@@ -83,7 +83,7 @@ export async function updateOrgSettings(
   if (updates.allowedEmails !== undefined) setValues.allowedEmails = updates.allowedEmails || null;
   if (updates.domainGatingEnabled !== undefined) setValues.domainGatingEnabled = updates.domainGatingEnabled;
   if (updates.emailAllowlistEnabled !== undefined) setValues.emailAllowlistEnabled = updates.emailAllowlistEnabled;
-  if (updates.modelPreferences !== undefined) setValues.modelPreferences = updates.modelPreferences ? JSON.stringify(updates.modelPreferences) : null;
+  if (updates.modelPreferences !== undefined) setValues.modelPreferences = updates.modelPreferences && updates.modelPreferences.length > 0 ? updates.modelPreferences : null;
 
   if (Object.keys(setValues).length > 0) {
     setValues.updatedAt = sql`datetime('now')`;

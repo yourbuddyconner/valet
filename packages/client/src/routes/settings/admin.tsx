@@ -138,8 +138,8 @@ interface FlatModel {
 }
 
 function flattenModels(providers: ProviderModels[]): FlatModel[] {
-  return providers.flatMap((p) =>
-    p.models.map((m) => ({ id: m.id, name: m.name, provider: p.provider }))
+  return (providers ?? []).flatMap((p) =>
+    (p.models ?? []).map((m) => ({ id: m.id, name: m.name, provider: p.provider }))
   );
 }
 
