@@ -8,7 +8,7 @@ import { listWorkflows, upsertWorkflow, getWorkflowByIdOrSlug, getWorkflowOwnerC
 import { listTriggers, getTrigger, deleteTrigger, createTrigger, getTriggerForRun, updateTriggerLastRun, findScheduleTriggerByNameAndWorkflow, findScheduleTriggersByWorkflow, findScheduleTriggersByName, updateTriggerFull } from '../lib/db/triggers.js';
 import { getExecution, getExecutionWithWorkflowName, getExecutionForAuth, getExecutionSteps, getExecutionOwnerAndStatus, checkIdempotencyKey, createExecution, completeExecutionFull, upsertExecutionStep, listExecutions } from '../lib/db/executions.js';
 import { checkWorkflowConcurrency, createWorkflowSession, dispatchOrchestratorPrompt, enqueueWorkflowExecution, sha256Hex } from '../lib/workflow-runtime.js';
-import { assembleCustomProviders } from '../lib/env-assembly.js';
+import { assembleCustomProviders, assembleBuiltInProviderModelConfigs } from '../lib/env-assembly.js';
 import { channelRegistry } from '../channels/registry.js';
 import type { ChannelTarget, ChannelContext } from '@agent-ops/sdk';
 import { validateWorkflowDefinition } from '../lib/workflow-definition.js';
@@ -359,6 +359,11 @@ interface RunnerOutbound {
       baseUrl: string;
       apiKey?: string;
       models: Array<{ id: string; name?: string; contextLimit?: number; outputLimit?: number }>;
+    }>;
+    builtInProviderModelConfigs?: Array<{
+      providerId: string;
+      models: Array<{ id: string; name?: string }>;
+      showAllModels: boolean;
     }>;
   };
   command?: string;
@@ -5282,8 +5287,9 @@ export class SessionAgentDO {
     this.setStateValue('sandboxId', '');
     this.setStateValue('tunnelUrls', '');
     this.setStateValue('tunnels', '');
-    this.setStateValue('tunnels', '');
     this.setStateValue('runningStartedAt', '');
+    this.setStateValue('initialModel', '');
+    this.setStateValue('initialPrompt', '');
 
     if (body.sandboxId) {
       this.setStateValue('sandboxId', body.sandboxId);
@@ -7630,7 +7636,17 @@ export class SessionAgentDO {
       }
     }
 
-    console.log(`[SessionAgentDO] Sending opencode-config to runner (providers=${Object.keys(config.providerKeys!).length}, customProviders=${config.customProviders?.length ?? 0}, isOrchestrator=${config.isOrchestrator})`);
+    // Fetch built-in provider model allowlists from D1
+    try {
+      const builtInConfigs = await assembleBuiltInProviderModelConfigs(this.appDb);
+      if (builtInConfigs.length > 0) {
+        config.builtInProviderModelConfigs = builtInConfigs;
+      }
+    } catch (err) {
+      console.warn('[SessionAgentDO] sendOpenCodeConfig: failed to fetch built-in provider model configs', err);
+    }
+
+    console.log(`[SessionAgentDO] Sending opencode-config to runner (providers=${Object.keys(config.providerKeys!).length}, customProviders=${config.customProviders?.length ?? 0}, builtInModelConfigs=${config.builtInProviderModelConfigs?.length ?? 0}, isOrchestrator=${config.isOrchestrator})`);
     this.sendToRunner({ type: 'opencode-config', config });
   }
 

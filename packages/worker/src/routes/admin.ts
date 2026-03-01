@@ -69,13 +69,45 @@ adminRouter.put('/llm-keys/:provider', async (c) => {
     throw new ValidationError(`Invalid provider: ${provider}. Must be one of: ${VALID_PROVIDERS.join(', ')}`);
   }
 
-  const { key } = await c.req.json<{ key: string }>();
-  if (!key || typeof key !== 'string' || key.trim().length === 0) {
-    throw new ValidationError('API key is required');
+  const body = await c.req.json<{
+    key?: string;
+    models?: Array<{ id: string; name?: string }>;
+    showAllModels?: boolean;
+  }>();
+
+  // Validate models if provided
+  if (body.models !== undefined) {
+    if (!Array.isArray(body.models)) {
+      throw new ValidationError('models must be an array');
+    }
+    for (const m of body.models) {
+      if (!m.id || typeof m.id !== 'string') {
+        throw new ValidationError('Each model must have a string id');
+      }
+    }
   }
 
   const user = c.get('user');
-  await adminService.setOrgLlmKey(c.get('db'), c.env.ENCRYPTION_KEY, { provider, key, setBy: user.id });
+
+  if (body.key && typeof body.key === 'string' && body.key.trim().length > 0) {
+    // Setting key (optionally with model config)
+    await adminService.setOrgLlmKey(c.get('db'), c.env.ENCRYPTION_KEY, {
+      provider,
+      key: body.key,
+      setBy: user.id,
+      models: body.models,
+      showAllModels: body.showAllModels,
+    });
+  } else if (body.models !== undefined || body.showAllModels !== undefined) {
+    // Updating model config only (no key change)
+    await adminService.updateOrgLlmKeyModelConfig(c.get('db'), {
+      provider,
+      models: body.models,
+      showAllModels: body.showAllModels,
+    });
+  } else {
+    throw new ValidationError('API key or model configuration is required');
+  }
 
   return c.json({ ok: true });
 });
@@ -175,6 +207,7 @@ adminRouter.put('/custom-providers/:providerId', async (c) => {
     baseUrl: string;
     apiKey?: string;
     models: Array<{ id: string; name?: string; contextLimit?: number; outputLimit?: number }>;
+    showAllModels?: boolean;
   }>();
 
   if (!body.displayName || typeof body.displayName !== 'string' || body.displayName.trim().length === 0) {
@@ -199,6 +232,7 @@ adminRouter.put('/custom-providers/:providerId', async (c) => {
     baseUrl: body.baseUrl.trim(),
     apiKey: body.apiKey,
     models: JSON.stringify(body.models),
+    showAllModels: !!body.showAllModels,
     setBy: user.id,
   });
 

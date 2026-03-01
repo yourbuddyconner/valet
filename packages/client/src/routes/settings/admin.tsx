@@ -716,7 +716,14 @@ function LLMKeysSection() {
             {LLM_PROVIDERS.map((provider) => {
               const existing = keys?.find((k) => k.provider === provider.id);
               return (
-                <LLMKeyRow key={provider.id} provider={provider.id} label={provider.label} isSet={!!existing} />
+                <LLMKeyRow
+                  key={provider.id}
+                  provider={provider.id}
+                  label={provider.label}
+                  isSet={!!existing}
+                  models={existing?.models}
+                  showAllModels={existing?.showAllModels ?? true}
+                />
               );
             })}
           </div>
@@ -726,11 +733,25 @@ function LLMKeysSection() {
   );
 }
 
-function LLMKeyRow({ provider, label, isSet }: { provider: string; label: string; isSet: boolean }) {
+function LLMKeyRow({ provider, label, isSet, models: existingModels, showAllModels: existingShowAll }: {
+  provider: string;
+  label: string;
+  isSet: boolean;
+  models?: Array<{ id: string; name?: string }>;
+  showAllModels: boolean;
+}) {
   const setKey = useSetLLMKey();
   const deleteKey = useDeleteLLMKey();
   const [value, setValue] = React.useState('');
   const [editing, setEditing] = React.useState(false);
+  const [showModelConfig, setShowModelConfig] = React.useState(false);
+  const [showAll, setShowAll] = React.useState(existingShowAll);
+  const [modelIds, setModelIds] = React.useState<Array<{ id: string; name?: string }>>(existingModels || []);
+
+  React.useEffect(() => {
+    setShowAll(existingShowAll);
+    setModelIds(existingModels || []);
+  }, [existingShowAll, existingModels]);
 
   function handleSave() {
     setKey.mutate(
@@ -744,45 +765,130 @@ function LLMKeyRow({ provider, label, isSet }: { provider: string; label: string
     );
   }
 
+  function handleSaveModelConfig() {
+    const validModels = modelIds.filter((m) => m.id.trim().length > 0);
+    setKey.mutate(
+      { provider, models: validModels.length > 0 ? validModels : undefined, showAllModels: showAll },
+      {
+        onSuccess: () => {
+          setShowModelConfig(false);
+        },
+      }
+    );
+  }
+
+  const hasModelRestrictions = !existingShowAll || (existingModels && existingModels.length > 0);
+
   return (
-    <div className="flex items-center gap-3">
-      <div className="w-24 text-sm font-medium text-neutral-700 dark:text-neutral-300">{label}</div>
-      {editing ? (
-        <>
-          <input
-            type="password"
-            value={value}
-            onChange={(e) => setValue(e.target.value)}
-            placeholder="sk-..."
-            className={inputClass + ' !mt-0 flex-1'}
-            autoFocus
-          />
-          <Button onClick={handleSave} disabled={!value || setKey.isPending}>
-            {setKey.isPending ? 'Saving...' : 'Save'}
-          </Button>
-          <Button variant="secondary" onClick={() => { setEditing(false); setValue(''); }}>
-            Cancel
-          </Button>
-        </>
-      ) : (
-        <>
-          <span className="flex-1 text-sm text-neutral-500 dark:text-neutral-400">
-            {isSet ? '••••••••••••' : 'Not set (using env var)'}
-          </span>
-          <Button variant="secondary" onClick={() => setEditing(true)}>
-            {isSet ? 'Update' : 'Set'}
-          </Button>
-          {isSet && (
-            <Button
-              variant="secondary"
-              onClick={() => deleteKey.mutate(provider)}
-              disabled={deleteKey.isPending}
+    <div className="space-y-2">
+      <div className="flex items-center gap-3">
+        <div className="w-24 text-sm font-medium text-neutral-700 dark:text-neutral-300">{label}</div>
+        {editing ? (
+          <>
+            <input
+              type="password"
+              value={value}
+              onChange={(e) => setValue(e.target.value)}
+              placeholder="sk-..."
+              className={inputClass + ' !mt-0 flex-1'}
+              autoFocus
+            />
+            <Button onClick={handleSave} disabled={!value || setKey.isPending}>
+              {setKey.isPending ? 'Saving...' : 'Save'}
+            </Button>
+            <Button variant="secondary" onClick={() => { setEditing(false); setValue(''); }}>
+              Cancel
+            </Button>
+          </>
+        ) : (
+          <>
+            <span className="flex-1 text-sm text-neutral-500 dark:text-neutral-400">
+              {isSet ? '••••••••••••' : 'Not set (using env var)'}
+              {hasModelRestrictions && (
+                <span className="ml-2 text-xs text-amber-600 dark:text-amber-400">
+                  ({existingModels?.length || 0} model{existingModels?.length === 1 ? '' : 's'} allowed)
+                </span>
+              )}
+            </span>
+            <button
+              type="button"
+              onClick={() => setShowModelConfig(!showModelConfig)}
+              className="text-xs text-blue-600 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300"
+            >
+              {showModelConfig ? 'Hide models' : 'Configure models'}
+            </button>
+            <Button variant="secondary" onClick={() => setEditing(true)}>
+              {isSet ? 'Update' : 'Set'}
+            </Button>
+            {isSet && (
+              <Button
+                variant="secondary"
+                onClick={() => deleteKey.mutate(provider)}
+                disabled={deleteKey.isPending}
             >
               Remove
             </Button>
           )}
         </>
       )}
+    </div>
+    {showModelConfig && (
+      <div className="ml-[6.5rem] rounded-md border border-neutral-200 bg-neutral-50 p-3 dark:border-neutral-700 dark:bg-neutral-800/50">
+        <div className="mb-3 flex items-center gap-2">
+          <label className="flex items-center gap-2 text-sm text-neutral-700 dark:text-neutral-300">
+            <input
+              type="checkbox"
+              checked={showAll}
+              onChange={(e) => setShowAll(e.target.checked)}
+              className="h-4 w-4 rounded border-neutral-300 text-blue-600 focus:ring-blue-500 dark:border-neutral-600"
+            />
+            Show all discovered models
+          </label>
+        </div>
+        {!showAll && (
+          <div className="space-y-2">
+            <p className="text-xs text-neutral-500 dark:text-neutral-400">Only these models will appear in the session model picker:</p>
+            {modelIds.map((m, i) => (
+              <div key={i} className="flex items-center gap-2">
+                <input
+                  value={m.id}
+                  onChange={(e) => {
+                    const updated = [...modelIds];
+                    updated[i] = { ...updated[i], id: e.target.value };
+                    setModelIds(updated);
+                  }}
+                  placeholder="e.g. claude-sonnet-4-20250514"
+                  className={inputClass + ' !mt-0 flex-1'}
+                />
+                <Button
+                  type="button"
+                  variant="secondary"
+                  onClick={() => setModelIds(modelIds.filter((_, j) => j !== i))}
+                  disabled={modelIds.length <= 1}
+                >
+                  -
+                </Button>
+              </div>
+            ))}
+            <Button type="button" variant="secondary" onClick={() => setModelIds([...modelIds, { id: '' }])}>
+              + Add Model
+            </Button>
+          </div>
+        )}
+        <div className="mt-3 flex items-center gap-2">
+          <Button onClick={handleSaveModelConfig} disabled={setKey.isPending}>
+            {setKey.isPending ? 'Saving...' : 'Save Model Config'}
+          </Button>
+          <Button variant="secondary" onClick={() => {
+            setShowModelConfig(false);
+            setShowAll(existingShowAll);
+            setModelIds(existingModels || []);
+          }}>
+            Cancel
+          </Button>
+        </div>
+      </div>
+    )}
     </div>
   );
 }
@@ -792,6 +898,9 @@ function LLMKeyRow({ provider, label, isSet }: { provider: string; label: string
 function CustomProvidersSection() {
   const { data: providers, isLoading } = useCustomProviders();
   const [adding, setAdding] = React.useState(false);
+  const [editingId, setEditingId] = React.useState<string | null>(null);
+
+  const editingProvider = editingId ? providers?.find((p) => p.providerId === editingId) : null;
 
   return (
     <Section title="Custom LLM Providers">
@@ -808,7 +917,7 @@ function CustomProvidersSection() {
         ) : (
           <>
             {providers && providers.length > 0 && (
-              <div className="overflow-hidden rounded-md border border-neutral-200 dark:border-neutral-700">
+              <div className="rounded-md border border-neutral-200 dark:border-neutral-700">
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="border-b border-neutral-200 bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-800/50">
@@ -822,15 +931,22 @@ function CustomProvidersSection() {
                   </thead>
                   <tbody>
                     {providers.map((p) => (
-                      <CustomProviderRow key={p.id} provider={p} />
+                      <CustomProviderRow key={p.id} provider={p} onEdit={() => setEditingId(p.providerId)} isEditing={editingId === p.providerId} />
                     ))}
                   </tbody>
                 </table>
               </div>
             )}
+            {editingProvider && (
+              <CustomProviderForm
+                existing={editingProvider}
+                onCancel={() => setEditingId(null)}
+                onSaved={() => setEditingId(null)}
+              />
+            )}
             {adding ? (
               <CustomProviderForm onCancel={() => setAdding(false)} onSaved={() => setAdding(false)} />
-            ) : (
+            ) : !editingId && (
               <Button variant="secondary" onClick={() => setAdding(true)}>
                 Add Provider
               </Button>
@@ -842,35 +958,20 @@ function CustomProvidersSection() {
   );
 }
 
-function CustomProviderRow({ provider }: { provider: import('@agent-ops/shared').CustomProvider }) {
+function CustomProviderRow({ provider, onEdit, isEditing }: { provider: import('@agent-ops/shared').CustomProvider; onEdit: () => void; isEditing: boolean }) {
   const deleteProvider = useDeleteCustomProvider();
-  const [editing, setEditing] = React.useState(false);
   const [confirmDelete, setConfirmDelete] = React.useState(false);
 
-  if (editing) {
-    return (
-      <tr>
-        <td colSpan={6} className="p-3">
-          <CustomProviderForm
-            existing={provider}
-            onCancel={() => setEditing(false)}
-            onSaved={() => setEditing(false)}
-          />
-        </td>
-      </tr>
-    );
-  }
-
   return (
-    <tr className="border-b border-neutral-100 last:border-0 dark:border-neutral-700/50">
+    <tr className={`border-b border-neutral-100 last:border-0 dark:border-neutral-700/50 ${isEditing ? 'bg-neutral-50 dark:bg-neutral-800/50' : ''}`}>
       <td className="px-3 py-2 font-mono text-xs text-neutral-700 dark:text-neutral-300">{provider.providerId}</td>
       <td className="px-3 py-2 text-neutral-900 dark:text-neutral-100">{provider.displayName}</td>
       <td className="px-3 py-2 text-neutral-500 dark:text-neutral-400 truncate max-w-[200px]">{provider.baseUrl}</td>
-      <td className="px-3 py-2 text-neutral-500 dark:text-neutral-400">{provider.models.length}</td>
+      <td className="px-3 py-2 text-neutral-500 dark:text-neutral-400">{provider.showAllModels ? 'All' : provider.models.length}</td>
       <td className="px-3 py-2 text-neutral-500 dark:text-neutral-400">{provider.hasKey ? 'Set' : 'None'}</td>
       <td className="px-3 py-2 text-right">
         <div className="flex items-center justify-end gap-2">
-          <Button variant="secondary" onClick={() => setEditing(true)}>Edit</Button>
+          <Button variant="secondary" onClick={onEdit} disabled={isEditing}>Edit</Button>
           {confirmDelete ? (
             <>
               <Button
@@ -897,10 +998,14 @@ function ModelIdInput({
   value,
   onChange,
   discoveredModels,
+  onRequestDiscover,
+  isDiscovering,
 }: {
   value: string;
   onChange: (value: string) => void;
   discoveredModels: string[];
+  onRequestDiscover?: () => void;
+  isDiscovering?: boolean;
 }) {
   const [showDropdown, setShowDropdown] = React.useState(false);
   const [highlightIndex, setHighlightIndex] = React.useState(0);
@@ -917,6 +1022,13 @@ function ModelIdInput({
   React.useEffect(() => {
     setHighlightIndex(0);
   }, [filtered.length]);
+
+  // Auto-open dropdown when discovered models arrive while input is focused
+  React.useEffect(() => {
+    if (discoveredModels.length > 0 && document.activeElement === inputRef.current) {
+      setShowDropdown(true);
+    }
+  }, [discoveredModels]);
 
   React.useEffect(() => {
     function handleClick(e: MouseEvent) {
@@ -955,8 +1067,16 @@ function ModelIdInput({
     }
   }
 
+  function handleFocus() {
+    if (discoveredModels.length > 0) {
+      setShowDropdown(true);
+    } else if (onRequestDiscover) {
+      onRequestDiscover();
+    }
+  }
+
   return (
-    <div className="relative flex-[4] min-w-0">
+    <div className="relative flex-1 min-w-0">
       <input
         ref={inputRef}
         value={value}
@@ -964,15 +1084,20 @@ function ModelIdInput({
           onChange(e.target.value);
           setShowDropdown(true);
         }}
-        onFocus={() => { if (discoveredModels.length > 0) setShowDropdown(true); }}
+        onFocus={handleFocus}
         onKeyDown={handleKeyDown}
-        placeholder="model-id"
-        className={inputClass + ' !mt-0 !max-w-none w-full'}
+        placeholder="model-id (e.g. meta-llama/llama-3.1-70b)"
+        className="block w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm font-mono text-neutral-900 placeholder:text-neutral-400 focus:border-neutral-500 focus:outline-none focus:ring-1 focus:ring-neutral-500 dark:border-neutral-600 dark:bg-neutral-900 dark:text-neutral-100 dark:placeholder:text-neutral-500 dark:focus:border-neutral-400 dark:focus:ring-neutral-400"
       />
+      {showDropdown && isDiscovering && discoveredModels.length === 0 && (
+        <div className="absolute z-20 mt-1 w-full rounded-md border border-neutral-200 bg-white px-3 py-2 text-sm text-neutral-500 shadow-lg dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-400">
+          Loading models...
+        </div>
+      )}
       {showDropdown && filtered.length > 0 && (
         <div
           ref={dropdownRef}
-          className="absolute z-20 mt-1 max-h-48 min-w-[360px] overflow-auto rounded-md border border-neutral-200 bg-white shadow-lg dark:border-neutral-700 dark:bg-neutral-800"
+          className="absolute z-20 mt-1 max-h-48 min-w-[360px] w-full overflow-auto rounded-md border border-neutral-200 bg-white shadow-lg dark:border-neutral-700 dark:bg-neutral-800"
         >
           {filtered.map((modelId, i) => (
             <button
@@ -1017,14 +1142,36 @@ function CustomProviderForm({
   const [models, setModels] = React.useState<CustomProviderModel[]>(
     existing?.models ?? [{ id: '' }]
   );
+  const [showAllModels, setShowAllModels] = React.useState(existing?.showAllModels ?? false);
   const [discoveredModels, setDiscoveredModels] = React.useState<string[]>([]);
   const [discoverStatus, setDiscoverStatus] = React.useState<
     { type: 'success'; count: number } | { type: 'error'; message: string } | null
   >(null);
+  const hasDiscoveredRef = React.useRef(false);
 
-  function handleTest() {
-    if (!baseUrl.trim()) return;
-    setDiscoverStatus(null);
+  // Auto-discover models when editing an existing provider with a baseUrl
+  React.useEffect(() => {
+    if (existing?.baseUrl && !hasDiscoveredRef.current) {
+      hasDiscoveredRef.current = true;
+      discover.mutate(
+        { baseUrl: existing.baseUrl },
+        {
+          onSuccess: (data) => {
+            const ids = data.models.map((m) => m.id);
+            setDiscoveredModels(ids);
+            setDiscoverStatus({ type: 'success', count: ids.length });
+          },
+          onError: () => {
+            // Silent fail for auto-discover — user can still use Test Connection
+          },
+        }
+      );
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  function handleDiscover() {
+    if (!baseUrl.trim() || discover.isPending) return;
     discover.mutate(
       { baseUrl: baseUrl.trim(), apiKey: apiKey || undefined },
       {
@@ -1032,6 +1179,7 @@ function CustomProviderForm({
           const ids = data.models.map((m) => m.id);
           setDiscoveredModels(ids);
           setDiscoverStatus({ type: 'success', count: ids.length });
+          hasDiscoveredRef.current = true;
         },
         onError: (err: any) => {
           setDiscoveredModels([]);
@@ -1039,6 +1187,11 @@ function CustomProviderForm({
         },
       }
     );
+  }
+
+  function handleTest() {
+    setDiscoverStatus(null);
+    handleDiscover();
   }
 
   function addModel() {
@@ -1073,6 +1226,7 @@ function CustomProviderForm({
           contextLimit: m.contextLimit || undefined,
           outputLimit: m.outputLimit || undefined,
         })),
+        showAllModels,
       },
       { onSuccess: onSaved }
     );
@@ -1151,39 +1305,69 @@ function CustomProviderForm({
         )}
       </div>
 
+      <div className="flex items-center gap-2">
+        <label className="flex items-center gap-2 text-sm text-neutral-700 dark:text-neutral-300">
+          <input
+            type="checkbox"
+            checked={showAllModels}
+            onChange={(e) => setShowAllModels(e.target.checked)}
+            className="h-4 w-4 rounded border-neutral-300 text-blue-600 focus:ring-blue-500 dark:border-neutral-600"
+          />
+          Show all discovered models
+        </label>
+        <span className="text-xs text-neutral-400">(when enabled, all models from the provider API appear in the picker)</span>
+      </div>
+
       <div>
         <label className="block text-sm font-medium text-neutral-700 dark:text-neutral-300">Models</label>
-        <div className="mt-2 space-y-2">
+        <div className="mt-2 space-y-3">
           {models.map((model, i) => (
-            <div key={i} className="flex items-center gap-2">
-              <ModelIdInput
-                value={model.id}
-                onChange={(v) => updateModel(i, 'id', v)}
-                discoveredModels={discoveredModels}
-              />
-              <input
-                value={model.name ?? ''}
-                onChange={(e) => updateModel(i, 'name', e.target.value)}
-                placeholder="Display name"
-                className={inputClass + ' !mt-0 !max-w-none flex-1'}
-              />
-              <input
-                type="number"
-                value={model.contextLimit ?? ''}
-                onChange={(e) => updateModel(i, 'contextLimit', parseInt(e.target.value) || 0)}
-                placeholder="Ctx"
-                className={inputClass + ' !mt-0 w-20 shrink-0'}
-              />
-              <input
-                type="number"
-                value={model.outputLimit ?? ''}
-                onChange={(e) => updateModel(i, 'outputLimit', parseInt(e.target.value) || 0)}
-                placeholder="Out"
-                className={inputClass + ' !mt-0 w-20 shrink-0'}
-              />
-              <Button type="button" variant="secondary" onClick={() => removeModel(i)} disabled={models.length <= 1}>
-                -
-              </Button>
+            <div key={i} className="rounded-md border border-neutral-200 bg-white p-3 dark:border-neutral-700 dark:bg-neutral-900">
+              <div className="flex items-center gap-2">
+                <div className="flex-1 min-w-0">
+                  <ModelIdInput
+                    value={model.id}
+                    onChange={(v) => updateModel(i, 'id', v)}
+                    discoveredModels={discoveredModels}
+                    onRequestDiscover={handleDiscover}
+                    isDiscovering={discover.isPending}
+                  />
+                </div>
+                <Button type="button" variant="secondary" onClick={() => removeModel(i)} disabled={models.length <= 1}>
+                  -
+                </Button>
+              </div>
+              <div className="mt-2 grid grid-cols-3 gap-2">
+                <div>
+                  <label className="block text-xs text-neutral-500 dark:text-neutral-400 mb-1">Display name</label>
+                  <input
+                    value={model.name ?? ''}
+                    onChange={(e) => updateModel(i, 'name', e.target.value)}
+                    placeholder="Optional"
+                    className="block w-full rounded-md border border-neutral-300 bg-white px-2 py-1.5 text-sm text-neutral-900 placeholder:text-neutral-400 focus:border-neutral-500 focus:outline-none focus:ring-1 focus:ring-neutral-500 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-100 dark:placeholder:text-neutral-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-neutral-500 dark:text-neutral-400 mb-1">Context limit</label>
+                  <input
+                    type="number"
+                    value={model.contextLimit ?? ''}
+                    onChange={(e) => updateModel(i, 'contextLimit', parseInt(e.target.value) || 0)}
+                    placeholder="e.g. 128000"
+                    className="block w-full rounded-md border border-neutral-300 bg-white px-2 py-1.5 text-sm text-neutral-900 placeholder:text-neutral-400 focus:border-neutral-500 focus:outline-none focus:ring-1 focus:ring-neutral-500 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-100 dark:placeholder:text-neutral-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-neutral-500 dark:text-neutral-400 mb-1">Output limit</label>
+                  <input
+                    type="number"
+                    value={model.outputLimit ?? ''}
+                    onChange={(e) => updateModel(i, 'outputLimit', parseInt(e.target.value) || 0)}
+                    placeholder="e.g. 8192"
+                    className="block w-full rounded-md border border-neutral-300 bg-white px-2 py-1.5 text-sm text-neutral-900 placeholder:text-neutral-400 focus:border-neutral-500 focus:outline-none focus:ring-1 focus:ring-neutral-500 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-100 dark:placeholder:text-neutral-500"
+                  />
+                </div>
+              </div>
             </div>
           ))}
           <Button type="button" variant="secondary" onClick={addModel}>

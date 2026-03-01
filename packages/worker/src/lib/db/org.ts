@@ -102,6 +102,8 @@ export async function listOrgApiKeys(db: AppDb): Promise<OrgApiKey[]> {
     .select({
       id: orgApiKeys.id,
       provider: orgApiKeys.provider,
+      models: orgApiKeys.models,
+      showAllModels: orgApiKeys.showAllModels,
       setBy: orgApiKeys.setBy,
       createdAt: orgApiKeys.createdAt,
       updatedAt: orgApiKeys.updatedAt,
@@ -113,6 +115,8 @@ export async function listOrgApiKeys(db: AppDb): Promise<OrgApiKey[]> {
     id: row.id,
     provider: row.provider,
     isSet: true,
+    models: (row.models as OrgApiKey['models']) || undefined,
+    showAllModels: row.showAllModels ?? true,
     setBy: row.setBy,
     createdAt: toDate(row.createdAt),
     updatedAt: toDate(row.updatedAt),
@@ -130,25 +134,60 @@ export async function getOrgApiKey(db: AppDb, provider: string): Promise<{ encry
 
 export async function setOrgApiKey(
   db: AppDb,
-  params: { id: string; provider: string; encryptedKey: string; setBy: string }
+  params: { id: string; provider: string; encryptedKey: string; setBy: string; models?: string | null; showAllModels?: boolean }
 ): Promise<void> {
   await db.insert(orgApiKeys).values({
     id: params.id,
     provider: params.provider,
     encryptedKey: params.encryptedKey,
+    models: params.models ? sql`${params.models}` : null,
+    showAllModels: params.showAllModels ?? true,
     setBy: params.setBy,
   }).onConflictDoUpdate({
     target: orgApiKeys.provider,
     set: {
       encryptedKey: sql`excluded.encrypted_key`,
+      models: sql`excluded.models`,
+      showAllModels: sql`excluded.show_all_models`,
       setBy: sql`excluded.set_by`,
       updatedAt: sql`datetime('now')`,
     },
   });
 }
 
+export async function updateOrgApiKeyModelConfig(
+  db: AppDb,
+  provider: string,
+  params: { models?: string | null; showAllModels?: boolean }
+): Promise<void> {
+  const setValues: Record<string, unknown> = {};
+  if (params.models !== undefined) setValues.models = params.models ? sql`${params.models}` : null;
+  if (params.showAllModels !== undefined) setValues.showAllModels = params.showAllModels;
+  if (Object.keys(setValues).length === 0) return;
+  setValues.updatedAt = sql`datetime('now')`;
+  await db.update(orgApiKeys).set(setValues).where(eq(orgApiKeys.provider, provider));
+}
+
 export async function deleteOrgApiKey(db: AppDb, provider: string): Promise<void> {
   await db.delete(orgApiKeys).where(eq(orgApiKeys.provider, provider));
+}
+
+export async function getBuiltInProviderModelConfigs(db: AppDb): Promise<Array<{ providerId: string; models: Array<{ id: string; name?: string }>; showAllModels: boolean }>> {
+  const rows = await db
+    .select({
+      provider: orgApiKeys.provider,
+      models: orgApiKeys.models,
+      showAllModels: orgApiKeys.showAllModels,
+    })
+    .from(orgApiKeys);
+
+  return rows
+    .filter((row) => row.models != null || !(row.showAllModels ?? true))
+    .map((row) => ({
+      providerId: row.provider,
+      models: (row.models as Array<{ id: string; name?: string }>) || [],
+      showAllModels: row.showAllModels ?? true,
+    }));
 }
 
 // Custom provider operations
@@ -165,6 +204,7 @@ export async function listCustomProviders(db: AppDb): Promise<CustomProvider[]> 
     baseUrl: row.baseUrl,
     hasKey: !!row.encryptedKey,
     models: row.models as CustomProviderModel[],
+    showAllModels: !!row.showAllModels,
     setBy: row.setBy,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
@@ -177,6 +217,7 @@ export async function getAllCustomProvidersWithKeys(db: AppDb): Promise<Array<{
   baseUrl: string;
   encryptedKey: string | null;
   models: CustomProviderModel[];
+  showAllModels: boolean;
 }>> {
   const rows = await db
     .select({
@@ -185,6 +226,7 @@ export async function getAllCustomProvidersWithKeys(db: AppDb): Promise<Array<{
       baseUrl: customProviders.baseUrl,
       encryptedKey: customProviders.encryptedKey,
       models: customProviders.models,
+      showAllModels: customProviders.showAllModels,
     })
     .from(customProviders);
 
@@ -194,12 +236,13 @@ export async function getAllCustomProvidersWithKeys(db: AppDb): Promise<Array<{
     baseUrl: row.baseUrl,
     encryptedKey: row.encryptedKey || null,
     models: row.models as CustomProviderModel[],
+    showAllModels: !!row.showAllModels,
   }));
 }
 
 export async function upsertCustomProvider(
   db: AppDb,
-  params: { id: string; providerId: string; displayName: string; baseUrl: string; encryptedKey: string | null; models: string; setBy: string }
+  params: { id: string; providerId: string; displayName: string; baseUrl: string; encryptedKey: string | null; models: string; showAllModels: boolean; setBy: string }
 ): Promise<void> {
   await db.insert(customProviders).values({
     id: params.id,
@@ -208,6 +251,7 @@ export async function upsertCustomProvider(
     baseUrl: params.baseUrl,
     encryptedKey: params.encryptedKey,
     models: sql`${params.models}`,
+    showAllModels: params.showAllModels,
     setBy: params.setBy,
   }).onConflictDoUpdate({
     target: customProviders.providerId,
@@ -216,6 +260,7 @@ export async function upsertCustomProvider(
       baseUrl: sql`excluded.base_url`,
       encryptedKey: sql`excluded.encrypted_key`,
       models: sql`excluded.models`,
+      showAllModels: sql`excluded.show_all_models`,
       setBy: sql`excluded.set_by`,
       updatedAt: sql`datetime('now')`,
     },

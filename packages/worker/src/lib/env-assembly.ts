@@ -88,6 +88,7 @@ export async function assembleCustomProviders(
   baseUrl: string;
   apiKey?: string;
   models: Array<{ id: string; name?: string; contextLimit?: number; outputLimit?: number }>;
+  showAllModels: boolean;
 }>> {
   try {
     const rawProviders = await db.getAllCustomProvidersWithKeys(database);
@@ -97,6 +98,7 @@ export async function assembleCustomProviders(
       baseUrl: string;
       apiKey?: string;
       models: Array<{ id: string; name?: string; contextLimit?: number; outputLimit?: number }>;
+      showAllModels: boolean;
     }> = [];
 
     for (const p of rawProviders) {
@@ -110,12 +112,28 @@ export async function assembleCustomProviders(
         baseUrl: p.baseUrl,
         apiKey,
         models: p.models,
+        showAllModels: p.showAllModels,
       });
     }
 
     return result;
   } catch {
     // Table may not exist yet — skip
+    return [];
+  }
+}
+
+/**
+ * Fetch built-in provider model allowlists from org_api_keys.
+ * Returns only providers that have model restrictions configured.
+ */
+export async function assembleBuiltInProviderModelConfigs(
+  database: AppDb
+): Promise<Array<{ providerId: string; models: Array<{ id: string; name?: string }>; showAllModels: boolean }>> {
+  try {
+    return await db.getBuiltInProviderModelConfigs(database);
+  } catch {
+    // Table may not have new columns yet — skip
     return [];
   }
 }

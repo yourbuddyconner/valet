@@ -287,6 +287,8 @@ export interface OrgApiKey {
   id: string;
   provider: string;
   isSet: boolean;
+  models?: Array<{ id: string; name?: string }>;
+  showAllModels: boolean;
   setBy: string;
   createdAt: Date;
   updatedAt: Date;
@@ -456,6 +458,7 @@ export interface CustomProvider {
   baseUrl: string;
   hasKey: boolean;
   models: CustomProviderModel[];
+  showAllModels: boolean;
   setBy: string;
   createdAt: string;
   updatedAt: string;

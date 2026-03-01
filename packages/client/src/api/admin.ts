@@ -46,8 +46,13 @@ export function useSetLLMKey() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: ({ provider, key }: { provider: string; key: string }) =>
-      api.put<{ ok: boolean }>(`/admin/llm-keys/${provider}`, { key }),
+    mutationFn: ({ provider, key, models, showAllModels }: {
+      provider: string;
+      key?: string;
+      models?: Array<{ id: string; name?: string }>;
+      showAllModels?: boolean;
+    }) =>
+      api.put<{ ok: boolean }>(`/admin/llm-keys/${provider}`, { key, models, showAllModels }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: adminKeys.llmKeys() });
     },
@@ -158,6 +163,7 @@ export function useUpsertCustomProvider() {
       baseUrl: string;
       apiKey?: string;
       models: Array<{ id: string; name?: string; contextLimit?: number; outputLimit?: number }>;
+      showAllModels?: boolean;
     }) =>
       api.put<{ ok: boolean }>(`/admin/custom-providers/${providerId}`, data),
     onSuccess: () => {

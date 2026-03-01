@@ -15,7 +15,7 @@ import type { Invite, UserRole } from '@agent-ops/shared';
 export async function setOrgLlmKey(
   db: AppDb,
   encryptionKey: string,
-  params: { provider: string; key: string; setBy: string },
+  params: { provider: string; key: string; setBy: string; models?: Array<{ id: string; name?: string }>; showAllModels?: boolean },
 ): Promise<void> {
   const encryptedKey = await encryptString(params.key, encryptionKey);
   await setOrgApiKey(db, {
@@ -23,6 +23,19 @@ export async function setOrgLlmKey(
     provider: params.provider,
     encryptedKey,
     setBy: params.setBy,
+    models: params.models ? JSON.stringify(params.models) : null,
+    showAllModels: params.showAllModels,
+  });
+}
+
+export async function updateOrgLlmKeyModelConfig(
+  db: AppDb,
+  params: { provider: string; models?: Array<{ id: string; name?: string }>; showAllModels?: boolean },
+): Promise<void> {
+  const { updateOrgApiKeyModelConfig } = await import('../lib/db.js');
+  await updateOrgApiKeyModelConfig(db, params.provider, {
+    models: params.models ? JSON.stringify(params.models) : null,
+    showAllModels: params.showAllModels,
   });
 }
 
@@ -114,6 +127,7 @@ export async function upsertCustomProviderWithEncryption(
     baseUrl: string;
     apiKey?: string;
     models: string;
+    showAllModels: boolean;
     setBy: string;
   },
 ): Promise<void> {
@@ -129,6 +143,7 @@ export async function upsertCustomProviderWithEncryption(
     baseUrl: params.baseUrl,
     encryptedKey,
     models: params.models,
+    showAllModels: params.showAllModels,
     setBy: params.setBy,
   });
 }

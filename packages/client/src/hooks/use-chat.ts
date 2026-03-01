@@ -559,7 +559,28 @@ export function useChat(sessionId: string) {
           reviewLoading: false,
           reviewDiffFiles: null,
         });
-        if (initModels.length > 0) autoSelectModelRef.current(initModels);
+        if (initModels.length > 0) {
+          // On fresh init (no messages = session just started/restarted), clear
+          // the localStorage-persisted model so model preferences take effect.
+          // This ensures org/user default model changes are respected after
+          // orchestrator restarts rather than sticking to a stale cached choice.
+          if (message.session.messages.length === 0) {
+            try {
+              localStorage.removeItem(`agent-ops:model:${sessionIdRef.current}`);
+            } catch { /* ignore */ }
+            // Force re-selection from preferences since autoSelectModel's closure
+            // still holds the stale selectedModel value from before this render.
+            const allIds = initModels.flatMap((p: ProviderModels) => p.models.map((m: { id: string }) => m.id));
+            const preferred = findModelFromPreferences(initModels, modelPreferences);
+            if (preferred) {
+              handleModelChange(preferred);
+            } else if (allIds.length > 0) {
+              handleModelChange(allIds[0]);
+            }
+          } else {
+            autoSelectModelRef.current(initModels);
+          }
+        }
         break;
       }
 

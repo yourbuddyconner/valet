@@ -5,7 +5,7 @@ import type { AppDb } from '../lib/drizzle.js';
 import { getDb } from '../lib/drizzle.js';
 import { signJWT } from '../lib/jwt.js';
 import { buildDoWebSocketUrl } from '../lib/do-ws-url.js';
-import { generateRunnerToken, assembleProviderEnv, assembleCredentialEnv, assembleCustomProviders, assembleGitHubEnv } from '../lib/env-assembly.js';
+import { generateRunnerToken, assembleProviderEnv, assembleCredentialEnv, assembleCustomProviders, assembleBuiltInProviderModelConfigs, assembleGitHubEnv } from '../lib/env-assembly.js';
 import { getCredential } from '../services/credentials.js';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
@@ -302,6 +302,9 @@ export async function createSession(
   // Custom LLM providers
   const customProviders = await assembleCustomProviders(appDb, env.ENCRYPTION_KEY);
 
+  // Built-in provider model allowlists
+  const builtInProviderModelConfigs = await assembleBuiltInProviderModelConfigs(appDb);
+
   // If repo URL provided, decrypt GitHub token and add repo/git env vars
   if (params.repoUrl) {
     const github = await assembleGitHubEnv(env.DB, env, params.userId, {
@@ -339,6 +342,7 @@ export async function createSession(
     envVars,
     personaFiles,
     customProviders: customProviders.length > 0 ? customProviders : undefined,
+    builtInProviderModelConfigs: builtInProviderModelConfigs.length > 0 ? builtInProviderModelConfigs : undefined,
   };
 
   try {

@@ -344,6 +344,7 @@ async function main() {
   agentClient.onOpenCodeConfig(async (config) => {
     console.log("[Runner] Received opencode-config from DO");
     try {
+      promptHandler.setProviderModelConfigs(config.customProviders, config.builtInProviderModelConfigs);
       await promptHandler.handleOpenCodeRestart();
       const result = await openCodeManager.applyConfig(config);
       if (result.restarted) {

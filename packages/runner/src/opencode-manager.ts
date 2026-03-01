@@ -16,6 +16,7 @@ export interface CustomProviderConfig {
   baseUrl: string;
   apiKey?: string;
   models: Array<{ id: string; name?: string; contextLimit?: number; outputLimit?: number }>;
+  showAllModels?: boolean;
 }
 
 export interface OpenCodeConfig {
@@ -270,6 +271,14 @@ export class OpenCodeManager {
     const sourceSkillsDir = join(this.configSourceDir, "skills");
     if (existsSync(sourceSkillsDir)) {
       this.copyDirRecursive(sourceSkillsDir, skillsDir);
+    }
+
+    // Copy plugins
+    const pluginsDir = join(this.workspaceDir, ".opencode", "plugins");
+    if (!existsSync(pluginsDir)) mkdirSync(pluginsDir, { recursive: true });
+    const sourcePluginsDir = join(this.configSourceDir, "plugins");
+    if (existsSync(sourcePluginsDir)) {
+      this.copyDirRecursive(sourcePluginsDir, pluginsDir);
     }
   }
 

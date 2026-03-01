@@ -201,6 +201,29 @@ const FIRST_RESPONSE_TIMEOUT_MS = 90_000;
 const REVIEW_POLL_INTERVAL_MS = 500;
 const REVIEW_TIMEOUT_MS = 120_000;
 
+// Pre-compaction memory flush configuration
+const FLUSH_THRESHOLD_RATIO = 0.70;  // Trigger at 70% of context window
+const FLUSH_TURN_INTERVAL = 20;      // Fallback: every 20 turns if no token data
+const FLUSH_TIMEOUT_MS = 60_000;     // Max time for flush turn
+
+const MEMORY_FLUSH_PROMPT = `[SYSTEM: Pre-compaction memory checkpoint]
+
+Your context window is approaching capacity and will be compacted soon. Context from earlier in the conversation may be lost.
+
+Review the conversation above and save any important information to memory using mem_write or mem_patch:
+
+- Current task status and remaining work
+- Key decisions and their reasoning
+- Important discoveries (bugs, constraints, edge cases)
+- User preferences and conventions
+- Key file paths and their purposes
+
+Use paths like "projects/<repo>/task-status.md", "projects/<repo>/decisions.md", etc.
+
+If nothing is worth saving, reply "Nothing to save."
+
+Do NOT mention this checkpoint to the user. This is an automatic system process.`;
+
 const REVIEW_PROMPT = `You are a code reviewer. Analyze the following diff and produce a structured JSON review.
 
 Return ONLY a fenced JSON block (\`\`\`json ... \`\`\`) with this exact structure:
@@ -407,6 +430,15 @@ export class ChannelSession {
   turnCreated = false;
   turnId: string | null = null;
 
+  // Pre-compaction memory flush state (session-lifetime — NOT reset per prompt)
+  cumulativeInputTokens = 0;
+  cumulativeOutputTokens = 0;
+  countedTokenMessageIds = new Set<string>();
+  turnCount = 0;
+  lastFlushTurnCount = 0;
+  memoryFlushInProgress = false;
+  lastUsedModel: string | null = null;
+
   constructor(channelKey: string) {
     this.channelKey = channelKey;
   }
@@ -570,10 +602,41 @@ export class PromptHandler {
   private sseParseWarnCount = 0;
   private sseDroppedEventCount = 0;
 
+  // Provider model filtering — maps providerId → { modelIds, showAll }
+  // Works for both custom providers and built-in providers (anthropic, openai, google, etc.)
+  private providerModelConfigs = new Map<string, { modelIds: Set<string>; showAll: boolean }>();
+
+  // Model context limits — populated from provider discovery, used for pre-compaction flush
+  private modelContextLimits = new Map<string, number>();
+
   constructor(opencodeUrl: string, agentClient: AgentClient, runnerSessionId?: string) {
     this.opencodeUrl = opencodeUrl;
     this.agentClient = agentClient;
     this.runnerSessionId = runnerSessionId?.trim() || null;
+  }
+
+  /** Populate the provider model config map for filtering in fetchAvailableModels(). */
+  setProviderModelConfigs(
+    customProviders?: Array<{ providerId: string; models: Array<{ id: string }>; showAllModels?: boolean }>,
+    builtInConfigs?: Array<{ providerId: string; models: Array<{ id: string }>; showAllModels: boolean }>,
+  ) {
+    this.providerModelConfigs.clear();
+    if (customProviders) {
+      for (const cp of customProviders) {
+        this.providerModelConfigs.set(cp.providerId, {
+          modelIds: new Set(cp.models.map((m) => m.id)),
+          showAll: !!cp.showAllModels,
+        });
+      }
+    }
+    if (builtInConfigs) {
+      for (const bp of builtInConfigs) {
+        this.providerModelConfigs.set(bp.providerId, {
+          modelIds: new Set(bp.models.map((m) => m.id)),
+          showAll: bp.showAllModels,
+        });
+      }
+    }
   }
 
   /** Get or create a ChannelSession for the given channel. */
@@ -1757,7 +1820,7 @@ export class PromptHandler {
     return new Promise<void>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.idleWaiters.delete(sessionId);
-        reject(new Error(`Review timed out after ${timeoutMs}ms`));
+        reject(new Error(`Idle wait timed out after ${timeoutMs}ms`));
       }, timeoutMs);
 
       this.idleWaiters.set(sessionId, () => {
@@ -1958,6 +2021,83 @@ export class PromptHandler {
     console.log(`[PromptHandler] Delete ephemeral session ${sessionId}: ${res.status}`);
   }
 
+  // ─── Pre-Compaction Memory Flush ──────────────────────────────────────
+
+  private getModelContextLimit(channel: ChannelSession): number {
+    if (channel.lastUsedModel) {
+      const limit = this.modelContextLimits.get(channel.lastUsedModel);
+      if (limit) return limit;
+    }
+    return 200_000; // Conservative default
+  }
+
+  private async checkAndTriggerMemoryFlush(channel: ChannelSession): Promise<void> {
+    if (channel.memoryFlushInProgress) return;
+
+    const totalTokens = channel.cumulativeInputTokens + channel.cumulativeOutputTokens;
+    const contextLimit = this.getModelContextLimit(channel);
+    const threshold = contextLimit * FLUSH_THRESHOLD_RATIO;
+
+    const tokenTriggered = totalTokens > 0 && totalTokens >= threshold;
+    const turnsSinceFlush = channel.turnCount - channel.lastFlushTurnCount;
+    const turnTriggered = totalTokens === 0 && turnsSinceFlush >= FLUSH_TURN_INTERVAL;
+
+    if (!tokenTriggered && !turnTriggered) return;
+
+    console.log(
+      `[PromptHandler] Pre-compaction flush triggered for ${channel.channelKey}: ` +
+      `tokens=${totalTokens}/${contextLimit} turns=${turnsSinceFlush}`
+    );
+    await this.executeMemoryFlush(channel);
+  }
+
+  private async executeMemoryFlush(channel: ChannelSession): Promise<void> {
+    const sessionId = channel.opencodeSessionId;
+    if (!sessionId) return;
+
+    channel.memoryFlushInProgress = true;
+
+    let forkedSessionId: string | null = null;
+    try {
+      // 1. Fork the current session — clone gets full conversation history
+      const forkRes = await fetch(`${this.opencodeUrl}/session/${sessionId}/fork`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+      });
+      if (!forkRes.ok) {
+        console.warn(`[PromptHandler] Failed to fork session for memory flush: ${forkRes.status}`);
+        return;
+      }
+      const forkData = await forkRes.json() as { id: string };
+      forkedSessionId = forkData.id;
+      console.log(`[PromptHandler] Forked session ${sessionId} → ${forkedSessionId} for memory flush`);
+
+      // 2. Register for ephemeral capture (reuses existing pattern from reviews)
+      this.ephemeralContent.set(forkedSessionId, "");
+      const idlePromise = this.pollUntilIdle(forkedSessionId, FLUSH_TIMEOUT_MS);
+
+      // 3. Send flush prompt to the FORKED session
+      await this.sendPromptAsync(forkedSessionId, MEMORY_FLUSH_PROMPT);
+
+      // 4. Wait for completion
+      await idlePromise;
+
+      const response = (this.ephemeralContent.get(forkedSessionId) || "").trim();
+      console.log(`[PromptHandler] Memory flush complete (${response.length} chars response)`);
+    } catch (err) {
+      console.warn(`[PromptHandler] Memory flush failed:`, err);
+    } finally {
+      // 5. Clean up: delete the forked session
+      if (forkedSessionId) {
+        this.ephemeralContent.delete(forkedSessionId);
+        this.idleWaiters.delete(forkedSessionId);
+        this.deleteSession(forkedSessionId).catch(() => {});
+      }
+      channel.memoryFlushInProgress = false;
+      channel.lastFlushTurnCount = channel.turnCount;
+    }
+  }
+
   // ─── OpenCode HTTP API ───────────────────────────────────────────────
 
   private async createSession(): Promise<string> {
@@ -2057,7 +2197,7 @@ export class PromptHandler {
         all: Array<{
           id: string;
           name: string;
-          models: Record<string, { id: string; name: string }>;
+          models: Record<string, { id: string; name: string; limit?: { context?: number } }>;
         }>;
         connected: string[];
       };
@@ -2076,10 +2216,28 @@ export class PromptHandler {
         if (!connectedSet.has(provider.id)) continue;
         if (!provider.models || typeof provider.models !== "object") continue;
 
-        const models = Object.values(provider.models).map((m) => ({
-          id: `${provider.id}/${m.id}`,
-          name: m.name || m.id,
-        }));
+        let models = Object.values(provider.models).map((m) => {
+          // Populate context limits for pre-compaction flush detection
+          if (m.limit?.context && m.limit.context > 0) {
+            this.modelContextLimits.set(`${provider.id}/${m.id}`, m.limit.context);
+          }
+          return {
+            id: `${provider.id}/${m.id}`,
+            name: m.name || m.id,
+          };
+        });
+
+        // Filter to admin-configured models unless showAll is enabled (works for both custom and built-in providers)
+        const cpConfig = this.providerModelConfigs.get(provider.id);
+        if (cpConfig && !cpConfig.showAll) {
+          models = models.filter((m) => {
+            // m.id is "providerId/modelId", extract the modelId portion
+            const slashIdx = m.id.indexOf("/");
+            const modelId = slashIdx >= 0 ? m.id.slice(slashIdx + 1) : m.id;
+            return cpConfig.modelIds.has(modelId);
+          });
+        }
+
         if (models.length > 0) {
           result.push({ provider: provider.name || provider.id, models });
         }
@@ -2630,12 +2788,22 @@ export class PromptHandler {
         break;
       }
 
+      case "session.compacted": {
+        if (eventChannel) {
+          console.log(`[PromptHandler] Session compacted for ${eventChannel.channelKey}`);
+          eventChannel.cumulativeInputTokens = 0;
+          eventChannel.cumulativeOutputTokens = 0;
+          eventChannel.countedTokenMessageIds.clear();
+          eventChannel.lastFlushTurnCount = eventChannel.turnCount;
+        }
+        break;
+      }
+
       case "server.connected":
       case "server.heartbeat":
       case "session.created":
       case "session.updated":
       case "session.deleted":
-      case "session.compacted":
       case "session.diff":
       case "message.removed":
       case "message.part.removed":
@@ -2910,6 +3078,34 @@ export class PromptHandler {
       this.lastChunkTime = Date.now();
       this.resetResponseTimeout();
     }
+
+    // Track last-used model for context limit lookups (before currentModelPreferences is cleared)
+    if (role === "assistant" && this.activeChannel) {
+      // Try model info from message.updated properties first
+      const modelId = info.modelID as string | undefined;
+      const providerId = info.providerID as string | undefined;
+      if (modelId && providerId) {
+        this.activeChannel.lastUsedModel = `${providerId}/${modelId}`;
+      } else if (this.activeChannel.currentModelPreferences?.[this.activeChannel.currentModelIndex]) {
+        this.activeChannel.lastUsedModel = this.activeChannel.currentModelPreferences[this.activeChannel.currentModelIndex];
+      }
+    }
+
+    // Accumulate token counts for pre-compaction detection (dedup by message ID)
+    if (role === "assistant" && this.activeChannel && ocMessageId) {
+      if (!this.activeChannel.countedTokenMessageIds.has(ocMessageId)) {
+        const tokenObj = info.tokens as Record<string, unknown> | undefined;
+        if (tokenObj) {
+          const input = typeof tokenObj.input === "number" ? tokenObj.input : 0;
+          const output = typeof tokenObj.output === "number" ? tokenObj.output : 0;
+          if (input > 0 || output > 0) {
+            this.activeChannel.countedTokenMessageIds.add(ocMessageId);
+            this.activeChannel.cumulativeInputTokens += input;
+            this.activeChannel.cumulativeOutputTokens += output;
+          }
+        }
+      }
+    }
   }
 
   private handleSessionStatus(props: Record<string, unknown>): void {
@@ -3125,6 +3321,16 @@ export class PromptHandler {
 
       // Notify client that agent is idle
       this.agentClient.sendAgentStatus("idle");
+
+      // Check for pre-compaction memory flush after each turn
+      const flushChannel = this.activeChannel;
+      if (flushChannel && !flushChannel.memoryFlushInProgress) {
+        flushChannel.turnCount++;
+        // Schedule async — don't block finalization
+        this.checkAndTriggerMemoryFlush(flushChannel).catch(err =>
+          console.warn("[PromptHandler] Memory flush check failed:", err)
+        );
+      }
 
       // Report files changed after each turn
       this.reportFilesChanged().catch((err) =>
