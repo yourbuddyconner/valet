@@ -8,6 +8,7 @@ import { listWorkflows, upsertWorkflow, getWorkflowByIdOrSlug, getWorkflowOwnerC
 import { listTriggers, getTrigger, deleteTrigger, createTrigger, getTriggerForRun, updateTriggerLastRun, findScheduleTriggerByNameAndWorkflow, findScheduleTriggersByWorkflow, findScheduleTriggersByName, updateTriggerFull } from '../lib/db/triggers.js';
 import { getExecution, getExecutionWithWorkflowName, getExecutionForAuth, getExecutionSteps, getExecutionOwnerAndStatus, checkIdempotencyKey, createExecution, completeExecutionFull, upsertExecutionStep, listExecutions } from '../lib/db/executions.js';
 import { checkWorkflowConcurrency, createWorkflowSession, dispatchOrchestratorPrompt, enqueueWorkflowExecution, sha256Hex } from '../lib/workflow-runtime.js';
+import { assembleCustomProviders } from '../lib/env-assembly.js';
 import { channelRegistry } from '../channels/registry.js';
 import type { ChannelTarget, ChannelContext } from '@agent-ops/sdk';
 import { validateWorkflowDefinition } from '../lib/workflow-definition.js';
@@ -7576,9 +7577,10 @@ export class SessionAgentDO {
 
   /**
    * Send current OpenCode config to the runner so it can apply it.
-   * Reads provider keys and settings from the spawnRequest envVars.
+   * Reads provider keys from spawnRequest envVars and re-fetches custom
+   * providers from D1 so admin changes take effect without session restart.
    */
-  private sendOpenCodeConfig(): void {
+  private async sendOpenCodeConfig(): Promise<void> {
     const spawnRequestStr = this.getStateValue('spawnRequest');
     if (!spawnRequestStr) {
       console.warn('[SessionAgentDO] sendOpenCodeConfig: no spawnRequest in state, skipping');
@@ -7614,9 +7616,18 @@ export class SessionAgentDO {
       config.tools!.parallel_data_enrichment = false;
     }
 
-    // Attach custom providers if present
-    if (spawnRequest.customProviders && spawnRequest.customProviders.length > 0) {
-      config.customProviders = spawnRequest.customProviders;
+    // Re-fetch custom providers from D1 so admin changes take effect immediately
+    try {
+      const freshProviders = await assembleCustomProviders(this.appDb, this.env.ENCRYPTION_KEY);
+      if (freshProviders.length > 0) {
+        config.customProviders = freshProviders;
+      }
+    } catch (err) {
+      console.warn('[SessionAgentDO] sendOpenCodeConfig: failed to fetch custom providers from D1, falling back to spawnRequest', err);
+      // Fallback to stale spawnRequest data
+      if (spawnRequest.customProviders && spawnRequest.customProviders.length > 0) {
+        config.customProviders = spawnRequest.customProviders;
+      }
     }
 
     console.log(`[SessionAgentDO] Sending opencode-config to runner (providers=${Object.keys(config.providerKeys!).length}, customProviders=${config.customProviders?.length ?? 0}, isOrchestrator=${config.isOrchestrator})`);
