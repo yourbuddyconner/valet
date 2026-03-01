@@ -31,15 +31,3 @@ export const syncLogs = sqliteTable('sync_logs', {
   index('idx_sync_logs_integration').on(table.integrationId),
 ]);
 
-export const syncedEntities = sqliteTable('synced_entities', {
-  id: text().primaryKey(),
-  integrationId: text().notNull().references(() => integrations.id, { onDelete: 'cascade' }),
-  entityType: text().notNull(),
-  externalId: text().notNull(),
-  data: text().notNull(),
-  syncedAt: text().default(sql`(datetime('now'))`),
-}, (table) => [
-  uniqueIndex('idx_synced_entities_unique').on(table.integrationId, table.entityType, table.externalId),
-  index('idx_synced_entities_integration').on(table.integrationId),
-  index('idx_synced_entities_type').on(table.integrationId, table.entityType),
-]);

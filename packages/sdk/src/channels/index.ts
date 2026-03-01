@@ -111,18 +111,9 @@ export interface ChannelTransport {
   unregisterWebhook?(ctx: ChannelContext): Promise<boolean>;
 }
 
-// ─── Integration Stubs (future action-sdk types) ─────────────────────────────
+// ─── Integration Provider (re-exported from integrations module) ─────────────
 
-export interface IntegrationProvider {
-  service: string;
-  displayName: string;
-  authType: 'oauth2' | 'bot_token' | 'api_key';
-}
-
-export interface ActionPackage {
-  name: string;
-  version: string;
-}
+export type { IntegrationProvider } from '../integrations/index.js';
 
 // ─── Channel Package Manifest ────────────────────────────────────────────────
 
@@ -131,6 +122,5 @@ export interface ChannelPackage {
   version: string;
   channelType: string;
   createTransport(): ChannelTransport;
-  provider?: IntegrationProvider;
-  actionPackage?: ActionPackage;
+  provider?: import('../integrations/index.js').IntegrationProvider;
 }

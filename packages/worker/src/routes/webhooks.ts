@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import type { Env, Variables } from '../env.js';
-import { integrationRegistry } from '../integrations/base.js';
+import { integrationRegistry } from '../integrations/registry.js';
 import * as webhookService from '../services/webhooks.js';
 
 export const webhooksRouter = new Hono<{ Bindings: Env; Variables: Variables }>();
@@ -59,7 +59,6 @@ webhooksRouter.all('/*', async (c, next) => {
  * Handle GitHub webhook events
  */
 webhooksRouter.post('/github', async (c) => {
-  const signature = c.req.header('X-Hub-Signature-256');
   const event = c.req.header('X-GitHub-Event');
   const deliveryId = c.req.header('X-GitHub-Delivery');
 
@@ -67,16 +66,25 @@ webhooksRouter.post('/github', async (c) => {
     return c.json({ error: 'Missing event header' }, 400);
   }
 
-  const payload = await c.req.json();
+  const rawBody = await c.req.raw.clone().text();
 
-  // Verify webhook signature if secret is configured
+  // Verify webhook signature via trigger source
   const webhookSecret = c.env.GITHUB_WEBHOOK_SECRET;
   if (webhookSecret) {
-    const isValid = await verifyGitHubSignature(signature, payload, webhookSecret);
-    if (!isValid) {
-      return c.json({ error: 'Invalid signature' }, 401);
+    const triggers = integrationRegistry.getTriggers('github');
+    if (triggers) {
+      const rawHeaders: Record<string, string> = {};
+      const sigHeader = c.req.header('X-Hub-Signature-256');
+      if (sigHeader) rawHeaders['x-hub-signature-256'] = sigHeader;
+
+      const isValid = await triggers.verifySignature(rawHeaders, rawBody, webhookSecret);
+      if (!isValid) {
+        return c.json({ error: 'Invalid signature' }, 401);
+      }
     }
   }
+
+  const payload = JSON.parse(rawBody);
 
   console.log(`GitHub webhook: ${event} (${deliveryId})`);
 
@@ -93,16 +101,6 @@ webhooksRouter.post('/github', async (c) => {
       await webhookService.handlePushWebhook(c.env, payload);
     } catch (error) {
       console.error('Push webhook handler error:', error);
-    }
-  }
-
-  // Forward to integration handler for general sync
-  const handler = integrationRegistry.get('github');
-  if (handler) {
-    try {
-      await handler.handleWebhook(event, payload);
-    } catch (error) {
-      console.error('Webhook handler error:', error);
     }
   }
 
@@ -169,30 +167,3 @@ webhooksRouter.post('/xero', async (c) => {
 
   return c.json({ received: true });
 });
-
-/**
- * Webhook signature verification helpers
- */
-async function verifyGitHubSignature(
-  signature: string | undefined,
-  payload: unknown,
-  secret: string
-): Promise<boolean> {
-  if (!signature) return false;
-
-  const encoder = new TextEncoder();
-  const key = await crypto.subtle.importKey(
-    'raw',
-    encoder.encode(secret),
-    { name: 'HMAC', hash: 'SHA-256' },
-    false,
-    ['sign']
-  );
-
-  const sig = await crypto.subtle.sign('HMAC', key, encoder.encode(JSON.stringify(payload)));
-  const expected = 'sha256=' + Array.from(new Uint8Array(sig))
-    .map((b) => b.toString(16).padStart(2, '0'))
-    .join('');
-
-  return signature === expected;
-}

@@ -30,7 +30,7 @@ describe('TelegramTransport', () => {
   // ─── verifySignature ──────────────────────────────────────────────
 
   it('always returns true (Telegram uses URL-based auth)', () => {
-    expect(transport.verifySignature({}, '', '')).toBe(true);
+    expect(transport.verifySignature()).toBe(true);
   });
 
   // ─── scopeKeyParts ────────────────────────────────────────────────

@@ -263,7 +263,7 @@ export class TelegramTransport implements ChannelTransport {
     return null;
   }
 
-  scopeKeyParts(message: InboundMessage): { channelType: string; channelId: string } {
+  scopeKeyParts(message: InboundMessage, _userId: string): { channelType: string; channelId: string } {
     return { channelType: 'telegram', channelId: message.channelId };
   }
 

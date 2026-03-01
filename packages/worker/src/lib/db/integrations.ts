@@ -1,8 +1,8 @@
 import type { Integration, SyncStatusResponse } from '@agent-ops/shared';
-import { eq, and, ne, desc, gt, sql, asc } from 'drizzle-orm';
+import { eq, and, ne, desc, sql } from 'drizzle-orm';
 import type { AppDb } from '../drizzle.js';
 import { toDate } from '../drizzle.js';
-import { integrations, syncLogs, syncedEntities } from '../schema/index.js';
+import { integrations, syncLogs } from '../schema/index.js';
 
 function rowToIntegration(row: typeof integrations.$inferSelect): Integration {
   return {
@@ -174,60 +174,3 @@ export async function getSyncLog(db: AppDb, id: string): Promise<SyncStatusRespo
   };
 }
 
-// Synced entity operations
-export async function upsertSyncedEntity(
-  db: AppDb,
-  data: { integrationId: string; entityType: string; externalId: string; data: unknown }
-): Promise<void> {
-  const id = `${data.integrationId}:${data.entityType}:${data.externalId}`;
-  await db.insert(syncedEntities).values({
-    id,
-    integrationId: data.integrationId,
-    entityType: data.entityType,
-    externalId: data.externalId,
-    data: JSON.stringify(data.data),
-    syncedAt: sql`datetime('now')`,
-  }).onConflictDoUpdate({
-    target: [syncedEntities.integrationId, syncedEntities.entityType, syncedEntities.externalId],
-    set: {
-      data: sql`excluded.data`,
-      syncedAt: sql`datetime('now')`,
-    },
-  });
-}
-
-export async function getSyncedEntities(
-  db: AppDb,
-  integrationId: string,
-  entityType: string,
-  options: { limit?: number; cursor?: string } = {}
-): Promise<{ entities: unknown[]; cursor?: string; hasMore: boolean }> {
-  const limit = options.limit || 100;
-
-  const conditions = [
-    eq(syncedEntities.integrationId, integrationId),
-    eq(syncedEntities.entityType, entityType),
-  ];
-  if (options.cursor) {
-    conditions.push(gt(syncedEntities.externalId, options.cursor));
-  }
-
-  const rows = await db
-    .select()
-    .from(syncedEntities)
-    .where(and(...conditions))
-    .orderBy(asc(syncedEntities.externalId))
-    .limit(limit + 1);
-
-  const hasMore = rows.length > limit;
-  const entities = rows.slice(0, limit).map((row) => ({
-    id: row.externalId,
-    ...JSON.parse(row.data),
-  }));
-
-  return {
-    entities,
-    cursor: hasMore ? rows[limit - 1].externalId : undefined,
-    hasMore,
-  };
-}

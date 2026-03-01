@@ -1,6 +1,9 @@
 // Channel transport types (backend contract)
 export * from './channels/index.js';
 
+// Integration types (action/trigger/sync contracts)
+export * from './integrations/index.js';
+
 // Channel metadata (display info, capabilities — usable by both backend and frontend)
 export * from './meta.js';
 

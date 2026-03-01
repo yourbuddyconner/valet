@@ -15,6 +15,63 @@ importers:
         specifier: ^4.0.18
         version: 4.0.18(@types/node@25.0.9)(jiti@1.21.7)(tsx@4.21.0)
 
+  packages/actions-github:
+    dependencies:
+      '@agent-ops/sdk':
+        specifier: workspace:*
+        version: link:../sdk
+      '@agent-ops/shared':
+        specifier: workspace:*
+        version: link:../shared
+      zod:
+        specifier: ^3.22.4
+        version: 3.25.76
+    devDependencies:
+      typescript:
+        specifier: ^5.3.3
+        version: 5.9.3
+      vitest:
+        specifier: ^4.0.18
+        version: 4.0.18(@types/node@25.0.9)(jiti@1.21.7)(tsx@4.21.0)
+
+  packages/actions-gmail:
+    dependencies:
+      '@agent-ops/sdk':
+        specifier: workspace:*
+        version: link:../sdk
+      '@agent-ops/shared':
+        specifier: workspace:*
+        version: link:../shared
+      zod:
+        specifier: ^3.22.4
+        version: 3.25.76
+    devDependencies:
+      typescript:
+        specifier: ^5.3.3
+        version: 5.9.3
+      vitest:
+        specifier: ^4.0.18
+        version: 4.0.18(@types/node@25.0.9)(jiti@1.21.7)(tsx@4.21.0)
+
+  packages/actions-google-calendar:
+    dependencies:
+      '@agent-ops/sdk':
+        specifier: workspace:*
+        version: link:../sdk
+      '@agent-ops/shared':
+        specifier: workspace:*
+        version: link:../shared
+      zod:
+        specifier: ^3.22.4
+        version: 3.25.76
+    devDependencies:
+      typescript:
+        specifier: ^5.3.3
+        version: 5.9.3
+      vitest:
+        specifier: ^4.0.18
+        version: 4.0.18(@types/node@25.0.9)(jiti@1.21.7)(tsx@4.21.0)
+
   packages/channel-slack:
     dependencies:
       '@agent-ops/sdk':
@@ -173,6 +230,13 @@ importers:
         version: 5.9.3
 
   packages/sdk:
+    dependencies:
+      '@agent-ops/shared':
+        specifier: workspace:*
+        version: link:../shared
+      zod:
+        specifier: ^3.22.4
+        version: 3.25.76
     devDependencies:
       '@types/react':
         specifier: ^19.0.0
@@ -198,6 +262,15 @@ importers:
 
   packages/worker:
     dependencies:
+      '@agent-ops/actions-github':
+        specifier: workspace:*
+        version: link:../actions-github
+      '@agent-ops/actions-gmail':
+        specifier: workspace:*
+        version: link:../actions-gmail
+      '@agent-ops/actions-google-calendar':
+        specifier: workspace:*
+        version: link:../actions-google-calendar
       '@agent-ops/channel-slack':
         specifier: workspace:*
         version: link:../channel-slack

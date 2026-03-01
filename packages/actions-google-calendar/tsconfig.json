@@ -3,9 +3,8 @@
   "compilerOptions": {
     "outDir": "./dist",
     "rootDir": "./src",
-    "jsx": "react-jsx",
     "types": []
   },
   "include": ["src/**/*"],
-  "references": [{ "path": "../shared" }]
+  "references": [{ "path": "../sdk" }, { "path": "../shared" }]
 }

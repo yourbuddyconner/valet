@@ -19,6 +19,9 @@
     { "path": "./packages/sdk" },
     { "path": "./packages/channel-telegram" },
     { "path": "./packages/channel-slack" },
+    { "path": "./packages/actions-github" },
+    { "path": "./packages/actions-gmail" },
+    { "path": "./packages/actions-google-calendar" },
     { "path": "./packages/worker" }
   ]
 }

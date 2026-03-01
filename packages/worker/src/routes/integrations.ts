@@ -1,18 +1,29 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { zValidator } from '@hono/zod-validator';
-import { NotFoundError, ValidationError, IntegrationError, ErrorCodes } from '@agent-ops/shared';
-import type { IntegrationService } from '@agent-ops/shared';
+import { NotFoundError, ValidationError } from '@agent-ops/shared';
+import type { OAuthConfig } from '@agent-ops/sdk';
 import type { Env, Variables } from '../env.js';
 import * as db from '../lib/db.js';
 import * as integrationService from '../services/integrations.js';
-import { integrationRegistry } from '../integrations/base.js';
+import { integrationRegistry } from '../integrations/registry.js';
 import { revokeCredential } from '../services/credentials.js';
-import '../integrations/github.js'; // Register GitHub integration
-import '../integrations/gmail.js'; // Register Gmail integration
-import '../integrations/google-calendar.js'; // Register Google Calendar integration
 
 export const integrationsRouter = new Hono<{ Bindings: Env; Variables: Variables }>();
+
+// ─── Helpers ────────────────────────────────────────────────────────────────
+
+/** Resolve OAuth client credentials from env vars for a given service. */
+function resolveOAuthConfig(service: string, env: Env): OAuthConfig {
+  if (service === 'github') {
+    return { clientId: env.GITHUB_CLIENT_ID, clientSecret: env.GITHUB_CLIENT_SECRET };
+  }
+  // Gmail, Google Calendar, and Google Drive all use the same Google OAuth app
+  if (service === 'gmail' || service === 'google_calendar' || service === 'google_drive') {
+    return { clientId: env.GOOGLE_CLIENT_ID, clientSecret: env.GOOGLE_CLIENT_SECRET };
+  }
+  throw new ValidationError(`OAuth not configured for service: ${service}`);
+}
 
 // Validation schemas
 const configureIntegrationSchema = z.object({
@@ -76,18 +87,20 @@ integrationsRouter.get('/', async (c) => {
 
 /**
  * GET /api/integrations/available
- * List available integration services
+ * List available integration services with rich metadata
  */
 integrationsRouter.get('/available', async (c) => {
-  const services = integrationRegistry.list();
+  const packages = integrationRegistry.listPackages();
 
-  const available = services.map((service) => {
-    const integration = integrationRegistry.get(service);
-    return {
-      service,
-      supportedEntities: integration?.supportedEntities || [],
-    };
-  });
+  const available = packages.map((pkg) => ({
+    service: pkg.service,
+    displayName: pkg.provider.displayName,
+    authType: pkg.provider.authType,
+    supportedEntities: pkg.provider.supportedEntities,
+    hasActions: !!pkg.actions,
+    hasTriggers: !!pkg.triggers,
+    hasSync: !!pkg.sync,
+  }));
 
   return c.json({ services: available });
 });
@@ -100,11 +113,8 @@ integrationsRouter.post('/', zValidator('json', configureIntegrationSchema), asy
   const user = c.get('user');
   const body = c.req.valid('json');
 
-  const result = await integrationService.configureIntegration(c.env, user.id, user.email, body);
-  if (!result.ok) {
-    return c.json({ error: result.error }, 400);
-  }
-  return c.json({ integration: result.integration }, 201);
+  const integration = await integrationService.configureIntegration(c.env, user.id, user.email, body);
+  return c.json({ integration }, 201);
 });
 
 /**
@@ -181,33 +191,6 @@ integrationsRouter.get('/:id/sync/:syncId', async (c) => {
 });
 
 /**
- * GET /api/integrations/:id/entities/:type
- * Get synced entities
- */
-integrationsRouter.get('/:id/entities/:type', async (c) => {
-  const user = c.get('user');
-  const { id, type } = c.req.param();
-  const { limit, cursor } = c.req.query();
-
-  const integration = await db.getIntegration(c.get('db'), id);
-
-  if (!integration) {
-    throw new NotFoundError('Integration', id);
-  }
-
-  if (integration.userId !== user.id) {
-    throw new NotFoundError('Integration', id);
-  }
-
-  const result = await db.getSyncedEntities(c.get('db'), id, type, {
-    limit: limit ? parseInt(limit) : undefined,
-    cursor,
-  });
-
-  return c.json(result);
-});
-
-/**
  * DELETE /api/integrations/:id
  * Remove an integration
  */
@@ -228,7 +211,7 @@ integrationsRouter.delete('/:id', async (c) => {
   // Revoke credentials in unified credentials table
   await revokeCredential(c.env, user.id, integration.service);
 
-  // Delete integration record (cascades to sync_logs and synced_entities)
+  // Delete integration record (cascades to sync_logs)
   await db.deleteIntegration(c.get('db'), id);
 
   return c.json({ success: true });
@@ -246,26 +229,14 @@ integrationsRouter.get('/:service/oauth', async (c) => {
     throw new ValidationError('redirect_uri is required');
   }
 
-  const integration = integrationRegistry.get(service as IntegrationService);
-  if (!integration || !integration.getOAuthUrl) {
+  const provider = integrationRegistry.getProvider(service);
+  if (!provider?.getOAuthUrl) {
     throw new ValidationError(`OAuth not supported for ${service}`);
   }
 
-  // Set client credentials based on service
-  if (service === 'github') {
-    integration.setCredentials({
-      client_id: c.env.GITHUB_CLIENT_ID,
-      client_secret: c.env.GITHUB_CLIENT_SECRET,
-    });
-  } else if (service === 'gmail' || service === 'google_calendar' || service === 'google_drive') {
-    integration.setCredentials({
-      client_id: c.env.GOOGLE_CLIENT_ID,
-      client_secret: c.env.GOOGLE_CLIENT_SECRET,
-    });
-  }
-
+  const oauth = resolveOAuthConfig(service, c.env);
   const state = crypto.randomUUID();
-  const url = integration.getOAuthUrl(redirect_uri, state);
+  const url = provider.getOAuthUrl(oauth, redirect_uri, state);
 
   return c.json({ url, state });
 });
@@ -275,7 +246,6 @@ integrationsRouter.get('/:service/oauth', async (c) => {
  * Handle OAuth callback
  */
 integrationsRouter.post('/:service/oauth/callback', async (c) => {
-  const user = c.get('user');
   const { service } = c.req.param();
   const { code, redirect_uri } = await c.req.json<{ code: string; redirect_uri: string }>();
 
@@ -283,25 +253,13 @@ integrationsRouter.post('/:service/oauth/callback', async (c) => {
     throw new ValidationError('code and redirect_uri are required');
   }
 
-  const integration = integrationRegistry.get(service as IntegrationService);
-  if (!integration || !integration.exchangeOAuthCode) {
+  const provider = integrationRegistry.getProvider(service);
+  if (!provider?.exchangeOAuthCode) {
     throw new ValidationError(`OAuth not supported for ${service}`);
   }
 
-  // Set client credentials based on service
-  if (service === 'github') {
-    integration.setCredentials({
-      client_id: c.env.GITHUB_CLIENT_ID,
-      client_secret: c.env.GITHUB_CLIENT_SECRET,
-    });
-  } else if (service === 'gmail' || service === 'google_calendar' || service === 'google_drive') {
-    integration.setCredentials({
-      client_id: c.env.GOOGLE_CLIENT_ID,
-      client_secret: c.env.GOOGLE_CLIENT_SECRET,
-    });
-  }
-
-  const credentials = await integration.exchangeOAuthCode(code, redirect_uri);
+  const oauth = resolveOAuthConfig(service, c.env);
+  const credentials = await provider.exchangeOAuthCode(oauth, code, redirect_uri);
 
   return c.json({ credentials });
 });

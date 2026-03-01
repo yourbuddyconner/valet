@@ -1,13 +1,9 @@
-import { IntegrationError, ValidationError, ErrorCodes } from '@agent-ops/shared';
-import type { IntegrationService } from '@agent-ops/shared';
+import { IntegrationError, ValidationError, NotFoundError, ErrorCodes } from '@agent-ops/shared';
 import type { Env } from '../env.js';
 import * as db from '../lib/db.js';
 import { getDb } from '../lib/drizzle.js';
-import { integrationRegistry } from '../integrations/base.js';
+import { integrationRegistry } from '../integrations/registry.js';
 import { storeCredential, getCredential } from '../services/credentials.js';
-import '../integrations/github.js';
-import '../integrations/gmail.js';
-import '../integrations/google-calendar.js';
 
 // ─── Configure Integration ──────────────────────────────────────────────────
 
@@ -21,16 +17,20 @@ export interface ConfigureIntegrationParams {
   };
 }
 
-export type ConfigureIntegrationResult =
-  | { ok: true; integration: { id: string; service: string; status: string; config: Record<string, unknown>; createdAt: Date } }
-  | { ok: false; error: string; code: string };
+export interface ConfiguredIntegration {
+  id: string;
+  service: string;
+  status: string;
+  config: Record<string, unknown>;
+  createdAt: Date;
+}
 
 export async function configureIntegration(
   env: Env,
   userId: string,
   userEmail: string,
   params: ConfigureIntegrationParams,
-): Promise<ConfigureIntegrationResult> {
+): Promise<ConfiguredIntegration> {
   const appDb = getDb(env.DB);
   // Check if integration already exists
   const existing = await db.getUserIntegrations(appDb, userId);
@@ -41,19 +41,18 @@ export async function configureIntegration(
     );
   }
 
-  // Get the integration handler
-  const integration = integrationRegistry.get(params.service as IntegrationService);
-  if (!integration) {
+  // Get the integration provider
+  const provider = integrationRegistry.getProvider(params.service);
+  if (!provider) {
     throw new ValidationError(`Unsupported integration: ${params.service}`);
   }
 
-  // Test credentials
-  integration.setCredentials(params.credentials);
-  if (!integration.validateCredentials()) {
+  // Test credentials (stateless — no setCredentials)
+  if (!provider.validateCredentials(params.credentials)) {
     throw new IntegrationError('Invalid credentials provided', ErrorCodes.INVALID_CREDENTIALS);
   }
 
-  const connectionValid = await integration.testConnection();
+  const connectionValid = await provider.testConnection(params.credentials);
   if (!connectionValid) {
     throw new IntegrationError('Failed to connect to service', ErrorCodes.INTEGRATION_AUTH_FAILED);
   }
@@ -80,14 +79,11 @@ export async function configureIntegration(
   await db.updateIntegrationStatus(appDb, integrationId, 'active');
 
   return {
-    ok: true,
-    integration: {
-      id: created.id,
-      service: created.service,
-      status: 'active',
-      config: created.config as unknown as Record<string, unknown>,
-      createdAt: created.createdAt,
-    },
+    id: created.id,
+    service: created.service,
+    status: 'active',
+    config: created.config as unknown as Record<string, unknown>,
+    createdAt: created.createdAt,
   };
 }
 
@@ -108,19 +104,19 @@ export async function triggerIntegrationSync(
   const appDb = getDb(env.DB);
   const integration = await db.getIntegration(appDb, integrationId);
   if (!integration) {
-    throw new (await import('@agent-ops/shared')).NotFoundError('Integration', integrationId);
+    throw new NotFoundError('Integration', integrationId);
   }
   if (integration.userId !== userId) {
-    throw new (await import('@agent-ops/shared')).NotFoundError('Integration', integrationId);
+    throw new NotFoundError('Integration', integrationId);
   }
   if (integration.status !== 'active') {
     throw new IntegrationError('Integration is not active', ErrorCodes.INTEGRATION_AUTH_FAILED);
   }
 
-  // Get the integration handler
-  const handler = integrationRegistry.get(integration.service);
-  if (!handler) {
-    throw new ValidationError(`Unsupported integration: ${integration.service}`);
+  // Get the sync source
+  const syncSource = integrationRegistry.getSync(integration.service);
+  if (!syncSource) {
+    throw new ValidationError(`Sync not supported for: ${integration.service}`);
   }
 
   // Retrieve credentials from unified credentials table
@@ -128,7 +124,7 @@ export async function triggerIntegrationSync(
   if (!credResult.ok) {
     throw new IntegrationError('Failed to retrieve credentials', ErrorCodes.INTEGRATION_AUTH_FAILED);
   }
-  handler.setCredentials({ access_token: credResult.credential.accessToken });
+  const credentials = { access_token: credResult.credential.accessToken };
 
   // Create sync log
   const syncId = crypto.randomUUID();
@@ -140,7 +136,7 @@ export async function triggerIntegrationSync(
       try {
         await db.updateSyncLog(appDb, syncId, { status: 'running' });
 
-        const result = await handler.sync({
+        const result = await syncSource.sync(credentials, {
           entities: params.entities || integration.config.entities,
           fullSync: params.fullSync,
         });

@@ -11,7 +11,6 @@ import type {
   OutboundAttachment,
   RoutingMetadata,
   IntegrationProvider,
-  ActionPackage,
 } from './index.js';
 
 describe('channel-sdk type contracts', () => {
@@ -112,17 +111,16 @@ describe('channel-sdk type contracts', () => {
     expect(transport.unregisterWebhook).toBeUndefined();
   });
 
-  it('IntegrationProvider stub type is usable', () => {
+  it('IntegrationProvider type is usable', () => {
     const provider: IntegrationProvider = {
       service: 'test',
       displayName: 'Test',
       authType: 'api_key',
+      supportedEntities: ['items'],
+      validateCredentials: () => true,
+      testConnection: async () => true,
     };
     expect(provider.authType).toBe('api_key');
-  });
-
-  it('ActionPackage stub type is usable', () => {
-    const pkg: ActionPackage = { name: 'test-actions', version: '0.1.0' };
-    expect(pkg.name).toBe('test-actions');
+    expect(provider.supportedEntities).toEqual(['items']);
   });
 });
