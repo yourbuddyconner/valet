@@ -40,6 +40,7 @@ export class OpenCodeManager {
   private healthy = false;
   private stopping = false;
   private configLock: Promise<void> = Promise.resolve();
+  private configApplyCounter = 0;
 
   private readonly workspaceDir: string;
   private readonly port: number;
@@ -120,7 +121,15 @@ export class OpenCodeManager {
    * Returns whether a restart actually occurred.
    */
   applyConfig(partial: Partial<OpenCodeConfig>): Promise<{ restarted: boolean }> {
+    const myNonce = ++this.configApplyCounter;
+
     const next = this.configLock.then(async () => {
+      // If a newer applyConfig was queued behind us, skip — it has more recent config
+      if (myNonce < this.configApplyCounter) {
+        console.log("[OpenCodeManager] Skipping superseded config apply");
+        return { restarted: false };
+      }
+
       if (!this.currentConfig) {
         console.warn("[OpenCodeManager] applyConfig called before start, ignoring");
         return { restarted: false };

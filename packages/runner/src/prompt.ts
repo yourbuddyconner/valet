@@ -3205,15 +3205,13 @@ export class PromptHandler {
       this.clearFirstResponseTimeout();
 
       const messageId = this.activeMessageId;
-      // turnId is set by ensureTurnCreated() before any sends
-      const turnId = this.turnId;
       let content = this.streamedContent || this.latestAssistantTextSnapshot;
 
       // Send result, error, or fallback depending on what happened
       if (content) {
         console.log(`[PromptHandler] Sending result for ${messageId} (${content.length} chars): "${content.slice(0, 100)}..."`);
         this.ensureTurnCreated();
-        this.agentClient.sendTurnFinalize(turnId!, "end_turn", content);
+        this.agentClient.sendTurnFinalize(this.turnId!, "end_turn", content);
       } else if (this.lastError) {
         if (isRetriableProviderError(this.lastError)) {
           console.log(`[PromptHandler] Retriable assistant error for ${messageId} — attempting model failover`);
@@ -3235,12 +3233,12 @@ export class PromptHandler {
         }
         console.log(`[PromptHandler] Sending error for ${messageId}: ${this.lastError}`);
         this.ensureTurnCreated();
-        this.agentClient.sendTurnFinalize(turnId!, "error", undefined, this.lastError || undefined);
+        this.agentClient.sendTurnFinalize(this.turnId!, "error", undefined, this.lastError || undefined);
       } else if (this.toolStates.size > 0) {
         // Tools ran but no text was produced — this is normal for tool-only turns
         console.log(`[PromptHandler] Tools-only response for ${messageId} (${this.toolStates.size} tools ran)`);
         this.ensureTurnCreated();
-        this.agentClient.sendTurnFinalize(turnId!, "end_turn");
+        this.agentClient.sendTurnFinalize(this.turnId!, "end_turn");
       } else {
         const recovered = await this.recoverAssistantTextOrError();
         if (recovered.error) {
@@ -3252,7 +3250,7 @@ export class PromptHandler {
             `[PromptHandler] Recovered assistant text for ${messageId} from message API (${recovered.text.length} chars)`
           );
           this.ensureTurnCreated();
-          this.agentClient.sendTurnFinalize(turnId!, "end_turn", recovered.text);
+          this.agentClient.sendTurnFinalize(this.turnId!, "end_turn", recovered.text);
         } else if (this.lastError) {
           if (isRetriableProviderError(this.lastError)) {
             console.log(`[PromptHandler] Retriable recovered error for ${messageId} — attempting model failover`);
@@ -3274,7 +3272,7 @@ export class PromptHandler {
           }
           console.log(`[PromptHandler] Sending recovered error for ${messageId}: ${this.lastError}`);
           this.ensureTurnCreated();
-          this.agentClient.sendTurnFinalize(turnId!, "error", undefined, this.lastError || undefined);
+          this.agentClient.sendTurnFinalize(this.turnId!, "error", undefined, this.lastError || undefined);
         } else {
           // Model produced nothing — try failover to next model before giving up
           console.warn(
@@ -3303,7 +3301,7 @@ export class PromptHandler {
           // No more models to try — send error
           console.log(`[PromptHandler] No failover available for ${messageId} — sending empty response error`);
           this.ensureTurnCreated();
-          this.agentClient.sendTurnFinalize(turnId!, "error", undefined, this.lastError || "The model did not respond. Try again or switch to a different model.");
+          this.agentClient.sendTurnFinalize(this.turnId!, "error", undefined, this.lastError || "The model did not respond. Try again or switch to a different model.");
         }
       }
 
@@ -3312,7 +3310,7 @@ export class PromptHandler {
       for (const [callID, { status, toolName }] of this.toolStates) {
         if (status === "pending" || status === "running") {
           console.log(`[PromptHandler] Flushing stuck tool "${toolName}" [${callID}] as completed (was: ${status})`);
-          this.agentClient.sendToolUpdate(turnId!, callID, toolName, "completed");
+          this.agentClient.sendToolUpdate(this.turnId!, callID, toolName, "completed");
         }
       }
 

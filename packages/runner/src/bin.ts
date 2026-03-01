@@ -51,6 +51,7 @@ const runnerToken = values["runner-token"];
 const sessionId = values["session-id"];
 const gatewayPort = parseInt(values["gateway-port"] || "9000", 10);
 const INITIAL_CONNECT_MAX_DELAY_MS = 30_000;
+const CONFIG_WAIT_TIMEOUT_MS = 30_000;
 
 if (!opencodeUrl || !doUrl || !runnerToken || !sessionId) {
   console.error("Error: --opencode-url, --do-url, --runner-token, and --session-id are required");
@@ -94,7 +95,7 @@ async function main() {
   const configSourceDir = "/opencode-config";
   const authJsonPath = "/root/.local/share/opencode/auth.json";
 
-  // ─── Start OpenCode (before DO connection) ──────────────────────────
+  // ─── Create OpenCode Manager (defer start until DO sends config) ────
   const openCodeManager = new OpenCodeManager({
     workspaceDir,
     port: parseInt(opencodePort, 10),
@@ -102,10 +103,11 @@ async function main() {
     authJsonPath,
   });
 
-  const initialConfig = buildInitialConfig();
-  console.log(`[Runner] Starting OpenCode with ${Object.keys(initialConfig.providerKeys).length} provider key(s)`);
-  await openCodeManager.start(initialConfig);
-  console.log(`[Runner] OpenCode URL: ${openCodeManager.getUrl()}`);
+  // Promise that resolves when the first opencode-config message arrives from the DO
+  let resolveFirstConfig: ((config: Partial<OpenCodeConfig>) => void) | null = null;
+  const firstConfigPromise = new Promise<Partial<OpenCodeConfig>>((resolve) => {
+    resolveFirstConfig = resolve;
+  });
 
   // ─── Connect to SessionAgent DO ─────────────────────────────────────
   const agentClient = new AgentClient(doUrl!, runnerToken!);
@@ -343,6 +345,16 @@ async function main() {
   // ─── OpenCode Config Handler ──────────────────────────────────────────
   agentClient.onOpenCodeConfig(async (config) => {
     console.log("[Runner] Received opencode-config from DO");
+
+    // First config: resolve the promise so main() handles the initial start
+    if (resolveFirstConfig) {
+      console.log("[Runner] First opencode-config received, deferring to boot sequence");
+      resolveFirstConfig(config);
+      resolveFirstConfig = null;
+      return;
+    }
+
+    // Subsequent configs: hot-reload via applyConfig (for admin config pushes)
     try {
       promptHandler.setProviderModelConfigs(config.customProviders, config.builtInProviderModelConfigs);
       await promptHandler.handleOpenCodeRestart();
@@ -393,20 +405,55 @@ async function main() {
     }
   }
 
-  console.log("[Runner] Ready and waiting for prompts");
+  // ─── Wait for DO config, then start OpenCode (single start) ─────────
+  console.log("[Runner] Waiting for opencode-config from DO...");
 
-  // Discover available models from OpenCode and send to DO
+  const doConfig = await Promise.race([
+    firstConfigPromise,
+    new Promise<null>((resolve) => setTimeout(() => resolve(null), CONFIG_WAIT_TIMEOUT_MS)),
+  ]);
+
+  const initialConfig = buildInitialConfig();
+
+  if (doConfig) {
+    console.log("[Runner] Got opencode-config from DO, merging with env config");
+    // Merge DO config on top of env-based config
+    Object.assign(initialConfig, {
+      tools: { ...initialConfig.tools, ...(doConfig.tools || {}) },
+      providerKeys: { ...initialConfig.providerKeys, ...(doConfig.providerKeys || {}) },
+      instructions: doConfig.instructions ?? initialConfig.instructions,
+      isOrchestrator: doConfig.isOrchestrator ?? initialConfig.isOrchestrator,
+      customProviders: doConfig.customProviders ?? initialConfig.customProviders,
+    });
+    // Set provider/model filtering from DO config before model discovery
+    promptHandler.setProviderModelConfigs(
+      (doConfig as any).customProviders,
+      (doConfig as any).builtInProviderModelConfigs,
+    );
+  } else {
+    console.warn("[Runner] Timed out waiting for opencode-config from DO, starting with env-only config");
+    // Consume the first-config resolver so late arrivals go through the hot-reload path
+    resolveFirstConfig = null;
+  }
+
+  console.log(`[Runner] Starting OpenCode with ${Object.keys(initialConfig.providerKeys).length} provider key(s)`);
+  await openCodeManager.start(initialConfig);
+  console.log(`[Runner] OpenCode URL: ${openCodeManager.getUrl()}`);
+
+  // Discover available models with the full config in place
   const models = await promptHandler.fetchAvailableModels();
   if (models.length > 0) {
     agentClient.sendModels(models);
     console.log(`[Runner] Sent ${models.length} provider(s) to DO`);
   }
 
-  // Signal readiness to the DO so it can drain any queued prompts.
-  // OpenCode doesn't emit session.status:idle on fresh start (idle is the
-  // implicit default), so the Runner must send this explicitly.
+  // Ack config to the DO
+  agentClient.sendOpenCodeConfigApplied(true, false);
+
+  // Signal readiness AFTER OpenCode is fully started and models discovered.
+  // This triggers the DO to drain any queued prompts.
   agentClient.sendAgentStatus("idle");
-  console.log("[Runner] Sent initial agentStatus: idle to DO");
+  console.log("[Runner] Ready — sent initial agentStatus: idle to DO");
 }
 
 main().catch((err) => {
