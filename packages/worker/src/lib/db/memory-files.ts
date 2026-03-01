@@ -433,6 +433,24 @@ export async function boostMemoryFileRelevance(db: AppDb, userId: string, path: 
     .where(and(eq(orchestratorMemoryFiles.userId, userId), eq(orchestratorMemoryFiles.path, normalized)));
 }
 
+// ─── Journal Auto-Creation ──────────────────────────────────────────────────
+
+export async function ensureTodayJournal(rawDb: D1Database, userId: string): Promise<void> {
+  const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+  const path = `journal/${today}.md`;
+  const normalized = normalizePath(path);
+  const existing = await rawDb
+    .prepare('SELECT id FROM orchestrator_memory_files WHERE user_id = ? AND path = ?')
+    .bind(userId, normalized)
+    .first();
+  if (existing) return;
+  try {
+    await writeMemoryFile(rawDb, userId, path, `# ${today}\n\n`);
+  } catch {
+    // Unique constraint race — another concurrent restart created it first. Safe to ignore.
+  }
+}
+
 // ─── Cap Enforcement ────────────────────────────────────────────────────────
 
 async function enforceMemoryCap(rawDb: D1Database, userId: string): Promise<void> {

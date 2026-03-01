@@ -5,6 +5,8 @@ import { getDb } from '../lib/drizzle.js';
 import { buildDoWebSocketUrl } from '../lib/do-ws-url.js';
 import { buildOrchestratorPersonaFiles } from '../lib/orchestrator-persona.js';
 import { generateRunnerToken, assembleProviderEnv, assembleCredentialEnv } from '../lib/env-assembly.js';
+import { ensureTodayJournal } from '../lib/db/memory-files.js';
+import { loadMemorySnapshot, formatMemorySnapshot } from '../lib/memory-snapshot.js';
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
@@ -22,6 +24,17 @@ export async function restartOrchestratorSession(
 ): Promise<{ sessionId: string }> {
   const appDb = getDb(env.DB);
   const personaFiles = buildOrchestratorPersonaFiles(identity as any);
+
+  // Ensure today's journal exists and load memory snapshot
+  await ensureTodayJournal(env.DB, userId);
+  const snapshot = await loadMemorySnapshot(env.DB, userId);
+  if (snapshot.files.length > 0) {
+    personaFiles.push({
+      filename: '02-MEMORY-SNAPSHOT.md',
+      content: formatMemorySnapshot(snapshot),
+      sortOrder: 2,
+    });
+  }
 
   const sessionId = `orchestrator:${userId}:${crypto.randomUUID()}`;
   const runnerToken = generateRunnerToken();
