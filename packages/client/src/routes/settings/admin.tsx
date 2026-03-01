@@ -12,6 +12,7 @@ import {
   useCustomProviders,
   useUpsertCustomProvider,
   useDeleteCustomProvider,
+  useDiscoverModels,
   useInvites,
   useCreateInvite,
   useDeleteInvite,
@@ -892,6 +893,112 @@ function CustomProviderRow({ provider }: { provider: import('@agent-ops/shared')
   );
 }
 
+function ModelIdInput({
+  value,
+  onChange,
+  discoveredModels,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  discoveredModels: string[];
+}) {
+  const [showDropdown, setShowDropdown] = React.useState(false);
+  const [highlightIndex, setHighlightIndex] = React.useState(0);
+  const inputRef = React.useRef<HTMLInputElement>(null);
+  const dropdownRef = React.useRef<HTMLDivElement>(null);
+
+  const filtered = React.useMemo(() => {
+    if (discoveredModels.length === 0) return [];
+    const q = value.toLowerCase();
+    if (!q) return discoveredModels;
+    return discoveredModels.filter((m) => m.toLowerCase().includes(q));
+  }, [value, discoveredModels]);
+
+  React.useEffect(() => {
+    setHighlightIndex(0);
+  }, [filtered.length]);
+
+  React.useEffect(() => {
+    function handleClick(e: MouseEvent) {
+      if (
+        dropdownRef.current && !dropdownRef.current.contains(e.target as Node) &&
+        inputRef.current && !inputRef.current.contains(e.target as Node)
+      ) {
+        setShowDropdown(false);
+      }
+    }
+    document.addEventListener('mousedown', handleClick);
+    return () => document.removeEventListener('mousedown', handleClick);
+  }, []);
+
+  function handleKeyDown(e: React.KeyboardEvent) {
+    if (!showDropdown || filtered.length === 0) return;
+    switch (e.key) {
+      case 'ArrowDown':
+        e.preventDefault();
+        setHighlightIndex((i) => Math.min(i + 1, filtered.length - 1));
+        break;
+      case 'ArrowUp':
+        e.preventDefault();
+        setHighlightIndex((i) => Math.max(i - 1, 0));
+        break;
+      case 'Enter':
+        if (filtered[highlightIndex]) {
+          e.preventDefault();
+          onChange(filtered[highlightIndex]);
+          setShowDropdown(false);
+        }
+        break;
+      case 'Escape':
+        setShowDropdown(false);
+        break;
+    }
+  }
+
+  return (
+    <div className="relative flex-[2]">
+      <input
+        ref={inputRef}
+        value={value}
+        onChange={(e) => {
+          onChange(e.target.value);
+          setShowDropdown(true);
+        }}
+        onFocus={() => { if (discoveredModels.length > 0) setShowDropdown(true); }}
+        onKeyDown={handleKeyDown}
+        placeholder="model-id"
+        className={inputClass + ' !mt-0 !max-w-none w-full'}
+      />
+      {showDropdown && filtered.length > 0 && (
+        <div
+          ref={dropdownRef}
+          className="absolute z-20 mt-1 max-h-48 w-full overflow-auto rounded-md border border-neutral-200 bg-white shadow-lg dark:border-neutral-700 dark:bg-neutral-800"
+        >
+          {filtered.map((modelId, i) => (
+            <button
+              key={modelId}
+              type="button"
+              onMouseDown={(e) => {
+                e.preventDefault();
+                onChange(modelId);
+                setShowDropdown(false);
+              }}
+              onMouseEnter={() => setHighlightIndex(i)}
+              className={`block w-full truncate px-3 py-1.5 text-left font-mono text-xs ${
+                i === highlightIndex
+                  ? 'bg-neutral-100 dark:bg-neutral-700'
+                  : 'hover:bg-neutral-50 dark:hover:bg-neutral-750'
+              }`}
+            >
+              {modelId}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function CustomProviderForm({
   existing,
   onCancel,
@@ -902,6 +1009,7 @@ function CustomProviderForm({
   onSaved: () => void;
 }) {
   const upsert = useUpsertCustomProvider();
+  const discover = useDiscoverModels();
   const [providerId, setProviderId] = React.useState(existing?.providerId ?? '');
   const [displayName, setDisplayName] = React.useState(existing?.displayName ?? '');
   const [baseUrl, setBaseUrl] = React.useState(existing?.baseUrl ?? '');
@@ -909,6 +1017,29 @@ function CustomProviderForm({
   const [models, setModels] = React.useState<CustomProviderModel[]>(
     existing?.models ?? [{ id: '' }]
   );
+  const [discoveredModels, setDiscoveredModels] = React.useState<string[]>([]);
+  const [discoverStatus, setDiscoverStatus] = React.useState<
+    { type: 'success'; count: number } | { type: 'error'; message: string } | null
+  >(null);
+
+  function handleTest() {
+    if (!baseUrl.trim()) return;
+    setDiscoverStatus(null);
+    discover.mutate(
+      { baseUrl: baseUrl.trim(), apiKey: apiKey || undefined },
+      {
+        onSuccess: (data) => {
+          const ids = data.models.map((m) => m.id);
+          setDiscoveredModels(ids);
+          setDiscoverStatus({ type: 'success', count: ids.length });
+        },
+        onError: (err: any) => {
+          setDiscoveredModels([]);
+          setDiscoverStatus({ type: 'error', message: err?.message ?? 'Connection failed' });
+        },
+      }
+    );
+  }
 
   function addModel() {
     setModels([...models, { id: '' }]);
@@ -998,22 +1129,43 @@ function CustomProviderForm({
         </div>
       </div>
 
+      <div className="flex items-center gap-3">
+        <Button
+          type="button"
+          variant="secondary"
+          onClick={handleTest}
+          disabled={!baseUrl.trim() || discover.isPending}
+        >
+          {discover.isPending ? 'Testing...' : 'Test Connection'}
+        </Button>
+        {discoverStatus?.type === 'success' && (
+          <span className="flex items-center gap-1.5 text-sm text-green-600 dark:text-green-400">
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6 9 17l-5-5" /></svg>
+            Connected — {discoverStatus.count} models found
+          </span>
+        )}
+        {discoverStatus?.type === 'error' && (
+          <span className="text-sm text-red-600 dark:text-red-400">
+            Connection failed — check URL and API key
+          </span>
+        )}
+      </div>
+
       <div>
         <label className="block text-sm font-medium text-neutral-700 dark:text-neutral-300">Models</label>
         <div className="mt-2 space-y-2">
           {models.map((model, i) => (
             <div key={i} className="flex items-center gap-2">
-              <input
+              <ModelIdInput
                 value={model.id}
-                onChange={(e) => updateModel(i, 'id', e.target.value)}
-                placeholder="model-id"
-                className={inputClass + ' !mt-0 flex-1'}
+                onChange={(v) => updateModel(i, 'id', v)}
+                discoveredModels={discoveredModels}
               />
               <input
                 value={model.name ?? ''}
                 onChange={(e) => updateModel(i, 'name', e.target.value)}
                 placeholder="Display name (optional)"
-                className={inputClass + ' !mt-0 flex-1'}
+                className={inputClass + ' !mt-0 !max-w-none flex-1'}
               />
               <input
                 type="number"

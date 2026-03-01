@@ -134,6 +134,13 @@ export function useRemoveUser() {
 
 // --- Custom Providers ---
 
+export function useDiscoverModels() {
+  return useMutation({
+    mutationFn: (data: { baseUrl: string; apiKey?: string }) =>
+      api.post<{ models: Array<{ id: string; created?: number }> }>('/admin/custom-providers/discover-models', data),
+  });
+}
+
 export function useCustomProviders() {
   return useQuery({
     queryKey: adminKeys.customProviders(),

@@ -205,6 +205,49 @@ adminRouter.put('/custom-providers/:providerId', async (c) => {
   return c.json({ ok: true });
 });
 
+adminRouter.post('/custom-providers/discover-models', async (c) => {
+  const { baseUrl, apiKey } = await c.req.json<{ baseUrl: string; apiKey?: string }>();
+
+  if (!baseUrl || typeof baseUrl !== 'string' || baseUrl.trim().length === 0) {
+    throw new ValidationError('Base URL is required');
+  }
+
+  // Normalize: strip trailing slash, append /models if not already present
+  let url = baseUrl.trim().replace(/\/+$/, '');
+  if (!url.endsWith('/models')) {
+    url += '/models';
+  }
+
+  const headers: Record<string, string> = { 'Accept': 'application/json' };
+  if (apiKey) {
+    headers['Authorization'] = `Bearer ${apiKey}`;
+  }
+
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10_000);
+
+    const res = await fetch(url, { headers, signal: controller.signal });
+    clearTimeout(timeout);
+
+    if (!res.ok) {
+      return c.json({ error: `Provider returned ${res.status}: ${res.statusText}` }, 502);
+    }
+
+    const body = await res.json() as { data?: Array<{ id: string; created?: number }> };
+    const models = (body.data ?? [])
+      .map((m) => ({ id: m.id, created: m.created }))
+      .sort((a, b) => a.id.localeCompare(b.id));
+
+    return c.json({ models });
+  } catch (err: any) {
+    if (err?.name === 'AbortError') {
+      return c.json({ error: 'Connection timed out (10s)' }, 504);
+    }
+    return c.json({ error: err?.message ?? 'Failed to connect to provider' }, 502);
+  }
+});
+
 adminRouter.delete('/custom-providers/:providerId', async (c) => {
   const providerId = c.req.param('providerId');
   await deleteCustomProvider(c.get('db'), providerId);

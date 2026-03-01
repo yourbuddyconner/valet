@@ -951,7 +951,7 @@ export function ChatInput({
               <select
                 value={selectedModel}
                 onChange={(e) => onModelChange?.(e.target.value)}
-                className="shrink-0 cursor-pointer appearance-none rounded-md border border-neutral-200/60 bg-transparent px-1.5 py-0.5 font-mono text-[10px] font-medium text-neutral-400 transition-colors hover:border-neutral-300 hover:text-neutral-600 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/30 dark:border-neutral-700/60 dark:text-neutral-500 dark:hover:border-neutral-600 dark:hover:text-neutral-400"
+                className="max-w-[240px] shrink-0 cursor-pointer truncate appearance-none rounded-md border border-neutral-200/60 bg-transparent px-1.5 py-0.5 font-mono text-xs font-medium text-neutral-400 transition-colors hover:border-neutral-300 hover:text-neutral-600 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/30 dark:border-neutral-700/60 dark:text-neutral-500 dark:hover:border-neutral-600 dark:hover:text-neutral-400"
               >
                 <option value="">Default model</option>
                 {availableModels.map((provider) => (
