@@ -956,7 +956,7 @@ function ModelIdInput({
   }
 
   return (
-    <div className="relative flex-[3] min-w-0">
+    <div className="relative flex-[4] min-w-0">
       <input
         ref={inputRef}
         value={value}
@@ -1165,21 +1165,21 @@ function CustomProviderForm({
                 value={model.name ?? ''}
                 onChange={(e) => updateModel(i, 'name', e.target.value)}
                 placeholder="Display name"
-                className={inputClass + ' !mt-0 !max-w-none flex-[2]'}
+                className={inputClass + ' !mt-0 !max-w-none flex-1'}
               />
               <input
                 type="number"
                 value={model.contextLimit ?? ''}
                 onChange={(e) => updateModel(i, 'contextLimit', parseInt(e.target.value) || 0)}
-                placeholder="Context"
-                className={inputClass + ' !mt-0 w-24'}
+                placeholder="Ctx"
+                className={inputClass + ' !mt-0 w-20 shrink-0'}
               />
               <input
                 type="number"
                 value={model.outputLimit ?? ''}
                 onChange={(e) => updateModel(i, 'outputLimit', parseInt(e.target.value) || 0)}
-                placeholder="Output"
-                className={inputClass + ' !mt-0 w-24'}
+                placeholder="Out"
+                className={inputClass + ' !mt-0 w-20 shrink-0'}
               />
               <Button type="button" variant="secondary" onClick={() => removeModel(i)} disabled={models.length <= 1}>
                 -
