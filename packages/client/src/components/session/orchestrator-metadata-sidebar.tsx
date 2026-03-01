@@ -1,9 +1,10 @@
 import { useState, useEffect, useMemo } from 'react';
 import { Link } from '@tanstack/react-router';
 import { useSession, useSessionChildren, useSessionDoStatus, useDeleteAnySessionTunnel } from '@/api/sessions';
-import { useOrchestratorInfo, useMemoryFiles } from '@/api/orchestrator';
+import { useOrchestratorInfo, useMemoryFiles, useMemoryFile } from '@/api/orchestrator';
 import { SidebarSection, StatusDot } from './session-metadata-sidebar';
 import { Badge } from '@/components/ui/badge';
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import type { ConnectedUser } from '@/hooks/use-chat';
 import type { PRState } from '@/api/types';
 import {
@@ -459,21 +460,81 @@ export function OrchestratorMetadataSidebar({
         {/* Memory Files */}
         {totalMemoryFiles > 0 && (
           <SidebarSection label={`Memory (${totalMemoryFiles} files, ${pinnedCount} pinned)`}>
-            <div className="space-y-1">
-              {recentFiles.map((file) => (
-                <div key={file.path} className="flex items-start gap-1.5">
-                  {file.pinned && (
-                    <Badge className="mt-px shrink-0 !px-1 !py-0 !text-[8px] !tracking-normal bg-violet-500/10 text-violet-600 dark:bg-violet-500/10 dark:text-violet-400">
-                      pin
-                    </Badge>
-                  )}
-                  <span className="line-clamp-1 font-mono text-[10px] text-neutral-500 dark:text-neutral-400">
-                    {file.path}
-                  </span>
-                </div>
-              ))}
-            </div>
+            <TooltipProvider delayDuration={400}>
+              <div className="space-y-1">
+                {recentFiles.map((file) => (
+                  <MemoryFileTooltip key={file.path} file={file} />
+                ))}
+              </div>
+            </TooltipProvider>
           </SidebarSection>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function MemoryFileTooltip({ file }: { file: { path: string; pinned: boolean } }) {
+  const [open, setOpen] = useState(false);
+
+  return (
+    <Tooltip open={open} onOpenChange={setOpen}>
+      <TooltipTrigger asChild>
+        <div className="flex cursor-default items-start gap-1.5 rounded-sm px-1 py-0.5 transition-colors hover:bg-surface-1 dark:hover:bg-surface-2">
+          {file.pinned && (
+            <Badge className="mt-px shrink-0 !px-1 !py-0 !text-[8px] !tracking-normal bg-violet-500/10 text-violet-600 dark:bg-violet-500/10 dark:text-violet-400">
+              pin
+            </Badge>
+          )}
+          <span className="line-clamp-1 font-mono text-[10px] text-neutral-500 dark:text-neutral-400">
+            {file.path}
+          </span>
+        </div>
+      </TooltipTrigger>
+      <TooltipContent
+        side="left"
+        align="start"
+        sideOffset={8}
+        className="max-h-[300px] max-w-[360px] overflow-hidden rounded-lg border border-border bg-surface-0 p-0 text-neutral-800 shadow-lg dark:bg-surface-1 dark:text-neutral-200"
+      >
+        {open && <MemoryFilePreview path={file.path} />}
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
+function MemoryFilePreview({ path }: { path: string }) {
+  const { data, isLoading, isError } = useMemoryFile(path);
+
+  const fileName = path.split('/').pop() ?? path;
+
+  return (
+    <div className="flex flex-col">
+      <div className="border-b border-border px-3 py-1.5">
+        <span className="font-mono text-[10px] font-medium text-neutral-600 dark:text-neutral-300">
+          {fileName}
+        </span>
+        <span className="ml-1.5 font-mono text-[9px] text-neutral-400 dark:text-neutral-500">
+          {path}
+        </span>
+      </div>
+      <div className="max-h-[260px] overflow-y-auto px-3 py-2">
+        {isLoading && (
+          <div className="flex items-center gap-2 py-2">
+            <div className="h-3 w-3 animate-spin rounded-full border border-neutral-300 border-t-transparent dark:border-neutral-600 dark:border-t-transparent" />
+            <span className="font-mono text-[10px] text-neutral-400">Loading...</span>
+          </div>
+        )}
+        {isError && (
+          <span className="font-mono text-[10px] text-red-500">Failed to load</span>
+        )}
+        {!isLoading && !isError && data && data.content.length > 0 && (
+          <pre className="whitespace-pre-wrap break-words font-mono text-[10px] leading-relaxed text-neutral-600 dark:text-neutral-300">
+            {data.content.length > 1500 ? data.content.slice(0, 1500) + '\n...' : data.content}
+          </pre>
+        )}
+        {!isLoading && !isError && (!data || data.content.length === 0) && (
+          <span className="font-mono text-[10px] text-neutral-400">Empty file</span>
         )}
       </div>
     </div>
