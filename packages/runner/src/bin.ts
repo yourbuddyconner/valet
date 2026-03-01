@@ -149,14 +149,20 @@ async function main() {
     onReportGitState: (params) => {
       agentClient.sendGitState(params);
     },
-    onMemoryRead: async (params) => {
-      return await agentClient.requestMemoryRead(params);
+    onMemRead: async (path) => {
+      return await agentClient.requestMemRead(path);
     },
-    onMemoryWrite: async (content, category) => {
-      return await agentClient.requestMemoryWrite(content, category);
+    onMemWrite: async (path, content) => {
+      return await agentClient.requestMemWrite(path, content);
     },
-    onMemoryDelete: async (memoryId) => {
-      return await agentClient.requestMemoryDelete(memoryId);
+    onMemPatch: async (path, operations) => {
+      return await agentClient.requestMemPatch(path, operations);
+    },
+    onMemRm: async (path) => {
+      return await agentClient.requestMemRm(path);
+    },
+    onMemSearch: async (query, path) => {
+      return await agentClient.requestMemSearch(query, path);
     },
     onListRepos: async (source) => {
       return await agentClient.requestListRepos(source);

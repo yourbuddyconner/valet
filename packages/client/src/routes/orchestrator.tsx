@@ -9,13 +9,13 @@ import {
   useOrchestratorInfo,
   useCreateOrchestrator,
   useCheckHandle,
-  useOrchestratorMemories,
-  useDeleteMemory,
+  useMemoryFiles,
 } from '@/api/orchestrator';
+import { MemoryExplorer } from '@/components/orchestrator/memory-explorer';
 import { useAutoRestartOrchestrator } from '@/hooks/use-auto-restart-orchestrator';
+import { useDebounced } from '@/hooks/use-debounced';
 import { useInfiniteSessionChildren, useSessionDoStatus } from '@/api/sessions';
 import { formatRelativeTime } from '@/lib/format';
-import type { OrchestratorMemory, OrchestratorMemoryCategory } from '@/api/types';
 import type { ChildSessionSummaryWithRuntime } from '@/api/sessions';
 import { Checkbox } from '@/components/ui/checkbox';
 import { LoadMoreButton } from '@/components/ui/load-more-button';
@@ -47,15 +47,6 @@ function OrchestratorPage() {
 // ---------------------------------------------------------------------------
 // Setup Form (migrated from orchestrator-setup.tsx)
 // ---------------------------------------------------------------------------
-
-function useDebounced(value: string, delayMs: number) {
-  const [debounced, setDebounced] = React.useState(value);
-  React.useEffect(() => {
-    const id = setTimeout(() => setDebounced(value), delayMs);
-    return () => clearTimeout(id);
-  }, [value, delayMs]);
-  return debounced;
-}
 
 function SetupForm() {
   const navigate = useNavigate();
@@ -223,8 +214,7 @@ function OrchestratorDashboard() {
   const { data: doStatus } = useSessionDoStatus(orchInfo?.sessionId ?? '');
   const [hideTerminated, setHideTerminated] = React.useState(true);
   const childrenQuery = useInfiniteSessionChildren(orchInfo?.sessionId ?? '', { hideTerminated });
-  const [memoryCategory, setMemoryCategory] = React.useState<string | undefined>();
-  const { data: memories } = useOrchestratorMemories(memoryCategory);
+  const { data: memoryFiles } = useMemoryFiles('');
   const autoRestart = useAutoRestartOrchestrator();
 
   const identity = orchInfo!.identity!;
@@ -418,18 +408,9 @@ function OrchestratorDashboard() {
           />
         </section>
 
-        {/* Memories */}
-        <section>
-          <div className="mb-3 flex items-center justify-between">
-            <h2 className="text-sm font-semibold text-neutral-900 dark:text-neutral-100">
-              Memories
-              <span className="ml-1.5 text-xs font-normal text-neutral-400 dark:text-neutral-500">
-                {memories?.length ?? 0}/200
-              </span>
-            </h2>
-          </div>
-          <MemoryCategoryFilter selected={memoryCategory} onSelect={setMemoryCategory} />
-          <MemoriesList memories={memories ?? []} />
+        {/* Memory Files */}
+        <section aria-label="Memory Files">
+          <MemoryExplorer files={memoryFiles ?? []} />
         </section>
       </div>
     </PageContainer>
@@ -534,112 +515,6 @@ function ManagedSessionRow({
 }
 
 // ---------------------------------------------------------------------------
-// Memories
-// ---------------------------------------------------------------------------
-
-const MEMORY_CATEGORIES: { value: OrchestratorMemoryCategory; label: string }[] = [
-  { value: 'preference', label: 'Preferences' },
-  { value: 'workflow', label: 'Workflows' },
-  { value: 'context', label: 'Context' },
-  { value: 'project', label: 'Projects' },
-  { value: 'decision', label: 'Decisions' },
-  { value: 'general', label: 'General' },
-];
-
-const CATEGORY_COLORS: Record<string, string> = {
-  preference: 'bg-violet-100 text-violet-700 dark:bg-violet-900/30 dark:text-violet-400',
-  workflow: 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400',
-  context: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400',
-  project: 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400',
-  decision: 'bg-rose-100 text-rose-700 dark:bg-rose-900/30 dark:text-rose-400',
-  general: 'bg-neutral-100 text-neutral-600 dark:bg-neutral-800 dark:text-neutral-400',
-};
-
-function MemoryCategoryFilter({
-  selected,
-  onSelect,
-}: {
-  selected: string | undefined;
-  onSelect: (cat: string | undefined) => void;
-}) {
-  return (
-    <div className="mb-3 flex flex-wrap gap-1.5">
-      <button
-        onClick={() => onSelect(undefined)}
-        className={`rounded-full px-2.5 py-1 text-xs font-medium transition-colors ${
-          !selected
-            ? 'bg-neutral-900 text-white dark:bg-neutral-100 dark:text-neutral-900'
-            : 'bg-neutral-100 text-neutral-600 hover:bg-neutral-200 dark:bg-neutral-800 dark:text-neutral-400 dark:hover:bg-neutral-700'
-        }`}
-      >
-        All
-      </button>
-      {MEMORY_CATEGORIES.map((cat) => (
-        <button
-          key={cat.value}
-          onClick={() => onSelect(selected === cat.value ? undefined : cat.value)}
-          className={`rounded-full px-2.5 py-1 text-xs font-medium transition-colors ${
-            selected === cat.value
-              ? 'bg-neutral-900 text-white dark:bg-neutral-100 dark:text-neutral-900'
-              : 'bg-neutral-100 text-neutral-600 hover:bg-neutral-200 dark:bg-neutral-800 dark:text-neutral-400 dark:hover:bg-neutral-700'
-          }`}
-        >
-          {cat.label}
-        </button>
-      ))}
-    </div>
-  );
-}
-
-function MemoriesList({ memories }: { memories: OrchestratorMemory[] }) {
-  const deleteMemory = useDeleteMemory();
-
-  if (memories.length === 0) {
-    return (
-      <div className="rounded-lg border border-neutral-200 bg-white p-6 text-center dark:border-neutral-700 dark:bg-neutral-800">
-        <p className="text-sm text-neutral-500 dark:text-neutral-400">
-          No memories yet
-        </p>
-      </div>
-    );
-  }
-
-  return (
-    <div className="space-y-2">
-      {memories.map((memory) => (
-        <div
-          key={memory.id}
-          className="group flex items-start gap-3 rounded-lg border border-neutral-200 bg-white px-4 py-3 dark:border-neutral-700 dark:bg-neutral-800"
-        >
-          <div className="flex-1 min-w-0">
-            <div className="mb-1.5 flex items-center gap-2">
-              <span
-                className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-medium ${CATEGORY_COLORS[memory.category] ?? CATEGORY_COLORS.general}`}
-              >
-                {memory.category}
-              </span>
-              <span className="text-[11px] text-neutral-400 dark:text-neutral-500 tabular-nums">
-                {formatRelativeTime(memory.createdAt)}
-              </span>
-            </div>
-            <p className="text-sm text-neutral-700 dark:text-neutral-300 whitespace-pre-wrap break-words">
-              {memory.content}
-            </p>
-          </div>
-          <button
-            onClick={() => deleteMemory.mutate(memory.id)}
-            className="shrink-0 rounded p-1 text-neutral-300 opacity-0 transition-all hover:bg-neutral-100 hover:text-neutral-500 group-hover:opacity-100 dark:text-neutral-600 dark:hover:bg-neutral-700 dark:hover:text-neutral-400"
-            title="Delete memory"
-          >
-            <TrashIcon className="h-3.5 w-3.5" />
-          </button>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
 // Skeleton
 // ---------------------------------------------------------------------------
 
@@ -663,16 +538,3 @@ function OrchestratorSkeleton() {
   );
 }
 
-// ---------------------------------------------------------------------------
-// Icons
-// ---------------------------------------------------------------------------
-
-function TrashIcon({ className }: { className?: string }) {
-  return (
-    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" className={className}>
-      <path d="M3 6h18" />
-      <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" />
-      <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
-    </svg>
-  );
-}

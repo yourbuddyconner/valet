@@ -1,11 +1,11 @@
 import { useState, useEffect, useMemo } from 'react';
 import { Link } from '@tanstack/react-router';
 import { useSession, useSessionChildren, useSessionDoStatus, useDeleteAnySessionTunnel } from '@/api/sessions';
-import { useOrchestratorInfo, useOrchestratorMemories } from '@/api/orchestrator';
-import { SidebarSection, StatusDot, StatItem } from './session-metadata-sidebar';
+import { useOrchestratorInfo, useMemoryFiles } from '@/api/orchestrator';
+import { SidebarSection, StatusDot } from './session-metadata-sidebar';
 import { Badge } from '@/components/ui/badge';
 import type { ConnectedUser } from '@/hooks/use-chat';
-import type { OrchestratorMemoryCategory, PRState } from '@/api/types';
+import type { PRState } from '@/api/types';
 import {
   deriveRuntimeStates,
   isAgentRuntimeState,
@@ -21,24 +21,6 @@ interface OrchestratorMetadataSidebarProps {
   embedded?: boolean;
 }
 
-const MEMORY_CATEGORIES: OrchestratorMemoryCategory[] = [
-  'preference',
-  'workflow',
-  'context',
-  'project',
-  'decision',
-  'general',
-];
-
-const CATEGORY_COLORS: Record<OrchestratorMemoryCategory, string> = {
-  preference: 'bg-violet-500/10 text-violet-600 dark:bg-violet-500/10 dark:text-violet-400',
-  workflow: 'bg-blue-500/10 text-blue-600 dark:bg-blue-500/10 dark:text-blue-400',
-  context: 'bg-amber-500/10 text-amber-600 dark:bg-amber-500/10 dark:text-amber-400',
-  project: 'bg-emerald-500/10 text-emerald-600 dark:bg-emerald-500/10 dark:text-emerald-400',
-  decision: 'bg-red-500/10 text-red-600 dark:bg-red-500/10 dark:text-red-400',
-  general: 'bg-neutral-200 text-neutral-600 dark:bg-neutral-800 dark:text-neutral-400',
-};
-
 const MAX_CHILDREN_SHOWN = 5;
 const MAX_OPEN_PRS_SHOWN = 6;
 const MAX_CHILD_TUNNELS_SHOWN = 8;
@@ -53,7 +35,7 @@ export function OrchestratorMetadataSidebar({
   const { data: doStatus } = useSessionDoStatus(sessionId);
   const { data: orchInfo } = useOrchestratorInfo();
   const { data: childSessions } = useSessionChildren(sessionId);
-  const { data: memories } = useOrchestratorMemories();
+  const { data: memoryFiles } = useMemoryFiles('');
   const deleteTunnel = useDeleteAnySessionTunnel(sessionId);
 
   const runningStartedAt = typeof doStatus?.runningStartedAt === 'number' ? doStatus.runningStartedAt : null;
@@ -139,23 +121,14 @@ export function OrchestratorMetadataSidebar({
     [nonTerminalChildren],
   );
 
-  const memoryCounts = useMemo(() => {
-    if (!memories) return {};
-    const counts: Partial<Record<OrchestratorMemoryCategory, number>> = {};
-    for (const m of memories) {
-      counts[m.category] = (counts[m.category] ?? 0) + 1;
-    }
-    return counts;
-  }, [memories]);
-
-  const recentMemories = useMemo(() => {
-    if (!memories || memories.length === 0) return [];
-    return [...memories]
-      .sort((a, b) => new Date(b.lastAccessedAt).getTime() - new Date(a.lastAccessedAt).getTime())
-      .slice(0, 3);
-  }, [memories]);
-
-  const totalMemories = memories?.length ?? 0;
+  const totalMemoryFiles = memoryFiles?.length ?? 0;
+  const pinnedCount = useMemo(() => (memoryFiles ?? []).filter((f) => f.pinned).length, [memoryFiles]);
+  const recentFiles = useMemo(() => {
+    if (!memoryFiles || memoryFiles.length === 0) return [];
+    return [...memoryFiles]
+      .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
+      .slice(0, 4);
+  }, [memoryFiles]);
 
   const formatDuration = (seconds: number) => {
     const h = Math.floor(seconds / 3600);
@@ -483,30 +456,19 @@ export function OrchestratorMetadataSidebar({
           </SidebarSection>
         )}
 
-        {/* Memories */}
-        {totalMemories > 0 && (
-          <SidebarSection label={`Memories (${totalMemories}/200)`}>
-            <div className="grid grid-cols-2 gap-x-2 gap-y-0.5">
-              {MEMORY_CATEGORIES.filter((cat) => (memoryCounts[cat] ?? 0) > 0).map((cat) => (
-                <StatItem key={cat} label={cat} value={memoryCounts[cat]!} />
-              ))}
-            </div>
-          </SidebarSection>
-        )}
-
-        {/* Recent Memories */}
-        {recentMemories.length > 0 && (
-          <SidebarSection label="Recent Memories">
+        {/* Memory Files */}
+        {totalMemoryFiles > 0 && (
+          <SidebarSection label={`Memory (${totalMemoryFiles} files, ${pinnedCount} pinned)`}>
             <div className="space-y-1">
-              {recentMemories.map((mem) => (
-                <div key={mem.id} className="flex items-start gap-1.5">
-                  <Badge
-                    className={`mt-px shrink-0 !px-1 !py-0 !text-[8px] !tracking-normal ${CATEGORY_COLORS[mem.category]}`}
-                  >
-                    {mem.category.slice(0, 4)}
-                  </Badge>
+              {recentFiles.map((file) => (
+                <div key={file.path} className="flex items-start gap-1.5">
+                  {file.pinned && (
+                    <Badge className="mt-px shrink-0 !px-1 !py-0 !text-[8px] !tracking-normal bg-violet-500/10 text-violet-600 dark:bg-violet-500/10 dark:text-violet-400">
+                      pin
+                    </Badge>
+                  )}
                   <span className="line-clamp-1 font-mono text-[10px] text-neutral-500 dark:text-neutral-400">
-                    {mem.content}
+                    {file.path}
                   </span>
                 </div>
               ))}

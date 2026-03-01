@@ -13,6 +13,7 @@ export * from './db/integrations.js';
 export * from './db/org.js';
 export * from './db/personas.js';
 export * from './db/orchestrator.js';
+export * from './db/memory-files.js';
 export * from './db/notifications.js';
 export * from './db/tasks.js';
 export * from './db/channels.js';

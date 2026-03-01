@@ -33,9 +33,21 @@ const updateIdentitySchema = z.object({
   customInstructions: z.string().max(10000).optional(),
 });
 
-const createMemorySchema = z.object({
-  content: z.string().min(1).max(5000),
-  category: z.enum(['preference', 'workflow', 'context', 'project', 'decision', 'general']),
+const writeMemorySchema = z.object({
+  path: z.string().min(1).max(256),
+  content: z.string().min(1).max(50000),
+});
+
+const patchMemorySchema = z.object({
+  path: z.string().min(1).max(256),
+  operations: z.array(z.union([
+    z.object({ op: z.literal('append'), content: z.string() }),
+    z.object({ op: z.literal('prepend'), content: z.string() }),
+    z.object({ op: z.literal('replace'), old: z.string(), new: z.string() }),
+    z.object({ op: z.literal('replace_all'), old: z.string(), new: z.string() }),
+    z.object({ op: z.literal('insert_after'), anchor: z.string(), content: z.string() }),
+    z.object({ op: z.literal('delete_section'), heading: z.string() }),
+  ])).min(1).max(20),
 });
 
 // ─── Orchestrator Routes ────────────────────────────────────────────────
@@ -134,55 +146,91 @@ orchestratorRouter.get('/orchestrator/check-handle', async (c) => {
   return c.json({ available, handle });
 });
 
-// ─── Memory Routes ──────────────────────────────────────────────────────
+// ─── Memory File Routes ─────────────────────────────────────────────────
 
 /**
- * GET /api/me/memories
+ * GET /api/me/memory?path=...
+ * If path ends with '/' or is empty → directory listing
+ * If path is a file → read file content
  */
-orchestratorRouter.get('/memories', async (c) => {
+orchestratorRouter.get('/memory', async (c) => {
   const user = c.get('user');
-  const { category, query, limit } = c.req.query();
+  const path = c.req.query('path') || '';
 
-  const memories = await db.listOrchestratorMemories(c.env.DB, user.id, {
-    category,
-    query,
-    limit: limit ? parseInt(limit) : undefined,
-  });
+  if (!path || path.endsWith('/')) {
+    const files = await db.listMemoryFiles(c.get('db'), user.id, path);
+    return c.json({ files });
+  }
 
-  return c.json({ memories });
+  const file = await db.readMemoryFile(c.get('db'), user.id, path);
+  if (!file) {
+    return c.json({ file: null, content: '' });
+  }
+
+  // Boost relevance on read
+  db.boostMemoryFileRelevance(c.get('db'), user.id, path).catch(() => {});
+
+  return c.json({ file });
 });
 
 /**
- * POST /api/me/memories
+ * PUT /api/me/memory — create or overwrite a file
  */
-orchestratorRouter.post('/memories', zValidator('json', createMemorySchema), async (c) => {
+orchestratorRouter.put('/memory', zValidator('json', writeMemorySchema), async (c) => {
   const user = c.get('user');
   const body = c.req.valid('json');
 
-  const id = crypto.randomUUID();
-  const memory = await db.createOrchestratorMemory(c.env.DB, {
-    id,
-    userId: user.id,
-    category: body.category,
-    content: body.content,
-  });
-
-  return c.json({ memory }, 201);
+  const file = await db.writeMemoryFile(c.env.DB, user.id, body.path, body.content);
+  return c.json({ file }, 201);
 });
 
 /**
- * DELETE /api/me/memories/:id
+ * PATCH /api/me/memory — surgical edits to a file
  */
-orchestratorRouter.delete('/memories/:id', async (c) => {
+orchestratorRouter.patch('/memory', zValidator('json', patchMemorySchema), async (c) => {
   const user = c.get('user');
-  const { id } = c.req.param();
+  const body = c.req.valid('json');
 
-  const deleted = await db.deleteOrchestratorMemory(c.env.DB, id, user.id);
-  if (!deleted) {
-    return c.json({ error: 'Memory not found' }, 404);
+  const result = await db.patchMemoryFile(c.env.DB, user.id, body.path, body.operations);
+  return c.json({ result });
+});
+
+/**
+ * DELETE /api/me/memory?path=...
+ * If path ends with '/' → delete all files under that prefix
+ * If path is a file → delete that single file
+ */
+orchestratorRouter.delete('/memory', async (c) => {
+  const user = c.get('user');
+  const path = c.req.query('path');
+  if (!path) {
+    return c.json({ error: 'path query param required' }, 400);
   }
 
-  return c.json({ success: true });
+  let deleted: number;
+  if (path.endsWith('/')) {
+    deleted = await db.deleteMemoryFilesUnderPath(c.env.DB, user.id, path);
+  } else {
+    deleted = await db.deleteMemoryFile(c.env.DB, user.id, path);
+  }
+
+  return c.json({ success: deleted > 0, deleted });
+});
+
+/**
+ * GET /api/me/memory/search?query=...&path=...
+ */
+orchestratorRouter.get('/memory/search', async (c) => {
+  const user = c.get('user');
+  const query = c.req.query('query');
+  const path = c.req.query('path') || undefined;
+
+  if (!query) {
+    return c.json({ error: 'query param required' }, 400);
+  }
+
+  const results = await db.searchMemoryFiles(c.env.DB, user.id, query, path);
+  return c.json({ results });
 });
 
 // ─── Notification Queue Routes (Phase C) ────────────────────────────────

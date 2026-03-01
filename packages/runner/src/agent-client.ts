@@ -377,24 +377,38 @@ export class AgentClient {
     });
   }
 
-  requestMemoryRead(params: { category?: string; query?: string; limit?: number } = {}): Promise<{ memories: unknown[] }> {
+  requestMemRead(path: string): Promise<{ file?: unknown; files?: unknown[]; content?: string }> {
     const requestId = crypto.randomUUID();
     return this.createPendingRequest(requestId, MESSAGE_OP_TIMEOUT_MS, () => {
-      this.send({ type: "memory-read", requestId, ...params });
+      this.send({ type: "mem-read", requestId, path });
     });
   }
 
-  requestMemoryWrite(content: string, category: string): Promise<{ memory: unknown; success: boolean }> {
+  requestMemWrite(path: string, content: string): Promise<{ file: unknown }> {
     const requestId = crypto.randomUUID();
     return this.createPendingRequest(requestId, MESSAGE_OP_TIMEOUT_MS, () => {
-      this.send({ type: "memory-write", requestId, content, category });
+      this.send({ type: "mem-write", requestId, path, content });
     });
   }
 
-  requestMemoryDelete(memoryId: string): Promise<{ success: boolean }> {
+  requestMemPatch(path: string, operations: unknown[]): Promise<{ result: unknown }> {
     const requestId = crypto.randomUUID();
     return this.createPendingRequest(requestId, MESSAGE_OP_TIMEOUT_MS, () => {
-      this.send({ type: "memory-delete", requestId, memoryId });
+      this.send({ type: "mem-patch", requestId, path, operations });
+    });
+  }
+
+  requestMemRm(path: string): Promise<{ deleted: number }> {
+    const requestId = crypto.randomUUID();
+    return this.createPendingRequest(requestId, MESSAGE_OP_TIMEOUT_MS, () => {
+      this.send({ type: "mem-rm", requestId, path });
+    });
+  }
+
+  requestMemSearch(query: string, path?: string): Promise<{ results: unknown[] }> {
+    const requestId = crypto.randomUUID();
+    return this.createPendingRequest(requestId, MESSAGE_OP_TIMEOUT_MS, () => {
+      this.send({ type: "mem-search", requestId, query, path });
     });
   }
 
@@ -959,27 +973,43 @@ export class AgentClient {
           }
           break;
 
-        case "memory-read-result":
+        case "mem-read-result":
           if (msg.error) {
             this.rejectPendingRequest(msg.requestId, msg.error);
           } else {
-            this.resolvePendingRequest(msg.requestId, { memories: msg.memories ?? [] });
+            this.resolvePendingRequest(msg.requestId, { file: msg.file, files: msg.files });
           }
           break;
 
-        case "memory-write-result":
+        case "mem-write-result":
           if (msg.error) {
             this.rejectPendingRequest(msg.requestId, msg.error);
           } else {
-            this.resolvePendingRequest(msg.requestId, { memory: msg.memory, success: true });
+            this.resolvePendingRequest(msg.requestId, { file: msg.file });
           }
           break;
 
-        case "memory-delete-result":
+        case "mem-patch-result":
           if (msg.error) {
             this.rejectPendingRequest(msg.requestId, msg.error);
           } else {
-            this.resolvePendingRequest(msg.requestId, { success: msg.success ?? true });
+            this.resolvePendingRequest(msg.requestId, { result: msg.result });
+          }
+          break;
+
+        case "mem-rm-result":
+          if (msg.error) {
+            this.rejectPendingRequest(msg.requestId, msg.error);
+          } else {
+            this.resolvePendingRequest(msg.requestId, { deleted: msg.deleted ?? 0 });
+          }
+          break;
+
+        case "mem-search-result":
+          if (msg.error) {
+            this.rejectPendingRequest(msg.requestId, msg.error);
+          } else {
+            this.resolvePendingRequest(msg.requestId, { results: msg.results ?? [] });
           }
           break;
 

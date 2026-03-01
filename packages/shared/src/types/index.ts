@@ -684,14 +684,6 @@ export interface AgentPersonaFile {
 // Orchestrator types
 export type OrchestratorType = 'personal' | 'org';
 
-export type OrchestratorMemoryCategory =
-  | 'preference'
-  | 'workflow'
-  | 'context'
-  | 'project'
-  | 'decision'
-  | 'general';
-
 export interface OrchestratorIdentity {
   id: string;
   userId?: string;
@@ -705,15 +697,47 @@ export interface OrchestratorIdentity {
   updatedAt: string;
 }
 
-export interface OrchestratorMemory {
+// Memory file system types
+export interface MemoryFile {
   id: string;
   userId: string;
   orgId: string;
-  category: OrchestratorMemoryCategory;
+  path: string;
   content: string;
   relevance: number;
+  pinned: boolean;
+  version: number;
   createdAt: string;
+  updatedAt: string;
   lastAccessedAt: string;
+}
+
+export interface MemoryFileListing {
+  path: string;
+  size: number;
+  updatedAt: string;
+  pinned: boolean;
+}
+
+export type PatchOperation =
+  | { op: 'append'; content: string }
+  | { op: 'prepend'; content: string }
+  | { op: 'replace'; old: string; new: string }
+  | { op: 'replace_all'; old: string; new: string }
+  | { op: 'insert_after'; anchor: string; content: string }
+  | { op: 'delete_section'; heading: string };
+
+export interface PatchResult {
+  content: string;
+  version: number;
+  applied: number;
+  skipped: string[];
+}
+
+export interface MemoryFileSearchResult {
+  path: string;
+  snippet: string;
+  relevance: number;
 }
 
 export interface OrchestratorInfo {

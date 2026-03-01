@@ -1,4 +1,4 @@
-import { sqliteTable, text, real, integer, index, uniqueIndex } from 'drizzle-orm/sqlite-core';
+import { sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core';
 import { sql } from 'drizzle-orm';
 
 export const orchestratorIdentities = sqliteTable('orchestrator_identities', {
@@ -17,18 +17,4 @@ export const orchestratorIdentities = sqliteTable('orchestrator_identities', {
   uniqueIndex('idx_orch_identity_user').on(table.orgId, table.userId),
 ]);
 
-// Note: orchestrator_memories_fts is an FTS5 virtual table and cannot be represented in Drizzle schema.
-// FTS5 queries must use raw SQL via d1.prepare().
-export const orchestratorMemories = sqliteTable('orchestrator_memories', {
-  id: text().primaryKey(),
-  userId: text().notNull(),
-  orgId: text().notNull().default('default'),
-  category: text().notNull(),
-  content: text().notNull(),
-  relevance: real().notNull().default(1.0),
-  createdAt: text().notNull().default(sql`(datetime('now'))`),
-  lastAccessedAt: text().notNull().default(sql`(datetime('now'))`),
-}, (table) => [
-  index('idx_orch_memories_user').on(table.userId),
-  index('idx_orch_memories_category').on(table.userId, table.category),
-]);
+// orchestrator_memories table removed — replaced by orchestrator_memory_files (see schema/memory-files.ts)

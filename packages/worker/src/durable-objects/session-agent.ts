@@ -1,7 +1,7 @@
 import type { Env } from '../env.js';
 import type { AppDb } from '../lib/drizzle.js';
 import { getDb } from '../lib/drizzle.js';
-import { updateSessionStatus, updateSessionMetrics, addActiveSeconds, updateSessionGitState, upsertSessionFileChanged, updateSessionTitle, createSession, createSessionGitState, getSession, getSessionGitState, getChildSessions, getSessionChannelBindings, listUserChannelBindings, listOrchestratorMemories, createOrchestratorMemory, deleteOrchestratorMemory, boostMemoryRelevance, listOrgRepositories, listPersonas, getUserById, getUsersByIds, createMailboxMessage, getSessionMailbox, markSessionMailboxRead, getOrchestratorIdentityByHandle, createSessionTask, getSessionTasks, getMyTasks, updateSessionTask, getUserTelegramConfig, getOrgSettings, enqueueWorkflowApprovalNotificationIfMissing, markWorkflowApprovalNotificationsRead, isNotificationWebEnabled, batchInsertAuditLog, batchUpsertMessages, updateUserDiscoveredModels } from '../lib/db.js';
+import { updateSessionStatus, updateSessionMetrics, addActiveSeconds, updateSessionGitState, upsertSessionFileChanged, updateSessionTitle, createSession, createSessionGitState, getSession, getSessionGitState, getChildSessions, getSessionChannelBindings, listUserChannelBindings, readMemoryFile, listMemoryFiles, writeMemoryFile, patchMemoryFile, deleteMemoryFile, deleteMemoryFilesUnderPath, searchMemoryFiles, boostMemoryFileRelevance, listOrgRepositories, listPersonas, getUserById, getUsersByIds, createMailboxMessage, getSessionMailbox, markSessionMailboxRead, getOrchestratorIdentityByHandle, createSessionTask, getSessionTasks, getMyTasks, updateSessionTask, getUserTelegramConfig, getOrgSettings, enqueueWorkflowApprovalNotificationIfMissing, markWorkflowApprovalNotificationsRead, isNotificationWebEnabled, batchInsertAuditLog, batchUpsertMessages, updateUserDiscoveredModels } from '../lib/db.js';
 import { getCredential } from '../services/credentials.js';
 import { getSlackBotToken } from '../services/slack.js';
 import { listWorkflows, upsertWorkflow, getWorkflowByIdOrSlug, getWorkflowOwnerCheck, deleteWorkflowTriggers, deleteWorkflowById, updateWorkflow, getWorkflowById } from '../lib/db/workflows.js';
@@ -210,7 +210,7 @@ function deriveRuntimeStates(args: {
 type ToolCallStatus = 'pending' | 'running' | 'completed' | 'error';
 
 interface RunnerMessage {
-  type: 'stream' | 'result' | 'tool' | 'question' | 'screenshot' | 'error' | 'complete' | 'agentStatus' | 'create-pr' | 'update-pr' | 'list-pull-requests' | 'inspect-pull-request' | 'models' | 'aborted' | 'reverted' | 'diff' | 'review-result' | 'command-result' | 'ping' | 'git-state' | 'pr-created' | 'files-changed' | 'child-session' | 'title' | 'spawn-child' | 'session-message' | 'session-messages' | 'terminate-child' | 'self-terminate' | 'memory-read' | 'memory-write' | 'memory-delete' | 'list-repos' | 'list-personas' | 'list-channels' | 'get-session-status' | 'list-child-sessions' | 'forward-messages' | 'read-repo-file' | 'workflow-list' | 'workflow-sync' | 'workflow-run' | 'workflow-executions' | 'workflow-api' | 'trigger-api' | 'execution-api' | 'workflow-execution-result' | 'workflow-chat-message' | 'model-switched' | 'tunnels' | 'mailbox-send' | 'mailbox-check' | 'task-create' | 'task-list' | 'task-update' | 'task-my' | 'channel-reply' | 'audio-transcript' | 'channel-session-created' | 'session-reset' | 'opencode-config-applied' | 'message.create' | 'message.part.text-delta' | 'message.part.tool-update' | 'message.finalize';
+  type: 'stream' | 'result' | 'tool' | 'question' | 'screenshot' | 'error' | 'complete' | 'agentStatus' | 'create-pr' | 'update-pr' | 'list-pull-requests' | 'inspect-pull-request' | 'models' | 'aborted' | 'reverted' | 'diff' | 'review-result' | 'command-result' | 'ping' | 'git-state' | 'pr-created' | 'files-changed' | 'child-session' | 'title' | 'spawn-child' | 'session-message' | 'session-messages' | 'terminate-child' | 'self-terminate' | 'mem-read' | 'mem-write' | 'mem-patch' | 'mem-rm' | 'mem-search' | 'list-repos' | 'list-personas' | 'list-channels' | 'get-session-status' | 'list-child-sessions' | 'forward-messages' | 'read-repo-file' | 'workflow-list' | 'workflow-sync' | 'workflow-run' | 'workflow-executions' | 'workflow-api' | 'trigger-api' | 'execution-api' | 'workflow-execution-result' | 'workflow-chat-message' | 'model-switched' | 'tunnels' | 'mailbox-send' | 'mailbox-check' | 'task-create' | 'task-list' | 'task-update' | 'task-my' | 'channel-reply' | 'audio-transcript' | 'channel-session-created' | 'session-reset' | 'opencode-config-applied' | 'message.create' | 'message.part.text-delta' | 'message.part.tool-update' | 'message.finalize';
   restarted?: boolean;
   turnId?: string;
   delta?: string;
@@ -265,9 +265,11 @@ interface RunnerMessage {
   commentsLimit?: number;
   childSessionId?: string;
   diffFiles?: unknown;
-  // Orchestrator memory fields
-  category?: string;
+  // Memory file system fields
   query?: string;
+  operations?: unknown[];
+  // Legacy fields
+  category?: string;
   memoryId?: string;
   relevance?: number;
   source?: string;
@@ -344,7 +346,7 @@ interface ClientOutbound {
 
 /** Messages sent from DO to runner */
 interface RunnerOutbound {
-  type: 'prompt' | 'answer' | 'stop' | 'abort' | 'revert' | 'diff' | 'review' | 'opencode-command' | 'pong' | 'init' | 'opencode-config' | 'spawn-child-result' | 'session-message-result' | 'session-messages-result' | 'create-pr-result' | 'update-pr-result' | 'list-pull-requests-result' | 'inspect-pull-request-result' | 'terminate-child-result' | 'memory-read-result' | 'memory-write-result' | 'memory-delete-result' | 'list-repos-result' | 'list-personas-result' | 'list-channels-result' | 'get-session-status-result' | 'list-child-sessions-result' | 'forward-messages-result' | 'read-repo-file-result' | 'workflow-list-result' | 'workflow-sync-result' | 'workflow-run-result' | 'workflow-executions-result' | 'workflow-api-result' | 'trigger-api-result' | 'execution-api-result' | 'workflow-execute' | 'tunnel-delete' | 'channel-reply-result';
+  type: 'prompt' | 'answer' | 'stop' | 'abort' | 'revert' | 'diff' | 'review' | 'opencode-command' | 'pong' | 'init' | 'opencode-config' | 'spawn-child-result' | 'session-message-result' | 'session-messages-result' | 'create-pr-result' | 'update-pr-result' | 'list-pull-requests-result' | 'inspect-pull-request-result' | 'terminate-child-result' | 'mem-read-result' | 'mem-write-result' | 'mem-patch-result' | 'mem-rm-result' | 'mem-search-result' | 'list-repos-result' | 'list-personas-result' | 'list-channels-result' | 'get-session-status-result' | 'list-child-sessions-result' | 'forward-messages-result' | 'read-repo-file-result' | 'workflow-list-result' | 'workflow-sync-result' | 'workflow-run-result' | 'workflow-executions-result' | 'workflow-api-result' | 'trigger-api-result' | 'execution-api-result' | 'workflow-execute' | 'tunnel-delete' | 'channel-reply-result';
   config?: {
     tools?: Record<string, boolean>;
     providerKeys?: Record<string, string>;
@@ -2644,17 +2646,25 @@ export class SessionAgentDO {
         break;
       }
 
-      // ─── Orchestrator Operations ──────────────────────────────────────
-      case 'memory-read':
-        await this.handleMemoryRead(msg.requestId!, msg.category, msg.query, msg.limit);
+      // ─── Memory File Operations ────────────────────────────────────────
+      case 'mem-read':
+        await this.handleMemRead(msg.requestId!, msg.path);
         break;
 
-      case 'memory-write':
-        await this.handleMemoryWrite(msg.requestId!, msg.content!, msg.category!);
+      case 'mem-write':
+        await this.handleMemWrite(msg.requestId!, msg.path!, msg.content!);
         break;
 
-      case 'memory-delete':
-        await this.handleMemoryDelete(msg.requestId!, msg.memoryId!);
+      case 'mem-patch':
+        await this.handleMemPatch(msg.requestId!, msg.path!, msg.operations);
+        break;
+
+      case 'mem-rm':
+        await this.handleMemRm(msg.requestId!, msg.path!);
+        break;
+
+      case 'mem-search':
+        await this.handleMemSearch(msg.requestId!, msg.query!, msg.path);
         break;
 
       case 'list-repos':
@@ -3181,48 +3191,73 @@ export class SessionAgentDO {
 
   // ─── Orchestrator Operations ────────────────────────────────────────────
 
-  private async handleMemoryRead(requestId: string, category?: string, query?: string, limit?: number) {
+  private async handleMemRead(requestId: string, path?: string) {
     try {
       const userId = this.getStateValue('userId')!;
-      const memories = await listOrchestratorMemories(this.env.DB, userId, { category, query, limit });
+      const p = path || '';
 
-      // Boost relevance for accessed memories
-      for (const mem of memories) {
-        boostMemoryRelevance(this.appDb, mem.id).catch(() => {});
+      if (!p || p.endsWith('/')) {
+        const files = await listMemoryFiles(this.appDb, userId, p);
+        this.sendToRunner({ type: 'mem-read-result', requestId, files } as any);
+      } else {
+        const file = await readMemoryFile(this.appDb, userId, p);
+        if (file) {
+          boostMemoryFileRelevance(this.appDb, userId, p).catch(() => {});
+        }
+        this.sendToRunner({ type: 'mem-read-result', requestId, file } as any);
       }
-
-      this.sendToRunner({ type: 'memory-read-result', requestId, memories } as any);
     } catch (err) {
-      console.error('[SessionAgentDO] Failed to read memories:', err);
-      this.sendToRunner({ type: 'memory-read-result', requestId, error: err instanceof Error ? err.message : String(err) } as any);
+      console.error('[SessionAgentDO] Failed to read memory file:', err);
+      this.sendToRunner({ type: 'mem-read-result', requestId, error: err instanceof Error ? err.message : String(err) } as any);
     }
   }
 
-  private async handleMemoryWrite(requestId: string, content: string, category: string) {
+  private async handleMemWrite(requestId: string, path: string, content: string) {
     try {
       const userId = this.getStateValue('userId')!;
-      const id = crypto.randomUUID();
-      const memory = await createOrchestratorMemory(this.env.DB, {
-        id,
-        userId,
-        category: category as any,
-        content,
-      });
-      this.sendToRunner({ type: 'memory-write-result', requestId, memory, success: true } as any);
+      const file = await writeMemoryFile(this.env.DB, userId, path, content);
+      this.sendToRunner({ type: 'mem-write-result', requestId, file } as any);
     } catch (err) {
-      console.error('[SessionAgentDO] Failed to write memory:', err);
-      this.sendToRunner({ type: 'memory-write-result', requestId, error: err instanceof Error ? err.message : String(err) } as any);
+      console.error('[SessionAgentDO] Failed to write memory file:', err);
+      this.sendToRunner({ type: 'mem-write-result', requestId, error: err instanceof Error ? err.message : String(err) } as any);
     }
   }
 
-  private async handleMemoryDelete(requestId: string, memoryId: string) {
+  private async handleMemPatch(requestId: string, path: string, operations: any) {
     try {
       const userId = this.getStateValue('userId')!;
-      const deleted = await deleteOrchestratorMemory(this.env.DB, memoryId, userId);
-      this.sendToRunner({ type: 'memory-delete-result', requestId, success: deleted } as any);
+      const result = await patchMemoryFile(this.env.DB, userId, path, operations);
+      this.sendToRunner({ type: 'mem-patch-result', requestId, result } as any);
     } catch (err) {
-      console.error('[SessionAgentDO] Failed to delete memory:', err);
-      this.sendToRunner({ type: 'memory-delete-result', requestId, error: err instanceof Error ? err.message : String(err) } as any);
+      console.error('[SessionAgentDO] Failed to patch memory file:', err);
+      this.sendToRunner({ type: 'mem-patch-result', requestId, error: err instanceof Error ? err.message : String(err) } as any);
+    }
+  }
+
+  private async handleMemRm(requestId: string, path: string) {
+    try {
+      const userId = this.getStateValue('userId')!;
+      let deleted: number;
+      if (path.endsWith('/')) {
+        deleted = await deleteMemoryFilesUnderPath(this.env.DB, userId, path);
+      } else {
+        deleted = await deleteMemoryFile(this.env.DB, userId, path);
+      }
+      this.sendToRunner({ type: 'mem-rm-result', requestId, deleted } as any);
+    } catch (err) {
+      console.error('[SessionAgentDO] Failed to delete memory file:', err);
+      this.sendToRunner({ type: 'mem-rm-result', requestId, error: err instanceof Error ? err.message : String(err) } as any);
+    }
+  }
+
+  private async handleMemSearch(requestId: string, query: string, path?: string) {
+    try {
+      const userId = this.getStateValue('userId')!;
+      const results = await searchMemoryFiles(this.env.DB, userId, query, path);
+      this.sendToRunner({ type: 'mem-search-result', requestId, results } as any);
+    } catch (err) {
+      console.error('[SessionAgentDO] Failed to search memory files:', err);
+      this.sendToRunner({ type: 'mem-search-result', requestId, error: err instanceof Error ? err.message : String(err) } as any);
     }
   }
 

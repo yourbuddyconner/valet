@@ -473,11 +473,6 @@ export interface GitStateParams {
   commitCount?: number;
 }
 
-export interface MemoryReadParams {
-  category?: string;
-  query?: string;
-  limit?: number;
-}
 
 export interface WorkflowSyncParams {
   id?: string;
@@ -526,9 +521,11 @@ export interface GatewayCallbacks {
   onListPullRequests?: (params: ListPullRequestsParams) => Promise<{ pulls: unknown[] }>;
   onInspectPullRequest?: (params: InspectPullRequestParams) => Promise<unknown>;
   onReportGitState?: (params: GitStateParams) => void;
-  onMemoryRead?: (params: MemoryReadParams) => Promise<{ memories: unknown[] }>;
-  onMemoryWrite?: (content: string, category: string) => Promise<{ memory: unknown; success: boolean }>;
-  onMemoryDelete?: (memoryId: string) => Promise<{ success: boolean }>;
+  onMemRead?: (path: string) => Promise<{ file?: unknown; files?: unknown[]; content?: string }>;
+  onMemWrite?: (path: string, content: string) => Promise<{ file: unknown }>;
+  onMemPatch?: (path: string, operations: unknown[]) => Promise<{ result: unknown }>;
+  onMemRm?: (path: string) => Promise<{ deleted: number }>;
+  onMemSearch?: (query: string, path?: string) => Promise<{ results: unknown[] }>;
   onListRepos?: (source?: string) => Promise<{ repos: unknown[] }>;
   onListPersonas?: () => Promise<{ personas: unknown[] }>;
   onListChannels?: () => Promise<{ channels: unknown[] }>;
@@ -897,15 +894,13 @@ export function startGateway(port: number, callbacks: GatewayCallbacks): void {
 
   // ─── Orchestrator API ─────────────────────────────────────────────
 
-  app.get("/api/memories", async (c) => {
-    if (!callbacks.onMemoryRead) {
+  app.get("/api/memory", async (c) => {
+    if (!callbacks.onMemRead) {
       return c.json({ error: "Memory read handler not configured" }, 500);
     }
     try {
-      const category = c.req.query("category") || undefined;
-      const query = c.req.query("query") || undefined;
-      const limit = c.req.query("limit") ? parseInt(c.req.query("limit")!, 10) : undefined;
-      const result = await callbacks.onMemoryRead({ category, query, limit });
+      const path = c.req.query("path") || "";
+      const result = await callbacks.onMemRead(path);
       return c.json(result);
     } catch (err) {
       console.error("[Gateway] Memory read error:", err);
@@ -913,16 +908,16 @@ export function startGateway(port: number, callbacks: GatewayCallbacks): void {
     }
   });
 
-  app.post("/api/memories", async (c) => {
-    if (!callbacks.onMemoryWrite) {
+  app.put("/api/memory", async (c) => {
+    if (!callbacks.onMemWrite) {
       return c.json({ error: "Memory write handler not configured" }, 500);
     }
     try {
-      const body = await c.req.json() as { content?: string; category?: string };
-      if (!body.content || !body.category) {
-        return c.json({ error: "Missing required fields: content, category" }, 400);
+      const body = await c.req.json() as { path?: string; content?: string };
+      if (!body.path || !body.content) {
+        return c.json({ error: "Missing required fields: path, content" }, 400);
       }
-      const result = await callbacks.onMemoryWrite(body.content, body.category);
+      const result = await callbacks.onMemWrite(body.path, body.content);
       return c.json(result);
     } catch (err) {
       console.error("[Gateway] Memory write error:", err);
@@ -930,16 +925,54 @@ export function startGateway(port: number, callbacks: GatewayCallbacks): void {
     }
   });
 
-  app.delete("/api/memories/:id", async (c) => {
-    if (!callbacks.onMemoryDelete) {
+  app.patch("/api/memory", async (c) => {
+    if (!callbacks.onMemPatch) {
+      return c.json({ error: "Memory patch handler not configured" }, 500);
+    }
+    try {
+      const body = await c.req.json() as { path?: string; operations?: unknown[] };
+      if (!body.path || !body.operations) {
+        return c.json({ error: "Missing required fields: path, operations" }, 400);
+      }
+      const result = await callbacks.onMemPatch(body.path, body.operations);
+      return c.json(result);
+    } catch (err) {
+      console.error("[Gateway] Memory patch error:", err);
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
+    }
+  });
+
+  app.delete("/api/memory", async (c) => {
+    if (!callbacks.onMemRm) {
       return c.json({ error: "Memory delete handler not configured" }, 500);
     }
     try {
-      const memoryId = c.req.param("id");
-      const result = await callbacks.onMemoryDelete(memoryId);
+      const path = c.req.query("path");
+      if (!path) {
+        return c.json({ error: "Missing required query param: path" }, 400);
+      }
+      const result = await callbacks.onMemRm(path);
       return c.json(result);
     } catch (err) {
       console.error("[Gateway] Memory delete error:", err);
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
+    }
+  });
+
+  app.get("/api/memory/search", async (c) => {
+    if (!callbacks.onMemSearch) {
+      return c.json({ error: "Memory search handler not configured" }, 500);
+    }
+    try {
+      const query = c.req.query("query");
+      if (!query) {
+        return c.json({ error: "Missing required query param: query" }, 400);
+      }
+      const path = c.req.query("path") || undefined;
+      const result = await callbacks.onMemSearch(query, path);
+      return c.json(result);
+    } catch (err) {
+      console.error("[Gateway] Memory search error:", err);
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
     }
   });

@@ -57,9 +57,11 @@ export type DOToRunnerMessage =
   | { type: "list-pull-requests-result"; requestId: string; pulls?: unknown[]; error?: string }
   | { type: "inspect-pull-request-result"; requestId: string; data?: unknown; error?: string }
   | { type: "terminate-child-result"; requestId: string; success?: boolean; error?: string }
-  | { type: "memory-read-result"; requestId: string; memories?: unknown[]; error?: string }
-  | { type: "memory-write-result"; requestId: string; memory?: unknown; success?: boolean; error?: string }
-  | { type: "memory-delete-result"; requestId: string; success?: boolean; error?: string }
+  | { type: "mem-read-result"; requestId: string; file?: unknown; files?: unknown[]; error?: string }
+  | { type: "mem-write-result"; requestId: string; file?: unknown; error?: string }
+  | { type: "mem-patch-result"; requestId: string; result?: unknown; error?: string }
+  | { type: "mem-rm-result"; requestId: string; deleted?: number; error?: string }
+  | { type: "mem-search-result"; requestId: string; results?: unknown[]; error?: string }
   | { type: "list-repos-result"; requestId: string; repos?: unknown[]; error?: string }
   | { type: "list-personas-result"; requestId: string; personas?: unknown[]; error?: string }
   | { type: "list-channels-result"; requestId: string; channels?: unknown[]; error?: string }
@@ -148,9 +150,11 @@ export type RunnerToDOMessage =
   | { type: "self-terminate" }
   | { type: "review-result"; requestId: string; data?: ReviewResultData; diffFiles?: DiffFile[]; error?: string }
   | { type: "ping" }
-  | { type: "memory-read"; requestId: string; category?: string; query?: string; limit?: number }
-  | { type: "memory-write"; requestId: string; content: string; category: string }
-  | { type: "memory-delete"; requestId: string; memoryId: string }
+  | { type: "mem-read"; requestId: string; path?: string }
+  | { type: "mem-write"; requestId: string; path: string; content: string }
+  | { type: "mem-patch"; requestId: string; path: string; operations: unknown[] }
+  | { type: "mem-rm"; requestId: string; path: string }
+  | { type: "mem-search"; requestId: string; query: string; path?: string }
   | { type: "list-repos"; requestId: string; source?: string }
   | { type: "list-personas"; requestId: string }
   | { type: "list-channels"; requestId: string }

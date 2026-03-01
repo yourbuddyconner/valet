@@ -1,13 +1,14 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from './client';
-import type { OrchestratorIdentity, OrchestratorMemory, AgentSession, MailboxMessage, UserNotificationPreference, UserIdentityLink, UserTelegramConfig } from './types';
+import type { OrchestratorIdentity, MemoryFile, MemoryFileListing, MemoryFileSearchResult, AgentSession, MailboxMessage, UserNotificationPreference, UserIdentityLink, UserTelegramConfig } from './types';
 
 export const orchestratorKeys = {
   all: ['orchestrator'] as const,
   info: () => [...orchestratorKeys.all, 'info'] as const,
   identity: () => [...orchestratorKeys.all, 'identity'] as const,
   checkHandle: (handle: string) => [...orchestratorKeys.all, 'check-handle', handle] as const,
-  memories: (filters?: { category?: string }) => [...orchestratorKeys.all, 'memories', filters] as const,
+  memoryFiles: (path?: string) => [...orchestratorKeys.all, 'memory-files', path] as const,
+  memoryFile: (path: string) => [...orchestratorKeys.all, 'memory-file', path] as const,
   notifications: (filters?: { messageType?: string; unreadOnly?: boolean }) => [...orchestratorKeys.all, 'notifications', filters] as const,
   notificationCount: () => [...orchestratorKeys.all, 'notifications-count'] as const,
   notificationThread: (threadId: string) => [...orchestratorKeys.all, 'notifications-thread', threadId] as const,
@@ -94,46 +95,75 @@ export function useUpdateOrchestratorIdentity() {
   });
 }
 
-export function useOrchestratorMemories(category?: string) {
+export function useMemoryFiles(path?: string) {
   return useQuery({
-    queryKey: orchestratorKeys.memories({ category }),
+    queryKey: orchestratorKeys.memoryFiles(path || ''),
     queryFn: () => {
       const params = new URLSearchParams();
-      if (category) params.set('category', category);
+      if (path) params.set('path', path);
       const qs = params.toString();
-      return api.get<{ memories: OrchestratorMemory[] }>(
-        `/me/memories${qs ? `?${qs}` : ''}`
+      return api.get<{ files: MemoryFileListing[] }>(
+        `/me/memory${qs ? `?${qs}` : ''}`
       );
     },
-    select: (data) => data.memories,
+    select: (data) => data.files,
     staleTime: 30_000,
   });
 }
 
-export function useCreateMemory() {
+export function useMemoryFile(path: string) {
+  return useQuery({
+    queryKey: orchestratorKeys.memoryFile(path),
+    queryFn: () => {
+      const params = new URLSearchParams({ path });
+      return api.get<{ file: MemoryFile | null }>(
+        `/me/memory?${params.toString()}`
+      );
+    },
+    select: (data) => data.file,
+    enabled: !!path && !path.endsWith('/'),
+    staleTime: 30_000,
+  });
+}
+
+export function useWriteMemoryFile() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: (data: { content: string; category: string }) =>
-      api.post<{ memory: OrchestratorMemory }>('/me/memories', data),
+    mutationFn: (data: { path: string; content: string }) =>
+      api.put<{ file: MemoryFile }>('/me/memory', data),
     onSuccess: () => {
-      // Use prefix key to invalidate all memory queries regardless of category filter
       queryClient.invalidateQueries({
-        queryKey: [...orchestratorKeys.all, 'memories'],
+        queryKey: [...orchestratorKeys.all, 'memory-files'],
       });
     },
   });
 }
 
-export function useDeleteMemory() {
+export function useSearchMemoryFiles(query: string) {
+  return useQuery({
+    queryKey: [...orchestratorKeys.all, 'memory-search', query],
+    queryFn: () => {
+      const params = new URLSearchParams({ query });
+      return api.get<{ results: MemoryFileSearchResult[] }>(
+        `/me/memory/search?${params.toString()}`
+      );
+    },
+    select: (data) => data.results,
+    enabled: query.length >= 2,
+    staleTime: 15_000,
+  });
+}
+
+export function useDeleteMemoryFile() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: (id: string) => api.delete<{ success: boolean }>(`/me/memories/${id}`),
+    mutationFn: (path: string) =>
+      api.delete<{ success: boolean; deleted: number }>(`/me/memory?path=${encodeURIComponent(path)}`),
     onSuccess: () => {
-      // Use prefix key to invalidate all memory queries regardless of category filter
       queryClient.invalidateQueries({
-        queryKey: [...orchestratorKeys.all, 'memories'],
+        queryKey: [...orchestratorKeys.all, 'memory-files'],
       });
     },
   });
