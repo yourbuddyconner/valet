@@ -59,6 +59,9 @@ export type {
   UserIdentityLink,
   ChannelBinding,
   UserTelegramConfig,
+  ProviderModels,
+  ProviderModelEntry,
+  AvailableModels,
 } from '@agent-ops/shared';
 
 export type { GitHub, Gmail, GoogleCalendar } from '@agent-ops/shared';

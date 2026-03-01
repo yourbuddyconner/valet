@@ -899,6 +899,11 @@ export const SLASH_COMMANDS: SlashCommand[] = [
   { name: 'new-session', description: 'Start fresh AI context (keeps history)', handler: 'websocket', availableIn: ['ui'], category: 'Session' },
 ];
 
+// Model discovery types
+export interface ProviderModelEntry { id: string; name: string }
+export interface ProviderModels { provider: string; models: ProviderModelEntry[] }
+export type AvailableModels = ProviderModels[];
+
 // Audit log types
 export type AuditLogEventType =
   | 'session.started'

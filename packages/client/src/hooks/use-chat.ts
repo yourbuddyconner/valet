@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useWebSocket } from './use-websocket';
-import { sessionKeys } from '@/api/sessions';
+import { sessionKeys, type ProviderModels } from '@/api/sessions';
 import { api } from '@/api/client';
 import { toast } from './use-toast';
 import type { Message, SessionStatus } from '@/api/types';
@@ -29,10 +29,7 @@ const MAX_LOG_ENTRIES = 500;
 
 type AgentStatus = 'idle' | 'thinking' | 'tool_calling' | 'streaming' | 'error' | 'queued';
 
-export interface ProviderModels {
-  provider: string;
-  models: { id: string; name: string }[];
-}
+export type { ProviderModels };
 
 export interface DiffFile {
   path: string;

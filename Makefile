@@ -589,7 +589,7 @@ release: ## Full idempotent release: install, build, push image, deploy worker +
 	@echo ""
 	@echo "$(YELLOW)Sign in with GitHub to get started.$(NC)"
 
-deploy: deploy-worker deploy-modal deploy-client ## Deploy everything (worker + modal + client)
+deploy: deploy-worker deploy-migrate deploy-modal deploy-client ## Deploy everything (worker + modal + client)
 	@echo ""
 	@echo "$(GREEN)========================================$(NC)"
 	@echo "$(GREEN)All deployments complete!$(NC)"
@@ -598,7 +598,8 @@ deploy: deploy-worker deploy-modal deploy-client ## Deploy everything (worker + 
 	@echo "Client:  https://$(PAGES_PROJECT_NAME).pages.dev"
 	@echo "Modal:   https://modal.com/apps/$(MODAL_WORKSPACE)/main/deployed/agent-ops-backend"
 
-deploy-worker: _wrangler-config ## Deploy Cloudflare Worker
+deploy-worker: ## Deploy Cloudflare Worker
+	@make _wrangler-config
 	@echo "$(GREEN)Deploying Worker...$(NC)"
 	cd packages/worker && wrangler deploy -c wrangler.deploy.toml
 	@rm -f packages/worker/wrangler.deploy.toml
@@ -610,6 +611,13 @@ _wrangler-config: ## Generate wrangler.deploy.toml from .env.deploy values
 		-e 's|$${ALLOWED_EMAILS}|$(ALLOWED_EMAILS)|g' \
 		-e 's|$${MODAL_BACKEND_URL}|$(MODAL_BACKEND_URL)|g' \
 		packages/worker/wrangler.toml > packages/worker/wrangler.deploy.toml
+
+deploy-migrate: ## Apply D1 migrations to production
+	@make _wrangler-config
+	@echo "$(GREEN)Applying D1 migrations...$(NC)"
+	cd packages/worker && wrangler d1 migrations apply agent-ops-db --remote -c wrangler.deploy.toml
+	@rm -f packages/worker/wrangler.deploy.toml
+	@echo "$(GREEN)✓ Migrations applied$(NC)"
 
 deploy-modal: ## Deploy Modal backend (includes runner)
 	@echo "$(GREEN)Deploying Modal backend...$(NC)"

@@ -68,6 +68,12 @@ export const orgRepoPersonaDefaults = sqliteTable('org_repo_persona_defaults', {
   uniqueIndex('idx_repo_persona_default').on(table.orgRepoId),
 ]);
 
+export const modelCatalogCache = sqliteTable('model_catalog_cache', {
+  cacheKey: text('cache_key').primaryKey(),
+  data: text().notNull(),
+  cachedAt: integer('cached_at').notNull(),
+});
+
 export const customProviders = sqliteTable('custom_providers', {
   id: text().primaryKey(),
   providerId: text().notNull().unique(),

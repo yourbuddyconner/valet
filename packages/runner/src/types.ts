@@ -227,13 +227,8 @@ export interface ReviewResultData {
   stats: { critical: number; warning: number; suggestion: number; nitpick: number };
 }
 
-/** Model discovery types */
-export interface ProviderModels {
-  provider: string;
-  models: { id: string; name: string }[];
-}
-
-export type AvailableModels = ProviderModels[];
+/** Model discovery types — re-exported from shared */
+export type { ProviderModelEntry, ProviderModels, AvailableModels } from '@agent-ops/shared';
 
 /** Diff file entry returned by OpenCode diff API */
 export interface DiffFile {

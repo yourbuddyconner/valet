@@ -4,6 +4,7 @@ import { zValidator } from '@hono/zod-validator';
 import type { Env, Variables } from '../env.js';
 import * as db from '../lib/db.js';
 import * as sessionService from '../services/sessions.js';
+import { resolveAvailableModels } from '../services/model-catalog.js';
 
 export const sessionsRouter = new Hono<{ Bindings: Env; Variables: Variables }>();
 
@@ -87,38 +88,24 @@ sessionsRouter.post('/', zValidator('json', createSessionSchema), async (c) => {
 
 /**
  * GET /api/sessions/available-models
- * Returns the list of available models.
+ * Returns the list of available models resolved from D1 configs + external catalogs.
+ * No running sandbox required — models are available as soon as provider keys are configured.
  */
 sessionsRouter.get('/available-models', async (c) => {
-  const user = c.get('user');
-  const orchSession = await db.getOrchestratorSession(c.env.DB, user.id);
-  const orchestratorId = orchSession?.id ?? `orchestrator:${user.id}`;
-
   try {
-    const doId = c.env.SESSIONS.idFromName(orchestratorId);
-    const sessionDO = c.env.SESSIONS.get(doId);
-
-    const resp = await sessionDO.fetch(new Request('http://do/models'));
-    if (resp.ok) {
-      const data = await resp.json() as { models: unknown[] };
-      if (data.models && data.models.length > 0) {
-        return c.json(data);
-      }
-    }
-  } catch {
-    // DO may not exist or be unreachable — fall through to D1 cache
+    const appDb = c.get('db');
+    const [models, orgSettings] = await Promise.all([
+      resolveAvailableModels(appDb, c.env),
+      db.getOrgSettings(appDb),
+    ]);
+    return c.json({
+      models,
+      orgModelPreferences: orgSettings.modelPreferences ?? null,
+    });
+  } catch (err) {
+    console.error('[available-models] resolution failed:', err);
+    return c.json({ models: [], orgModelPreferences: null });
   }
-
-  try {
-    const models = await db.getUserDiscoveredModels(c.get('db'), user.id);
-    if (models && models.length > 0) {
-      return c.json({ models });
-    }
-  } catch {
-    // D1 read failed — return empty
-  }
-
-  return c.json({ models: [] });
 });
 
 /**

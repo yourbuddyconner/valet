@@ -3,7 +3,7 @@ import type { AppDb } from '../drizzle.js';
 import type { OrgSettings, OrgApiKey, Invite, UserRole, OrgRepository, OrchestratorIdentity, CustomProvider, CustomProviderModel } from '@agent-ops/shared';
 import { eq, and, isNull, gt, sql, desc, asc } from 'drizzle-orm';
 import { toDate } from '../drizzle.js';
-import { orgSettings, orgApiKeys, invites, orgRepositories, customProviders } from '../schema/index.js';
+import { orgSettings, orgApiKeys, invites, orgRepositories, customProviders, modelCatalogCache } from '../schema/index.js';
 import { orchestratorIdentities } from '../schema/orchestrator.js';
 
 function rowToOrgSettings(row: typeof orgSettings.$inferSelect): OrgSettings {
@@ -258,7 +258,8 @@ export async function upsertCustomProvider(
     set: {
       displayName: sql`excluded.display_name`,
       baseUrl: sql`excluded.base_url`,
-      encryptedKey: sql`excluded.encrypted_key`,
+      // Preserve existing key when the update doesn't provide a new one
+      encryptedKey: sql`CASE WHEN excluded.encrypted_key IS NOT NULL THEN excluded.encrypted_key ELSE ${customProviders.encryptedKey} END`,
       models: sql`excluded.models`,
       showAllModels: sql`excluded.show_all_models`,
       setBy: sql`excluded.set_by`,
@@ -436,6 +437,31 @@ export async function updateOrgRepository(
 
 export async function deleteOrgRepository(db: AppDb, id: string): Promise<void> {
   await db.delete(orgRepositories).where(eq(orgRepositories.id, id));
+}
+
+// Model catalog cache operations
+export async function getCatalogCache(db: AppDb, key: string): Promise<{ data: string; cachedAt: number } | null> {
+  const row = await db
+    .select({ data: modelCatalogCache.data, cachedAt: modelCatalogCache.cachedAt })
+    .from(modelCatalogCache)
+    .where(eq(modelCatalogCache.cacheKey, key))
+    .get();
+  return row || null;
+}
+
+export async function setCatalogCache(db: AppDb, key: string, data: string): Promise<void> {
+  const now = Math.floor(Date.now() / 1000);
+  await db.insert(modelCatalogCache).values({
+    cacheKey: key,
+    data,
+    cachedAt: now,
+  }).onConflictDoUpdate({
+    target: modelCatalogCache.cacheKey,
+    set: {
+      data: sql`excluded.data`,
+      cachedAt: sql`excluded.cached_at`,
+    },
+  });
 }
 
 // Org Directory Helper

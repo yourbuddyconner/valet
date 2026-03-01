@@ -1,5 +1,7 @@
+import { useEffect, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient, useInfiniteQuery } from '@tanstack/react-query';
 import { api, ApiError } from './client';
+import { useAuthStore } from '@/stores/auth';
 import type {
   AgentSession,
   CreateSessionRequest,
@@ -13,6 +15,7 @@ import type {
   SessionParticipantRole,
   SessionShareLink,
   SessionOwnershipFilter,
+  ProviderModels,
 } from './types';
 
 export const sessionKeys = {
@@ -60,23 +63,31 @@ export function useInfiniteSessions(ownership?: SessionOwnershipFilter) {
   });
 }
 
-export interface ProviderModels {
-  provider: string;
-  models: { id: string; name: string }[];
-}
+export type { ProviderModels };
 
 export function useAvailableModels() {
-  return useQuery({
+  const query = useQuery({
     queryKey: ['available-models'],
-    queryFn: () => api.get<{ models: ProviderModels[] }>('/sessions/available-models'),
-    select: (data) => data.models ?? [],
+    queryFn: () => api.get<{ models: ProviderModels[]; orgModelPreferences?: string[] | null }>('/sessions/available-models'),
     staleTime: 60_000,
-    // Poll more frequently when no models are available yet
-    refetchInterval: (query) => {
-      const models = query.state.data?.models;
-      return models && models.length > 0 ? 60_000 : 10_000;
-    },
+    refetchInterval: 60_000,
   });
+
+  // Hydrate orgModelPreferences into auth store so model pickers
+  // get updated preferences without requiring a re-login.
+  // Done in useEffect (not select) to avoid side effects during render.
+  useEffect(() => {
+    if (!query.data) return;
+    const incoming = query.data.orgModelPreferences ?? undefined;
+    const current = useAuthStore.getState().orgModelPreferences;
+    if (JSON.stringify(current) !== JSON.stringify(incoming)) {
+      useAuthStore.setState({ orgModelPreferences: incoming });
+    }
+  }, [query.data]);
+
+  const data = useMemo(() => query.data?.models ?? [], [query.data]);
+
+  return { ...query, data };
 }
 
 interface SessionDetailResponse {
