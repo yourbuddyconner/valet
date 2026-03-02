@@ -1,6 +1,7 @@
 import type { Integration } from '@/api/types';
+import { useDeleteIntegration } from '@/api/integrations';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 
 interface IntegrationCardProps {
   integration: Integration;
@@ -30,39 +31,52 @@ const serviceIcons: Record<string, React.ReactNode> = {
   xero: <XeroIcon className="h-5 w-5" />,
 };
 
-const statusVariants: Record<
-  Integration['status'],
-  'default' | 'success' | 'warning' | 'error' | 'secondary'
-> = {
-  active: 'success',
-  pending: 'warning',
-  error: 'error',
-  disconnected: 'secondary',
+const statusText: Record<Integration['status'], { label: string; className: string }> = {
+  active: { label: 'Connected', className: 'text-green-600 dark:text-green-400' },
+  pending: { label: 'Pending', className: 'text-amber-600 dark:text-amber-400' },
+  error: { label: 'Error', className: 'text-red-600 dark:text-red-400' },
+  disconnected: { label: 'Disconnected', className: 'text-neutral-500 dark:text-neutral-400' },
 };
 
 export function IntegrationCard({ integration }: IntegrationCardProps) {
+  const deleteIntegration = useDeleteIntegration();
+
+  const status = statusText[integration.status];
+
   return (
     <Card>
       <CardHeader className="pb-2">
-        <div className="flex items-start justify-between">
-          <div className="flex items-center gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-neutral-100 text-neutral-600">
-              {serviceIcons[integration.service] ?? (
-                <DefaultIcon className="h-5 w-5" />
-              )}
-            </div>
-            <div>
-              <CardTitle className="text-base">
-                {serviceLabels[integration.service] ?? integration.service}
-              </CardTitle>
-              <Badge variant={statusVariants[integration.status]}>
-                {integration.status}
-              </Badge>
-            </div>
+        <div className="flex items-center gap-3">
+          <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-neutral-100 text-neutral-600 dark:bg-neutral-700 dark:text-neutral-300">
+            {serviceIcons[integration.service] ?? (
+              <DefaultIcon className="h-5 w-5" />
+            )}
+          </div>
+          <div>
+            <CardTitle className="text-base">
+              {serviceLabels[integration.service] ?? integration.service}
+            </CardTitle>
+            <p className={`text-xs ${status.className}`}>
+              {status.label}
+            </p>
           </div>
         </div>
       </CardHeader>
-      <CardContent />
+      <CardContent>
+        <div className="flex items-center justify-between">
+          <p className="text-xs text-neutral-500 dark:text-neutral-400">
+            OAuth connected
+          </p>
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={() => deleteIntegration.mutate(integration.id)}
+            disabled={deleteIntegration.isPending}
+          >
+            {deleteIntegration.isPending ? 'Disconnecting...' : 'Disconnect'}
+          </Button>
+        </div>
+      </CardContent>
     </Card>
   );
 }
