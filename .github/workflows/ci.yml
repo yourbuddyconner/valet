@@ -21,7 +21,12 @@ jobs:
           node-version: 22
           cache: pnpm
 
+      - uses: oven-sh/setup-bun@v2
+
       - run: pnpm install --frozen-lockfile
+
+      - name: Generate plugin registries
+        run: cd packages/worker && bun scripts/generate-plugin-registry.ts
 
       - name: Typecheck
         run: pnpm typecheck
