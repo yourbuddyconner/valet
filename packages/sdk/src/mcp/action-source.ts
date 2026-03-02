@@ -46,8 +46,11 @@ export class McpActionSource implements ActionSource {
     let tools: McpTool[];
     try {
       tools = await this.client.listTools(token);
-    } catch {
-      // If the MCP server is unreachable, degrade gracefully.
+    } catch (err) {
+      console.warn(
+        `[McpActionSource] ${this.serviceName} listTools failed:`,
+        err instanceof Error ? err.message : String(err),
+      );
       return [];
     }
 

@@ -1,7 +1,8 @@
-import type { OAuthConfig } from '@agent-ops/sdk';
+import { type OAuthConfig, refreshTokenPkce } from '@agent-ops/sdk';
 import { type Env, getEnvString } from '../env.js';
 import { encryptStringPBKDF2, decryptStringPBKDF2 } from '../lib/crypto.js';
 import * as credentialDb from '../lib/db/credentials.js';
+import * as mcpOAuthDb from '../lib/db/mcp-oauth.js';
 import { getDb } from '../lib/drizzle.js';
 import { integrationRegistry } from '../integrations/registry.js';
 
@@ -159,7 +160,57 @@ async function attemptRefresh(
     };
   }
 
+  // MCP OAuth path: use PKCE refresh with dynamically registered client
   const integrationProvider = integrationRegistry.getProvider(provider);
+  if (integrationProvider?.mcpServerUrl) {
+    const db = getDb(env.DB);
+    const client = await mcpOAuthDb.getMcpOAuthClient(db, provider);
+    if (client) {
+      try {
+        const tokens = await refreshTokenPkce({
+          tokenEndpoint: client.tokenEndpoint,
+          clientId: client.clientId,
+          refreshToken: data.refresh_token,
+        });
+        const newData: CredentialData = {
+          access_token: tokens.access_token,
+          refresh_token: tokens.refresh_token || data.refresh_token,
+        };
+        const expiresAt = tokens.expires_in
+          ? new Date(Date.now() + tokens.expires_in * 1000).toISOString()
+          : undefined;
+        const encrypted = await encryptCredentialData(newData, env.ENCRYPTION_KEY);
+        await credentialDb.upsertCredential(db, {
+          id: crypto.randomUUID(),
+          userId,
+          provider,
+          credentialType: 'oauth2',
+          encryptedData: encrypted,
+          expiresAt,
+        });
+        return {
+          ok: true,
+          credential: {
+            accessToken: tokens.access_token,
+            refreshToken: tokens.refresh_token || data.refresh_token,
+            expiresAt: expiresAt ? new Date(expiresAt) : undefined,
+            credentialType: 'oauth2',
+            refreshed: true,
+          },
+        };
+      } catch (err) {
+        return {
+          ok: false,
+          error: {
+            service: provider,
+            reason: 'refresh_failed',
+            message: `MCP PKCE refresh failed: ${err instanceof Error ? err.message : String(err)}`,
+          },
+        };
+      }
+    }
+  }
+
   if (!integrationProvider?.refreshOAuthTokens) {
     return {
       ok: false,

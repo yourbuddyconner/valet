@@ -2,12 +2,21 @@ import { Hono } from 'hono';
 import { z } from 'zod';
 import { zValidator } from '@hono/zod-validator';
 import { NotFoundError, ValidationError } from '@agent-ops/shared';
-import type { OAuthConfig } from '@agent-ops/sdk';
+import {
+  type OAuthConfig,
+  discoverAuthServer,
+  registerClient,
+  generatePkceChallenge,
+  buildAuthorizationUrl,
+  exchangeCodePkce,
+} from '@agent-ops/sdk';
 import { type Env, type Variables, getEnvString } from '../env.js';
 import * as db from '../lib/db.js';
+import * as mcpOAuthDb from '../lib/db/mcp-oauth.js';
 import * as integrationService from '../services/integrations.js';
 import { integrationRegistry } from '../integrations/registry.js';
 import { revokeCredential } from '../services/credentials.js';
+import { getDb } from '../lib/drizzle.js';
 
 export const integrationsRouter = new Hono<{ Bindings: Env; Variables: Variables }>();
 
@@ -26,6 +35,46 @@ function resolveOAuthConfig(service: string, env: Env): OAuthConfig {
     throw new ValidationError(`OAuth env vars missing for service: ${service} (need ${keys.clientId}, ${keys.clientSecret})`);
   }
   return { clientId, clientSecret };
+}
+
+/**
+ * Ensure we have a registered MCP OAuth client for a service.
+ * Discovers metadata + registers a dynamic client if not already cached in D1.
+ */
+async function ensureMcpOAuthClient(
+  env: Env,
+  service: string,
+  mcpServerUrl: string,
+  redirectUri: string,
+) {
+  const d1 = getDb(env.DB);
+  const existing = await mcpOAuthDb.getMcpOAuthClient(d1, service);
+  if (existing) return existing;
+
+  // Discover authorization server metadata
+  const metadata = await discoverAuthServer(mcpServerUrl);
+  if (!metadata.registration_endpoint) {
+    throw new ValidationError(`MCP server ${mcpServerUrl} does not support dynamic client registration`);
+  }
+
+  // Register a new client
+  const registered = await registerClient(metadata.registration_endpoint, {
+    clientName: 'Agent Ops',
+    redirectUris: [redirectUri],
+  });
+
+  const row: mcpOAuthDb.McpOAuthClientRow = {
+    service,
+    clientId: registered.client_id,
+    clientSecret: registered.client_secret ?? null,
+    authorizationEndpoint: metadata.authorization_endpoint,
+    tokenEndpoint: metadata.token_endpoint,
+    registrationEndpoint: metadata.registration_endpoint,
+    scopesSupported: metadata.scopes_supported ? JSON.stringify(metadata.scopes_supported) : null,
+    metadataJson: JSON.stringify(metadata),
+  };
+
+  return mcpOAuthDb.insertMcpOAuthClientIfNotExists(d1, row);
 }
 
 // Validation schemas
@@ -84,15 +133,16 @@ integrationsRouter.get('/', async (c) => {
 /**
  * GET /api/integrations/available
  * List integration services that are actually configured (OAuth env vars present).
- * Services whose required credentials aren't set are excluded so the UI only
- * shows connectable integrations.
+ * MCP OAuth services (with mcpServerUrl) are always available — no env vars needed.
  */
 integrationsRouter.get('/available', async (c) => {
   const packages = integrationRegistry.listPackages();
 
   const available = packages
     .filter((pkg) => {
-      // OAuth services need their client ID + secret in the env to be connectable
+      // MCP OAuth services — always available (dynamic client registration)
+      if (pkg.provider.mcpServerUrl) return true;
+      // Traditional OAuth services — need env vars configured
       if (pkg.provider.authType === 'oauth2' && pkg.provider.oauthEnvKeys) {
         const clientId = getEnvString(c.env, pkg.provider.oauthEnvKeys.clientId);
         const clientSecret = getEnvString(c.env, pkg.provider.oauthEnvKeys.clientSecret);
@@ -218,7 +268,7 @@ integrationsRouter.delete('/:id', async (c) => {
 
 /**
  * GET /api/integrations/:service/oauth
- * Get OAuth URL for a service
+ * Get OAuth URL for a service (MCP OAuth or traditional)
  */
 integrationsRouter.get('/:service/oauth', async (c) => {
   const { service } = c.req.param();
@@ -229,7 +279,30 @@ integrationsRouter.get('/:service/oauth', async (c) => {
   }
 
   const provider = integrationRegistry.getProvider(service);
-  if (!provider?.getOAuthUrl) {
+  if (!provider) {
+    throw new ValidationError(`Unknown service: ${service}`);
+  }
+
+  if (provider.mcpServerUrl) {
+    // ── MCP OAuth path ──
+    const client = await ensureMcpOAuthClient(c.env, service, provider.mcpServerUrl, redirect_uri);
+    const { codeVerifier, codeChallenge } = await generatePkceChallenge();
+    const state = crypto.randomUUID();
+
+    const url = buildAuthorizationUrl({
+      authorizationEndpoint: client.authorizationEndpoint,
+      clientId: client.clientId,
+      redirectUri: redirect_uri,
+      codeChallenge,
+      state,
+      scopes: provider.oauthScopes,
+    });
+
+    return c.json({ url, state, code_verifier: codeVerifier });
+  }
+
+  // ── Traditional OAuth path ──
+  if (!provider.getOAuthUrl) {
     throw new ValidationError(`OAuth not supported for ${service}`);
   }
 
@@ -242,18 +315,53 @@ integrationsRouter.get('/:service/oauth', async (c) => {
 
 /**
  * POST /api/integrations/:service/oauth/callback
- * Handle OAuth callback
+ * Handle OAuth callback (MCP OAuth or traditional)
  */
 integrationsRouter.post('/:service/oauth/callback', async (c) => {
   const { service } = c.req.param();
-  const { code, redirect_uri } = await c.req.json<{ code: string; redirect_uri: string }>();
+  const body = await c.req.json<{ code: string; redirect_uri: string; code_verifier?: string }>();
+  const { code, redirect_uri, code_verifier } = body;
 
   if (!code || !redirect_uri) {
     throw new ValidationError('code and redirect_uri are required');
   }
 
   const provider = integrationRegistry.getProvider(service);
-  if (!provider?.exchangeOAuthCode) {
+  if (!provider) {
+    throw new ValidationError(`Unknown service: ${service}`);
+  }
+
+  if (provider.mcpServerUrl) {
+    // ── MCP OAuth path ──
+    if (!code_verifier) {
+      throw new ValidationError('code_verifier is required for MCP OAuth callback');
+    }
+
+    const d1 = getDb(c.env.DB);
+    const client = await mcpOAuthDb.getMcpOAuthClient(d1, service);
+    if (!client) {
+      throw new ValidationError(`No registered MCP OAuth client for ${service}. Initiate OAuth first.`);
+    }
+
+    const tokens = await exchangeCodePkce({
+      tokenEndpoint: client.tokenEndpoint,
+      clientId: client.clientId,
+      code,
+      redirectUri: redirect_uri,
+      codeVerifier: code_verifier,
+    });
+
+    const credentials: Record<string, string> = {
+      access_token: tokens.access_token,
+      token_type: tokens.token_type || 'bearer',
+    };
+    if (tokens.refresh_token) credentials.refresh_token = tokens.refresh_token;
+
+    return c.json({ credentials });
+  }
+
+  // ── Traditional OAuth path ──
+  if (!provider.exchangeOAuthCode) {
     throw new ValidationError(`OAuth not supported for ${service}`);
   }
 

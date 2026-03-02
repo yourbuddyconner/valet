@@ -7655,6 +7655,8 @@ export class SessionAgentDO {
         ...orgIntegrations.filter((i) => i.status === 'active'),
       ];
 
+      console.log(`[SessionAgentDO] list-tools: userId=${userId}, service=${service ?? 'all'}, active integrations: [${allIntegrations.map((i) => `${i.service}(${i.status})`).join(', ')}]`);
+
       // Deduplicate by service (user-scoped takes precedence)
       const seen = new Set<string>();
       const dedupedIntegrations = allIntegrations.filter((i) => {
@@ -7670,15 +7672,24 @@ export class SessionAgentDO {
         if (service && integration.service !== service) continue;
 
         const actionSource = integrationRegistry.getActions(integration.service);
-        if (!actionSource) continue;
+        if (!actionSource) {
+          console.warn(`[SessionAgentDO] list-tools: no action source for ${integration.service}`);
+          continue;
+        }
 
         // Resolve credentials for this integration to pass to listActions (needed by MCP-backed sources)
         const credResult = await getCredential(this.env, userId, integration.service);
+        if (!credResult.ok) {
+          console.warn(`[SessionAgentDO] list-tools: no credentials for ${integration.service}: ${credResult.error.reason} — ${credResult.error.message}`);
+        } else {
+          console.log(`[SessionAgentDO] list-tools: credentials OK for ${integration.service} (type=${credResult.credential.credentialType}, refreshed=${credResult.credential.refreshed}, hasToken=${!!credResult.credential.accessToken})`);
+        }
         const credCtx = credResult.ok
           ? { credentials: { access_token: credResult.credential.accessToken } }
           : undefined;
 
         const actions = await actionSource.listActions(credCtx);
+        console.log(`[SessionAgentDO] list-tools: ${integration.service} returned ${actions.length} actions`);
         for (const action of actions) {
           // If query provided, filter by case-insensitive substring match on name/description
           if (query) {

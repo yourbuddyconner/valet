@@ -81,6 +81,9 @@ export interface IntegrationProvider {
   readonly oauthScopes?: string[];
   /** Env var names the Worker should read to build OAuthConfig for this provider. */
   readonly oauthEnvKeys?: { clientId: string; clientSecret: string };
+  /** Base URL of the MCP server (e.g. 'https://mcp.notion.com').
+   *  When set, uses MCP OAuth (dynamic client registration + PKCE) instead of env-var OAuth. */
+  readonly mcpServerUrl?: string;
 
   validateCredentials(credentials: IntegrationCredentials): boolean;
   testConnection(credentials: IntegrationCredentials): Promise<boolean>;

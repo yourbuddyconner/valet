@@ -60,23 +60,24 @@ function OAuthCallbackPage() {
       const storedState = sessionStorage.getItem('oauth_state');
       const storedService = sessionStorage.getItem('oauth_service');
 
-      if (!storedService) {
+      if (!storedService || !storedState) {
         setStatus('error');
         setErrorMessage('OAuth session expired. Please try again.');
         return;
       }
 
-      if (state && storedState && state !== storedState) {
+      if (!state || state !== storedState) {
         setStatus('error');
         setErrorMessage('Security validation failed. Please try again.');
         return;
       }
 
-      // Exchange code for credentials
+      // Exchange code for credentials (include code_verifier for MCP OAuth PKCE)
       const redirectUri = `${window.location.origin}/integrations/callback`;
+      const codeVerifier = sessionStorage.getItem('oauth_code_verifier');
       const credentialsResponse = await api.post<{ credentials: Record<string, string> }>(
         `/integrations/${storedService}/oauth/callback`,
-        { code, redirect_uri: redirectUri }
+        { code, redirect_uri: redirectUri, ...(codeVerifier && { code_verifier: codeVerifier }) }
       );
 
       // Configure the integration with the obtained credentials
@@ -91,6 +92,7 @@ function OAuthCallbackPage() {
       // Clean up session storage
       sessionStorage.removeItem('oauth_state');
       sessionStorage.removeItem('oauth_service');
+      sessionStorage.removeItem('oauth_code_verifier');
 
       setStatus('success');
 
@@ -105,6 +107,9 @@ function OAuthCallbackPage() {
       setErrorMessage(
         error instanceof Error ? error.message : 'Failed to complete authorization'
       );
+      sessionStorage.removeItem('oauth_state');
+      sessionStorage.removeItem('oauth_service');
+      sessionStorage.removeItem('oauth_code_verifier');
     }
   };
 

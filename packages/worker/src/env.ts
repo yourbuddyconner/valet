@@ -48,14 +48,6 @@ export interface Env {
   SLACK_CLIENT_ID?: string;
   SLACK_CLIENT_SECRET?: string;
 
-  // Notion OAuth
-  NOTION_CLIENT_ID?: string;
-  NOTION_CLIENT_SECRET?: string;
-
-  // Linear OAuth
-  LINEAR_CLIENT_ID?: string;
-  LINEAR_CLIENT_SECRET?: string;
-
   // Email allowlist (comma-separated). If unset, all emails are allowed.
   ALLOWED_EMAILS?: string;
 }

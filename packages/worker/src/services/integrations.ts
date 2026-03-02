@@ -51,22 +51,27 @@ export async function configureIntegration(
     throw new IntegrationError('Invalid credentials provided', ErrorCodes.INVALID_CREDENTIALS);
   }
 
-  let connectionValid: boolean;
-  try {
-    connectionValid = await provider.testConnection(params.credentials);
-  } catch (err) {
-    console.error(`[Integrations] testConnection for ${params.service} threw:`, err);
-    throw new IntegrationError(
-      `Failed to connect to ${provider.displayName}: ${err instanceof Error ? err.message : String(err)}`,
-      ErrorCodes.INTEGRATION_AUTH_FAILED,
-    );
-  }
-  if (!connectionValid) {
-    console.error(`[Integrations] testConnection for ${params.service} returned false (credentials present: ${Object.keys(params.credentials).join(', ')})`);
-    throw new IntegrationError(
-      `Failed to connect to ${provider.displayName}. Ensure the API is enabled in your provider's console.`,
-      ErrorCodes.INTEGRATION_AUTH_FAILED,
-    );
+  // MCP OAuth services issue tokens scoped to the MCP server, not the provider's
+  // standard API. Skip testConnection for these — the successful OAuth token
+  // exchange already proves the connection is valid.
+  if (!provider.mcpServerUrl) {
+    let connectionValid: boolean;
+    try {
+      connectionValid = await provider.testConnection(params.credentials);
+    } catch (err) {
+      console.error(`[Integrations] testConnection for ${params.service} threw:`, err);
+      throw new IntegrationError(
+        `Failed to connect to ${provider.displayName}: ${err instanceof Error ? err.message : String(err)}`,
+        ErrorCodes.INTEGRATION_AUTH_FAILED,
+      );
+    }
+    if (!connectionValid) {
+      console.error(`[Integrations] testConnection for ${params.service} returned false (credentials present: ${Object.keys(params.credentials).join(', ')})`);
+      throw new IntegrationError(
+        `Failed to connect to ${provider.displayName}. Ensure the API is enabled in your provider's console.`,
+        ErrorCodes.INTEGRATION_AUTH_FAILED,
+      );
+    }
   }
 
   // Ensure user exists

@@ -14,3 +14,4 @@ export * from './memories.js';
 export * from './memory-files.js';
 export * from './credentials.js';
 export * from './actions.js';
+export * from './mcp-oauth.js';
