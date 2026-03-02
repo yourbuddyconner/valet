@@ -35,6 +35,10 @@ Thumbs.db
 *.log
 npm-debug.log*
 
+# Auto-generated plugin registries
+packages/worker/src/integrations/packages.ts
+packages/worker/src/channels/packages.ts
+
 # TypeScript
 *.tsbuildinfo
 

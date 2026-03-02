@@ -16,7 +16,7 @@
         health health-worker health-opencode \
         workflow-create workflow-list workflow-run workflow-delete \
         trigger-create trigger-list trigger-run \
-        release deploy deploy-worker deploy-modal deploy-client build-client \
+        release deploy deploy-worker deploy-modal deploy-client build-client generate-registries \
         secrets-set secrets-list \
         image-build image-push
 
@@ -214,7 +214,7 @@ lint: ## Run linter
 	@echo "$(GREEN)Running linter...$(NC)"
 	$(PNPM) run lint 2>/dev/null || echo "$(YELLOW)No lint script configured$(NC)"
 
-typecheck: ## Run TypeScript type checking
+typecheck: generate-registries ## Run TypeScript type checking
 	@echo "$(GREEN)Running type check...$(NC)"
 	$(PNPM) run typecheck
 
@@ -545,6 +545,9 @@ e2e-ci: ## E2E tests for CI (includes cleanup)
 # Version tag for container images (use git commit hash or timestamp)
 VERSION ?= $(shell git rev-parse --short HEAD 2>/dev/null || date +%Y%m%d%H%M%S)
 
+generate-registries: ## Generate auto-discovered plugin registry files
+	@cd packages/worker && bun scripts/generate-plugin-registry.ts
+
 release: ## Full idempotent release: install, build, push image, deploy worker + client
 	@echo "$(GREEN)========================================$(NC)"
 	@echo "$(GREEN)Starting Release (version: $(VERSION))$(NC)"
@@ -553,6 +556,9 @@ release: ## Full idempotent release: install, build, push image, deploy worker +
 	@echo "Step 1/7: Installing dependencies..."
 	@$(PNPM) install --frozen-lockfile || $(PNPM) install
 	@echo "$(GREEN)✓ Dependencies installed$(NC)"
+	@echo ""
+	@echo "Generating plugin registries..."
+	@make generate-registries
 	@echo ""
 	@echo "Step 2/7: Type checking..."
 	@$(PNPM) run typecheck || echo "$(YELLOW)⚠ Type check had warnings$(NC)"
@@ -598,7 +604,7 @@ deploy: deploy-worker deploy-migrate deploy-modal deploy-client ## Deploy everyt
 	@echo "Client:  https://$(PAGES_PROJECT_NAME).pages.dev"
 	@echo "Modal:   https://modal.com/apps/$(MODAL_WORKSPACE)/main/deployed/agent-ops-backend"
 
-deploy-worker: ## Deploy Cloudflare Worker
+deploy-worker: generate-registries ## Deploy Cloudflare Worker
 	@make _wrangler-config
 	@echo "$(GREEN)Deploying Worker...$(NC)"
 	cd packages/worker && wrangler deploy -c wrangler.deploy.toml

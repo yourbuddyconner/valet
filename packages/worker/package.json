@@ -4,8 +4,12 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "generate-registry": "bun scripts/generate-plugin-registry.ts",
+    "predev": "bun scripts/generate-plugin-registry.ts",
     "dev": "wrangler dev",
+    "prebuild": "bun scripts/generate-plugin-registry.ts",
     "build": "wrangler deploy --dry-run",
+    "predeploy": "bun scripts/generate-plugin-registry.ts",
     "deploy": "wrangler deploy",
     "typecheck": "tsc --noEmit",
     "db:migrate": "wrangler d1 migrations apply agent-ops-db --local",

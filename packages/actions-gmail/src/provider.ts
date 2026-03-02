@@ -18,6 +18,7 @@ export const gmailProvider: IntegrationProvider = {
   authType: 'oauth2',
   supportedEntities: ['messages', 'threads', 'labels', 'drafts'],
   oauthScopes: GMAIL_SCOPES,
+  oauthEnvKeys: { clientId: 'GOOGLE_CLIENT_ID', clientSecret: 'GOOGLE_CLIENT_SECRET' },
 
   validateCredentials(credentials: IntegrationCredentials): boolean {
     return !!(credentials.access_token || credentials.refresh_token);

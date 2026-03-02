@@ -7,6 +7,7 @@ export const githubProvider: IntegrationProvider = {
   authType: 'oauth2',
   supportedEntities: ['repositories', 'issues', 'pull_requests', 'commits'],
   oauthScopes: ['repo', 'read:user', 'read:org'],
+  oauthEnvKeys: { clientId: 'GITHUB_CLIENT_ID', clientSecret: 'GITHUB_CLIENT_SECRET' },
 
   validateCredentials(credentials: IntegrationCredentials): boolean {
     return !!(credentials.access_token || credentials.token);

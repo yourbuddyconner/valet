@@ -76,6 +76,8 @@ export interface IntegrationProvider {
   readonly authType: 'oauth2' | 'bot_token' | 'api_key';
   readonly supportedEntities: string[];
   readonly oauthScopes?: string[];
+  /** Env var names the Worker should read to build OAuthConfig for this provider. */
+  readonly oauthEnvKeys?: { clientId: string; clientSecret: string };
 
   validateCredentials(credentials: IntegrationCredentials): boolean;
   testConnection(credentials: IntegrationCredentials): Promise<boolean>;

@@ -13,21 +13,35 @@ export const integrationsRouter = new Hono<{ Bindings: Env; Variables: Variables
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
-/** Resolve OAuth client credentials from env vars for a given service. */
+/** Read a string-valued env var by dynamic key name. Returns undefined for missing or non-string values. */
+function getEnvString(env: Env, key: string): string | undefined {
+  // Env is a typed interface; we need dynamic key access for provider-declared env var names.
+  // The typeof check below ensures we only return actual string bindings.
+  const val = (env as unknown as Record<string, unknown>)[key];
+  return typeof val === 'string' ? val : undefined;
+}
+
+/** Resolve OAuth client credentials from env vars using provider-declared key names. */
 function resolveOAuthConfig(service: string, env: Env): OAuthConfig {
-  if (service === 'github') {
-    return { clientId: env.GITHUB_CLIENT_ID, clientSecret: env.GITHUB_CLIENT_SECRET };
+  const provider = integrationRegistry.getProvider(service);
+  const keys = provider?.oauthEnvKeys;
+  if (!keys) {
+    throw new ValidationError(`OAuth not configured for service: ${service}`);
   }
-  // Gmail, Google Calendar, and Google Drive all use the same Google OAuth app
-  if (service === 'gmail' || service === 'google_calendar' || service === 'google_drive') {
-    return { clientId: env.GOOGLE_CLIENT_ID, clientSecret: env.GOOGLE_CLIENT_SECRET };
+  const clientId = getEnvString(env, keys.clientId);
+  const clientSecret = getEnvString(env, keys.clientSecret);
+  if (!clientId || !clientSecret) {
+    throw new ValidationError(`OAuth env vars missing for service: ${service} (need ${keys.clientId}, ${keys.clientSecret})`);
   }
-  throw new ValidationError(`OAuth not configured for service: ${service}`);
+  return { clientId, clientSecret };
 }
 
 // Validation schemas
 const configureIntegrationSchema = z.object({
-  service: z.enum(['github', 'gmail', 'google_calendar', 'google_drive', 'notion', 'hubspot', 'ashby', 'discord', 'xero']),
+  service: z.string().min(1).refine(
+    (s) => integrationRegistry.getPackage(s) !== undefined,
+    (s) => ({ message: `Unknown integration service: ${s}` }),
+  ),
   credentials: z.record(z.string()),
   config: z.object({
     syncFrequency: z.enum(['realtime', 'hourly', 'daily', 'manual']).default('hourly'),
