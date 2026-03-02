@@ -1,5 +1,6 @@
 import { tool } from "@opencode-ai/plugin"
 import { z } from "zod"
+import { formatOutput } from "./_format"
 
 export default tool({
   description: "Get a workflow by ID or slug.",
@@ -19,7 +20,7 @@ export default tool({
         return `Failed to get workflow: workflow ${args.workflow_id} was not returned by API.`
       }
 
-      return JSON.stringify(data.workflow, null, 2)
+      return formatOutput(data.workflow)
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
       return `Failed to get workflow: ${msg}`

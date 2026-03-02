@@ -1,4 +1,5 @@
 import { tool } from "@opencode-ai/plugin"
+import { formatOutput } from "./_format"
 
 interface ChannelBindingSummary {
   id: string
@@ -46,7 +47,7 @@ export default tool({
         return "No channels found."
       }
 
-      return JSON.stringify(channels, null, 2)
+      return formatOutput(channels)
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
       return `Failed to list channels: ${msg}`

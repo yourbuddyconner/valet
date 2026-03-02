@@ -1,4 +1,5 @@
 import { tool } from "@opencode-ai/plugin"
+import { formatOutput } from "./_format"
 
 export default tool({
   description:
@@ -34,7 +35,7 @@ export default tool({
       if (!data.notifications || data.notifications.length === 0) {
         return "No unread notifications."
       }
-      return JSON.stringify(data.notifications, null, 2)
+      return formatOutput(data.notifications)
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
       return `Failed to check notifications: ${msg}`

@@ -1,4 +1,5 @@
 import { tool } from "@opencode-ai/plugin"
+import { formatOutput } from "./_format"
 
 export default tool({
   description:
@@ -37,7 +38,7 @@ export default tool({
           : "No tools available. The user may not have any active integrations configured."
       }
 
-      return JSON.stringify(tools, null, 2)
+      return formatOutput(tools)
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
       return `Failed to list tools: ${msg}`

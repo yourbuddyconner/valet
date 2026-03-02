@@ -7,6 +7,7 @@ import { useDrawer } from '@/routes/sessions/$sessionId';
 import { MessageList } from './message-list';
 import { ChatInput } from './chat-input';
 import { QuestionPrompt } from './question-prompt';
+import { ActionApprovalCard } from '@/components/session/action-approval-card';
 import { ChannelSwitcher, deriveChannels } from './channel-switcher';
 import { SessionActionsMenu } from '@/components/sessions/session-actions-menu';
 import { ShareSessionDialog } from '@/components/sessions/share-session-dialog';
@@ -59,6 +60,9 @@ export function ChatContainer({ sessionId }: ChatContainerProps) {
     childSessionEvents,
     connectedUsers,
     executeCommand,
+    pendingActionApprovals,
+    approveActionWs,
+    denyActionWs,
   } = useChat(sessionId);
   type QueuedAttachments = Parameters<typeof sendMessage>[2];
   type QueuedPrompt = {
@@ -424,6 +428,14 @@ export function ChatContainer({ sessionId }: ChatContainerProps) {
               options={q.options}
               expiresAt={q.expiresAt}
               onAnswer={answerQuestion}
+            />
+          ))}
+          {pendingActionApprovals.map((a) => (
+            <ActionApprovalCard
+              key={a.invocationId}
+              approval={a}
+              onApproveWs={approveActionWs}
+              onDenyWs={denyActionWs}
             />
           ))}
           {selectedChannelOption && (

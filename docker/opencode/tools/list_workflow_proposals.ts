@@ -1,5 +1,6 @@
 import { tool } from "@opencode-ai/plugin"
 import { z } from "zod"
+import { formatOutput } from "./_format"
 
 export default tool({
   description: "List workflow mutation proposals for a workflow.",
@@ -31,7 +32,7 @@ export default tool({
       if (proposals.length === 0) {
         return "No workflow proposals found."
       }
-      return JSON.stringify(proposals, null, 2)
+      return formatOutput(proposals)
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
       return `Failed to list workflow proposals: ${msg}`

@@ -1,4 +1,5 @@
 import { tool } from "@opencode-ai/plugin"
+import { formatOutput } from "./_format"
 
 export default tool({
   description:
@@ -23,7 +24,7 @@ export default tool({
       }
 
       const data = (await res.json()) as { sessionStatus: unknown }
-      return JSON.stringify(data.sessionStatus, null, 2)
+      return formatOutput(data.sessionStatus)
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
       return `Failed to get session status: ${msg}`

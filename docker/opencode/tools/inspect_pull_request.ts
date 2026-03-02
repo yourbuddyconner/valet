@@ -1,5 +1,6 @@
 import { tool } from "@opencode-ai/plugin"
 import { z } from "zod"
+import { formatOutput } from "./_format"
 
 export default tool({
   description:
@@ -33,7 +34,7 @@ export default tool({
       }
 
       const data = await res.json()
-      return JSON.stringify(data, null, 2)
+      return formatOutput(data)
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
       return `Failed to inspect pull request: ${msg}`

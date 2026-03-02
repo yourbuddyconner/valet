@@ -7678,15 +7678,21 @@ export class SessionAgentDO {
         }
 
         // Resolve credentials for this integration to pass to listActions (needed by MCP-backed sources)
-        const credResult = await getCredential(this.env, userId, integration.service);
-        if (!credResult.ok) {
-          console.warn(`[SessionAgentDO] list-tools: no credentials for ${integration.service}: ${credResult.error.reason} — ${credResult.error.message}`);
+        // No-auth services (e.g. DeepWiki) skip credential lookup entirely.
+        const provider = integrationRegistry.getProvider(integration.service);
+        let credCtx: { credentials: { access_token: string } } | undefined;
+        if (provider?.authType === 'none') {
+          // No credentials needed — pass undefined context
+          console.log(`[SessionAgentDO] list-tools: ${integration.service} is no-auth, skipping credential lookup`);
         } else {
-          console.log(`[SessionAgentDO] list-tools: credentials OK for ${integration.service} (type=${credResult.credential.credentialType}, refreshed=${credResult.credential.refreshed}, hasToken=${!!credResult.credential.accessToken})`);
+          const credResult = await getCredential(this.env, userId, integration.service);
+          if (!credResult.ok) {
+            console.warn(`[SessionAgentDO] list-tools: no credentials for ${integration.service}: ${credResult.error.reason} — ${credResult.error.message}`);
+          } else {
+            console.log(`[SessionAgentDO] list-tools: credentials OK for ${integration.service} (type=${credResult.credential.credentialType}, refreshed=${credResult.credential.refreshed}, hasToken=${!!credResult.credential.accessToken})`);
+            credCtx = { credentials: { access_token: credResult.credential.accessToken } };
+          }
         }
-        const credCtx = credResult.ok
-          ? { credentials: { access_token: credResult.credential.accessToken } }
-          : undefined;
 
         const actions = await actionSource.listActions(credCtx);
         console.log(`[SessionAgentDO] list-tools: ${integration.service} returned ${actions.length} actions`);
@@ -7781,10 +7787,15 @@ export class SessionAgentDO {
       if (cachedRisk) {
         riskLevel = cachedRisk;
       } else {
-        const listCredResult = await getCredential(this.env, userId, service);
-        const listCtx = listCredResult.ok
-          ? { credentials: { access_token: listCredResult.credential.accessToken } }
-          : undefined;
+        // Resolve list context for policy fallback — skip credential lookup for no-auth services
+        const fallbackProvider = integrationRegistry.getProvider(service);
+        let listCtx: { credentials: { access_token: string } } | undefined;
+        if (fallbackProvider?.authType !== 'none') {
+          const listCredResult = await getCredential(this.env, userId, service);
+          listCtx = listCredResult.ok
+            ? { credentials: { access_token: listCredResult.credential.accessToken } }
+            : undefined;
+        }
         const actionDef = (await actionSource.listActions(listCtx)).find(a => a.id === actionId);
         riskLevel = actionDef?.riskLevel || 'medium';
       }
@@ -7902,8 +7913,12 @@ export class SessionAgentDO {
     }
 
     // Resolve credentials based on integration scope
+    const provider = integrationRegistry.getProvider(service);
     let credentials: Record<string, string>;
-    if (isOrgScoped && service === 'slack') {
+    if (provider?.authType === 'none') {
+      // No-auth services (e.g. DeepWiki) don't need credentials
+      credentials = {};
+    } else if (isOrgScoped && service === 'slack') {
       // Slack uses a bot token for org-scoped integrations
       const botToken = await getSlackBotToken(this.env);
       if (!botToken) {
@@ -7934,8 +7949,8 @@ export class SessionAgentDO {
     // Execute the action
     let actionResult = await actionSource.execute(actionId, params, { credentials, userId });
 
-    // If auth error, retry once with force-refreshed credentials (user-scoped only)
-    if (!isOrgScoped && !actionResult.success && actionResult.error && /\b(401|403|unauthorized|invalid.credentials|token.*expired|token.*revoked)\b/i.test(actionResult.error)) {
+    // If auth error, retry once with force-refreshed credentials (user-scoped only, skip no-auth services)
+    if (!isOrgScoped && provider?.authType !== 'none' && !actionResult.success && actionResult.error && /\b(401|403|unauthorized|invalid.credentials|token.*expired|token.*revoked)\b/i.test(actionResult.error)) {
       console.log(`[SessionAgentDO] Tool "${toolId}" returned auth error, retrying with refreshed credentials`);
       const refreshedCred = await getCredential(this.env, userId, service, { forceRefresh: true });
       if (refreshedCred.ok) {

@@ -1,4 +1,5 @@
 import { tool } from "@opencode-ai/plugin"
+import { formatOutput } from "./_format"
 
 export default tool({
   description:
@@ -67,7 +68,7 @@ export default tool({
         truncated: data.truncated || false,
       }
 
-      return JSON.stringify({ meta, content: data.content }, null, 2)
+      return formatOutput({ meta, content: data.content })
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
       return `Failed to read repo file: ${msg}`

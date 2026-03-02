@@ -1,5 +1,6 @@
 import { tool } from "@opencode-ai/plugin"
 import { z } from "zod"
+import { formatOutput } from "./_format"
 
 function parseJsonObject(raw: string): { ok: true; value: Record<string, unknown> } | { ok: false; error: string } {
   try {
@@ -79,7 +80,7 @@ export default tool({
         }
       } & Record<string, string | number | boolean | null | object>
 
-      return JSON.stringify(data.execution || data, null, 2)
+      return formatOutput(data.execution || data)
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
       return `Failed to run workflow: ${msg}`

@@ -1,4 +1,5 @@
 import { tool } from "@opencode-ai/plugin"
+import { formatOutput } from "./_format"
 
 export default tool({
   description:
@@ -36,7 +37,7 @@ export default tool({
         return "No secrets found."
       }
 
-      return JSON.stringify(data.secrets, null, 2)
+      return formatOutput(data.secrets)
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
       return `Failed to list secrets: ${msg}`

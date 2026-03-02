@@ -27,7 +27,7 @@ export class McpClient {
   private async rpc<T>(
     method: string,
     params: Record<string, unknown> | undefined,
-    token: string,
+    token: string | undefined,
     sessionId?: string | null,
   ): Promise<{ result: T; sessionId: string | null }> {
     const req: JsonRpcRequest = {
@@ -40,8 +40,10 @@ export class McpClient {
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
       Accept: 'application/json, text/event-stream',
-      Authorization: `Bearer ${token}`,
     };
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
     if (sessionId) {
       headers['Mcp-Session-Id'] = sessionId;
     }
@@ -102,7 +104,7 @@ export class McpClient {
   private async notify(
     method: string,
     params: Record<string, unknown> | undefined,
-    token: string,
+    token: string | undefined,
     sessionId?: string | null,
   ): Promise<void> {
     const req = {
@@ -114,8 +116,10 @@ export class McpClient {
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
       Accept: 'application/json, text/event-stream',
-      Authorization: `Bearer ${token}`,
     };
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
     if (sessionId) {
       headers['Mcp-Session-Id'] = sessionId;
     }
@@ -133,9 +137,10 @@ export class McpClient {
    * MCP Streamable HTTP spec requires initialize before other methods.
    * Falls back to no-session mode if initialize fails (some servers don't require it).
    */
-  private async ensureInitialized(token: string): Promise<string | null> {
-    if (this.sessions.has(token)) {
-      return this.sessions.get(token) ?? null;
+  private async ensureInitialized(token?: string): Promise<string | null> {
+    const cacheKey = token || '__no_auth__';
+    if (this.sessions.has(cacheKey)) {
+      return this.sessions.get(cacheKey) ?? null;
     }
 
     try {
@@ -155,7 +160,7 @@ export class McpClient {
 
       console.log(`[McpClient] ${this.serviceName} initialized: protocol=${result?.protocolVersion}, sessionId=${sessionId}, server=${result?.serverInfo?.name}/${result?.serverInfo?.version}`);
 
-      this.sessions.set(token, sessionId);
+      this.sessions.set(cacheKey, sessionId);
 
       // Send initialized notification
       await this.notify('notifications/initialized', undefined, token, sessionId);
@@ -167,20 +172,20 @@ export class McpClient {
         err instanceof Error ? err.message : String(err),
       );
       // Cache null so we don't retry initialization on every call
-      this.sessions.set(token, null);
+      this.sessions.set(cacheKey, null);
       return null;
     }
   }
 
   /** List available tools from the MCP server. */
-  async listTools(token: string): Promise<McpTool[]> {
+  async listTools(token?: string): Promise<McpTool[]> {
     const sessionId = await this.ensureInitialized(token);
     const { result } = await this.rpc<{ tools: McpTool[] }>('tools/list', {}, token, sessionId);
     return result?.tools ?? [];
   }
 
   /** Call a tool by name with arguments. */
-  async callTool(token: string, name: string, args: unknown): Promise<McpToolResult> {
+  async callTool(token: string | undefined, name: string, args: unknown): Promise<McpToolResult> {
     const sessionId = await this.ensureInitialized(token);
     const { result } = await this.rpc<McpToolResult>('tools/call', { name, arguments: args }, token, sessionId);
     return result;

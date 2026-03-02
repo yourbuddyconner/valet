@@ -1,4 +1,5 @@
 import { tool } from "@opencode-ai/plugin"
+import { formatOutput } from "./_format"
 
 export default tool({
   description:
@@ -33,7 +34,7 @@ export default tool({
       if (!data.tasks || data.tasks.length === 0) {
         return "No tasks found."
       }
-      return JSON.stringify(data.tasks, null, 2)
+      return formatOutput(data.tasks)
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
       return `Failed to list tasks: ${msg}`

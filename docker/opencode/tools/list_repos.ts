@@ -1,5 +1,6 @@
 import { tool } from "@opencode-ai/plugin"
 import { z } from "zod"
+import { formatOutput } from "./_format"
 
 export default tool({
   description:
@@ -33,7 +34,7 @@ export default tool({
           : "No repositories registered with the organization."
       }
 
-      return JSON.stringify(data.repos, null, 2)
+      return formatOutput(data.repos)
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
       return `Failed to list repos: ${msg}`

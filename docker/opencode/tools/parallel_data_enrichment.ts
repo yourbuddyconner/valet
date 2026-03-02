@@ -1,4 +1,5 @@
 import { tool } from "@opencode-ai/plugin"
+import { formatOutput } from "./_format"
 
 const PARALLEL_API_BASE = "https://api.parallel.ai"
 const POLL_INTERVAL_MS = 3000
@@ -107,11 +108,11 @@ export default tool({
           }
 
           const resultData = await resultRes.json()
-          return JSON.stringify(resultData, null, 2)
+          return formatOutput(resultData)
         }
 
         if (pollData.status === "failed" || pollData.status === "cancelled") {
-          return `Enrichment task ${pollData.status}. Run ID: ${runId}\n${JSON.stringify(pollData, null, 2)}`
+          return `Enrichment task ${pollData.status}. Run ID: ${runId}\n${formatOutput(pollData)}`
         }
       }
 

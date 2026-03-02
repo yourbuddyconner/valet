@@ -119,6 +119,7 @@ def get_base_image() -> modal.Image:
             "/opencode-config",
             copy=True,
         )
+        .run_commands("cd /opencode-config && /root/.bun/bin/bun install")
         # Create workspace directory
         .run_commands("mkdir -p /workspace")
         # Setup bash prompt and environment for terminals
@@ -139,7 +140,7 @@ def get_base_image() -> modal.Image:
                 "DISPLAY": ":99",
                 "HOME": "/root",
                 # Force image rebuild on deploy (change this value to trigger rebuild)
-                "IMAGE_BUILD_VERSION": "2026-03-01-v118-slack-actions-tool-discovery",
+                "IMAGE_BUILD_VERSION": "2026-03-02-v119-toon-output",
                 "AGENT_BROWSER_EXECUTABLE_PATH": "/usr/bin/chromium",
                 "AGENT_BROWSER_PROFILE": "/root/.agent-browser-profile",
                 "PLAYWRIGHT_BROWSERS_PATH": "/ms-playwright",

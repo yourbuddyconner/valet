@@ -1,5 +1,6 @@
 import { tool } from "@opencode-ai/plugin"
 import { z } from "zod"
+import { formatOutput } from "./_format"
 
 interface ExecutionStepTrace {
   id: string
@@ -41,7 +42,7 @@ export default tool({
       }
 
       const limited = steps.slice(0, args.limit ?? 200)
-      return JSON.stringify(limited, null, 2)
+      return formatOutput(limited)
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
       return `Failed to get execution steps: ${msg}`

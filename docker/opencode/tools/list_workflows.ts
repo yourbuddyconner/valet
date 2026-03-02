@@ -1,4 +1,5 @@
 import { tool } from "@opencode-ai/plugin"
+import { formatOutput } from "./_format"
 
 interface WorkflowSummary {
   id: string
@@ -30,7 +31,7 @@ export default tool({
         return "No workflows found."
       }
 
-      return JSON.stringify(workflows, null, 2)
+      return formatOutput(workflows)
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
       return `Failed to list workflows: ${msg}`

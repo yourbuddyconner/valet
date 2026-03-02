@@ -1,4 +1,5 @@
 import { tool } from "@opencode-ai/plugin"
+import { formatOutput } from "./_format"
 
 export default tool({
   description:
@@ -47,7 +48,7 @@ export default tool({
         return "Tool executed successfully (no data returned)."
       }
 
-      return JSON.stringify(data.result, null, 2)
+      return formatOutput(data.result)
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
       return `Failed to call tool: ${msg}`

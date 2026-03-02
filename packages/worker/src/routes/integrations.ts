@@ -58,10 +58,17 @@ async function ensureMcpOAuthClient(
   }
 
   // Register a new client
-  const registered = await registerClient(metadata.registration_endpoint, {
-    clientName: 'Agent Ops',
-    redirectUris: [redirectUri],
-  });
+  let registered;
+  try {
+    registered = await registerClient(metadata.registration_endpoint, {
+      clientName: 'Agent Ops',
+      redirectUris: [redirectUri],
+    });
+  } catch (err) {
+    throw new ValidationError(
+      `MCP OAuth client registration failed for ${service}: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
 
   const row: mcpOAuthDb.McpOAuthClientRow = {
     service,

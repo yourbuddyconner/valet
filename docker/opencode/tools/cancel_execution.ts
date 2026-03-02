@@ -1,5 +1,6 @@
 import { tool } from "@opencode-ai/plugin"
 import { z } from "zod"
+import { formatOutput } from "./_format"
 
 export default tool({
   description:
@@ -25,11 +26,11 @@ export default tool({
       }
 
       const data = (await res.json()) as { success?: boolean; status?: string }
-      return JSON.stringify({
+      return formatOutput({
         success: data.success === true,
         executionId: args.execution_id,
         status: data.status || "unknown",
-      }, null, 2)
+      })
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
       return `Failed to cancel execution: ${msg}`

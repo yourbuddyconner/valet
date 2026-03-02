@@ -1,5 +1,6 @@
 import { tool } from "@opencode-ai/plugin"
 import { z } from "zod"
+import { formatOutput } from "./_format"
 
 type ExecutionStatus = "pending" | "running" | "waiting_approval" | "completed" | "failed" | "cancelled" | string
 
@@ -158,7 +159,7 @@ export default tool({
         recommendedActions: actions,
       }
 
-      return JSON.stringify(response, null, 2)
+      return formatOutput(response)
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
       return `Failed to debug execution: ${msg}`

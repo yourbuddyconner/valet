@@ -1,4 +1,5 @@
 import { tool } from "@opencode-ai/plugin"
+import { formatOutput } from "./_format"
 
 interface TriggerSummary {
   id: string
@@ -49,7 +50,7 @@ export default tool({
         return "No triggers found."
       }
 
-      return JSON.stringify(triggers, null, 2)
+      return formatOutput(triggers)
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
       return `Failed to list triggers: ${msg}`

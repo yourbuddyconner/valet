@@ -76,7 +76,7 @@ export interface TriggerSource {
 export interface IntegrationProvider {
   readonly service: string;
   readonly displayName: string;
-  readonly authType: 'oauth2' | 'bot_token' | 'api_key';
+  readonly authType: 'oauth2' | 'bot_token' | 'api_key' | 'none';
   readonly supportedEntities: string[];
   readonly oauthScopes?: string[];
   /** Env var names the Worker should read to build OAuthConfig for this provider. */

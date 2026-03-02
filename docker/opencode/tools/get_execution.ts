@@ -1,5 +1,6 @@
 import { tool } from "@opencode-ai/plugin"
 import { z } from "zod"
+import { formatOutput } from "./_format"
 
 export default tool({
   description:
@@ -21,7 +22,7 @@ export default tool({
         return `Failed to get execution: execution ${args.execution_id} was not returned by API.`
       }
 
-      return JSON.stringify(data.execution, null, 2)
+      return formatOutput(data.execution)
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
       return `Failed to get execution: ${msg}`

@@ -1,5 +1,6 @@
 import { tool } from "@opencode-ai/plugin"
 import { z } from "zod"
+import { formatOutput } from "./_format"
 
 interface WorkflowHistoryResponse {
   currentWorkflowHash?: string
@@ -30,15 +31,11 @@ export default tool({
       }
 
       const data = (await res.json()) as WorkflowHistoryResponse
-      return JSON.stringify(
-        {
+      return formatOutput({
           workflowId: args.workflow_id,
           currentWorkflowHash: data.currentWorkflowHash || null,
           history: data.history || [],
-        },
-        null,
-        2,
-      )
+        })
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
       return `Failed to list workflow history: ${msg}`

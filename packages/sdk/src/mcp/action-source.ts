@@ -14,6 +14,8 @@ export interface McpActionSourceOptions {
   mcpUrl: string;
   serviceName: string;
   defaultRiskLevel?: RiskLevel;
+  /** When true, calls MCP server without authentication (for public services). */
+  noAuth?: boolean;
 }
 
 /**
@@ -28,16 +30,18 @@ export class McpActionSource implements ActionSource {
   private client: McpClient;
   private serviceName: string;
   private defaultRiskLevel: RiskLevel;
+  private noAuth: boolean;
 
   constructor(opts: McpActionSourceOptions) {
     this.client = new McpClient({ url: opts.mcpUrl, serviceName: opts.serviceName });
     this.serviceName = opts.serviceName;
     this.defaultRiskLevel = opts.defaultRiskLevel ?? 'medium';
+    this.noAuth = opts.noAuth ?? false;
   }
 
   async listActions(ctx?: ActionListContext): Promise<ActionDefinition[]> {
     const token = ctx?.credentials?.access_token;
-    if (!token) {
+    if (!token && !this.noAuth) {
       // Without credentials we can't call the MCP server; return empty gracefully.
       // This happens in unauthenticated contexts like the policy editor catalog.
       return [];
@@ -59,7 +63,7 @@ export class McpActionSource implements ActionSource {
 
   async execute(actionId: string, params: unknown, ctx: ActionContext): Promise<ActionResult> {
     const token = ctx.credentials.access_token;
-    if (!token) {
+    if (!token && !this.noAuth) {
       return { success: false, error: `No access token for ${this.serviceName}` };
     }
 

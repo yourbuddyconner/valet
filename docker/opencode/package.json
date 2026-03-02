@@ -1,0 +1,7 @@
+{
+  "name": "opencode-tools",
+  "private": true,
+  "dependencies": {
+    "@toon-format/toon": "^2.1.0"
+  }
+}

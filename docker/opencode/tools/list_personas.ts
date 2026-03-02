@@ -1,4 +1,5 @@
 import { tool } from "@opencode-ai/plugin"
+import { formatOutput } from "./_format"
 
 export default tool({
   description:
@@ -21,7 +22,7 @@ export default tool({
         return "No personas configured."
       }
 
-      return JSON.stringify(data.personas, null, 2)
+      return formatOutput(data.personas)
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
       return `Failed to list personas: ${msg}`
