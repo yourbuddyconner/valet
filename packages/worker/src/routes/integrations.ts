@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { zValidator } from '@hono/zod-validator';
 import { NotFoundError, ValidationError } from '@agent-ops/shared';
 import type { OAuthConfig } from '@agent-ops/sdk';
-import type { Env, Variables } from '../env.js';
+import { type Env, type Variables, getEnvString } from '../env.js';
 import * as db from '../lib/db.js';
 import * as integrationService from '../services/integrations.js';
 import { integrationRegistry } from '../integrations/registry.js';
@@ -12,14 +12,6 @@ import { revokeCredential } from '../services/credentials.js';
 export const integrationsRouter = new Hono<{ Bindings: Env; Variables: Variables }>();
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
-
-/** Read a string-valued env var by dynamic key name. Returns undefined for missing or non-string values. */
-function getEnvString(env: Env, key: string): string | undefined {
-  // Env is a typed interface; we need dynamic key access for provider-declared env var names.
-  // The typeof check below ensures we only return actual string bindings.
-  const val = (env as unknown as Record<string, unknown>)[key];
-  return typeof val === 'string' ? val : undefined;
-}
 
 /** Resolve OAuth client credentials from env vars using provider-declared key names. */
 function resolveOAuthConfig(service: string, env: Env): OAuthConfig {
@@ -115,19 +107,32 @@ integrationsRouter.get('/available', async (c) => {
 integrationsRouter.get('/actions', async (c) => {
   const serviceFilter = c.req.query('service');
   const packages = integrationRegistry.listPackages();
-  const catalog = packages
-    .filter((pkg) => !serviceFilter || pkg.service === serviceFilter)
-    .flatMap((pkg) => {
-      const actions = pkg.actions?.listActions() ?? [];
-      return actions.map((a) => ({
+  const catalog: Array<{
+    service: string;
+    serviceDisplayName: string;
+    actionId: string;
+    name: string;
+    description: string;
+    riskLevel: string;
+  }> = [];
+
+  for (const pkg of packages) {
+    if (serviceFilter && pkg.service !== serviceFilter) continue;
+    // listActions may be async (e.g. MCP-backed sources). Without credentials
+    // MCP sources return [] gracefully, which is fine for the catalog endpoint.
+    const actions = await (pkg.actions?.listActions() ?? []);
+    for (const a of actions) {
+      catalog.push({
         service: pkg.service,
         serviceDisplayName: pkg.provider.displayName,
         actionId: a.id,
         name: a.name,
         description: a.description,
         riskLevel: a.riskLevel,
-      }));
-    });
+      });
+    }
+  }
+
   return c.json({ actions: catalog });
 });
 

@@ -7,6 +7,7 @@ export type IntegrationService =
   | 'google_calendar'
   | 'google_drive'
   | 'notion'
+  | 'linear'
   | 'hubspot'
   | 'ashby'
   | 'discord'

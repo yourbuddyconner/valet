@@ -1,7 +1,9 @@
-import type { Env } from '../env.js';
+import type { OAuthConfig } from '@agent-ops/sdk';
+import { type Env, getEnvString } from '../env.js';
 import { encryptStringPBKDF2, decryptStringPBKDF2 } from '../lib/crypto.js';
 import * as credentialDb from '../lib/db/credentials.js';
 import { getDb } from '../lib/drizzle.js';
+import { integrationRegistry } from '../integrations/registry.js';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -119,12 +121,24 @@ async function refreshGoogleToken(
   };
 }
 
+/** Try to resolve OAuthConfig from the provider's declared env key names. */
+function resolveOAuthConfigForProvider(provider: string, env: Env): OAuthConfig | null {
+  const prov = integrationRegistry.getProvider(provider);
+  const keys = prov?.oauthEnvKeys;
+  if (!keys) return null;
+  const clientId = getEnvString(env, keys.clientId);
+  const clientSecret = getEnvString(env, keys.clientSecret);
+  if (!clientId || !clientSecret) return null;
+  return { clientId, clientSecret };
+}
+
 async function attemptRefresh(
   env: Env,
   userId: string,
   provider: string,
   data: CredentialData,
 ): Promise<CredentialResult> {
+  // Hardcoded paths for providers that existed before the generic mechanism
   switch (provider) {
     case 'google':
     case 'gmail':
@@ -135,11 +149,67 @@ async function attemptRefresh(
         ok: false,
         error: { service: provider, reason: 'refresh_failed', message: 'GitHub tokens do not support refresh' },
       };
-    default:
-      return {
-        ok: false,
-        error: { service: provider, reason: 'refresh_failed', message: `No refresh handler for ${provider}` },
-      };
+  }
+
+  // Generic path: use the provider's refreshOAuthTokens if available
+  if (!data.refresh_token) {
+    return {
+      ok: false,
+      error: { service: provider, reason: 'refresh_failed', message: 'No refresh token available' },
+    };
+  }
+
+  const integrationProvider = integrationRegistry.getProvider(provider);
+  if (!integrationProvider?.refreshOAuthTokens) {
+    return {
+      ok: false,
+      error: { service: provider, reason: 'refresh_failed', message: `No refresh handler for ${provider}` },
+    };
+  }
+
+  const oauthConfig = resolveOAuthConfigForProvider(provider, env);
+  if (!oauthConfig) {
+    return {
+      ok: false,
+      error: { service: provider, reason: 'refresh_failed', message: `OAuth env vars missing for ${provider}` },
+    };
+  }
+
+  try {
+    const newCreds = await integrationProvider.refreshOAuthTokens(oauthConfig, data.refresh_token);
+    const newData: CredentialData = {
+      access_token: newCreds.access_token,
+      refresh_token: newCreds.refresh_token || data.refresh_token,
+    };
+
+    const encrypted = await encryptCredentialData(newData, env.ENCRYPTION_KEY);
+    const db = getDb(env.DB);
+    await credentialDb.upsertCredential(db, {
+      id: crypto.randomUUID(),
+      userId,
+      provider,
+      credentialType: 'oauth2',
+      encryptedData: encrypted,
+    });
+
+    return {
+      ok: true,
+      credential: {
+        accessToken: newCreds.access_token,
+        refreshToken: newCreds.refresh_token || data.refresh_token,
+        credentialType: 'oauth2',
+        refreshed: true,
+      },
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      error: {
+        service: provider,
+        reason: 'refresh_failed',
+        message: `Refresh failed: ${err instanceof Error ? err.message : String(err)}`,
+      },
+    };
   }
 }
 

@@ -48,8 +48,22 @@ export interface Env {
   SLACK_CLIENT_ID?: string;
   SLACK_CLIENT_SECRET?: string;
 
+  // Notion OAuth
+  NOTION_CLIENT_ID?: string;
+  NOTION_CLIENT_SECRET?: string;
+
+  // Linear OAuth
+  LINEAR_CLIENT_ID?: string;
+  LINEAR_CLIENT_SECRET?: string;
+
   // Email allowlist (comma-separated). If unset, all emails are allowed.
   ALLOWED_EMAILS?: string;
+}
+
+/** Read a string-valued env var by dynamic key name. Returns undefined for missing or non-string values. */
+export function getEnvString(env: Env, key: string): string | undefined {
+  const val = (env as unknown as Record<string, unknown>)[key];
+  return typeof val === 'string' ? val : undefined;
 }
 
 // Type for Hono context variables

@@ -22,6 +22,8 @@
     { "path": "./packages/actions-github" },
     { "path": "./packages/actions-gmail" },
     { "path": "./packages/actions-google-calendar" },
+    { "path": "./packages/actions-linear" },
+    { "path": "./packages/actions-notion" },
     { "path": "./packages/worker" }
   ]
 }

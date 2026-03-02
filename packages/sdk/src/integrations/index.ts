@@ -24,6 +24,8 @@ export interface ActionDefinition<TParams extends z.ZodType = z.ZodType> {
   description: string;
   riskLevel: RiskLevel;
   params: TParams;
+  /** Raw JSON Schema — when present, bypasses Zod serialization in tool discovery. */
+  inputSchema?: Record<string, unknown>;
 }
 
 /** Context passed to action execution. */
@@ -40,9 +42,14 @@ export interface ActionResult<T = unknown> {
   error?: string;
 }
 
+/** Context passed to listActions for credential-dependent sources (e.g. MCP). */
+export interface ActionListContext {
+  credentials?: IntegrationCredentials;
+}
+
 /** Source of typed actions for a service. */
 export interface ActionSource {
-  listActions(): ActionDefinition[];
+  listActions(ctx?: ActionListContext): ActionDefinition[] | Promise<ActionDefinition[]>;
   execute(actionId: string, params: unknown, ctx: ActionContext): Promise<ActionResult>;
 }
 

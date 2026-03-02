@@ -552,6 +552,10 @@ export class SessionAgentDO {
   private initialized = false;
   private userDetailsCache = new Map<string, CachedUserDetails>();
 
+  /** In-memory cache of discovered tool risk levels. Populated by handleListTools,
+   *  used by handleCallTool to avoid re-fetching listActions on every invocation. */
+  private discoveredToolRiskLevels = new Map<string, string>();
+
   // ─── Auto Channel Reply Tracking ─────────────────────────────────────
   // When a prompt arrives from an external channel (e.g. Telegram), we track
   // the channel context so we can auto-send the agent's response back to it.
@@ -7668,7 +7672,13 @@ export class SessionAgentDO {
         const actionSource = integrationRegistry.getActions(integration.service);
         if (!actionSource) continue;
 
-        const actions = actionSource.listActions();
+        // Resolve credentials for this integration to pass to listActions (needed by MCP-backed sources)
+        const credResult = await getCredential(this.env, userId, integration.service);
+        const credCtx = credResult.ok
+          ? { credentials: { access_token: credResult.credential.accessToken } }
+          : undefined;
+
+        const actions = await actionSource.listActions(credCtx);
         for (const action of actions) {
           // If query provided, filter by case-insensitive substring match on name/description
           if (query) {
@@ -7678,12 +7688,17 @@ export class SessionAgentDO {
             if (!matchesName && !matchesDesc) continue;
           }
 
+          const compositeId = `${integration.service}:${action.id}`;
+
+          // Cache discovered risk levels so handleCallTool doesn't need to re-fetch
+          this.discoveredToolRiskLevels.set(compositeId, action.riskLevel);
+
           tools.push({
-            id: `${integration.service}:${action.id}`,
+            id: compositeId,
             name: action.name,
             description: action.description,
             riskLevel: action.riskLevel,
-            params: this.serializeZodSchema(action.params),
+            params: action.inputSchema || this.serializeZodSchema(action.params),
           });
         }
       }
@@ -7748,9 +7763,20 @@ export class SessionAgentDO {
       }
 
       // ─── Policy Resolution ─────────────────────────────────────────────
-      // Look up the action definition to get its risk level
-      const actionDef = actionSource.listActions().find(a => a.id === actionId);
-      const riskLevel = actionDef?.riskLevel || 'medium';
+      // Use cached risk level from handleListTools if available (avoids MCP round-trip).
+      // Fall back to listActions only if the cache misses (e.g. tool was never listed).
+      const cachedRisk = this.discoveredToolRiskLevels.get(toolId);
+      let riskLevel: string;
+      if (cachedRisk) {
+        riskLevel = cachedRisk;
+      } else {
+        const listCredResult = await getCredential(this.env, userId, service);
+        const listCtx = listCredResult.ok
+          ? { credentials: { access_token: listCredResult.credential.accessToken } }
+          : undefined;
+        const actionDef = (await actionSource.listActions(listCtx)).find(a => a.id === actionId);
+        riskLevel = actionDef?.riskLevel || 'medium';
+      }
 
       // Resolve policy mode
       const invocationResult = await invokeAction(this.appDb, {
@@ -7866,7 +7892,8 @@ export class SessionAgentDO {
 
     // Resolve credentials based on integration scope
     let credentials: Record<string, string>;
-    if (isOrgScoped) {
+    if (isOrgScoped && service === 'slack') {
+      // Slack uses a bot token for org-scoped integrations
       const botToken = await getSlackBotToken(this.env);
       if (!botToken) {
         this.sendToRunner({ type: 'call-tool-result', requestId, error: `No bot token found for "${service}". Reinstall in Settings.` } as any);
@@ -7874,6 +7901,15 @@ export class SessionAgentDO {
         return;
       }
       credentials = { bot_token: botToken };
+    } else if (isOrgScoped) {
+      // Non-Slack org-scoped integrations: try to resolve credentials for the calling user
+      const credResult = await getCredential(this.env, userId, service);
+      if (!credResult.ok) {
+        this.sendToRunner({ type: 'call-tool-result', requestId, error: `No credentials found for org-scoped "${service}": ${credResult.error.message}. Connect it in Settings > Integrations.` } as any);
+        await markFailed(this.appDb, invocationId, `No credentials for org-scoped service: ${credResult.error.message}`);
+        return;
+      }
+      credentials = { access_token: credResult.credential.accessToken };
     } else {
       const credResult = await getCredential(this.env, userId, service);
       if (!credResult.ok) {

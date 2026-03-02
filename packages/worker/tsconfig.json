@@ -12,6 +12,8 @@
     { "path": "../sdk" },
     { "path": "../channel-telegram" },
     { "path": "../channel-slack" },
-    { "path": "../actions-slack" }
+    { "path": "../actions-slack" },
+    { "path": "../actions-linear" },
+    { "path": "../actions-notion" }
   ]
 }
