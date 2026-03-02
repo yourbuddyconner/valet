@@ -3,7 +3,6 @@ import type {
   IntegrationProvider,
   ActionSource,
   TriggerSource,
-  SyncSource,
 } from '@agent-ops/sdk';
 import { installedIntegrations } from './packages.js';
 
@@ -30,10 +29,6 @@ export class IntegrationRegistry {
 
   getTriggers(service: string): TriggerSource | undefined {
     return this.packages.get(service)?.triggers;
-  }
-
-  getSync(service: string): SyncSource | undefined {
-    return this.packages.get(service)?.sync;
   }
 
   listServices(): string[] {

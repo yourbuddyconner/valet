@@ -68,7 +68,6 @@ function OAuthCallbackPage() {
         service: storedService as any,
         credentials: credentialsResponse.credentials,
         config: {
-          syncFrequency: 'hourly',
           entities: [],
         },
       });

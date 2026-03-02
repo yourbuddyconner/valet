@@ -44,15 +44,9 @@ const configureIntegrationSchema = z.object({
   ),
   credentials: z.record(z.string()),
   config: z.object({
-    syncFrequency: z.enum(['realtime', 'hourly', 'daily', 'manual']).default('hourly'),
     entities: z.array(z.string()).default([]),
     filters: z.record(z.unknown()).optional(),
   }),
-});
-
-const triggerSyncSchema = z.object({
-  entities: z.array(z.string()).optional(),
-  fullSync: z.boolean().optional(),
 });
 
 /**
@@ -76,10 +70,8 @@ integrationsRouter.get('/', async (c) => {
       status: i.status,
       scope: i.scope,
       config: {
-        syncFrequency: i.config.syncFrequency,
         entities: i.config.entities,
       },
-      lastSyncedAt: i.lastSyncedAt,
       createdAt: i.createdAt,
     })),
     ...orgIntegrations.map((i) => ({
@@ -88,10 +80,8 @@ integrationsRouter.get('/', async (c) => {
       status: i.status,
       scope: i.scope,
       config: {
-        syncFrequency: (i.config as any).syncFrequency,
         entities: (i.config as any).entities,
       },
-      lastSyncedAt: i.lastSyncedAt,
       createdAt: i.createdAt,
     })),
   ];
@@ -113,7 +103,6 @@ integrationsRouter.get('/available', async (c) => {
     supportedEntities: pkg.provider.supportedEntities,
     hasActions: !!pkg.actions,
     hasTriggers: !!pkg.triggers,
-    hasSync: !!pkg.sync,
   }));
 
   return c.json({ services: available });
@@ -155,53 +144,9 @@ integrationsRouter.get('/:id', async (c) => {
       service: integration.service,
       status: integration.status,
       config: integration.config,
-      lastSyncedAt: integration.lastSyncedAt,
       createdAt: integration.createdAt,
     },
   });
-});
-
-/**
- * POST /api/integrations/:id/sync
- * Trigger a sync
- */
-integrationsRouter.post('/:id/sync', zValidator('json', triggerSyncSchema), async (c) => {
-  const user = c.get('user');
-  const { id } = c.req.param();
-  const body = c.req.valid('json');
-
-  const result = await integrationService.triggerIntegrationSync(
-    c.env, user.id, id, body, c.executionCtx,
-  );
-
-  return c.json({ syncId: result.syncId, status: 'started' }, 202);
-});
-
-/**
- * GET /api/integrations/:id/sync/:syncId
- * Get sync status
- */
-integrationsRouter.get('/:id/sync/:syncId', async (c) => {
-  const user = c.get('user');
-  const { id, syncId } = c.req.param();
-
-  const integration = await db.getIntegration(c.get('db'), id);
-
-  if (!integration) {
-    throw new NotFoundError('Integration', id);
-  }
-
-  if (integration.userId !== user.id) {
-    throw new NotFoundError('Integration', id);
-  }
-
-  const syncLog = await db.getSyncLog(c.get('db'), syncId);
-
-  if (!syncLog || syncLog.integrationId !== id) {
-    throw new NotFoundError('Sync', syncId);
-  }
-
-  return c.json(syncLog);
 });
 
 /**
@@ -225,7 +170,7 @@ integrationsRouter.delete('/:id', async (c) => {
   // Revoke credentials in unified credentials table
   await revokeCredential(c.env, user.id, integration.service);
 
-  // Delete integration record (cascades to sync_logs)
+  // Delete integration record
   await db.deleteIntegration(c.get('db'), id);
 
   return c.json({ success: true });

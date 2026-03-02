@@ -98,21 +98,3 @@ export async function getTrackedGitHubResources(db: D1Database): Promise<Tracked
   return result.results || [];
 }
 
-export async function getIntegrationsNeedingSync(db: D1Database): Promise<{
-  id: string;
-  user_id: string;
-  service: string;
-  config: string;
-}[]> {
-  const result = await db.prepare(`
-    SELECT id, user_id, service, config
-    FROM integrations
-    WHERE status = 'active'
-      AND (
-        (json_extract(config, '$.syncFrequency') = 'hourly')
-        OR (json_extract(config, '$.syncFrequency') = 'daily' AND strftime('%H', 'now') = '00')
-      )
-      AND (last_synced_at IS NULL OR datetime(last_synced_at, '+1 hour') < datetime('now'))
-  `).all();
-  return (result.results || []) as any;
-}

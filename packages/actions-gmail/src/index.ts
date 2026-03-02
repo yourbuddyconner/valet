@@ -1,11 +1,9 @@
 import type { IntegrationPackage } from '@agent-ops/sdk';
 import { gmailProvider } from './provider.js';
 import { gmailActions } from './actions.js';
-import { gmailSync } from './sync.js';
 
 export { gmailProvider } from './provider.js';
 export { gmailActions } from './actions.js';
-export { gmailSync } from './sync.js';
 export { gmailFetch, decodeBase64Url, encodeBase64Url } from './api.js';
 
 const gmailPackage: IntegrationPackage = {
@@ -14,7 +12,6 @@ const gmailPackage: IntegrationPackage = {
   service: 'gmail',
   provider: gmailProvider,
   actions: gmailActions,
-  sync: gmailSync,
 };
 
 export default gmailPackage;

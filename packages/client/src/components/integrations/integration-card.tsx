@@ -1,8 +1,6 @@
 import type { Integration } from '@/api/types';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Button } from '@/components/ui/button';
-import { SyncStatusBadge } from './sync-status-badge';
-import { useTriggerSync } from '@/api/integrations';
+import { Badge } from '@/components/ui/badge';
 
 interface IntegrationCardProps {
   integration: Integration;
@@ -32,13 +30,17 @@ const serviceIcons: Record<string, React.ReactNode> = {
   xero: <XeroIcon className="h-5 w-5" />,
 };
 
+const statusVariants: Record<
+  Integration['status'],
+  'default' | 'success' | 'warning' | 'error' | 'secondary'
+> = {
+  active: 'success',
+  pending: 'warning',
+  error: 'error',
+  disconnected: 'secondary',
+};
+
 export function IntegrationCard({ integration }: IntegrationCardProps) {
-  const triggerSync = useTriggerSync();
-
-  const handleSync = () => {
-    triggerSync.mutate({ integrationId: integration.id });
-  };
-
   return (
     <Card>
       <CardHeader className="pb-2">
@@ -53,33 +55,14 @@ export function IntegrationCard({ integration }: IntegrationCardProps) {
               <CardTitle className="text-base">
                 {serviceLabels[integration.service] ?? integration.service}
               </CardTitle>
-              <SyncStatusBadge
-                status={integration.status}
-                lastSyncedAt={integration.lastSyncedAt}
-              />
+              <Badge variant={statusVariants[integration.status]}>
+                {integration.status}
+              </Badge>
             </div>
           </div>
         </div>
       </CardHeader>
-      <CardContent>
-        <div className="flex items-center justify-between">
-          <div className="text-xs text-neutral-500">
-            <span className="font-medium">Sync:</span>{' '}
-            {integration.config.syncFrequency}
-          </div>
-          <Button
-            variant="secondary"
-            size="sm"
-            onClick={handleSync}
-            disabled={
-              triggerSync.isPending ||
-              integration.status === 'disconnected'
-            }
-          >
-            {triggerSync.isPending ? 'Syncing...' : 'Sync Now'}
-          </Button>
-        </div>
-      </CardContent>
+      <CardContent />
     </Card>
   );
 }

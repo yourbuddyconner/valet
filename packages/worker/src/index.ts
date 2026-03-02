@@ -51,7 +51,6 @@ import {
   getArchivableSessions,
   markSessionsArchived,
   getTrackedGitHubResources,
-  getIntegrationsNeedingSync,
 } from './lib/db.js';
 import { getCredential } from './services/credentials.js';
 import { getDb } from './lib/drizzle.js';
@@ -158,27 +157,7 @@ app.notFound((c) => {
 
 // Scheduled handler for cron triggers
 const scheduled: ExportedHandlerScheduledHandler<Env> = async (event, env, ctx) => {
-  console.log('Running scheduled sync check:', event.cron);
-
-  // Query for integrations that need syncing
-  const integrationsToSync = await getIntegrationsNeedingSync(env.DB);
-
-  console.log(`Found ${integrationsToSync.length} integrations to sync`);
-
-  // Trigger syncs by calling back into this worker's own fetch handler
-  for (const integration of integrationsToSync) {
-    ctx.waitUntil(
-      Promise.resolve(
-        app.fetch(
-          new Request(`https://localhost/api/integrations/${integration.id}/sync`, {
-            method: 'POST',
-            headers: { 'X-Internal-Cron': 'true' },
-          }),
-          env
-        )
-      ).catch((err: unknown) => console.error(`Failed to trigger sync for ${integration.id}:`, err))
-    );
-  }
+  console.log('Running scheduled handler:', event.cron);
 
   try {
     await reconcileWorkflowExecutions(env);

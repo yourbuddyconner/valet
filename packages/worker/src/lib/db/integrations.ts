@@ -1,8 +1,8 @@
-import type { Integration, SyncStatusResponse } from '@agent-ops/shared';
+import type { Integration } from '@agent-ops/shared';
 import { eq, and, ne, desc, sql } from 'drizzle-orm';
 import type { AppDb } from '../drizzle.js';
 import { toDate } from '../drizzle.js';
-import { integrations, syncLogs } from '../schema/index.js';
+import { integrations } from '../schema/index.js';
 
 function rowToIntegration(row: typeof integrations.$inferSelect): Integration {
   return {
@@ -12,7 +12,6 @@ function rowToIntegration(row: typeof integrations.$inferSelect): Integration {
     config: row.config as Integration['config'],
     status: row.status as Integration['status'],
     scope: (row.scope as 'user' | 'org') || 'user',
-    lastSyncedAt: row.lastSyncedAt ? toDate(row.lastSyncedAt) : null,
     createdAt: toDate(row.createdAt),
     updatedAt: toDate(row.updatedAt),
   };
@@ -37,7 +36,6 @@ export async function createIntegration(
     config: data.config as unknown as Integration['config'],
     status: 'pending',
     scope: 'user' as const,
-    lastSyncedAt: null,
     createdAt: new Date(),
     updatedAt: new Date(),
   };
@@ -54,7 +52,6 @@ export async function getOrgIntegrations(db: AppDb, excludeUserId: string): Prom
   status: string;
   scope: 'org';
   config: Record<string, unknown>;
-  lastSyncedAt: Date | null;
   createdAt: Date;
 }>> {
   const rows = await db
@@ -69,7 +66,6 @@ export async function getOrgIntegrations(db: AppDb, excludeUserId: string): Prom
     status: row.status,
     scope: 'org' as const,
     config: row.config as Record<string, unknown>,
-    lastSyncedAt: row.lastSyncedAt ? toDate(row.lastSyncedAt) : null,
     createdAt: toDate(row.createdAt),
   }));
 }
@@ -99,78 +95,6 @@ export async function updateIntegrationStatus(
     .where(eq(integrations.id, id));
 }
 
-export async function updateIntegrationSyncTime(db: AppDb, id: string): Promise<void> {
-  await db
-    .update(integrations)
-    .set({
-      lastSyncedAt: sql`datetime('now')`,
-      updatedAt: sql`datetime('now')`,
-    })
-    .where(eq(integrations.id, id));
-}
-
 export async function deleteIntegration(db: AppDb, id: string): Promise<void> {
   await db.delete(integrations).where(eq(integrations.id, id));
 }
-
-// Sync log operations
-export async function createSyncLog(
-  db: AppDb,
-  data: { id: string; integrationId: string }
-): Promise<SyncStatusResponse> {
-  await db.insert(syncLogs).values({
-    id: data.id,
-    integrationId: data.integrationId,
-    status: 'pending',
-  });
-
-  return {
-    id: data.id,
-    integrationId: data.integrationId,
-    status: 'pending',
-    startedAt: new Date(),
-  };
-}
-
-export async function updateSyncLog(
-  db: AppDb,
-  id: string,
-  data: { status: string; recordsSynced?: number; errors?: unknown[] }
-): Promise<void> {
-  await db
-    .update(syncLogs)
-    .set({
-      status: data.status,
-      recordsSynced: data.recordsSynced !== undefined
-        ? data.recordsSynced
-        : sql`${syncLogs.recordsSynced}`,
-      errors: data.errors ? sql`${JSON.stringify(data.errors)}` : null,
-      completedAt: ['completed', 'failed'].includes(data.status)
-        ? sql`datetime('now')`
-        : sql`${syncLogs.completedAt}`,
-    })
-    .where(eq(syncLogs.id, id));
-}
-
-export async function getSyncLog(db: AppDb, id: string): Promise<SyncStatusResponse | null> {
-  const row = await db.select().from(syncLogs).where(eq(syncLogs.id, id)).get();
-  if (!row) return null;
-
-  return {
-    id: row.id,
-    integrationId: row.integrationId,
-    status: row.status as SyncStatusResponse['status'],
-    progress: row.recordsSynced ?? undefined,
-    result: row.completedAt
-      ? {
-          success: row.status === 'completed',
-          recordsSynced: row.recordsSynced || 0,
-          errors: (row.errors as Array<{ entity: string; entityId?: string; message: string; code: string }>) || [],
-          completedAt: toDate(row.completedAt),
-        }
-      : undefined,
-    startedAt: toDate(row.startedAt),
-    completedAt: row.completedAt ? toDate(row.completedAt) : undefined,
-  };
-}
-

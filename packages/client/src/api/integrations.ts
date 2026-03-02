@@ -3,8 +3,6 @@ import { api } from './client';
 import type {
   Integration,
   ConfigureIntegrationRequest,
-  TriggerSyncRequest,
-  SyncStatusResponse,
 } from './types';
 
 export const integrationKeys = {
@@ -13,8 +11,6 @@ export const integrationKeys = {
   list: () => [...integrationKeys.lists()] as const,
   details: () => [...integrationKeys.all, 'detail'] as const,
   detail: (id: string) => [...integrationKeys.details(), id] as const,
-  syncStatus: (id: string) =>
-    [...integrationKeys.detail(id), 'sync-status'] as const,
 };
 
 interface ListIntegrationsResponse {
@@ -77,41 +73,5 @@ export function useDeleteIntegration() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: integrationKeys.lists() });
     },
-  });
-}
-
-export function useTriggerSync() {
-  const queryClient = useQueryClient();
-
-  return useMutation({
-    mutationFn: ({
-      integrationId,
-      data,
-    }: {
-      integrationId: string;
-      data?: TriggerSyncRequest;
-    }) =>
-      api.post<SyncStatusResponse>(
-        `/integrations/${integrationId}/sync`,
-        data
-      ),
-    onSuccess: (_, { integrationId }) => {
-      queryClient.invalidateQueries({
-        queryKey: integrationKeys.detail(integrationId),
-      });
-    },
-  });
-}
-
-export function useSyncStatus(integrationId: string, syncId?: string) {
-  return useQuery({
-    queryKey: integrationKeys.syncStatus(integrationId),
-    queryFn: () =>
-      api.get<SyncStatusResponse>(
-        `/integrations/${integrationId}/sync/${syncId}`
-      ),
-    enabled: !!integrationId && !!syncId,
-    refetchInterval: (query) =>
-      query.state.data?.status === 'running' ? 2000 : false,
   });
 }

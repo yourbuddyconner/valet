@@ -19,30 +19,13 @@ export interface Integration {
   config: IntegrationConfig;
   status: 'active' | 'error' | 'pending' | 'disconnected';
   scope: 'user' | 'org';
-  lastSyncedAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
 }
 
 export interface IntegrationConfig {
-  syncFrequency: 'realtime' | 'hourly' | 'daily' | 'manual';
   entities: string[];
   filters?: Record<string, unknown>;
-}
-
-export interface SyncResult {
-  success: boolean;
-  recordsSynced: number;
-  errors: SyncError[];
-  nextCursor?: string;
-  completedAt: Date;
-}
-
-export interface SyncError {
-  entity: string;
-  entityId?: string;
-  message: string;
-  code: string;
 }
 
 // EventBus types
@@ -426,21 +409,6 @@ export interface ConfigureIntegrationRequest {
   service: IntegrationService;
   credentials: Record<string, string>;
   config: IntegrationConfig;
-}
-
-export interface TriggerSyncRequest {
-  entities?: string[];
-  fullSync?: boolean;
-}
-
-export interface SyncStatusResponse {
-  id: string;
-  integrationId: string;
-  status: 'pending' | 'running' | 'completed' | 'failed';
-  progress?: number;
-  result?: SyncResult;
-  startedAt: Date;
-  completedAt?: Date;
 }
 
 // Custom LLM provider types

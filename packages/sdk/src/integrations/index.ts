@@ -1,8 +1,4 @@
-import type { SyncResult, SyncError } from '@agent-ops/shared';
 import { z } from 'zod';
-
-// Re-export shared sync types for convenience
-export type { SyncResult, SyncError };
 
 // ─── Credentials ─────────────────────────────────────────────────────────────
 
@@ -88,19 +84,6 @@ export interface IntegrationProvider {
   refreshOAuthTokens?(oauth: OAuthConfig, refreshToken: string): Promise<IntegrationCredentials>;
 }
 
-// ─── Sync Definitions ────────────────────────────────────────────────────────
-
-export interface SyncOptions {
-  entities?: string[];
-  fullSync?: boolean;
-  cursor?: string;
-}
-
-/** Source of data sync for a service. */
-export interface SyncSource {
-  sync(credentials: IntegrationCredentials, options: SyncOptions): Promise<SyncResult>;
-}
-
 // ─── Integration Package Manifest ────────────────────────────────────────────
 
 /** Complete integration package manifest — the unit of registration. */
@@ -111,5 +94,4 @@ export interface IntegrationPackage {
   provider: IntegrationProvider;
   actions?: ActionSource;
   triggers?: TriggerSource;
-  sync?: SyncSource;
 }
