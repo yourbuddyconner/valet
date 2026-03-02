@@ -10,7 +10,7 @@ function ensureMermaidInit(isDark: boolean) {
     mermaid.initialize({
       startOnLoad: false,
       theme,
-      securityLevel: 'loose',
+      securityLevel: 'strict',
       fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
     });
     mermaidInitialized = true;
