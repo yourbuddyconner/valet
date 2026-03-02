@@ -7,7 +7,7 @@
  */
 
 import { Subprocess } from "bun";
-import { existsSync, mkdirSync, readdirSync, copyFileSync, unlinkSync, writeFileSync, readFileSync, statSync } from "fs";
+import { existsSync, mkdirSync, readdirSync, copyFileSync, unlinkSync, writeFileSync, readFileSync, statSync, symlinkSync } from "fs";
 import { join, basename } from "path";
 
 export interface CustomProviderConfig {
@@ -256,6 +256,19 @@ export class OpenCodeManager {
     if (existsSync(sourceToolsDir)) {
       for (const file of readdirSync(sourceToolsDir)) {
         copyFileSync(join(sourceToolsDir, file), join(toolsDir, file));
+      }
+    }
+
+    // Symlink node_modules so tool imports (e.g. @toon-format/toon) resolve correctly.
+    // The tools are copied as flat files from /opencode-config/tools/ but their
+    // dependencies are installed in /opencode-config/node_modules/ during image build.
+    const sourceNodeModules = join(this.configSourceDir, "node_modules");
+    const targetNodeModules = join(toolsDir, "node_modules");
+    if (existsSync(sourceNodeModules) && !existsSync(targetNodeModules)) {
+      try {
+        symlinkSync(sourceNodeModules, targetNodeModules, "dir");
+      } catch (err) {
+        console.warn("[OpenCodeManager] Failed to symlink node_modules for tools:", err);
       }
     }
 
