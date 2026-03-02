@@ -11,7 +11,7 @@ import { checkWorkflowConcurrency, createWorkflowSession, dispatchOrchestratorPr
 import { assembleCustomProviders, assembleBuiltInProviderModelConfigs } from '../lib/env-assembly.js';
 import { channelRegistry } from '../channels/registry.js';
 import { integrationRegistry } from '../integrations/registry.js';
-import { getUserIntegrations, getOrgIntegrations } from '../lib/db/integrations.js';
+import { getUserIntegrations, getOrgIntegrations, updateIntegrationStatus } from '../lib/db/integrations.js';
 import { resolveMode } from '../services/action-policy.js';
 import { invokeAction, markExecuted, markFailed, approveInvocation, denyInvocation } from '../services/actions.js';
 import { updateInvocationStatus } from '../lib/db/actions.js';
@@ -354,7 +354,7 @@ interface RunnerMessage {
 
 /** Messages sent from DO to clients */
 interface ClientOutbound {
-  type: 'message' | 'message.updated' | 'messages.removed' | 'stream' | 'chunk' | 'question' | 'status' | 'pong' | 'error' | 'user.joined' | 'user.left' | 'agentStatus' | 'models' | 'diff' | 'review-result' | 'command-result' | 'git-state' | 'pr-created' | 'files-changed' | 'child-session' | 'title' | 'audit_log' | 'model-switched' | 'toast' | 'action_approval_required' | 'action_approved' | 'action_denied' | 'action_expired';
+  type: 'message' | 'message.updated' | 'messages.removed' | 'stream' | 'chunk' | 'question' | 'status' | 'pong' | 'error' | 'user.joined' | 'user.left' | 'agentStatus' | 'models' | 'diff' | 'review-result' | 'command-result' | 'git-state' | 'pr-created' | 'files-changed' | 'child-session' | 'title' | 'audit_log' | 'model-switched' | 'toast' | 'action_approval_required' | 'action_approved' | 'action_denied' | 'action_expired' | 'integration-auth-required';
   [key: string]: unknown;
 }
 
@@ -7666,6 +7666,7 @@ export class SessionAgentDO {
       });
 
       const tools: unknown[] = [];
+      const warnings: Array<{ service: string; displayName: string; reason: string; message: string; integrationId: string }> = [];
 
       for (const integration of dedupedIntegrations) {
         // If filtering by service, skip non-matching integrations
@@ -7685,9 +7686,23 @@ export class SessionAgentDO {
           // No credentials needed — pass undefined context
           console.log(`[SessionAgentDO] list-tools: ${integration.service} is no-auth, skipping credential lookup`);
         } else {
-          const credResult = await getCredential(this.env, userId, integration.service);
+          // For org-scoped integrations, credentials belong to the admin who installed them
+          const credentialUserId = ('scope' in integration && integration.scope === 'org' && 'userId' in integration)
+            ? (integration as { userId: string }).userId
+            : userId;
+          const credResult = await getCredential(this.env, credentialUserId, integration.service);
           if (!credResult.ok) {
-            console.warn(`[SessionAgentDO] list-tools: no credentials for ${integration.service}: ${credResult.error.reason} — ${credResult.error.message}`);
+            const displayName = provider?.displayName || integration.service;
+            console.warn(`[SessionAgentDO] list-tools: credential failure for ${integration.service}: ${credResult.error.reason} — ${credResult.error.message}`);
+            warnings.push({
+              service: integration.service,
+              displayName,
+              reason: credResult.error.reason,
+              message: credResult.error.message,
+              integrationId: integration.id,
+            });
+            // Skip listActions — no point calling without a valid token
+            continue;
           } else {
             console.log(`[SessionAgentDO] list-tools: credentials OK for ${integration.service} (type=${credResult.credential.credentialType}, refreshed=${credResult.credential.refreshed}, hasToken=${!!credResult.credential.accessToken})`);
             credCtx = { credentials: { access_token: credResult.credential.accessToken } };
@@ -7720,7 +7735,43 @@ export class SessionAgentDO {
         }
       }
 
-      this.sendToRunner({ type: 'list-tools-result', requestId, tools } as any);
+      this.sendToRunner({
+        type: 'list-tools-result',
+        requestId,
+        tools,
+        ...(warnings.length > 0 ? {
+          warnings: warnings.map(({ integrationId: _, ...rest }) => rest),
+        } : {}),
+      } as any);
+
+      // Broadcast reauth-required event to connected frontend clients
+      if (warnings.length > 0) {
+        this.broadcastToClients({
+          type: 'integration-auth-required',
+          services: warnings.map((w) => ({
+            service: w.service,
+            displayName: w.displayName,
+            reason: w.reason,
+          })),
+        });
+
+        // Fire-and-forget: mark integrations as 'error' in D1 only for definitive failures
+        // (not transient ones like refresh_failed which may succeed on retry)
+        const definitiveFailures = warnings.filter((w) => w.reason === 'revoked' || w.reason === 'not_found');
+        if (definitiveFailures.length > 0) {
+          this.ctx.waitUntil(
+            (async () => {
+              try {
+                for (const w of definitiveFailures) {
+                  await updateIntegrationStatus(this.appDb, w.integrationId, 'error', w.message);
+                }
+              } catch (err) {
+                console.warn('[SessionAgentDO] list-tools: failed to update integration status in D1:', err);
+              }
+            })(),
+          );
+        }
+      }
     } catch (err) {
       this.sendToRunner({
         type: 'list-tools-result',

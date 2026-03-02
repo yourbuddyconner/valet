@@ -50,6 +50,7 @@ export async function getIntegration(db: AppDb, id: string): Promise<Integration
 
 export async function getOrgIntegrations(db: AppDb, excludeUserId: string): Promise<Array<{
   id: string;
+  userId: string;
   service: string;
   status: string;
   scope: 'org';
@@ -64,6 +65,7 @@ export async function getOrgIntegrations(db: AppDb, excludeUserId: string): Prom
 
   return rows.map((row) => ({
     id: row.id,
+    userId: row.userId,
     service: row.service,
     status: row.status,
     scope: 'org' as const,

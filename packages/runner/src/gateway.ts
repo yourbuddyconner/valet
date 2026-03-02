@@ -580,7 +580,7 @@ export interface GatewayCallbacks {
   // Phase D: Channel Reply
   onChannelReply?: (channelType: string, channelId: string, message: string, imageBase64?: string, imageMimeType?: string, followUp?: boolean) => Promise<{ success: boolean }>;
   // Tool Discovery & Invocation
-  onListTools?: (service?: string, query?: string) => Promise<{ tools: unknown[] }>;
+  onListTools?: (service?: string, query?: string) => Promise<{ tools: unknown[]; warnings?: Array<{ service: string; displayName: string; reason: string; message: string }> }>;
   onCallTool?: (toolId: string, params: Record<string, unknown>) => Promise<{ result: unknown }>;
 }
 

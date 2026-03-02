@@ -1,6 +1,13 @@
 import { tool } from "@opencode-ai/plugin"
 import { formatOutput } from "./_format"
 
+interface ToolWarning {
+  service: string
+  displayName: string
+  reason: string
+  message: string
+}
+
 export default tool({
   description:
     "List available tools from connected integrations. Optionally filter by service name or search query. " +
@@ -29,8 +36,23 @@ export default tool({
         return `Failed to list tools: ${errText}`
       }
 
-      const data = (await res.json()) as { tools?: unknown[] }
+      const data = (await res.json()) as { tools?: unknown[]; warnings?: ToolWarning[] }
       const tools = Array.isArray(data.tools) ? data.tools : []
+      const warnings = Array.isArray(data.warnings) ? data.warnings : []
+
+      // Build warning lines for integrations with auth failures
+      const warningLines: string[] = []
+      for (const w of warnings) {
+        warningLines.push(`⚠ ${w.displayName}: Authorization expired or failed (${w.reason}) — the user should reauthorize in Settings > Integrations or via the banner in the session UI.`)
+      }
+
+      if (tools.length === 0 && warnings.length > 0) {
+        return [
+          ...warningLines,
+          "",
+          "No tools available because all integrations have auth failures. Ask the user to reauthorize their integrations.",
+        ].join("\n")
+      }
 
       if (tools.length === 0) {
         return args.service || args.query
@@ -38,7 +60,12 @@ export default tool({
           : "No tools available. The user may not have any active integrations configured."
       }
 
-      return formatOutput(tools)
+      const output = formatOutput(tools)
+      if (warningLines.length > 0) {
+        return warningLines.join("\n") + "\n\n" + output
+      }
+
+      return output
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
       return `Failed to list tools: ${msg}`

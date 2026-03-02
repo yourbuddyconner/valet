@@ -38,6 +38,11 @@ function OAuthCallbackPage() {
   }, []);
 
   const handleCallback = async () => {
+    // Popup reauth uses localStorage (popups don't share sessionStorage);
+    // full-redirect connect dialog uses sessionStorage. Check both.
+    const isPopup = !!window.opener;
+    const storage = isPopup ? localStorage : sessionStorage;
+
     try {
       const url = new URL(window.location.href);
       const code = url.searchParams.get('code');
@@ -57,8 +62,8 @@ function OAuthCallbackPage() {
       }
 
       // Verify state matches what we stored
-      const storedState = sessionStorage.getItem('oauth_state');
-      const storedService = sessionStorage.getItem('oauth_service');
+      const storedState = storage.getItem('oauth_state');
+      const storedService = storage.getItem('oauth_service');
 
       if (!storedService || !storedState) {
         setStatus('error');
@@ -74,7 +79,7 @@ function OAuthCallbackPage() {
 
       // Exchange code for credentials (include code_verifier for MCP OAuth PKCE)
       const redirectUri = `${window.location.origin}/integrations/callback`;
-      const codeVerifier = sessionStorage.getItem('oauth_code_verifier');
+      const codeVerifier = storage.getItem('oauth_code_verifier');
       const credentialsResponse = await api.post<{ credentials: Record<string, string> }>(
         `/integrations/${storedService}/oauth/callback`,
         { code, redirect_uri: redirectUri, ...(codeVerifier && { code_verifier: codeVerifier }) }
@@ -89,12 +94,22 @@ function OAuthCallbackPage() {
         },
       });
 
-      // Clean up session storage
-      sessionStorage.removeItem('oauth_state');
-      sessionStorage.removeItem('oauth_service');
-      sessionStorage.removeItem('oauth_code_verifier');
+      // Clean up storage
+      storage.removeItem('oauth_state');
+      storage.removeItem('oauth_service');
+      storage.removeItem('oauth_code_verifier');
 
       setStatus('success');
+
+      // If opened as a popup, notify the opener and close
+      if (isPopup) {
+        window.opener.postMessage(
+          { type: 'oauth-complete', service: storedService },
+          window.location.origin
+        );
+        window.close();
+        return;
+      }
 
       // Redirect to integrations page after a short delay
       setTimeout(() => {
@@ -103,13 +118,13 @@ function OAuthCallbackPage() {
     } catch (error) {
       console.error('OAuth callback error:', error);
       setStatus('error');
-      setFailedService(sessionStorage.getItem('oauth_service'));
+      setFailedService(storage.getItem('oauth_service'));
       setErrorMessage(
         error instanceof Error ? error.message : 'Failed to complete authorization'
       );
-      sessionStorage.removeItem('oauth_state');
-      sessionStorage.removeItem('oauth_service');
-      sessionStorage.removeItem('oauth_code_verifier');
+      storage.removeItem('oauth_state');
+      storage.removeItem('oauth_service');
+      storage.removeItem('oauth_code_verifier');
     }
   };
 

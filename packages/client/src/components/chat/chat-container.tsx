@@ -1,7 +1,9 @@
 import { useState, useEffect, useRef, useCallback, useMemo, type ReactNode } from 'react';
 import { useNavigate, useRouter } from '@tanstack/react-router';
+import { useQueryClient } from '@tanstack/react-query';
 import * as Dialog from '@radix-ui/react-dialog';
 import { useChat } from '@/hooks/use-chat';
+import type { IntegrationAuthError } from '@/hooks/use-chat';
 import { useSession, useSessionGitState, useUpdateSessionTitle, useSessionChildren } from '@/api/sessions';
 import { useDrawer } from '@/routes/sessions/$sessionId';
 import { MessageList } from './message-list';
@@ -11,6 +13,7 @@ import { ActionApprovalCard } from '@/components/session/action-approval-card';
 import { ChannelSwitcher, deriveChannels } from './channel-switcher';
 import { SessionActionsMenu } from '@/components/sessions/session-actions-menu';
 import { ShareSessionDialog } from '@/components/sessions/share-session-dialog';
+import { api } from '@/api/client';
 import type { QueueMode } from '@agent-ops/shared';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -63,6 +66,8 @@ export function ChatContainer({ sessionId }: ChatContainerProps) {
     pendingActionApprovals,
     approveActionWs,
     denyActionWs,
+    integrationAuthErrors,
+    dismissIntegrationAuth,
   } = useChat(sessionId);
   type QueuedAttachments = Parameters<typeof sendMessage>[2];
   type QueuedPrompt = {
@@ -438,6 +443,12 @@ export function ChatContainer({ sessionId }: ChatContainerProps) {
               onDenyWs={denyActionWs}
             />
           ))}
+          {integrationAuthErrors.length > 0 && (
+            <IntegrationReauthBanner
+              errors={integrationAuthErrors}
+              onDismiss={dismissIntegrationAuth}
+            />
+          )}
           {selectedChannelOption && (
             <div className="flex items-center gap-2 border-t border-neutral-100 bg-surface-0 px-3 py-1 dark:border-neutral-800/50 dark:bg-surface-0">
               <span className="font-mono text-[10px] text-neutral-400 dark:text-neutral-500">
@@ -641,6 +652,118 @@ function ChatSkeleton() {
         ))}
       </div>
     </div>
+  );
+}
+
+function IntegrationReauthBanner({
+  errors,
+  onDismiss,
+}: {
+  errors: IntegrationAuthError[];
+  onDismiss: (service: string) => void;
+}) {
+  const queryClient = useQueryClient();
+
+  const handleReauthorize = useCallback(async (service: string) => {
+    try {
+      const redirectUri = `${window.location.origin}/integrations/callback`;
+      const response = await api.get<{ url: string; state: string; code_verifier?: string }>(
+        `/integrations/${service}/oauth?redirect_uri=${encodeURIComponent(redirectUri)}`
+      );
+
+      // Store OAuth state in localStorage (not sessionStorage — popups don't share sessionStorage)
+      localStorage.setItem('oauth_state', response.state);
+      localStorage.setItem('oauth_service', service);
+      if (response.code_verifier) {
+        localStorage.setItem('oauth_code_verifier', response.code_verifier);
+      }
+
+      // Listen for completion message from popup
+      const handleMessage = (event: MessageEvent) => {
+        if (event.origin !== window.location.origin) return;
+        if (event.data?.type === 'oauth-complete' && event.data?.service === service) {
+          window.removeEventListener('message', handleMessage);
+          onDismiss(service);
+          queryClient.invalidateQueries({ queryKey: ['integrations'] });
+        }
+      };
+      window.addEventListener('message', handleMessage);
+
+      // Open OAuth flow in popup
+      const popup = window.open(response.url, `reauth-${service}`, 'width=600,height=700,popup=yes');
+
+      // Clean up listener if popup is blocked or closes without completing
+      if (!popup) {
+        window.removeEventListener('message', handleMessage);
+        console.warn(`[ReauthBanner] Popup blocked for ${service}`);
+        return;
+      }
+      const checkClosed = setInterval(() => {
+        if (popup.closed) {
+          clearInterval(checkClosed);
+          window.removeEventListener('message', handleMessage);
+        }
+      }, 500);
+    } catch (err) {
+      console.error(`[ReauthBanner] Failed to initiate OAuth for ${service}:`, err);
+    }
+  }, [onDismiss, queryClient]);
+
+  return (
+    <div className="border-t border-amber-200 bg-amber-50/80 px-3 py-2 dark:border-amber-800/50 dark:bg-amber-900/20">
+      <div className="flex items-start gap-2">
+        <WarningIcon className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-600 dark:text-amber-400" />
+        <div className="min-w-0 flex-1">
+          <p className="font-mono text-[11px] font-medium text-amber-800 dark:text-amber-200">
+            Integration authorization expired
+          </p>
+          <div className="mt-1 space-y-1">
+            {errors.map((err) => (
+              <div key={err.service} className="flex items-center gap-2">
+                <span className="font-mono text-[11px] text-amber-700 dark:text-amber-300">
+                  {err.displayName}
+                </span>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => handleReauthorize(err.service)}
+                  className="h-5 px-1.5 font-mono text-[10px] font-semibold text-amber-700 hover:bg-amber-200/60 hover:text-amber-900 dark:text-amber-300 dark:hover:bg-amber-800/40 dark:hover:text-amber-100"
+                >
+                  Reauthorize
+                </Button>
+                <button
+                  type="button"
+                  onClick={() => onDismiss(err.service)}
+                  className="ml-auto rounded p-0.5 text-amber-400 transition-colors hover:text-amber-700 dark:text-amber-600 dark:hover:text-amber-300"
+                  title="Dismiss"
+                >
+                  <XIcon className="h-3 w-3" />
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function WarningIcon({ className }: { className?: string }) {
+  return (
+    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" className={className}>
+      <path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z" />
+      <path d="M12 9v4" />
+      <path d="M12 17h.01" />
+    </svg>
+  );
+}
+
+function XIcon({ className }: { className?: string }) {
+  return (
+    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" className={className}>
+      <path d="M18 6 6 18" />
+      <path d="m6 6 12 12" />
+    </svg>
   );
 }
 

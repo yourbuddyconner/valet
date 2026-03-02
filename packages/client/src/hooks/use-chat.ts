@@ -81,6 +81,12 @@ export interface ReviewResultData {
   stats: { critical: number; warning: number; suggestion: number; nitpick: number };
 }
 
+export interface IntegrationAuthError {
+  service: string;
+  displayName: string;
+  reason: string;
+}
+
 interface ChatState {
   messages: Message[];
   status: SessionStatus;
@@ -103,6 +109,7 @@ interface ChatState {
   reviewDiffFiles: DiffFile[] | null;
   agentStatusChannelType?: string;
   agentStatusChannelId?: string;
+  integrationAuthErrors: IntegrationAuthError[];
 }
 
 interface WebSocketInitMessage {
@@ -331,6 +338,11 @@ interface WebSocketActionResolvedMessage {
   reason?: string;
 }
 
+interface WebSocketIntegrationAuthRequiredMessage {
+  type: 'integration-auth-required';
+  services: Array<{ service: string; displayName: string; reason: string }>;
+}
+
 type WebSocketChatMessage =
   | WebSocketInitMessage
   | WebSocketMessageMessage
@@ -355,6 +367,7 @@ type WebSocketChatMessage =
   | WebSocketCommandResultMessage
   | WebSocketToastMessage
   | WebSocketModelSwitchedMessage
+  | WebSocketIntegrationAuthRequiredMessage
   | { type: 'pong' }
   | { type: 'user.joined'; userId: string }
   | { type: 'user.left'; userId: string };
@@ -382,6 +395,7 @@ function createInitialState(): ChatState {
     reviewError: null,
     reviewLoading: false,
     reviewDiffFiles: null,
+    integrationAuthErrors: [],
   };
 }
 
@@ -590,6 +604,7 @@ export function useChat(sessionId: string) {
           reviewError: null,
           reviewLoading: false,
           reviewDiffFiles: null,
+          integrationAuthErrors: [],
         });
         if (initModels.length > 0) {
           // On fresh init (no messages = session just started/restarted), clear
@@ -1065,6 +1080,20 @@ export function useChat(sessionId: string) {
         break;
       }
 
+      case 'integration-auth-required': {
+        const authMsg = message as WebSocketIntegrationAuthRequiredMessage;
+        setState((prev) => {
+          const existingServices = new Set(prev.integrationAuthErrors.map((e) => e.service));
+          const newErrors = authMsg.services.filter((s) => !existingServices.has(s.service));
+          if (newErrors.length === 0) return prev;
+          return {
+            ...prev,
+            integrationAuthErrors: [...prev.integrationAuthErrors, ...newErrors],
+          };
+        });
+        break;
+      }
+
       case 'user.joined':
       case 'user.left': {
         const userMsg = msg as { connectedUsers?: Array<string | ConnectedUser> };
@@ -1311,6 +1340,13 @@ export function useChat(sessionId: string) {
     return () => clearInterval(interval);
   }, [isConnected, send]);
 
+  const dismissIntegrationAuth = useCallback((service: string) => {
+    setState((prev) => ({
+      ...prev,
+      integrationAuthErrors: prev.integrationAuthErrors.filter((e) => e.service !== service),
+    }));
+  }, []);
+
   return {
     messages: state.messages,
     sessionStatus: state.status,
@@ -1343,6 +1379,8 @@ export function useChat(sessionId: string) {
     reviewLoading: state.reviewLoading,
     reviewDiffFiles: state.reviewDiffFiles,
     executeCommand,
+    integrationAuthErrors: state.integrationAuthErrors,
+    dismissIntegrationAuth,
     pendingActionApprovals: state.pendingActionApprovals,
     approveActionWs: useCallback((invocationId: string) => {
       if (isConnected) {

@@ -721,7 +721,7 @@ export class AgentClient {
 
   // ─── Tool Discovery & Invocation ──────────────────────────────
 
-  requestListTools(service?: string, query?: string): Promise<{ tools: unknown[] }> {
+  requestListTools(service?: string, query?: string): Promise<{ tools: unknown[]; warnings?: Array<{ service: string; displayName: string; reason: string; message: string }> }> {
     const requestId = crypto.randomUUID();
     return this.createPendingRequest(requestId, TOOL_OP_TIMEOUT_MS, () => {
       this.send({ type: "list-tools", requestId, service, query });
@@ -1208,7 +1208,10 @@ export class AgentClient {
           if (msg.error) {
             this.rejectPendingRequest(msg.requestId, msg.error);
           } else {
-            this.resolvePendingRequest(msg.requestId, { tools: msg.tools ?? [] });
+            this.resolvePendingRequest(msg.requestId, {
+              tools: msg.tools ?? [],
+              ...(msg.warnings?.length ? { warnings: msg.warnings } : {}),
+            });
           }
           break;
 
