@@ -99,6 +99,7 @@ export type DOToRunnerMessage =
     }
   | { type: "list-tools-result"; requestId: string; tools?: unknown[]; error?: string }
   | { type: "call-tool-result"; requestId: string; result?: unknown; error?: string }
+  | { type: "call-tool-pending"; requestId: string; invocationId: string; message: string }
   | { type: "tunnel-delete"; name: string; actorId?: string; actorName?: string; actorEmail?: string }
   | { type: "opencode-command"; command: string; args?: string; requestId: string }
   | { type: "new-session"; channelType: string; channelId: string; requestId: string }

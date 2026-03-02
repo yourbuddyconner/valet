@@ -35,6 +35,7 @@ const TERMINATE_CHILD_TIMEOUT_MS = 30_000;
 const MESSAGE_OP_TIMEOUT_MS = 15_000;
 const PR_OP_TIMEOUT_MS = 30_000;
 const TOOL_OP_TIMEOUT_MS = 30_000;
+const APPROVAL_TIMEOUT_MS = 11 * 60 * 1000; // 11 min — slightly longer than DO's 10 min expiry
 // If the server rejects the WebSocket upgrade N times in a row (e.g. 401 due to
 // rotated token), stop retrying and exit — the sandbox has been replaced.
 const MAX_CONSECUTIVE_UPGRADE_FAILURES = 5;
@@ -773,6 +774,21 @@ export class AgentClient {
     }
   }
 
+  /**
+   * Extend the timeout on a pending request (e.g. when waiting for human approval).
+   * Clears the old timer and sets a new one with the given timeout.
+   */
+  private extendPendingRequestTimeout(requestId: string, newTimeoutMs: number): void {
+    const pending = this.pendingRequests.get(requestId);
+    if (pending) {
+      clearTimeout(pending.timer);
+      pending.timer = setTimeout(() => {
+        this.pendingRequests.delete(requestId);
+        pending.reject(new Error('Action approval timed out'));
+      }, newTimeoutMs);
+    }
+  }
+
   // ─── Inbound Handlers (DO → Runner) ─────────────────────────────────
 
   onPrompt(handler: (messageId: string, content: string, model?: string, author?: PromptAuthor, modelPreferences?: string[], attachments?: PromptAttachment[], channelType?: string, channelId?: string, opencodeSessionId?: string) => void | Promise<void>): void {
@@ -1202,6 +1218,12 @@ export class AgentClient {
           } else {
             this.resolvePendingRequest(msg.requestId, { result: msg.result });
           }
+          break;
+
+        case "call-tool-pending":
+          // Action is awaiting human approval — extend the timeout so the
+          // pending request doesn't time out while waiting.
+          this.extendPendingRequestTimeout(msg.requestId, APPROVAL_TIMEOUT_MS);
           break;
 
         case "tunnel-delete":

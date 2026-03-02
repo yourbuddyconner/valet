@@ -38,7 +38,10 @@ export type EventBusEventType =
   | 'sandbox.status'
   | 'question.asked'
   | 'question.answered'
-  | 'notification';
+  | 'notification'
+  | 'action.approval_required'
+  | 'action.approved'
+  | 'action.denied';
 
 export interface EventBusEvent {
   type: EventBusEventType;
@@ -898,4 +901,41 @@ export interface AuditLogEntry {
   actorId?: string;
   metadata?: Record<string, unknown>;
   createdAt: string;
+}
+
+// ─── Action Policy Types ────────────────────────────────────────────────────
+
+export type ActionMode = 'allow' | 'require_approval' | 'deny';
+export type ActionInvocationStatus = 'pending' | 'approved' | 'denied' | 'executed' | 'failed' | 'expired';
+
+export interface ActionPolicy {
+  id: string;
+  service?: string;
+  actionId?: string;
+  riskLevel?: string;
+  mode: ActionMode;
+  createdBy: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ActionInvocation {
+  id: string;
+  sessionId: string;
+  userId: string;
+  service: string;
+  actionId: string;
+  riskLevel: string;
+  resolvedMode: ActionMode;
+  status: ActionInvocationStatus;
+  params?: string;
+  result?: string;
+  error?: string;
+  resolvedBy?: string;
+  resolvedAt?: string;
+  executedAt?: string;
+  expiresAt?: string;
+  policyId?: string;
+  createdAt: string;
+  updatedAt: string;
 }

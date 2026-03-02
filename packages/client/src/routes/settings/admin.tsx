@@ -28,6 +28,7 @@ import { Input } from '@/components/ui/input';
 import { useAvailableModels } from '@/api/sessions';
 import type { ProviderModels } from '@/api/sessions';
 import { useSlackInstallStatus, useInstallSlack, useUninstallSlack } from '@/api/slack';
+import { ActionPoliciesSection } from '@/components/settings/action-policies-section';
 
 export const Route = createFileRoute('/settings/admin')({
   component: AdminSettingsPage,
@@ -71,6 +72,7 @@ function AdminSettingsPage() {
         <AccessControlSection />
         <InvitesSection />
         <UsersSection currentUserId={user.id} />
+        <ActionPoliciesSection />
       </div>
     </PageContainer>
   );
