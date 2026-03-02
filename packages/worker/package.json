@@ -24,6 +24,7 @@
     "@agent-ops/actions-github": "workspace:*",
     "@agent-ops/actions-gmail": "workspace:*",
     "@agent-ops/actions-google-calendar": "workspace:*",
+    "@agent-ops/actions-slack": "workspace:*",
     "@agent-ops/shared": "workspace:*",
     "@cf-wasm/resvg": "^0.3.3",
     "@cf-wasm/satori": "^0.3.3",

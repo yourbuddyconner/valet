@@ -19,14 +19,16 @@ function rowToIntegration(row: typeof integrations.$inferSelect): Integration {
 
 export async function createIntegration(
   db: AppDb,
-  data: { id: string; userId: string; service: string; config: Record<string, unknown> }
+  data: { id: string; userId: string; service: string; config: Record<string, unknown>; scope?: 'user' | 'org' }
 ): Promise<Integration> {
+  const scope = data.scope || 'user';
   await db.insert(integrations).values({
     id: data.id,
     userId: data.userId,
     service: data.service,
     config: data.config as unknown as Integration['config'],
     status: 'pending',
+    scope,
   });
 
   return {
@@ -35,7 +37,7 @@ export async function createIntegration(
     service: data.service as Integration['service'],
     config: data.config as unknown as Integration['config'],
     status: 'pending',
-    scope: 'user' as const,
+    scope,
     createdAt: new Date(),
     updatedAt: new Date(),
   };
@@ -97,4 +99,10 @@ export async function updateIntegrationStatus(
 
 export async function deleteIntegration(db: AppDb, id: string): Promise<void> {
   await db.delete(integrations).where(eq(integrations.id, id));
+}
+
+export async function deleteOrgIntegrationByService(db: AppDb, service: string): Promise<void> {
+  await db.delete(integrations).where(
+    and(eq(integrations.service, service), eq(integrations.scope, 'org')),
+  );
 }

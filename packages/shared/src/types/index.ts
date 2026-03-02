@@ -10,6 +10,7 @@ export type IntegrationService =
   | 'hubspot'
   | 'ashby'
   | 'discord'
+  | 'slack'
   | 'xero';
 
 export interface Integration {

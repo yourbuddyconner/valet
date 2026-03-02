@@ -22,13 +22,13 @@ export const googleCalendarProvider: IntegrationProvider = {
   },
 
   async testConnection(credentials: IntegrationCredentials): Promise<boolean> {
-    try {
-      const token = credentials.access_token || '';
-      const res = await calendarFetch('/users/me/calendarList?maxResults=1', token);
-      return res.ok;
-    } catch {
-      return false;
+    const token = credentials.access_token || '';
+    const res = await calendarFetch('/users/me/calendarList?maxResults=1', token);
+    if (!res.ok) {
+      const body = await res.text().catch(() => '');
+      console.error(`[GoogleCalendar] testConnection failed: ${res.status} ${res.statusText} — ${body.slice(0, 500)}`);
     }
+    return res.ok;
   },
 
   getOAuthUrl(oauth: OAuthConfig, redirectUri: string, state: string): string {

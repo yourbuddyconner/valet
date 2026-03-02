@@ -51,9 +51,22 @@ export async function configureIntegration(
     throw new IntegrationError('Invalid credentials provided', ErrorCodes.INVALID_CREDENTIALS);
   }
 
-  const connectionValid = await provider.testConnection(params.credentials);
+  let connectionValid: boolean;
+  try {
+    connectionValid = await provider.testConnection(params.credentials);
+  } catch (err) {
+    console.error(`[Integrations] testConnection for ${params.service} threw:`, err);
+    throw new IntegrationError(
+      `Failed to connect to ${provider.displayName}: ${err instanceof Error ? err.message : String(err)}`,
+      ErrorCodes.INTEGRATION_AUTH_FAILED,
+    );
+  }
   if (!connectionValid) {
-    throw new IntegrationError('Failed to connect to service', ErrorCodes.INTEGRATION_AUTH_FAILED);
+    console.error(`[Integrations] testConnection for ${params.service} returned false (credentials present: ${Object.keys(params.credentials).join(', ')})`);
+    throw new IntegrationError(
+      `Failed to connect to ${provider.displayName}. Ensure the API is enabled in your provider's console.`,
+      ErrorCodes.INTEGRATION_AUTH_FAILED,
+    );
   }
 
   // Ensure user exists

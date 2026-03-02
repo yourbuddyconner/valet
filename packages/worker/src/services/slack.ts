@@ -85,6 +85,21 @@ export async function installSlackApp(
     installedBy,
   });
 
+  // Create org-scoped integration row so tools (list_tools/call_tool) discover Slack
+  try {
+    const integrationId = crypto.randomUUID();
+    await db.createIntegration(appDb, {
+      id: integrationId,
+      userId: installedBy,
+      service: 'slack',
+      config: { entities: ['channels', 'messages', 'users'] },
+      scope: 'org',
+    });
+    await db.updateIntegrationStatus(appDb, integrationId, 'active');
+  } catch {
+    // Integration row may already exist from a previous install — ignore duplicate
+  }
+
   return { ok: true, install };
 }
 
@@ -152,6 +167,7 @@ export async function uninstallSlackApp(
 ): Promise<void> {
   const appDb = getDb(env.DB);
   await db.deleteOrgSlackInstall(appDb, teamId);
+  await db.deleteOrgIntegrationByService(appDb, 'slack');
 }
 
 // ─── List Slack Workspace Users ─────────────────────────────────────────────

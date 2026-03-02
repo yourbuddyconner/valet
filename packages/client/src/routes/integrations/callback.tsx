@@ -7,11 +7,27 @@ export const Route = createFileRoute('/integrations/callback')({
   component: OAuthCallbackPage,
 });
 
+const GOOGLE_API_LINKS: Record<string, { name: string; url: string }> = {
+  google_calendar: {
+    name: 'Google Calendar API',
+    url: 'https://console.cloud.google.com/apis/library/calendar-json.googleapis.com',
+  },
+  gmail: {
+    name: 'Gmail API',
+    url: 'https://console.cloud.google.com/apis/library/gmail.googleapis.com',
+  },
+  google_drive: {
+    name: 'Google Drive API',
+    url: 'https://console.cloud.google.com/apis/library/drive.googleapis.com',
+  },
+};
+
 function OAuthCallbackPage() {
   const navigate = useNavigate();
   const configureIntegration = useConfigureIntegration();
   const [status, setStatus] = React.useState<'processing' | 'success' | 'error'>('processing');
   const [errorMessage, setErrorMessage] = React.useState<string | null>(null);
+  const [failedService, setFailedService] = React.useState<string | null>(null);
   const hasProcessed = React.useRef(false);
 
   React.useEffect(() => {
@@ -85,6 +101,7 @@ function OAuthCallbackPage() {
     } catch (error) {
       console.error('OAuth callback error:', error);
       setStatus('error');
+      setFailedService(sessionStorage.getItem('oauth_service'));
       setErrorMessage(
         error instanceof Error ? error.message : 'Failed to complete authorization'
       );
@@ -153,6 +170,23 @@ function OAuthCallbackPage() {
               Connection Failed
             </h1>
             <p className="mt-2 text-sm text-neutral-500">{errorMessage}</p>
+            {failedService && GOOGLE_API_LINKS[failedService] && (
+              <div className="mt-4 rounded-md border border-amber-200 bg-amber-50 p-3 text-left text-sm text-amber-800">
+                <p className="font-medium">Common fix</p>
+                <p className="mt-1">
+                  The {GOOGLE_API_LINKS[failedService].name} must be enabled in your Google Cloud project.{' '}
+                  <a
+                    href={GOOGLE_API_LINKS[failedService].url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="font-medium underline hover:text-amber-900"
+                  >
+                    Enable it here
+                  </a>
+                  , then try connecting again.
+                </p>
+              </div>
+            )}
             <button
               onClick={() => navigate({ to: '/integrations' })}
               className="mt-4 inline-flex items-center justify-center rounded-md bg-neutral-900 px-4 py-2 text-sm font-medium text-white hover:bg-neutral-800"

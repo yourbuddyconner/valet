@@ -11,6 +11,7 @@
     { "path": "../shared" },
     { "path": "../sdk" },
     { "path": "../channel-telegram" },
-    { "path": "../channel-slack" }
+    { "path": "../channel-slack" },
+    { "path": "../actions-slack" }
   ]
 }

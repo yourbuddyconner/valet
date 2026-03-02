@@ -11,7 +11,7 @@ import { checkWorkflowConcurrency, createWorkflowSession, dispatchOrchestratorPr
 import { assembleCustomProviders, assembleBuiltInProviderModelConfigs } from '../lib/env-assembly.js';
 import { channelRegistry } from '../channels/registry.js';
 import { integrationRegistry } from '../integrations/registry.js';
-import { getUserIntegrations } from '../lib/db/integrations.js';
+import { getUserIntegrations, getOrgIntegrations } from '../lib/db/integrations.js';
 import type { ChannelTarget, ChannelContext } from '@agent-ops/sdk';
 import { validateWorkflowDefinition } from '../lib/workflow-definition.js';
 
@@ -7477,13 +7477,25 @@ export class SessionAgentDO {
         return;
       }
 
-      // Get user's active integrations
+      // Get user's active integrations + org-scoped integrations
       const userIntegrations = await getUserIntegrations(this.appDb, userId);
-      const activeIntegrations = userIntegrations.filter((i) => i.status === 'active');
+      const orgIntegrations = await getOrgIntegrations(this.appDb, userId);
+      const allIntegrations = [
+        ...userIntegrations.filter((i) => i.status === 'active'),
+        ...orgIntegrations.filter((i) => i.status === 'active'),
+      ];
+
+      // Deduplicate by service (user-scoped takes precedence)
+      const seen = new Set<string>();
+      const dedupedIntegrations = allIntegrations.filter((i) => {
+        if (seen.has(i.service)) return false;
+        seen.add(i.service);
+        return true;
+      });
 
       const tools: unknown[] = [];
 
-      for (const integration of activeIntegrations) {
+      for (const integration of dedupedIntegrations) {
         // If filtering by service, skip non-matching integrations
         if (service && integration.service !== service) continue;
 
@@ -7537,11 +7549,25 @@ export class SessionAgentDO {
       const service = toolId.slice(0, colonIndex);
       const actionId = toolId.slice(colonIndex + 1);
 
-      // Verify user has this integration active (not just credentials in the DB)
+      // Verify user or org has this integration active
       const userIntegrations = await getUserIntegrations(this.appDb, userId);
-      const activeIntegration = userIntegrations.find(
+      let activeIntegration = userIntegrations.find(
         (i) => i.service === service && i.status === 'active',
       );
+
+      // Fall back to org-scoped integrations
+      let isOrgScoped = false;
+      if (!activeIntegration) {
+        const orgIntegrations = await getOrgIntegrations(this.appDb, userId);
+        const orgMatch = orgIntegrations.find(
+          (i) => i.service === service && i.status === 'active',
+        );
+        if (orgMatch) {
+          activeIntegration = { ...orgMatch, userId: '', scope: 'org' as const, updatedAt: orgMatch.createdAt } as any;
+          isOrgScoped = true;
+        }
+      }
+
       if (!activeIntegration) {
         this.sendToRunner({ type: 'call-tool-result', requestId, error: `Integration "${service}" is not active. Configure it in Settings > Integrations.` } as any);
         return;
@@ -7554,21 +7580,34 @@ export class SessionAgentDO {
         return;
       }
 
-      // Get credentials
-      const credResult = await getCredential(this.env, userId, service);
-      if (!credResult.ok) {
-        this.sendToRunner({ type: 'call-tool-result', requestId, error: `No credentials found for "${service}": ${credResult.error.message}` } as any);
-        return;
+      // Resolve credentials based on integration scope
+      let credentials: Record<string, string>;
+      if (isOrgScoped) {
+        // Org-scoped: use service-specific token resolution
+        const botToken = await getSlackBotToken(this.env);
+        if (!botToken) {
+          this.sendToRunner({ type: 'call-tool-result', requestId, error: `No bot token found for "${service}". Reinstall in Settings.` } as any);
+          return;
+        }
+        credentials = { bot_token: botToken };
+      } else {
+        // User-scoped: existing per-user credential flow
+        const credResult = await getCredential(this.env, userId, service);
+        if (!credResult.ok) {
+          this.sendToRunner({ type: 'call-tool-result', requestId, error: `No credentials found for "${service}": ${credResult.error.message}` } as any);
+          return;
+        }
+        credentials = { access_token: credResult.credential.accessToken };
       }
 
       // Execute the action
       let actionResult = await actionSource.execute(actionId, params, {
-        credentials: { access_token: credResult.credential.accessToken },
+        credentials,
         userId,
       });
 
-      // If auth error (401/403), retry once with force-refreshed credentials
-      if (!actionResult.success && actionResult.error && /\b(401|403|unauthorized|invalid.credentials|token.*expired|token.*revoked)\b/i.test(actionResult.error)) {
+      // If auth error (401/403), retry once with force-refreshed credentials (user-scoped only)
+      if (!isOrgScoped && !actionResult.success && actionResult.error && /\b(401|403|unauthorized|invalid.credentials|token.*expired|token.*revoked)\b/i.test(actionResult.error)) {
         console.log(`[SessionAgentDO] Tool "${toolId}" returned auth error, retrying with refreshed credentials`);
         const refreshedCred = await getCredential(this.env, userId, service, { forceRefresh: true });
         if (refreshedCred.ok) {
