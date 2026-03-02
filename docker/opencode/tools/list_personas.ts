@@ -6,7 +6,9 @@ export default tool({
     "List all available agent personas. " +
     "Personas are instruction sets that customize agent behavior for specific tasks or repos. " +
     "Use this to choose a persona when spawning child sessions.",
-  args: {},
+  args: {
+    _placeholder: tool.schema.string().optional().describe("Unused"),
+  },
   async execute() {
     try {
       const res = await fetch("http://localhost:9000/api/personas")

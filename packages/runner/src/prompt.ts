@@ -1347,6 +1347,32 @@ export class PromptHandler {
   }
 
   /**
+   * Build a user-facing error message when all failover models are exhausted.
+   * References the originally selected model (index 0) and mentions how many
+   * fallback models were also tried, so the user doesn't see a model name they
+   * never selected.
+   */
+  private buildFailoverExhaustedError(lastModelError: string): string {
+    const chain = this.currentModelPreferences;
+    if (!chain || chain.length === 0) return lastModelError;
+
+    const primaryModel = chain[0];
+    const triedCount = Math.min((this.currentModelIndex ?? 0) + 1, chain.length);
+
+    if (triedCount <= 1) {
+      // No failover happened — just show the primary model error
+      return lastModelError;
+    }
+
+    const fallbackCount = triedCount - 1;
+    return (
+      `Model ${primaryModel} did not respond. ` +
+      `Tried ${fallbackCount} fallback model${fallbackCount > 1 ? "s" : ""} — none responded. ` +
+      `Try again or switch to a different model.`
+    );
+  }
+
+  /**
    * Attempt to failover to the next model in preferences.
    * Returns true if failover was initiated, false if no more models.
    */
@@ -3270,9 +3296,10 @@ export class PromptHandler {
               }
             }
           }
-          console.log(`[PromptHandler] Sending recovered error for ${messageId}: ${this.lastError}`);
+          const userError = this.buildFailoverExhaustedError(this.lastError);
+          console.log(`[PromptHandler] Sending recovered error for ${messageId}: ${userError}`);
           this.ensureTurnCreated();
-          this.agentClient.sendTurnFinalize(this.turnId!, "error", undefined, this.lastError || undefined);
+          this.agentClient.sendTurnFinalize(this.turnId!, "error", undefined, userError || undefined);
         } else {
           // Model produced nothing — try failover to next model before giving up
           console.warn(
@@ -3299,9 +3326,12 @@ export class PromptHandler {
             }
           }
           // No more models to try — send error
-          console.log(`[PromptHandler] No failover available for ${messageId} — sending empty response error`);
+          const emptyError = this.buildFailoverExhaustedError(
+            this.lastError || "The model did not respond."
+          );
+          console.log(`[PromptHandler] No failover available for ${messageId} — sending empty response error: ${emptyError}`);
           this.ensureTurnCreated();
-          this.agentClient.sendTurnFinalize(this.turnId!, "error", undefined, this.lastError || "The model did not respond. Try again or switch to a different model.");
+          this.agentClient.sendTurnFinalize(this.turnId!, "error", undefined, emptyError);
         }
       }
 

@@ -3,7 +3,9 @@ import { tool } from "@opencode-ai/plugin"
 export default tool({
   description:
     "List active tunnels registered in the sandbox gateway.",
-  args: {},
+  args: {
+    _placeholder: tool.schema.string().optional().describe("Unused"),
+  },
   async execute() {
     try {
       const res = await fetch("http://localhost:9000/api/tunnels")

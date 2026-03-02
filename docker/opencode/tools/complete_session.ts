@@ -5,7 +5,9 @@ export default tool({
     "Signal that your assigned task is fully complete and shut down this session. " +
     "Call this when you have finished all work, committed your changes, and have nothing left to do. " +
     "This will terminate your sandbox — only call it when you are truly done.",
-  args: {},
+  args: {
+    _placeholder: tool.schema.string().optional().describe("Unused"),
+  },
   async execute() {
     try {
       const res = await fetch("http://localhost:9000/api/complete-session", {

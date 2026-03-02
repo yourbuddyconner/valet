@@ -16,7 +16,9 @@ export default tool({
   description:
     "List workflows available to the current user in Agent-Ops. " +
     "Use this before creating new workflows to avoid duplicates.",
-  args: {},
+  args: {
+    _placeholder: tool.schema.string().optional().describe("Unused"),
+  },
   async execute() {
     try {
       const res = await fetch("http://localhost:9000/api/workflows")

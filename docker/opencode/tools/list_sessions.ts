@@ -5,7 +5,9 @@ export default tool({
   description:
     "List child sessions spawned by the current session. Returns each session's ID, title, status, workspace, and PR info. " +
     "Use this to see what sessions you've spawned, check their statuses, and find session IDs for further inspection with get_session_status or read_messages.",
-  args: {},
+  args: {
+    _placeholder: tool.schema.string().optional().describe("Unused"),
+  },
   async execute() {
     try {
       const res = await fetch("http://localhost:9000/api/child-sessions")

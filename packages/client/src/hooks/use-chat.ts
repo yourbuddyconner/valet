@@ -295,6 +295,14 @@ interface WebSocketCommandResultMessage {
   error?: string;
 }
 
+interface WebSocketModelSwitchedMessage {
+  type: 'model-switched';
+  messageId: string;
+  fromModel: string;
+  toModel: string;
+  reason: string;
+}
+
 interface WebSocketToastMessage {
   type: 'toast';
   title: string;
@@ -346,6 +354,7 @@ type WebSocketChatMessage =
   | WebSocketAuditLogMessage
   | WebSocketCommandResultMessage
   | WebSocketToastMessage
+  | WebSocketModelSwitchedMessage
   | { type: 'pong' }
   | { type: 'user.joined'; userId: string }
   | { type: 'user.left'; userId: string };
@@ -984,6 +993,26 @@ export function useChat(sessionId: string) {
           description: toastMsg.description,
           variant: toastMsg.variant,
           duration: toastMsg.duration,
+        });
+        break;
+      }
+
+      case 'model-switched': {
+        const switchMsg = message as WebSocketModelSwitchedMessage;
+        const switchText = `Model switched from ${switchMsg.fromModel} to ${switchMsg.toModel}: ${switchMsg.reason}`;
+        const switchMessage: Message = {
+          id: switchMsg.messageId,
+          sessionId: sessionIdRef.current,
+          role: 'system',
+          content: switchText,
+          createdAt: new Date(),
+        };
+        setState((prev) => {
+          if (prev.messages.some((m) => m.id === switchMessage.id)) return prev;
+          return {
+            ...prev,
+            messages: [...prev.messages, switchMessage],
+          };
         });
         break;
       }
