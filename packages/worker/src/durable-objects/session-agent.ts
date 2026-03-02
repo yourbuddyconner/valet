@@ -38,6 +38,7 @@ const MAX_PROMPT_ATTACHMENT_URL_LENGTH = 12_000_000;
 /** Total base64 across all attachments — safety cap below 32 MiB WS limit. */
 const MAX_TOTAL_ATTACHMENT_BYTES = 25_000_000;
 const MAX_CHANNEL_FOLLOWUP_REMINDERS = 3;
+const PARENT_IDLE_DEBOUNCE_MS = 10_000;
 
 function parseBase64DataUrl(url: string): string | null {
   const commaIndex = url.indexOf(',');
@@ -1151,6 +1152,27 @@ export class SessionAgentDO {
       }
     }
 
+    // ─── Parent Idle Debounce Flush ─────────────────────────────────
+    const parentIdleNotifyAtStr = this.getStateValue('parentIdleNotifyAt');
+    if (parentIdleNotifyAtStr) {
+      const parentIdleNotifyAt = parseInt(parentIdleNotifyAtStr);
+      if (!isNaN(parentIdleNotifyAt) && now >= parentIdleNotifyAt) {
+        // Re-verify idle conditions before sending
+        const idleStatus = this.getStateValue('status');
+        const idleRunnerBusy = this.getStateValue('runnerBusy') === 'true';
+        const idleQueued = this.getQueueLength();
+        const idleLast = this.getStateValue('lastParentIdleNotice');
+        const idleSessionId = this.getStateValue('sessionId');
+
+        this.setStateValue('parentIdleNotifyAt', '');
+
+        if (idleSessionId && idleStatus === 'running' && !idleRunnerBusy && idleQueued === 0 && idleLast !== 'true') {
+          this.setStateValue('lastParentIdleNotice', 'true');
+          this.ctx.waitUntil(this.notifyParentEvent(`Child session event: ${idleSessionId} is idle.`, { wake: true }));
+        }
+      }
+    }
+
     // ─── Periodic Metrics Flush ──────────────────────────────────────
     this.ctx.waitUntil(this.flushMetrics());
 
@@ -1284,6 +1306,15 @@ export class SessionAgentDO {
       const idleAlarmMs = lastActivity + idleTimeoutMs;
       if (idleAlarmMs > now && (nextAlarmMs === null || idleAlarmMs < nextAlarmMs)) {
         nextAlarmMs = idleAlarmMs;
+      }
+    }
+
+    // Also consider parent idle debounce deadline
+    const alarmParentIdleStr = this.getStateValue('parentIdleNotifyAt');
+    if (alarmParentIdleStr) {
+      const parentIdleMs = parseInt(alarmParentIdleStr);
+      if (!isNaN(parentIdleMs) && parentIdleMs > now && (nextAlarmMs === null || parentIdleMs < nextAlarmMs)) {
+        nextAlarmMs = parentIdleMs;
       }
     }
 
@@ -1536,6 +1567,8 @@ export class SessionAgentDO {
     // Forward directly to runner with author info + channel metadata
     this.setStateValue('runnerBusy', 'true');
     this.setStateValue('lastPromptDispatchedAt', String(Date.now()));
+    this.setStateValue('lastParentIdleNotice', '');
+    this.setStateValue('parentIdleNotifyAt', '');
     this.rescheduleIdleAlarm();
     console.log('[SessionAgentDO] handlePrompt: dispatching to runner (DO_CODE_VERSION=v2-pipeline-2)');
 
@@ -1754,6 +1787,12 @@ export class SessionAgentDO {
     if (nextFollowup.length > 0 && nextFollowup[0].next) {
       const followupMs = nextFollowup[0].next as number;
       if (followupMs < earliestAlarm) earliestAlarm = followupMs;
+    }
+
+    const parentIdleStr = this.getStateValue('parentIdleNotifyAt');
+    if (parentIdleStr) {
+      const parentIdleMs = parseInt(parentIdleStr);
+      if (!isNaN(parentIdleMs) && parentIdleMs < earliestAlarm) earliestAlarm = parentIdleMs;
     }
 
     this.ctx.storage.setAlarm(earliestAlarm);
@@ -2348,10 +2387,11 @@ export class SessionAgentDO {
           // message. Setting it here creates a window where a new prompt can bypass
           // the queue and be dispatched directly, resulting in two concurrent prompts.
           // The `complete` handler (handlePromptComplete) is the single source of truth.
-          await this.notifyParentIfIdle();
+          this.notifyParentIfIdle();
         } else if (msg.status === 'thinking' || msg.status === 'tool_calling' || msg.status === 'streaming') {
           this.setStateValue('runnerBusy', 'true');
           this.setStateValue('lastParentIdleNotice', '');
+          this.setStateValue('parentIdleNotifyAt', '');
         }
         break;
       }
@@ -5252,7 +5292,7 @@ export class SessionAgentDO {
       type: 'status',
       data: { runnerBusy: false },
     });
-    await this.notifyParentIfIdle();
+    this.notifyParentIfIdle();
   }
 
   // ─── Internal Endpoints ────────────────────────────────────────────────
@@ -5695,7 +5735,7 @@ export class SessionAgentDO {
     });
   }
 
-  private async notifyParentIfIdle() {
+  private notifyParentIfIdle() {
     const sessionId = this.getStateValue('sessionId');
     if (!sessionId) return;
     const status = this.getStateValue('status');
@@ -5706,8 +5746,10 @@ export class SessionAgentDO {
 
     const last = this.getStateValue('lastParentIdleNotice');
     if (last === 'true') return;
-    this.setStateValue('lastParentIdleNotice', 'true');
-    await this.notifyParentEvent(`Child session event: ${sessionId} is idle.`, { wake: true });
+    const existing = this.getStateValue('parentIdleNotifyAt');
+    if (existing) return; // debounce already pending
+    this.setStateValue('parentIdleNotifyAt', String(Date.now() + PARENT_IDLE_DEBOUNCE_MS));
+    this.rescheduleIdleAlarm();
   }
 
   private async notifyParentEvent(content: string, options?: { wake?: boolean }) {
@@ -5793,6 +5835,8 @@ export class SessionAgentDO {
           );
           this.setStateValue('runnerBusy', 'true');
           this.setStateValue('lastPromptDispatchedAt', String(Date.now()));
+          this.setStateValue('lastParentIdleNotice', '');
+          this.setStateValue('parentIdleNotifyAt', '');
           const ownerId = this.getStateValue('userId');
           const ownerDetails = ownerId ? await this.getUserDetails(ownerId) : undefined;
           const sysModelPrefs = await this.resolveModelPreferences(ownerDetails);
@@ -5885,6 +5929,7 @@ export class SessionAgentDO {
     this.setStateValue('lastPromptDispatchedAt', String(Date.now()));
     this.rescheduleIdleAlarm();
     this.setStateValue('lastParentIdleNotice', '');
+    this.setStateValue('parentIdleNotifyAt', '');
     const dispatchOwnerId = this.getStateValue('userId');
     const dispatchOwnerDetails = dispatchOwnerId ? await this.getUserDetails(dispatchOwnerId) : undefined;
     const dispatchModelPrefs = await this.resolveModelPreferences(dispatchOwnerDetails);
@@ -5950,6 +5995,7 @@ export class SessionAgentDO {
       this.setStateValue('runnerBusy', 'true');
       this.setStateValue('lastPromptDispatchedAt', String(Date.now()));
       this.setStateValue('lastParentIdleNotice', '');
+      this.setStateValue('parentIdleNotifyAt', '');
       const queueOwnerId = this.getStateValue('userId');
       const queueOwnerDetails = queueOwnerId ? await this.getUserDetails(queueOwnerId) : undefined;
       const queueModelPrefs = await this.resolveModelPreferences(queueOwnerDetails);
@@ -6030,6 +6076,8 @@ export class SessionAgentDO {
     }
     this.setStateValue('runnerBusy', 'true');
     this.setStateValue('lastPromptDispatchedAt', String(Date.now()));
+    this.setStateValue('lastParentIdleNotice', '');
+    this.setStateValue('parentIdleNotifyAt', '');
     this.rescheduleIdleAlarm();
     this.broadcastToClients({
       type: 'status',
@@ -6822,6 +6870,15 @@ export class SessionAgentDO {
       const safetyNetMs = parseInt(safetyNetStr);
       if (!isNaN(safetyNetMs) && safetyNetMs < earliestAlarm) {
         earliestAlarm = safetyNetMs;
+      }
+    }
+
+    // Also consider parent idle debounce deadline
+    const parentIdleStr = this.getStateValue('parentIdleNotifyAt');
+    if (parentIdleStr) {
+      const parentIdleMs = parseInt(parentIdleStr);
+      if (!isNaN(parentIdleMs) && parentIdleMs < earliestAlarm) {
+        earliestAlarm = parentIdleMs;
       }
     }
 
