@@ -109,6 +109,29 @@ integrationsRouter.get('/available', async (c) => {
 });
 
 /**
+ * GET /api/integrations/actions
+ * List all actions from the integration registry (for policy editor autocomplete)
+ */
+integrationsRouter.get('/actions', async (c) => {
+  const serviceFilter = c.req.query('service');
+  const packages = integrationRegistry.listPackages();
+  const catalog = packages
+    .filter((pkg) => !serviceFilter || pkg.service === serviceFilter)
+    .flatMap((pkg) => {
+      const actions = pkg.actions?.listActions() ?? [];
+      return actions.map((a) => ({
+        service: pkg.service,
+        serviceDisplayName: pkg.provider.displayName,
+        actionId: a.id,
+        name: a.name,
+        description: a.description,
+        riskLevel: a.riskLevel,
+      }));
+    });
+  return c.json({ actions: catalog });
+});
+
+/**
  * POST /api/integrations
  * Configure a new integration
  */

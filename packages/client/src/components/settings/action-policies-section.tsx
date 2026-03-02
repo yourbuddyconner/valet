@@ -2,6 +2,8 @@ import * as React from 'react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { useActionPolicies, useUpsertActionPolicy, useDeleteActionPolicy } from '@/api/action-policies';
+import { useActionCatalog } from '@/api/action-catalog';
+import type { ActionCatalogEntry } from '@/api/action-catalog';
 import { ActionPolicyDialog } from './action-policy-dialog';
 import type { ActionPolicy } from '@agent-ops/shared';
 
@@ -23,12 +25,42 @@ function modeLabel(mode: string): string {
   }
 }
 
-function scopeLabel(policy: ActionPolicy): { badge: string; target: string } {
+function scopeLabel(
+  policy: ActionPolicy,
+  catalog: ActionCatalogEntry[] | undefined,
+): { badge: string; target: React.ReactNode } {
   if (policy.actionId) {
-    return { badge: 'Action', target: `${policy.service}:${policy.actionId}` };
+    const entry = catalog?.find((e) => e.actionId === policy.actionId);
+    return {
+      badge: 'Action',
+      target: (
+        <span className="flex items-baseline gap-1.5">
+          {entry ? (
+            <>
+              <span className="text-neutral-900 dark:text-neutral-100">{entry.serviceDisplayName} &rsaquo; {entry.name}</span>
+              <span className="font-mono text-[11px] text-neutral-400 dark:text-neutral-500">{policy.actionId}</span>
+            </>
+          ) : (
+            <span className="font-mono">{policy.service}:{policy.actionId}</span>
+          )}
+        </span>
+      ),
+    };
   }
   if (policy.service) {
-    return { badge: 'Service', target: policy.service };
+    const entry = catalog?.find((e) => e.service === policy.service);
+    const displayName = entry?.serviceDisplayName ?? policy.service;
+    return {
+      badge: 'Service',
+      target: (
+        <span className="flex items-baseline gap-1.5">
+          <span className="text-neutral-900 dark:text-neutral-100">{displayName}</span>
+          {displayName !== policy.service && (
+            <span className="font-mono text-[11px] text-neutral-400 dark:text-neutral-500">{policy.service}</span>
+          )}
+        </span>
+      ),
+    };
   }
   if (policy.riskLevel) {
     return { badge: 'Risk Level', target: policy.riskLevel };
@@ -38,6 +70,7 @@ function scopeLabel(policy: ActionPolicy): { badge: string; target: string } {
 
 export function ActionPoliciesSection() {
   const { data: policies, isLoading } = useActionPolicies();
+  const { data: catalog } = useActionCatalog();
   const upsertMutation = useUpsertActionPolicy();
   const deleteMutation = useDeleteActionPolicy();
   const [dialogOpen, setDialogOpen] = React.useState(false);
@@ -105,13 +138,13 @@ export function ActionPoliciesSection() {
             </thead>
             <tbody>
               {policies.map((policy) => {
-                const { badge, target } = scopeLabel(policy);
+                const { badge, target } = scopeLabel(policy, catalog);
                 return (
                   <tr key={policy.id} className="border-b border-neutral-100 last:border-0 dark:border-neutral-700/50">
                     <td className="py-2">
                       <Badge variant="secondary">{badge}</Badge>
                     </td>
-                    <td className="py-2 font-mono text-xs">{target}</td>
+                    <td className="py-2 text-xs">{target}</td>
                     <td className="py-2">
                       <Badge variant={modeBadgeVariant(policy.mode)}>{modeLabel(policy.mode)}</Badge>
                     </td>
