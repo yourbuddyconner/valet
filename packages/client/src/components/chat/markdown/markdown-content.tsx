@@ -1,7 +1,6 @@
 import { memo, useMemo, createContext, useContext, type ComponentProps } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import rehypeRaw from 'rehype-raw';
 import rehypeSanitize, { defaultSchema } from 'rehype-sanitize';
 import type { Components } from 'react-markdown';
 import { CodeBlock } from './code-block';
@@ -24,7 +23,7 @@ const sanitizeSchema = {
 };
 
 const remarkPlugins = [remarkGfm];
-const rehypePlugins = [rehypeRaw, [rehypeSanitize, sanitizeSchema]] as ComponentProps<typeof ReactMarkdown>['rehypePlugins'];
+const rehypePlugins = [[rehypeSanitize, sanitizeSchema]] as ComponentProps<typeof ReactMarkdown>['rehypePlugins'];
 
 function MermaidOrPlaceholder({ code }: { code: string }) {
   const isStreaming = useContext(StreamingContext);
