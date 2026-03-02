@@ -221,6 +221,7 @@ export interface User {
   idleTimeoutSeconds?: number;
   modelPreferences?: string[];
   uiQueueMode?: QueueMode;
+  timezone?: string;
   role: UserRole;
   createdAt: Date;
   updatedAt: Date;

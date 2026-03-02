@@ -17,6 +17,7 @@ export const users = sqliteTable('users', {
   discoveredModels: text({ mode: 'json' }),
   maxActiveSessions: integer(),
   uiQueueMode: text().default('followup'),
+  timezone: text(),
   createdAt: text().default(sql`(datetime('now'))`),
   updatedAt: text().default(sql`(datetime('now'))`),
 }, (table) => [

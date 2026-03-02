@@ -18,6 +18,7 @@ function rowToUser(row: typeof users.$inferSelect): User {
     idleTimeoutSeconds: row.idleTimeoutSeconds ?? 900,
     modelPreferences: row.modelPreferences || undefined,
     uiQueueMode: (row.uiQueueMode as QueueMode) || 'followup',
+    timezone: row.timezone || undefined,
     role: (row.role as UserRole) || 'member',
     createdAt: toDate(row.createdAt),
     updatedAt: toDate(row.updatedAt),
@@ -95,6 +96,7 @@ export async function updateUserProfile(
     idleTimeoutSeconds?: number;
     modelPreferences?: string[];
     uiQueueMode?: QueueMode;
+    timezone?: string;
   },
 ): Promise<User | null> {
   const setValues: Record<string, unknown> = { updatedAt: sql`datetime('now')` };
@@ -106,6 +108,7 @@ export async function updateUserProfile(
   if (data.idleTimeoutSeconds !== undefined) setValues.idleTimeoutSeconds = sql`COALESCE(${data.idleTimeoutSeconds}, ${users.idleTimeoutSeconds})`;
   if (data.modelPreferences !== undefined) setValues.modelPreferences = sql`COALESCE(${JSON.stringify(data.modelPreferences)}, ${users.modelPreferences})`;
   if (data.uiQueueMode !== undefined) setValues.uiQueueMode = sql`COALESCE(${data.uiQueueMode}, ${users.uiQueueMode})`;
+  if (data.timezone !== undefined) setValues.timezone = data.timezone || null;
 
   await db
     .update(users)

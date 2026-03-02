@@ -324,6 +324,11 @@ export async function createSession(
   const uiQueueMode = userRow?.uiQueueMode ?? 'followup';
   const idleTimeoutMs = idleTimeoutSeconds * 1000;
 
+  // Inject user timezone into sandbox env
+  if (userRow?.timezone) {
+    envVars['TZ'] = userRow.timezone;
+  }
+
   // Initialize SessionAgentDO
   const doId = env.SESSIONS.idFromName(sessionId);
   const sessionDO = env.SESSIONS.get(doId);

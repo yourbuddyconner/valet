@@ -24,7 +24,7 @@ export function useUpdateProfile() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: async (data: { name?: string; gitName?: string; gitEmail?: string; onboardingCompleted?: boolean; idleTimeoutSeconds?: number; modelPreferences?: string[]; uiQueueMode?: QueueMode }) => {
+    mutationFn: async (data: { name?: string; gitName?: string; gitEmail?: string; onboardingCompleted?: boolean; idleTimeoutSeconds?: number; modelPreferences?: string[]; uiQueueMode?: QueueMode; timezone?: string }) => {
       return api.patch<{ user: User }>('/auth/me', data);
     },
     onSuccess: (res) => {

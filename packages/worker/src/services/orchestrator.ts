@@ -69,6 +69,11 @@ export async function restartOrchestratorSession(
   const uiQueueMode = userRow?.uiQueueMode ?? 'followup';
   const idleTimeoutMs = idleTimeoutSeconds * 1000;
 
+  // Inject user timezone into sandbox env
+  if (userRow?.timezone) {
+    envVars['TZ'] = userRow.timezone;
+  }
+
   // Resolve default model: user prefs first, then org prefs as fallback.
   let initialModel: string | undefined;
   if (userRow?.modelPreferences && userRow.modelPreferences.length > 0) {
