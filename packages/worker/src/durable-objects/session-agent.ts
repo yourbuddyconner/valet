@@ -12,6 +12,9 @@ import { assembleCustomProviders, assembleBuiltInProviderModelConfigs } from '..
 import { channelRegistry } from '../channels/registry.js';
 import { integrationRegistry } from '../integrations/registry.js';
 import { getUserIntegrations, getOrgIntegrations } from '../lib/db/integrations.js';
+import { resolveMode } from '../services/action-policy.js';
+import { invokeAction, markExecuted, markFailed, approveInvocation, denyInvocation } from '../services/actions.js';
+import { updateInvocationStatus } from '../lib/db/actions.js';
 import type { ChannelTarget, ChannelContext } from '@agent-ops/sdk';
 import { validateWorkflowDefinition } from '../lib/workflow-definition.js';
 
@@ -39,6 +42,7 @@ const MAX_PROMPT_ATTACHMENT_URL_LENGTH = 12_000_000;
 const MAX_TOTAL_ATTACHMENT_BYTES = 25_000_000;
 const MAX_CHANNEL_FOLLOWUP_REMINDERS = 3;
 const PARENT_IDLE_DEBOUNCE_MS = 10_000;
+const ACTION_APPROVAL_EXPIRY_MS = 10 * 60 * 1000; // 10 minutes
 
 function parseBase64DataUrl(url: string): string | null {
   const commaIndex = url.indexOf(',');
@@ -129,7 +133,7 @@ function parseQueuedWorkflowPayload(raw: unknown): WorkflowExecutionDispatchPayl
 
 /** Messages sent by browser clients to the DO */
 interface ClientMessage {
-  type: 'prompt' | 'answer' | 'ping' | 'abort' | 'revert' | 'diff' | 'review' | 'command';
+  type: 'prompt' | 'answer' | 'ping' | 'abort' | 'revert' | 'diff' | 'review' | 'command' | 'approve-action' | 'deny-action';
   content?: string;
   model?: string;
   queueMode?: 'followup' | 'collect' | 'steer';
@@ -142,6 +146,8 @@ interface ClientMessage {
   args?: string;
   channelType?: string;
   channelId?: string;
+  invocationId?: string;
+  reason?: string;
 }
 
 /** Agent status values for activity indication */
@@ -348,13 +354,13 @@ interface RunnerMessage {
 
 /** Messages sent from DO to clients */
 interface ClientOutbound {
-  type: 'message' | 'message.updated' | 'messages.removed' | 'stream' | 'chunk' | 'question' | 'status' | 'pong' | 'error' | 'user.joined' | 'user.left' | 'agentStatus' | 'models' | 'diff' | 'review-result' | 'command-result' | 'git-state' | 'pr-created' | 'files-changed' | 'child-session' | 'title' | 'audit_log' | 'model-switched' | 'toast';
+  type: 'message' | 'message.updated' | 'messages.removed' | 'stream' | 'chunk' | 'question' | 'status' | 'pong' | 'error' | 'user.joined' | 'user.left' | 'agentStatus' | 'models' | 'diff' | 'review-result' | 'command-result' | 'git-state' | 'pr-created' | 'files-changed' | 'child-session' | 'title' | 'audit_log' | 'model-switched' | 'toast' | 'action_approval_required' | 'action_approved' | 'action_denied' | 'action_expired';
   [key: string]: unknown;
 }
 
 /** Messages sent from DO to runner */
 interface RunnerOutbound {
-  type: 'prompt' | 'answer' | 'stop' | 'abort' | 'revert' | 'diff' | 'review' | 'opencode-command' | 'pong' | 'init' | 'opencode-config' | 'spawn-child-result' | 'session-message-result' | 'session-messages-result' | 'create-pr-result' | 'update-pr-result' | 'list-pull-requests-result' | 'inspect-pull-request-result' | 'terminate-child-result' | 'mem-read-result' | 'mem-write-result' | 'mem-patch-result' | 'mem-rm-result' | 'mem-search-result' | 'list-repos-result' | 'list-personas-result' | 'list-channels-result' | 'get-session-status-result' | 'list-child-sessions-result' | 'forward-messages-result' | 'read-repo-file-result' | 'workflow-list-result' | 'workflow-sync-result' | 'workflow-run-result' | 'workflow-executions-result' | 'workflow-api-result' | 'trigger-api-result' | 'execution-api-result' | 'workflow-execute' | 'tunnel-delete' | 'channel-reply-result' | 'list-tools-result' | 'call-tool-result';
+  type: 'prompt' | 'answer' | 'stop' | 'abort' | 'revert' | 'diff' | 'review' | 'opencode-command' | 'pong' | 'init' | 'opencode-config' | 'spawn-child-result' | 'session-message-result' | 'session-messages-result' | 'create-pr-result' | 'update-pr-result' | 'list-pull-requests-result' | 'inspect-pull-request-result' | 'terminate-child-result' | 'mem-read-result' | 'mem-write-result' | 'mem-patch-result' | 'mem-rm-result' | 'mem-search-result' | 'list-repos-result' | 'list-personas-result' | 'list-channels-result' | 'get-session-status-result' | 'list-child-sessions-result' | 'forward-messages-result' | 'read-repo-file-result' | 'workflow-list-result' | 'workflow-sync-result' | 'workflow-run-result' | 'workflow-executions-result' | 'workflow-api-result' | 'trigger-api-result' | 'execution-api-result' | 'workflow-execute' | 'tunnel-delete' | 'channel-reply-result' | 'list-tools-result' | 'call-tool-result' | 'call-tool-pending';
   config?: {
     tools?: Record<string, boolean>;
     providerKeys?: Record<string, string>;
@@ -513,6 +519,18 @@ const SCHEMA_SQL = `
     channel_key TEXT PRIMARY KEY,
     busy INTEGER NOT NULL DEFAULT 0,
     opencode_session_id TEXT
+  );
+
+  CREATE TABLE IF NOT EXISTS pending_action_approvals (
+    invocation_id TEXT PRIMARY KEY,
+    request_id TEXT NOT NULL,
+    tool_id TEXT NOT NULL,
+    service TEXT NOT NULL,
+    action_id TEXT NOT NULL,
+    params TEXT,
+    is_org_scoped INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    expires_at INTEGER
   );
 `;
 
@@ -766,6 +784,28 @@ export class SessionAgentDO {
           actorName: body.actorName,
           actorEmail: body.actorEmail,
         });
+        return Response.json({ success: true });
+      }
+      case '/action-approved': {
+        if (request.method !== 'POST') {
+          return new Response(JSON.stringify({ error: 'Method not allowed' }), { status: 405 });
+        }
+        const body = await request.json() as { invocationId: string };
+        if (!body.invocationId) {
+          return new Response(JSON.stringify({ error: 'Missing invocationId' }), { status: 400 });
+        }
+        await this.handleActionApproved(body.invocationId);
+        return Response.json({ success: true });
+      }
+      case '/action-denied': {
+        if (request.method !== 'POST') {
+          return new Response(JSON.stringify({ error: 'Method not allowed' }), { status: 405 });
+        }
+        const body = await request.json() as { invocationId: string; reason?: string };
+        if (!body.invocationId) {
+          return new Response(JSON.stringify({ error: 'Missing invocationId' }), { status: 400 });
+        }
+        await this.handleActionDenied(body.invocationId, body.reason);
         return Response.json({ success: true });
       }
     }
@@ -1173,6 +1213,46 @@ export class SessionAgentDO {
       }
     }
 
+    // ─── Action Approval Expiry ─────────────────────────────────────
+    const expiredActions = this.ctx.storage.sql
+      .exec(
+        'SELECT invocation_id, request_id, tool_id, service, action_id FROM pending_action_approvals WHERE expires_at IS NOT NULL AND expires_at <= ?',
+        nowSecs
+      )
+      .toArray();
+
+    for (const ea of expiredActions) {
+      const eaInvocationId = ea.invocation_id as string;
+      const eaRequestId = ea.request_id as string;
+      const eaToolId = ea.tool_id as string;
+      const eaService = ea.service as string;
+      const eaActionId = ea.action_id as string;
+
+      // Delete from local SQLite
+      this.ctx.storage.sql.exec('DELETE FROM pending_action_approvals WHERE invocation_id = ?', eaInvocationId);
+
+      // Update D1 status to expired
+      this.ctx.waitUntil(
+        updateInvocationStatus(this.appDb, eaInvocationId, {
+          status: 'expired',
+        }).catch((err) => console.error('[SessionAgentDO] Failed to mark invocation expired:', err))
+      );
+
+      // Send error to runner to unblock the pending request
+      this.sendToRunner({ type: 'call-tool-result', requestId: eaRequestId, error: `Action "${eaToolId}" approval expired after 10 minutes` } as any);
+
+      // Broadcast to clients
+      this.broadcastToClients({
+        type: 'action_expired',
+        invocationId: eaInvocationId,
+        toolId: eaToolId,
+        service: eaService,
+        actionId: eaActionId,
+      });
+
+      this.appendAuditLog('agent.tool_call', `Action ${eaToolId} approval expired`, undefined, { invocationId: eaInvocationId });
+    }
+
     // ─── Periodic Metrics Flush ──────────────────────────────────────
     this.ctx.waitUntil(this.flushMetrics());
 
@@ -1318,6 +1398,17 @@ export class SessionAgentDO {
       }
     }
 
+    // Also consider pending action approval expiry
+    const nextActionExpiry = this.ctx.storage.sql
+      .exec('SELECT MIN(expires_at) as next FROM pending_action_approvals WHERE expires_at IS NOT NULL')
+      .toArray();
+    if (nextActionExpiry.length > 0 && nextActionExpiry[0].next) {
+      const actionExpiryMs = (nextActionExpiry[0].next as number) * 1000;
+      if (actionExpiryMs > now && (nextAlarmMs === null || actionExpiryMs < nextAlarmMs)) {
+        nextAlarmMs = actionExpiryMs;
+      }
+    }
+
     if (nextAlarmMs !== null) {
       this.ctx.storage.setAlarm(nextAlarmMs);
     }
@@ -1394,6 +1485,24 @@ export class SessionAgentDO {
       case 'review': {
         const reviewRequestId = crypto.randomUUID();
         this.sendToRunner({ type: 'review', requestId: reviewRequestId });
+        break;
+      }
+
+      case 'approve-action': {
+        if (!msg.invocationId) {
+          ws.send(JSON.stringify({ type: 'error', message: 'Missing invocationId' }));
+          return;
+        }
+        await this.handleActionApproved(msg.invocationId);
+        break;
+      }
+
+      case 'deny-action': {
+        if (!msg.invocationId) {
+          ws.send(JSON.stringify({ type: 'error', message: 'Missing invocationId' }));
+          return;
+        }
+        await this.handleActionDenied(msg.invocationId, msg.reason);
         break;
       }
 
@@ -7592,6 +7701,7 @@ export class SessionAgentDO {
   private async handleCallTool(requestId: string, toolId: string, params: Record<string, unknown>) {
     try {
       const userId = this.getStateValue('userId');
+      const sessionId = this.getStateValue('sessionId');
       if (!userId) {
         this.sendToRunner({ type: 'call-tool-result', requestId, error: 'No userId on session' } as any);
         return;
@@ -7637,50 +7747,93 @@ export class SessionAgentDO {
         return;
       }
 
-      // Resolve credentials based on integration scope
-      let credentials: Record<string, string>;
-      if (isOrgScoped) {
-        // Org-scoped: use service-specific token resolution
-        const botToken = await getSlackBotToken(this.env);
-        if (!botToken) {
-          this.sendToRunner({ type: 'call-tool-result', requestId, error: `No bot token found for "${service}". Reinstall in Settings.` } as any);
-          return;
-        }
-        credentials = { bot_token: botToken };
-      } else {
-        // User-scoped: existing per-user credential flow
-        const credResult = await getCredential(this.env, userId, service);
-        if (!credResult.ok) {
-          this.sendToRunner({ type: 'call-tool-result', requestId, error: `No credentials found for "${service}": ${credResult.error.message}` } as any);
-          return;
-        }
-        credentials = { access_token: credResult.credential.accessToken };
-      }
+      // ─── Policy Resolution ─────────────────────────────────────────────
+      // Look up the action definition to get its risk level
+      const actionDef = actionSource.listActions().find(a => a.id === actionId);
+      const riskLevel = actionDef?.riskLevel || 'medium';
 
-      // Execute the action
-      let actionResult = await actionSource.execute(actionId, params, {
-        credentials,
+      // Resolve policy mode
+      const invocationResult = await invokeAction(this.appDb, {
+        sessionId: sessionId || '',
         userId,
+        service,
+        actionId,
+        riskLevel,
+        params,
       });
 
-      // If auth error (401/403), retry once with force-refreshed credentials (user-scoped only)
-      if (!isOrgScoped && !actionResult.success && actionResult.error && /\b(401|403|unauthorized|invalid.credentials|token.*expired|token.*revoked)\b/i.test(actionResult.error)) {
-        console.log(`[SessionAgentDO] Tool "${toolId}" returned auth error, retrying with refreshed credentials`);
-        const refreshedCred = await getCredential(this.env, userId, service, { forceRefresh: true });
-        if (refreshedCred.ok) {
-          actionResult = await actionSource.execute(actionId, params, {
-            credentials: { access_token: refreshedCred.credential.accessToken },
-            userId,
-          });
-        }
+      // ─── Deny ──────────────────────────────────────────────────────────
+      if (invocationResult.outcome === 'denied') {
+        this.sendToRunner({ type: 'call-tool-result', requestId, error: `Action "${toolId}" denied by policy (risk level: ${riskLevel})` } as any);
+        this.appendAuditLog('agent.tool_call', `Action ${toolId} denied by policy`, undefined, { invocationId: invocationResult.invocationId, riskLevel });
+        return;
       }
 
-      // Unwrap ActionResult: propagate failures as error, send data directly on success
-      if (!actionResult.success) {
-        this.sendToRunner({ type: 'call-tool-result', requestId, error: actionResult.error || 'Action failed' } as any);
-      } else {
-        this.sendToRunner({ type: 'call-tool-result', requestId, result: actionResult.data } as any);
+      // ─── Require Approval ──────────────────────────────────────────────
+      if (invocationResult.outcome === 'pending_approval') {
+        const expiresAt = Math.floor(Date.now() / 1000) + Math.floor(ACTION_APPROVAL_EXPIRY_MS / 1000);
+
+        // Store in local SQLite for alarm-based expiry and later execution
+        this.ctx.storage.sql.exec(
+          `INSERT OR REPLACE INTO pending_action_approvals
+            (invocation_id, request_id, tool_id, service, action_id, params, is_org_scoped, expires_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+          invocationResult.invocationId,
+          requestId,
+          toolId,
+          service,
+          actionId,
+          JSON.stringify(params),
+          isOrgScoped ? 1 : 0,
+          expiresAt,
+        );
+
+        // Notify runner to extend its timeout
+        this.sendToRunner({
+          type: 'call-tool-pending',
+          requestId,
+          invocationId: invocationResult.invocationId,
+          message: `Action "${toolId}" requires approval (risk level: ${riskLevel}). Waiting for human review.`,
+        } as any);
+
+        // Broadcast to connected clients
+        this.broadcastToClients({
+          type: 'action_approval_required',
+          invocationId: invocationResult.invocationId,
+          toolId,
+          service,
+          actionId,
+          riskLevel,
+          params,
+          expiresAt: expiresAt * 1000,
+          sessionId,
+        });
+
+        // Publish to EventBus
+        this.notifyEventBus({
+          type: 'action.approval_required',
+          sessionId,
+          userId,
+          data: {
+            invocationId: invocationResult.invocationId,
+            toolId,
+            service,
+            actionId,
+            riskLevel,
+          },
+          timestamp: new Date().toISOString(),
+        });
+
+        this.appendAuditLog('agent.tool_call', `Action ${toolId} requires approval (${riskLevel})`, undefined, { invocationId: invocationResult.invocationId, riskLevel });
+
+        // Schedule alarm for expiry
+        await this.ensureActionExpiryAlarm(expiresAt * 1000);
+
+        return; // Don't send call-tool-result — the runner will wait
       }
+
+      // ─── Allow — execute immediately ───────────────────────────────────
+      await this.executeAction(requestId, toolId, service, actionId, params, isOrgScoped, userId, actionSource, invocationResult.invocationId);
     } catch (err) {
       this.sendToRunner({
         type: 'call-tool-result',
@@ -7688,6 +7841,201 @@ export class SessionAgentDO {
         error: err instanceof Error ? err.message : String(err),
       } as any);
     }
+  }
+
+  /**
+   * Execute an integration action and send the result to the runner.
+   * Shared between immediate execution and post-approval execution.
+   */
+  private async executeAction(
+    requestId: string,
+    toolId: string,
+    service: string,
+    actionId: string,
+    params: Record<string, unknown>,
+    isOrgScoped: boolean,
+    userId: string,
+    actionSource: ReturnType<typeof integrationRegistry.getActions>,
+    invocationId: string,
+  ) {
+    if (!actionSource) {
+      this.sendToRunner({ type: 'call-tool-result', requestId, error: `No integration package found for service "${service}".` } as any);
+      await markFailed(this.appDb, invocationId, 'No integration package found');
+      return;
+    }
+
+    // Resolve credentials based on integration scope
+    let credentials: Record<string, string>;
+    if (isOrgScoped) {
+      const botToken = await getSlackBotToken(this.env);
+      if (!botToken) {
+        this.sendToRunner({ type: 'call-tool-result', requestId, error: `No bot token found for "${service}". Reinstall in Settings.` } as any);
+        await markFailed(this.appDb, invocationId, 'No bot token found');
+        return;
+      }
+      credentials = { bot_token: botToken };
+    } else {
+      const credResult = await getCredential(this.env, userId, service);
+      if (!credResult.ok) {
+        this.sendToRunner({ type: 'call-tool-result', requestId, error: `No credentials found for "${service}": ${credResult.error.message}` } as any);
+        await markFailed(this.appDb, invocationId, `No credentials: ${credResult.error.message}`);
+        return;
+      }
+      credentials = { access_token: credResult.credential.accessToken };
+    }
+
+    // Execute the action
+    let actionResult = await actionSource.execute(actionId, params, { credentials, userId });
+
+    // If auth error, retry once with force-refreshed credentials (user-scoped only)
+    if (!isOrgScoped && !actionResult.success && actionResult.error && /\b(401|403|unauthorized|invalid.credentials|token.*expired|token.*revoked)\b/i.test(actionResult.error)) {
+      console.log(`[SessionAgentDO] Tool "${toolId}" returned auth error, retrying with refreshed credentials`);
+      const refreshedCred = await getCredential(this.env, userId, service, { forceRefresh: true });
+      if (refreshedCred.ok) {
+        actionResult = await actionSource.execute(actionId, params, {
+          credentials: { access_token: refreshedCred.credential.accessToken },
+          userId,
+        });
+      }
+    }
+
+    // Record result and send to runner
+    if (!actionResult.success) {
+      await markFailed(this.appDb, invocationId, actionResult.error || 'Action failed');
+      this.sendToRunner({ type: 'call-tool-result', requestId, error: actionResult.error || 'Action failed' } as any);
+    } else {
+      await markExecuted(this.appDb, invocationId, actionResult.data);
+      this.sendToRunner({ type: 'call-tool-result', requestId, result: actionResult.data } as any);
+    }
+  }
+
+  /**
+   * Handle an approved action invocation: re-resolve credentials and execute.
+   */
+  private async handleActionApproved(invocationId: string) {
+    // Read from local SQLite
+    const rows = this.ctx.storage.sql
+      .exec('SELECT * FROM pending_action_approvals WHERE invocation_id = ?', invocationId)
+      .toArray();
+
+    if (rows.length === 0) {
+      console.warn(`[SessionAgentDO] handleActionApproved: no pending approval found for ${invocationId}`);
+      return;
+    }
+
+    const row = rows[0];
+    const requestId = row.request_id as string;
+    const toolId = row.tool_id as string;
+    const service = row.service as string;
+    const actionId = row.action_id as string;
+    const params = row.params ? JSON.parse(row.params as string) : {};
+    const isOrgScoped = (row.is_org_scoped as number) === 1;
+
+    // Delete from local SQLite
+    this.ctx.storage.sql.exec('DELETE FROM pending_action_approvals WHERE invocation_id = ?', invocationId);
+
+    const userId = this.getStateValue('userId');
+    if (!userId) {
+      this.sendToRunner({ type: 'call-tool-result', requestId, error: 'No userId on session' } as any);
+      return;
+    }
+
+    // Update D1 status to approved with resolvedBy
+    await approveInvocation(this.appDb, invocationId, userId);
+
+    const actionSource = integrationRegistry.getActions(service);
+    await this.executeAction(requestId, toolId, service, actionId, params, isOrgScoped, userId, actionSource, invocationId);
+
+    const sessionId = this.getStateValue('sessionId');
+
+    // Broadcast approval to clients
+    this.broadcastToClients({
+      type: 'action_approved',
+      invocationId,
+      toolId,
+      service,
+      actionId,
+    });
+
+    // Publish to EventBus
+    this.notifyEventBus({
+      type: 'action.approved',
+      sessionId,
+      userId,
+      data: { invocationId, toolId, service, actionId },
+      timestamp: new Date().toISOString(),
+    });
+
+    this.appendAuditLog('agent.tool_call', `Action ${toolId} approved and executed`, undefined, { invocationId });
+  }
+
+  /**
+   * Handle a denied action invocation.
+   */
+  private async handleActionDenied(invocationId: string, reason?: string) {
+    const rows = this.ctx.storage.sql
+      .exec('SELECT * FROM pending_action_approvals WHERE invocation_id = ?', invocationId)
+      .toArray();
+
+    if (rows.length === 0) {
+      console.warn(`[SessionAgentDO] handleActionDenied: no pending approval found for ${invocationId}`);
+      return;
+    }
+
+    const row = rows[0];
+    const requestId = row.request_id as string;
+    const toolId = row.tool_id as string;
+    const service = row.service as string;
+    const actionId = row.action_id as string;
+
+    // Delete from local SQLite
+    this.ctx.storage.sql.exec('DELETE FROM pending_action_approvals WHERE invocation_id = ?', invocationId);
+
+    const userId = this.getStateValue('userId');
+
+    // Update D1 status to denied
+    await denyInvocation(this.appDb, invocationId, userId || 'system', reason);
+
+    // Send error to runner to unblock the pending request
+    const errorMsg = reason
+      ? `Action "${toolId}" was denied: ${reason}`
+      : `Action "${toolId}" was denied by a reviewer`;
+    this.sendToRunner({ type: 'call-tool-result', requestId, error: errorMsg } as any);
+
+    const sessionId = this.getStateValue('sessionId');
+
+    // Broadcast denial to clients
+    this.broadcastToClients({
+      type: 'action_denied',
+      invocationId,
+      toolId,
+      service,
+      actionId,
+      reason,
+    });
+
+    // Publish to EventBus
+    this.notifyEventBus({
+      type: 'action.denied',
+      sessionId,
+      userId,
+      data: { invocationId, toolId, service, actionId, reason },
+      timestamp: new Date().toISOString(),
+    });
+
+    this.appendAuditLog('agent.tool_call', `Action ${toolId} denied${reason ? `: ${reason}` : ''}`, undefined, { invocationId });
+  }
+
+  /**
+   * Ensure an alarm is scheduled for the earliest pending action expiry.
+   */
+  private async ensureActionExpiryAlarm(expiryMs: number) {
+    const currentAlarm = await this.ctx.storage.getAlarm();
+    // setAlarm if no alarm exists or the new expiry is earlier
+    if (!currentAlarm || expiryMs < currentAlarm) {
+      await this.ctx.storage.setAlarm(expiryMs);
+    }
+    // Otherwise the existing alarm() handler will check pending_action_approvals
   }
 
   /** Serialize a Zod schema into a simple param descriptor object for tool discovery. */

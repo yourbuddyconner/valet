@@ -36,6 +36,8 @@ import { telegramApiRouter } from './routes/telegram.js';
 import { slackAdminRouter, slackUserRouter } from './routes/slack.js';
 import { slackEventsRouter } from './routes/slack-events.js';
 import { channelWebhooksRouter } from './routes/channel-webhooks.js';
+import { actionPoliciesRouter } from './routes/action-policies.js';
+import { actionInvocationsRouter } from './routes/action-invocations.js';
 import {
   enqueueWorkflowApprovalNotificationIfMissing,
   getTerminatedOrchestratorSessions,
@@ -143,6 +145,8 @@ app.route('/api', notificationQueueRouter);
 app.route('/api', channelsRouter);
 app.route('/api/me/telegram', telegramApiRouter);
 app.route('/api/admin/slack', slackAdminRouter);
+app.route('/api/admin/action-policies', actionPoliciesRouter);
+app.route('/api/action-invocations', actionInvocationsRouter);
 app.route('/api/me/slack', slackUserRouter);
 app.route('/api/invites', invitesApiRouter);
 

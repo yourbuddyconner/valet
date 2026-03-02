@@ -8,6 +8,7 @@ import type { Message, SessionStatus } from '@/api/types';
 import type { MessagePart } from '@agent-ops/shared';
 import { useAuthStore } from '@/stores/auth';
 import { SLASH_COMMANDS, type QueueMode } from '@agent-ops/shared';
+import type { PendingActionApproval } from '@/components/session/action-approval-card';
 
 export interface PendingQuestion {
   questionId: string;
@@ -84,6 +85,7 @@ interface ChatState {
   messages: Message[];
   status: SessionStatus;
   pendingQuestions: PendingQuestion[];
+  pendingActionApprovals: PendingActionApproval[];
   connectedUsers: ConnectedUser[];
   logEntries: LogEntry[];
   isAgentThinking: boolean;
@@ -301,6 +303,26 @@ interface WebSocketToastMessage {
   duration?: number;
 }
 
+interface WebSocketActionApprovalRequiredMessage {
+  type: 'action_approval_required';
+  invocationId: string;
+  toolId: string;
+  service: string;
+  actionId: string;
+  riskLevel: string;
+  params?: Record<string, unknown>;
+  expiresAt?: number;
+}
+
+interface WebSocketActionResolvedMessage {
+  type: 'action_approved' | 'action_denied' | 'action_expired';
+  invocationId: string;
+  toolId?: string;
+  service?: string;
+  actionId?: string;
+  reason?: string;
+}
+
 type WebSocketChatMessage =
   | WebSocketInitMessage
   | WebSocketMessageMessage
@@ -317,6 +339,8 @@ type WebSocketChatMessage =
   | WebSocketPrCreatedMessage
   | WebSocketFilesChangedMessage
   | WebSocketChildSessionMessage
+  | WebSocketActionApprovalRequiredMessage
+  | WebSocketActionResolvedMessage
   | WebSocketReviewResultMessage
   | WebSocketTitleMessage
   | WebSocketAuditLogMessage
@@ -333,6 +357,7 @@ function createInitialState(): ChatState {
     messages: [],
     status: 'initializing',
     pendingQuestions: [],
+    pendingActionApprovals: [],
     connectedUsers: [],
     logEntries: [],
     isAgentThinking: false,
@@ -962,6 +987,54 @@ export function useChat(sessionId: string) {
         break;
       }
 
+      case 'action_approval_required': {
+        const aMsg = message as WebSocketActionApprovalRequiredMessage;
+        setState((prev) => ({
+          ...prev,
+          pendingActionApprovals: [
+            ...prev.pendingActionApprovals,
+            {
+              invocationId: aMsg.invocationId,
+              toolId: aMsg.toolId,
+              service: aMsg.service,
+              actionId: aMsg.actionId,
+              riskLevel: aMsg.riskLevel,
+              params: aMsg.params,
+              expiresAt: aMsg.expiresAt,
+              status: 'pending' as const,
+            },
+          ],
+        }));
+        break;
+      }
+
+      case 'action_approved':
+      case 'action_denied':
+      case 'action_expired': {
+        const rMsg = message as WebSocketActionResolvedMessage;
+        const newStatus = message.type === 'action_approved' ? 'approved' as const
+          : message.type === 'action_denied' ? 'denied' as const
+          : 'expired' as const;
+        setState((prev) => ({
+          ...prev,
+          pendingActionApprovals: prev.pendingActionApprovals.map((a) =>
+            a.invocationId === rMsg.invocationId
+              ? { ...a, status: newStatus }
+              : a
+          ),
+        }));
+        // Prune resolved approval from state after a short delay
+        setTimeout(() => {
+          setState((prev) => ({
+            ...prev,
+            pendingActionApprovals: prev.pendingActionApprovals.filter(
+              (a) => a.invocationId !== rMsg.invocationId || a.status === 'pending'
+            ),
+          }));
+        }, 5000);
+        break;
+      }
+
       case 'user.joined':
       case 'user.left': {
         const userMsg = msg as { connectedUsers?: Array<string | ConnectedUser> };
@@ -1240,5 +1313,16 @@ export function useChat(sessionId: string) {
     reviewLoading: state.reviewLoading,
     reviewDiffFiles: state.reviewDiffFiles,
     executeCommand,
+    pendingActionApprovals: state.pendingActionApprovals,
+    approveActionWs: useCallback((invocationId: string) => {
+      if (isConnected) {
+        send({ type: 'approve-action', invocationId } as any);
+      }
+    }, [isConnected, send]),
+    denyActionWs: useCallback((invocationId: string) => {
+      if (isConnected) {
+        send({ type: 'deny-action', invocationId } as any);
+      }
+    }, [isConnected, send]),
   };
 }
