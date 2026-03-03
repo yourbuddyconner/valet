@@ -408,3 +408,36 @@ export async function hasCredential(
   const db = getDb(env.DB);
   return credentialDb.hasCredential(db, userId, provider);
 }
+
+/**
+ * Proactively refresh credentials that are expiring soon.
+ * Called from the scheduled cron to keep tokens alive even when no user interaction occurs.
+ * Returns the number of credentials successfully refreshed.
+ */
+export async function refreshExpiringCredentials(
+  env: Env,
+  windowSeconds: number = 15 * 60, // default: refresh anything expiring within 15 minutes
+): Promise<{ refreshed: number; failed: number }> {
+  const db = getDb(env.DB);
+  const expiring = await credentialDb.getExpiringCredentials(db, windowSeconds);
+  if (expiring.length === 0) return { refreshed: 0, failed: 0 };
+
+  let refreshed = 0;
+  let failed = 0;
+
+  for (const row of expiring) {
+    try {
+      const result = await getCredential(env, row.userId, row.provider, { forceRefresh: true });
+      if (result.ok && result.credential.refreshed) {
+        refreshed++;
+      } else {
+        failed++;
+      }
+    } catch (err) {
+      console.warn(`[CredentialRefresh] Failed to refresh ${row.provider} for user ${row.userId}:`, err);
+      failed++;
+    }
+  }
+
+  return { refreshed, failed };
+}

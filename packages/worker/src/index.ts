@@ -196,6 +196,19 @@ const scheduled: ExportedHandlerScheduledHandler<Env> = async (event, env, ctx) 
   } catch (error) {
     console.error('Orchestrator auto-restart error:', error);
   }
+
+  // Proactively refresh OAuth credentials expiring within 15 minutes (runs every 5 min)
+  if (new Date().getMinutes() % 5 === 0) {
+    try {
+      const { refreshExpiringCredentials } = await import('./services/credentials.js');
+      const result = await refreshExpiringCredentials(env);
+      if (result.refreshed > 0 || result.failed > 0) {
+        console.log(`Credential refresh sweep: ${result.refreshed} refreshed, ${result.failed} failed`);
+      }
+    } catch (error) {
+      console.error('Credential refresh sweep error:', error);
+    }
+  }
 };
 
 const MAX_GITHUB_RESOURCES_PER_RUN = 100;

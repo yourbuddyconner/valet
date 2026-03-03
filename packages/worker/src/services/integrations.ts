@@ -77,10 +77,21 @@ export async function configureIntegration(
   // Ensure user exists
   await db.getOrCreateUser(appDb, { id: userId, email: userEmail });
 
+  // Compute expiresAt from expires_in if present (passed through from MCP OAuth token exchange)
+  let expiresAt: string | undefined;
+  const expiresInRaw = params.credentials.expires_in;
+  if (expiresInRaw) {
+    const expiresInSec = parseInt(expiresInRaw, 10);
+    if (!Number.isNaN(expiresInSec) && expiresInSec > 0) {
+      expiresAt = new Date(Date.now() + expiresInSec * 1000).toISOString();
+    }
+  }
+
   // Store credentials in unified credentials table
   await storeCredential(env, userId, params.service, params.credentials, {
     credentialType: 'oauth2',
     scopes: params.config.entities.join(' '),
+    expiresAt,
   });
 
   // Create integration record (without credentials)

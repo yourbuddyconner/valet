@@ -42,6 +42,7 @@ const mockDb = credentialDb as {
   deleteCredential: ReturnType<typeof vi.fn>;
   listCredentialsByUser: ReturnType<typeof vi.fn>;
   hasCredential: ReturnType<typeof vi.fn>;
+  getExpiringCredentials: ReturnType<typeof vi.fn>;
 };
 const mockEncrypt = encryptStringPBKDF2 as ReturnType<typeof vi.fn>;
 const mockDecrypt = decryptStringPBKDF2 as ReturnType<typeof vi.fn>;

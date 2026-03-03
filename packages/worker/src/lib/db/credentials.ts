@@ -96,6 +96,30 @@ export async function listCredentialsByUser(
     .where(eq(credentials.userId, userId));
 }
 
+/**
+ * Find credentials expiring within the given window (seconds from now).
+ * Returns userId + provider pairs so the caller can attempt refresh.
+ */
+export async function getExpiringCredentials(
+  db: AppDb,
+  windowSeconds: number,
+): Promise<Array<{ userId: string; provider: string; expiresAt: string }>> {
+  const cutoff = new Date(Date.now() + windowSeconds * 1000).toISOString();
+  return db
+    .select({
+      userId: credentials.userId,
+      provider: credentials.provider,
+      expiresAt: credentials.expiresAt,
+    })
+    .from(credentials)
+    .where(
+      and(
+        sql`${credentials.expiresAt} IS NOT NULL`,
+        sql`${credentials.expiresAt} <= ${cutoff}`,
+      ),
+    ) as any;
+}
+
 export async function hasCredential(
   db: AppDb,
   userId: string,

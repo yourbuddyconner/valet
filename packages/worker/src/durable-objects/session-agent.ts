@@ -7690,7 +7690,12 @@ export class SessionAgentDO {
           const credentialUserId = ('scope' in integration && integration.scope === 'org' && 'userId' in integration)
             ? (integration as { userId: string }).userId
             : userId;
-          const credResult = await getCredential(this.env, credentialUserId, integration.service);
+          let credResult = await getCredential(this.env, credentialUserId, integration.service);
+          // If the initial credential fetch fails with a refreshable reason, try force-refresh
+          if (!credResult.ok && (credResult.error.reason === 'expired' || credResult.error.reason === 'refresh_failed')) {
+            console.log(`[SessionAgentDO] list-tools: ${integration.service} credential ${credResult.error.reason}, attempting force-refresh`);
+            credResult = await getCredential(this.env, credentialUserId, integration.service, { forceRefresh: true });
+          }
           if (!credResult.ok) {
             const displayName = provider?.displayName || integration.service;
             console.warn(`[SessionAgentDO] list-tools: credential failure for ${integration.service}: ${credResult.error.reason} — ${credResult.error.message}`);
@@ -7709,7 +7714,22 @@ export class SessionAgentDO {
           }
         }
 
-        const actions = await actionSource.listActions(credCtx);
+        let actions = await actionSource.listActions(credCtx);
+
+        // If no actions returned and we have credentials, the token may be silently expired
+        // (MCP listTools returns [] on auth failure). Try force-refreshing the credential.
+        if (actions.length === 0 && credCtx && provider?.authType !== 'none') {
+          const credentialUserId = ('scope' in integration && integration.scope === 'org' && 'userId' in integration)
+            ? (integration as { userId: string }).userId
+            : userId;
+          const refreshed = await getCredential(this.env, credentialUserId, integration.service, { forceRefresh: true });
+          if (refreshed.ok && refreshed.credential.refreshed) {
+            console.log(`[SessionAgentDO] list-tools: ${integration.service} returned 0 actions, retrying with force-refreshed token`);
+            credCtx = { credentials: { access_token: refreshed.credential.accessToken } };
+            actions = await actionSource.listActions(credCtx);
+          }
+        }
+
         console.log(`[SessionAgentDO] list-tools: ${integration.service} returned ${actions.length} actions`);
         for (const action of actions) {
           // If query provided, filter by case-insensitive substring match on name/description

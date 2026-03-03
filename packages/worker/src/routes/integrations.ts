@@ -363,6 +363,7 @@ integrationsRouter.post('/:service/oauth/callback', async (c) => {
       token_type: tokens.token_type || 'bearer',
     };
     if (tokens.refresh_token) credentials.refresh_token = tokens.refresh_token;
+    if (tokens.expires_in) credentials.expires_in = String(tokens.expires_in);
 
     return c.json({ credentials });
   }
