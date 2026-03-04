@@ -4,7 +4,7 @@ export default tool({
   description:
     "Read a memory file or list a directory. " +
     "If the path ends with '/' or is empty, returns a directory listing. " +
-    "If the path is a file (e.g. 'projects/agent-ops/repo.md'), returns its content. " +
+    "If the path is a file (e.g. 'projects/valet/repo.md'), returns its content. " +
     "Use this to recall user preferences, project context, and past decisions.",
   args: {
     path: tool.schema
@@ -12,7 +12,7 @@ export default tool({
       .default("")
       .describe(
         "Path to read. Examples: '' (root listing), 'preferences/' (list preferences), " +
-        "'projects/agent-ops/repo.md' (read file). Omit leading slash.",
+        "'projects/valet/repo.md' (read file). Omit leading slash.",
       ),
   },
   async execute(args) {

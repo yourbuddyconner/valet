@@ -1,5 +1,5 @@
 ---
-# agent-ops-pa5m
+# valet-pa5m
 title: Polymorphic Action Sources
 status: todo
 type: epic
@@ -14,13 +14,13 @@ created_at: 2026-02-24T00:00:00Z
 updated_at: 2026-02-24T00:00:00Z
 ---
 
-Build the `UnifiedActionRegistry` that discovers and loads action sources from two archetypes: **action packages** (npm modules implementing the `ActionSource` contract from `@agent-ops/action-sdk`) and **MCP connectors** (dynamic tool discovery from external HTTP servers). Both feed into the same policy-gated action service. Core integrations (GitHub, Gmail, Google Calendar) ship as default-installed action packages — the same mechanism that supports built-in functionality also supports third-party and community extensions.
+Build the `UnifiedActionRegistry` that discovers and loads action sources from two archetypes: **action packages** (npm modules implementing the `ActionSource` contract from `@valet/action-sdk`) and **MCP connectors** (dynamic tool discovery from external HTTP servers). Both feed into the same policy-gated action service. Core integrations (GitHub, Gmail, Google Calendar) ship as default-installed action packages — the same mechanism that supports built-in functionality also supports third-party and community extensions.
 
 ## Problem
 
 After bean cp7w, we have:
-- `@agent-ops/action-sdk` — the contract (`ActionPackage`, `ActionSource`, `ActionDefinition`)
-- `@agent-ops/actions-github`, `actions-gmail`, `actions-google-calendar` — core action packages
+- `@valet/action-sdk` — the contract (`ActionPackage`, `ActionSource`, `ActionDefinition`)
+- `@valet/actions-github`, `actions-gmail`, `actions-google-calendar` — core action packages
 - The policy-gated action service (bean pg9a) — the execution pipeline
 
 What's missing is the **discovery and loading layer**: how does the gateway find installed action packages, instantiate their `ActionSource`s, and merge them with MCP connectors into a unified catalog that the action service can query?
@@ -43,10 +43,10 @@ The gateway discovers installed action packages at startup. In the CF Workers bu
 // This file is the "manifest" — it imports installed action packages.
 // Adding a new package means adding an import here and redeploying.
 
-import github from '@agent-ops/actions-github';
-import gmail from '@agent-ops/actions-gmail';
-import gcal from '@agent-ops/actions-google-calendar';
-import type { ActionPackage } from '@agent-ops/action-sdk';
+import github from '@valet/actions-github';
+import gmail from '@valet/actions-gmail';
+import gcal from '@valet/actions-google-calendar';
+import type { ActionPackage } from '@valet/action-sdk';
 
 // Core packages — always installed
 export const installedPackages: ActionPackage[] = [
@@ -56,8 +56,8 @@ export const installedPackages: ActionPackage[] = [
 ];
 
 // To add an extended package:
-// 1. pnpm add @agent-ops/actions-jira
-// 2. Add: import jira from '@agent-ops/actions-jira';
+// 1. pnpm add @valet/actions-jira
+// 2. Add: import jira from '@valet/actions-jira';
 // 3. Add jira to installedPackages array
 // 4. Redeploy
 ```
@@ -82,7 +82,7 @@ Merges installed packages + MCP connectors into a single queryable catalog:
 ```typescript
 // packages/worker/src/actions/registry.ts
 
-import type { ActionSource, ActionDefinition } from '@agent-ops/action-sdk';
+import type { ActionSource, ActionDefinition } from '@valet/action-sdk';
 import { installedPackages } from './packages.js';
 import { McpConnectorActionSource } from './mcp-connector.js';
 
@@ -189,7 +189,7 @@ For dynamically discovered tools from external MCP servers. Implements the same 
 ```typescript
 // packages/worker/src/actions/mcp-connector.ts
 
-import type { ActionSource, ActionDefinition, ActionContext, ActionResult } from '@agent-ops/action-sdk';
+import type { ActionSource, ActionDefinition, ActionContext, ActionResult } from '@valet/action-sdk';
 
 export class McpConnectorActionSource implements ActionSource {
   readonly sourceId: string;
@@ -383,14 +383,14 @@ Agent: I need to deploy the user-service to staging.
 Agent: Now create a Jira ticket to track this deployment.
 
 [Agent calls run_action("jira.create_issue", { project: "OPS", summary: "Deploy user-service v2.3.1" })]
-→ Registry resolves to JiraActionSource (from @agent-ops/actions-jira package)
+→ Registry resolves to JiraActionSource (from @valet/actions-jira package)
 → Policy check: write risk → allow (org policy: jira.* → allow)
 → Jira API called → result returned
 
 Agent: And update the GitHub issue.
 
 [Agent calls run_action("github.add_comment", { owner: "myorg", repo: "user-service", issue: 42, body: "Deployed to staging" })]
-→ Registry resolves to GithubActionSource (from @agent-ops/actions-github package)
+→ Registry resolves to GithubActionSource (from @valet/actions-github package)
 → Policy check: write risk → allow
 → GitHub API called → result returned
 ```
@@ -402,14 +402,14 @@ Three different sources (MCP connector, extended package, core package), same UX
 Publishing a community action package:
 
 ```bash
-mkdir agent-ops-actions-notion && cd agent-ops-actions-notion
+mkdir valet-actions-notion && cd valet-actions-notion
 npm init
-npm install @agent-ops/action-sdk zod
+npm install @valet/action-sdk zod
 ```
 
 ```typescript
 // src/index.ts
-import type { ActionPackage } from '@agent-ops/action-sdk';
+import type { ActionPackage } from '@valet/action-sdk';
 import { NotionActionSource } from './source.js';
 
 export default {
@@ -422,7 +422,7 @@ export default {
 ```typescript
 // src/source.ts
 import { z } from 'zod';
-import type { ActionSource, ActionDefinition, ActionContext, ActionResult } from '@agent-ops/action-sdk';
+import type { ActionSource, ActionDefinition, ActionContext, ActionResult } from '@valet/action-sdk';
 
 export class NotionActionSource implements ActionSource {
   readonly sourceId = 'notion';
@@ -463,7 +463,7 @@ export class NotionActionSource implements ActionSource {
 
 ```bash
 npm publish
-# User installs: pnpm add agent-ops-actions-notion
+# User installs: pnpm add valet-actions-notion
 # Add import to packages/worker/src/actions/packages.ts
 # Redeploy
 ```
@@ -530,11 +530,11 @@ npm publish
 
 ## Relationship to Other Beans
 
-- **agent-ops-cp7w (Control Plane / Execution Plane Split)** — Prerequisite. Defines `@agent-ops/action-sdk` (the contract) and creates the core action packages (`actions-github`, `actions-gmail`, `actions-google-calendar`). This bean loads and registers them.
-- **agent-ops-pg9a (Policy-Gated Actions)** — Prerequisite. The `invokeAction()` service is the execution engine. This bean provides the registry that `invokeAction()` uses to find action sources and definitions.
-- **agent-ops-tk3n (Unified Credential Boundary)** — Used by `McpConnectorActionSource` to resolve connector secrets via `getCredential()`.
-- **agent-ops-cf0x (Decouple from Cloudflare)** — On a Node/Bun runtime, the package manifest could be dynamic (read from config/DB) instead of static imports, enabling runtime package installation without redeployment.
-- **agent-ops-ch4t (Pluggable Channel Transports)** — Channel packages that include an `actionPackage` property (e.g., `@agent-ops/channel-telegram` with `telegram.pin_message`, `telegram.create_poll`) get their actions registered in the `UnifiedActionRegistry` alongside regular action packages and MCP connectors. The registry treats channel action packages identically to standalone action packages.
+- **valet-cp7w (Control Plane / Execution Plane Split)** — Prerequisite. Defines `@valet/action-sdk` (the contract) and creates the core action packages (`actions-github`, `actions-gmail`, `actions-google-calendar`). This bean loads and registers them.
+- **valet-pg9a (Policy-Gated Actions)** — Prerequisite. The `invokeAction()` service is the execution engine. This bean provides the registry that `invokeAction()` uses to find action sources and definitions.
+- **valet-tk3n (Unified Credential Boundary)** — Used by `McpConnectorActionSource` to resolve connector secrets via `getCredential()`.
+- **valet-cf0x (Decouple from Cloudflare)** — On a Node/Bun runtime, the package manifest could be dynamic (read from config/DB) instead of static imports, enabling runtime package installation without redeployment.
+- **valet-ch4t (Pluggable Channel Transports)** — Channel packages that include an `actionPackage` property (e.g., `@valet/channel-telegram` with `telegram.pin_message`, `telegram.create_poll`) get their actions registered in the `UnifiedActionRegistry` alongside regular action packages and MCP connectors. The registry treats channel action packages identically to standalone action packages.
 
 ## Open Questions
 

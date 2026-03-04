@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { zValidator } from '@hono/zod-validator';
-import { webManualScopeKey } from '@agent-ops/shared';
+import { webManualScopeKey } from '@valet/shared';
 import type { Env, Variables } from '../env.js';
 import * as db from '../lib/db.js';
 import { dispatchOrchestratorPrompt } from '../lib/workflow-runtime.js';

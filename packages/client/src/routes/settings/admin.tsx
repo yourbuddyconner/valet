@@ -22,7 +22,7 @@ import {
 } from '@/api/admin';
 import { useOrgRepos, useCreateOrgRepo, useDeleteOrgRepo, useSetRepoPersonaDefault } from '@/api/org-repos';
 import { usePersonas } from '@/api/personas';
-import type { UserRole, CustomProviderModel } from '@agent-ops/shared';
+import type { UserRole, CustomProviderModel } from '@valet/shared';
 import { formatDate } from '../../lib/format';
 import { Input } from '@/components/ui/input';
 import { useAvailableModels } from '@/api/sessions';
@@ -962,7 +962,7 @@ function CustomProvidersSection() {
   );
 }
 
-function CustomProviderRow({ provider, onEdit, isEditing }: { provider: import('@agent-ops/shared').CustomProvider; onEdit: () => void; isEditing: boolean }) {
+function CustomProviderRow({ provider, onEdit, isEditing }: { provider: import('@valet/shared').CustomProvider; onEdit: () => void; isEditing: boolean }) {
   const deleteProvider = useDeleteCustomProvider();
   const [confirmDelete, setConfirmDelete] = React.useState(false);
 
@@ -1133,7 +1133,7 @@ function CustomProviderForm({
   onCancel,
   onSaved,
 }: {
-  existing?: import('@agent-ops/shared').CustomProvider;
+  existing?: import('@valet/shared').CustomProvider;
   onCancel: () => void;
   onSaved: () => void;
 }) {

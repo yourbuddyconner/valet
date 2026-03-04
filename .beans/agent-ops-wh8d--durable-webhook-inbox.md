@@ -1,5 +1,5 @@
 ---
-# agent-ops-wh8d
+# valet-wh8d
 title: Durable Webhook Inbox
 status: todo
 type: epic
@@ -355,9 +355,9 @@ await env.DB.prepare(`
 
 ## Relationship to Other Beans
 
-- **agent-ops-cp7w (Control Plane / Execution Plane Split)** — The inbox is part of the execution plane. Webhook processing triggers actions, which go through the action service.
-- **agent-ops-pg9a (Policy-Gated Actions)** — Webhook-triggered actions (e.g., "auto-respond to PR review") should flow through the action approval pipeline, not bypass it.
-- **agent-ops-ch4t (Pluggable Channel Transports)** — Inbound channel webhooks (Telegram messages, Slack events) flow through the inbox. The inbox processor uses `channelRegistry.getTransport()` to dispatch to the correct channel transport for parsing and routing, instead of hardcoded per-platform handlers.
+- **valet-cp7w (Control Plane / Execution Plane Split)** — The inbox is part of the execution plane. Webhook processing triggers actions, which go through the action service.
+- **valet-pg9a (Policy-Gated Actions)** — Webhook-triggered actions (e.g., "auto-respond to PR review") should flow through the action approval pipeline, not bypass it.
+- **valet-ch4t (Pluggable Channel Transports)** — Inbound channel webhooks (Telegram messages, Slack events) flow through the inbox. The inbox processor uses `channelRegistry.getTransport()` to dispatch to the correct channel transport for parsing and routing, instead of hardcoded per-platform handlers.
 
 ## Open Questions
 

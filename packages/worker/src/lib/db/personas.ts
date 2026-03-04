@@ -1,6 +1,6 @@
 import type { D1Database } from '@cloudflare/workers-types';
 import type { AppDb } from '../drizzle.js';
-import type { AgentPersona, AgentPersonaFile, PersonaVisibility } from '@agent-ops/shared';
+import type { AgentPersona, AgentPersonaFile, PersonaVisibility } from '@valet/shared';
 import { eq, and, sql, asc } from 'drizzle-orm';
 import { getDb } from '../drizzle.js';
 import { agentPersonas, agentPersonaFiles, orgRepoPersonaDefaults } from '../schema/index.js';

@@ -1,5 +1,5 @@
 import type { MiddlewareHandler } from 'hono';
-import { ForbiddenError } from '@agent-ops/shared';
+import { ForbiddenError } from '@valet/shared';
 import type { Env, Variables } from '../env.js';
 
 export const adminMiddleware: MiddlewareHandler<{ Bindings: Env; Variables: Variables }> = async (

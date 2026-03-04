@@ -1,4 +1,4 @@
-import type { IntegrationProvider, IntegrationCredentials } from '@agent-ops/sdk';
+import type { IntegrationProvider, IntegrationCredentials } from '@valet/sdk';
 
 export const deepwikiProvider: IntegrationProvider = {
   service: 'deepwiki',

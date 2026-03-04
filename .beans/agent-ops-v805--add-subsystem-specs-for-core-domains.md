@@ -1,5 +1,5 @@
 ---
-# agent-ops-v805
+# valet-v805
 title: Add subsystem specs for core domains
 status: done
 type: task
@@ -16,7 +16,7 @@ Create focused specification documents for each core subsystem in `docs/specs/`.
 
 ## Problem
 
-Agent-Ops has two high-level spec documents (`V1.md` — full architecture, `WORKFLOW_PLUGIN_SPEC.md` — workflow engine) and several general docs (`docs/architecture.md`, `docs/security-model.md`, etc.), but no per-subsystem specifications that define:
+Valet has two high-level spec documents (`V1.md` — full architecture, `WORKFLOW_PLUGIN_SPEC.md` — workflow engine) and several general docs (`docs/architecture.md`, `docs/security-model.md`, etc.), but no per-subsystem specifications that define:
 
 - What the subsystem does and doesn't do (boundary rules)
 - The exact data model and state machine

@@ -18,7 +18,7 @@ Scopes requested: `repo read:user user:email` (needed for repo cloning and PR cr
 
 ## Google OAuth (Optional)
 
-Google OAuth in Agent Ops is handled by the Worker routes:
+Google OAuth in Valet is handled by the Worker routes:
 - `GET /auth/google`
 - `GET /auth/google/callback`
 
@@ -30,7 +30,7 @@ The app currently requests these scopes:
 ### 1. Configure OAuth Consent Screen
 
 1. Open [Google Cloud Console](https://console.cloud.google.com/).
-2. Select or create a Google Cloud project for Agent Ops.
+2. Select or create a Google Cloud project for Valet.
 3. Go to `APIs & Services` -> `OAuth consent screen`.
 4. Choose your user type:
    - `Internal` for Google Workspace org-only use.

@@ -1,6 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from './client';
-import type { DisabledAction } from '@agent-ops/shared';
+import type { DisabledAction } from '@valet/shared';
 
 export const disabledActionKeys = {
   all: ['disabled-actions'] as const,

@@ -1,5 +1,5 @@
 import type { D1Database } from '@cloudflare/workers-types';
-import type { MailboxMessage, UserNotificationPreference } from '@agent-ops/shared';
+import type { MailboxMessage, UserNotificationPreference } from '@valet/shared';
 import { eq, and, desc, sql, inArray } from 'drizzle-orm';
 import type { AppDb } from '../drizzle.js';
 import { mailboxMessages, userNotificationPreferences } from '../schema/index.js';

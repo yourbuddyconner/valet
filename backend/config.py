@@ -1,4 +1,4 @@
-"""Configuration and constants for the Agent-Ops backend."""
+"""Configuration and constants for the Valet backend."""
 
 import os
 

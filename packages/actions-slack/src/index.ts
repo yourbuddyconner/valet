@@ -1,4 +1,4 @@
-import type { IntegrationPackage } from '@agent-ops/sdk';
+import type { IntegrationPackage } from '@valet/sdk';
 import { slackProvider } from './provider.js';
 import { slackActions } from './actions.js';
 
@@ -7,7 +7,7 @@ export { slackActions } from './actions.js';
 export { slackFetch } from './api.js';
 
 const slackPackage: IntegrationPackage = {
-  name: '@agent-ops/actions-slack',
+  name: '@valet/actions-slack',
   version: '0.0.1',
   service: 'slack',
   provider: slackProvider,

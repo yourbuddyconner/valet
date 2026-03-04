@@ -1,6 +1,6 @@
 import { useRef, useEffect, useState, useCallback } from 'react';
 import type { Message } from '@/api/types';
-import type { MessagePart } from '@agent-ops/shared';
+import type { MessagePart } from '@valet/shared';
 import { MessageItem } from './message-item';
 import { ThinkingIndicator } from './thinking-indicator';
 import { MarkdownContent } from './markdown';
@@ -10,7 +10,7 @@ import { useDrawer } from '@/routes/sessions/$sessionId';
 import type { ChildSessionEvent, ConnectedUser } from '@/hooks/use-chat';
 import type { ChildSessionSummary } from '@/api/types';
 import { MessageCopyButton } from './message-copy-button';
-import { ChannelSentBadge } from '@agent-ops/sdk/ui';
+import { ChannelSentBadge } from '@valet/sdk/ui';
 
 type AgentStatus = 'idle' | 'thinking' | 'tool_calling' | 'streaming' | 'error' | 'queued';
 

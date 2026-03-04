@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { ActionDefinition, ActionSource, ActionContext, ActionResult } from '@agent-ops/sdk';
+import type { ActionDefinition, ActionSource, ActionContext, ActionResult } from '@valet/sdk';
 import { slackFetch } from './api.js';
 
 /** Build a descriptive error from a Slack API response. */

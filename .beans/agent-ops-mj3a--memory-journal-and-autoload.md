@@ -1,5 +1,5 @@
 ---
-# agent-ops-mj3a
+# valet-mj3a
 title: "Memory Journal and Auto-Load"
 status: todo
 type: epic
@@ -10,7 +10,7 @@ tags:
     - agent-tools
     - context
 depends_on:
-    - agent-ops-mf5v
+    - valet-mf5v
 created_at: 2026-02-28T00:00:00Z
 updated_at: 2026-02-28T00:00:00Z
 ---
@@ -68,7 +68,7 @@ One tool call, no read required. The `append` operation is the natural fit for j
 
 Journals older than 30 days are candidates for auto-pruning (they're not pinned). The existing cap-based pruning handles this naturally — old, low-relevance journals get evicted when the memory store fills up. No separate cleanup job needed.
 
-If the agent decides a journal entry contains durable knowledge (e.g., an architectural decision made that day), it should extract that into a persistent file (`projects/agent-ops/decisions.md`) and let the journal be pruned eventually.
+If the agent decides a journal entry contains durable knowledge (e.g., an architectural decision made that day), it should extract that into a persistent file (`projects/valet/decisions.md`) and let the journal be pruned eventually.
 
 ### 2. Auto-Load Memories at Session Start
 
@@ -107,8 +107,8 @@ Prefers TypeScript, pnpm, Hono for APIs. Uses kebab-case for files, camelCase fo
 ### preferences/communication.md
 Prefers concise responses. No emojis unless asked. Direct and technical.
 
-### projects/agent-ops/repo.md
-GitHub: https://github.com/connerswann/agent-ops.git
+### projects/valet/repo.md
+GitHub: https://github.com/connerswann/valet.git
 Stack: Cloudflare Workers + D1 + React + Modal
 Deploy: `make deploy` from project root
 
@@ -116,7 +116,7 @@ Deploy: `make deploy` from project root
 # 2026-02-28
 
 ## 10:00 — Fixed Slack mentions
-Deployed mention resolution using bots.info API. Bot mentions now show @Agent-Ops instead of raw user IDs.
+Deployed mention resolution using bots.info API. Bot mentions now show @Valet instead of raw user IDs.
 
 ### journal/2026-02-27.md
 # 2026-02-27
@@ -286,8 +286,8 @@ Update the Memory section in `orchestrator-persona.ts` to:
 
 ## Relationship to Other Beans
 
-- **agent-ops-mf5v (Memory File System Facade)** — Hard dependency. This bean builds on top of the path-based schema, `mem_read`/`mem_write` tools, and pinned column introduced by mf5v. Must be implemented after mf5v.
-- **agent-ops-cf0x (Decouple from CF)** — The FTS queries in `memory-files.ts` are raw SQL. The `SearchProvider` abstraction from cf0x Phase 1 will eventually wrap these. No conflict — this bean adds new raw SQL queries in the same pattern as the existing ones.
+- **valet-mf5v (Memory File System Facade)** — Hard dependency. This bean builds on top of the path-based schema, `mem_read`/`mem_write` tools, and pinned column introduced by mf5v. Must be implemented after mf5v.
+- **valet-cf0x (Decouple from CF)** — The FTS queries in `memory-files.ts` are raw SQL. The `SearchProvider` abstraction from cf0x Phase 1 will eventually wrap these. No conflict — this bean adds new raw SQL queries in the same pattern as the existing ones.
 
 ## Open Questions
 

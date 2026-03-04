@@ -9,7 +9,7 @@ import {
 } from '@/components/ui/dialog';
 import { cn } from '@/lib/cn';
 import { useActionCatalog } from '@/api/action-catalog';
-import type { ActionPolicy, ActionMode } from '@agent-ops/shared';
+import type { ActionPolicy, ActionMode } from '@valet/shared';
 
 interface ActionPolicyDialogProps {
   open: boolean;

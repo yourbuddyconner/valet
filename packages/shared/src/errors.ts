@@ -42,7 +42,7 @@ export const ErrorCodes = {
 
 export type ErrorCode = (typeof ErrorCodes)[keyof typeof ErrorCodes];
 
-export class AgentOpsError extends Error {
+export class ValetError extends Error {
   constructor(
     message: string,
     public readonly code: ErrorCode,
@@ -50,7 +50,7 @@ export class AgentOpsError extends Error {
     public readonly details?: unknown
   ) {
     super(message);
-    this.name = 'AgentOpsError';
+    this.name = 'ValetError';
   }
 
   toJSON() {
@@ -62,7 +62,7 @@ export class AgentOpsError extends Error {
   }
 }
 
-export class NotFoundError extends AgentOpsError {
+export class NotFoundError extends ValetError {
   constructor(resource: string, id?: string) {
     super(
       id ? `${resource} with id '${id}' not found` : `${resource} not found`,
@@ -72,31 +72,31 @@ export class NotFoundError extends AgentOpsError {
   }
 }
 
-export class UnauthorizedError extends AgentOpsError {
+export class UnauthorizedError extends ValetError {
   constructor(message = 'Unauthorized') {
     super(message, ErrorCodes.UNAUTHORIZED, 401);
   }
 }
 
-export class ForbiddenError extends AgentOpsError {
+export class ForbiddenError extends ValetError {
   constructor(message = 'Forbidden') {
     super(message, ErrorCodes.FORBIDDEN, 403);
   }
 }
 
-export class ValidationError extends AgentOpsError {
+export class ValidationError extends ValetError {
   constructor(message: string, details?: unknown) {
     super(message, ErrorCodes.VALIDATION_ERROR, 400, details);
   }
 }
 
-export class RateLimitError extends AgentOpsError {
+export class RateLimitError extends ValetError {
   constructor(retryAfter?: number) {
     super('Rate limit exceeded', ErrorCodes.RATE_LIMIT_EXCEEDED, 429, { retryAfter });
   }
 }
 
-export class IntegrationError extends AgentOpsError {
+export class IntegrationError extends ValetError {
   constructor(message: string, code: ErrorCode = ErrorCodes.INTEGRATION_AUTH_FAILED, details?: unknown) {
     super(message, code, 400, details);
   }

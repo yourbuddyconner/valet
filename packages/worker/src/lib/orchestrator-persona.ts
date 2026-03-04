@@ -1,4 +1,4 @@
-import type { OrchestratorIdentity } from '@agent-ops/shared';
+import type { OrchestratorIdentity } from '@valet/shared';
 
 /**
  * Build persona files for an orchestrator session.
@@ -110,7 +110,7 @@ You have access to external service integrations via \`list_tools\` and \`call_t
 When using \`spawn_session\`, ALWAYS include:
 - **\`repo_url\`** — the HTTPS clone URL (e.g. \`https://github.com/owner/repo.git\`). This is CRITICAL — without it, the child sandbox has no repo, no git credentials, and no GitHub token. The child WILL fail if it needs to push/pull without this.
 - **Tell the child the repo is already cloned** — the sandbox auto-clones into \`/workspace\` before the agent starts. Instruct the child to use the existing working directory and NOT to re-clone.
-- **\`workspace\`** — short name, typically the repo name (e.g. \`agent-ops\`)
+- **\`workspace\`** — short name, typically the repo name (e.g. \`valet\`)
 - **\`title\`** — human-readable description of the task (e.g. \`Fix login bug\`)
 - **\`source_repo_full_name\`** — \`owner/repo\` format for UI tracking
 
@@ -270,10 +270,10 @@ Journals are not pinned — old ones are pruned naturally by the cap system. Ext
 ### Tools
 
 - \`mem_read("preferences/")\` — list all preference files
-- \`mem_read("projects/agent-ops/architecture.md")\` — read a specific file
-- \`mem_write("projects/agent-ops/repo.md", "GitHub: https://github.com/...")\` — create or overwrite a file
+- \`mem_read("projects/valet/architecture.md")\` — read a specific file
+- \`mem_write("projects/valet/repo.md", "GitHub: https://github.com/...")\` — create or overwrite a file
 - \`mem_patch("journal/2026-02-28.md", [{ op: "append", content: "\\n\\n## 14:30 — Fix deployed" }])\` — append to a file without reading it first
-- \`mem_patch("projects/agent-ops/overview.md", [{ op: "replace", old: "old fact", new: "new fact" }])\` — surgical edit
+- \`mem_patch("projects/valet/overview.md", [{ op: "replace", old: "old fact", new: "new fact" }])\` — surgical edit
 - \`mem_rm("notes/outdated.md")\` — delete a file
 - \`mem_search("deployment")\` — search across all memory files
 
@@ -392,7 +392,7 @@ After completing a major task (child session finished, PR merged, significant de
 
 Good journal entries are short and factual:
 \`\`\`
-mem_patch("journal/2026-02-28.md", [{ op: "append", content: "\\n\\n## 14:30 — Deployed auth fix\\n\\n- Spawned child for agent-ops, branch fix/auth-bug\\n- PR #42 created and merged\\n- User confirmed it works" }])
+mem_patch("journal/2026-02-28.md", [{ op: "append", content: "\\n\\n## 14:30 — Deployed auth fix\\n\\n- Spawned child for valet, branch fix/auth-bug\\n- PR #42 created and merged\\n- User confirmed it works" }])
 \`\`\`
 
 Don't journal routine status checks or trivial interactions — just the outcomes worth remembering tomorrow.

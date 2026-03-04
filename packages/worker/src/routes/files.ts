@@ -1,5 +1,5 @@
 import { Hono } from 'hono';
-import { NotFoundError, ValidationError } from '@agent-ops/shared';
+import { NotFoundError, ValidationError } from '@valet/shared';
 import type { Env, Variables } from '../env.js';
 import * as db from '../lib/db.js';
 

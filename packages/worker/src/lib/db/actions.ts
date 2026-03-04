@@ -1,7 +1,7 @@
 import { eq, and, or, isNull, desc, sql } from 'drizzle-orm';
 import type { AppDb } from '../drizzle.js';
 import { actionPolicies, actionInvocations } from '../schema/index.js';
-import type { ActionMode } from '@agent-ops/shared';
+import type { ActionMode } from '@valet/shared';
 
 // ─── System Defaults ─────────────────────────────────────────────────────────
 

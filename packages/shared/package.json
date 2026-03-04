@@ -1,5 +1,5 @@
 {
-  "name": "@agent-ops/shared",
+  "name": "@valet/shared",
   "version": "0.0.1",
   "private": true,
   "type": "module",

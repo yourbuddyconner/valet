@@ -130,7 +130,7 @@ Sets display for VNC and establishes port constants.
 
 - Configures `user.name` and `user.email` from env vars.
 - Sets up HTTPS credential helper using `GITHUB_TOKEN`.
-- Creates global gitignore excluding `.agent-ops/` and `.opencode/`.
+- Creates global gitignore excluding `.valet/` and `.opencode/`.
 
 ### Step 4 — Repository Clone
 
@@ -142,7 +142,7 @@ If `REPO_URL` is set:
 
 ### Step 5 — Persona/Context Injection
 
-Creates `.agent-ops/persona/` inside the workspace:
+Creates `.valet/persona/` inside the workspace:
 - `00-repo-context.md` — auto-generated from `REPO_URL`, `REPO_BRANCH`, `REPO_REF`.
 - Persona files from `PERSONA_FILES_JSON` env var (JSON array parsed by `jq`), each with a sort-order prefix.
 
@@ -151,7 +151,7 @@ Creates `.agent-ops/persona/` inside the workspace:
 ```bash
 code-server --bind-addr "127.0.0.1:8765" --auth none \
   --disable-telemetry --disable-update-check \
-  --welcome-text "Agent-Ops Workspace" "${WORK_DIR}" &
+  --welcome-text "Valet Workspace" "${WORK_DIR}" &
 ```
 
 Binds only to localhost; external access through gateway.

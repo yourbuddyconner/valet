@@ -243,7 +243,7 @@ export interface ReviewResultData {
 }
 
 /** Model discovery types — re-exported from shared */
-export type { ProviderModelEntry, ProviderModels, AvailableModels } from '@agent-ops/shared';
+export type { ProviderModelEntry, ProviderModels, AvailableModels } from '@valet/shared';
 
 /** Diff file entry returned by OpenCode diff API */
 export interface DiffFile {

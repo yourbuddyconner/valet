@@ -172,7 +172,7 @@ export async function assembleGitHubEnv(
   if (opts.ref) {
     envVars.REPO_REF = opts.ref;
   }
-  envVars.GIT_USER_NAME = userRow?.git_name || userRow?.name || userRow?.github_username || 'Agent Ops User';
+  envVars.GIT_USER_NAME = userRow?.git_name || userRow?.name || userRow?.github_username || 'Valet User';
   envVars.GIT_USER_EMAIL = userRow?.git_email || userRow?.email || '';
 
   return { envVars };

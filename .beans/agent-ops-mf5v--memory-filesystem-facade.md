@@ -1,5 +1,5 @@
 ---
-# agent-ops-mf5v
+# valet-mf5v
 title: "Memory File System Facade"
 status: done
 type: epic
@@ -57,7 +57,7 @@ The agent already knows how `read`, `write`, `patch`, `rm`, and `search` work. T
 │   ├── communication.md
 │   └── tools.md
 ├── projects/
-│   ├── agent-ops/
+│   ├── valet/
 │   │   ├── architecture.md
 │   │   ├── repo.md
 │   │   └── decisions.md
@@ -109,7 +109,7 @@ CREATE TABLE orchestrator_memory_files (
   id TEXT PRIMARY KEY,
   user_id TEXT NOT NULL,
   org_id TEXT NOT NULL DEFAULT 'default',
-  path TEXT NOT NULL,               -- e.g. "projects/agent-ops/architecture.md"
+  path TEXT NOT NULL,               -- e.g. "projects/valet/architecture.md"
   content TEXT NOT NULL,
   relevance REAL NOT NULL DEFAULT 1.0,
   pinned INTEGER NOT NULL DEFAULT 0,  -- 1 = never auto-pruned
@@ -142,12 +142,12 @@ CREATE VIRTUAL TABLE orchestrator_memory_files_fts USING fts5(
 );
 ```
 
-FTS now indexes `path` as well as `content`. This means `mem_search("agent-ops")` matches both files with "agent-ops" in the content AND files under `projects/agent-ops/`.
+FTS now indexes `path` as well as `content`. This means `mem_search("valet")` matches both files with "valet" in the content AND files under `projects/valet/`.
 
 ### Path Rules
 
 1. **Paths are relative** — no leading `/`. Always like `preferences/coding-style.md`.
-2. **Lowercase, kebab-case** — normalized on write. `Projects/Agent Ops/Arch.md` → `projects/agent-ops/arch.md`.
+2. **Lowercase, kebab-case** — normalized on write. `Projects/Valet/Arch.md` → `projects/valet/arch.md`.
 3. **`.md` extension optional but conventional** — the system doesn't enforce it, but the prompt encourages it.
 4. **Max depth: 4 levels** — `a/b/c/d.md` is fine, `a/b/c/d/e/f.md` is rejected. Prevents pathological nesting.
 5. **Max path length: 256 chars** — reasonable limit.
@@ -160,7 +160,7 @@ FTS now indexes `path` as well as `content`. This means `mem_search("agent-ops")
 
 Two modes based on whether the path ends with `/` or refers to a file:
 
-**File read** (`mem_read("projects/agent-ops/architecture.md")`):
+**File read** (`mem_read("projects/valet/architecture.md")`):
 - Query: `SELECT * FROM orchestrator_memory_files WHERE user_id = ? AND path = ?`
 - Returns the file content as plain text
 - Boosts relevance (+0.1, capped at 2.0) and updates `last_accessed_at`
@@ -172,7 +172,7 @@ Two modes based on whether the path ends with `/` or refers to a file:
 
 ```
 projects/
-  agent-ops/
+  valet/
     architecture.md    (1.2 KB, updated 2h ago)
     repo.md            (0.3 KB, updated 3d ago)
     decisions.md       (0.8 KB, updated 1d ago)
@@ -188,7 +188,7 @@ Listing is computed by grouping paths by their next path component relative to t
 - Upsert: `INSERT INTO ... ON CONFLICT(user_id, path) DO UPDATE SET content = ?, version = version + 1, updated_at = datetime('now')`
 - Sync FTS index (delete old row if exists, insert new)
 - Run cap check (same logic as current — delete lowest-relevance, least-recently-accessed if over cap)
-- Return: `"Written: projects/agent-ops/architecture.md (v3, 1.2 KB)"`
+- Return: `"Written: projects/valet/architecture.md (v3, 1.2 KB)"`
 
 Writing to an existing path **replaces the content** — this is the "edit file" semantic. The agent doesn't need to delete-then-create to update a memory. The version counter increments so the agent can see it's been edited.
 
@@ -226,7 +226,7 @@ Operations are applied sequentially to the file content. If the file doesn't exi
 
 2. **Fact updates.** A project file says "Deploy: `make deploy-staging`" but the process changed. Without patch, the agent reads the whole file, finds the line, changes it, writes the whole file back. With patch:
    ```
-   mem_patch("projects/agent-ops/overview.md", [
+   mem_patch("projects/valet/overview.md", [
      { op: "replace", old: "Deploy: `make deploy-staging`", new: "Deploy: `make deploy`" }
    ])
    ```
@@ -302,7 +302,7 @@ Found 3 matches for "deployment":
 1. workflows/deploy.md (relevance: 1.8)
    ...run `make deploy` which handles worker + modal + client...
 
-2. projects/agent-ops/architecture.md (relevance: 1.5)
+2. projects/valet/architecture.md (relevance: 1.5)
    ...deployment uses Cloudflare Workers with D1...
 
 3. journal/2026-02-27.md (relevance: 1.0)
@@ -337,7 +337,7 @@ DROP TABLE IF EXISTS orchestrator_memories_fts;
 DROP TABLE IF EXISTS orchestrator_memories;
 ```
 
-The migration creates paths like `project/a1b2c3d4.md` — not beautiful, but functional. The agent will encounter these and naturally reorganize them into better paths (e.g., `mem_write("projects/agent-ops/overview.md", ...)` then `mem_rm("project/a1b2c3d4.md")`). The system prompt can include a one-time instruction to consolidate migrated memories.
+The migration creates paths like `project/a1b2c3d4.md` — not beautiful, but functional. The agent will encounter these and naturally reorganize them into better paths (e.g., `mem_write("projects/valet/overview.md", ...)` then `mem_rm("project/a1b2c3d4.md")`). The system prompt can include a one-time instruction to consolidate migrated memories.
 
 ### System Prompt Changes
 
@@ -352,10 +352,10 @@ organized by topic. Your memory persists across conversations and sandbox restar
 ### Tools
 
 - `mem_read("preferences/")` — list all preference files
-- `mem_read("projects/agent-ops/architecture.md")` — read a specific file
-- `mem_write("projects/agent-ops/repo.md", "GitHub: https://github.com/...")` — create or overwrite a file
+- `mem_read("projects/valet/architecture.md")` — read a specific file
+- `mem_write("projects/valet/repo.md", "GitHub: https://github.com/...")` — create or overwrite a file
 - `mem_patch("journal/2026-02-28.md", [{ op: "append", content: "\n\n## 14:30 — Fix deployed" }])` — append to a file without reading it first
-- `mem_patch("projects/agent-ops/overview.md", [{ op: "replace", old: "old fact", new: "new fact" }])` — surgical edit
+- `mem_patch("projects/valet/overview.md", [{ op: "replace", old: "old fact", new: "new fact" }])` — surgical edit
 - `mem_rm("notes/outdated.md")` — delete a file
 - `mem_search("deployment")` — search across all memory files
 
@@ -510,12 +510,12 @@ The current 200-memory cap and auto-prune logic carries over, with two changes:
 
 ## Relationship to Other Beans
 
-- **agent-ops-cf0x (Decouple from CF)** — The FTS5 queries in `memory-files.ts` are raw SQL, same as the current memory system. These are covered by the `SearchProvider` abstraction in cf0x Phase 1. The new schema is Drizzle-first for all non-FTS operations.
-- **agent-ops-mj3a (Memory Journal and Auto-Load)** — This bean creates the file system facade. The journal bean (below) adds daily auto-creation, pre-compaction flush, and auto-loading on top of this foundation.
+- **valet-cf0x (Decouple from CF)** — The FTS5 queries in `memory-files.ts` are raw SQL, same as the current memory system. These are covered by the `SearchProvider` abstraction in cf0x Phase 1. The new schema is Drizzle-first for all non-FTS operations.
+- **valet-mj3a (Memory Journal and Auto-Load)** — This bean creates the file system facade. The journal bean (below) adds daily auto-creation, pre-compaction flush, and auto-loading on top of this foundation.
 
 ## Open Questions
 
-1. **Path normalization strictness.** Should we enforce `.md` extension? Or allow any extension (`.json`, `.yaml`)? Recommendation: don't enforce — the convention is `.md` but the system shouldn't reject `projects/agent-ops/config.json`. Content is always plain text regardless of extension.
+1. **Path normalization strictness.** Should we enforce `.md` extension? Or allow any extension (`.json`, `.yaml`)? Recommendation: don't enforce — the convention is `.md` but the system shouldn't reject `projects/valet/config.json`. Content is always plain text regardless of extension.
 
 2. **Frontend memory panel.** The current frontend may have a memory viewer. It needs updating to show the file tree instead of a flat list. This is a separate frontend task, not part of this bean.
 

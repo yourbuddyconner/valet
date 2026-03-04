@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  AgentOpsError,
+  ValetError,
   NotFoundError,
   UnauthorizedError,
   ForbiddenError,
@@ -22,23 +22,23 @@ describe('ErrorCodes', () => {
   });
 });
 
-describe('AgentOpsError', () => {
+describe('ValetError', () => {
   it('constructs with message, code, statusCode, details', () => {
-    const err = new AgentOpsError('something broke', ErrorCodes.INTERNAL_ERROR, 500, { foo: 1 });
+    const err = new ValetError('something broke', ErrorCodes.INTERNAL_ERROR, 500, { foo: 1 });
     expect(err.message).toBe('something broke');
     expect(err.code).toBe('INTERNAL_ERROR');
     expect(err.statusCode).toBe(500);
     expect(err.details).toEqual({ foo: 1 });
-    expect(err.name).toBe('AgentOpsError');
+    expect(err.name).toBe('ValetError');
   });
 
   it('defaults statusCode to 500', () => {
-    const err = new AgentOpsError('err', ErrorCodes.INTERNAL_ERROR);
+    const err = new ValetError('err', ErrorCodes.INTERNAL_ERROR);
     expect(err.statusCode).toBe(500);
   });
 
   it('toJSON returns error, code, details', () => {
-    const err = new AgentOpsError('msg', ErrorCodes.INTERNAL_ERROR, 500, { x: 1 });
+    const err = new ValetError('msg', ErrorCodes.INTERNAL_ERROR, 500, { x: 1 });
     expect(err.toJSON()).toEqual({
       error: 'msg',
       code: 'INTERNAL_ERROR',
@@ -47,9 +47,9 @@ describe('AgentOpsError', () => {
   });
 
   it('is instanceof Error', () => {
-    const err = new AgentOpsError('msg', ErrorCodes.INTERNAL_ERROR);
+    const err = new ValetError('msg', ErrorCodes.INTERNAL_ERROR);
     expect(err).toBeInstanceOf(Error);
-    expect(err).toBeInstanceOf(AgentOpsError);
+    expect(err).toBeInstanceOf(ValetError);
   });
 });
 
@@ -66,10 +66,10 @@ describe('NotFoundError', () => {
     expect(err.message).toBe("Session with id 'abc-123' not found");
   });
 
-  it('instanceof chain: NotFoundError → AgentOpsError → Error', () => {
+  it('instanceof chain: NotFoundError → ValetError → Error', () => {
     const err = new NotFoundError('X');
     expect(err).toBeInstanceOf(NotFoundError);
-    expect(err).toBeInstanceOf(AgentOpsError);
+    expect(err).toBeInstanceOf(ValetError);
     expect(err).toBeInstanceOf(Error);
   });
 });
@@ -90,7 +90,7 @@ describe('UnauthorizedError', () => {
   it('instanceof chain', () => {
     const err = new UnauthorizedError();
     expect(err).toBeInstanceOf(UnauthorizedError);
-    expect(err).toBeInstanceOf(AgentOpsError);
+    expect(err).toBeInstanceOf(ValetError);
     expect(err).toBeInstanceOf(Error);
   });
 });

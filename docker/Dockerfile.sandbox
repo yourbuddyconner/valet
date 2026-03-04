@@ -1,4 +1,4 @@
-# Agent-Ops Sandbox Image
+# Valet Sandbox Image
 # Full dev environment: OpenCode + Runner + code-server + VNC + TTYD
 
 FROM debian:bookworm-slim AS base

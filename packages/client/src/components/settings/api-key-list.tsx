@@ -39,7 +39,7 @@ export function APIKeyList() {
       <div className="flex items-center justify-between">
         <p className="text-sm text-neutral-500">
           {keys.length === 0
-            ? 'Create an API key to authenticate with the Agent Ops API.'
+            ? 'Create an API key to authenticate with the Valet API.'
             : `${keys.length} API key${keys.length === 1 ? '' : 's'}`}
         </p>
         <Button size="sm" onClick={() => setCreateDialogOpen(true)}>

@@ -1,4 +1,4 @@
-import type { IntegrationProvider, IntegrationCredentials, OAuthConfig } from '@agent-ops/sdk';
+import type { IntegrationProvider, IntegrationCredentials, OAuthConfig } from '@valet/sdk';
 import { sheetsFetch } from './api.js';
 
 const GOOGLE_OAUTH = 'https://oauth2.googleapis.com';

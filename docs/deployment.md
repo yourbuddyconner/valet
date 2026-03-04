@@ -56,10 +56,10 @@ Log in to Wrangler and create the database and storage bucket:
 wrangler login
 
 # Create D1 database -- save the ID it prints
-wrangler d1 create agent-ops-db
+wrangler d1 create valet-db
 
 # Create R2 bucket
-wrangler r2 bucket create agent-ops-storage
+wrangler r2 bucket create valet-storage
 ```
 
 ## Step 3: Configure
@@ -69,15 +69,15 @@ wrangler r2 bucket create agent-ops-storage
 Copy `.env.deploy.example` to `.env.deploy` and fill in your values:
 
 ```bash
-WORKER_PROD_URL=https://agent-ops.your-subdomain.workers.dev
-PAGES_PROJECT_NAME=my-agent-ops                # Must be globally unique on Cloudflare Pages
+WORKER_PROD_URL=https://valet.your-subdomain.workers.dev
+PAGES_PROJECT_NAME=my-valet                # Must be globally unique on Cloudflare Pages
 MODAL_BACKEND_URL=https://your-modal-workspace--{label}.modal.run
 D1_DATABASE_ID=<id-from-step-2>
-R2_BUCKET_NAME=agent-ops-storage
+R2_BUCKET_NAME=valet-storage
 ALLOWED_EMAILS=you@example.com
 ```
 
-`PAGES_PROJECT_NAME` must be unique across all of Cloudflare Pages -- pick something like `agent-ops-yourname`. The project is created automatically on first deploy.
+`PAGES_PROJECT_NAME` must be unique across all of Cloudflare Pages -- pick something like `valet-yourname`. The project is created automatically on first deploy.
 
 `MODAL_BACKEND_URL` uses `{label}` as a placeholder -- the Makefile substitutes endpoint names at deploy time. Use the format `https://<workspace>--{label}.modal.run`.
 
@@ -92,7 +92,7 @@ cd packages/worker
 npx wrangler secret put ENCRYPTION_KEY        # Any string, 32+ characters
 npx wrangler secret put GITHUB_CLIENT_ID      # From your GitHub OAuth app
 npx wrangler secret put GITHUB_CLIENT_SECRET   # From your GitHub OAuth app
-npx wrangler secret put FRONTEND_URL           # Your Pages URL, e.g. https://my-agent-ops.pages.dev
+npx wrangler secret put FRONTEND_URL           # Your Pages URL, e.g. https://my-valet.pages.dev
 
 # Optional -- needed for Google OAuth sign-in and Google integrations
 npx wrangler secret put GOOGLE_CLIENT_ID
@@ -128,7 +128,7 @@ This deploys all three components:
 On first deploy, also run D1 migrations to create the database tables:
 
 ```bash
-make _wrangler-config && cd packages/worker && wrangler d1 migrations apply agent-ops-db --remote -c wrangler.deploy.toml
+make _wrangler-config && cd packages/worker && wrangler d1 migrations apply valet-db --remote -c wrangler.deploy.toml
 ```
 
 Visit your Pages URL and sign in with GitHub.
@@ -160,7 +160,7 @@ Sandbox images are built and cached by Modal (defined in `backend/images/base.py
 |------|-------|
 | Worker URL | `https://<name>.<subdomain>.workers.dev` |
 | Frontend URL | `https://<pages-project>.pages.dev` |
-| Modal dashboard | `https://modal.com/apps/<workspace>/main/deployed/agent-ops-backend` |
+| Modal dashboard | `https://modal.com/apps/<workspace>/main/deployed/valet-backend` |
 | D1 console | Cloudflare dashboard > Workers & Pages > D1 |
 | Worker logs | `wrangler tail` (from `packages/worker/`) |
 | Worker secrets | `wrangler secret list` (from `packages/worker/`) |

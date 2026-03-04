@@ -1,5 +1,5 @@
 {
-  "name": "@agent-ops/actions-slack",
+  "name": "@valet/actions-slack",
   "version": "0.0.1",
   "private": true,
   "type": "module",
@@ -17,8 +17,8 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@agent-ops/sdk": "workspace:*",
-    "@agent-ops/shared": "workspace:*",
+    "@valet/sdk": "workspace:*",
+    "@valet/shared": "workspace:*",
     "zod": "^3.22.4"
   },
   "devDependencies": {

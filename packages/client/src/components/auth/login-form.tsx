@@ -33,7 +33,7 @@ export function LoginForm() {
             />
           </svg>
         </div>
-        <CardTitle className="text-2xl">Agent Ops</CardTitle>
+        <CardTitle className="text-2xl">Valet</CardTitle>
         <CardDescription>Sign in to continue</CardDescription>
       </CardHeader>
       <CardContent className="space-y-3">

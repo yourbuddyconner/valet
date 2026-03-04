@@ -14,9 +14,9 @@ import { useIsMobile } from '@/hooks/use-is-mobile';
 
 type DrawerPanel = 'vscode' | 'desktop' | 'terminal' | 'files' | 'review' | 'logs' | null;
 
-const DRAWER_STORAGE_KEY = 'agent-ops:drawer-panel';
-const LAYOUT_STORAGE_KEY = 'agent-ops:editor-layout';
-const SIDEBAR_STORAGE_KEY = 'agent-ops:metadata-sidebar';
+const DRAWER_STORAGE_KEY = 'valet:drawer-panel';
+const LAYOUT_STORAGE_KEY = 'valet:editor-layout';
+const SIDEBAR_STORAGE_KEY = 'valet:metadata-sidebar';
 
 function loadDrawerState(): DrawerPanel {
   try {

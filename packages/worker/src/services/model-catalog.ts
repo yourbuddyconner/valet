@@ -5,7 +5,7 @@
  * immediately after provider keys are configured.
  */
 
-import type { AvailableModels, ProviderModels, CustomProviderModel } from '@agent-ops/shared';
+import type { AvailableModels, ProviderModels, CustomProviderModel } from '@valet/shared';
 import type { AppDb } from '../lib/drizzle.js';
 import type { Env } from '../env.js';
 import { listOrgApiKeys, getAllCustomProvidersWithKeys, getCatalogCache, setCatalogCache } from '../lib/db/org.js';

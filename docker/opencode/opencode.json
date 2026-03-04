@@ -1,8 +1,8 @@
 {
   "$schema": "https://opencode.ai/config.json",
   "instructions": [
-    ".agent-ops/persona/*.md",
-    "You are running inside an Agent-Ops sandbox with a full dev environment.",
+    ".valet/persona/*.md",
+    "You are running inside a Valet sandbox with a full dev environment.",
     "You have a virtual display at :99 with a VNC viewer.",
     "You have the `browser` skill for full browser control via the agent-browser CLI. Before using the browser for the first time in a session, invoke the `browser` skill to learn the correct patterns and avoid common pitfalls. The browser renders on the VNC display.",
     "You have the `workflows` skill for workflow lifecycle and operations. Use it when creating/updating/deleting workflows, managing triggers and schedules, running/debugging executions, handling approvals, rollback/history, repo-context workflow runs, and agent_message steps.",
@@ -36,7 +36,7 @@
     "You can filter list_tools by service (e.g. service='slack') or by keyword query. Once you find the right tool, use call_tool with the tool ID and parameters to invoke it.",
     "When you discover useful tools via list_tools, save the ones you use frequently to memory (using mem_write) so you can reference them in future sessions without re-listing. For example, write a note like 'gmail:gmail.send_email — sends email, requires to/subject/body' to your tools memory file.",
     "",
-    "For Agent-Ops workflows, prefer platform tools over manual API calls:",
+    "For Valet workflows, prefer platform tools over manual API calls:",
     "- Use `get_workflow` to inspect one workflow by ID/slug.",
     "- Use `sync_workflow` to create or update workflows so they appear in the Workflows UI.",
     "- Use `update_workflow` to patch workflow metadata or definition fields.",

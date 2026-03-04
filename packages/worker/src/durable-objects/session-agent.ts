@@ -16,7 +16,7 @@ import { resolveMode } from '../services/action-policy.js';
 import { invokeAction, markExecuted, markFailed, approveInvocation, denyInvocation } from '../services/actions.js';
 import { updateInvocationStatus } from '../lib/db/actions.js';
 import { getDisabledActionsIndex, isActionDisabled } from '../lib/db/disabled-actions.js';
-import type { ChannelTarget, ChannelContext } from '@agent-ops/sdk';
+import type { ChannelTarget, ChannelContext } from '@valet/sdk';
 import { validateWorkflowDefinition } from '../lib/workflow-definition.js';
 
 // ─── WebSocket Message Types ───────────────────────────────────────────────
@@ -985,7 +985,7 @@ export class SessionAgentDO {
     return new Response(null, {
       status: 101,
       webSocket: client,
-      headers: { 'Sec-WebSocket-Protocol': 'agent-ops' },
+      headers: { 'Sec-WebSocket-Protocol': 'valet' },
     });
   }
 
@@ -3141,7 +3141,7 @@ export class SessionAgentDO {
             const userRow = await getUserById(this.appDb, userId);
             if (userRow) {
               if (!childSpawnRequest.envVars.GIT_USER_NAME) {
-                childSpawnRequest.envVars.GIT_USER_NAME = userRow.gitName || userRow.name || userRow.githubUsername || 'Agent Ops User';
+                childSpawnRequest.envVars.GIT_USER_NAME = userRow.gitName || userRow.name || userRow.githubUsername || 'Valet User';
               }
               if (!childSpawnRequest.envVars.GIT_USER_EMAIL) {
                 childSpawnRequest.envVars.GIT_USER_EMAIL = userRow.gitEmail || userRow.email;
@@ -3488,7 +3488,7 @@ export class SessionAgentDO {
           headers: {
             'Authorization': `Bearer ${githubToken}`,
             'Accept': 'application/vnd.github+json',
-            'User-Agent': 'agent-ops',
+            'User-Agent': 'valet',
           },
         });
         if (!res.ok) {
@@ -4750,7 +4750,7 @@ export class SessionAgentDO {
           headers: {
             'Authorization': `Bearer ${githubToken}`,
             'Accept': 'application/vnd.github+json',
-            'User-Agent': 'agent-ops',
+            'User-Agent': 'valet',
           },
         },
       );
@@ -4821,7 +4821,7 @@ export class SessionAgentDO {
         headers: {
           'Authorization': `Bearer ${githubToken}`,
           'Accept': 'application/vnd.github+json',
-          'User-Agent': 'agent-ops',
+          'User-Agent': 'valet',
         },
       });
 
@@ -4870,7 +4870,7 @@ export class SessionAgentDO {
             headers: {
               'Authorization': `Bearer ${githubToken}`,
               'Accept': 'application/vnd.github+json',
-              'User-Agent': 'agent-ops',
+              'User-Agent': 'valet',
             },
           },
         );
@@ -4903,7 +4903,7 @@ export class SessionAgentDO {
           headers: {
             'Authorization': `Bearer ${githubToken}`,
             'Accept': 'application/vnd.github+json',
-            'User-Agent': 'agent-ops',
+            'User-Agent': 'valet',
           },
         },
       );
@@ -4937,7 +4937,7 @@ export class SessionAgentDO {
             headers: {
               'Authorization': `Bearer ${githubToken}`,
               'Accept': 'application/vnd.github+json',
-              'User-Agent': 'agent-ops',
+              'User-Agent': 'valet',
             },
           },
         );
@@ -4979,7 +4979,7 @@ export class SessionAgentDO {
           headers: {
             'Authorization': `Bearer ${githubToken}`,
             'Accept': 'application/vnd.github+json',
-            'User-Agent': 'agent-ops',
+            'User-Agent': 'valet',
           },
         },
       );
@@ -4994,7 +4994,7 @@ export class SessionAgentDO {
           headers: {
             'Authorization': `Bearer ${githubToken}`,
             'Accept': 'application/vnd.github+json',
-            'User-Agent': 'agent-ops',
+            'User-Agent': 'valet',
           },
         },
       );
@@ -5197,7 +5197,7 @@ export class SessionAgentDO {
         headers: {
           'Authorization': `Bearer ${githubToken}`,
           'Accept': 'application/vnd.github+json',
-          'User-Agent': 'agent-ops',
+          'User-Agent': 'valet',
         },
       });
 
@@ -6468,7 +6468,7 @@ export class SessionAgentDO {
           headers: {
             'Authorization': `Bearer ${githubToken}`,
             'Accept': 'application/vnd.github+json',
-            'User-Agent': 'agent-ops',
+            'User-Agent': 'valet',
           },
         });
         if (repoResp.ok) {
@@ -6485,7 +6485,7 @@ export class SessionAgentDO {
         headers: {
           'Authorization': `Bearer ${githubToken}`,
           'Accept': 'application/vnd.github+json',
-          'User-Agent': 'agent-ops',
+          'User-Agent': 'valet',
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
@@ -6598,7 +6598,7 @@ export class SessionAgentDO {
         headers: {
           'Authorization': `Bearer ${githubToken}`,
           'Accept': 'application/vnd.github+json',
-          'User-Agent': 'agent-ops',
+          'User-Agent': 'valet',
           'Content-Type': 'application/json',
         },
         body: JSON.stringify(updateBody),
@@ -6618,7 +6618,7 @@ export class SessionAgentDO {
           headers: {
             'Authorization': `Bearer ${githubToken}`,
             'Accept': 'application/vnd.github+json',
-            'User-Agent': 'agent-ops',
+            'User-Agent': 'valet',
             'Content-Type': 'application/json',
           },
           body: JSON.stringify({ labels: msg.labels }),
@@ -7641,7 +7641,7 @@ export class SessionAgentDO {
       const ctx: ChannelContext = { token, userId };
 
       // Build outbound message
-      const outbound: import('@agent-ops/sdk').OutboundMessage = imageBase64
+      const outbound: import('@valet/sdk').OutboundMessage = imageBase64
         ? {
             markdown: message || undefined,
             attachments: [{

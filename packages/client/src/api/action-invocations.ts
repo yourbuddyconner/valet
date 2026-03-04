@@ -1,6 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from './client';
-import type { ActionInvocation } from '@agent-ops/shared';
+import type { ActionInvocation } from '@valet/shared';
 
 export const actionInvocationKeys = {
   all: ['action-invocations'] as const,

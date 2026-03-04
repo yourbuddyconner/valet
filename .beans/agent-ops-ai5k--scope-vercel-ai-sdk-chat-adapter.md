@@ -1,5 +1,5 @@
 ---
-# agent-ops-ai5k
+# valet-ai5k
 title: Scope Vercel AI SDK Chat adapter
 status: todo
 type: task
@@ -15,7 +15,7 @@ updated_at: 2026-02-25T00:00:00Z
 closes: 18
 ---
 
-Produce a written implementation plan (RFC) for adding Vercel AI SDK Chat compatibility to Agent Ops via an adapter-first approach. No production code ships in this bean — the deliverable is a committed RFC document and follow-up tickets. The RFC must make a concrete recommendation (adapter vs full migration), map the existing V2 protocol to the AI SDK stream protocol, identify every file that Phase 1 implementation would touch, and define a test plan for stream/message parity.
+Produce a written implementation plan (RFC) for adding Vercel AI SDK Chat compatibility to Valet via an adapter-first approach. No production code ships in this bean — the deliverable is a committed RFC document and follow-up tickets. The RFC must make a concrete recommendation (adapter vs full migration), map the existing V2 protocol to the AI SDK stream protocol, identify every file that Phase 1 implementation would touch, and define a test plan for stream/message parity.
 
 ## Problem
 
@@ -25,7 +25,7 @@ The project uses a fully custom WebSocket chat stack: a bespoke `use-chat.ts` ho
 - Features that AI SDK gives for free (reconnection, stream recovery, optimistic UI, multi-step tool call rendering) must be reimplemented.
 - Future surfaces (mobile app, embeddable widget, third-party integrations) would each need to reimplement the custom protocol.
 
-The Vercel AI SDK (v5/v6) defines a well-documented SSE stream protocol and a `useChat` hook that handles message state, streaming status, tool calls, and error recovery out of the box. If Agent Ops can expose an AI SDK-compatible endpoint, any AI SDK client can connect with zero custom code.
+The Vercel AI SDK (v5/v6) defines a well-documented SSE stream protocol and a `useChat` hook that handles message state, streaming status, tool calls, and error recovery out of the box. If Valet can expose an AI SDK-compatible endpoint, any AI SDK client can connect with zero custom code.
 
 ## Current Architecture (what exists today)
 
@@ -175,7 +175,7 @@ With just the adapter endpoint, an AI SDK `useChat` client gets:
 
 ### What useChat does NOT get (domain events)
 
-These features are Agent Ops-specific and have no AI SDK equivalent:
+These features are Valet-specific and have no AI SDK equivalent:
 - Session status changes (initializing, hibernating, etc.)
 - Git state (branch, PR, commits)
 - Diff / code review results
@@ -321,7 +321,7 @@ function translateV2ToAISDK(v2Event: WSEvent): SSEFrame[] {
 
 2. **Message history.** AI SDK `useChat` sends the full message history on each POST. The SessionAgent DO already has its own message history. Should the adapter ignore the AI SDK history and just extract the latest user message? (Recommended: yes, treat the DO as the source of truth.)
 
-3. **Tool output flow.** AI SDK supports `addToolOutput()` for client-side tool execution. Agent Ops tools run server-side (in the sandbox). The adapter should NOT expose `addToolOutput` — tools are handled internally. But the AI SDK client needs to know tools are "server-executed" so it doesn't wait for client-side output.
+3. **Tool output flow.** AI SDK supports `addToolOutput()` for client-side tool execution. Valet tools run server-side (in the sandbox). The adapter should NOT expose `addToolOutput` — tools are handled internally. But the AI SDK client needs to know tools are "server-executed" so it doesn't wait for client-side output.
 
 4. **Multiple concurrent turns.** The existing protocol supports channel-scoped turns (channelType + channelId). The AI SDK adapter would only expose the default channel. Multi-channel support is out of scope for the adapter.
 

@@ -1,4 +1,4 @@
-import { McpActionSource } from '@agent-ops/sdk';
+import { McpActionSource } from '@valet/sdk';
 
 export const deepwikiActions = new McpActionSource({
   mcpUrl: 'https://mcp.deepwiki.com/mcp',

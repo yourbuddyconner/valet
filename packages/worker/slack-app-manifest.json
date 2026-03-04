@@ -1,6 +1,6 @@
 {
   "display_information": {
-    "name": "Agent-Ops",
+    "name": "Valet",
     "description": "AI coding agent — send prompts, get results",
     "background_color": "#1a1a2e"
   },
@@ -10,7 +10,7 @@
       "messages_tab_read_only_enabled": false
     },
     "bot_user": {
-      "display_name": "Agent-Ops",
+      "display_name": "Valet",
       "always_online": true
     }
   },

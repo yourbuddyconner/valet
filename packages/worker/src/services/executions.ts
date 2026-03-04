@@ -1,4 +1,4 @@
-import { NotFoundError, UnauthorizedError, ValidationError } from '@agent-ops/shared';
+import { NotFoundError, UnauthorizedError, ValidationError } from '@valet/shared';
 import type { Env } from '../env.js';
 import { countActiveExecutions, countActiveExecutionsGlobal } from '../lib/db/executions.js';
 import type { AppDb } from '../lib/drizzle.js';

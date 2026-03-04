@@ -21,7 +21,7 @@ function JoinSessionPage() {
 
     if (!isAuthenticated) {
       // Store the join URL so the user can return after login
-      sessionStorage.setItem('agent-ops:return-url', `/sessions/join/${token}`);
+      sessionStorage.setItem('valet:return-url', `/sessions/join/${token}`);
       navigate({ to: '/login' });
       return;
     }

@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { zValidator } from '@hono/zod-validator';
-import { ValidationError } from '@agent-ops/shared';
+import { ValidationError } from '@valet/shared';
 import type { Env, Variables } from '../env.js';
 import { getCredential } from '../services/credentials.js';
 
@@ -36,7 +36,7 @@ reposRouter.get('/', async (c) => {
       headers: {
         Authorization: `Bearer ${token}`,
         Accept: 'application/vnd.github+json',
-        'User-Agent': 'Agent-Ops',
+        'User-Agent': 'Valet',
       },
     },
   );
@@ -103,7 +103,7 @@ reposRouter.get('/validate', async (c) => {
     headers: {
       Authorization: `Bearer ${token}`,
       Accept: 'application/vnd.github+json',
-      'User-Agent': 'Agent-Ops',
+      'User-Agent': 'Valet',
     },
   });
 
@@ -151,7 +151,7 @@ reposRouter.get('/:owner/:repo/pulls', async (c) => {
       headers: {
         Authorization: `Bearer ${token}`,
         Accept: 'application/vnd.github+json',
-        'User-Agent': 'Agent-Ops',
+        'User-Agent': 'Valet',
       },
     },
   );
@@ -210,7 +210,7 @@ reposRouter.get('/:owner/:repo/issues', async (c) => {
       headers: {
         Authorization: `Bearer ${token}`,
         Accept: 'application/vnd.github+json',
-        'User-Agent': 'Agent-Ops',
+        'User-Agent': 'Valet',
       },
     },
   );
@@ -286,7 +286,7 @@ reposRouter.post('/pull-request', zValidator('json', createPRSchema), async (c) 
       headers: {
         Authorization: `Bearer ${token}`,
         Accept: 'application/vnd.github+json',
-        'User-Agent': 'Agent-Ops',
+        'User-Agent': 'Valet',
       },
     });
     if (repoRes.ok) {
@@ -302,7 +302,7 @@ reposRouter.post('/pull-request', zValidator('json', createPRSchema), async (c) 
     headers: {
       Authorization: `Bearer ${token}`,
       Accept: 'application/vnd.github+json',
-      'User-Agent': 'Agent-Ops',
+      'User-Agent': 'Valet',
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({

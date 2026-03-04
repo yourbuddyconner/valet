@@ -1,5 +1,5 @@
 ---
-# agent-ops-cp7w
+# valet-cp7w
 title: Control Plane / Execution Plane Split
 status: todo
 type: epic
@@ -14,7 +14,7 @@ updated_at: 2026-02-24T00:00:00Z
 
 Decompose the monolithic `BaseIntegration` class into three distinct concerns: a **control plane** (connection management + credential references), a **trigger plane** (inbound event processing), and an **action plane** (outbound operations packaged as standalone npm modules). Currently a single 800-line integration class (e.g., `gmail.ts`) handles all three. The target architecture separates "is this service connected?" from "something happened on that service" from "do something on that service" — each with its own interface, registration, and lifecycle.
 
-The action plane is the biggest shift: outbound operations move from methods on a god-class into **standalone npm packages** (`@agent-ops/actions-github`, `@agent-ops/actions-gmail`, etc.) that implement a shared `ActionSource` contract defined by `@agent-ops/action-sdk`. Core integrations ship as packages that are installed by default. Extended functionality (Jira, Linear, Salesforce) ships as additional packages. This means the same architecture that supports built-in integrations also supports third-party and community extensions.
+The action plane is the biggest shift: outbound operations move from methods on a god-class into **standalone npm packages** (`@valet/actions-github`, `@valet/actions-gmail`, etc.) that implement a shared `ActionSource` contract defined by `@valet/action-sdk`. Core integrations ship as packages that are installed by default. Extended functionality (Jira, Linear, Salesforce) ships as additional packages. This means the same architecture that supports built-in integrations also supports third-party and community extensions.
 
 ## Problem
 
@@ -55,7 +55,7 @@ abstract class BaseIntegration {
 
 6. **Cannot add capabilities independently.** Want to add "create GitHub issue from session"? Must go through `GitHubIntegration.pushEntity()`. Want to add "react to PR review comment"? Must add to `GitHubIntegration.handleWebhook()`. Both changes touch the same class even though they're unrelated.
 
-7. **No extensibility path.** An organization that uses an internal tool or a service we don't support (Jira, Linear, Salesforce) has no way to add it without forking agent-ops and modifying the core integration code. The class-based architecture is closed to extension.
+7. **No extensibility path.** An organization that uses an internal tool or a service we don't support (Jira, Linear, Salesforce) has no way to add it without forking valet and modifying the core integration code. The class-based architecture is closed to extension.
 
 ## Current Architecture
 
@@ -168,16 +168,16 @@ This is essentially what we already have in `services/webhooks.ts` and `services
 
 #### 3. Action Packages (standalone npm modules)
 
-This is the key architectural shift. Outbound operations are **not** defined as files inside the gateway. They are standalone npm packages that implement the `ActionSource` contract from `@agent-ops/action-sdk`.
+This is the key architectural shift. Outbound operations are **not** defined as files inside the gateway. They are standalone npm packages that implement the `ActionSource` contract from `@valet/action-sdk`.
 
 ```
 packages/
 ├── action-sdk/                    # NEW: contract package
-│   ├── package.json               # @agent-ops/action-sdk
+│   ├── package.json               # @valet/action-sdk
 │   └── src/
 │       └── index.ts               # ActionPackage, ActionSource, ActionDefinition, ActionContext, RiskLevel
 ├── actions-github/                # NEW: core action package
-│   ├── package.json               # @agent-ops/actions-github
+│   ├── package.json               # @valet/actions-github
 │   └── src/
 │       ├── index.ts               # exports ActionPackage
 │       ├── source.ts              # GithubActionSource implements ActionSource
@@ -186,7 +186,7 @@ packages/
 │           ├── pulls.ts           # create_pr, merge_pr, request_review
 │           └── repos.ts           # list_repos, get_repo
 ├── actions-gmail/                 # NEW: core action package
-│   ├── package.json               # @agent-ops/actions-gmail
+│   ├── package.json               # @valet/actions-gmail
 │   └── src/
 │       ├── index.ts
 │       ├── source.ts
@@ -195,7 +195,7 @@ packages/
 │           ├── drafts.ts          # create_draft, update_draft
 │           └── labels.ts          # add_label, remove_label
 ├── actions-google-calendar/       # NEW: core action package
-│   ├── package.json               # @agent-ops/actions-google-calendar
+│   ├── package.json               # @valet/actions-google-calendar
 │   └── src/
 │       ├── index.ts
 │       ├── source.ts
@@ -204,7 +204,7 @@ packages/
 │           └── calendars.ts       # list_calendars, free_busy
 ```
 
-**The SDK contract (`@agent-ops/action-sdk`):**
+**The SDK contract (`@valet/action-sdk`):**
 
 ```typescript
 // packages/action-sdk/src/index.ts
@@ -254,11 +254,11 @@ export interface ActionPackage {
 }
 ```
 
-**A core action package (`@agent-ops/actions-github`):**
+**A core action package (`@valet/actions-github`):**
 
 ```typescript
 // packages/actions-github/src/index.ts
-import type { ActionPackage } from '@agent-ops/action-sdk';
+import type { ActionPackage } from '@valet/action-sdk';
 import { GithubActionSource } from './source.js';
 
 export default {
@@ -270,7 +270,7 @@ export default {
 
 ```typescript
 // packages/actions-github/src/source.ts
-import type { ActionSource, ActionDefinition, ActionContext, ActionResult } from '@agent-ops/action-sdk';
+import type { ActionSource, ActionDefinition, ActionContext, ActionResult } from '@valet/action-sdk';
 import { issueActions } from './actions/issues.js';
 import { pullActions } from './actions/pulls.js';
 
@@ -296,7 +296,7 @@ export class GithubActionSource implements ActionSource {
 ```typescript
 // packages/actions-github/src/actions/issues.ts
 import { z } from 'zod';
-import type { ActionDefinition, ActionContext } from '@agent-ops/action-sdk';
+import type { ActionDefinition, ActionContext } from '@valet/action-sdk';
 
 export const issueActions = {
   createIssue: {
@@ -338,8 +338,8 @@ export const issueActions = {
 
 **Why packages instead of directories:**
 
-- Core integrations (GitHub, Gmail, GCal) are packages that ship with agent-ops — installed by default.
-- Extended integrations (Jira, Linear, Salesforce) are additional packages — `npm install @agent-ops/actions-jira`.
+- Core integrations (GitHub, Gmail, GCal) are packages that ship with valet — installed by default.
+- Extended integrations (Jira, Linear, Salesforce) are additional packages — `npm install @valet/actions-jira`.
 - Community/org-specific integrations follow the same pattern — `npm install @myorg/actions-internal-deploy`.
 - The gateway loads whatever's installed. No code changes needed to add a new integration.
 - Each package has its own `package.json`, dependencies, version, and tests. Gmail changes don't affect GitHub.
@@ -354,7 +354,7 @@ It gets deleted. Its responsibilities are absorbed:
 | `testConnection()` | `IntegrationProvider.testConnection()` in gateway |
 | `getOAuthUrl()`, `exchangeOAuthCode()`, `refreshOAuthTokens()` | `IntegrationProvider.oauth.*` in gateway |
 | `handleWebhook()` | `triggers/{provider}.ts` standalone functions in gateway |
-| `fetchEntity()`, `pushEntity()` | Typed actions in `@agent-ops/actions-{provider}` packages |
+| `fetchEntity()`, `pushEntity()` | Typed actions in `@valet/actions-{provider}` packages |
 | `sync()` | Standalone sync functions in `services/sync/{provider}.ts` (if sync is still needed) |
 | `successResult()`, `failedResult()`, `syncError()` | Utility functions in `services/sync/utils.ts` |
 
@@ -375,7 +375,7 @@ export const triggerHandlers = new Map<string, TriggerHandler>();
 
 ## Migration Plan
 
-### Phase 1: Create `@agent-ops/action-sdk`
+### Phase 1: Create `@valet/action-sdk`
 
 1. Create `packages/action-sdk/` with `ActionPackage`, `ActionSource`, `ActionDefinition`, `ActionContext`, `RiskLevel` types
 2. This is a pure types package — no runtime dependencies, ~50 lines
@@ -399,7 +399,7 @@ Extract outbound operations from the old integration classes into standalone pac
 2. `packages/actions-gmail/` — extract from `integrations/gmail.ts` email/draft/label operations
 3. `packages/actions-google-calendar/` — extract from `integrations/google-calendar.ts` event/calendar operations
 
-Each package depends on `@agent-ops/action-sdk` and exports an `ActionPackage`. Action definitions get Zod schemas and risk levels.
+Each package depends on `@valet/action-sdk` and exports an `ActionPackage`. Action definitions get Zod schemas and risk levels.
 
 ### Phase 5: Remove bridge code and delete `BaseIntegration`
 
@@ -421,13 +421,13 @@ Once all three planes are populated and all consumers are migrated:
 
 ```
 packages/
-├── action-sdk/                    # NEW: contract package (@agent-ops/action-sdk)
+├── action-sdk/                    # NEW: contract package (@valet/action-sdk)
 │   ├── package.json
 │   └── src/index.ts               # ActionPackage, ActionSource, ActionDefinition, etc.
-├── actions-github/                # NEW: core action package (@agent-ops/actions-github)
+├── actions-github/                # NEW: core action package (@valet/actions-github)
 │   ├── package.json
 │   └── src/
-├── actions-gmail/                 # NEW: core action package (@agent-ops/actions-gmail)
+├── actions-gmail/                 # NEW: core action package (@valet/actions-gmail)
 │   ├── package.json
 │   └── src/
 ├── actions-google-calendar/       # NEW: core action package
@@ -452,11 +452,11 @@ packages/
 
 ## Relationship to Other Beans
 
-- **agent-ops-tk3n (Unified Credential Boundary)** — Prerequisite. Providers call `testConnection(credentials)` with credentials passed in. Action execution calls `getCredential()` to resolve credentials into the `ActionContext`. The control plane never stores or manages credentials directly.
-- **agent-ops-wh8d (Durable Webhook Inbox)** — The inbox's `processInboxRow()` dispatches to trigger handlers defined in this bean's `triggers/` directory.
-- **agent-ops-pg9a (Policy-Gated Actions)** — The policy gate consumes action definitions from installed packages. The risk level declared in each action definition drives the policy cascade.
-- **agent-ops-pa5m (Polymorphic Action Sources)** — The `ActionSource` interface and `ActionPackage` contract defined here (via `action-sdk`) are the foundation for pa5m's `UnifiedActionRegistry`, which discovers installed packages and MCP connectors. pa5m owns the loading and registry; this bean owns the contract and the core packages.
-- **agent-ops-ch4t (Pluggable Channel Transports)** — Channel packages (Telegram, Slack, etc.) can bundle an `IntegrationProvider` for connection setup and an `ActionPackage` for platform-specific agent actions. Both use the contracts defined in this bean. Telegram's connection management moves from the gateway into `@agent-ops/channel-telegram`'s provider.
+- **valet-tk3n (Unified Credential Boundary)** — Prerequisite. Providers call `testConnection(credentials)` with credentials passed in. Action execution calls `getCredential()` to resolve credentials into the `ActionContext`. The control plane never stores or manages credentials directly.
+- **valet-wh8d (Durable Webhook Inbox)** — The inbox's `processInboxRow()` dispatches to trigger handlers defined in this bean's `triggers/` directory.
+- **valet-pg9a (Policy-Gated Actions)** — The policy gate consumes action definitions from installed packages. The risk level declared in each action definition drives the policy cascade.
+- **valet-pa5m (Polymorphic Action Sources)** — The `ActionSource` interface and `ActionPackage` contract defined here (via `action-sdk`) are the foundation for pa5m's `UnifiedActionRegistry`, which discovers installed packages and MCP connectors. pa5m owns the loading and registry; this bean owns the contract and the core packages.
+- **valet-ch4t (Pluggable Channel Transports)** — Channel packages (Telegram, Slack, etc.) can bundle an `IntegrationProvider` for connection setup and an `ActionPackage` for platform-specific agent actions. Both use the contracts defined in this bean. Telegram's connection management moves from the gateway into `@valet/channel-telegram`'s provider.
 
 ## Open Questions
 
@@ -464,7 +464,7 @@ packages/
 
 2. **Provider file size.** Each action package handles its own code organization. Large providers like Gmail can split across `actions/messages.ts`, `actions/drafts.ts`, `actions/labels.ts`. This is a per-package decision, not a gateway concern.
 
-3. **Telegram as an integration?** Resolved: Telegram is a **channel** (bidirectional messaging), not a standard integration. It lives in `@agent-ops/channel-telegram` (see bean ch4t). The channel package bundles an `IntegrationProvider` for bot token setup and an `ActionPackage` for explicit agent actions (pin message, create poll). The bidirectional messaging path goes through the `ChannelTransport` contract, not the action system.
+3. **Telegram as an integration?** Resolved: Telegram is a **channel** (bidirectional messaging), not a standard integration. It lives in `@valet/channel-telegram` (see bean ch4t). The channel package bundles an `IntegrationProvider` for bot token setup and an `ActionPackage` for explicit agent actions (pin message, create poll). The bidirectional messaging path goes through the `ChannelTransport` contract, not the action system.
 
 4. **Action package versioning.** When a core action package gets a breaking change, how does that interact with the gateway? Since they're in the same monorepo and installed via workspace dependencies, versioning is implicit. But for third-party packages, we need semver compatibility guarantees on the `action-sdk` contract.
 

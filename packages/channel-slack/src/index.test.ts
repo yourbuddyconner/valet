@@ -3,7 +3,7 @@ import slackChannelPackage, { SlackTransport, slackProvider, markdownToSlackMrkd
 
 describe('channel-slack package', () => {
   it('exports default ChannelPackage with correct metadata', () => {
-    expect(slackChannelPackage.name).toBe('@agent-ops/channel-slack');
+    expect(slackChannelPackage.name).toBe('@valet/channel-slack');
     expect(slackChannelPackage.version).toBe('0.0.1');
     expect(slackChannelPackage.channelType).toBe('slack');
   });

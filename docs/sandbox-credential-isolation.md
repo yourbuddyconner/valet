@@ -377,7 +377,7 @@ Model D (patch pipeline) is the most architecturally elegant but is over-enginee
 
 ## Open Questions
 
-1. **GitHub App vs. OAuth token:** If using a GitHub App, commits are attributed to the app bot (e.g., `agent-ops[bot]`). Is this acceptable for all orgs, or do some need commits attributed to the user? (Note: GitHub App commits *can* include a `Co-authored-by` trailer for the user.)
+1. **GitHub App vs. OAuth token:** If using a GitHub App, commits are attributed to the app bot (e.g., `valet[bot]`). Is this acceptable for all orgs, or do some need commits attributed to the user? (Note: GitHub App commits *can* include a `Co-authored-by` trailer for the user.)
 
 2. **Clone strategy without token in sandbox:** The cleanest path is the controller sandbox cloning into the shared volume at session start, before the agent sandbox begins work. This adds ~10-30s to session startup (depending on repo size). Is this acceptable? Alternatives: pre-populated volume cache per repo, or GitHub API tarball download.
 

@@ -1,5 +1,5 @@
 ---
-# agent-ops-ts7v
+# valet-ts7v
 title: Test infrastructure and initial test suites
 status: todo
 type: task
@@ -54,7 +54,7 @@ Prioritize by blast radius and testability. Start with pure service functions th
 ### Configuration
 
 ```
-agent-ops/
+valet/
 ├── vitest.workspace.ts          # Monorepo workspace config
 ├── packages/
 │   ├── shared/

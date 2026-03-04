@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import type { Env, Variables } from '../env.js';
-import type { DashboardStatsResponse } from '@agent-ops/shared';
+import type { DashboardStatsResponse } from '@valet/shared';
 import * as db from '../lib/db.js';
 import type { SessionAggregateRow } from '../lib/db/dashboard.js';
 

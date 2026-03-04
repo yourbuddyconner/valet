@@ -101,7 +101,7 @@ export function CreateAPIKeyDialog({ open, onOpenChange }: CreateAPIKeyDialogPro
             <DialogHeader>
               <DialogTitle>Create API Key</DialogTitle>
               <DialogDescription>
-                Create a new API key to authenticate with the Agent Ops API.
+                Create a new API key to authenticate with the Valet API.
               </DialogDescription>
             </DialogHeader>
 

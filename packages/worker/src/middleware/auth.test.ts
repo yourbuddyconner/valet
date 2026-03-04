@@ -11,7 +11,7 @@ describe('extractBearerToken', () => {
 
   it('reads websocket token from Sec-WebSocket-Protocol', () => {
     const req = new Request('https://example.com/api/sessions/1/ws?role=client', {
-      headers: { 'Sec-WebSocket-Protocol': 'agent-ops, bearer.ws-token-123' },
+      headers: { 'Sec-WebSocket-Protocol': 'valet, bearer.ws-token-123' },
     });
     expect(extractBearerToken(req)).toBe('ws-token-123');
   });

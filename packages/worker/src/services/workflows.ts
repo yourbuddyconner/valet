@@ -1,4 +1,4 @@
-import { NotFoundError, ValidationError } from '@agent-ops/shared';
+import { NotFoundError, ValidationError } from '@valet/shared';
 import type { Env } from '../env.js';
 import type { AppDb } from '../lib/drizzle.js';
 import { getDb } from '../lib/drizzle.js';

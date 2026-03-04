@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { zValidator } from '@hono/zod-validator';
-import { NotFoundError, ValidationError } from '@agent-ops/shared';
+import { NotFoundError, ValidationError } from '@valet/shared';
 import {
   type OAuthConfig,
   discoverAuthServer,
@@ -9,7 +9,7 @@ import {
   generatePkceChallenge,
   buildAuthorizationUrl,
   exchangeCodePkce,
-} from '@agent-ops/sdk';
+} from '@valet/sdk';
 import { type Env, type Variables, getEnvString } from '../env.js';
 import * as db from '../lib/db.js';
 import * as mcpOAuthDb from '../lib/db/mcp-oauth.js';
@@ -61,7 +61,7 @@ async function ensureMcpOAuthClient(
   let registered;
   try {
     registered = await registerClient(metadata.registration_endpoint, {
-      clientName: 'Agent Ops',
+      clientName: 'Valet',
       redirectUris: [redirectUri],
     });
   } catch (err) {

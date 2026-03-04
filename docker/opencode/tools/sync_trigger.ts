@@ -51,7 +51,7 @@ interface TriggerResponse {
 
 export default tool({
   description:
-    "Create or update a trigger in Agent-Ops. " +
+    "Create or update a trigger in Valet. " +
     "Supports manual, webhook, and schedule triggers (including schedule target=orchestrator with prompt).",
   args: {
     trigger_id: z.string().optional().describe("If provided, update this trigger ID instead of creating a new one"),

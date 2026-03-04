@@ -1,4 +1,4 @@
-import { IntegrationError, ValidationError, ErrorCodes } from '@agent-ops/shared';
+import { IntegrationError, ValidationError, ErrorCodes } from '@valet/shared';
 import type { Env } from '../env.js';
 import * as db from '../lib/db.js';
 import { getDb } from '../lib/drizzle.js';

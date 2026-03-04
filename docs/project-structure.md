@@ -1,7 +1,7 @@
 # Project Structure
 
 ```
-agent-ops/
+valet/
 ├── packages/
 │   ├── client/                # React SPA
 │   │   └── src/

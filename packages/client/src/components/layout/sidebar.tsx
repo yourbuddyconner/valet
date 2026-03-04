@@ -31,16 +31,16 @@ export function Sidebar() {
         {!sidebarCollapsed && (
           <div className="flex items-center gap-2.5">
             <div className="flex h-7 w-7 items-center justify-center rounded-md bg-accent font-mono text-xs font-semibold text-white">
-              A
+              V
             </div>
             <span className="font-mono text-sm font-semibold tracking-tight text-neutral-900 dark:text-neutral-100">
-              agent-ops
+              valet
             </span>
           </div>
         )}
         {sidebarCollapsed && (
           <div className="mx-auto flex h-7 w-7 items-center justify-center rounded-md bg-accent font-mono text-xs font-semibold text-white">
-            A
+            V
           </div>
         )}
       </div>

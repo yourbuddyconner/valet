@@ -17,10 +17,10 @@ importers:
 
   packages/actions-cloudflare:
     dependencies:
-      '@agent-ops/sdk':
+      '@valet/sdk':
         specifier: workspace:*
         version: link:../sdk
-      '@agent-ops/shared':
+      '@valet/shared':
         specifier: workspace:*
         version: link:../shared
       zod:
@@ -36,10 +36,10 @@ importers:
 
   packages/actions-deepwiki:
     dependencies:
-      '@agent-ops/sdk':
+      '@valet/sdk':
         specifier: workspace:*
         version: link:../sdk
-      '@agent-ops/shared':
+      '@valet/shared':
         specifier: workspace:*
         version: link:../shared
       zod:
@@ -55,10 +55,10 @@ importers:
 
   packages/actions-github:
     dependencies:
-      '@agent-ops/sdk':
+      '@valet/sdk':
         specifier: workspace:*
         version: link:../sdk
-      '@agent-ops/shared':
+      '@valet/shared':
         specifier: workspace:*
         version: link:../shared
       zod:
@@ -74,10 +74,10 @@ importers:
 
   packages/actions-gmail:
     dependencies:
-      '@agent-ops/sdk':
+      '@valet/sdk':
         specifier: workspace:*
         version: link:../sdk
-      '@agent-ops/shared':
+      '@valet/shared':
         specifier: workspace:*
         version: link:../shared
       zod:
@@ -93,10 +93,10 @@ importers:
 
   packages/actions-google-calendar:
     dependencies:
-      '@agent-ops/sdk':
+      '@valet/sdk':
         specifier: workspace:*
         version: link:../sdk
-      '@agent-ops/shared':
+      '@valet/shared':
         specifier: workspace:*
         version: link:../shared
       zod:
@@ -112,10 +112,10 @@ importers:
 
   packages/actions-google-drive:
     dependencies:
-      '@agent-ops/sdk':
+      '@valet/sdk':
         specifier: workspace:*
         version: link:../sdk
-      '@agent-ops/shared':
+      '@valet/shared':
         specifier: workspace:*
         version: link:../shared
       unpdf:
@@ -134,10 +134,10 @@ importers:
 
   packages/actions-google-sheets:
     dependencies:
-      '@agent-ops/sdk':
+      '@valet/sdk':
         specifier: workspace:*
         version: link:../sdk
-      '@agent-ops/shared':
+      '@valet/shared':
         specifier: workspace:*
         version: link:../shared
       zod:
@@ -153,10 +153,10 @@ importers:
 
   packages/actions-linear:
     dependencies:
-      '@agent-ops/sdk':
+      '@valet/sdk':
         specifier: workspace:*
         version: link:../sdk
-      '@agent-ops/shared':
+      '@valet/shared':
         specifier: workspace:*
         version: link:../shared
       zod:
@@ -172,10 +172,10 @@ importers:
 
   packages/actions-notion:
     dependencies:
-      '@agent-ops/sdk':
+      '@valet/sdk':
         specifier: workspace:*
         version: link:../sdk
-      '@agent-ops/shared':
+      '@valet/shared':
         specifier: workspace:*
         version: link:../shared
       zod:
@@ -191,10 +191,10 @@ importers:
 
   packages/actions-sentry:
     dependencies:
-      '@agent-ops/sdk':
+      '@valet/sdk':
         specifier: workspace:*
         version: link:../sdk
-      '@agent-ops/shared':
+      '@valet/shared':
         specifier: workspace:*
         version: link:../shared
       zod:
@@ -210,10 +210,10 @@ importers:
 
   packages/actions-slack:
     dependencies:
-      '@agent-ops/sdk':
+      '@valet/sdk':
         specifier: workspace:*
         version: link:../sdk
-      '@agent-ops/shared':
+      '@valet/shared':
         specifier: workspace:*
         version: link:../shared
       zod:
@@ -229,10 +229,10 @@ importers:
 
   packages/actions-stripe:
     dependencies:
-      '@agent-ops/sdk':
+      '@valet/sdk':
         specifier: workspace:*
         version: link:../sdk
-      '@agent-ops/shared':
+      '@valet/shared':
         specifier: workspace:*
         version: link:../shared
       zod:
@@ -248,7 +248,7 @@ importers:
 
   packages/channel-slack:
     dependencies:
-      '@agent-ops/sdk':
+      '@valet/sdk':
         specifier: workspace:*
         version: link:../sdk
     devDependencies:
@@ -261,7 +261,7 @@ importers:
 
   packages/channel-telegram:
     dependencies:
-      '@agent-ops/sdk':
+      '@valet/sdk':
         specifier: workspace:*
         version: link:../sdk
     devDependencies:
@@ -274,12 +274,6 @@ importers:
 
   packages/client:
     dependencies:
-      '@agent-ops/sdk':
-        specifier: workspace:*
-        version: link:../sdk
-      '@agent-ops/shared':
-        specifier: workspace:*
-        version: link:../shared
       '@pierre/diffs':
         specifier: ^1.0.11
         version: 1.0.11(react-dom@19.2.3(react@19.2.3))(react@19.2.3)
@@ -313,6 +307,12 @@ importers:
       '@toon-format/toon':
         specifier: ^2.1.0
         version: 2.1.0
+      '@valet/sdk':
+        specifier: workspace:*
+        version: link:../sdk
+      '@valet/shared':
+        specifier: workspace:*
+        version: link:../shared
       clsx:
         specifier: ^2.1.1
         version: 2.1.1
@@ -405,7 +405,7 @@ importers:
 
   packages/sdk:
     dependencies:
-      '@agent-ops/shared':
+      '@valet/shared':
         specifier: workspace:*
         version: link:../shared
       zod:
@@ -436,54 +436,6 @@ importers:
 
   packages/worker:
     dependencies:
-      '@agent-ops/actions-cloudflare':
-        specifier: workspace:*
-        version: link:../actions-cloudflare
-      '@agent-ops/actions-deepwiki':
-        specifier: workspace:*
-        version: link:../actions-deepwiki
-      '@agent-ops/actions-github':
-        specifier: workspace:*
-        version: link:../actions-github
-      '@agent-ops/actions-gmail':
-        specifier: workspace:*
-        version: link:../actions-gmail
-      '@agent-ops/actions-google-calendar':
-        specifier: workspace:*
-        version: link:../actions-google-calendar
-      '@agent-ops/actions-google-drive':
-        specifier: workspace:*
-        version: link:../actions-google-drive
-      '@agent-ops/actions-google-sheets':
-        specifier: workspace:*
-        version: link:../actions-google-sheets
-      '@agent-ops/actions-linear':
-        specifier: workspace:*
-        version: link:../actions-linear
-      '@agent-ops/actions-notion':
-        specifier: workspace:*
-        version: link:../actions-notion
-      '@agent-ops/actions-sentry':
-        specifier: workspace:*
-        version: link:../actions-sentry
-      '@agent-ops/actions-slack':
-        specifier: workspace:*
-        version: link:../actions-slack
-      '@agent-ops/actions-stripe':
-        specifier: workspace:*
-        version: link:../actions-stripe
-      '@agent-ops/channel-slack':
-        specifier: workspace:*
-        version: link:../channel-slack
-      '@agent-ops/channel-telegram':
-        specifier: workspace:*
-        version: link:../channel-telegram
-      '@agent-ops/sdk':
-        specifier: workspace:*
-        version: link:../sdk
-      '@agent-ops/shared':
-        specifier: workspace:*
-        version: link:../shared
       '@cf-wasm/resvg':
         specifier: ^0.3.3
         version: 0.3.3
@@ -493,6 +445,54 @@ importers:
       '@hono/zod-validator':
         specifier: ^0.2.1
         version: 0.2.2(hono@4.11.4)(zod@3.25.76)
+      '@valet/actions-cloudflare':
+        specifier: workspace:*
+        version: link:../actions-cloudflare
+      '@valet/actions-deepwiki':
+        specifier: workspace:*
+        version: link:../actions-deepwiki
+      '@valet/actions-github':
+        specifier: workspace:*
+        version: link:../actions-github
+      '@valet/actions-gmail':
+        specifier: workspace:*
+        version: link:../actions-gmail
+      '@valet/actions-google-calendar':
+        specifier: workspace:*
+        version: link:../actions-google-calendar
+      '@valet/actions-google-drive':
+        specifier: workspace:*
+        version: link:../actions-google-drive
+      '@valet/actions-google-sheets':
+        specifier: workspace:*
+        version: link:../actions-google-sheets
+      '@valet/actions-linear':
+        specifier: workspace:*
+        version: link:../actions-linear
+      '@valet/actions-notion':
+        specifier: workspace:*
+        version: link:../actions-notion
+      '@valet/actions-sentry':
+        specifier: workspace:*
+        version: link:../actions-sentry
+      '@valet/actions-slack':
+        specifier: workspace:*
+        version: link:../actions-slack
+      '@valet/actions-stripe':
+        specifier: workspace:*
+        version: link:../actions-stripe
+      '@valet/channel-slack':
+        specifier: workspace:*
+        version: link:../channel-slack
+      '@valet/channel-telegram':
+        specifier: workspace:*
+        version: link:../channel-telegram
+      '@valet/sdk':
+        specifier: workspace:*
+        version: link:../sdk
+      '@valet/shared':
+        specifier: workspace:*
+        version: link:../shared
       drizzle-orm:
         specifier: ^0.45.1
         version: 0.45.1(@cloudflare/workers-types@4.20260118.0)(@types/better-sqlite3@7.6.13)(better-sqlite3@11.10.0)(bun-types@1.3.10)

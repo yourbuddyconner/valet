@@ -1,5 +1,5 @@
 import type { D1Database } from '@cloudflare/workers-types';
-import type { OrchestratorIdentity, AgentSession } from '@agent-ops/shared';
+import type { OrchestratorIdentity, AgentSession } from '@valet/shared';
 import { eq, and, sql } from 'drizzle-orm';
 import type { AppDb } from '../drizzle.js';
 import { getDb } from '../drizzle.js';

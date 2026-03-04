@@ -153,7 +153,7 @@ export class McpClient {
         {
           protocolVersion: '2024-11-05',
           capabilities: {},
-          clientInfo: { name: 'agent-ops', version: '1.0.0' },
+          clientInfo: { name: 'valet', version: '1.0.0' },
         },
         token,
       );

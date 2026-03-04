@@ -66,7 +66,7 @@ function useSessionStatus(sessionId: string | null) {
     const wsUrl = new URL(wsUrlStr);
     wsUrl.searchParams.delete('userId');
     wsUrl.searchParams.delete('token');
-    const ws = new WebSocket(wsUrl.toString(), ['agent-ops', `bearer.${token}`]);
+    const ws = new WebSocket(wsUrl.toString(), ['valet', `bearer.${token}`]);
     wsRef.current = ws;
 
     const closeIfReady = () => {

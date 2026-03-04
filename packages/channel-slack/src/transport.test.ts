@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { SlackTransport } from './transport.js';
-import type { ChannelTarget, ChannelContext } from '@agent-ops/sdk';
+import type { ChannelTarget, ChannelContext } from '@valet/sdk';
 
 // Mock global fetch
 const mockFetch = vi.fn();

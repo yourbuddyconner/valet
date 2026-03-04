@@ -51,7 +51,7 @@ function OnboardingPage() {
       <div className="w-full max-w-md">
         <div className="mb-8 text-center">
           <h1 className="text-2xl font-semibold text-neutral-900 dark:text-neutral-100">
-            Welcome to Agent-Ops
+            Welcome to Valet
           </h1>
           <p className="mt-2 text-sm text-neutral-500 dark:text-neutral-400">
             Set up your profile to get started.

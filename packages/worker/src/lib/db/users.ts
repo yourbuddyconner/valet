@@ -1,5 +1,5 @@
 import type { AppDb } from '../drizzle.js';
-import type { User, UserRole, QueueMode } from '@agent-ops/shared';
+import type { User, UserRole, QueueMode } from '@valet/shared';
 import { eq, sql, asc, inArray } from 'drizzle-orm';
 import { toDate } from '../drizzle.js';
 import { users } from '../schema/index.js';

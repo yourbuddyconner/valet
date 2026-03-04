@@ -1,6 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from './client';
-import type { OrgSettings, OrgApiKey, Invite, User, CustomProvider } from '@agent-ops/shared';
+import type { OrgSettings, OrgApiKey, Invite, User, CustomProvider } from '@valet/shared';
 
 // Query key factory
 export const adminKeys = {

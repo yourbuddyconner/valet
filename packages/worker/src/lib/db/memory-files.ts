@@ -1,5 +1,5 @@
 import type { D1Database } from '@cloudflare/workers-types';
-import type { MemoryFile, MemoryFileListing, MemoryFileSearchResult, PatchOperation, PatchResult } from '@agent-ops/shared';
+import type { MemoryFile, MemoryFileListing, MemoryFileSearchResult, PatchOperation, PatchResult } from '@valet/shared';
 import { eq, and, sql } from 'drizzle-orm';
 import type { AppDb } from '../drizzle.js';
 import { orchestratorMemoryFiles } from '../schema/memory-files.js';

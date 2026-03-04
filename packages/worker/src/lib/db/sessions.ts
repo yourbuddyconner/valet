@@ -14,7 +14,7 @@ import type {
   SessionShareLink,
   AuditLogEntry,
   SessionPurpose,
-} from '@agent-ops/shared';
+} from '@valet/shared';
 import { eq, and, or, ne, lt, gt, desc, asc, sql, inArray, isNull, isNotNull, not } from 'drizzle-orm';
 import type { AppDb } from '../drizzle.js';
 import { getDb, toDate } from '../drizzle.js';
@@ -893,7 +893,7 @@ export async function assertSessionAccess(
 ): Promise<AgentSession> {
   const session = await getSession(database, sessionId);
   if (!session) {
-    const { NotFoundError } = await import('@agent-ops/shared');
+    const { NotFoundError } = await import('@valet/shared');
     throw new NotFoundError('Session', sessionId);
   }
 
@@ -902,7 +902,7 @@ export async function assertSessionAccess(
 
   // Orchestrator sessions are never accessible to non-owners.
   if (session.isOrchestrator || session.purpose === 'workflow') {
-    const { NotFoundError } = await import('@agent-ops/shared');
+    const { NotFoundError } = await import('@valet/shared');
     throw new NotFoundError('Session', sessionId);
   }
 
@@ -920,7 +920,7 @@ export async function assertSessionAccess(
     // org_settings column may not exist yet
   }
 
-  const { NotFoundError } = await import('@agent-ops/shared');
+  const { NotFoundError } = await import('@valet/shared');
   throw new NotFoundError('Session', sessionId);
 }
 

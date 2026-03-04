@@ -1,4 +1,4 @@
-# Agent-Ops Workflow Plugin - E2E Testing Makefile
+# Valet Workflow Plugin - E2E Testing Makefile
 # ================================================
 #
 # This Makefile provides commands for end-to-end testing of the
@@ -28,11 +28,11 @@
 
 WORKER_URL ?= http://localhost:8787
 WORKER_PROD_URL ?= https://your-worker.your-subdomain.workers.dev
-PAGES_PROJECT_NAME ?= agent-ops-client
+PAGES_PROJECT_NAME ?= valet-client
 MODAL_WORKSPACE ?= your-modal-workspace
 MODAL_DEPLOY_CMD ?= uv run --project backend modal deploy
 D1_DATABASE_ID ?= your-d1-database-id
-R2_BUCKET_NAME ?= agent-ops-storage
+R2_BUCKET_NAME ?= valet-storage
 ALLOWED_EMAILS ?=
 MODAL_BACKEND_URL ?=
 OPENCODE_URL ?= http://localhost:4096
@@ -44,7 +44,7 @@ API_TOKEN ?= test-api-token-12345
 DOCKER_COMPOSE = docker compose
 PNPM = pnpm
 CF_ENV ?=
-CF_WORKER_NAME ?= agent-ops
+CF_WORKER_NAME ?= valet
 TAIL_FORMAT ?= pretty
 TAIL_SEARCH ?=
 TAIL_SAMPLING_RATE ?=
@@ -57,7 +57,7 @@ NC = \033[0m # No Color
 
 # Default target
 help: ## Show this help message
-	@echo "Agent-Ops Workflow Plugin - E2E Testing"
+	@echo "Valet Workflow Plugin - E2E Testing"
 	@echo "========================================"
 	@echo ""
 	@echo "Usage: make [target]"
@@ -120,7 +120,7 @@ db-reset: ## Reset database (drop and recreate)
 	@echo "$(GREEN)Database reset complete!$(NC)"
 
 db-shell: ## Open D1 database shell
-	cd packages/worker && wrangler d1 execute agent-ops-db --local --command "SELECT 1"
+	cd packages/worker && wrangler d1 execute valet-db --local --command "SELECT 1"
 
 # ==========================================
 # Docker Operations
@@ -579,7 +579,7 @@ release: ## Full idempotent release: install, build, push image, deploy worker +
 	@echo ""
 	@echo "Step 6/7: Running database migrations and seeding..."
 	@make _wrangler-config
-	@cd packages/worker && wrangler d1 migrations apply agent-ops-db --remote -c wrangler.deploy.toml
+	@cd packages/worker && wrangler d1 migrations apply valet-db --remote -c wrangler.deploy.toml
 	@rm -f packages/worker/wrangler.deploy.toml
 	@echo "$(GREEN)✓ Database migrated and seeded$(NC)"
 	@echo ""
@@ -603,7 +603,7 @@ deploy: deploy-worker deploy-migrate deploy-modal deploy-client ## Deploy everyt
 	@echo "$(GREEN)========================================$(NC)"
 	@echo "Worker:  $(WORKER_PROD_URL)"
 	@echo "Client:  https://$(PAGES_PROJECT_NAME).pages.dev"
-	@echo "Modal:   https://modal.com/apps/$(MODAL_WORKSPACE)/main/deployed/agent-ops-backend"
+	@echo "Modal:   https://modal.com/apps/$(MODAL_WORKSPACE)/main/deployed/valet-backend"
 
 deploy-worker: generate-registries ## Deploy Cloudflare Worker
 	@make _wrangler-config
@@ -622,7 +622,7 @@ _wrangler-config: ## Generate wrangler.deploy.toml from .env.deploy values
 deploy-migrate: ## Apply D1 migrations to production
 	@make _wrangler-config
 	@echo "$(GREEN)Applying D1 migrations...$(NC)"
-	cd packages/worker && wrangler d1 migrations apply agent-ops-db --remote -c wrangler.deploy.toml
+	cd packages/worker && wrangler d1 migrations apply valet-db --remote -c wrangler.deploy.toml
 	@rm -f packages/worker/wrangler.deploy.toml
 	@echo "$(GREEN)✓ Migrations applied$(NC)"
 
@@ -683,12 +683,13 @@ image-push: image-build ## Build and push OpenCode image to GHCR
 # ==========================================
 # These targets destroy PRODUCTION resources. Use with care.
 # Resource names default to the current config (CF_WORKER_NAME, etc.)
-# but can be overridden to tear down old-named resources, e.g.:
-#   make destroy CF_WORKER_NAME=agent-ops PAGES_PROJECT_NAME=agent-ops-client \
-#     R2_BUCKET_NAME=agent-ops-storage D1_DATABASE_NAME=agent-ops-db
+# but can be overridden, e.g.:
+#   make destroy CF_WORKER_NAME=old-name PAGES_PROJECT_NAME=old-pages ...
 
 # D1 database name (not the UUID — wrangler d1 delete takes a name)
-D1_DATABASE_NAME ?= agent-ops-db
+D1_DATABASE_NAME ?= valet-db
+# Modal app name
+MODAL_APP_NAME ?= valet-backend
 
 destroy: ## Destroy all remote resources (Worker, D1, R2, Pages, Modal) — DESTRUCTIVE
 	@echo "$(RED)========================================$(NC)"
@@ -699,7 +700,7 @@ destroy: ## Destroy all remote resources (Worker, D1, R2, Pages, Modal) — DEST
 	@echo "  Pages:   $(PAGES_PROJECT_NAME)"
 	@echo "  D1:      $(D1_DATABASE_NAME)"
 	@echo "  R2:      $(R2_BUCKET_NAME)"
-	@echo "  Modal:   agent-ops-backend"
+	@echo "  Modal:   $(MODAL_APP_NAME)"
 	@echo ""
 	@echo "$(YELLOW)Press Ctrl+C within 5 seconds to abort...$(NC)"
 	@sleep 5
@@ -735,6 +736,6 @@ destroy-pages: ## Delete the Cloudflare Pages project
 	@echo "$(GREEN)✓ Pages project deleted$(NC)"
 
 destroy-modal: ## Stop the Modal backend app (no delete CLI — stopped apps are garbage collected; use dashboard for immediate removal)
-	@echo "$(YELLOW)Stopping Modal app 'agent-ops-backend' (will be garbage collected)...$(NC)"
-	uv run --project backend modal app stop agent-ops-backend || echo "$(YELLOW)Modal app not found or already stopped$(NC)"
+	@echo "$(YELLOW)Stopping Modal app '$(MODAL_APP_NAME)' (will be garbage collected)...$(NC)"
+	uv run --project backend modal app stop $(MODAL_APP_NAME) || echo "$(YELLOW)Modal app not found or already stopped$(NC)"
 	@echo "$(GREEN)✓ Modal app stopped$(NC)"

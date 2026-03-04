@@ -38,7 +38,7 @@ export function buildMultipartBody(
   content: string,
   contentType: string,
 ): { body: string; boundary: string } {
-  const boundary = '----AgentOpsDriveBoundary' + Date.now().toString(36) + Math.random().toString(36).slice(2);
+  const boundary = '----ValetDriveBoundary' + Date.now().toString(36) + Math.random().toString(36).slice(2);
   const parts = [
     `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(metadata)}`,
     `--${boundary}\r\nContent-Type: ${contentType}\r\n\r\n${content}`,

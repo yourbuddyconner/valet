@@ -7,7 +7,7 @@ import type {
   OutboundMessage,
   RoutingMetadata,
   SendResult,
-} from '@agent-ops/sdk';
+} from '@valet/sdk';
 import { markdownToTelegramHtml } from './format.js';
 
 // ─── Telegram API Helpers ────────────────────────────────────────────────────

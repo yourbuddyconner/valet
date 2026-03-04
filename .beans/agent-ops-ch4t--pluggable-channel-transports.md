@@ -1,5 +1,5 @@
 ---
-# agent-ops-ch4t
+# valet-ch4t
 title: Pluggable Channel Transports
 status: todo
 type: epic
@@ -14,7 +14,7 @@ created_at: 2026-02-24T00:00:00Z
 updated_at: 2026-02-24T00:00:00Z
 ---
 
-Define a `ChannelTransport` contract for bidirectional messaging platforms (Telegram, Slack, Discord, WhatsApp, etc.) and ship it as `@agent-ops/channel-sdk`. Each messaging platform is a standalone npm package (`@agent-ops/channel-telegram`, `@agent-ops/channel-slack`) that handles inbound webhook parsing, outbound message formatting/delivery, signature verification, and optionally connection setup and platform-specific agent actions. The gateway loads installed channel packages and routes through them without hardcoding any platform specifics.
+Define a `ChannelTransport` contract for bidirectional messaging platforms (Telegram, Slack, Discord, WhatsApp, etc.) and ship it as `@valet/channel-sdk`. Each messaging platform is a standalone npm package (`@valet/channel-telegram`, `@valet/channel-slack`) that handles inbound webhook parsing, outbound message formatting/delivery, signature verification, and optionally connection setup and platform-specific agent actions. The gateway loads installed channel packages and routes through them without hardcoding any platform specifics.
 
 ## Problem
 
@@ -73,7 +73,7 @@ The routing in `routes/channels.ts` (POST `/api/prompt`) already uses `channelTy
 
 ## Design
 
-### Channel SDK Contract (`@agent-ops/channel-sdk`)
+### Channel SDK Contract (`@valet/channel-sdk`)
 
 ```typescript
 // packages/channel-sdk/src/index.ts
@@ -216,13 +216,13 @@ export interface ChannelPackage {
 
 ### Core Channel Packages
 
-#### `@agent-ops/channel-telegram`
+#### `@valet/channel-telegram`
 
 Extracts the current `routes/telegram.ts` + `services/telegram.ts` code into a package:
 
 ```typescript
 // packages/channel-telegram/src/index.ts
-import type { ChannelPackage } from '@agent-ops/channel-sdk';
+import type { ChannelPackage } from '@valet/channel-sdk';
 import { TelegramTransport } from './transport.js';
 import { telegramProvider } from './provider.js';
 import { telegramActions } from './actions.js';
@@ -239,7 +239,7 @@ export default {
 
 ```typescript
 // packages/channel-telegram/src/transport.ts
-import type { ChannelTransport, InboundMessage, OutboundMessage, ... } from '@agent-ops/channel-sdk';
+import type { ChannelTransport, InboundMessage, OutboundMessage, ... } from '@valet/channel-sdk';
 
 export class TelegramTransport implements ChannelTransport {
   readonly channelType = 'telegram';
@@ -368,7 +368,7 @@ export class TelegramTransport implements ChannelTransport {
 
 ```typescript
 // packages/channel-telegram/src/provider.ts — connection setup
-import type { IntegrationProvider } from '@agent-ops/action-sdk';
+import type { IntegrationProvider } from '@valet/action-sdk';
 
 export const telegramProvider: IntegrationProvider = {
   service: 'telegram',
@@ -384,7 +384,7 @@ export const telegramProvider: IntegrationProvider = {
 
 ```typescript
 // packages/channel-telegram/src/actions.ts — explicit agent actions
-import type { ActionPackage } from '@agent-ops/action-sdk';
+import type { ActionPackage } from '@valet/action-sdk';
 import { z } from 'zod';
 
 export const telegramActions: ActionPackage = {
@@ -423,7 +423,7 @@ export const telegramActions: ActionPackage = {
 };
 ```
 
-#### `@agent-ops/channel-slack` (future)
+#### `@valet/channel-slack` (future)
 
 Same pattern but with Slack-specific transport:
 
@@ -485,9 +485,9 @@ Parallel to the action package manifest:
 
 ```typescript
 // packages/worker/src/channels/packages.ts
-import telegram from '@agent-ops/channel-telegram';
-// import slack from '@agent-ops/channel-slack';  // when ready
-import type { ChannelPackage } from '@agent-ops/channel-sdk';
+import telegram from '@valet/channel-telegram';
+// import slack from '@valet/channel-slack';  // when ready
+import type { ChannelPackage } from '@valet/channel-sdk';
 
 export const installedChannels: ChannelPackage[] = [
   telegram,
@@ -499,7 +499,7 @@ export const installedChannels: ChannelPackage[] = [
 
 ```typescript
 // packages/worker/src/channels/registry.ts
-import type { ChannelTransport, ChannelPackage } from '@agent-ops/channel-sdk';
+import type { ChannelTransport, ChannelPackage } from '@valet/channel-sdk';
 import { installedChannels } from './packages.js';
 
 export class ChannelRegistry {
@@ -701,10 +701,10 @@ This replaces the current `POST /telegram/webhook/:userId` route. Adding Slack m
 
 | File/Code | Lines | Moves To |
 |---|---|---|
-| `routes/telegram.ts` webhook handler | ~200 | `@agent-ops/channel-telegram` transport |
-| `services/telegram.ts` send functions | ~80 | `@agent-ops/channel-telegram` transport |
-| `services/telegram.ts` `markdownToTelegramHtml()` | ~30 | `@agent-ops/channel-telegram` transport |
-| Grammy dependency in worker `package.json` | — | `@agent-ops/channel-telegram` package.json |
+| `routes/telegram.ts` webhook handler | ~200 | `@valet/channel-telegram` transport |
+| `services/telegram.ts` send functions | ~80 | `@valet/channel-telegram` transport |
+| `services/telegram.ts` `markdownToTelegramHtml()` | ~30 | `@valet/channel-telegram` transport |
+| Grammy dependency in worker `package.json` | — | `@valet/channel-telegram` package.json |
 | Telegram-specific slash command handling | ~100 | Universal command handler + transport |
 
 The gateway retains:
@@ -716,12 +716,12 @@ The gateway retains:
 
 ## Migration Plan
 
-### Phase 1: Create `@agent-ops/channel-sdk`
+### Phase 1: Create `@valet/channel-sdk`
 
 1. Create `packages/channel-sdk/` with all interfaces: `ChannelTransport`, `ChannelPackage`, `InboundMessage`, `OutboundMessage`, `ChannelTarget`, `ChannelContext`, `SendResult`
 2. Pure types package, no runtime dependencies
 
-### Phase 2: Create `@agent-ops/channel-telegram`
+### Phase 2: Create `@valet/channel-telegram`
 
 1. Extract `TelegramTransport` from `routes/telegram.ts` and `services/telegram.ts`
 2. Extract `telegramProvider` from `services/telegram.ts` setup flow
@@ -769,7 +769,7 @@ const universalCommands: ChannelCommand[] = [
 
 Commands are channel-agnostic. The reply function uses the transport.
 
-### Phase 6: Build `@agent-ops/channel-slack` (separate bean)
+### Phase 6: Build `@valet/channel-slack` (separate bean)
 
 Follow the same pattern. This would be its own bean since Slack has significant scope (OAuth, Events API, slash commands, interactive components, Block Kit, app home).
 
@@ -777,9 +777,9 @@ Follow the same pattern. This would be its own bean since Slack has significant 
 
 | File | Purpose |
 |---|---|
-| `packages/channel-sdk/package.json` | `@agent-ops/channel-sdk` package |
+| `packages/channel-sdk/package.json` | `@valet/channel-sdk` package |
 | `packages/channel-sdk/src/index.ts` | All channel interfaces |
-| `packages/channel-telegram/package.json` | `@agent-ops/channel-telegram` package |
+| `packages/channel-telegram/package.json` | `@valet/channel-telegram` package |
 | `packages/channel-telegram/src/index.ts` | ChannelPackage export |
 | `packages/channel-telegram/src/transport.ts` | TelegramTransport |
 | `packages/channel-telegram/src/provider.ts` | IntegrationProvider for bot setup |
@@ -807,11 +807,11 @@ Follow the same pattern. This would be its own bean since Slack has significant 
 
 ## Relationship to Other Beans
 
-- **agent-ops-cp7w (Control Plane / Execution Plane Split)** — Channel packages can include an `IntegrationProvider` for connection setup (bot token, OAuth) and an `ActionPackage` for explicit agent actions. Both use the contracts defined in cp7w.
-- **agent-ops-pa5m (Polymorphic Action Sources)** — Channel packages that include an `actionPackage` property get their actions registered in the `UnifiedActionRegistry` alongside regular action packages and MCP connectors.
-- **agent-ops-tk3n (Unified Credential Boundary)** — The outbound reply path calls `getCredential(env, userId, channelType)` to resolve the bot credential or OAuth credential for sending messages.
-- **agent-ops-wh8d (Durable Webhook Inbox)** — Inbound channel webhooks flow through the inbox. The inbox processor uses the channel transport to parse and route messages.
-- **agent-ops-pg9a (Policy-Gated Actions)** — Explicit agent actions from channel packages (e.g., `telegram.pin_message`) go through the policy gate like any other action. The bidirectional messaging path (system-routed replies) does NOT go through the policy gate — it's a system operation, not an agent-initiated action.
+- **valet-cp7w (Control Plane / Execution Plane Split)** — Channel packages can include an `IntegrationProvider` for connection setup (bot token, OAuth) and an `ActionPackage` for explicit agent actions. Both use the contracts defined in cp7w.
+- **valet-pa5m (Polymorphic Action Sources)** — Channel packages that include an `actionPackage` property get their actions registered in the `UnifiedActionRegistry` alongside regular action packages and MCP connectors.
+- **valet-tk3n (Unified Credential Boundary)** — The outbound reply path calls `getCredential(env, userId, channelType)` to resolve the bot credential or OAuth credential for sending messages.
+- **valet-wh8d (Durable Webhook Inbox)** — Inbound channel webhooks flow through the inbox. The inbox processor uses the channel transport to parse and route messages.
+- **valet-pg9a (Policy-Gated Actions)** — Explicit agent actions from channel packages (e.g., `telegram.pin_message`) go through the policy gate like any other action. The bidirectional messaging path (system-routed replies) does NOT go through the policy gate — it's a system operation, not an agent-initiated action.
 
 ## Open Questions
 

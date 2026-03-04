@@ -1,6 +1,6 @@
 import type { D1Database } from '@cloudflare/workers-types';
 import type { AppDb } from '../drizzle.js';
-import type { OrgSettings, OrgApiKey, Invite, UserRole, OrgRepository, OrchestratorIdentity, CustomProvider, CustomProviderModel } from '@agent-ops/shared';
+import type { OrgSettings, OrgApiKey, Invite, UserRole, OrgRepository, OrchestratorIdentity, CustomProvider, CustomProviderModel } from '@valet/shared';
 import { eq, and, isNull, gt, sql, desc, asc } from 'drizzle-orm';
 import { toDate } from '../drizzle.js';
 import { orgSettings, orgApiKeys, invites, orgRepositories, customProviders, modelCatalogCache } from '../schema/index.js';

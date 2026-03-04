@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import type { User } from '@agent-ops/shared';
+import type { User } from '@valet/shared';
 
 interface AuthState {
   token: string | null;
@@ -46,7 +46,7 @@ export const useAuthStore = create<AuthState>()(
         set({ isHydrated: hydrated }),
     }),
     {
-      name: 'agent-ops-auth',
+      name: 'valet-auth',
       partialize: (state) => ({
         token: state.token,
         user: state.user,

@@ -13,7 +13,7 @@ export default tool({
       .min(1)
       .describe(
         "File path (no leading slash). Examples: 'preferences/coding-style.md', " +
-        "'projects/agent-ops/repo.md', 'notes/team.md'",
+        "'projects/valet/repo.md', 'notes/team.md'",
       ),
     content: tool.schema
       .string()

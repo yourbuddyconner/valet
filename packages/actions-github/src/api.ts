@@ -11,7 +11,7 @@ export async function githubFetch(
     headers: {
       Authorization: `Bearer ${token}`,
       Accept: 'application/vnd.github.v3+json',
-      'User-Agent': 'AgentOps/1.0',
+      'User-Agent': 'Valet/1.0',
       ...options?.headers,
     },
   });

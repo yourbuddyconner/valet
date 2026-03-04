@@ -1,5 +1,5 @@
 {
-  "name": "@agent-ops/sdk",
+  "name": "@valet/sdk",
   "version": "0.0.1",
   "private": true,
   "type": "module",
@@ -33,7 +33,7 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@agent-ops/shared": "workspace:*",
+    "@valet/shared": "workspace:*",
     "zod": "^3.22.4"
   },
   "peerDependencies": {

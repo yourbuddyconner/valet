@@ -16,7 +16,7 @@ describe('ChannelRegistry', () => {
   it('getPackage returns the telegram package', () => {
     const pkg = channelRegistry.getPackage('telegram');
     expect(pkg).toBeDefined();
-    expect(pkg!.name).toBe('@agent-ops/channel-telegram');
+    expect(pkg!.name).toBe('@valet/channel-telegram');
     expect(pkg!.channelType).toBe('telegram');
   });
 

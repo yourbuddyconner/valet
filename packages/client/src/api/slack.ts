@@ -1,6 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from './client';
-import type { UserIdentityLink } from '@agent-ops/shared';
+import type { UserIdentityLink } from '@valet/shared';
 
 // ─── Query Keys ─────────────────────────────────────────────────────────
 

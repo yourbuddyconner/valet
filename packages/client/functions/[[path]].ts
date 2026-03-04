@@ -77,7 +77,7 @@ export const onRequest: PagesFunction<PagesEnv> = async (context) => {
     }
 
     const metaResponse = await fetch(metaUrl, {
-      headers: { 'User-Agent': 'AgentOps-Pages-Function' },
+      headers: { 'User-Agent': 'Valet-Pages-Function' },
       redirect: 'follow',
     });
 
@@ -117,7 +117,7 @@ export const onRequest: PagesFunction<PagesEnv> = async (context) => {
         /<meta name="twitter:image" content="[^"]*" \/>/,
         `<meta name="twitter:image" content="${escapeAttr(meta.imageUrl)}" />`
       )
-      .replace(/<title>[^<]*<\/title>/, `<title>${escapeHtml(meta.title)} — Agent Ops</title>`);
+      .replace(/<title>[^<]*<\/title>/, `<title>${escapeHtml(meta.title)} — Valet</title>`);
 
     return new Response(modifiedHtml, {
       status: response.status,

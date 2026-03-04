@@ -1,5 +1,5 @@
 import type { AppDb } from '../drizzle.js';
-import type { UserTelegramConfig } from '@agent-ops/shared';
+import type { UserTelegramConfig } from '@valet/shared';
 import { eq, sql } from 'drizzle-orm';
 import { userTelegramConfig } from '../schema/index.js';
 

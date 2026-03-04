@@ -1,4 +1,4 @@
-import type { IntegrationProvider, IntegrationCredentials, OAuthConfig } from '@agent-ops/sdk';
+import type { IntegrationProvider, IntegrationCredentials, OAuthConfig } from '@valet/sdk';
 import { githubFetch } from './api.js';
 
 export const githubProvider: IntegrationProvider = {

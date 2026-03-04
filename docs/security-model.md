@@ -1,6 +1,6 @@
 # Security Model
 
-This document defines the security model for Agent-Ops: the trust boundaries, authentication and authorization mechanisms, data protection guarantees, and how each architectural decision serves security goals.
+This document defines the security model for Valet: the trust boundaries, authentication and authorization mechanisms, data protection guarantees, and how each architectural decision serves security goals.
 
 ## Trust Boundaries
 
@@ -54,7 +54,7 @@ graph LR
 
 **Zone 1 (Cloudflare Edge)** is the root of trust. It holds `ENCRYPTION_KEY`, issues all tokens, and makes all authorization decisions. No other zone can escalate privileges without going through Zone 1.
 
-**Zone 2 (Modal Infrastructure)** is trusted to provide container-level isolation between sandboxes. Agent-Ops does not attempt to re-implement container isolation — it delegates to Modal's infrastructure and treats it as a platform guarantee.
+**Zone 2 (Modal Infrastructure)** is trusted to provide container-level isolation between sandboxes. Valet does not attempt to re-implement container isolation — it delegates to Modal's infrastructure and treats it as a platform guarantee.
 
 **Zone 3 (Sandbox Container)** runs arbitrary user code. It is given the minimum credentials needed for its task (the user's GitHub token, LLM API keys, a per-session runner token). The gateway on port 9000 is the only externally-reachable entry point, and it validates JWTs before proxying to internal services.
 
@@ -73,7 +73,7 @@ Users authenticate via GitHub or Google OAuth. The flow:
 5. Worker generates a 256-bit random session token, SHA-256 hashes it, and stores the hash in `auth_sessions` (7-day expiry)
 6. The plaintext token is returned to the browser, which stores it in a Zustand store backed by localStorage
 
-All subsequent API requests include `Authorization: Bearer <token>`. For browser WebSocket upgrades, the client sends `Sec-WebSocket-Protocol: agent-ops, bearer.<token>` (instead of putting tokens in URL query params). The auth middleware hashes the token, looks up the hash in `auth_sessions`, verifies expiry, and sets `c.set('user', { id, email, role })` for downstream route handlers.
+All subsequent API requests include `Authorization: Bearer <token>`. For browser WebSocket upgrades, the client sends `Sec-WebSocket-Protocol: valet, bearer.<token>` (instead of putting tokens in URL query params). The auth middleware hashes the token, looks up the hash in `auth_sessions`, verifies expiry, and sets `c.set('user', { id, email, role })` for downstream route handlers.
 
 **Key files:** `packages/worker/src/routes/oauth.ts`, `packages/worker/src/middleware/auth.ts`
 
@@ -301,9 +301,9 @@ If multi-tenancy is ever needed, it requires adding `org_id` foreign keys across
 
 ## Comparison: Hosted Sandbox vs. Local Dev Machine
 
-Most coding agents today run directly on the developer's local machine — inside their terminal, with full access to their filesystem, credentials, and network. Agent-Ops takes a fundamentally different approach by running the agent in an isolated remote sandbox. The table below contrasts the two models across key security dimensions.
+Most coding agents today run directly on the developer's local machine — inside their terminal, with full access to their filesystem, credentials, and network. Valet takes a fundamentally different approach by running the agent in an isolated remote sandbox. The table below contrasts the two models across key security dimensions.
 
-| Dimension | Local Agent (e.g. CLI copilot) | Agent-Ops (remote sandbox) |
+| Dimension | Local Agent (e.g. CLI copilot) | Valet (remote sandbox) |
 |-----------|-------------------------------|---------------------------|
 | **Blast radius of agent error** | Entire developer machine. A bad `rm -rf`, a misconfigured git push, or an accidental credential write affects the real filesystem, real git remote, and real credentials. | Single disposable container. The worst case is a trashed sandbox — the developer's machine, other sessions, and production systems are unaffected. |
 | **Credential exposure** | The agent inherits the developer's full shell environment: SSH keys, cloud provider credentials, browser cookies, `.env` files, git credentials for all repos. A prompt injection or tool misuse can exfiltrate any of them. | The sandbox receives only the credentials it needs for the current task (one GitHub token, one set of LLM keys). SSH keys, cloud credentials, and unrelated repo tokens are never present. |

@@ -1,4 +1,4 @@
-"""Base sandbox image definition for Agent-Ops.
+"""Base sandbox image definition for Valet.
 
 Full dev environment: Node.js, Bun, OpenCode CLI,
 code-server, VNC stack (Xvfb + fluxbox + x11vnc + websockify + noVNC),
@@ -140,7 +140,7 @@ def get_base_image() -> modal.Image:
                 "DISPLAY": ":99",
                 "HOME": "/root",
                 # Force image rebuild on deploy (change this value to trigger rebuild)
-                "IMAGE_BUILD_VERSION": "2026-03-02-v121-fix-toon-module-resolution",
+                "IMAGE_BUILD_VERSION": "2026-03-04-v122-rename-to-valet",
                 "AGENT_BROWSER_EXECUTABLE_PATH": "/usr/bin/chromium",
                 "AGENT_BROWSER_PROFILE": "/root/.agent-browser-profile",
                 "PLAYWRIGHT_BROWSERS_PATH": "/ms-playwright",

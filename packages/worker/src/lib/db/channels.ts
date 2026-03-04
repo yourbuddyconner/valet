@@ -1,5 +1,5 @@
 import type { AppDb } from '../drizzle.js';
-import type { UserIdentityLink, ChannelBinding, ChannelType, QueueMode } from '@agent-ops/shared';
+import type { UserIdentityLink, ChannelBinding, ChannelType, QueueMode } from '@valet/shared';
 import { eq, and, desc } from 'drizzle-orm';
 import { userIdentityLinks, channelBindings } from '../schema/index.js';
 

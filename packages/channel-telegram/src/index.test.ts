@@ -3,7 +3,7 @@ import telegramChannelPackage, { TelegramTransport, telegramProvider, markdownTo
 
 describe('channel-telegram package', () => {
   it('exports default ChannelPackage with correct metadata', () => {
-    expect(telegramChannelPackage.name).toBe('@agent-ops/channel-telegram');
+    expect(telegramChannelPackage.name).toBe('@valet/channel-telegram');
     expect(telegramChannelPackage.version).toBe('0.0.1');
     expect(telegramChannelPackage.channelType).toBe('telegram');
   });

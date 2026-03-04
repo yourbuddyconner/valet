@@ -1,6 +1,6 @@
 import type { AppDb } from '../lib/drizzle.js';
 import { resolvePolicy } from '../lib/db.js';
-import type { ActionMode } from '@agent-ops/shared';
+import type { ActionMode } from '@valet/shared';
 
 /**
  * Resolve the effective action mode for a given service/action/risk combination.

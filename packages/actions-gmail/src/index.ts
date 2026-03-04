@@ -1,4 +1,4 @@
-import type { IntegrationPackage } from '@agent-ops/sdk';
+import type { IntegrationPackage } from '@valet/sdk';
 import { gmailProvider } from './provider.js';
 import { gmailActions } from './actions.js';
 
@@ -7,7 +7,7 @@ export { gmailActions } from './actions.js';
 export { gmailFetch, decodeBase64Url, encodeBase64Url } from './api.js';
 
 const gmailPackage: IntegrationPackage = {
-  name: '@agent-ops/actions-gmail',
+  name: '@valet/actions-gmail',
   version: '0.0.1',
   service: 'gmail',
   provider: gmailProvider,

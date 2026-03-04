@@ -14,7 +14,7 @@ import { ChannelSwitcher, deriveChannels } from './channel-switcher';
 import { SessionActionsMenu } from '@/components/sessions/session-actions-menu';
 import { ShareSessionDialog } from '@/components/sessions/share-session-dialog';
 import { api } from '@/api/client';
-import type { QueueMode } from '@agent-ops/shared';
+import type { QueueMode } from '@valet/shared';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';

@@ -3,7 +3,7 @@ import type {
   IntegrationProvider,
   ActionSource,
   TriggerSource,
-} from '@agent-ops/sdk';
+} from '@valet/sdk';
 import { installedIntegrations } from './packages.js';
 
 export class IntegrationRegistry {

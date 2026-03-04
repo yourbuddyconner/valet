@@ -1,5 +1,5 @@
 import type { D1Database } from '@cloudflare/workers-types';
-import type { Message } from '@agent-ops/shared';
+import type { Message } from '@valet/shared';
 import { eq, and, gt, asc } from 'drizzle-orm';
 import type { AppDb } from '../drizzle.js';
 import { toDate } from '../drizzle.js';

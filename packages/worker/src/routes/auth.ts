@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import { z } from 'zod';
 import type { Env, Variables } from '../env.js';
 import * as db from '../lib/db.js';
-import { ValidationError } from '@agent-ops/shared';
+import { ValidationError } from '@valet/shared';
 import { storeCredential, listCredentials, revokeCredential, hasCredential } from '../services/credentials.js';
 
 export const authRouter = new Hono<{ Bindings: Env; Variables: Variables }>();

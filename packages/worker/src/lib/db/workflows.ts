@@ -1,5 +1,5 @@
 import type { D1Database } from '@cloudflare/workers-types';
-import { ValidationError } from '@agent-ops/shared';
+import { ValidationError } from '@valet/shared';
 import { eq, and, or, sql, desc } from 'drizzle-orm';
 import type { AppDb } from '../drizzle.js';
 import { workflows, triggers, workflowMutationProposals, workflowVersionHistory } from '../schema/index.js';

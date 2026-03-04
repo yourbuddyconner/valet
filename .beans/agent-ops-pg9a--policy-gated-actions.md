@@ -1,5 +1,5 @@
 ---
-# agent-ops-pg9a
+# valet-pg9a
 title: Policy-Gated Actions
 status: todo
 type: epic
@@ -27,7 +27,7 @@ Agent-ops currently has **no policy layer** between "agent decides to do somethi
 
 ### What this means for wholesale deployment
 
-Deploying agent-ops to organizations means agents act on behalf of employees. An agent that can silently create GitHub issues, send emails, post Slack messages, or modify calendar events without oversight is a liability. Organizations need:
+Deploying valet to organizations means agents act on behalf of employees. An agent that can silently create GitHub issues, send emails, post Slack messages, or modify calendar events without oversight is a liability. Organizations need:
 
 1. Clear visibility into what agents are doing with external services
 2. Ability to require approval for high-risk operations
@@ -371,11 +371,11 @@ Once action definitions exist (from bean cp7w), update `invokeAction()` to:
 
 ## Relationship to Other Beans
 
-- **agent-ops-tk3n (Unified Credential Boundary)** — Prerequisite. `invokeAction()` calls `getCredential()` to resolve credentials before executing an approved action.
-- **agent-ops-cp7w (Control Plane / Execution Plane Split)** — Prerequisite (partially). Action definitions with typed params and risk levels come from the action plane defined in that bean. The policy service consumes the risk level from action definitions.
-- **agent-ops-pa5m (Polymorphic Action Sources)** — The action service defined here becomes the execution engine that polymorphic action sources feed into. Whether the action comes from a static provider adapter or a dynamic MCP connector, it goes through the same policy gate.
-- **agent-ops-wh8d (Durable Webhook Inbox)** — Webhook-triggered actions (e.g., "on PR opened, create Linear ticket") flow from the inbox processor through the action service, respecting policies.
-- **agent-ops-ch4t (Pluggable Channel Transports)** — Explicit agent actions from channel packages (e.g., `telegram.pin_message`) go through the policy gate like any other action. The bidirectional messaging path (system-routed replies) does NOT go through the policy gate — it's a system operation, not an agent-initiated action. Approval prompts need per-channel rendering (inline keyboard for Telegram, Block Kit for Slack).
+- **valet-tk3n (Unified Credential Boundary)** — Prerequisite. `invokeAction()` calls `getCredential()` to resolve credentials before executing an approved action.
+- **valet-cp7w (Control Plane / Execution Plane Split)** — Prerequisite (partially). Action definitions with typed params and risk levels come from the action plane defined in that bean. The policy service consumes the risk level from action definitions.
+- **valet-pa5m (Polymorphic Action Sources)** — The action service defined here becomes the execution engine that polymorphic action sources feed into. Whether the action comes from a static provider adapter or a dynamic MCP connector, it goes through the same policy gate.
+- **valet-wh8d (Durable Webhook Inbox)** — Webhook-triggered actions (e.g., "on PR opened, create Linear ticket") flow from the inbox processor through the action service, respecting policies.
+- **valet-ch4t (Pluggable Channel Transports)** — Explicit agent actions from channel packages (e.g., `telegram.pin_message`) go through the policy gate like any other action. The bidirectional messaging path (system-routed replies) does NOT go through the policy gate — it's a system operation, not an agent-initiated action. Approval prompts need per-channel rendering (inline keyboard for Telegram, Block Kit for Slack).
 
 ## Open Questions
 
@@ -403,4 +403,4 @@ Once action definitions exist (from bean cp7w), update `invokeAction()` to:
 - [ ] Admin routes for policy CRUD
 - [ ] Invocations include params, result, timestamps, and approval metadata
 - [ ] `pnpm typecheck` passes
-- [ ] Shared types for `RiskLevel`, `ActionMode`, `ActionInvocation` in `@agent-ops/shared`
+- [ ] Shared types for `RiskLevel`, `ActionMode`, `ActionInvocation` in `@valet/shared`

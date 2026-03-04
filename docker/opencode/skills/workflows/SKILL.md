@@ -1,6 +1,6 @@
 ---
 name: workflows
-description: End-to-end Agent-Ops workflow operations. Use when creating, updating, deleting, running, scheduling, debugging, rolling back, or self-modifying workflows; when managing workflow executions and approvals; when configuring trigger behavior; when passing repository context into workflow runs; and when using agent_message workflow steps.
+description: End-to-end Valet workflow operations. Use when creating, updating, deleting, running, scheduling, debugging, rolling back, or self-modifying workflows; when managing workflow executions and approvals; when configuring trigger behavior; when passing repository context into workflow runs; and when using agent_message workflow steps.
 ---
 
 # Workflows

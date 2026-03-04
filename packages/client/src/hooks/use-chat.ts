@@ -5,9 +5,9 @@ import { sessionKeys, type ProviderModels } from '@/api/sessions';
 import { api } from '@/api/client';
 import { toast } from './use-toast';
 import type { Message, SessionStatus } from '@/api/types';
-import type { MessagePart } from '@agent-ops/shared';
+import type { MessagePart } from '@valet/shared';
 import { useAuthStore } from '@/stores/auth';
-import { SLASH_COMMANDS, type QueueMode } from '@agent-ops/shared';
+import { SLASH_COMMANDS, type QueueMode } from '@valet/shared';
 import type { PendingActionApproval } from '@/components/session/action-approval-card';
 
 export interface PendingQuestion {
@@ -421,7 +421,7 @@ export function useChat(sessionId: string) {
 
   const [selectedModel, setSelectedModel] = useState<string>(() => {
     try {
-      return localStorage.getItem(`agent-ops:model:${sessionId}`) || '';
+      return localStorage.getItem(`valet:model:${sessionId}`) || '';
     } catch {
       return '';
     }
@@ -431,9 +431,9 @@ export function useChat(sessionId: string) {
     setSelectedModel(model);
     try {
       if (model) {
-        localStorage.setItem(`agent-ops:model:${sessionId}`, model);
+        localStorage.setItem(`valet:model:${sessionId}`, model);
       } else {
-        localStorage.removeItem(`agent-ops:model:${sessionId}`);
+        localStorage.removeItem(`valet:model:${sessionId}`);
       }
     } catch {
       // ignore
@@ -471,7 +471,7 @@ export function useChat(sessionId: string) {
 
     // If we have a persisted valid choice for this session, keep it.
     try {
-      const persisted = localStorage.getItem(`agent-ops:model:${sessionId}`) || '';
+      const persisted = localStorage.getItem(`valet:model:${sessionId}`) || '';
       if (persisted && allIds.includes(persisted)) {
         if (selectedModel !== persisted) handleModelChange(persisted);
         return;
@@ -506,7 +506,7 @@ export function useChat(sessionId: string) {
     prevSessionIdRef.current = sessionId;
     setState(createInitialState());
     try {
-      setSelectedModel(localStorage.getItem(`agent-ops:model:${sessionId}`) || '');
+      setSelectedModel(localStorage.getItem(`valet:model:${sessionId}`) || '');
     } catch {
       setSelectedModel('');
     }
@@ -613,7 +613,7 @@ export function useChat(sessionId: string) {
           // orchestrator restarts rather than sticking to a stale cached choice.
           if (message.session.messages.length === 0) {
             try {
-              localStorage.removeItem(`agent-ops:model:${sessionIdRef.current}`);
+              localStorage.removeItem(`valet:model:${sessionIdRef.current}`);
             } catch { /* ignore */ }
             // Force re-selection from preferences since autoSelectModel's closure
             // still holds the stale selectedModel value from before this render.

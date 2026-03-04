@@ -371,7 +371,7 @@ A separate DO exists for third-party credential storage using PBKDF2 key derivat
 
 ### Zustand Store (`stores/auth.ts`)
 
-Persisted to `localStorage` under `'agent-ops-auth'`:
+Persisted to `localStorage` under `'valet-auth'`:
 
 ```typescript
 interface AuthState {

@@ -6,7 +6,7 @@ import { useLogout, useUpdateProfile } from '@/api/auth';
 import { useOrchestratorInfo, useUpdateOrchestratorIdentity, useCheckHandle, useNotificationPreferences, useUpdateNotificationPreferences, useIdentityLinks, useCreateIdentityLink, useDeleteIdentityLink } from '@/api/orchestrator';
 import { useAvailableModels } from '@/api/sessions';
 import type { ProviderModels } from '@/api/sessions';
-import type { QueueMode } from '@agent-ops/shared';
+import type { QueueMode } from '@valet/shared';
 import { Button } from '@/components/ui/button';
 import { APIKeyList } from '@/components/settings/api-key-list';
 import { useTheme } from '@/hooks/use-theme';

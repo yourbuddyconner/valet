@@ -1,5 +1,5 @@
 ---
-# agent-ops-cf0x
+# valet-cf0x
 title: Decouple worker from Cloudflare primitives
 status: in_progress
 type: epic
@@ -120,7 +120,7 @@ All 28 DB service files in `src/lib/db/*.ts` import `D1Database` from `@cloudfla
 ### Why this matters
 
 1. **Deployment flexibility blocked.** Cannot deploy to Kubernetes, Fly.io, Railway, or any other platform without rewriting the worker.
-2. **Self-hosted path blocked.** Users who want to run agent-ops on their own infrastructure cannot do so.
+2. **Self-hosted path blocked.** Users who want to run valet on their own infrastructure cannot do so.
 3. **Testing difficulty.** Unit testing requires mocking CF globals (`D1Database`, `DurableObjectState`, `WebSocketPair`). Portable interfaces enable in-memory test implementations.
 4. **Vendor risk.** Single-provider dependency for the entire API layer.
 5. **Database flexibility blocked.** D1 is the only option. Operators deploying to k8s may prefer Postgres; CF deployments may want to use Postgres via Hyperdrive for features D1 lacks (e.g., real full-text search, jsonb operators, advisory locks).
@@ -328,7 +328,7 @@ The critical insight: DOs provide **single-writer guarantees** (one instance per
 
 Rename `packages/worker` → `packages/gateway` to reflect its platform-agnostic role:
 
-- Update `package.json` name: `@agent-ops/worker` → `@agent-ops/gateway`
+- Update `package.json` name: `@valet/worker` → `@valet/gateway`
 - Update all cross-package imports
 - Update `CLAUDE.md`, `Makefile`, deploy scripts
 - Update wrangler.toml (still needed for CF deployments)
@@ -377,7 +377,7 @@ This is the prerequisite for everything else. Convert ~80 raw `.prepare()` calls
 
 **Estimated scope:** ~28 DB files + `index.ts` cron handler. Most conversions are mechanical. The cron handler deduplication is the largest single change.
 
-**Dependency:** The [extract service layer bean (agent-ops-yj5t)](#) makes this easier by first consolidating DB access into service files. Consider doing yj5t first or in parallel.
+**Dependency:** The [extract service layer bean (valet-yj5t)](#) makes this easier by first consolidating DB access into service files. Consider doing yj5t first or in parallel.
 
 ### Phase 1: Abstract database and search, support both dialects
 
@@ -516,7 +516,7 @@ services:
       DATABASE_DIALECT: postgres
       REDIS_URL: redis://redis:6379
       S3_ENDPOINT: http://minio:9000
-      S3_BUCKET: agent-ops-storage
+      S3_BUCKET: valet-storage
       S3_ACCESS_KEY: minioadmin
       S3_SECRET_KEY: minioadmin
       # ... other env vars
@@ -591,9 +591,9 @@ dev-seed:         ## Seed test data
 
 ## Relationship to Other Beans
 
-- **agent-ops-yj5t (Extract service layer)** — Should be done first or in parallel with Phase 0. Consolidating DB access into service files makes the Drizzle conversion cleaner — fewer files to touch, clearer boundaries, and the cron handler deduplication becomes obvious.
-- **agent-ops-k8rt (Multi-runtime sandbox abstraction)** — Complementary. That bean abstracts the sandbox runtime (Modal vs K8s). This bean abstracts the gateway runtime (CF Workers vs K8s). Together they fully decouple agent-ops from any single cloud provider.
-- **agent-ops-xc0m (Plugin system)** — Plugin SDK interfaces should be defined against the portable interfaces, not CF-specific types, so plugins work regardless of deployment target.
+- **valet-yj5t (Extract service layer)** — Should be done first or in parallel with Phase 0. Consolidating DB access into service files makes the Drizzle conversion cleaner — fewer files to touch, clearer boundaries, and the cron handler deduplication becomes obvious.
+- **valet-k8rt (Multi-runtime sandbox abstraction)** — Complementary. That bean abstracts the sandbox runtime (Modal vs K8s). This bean abstracts the gateway runtime (CF Workers vs K8s). Together they fully decouple valet from any single cloud provider.
+- **valet-xc0m (Plugin system)** — Plugin SDK interfaces should be defined against the portable interfaces, not CF-specific types, so plugins work regardless of deployment target.
 
 ## Open Questions
 

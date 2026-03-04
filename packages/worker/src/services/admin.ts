@@ -8,7 +8,7 @@ import {
   upsertCustomProvider,
 } from '../lib/db.js';
 import type { AppDb } from '../lib/drizzle.js';
-import type { Invite, UserRole } from '@agent-ops/shared';
+import type { Invite, UserRole } from '@valet/shared';
 
 // ─── LLM Key Management ────────────────────────────────────────────────────
 

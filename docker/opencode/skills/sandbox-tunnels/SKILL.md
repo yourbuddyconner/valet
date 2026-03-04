@@ -1,6 +1,6 @@
 ---
 name: sandbox-tunnels
-description: Configure frontend/backend apps to work through Agent-Ops sandbox tunnels. Use when wiring dev servers (frontend + API + websocket) to /t/<name> routes, avoiding CORS/mixed-content, or debugging tunnel connectivity in a sandbox.
+description: Configure frontend/backend apps to work through Valet sandbox tunnels. Use when wiring dev servers (frontend + API + websocket) to /t/<name> routes, avoiding CORS/mixed-content, or debugging tunnel connectivity in a sandbox.
 ---
 
 # Sandbox Tunnels

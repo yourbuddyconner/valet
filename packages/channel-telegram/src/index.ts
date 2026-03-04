@@ -1,4 +1,4 @@
-import type { ChannelPackage } from '@agent-ops/sdk';
+import type { ChannelPackage } from '@valet/sdk';
 import { TelegramTransport } from './transport.js';
 import { telegramProvider } from './provider.js';
 
@@ -7,7 +7,7 @@ export { telegramProvider } from './provider.js';
 export { markdownToTelegramHtml } from './format.js';
 
 const telegramChannelPackage: ChannelPackage = {
-  name: '@agent-ops/channel-telegram',
+  name: '@valet/channel-telegram',
   version: '0.0.1',
   channelType: 'telegram',
   createTransport: () => new TelegramTransport(),

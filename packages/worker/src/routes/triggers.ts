@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { zValidator } from '@hono/zod-validator';
-import { NotFoundError, ValidationError } from '@agent-ops/shared';
+import { NotFoundError, ValidationError } from '@valet/shared';
 import type { Env, Variables } from '../env.js';
 import {
   scheduleTarget,

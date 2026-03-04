@@ -1,4 +1,4 @@
-import type { ChannelTransport, ChannelPackage } from '@agent-ops/sdk';
+import type { ChannelTransport, ChannelPackage } from '@valet/sdk';
 import { installedChannels } from './packages.js';
 
 export class ChannelRegistry {

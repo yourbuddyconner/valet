@@ -1,5 +1,5 @@
 import type { MiddlewareHandler } from 'hono';
-import { UnauthorizedError } from '@agent-ops/shared';
+import { UnauthorizedError } from '@valet/shared';
 import type { Env, Variables } from '../env.js';
 import { extractBearerToken } from '../lib/ws-auth.js';
 

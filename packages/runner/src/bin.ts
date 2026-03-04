@@ -30,7 +30,7 @@ const { values } = parseArgs({
 
 if (values.help) {
   console.log(`
-Agent-Ops Runner
+Valet Runner
 
 Bridges the local OpenCode server and the SessionAgent Durable Object.
 

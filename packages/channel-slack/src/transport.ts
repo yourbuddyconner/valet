@@ -6,7 +6,7 @@ import type {
   OutboundMessage,
   RoutingMetadata,
   SendResult,
-} from '@agent-ops/sdk';
+} from '@valet/sdk';
 import { markdownToSlackMrkdwn } from './format.js';
 
 // ─── Slack API Helpers ──────────────────────────────────────────────────────

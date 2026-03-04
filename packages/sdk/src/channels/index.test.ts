@@ -77,7 +77,7 @@ describe('channel-sdk type contracts', () => {
 
   it('ChannelPackage shape includes all required fields', () => {
     const pkg: ChannelPackage = {
-      name: '@agent-ops/channel-test',
+      name: '@valet/channel-test',
       version: '1.0.0',
       channelType: 'test',
       createTransport: () => ({

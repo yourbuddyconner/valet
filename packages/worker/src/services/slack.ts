@@ -1,4 +1,4 @@
-import type { UserIdentityLink } from '@agent-ops/shared';
+import type { UserIdentityLink } from '@valet/shared';
 import type { Env } from '../env.js';
 import * as db from '../lib/db.js';
 import { getDb } from '../lib/drizzle.js';
@@ -448,7 +448,7 @@ export async function initiateSlackLink(
       },
       body: JSON.stringify({
         channel: dmChannelId,
-        text: `Your Agent-Ops verification code is: *${code}*. Paste this in Agent-Ops to link your account. Expires in 10 minutes.`,
+        text: `Your Valet verification code is: *${code}*. Paste this in Valet to link your account. Expires in 10 minutes.`,
       }),
     });
   } catch {

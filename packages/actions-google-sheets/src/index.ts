@@ -1,4 +1,4 @@
-import type { IntegrationPackage } from '@agent-ops/sdk';
+import type { IntegrationPackage } from '@valet/sdk';
 import { googleSheetsProvider } from './provider.js';
 import { googleSheetsActions } from './actions.js';
 
@@ -7,7 +7,7 @@ export { googleSheetsActions } from './actions.js';
 export { sheetsFetch } from './api.js';
 
 const googleSheetsPackage: IntegrationPackage = {
-  name: '@agent-ops/actions-google-sheets',
+  name: '@valet/actions-google-sheets',
   version: '0.0.1',
   service: 'google_sheets',
   provider: googleSheetsProvider,

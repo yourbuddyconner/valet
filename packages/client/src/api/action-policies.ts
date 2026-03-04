@@ -1,6 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from './client';
-import type { ActionPolicy } from '@agent-ops/shared';
+import type { ActionPolicy } from '@valet/shared';
 
 export const actionPolicyKeys = {
   all: ['action-policies'] as const,

@@ -209,7 +209,7 @@ export function ConnectIntegrationDialog({
             <DialogHeader>
               <DialogTitle>Connect Integration</DialogTitle>
               <DialogDescription>
-                Choose a service to connect with your Agent Ops workspace.
+                Choose a service to connect with your Valet workspace.
               </DialogDescription>
             </DialogHeader>
 

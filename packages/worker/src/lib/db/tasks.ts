@@ -1,5 +1,5 @@
 import type { D1Database } from '@cloudflare/workers-types';
-import type { SessionTask } from '@agent-ops/shared';
+import type { SessionTask } from '@valet/shared';
 import { eq, and, sql } from 'drizzle-orm';
 import type { AppDb } from '../drizzle.js';
 import { sessionTasks, sessionTaskDependencies } from '../schema/index.js';

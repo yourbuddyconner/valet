@@ -1,5 +1,5 @@
 import type { Env } from '../env.js';
-import type { EventBusEvent, EventBusEventType } from '@agent-ops/shared';
+import type { EventBusEvent, EventBusEventType } from '@valet/shared';
 
 /**
  * EventBusDO — centralized real-time event broadcasting hub.

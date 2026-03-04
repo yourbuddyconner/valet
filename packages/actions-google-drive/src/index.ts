@@ -1,4 +1,4 @@
-import type { IntegrationPackage } from '@agent-ops/sdk';
+import type { IntegrationPackage } from '@valet/sdk';
 import { googleDriveProvider } from './provider.js';
 import { googleDriveActions } from './actions.js';
 
@@ -7,7 +7,7 @@ export { googleDriveActions } from './actions.js';
 export { driveFetch, driveUploadFetch, buildMultipartBody } from './api.js';
 
 const googleDrivePackage: IntegrationPackage = {
-  name: '@agent-ops/actions-google-drive',
+  name: '@valet/actions-google-drive',
   version: '0.0.1',
   service: 'google_drive',
   provider: googleDriveProvider,

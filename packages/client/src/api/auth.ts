@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from './client';
 import { useAuthStore } from '@/stores/auth';
-import type { QueueMode, User, UserCredential } from '@agent-ops/shared';
+import type { QueueMode, User, UserCredential } from '@valet/shared';
 
 export const authKeys = {
   credentials: () => ['auth', 'credentials'] as const,

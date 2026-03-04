@@ -1,5 +1,5 @@
 ---
-# agent-ops-yj5t
+# valet-yj5t
 title: Extract service layer from routes and DOs
 status: done
 type: epic
@@ -60,7 +60,7 @@ Each service function receives an explicit `D1Database` (or future `DrizzleDB`) 
 ```typescript
 // packages/worker/src/services/sessions.ts
 import type { D1Database } from '@cloudflare/workers-types';
-import type { AgentSession } from '@agent-ops/shared';
+import type { AgentSession } from '@valet/shared';
 
 export async function createSession(
   db: D1Database,

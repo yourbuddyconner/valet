@@ -9,7 +9,7 @@ import {
   approveInvocation,
   denyInvocation,
 } from '../services/actions.js';
-import { NotFoundError, ForbiddenError } from '@agent-ops/shared';
+import { NotFoundError, ForbiddenError } from '@valet/shared';
 
 export const actionInvocationsRouter = new Hono<{ Bindings: Env; Variables: Variables }>();
 

@@ -59,6 +59,6 @@ export type {
   ProviderModelEntry,
   AvailableModels,
   UsageStatsResponse,
-} from '@agent-ops/shared';
+} from '@valet/shared';
 
-export type { GitHub, Gmail, GoogleCalendar } from '@agent-ops/shared';
+export type { GitHub, Gmail, GoogleCalendar } from '@valet/shared';

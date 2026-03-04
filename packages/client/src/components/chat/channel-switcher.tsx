@@ -1,7 +1,7 @@
 import { useMemo } from 'react';
 import type { Message } from '@/api/types';
-import { formatChannelLabel } from '@agent-ops/sdk';
-import { getChannelIcon, ChannelsIcon } from '@agent-ops/sdk/ui';
+import { formatChannelLabel } from '@valet/sdk';
+import { getChannelIcon, ChannelsIcon } from '@valet/sdk/ui';
 import {
   DropdownMenu,
   DropdownMenuTrigger,

@@ -1,4 +1,4 @@
-import { ForbiddenError, NotFoundError, ValidationError, webManualScopeKey } from '@agent-ops/shared';
+import { ForbiddenError, NotFoundError, ValidationError, webManualScopeKey } from '@valet/shared';
 import type { Env } from '../env.js';
 import * as db from '../lib/db.js';
 import type { AppDb } from '../lib/drizzle.js';
@@ -130,7 +130,7 @@ export async function refreshOpenChildPullRequestStates(
             headers: {
               Authorization: `Bearer ${githubToken}`,
               Accept: 'application/vnd.github+json',
-              'User-Agent': 'Agent-Ops',
+              'User-Agent': 'Valet',
             },
           },
         );

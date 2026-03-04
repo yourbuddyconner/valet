@@ -1,5 +1,5 @@
-import { SLASH_COMMANDS } from '@agent-ops/shared';
-import type { UserTelegramConfig } from '@agent-ops/shared';
+import { SLASH_COMMANDS } from '@valet/shared';
+import type { UserTelegramConfig } from '@valet/shared';
 import type { Env } from '../env.js';
 import * as db from '../lib/db.js';
 import { getDb } from '../lib/drizzle.js';

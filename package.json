@@ -1,14 +1,14 @@
 {
-  "name": "agent-ops",
+  "name": "valet",
   "private": true,
   "workspaces": [
     "packages/*"
   ],
   "scripts": {
-    "dev": "pnpm --filter @agent-ops/worker dev",
-    "build": "pnpm --filter @agent-ops/worker build",
-    "deploy": "pnpm --filter @agent-ops/worker deploy",
-    "db:migrate": "pnpm --filter @agent-ops/worker db:migrate",
+    "dev": "pnpm --filter @valet/worker dev",
+    "build": "pnpm --filter @valet/worker build",
+    "deploy": "pnpm --filter @valet/worker deploy",
+    "db:migrate": "pnpm --filter @valet/worker db:migrate",
     "typecheck": "tsc --build",
     "test": "vitest run",
     "test:watch": "vitest",

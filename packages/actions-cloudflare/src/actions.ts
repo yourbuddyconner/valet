@@ -1,4 +1,4 @@
-import { McpActionSource } from '@agent-ops/sdk';
+import { McpActionSource } from '@valet/sdk';
 
 export const cloudflareActions = new McpActionSource({
   mcpUrl: 'https://mcp.cloudflare.com/mcp',

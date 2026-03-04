@@ -1,7 +1,7 @@
 [project]
-name = "agent-ops-backend"
+name = "valet-backend"
 version = "0.1.0"
-description = "Agent-Ops Modal backend for session and sandbox management"
+description = "Valet Modal backend for session and sandbox management"
 requires-python = ">=3.12"
 dependencies = [
     "modal>=0.67.0",

@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import type { Env, Variables } from '../env.js';
 import { getInviteByCode, getInviteByCodeAny, getOrgSettings, markInviteAccepted, updateUserRole } from '../lib/db.js';
-import { NotFoundError, ValidationError } from '@agent-ops/shared';
+import { NotFoundError, ValidationError } from '@valet/shared';
 
 export const invitesRouter = new Hono<{ Bindings: Env; Variables: Variables }>();
 

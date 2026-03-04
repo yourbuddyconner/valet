@@ -1,4 +1,4 @@
-"""Agent-Ops Modal backend — web endpoints for session/sandbox management."""
+"""Valet Modal backend — web endpoints for session/sandbox management."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ import modal
 
 from config import WHISPER_MODELS_MOUNT, WHISPER_MODELS_VOLUME
 
-app = modal.App("agent-ops-backend")
+app = modal.App("valet-backend")
 
 # Image for the web functions — includes our backend Python modules
 # Also mount runner package and docker files so sandbox image builds can reference them

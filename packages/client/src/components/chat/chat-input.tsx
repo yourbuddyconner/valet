@@ -4,7 +4,7 @@ import { api } from '@/api/client';
 import { useWakeSession } from '@/api/sessions';
 import type { PromptAttachment, ProviderModels } from '@/hooks/use-chat';
 import { useAudioRecorder } from '@/hooks/use-audio-recorder';
-import { SLASH_COMMANDS } from '@agent-ops/shared';
+import { SLASH_COMMANDS } from '@valet/shared';
 import { isImageFile, needsProcessing, needsCompression, processImage, perImageBudget } from '@/lib/image-compression';
 import { toastError } from '@/hooks/use-toast';
 

@@ -5,7 +5,7 @@ import { useActionPolicies, useUpsertActionPolicy, useDeleteActionPolicy } from 
 import { useActionCatalog } from '@/api/action-catalog';
 import type { ActionCatalogEntry } from '@/api/action-catalog';
 import { ActionPolicyDialog } from './action-policy-dialog';
-import type { ActionPolicy } from '@agent-ops/shared';
+import type { ActionPolicy } from '@valet/shared';
 
 function modeBadgeVariant(mode: string): 'success' | 'warning' | 'error' {
   switch (mode) {

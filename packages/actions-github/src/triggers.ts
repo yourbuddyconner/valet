@@ -1,4 +1,4 @@
-import type { TriggerSource, ParsedWebhookEvent } from '@agent-ops/sdk';
+import type { TriggerSource, ParsedWebhookEvent } from '@valet/sdk';
 
 const GITHUB_EVENT_TYPES = [
   'push',

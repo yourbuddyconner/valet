@@ -14,7 +14,7 @@ interface WorkflowSummary {
 
 export default tool({
   description:
-    "List workflows available to the current user in Agent-Ops. " +
+    "List workflows available to the current user in Valet. " +
     "Use this before creating new workflows to avoid duplicates.",
   args: {
     _placeholder: tool.schema.string().optional().describe("Unused"),

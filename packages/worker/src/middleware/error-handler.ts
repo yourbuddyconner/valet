@@ -1,11 +1,11 @@
 import type { ErrorHandler } from 'hono';
-import { AgentOpsError, ErrorCodes } from '@agent-ops/shared';
+import { ValetError, ErrorCodes } from '@valet/shared';
 import type { Env, Variables } from '../env.js';
 
 export const errorHandler: ErrorHandler<{ Bindings: Env; Variables: Variables }> = (err, c) => {
   const requestId = c.get('requestId');
 
-  if (err instanceof AgentOpsError) {
+  if (err instanceof ValetError) {
     console.error(`[${requestId}] ${err.code}: ${err.message}`, err.details);
     return c.json(err.toJSON(), err.statusCode as any);
   }

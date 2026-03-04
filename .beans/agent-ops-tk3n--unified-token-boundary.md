@@ -1,5 +1,5 @@
 ---
-# agent-ops-tk3n
+# valet-tk3n
 title: Unified Credential Boundary
 status: completed
 type: epic
@@ -21,7 +21,7 @@ Agent-ops currently has **four independent credential stores** that are largely 
 
 | Store | Location | Encryption | Key Derivation | What It Holds |
 |---|---|---|---|---|
-| `API_KEYS` Durable Object | `src/durable-objects/api-keys.ts` | AES-256-GCM | PBKDF2 (100k iterations, hardcoded salt `'agent-ops-salt'`) | Integration tokens (GitHub, Gmail, GCal) |
+| `API_KEYS` Durable Object | `src/durable-objects/api-keys.ts` | AES-256-GCM | PBKDF2 (100k iterations, hardcoded salt `'valet-salt'`) | Integration tokens (GitHub, Gmail, GCal) |
 | `oauth_tokens` D1 table | `src/lib/db/oauth.ts` | AES-256-GCM | `secret.padEnd(32, '0').slice(0, 32)` raw import | Login OAuth tokens (GitHub, Google) |
 | `user_credentials` D1 table | `src/lib/db/oauth.ts` | AES-256-GCM | Same padEnd derivation | 1Password service account token (literally one provider) |
 | `user_telegram_config` D1 table | `src/lib/db/telegram.ts` | AES-256-GCM | Same padEnd derivation | Telegram bot token + bot metadata |
@@ -91,7 +91,7 @@ export async function encryptStringPBKDF2(plaintext: string, secret: string): Pr
   const keyMaterial = new TextEncoder().encode(secret);
   const baseKey = await crypto.subtle.importKey('raw', keyMaterial, 'PBKDF2', false, ['deriveKey']);
   const key = await crypto.subtle.deriveKey(
-    { name: 'PBKDF2', salt: new TextEncoder().encode('agent-ops-credentials'), iterations: 100000, hash: 'SHA-256' },
+    { name: 'PBKDF2', salt: new TextEncoder().encode('valet-credentials'), iterations: 100000, hash: 'SHA-256' },
     baseKey,
     { name: 'AES-GCM', length: 256 },
     false,
@@ -363,11 +363,11 @@ Rough estimate: **~500 lines deleted**, ~250 lines added in `services/credential
 
 ## Relationship to Other Beans
 
-- **agent-ops-cp7w (Control Plane / Execution Plane Split)** — Prerequisite. Once `getCredential()` exists, the control plane can own credential resolution while the execution plane just receives resolved credentials.
-- **agent-ops-pg9a (Policy-Gated Actions)** — Action execution needs credentials. The action service calls `getCredential()` to resolve credentials before executing external side effects.
-- **agent-ops-pa5m (Polymorphic Action Sources)** — Action sources receive resolved credentials via their execution context, never fetching credentials directly.
-- **agent-ops-cf0x (Decouple from Cloudflare)** — Deleting the API_KEYS DO removes one Cloudflare-specific primitive from the codebase. One fewer DO to abstract away.
-- **agent-ops-ch4t (Pluggable Channel Transports)** — Channel transports call `getCredential(env, userId, channelType)` to resolve bot credentials or OAuth credentials for outbound message delivery. Telegram's bot token moves from `user_telegram_config.botTokenEncrypted` into the unified `credentials` table with `provider='telegram'`.
+- **valet-cp7w (Control Plane / Execution Plane Split)** — Prerequisite. Once `getCredential()` exists, the control plane can own credential resolution while the execution plane just receives resolved credentials.
+- **valet-pg9a (Policy-Gated Actions)** — Action execution needs credentials. The action service calls `getCredential()` to resolve credentials before executing external side effects.
+- **valet-pa5m (Polymorphic Action Sources)** — Action sources receive resolved credentials via their execution context, never fetching credentials directly.
+- **valet-cf0x (Decouple from Cloudflare)** — Deleting the API_KEYS DO removes one Cloudflare-specific primitive from the codebase. One fewer DO to abstract away.
+- **valet-ch4t (Pluggable Channel Transports)** — Channel transports call `getCredential(env, userId, channelType)` to resolve bot credentials or OAuth credentials for outbound message delivery. Telegram's bot token moves from `user_telegram_config.botTokenEncrypted` into the unified `credentials` table with `provider='telegram'`.
 
 ## Resolved Questions
 

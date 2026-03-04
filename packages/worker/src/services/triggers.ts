@@ -1,4 +1,4 @@
-import { NotFoundError, ValidationError } from '@agent-ops/shared';
+import { NotFoundError, ValidationError } from '@valet/shared';
 import type { Env } from '../env.js';
 import { checkWorkflowConcurrency, enqueueWorkflowExecution } from './executions.js';
 import { dispatchOrchestratorPrompt } from './orchestrator.js';

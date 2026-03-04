@@ -34,7 +34,7 @@ export class OnePasswordProvider implements SecretsProvider {
       const sdk = await import("@1password/sdk");
       clientInstance = await sdk.createClient({
         auth: token,
-        integrationName: "Agent-Ops Runner",
+        integrationName: "Valet Runner",
         integrationVersion: "1.0.0",
       }) as unknown as OPClient;
     } catch (err) {

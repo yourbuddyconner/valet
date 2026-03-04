@@ -46,7 +46,7 @@ ogRouter.get('/meta/session/:id', async (c) => {
   const parts: string[] = [];
   if (gitState?.sourceRepoFullName) parts.push(gitState.sourceRepoFullName);
   if (session.workspace) parts.push(session.workspace);
-  const description = parts.length > 0 ? parts.join(' · ') : 'Agent Ops session';
+  const description = parts.length > 0 ? parts.join(' · ') : 'Valet session';
 
   // Build absolute image URL based on the request origin
   const url = new URL(c.req.url);
@@ -135,7 +135,7 @@ ogRouter.get('/image/session/:id', async (c) => {
                       fontWeight: 700,
                       color: '#0a0a0a',
                     },
-                    children: 'A',
+                    children: 'V',
                   },
                 },
                 {
@@ -146,7 +146,7 @@ ogRouter.get('/image/session/:id', async (c) => {
                       fontWeight: 600,
                       color: '#a1a1aa',
                     },
-                    children: 'Agent Ops',
+                    children: 'Valet',
                   },
                 },
               ],
@@ -270,7 +270,7 @@ ogRouter.get('/meta/invite/:code', async (c) => {
   }
 
   const orgSettings = await getOrgSettings(c.get('db'));
-  const orgName = orgSettings.name || 'Agent Ops';
+  const orgName = orgSettings.name || 'Valet';
 
   const isExpired = new Date(invite.expiresAt) < new Date();
   const isAccepted = !!invite.acceptedAt;
@@ -303,7 +303,7 @@ ogRouter.get('/image/invite/:code', async (c) => {
   }
 
   const orgSettings = await getOrgSettings(c.get('db'));
-  const orgName = orgSettings.name || 'Agent Ops';
+  const orgName = orgSettings.name || 'Valet';
   const roleLabel = `Invited as ${invite.role}`;
 
   const font = await getFont();
@@ -349,7 +349,7 @@ ogRouter.get('/image/invite/:code', async (c) => {
                       fontWeight: 700,
                       color: '#0a0a0a',
                     },
-                    children: 'A',
+                    children: 'V',
                   },
                 },
                 {
@@ -360,7 +360,7 @@ ogRouter.get('/image/invite/:code', async (c) => {
                       fontWeight: 600,
                       color: '#a1a1aa',
                     },
-                    children: 'Agent Ops',
+                    children: 'Valet',
                   },
                 },
               ],

@@ -1,4 +1,4 @@
-import { type OAuthConfig, refreshTokenPkce } from '@agent-ops/sdk';
+import { type OAuthConfig, refreshTokenPkce } from '@valet/sdk';
 import { type Env, getEnvString } from '../env.js';
 import { encryptStringPBKDF2, decryptStringPBKDF2 } from '../lib/crypto.js';
 import * as credentialDb from '../lib/db/credentials.js';

@@ -1,5 +1,5 @@
 {
-  "name": "@agent-ops/channel-telegram",
+  "name": "@valet/channel-telegram",
   "version": "0.0.1",
   "private": true,
   "type": "module",
@@ -17,7 +17,7 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@agent-ops/sdk": "workspace:*"
+    "@valet/sdk": "workspace:*"
   },
   "devDependencies": {
     "typescript": "^5.3.3",

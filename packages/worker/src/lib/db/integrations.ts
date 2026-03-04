@@ -1,4 +1,4 @@
-import type { Integration } from '@agent-ops/shared';
+import type { Integration } from '@valet/shared';
 import { eq, and, ne, desc, sql } from 'drizzle-orm';
 import type { AppDb } from '../drizzle.js';
 import { toDate } from '../drizzle.js';

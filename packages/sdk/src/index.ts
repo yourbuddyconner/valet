@@ -24,5 +24,5 @@ export {
 } from './mcp/oauth.js';
 export type { AuthServerMetadata, RegisteredClient, TokenResponse } from './mcp/oauth.js';
 
-// NOTE: React UI components are exported from '@agent-ops/sdk/ui'
+// NOTE: React UI components are exported from '@valet/sdk/ui'
 // to avoid pulling React into backend bundles.

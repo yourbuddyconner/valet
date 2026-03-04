@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import type { Env, Variables } from '../env.js';
 import { adminMiddleware } from '../middleware/admin.js';
-import { ValidationError } from '@agent-ops/shared';
+import { ValidationError } from '@valet/shared';
 import {
   getOrgSettings,
   updateOrgSettings,

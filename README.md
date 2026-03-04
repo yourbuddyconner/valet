@@ -1,4 +1,4 @@
-# Agent Ops
+# Valet
 
 **Self-hosted background coding agents with full dev environments.**
 

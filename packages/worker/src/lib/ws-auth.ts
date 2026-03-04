@@ -8,7 +8,7 @@ export function extractBearerToken(req: Request): string | null {
   if (!protocolHeader) return null;
 
   // Browser WebSocket clients can pass auth via subprotocols.
-  // Expected format: "agent-ops, bearer.<token>"
+  // Expected format: "valet, bearer.<token>"
   for (const protocol of protocolHeader.split(',').map((p) => p.trim())) {
     if (protocol.startsWith('bearer.')) {
       const token = protocol.slice('bearer.'.length);

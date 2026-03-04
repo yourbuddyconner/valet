@@ -57,7 +57,7 @@ export function useWebSocket(url: string | null, options: UseWebSocketOptions = 
     const wsUrlStr = getWebSocketUrl(url);
     const wsUrl = new URL(wsUrlStr);
 
-    const ws = new WebSocket(wsUrl.toString(), ['agent-ops', `bearer.${token}`]);
+    const ws = new WebSocket(wsUrl.toString(), ['valet', `bearer.${token}`]);
 
     ws.onopen = () => {
       setStatus('connected');

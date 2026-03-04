@@ -7,7 +7,7 @@ import { ToolCard, type ToolCallData, type ToolCallStatus } from './tool-cards';
 import { useDrawer } from '@/routes/sessions/$sessionId';
 import { Avatar, AvatarImage, AvatarFallback } from '@/components/ui/avatar';
 import { MessageCopyButton } from './message-copy-button';
-import { ChannelBadge } from '@agent-ops/sdk/ui';
+import { ChannelBadge } from '@valet/sdk/ui';
 
 interface MessageItemProps {
   message: Message;
@@ -15,7 +15,7 @@ interface MessageItemProps {
   connectedUsers?: ConnectedUser[];
 }
 
-const WORKFLOW_EXECUTE_PROMPT_PREFIX = '__AGENT_OPS_WORKFLOW_EXECUTE_V1__';
+const WORKFLOW_EXECUTE_PROMPT_PREFIX = '__VALET_WORKFLOW_EXECUTE_V1__';
 
 export function MessageItem({ message, onRevert, connectedUsers }: MessageItemProps) {
   const isUser = message.role === 'user';

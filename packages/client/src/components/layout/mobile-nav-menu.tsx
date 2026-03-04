@@ -68,11 +68,11 @@ export function MobileNavMenu({ className }: MobileNavMenuProps) {
           <div className="flex h-14 items-center justify-between border-b border-border/50 px-4">
             <div className="flex items-center gap-3">
               <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-accent shadow-sm shadow-accent/20 font-mono text-sm font-bold text-white">
-                A
+                V
               </div>
               <div className="flex flex-col">
                 <span className="font-mono text-[13px] font-semibold tracking-tight text-neutral-900 dark:text-neutral-100">
-                  agent-ops
+                  valet
                 </span>
                 <span className="font-mono text-[10px] text-neutral-400 dark:text-neutral-500">
                   v1.0

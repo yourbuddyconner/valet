@@ -1,8 +1,8 @@
 import { Hono } from 'hono';
 import type { Env, Variables } from '../env.js';
-import { channelScopeKey } from '@agent-ops/shared';
-import type { ChannelTarget, ChannelContext } from '@agent-ops/sdk';
-import { verifySlackSignature } from '@agent-ops/channel-slack';
+import { channelScopeKey } from '@valet/shared';
+import type { ChannelTarget, ChannelContext } from '@valet/sdk';
+import { verifySlackSignature } from '@valet/channel-slack';
 import { channelRegistry } from '../channels/registry.js';
 import * as db from '../lib/db.js';
 import { decryptString } from '../lib/crypto.js';
@@ -166,7 +166,7 @@ slackEventsRouter.post('/slack/events', async (c) => {
         threadId: isDm ? undefined : threadId,
       };
       await transport.sendMessage(target, {
-        markdown: "I don't recognize your Slack account yet. To get started, link your account in Agent-Ops:\n\n1. Log in to Agent-Ops\n2. Go to **Integrations** in the sidebar\n3. Click **Link Account** on the Slack card\n4. Find your name and enter the verification code I'll DM you",
+        markdown: "I don't recognize your Slack account yet. To get started, link your account in Valet:\n\n1. Log in to Valet\n2. Go to **Integrations** in the sidebar\n3. Click **Link Account** on the Slack card\n4. Find your name and enter the verification code I'll DM you",
       }, ctx);
     }
     return c.json({ ok: true });
@@ -265,7 +265,7 @@ slackEventsRouter.post('/slack/events', async (c) => {
       threadId,
     };
     await transport.sendMessage(target, {
-      markdown: 'Your orchestrator is not running. Start it from the Agent-Ops dashboard.',
+      markdown: 'Your orchestrator is not running. Start it from the Valet dashboard.',
     }, ctx);
   }
 

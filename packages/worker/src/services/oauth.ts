@@ -156,7 +156,7 @@ export async function handleGitHubCallback(
     headers: {
       Authorization: `Bearer ${tokenData.access_token}`,
       Accept: 'application/vnd.github+json',
-      'User-Agent': 'Agent-Ops',
+      'User-Agent': 'Valet',
     },
   });
 
@@ -180,7 +180,7 @@ export async function handleGitHubCallback(
       headers: {
         Authorization: `Bearer ${tokenData.access_token}`,
         Accept: 'application/vnd.github+json',
-        'User-Agent': 'Agent-Ops',
+        'User-Agent': 'Valet',
       },
     });
 

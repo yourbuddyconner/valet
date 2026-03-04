@@ -3,7 +3,7 @@ import { Badge } from '@/components/ui/badge';
 import { useActionCatalog } from '@/api/action-catalog';
 import type { ActionCatalogEntry } from '@/api/action-catalog';
 import { useDisabledActions, useSetServiceDisabledState } from '@/api/disabled-actions';
-import type { DisabledAction } from '@agent-ops/shared';
+import type { DisabledAction } from '@valet/shared';
 
 interface ServiceGroup {
   service: string;

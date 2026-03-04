@@ -87,9 +87,9 @@ app.use(
       const frontendUrl = (c.env as Env).FRONTEND_URL;
       const allowed = [frontendUrl, 'http://localhost:5173', 'http://localhost:4173'].filter(Boolean);
       if (allowed.includes(origin)) return origin;
-      // Allow Cloudflare Pages preview deployments (e.g. abc123.my-agent-ops.pages.dev)
+      // Allow Cloudflare Pages preview deployments (e.g. abc123.my-valet.pages.dev)
       if (frontendUrl) {
-        const pagesHost = new URL(frontendUrl).hostname; // my-agent-ops.pages.dev
+        const pagesHost = new URL(frontendUrl).hostname; // my-valet.pages.dev
         if (origin.endsWith(`.${pagesHost}`) && origin.startsWith('https://')) return origin;
       }
       return '';
@@ -362,7 +362,7 @@ async function reconcileGitHubResources(env: Env): Promise<void> {
           headers: {
             Authorization: `Bearer ${token}`,
             Accept: 'application/vnd.github+json',
-            'User-Agent': 'Agent-Ops-Reconciler',
+            'User-Agent': 'Valet-Reconciler',
           },
         });
       } catch (error) {
@@ -934,7 +934,7 @@ async function dispatchScheduledWorkflows(event: ScheduledController, env: Env):
       userId: row.user_id,
       content: prompt,
       authorName: 'Scheduled Task',
-      authorEmail: 'scheduled-task@agent-ops.local',
+      authorEmail: 'scheduled-task@valet.local',
     });
 
     if (!dispatch.dispatched) {

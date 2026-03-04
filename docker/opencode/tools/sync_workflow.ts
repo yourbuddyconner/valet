@@ -97,7 +97,7 @@ function validateWorkflowPayload(payload: Record<string, unknown>): string | nul
 
 export default tool({
   description:
-    "Create or update a workflow in Agent-Ops. " +
+    "Create or update a workflow in Valet. " +
     "This immediately syncs the workflow to the backend so it appears on the Workflows page. " +
     "Step types: bash (requires command field), approval, conditional, parallel, agent, agent_message. " +
     "For shell commands use type: \"bash\" with a \"command\" field — NOT type: \"tool\" with tool: \"bash\".",

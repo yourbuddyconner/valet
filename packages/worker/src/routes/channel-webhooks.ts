@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import type { Env, Variables } from '../env.js';
-import { channelScopeKey, SLASH_COMMANDS } from '@agent-ops/shared';
-import type { ChannelTransport, ChannelTarget, ChannelContext, InboundMessage } from '@agent-ops/sdk';
+import { channelScopeKey, SLASH_COMMANDS } from '@valet/shared';
+import type { ChannelTransport, ChannelTarget, ChannelContext, InboundMessage } from '@valet/sdk';
 import { channelRegistry } from '../channels/registry.js';
 import * as db from '../lib/db.js';
 import { getCredential } from '../services/credentials.js';
@@ -121,7 +121,7 @@ channelWebhooksRouter.post('/:channelType/webhook/:userId', async (c) => {
     const ctx: ChannelContext = { token: botToken, userId };
     const target: ChannelTarget = { channelType, channelId: message.channelId };
     await transport.sendMessage(target, {
-      markdown: 'Your orchestrator is not running. Start it from the Agent-Ops dashboard.',
+      markdown: 'Your orchestrator is not running. Start it from the Valet dashboard.',
     }, ctx);
   }
 
@@ -147,7 +147,7 @@ export async function handleChannelCommand(
   switch (command) {
     case 'start': {
       await transport.sendMessage(target, {
-        markdown: 'Connected to Agent-Ops! Send me a message and it will be routed to your orchestrator.',
+        markdown: 'Connected to Valet! Send me a message and it will be routed to your orchestrator.',
       }, ctx);
       break;
     }
