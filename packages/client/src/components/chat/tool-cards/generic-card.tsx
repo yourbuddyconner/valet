@@ -110,11 +110,11 @@ const CellValue = memo(function CellValue({ value }: { value: unknown }) {
   if (typeof value === 'object') {
     const s = JSON.stringify(value);
     const display = s.length > 60 ? s.slice(0, 60) + '...' : s;
-    return <span className="text-neutral-500 dark:text-neutral-500" title={s}>{display}</span>;
+    return <span className="text-neutral-500 dark:text-neutral-500">{display}</span>;
   }
   const str = String(value);
   if (str.length > 80) {
-    return <span title={str}>{str.slice(0, 80)}...</span>;
+    return <span>{str.slice(0, 80)}...</span>;
   }
   return <>{str}</>;
 });
