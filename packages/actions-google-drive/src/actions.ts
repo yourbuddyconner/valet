@@ -107,7 +107,7 @@ const readFile: ActionDefinition = {
   id: 'drive.read_file',
   name: 'Read File',
   description:
-    'Download and return text content of a file. Auto-exports Google Workspace files (Docs→text, Sheets→CSV). Rejects binary files.',
+    'Download and return text content of a file. Auto-exports Google Workspace files (Docs→text, Sheets→CSV). Extracts text from PDFs. Rejects other binary files.',
   riskLevel: 'low',
   params: z.object({
     fileId: z.string(),
@@ -408,6 +408,35 @@ async function executeAction(
               exportedAs: exportMime,
               content: text,
             },
+          };
+        }
+
+        // PDF files — extract text
+        if (meta.mimeType === 'application/pdf') {
+          const pdfMaxBytes = maxSizeBytes || 5_242_880; // 5MB default for PDFs
+          const pdfSize = meta.size ? parseInt(meta.size) : 0;
+          if (pdfSize > pdfMaxBytes) {
+            return {
+              success: false,
+              error: `PDF is ${pdfSize} bytes, exceeds max ${pdfMaxBytes} bytes. Increase maxSizeBytes or download externally.`,
+            };
+          }
+
+          const pdfDlQs = new URLSearchParams({
+            alt: 'media',
+            supportsAllDrives: 'true',
+          });
+          const pdfRes = await driveFetch(`/files/${encodeURIComponent(fileId)}?${pdfDlQs}`, token);
+          if (!pdfRes.ok) return driveError(pdfRes);
+
+          const pdfBuffer = new Uint8Array(await pdfRes.arrayBuffer());
+          const { getDocumentProxy, extractText } = await import('unpdf');
+          const doc = await getDocumentProxy(pdfBuffer);
+          const { text, totalPages } = await extractText(doc);
+
+          return {
+            success: true,
+            data: { name: meta.name, mimeType: meta.mimeType, content: text, pageCount: totalPages },
           };
         }
 
