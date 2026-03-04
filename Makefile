@@ -18,7 +18,8 @@
         trigger-create trigger-list trigger-run \
         release deploy deploy-worker deploy-modal deploy-client build-client generate-registries \
         secrets-set secrets-list \
-        image-build image-push
+        image-build image-push \
+        destroy destroy-worker destroy-d1 destroy-r2 destroy-pages destroy-modal
 
 # Configuration
 # =============
@@ -676,3 +677,64 @@ image-push: image-build ## Build and push OpenCode image to GHCR
 	@docker push $(GHCR_REPO):$(VERSION)
 	@docker push $(GHCR_REPO):latest
 	@echo "$(GREEN)✓ Image pushed: $(GHCR_REPO):$(VERSION)$(NC)"
+
+# ==========================================
+# Teardown / Destroy
+# ==========================================
+# These targets destroy PRODUCTION resources. Use with care.
+# Resource names default to the current config (CF_WORKER_NAME, etc.)
+# but can be overridden to tear down old-named resources, e.g.:
+#   make destroy CF_WORKER_NAME=agent-ops PAGES_PROJECT_NAME=agent-ops-client \
+#     R2_BUCKET_NAME=agent-ops-storage D1_DATABASE_NAME=agent-ops-db
+
+# D1 database name (not the UUID — wrangler d1 delete takes a name)
+D1_DATABASE_NAME ?= agent-ops-db
+
+destroy: ## Destroy all remote resources (Worker, D1, R2, Pages, Modal) — DESTRUCTIVE
+	@echo "$(RED)========================================$(NC)"
+	@echo "$(RED)  DESTROYING PRODUCTION RESOURCES$(NC)"
+	@echo "$(RED)========================================$(NC)"
+	@echo ""
+	@echo "  Worker:  $(CF_WORKER_NAME)"
+	@echo "  Pages:   $(PAGES_PROJECT_NAME)"
+	@echo "  D1:      $(D1_DATABASE_NAME)"
+	@echo "  R2:      $(R2_BUCKET_NAME)"
+	@echo "  Modal:   agent-ops-backend"
+	@echo ""
+	@echo "$(YELLOW)Press Ctrl+C within 5 seconds to abort...$(NC)"
+	@sleep 5
+	@echo ""
+	@make destroy-worker
+	@make destroy-pages
+	@make destroy-d1
+	@make destroy-r2
+	@make destroy-modal
+	@echo ""
+	@echo "$(GREEN)========================================$(NC)"
+	@echo "$(GREEN)All resources destroyed.$(NC)"
+	@echo "$(GREEN)========================================$(NC)"
+
+destroy-worker: ## Delete the Cloudflare Worker
+	@echo "$(YELLOW)Deleting Worker '$(CF_WORKER_NAME)'...$(NC)"
+	wrangler delete --name $(CF_WORKER_NAME) --force || echo "$(YELLOW)Worker not found or already deleted$(NC)"
+	@echo "$(GREEN)✓ Worker deleted$(NC)"
+
+destroy-d1: ## Delete the D1 database by name (override: D1_DATABASE_NAME=xxx)
+	@echo "$(YELLOW)Deleting D1 database '$(D1_DATABASE_NAME)'...$(NC)"
+	wrangler d1 delete $(D1_DATABASE_NAME) -y || echo "$(YELLOW)D1 database not found or already deleted$(NC)"
+	@echo "$(GREEN)✓ D1 database deleted$(NC)"
+
+destroy-r2: ## Delete the R2 bucket (must be empty first)
+	@echo "$(YELLOW)Deleting R2 bucket '$(R2_BUCKET_NAME)'...$(NC)"
+	wrangler r2 bucket delete $(R2_BUCKET_NAME) || echo "$(YELLOW)R2 bucket not found, not empty, or already deleted$(NC)"
+	@echo "$(GREEN)✓ R2 bucket deleted$(NC)"
+
+destroy-pages: ## Delete the Cloudflare Pages project
+	@echo "$(YELLOW)Deleting Pages project '$(PAGES_PROJECT_NAME)'...$(NC)"
+	wrangler pages project delete $(PAGES_PROJECT_NAME) -y || echo "$(YELLOW)Pages project not found or already deleted$(NC)"
+	@echo "$(GREEN)✓ Pages project deleted$(NC)"
+
+destroy-modal: ## Stop the Modal backend app (no delete CLI — stopped apps are garbage collected; use dashboard for immediate removal)
+	@echo "$(YELLOW)Stopping Modal app 'agent-ops-backend' (will be garbage collected)...$(NC)"
+	uv run --project backend modal app stop agent-ops-backend || echo "$(YELLOW)Modal app not found or already stopped$(NC)"
+	@echo "$(GREEN)✓ Modal app stopped$(NC)"
