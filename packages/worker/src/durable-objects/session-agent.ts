@@ -2313,13 +2313,16 @@ export class SessionAgentDO {
             break;
           }
         }
-        turn.text += msg.delta || '';
-        // Update the text part in parts array
-        const lastPart = turn.parts[turn.parts.length - 1];
-        if (lastPart && lastPart.type === 'text') {
-          lastPart.text = turn.text;
+        const delta = msg.delta || '';
+        turn.text += delta;
+        // Update or create the current streaming text part.
+        // If the last part is a non-text part (e.g. tool-call), start a new text part
+        // with only the new delta — not the full accumulated turn.text.
+        const lastTextPart = turn.parts[turn.parts.length - 1];
+        if (lastTextPart && lastTextPart.type === 'text' && lastTextPart.streaming) {
+          lastTextPart.text += delta;
         } else {
-          turn.parts.push({ type: 'text', text: turn.text, streaming: true });
+          turn.parts.push({ type: 'text', text: delta, streaming: true });
         }
         // Broadcast chunk with messageId so client knows which v2 message to update
         this.broadcastToClients({
@@ -2403,12 +2406,15 @@ export class SessionAgentDO {
         if (turn.parts.length === 0 && finalContent) {
           turn.parts.push({ type: 'text', text: finalContent });
         }
-        // Update text part and mark all as not streaming
-        for (const part of turn.parts) {
-          if (part.type === 'text') {
-            part.text = finalContent;
-            part.streaming = false;
-          }
+        // Mark all text parts as not streaming.
+        // If there's only one text part and finalText was provided, use it (more complete).
+        // Otherwise preserve the per-part text that was built up during streaming.
+        const textParts = turn.parts.filter(p => p.type === 'text');
+        if (textParts.length === 1 && msg.finalText) {
+          textParts[0].text = finalContent;
+        }
+        for (const part of textParts) {
+          part.streaming = false;
         }
         // Add finish part
         turn.parts.push({ type: 'finish', reason: msg.reason || 'end_turn' });

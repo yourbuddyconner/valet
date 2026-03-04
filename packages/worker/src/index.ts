@@ -54,6 +54,7 @@ import {
   getArchivableSessions,
   markSessionsArchived,
   getTrackedGitHubResources,
+  pruneEmptyJournals,
 } from './lib/db.js';
 import { getCredential } from './services/credentials.js';
 import { getDb } from './lib/drizzle.js';
@@ -183,12 +184,21 @@ const scheduled: ExportedHandlerScheduledHandler<Env> = async (event, env, ctx) 
     console.error('GitHub reconciliation error:', error);
   }
 
-  // Nightly: archive terminated sessions older than 7 days
+  // Nightly: archive terminated sessions older than 7 days + prune empty journals
   if (event.cron === '0 3 * * *') {
     try {
       await archiveTerminatedSessions(env);
     } catch (error) {
       console.error('Session archive error:', error);
+    }
+
+    try {
+      const pruned = await pruneEmptyJournals(env.DB);
+      if (pruned > 0) {
+        console.log(`Pruned ${pruned} empty journal stubs`);
+      }
+    } catch (error) {
+      console.error('Journal prune error:', error);
     }
   }
 

@@ -451,6 +451,42 @@ export async function ensureTodayJournal(rawDb: D1Database, userId: string): Pro
   }
 }
 
+// ─── Journal Pruning ────────────────────────────────────────────────────────
+
+/**
+ * Delete journal files from previous days that were never written to
+ * (still contain only the auto-created stub header "# YYYY-MM-DD\n\n").
+ */
+export async function pruneEmptyJournals(rawDb: D1Database): Promise<number> {
+  const today = new Date().toISOString().slice(0, 10);
+  const todayPath = normalizePath(`journal/${today}.md`);
+
+  // Find empty journal stubs: path starts with "journal/", not today's, content is just the header
+  const toDelete = await rawDb
+    .prepare(
+      `SELECT id, rowid, path, content FROM orchestrator_memory_files
+       WHERE path LIKE 'journal/%.md'
+         AND path != ?
+         AND pinned = 0
+         AND LENGTH(TRIM(content)) <= 14`
+    )
+    .bind(todayPath)
+    .all<{ id: string; rowid: number; path: string; content: string }>();
+
+  let pruned = 0;
+  for (const row of toDelete.results || []) {
+    // Verify content is just the stub: "# YYYY-MM-DD" with optional whitespace
+    const trimmed = row.content.trim();
+    if (!/^#\s+\d{4}-\d{2}-\d{2}\s*$/.test(trimmed)) continue;
+
+    await rawDb.prepare('DELETE FROM orchestrator_memory_files WHERE id = ?').bind(row.id).run();
+    await rawDb.prepare('DELETE FROM orchestrator_memory_files_fts WHERE rowid = ?').bind(row.rowid).run();
+    pruned++;
+  }
+
+  return pruned;
+}
+
 // ─── Cap Enforcement ────────────────────────────────────────────────────────
 
 async function enforceMemoryCap(rawDb: D1Database, userId: string): Promise<void> {
