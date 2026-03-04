@@ -21,6 +21,7 @@ import { Route as SessionsIndexRouteImport } from './routes/sessions/index'
 import { Route as IntegrationsIndexRouteImport } from './routes/integrations/index'
 import { Route as WorkflowsExecutionsRouteImport } from './routes/workflows/executions'
 import { Route as WorkflowsWorkflowIdRouteImport } from './routes/workflows/$workflowId'
+import { Route as SettingsUsageRouteImport } from './routes/settings/usage'
 import { Route as SettingsPersonasRouteImport } from './routes/settings/personas'
 import { Route as SettingsAdminRouteImport } from './routes/settings/admin'
 import { Route as SessionsSessionIdRouteImport } from './routes/sessions/$sessionId'
@@ -92,6 +93,11 @@ const WorkflowsExecutionsRoute = WorkflowsExecutionsRouteImport.update({
 const WorkflowsWorkflowIdRoute = WorkflowsWorkflowIdRouteImport.update({
   id: '/workflows/$workflowId',
   path: '/workflows/$workflowId',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SettingsUsageRoute = SettingsUsageRouteImport.update({
+  id: '/settings/usage',
+  path: '/settings/usage',
   getParentRoute: () => rootRouteImport,
 } as any)
 const SettingsPersonasRoute = SettingsPersonasRouteImport.update({
@@ -171,6 +177,7 @@ export interface FileRoutesByFullPath {
   '/sessions/$sessionId': typeof SessionsSessionIdRouteWithChildren
   '/settings/admin': typeof SettingsAdminRoute
   '/settings/personas': typeof SettingsPersonasRoute
+  '/settings/usage': typeof SettingsUsageRoute
   '/workflows/$workflowId': typeof WorkflowsWorkflowIdRoute
   '/workflows/executions': typeof WorkflowsExecutionsRoute
   '/integrations/': typeof IntegrationsIndexRoute
@@ -196,6 +203,7 @@ export interface FileRoutesByTo {
   '/invite/$code': typeof InviteCodeRoute
   '/settings/admin': typeof SettingsAdminRoute
   '/settings/personas': typeof SettingsPersonasRoute
+  '/settings/usage': typeof SettingsUsageRoute
   '/workflows/$workflowId': typeof WorkflowsWorkflowIdRoute
   '/workflows/executions': typeof WorkflowsExecutionsRoute
   '/integrations': typeof IntegrationsIndexRoute
@@ -223,6 +231,7 @@ export interface FileRoutesById {
   '/sessions/$sessionId': typeof SessionsSessionIdRouteWithChildren
   '/settings/admin': typeof SettingsAdminRoute
   '/settings/personas': typeof SettingsPersonasRoute
+  '/settings/usage': typeof SettingsUsageRoute
   '/workflows/$workflowId': typeof WorkflowsWorkflowIdRoute
   '/workflows/executions': typeof WorkflowsExecutionsRoute
   '/integrations/': typeof IntegrationsIndexRoute
@@ -251,6 +260,7 @@ export interface FileRouteTypes {
     | '/sessions/$sessionId'
     | '/settings/admin'
     | '/settings/personas'
+    | '/settings/usage'
     | '/workflows/$workflowId'
     | '/workflows/executions'
     | '/integrations/'
@@ -276,6 +286,7 @@ export interface FileRouteTypes {
     | '/invite/$code'
     | '/settings/admin'
     | '/settings/personas'
+    | '/settings/usage'
     | '/workflows/$workflowId'
     | '/workflows/executions'
     | '/integrations'
@@ -302,6 +313,7 @@ export interface FileRouteTypes {
     | '/sessions/$sessionId'
     | '/settings/admin'
     | '/settings/personas'
+    | '/settings/usage'
     | '/workflows/$workflowId'
     | '/workflows/executions'
     | '/integrations/'
@@ -329,6 +341,7 @@ export interface RootRouteChildren {
   SessionsSessionIdRoute: typeof SessionsSessionIdRouteWithChildren
   SettingsAdminRoute: typeof SettingsAdminRoute
   SettingsPersonasRoute: typeof SettingsPersonasRoute
+  SettingsUsageRoute: typeof SettingsUsageRoute
   WorkflowsWorkflowIdRoute: typeof WorkflowsWorkflowIdRoute
   WorkflowsExecutionsRoute: typeof WorkflowsExecutionsRoute
   IntegrationsIndexRoute: typeof IntegrationsIndexRoute
@@ -422,6 +435,13 @@ declare module '@tanstack/react-router' {
       path: '/workflows/$workflowId'
       fullPath: '/workflows/$workflowId'
       preLoaderRoute: typeof WorkflowsWorkflowIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/settings/usage': {
+      id: '/settings/usage'
+      path: '/settings/usage'
+      fullPath: '/settings/usage'
+      preLoaderRoute: typeof SettingsUsageRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/settings/personas': {
@@ -553,6 +573,7 @@ const rootRouteChildren: RootRouteChildren = {
   SessionsSessionIdRoute: SessionsSessionIdRouteWithChildren,
   SettingsAdminRoute: SettingsAdminRoute,
   SettingsPersonasRoute: SettingsPersonasRoute,
+  SettingsUsageRoute: SettingsUsageRoute,
   WorkflowsWorkflowIdRoute: WorkflowsWorkflowIdRoute,
   WorkflowsExecutionsRoute: WorkflowsExecutionsRoute,
   IntegrationsIndexRoute: IntegrationsIndexRoute,

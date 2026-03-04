@@ -430,6 +430,9 @@ export class ChannelSession {
   turnCreated = false;
   turnId: string | null = null;
 
+  // Per-message usage entries for the current turn (reset per prompt)
+  usageEntries = new Map<string, { model: string; inputTokens: number; outputTokens: number }>();
+
   // Pre-compaction memory flush state (session-lifetime — NOT reset per prompt)
   cumulativeInputTokens = 0;
   cumulativeOutputTokens = 0;
@@ -461,6 +464,7 @@ export class ChannelSession {
     this.awaitingAssistantForAttempt = false;
     this.turnCreated = false;
     this.turnId = null;
+    this.usageEntries.clear();
   }
 
   /** Reset state for model failover retry (keep activeMessageId). */
@@ -480,6 +484,8 @@ export class ChannelSession {
     this.awaitingAssistantForAttempt = false;
     this.turnCreated = false;
     this.turnId = null;
+    // Note: usageEntries NOT cleared on retry — entries from failed attempt
+    // are still valid usage that was billed by the provider
   }
 
   /** Reset state on abort. */
@@ -500,6 +506,10 @@ export class ChannelSession {
     this.awaitingAssistantForAttempt = false;
     this.turnCreated = false;
     this.turnId = null;
+    // Tokens consumed during aborted turns are still billed by the provider
+    // but we drop them here since turnId is cleared and we can't attribute them.
+    // This causes minor underreporting of actual provider cost on aborted turns.
+    this.usageEntries.clear();
   }
 
   static channelKeyFrom(channelType?: string, channelId?: string): string {
@@ -3128,6 +3138,18 @@ export class PromptHandler {
             this.activeChannel.countedTokenMessageIds.add(ocMessageId);
             this.activeChannel.cumulativeInputTokens += input;
             this.activeChannel.cumulativeOutputTokens += output;
+
+            // Track per-message usage for cost reporting
+            const modelId = info.modelID as string | undefined;
+            const providerId = info.providerID as string | undefined;
+            const usageModel = modelId && providerId
+              ? `${providerId}/${modelId}`
+              : this.activeChannel.lastUsedModel ?? "unknown";
+            this.activeChannel.usageEntries.set(ocMessageId, {
+              model: usageModel,
+              inputTokens: input,
+              outputTokens: output,
+            });
           }
         }
       }
@@ -3349,6 +3371,21 @@ export class PromptHandler {
 
       // Notify client that agent is idle
       this.agentClient.sendAgentStatus("idle");
+
+      // Emit usage report for this turn
+      const usageChannel = this.activeChannel;
+      if (usageChannel && usageChannel.usageEntries.size > 0 && usageChannel.turnId) {
+        const entries = Array.from(usageChannel.usageEntries.entries()).map(
+          ([ocMessageId, data]) => ({
+            ocMessageId,
+            model: data.model,
+            inputTokens: data.inputTokens,
+            outputTokens: data.outputTokens,
+          })
+        );
+        this.agentClient.sendUsageReport(usageChannel.turnId, entries);
+        usageChannel.usageEntries.clear();
+      }
 
       // Check for pre-compaction memory flush after each turn
       const flushChannel = this.activeChannel;

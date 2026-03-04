@@ -26,3 +26,4 @@ export * from './db/webhooks.js';
 export * from './db/api-keys.js';
 export * from './db/dashboard.js';
 export * from './db/actions.js';
+export * from './db/usage.js';

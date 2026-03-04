@@ -58,6 +58,7 @@ export type {
   ProviderModels,
   ProviderModelEntry,
   AvailableModels,
+  UsageStatsResponse,
 } from '@agent-ops/shared';
 
 export type { GitHub, Gmail, GoogleCalendar } from '@agent-ops/shared';

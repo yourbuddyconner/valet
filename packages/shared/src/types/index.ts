@@ -941,3 +941,39 @@ export interface ActionInvocation {
   createdAt: string;
   updatedAt: string;
 }
+
+// ─── Usage & Cost Types ──────────────────────────────────────────────────────
+
+export interface UsageStatsResponse {
+  hero: {
+    totalCost: number | null;
+    totalInputTokens: number;
+    totalOutputTokens: number;
+    totalSessions: number;
+    totalUsers: number;
+  };
+  costByDay: Array<{
+    date: string;
+    cost: number | null;
+    inputTokens: number;
+    outputTokens: number;
+  }>;
+  byUser: Array<{
+    userId: string;
+    email: string;
+    name?: string;
+    inputTokens: number;
+    outputTokens: number;
+    cost: number | null;
+    sessionCount: number;
+  }>;
+  byModel: Array<{
+    model: string;
+    inputTokens: number;
+    outputTokens: number;
+    cost: number | null;
+    callCount: number;
+    percentage: number;
+  }>;
+  period: number;
+}

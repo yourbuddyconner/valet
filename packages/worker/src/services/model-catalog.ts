@@ -35,7 +35,87 @@ const PROVIDER_ENV_KEYS: Array<{ provider: string; envKey: keyof Env }> = [
 interface CatalogModel {
   id: string;
   name: string;
+  cost?: {
+    input?: number;
+    output?: number;
+  };
   [key: string]: unknown;
+}
+
+/** Pricing info for a model, keyed by "provider/modelId" */
+export interface ModelPricing {
+  inputCostPerMillion: number;
+  outputCostPerMillion: number;
+}
+
+/**
+ * Get model pricing from cached catalog data.
+ * Returns a Map keyed by "provider/modelId" with cost per million tokens.
+ * Fetches from models.dev on cache miss to ensure pricing is available.
+ */
+export async function getModelPricing(
+  db: AppDb,
+  env: Env,
+): Promise<Map<string, ModelPricing>> {
+  const pricingMap = new Map<string, ModelPricing>();
+
+  // Collect all provider IDs: built-in + custom
+  const [orgKeys, customProviders] = await Promise.all([
+    listOrgApiKeys(db),
+    getAllCustomProvidersWithKeys(db),
+  ]);
+  const providerIds: string[] = [];
+
+  for (const k of orgKeys) {
+    providerIds.push(k.provider);
+  }
+  for (const { provider, envKey } of PROVIDER_ENV_KEYS) {
+    if (!providerIds.includes(provider) && env[envKey]) {
+      providerIds.push(provider);
+    }
+  }
+  // Include custom providers (e.g. openrouter) for models.dev pricing lookup
+  for (const cp of customProviders) {
+    if (!providerIds.includes(cp.providerId)) {
+      providerIds.push(cp.providerId);
+    }
+  }
+
+  // Check per-provider caches in parallel
+  const cacheResults = await Promise.all(
+    providerIds.map(async (providerId) => {
+      const models = await getCachedProviderModels(db, providerId);
+      return [providerId, models] as const;
+    }),
+  );
+  const cachedModels = new Map<string, CatalogModel[] | null>(cacheResults);
+
+  // Determine which providers had cache misses and fetch from models.dev
+  const cacheMisses = providerIds.filter((id) => !cachedModels.get(id));
+  if (cacheMisses.length > 0) {
+    const fetched = await fetchModelsDevProviders(db, cacheMisses);
+    for (const providerId of cacheMisses) {
+      cachedModels.set(providerId, fetched.get(providerId) ?? null);
+    }
+  }
+
+  // Extract pricing from cached catalog data
+  for (const providerId of providerIds) {
+    const models = cachedModels.get(providerId);
+    if (!models) continue;
+
+    for (const model of models) {
+      if (model.cost && (typeof model.cost.input === 'number' || typeof model.cost.output === 'number')) {
+        const key = `${providerId}/${model.id}`;
+        pricingMap.set(key, {
+          inputCostPerMillion: model.cost.input ?? 0,
+          outputCostPerMillion: model.cost.output ?? 0,
+        });
+      }
+    }
+  }
+
+  return pricingMap;
 }
 
 function isCacheStale(cachedAt: number): boolean {

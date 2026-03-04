@@ -333,6 +333,11 @@ export class AgentClient {
     this.send({ type: "opencode-config-applied", success, restarted, error });
   }
 
+  sendUsageReport(turnId: string, entries: Array<{ ocMessageId: string; model: string; inputTokens: number; outputTokens: number }>): void {
+    if (entries.length === 0) return;
+    this.send({ type: "usage-report", turnId, entries });
+  }
+
   // ─── Request/Response (Runner → DO → Runner) ─────────────────────────
 
   requestSpawnChild(params: {

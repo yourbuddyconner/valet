@@ -1,7 +1,7 @@
 import type { Env } from '../env.js';
 import type { AppDb } from '../lib/drizzle.js';
 import { getDb } from '../lib/drizzle.js';
-import { updateSessionStatus, updateSessionMetrics, addActiveSeconds, updateSessionGitState, upsertSessionFileChanged, updateSessionTitle, createSession, createSessionGitState, getSession, getSessionGitState, getChildSessions, getSessionChannelBindings, listUserChannelBindings, readMemoryFile, listMemoryFiles, writeMemoryFile, patchMemoryFile, deleteMemoryFile, deleteMemoryFilesUnderPath, searchMemoryFiles, boostMemoryFileRelevance, listOrgRepositories, listPersonas, getUserById, getUsersByIds, createMailboxMessage, getSessionMailbox, markSessionMailboxRead, getOrchestratorIdentityByHandle, createSessionTask, getSessionTasks, getMyTasks, updateSessionTask, getUserTelegramConfig, getOrgSettings, enqueueWorkflowApprovalNotificationIfMissing, markWorkflowApprovalNotificationsRead, isNotificationWebEnabled, batchInsertAuditLog, batchUpsertMessages, updateUserDiscoveredModels } from '../lib/db.js';
+import { updateSessionStatus, updateSessionMetrics, addActiveSeconds, updateSessionGitState, upsertSessionFileChanged, updateSessionTitle, createSession, createSessionGitState, getSession, getSessionGitState, getChildSessions, getSessionChannelBindings, listUserChannelBindings, readMemoryFile, listMemoryFiles, writeMemoryFile, patchMemoryFile, deleteMemoryFile, deleteMemoryFilesUnderPath, searchMemoryFiles, boostMemoryFileRelevance, listOrgRepositories, listPersonas, getUserById, getUsersByIds, createMailboxMessage, getSessionMailbox, markSessionMailboxRead, getOrchestratorIdentityByHandle, createSessionTask, getSessionTasks, getMyTasks, updateSessionTask, getUserTelegramConfig, getOrgSettings, enqueueWorkflowApprovalNotificationIfMissing, markWorkflowApprovalNotificationsRead, isNotificationWebEnabled, batchInsertAuditLog, batchUpsertMessages, updateUserDiscoveredModels, batchInsertUsageEvents } from '../lib/db.js';
 import { getCredential } from '../services/credentials.js';
 import { getSlackBotToken } from '../services/slack.js';
 import { listWorkflows, upsertWorkflow, getWorkflowByIdOrSlug, getWorkflowOwnerCheck, deleteWorkflowTriggers, deleteWorkflowById, updateWorkflow, getWorkflowById } from '../lib/db/workflows.js';
@@ -220,7 +220,7 @@ function deriveRuntimeStates(args: {
 type ToolCallStatus = 'pending' | 'running' | 'completed' | 'error';
 
 interface RunnerMessage {
-  type: 'stream' | 'result' | 'tool' | 'question' | 'screenshot' | 'error' | 'complete' | 'agentStatus' | 'create-pr' | 'update-pr' | 'list-pull-requests' | 'inspect-pull-request' | 'models' | 'aborted' | 'reverted' | 'diff' | 'review-result' | 'command-result' | 'ping' | 'git-state' | 'pr-created' | 'files-changed' | 'child-session' | 'title' | 'spawn-child' | 'session-message' | 'session-messages' | 'terminate-child' | 'self-terminate' | 'mem-read' | 'mem-write' | 'mem-patch' | 'mem-rm' | 'mem-search' | 'list-repos' | 'list-personas' | 'list-channels' | 'get-session-status' | 'list-child-sessions' | 'forward-messages' | 'read-repo-file' | 'workflow-list' | 'workflow-sync' | 'workflow-run' | 'workflow-executions' | 'workflow-api' | 'trigger-api' | 'execution-api' | 'workflow-execution-result' | 'workflow-chat-message' | 'model-switched' | 'tunnels' | 'mailbox-send' | 'mailbox-check' | 'task-create' | 'task-list' | 'task-update' | 'task-my' | 'channel-reply' | 'audio-transcript' | 'channel-session-created' | 'session-reset' | 'opencode-config-applied' | 'list-tools' | 'call-tool' | 'message.create' | 'message.part.text-delta' | 'message.part.tool-update' | 'message.finalize';
+  type: 'stream' | 'result' | 'tool' | 'question' | 'screenshot' | 'error' | 'complete' | 'agentStatus' | 'create-pr' | 'update-pr' | 'list-pull-requests' | 'inspect-pull-request' | 'models' | 'aborted' | 'reverted' | 'diff' | 'review-result' | 'command-result' | 'ping' | 'git-state' | 'pr-created' | 'files-changed' | 'child-session' | 'title' | 'spawn-child' | 'session-message' | 'session-messages' | 'terminate-child' | 'self-terminate' | 'mem-read' | 'mem-write' | 'mem-patch' | 'mem-rm' | 'mem-search' | 'list-repos' | 'list-personas' | 'list-channels' | 'get-session-status' | 'list-child-sessions' | 'forward-messages' | 'read-repo-file' | 'workflow-list' | 'workflow-sync' | 'workflow-run' | 'workflow-executions' | 'workflow-api' | 'trigger-api' | 'execution-api' | 'workflow-execution-result' | 'workflow-chat-message' | 'model-switched' | 'tunnels' | 'mailbox-send' | 'mailbox-check' | 'task-create' | 'task-list' | 'task-update' | 'task-my' | 'channel-reply' | 'audio-transcript' | 'channel-session-created' | 'session-reset' | 'opencode-config-applied' | 'list-tools' | 'call-tool' | 'message.create' | 'message.part.text-delta' | 'message.part.tool-update' | 'message.finalize' | 'usage-report';
   restarted?: boolean;
   turnId?: string;
   delta?: string;
@@ -350,6 +350,8 @@ interface RunnerMessage {
   opencodeSessionId?: string;
   role?: 'user' | 'assistant' | 'system';
   parts?: Record<string, unknown>;
+  // Usage tracking
+  entries?: Array<{ ocMessageId: string; model: string; inputTokens: number; outputTokens: number }>;
 }
 
 /** Messages sent from DO to clients */
@@ -531,6 +533,17 @@ const SCHEMA_SQL = `
     is_org_scoped INTEGER NOT NULL DEFAULT 0,
     created_at INTEGER NOT NULL DEFAULT (unixepoch()),
     expires_at INTEGER
+  );
+
+  CREATE TABLE IF NOT EXISTS usage_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    turn_id TEXT NOT NULL,
+    oc_message_id TEXT NOT NULL UNIQUE,
+    model TEXT NOT NULL,
+    input_tokens INTEGER NOT NULL DEFAULT 0,
+    output_tokens INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    flushed INTEGER NOT NULL DEFAULT 0
   );
 `;
 
@@ -2039,6 +2052,27 @@ export class SessionAgentDO {
     }
 
     switch (msg.type) {
+      case 'usage-report': {
+        const entries = msg.entries;
+        if (Array.isArray(entries)) {
+          for (const entry of entries) {
+            try {
+              this.ctx.storage.sql.exec(
+                'INSERT OR IGNORE INTO usage_events (turn_id, oc_message_id, model, input_tokens, output_tokens) VALUES (?, ?, ?, ?, ?)',
+                msg.turnId ?? '',
+                entry.ocMessageId ?? '',
+                entry.model ?? 'unknown',
+                entry.inputTokens ?? 0,
+                entry.outputTokens ?? 0,
+              );
+            } catch (err) {
+              console.error('[SessionAgentDO] Failed to insert usage event:', err);
+            }
+          }
+        }
+        break;
+      }
+
       case 'tunnels': {
         if (Array.isArray(msg.tunnels)) {
           this.setStateValue('tunnels', JSON.stringify(msg.tunnels));
@@ -7326,6 +7360,33 @@ export class SessionAgentDO {
           );
         } catch (flushErr) {
           console.error('[SessionAgentDO] Failed to flush audit log to D1:', flushErr);
+        }
+      }
+
+      // Flush unflushed usage events to D1
+      const unflushedUsage = this.ctx.storage.sql
+        .exec('SELECT id, turn_id, oc_message_id, model, input_tokens, output_tokens, created_at FROM usage_events WHERE flushed = 0 ORDER BY id ASC LIMIT 100')
+        .toArray();
+
+      if (unflushedUsage.length > 0) {
+        try {
+          await batchInsertUsageEvents(this.env.DB, sessionId, unflushedUsage.map((row) => ({
+            localId: row.id as number,
+            turnId: row.turn_id as string,
+            ocMessageId: row.oc_message_id as string,
+            model: row.model as string,
+            inputTokens: row.input_tokens as number,
+            outputTokens: row.output_tokens as number,
+            createdAt: row.created_at as number,
+          })));
+          const flushedUsageIds = unflushedUsage.map((r) => r.id as number);
+          const usagePlaceholders = flushedUsageIds.map(() => '?').join(',');
+          this.ctx.storage.sql.exec(
+            `UPDATE usage_events SET flushed = 1 WHERE id IN (${usagePlaceholders})`,
+            ...flushedUsageIds,
+          );
+        } catch (flushErr) {
+          console.error('[SessionAgentDO] Failed to flush usage events to D1:', flushErr);
         }
       }
     } catch (err) {

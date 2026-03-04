@@ -78,22 +78,40 @@ function GeneralTab() {
   return (
     <div className="space-y-6">
       {user?.role === 'admin' && (
-        <div className="rounded-lg border border-neutral-200 bg-white p-6 dark:border-neutral-700 dark:bg-neutral-800">
-          <div className="flex items-center justify-between">
-            <div>
-              <h2 className="text-lg font-medium text-neutral-900 dark:text-neutral-100">Organization</h2>
-              <p className="mt-1 text-sm text-neutral-500 dark:text-neutral-400">
-                Manage members, API keys, access control, and invites.
-              </p>
+        <>
+          <div className="rounded-lg border border-neutral-200 bg-white p-6 dark:border-neutral-700 dark:bg-neutral-800">
+            <div className="flex items-center justify-between">
+              <div>
+                <h2 className="text-lg font-medium text-neutral-900 dark:text-neutral-100">Organization</h2>
+                <p className="mt-1 text-sm text-neutral-500 dark:text-neutral-400">
+                  Manage members, API keys, access control, and invites.
+                </p>
+              </div>
+              <Link
+                to="/settings/admin"
+                className="rounded-md bg-neutral-900 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-neutral-800 dark:bg-neutral-100 dark:text-neutral-900 dark:hover:bg-neutral-200"
+              >
+                Manage
+              </Link>
             </div>
-            <Link
-              to="/settings/admin"
-              className="rounded-md bg-neutral-900 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-neutral-800 dark:bg-neutral-100 dark:text-neutral-900 dark:hover:bg-neutral-200"
-            >
-              Manage
-            </Link>
           </div>
-        </div>
+          <div className="rounded-lg border border-neutral-200 bg-white p-6 dark:border-neutral-700 dark:bg-neutral-800">
+            <div className="flex items-center justify-between">
+              <div>
+                <h2 className="text-lg font-medium text-neutral-900 dark:text-neutral-100">Usage & Cost</h2>
+                <p className="mt-1 text-sm text-neutral-500 dark:text-neutral-400">
+                  Track LLM token usage and cost breakdown by user and model.
+                </p>
+              </div>
+              <Link
+                to="/settings/usage"
+                className="rounded-md bg-neutral-900 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-neutral-800 dark:bg-neutral-100 dark:text-neutral-900 dark:hover:bg-neutral-200"
+              >
+                View
+              </Link>
+            </div>
+          </div>
+        </>
       )}
 
       <SettingsSection title="Account">

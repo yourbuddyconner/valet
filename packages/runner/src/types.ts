@@ -202,7 +202,17 @@ export type RunnerToDOMessage =
   | { type: "message.part.text-delta"; turnId: string; delta: string }
   | { type: "message.part.tool-update"; turnId: string; callId: string; toolName: string; status: ToolCallStatus; args?: unknown; result?: unknown; error?: string }
   | { type: "message.finalize"; turnId: string; reason: "end_turn" | "error" | "canceled"; finalText?: string; error?: string }
-  | { type: "opencode-config-applied"; success: boolean; restarted: boolean; error?: string };
+  | { type: "opencode-config-applied"; success: boolean; restarted: boolean; error?: string }
+  | {
+      type: "usage-report";
+      turnId: string;
+      entries: Array<{
+        ocMessageId: string;
+        model: string;
+        inputTokens: number;
+        outputTokens: number;
+      }>;
+    };
 
 /** Structured review result data */
 export interface ReviewFinding {
