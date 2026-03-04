@@ -37,6 +37,7 @@ import { slackAdminRouter, slackUserRouter } from './routes/slack.js';
 import { slackEventsRouter } from './routes/slack-events.js';
 import { channelWebhooksRouter } from './routes/channel-webhooks.js';
 import { actionPoliciesRouter } from './routes/action-policies.js';
+import { disabledActionsRouter } from './routes/disabled-actions.js';
 import { actionInvocationsRouter } from './routes/action-invocations.js';
 import { usageRouter } from './routes/usage.js';
 import {
@@ -148,6 +149,7 @@ app.route('/api', channelsRouter);
 app.route('/api/me/telegram', telegramApiRouter);
 app.route('/api/admin/slack', slackAdminRouter);
 app.route('/api/admin/action-policies', actionPoliciesRouter);
+app.route('/api/admin/disabled-actions', disabledActionsRouter);
 app.route('/api/action-invocations', actionInvocationsRouter);
 app.route('/api/me/slack', slackUserRouter);
 app.route('/api/invites', invitesApiRouter);

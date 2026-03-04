@@ -923,6 +923,14 @@ export interface ActionPolicy {
   updatedAt: string;
 }
 
+export interface DisabledAction {
+  id: string;
+  service: string;
+  actionId?: string | null;
+  disabledBy: string;
+  createdAt: string;
+}
+
 export interface ActionInvocation {
   id: string;
   sessionId: string;

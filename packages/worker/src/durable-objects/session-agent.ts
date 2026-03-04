@@ -15,6 +15,7 @@ import { getUserIntegrations, getOrgIntegrations, updateIntegrationStatus } from
 import { resolveMode } from '../services/action-policy.js';
 import { invokeAction, markExecuted, markFailed, approveInvocation, denyInvocation } from '../services/actions.js';
 import { updateInvocationStatus } from '../lib/db/actions.js';
+import { getDisabledActionsIndex, isActionDisabled } from '../lib/db/disabled-actions.js';
 import type { ChannelTarget, ChannelContext } from '@agent-ops/sdk';
 import { validateWorkflowDefinition } from '../lib/workflow-definition.js';
 
@@ -7732,12 +7733,19 @@ export class SessionAgentDO {
         return true;
       });
 
+      // Load disabled-actions index for filtering
+      const { disabledActions: disabledActionSet, disabledServices: disabledServiceSet } =
+        await getDisabledActionsIndex(this.appDb);
+
       const tools: unknown[] = [];
       const warnings: Array<{ service: string; displayName: string; reason: string; message: string; integrationId: string }> = [];
 
       for (const integration of dedupedIntegrations) {
         // If filtering by service, skip non-matching integrations
         if (service && integration.service !== service) continue;
+
+        // Skip entirely disabled services
+        if (disabledServiceSet.has(integration.service)) continue;
 
         const actionSource = integrationRegistry.getActions(integration.service);
         if (!actionSource) {
@@ -7808,6 +7816,9 @@ export class SessionAgentDO {
           }
 
           const compositeId = `${integration.service}:${action.id}`;
+
+          // Skip individually disabled actions
+          if (disabledActionSet.has(compositeId)) continue;
 
           // Cache discovered risk levels so handleCallTool doesn't need to re-fetch
           this.discoveredToolRiskLevels.set(compositeId, action.riskLevel);
@@ -7885,6 +7896,12 @@ export class SessionAgentDO {
       }
       const service = toolId.slice(0, colonIndex);
       const actionId = toolId.slice(colonIndex + 1);
+
+      // Safety net: reject disabled actions even if the tool ID was guessed
+      if (await isActionDisabled(this.appDb, service, actionId)) {
+        this.sendToRunner({ type: 'call-tool-result', requestId, error: `Action "${toolId}" is disabled by your organization.` } as any);
+        return;
+      }
 
       // Verify user or org has this integration active
       const userIntegrations = await getUserIntegrations(this.appDb, userId);
