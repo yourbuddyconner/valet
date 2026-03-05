@@ -372,7 +372,6 @@ type WebSocketChatMessage =
   | { type: 'user.joined'; userId: string }
   | { type: 'user.left'; userId: string };
 
-const EMPTY_MODEL_PREFERENCES: string[] = [];
 
 function createInitialState(): ChatState {
   return {
@@ -405,12 +404,7 @@ function isTerminalSessionStatus(status: SessionStatus | undefined) {
 
 export function useChat(sessionId: string) {
   const queryClient = useQueryClient();
-  const userModelPreferences = useAuthStore((s) => s.user?.modelPreferences);
   const userQueueMode = useAuthStore((s) => s.user?.uiQueueMode || 'followup');
-  const orgModelPreferences = useAuthStore((s) => s.orgModelPreferences);
-  const modelPreferences = (userModelPreferences && userModelPreferences.length > 0)
-    ? userModelPreferences
-    : orgModelPreferences ?? EMPTY_MODEL_PREFERENCES;
 
   // Keep a ref to sessionId so WebSocket message handlers always read the current value
   // without needing sessionId in their dependency arrays (which would cause reconnects).
@@ -440,36 +434,16 @@ export function useChat(sessionId: string) {
     }
   }, [sessionId]);
 
-  function findModelFromPreferences(models: ProviderModels[], preferences: string[]): string | null {
-    if (!preferences.length) return null;
-    const allIds = models.flatMap((p) => p.models.map((m) => m.id));
-
-    for (const pref of preferences) {
-      // Exact match first (preferred path).
-      if (allIds.includes(pref)) return pref;
-
-      // Fallback: allow preference without provider prefix.
-      const slashIdx = pref.indexOf('/');
-      const modelIdOnly = slashIdx >= 0 ? pref.slice(slashIdx + 1) : pref;
-      const suffixMatch = allIds.find((id) => id.endsWith(`/${modelIdOnly}`) || id === modelIdOnly);
-      if (suffixMatch) return suffixMatch;
-    }
-
-    return null;
-  }
-
-  // Auto-select model with precedence:
-  // current session selection > persisted session selection > preferences > first available.
-  const autoSelectModel = useCallback((models: ProviderModels[]) => {
+  // Validate selected model is still in the available list.
+  // No fallback logic — the DO provides the default via init.
+  const validateSelectedModel = useCallback((models: ProviderModels[]) => {
     const allIds = models.flatMap((p) => p.models.map((m) => m.id));
     if (allIds.length === 0) return;
 
-    // Preserve an in-session user choice when it is still available.
-    if (selectedModel && allIds.includes(selectedModel)) {
-      return;
-    }
+    // If current selection is still valid, keep it.
+    if (selectedModel && allIds.includes(selectedModel)) return;
 
-    // If we have a persisted valid choice for this session, keep it.
+    // Check localStorage for a persisted session choice.
     try {
       const persisted = localStorage.getItem(`valet:model:${sessionId}`) || '';
       if (persisted && allIds.includes(persisted)) {
@@ -480,22 +454,14 @@ export function useChat(sessionId: string) {
       // ignore
     }
 
-    const preferred = findModelFromPreferences(models, modelPreferences);
-    if (preferred) {
-      if (selectedModel !== preferred) handleModelChange(preferred);
-      return;
-    }
+    // No valid selection — clear it. The init handler sets the default.
+    if (selectedModel) handleModelChange('');
+  }, [sessionId, handleModelChange, selectedModel]);
 
-    // Last resort: use the first discovered model to avoid implicit server defaults.
-    if (!selectedModel || !allIds.includes(selectedModel)) {
-      handleModelChange(allIds[0]);
-    }
-  }, [sessionId, handleModelChange, selectedModel, modelPreferences]);
-
-  const autoSelectModelRef = useRef(autoSelectModel);
+  const autoSelectModelRef = useRef(validateSelectedModel);
   useEffect(() => {
-    autoSelectModelRef.current = autoSelectModel;
-  }, [autoSelectModel]);
+    autoSelectModelRef.current = validateSelectedModel;
+  }, [validateSelectedModel]);
 
   // Reset state when sessionId changes (e.g. navigating between parent/child sessions).
   // Without this, stale messages from the previous session remain visible until the
@@ -607,25 +573,30 @@ export function useChat(sessionId: string) {
           integrationAuthErrors: [],
         });
         if (initModels.length > 0) {
-          // On fresh init (no messages = session just started/restarted), clear
-          // the localStorage-persisted model so model preferences take effect.
-          // This ensures org/user default model changes are respected after
-          // orchestrator restarts rather than sticking to a stale cached choice.
+          // Use the DO-provided default model on fresh sessions or when no persisted choice
+          const doDefaultModel = typeof message.data?.defaultModel === 'string' ? message.data.defaultModel : null;
+
           if (message.session.messages.length === 0) {
+            // Fresh session — clear stale localStorage and apply DO default
             try {
               localStorage.removeItem(`valet:model:${sessionIdRef.current}`);
             } catch { /* ignore */ }
-            // Force re-selection from preferences since autoSelectModel's closure
-            // still holds the stale selectedModel value from before this render.
-            const allIds = initModels.flatMap((p: ProviderModels) => p.models.map((m: { id: string }) => m.id));
-            const preferred = findModelFromPreferences(initModels, modelPreferences);
-            if (preferred) {
-              handleModelChange(preferred);
-            } else if (allIds.length > 0) {
-              handleModelChange(allIds[0]);
+            if (doDefaultModel) {
+              handleModelChange(doDefaultModel);
             }
           } else {
-            autoSelectModelRef.current(initModels);
+            // Existing session — validate current selection, fall back to DO default
+            const allIds = initModels.flatMap((p: ProviderModels) => p.models.map((m: { id: string }) => m.id));
+            try {
+              const persisted = localStorage.getItem(`valet:model:${sessionIdRef.current}`) || '';
+              if (persisted && allIds.includes(persisted)) {
+                handleModelChange(persisted);
+              } else if (doDefaultModel) {
+                handleModelChange(doDefaultModel);
+              }
+            } catch {
+              if (doDefaultModel) handleModelChange(doDefaultModel);
+            }
           }
         }
         break;
@@ -838,12 +809,8 @@ export function useChat(sessionId: string) {
       }
 
       case 'models': {
-        const modelsMsg = message as WebSocketModelsMessage;
-        setState((prev) => ({
-          ...prev,
-          availableModels: modelsMsg.models,
-        }));
-        autoSelectModelRef.current(modelsMsg.models);
+        // Runner-discovered models are no longer used for UI.
+        // The Worker-resolved catalog from init is authoritative.
         break;
       }
 
