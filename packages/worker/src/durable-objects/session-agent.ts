@@ -2592,13 +2592,10 @@ export class SessionAgentDO {
       }
 
       case 'models':
-        // Runner discovered available models — store and broadcast to clients
+        // Runner discovered available models — store for internal use (failover, context limits)
+        // but do NOT broadcast to clients. The UI uses the Worker-resolved catalog from init.
         if (msg.models) {
           this.setStateValue('availableModels', JSON.stringify(msg.models));
-          this.broadcastToClients({
-            type: 'models',
-            models: msg.models,
-          });
           // Persist to D1 so the settings typeahead works without a running session
           const userId = this.getStateValue('userId');
           if (userId) {
@@ -2606,8 +2603,6 @@ export class SessionAgentDO {
               .catch((err: unknown) => console.error('[SessionAgentDO] Failed to cache models to D1:', err));
           }
         }
-        // Queue drain is handled by `agentStatus: idle` which the Runner now sends
-        // explicitly after model discovery (OpenCode doesn't emit idle on fresh start).
         break;
 
       case 'model-switched': {
