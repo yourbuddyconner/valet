@@ -220,11 +220,6 @@ interface WebSocketErrorMessage {
   channelId?: string;
 }
 
-interface WebSocketModelsMessage {
-  type: 'models';
-  models: ProviderModels[];
-}
-
 interface WebSocketMessagesRemovedMessage {
   type: 'messages.removed';
   messageIds: string[];
@@ -352,7 +347,6 @@ type WebSocketChatMessage =
   | WebSocketQuestionMessage
   | WebSocketAgentStatusMessage
   | WebSocketErrorMessage
-  | WebSocketModelsMessage
   | WebSocketMessagesRemovedMessage
   | WebSocketDiffMessage
   | WebSocketGitStateMessage
@@ -433,35 +427,6 @@ export function useChat(sessionId: string) {
       // ignore
     }
   }, [sessionId]);
-
-  // Validate selected model is still in the available list.
-  // No fallback logic — the DO provides the default via init.
-  const validateSelectedModel = useCallback((models: ProviderModels[]) => {
-    const allIds = models.flatMap((p) => p.models.map((m) => m.id));
-    if (allIds.length === 0) return;
-
-    // If current selection is still valid, keep it.
-    if (selectedModel && allIds.includes(selectedModel)) return;
-
-    // Check localStorage for a persisted session choice.
-    try {
-      const persisted = localStorage.getItem(`valet:model:${sessionId}`) || '';
-      if (persisted && allIds.includes(persisted)) {
-        if (selectedModel !== persisted) handleModelChange(persisted);
-        return;
-      }
-    } catch {
-      // ignore
-    }
-
-    // No valid selection — clear it. The init handler sets the default.
-    if (selectedModel) handleModelChange('');
-  }, [sessionId, handleModelChange, selectedModel]);
-
-  const autoSelectModelRef = useRef(validateSelectedModel);
-  useEffect(() => {
-    autoSelectModelRef.current = validateSelectedModel;
-  }, [validateSelectedModel]);
 
   // Reset state when sessionId changes (e.g. navigating between parent/child sessions).
   // Without this, stale messages from the previous session remain visible until the
@@ -573,8 +538,10 @@ export function useChat(sessionId: string) {
           integrationAuthErrors: [],
         });
         if (initModels.length > 0) {
-          // Use the DO-provided default model on fresh sessions or when no persisted choice
-          const doDefaultModel = typeof message.data?.defaultModel === 'string' ? message.data.defaultModel : null;
+          // Use the DO-provided default model, validated against the catalog
+          const allIds = initModels.flatMap((p: ProviderModels) => p.models.map((m: { id: string }) => m.id));
+          const raw = typeof message.data?.defaultModel === 'string' ? message.data.defaultModel : null;
+          const doDefaultModel = raw && allIds.includes(raw) ? raw : null;
 
           if (message.session.messages.length === 0) {
             // Fresh session — clear stale localStorage and apply DO default
@@ -585,8 +552,7 @@ export function useChat(sessionId: string) {
               handleModelChange(doDefaultModel);
             }
           } else {
-            // Existing session — validate current selection, fall back to DO default
-            const allIds = initModels.flatMap((p: ProviderModels) => p.models.map((m: { id: string }) => m.id));
+            // Existing session — prefer persisted choice, fall back to DO default
             try {
               const persisted = localStorage.getItem(`valet:model:${sessionIdRef.current}`) || '';
               if (persisted && allIds.includes(persisted)) {
@@ -805,12 +771,6 @@ export function useChat(sessionId: string) {
           agentStatus: 'error',
           agentStatusDetail: errorText,
         }));
-        break;
-      }
-
-      case 'models': {
-        // Runner-discovered models are no longer used for UI.
-        // The Worker-resolved catalog from init is authoritative.
         break;
       }
 
