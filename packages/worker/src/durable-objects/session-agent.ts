@@ -9,6 +9,7 @@ import { listTriggers, getTrigger, deleteTrigger, createTrigger, getTriggerForRu
 import { getExecution, getExecutionWithWorkflowName, getExecutionForAuth, getExecutionSteps, getExecutionOwnerAndStatus, checkIdempotencyKey, createExecution, completeExecutionFull, upsertExecutionStep, listExecutions } from '../lib/db/executions.js';
 import { checkWorkflowConcurrency, createWorkflowSession, dispatchOrchestratorPrompt, enqueueWorkflowExecution, sha256Hex } from '../lib/workflow-runtime.js';
 import { assembleCustomProviders, assembleBuiltInProviderModelConfigs } from '../lib/env-assembly.js';
+import { resolveAvailableModels } from '../services/model-catalog.js';
 import { channelRegistry } from '../channels/registry.js';
 import { integrationRegistry } from '../integrations/registry.js';
 import { getUserIntegrations, getOrgIntegrations, updateIntegrationStatus } from '../lib/db/integrations.js';
@@ -901,8 +902,22 @@ export class SessionAgentDO {
     const workspace = this.getStateValue('workspace') || '';
     const title = this.getStateValue('title');
 
-    const availableModelsRaw = this.getStateValue('availableModels');
-    const availableModels = availableModelsRaw ? JSON.parse(availableModelsRaw) : undefined;
+    // Resolve authoritative model catalog from D1 (not from Runner discovery)
+    let availableModels: import('@valet/shared').AvailableModels | undefined;
+    try {
+      availableModels = await resolveAvailableModels(this.appDb, this.env);
+    } catch (err) {
+      console.error('[SessionAgentDO] Failed to resolve available models for init:', err);
+      // Fall back to Runner-discovered models if catalog resolution fails
+      const availableModelsRaw = this.getStateValue('availableModels');
+      availableModels = availableModelsRaw ? JSON.parse(availableModelsRaw) : undefined;
+    }
+
+    // Resolve default model: user prefs → org prefs
+    const initOwnerId = this.getStateValue('userId');
+    const initOwnerDetails = initOwnerId ? await this.getUserDetails(initOwnerId) : undefined;
+    const initModelPrefs = await this.resolveModelPreferences(initOwnerDetails);
+    const defaultModel = initModelPrefs?.[0] ?? null;
 
     // Load audit log for late joiners
     const auditLogRows = this.ctx.storage.sql
@@ -938,6 +953,7 @@ export class SessionAgentDO {
         connectedClients: this.getClientSockets().length + 1,
         connectedUsers,
         availableModels,
+        defaultModel,
         auditLog: auditLogRows.map((row) => ({
           eventType: row.event_type,
           summary: row.summary,
