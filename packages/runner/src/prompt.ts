@@ -424,6 +424,7 @@ export class ChannelSession {
   pendingRetryAuthor: PromptAuthor | undefined;
   waitForEventForced = false;
   failoverInProgress = false;
+  syncPromptInFlight = false;
   retryPending = false;
   finalizeInFlight = false;
   awaitingAssistantForAttempt = false;
@@ -461,6 +462,7 @@ export class ChannelSession {
     this.latestAssistantTextSnapshot = "";
     this.recentEventTrace = [];
     this.waitForEventForced = false;
+    this.syncPromptInFlight = false;
     this.awaitingAssistantForAttempt = false;
     this.turnCreated = false;
     this.turnId = null;
@@ -481,6 +483,7 @@ export class ChannelSession {
     this.activeAssistantMessageIds.clear();
     this.latestAssistantTextSnapshot = "";
     this.recentEventTrace = [];
+    this.syncPromptInFlight = false;
     this.awaitingAssistantForAttempt = false;
     this.turnCreated = false;
     this.turnId = null;
@@ -503,6 +506,7 @@ export class ChannelSession {
     this.activeAssistantMessageIds.clear();
     this.latestAssistantTextSnapshot = "";
     this.recentEventTrace = [];
+    this.syncPromptInFlight = false;
     this.awaitingAssistantForAttempt = false;
     this.turnCreated = false;
     this.turnId = null;
@@ -1330,6 +1334,9 @@ export class PromptHandler {
       this.agentClient.sendAgentStatus("thinking");
       this.awaitingAssistantForAttempt = true;
 
+      // Mark sync prompt in flight so SSE-side finalizeResponse is suppressed
+      channel.syncPromptInFlight = true;
+
       // Synchronous failover loop — try each model in the chain
       const modelsToTry = failoverChain.length > 0 ? failoverChain : [undefined];
       let lastModelError: string | null = null;
@@ -1546,6 +1553,7 @@ export class PromptHandler {
     this.pendingRetryAuthor = undefined;
     this.retryPending = false;
     this.finalizeInFlight = false;
+    if (this.activeChannel) this.activeChannel.syncPromptInFlight = false;
     console.log(`[PromptHandler] Response finalized`);
   }
 
@@ -3461,6 +3469,11 @@ export class PromptHandler {
 
   private async finalizeResponse(force = false): Promise<void> {
     if (!this.activeMessageId || this.failoverInProgress) {
+      return;
+    }
+    // Don't finalize from SSE events while a sync prompt is in flight
+    if (this.activeChannel?.syncPromptInFlight) {
+      console.log(`[PromptHandler] Skipping SSE-side finalization — sync prompt in flight`);
       return;
     }
     if (this.finalizeInFlight) {
