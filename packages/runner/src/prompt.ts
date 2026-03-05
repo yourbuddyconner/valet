@@ -2401,10 +2401,14 @@ export class PromptHandler {
     return { transcriptions, remaining };
   }
 
-  private async sendPromptAsync(sessionId: string, content: string, model?: string, attachments?: PromptAttachment[], author?: PromptAuthor, channelType?: string, channelId?: string): Promise<void> {
-    const url = `${this.opencodeUrl}/session/${sessionId}/prompt_async`;
-    console.log(`[PromptHandler] POST ${url}${model ? ` (model: ${model})` : ''}${attachments?.length ? ` (attachments: ${attachments.length})` : ''}`);
-
+  private buildPromptBody(
+    content: string,
+    model?: string,
+    attachments?: PromptAttachment[],
+    author?: PromptAuthor,
+    channelType?: string,
+    channelId?: string,
+  ): Record<string, unknown> {
     const promptParts: Array<Record<string, unknown>> = [];
     for (const attachment of attachments ?? []) {
       promptParts.push({
@@ -2448,6 +2452,14 @@ export class PromptHandler {
         body.model = { providerID: "", modelID: model };
       }
     }
+    return body;
+  }
+
+  private async sendPromptAsync(sessionId: string, content: string, model?: string, attachments?: PromptAttachment[], author?: PromptAuthor, channelType?: string, channelId?: string): Promise<void> {
+    const url = `${this.opencodeUrl}/session/${sessionId}/prompt_async`;
+    console.log(`[PromptHandler] POST ${url}${model ? ` (model: ${model})` : ''}${attachments?.length ? ` (attachments: ${attachments.length})` : ''}`);
+
+    const body = this.buildPromptBody(content, model, attachments, author, channelType, channelId);
 
     const res = await fetch(url, {
       method: "POST",
@@ -2477,43 +2489,7 @@ export class PromptHandler {
     const url = `${this.opencodeUrl}/session/${sessionId}/message`;
     console.log(`[PromptHandler] POST ${url}${model ? ` (model: ${model})` : ''}${attachments?.length ? ` (attachments: ${attachments.length})` : ''}`);
 
-    const promptParts: Array<Record<string, unknown>> = [];
-    for (const attachment of attachments ?? []) {
-      promptParts.push({
-        type: "file",
-        mime: attachment.mime,
-        url: attachment.url,
-        ...(attachment.filename ? { filename: attachment.filename } : {}),
-      });
-    }
-    // Prefix content with channel context and user identity (agent sees this, users don't)
-    let attributedContent = content;
-    if (channelType && channelId) {
-      attributedContent = `[via ${channelType} | chatId: ${channelId}] ${attributedContent}`;
-    }
-    if (author?.authorName || author?.authorEmail) {
-      const name = author.authorName || 'Unknown';
-      const email = author.authorEmail ? ` <${author.authorEmail}>` : '';
-      const userId = author.authorId ? ` (userId: ${author.authorId})` : '';
-      attributedContent = `[User: ${name}${email}${userId}] ${attributedContent}`;
-    }
-    if (attributedContent) {
-      promptParts.push({ type: "text", text: attributedContent });
-    }
-    if (promptParts.length === 0) {
-      throw new Error("Cannot send empty prompt: no text or attachments");
-    }
-    const body: Record<string, unknown> = {
-      parts: promptParts,
-    };
-    if (model) {
-      const slashIdx = model.indexOf("/");
-      if (slashIdx !== -1) {
-        body.model = { providerID: model.slice(0, slashIdx), modelID: model.slice(slashIdx + 1) };
-      } else {
-        body.model = { providerID: "", modelID: model };
-      }
-    }
+    const body = this.buildPromptBody(content, model, attachments, author, channelType, channelId);
 
     const res = await fetch(url, {
       method: "POST",
