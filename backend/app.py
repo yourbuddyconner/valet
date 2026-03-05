@@ -14,6 +14,7 @@ app = modal.App("valet-backend")
 # Also mount runner package and docker files so sandbox image builds can reference them
 fn_image = (
     modal.Image.debian_slim()
+    .pip_install("fastapi[standard]")
     .add_local_python_source("session", "sandboxes", "config", "images")
     .add_local_dir("docker", remote_path="/root/docker")
     .add_local_dir("packages/runner", remote_path="/root/packages/runner")

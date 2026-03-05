@@ -5,4 +5,5 @@ description = "Valet Modal backend for session and sandbox management"
 requires-python = ">=3.12"
 dependencies = [
     "modal>=0.67.0",
+    "fastapi[standard]",
 ]

@@ -27,13 +27,17 @@
 # Source deployment config if it exists (copy .env.deploy.example to .env.deploy)
 -include .env.deploy
 
+# Project name — all resource names derive from this (set in .env.deploy)
+PROJECT_NAME ?= valet
+CF_WORKER_NAME ?= $(PROJECT_NAME)
+PAGES_PROJECT_NAME ?= $(PROJECT_NAME)-client
+D1_DATABASE_NAME ?= $(PROJECT_NAME)-db
+R2_BUCKET_NAME ?= $(PROJECT_NAME)-storage
+
 WORKER_URL ?= http://localhost:8787
-WORKER_PROD_URL ?= https://your-worker.your-subdomain.workers.dev
-PAGES_PROJECT_NAME ?= valet-client
-MODAL_WORKSPACE ?= your-modal-workspace
+WORKER_PROD_URL ?= https://$(CF_WORKER_NAME).workers.dev
 MODAL_DEPLOY_CMD ?= uv run --project backend modal deploy
-D1_DATABASE_ID ?= your-d1-database-id
-R2_BUCKET_NAME ?= valet-storage
+D1_DATABASE_ID ?=
 ALLOWED_EMAILS ?=
 MODAL_BACKEND_URL ?=
 OPENCODE_URL ?= http://localhost:4096
@@ -45,7 +49,6 @@ API_TOKEN ?= test-api-token-12345
 DOCKER_COMPOSE = docker compose
 PNPM = pnpm
 CF_ENV ?=
-CF_WORKER_NAME ?= valet
 TAIL_FORMAT ?= pretty
 TAIL_SEARCH ?=
 TAIL_SAMPLING_RATE ?=
@@ -121,7 +124,7 @@ db-reset: ## Reset database (drop and recreate)
 	@echo "$(GREEN)Database reset complete!$(NC)"
 
 db-shell: ## Open D1 database shell
-	cd packages/worker && wrangler d1 execute valet-db --local --command "SELECT 1"
+	cd packages/worker && wrangler d1 execute $(D1_DATABASE_NAME) --local --command "SELECT 1"
 
 # ==========================================
 # Docker Operations
@@ -644,7 +647,7 @@ release: ## Full idempotent release: install, build, push image, deploy worker +
 	@echo ""
 	@echo "Step 6/7: Running database migrations and seeding..."
 	@make _wrangler-config
-	@cd packages/worker && wrangler d1 migrations apply valet-db --remote -c wrangler.deploy.toml
+	@cd packages/worker && wrangler d1 migrations apply $(D1_DATABASE_NAME) --remote -c wrangler.deploy.toml
 	@rm -f packages/worker/wrangler.deploy.toml
 	@echo "$(GREEN)✓ Database migrated and seeded$(NC)"
 	@echo ""
@@ -661,14 +664,8 @@ release: ## Full idempotent release: install, build, push image, deploy worker +
 	@echo ""
 	@echo "$(YELLOW)Sign in with GitHub to get started.$(NC)"
 
-deploy: deploy-worker deploy-migrate deploy-modal deploy-client ## Deploy everything (worker + modal + client)
-	@echo ""
-	@echo "$(GREEN)========================================$(NC)"
-	@echo "$(GREEN)All deployments complete!$(NC)"
-	@echo "$(GREEN)========================================$(NC)"
-	@echo "Worker:  $(WORKER_PROD_URL)"
-	@echo "Client:  https://$(PAGES_PROJECT_NAME).pages.dev"
-	@echo "Modal:   https://modal.com/apps/$(MODAL_WORKSPACE)/main/deployed/valet-backend"
+deploy: ## Deploy everything — auto-creates resources, discovers URLs
+	@./scripts/deploy.sh
 
 deploy-worker: generate-registries ## Deploy Cloudflare Worker
 	@make _wrangler-config
@@ -678,7 +675,9 @@ deploy-worker: generate-registries ## Deploy Cloudflare Worker
 	@echo "$(GREEN)✓ Worker deployed$(NC)"
 
 _wrangler-config: ## Generate wrangler.deploy.toml from .env.deploy values
-	@sed -e 's|$${D1_DATABASE_ID}|$(D1_DATABASE_ID)|g' \
+	@sed -e 's|$${CF_WORKER_NAME}|$(CF_WORKER_NAME)|g' \
+		-e 's|$${D1_DATABASE_NAME}|$(D1_DATABASE_NAME)|g' \
+		-e 's|$${D1_DATABASE_ID}|$(D1_DATABASE_ID)|g' \
 		-e 's|$${R2_BUCKET_NAME}|$(R2_BUCKET_NAME)|g' \
 		-e 's|$${ALLOWED_EMAILS}|$(ALLOWED_EMAILS)|g' \
 		-e 's|$${MODAL_BACKEND_URL}|$(MODAL_BACKEND_URL)|g' \
@@ -687,7 +686,7 @@ _wrangler-config: ## Generate wrangler.deploy.toml from .env.deploy values
 deploy-migrate: ## Apply D1 migrations to production
 	@make _wrangler-config
 	@echo "$(GREEN)Applying D1 migrations...$(NC)"
-	cd packages/worker && wrangler d1 migrations apply valet-db --remote -c wrangler.deploy.toml
+	cd packages/worker && wrangler d1 migrations apply $(D1_DATABASE_NAME) --remote -c wrangler.deploy.toml
 	@rm -f packages/worker/wrangler.deploy.toml
 	@echo "$(GREEN)✓ Migrations applied$(NC)"
 
@@ -751,10 +750,8 @@ image-push: image-build ## Build and push OpenCode image to GHCR
 # but can be overridden, e.g.:
 #   make destroy CF_WORKER_NAME=old-name PAGES_PROJECT_NAME=old-pages ...
 
-# D1 database name (not the UUID — wrangler d1 delete takes a name)
-D1_DATABASE_NAME ?= valet-db
 # Modal app name
-MODAL_APP_NAME ?= valet-backend
+MODAL_APP_NAME ?= $(PROJECT_NAME)-backend
 
 destroy: ## Destroy all remote resources (Worker, D1, R2, Pages, Modal) — DESTRUCTIVE
 	@echo "$(RED)========================================$(NC)"
