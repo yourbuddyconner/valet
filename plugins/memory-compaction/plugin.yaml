@@ -1,0 +1,4 @@
+name: memory-compaction
+version: 0.0.1
+description: Memory compaction plugin for OpenCode
+icon: "\U0001F9E0"

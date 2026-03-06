@@ -1,0 +1,4 @@
+name: browser
+version: 0.0.1
+description: Browser control via agent-browser CLI
+icon: "\U0001F310"
