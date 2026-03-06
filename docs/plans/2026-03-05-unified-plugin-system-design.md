@@ -1,5 +1,7 @@
 # Unified Plugin System Design
 
+> **Status:** Implemented. See commits on `main` branch. Directory structure uses `packages/plugin-*/` (not `plugins/` as originally planned).
+
 > Replaces the fragmented `packages/actions-*`, `packages/channel-*`, `docker/opencode/skills/`, and `docker/opencode/plugins/` with a single plugin abstraction.
 
 ## Problem
@@ -83,19 +85,19 @@ Content plugins are dynamic — artifacts stored in D1, injected at session boot
 
 ### Plugin Sources
 
-#### Source 1: Platform plugins (`plugins/` in the monorepo)
+#### Source 1: Platform plugins (`packages/plugin-*/` in the monorepo)
 
 ```
-plugins/
-  github/           # was packages/actions-github
-  slack/            # was packages/actions-slack + packages/channel-slack
-  telegram/         # was packages/channel-telegram
-  kubernetes/       # new — skills + tools
-  browser/          # was docker/opencode/skills/browser
+packages/
+  plugin-github/           # was packages/actions-github
+  plugin-slack/            # was packages/actions-slack + packages/channel-slack
+  plugin-telegram/         # was packages/channel-telegram
+  plugin-kubernetes/       # new — skills + tools
+  plugin-browser/          # was docker/opencode/skills/browser
   ...
 ```
 
-Full plugin packages with `plugin.yaml`. Can contain any capability type. Forks add plugins by putting new directories here and adding npm dependencies as needed.
+Full plugin packages with `plugin.yaml`. Can contain any capability type. Forks add plugins by putting new directories here and adding npm dependencies as needed. Each is an npm workspace package (`@valet/plugin-*`).
 
 #### Source 2: Per-repo content (`.valet/` in any cloned repo)
 
@@ -185,13 +187,13 @@ Content flows from D1 to sandbox via the Runner's existing WebSocket connection 
 1. **DO assembles content** — queries `org_plugin_artifacts` for active org plugins, plus `agent_persona_files` for the selected persona.
 2. **DO sends to Runner** — plugin content payload included in session config over WebSocket.
 3. **Runner writes files** — before starting OpenCode:
-   - Personas -> `/workspace/.valet/persona/*.md`
-   - Skills -> `/workspace/.opencode/skills/<name>/SKILL.md`
-   - Tools -> `/workspace/.opencode/tools/<name>.json`
+   - Personas -> `/root/.opencode/personas/`
+   - Skills -> `/root/.opencode/skills/`
+   - Tools/plugins -> `/root/.opencode/plugins/valet/`
 4. **Runner scans repo** — if `allowRepoContent` is enabled, reads `.valet/personas/`, `.valet/skills/`, `.valet/tools/` from the cloned repo and merges on top (repo content overrides org content for same-named files).
 5. **Runner starts OpenCode**.
 
-`PERSONA_FILES_JSON` env var and the `start.sh` persona injection block are removed.
+`PERSONA_FILES_JSON` env var and the `start.sh` persona injection block are removed. Content is now delivered via the Runner WebSocket `plugin-content` message.
 
 #### Assembly pseudocode
 
@@ -227,33 +229,33 @@ export { type PluginManifest } from './manifest'; // parsed plugin.yaml type
 
 ### Registry Generation
 
-`make generate-registries` is updated to scan `plugins/*/` instead of `packages/actions-*/` and `packages/channel-*/`. It checks for `actions/index.ts` and `channels/index.ts` to determine what to register. Output format unchanged — worker import maps.
+`make generate-registries` is updated to scan `packages/plugin-*/` instead of `packages/actions-*/` and `packages/channel-*/`. It checks for `actions/index.ts` and `channels/index.ts` to determine what to register. Output format unchanged — worker import maps.
 
 ## Migration Path
 
 ### Phase 1: Restructure directories
 
-Move existing packages into `plugins/`:
+Move existing packages into `packages/plugin-*/`:
 
 | From | To |
 |---|---|
-| `packages/actions-github/src/*` | `plugins/github/actions/*` |
-| `packages/actions-slack/src/*` | `plugins/slack/actions/*` |
-| `packages/channel-slack/src/*` | `plugins/slack/channels/*` |
-| `packages/channel-telegram/src/*` | `plugins/telegram/channels/*` |
-| `packages/actions-gmail/src/*` | `plugins/gmail/actions/*` |
-| `packages/actions-google-calendar/src/*` | `plugins/google-calendar/actions/*` |
-| `packages/actions-linear/src/*` | `plugins/linear/actions/*` |
-| `packages/actions-notion/src/*` | `plugins/notion/actions/*` |
-| `packages/actions-stripe/src/*` | `plugins/stripe/actions/*` |
-| `packages/actions-cloudflare/src/*` | `plugins/cloudflare/actions/*` |
-| `packages/actions-sentry/src/*` | `plugins/sentry/actions/*` |
-| `packages/actions-deepwiki/src/*` | `plugins/deepwiki/actions/*` |
-| `docker/opencode/skills/browser/` | `plugins/browser/skills/` |
-| `docker/opencode/skills/workflows/` | `plugins/workflows/skills/` |
-| `docker/opencode/skills/sandbox-tunnels/` | `plugins/sandbox-tunnels/skills/` |
+| `packages/actions-github/src/*` | `packages/plugin-github/actions/*` |
+| `packages/actions-slack/src/*` | `packages/plugin-slack/actions/*` |
+| `packages/channel-slack/src/*` | `packages/plugin-slack/channels/*` |
+| `packages/channel-telegram/src/*` | `packages/plugin-telegram/channels/*` |
+| `packages/actions-gmail/src/*` | `packages/plugin-gmail/actions/*` |
+| `packages/actions-google-calendar/src/*` | `packages/plugin-google-calendar/actions/*` |
+| `packages/actions-linear/src/*` | `packages/plugin-linear/actions/*` |
+| `packages/actions-notion/src/*` | `packages/plugin-notion/actions/*` |
+| `packages/actions-stripe/src/*` | `packages/plugin-stripe/actions/*` |
+| `packages/actions-cloudflare/src/*` | `packages/plugin-cloudflare/actions/*` |
+| `packages/actions-sentry/src/*` | `packages/plugin-sentry/actions/*` |
+| `packages/actions-deepwiki/src/*` | `packages/plugin-deepwiki/actions/*` |
+| `docker/opencode/skills/browser/` | `packages/plugin-browser/skills/` |
+| `docker/opencode/skills/workflows/` | `packages/plugin-workflows/skills/` |
+| `docker/opencode/skills/sandbox-tunnels/` | `packages/plugin-sandbox-tunnels/skills/` |
 
-Add `plugin.yaml` to each. Update `make generate-registries` to scan `plugins/`.
+Add `plugin.yaml` to each. Update `make generate-registries` to scan `packages/plugin-*/`.
 
 ### Phase 2: Content delivery via Runner
 
@@ -266,7 +268,7 @@ Add `plugin.yaml` to each. Update `make generate-registries` to scan `plugins/`.
 
 ### Phase 3: Cleanup
 
-- Delete `packages/actions-*` and `packages/channel-*` directories
+- Delete old `packages/actions-*` and `packages/channel-*` directories (now under `packages/plugin-*/actions` and `packages/plugin-*/channels`)
 - Delete `packages/sdk/src/integrations/` and `packages/sdk/src/channels/` (re-export from `@valet/sdk/plugins`)
 - Update `docker/opencode/opencode.json` path globs
 - Update all docs/specs

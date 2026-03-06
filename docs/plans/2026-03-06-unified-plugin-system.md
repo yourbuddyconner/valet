@@ -1,5 +1,7 @@
 # Unified Plugin System Implementation Plan
 
+> **Status:** Implementation complete. All 16 tasks finished. Key deviation: plugins live in `packages/plugin-*/` instead of `plugins/*/` per user direction.
+
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
 **Goal:** Replace the fragmented `packages/actions-*`, `packages/channel-*`, `docker/opencode/skills/`, and `docker/opencode/plugins/` with a unified `plugins/` directory, backed by a D1 registry that delivers content plugins (skills, personas, tools) to sandboxes via the Runner WebSocket.
