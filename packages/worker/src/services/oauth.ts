@@ -264,6 +264,9 @@ export async function handleGitHubCallback(
     scopes: tokenData.scope || 'repo read:user user:email',
   });
 
+  // Auto-provision GitHub integration so tools are available immediately
+  await db.ensureIntegration(appDb, user.id, 'github');
+
   const sessionToken = await finalizeUserLogin(env, user, isNewUser, params.inviteCode, email, 'github');
   return { ok: true, sessionToken };
 }

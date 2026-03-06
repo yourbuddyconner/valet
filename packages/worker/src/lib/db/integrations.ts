@@ -103,6 +103,32 @@ export async function deleteIntegration(db: AppDb, id: string): Promise<void> {
   await db.delete(integrations).where(eq(integrations.id, id));
 }
 
+/**
+ * Ensure an integration record exists and is active for a user+service.
+ * Used during OAuth login to auto-provision integrations (e.g. GitHub on login).
+ */
+export async function ensureIntegration(
+  db: AppDb,
+  userId: string,
+  service: string,
+): Promise<void> {
+  await db.insert(integrations).values({
+    id: crypto.randomUUID(),
+    userId,
+    service,
+    config: { entities: [] } as unknown as Integration['config'],
+    status: 'active',
+    scope: 'user',
+  }).onConflictDoUpdate({
+    target: [integrations.userId, integrations.service],
+    set: {
+      status: 'active',
+      errorMessage: null,
+      updatedAt: sql`datetime('now')`,
+    },
+  });
+}
+
 export async function deleteOrgIntegrationByService(db: AppDb, service: string): Promise<void> {
   await db.delete(integrations).where(
     and(eq(integrations.service, service), eq(integrations.scope, 'org')),
