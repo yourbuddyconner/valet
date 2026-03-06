@@ -4,7 +4,9 @@
 
 Give your AI coding agent its own sandbox — complete with VS Code, a browser, and a terminal — and let it work in the background while you do something else. Watch it think, intervene when needed, or check back when it's done.
 
-<!-- TODO: Add screenshot or GIF of a running session showing the chat + IDE panels -->
+<p align="center">
+  <img src="docs/valet.png" alt="Valet session" />
+</p>
 
 ## Features
 
