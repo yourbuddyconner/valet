@@ -995,3 +995,39 @@ export interface UsageStatsResponse {
   }>;
   period: number;
 }
+
+// Plugin types
+export interface OrgPlugin {
+  id: string;
+  orgId: string;
+  name: string;
+  version: string;
+  description?: string;
+  icon?: string;
+  source: string;
+  capabilities: string[];
+  status: string;
+  installedBy: string;
+  installedAt: string;
+  updatedAt: string;
+}
+
+export interface OrgPluginArtifact {
+  id: string;
+  pluginId: string;
+  type: 'skill' | 'persona' | 'tool';
+  filename: string;
+  content: string;
+  sortOrder: number;
+}
+
+export interface OrgPluginSettings {
+  allowRepoContent: boolean;
+}
+
+export interface PluginContentPayload {
+  personas: Array<{ filename: string; content: string; sortOrder: number }>;
+  skills: Array<{ filename: string; content: string }>;
+  tools: Array<{ filename: string; content: string }>;
+  allowRepoContent: boolean;
+}
