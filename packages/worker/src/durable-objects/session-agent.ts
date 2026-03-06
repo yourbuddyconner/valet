@@ -7860,12 +7860,13 @@ export class SessionAgentDO {
 
         console.log(`[SessionAgentDO] list-tools: ${integration.service} returned ${actions.length} actions`);
         for (const action of actions) {
-          // If query provided, filter by case-insensitive substring match on name/description
+          // If query provided, filter by case-insensitive substring match on name/description/service
           if (query) {
             const lowerQuery = query.toLowerCase();
             const matchesName = action.name.toLowerCase().includes(lowerQuery);
             const matchesDesc = action.description.toLowerCase().includes(lowerQuery);
-            if (!matchesName && !matchesDesc) continue;
+            const matchesService = integration.service.toLowerCase().includes(lowerQuery);
+            if (!matchesName && !matchesDesc && !matchesService) continue;
           }
 
           const compositeId = `${integration.service}:${action.id}`;
@@ -7972,6 +7973,14 @@ export class SessionAgentDO {
         if (orgMatch) {
           activeIntegration = { ...orgMatch, userId: '', scope: 'org' as const, updatedAt: orgMatch.createdAt } as any;
           isOrgScoped = true;
+        }
+      }
+
+      // Fall back to auto-enabled plugins (no auth required)
+      if (!activeIntegration) {
+        const autoServices = await getAutoEnabledServices(this.env.DB);
+        if (autoServices.includes(service)) {
+          activeIntegration = { id: `auto:${service}`, service, status: 'active' } as any;
         }
       }
 
