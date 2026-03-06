@@ -16,23 +16,26 @@ valet/
 │   ├── shared/              # Shared TypeScript types & errors
 │   ├── runner/              # Bun/TS runner for inside sandboxes
 │   ├── sdk/                 # Integration & channel SDK contracts, MCP client, UI components
-│   ├── channel-slack/       # Slack channel adapter
-│   ├── channel-telegram/    # Telegram channel adapter
-│   ├── actions-github/      # GitHub integration (PRs, issues, webhooks)
-│   ├── actions-slack/       # Slack actions (messages, channels)
-│   ├── actions-gmail/       # Gmail integration
-│   ├── actions-google-calendar/  # Google Calendar integration
-│   ├── actions-linear/      # Linear issue tracking
-│   ├── actions-notion/      # Notion integration
-│   ├── actions-stripe/      # Stripe integration
-│   ├── actions-cloudflare/  # Cloudflare API integration
-│   ├── actions-sentry/      # Sentry error tracking
-│   └── actions-deepwiki/    # DeepWiki knowledge base
+│   ├── plugin-github/       # GitHub integration (actions: PRs, issues, webhooks)
+│   ├── plugin-slack/        # Slack (actions + channel adapter)
+│   ├── plugin-gmail/        # Gmail integration
+│   ├── plugin-google-*/     # Google Calendar, Drive, Sheets integrations
+│   ├── plugin-linear/       # Linear issue tracking
+│   ├── plugin-notion/       # Notion integration
+│   ├── plugin-stripe/       # Stripe integration
+│   ├── plugin-cloudflare/   # Cloudflare API integration
+│   ├── plugin-sentry/       # Sentry error tracking
+│   ├── plugin-deepwiki/     # DeepWiki knowledge base
+│   ├── plugin-telegram/     # Telegram (channel adapter)
+│   ├── plugin-browser/      # Browser skill (content-only)
+│   ├── plugin-workflows/    # Workflow skill (content-only)
+│   ├── plugin-sandbox-tunnels/  # Tunnel skill (content-only)
+│   └── plugin-memory-compaction/ # Memory compaction tool (content-only)
 ├── backend/                 # Modal Python backend
 ├── docker/
 │   ├── Dockerfile.sandbox   # Sandbox container image
 │   ├── start.sh             # Sandbox startup script
-│   └── opencode/            # OpenCode config: tools/, skills/, plugins/
+│   └── opencode/            # OpenCode config: tools/
 ├── docs/
 │   └── specs/               # Subsystem specs (source of truth per domain)
 ├── V1.md                    # Original architecture spec (may be outdated)
@@ -81,7 +84,7 @@ These are decided and locked in. Do not revisit:
 4. **Repo-specific images** from day one. Base image fallback for unconfigured repos.
 5. **iframes** for VNC (websockify noVNC web UI) and Terminal (TTYD web UI). No embedded JS clients.
 6. **Single auth gateway proxy** on port 9000 in sandbox. Routes `/vscode/*`, `/vnc/*`, `/ttyd/*` to internal services. JWT validation.
-7. **Plugin SDK auto-discovery** — action and channel packages are auto-registered via generated registry files (`make generate-registries`).
+7. **Unified plugin system** — all extensions (actions, channels, skills, personas, tools) live in `packages/plugin-*/`. Code plugins (actions/channels) are compiled into the worker via generated registries (`make generate-registries`). Content plugins (skills/personas/tools) are synced to D1 at startup and delivered to sandboxes via the Runner WebSocket.
 8. **User orchestrator is a full agent session** — SessionAgent DO + sandbox + Runner + OpenCode with orchestrator persona and tools. Uses well-known session ID `orchestrator:{userId}`.
 9. **Org orchestrator is also a full agent session** — org's "chief of staff", admin-configured identity/handle, handles unattributed events + automation rules. Uses well-known session ID `orchestrator:org:{orgId}`.
 
@@ -231,8 +234,8 @@ The system OpenCode instance is configured via `docker/opencode/opencode.json` a
 1. **Frontend**: Run `cd packages/client && pnpm dev`, open `http://localhost:5173` in the VNC browser (port 6080) to preview changes live.
 2. **Worker**: Run `cd packages/worker && pnpm dev` to start the worker locally with `wrangler dev` on `:8787`. You can also point the frontend at it: `VITE_API_URL=http://localhost:8787/api pnpm dev`. Use `pnpm typecheck` to catch type errors.
 3. **Shared types**: Edit `packages/shared/src/`, then `pnpm typecheck` from root to verify all consumers compile.
-4. **SDK**: Edit `packages/sdk/src/`, then `pnpm typecheck` from root. SDK exports are consumed by action packages, channel packages, and the worker.
-5. **Action/channel packages**: Edit `packages/actions-*/` or `packages/channel-*/`. Run `make generate-registries` if adding a new package. Run `pnpm typecheck` to verify.
+4. **SDK**: Edit `packages/sdk/src/`, then `pnpm typecheck` from root. SDK exports are consumed by plugin packages and the worker.
+5. **Plugin packages**: Edit `packages/plugin-*/`. Run `make generate-registries` if adding a new plugin with actions or channels. Run `pnpm typecheck` to verify.
 6. **Runner**: Edit `packages/runner/src/`, run `cd packages/runner && pnpm typecheck`. The live runner instance is managed by `start.sh` — don't restart it manually.
 7. **Migrations**: Write SQL in `packages/worker/migrations/NNNN_name.sql` and add the corresponding Drizzle schema in `packages/worker/src/lib/schema/`. Migrations are applied via `wrangler d1 migrations apply` from outside the sandbox or during `make deploy`.
 
@@ -258,7 +261,7 @@ You can also `curl` the deployed API directly for testing routes.
 - Three Durable Objects in `src/durable-objects/`: `SessionAgentDO` (session-agent.ts), `EventBusDO` (event-bus.ts), `WorkflowExecutorDO` (workflow-executor.ts). All re-exported from `index.ts`.
 - Services go in `packages/worker/src/services/<name>.ts`
 - Middleware: `auth.ts` (OAuth + API keys), `db.ts` (Drizzle setup), `admin.ts` (role-based access), `error-handler.ts` (global error handling). Auth sets `c.get('user')` with `{ id, email, role }`.
-- Plugin registries: `src/integrations/packages.ts` (auto-generated, 10 action packages) and `src/channels/packages.ts` (auto-generated, 2 channel packages). Regenerate with `make generate-registries`.
+- Plugin registries: `src/integrations/packages.ts` (actions), `src/channels/packages.ts` (channels), `src/plugins/content-registry.ts` (skills/personas/tools). All auto-generated by `make generate-registries` from `packages/plugin-*/`.
 - Env types in `packages/worker/src/env.ts` — `Env` interface (bindings) and `Variables` interface (request context)
 - Errors use classes from `@valet/shared`: `UnauthorizedError`, `NotFoundError`, `ValidationError`
 - All API responses are JSON. Error format: `{ error, code, requestId }`
@@ -295,29 +298,25 @@ You can also `curl` the deployed API directly for testing routes.
 - Metadata helpers in `packages/sdk/src/meta.ts`
 - Exports: `@valet/sdk` (main), `@valet/sdk/channels`, `@valet/sdk/integrations`, `@valet/sdk/meta`, `@valet/sdk/ui`
 
-### Action Packages (`packages/actions-*`)
+### Plugin Packages (`packages/plugin-*`)
 
-Each action package follows a standard structure:
+Each plugin lives in `packages/plugin-<name>/` with a `plugin.yaml` manifest. Plugins can provide any combination of:
 
-- `src/index.ts` — package entry, re-exports provider/actions/triggers
-- `src/provider.ts` — OAuth/API configuration for the service
-- `src/actions.ts` — tool definitions the agent can invoke
-- `src/triggers.ts` — webhook/event handlers from the service
-- `src/api.ts` — (optional) typed API client for the service
+**Code capabilities** (compiled into worker):
+- `src/actions/` — tool definitions the agent can invoke (provider, actions, triggers)
+- `src/channels/` — channel transport implementation (send/receive messages)
 
-Auto-discovered by the worker via `src/integrations/packages.ts` (generated by `make generate-registries`). Each package depends on `@valet/sdk` for contracts.
+**Content capabilities** (delivered to sandbox via Runner WebSocket):
+- `skills/*.md` — OpenCode skill files
+- `personas/*.md` — persona files
+- `tools/*.ts` — OpenCode plugin/tool files
 
-### Channel Packages (`packages/channel-*`)
+Code plugins have `package.json`, `tsconfig.json`, and export via `@valet/plugin-<name>/actions` and/or `@valet/plugin-<name>/channels`. Content-only plugins need just `plugin.yaml` and content files.
 
-Each channel package implements the `ChannelTransport` contract from `@valet/sdk/channels`:
-
-- `src/index.ts` — package entry
-- `src/provider.ts` — channel configuration and setup
-- `src/transport.ts` — message send/receive implementation
-- `src/format.ts` — (optional) message formatting for the platform
-- `src/verify.ts` — (optional) webhook signature verification
-
-Auto-discovered by the worker via `src/channels/packages.ts` (generated by `make generate-registries`).
+Auto-discovered by `make generate-registries` which scans `packages/plugin-*/` and generates:
+- `src/integrations/packages.ts` — action plugin registry
+- `src/channels/packages.ts` — channel plugin registry
+- `src/plugins/content-registry.ts` — inlined content artifacts for D1 sync
 
 ### Runner
 
@@ -356,24 +355,20 @@ Auto-discovered by the worker via `src/channels/packages.ts` (generated by `make
 7. Add React Query hooks in `packages/client/src/api/<name>.ts`
 8. Run `make db-migrate` (local) or apply to production via the deploy migration workflow above
 
-### Adding a new integration (action package)
+### Adding a new plugin
 
-1. Create package: `packages/actions-<name>/` with `package.json`, `tsconfig.json`, `src/index.ts`
-2. Add `@valet/sdk` as a dependency
-3. Implement `src/provider.ts` (OAuth/API config), `src/actions.ts` (tool definitions), `src/triggers.ts` (webhook handlers)
-4. Export everything from `src/index.ts`
-5. Run `make generate-registries` to auto-register the package in the worker
-6. Add any needed OAuth routes in `packages/worker/src/routes/`
-7. Add credential storage if needed (see `docs/specs/integrations.md`)
-
-### Adding a new channel
-
-1. Create package: `packages/channel-<name>/` with `package.json`, `tsconfig.json`, `src/index.ts`
-2. Add `@valet/sdk` as a dependency
-3. Implement the `ChannelTransport` contract from `@valet/sdk/channels` in `src/transport.ts`
-4. Add `src/provider.ts` for channel configuration
-5. Run `make generate-registries` to auto-register the channel in the worker
-6. Add webhook/event routes in `packages/worker/src/routes/` if the channel receives inbound messages
+1. Create directory: `packages/plugin-<name>/`
+2. Add `plugin.yaml` with name, version, description, icon
+3. For **code plugins** (actions/channels):
+   - Add `package.json` with `@valet/sdk` dependency and exports (`./actions`, `./channels`)
+   - Add `tsconfig.json` extending root config
+   - Implement `src/actions/` (provider, actions, triggers) and/or `src/channels/` (transport)
+   - Add reference to root `tsconfig.json` and `packages/worker/tsconfig.json`
+   - Add dependency in `packages/worker/package.json`: `"@valet/plugin-<name>": "workspace:*"`
+4. For **content plugins** (skills/personas/tools):
+   - Add content files in `skills/*.md`, `personas/*.md`, or `tools/*.ts`
+5. Run `make generate-registries` to regenerate all registries
+6. Run `pnpm typecheck` to verify
 
 ### Adding a new Durable Object
 
