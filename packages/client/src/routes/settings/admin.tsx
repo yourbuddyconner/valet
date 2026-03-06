@@ -29,7 +29,7 @@ import { useAvailableModels } from '@/api/sessions';
 import type { ProviderModels } from '@/api/sessions';
 import { useSlackInstallStatus, useInstallSlack, useUninstallSlack } from '@/api/slack';
 import { ActionPoliciesSection } from '@/components/settings/action-policies-section';
-import { usePlugins, usePluginSettings, useUpdatePluginStatus, useSyncPlugins, useUpdatePluginSettings } from '@/api/plugins';
+import { usePlugins, usePluginDetail, usePluginSettings, useUpdatePluginStatus, useSyncPlugins, useUpdatePluginSettings } from '@/api/plugins';
 import { Badge } from '@/components/ui/badge';
 import { ActionEnablementSection } from '@/components/settings/action-enablement-section';
 
@@ -1798,6 +1798,7 @@ function PluginsSection() {
   const updateStatusMutation = useUpdatePluginStatus();
   const syncMutation = useSyncPlugins();
   const updateSettingsMutation = useUpdatePluginSettings();
+  const [expandedId, setExpandedId] = React.useState<string | null>(null);
 
   const capabilityLabel: Record<string, string> = {
     actions: 'Actions',
@@ -1805,6 +1806,12 @@ function PluginsSection() {
     skills: 'Skills',
     tools: 'Tools',
     personas: 'Personas',
+  };
+
+  const artifactTypeLabel: Record<string, string> = {
+    skill: 'Skill',
+    persona: 'Persona',
+    tool: 'Tool',
   };
 
   return (
@@ -1843,52 +1850,71 @@ function PluginsSection() {
         ) : !plugins?.length ? (
           <div className="py-8 text-center text-sm text-neutral-400">No plugins installed</div>
         ) : (
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-neutral-200 dark:border-neutral-700">
-                <th className="pb-2 text-left font-medium text-neutral-500 dark:text-neutral-400">Plugin</th>
-                <th className="pb-2 text-left font-medium text-neutral-500 dark:text-neutral-400">Capabilities</th>
-                <th className="pb-2 text-left font-medium text-neutral-500 dark:text-neutral-400">Version</th>
-                <th className="pb-2 text-left font-medium text-neutral-500 dark:text-neutral-400">Status</th>
-                <th className="pb-2 text-right font-medium text-neutral-500 dark:text-neutral-400" />
-              </tr>
-            </thead>
-            <tbody>
-              {plugins.map((plugin) => (
-                <tr key={plugin.id} className="border-b border-neutral-100 last:border-0 dark:border-neutral-700/50">
-                  <td className="py-2.5">
-                    <div className="flex items-center gap-2">
-                      {plugin.icon && <span>{plugin.icon}</span>}
-                      <div>
-                        <div className="font-medium text-neutral-900 dark:text-neutral-100">
-                          {plugin.name}
+          <div className="divide-y divide-neutral-100 dark:divide-neutral-700/50">
+            {plugins.map((plugin) => {
+              const isExpanded = expandedId === plugin.id;
+              const hasContent = plugin.capabilities.some(c => ['skills', 'tools', 'personas'].includes(c));
+              return (
+                <div key={plugin.id}>
+                  <div className="flex items-center gap-3 py-2.5">
+                    {/* Expand toggle */}
+                    <button
+                      type="button"
+                      onClick={() => hasContent ? setExpandedId(isExpanded ? null : plugin.id) : undefined}
+                      className={`flex items-center ${hasContent ? 'cursor-pointer' : 'cursor-default'}`}
+                      disabled={!hasContent}
+                    >
+                      <svg
+                        xmlns="http://www.w3.org/2000/svg"
+                        width="16"
+                        height="16"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        className={`h-4 w-4 transition-transform ${hasContent ? 'text-neutral-400' : 'text-transparent'} ${isExpanded ? 'rotate-180' : ''}`}
+                      >
+                        <path d="m6 9 6 6 6-6" />
+                      </svg>
+                    </button>
+
+                    {/* Plugin info */}
+                    <button
+                      type="button"
+                      onClick={() => hasContent ? setExpandedId(isExpanded ? null : plugin.id) : undefined}
+                      className="flex flex-1 items-center gap-3 text-left"
+                    >
+                      <div className="flex items-center gap-2 min-w-0">
+                        {plugin.icon && <span className="text-base">{plugin.icon}</span>}
+                        <div className="min-w-0">
+                          <span className="text-sm font-medium text-neutral-900 dark:text-neutral-100">
+                            {plugin.name}
+                          </span>
+                          {plugin.description && (
+                            <span className="ml-2 text-xs text-neutral-400 dark:text-neutral-500">
+                              {plugin.description}
+                            </span>
+                          )}
                         </div>
-                        {plugin.description && (
-                          <div className="text-xs text-neutral-400 dark:text-neutral-500">
-                            {plugin.description}
-                          </div>
-                        )}
                       </div>
-                    </div>
-                  </td>
-                  <td className="py-2.5">
-                    <div className="flex flex-wrap gap-1">
-                      {plugin.capabilities.map((cap) => (
-                        <Badge key={cap} variant="secondary">
-                          {capabilityLabel[cap] || cap}
-                        </Badge>
-                      ))}
-                    </div>
-                  </td>
-                  <td className="py-2.5 text-neutral-500 dark:text-neutral-400">
-                    {plugin.version}
-                  </td>
-                  <td className="py-2.5">
+                      <div className="flex flex-wrap gap-1 ml-auto mr-4">
+                        {plugin.capabilities.map((cap) => (
+                          <Badge key={cap} variant="secondary">
+                            {capabilityLabel[cap] || cap}
+                          </Badge>
+                        ))}
+                      </div>
+                      <span className="text-xs text-neutral-400 dark:text-neutral-500 w-12 text-right shrink-0">
+                        {plugin.version}
+                      </span>
+                    </button>
+
+                    {/* Status + actions */}
                     <Badge variant={plugin.status === 'active' ? 'success' : 'error'}>
                       {plugin.status}
                     </Badge>
-                  </td>
-                  <td className="py-2.5 text-right">
                     <Button
                       variant="ghost"
                       size="sm"
@@ -1902,14 +1928,84 @@ function PluginsSection() {
                     >
                       {plugin.status === 'active' ? 'Disable' : 'Enable'}
                     </Button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+                  </div>
+
+                  {/* Expanded artifact detail */}
+                  {isExpanded && (
+                    <PluginArtifactDetail pluginId={plugin.id} typeLabels={artifactTypeLabel} />
+                  )}
+                </div>
+              );
+            })}
+          </div>
         )}
       </div>
     </Section>
+  );
+}
+
+function PluginArtifactDetail({ pluginId, typeLabels }: { pluginId: string; typeLabels: Record<string, string> }) {
+  const { data: plugin, isLoading } = usePluginDetail(pluginId);
+  const [previewFile, setPreviewFile] = React.useState<string | null>(null);
+
+  if (isLoading) {
+    return (
+      <div className="border-t border-neutral-100 bg-neutral-50 px-8 py-4 dark:border-neutral-700/50 dark:bg-neutral-800/50">
+        <span className="text-xs text-neutral-400">Loading artifacts...</span>
+      </div>
+    );
+  }
+
+  const artifacts = plugin?.artifacts ?? [];
+  if (artifacts.length === 0) {
+    return (
+      <div className="border-t border-neutral-100 bg-neutral-50 px-8 py-4 dark:border-neutral-700/50 dark:bg-neutral-800/50">
+        <span className="text-xs text-neutral-400">No content artifacts</span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="border-t border-neutral-100 bg-neutral-50 dark:border-neutral-700/50 dark:bg-neutral-800/50">
+      <div className="px-8 py-3">
+        <div className="text-xs font-medium text-neutral-500 dark:text-neutral-400 mb-2">
+          Content Artifacts ({artifacts.length})
+        </div>
+        <div className="space-y-1">
+          {artifacts.map((artifact) => (
+            <div key={artifact.id}>
+              <button
+                type="button"
+                onClick={() => setPreviewFile(previewFile === artifact.id ? null : artifact.id)}
+                className="flex w-full items-center gap-2 rounded px-2 py-1 text-left text-xs hover:bg-neutral-100 dark:hover:bg-neutral-700/50"
+              >
+                <Badge variant="secondary">{typeLabels[artifact.type] || artifact.type}</Badge>
+                <span className="font-mono text-neutral-600 dark:text-neutral-300">{artifact.filename}</span>
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  width="12"
+                  height="12"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  className={`ml-auto h-3 w-3 text-neutral-400 transition-transform ${previewFile === artifact.id ? 'rotate-180' : ''}`}
+                >
+                  <path d="m6 9 6 6 6-6" />
+                </svg>
+              </button>
+              {previewFile === artifact.id && (
+                <pre className="mt-1 mb-2 ml-2 max-h-64 overflow-auto rounded border border-neutral-200 bg-white p-3 font-mono text-[11px] leading-relaxed text-neutral-700 dark:border-neutral-600 dark:bg-neutral-900 dark:text-neutral-300">
+                  {artifact.content}
+                </pre>
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
   );
 }
 

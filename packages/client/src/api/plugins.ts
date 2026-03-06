@@ -1,5 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import type { OrgPlugin, OrgPluginSettings } from '@valet/shared';
+import type { OrgPlugin, OrgPluginArtifact, OrgPluginSettings } from '@valet/shared';
 import { api } from './client';
 
 export const pluginKeys = {
@@ -20,6 +20,14 @@ export function usePluginSettings() {
   return useQuery({
     queryKey: pluginKeys.settings(),
     queryFn: () => api.get<{ settings: OrgPluginSettings }>('/plugins/settings').then(r => r.settings),
+  });
+}
+
+export function usePluginDetail(id: string | null) {
+  return useQuery({
+    queryKey: pluginKeys.detail(id ?? ''),
+    queryFn: () => api.get<{ plugin: OrgPlugin & { artifacts: OrgPluginArtifact[] } }>(`/plugins/${id}`).then(r => r.plugin),
+    enabled: !!id,
   });
 }
 
