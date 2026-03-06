@@ -10,18 +10,18 @@
   "references": [
     { "path": "../shared" },
     { "path": "../sdk" },
-    { "path": "../channel-telegram" },
-    { "path": "../channel-slack" },
-    { "path": "../actions-cloudflare" },
-    { "path": "../actions-deepwiki" },
-    { "path": "../actions-github" },
-    { "path": "../actions-gmail" },
-    { "path": "../actions-google-calendar" },
-    { "path": "../actions-google-drive" },
-    { "path": "../actions-linear" },
-    { "path": "../actions-notion" },
-    { "path": "../actions-sentry" },
-    { "path": "../actions-slack" },
-    { "path": "../actions-stripe" }
+    { "path": "../plugin-cloudflare" },
+    { "path": "../plugin-deepwiki" },
+    { "path": "../plugin-github" },
+    { "path": "../plugin-gmail" },
+    { "path": "../plugin-google-calendar" },
+    { "path": "../plugin-google-drive" },
+    { "path": "../plugin-google-sheets" },
+    { "path": "../plugin-linear" },
+    { "path": "../plugin-notion" },
+    { "path": "../plugin-sentry" },
+    { "path": "../plugin-slack" },
+    { "path": "../plugin-stripe" },
+    { "path": "../plugin-telegram" }
   ]
 }

@@ -17,13 +17,19 @@
   "references": [
     { "path": "./packages/shared" },
     { "path": "./packages/sdk" },
-    { "path": "./packages/channel-telegram" },
-    { "path": "./packages/channel-slack" },
-    { "path": "./packages/actions-github" },
-    { "path": "./packages/actions-gmail" },
-    { "path": "./packages/actions-google-calendar" },
-    { "path": "./packages/actions-linear" },
-    { "path": "./packages/actions-notion" },
+    { "path": "./packages/plugin-github" },
+    { "path": "./packages/plugin-slack" },
+    { "path": "./packages/plugin-gmail" },
+    { "path": "./packages/plugin-google-calendar" },
+    { "path": "./packages/plugin-google-drive" },
+    { "path": "./packages/plugin-google-sheets" },
+    { "path": "./packages/plugin-linear" },
+    { "path": "./packages/plugin-notion" },
+    { "path": "./packages/plugin-stripe" },
+    { "path": "./packages/plugin-cloudflare" },
+    { "path": "./packages/plugin-sentry" },
+    { "path": "./packages/plugin-deepwiki" },
+    { "path": "./packages/plugin-telegram" },
     { "path": "./packages/worker" }
   ]
 }
