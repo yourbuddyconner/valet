@@ -112,6 +112,15 @@ export type DOToRunnerMessage =
         instructions?: string[];
         isOrchestrator?: boolean;
       };
+    }
+  | {
+      type: 'plugin-content';
+      content: {
+        personas: Array<{ filename: string; content: string; sortOrder: number }>;
+        skills: Array<{ filename: string; content: string }>;
+        tools: Array<{ filename: string; content: string }>;
+        allowRepoContent: boolean;
+      };
     };
 
 /** Tool call status values */

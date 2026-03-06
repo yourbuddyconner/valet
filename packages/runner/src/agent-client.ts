@@ -70,6 +70,12 @@ export class AgentClient {
   private newSessionHandler: ((channelType: string, channelId: string, requestId: string) => void | Promise<void>) | null = null;
   private initHandler: (() => void | Promise<void>) | null = null;
   private openCodeConfigHandler: ((config: { tools?: Record<string, boolean>; providerKeys?: Record<string, string>; instructions?: string[]; isOrchestrator?: boolean; customProviders?: Array<{ providerId: string; displayName: string; baseUrl: string; apiKey?: string; models: Array<{ id: string; name?: string; contextLimit?: number; outputLimit?: number }> }> }) => void | Promise<void>) | null = null;
+  private pluginContentHandler: ((content: {
+    personas: Array<{ filename: string; content: string; sortOrder: number }>;
+    skills: Array<{ filename: string; content: string }>;
+    tools: Array<{ filename: string; content: string }>;
+    allowRepoContent: boolean;
+  }) => void | Promise<void>) | null = null;
 
   private pendingRequests = new Map<string, {
     resolve: (value: any) => void;
@@ -858,6 +864,10 @@ export class AgentClient {
     this.openCodeConfigHandler = handler;
   }
 
+  onPluginContent(handler: typeof this.pluginContentHandler): void {
+    this.pluginContentHandler = handler;
+  }
+
   // ─── Keepalive ──────────────────────────────────────────────────────
 
   private startPing(): void {
@@ -948,6 +958,10 @@ export class AgentClient {
 
         case "opencode-config":
           await this.openCodeConfigHandler?.(msg.config);
+          break;
+
+        case "plugin-content":
+          await this.pluginContentHandler?.(msg.content);
           break;
 
         case "spawn-child-result":

@@ -17,6 +17,7 @@ import { resolveMode } from '../services/action-policy.js';
 import { invokeAction, markExecuted, markFailed, approveInvocation, denyInvocation } from '../services/actions.js';
 import { updateInvocationStatus } from '../lib/db/actions.js';
 import { getDisabledActionsIndex, isActionDisabled } from '../lib/db/disabled-actions.js';
+import { getActivePluginArtifacts, getPluginSettings } from '../lib/db/plugins.js';
 import type { ChannelTarget, ChannelContext } from '@valet/sdk';
 import { validateWorkflowDefinition } from '../lib/workflow-definition.js';
 
@@ -364,7 +365,7 @@ interface ClientOutbound {
 
 /** Messages sent from DO to runner */
 interface RunnerOutbound {
-  type: 'prompt' | 'answer' | 'stop' | 'abort' | 'revert' | 'diff' | 'review' | 'opencode-command' | 'pong' | 'init' | 'opencode-config' | 'spawn-child-result' | 'session-message-result' | 'session-messages-result' | 'create-pr-result' | 'update-pr-result' | 'list-pull-requests-result' | 'inspect-pull-request-result' | 'terminate-child-result' | 'mem-read-result' | 'mem-write-result' | 'mem-patch-result' | 'mem-rm-result' | 'mem-search-result' | 'list-repos-result' | 'list-personas-result' | 'list-channels-result' | 'get-session-status-result' | 'list-child-sessions-result' | 'forward-messages-result' | 'read-repo-file-result' | 'workflow-list-result' | 'workflow-sync-result' | 'workflow-run-result' | 'workflow-executions-result' | 'workflow-api-result' | 'trigger-api-result' | 'execution-api-result' | 'workflow-execute' | 'tunnel-delete' | 'channel-reply-result' | 'list-tools-result' | 'call-tool-result' | 'call-tool-pending';
+  type: 'prompt' | 'answer' | 'stop' | 'abort' | 'revert' | 'diff' | 'review' | 'opencode-command' | 'pong' | 'init' | 'opencode-config' | 'plugin-content' | 'spawn-child-result' | 'session-message-result' | 'session-messages-result' | 'create-pr-result' | 'update-pr-result' | 'list-pull-requests-result' | 'inspect-pull-request-result' | 'terminate-child-result' | 'mem-read-result' | 'mem-write-result' | 'mem-patch-result' | 'mem-rm-result' | 'mem-search-result' | 'list-repos-result' | 'list-personas-result' | 'list-channels-result' | 'get-session-status-result' | 'list-child-sessions-result' | 'forward-messages-result' | 'read-repo-file-result' | 'workflow-list-result' | 'workflow-sync-result' | 'workflow-run-result' | 'workflow-executions-result' | 'workflow-api-result' | 'trigger-api-result' | 'execution-api-result' | 'workflow-execute' | 'tunnel-delete' | 'channel-reply-result' | 'list-tools-result' | 'call-tool-result' | 'call-tool-pending';
   config?: {
     tools?: Record<string, boolean>;
     providerKeys?: Record<string, string>;
@@ -439,6 +440,12 @@ interface RunnerOutbound {
   actorId?: string;
   actorName?: string;
   actorEmail?: string;
+  pluginContent?: {
+    personas: Array<{ filename: string; content: string; sortOrder: number }>;
+    skills: Array<{ filename: string; content: string }>;
+    tools: Array<{ filename: string; content: string }>;
+    allowRepoContent: boolean;
+  };
 }
 
 // ─── Durable SQLite Table Schemas ──────────────────────────────────────────
@@ -1049,6 +1056,7 @@ export class SessionAgentDO {
     // Push latest OpenCode config — after hibernation/wake the runner may need
     // updated keys (e.g. admin rotated a provider key while sandbox was hibernated).
     this.sendOpenCodeConfig();
+    this.sendPluginContent();
 
     // Don't dispatch queued work immediately — the runner isn't ready yet.
     // It needs to start its event stream, discover models, and create OpenCode sessions.
@@ -8535,6 +8543,57 @@ export class SessionAgentDO {
 
     console.log(`[SessionAgentDO] Sending opencode-config to runner (providers=${Object.keys(config.providerKeys!).length}, customProviders=${config.customProviders?.length ?? 0}, builtInModelConfigs=${config.builtInProviderModelConfigs?.length ?? 0}, isOrchestrator=${config.isOrchestrator})`);
     this.sendToRunner({ type: 'opencode-config', config });
+  }
+
+  private async sendPluginContent(): Promise<void> {
+    const orgId = 'default'; // TODO: resolve from user's org
+
+    let artifacts: Awaited<ReturnType<typeof getActivePluginArtifacts>>;
+    let settings: Awaited<ReturnType<typeof getPluginSettings>>;
+    try {
+      artifacts = await getActivePluginArtifacts(this.env.DB, orgId);
+      settings = await getPluginSettings(this.env.DB, orgId);
+    } catch (err) {
+      console.warn('[SessionAgentDO] sendPluginContent: failed to fetch plugin data from D1', err);
+      return;
+    }
+
+    // Get persona files from spawnRequest (session-specific personas from identity)
+    let sessionPersonas: Array<{ filename: string; content: string; sortOrder: number }> = [];
+    const spawnRequestStr = this.getStateValue('spawnRequest');
+    if (spawnRequestStr) {
+      try {
+        const spawnRequest = JSON.parse(spawnRequestStr);
+        if (spawnRequest.personaFiles && Array.isArray(spawnRequest.personaFiles)) {
+          sessionPersonas = spawnRequest.personaFiles;
+        }
+      } catch {
+        // ignore
+      }
+    }
+
+    const content = {
+      personas: [
+        ...artifacts.filter(a => a.type === 'persona').map(a => ({
+          filename: a.filename,
+          content: a.content,
+          sortOrder: a.sortOrder,
+        })),
+        ...sessionPersonas,
+      ],
+      skills: artifacts.filter(a => a.type === 'skill').map(a => ({
+        filename: a.filename,
+        content: a.content,
+      })),
+      tools: artifacts.filter(a => a.type === 'tool').map(a => ({
+        filename: a.filename,
+        content: a.content,
+      })),
+      allowRepoContent: settings.allowRepoContent,
+    };
+
+    console.log(`[SessionAgentDO] Sending plugin-content: ${content.personas.length} persona(s), ${content.skills.length} skill(s), ${content.tools.length} tool(s), allowRepoContent=${content.allowRepoContent}`);
+    this.sendToRunner({ type: 'plugin-content', pluginContent: content });
   }
 
   private sendToRunner(message: RunnerOutbound): boolean {

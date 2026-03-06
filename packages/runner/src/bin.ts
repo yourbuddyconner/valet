@@ -378,6 +378,43 @@ async function main() {
     }
   });
 
+  // ─── Plugin Content Handler ────────────────────────────────────────────
+  agentClient.onPluginContent(async (content) => {
+    console.log(`[Runner] Received plugin-content: ${content.personas.length} persona(s), ${content.skills.length} skill(s), ${content.tools.length} tool(s)`);
+
+    const { mkdirSync } = await import('node:fs');
+    const baseDir = '/root/.opencode';
+
+    // Write persona files
+    if (content.personas.length > 0) {
+      const dir = `${baseDir}/personas`;
+      mkdirSync(dir, { recursive: true });
+      for (const persona of content.personas) {
+        await Bun.write(`${dir}/${persona.filename}`, persona.content);
+      }
+    }
+
+    // Write skill files
+    if (content.skills.length > 0) {
+      const dir = `${baseDir}/skills`;
+      mkdirSync(dir, { recursive: true });
+      for (const skill of content.skills) {
+        await Bun.write(`${dir}/${skill.filename}`, skill.content);
+      }
+    }
+
+    // Write tool/plugin files
+    if (content.tools.length > 0) {
+      const dir = `${baseDir}/plugins/valet`;
+      mkdirSync(dir, { recursive: true });
+      for (const tool of content.tools) {
+        await Bun.write(`${dir}/${tool.filename}`, tool.content);
+      }
+    }
+
+    console.log('[Runner] Plugin content written to filesystem');
+  });
+
   // ─── Graceful Shutdown ────────────────────────────────────────────────
   const shutdown = async () => {
     console.log("[Runner] Shutting down...");
