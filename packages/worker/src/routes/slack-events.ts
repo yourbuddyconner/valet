@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import type { Env, Variables } from '../env.js';
 import { channelScopeKey } from '@valet/shared';
 import type { ChannelTarget, ChannelContext } from '@valet/sdk';
-import { verifySlackSignature } from '@valet/channel-slack';
+import { verifySlackSignature } from '@valet/plugin-slack/channels';
 import { channelRegistry } from '../channels/registry.js';
 import * as db from '../lib/db.js';
 import { decryptString } from '../lib/crypto.js';
