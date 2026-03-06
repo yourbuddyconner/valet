@@ -1,7 +1,7 @@
 ---
 # agent-ops-dp6s
 title: Update Plugin System Design Doc to Match Implementation
-status: todo
+status: done
 type: chore
 priority: low
 tags:

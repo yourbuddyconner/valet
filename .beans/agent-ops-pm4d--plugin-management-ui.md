@@ -1,7 +1,7 @@
 ---
 # agent-ops-pm4d
 title: Plugin Management UI
-status: todo
+status: done
 type: task
 priority: medium
 tags:
