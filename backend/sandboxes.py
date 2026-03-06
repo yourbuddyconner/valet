@@ -86,11 +86,6 @@ class SandboxManager:
             "OPENCODE_SERVER_PASSWORD": get_secret("OPENCODE_SERVER_PASSWORD"),
         })
 
-        # Inject persona files as JSON env var
-        if config.persona_files:
-            import json
-            secrets_dict["PERSONA_FILES_JSON"] = json.dumps(config.persona_files)
-
         # Strip empty values so Modal doesn't set blank env vars
         secrets_dict = {k: v for k, v in secrets_dict.items() if v}
 
@@ -182,10 +177,6 @@ class SandboxManager:
             "JWT_SECRET": config.jwt_secret,
             "OPENCODE_SERVER_PASSWORD": get_secret("OPENCODE_SERVER_PASSWORD"),
         })
-
-        if config.persona_files:
-            import json
-            secrets_dict["PERSONA_FILES_JSON"] = json.dumps(config.persona_files)
 
         secrets_dict = {k: v for k, v in secrets_dict.items() if v}
 

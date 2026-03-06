@@ -98,24 +98,6 @@ if [ -n "${REPO_URL:-}" ]; then
   } > "${WORK_DIR}/.valet/persona/00-repo-context.md"
 fi
 
-# ─── Persona Files Injection ─────────────────────────────────────────
-if [ -n "${PERSONA_FILES_JSON:-}" ]; then
-  echo "[start.sh] Injecting persona files"
-  mkdir -p "${WORK_DIR}/.valet/persona"
-  # Use printf to avoid echo interpreting escape sequences in JSON content.
-  # Use jq to extract each file, then write content with printf to preserve
-  # multi-line markdown and special characters.
-  FILE_COUNT=$(printf '%s' "$PERSONA_FILES_JSON" | jq 'length')
-  for i in $(seq 0 $(( FILE_COUNT - 1 ))); do
-    SORT_ORDER=$(printf '%s' "$PERSONA_FILES_JSON" | jq -r ".[$i].sortOrder // 0")
-    FILENAME=$(printf '%s' "$PERSONA_FILES_JSON" | jq -r ".[$i].filename")
-    PADDED=$(printf "%02d" "$SORT_ORDER")
-    printf '%s' "$PERSONA_FILES_JSON" | jq -r ".[$i].content" > "${WORK_DIR}/.valet/persona/${PADDED}-${FILENAME}"
-    echo "[start.sh]   Wrote ${PADDED}-${FILENAME}"
-  done
-  echo "[start.sh] Persona files written to ${WORK_DIR}/.valet/persona/"
-  ls -la "${WORK_DIR}/.valet/persona/"
-fi
 
 # ─── code-server (VS Code) ────────────────────────────────────────────
 # Started after clone so it opens the correct folder
