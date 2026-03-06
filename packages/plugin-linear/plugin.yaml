@@ -2,3 +2,4 @@ name: linear
 version: 0.0.1
 description: Linear integration for issue tracking and project management
 icon: "\U0001F3AF"
+actionType: mcp

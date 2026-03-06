@@ -31,6 +31,7 @@ async function doSync(d1: D1Database, orgId: string): Promise<void> {
       version: plugin.version,
       description: plugin.description,
       icon: plugin.icon,
+      actionType: plugin.actionType,
       source: 'builtin',
       capabilities: plugin.capabilities,
     });

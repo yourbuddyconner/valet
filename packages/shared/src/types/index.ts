@@ -1004,6 +1004,7 @@ export interface OrgPlugin {
   version: string;
   description?: string;
   icon?: string;
+  actionType?: string;
   source: string;
   capabilities: string[];
   status: string;

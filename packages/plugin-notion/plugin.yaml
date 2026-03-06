@@ -2,3 +2,4 @@ name: notion
 version: 0.0.1
 description: Notion integration for pages, databases, and workspaces
 icon: "\U0001F4DD"
+actionType: mcp

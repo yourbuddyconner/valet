@@ -67,6 +67,7 @@ export async function upsertPlugin(
     version: string;
     description?: string;
     icon?: string;
+    actionType?: string;
     source?: string;
     capabilities?: string[];
     status?: string;
@@ -80,6 +81,7 @@ export async function upsertPlugin(
     version: data.version,
     description: data.description ?? null,
     icon: data.icon ?? null,
+    actionType: data.actionType ?? null,
     source: data.source ?? 'builtin',
     capabilities: data.capabilities ?? [],
     status: data.status ?? 'active',
@@ -90,6 +92,7 @@ export async function upsertPlugin(
       version: sql`excluded.version`,
       description: sql`excluded.description`,
       icon: sql`excluded.icon`,
+      actionType: sql`excluded.action_type`,
       source: sql`excluded.source`,
       capabilities: sql`excluded.capabilities`,
       updatedAt: sql`datetime('now')`,

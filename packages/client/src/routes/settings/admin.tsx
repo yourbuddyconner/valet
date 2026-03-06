@@ -1938,10 +1938,11 @@ function PluginsSection() {
             {plugins.map((plugin) => {
               const isExpanded = expandedId === plugin.id;
               const isActive = plugin.status === 'active';
+              const isMcp = plugin.actionType === 'mcp';
               const actions = actionsByService.get(plugin.name) ?? [];
               const hasActions = actions.length > 0;
               const hasContent = plugin.capabilities.some(c => ['skills', 'tools', 'personas'].includes(c));
-              const hasExpandable = hasActions || hasContent;
+              const hasExpandable = hasActions || hasContent || isMcp;
 
               // Action enablement state for this plugin
               const isServiceDisabled = disabledServices.has(plugin.name);
@@ -1994,6 +1995,11 @@ function PluginsSection() {
                           ))}
                         </div>
 
+                        {/* MCP badge */}
+                        {isMcp && (
+                          <Badge variant="secondary">MCP</Badge>
+                        )}
+
                         {/* Action disabled status */}
                         {hasActions && isServiceDisabled && (
                           <Badge variant="error">Actions off</Badge>
@@ -2034,6 +2040,7 @@ function PluginsSection() {
                     <PluginExpandedDetail
                       plugin={plugin}
                       actions={actions}
+                      isMcp={isMcp}
                       isServiceDisabled={isServiceDisabled}
                       disabledActions={disabledActions}
                       allActionsEnabled={allActionsEnabled}
@@ -2063,6 +2070,7 @@ function PluginExpandedDetail({
   onServiceToggle,
   onActionToggle,
   actionMutationPending,
+  isMcp,
 }: {
   plugin: { id: string; name: string; capabilities: string[] };
   actions: ActionCatalogEntry[];
@@ -2073,6 +2081,7 @@ function PluginExpandedDetail({
   onServiceToggle: () => void;
   onActionToggle: (actionId: string, currentlyEnabled: boolean) => void;
   actionMutationPending: boolean;
+  isMcp: boolean;
 }) {
   const hasActions = actions.length > 0;
   const hasContent = plugin.capabilities.some(c => ['skills', 'tools', 'personas'].includes(c));
@@ -2082,6 +2091,23 @@ function PluginExpandedDetail({
 
   return (
     <div className="border-t border-neutral-100 bg-neutral-50 dark:border-neutral-700/50 dark:bg-neutral-800/50">
+      {/* MCP info */}
+      {isMcp && !hasActions && (
+        <div className="px-6 py-3">
+          <div className="flex items-center gap-2 rounded-md border border-blue-200 bg-blue-50 px-3 py-2 dark:border-blue-800 dark:bg-blue-900/30">
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-blue-500 dark:text-blue-400 shrink-0">
+              <circle cx="12" cy="12" r="10" />
+              <path d="M12 16v-4" />
+              <path d="M12 8h.01" />
+            </svg>
+            <span className="text-xs text-blue-700 dark:text-blue-300">
+              This plugin connects via MCP. Available tools are discovered at runtime when the user connects the integration.
+              Per-action toggles are not available for MCP plugins.
+            </span>
+          </div>
+        </div>
+      )}
+
       {/* Actions table */}
       {hasActions && (
         <div className="px-6 py-3">

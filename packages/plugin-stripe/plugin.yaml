@@ -2,3 +2,4 @@ name: stripe
 version: 0.0.1
 description: Stripe integration for payments, customers, and subscriptions
 icon: "\U0001F4B3"
+actionType: mcp

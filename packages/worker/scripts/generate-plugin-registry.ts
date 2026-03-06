@@ -36,6 +36,7 @@ function parsePluginYaml(filePath: string): {
   version: string;
   description?: string;
   icon?: string;
+  actionType?: string;
 } {
   const text = readFileSync(filePath, 'utf-8');
   const result: Record<string, string> = {};
@@ -61,6 +62,7 @@ function parsePluginYaml(filePath: string): {
     version: result.version || '0.0.1',
     description: result.description,
     icon: result.icon,
+    actionType: result.actionType,
   };
 }
 
@@ -83,6 +85,7 @@ interface ContentEntry {
   version: string;
   description?: string;
   icon?: string;
+  actionType?: string;
   capabilities: string[];
   artifacts: Array<{ type: string; filename: string; content: string; sortOrder: number }>;
 }
@@ -165,6 +168,7 @@ for (const dir of pluginDirs) {
     version: meta.version,
     description: meta.description,
     icon: meta.icon,
+    actionType: meta.actionType,
     capabilities,
     artifacts,
   });
@@ -202,6 +206,7 @@ const contentLines: string[] = [
   '  version: string;',
   '  description?: string;',
   '  icon?: string;',
+  '  actionType?: string;',
   '  capabilities: string[];',
   '  artifacts: Array<{ type: string; filename: string; content: string; sortOrder: number }>;',
   '}',
@@ -218,6 +223,9 @@ for (const entry of contentEntries) {
   }
   if (entry.icon !== undefined) {
     contentLines.push(`    icon: ${JSON.stringify(entry.icon)},`);
+  }
+  if (entry.actionType !== undefined) {
+    contentLines.push(`    actionType: ${JSON.stringify(entry.actionType)},`);
   }
   contentLines.push(`    capabilities: ${JSON.stringify(entry.capabilities)},`);
   if (entry.artifacts.length === 0) {

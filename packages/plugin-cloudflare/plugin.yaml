@@ -2,3 +2,4 @@ name: cloudflare
 version: 0.0.1
 description: Cloudflare integration for DNS, zones, and workers
 icon: "\u2601\uFE0F"
+actionType: mcp

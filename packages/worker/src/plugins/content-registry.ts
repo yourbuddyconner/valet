@@ -5,6 +5,7 @@ export interface PluginContentEntry {
   version: string;
   description?: string;
   icon?: string;
+  actionType?: string;
   capabilities: string[];
   artifacts: Array<{ type: string; filename: string; content: string; sortOrder: number }>;
 }
@@ -244,6 +245,7 @@ timeout 10 agent-browser --headed wait --text "Welcome"     # Wait for specific 
     version: "0.0.1",
     description: "Cloudflare integration for DNS, zones, and workers",
     icon: "☁️",
+    actionType: "mcp",
     capabilities: ["actions"],
     artifacts: [],
   },
@@ -300,6 +302,7 @@ timeout 10 agent-browser --headed wait --text "Welcome"     # Wait for specific 
     version: "0.0.1",
     description: "Linear integration for issue tracking and project management",
     icon: "🎯",
+    actionType: "mcp",
     capabilities: ["actions"],
     artifacts: [],
   },
@@ -330,6 +333,7 @@ timeout 10 agent-browser --headed wait --text "Welcome"     # Wait for specific 
     version: "0.0.1",
     description: "Notion integration for pages, databases, and workspaces",
     icon: "📝",
+    actionType: "mcp",
     capabilities: ["actions"],
     artifacts: [],
   },
@@ -421,6 +425,7 @@ The runner receives a \`tunnel-delete\` event and unregisters it.
     version: "0.0.1",
     description: "Sentry integration for error tracking and monitoring",
     icon: "🐛",
+    actionType: "mcp",
     capabilities: ["actions"],
     artifacts: [],
   },
@@ -437,6 +442,7 @@ The runner receives a \`tunnel-delete\` event and unregisters it.
     version: "0.0.1",
     description: "Stripe integration for payments, customers, and subscriptions",
     icon: "💳",
+    actionType: "mcp",
     capabilities: ["actions"],
     artifacts: [],
   },
