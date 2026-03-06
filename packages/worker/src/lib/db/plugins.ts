@@ -92,7 +92,6 @@ export async function upsertPlugin(
       icon: sql`excluded.icon`,
       source: sql`excluded.source`,
       capabilities: sql`excluded.capabilities`,
-      status: sql`excluded.status`,
       updatedAt: sql`datetime('now')`,
     },
   });
