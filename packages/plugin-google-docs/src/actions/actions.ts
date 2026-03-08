@@ -269,13 +269,27 @@ async function executeAction(
       }
 
       case 'docs.read_section': {
-        const { documentId, heading } = readSection.params.parse(params);
+        const { documentId, heading, tabId } = readSection.params.parse(params);
         const result = await fetchDocument(documentId, token);
         if (!result.ok) return result.error;
         const doc = result.doc;
 
-        const body = (doc.body ?? {}) as DocsBody;
-        const lists = doc.lists as DocsLists | undefined;
+        let body: DocsBody;
+        let lists: DocsLists | undefined;
+
+        if (tabId) {
+          const tabs = (doc as { tabs?: Array<{ tabProperties?: { tabId?: string }; body?: DocsBody; documentTab?: { body?: DocsBody; lists?: DocsLists } }> }).tabs;
+          const tab = tabs?.find((t) => t.tabProperties?.tabId === tabId);
+          if (!tab) {
+            return { success: false, error: `Tab '${tabId}' not found in document` };
+          }
+          body = tab.documentTab?.body ?? tab.body ?? {};
+          lists = tab.documentTab?.lists;
+        } else {
+          body = (doc.body ?? {}) as DocsBody;
+          lists = doc.lists as DocsLists | undefined;
+        }
+
         const markdown = docsToMarkdown(body, lists);
 
         const sectionMarkdown = extractMarkdownSection(markdown, heading);
@@ -294,7 +308,7 @@ async function executeAction(
           method: 'POST',
           body: JSON.stringify({ title }),
         });
-        if (!createRes.ok) return apiError(createRes, 'Docs');
+        if (!createRes.ok) return await apiError(createRes, 'Docs');
         const newDoc = (await createRes.json()) as { documentId: string; title: string };
 
         // 2. If markdown provided, insert content
