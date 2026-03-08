@@ -1,0 +1,4 @@
+name: google-docs
+version: 0.0.1
+description: Google Docs integration with markdown-native read/write
+icon: "\U0001F4DD"

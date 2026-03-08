@@ -15,6 +15,7 @@
     { "path": "../plugin-github" },
     { "path": "../plugin-gmail" },
     { "path": "../plugin-google-calendar" },
+    { "path": "../plugin-google-docs" },
     { "path": "../plugin-google-drive" },
     { "path": "../plugin-google-sheets" },
     { "path": "../plugin-linear" },

@@ -24,6 +24,7 @@
     "@valet/plugin-github": "workspace:*",
     "@valet/plugin-gmail": "workspace:*",
     "@valet/plugin-google-calendar": "workspace:*",
+    "@valet/plugin-google-docs": "workspace:*",
     "@valet/plugin-google-drive": "workspace:*",
     "@valet/plugin-google-sheets": "workspace:*",
     "@valet/plugin-linear": "workspace:*",

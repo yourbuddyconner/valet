@@ -21,6 +21,7 @@
     { "path": "./packages/plugin-slack" },
     { "path": "./packages/plugin-gmail" },
     { "path": "./packages/plugin-google-calendar" },
+    { "path": "./packages/plugin-google-docs" },
     { "path": "./packages/plugin-google-drive" },
     { "path": "./packages/plugin-google-sheets" },
     { "path": "./packages/plugin-linear" },
