@@ -15,7 +15,7 @@ export class McpClient {
   private serviceName: string;
   private nextId = 1;
 
-  /** Per-token session IDs to avoid re-initializing for the same token. */
+  /** Per-service session IDs to avoid re-initializing on every call. */
   private sessions = new Map<string, string | null>();
 
   constructor(opts: { url: string; serviceName: string }) {

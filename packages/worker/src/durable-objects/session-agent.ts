@@ -7855,8 +7855,11 @@ export class SessionAgentDO {
               console.log(`[SessionAgentDO] list-tools: ${integration.service} credential ${credResult.error.reason}, attempting force-refresh`);
               credResult = await getCredential(this.env, credentialUserId, integration.service, { forceRefresh: true });
             }
-            // Cache the result (success or permanent failure)
-            this.setCachedCredential(credentialUserId, integration.service, credResult);
+            // Only cache successful results — failure states (not_found, revoked) are
+            // transient and should be re-checked so newly connected integrations work immediately.
+            if (credResult.ok) {
+              this.setCachedCredential(credentialUserId, integration.service, credResult);
+            }
           }
 
           if (!credResult.ok) {
