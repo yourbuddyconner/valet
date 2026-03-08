@@ -59,7 +59,12 @@ export async function decryptString(ciphertext: string, secret: string): Promise
 const PBKDF2_SALT = encoder.encode('agent-ops-credentials');
 const PBKDF2_ITERATIONS = 100_000;
 
+let cachedPBKDF2Key: { secret: string; key: CryptoKey } | null = null;
+
 async function deriveKeyPBKDF2(secret: string): Promise<CryptoKey> {
+  if (cachedPBKDF2Key && cachedPBKDF2Key.secret === secret) {
+    return cachedPBKDF2Key.key;
+  }
   const baseKey = await crypto.subtle.importKey(
     'raw',
     encoder.encode(secret),
@@ -67,13 +72,15 @@ async function deriveKeyPBKDF2(secret: string): Promise<CryptoKey> {
     false,
     ['deriveKey'],
   );
-  return crypto.subtle.deriveKey(
+  const key = await crypto.subtle.deriveKey(
     { name: 'PBKDF2', salt: PBKDF2_SALT, iterations: PBKDF2_ITERATIONS, hash: 'SHA-256' },
     baseKey,
     { name: 'AES-GCM', length: 256 },
     false,
     ['encrypt', 'decrypt'],
   );
+  cachedPBKDF2Key = { secret, key };
+  return key;
 }
 
 export async function encryptStringPBKDF2(plaintext: string, secret: string): Promise<string> {
