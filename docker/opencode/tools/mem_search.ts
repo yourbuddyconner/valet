@@ -142,49 +142,65 @@ Example for 3 docs: [0.9, 0.2, 0.7]`
   }
 }
 
+const RERANK_TIMEOUT_MS = 8000
+
 async function callAnthropic(model: string, prompt: string, apiKey: string): Promise<number[] | null> {
-  const res = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-api-key": apiKey,
-      "anthropic-version": "2023-06-01",
-    },
-    body: JSON.stringify({
-      model,
-      max_tokens: 256,
-      messages: [{ role: "user", content: prompt }],
-    }),
-  })
-  if (!res.ok) return null
-  const data = (await res.json()) as any
-  const text = data?.content?.[0]?.text ?? ""
-  return parseScores(text)
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), RERANK_TIMEOUT_MS)
+  try {
+    const res = await fetch("https://api.anthropic.com/v1/messages", {
+      signal: controller.signal,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": apiKey,
+        "anthropic-version": "2023-06-01",
+      },
+      body: JSON.stringify({
+        model,
+        max_tokens: 256,
+        messages: [{ role: "user", content: prompt }],
+      }),
+    })
+    if (!res.ok) return null
+    const data = (await res.json()) as any
+    const text = data?.content?.[0]?.text ?? ""
+    return parseScores(text)
+  } finally {
+    clearTimeout(timer)
+  }
 }
 
 async function callOpenAI(model: string, prompt: string, apiKey: string): Promise<number[] | null> {
-  const res = await fetch("https://api.openai.com/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "Authorization": `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({
-      model,
-      max_tokens: 256,
-      messages: [{ role: "user", content: prompt }],
-    }),
-  })
-  if (!res.ok) return null
-  const data = (await res.json()) as any
-  const text = data?.choices?.[0]?.message?.content ?? ""
-  return parseScores(text)
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), RERANK_TIMEOUT_MS)
+  try {
+    const res = await fetch("https://api.openai.com/v1/chat/completions", {
+      signal: controller.signal,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model,
+        max_tokens: 256,
+        messages: [{ role: "user", content: prompt }],
+      }),
+    })
+    if (!res.ok) return null
+    const data = (await res.json()) as any
+    const text = data?.choices?.[0]?.message?.content ?? ""
+    return parseScores(text)
+  } finally {
+    clearTimeout(timer)
+  }
 }
 
 function parseScores(text: string): number[] | null {
   try {
     // Extract JSON array from text (LLM may include surrounding prose)
-    const match = text.match(/\[[\d.,\s]+\]/)
+    const match = text.match(/\[[\d.,\s"e\-]+\]/i)
     if (!match) return null
     const arr = JSON.parse(match[0])
     if (!Array.isArray(arr)) return null

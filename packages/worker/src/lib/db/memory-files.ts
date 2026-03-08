@@ -426,8 +426,10 @@ export async function searchMemoryFiles(
   };
 
   let rows = await runSearch(ftsQuery);
-  if (rows.length === 0) {
-    const orQuery = ftsQuery.replace(/ AND /g, ' OR ');
+  if (rows.length === 0 && ftsQuery.includes(' AND ')) {
+    // Fallback: try OR instead of AND, but strip NOT clauses to avoid
+    // precedence issues (e.g. "a OR b NOT c" groups as "a OR (b NOT c)")
+    const orQuery = ftsQuery.replace(/ NOT (\([^)]+\)|"[^"]*"\*?)/, '').replace(/ AND /g, ' OR ');
     rows = await runSearch(orQuery);
   }
 
