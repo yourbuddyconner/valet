@@ -108,6 +108,7 @@ const readSection: ActionDefinition = {
   params: z.object({
     documentId: z.string().describe('Google Docs document ID'),
     heading: z.string().describe('Heading text to find (case-insensitive substring match)'),
+    tabId: z.string().optional().describe('Specific tab ID (for multi-tab docs)'),
   }),
 };
 
@@ -220,7 +221,7 @@ async function executeAction(
           includeItemsFromAllDrives: 'true',
         });
         const res = await driveFetch(`/files?${qs}`, token);
-        if (!res.ok) return apiError(res, 'Drive');
+        if (!res.ok) return await apiError(res, 'Drive');
         const data = (await res.json()) as { files: unknown[] };
         return { success: true, data: { files: data.files || [] } };
       }
