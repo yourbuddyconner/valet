@@ -2,7 +2,7 @@ import type { Env } from '../env.js';
 import type { AppDb } from '../lib/drizzle.js';
 import { getDb } from '../lib/drizzle.js';
 import { updateSessionStatus, updateSessionMetrics, addActiveSeconds, updateSessionGitState, upsertSessionFileChanged, updateSessionTitle, createSession, createSessionGitState, getSession, getSessionGitState, getChildSessions, getSessionChannelBindings, listUserChannelBindings, readMemoryFile, listMemoryFiles, writeMemoryFile, patchMemoryFile, deleteMemoryFile, deleteMemoryFilesUnderPath, searchMemoryFiles, boostMemoryFileRelevance, listOrgRepositories, listPersonas, getUserById, getUsersByIds, createMailboxMessage, getSessionMailbox, markSessionMailboxRead, getOrchestratorIdentityByHandle, createSessionTask, getSessionTasks, getMyTasks, updateSessionTask, getUserTelegramConfig, getOrgSettings, enqueueWorkflowApprovalNotificationIfMissing, markWorkflowApprovalNotificationsRead, isNotificationWebEnabled, batchInsertAuditLog, batchUpsertMessages, updateUserDiscoveredModels, batchInsertUsageEvents, setCatalogCache } from '../lib/db.js';
-import { getCredential } from '../services/credentials.js';
+import { getCredential, type CredentialResult } from '../services/credentials.js';
 import { getSlackBotToken } from '../services/slack.js';
 import { listWorkflows, upsertWorkflow, getWorkflowByIdOrSlug, getWorkflowOwnerCheck, deleteWorkflowTriggers, deleteWorkflowById, updateWorkflow, getWorkflowById } from '../lib/db/workflows.js';
 import { listTriggers, getTrigger, deleteTrigger, createTrigger, getTriggerForRun, updateTriggerLastRun, findScheduleTriggerByNameAndWorkflow, findScheduleTriggersByWorkflow, findScheduleTriggersByName, updateTriggerFull } from '../lib/db/triggers.js';
@@ -577,6 +577,33 @@ export class SessionAgentDO {
   /** In-memory cache of discovered tool risk levels. Populated by handleListTools,
    *  used by handleCallTool to avoid re-fetching listActions on every invocation. */
   private discoveredToolRiskLevels = new Map<string, string>();
+
+  /** In-memory credential cache to avoid repeated D1 lookups + PBKDF2 decryption.
+   *  Keyed by "userId:service", entries expire after CREDENTIAL_CACHE_TTL_MS. */
+  private credentialCache = new Map<string, { result: CredentialResult; expiresAt: number }>();
+  private static readonly CREDENTIAL_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
+  private getCachedCredential(userId: string, service: string): CredentialResult | null {
+    const key = `${userId}:${service}`;
+    const entry = this.credentialCache.get(key);
+    if (!entry || Date.now() > entry.expiresAt) {
+      if (entry) this.credentialCache.delete(key);
+      return null;
+    }
+    return entry.result;
+  }
+
+  private setCachedCredential(userId: string, service: string, result: CredentialResult): void {
+    const key = `${userId}:${service}`;
+    this.credentialCache.set(key, {
+      result,
+      expiresAt: Date.now() + SessionAgentDO.CREDENTIAL_CACHE_TTL_MS,
+    });
+  }
+
+  private invalidateCachedCredential(userId: string, service: string): void {
+    this.credentialCache.delete(`${userId}:${service}`);
+  }
 
   // ─── Auto Channel Reply Tracking ─────────────────────────────────────
   // When a prompt arrives from an external channel (e.g. Telegram), we track
@@ -7759,9 +7786,15 @@ export class SessionAgentDO {
         return;
       }
 
-      // Get user's active integrations + org-scoped integrations
-      const userIntegrations = await getUserIntegrations(this.appDb, userId);
-      const orgIntegrations = await getOrgIntegrations(this.appDb, userId);
+      // Fetch integrations, auto-enabled services, and disabled-actions index in parallel
+      const [userIntegrations, orgIntegrations, autoServices, { disabledActions: disabledActionSet, disabledServices: disabledServiceSet }] =
+        await Promise.all([
+          getUserIntegrations(this.appDb, userId),
+          getOrgIntegrations(this.appDb, userId),
+          getAutoEnabledServices(this.env.DB),
+          getDisabledActionsIndex(this.appDb),
+        ]);
+
       const allIntegrations = [
         ...userIntegrations.filter((i) => i.status === 'active'),
         ...orgIntegrations.filter((i) => i.status === 'active'),
@@ -7778,17 +7811,12 @@ export class SessionAgentDO {
       });
 
       // Inject synthetic integrations for plugins that don't require auth
-      const autoServices = await getAutoEnabledServices(this.env.DB);
       for (const svc of autoServices) {
         if (!seen.has(svc)) {
           dedupedIntegrations.push({ id: `auto:${svc}`, service: svc, status: 'active' } as any);
           seen.add(svc);
         }
       }
-
-      // Load disabled-actions index for filtering
-      const { disabledActions: disabledActionSet, disabledServices: disabledServiceSet } =
-        await getDisabledActionsIndex(this.appDb);
 
       const tools: unknown[] = [];
       const warnings: Array<{ service: string; displayName: string; reason: string; message: string; integrationId: string }> = [];
@@ -7814,16 +7842,26 @@ export class SessionAgentDO {
           // No credentials needed — pass undefined context
           console.log(`[SessionAgentDO] list-tools: ${integration.service} is no-auth, skipping credential lookup`);
         } else {
-          // For org-scoped integrations, credentials belong to the admin who installed them
           const credentialUserId = ('scope' in integration && integration.scope === 'org' && 'userId' in integration)
             ? (integration as { userId: string }).userId
             : userId;
-          let credResult = await getCredential(this.env, credentialUserId, integration.service);
-          // If the initial credential fetch fails with a refreshable reason, try force-refresh
-          if (!credResult.ok && (credResult.error.reason === 'expired' || credResult.error.reason === 'refresh_failed')) {
-            console.log(`[SessionAgentDO] list-tools: ${integration.service} credential ${credResult.error.reason}, attempting force-refresh`);
-            credResult = await getCredential(this.env, credentialUserId, integration.service, { forceRefresh: true });
+
+          // Check credential cache first
+          let credResult = this.getCachedCredential(credentialUserId, integration.service);
+          if (!credResult) {
+            credResult = await getCredential(this.env, credentialUserId, integration.service);
+            // If the initial credential fetch fails with a refreshable reason, try force-refresh
+            if (!credResult.ok && (credResult.error.reason === 'expired' || credResult.error.reason === 'refresh_failed')) {
+              console.log(`[SessionAgentDO] list-tools: ${integration.service} credential ${credResult.error.reason}, attempting force-refresh`);
+              credResult = await getCredential(this.env, credentialUserId, integration.service, { forceRefresh: true });
+            }
+            // Only cache successful results — failure states (not_found, revoked) are
+            // transient and should be re-checked so newly connected integrations work immediately.
+            if (credResult.ok) {
+              this.setCachedCredential(credentialUserId, integration.service, credResult);
+            }
           }
+
           if (!credResult.ok) {
             const displayName = provider?.displayName || integration.service;
             console.warn(`[SessionAgentDO] list-tools: credential failure for ${integration.service}: ${credResult.error.reason} — ${credResult.error.message}`);
@@ -7834,7 +7872,6 @@ export class SessionAgentDO {
               message: credResult.error.message,
               integrationId: integration.id,
             });
-            // Skip listActions — no point calling without a valid token
             continue;
           } else {
             console.log(`[SessionAgentDO] list-tools: credentials OK for ${integration.service} (type=${credResult.credential.credentialType}, refreshed=${credResult.credential.refreshed}, hasToken=${!!credResult.credential.accessToken})`);
@@ -7850,9 +7887,11 @@ export class SessionAgentDO {
           const credentialUserId = ('scope' in integration && integration.scope === 'org' && 'userId' in integration)
             ? (integration as { userId: string }).userId
             : userId;
+          this.invalidateCachedCredential(credentialUserId, integration.service);
           const refreshed = await getCredential(this.env, credentialUserId, integration.service, { forceRefresh: true });
           if (refreshed.ok && refreshed.credential.refreshed) {
             console.log(`[SessionAgentDO] list-tools: ${integration.service} returned 0 actions, retrying with force-refreshed token`);
+            this.setCachedCredential(credentialUserId, integration.service, refreshed);
             credCtx = { credentials: { access_token: refreshed.credential.accessToken } };
             actions = await actionSource.listActions(credCtx);
           }
@@ -8008,7 +8047,11 @@ export class SessionAgentDO {
         const fallbackProvider = integrationRegistry.getProvider(service);
         let listCtx: { credentials: { access_token: string } } | undefined;
         if (fallbackProvider?.authType !== 'none') {
-          const listCredResult = await getCredential(this.env, userId, service);
+          let listCredResult = this.getCachedCredential(userId, service)
+            || await getCredential(this.env, userId, service);
+          if (listCredResult.ok) {
+            this.setCachedCredential(userId, service, listCredResult);
+          }
           listCtx = listCredResult.ok
             ? { credentials: { access_token: listCredResult.credential.accessToken } }
             : undefined;
@@ -8146,7 +8189,11 @@ export class SessionAgentDO {
       credentials = { bot_token: botToken };
     } else if (isOrgScoped) {
       // Non-Slack org-scoped integrations: try to resolve credentials for the calling user
-      const credResult = await getCredential(this.env, userId, service);
+      let credResult = this.getCachedCredential(userId, service)
+        || await getCredential(this.env, userId, service);
+      if (credResult.ok) {
+        this.setCachedCredential(userId, service, credResult);
+      }
       if (!credResult.ok) {
         this.sendToRunner({ type: 'call-tool-result', requestId, error: `No credentials found for org-scoped "${service}": ${credResult.error.message}. Connect it in Settings > Integrations.` } as any);
         await markFailed(this.appDb, invocationId, `No credentials for org-scoped service: ${credResult.error.message}`);
@@ -8154,7 +8201,11 @@ export class SessionAgentDO {
       }
       credentials = { access_token: credResult.credential.accessToken };
     } else {
-      const credResult = await getCredential(this.env, userId, service);
+      let credResult = this.getCachedCredential(userId, service)
+        || await getCredential(this.env, userId, service);
+      if (credResult.ok) {
+        this.setCachedCredential(userId, service, credResult);
+      }
       if (!credResult.ok) {
         this.sendToRunner({ type: 'call-tool-result', requestId, error: `No credentials found for "${service}": ${credResult.error.message}` } as any);
         await markFailed(this.appDb, invocationId, `No credentials: ${credResult.error.message}`);
@@ -8169,8 +8220,10 @@ export class SessionAgentDO {
     // If auth error, retry once with force-refreshed credentials (user-scoped only, skip no-auth services)
     if (!isOrgScoped && provider?.authType !== 'none' && !actionResult.success && actionResult.error && /\b(401|403|unauthorized|invalid.credentials|token.*expired|token.*revoked)\b/i.test(actionResult.error)) {
       console.log(`[SessionAgentDO] Tool "${toolId}" returned auth error, retrying with refreshed credentials`);
+      this.invalidateCachedCredential(userId, service);
       const refreshedCred = await getCredential(this.env, userId, service, { forceRefresh: true });
       if (refreshedCred.ok) {
+        this.setCachedCredential(userId, service, refreshedCred);
         actionResult = await actionSource.execute(actionId, params, {
           credentials: { access_token: refreshedCred.credential.accessToken },
           userId,
