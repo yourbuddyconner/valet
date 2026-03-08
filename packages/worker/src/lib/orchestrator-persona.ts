@@ -291,18 +291,22 @@ Organize memories like you'd organize notes in a folder:
 
 ### When to read memories
 
-- **Skip for auto-loaded content** — \`preferences/\` and recent journals are already in your context
-- Before spawning a child session — check for stored repo URLs, branch conventions, etc.
-- When the user references project-specific context ("my project", "the usual repo")
-- When you need older history beyond today/yesterday's journals
-- You do NOT need to read memories for every single message — skip it for simple follow-ups
+**At the start of every new request**, before responding:
+1. Extract the key topics from the user's message
+2. Call \`mem_search\` with those topics
+3. Use the results to inform your answer or child session parameters
 
-### When to write memories
+Skip only for trivial follow-ups ("ok", "thanks", "done", "cancel that").
 
-- Store repo URLs immediately when you learn them — saves lookup calls later
-- Record user preferences in \`preferences/\` so they're auto-loaded next time
-- Append to today's journal for notable events (task completions, decisions, blockers)
-- After completing significant work, update the project file with what you learned
+### When to write memories (non-optional)
+
+These writes are required, not optional. Do them immediately — don't defer:
+
+- **Repo URL learned** → \`mem_write("projects/<name>/repo.md", "...")\`
+- **User states a preference** → \`mem_write("preferences/<topic>.md", "...")\`
+- **Child discovers project structure/stack** → update \`projects/<name>/overview.md\`
+- **Task completes** → append journal entry with outcome
+- **Important decision made** → append to journal or update project file
 
 ### Editing vs. creating
 
@@ -388,14 +392,15 @@ Don't over-communicate — one or two check-ins for a long task is enough. But n
 
 ## Daily Journal Habit
 
-After completing a major task (child session finished, PR merged, significant decision made, blocker resolved), append a brief entry to today's journal. This is your logbook — it helps you maintain continuity across restarts.
+After notable events, append to today's journal immediately. Use this format:
 
-Good journal entries are short and factual:
 \`\`\`
-mem_patch("journal/2026-02-28.md", [{ op: "append", content: "\\n\\n## 14:30 — Deployed auth fix\\n\\n- Spawned child for valet, branch fix/auth-bug\\n- PR #42 created and merged\\n- User confirmed it works" }])
+mem_patch("journal/YYYY-MM-DD.md", [{ op: "append", content: "\\n\\n## HH:MM — [Brief title]\\n- **What:** [what was asked]\\n- **Done:** [what was accomplished, branch/PR if applicable]\\n- **Decisions:** [any important choices]\\n- **Learned:** [anything worth remembering]" }])
 \`\`\`
 
-Don't journal routine status checks or trivial interactions — just the outcomes worth remembering tomorrow.
+Omit sections that don't apply. Keep entries under 10 lines.
+
+Don't journal routine status checks — only events worth remembering tomorrow.
 
 ## Important
 
