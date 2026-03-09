@@ -34,6 +34,8 @@ import { Route as AutomationTriggersIndexRouteImport } from './routes/automation
 import { Route as AutomationExecutionsIndexRouteImport } from './routes/automation/executions/index'
 import { Route as SessionsJoinTokenRouteImport } from './routes/sessions/join/$token'
 import { Route as AutomationWorkflowsWorkflowIdRouteImport } from './routes/automation/workflows/$workflowId'
+import { Route as SessionsSessionIdThreadsIndexRouteImport } from './routes/sessions/$sessionId/threads/index'
+import { Route as SessionsSessionIdThreadsThreadIdRouteImport } from './routes/sessions/$sessionId/threads/$threadId'
 
 const OrchestratorRoute = OrchestratorRouteImport.update({
   id: '/orchestrator',
@@ -163,6 +165,16 @@ const AutomationWorkflowsWorkflowIdRoute =
     path: '/workflows/$workflowId',
     getParentRoute: () => AutomationRoute,
   } as any)
+const SessionsSessionIdThreadsIndexRoute = SessionsSessionIdThreadsIndexRouteImport.update({
+  id: '/threads/',
+  path: '/threads/',
+  getParentRoute: () => SessionsSessionIdRoute,
+} as any)
+const SessionsSessionIdThreadsThreadIdRoute = SessionsSessionIdThreadsThreadIdRouteImport.update({
+  id: '/threads/$threadId',
+  path: '/threads/$threadId',
+  getParentRoute: () => SessionsSessionIdRoute,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -190,6 +202,8 @@ export interface FileRoutesByFullPath {
   '/automation/triggers/': typeof AutomationTriggersIndexRoute
   '/automation/workflows/': typeof AutomationWorkflowsIndexRoute
   '/sessions/$sessionId/': typeof SessionsSessionIdIndexRoute
+  '/sessions/$sessionId/threads/': typeof SessionsSessionIdThreadsIndexRoute
+  '/sessions/$sessionId/threads/$threadId': typeof SessionsSessionIdThreadsThreadIdRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -216,6 +230,8 @@ export interface FileRoutesByTo {
   '/automation/triggers': typeof AutomationTriggersIndexRoute
   '/automation/workflows': typeof AutomationWorkflowsIndexRoute
   '/sessions/$sessionId': typeof SessionsSessionIdIndexRoute
+  '/sessions/$sessionId/threads': typeof SessionsSessionIdThreadsIndexRoute
+  '/sessions/$sessionId/threads/$threadId': typeof SessionsSessionIdThreadsThreadIdRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -244,6 +260,8 @@ export interface FileRoutesById {
   '/automation/triggers/': typeof AutomationTriggersIndexRoute
   '/automation/workflows/': typeof AutomationWorkflowsIndexRoute
   '/sessions/$sessionId/': typeof SessionsSessionIdIndexRoute
+  '/sessions/$sessionId/threads/': typeof SessionsSessionIdThreadsIndexRoute
+  '/sessions/$sessionId/threads/$threadId': typeof SessionsSessionIdThreadsThreadIdRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -273,6 +291,8 @@ export interface FileRouteTypes {
     | '/automation/triggers/'
     | '/automation/workflows/'
     | '/sessions/$sessionId/'
+    | '/sessions/$sessionId/threads/'
+    | '/sessions/$sessionId/threads/$threadId'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -299,6 +319,8 @@ export interface FileRouteTypes {
     | '/automation/triggers'
     | '/automation/workflows'
     | '/sessions/$sessionId'
+    | '/sessions/$sessionId/threads'
+    | '/sessions/$sessionId/threads/$threadId'
   id:
     | '__root__'
     | '/'
@@ -326,6 +348,8 @@ export interface FileRouteTypes {
     | '/automation/triggers/'
     | '/automation/workflows/'
     | '/sessions/$sessionId/'
+    | '/sessions/$sessionId/threads/'
+    | '/sessions/$sessionId/threads/$threadId'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -493,6 +517,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SessionsSessionIdIndexRouteImport
       parentRoute: typeof SessionsSessionIdRoute
     }
+    '/sessions/$sessionId/threads/': {
+      id: '/sessions/$sessionId/threads/'
+      path: '/threads'
+      fullPath: '/sessions/$sessionId/threads/'
+      preLoaderRoute: typeof SessionsSessionIdThreadsIndexRouteImport
+      parentRoute: typeof SessionsSessionIdRoute
+    }
+    '/sessions/$sessionId/threads/$threadId': {
+      id: '/sessions/$sessionId/threads/$threadId'
+      path: '/threads/$threadId'
+      fullPath: '/sessions/$sessionId/threads/$threadId'
+      preLoaderRoute: typeof SessionsSessionIdThreadsThreadIdRouteImport
+      parentRoute: typeof SessionsSessionIdRoute
+    }
     '/automation/workflows/': {
       id: '/automation/workflows/'
       path: '/workflows'
@@ -551,10 +589,14 @@ const AutomationRouteWithChildren = AutomationRoute._addFileChildren(
 
 interface SessionsSessionIdRouteChildren {
   SessionsSessionIdIndexRoute: typeof SessionsSessionIdIndexRoute
+  SessionsSessionIdThreadsIndexRoute: typeof SessionsSessionIdThreadsIndexRoute
+  SessionsSessionIdThreadsThreadIdRoute: typeof SessionsSessionIdThreadsThreadIdRoute
 }
 
 const SessionsSessionIdRouteChildren: SessionsSessionIdRouteChildren = {
   SessionsSessionIdIndexRoute: SessionsSessionIdIndexRoute,
+  SessionsSessionIdThreadsIndexRoute: SessionsSessionIdThreadsIndexRoute,
+  SessionsSessionIdThreadsThreadIdRoute: SessionsSessionIdThreadsThreadIdRoute,
 }
 
 const SessionsSessionIdRouteWithChildren =
