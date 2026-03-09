@@ -47,16 +47,20 @@ async function doSync(d1: D1Database, orgId: string): Promise<void> {
         const slug = artifact.filename.replace('.md', '').replace(/_/g, '-');
         const source = BUILTIN_SKILL_PLUGINS.has(plugin.name) ? 'builtin' as const : 'plugin' as const;
         const skillId = `skill:${orgId}:${slug}`;
-        await db.upsertSkillFromSync(appDb, {
-          id: skillId,
-          orgId,
-          source,
-          name: slug.replace(/-/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()),
-          slug,
-          content: artifact.content,
-          visibility: 'shared',
-        });
-        syncedSkillIds.add(skillId);
+        try {
+          await db.upsertSkillFromSync(appDb, {
+            id: skillId,
+            orgId,
+            source,
+            name: slug.replace(/-/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()),
+            slug,
+            content: artifact.content,
+            visibility: 'shared',
+          });
+          syncedSkillIds.add(skillId);
+        } catch (err) {
+          console.error(`[plugin-sync] Failed to sync skill ${slug}:`, err);
+        }
       } else {
         // Non-skill artifacts (tools, personas) continue using plugin_artifacts
         await db.upsertPluginArtifact(appDb, {

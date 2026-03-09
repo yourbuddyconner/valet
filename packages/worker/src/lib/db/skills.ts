@@ -20,21 +20,30 @@ export type ListSkillsFilters = {
 // ─── FTS Sync ───────────────────────────────────────────────────────────────
 
 async function syncSkillFts(db: AppDb, skillId: string): Promise<void> {
-  // Delete existing FTS entry by matching rowid via subquery
-  await db.run(sql`
-    DELETE FROM skills_fts WHERE rowid = (SELECT rowid FROM skills WHERE id = ${skillId})
-  `);
-  // Re-insert from skills table
-  await db.run(sql`
-    INSERT INTO skills_fts(rowid, name, description, content)
-    SELECT rowid, name, COALESCE(description, ''), content FROM skills WHERE id = ${skillId}
-  `);
+  try {
+    // Delete existing FTS entry by matching rowid via subquery
+    await db.run(sql`
+      DELETE FROM skills_fts WHERE rowid = (SELECT rowid FROM skills WHERE id = ${skillId})
+    `);
+    // Re-insert from skills table
+    await db.run(sql`
+      INSERT INTO skills_fts(rowid, name, description, content)
+      SELECT rowid, name, COALESCE(description, ''), content FROM skills WHERE id = ${skillId}
+    `);
+  } catch (err) {
+    // FTS sync is best-effort — don't block skill upserts if FTS fails
+    console.error(`[skills] FTS sync failed for skill ${skillId}:`, err);
+  }
 }
 
 async function deleteSkillFts(db: AppDb, skillId: string): Promise<void> {
-  await db.run(sql`
-    DELETE FROM skills_fts WHERE rowid = (SELECT rowid FROM skills WHERE id = ${skillId})
-  `);
+  try {
+    await db.run(sql`
+      DELETE FROM skills_fts WHERE rowid = (SELECT rowid FROM skills WHERE id = ${skillId})
+    `);
+  } catch (err) {
+    console.error(`[skills] FTS delete failed for skill ${skillId}:`, err);
+  }
 }
 
 // ─── CRUD ───────────────────────────────────────────────────────────────────
