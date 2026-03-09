@@ -40,6 +40,7 @@ export type DOToRunnerMessage =
       modelPreferences?: string[];
       channelType?: string; channelId?: string;
       opencodeSessionId?: string;
+      continuationContext?: string;
       authorId?: string; authorEmail?: string; authorName?: string;
       gitName?: string; gitEmail?: string }
   | { type: "answer"; questionId: string; answer: string | boolean }

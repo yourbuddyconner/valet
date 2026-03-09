@@ -50,7 +50,7 @@ export class AgentClient {
   private consecutiveUpgradeFailures = 0;
   private hasEverConnected = false;
 
-  private promptHandler: ((messageId: string, content: string, model?: string, author?: PromptAuthor, modelPreferences?: string[], attachments?: PromptAttachment[], channelType?: string, channelId?: string, opencodeSessionId?: string) => void | Promise<void>) | null = null;
+  private promptHandler: ((messageId: string, content: string, model?: string, author?: PromptAuthor, modelPreferences?: string[], attachments?: PromptAttachment[], channelType?: string, channelId?: string, opencodeSessionId?: string, continuationContext?: string) => void | Promise<void>) | null = null;
   private answerHandler: ((questionId: string, answer: string | boolean) => void | Promise<void>) | null = null;
   private stopHandler: (() => void) | null = null;
   private abortHandler: ((channelType?: string, channelId?: string) => void | Promise<void>) | null = null;
@@ -813,7 +813,7 @@ export class AgentClient {
 
   // ─── Inbound Handlers (DO → Runner) ─────────────────────────────────
 
-  onPrompt(handler: (messageId: string, content: string, model?: string, author?: PromptAuthor, modelPreferences?: string[], attachments?: PromptAttachment[], channelType?: string, channelId?: string, opencodeSessionId?: string) => void | Promise<void>): void {
+  onPrompt(handler: (messageId: string, content: string, model?: string, author?: PromptAuthor, modelPreferences?: string[], attachments?: PromptAttachment[], channelType?: string, channelId?: string, opencodeSessionId?: string, continuationContext?: string) => void | Promise<void>): void {
     this.promptHandler = handler;
   }
 
@@ -927,7 +927,7 @@ export class AgentClient {
           const author: PromptAuthor | undefined = (msg.authorId || msg.gitName || msg.gitEmail || msg.authorName || msg.authorEmail)
             ? { authorId: msg.authorId, gitName: msg.gitName, gitEmail: msg.gitEmail, authorName: msg.authorName, authorEmail: msg.authorEmail }
             : undefined;
-          await this.promptHandler?.(msg.messageId, msg.content, msg.model, author, msg.modelPreferences, msg.attachments, msg.channelType, msg.channelId, msg.opencodeSessionId);
+          await this.promptHandler?.(msg.messageId, msg.content, msg.model, author, msg.modelPreferences, msg.attachments, msg.channelType, msg.channelId, msg.opencodeSessionId, msg.continuationContext);
           break;
         }
         case "answer":

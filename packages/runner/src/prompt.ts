@@ -1256,8 +1256,8 @@ export class PromptHandler {
     });
   }
 
-  async handlePrompt(messageId: string, content: string, model?: string, author?: { authorId?: string; gitName?: string; gitEmail?: string; authorName?: string; authorEmail?: string }, modelPreferences?: string[], attachments?: PromptAttachment[], channelType?: string, channelId?: string, opencodeSessionId?: string): Promise<void> {
-    console.log(`[PromptHandler] Handling prompt ${messageId}: "${content.slice(0, 80)}"${model ? ` (model: ${model})` : ''}${author?.authorName ? ` (by: ${author.authorName})` : ''}${modelPreferences?.length ? ` (prefs: ${modelPreferences.length})` : ''}${attachments?.length ? ` (attachments: ${attachments.length})` : ''}${channelType ? ` (channel: ${channelType})` : ''}`);
+  async handlePrompt(messageId: string, content: string, model?: string, author?: { authorId?: string; gitName?: string; gitEmail?: string; authorName?: string; authorEmail?: string }, modelPreferences?: string[], attachments?: PromptAttachment[], channelType?: string, channelId?: string, opencodeSessionId?: string, continuationContext?: string): Promise<void> {
+    console.log(`[PromptHandler] Handling prompt ${messageId}: "${content.slice(0, 80)}"${model ? ` (model: ${model})` : ''}${author?.authorName ? ` (by: ${author.authorName})` : ''}${modelPreferences?.length ? ` (prefs: ${modelPreferences.length})` : ''}${attachments?.length ? ` (attachments: ${attachments.length})` : ''}${channelType ? ` (channel: ${channelType})` : ''}${continuationContext ? ' (with continuation context)' : ''}`);
 
     // Resolve per-channel session
     const channel = this.getOrCreateChannel(channelType, channelId);
@@ -1265,6 +1265,22 @@ export class PromptHandler {
     this.applyPersistedOpenCodeSessionId(channel, opencodeSessionId);
 
     try {
+      // If continuation context is provided, inject it as a context-setting first message
+      // before the actual user prompt. This happens when the user clicks "Continue" on an
+      // old thread and the DO generates a summary of the previous conversation.
+      if (continuationContext) {
+        console.log(`[PromptHandler] Injecting continuation context (${continuationContext.length} chars) for thread resumption`);
+        await this.ensureChannelOpenCodeSession(channel);
+        const sessionId = channel.opencodeSessionId!;
+
+        const contextPrompt = `You are continuing a conversation from a previous thread. Here is the context from that conversation:\n\n---\n\n${continuationContext}\n\n---\n\nThe user may reference topics from this previous conversation. Continue naturally.`;
+
+        const idlePromise = this.pollUntilIdle(sessionId, 60_000);
+        await this.sendPromptAsync(sessionId, contextPrompt);
+        await idlePromise;
+        console.log(`[PromptHandler] Continuation context injected successfully`);
+      }
+
       // Set git config for author attribution before processing
       if (author?.gitName || author?.authorName) {
         const name = author.gitName || author.authorName;
