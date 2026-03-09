@@ -121,6 +121,10 @@ export type DOToRunnerMessage =
         skills: Array<{ filename: string; content: string }>;
         tools: Array<{ filename: string; content: string }>;
         allowRepoContent: boolean;
+        toolWhitelist?: {
+          services: string[];
+          excludedActions: Array<{ service: string; actionId: string }>;
+        } | null;
       };
     };
 

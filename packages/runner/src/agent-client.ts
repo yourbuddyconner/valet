@@ -75,6 +75,10 @@ export class AgentClient {
     skills: Array<{ filename: string; content: string }>;
     tools: Array<{ filename: string; content: string }>;
     allowRepoContent: boolean;
+    toolWhitelist?: {
+      services: string[];
+      excludedActions: Array<{ service: string; actionId: string }>;
+    } | null;
   }) => void | Promise<void>) | null = null;
 
   private pendingRequests = new Map<string, {

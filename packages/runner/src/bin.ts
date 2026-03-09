@@ -53,6 +53,44 @@ const gatewayPort = parseInt(values["gateway-port"] || "9000", 10);
 const INITIAL_CONNECT_MAX_DELAY_MS = 30_000;
 const CONFIG_WAIT_TIMEOUT_MS = 30_000;
 
+// ─── Tool Whitelist ──────────────────────────────────────────────────────
+// When a persona has tool whitelisting configured, this stores the whitelist.
+// null/undefined = no whitelist, all tools available (backward compatible).
+let activeToolWhitelist: {
+  services: string[];
+  excludedActions: Array<{ service: string; actionId: string }>;
+} | null = null;
+
+/**
+ * Check if a tool (identified by service and optional actionId) is allowed
+ * by the active tool whitelist.
+ */
+function isToolAllowed(service: string, actionId?: string): boolean {
+  if (!activeToolWhitelist) return true; // No whitelist = all tools allowed
+  // Check if the service is in the whitelist
+  if (!activeToolWhitelist.services.includes(service)) return false;
+  // Check if this specific action is excluded
+  if (actionId) {
+    const excluded = activeToolWhitelist.excludedActions.some(
+      (e) => e.service === service && e.actionId === actionId,
+    );
+    if (excluded) return false;
+  }
+  return true;
+}
+
+/**
+ * Parse a toolId string into service and actionId components.
+ * Tool IDs typically follow the pattern "service:actionId" or just "actionId".
+ */
+function parseToolId(toolId: string): { service: string; actionId?: string } {
+  const colonIdx = toolId.indexOf(':');
+  if (colonIdx > 0) {
+    return { service: toolId.substring(0, colonIdx), actionId: toolId.substring(colonIdx + 1) };
+  }
+  return { service: toolId };
+}
+
 if (!opencodeUrl || !doUrl || !runnerToken || !sessionId) {
   console.error("Error: --opencode-url, --do-url, --runner-token, and --session-id are required");
   process.exit(1);
@@ -267,11 +305,27 @@ async function main() {
     onChannelReply: async (channelType, channelId, message, imageBase64, imageMimeType, followUp) => {
       return await agentClient.requestChannelReply(channelType, channelId, message, imageBase64, imageMimeType, followUp);
     },
-    // Tool Discovery & Invocation
+    // Tool Discovery & Invocation (with whitelist filtering)
     onListTools: async (service, query) => {
-      return await agentClient.requestListTools(service, query);
+      const result = await agentClient.requestListTools(service, query);
+      if (activeToolWhitelist && result.tools) {
+        result.tools = (result.tools as Array<{ id?: string; service?: string; actionId?: string; [key: string]: unknown }>).filter((tool) => {
+          const svc = tool.service || (tool.id ? parseToolId(tool.id).service : undefined);
+          const action = tool.actionId || (tool.id ? parseToolId(tool.id).actionId : undefined);
+          if (!svc) return true; // Can't determine service, allow through
+          return isToolAllowed(svc, action);
+        });
+      }
+      return result;
     },
     onCallTool: async (toolId, params) => {
+      // Enforce whitelist on tool invocation
+      if (activeToolWhitelist) {
+        const { service, actionId } = parseToolId(toolId);
+        if (!isToolAllowed(service, actionId)) {
+          throw new Error(`Tool "${toolId}" is not available for this persona`);
+        }
+      }
       return await agentClient.requestCallTool(toolId, params);
     },
     // Skill API
@@ -384,7 +438,10 @@ async function main() {
 
   // ─── Plugin Content Handler ────────────────────────────────────────────
   agentClient.onPluginContent(async (content) => {
-    console.log(`[Runner] Received plugin-content: ${content.personas.length} persona(s), ${content.skills.length} skill(s), ${content.tools.length} tool(s)`);
+    console.log(`[Runner] Received plugin-content: ${content.personas.length} persona(s), ${content.skills.length} skill(s), ${content.tools.length} tool(s), toolWhitelist=${content.toolWhitelist ? `${content.toolWhitelist.services.length} service(s)` : 'none'}`);
+
+    // Store tool whitelist for filtering list-tools and call-tool
+    activeToolWhitelist = content.toolWhitelist ?? null;
 
     const { mkdirSync } = await import('node:fs');
     const baseDir = '/root/.opencode';

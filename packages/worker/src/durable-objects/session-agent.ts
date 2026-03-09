@@ -18,7 +18,7 @@ import { invokeAction, markExecuted, markFailed, approveInvocation, denyInvocati
 import { updateInvocationStatus } from '../lib/db/actions.js';
 import { getDisabledActionsIndex, isActionDisabled } from '../lib/db/disabled-actions.js';
 import { getActivePluginArtifacts, getPluginSettings, getAutoEnabledServices } from '../lib/db/plugins.js';
-import { getPersonaSkills, getOrgDefaultSkills, searchSkills, listSkills, getSkill, getSkillBySlug, createSkill, updateSkill, deleteSkill } from '../lib/db.js';
+import { getPersonaSkills, getOrgDefaultSkills, searchSkills, listSkills, getSkill, getSkillBySlug, createSkill, updateSkill, deleteSkill, getPersonaToolWhitelist } from '../lib/db.js';
 import type { ChannelTarget, ChannelContext } from '@valet/sdk';
 import { validateWorkflowDefinition } from '../lib/workflow-definition.js';
 
@@ -8781,9 +8781,10 @@ export class SessionAgentDO {
       }
     }
 
-    // Resolve skills from persona attachments or org defaults
+    // Resolve skills and tool whitelist from persona attachments or org defaults
     const appDb = getDb(this.env.DB);
     let resolvedSkills: Array<{ filename: string; content: string }> = [];
+    let toolWhitelist: { services: string[]; excludedActions: Array<{ service: string; actionId: string }> } | null = null;
     try {
       // Check if this session has a personaId by looking up the session record
       const sessionId = this.getStateValue('sessionId');
@@ -8791,6 +8792,11 @@ export class SessionAgentDO {
         const session = await getSession(appDb, sessionId);
         if (session?.personaId) {
           resolvedSkills = await getPersonaSkills(appDb, session.personaId);
+          // Resolve tool whitelist for this persona
+          const whitelist = await getPersonaToolWhitelist(appDb, session.personaId);
+          if (whitelist.services.length > 0) {
+            toolWhitelist = whitelist;
+          }
         } else {
           resolvedSkills = await getOrgDefaultSkills(appDb, orgId);
         }
@@ -8817,9 +8823,10 @@ export class SessionAgentDO {
         content: a.content,
       })),
       allowRepoContent: settings.allowRepoContent,
+      toolWhitelist,
     };
 
-    console.log(`[SessionAgentDO] Sending plugin-content: ${content.personas.length} persona(s), ${content.skills.length} skill(s), ${content.tools.length} tool(s), allowRepoContent=${content.allowRepoContent}`);
+    console.log(`[SessionAgentDO] Sending plugin-content: ${content.personas.length} persona(s), ${content.skills.length} skill(s), ${content.tools.length} tool(s), allowRepoContent=${content.allowRepoContent}, toolWhitelist=${toolWhitelist ? `${toolWhitelist.services.length} service(s)` : 'none'}`);
     this.sendToRunner({ type: 'plugin-content', pluginContent: content });
   }
 
