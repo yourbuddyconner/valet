@@ -1034,3 +1034,42 @@ export interface PluginContentPayload {
   tools: Array<{ filename: string; content: string }>;
   allowRepoContent: boolean;
 }
+
+// --- Skills ---
+
+export type SkillSource = 'builtin' | 'plugin' | 'managed';
+export type SkillVisibility = 'private' | 'shared';
+
+export interface Skill {
+  id: string;
+  orgId: string;
+  ownerId: string | null;
+  source: SkillSource;
+  name: string;
+  slug: string;
+  description: string | null;
+  content: string;
+  visibility: SkillVisibility;
+  status: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface SkillSummary {
+  id: string;
+  name: string;
+  slug: string;
+  description: string | null;
+  source: SkillSource;
+  visibility: SkillVisibility;
+  ownerId: string | null;
+  updatedAt: string;
+}
+
+export interface PersonaSkillAttachment {
+  id: string;
+  personaId: string;
+  skillId: string;
+  sortOrder: number;
+  createdAt: string;
+}
