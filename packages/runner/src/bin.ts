@@ -332,6 +332,10 @@ async function main() {
     onSkillApi: async (action, payload) => {
       return await agentClient.requestSkillApi(action, payload);
     },
+    // Persona API
+    onPersonaApi: async (action, payload) => {
+      return await agentClient.requestPersonaApi(action, payload);
+    },
   });
   const promptHandler = new PromptHandler(opencodeUrl!, agentClient, sessionId!);
 

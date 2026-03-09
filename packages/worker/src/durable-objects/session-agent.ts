@@ -18,7 +18,7 @@ import { invokeAction, markExecuted, markFailed, approveInvocation, denyInvocati
 import { updateInvocationStatus } from '../lib/db/actions.js';
 import { getDisabledActionsIndex, isActionDisabled } from '../lib/db/disabled-actions.js';
 import { getActivePluginArtifacts, getPluginSettings, getAutoEnabledServices } from '../lib/db/plugins.js';
-import { getPersonaSkills, getOrgDefaultSkills, searchSkills, listSkills, getSkill, getSkillBySlug, createSkill, updateSkill, deleteSkill, getPersonaToolWhitelist } from '../lib/db.js';
+import { getPersonaSkills, getOrgDefaultSkills, searchSkills, listSkills, getSkill, getSkillBySlug, createSkill, updateSkill, deleteSkill, getPersonaToolWhitelist, createPersona, updatePersona, deletePersona, getPersonaWithFiles, upsertPersonaFile } from '../lib/db.js';
 import type { ChannelTarget, ChannelContext } from '@valet/sdk';
 import { validateWorkflowDefinition } from '../lib/workflow-definition.js';
 
@@ -224,7 +224,7 @@ function deriveRuntimeStates(args: {
 type ToolCallStatus = 'pending' | 'running' | 'completed' | 'error';
 
 interface RunnerMessage {
-  type: 'stream' | 'result' | 'tool' | 'question' | 'screenshot' | 'error' | 'complete' | 'agentStatus' | 'create-pr' | 'update-pr' | 'list-pull-requests' | 'inspect-pull-request' | 'models' | 'aborted' | 'reverted' | 'diff' | 'review-result' | 'command-result' | 'ping' | 'git-state' | 'pr-created' | 'files-changed' | 'child-session' | 'title' | 'spawn-child' | 'session-message' | 'session-messages' | 'terminate-child' | 'self-terminate' | 'mem-read' | 'mem-write' | 'mem-patch' | 'mem-rm' | 'mem-search' | 'list-repos' | 'list-personas' | 'list-channels' | 'get-session-status' | 'list-child-sessions' | 'forward-messages' | 'read-repo-file' | 'workflow-list' | 'workflow-sync' | 'workflow-run' | 'workflow-executions' | 'workflow-api' | 'trigger-api' | 'execution-api' | 'skill-api' | 'workflow-execution-result' | 'workflow-chat-message' | 'model-switched' | 'tunnels' | 'mailbox-send' | 'mailbox-check' | 'task-create' | 'task-list' | 'task-update' | 'task-my' | 'channel-reply' | 'audio-transcript' | 'channel-session-created' | 'session-reset' | 'opencode-config-applied' | 'list-tools' | 'call-tool' | 'message.create' | 'message.part.text-delta' | 'message.part.tool-update' | 'message.finalize' | 'usage-report';
+  type: 'stream' | 'result' | 'tool' | 'question' | 'screenshot' | 'error' | 'complete' | 'agentStatus' | 'create-pr' | 'update-pr' | 'list-pull-requests' | 'inspect-pull-request' | 'models' | 'aborted' | 'reverted' | 'diff' | 'review-result' | 'command-result' | 'ping' | 'git-state' | 'pr-created' | 'files-changed' | 'child-session' | 'title' | 'spawn-child' | 'session-message' | 'session-messages' | 'terminate-child' | 'self-terminate' | 'mem-read' | 'mem-write' | 'mem-patch' | 'mem-rm' | 'mem-search' | 'list-repos' | 'list-personas' | 'list-channels' | 'get-session-status' | 'list-child-sessions' | 'forward-messages' | 'read-repo-file' | 'workflow-list' | 'workflow-sync' | 'workflow-run' | 'workflow-executions' | 'workflow-api' | 'trigger-api' | 'execution-api' | 'skill-api' | 'persona-api' | 'workflow-execution-result' | 'workflow-chat-message' | 'model-switched' | 'tunnels' | 'mailbox-send' | 'mailbox-check' | 'task-create' | 'task-list' | 'task-update' | 'task-my' | 'channel-reply' | 'audio-transcript' | 'channel-session-created' | 'session-reset' | 'opencode-config-applied' | 'list-tools' | 'call-tool' | 'message.create' | 'message.part.text-delta' | 'message.part.tool-update' | 'message.finalize' | 'usage-report';
   restarted?: boolean;
   turnId?: string;
   delta?: string;
@@ -366,7 +366,7 @@ interface ClientOutbound {
 
 /** Messages sent from DO to runner */
 interface RunnerOutbound {
-  type: 'prompt' | 'answer' | 'stop' | 'abort' | 'revert' | 'diff' | 'review' | 'opencode-command' | 'pong' | 'init' | 'opencode-config' | 'plugin-content' | 'spawn-child-result' | 'session-message-result' | 'session-messages-result' | 'create-pr-result' | 'update-pr-result' | 'list-pull-requests-result' | 'inspect-pull-request-result' | 'terminate-child-result' | 'mem-read-result' | 'mem-write-result' | 'mem-patch-result' | 'mem-rm-result' | 'mem-search-result' | 'list-repos-result' | 'list-personas-result' | 'list-channels-result' | 'get-session-status-result' | 'list-child-sessions-result' | 'forward-messages-result' | 'read-repo-file-result' | 'workflow-list-result' | 'workflow-sync-result' | 'workflow-run-result' | 'workflow-executions-result' | 'workflow-api-result' | 'trigger-api-result' | 'execution-api-result' | 'skill-api-result' | 'workflow-execute' | 'tunnel-delete' | 'channel-reply-result' | 'list-tools-result' | 'call-tool-result' | 'call-tool-pending';
+  type: 'prompt' | 'answer' | 'stop' | 'abort' | 'revert' | 'diff' | 'review' | 'opencode-command' | 'pong' | 'init' | 'opencode-config' | 'plugin-content' | 'spawn-child-result' | 'session-message-result' | 'session-messages-result' | 'create-pr-result' | 'update-pr-result' | 'list-pull-requests-result' | 'inspect-pull-request-result' | 'terminate-child-result' | 'mem-read-result' | 'mem-write-result' | 'mem-patch-result' | 'mem-rm-result' | 'mem-search-result' | 'list-repos-result' | 'list-personas-result' | 'list-channels-result' | 'get-session-status-result' | 'list-child-sessions-result' | 'forward-messages-result' | 'read-repo-file-result' | 'workflow-list-result' | 'workflow-sync-result' | 'workflow-run-result' | 'workflow-executions-result' | 'workflow-api-result' | 'trigger-api-result' | 'execution-api-result' | 'skill-api-result' | 'persona-api-result' | 'workflow-execute' | 'tunnel-delete' | 'channel-reply-result' | 'list-tools-result' | 'call-tool-result' | 'call-tool-pending';
   config?: {
     tools?: Record<string, boolean>;
     providerKeys?: Record<string, string>;
@@ -3040,6 +3040,10 @@ export class SessionAgentDO {
         await this.handleSkillApi(msg.requestId!, msg.action || '', msg.payload);
         break;
 
+      case 'persona-api':
+        await this.handlePersonaApi(msg.requestId!, msg.action || '', msg.payload);
+        break;
+
       case 'execution-api':
         await this.handleExecutionApi(msg.requestId!, msg.action || '', msg.payload);
         break;
@@ -4610,6 +4614,146 @@ export class SessionAgentDO {
     } catch (err) {
       console.error('[SessionAgentDO] Skill API error:', err);
       this.sendToRunner({ type: 'skill-api-result', requestId, error: err instanceof Error ? err.message : String(err), statusCode: 500 });
+    }
+  }
+
+  private async handlePersonaApi(requestId: string, action: string, payload?: Record<string, unknown>) {
+    try {
+      const userId = this.getStateValue('userId')!;
+
+      if (action === 'get') {
+        const id = payload?.id as string;
+        if (!id) {
+          this.sendToRunner({ type: 'persona-api-result', requestId, error: 'id is required', statusCode: 400 });
+          return;
+        }
+        const persona = await getPersonaWithFiles(this.env.DB, id);
+        if (!persona) {
+          this.sendToRunner({ type: 'persona-api-result', requestId, error: 'Persona not found', statusCode: 404 });
+          return;
+        }
+        if (persona.visibility === 'private' && persona.createdBy !== userId) {
+          this.sendToRunner({ type: 'persona-api-result', requestId, error: 'Persona not found', statusCode: 404 });
+          return;
+        }
+        this.sendToRunner({ type: 'persona-api-result', requestId, data: { persona } });
+        return;
+      }
+
+      if (action === 'create') {
+        const name = payload?.name as string;
+        const slug = payload?.slug as string;
+        if (!name || !slug) {
+          this.sendToRunner({ type: 'persona-api-result', requestId, error: 'name and slug are required', statusCode: 400 });
+          return;
+        }
+        const personaId = crypto.randomUUID();
+        const persona = await createPersona(this.appDb, {
+          id: personaId,
+          name,
+          slug,
+          description: payload?.description as string | undefined,
+          icon: payload?.icon as string | undefined,
+          defaultModel: payload?.defaultModel as string | undefined,
+          visibility: (payload?.visibility as 'private' | 'shared') || 'shared',
+          createdBy: userId,
+        });
+        // Create inline files if provided
+        const files = payload?.files as Array<{ filename: string; content: string; sortOrder?: number }> | undefined;
+        if (files?.length) {
+          for (const file of files) {
+            await upsertPersonaFile(this.appDb, {
+              id: crypto.randomUUID(),
+              personaId,
+              filename: file.filename,
+              content: file.content,
+              sortOrder: file.sortOrder ?? 0,
+            });
+          }
+        }
+        this.sendToRunner({ type: 'persona-api-result', requestId, data: { persona } });
+        return;
+      }
+
+      if (action === 'update') {
+        const id = payload?.id as string;
+        if (!id) {
+          this.sendToRunner({ type: 'persona-api-result', requestId, error: 'id is required', statusCode: 400 });
+          return;
+        }
+        const persona = await getPersonaWithFiles(this.env.DB, id);
+        if (!persona) {
+          this.sendToRunner({ type: 'persona-api-result', requestId, error: 'Persona not found', statusCode: 404 });
+          return;
+        }
+        if (persona.createdBy !== userId) {
+          this.sendToRunner({ type: 'persona-api-result', requestId, error: 'Only the creator can update this persona', statusCode: 403 });
+          return;
+        }
+        const updates: Record<string, unknown> = {};
+        if (payload?.name) updates.name = payload.name;
+        if (payload?.slug) updates.slug = payload.slug;
+        if (payload?.description !== undefined) updates.description = payload.description;
+        if (payload?.icon !== undefined) updates.icon = payload.icon;
+        if (payload?.defaultModel !== undefined) updates.defaultModel = payload.defaultModel;
+        if (payload?.visibility) updates.visibility = payload.visibility;
+        await updatePersona(this.appDb, id, updates);
+        this.sendToRunner({ type: 'persona-api-result', requestId, data: { ok: true } });
+        return;
+      }
+
+      if (action === 'delete') {
+        const id = payload?.id as string;
+        if (!id) {
+          this.sendToRunner({ type: 'persona-api-result', requestId, error: 'id is required', statusCode: 400 });
+          return;
+        }
+        const persona = await getPersonaWithFiles(this.env.DB, id);
+        if (!persona) {
+          this.sendToRunner({ type: 'persona-api-result', requestId, error: 'Persona not found', statusCode: 404 });
+          return;
+        }
+        if (persona.createdBy !== userId) {
+          this.sendToRunner({ type: 'persona-api-result', requestId, error: 'Only the creator can delete this persona', statusCode: 403 });
+          return;
+        }
+        await deletePersona(this.appDb, id);
+        this.sendToRunner({ type: 'persona-api-result', requestId, data: { deleted: true } });
+        return;
+      }
+
+      if (action === 'upsert-file') {
+        const personaId = payload?.personaId as string;
+        const filename = payload?.filename as string;
+        const content = payload?.content as string;
+        if (!personaId || !filename || !content) {
+          this.sendToRunner({ type: 'persona-api-result', requestId, error: 'personaId, filename, and content are required', statusCode: 400 });
+          return;
+        }
+        const persona = await getPersonaWithFiles(this.env.DB, personaId);
+        if (!persona) {
+          this.sendToRunner({ type: 'persona-api-result', requestId, error: 'Persona not found', statusCode: 404 });
+          return;
+        }
+        if (persona.createdBy !== userId) {
+          this.sendToRunner({ type: 'persona-api-result', requestId, error: 'Only the creator can edit this persona', statusCode: 403 });
+          return;
+        }
+        await upsertPersonaFile(this.appDb, {
+          id: crypto.randomUUID(),
+          personaId,
+          filename,
+          content,
+          sortOrder: (payload?.sortOrder as number) ?? 0,
+        });
+        this.sendToRunner({ type: 'persona-api-result', requestId, data: { ok: true } });
+        return;
+      }
+
+      this.sendToRunner({ type: 'persona-api-result', requestId, error: `Unsupported persona action: ${action}`, statusCode: 400 });
+    } catch (err) {
+      console.error('[SessionAgentDO] Persona API error:', err);
+      this.sendToRunner({ type: 'persona-api-result', requestId, error: err instanceof Error ? err.message : String(err), statusCode: 500 });
     }
   }
 
