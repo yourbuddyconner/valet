@@ -22,6 +22,20 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { useAuthStore } from '@/stores/auth';
 import { useIsMobile } from '@/hooks/use-is-mobile';
 
+// Module-level store for continuation context to avoid URL search param size limits
+let pendingContinuationStore: { threadId: string; context: string } | null = null;
+export function setPendingContinuation(threadId: string, context: string) {
+  pendingContinuationStore = { threadId, context };
+}
+export function consumePendingContinuation(threadId: string): string | null {
+  if (pendingContinuationStore?.threadId === threadId) {
+    const ctx = pendingContinuationStore.context;
+    pendingContinuationStore = null;
+    return ctx;
+  }
+  return null;
+}
+
 interface ChatContainerProps {
   sessionId: string;
   initialThreadId?: string;
@@ -106,7 +120,9 @@ export function ChatContainer({ sessionId, initialThreadId, initialContinuationC
 
   // Thread state (orchestrator sessions only)
   const [activeThreadId, setActiveThreadId] = useState<string | null>(initialThreadId ?? null);
-  const pendingContinuationContext = useRef<string | undefined>(initialContinuationContext);
+  const pendingContinuationContext = useRef<string | undefined>(
+    initialContinuationContext ?? (initialThreadId ? (consumePendingContinuation(initialThreadId) ?? undefined) : undefined)
+  );
   const createThread = useCreateThread(sessionId);
   const { data: threadsData } = useThreads(sessionId);
   const activeThread = useMemo(

@@ -17,9 +17,12 @@ threadsRouter.get('/:sessionId/threads', async (c) => {
 
   await db.assertSessionAccess(c.get('db'), sessionId, user.id, 'viewer');
 
+  const parsedLimit = limit ? parseInt(limit, 10) : 20;
+  const safeLimit = Number.isNaN(parsedLimit) ? 20 : Math.min(Math.max(parsedLimit, 1), 100);
+
   const result = await db.listThreads(c.env.DB, sessionId, {
     cursor,
-    limit: limit ? parseInt(limit) : undefined,
+    limit: safeLimit,
   });
 
   return c.json(result);
