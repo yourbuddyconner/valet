@@ -215,27 +215,18 @@ export async function upsertSkillFromSync(
     visibility?: SkillVisibility;
   },
 ): Promise<void> {
-  await db.insert(skills).values({
-    id: data.id,
-    orgId: data.orgId ?? 'default',
-    ownerId: null,
-    source: data.source,
-    name: data.name,
-    slug: data.slug,
-    description: data.description ?? null,
-    content: data.content,
-    visibility: data.visibility ?? 'shared',
-    status: 'active',
-  }).onConflictDoUpdate({
-    target: skills.id,
-    set: {
-      name: sql`excluded.name`,
-      description: sql`excluded.description`,
-      content: sql`excluded.content`,
-      visibility: sql`excluded.visibility`,
-      updatedAt: sql`datetime('now')`,
-    },
-  });
+  // Use raw SQL because Drizzle generates table-qualified column names in
+  // ON CONFLICT ("skills"."id") which SQLite/D1 doesn't support.
+  await db.run(sql`
+    INSERT INTO skills (id, org_id, owner_id, source, name, slug, description, content, visibility, status, created_at, updated_at)
+    VALUES (${data.id}, ${data.orgId ?? 'default'}, NULL, ${data.source}, ${data.name}, ${data.slug}, ${data.description ?? null}, ${data.content}, ${data.visibility ?? 'shared'}, 'active', datetime('now'), datetime('now'))
+    ON CONFLICT (id) DO UPDATE SET
+      name = excluded.name,
+      description = excluded.description,
+      content = excluded.content,
+      visibility = excluded.visibility,
+      updated_at = datetime('now')
+  `);
   await syncSkillFts(db, data.id);
 }
 
