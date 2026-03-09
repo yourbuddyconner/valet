@@ -751,7 +751,7 @@ export class AgentClient {
 
   // ─── Skill API ──────────────────────────────────────────────────
 
-  requestSkillApi(action: string, payload?: Record<string, unknown>): Promise<{ data?: unknown }> {
+  requestSkillApi(action: string, payload?: Record<string, unknown>): Promise<{ data?: unknown; error?: string; statusCode?: number }> {
     const requestId = crypto.randomUUID();
     return this.createPendingRequest(requestId, MESSAGE_OP_TIMEOUT_MS, () => {
       this.send({ type: "skill-api", requestId, action, payload });
@@ -1172,11 +1172,17 @@ export class AgentClient {
         case "workflow-api-result":
         case "trigger-api-result":
         case "execution-api-result":
-        case "skill-api-result":
           if (msg.error) {
             this.rejectPendingRequest(msg.requestId, msg.error);
           } else {
             this.resolvePendingRequest(msg.requestId, msg.data ?? {});
+          }
+          break;
+        case "skill-api-result":
+          if (msg.error) {
+            this.resolvePendingRequest(msg.requestId, { error: msg.error, statusCode: msg.statusCode });
+          } else {
+            this.resolvePendingRequest(msg.requestId, { data: msg.data ?? {} });
           }
           break;
         // ─── Phase C: Mailbox + Task Board Results ──────────────────

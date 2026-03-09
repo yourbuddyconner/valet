@@ -226,6 +226,39 @@ export async function upsertSkillFromSync(
   await syncSkillFts(db, data.id);
 }
 
+export async function deleteOrphanedSyncSkills(
+  db: AppDb,
+  orgId: string,
+  syncedIds: Set<string>,
+): Promise<void> {
+  if (syncedIds.size === 0) return;
+
+  // Find orphaned skill IDs: source is builtin/plugin, same org, not in synced set
+  const allSynced = await db
+    .select({ id: skills.id })
+    .from(skills)
+    .where(
+      and(
+        eq(skills.orgId, orgId),
+        sql`${skills.source} IN ('builtin', 'plugin')`,
+      ),
+    );
+
+  const orphanIds = allSynced
+    .map((r) => r.id)
+    .filter((id) => !syncedIds.has(id));
+
+  if (orphanIds.length === 0) return;
+
+  // Clean up FTS entries, persona_skills, org_default_skills, then the skills themselves
+  for (const id of orphanIds) {
+    await deleteSkillFts(db, id);
+    await db.delete(personaSkills).where(eq(personaSkills.skillId, id));
+    await db.delete(orgDefaultSkills).where(eq(orgDefaultSkills.skillId, id));
+    await db.delete(skills).where(eq(skills.id, id));
+  }
+}
+
 // ─── Persona Skills ─────────────────────────────────────────────────────────
 
 export async function getPersonaSkills(

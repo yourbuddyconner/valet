@@ -22,6 +22,7 @@ export async function syncPluginsOnce(d1: D1Database, orgId: string = 'default',
 
 async function doSync(d1: D1Database, orgId: string): Promise<void> {
   const appDb = getDb(d1);
+  const syncedSkillIds = new Set<string>();
 
   for (const plugin of pluginContentRegistry) {
     const pluginId = `builtin:${plugin.name}`;
@@ -45,8 +46,9 @@ async function doSync(d1: D1Database, orgId: string): Promise<void> {
         // Route skill artifacts to the unified skills table
         const slug = artifact.filename.replace('.md', '').replace(/_/g, '-');
         const source = BUILTIN_SKILL_PLUGINS.has(plugin.name) ? 'builtin' as const : 'plugin' as const;
+        const skillId = `skill:${orgId}:${slug}`;
         await db.upsertSkillFromSync(appDb, {
-          id: `skill:${orgId}:${slug}`,
+          id: skillId,
           orgId,
           source,
           name: slug.replace(/-/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()),
@@ -54,6 +56,7 @@ async function doSync(d1: D1Database, orgId: string): Promise<void> {
           content: artifact.content,
           visibility: 'shared',
         });
+        syncedSkillIds.add(skillId);
       } else {
         // Non-skill artifacts (tools, personas) continue using plugin_artifacts
         await db.upsertPluginArtifact(appDb, {
@@ -67,4 +70,7 @@ async function doSync(d1: D1Database, orgId: string): Promise<void> {
       }
     }
   }
+
+  // Clean up orphaned builtin/plugin skills that were not part of this sync
+  await db.deleteOrphanedSyncSkills(appDb, orgId, syncedSkillIds);
 }

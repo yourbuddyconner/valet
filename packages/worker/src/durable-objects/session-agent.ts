@@ -396,6 +396,7 @@ interface RunnerOutbound {
   childSessionId?: string;
   success?: boolean;
   error?: string;
+  statusCode?: number;
   messages?: Array<{ role: string; content: string; createdAt: string }>;
   number?: number;
   url?: string;
@@ -4489,7 +4490,7 @@ export class SessionAgentDO {
         const q = typeof payload?.q === 'string' ? payload.q : '';
         const source = typeof payload?.source === 'string' ? payload.source as any : undefined;
         const skills = await searchSkills(this.appDb, orgId, userId, q, { source });
-        this.sendToRunner({ type: 'skill-api-result', requestId, data: { skills } } as any);
+        this.sendToRunner({ type: 'skill-api-result', requestId, data: { skills } });
         return;
       }
 
@@ -4497,14 +4498,14 @@ export class SessionAgentDO {
         const source = typeof payload?.source === 'string' ? payload.source as any : undefined;
         const visibility = typeof payload?.visibility === 'string' ? payload.visibility as any : undefined;
         const skills = await listSkills(this.appDb, orgId, userId, { source, visibility });
-        this.sendToRunner({ type: 'skill-api-result', requestId, data: { skills } } as any);
+        this.sendToRunner({ type: 'skill-api-result', requestId, data: { skills } });
         return;
       }
 
       if (action === 'get') {
         const id = typeof payload?.id === 'string' ? payload.id : '';
         if (!id) {
-          this.sendToRunner({ type: 'skill-api-result', requestId, error: 'id is required' } as any);
+          this.sendToRunner({ type: 'skill-api-result', requestId, error: 'id is required', statusCode: 400 });
           return;
         }
         // Try by ID first, then fall back to slug lookup
@@ -4513,14 +4514,14 @@ export class SessionAgentDO {
           skill = await getSkillBySlug(this.appDb, orgId, id);
         }
         if (!skill) {
-          this.sendToRunner({ type: 'skill-api-result', requestId, error: 'Skill not found' } as any);
+          this.sendToRunner({ type: 'skill-api-result', requestId, error: 'Skill not found', statusCode: 404 });
           return;
         }
         if (skill.visibility === 'private' && skill.ownerId !== userId) {
-          this.sendToRunner({ type: 'skill-api-result', requestId, error: 'Skill not found' } as any);
+          this.sendToRunner({ type: 'skill-api-result', requestId, error: 'Skill not found', statusCode: 404 });
           return;
         }
-        this.sendToRunner({ type: 'skill-api-result', requestId, data: { skill } } as any);
+        this.sendToRunner({ type: 'skill-api-result', requestId, data: { skill } });
         return;
       }
 
@@ -4528,7 +4529,7 @@ export class SessionAgentDO {
         const name = typeof payload?.name === 'string' ? payload.name.trim() : '';
         const content = typeof payload?.content === 'string' ? payload.content : '';
         if (!name || !content) {
-          this.sendToRunner({ type: 'skill-api-result', requestId, error: 'name and content are required' } as any);
+          this.sendToRunner({ type: 'skill-api-result', requestId, error: 'name and content are required', statusCode: 400 });
           return;
         }
         const slug = typeof payload?.slug === 'string' && payload.slug.trim()
@@ -4547,27 +4548,27 @@ export class SessionAgentDO {
           content,
           visibility,
         });
-        this.sendToRunner({ type: 'skill-api-result', requestId, data: { skill } } as any);
+        this.sendToRunner({ type: 'skill-api-result', requestId, data: { skill } });
         return;
       }
 
       if (action === 'update') {
         const id = typeof payload?.id === 'string' ? payload.id : '';
         if (!id) {
-          this.sendToRunner({ type: 'skill-api-result', requestId, error: 'id is required' } as any);
+          this.sendToRunner({ type: 'skill-api-result', requestId, error: 'id is required', statusCode: 400 });
           return;
         }
         const skill = await getSkill(this.appDb, id);
         if (!skill) {
-          this.sendToRunner({ type: 'skill-api-result', requestId, error: 'Skill not found' } as any);
+          this.sendToRunner({ type: 'skill-api-result', requestId, error: 'Skill not found', statusCode: 404 });
           return;
         }
         if (skill.source !== 'managed') {
-          this.sendToRunner({ type: 'skill-api-result', requestId, error: 'Only managed skills can be updated' } as any);
+          this.sendToRunner({ type: 'skill-api-result', requestId, error: 'Only managed skills can be updated', statusCode: 403 });
           return;
         }
         if (skill.ownerId !== userId) {
-          this.sendToRunner({ type: 'skill-api-result', requestId, error: 'Only the owner can update this skill' } as any);
+          this.sendToRunner({ type: 'skill-api-result', requestId, error: 'Only the owner can update this skill', statusCode: 403 });
           return;
         }
         const updates: Record<string, string> = {};
@@ -4577,38 +4578,38 @@ export class SessionAgentDO {
         if (typeof payload?.content === 'string') updates.content = payload.content;
         if (typeof payload?.visibility === 'string') updates.visibility = payload.visibility;
         await updateSkill(this.appDb, id, updates);
-        this.sendToRunner({ type: 'skill-api-result', requestId, data: { skill: { ...skill, ...updates } } } as any);
+        this.sendToRunner({ type: 'skill-api-result', requestId, data: { skill: { ...skill, ...updates } } });
         return;
       }
 
       if (action === 'delete') {
         const id = typeof payload?.id === 'string' ? payload.id : '';
         if (!id) {
-          this.sendToRunner({ type: 'skill-api-result', requestId, error: 'id is required' } as any);
+          this.sendToRunner({ type: 'skill-api-result', requestId, error: 'id is required', statusCode: 400 });
           return;
         }
         const skill = await getSkill(this.appDb, id);
         if (!skill) {
-          this.sendToRunner({ type: 'skill-api-result', requestId, error: 'Skill not found' } as any);
+          this.sendToRunner({ type: 'skill-api-result', requestId, error: 'Skill not found', statusCode: 404 });
           return;
         }
         if (skill.source !== 'managed') {
-          this.sendToRunner({ type: 'skill-api-result', requestId, error: 'Only managed skills can be deleted' } as any);
+          this.sendToRunner({ type: 'skill-api-result', requestId, error: 'Only managed skills can be deleted', statusCode: 403 });
           return;
         }
         if (skill.ownerId !== userId) {
-          this.sendToRunner({ type: 'skill-api-result', requestId, error: 'Only the owner can delete this skill' } as any);
+          this.sendToRunner({ type: 'skill-api-result', requestId, error: 'Only the owner can delete this skill', statusCode: 403 });
           return;
         }
         await deleteSkill(this.appDb, id);
-        this.sendToRunner({ type: 'skill-api-result', requestId, data: { deleted: true } } as any);
+        this.sendToRunner({ type: 'skill-api-result', requestId, data: { deleted: true } });
         return;
       }
 
-      this.sendToRunner({ type: 'skill-api-result', requestId, error: `Unsupported skill action: ${action}` } as any);
+      this.sendToRunner({ type: 'skill-api-result', requestId, error: `Unsupported skill action: ${action}`, statusCode: 400 });
     } catch (err) {
       console.error('[SessionAgentDO] Skill API error:', err);
-      this.sendToRunner({ type: 'skill-api-result', requestId, error: err instanceof Error ? err.message : String(err) } as any);
+      this.sendToRunner({ type: 'skill-api-result', requestId, error: err instanceof Error ? err.message : String(err), statusCode: 500 });
     }
   }
 
