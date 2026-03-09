@@ -9,6 +9,7 @@ export const threadKeys = {
   details: () => [...threadKeys.all, 'detail'] as const,
   detail: (sessionId: string, threadId: string) =>
     [...threadKeys.details(), sessionId, threadId] as const,
+  active: (sessionId: string) => [...threadKeys.all, 'active', sessionId] as const,
 };
 
 export function useThreads(sessionId: string) {
@@ -36,6 +37,17 @@ export function useThread(sessionId: string, threadId: string) {
       };
     },
     enabled: !!sessionId && !!threadId,
+  });
+}
+
+export function useActiveThread(sessionId: string, enabled = true) {
+  return useQuery({
+    queryKey: threadKeys.active(sessionId),
+    queryFn: () =>
+      api.get<{ thread: SessionThread }>(`/sessions/${sessionId}/threads/active`),
+    select: (data) => data.thread,
+    enabled: !!sessionId && enabled,
+    staleTime: 30_000,
   });
 }
 

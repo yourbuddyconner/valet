@@ -5,7 +5,7 @@ import * as Dialog from '@radix-ui/react-dialog';
 import { useChat } from '@/hooks/use-chat';
 import type { IntegrationAuthError } from '@/hooks/use-chat';
 import { useSession, useSessionGitState, useUpdateSessionTitle, useSessionChildren } from '@/api/sessions';
-import { useCreateThread, useThreads } from '@/api/threads';
+import { useActiveThread, useCreateThread, useThreads } from '@/api/threads';
 import { useDrawer } from '@/routes/sessions/$sessionId';
 import { MessageList } from './message-list';
 import { ChatInput } from './chat-input';
@@ -123,13 +123,26 @@ export function ChatContainer({ sessionId, initialThreadId, initialContinuationC
   const pendingContinuationContext = useRef<string | undefined>(
     initialContinuationContext ?? (initialThreadId ? (consumePendingContinuation(initialThreadId) ?? undefined) : undefined)
   );
+  const isOrchestrator = session?.isOrchestrator === true;
   const createThread = useCreateThread(sessionId);
   const { data: threadsData } = useThreads(sessionId);
   const activeThread = useMemo(
     () => threadsData?.threads?.find((t) => t.id === activeThreadId),
     [threadsData, activeThreadId]
   );
-  const isOrchestrator = session?.isOrchestrator === true;
+
+  // Auto-select the active thread on mount for orchestrator sessions when no
+  // threadId was provided in the URL. The endpoint returns the current active
+  // thread (or creates one if none exists), so we always land on the right thread.
+  const { data: serverActiveThread } = useActiveThread(
+    sessionId,
+    isOrchestrator && !initialThreadId,
+  );
+  useEffect(() => {
+    if (serverActiveThread && !activeThreadId) {
+      setActiveThreadId(serverActiveThread.id);
+    }
+  }, [serverActiveThread, activeThreadId, setActiveThreadId]);
 
   const handleNewThread = useCallback(async () => {
     try {
@@ -145,7 +158,13 @@ export function ChatContainer({ sessionId, initialThreadId, initialContinuationC
   const channels = useMemo(() => deriveChannels(messages), [messages]);
   const showChannelSwitcher = session?.isOrchestrator === true && channels.length >= 1;
 
+  // While the active thread is still resolving for orchestrator sessions,
+  // show no messages to avoid a flash of unfiltered content.
+  const isResolvingThread = isOrchestrator && !initialThreadId && !activeThreadId;
+
   const filteredMessages = useMemo(() => {
+    if (isResolvingThread) return [];
+
     let filtered = messages;
 
     // Filter by thread if active
@@ -165,7 +184,7 @@ export function ChatContainer({ sessionId, initialThreadId, initialContinuationC
     }
 
     return filtered;
-  }, [messages, selectedChannel, activeThreadId]);
+  }, [messages, selectedChannel, activeThreadId, isResolvingThread]);
 
   const selectedChannelOption = useMemo(
     () => (selectedChannel ? channels.find((c) => `${c.channelType}:${c.channelId}` === selectedChannel) : null),
@@ -199,18 +218,6 @@ export function ChatContainer({ sessionId, initialThreadId, initialContinuationC
       const channelType = selectedChannelOption?.channelType;
       const channelId = selectedChannelOption?.channelId;
 
-      // For orchestrator sessions, auto-create a thread on first message if none is active
-      let threadId = activeThreadId;
-      if (isOrchestrator && !threadId) {
-        try {
-          const thread = await createThread.mutateAsync();
-          threadId = thread.id;
-          setActiveThreadId(threadId);
-        } catch (err) {
-          console.error('[ChatContainer] Failed to auto-create thread:', err);
-        }
-      }
-
       if (queueModePreference === 'followup' && isDispatchBusy) {
         setStagedQueuedPrompts((prev) => [
           ...prev,
@@ -228,9 +235,9 @@ export function ChatContainer({ sessionId, initialThreadId, initialContinuationC
 
       const continuation = pendingContinuationContext.current;
       pendingContinuationContext.current = undefined;
-      sendMessage(content, model, attachments, channelType, channelId, queueModePreference, threadId ?? undefined, continuation);
+      sendMessage(content, model, attachments, channelType, channelId, queueModePreference, activeThreadId ?? undefined, continuation);
     },
-    [sendMessage, selectedChannelOption, queueModePreference, isDispatchBusy, activeThreadId, isOrchestrator, createThread]
+    [sendMessage, selectedChannelOption, queueModePreference, isDispatchBusy, activeThreadId]
   );
 
   const handleAbort = useCallback(() => {
