@@ -41,6 +41,7 @@ import { disabledActionsRouter } from './routes/disabled-actions.js';
 import { actionInvocationsRouter } from './routes/action-invocations.js';
 import { usageRouter } from './routes/usage.js';
 import { pluginsRouter } from './routes/plugins.js';
+import { skillsRouter } from './routes/skills.js';
 import {
   enqueueWorkflowApprovalNotificationIfMissing,
   getTerminatedOrchestratorSessions,
@@ -163,6 +164,7 @@ app.route('/api/me/slack', slackUserRouter);
 app.route('/api/invites', invitesApiRouter);
 app.route('/api/usage', usageRouter);
 app.route('/api/plugins', pluginsRouter);
+app.route('/api/skills', skillsRouter);
 
 // Agent container proxy (protected)
 app.use('/agent/*', authMiddleware);
