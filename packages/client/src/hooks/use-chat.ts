@@ -2,6 +2,7 @@ import { useState, useCallback, useEffect, useRef } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useWebSocket } from './use-websocket';
 import { sessionKeys, type ProviderModels } from '@/api/sessions';
+import { threadKeys } from '@/api/threads';
 import { api } from '@/api/client';
 import { toast } from './use-toast';
 import type { Message, SessionStatus } from '@/api/types';
@@ -362,6 +363,8 @@ type WebSocketChatMessage =
   | WebSocketToastMessage
   | WebSocketModelSwitchedMessage
   | WebSocketIntegrationAuthRequiredMessage
+  | { type: 'thread.created'; threadId: string; sessionId: string }
+  | { type: 'thread.updated'; threadId: string; sessionId: string }
   | { type: 'pong' }
   | { type: 'user.joined'; userId: string }
   | { type: 'user.left'; userId: string };
@@ -840,6 +843,12 @@ export function useChat(sessionId: string) {
 
       case 'files-changed': {
         queryClient.invalidateQueries({ queryKey: sessionKeys.filesChanged(sessionIdRef.current) });
+        break;
+      }
+
+      case 'thread.created':
+      case 'thread.updated': {
+        queryClient.invalidateQueries({ queryKey: threadKeys.list(sessionIdRef.current) });
         break;
       }
 

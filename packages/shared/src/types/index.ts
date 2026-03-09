@@ -42,7 +42,9 @@ export type EventBusEventType =
   | 'notification'
   | 'action.approval_required'
   | 'action.approved'
-  | 'action.denied';
+  | 'action.denied'
+  | 'thread.created'
+  | 'thread.updated';
 
 export interface EventBusEvent {
   type: EventBusEventType;
