@@ -2,6 +2,7 @@ import { useState, useCallback, useEffect, useRef } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useWebSocket } from './use-websocket';
 import { sessionKeys, type ProviderModels } from '@/api/sessions';
+import { threadKeys } from '@/api/threads';
 import { api } from '@/api/client';
 import { toast } from './use-toast';
 import type { Message, SessionStatus } from '@/api/types';
@@ -130,6 +131,7 @@ interface WebSocketInitMessage {
       authorAvatarUrl?: string;
       channelType?: string;
       channelId?: string;
+      threadId?: string;
       createdAt: number;
     }>;
   };
@@ -162,6 +164,7 @@ interface WebSocketMessageMessage {
     authorAvatarUrl?: string;
     channelType?: string;
     channelId?: string;
+    threadId?: string;
     createdAt: number;
   };
 }
@@ -362,6 +365,8 @@ type WebSocketChatMessage =
   | WebSocketToastMessage
   | WebSocketModelSwitchedMessage
   | WebSocketIntegrationAuthRequiredMessage
+  | { type: 'thread.created'; threadId: string; sessionId: string }
+  | { type: 'thread.updated'; threadId: string; sessionId: string }
   | { type: 'pong' }
   | { type: 'user.joined'; userId: string }
   | { type: 'user.left'; userId: string };
@@ -515,6 +520,7 @@ export function useChat(sessionId: string) {
             authorAvatarUrl: m.authorAvatarUrl,
             channelType: m.channelType,
             channelId: m.channelId,
+            threadId: m.threadId,
             createdAt: new Date(m.createdAt * 1000),
           })),
           status: message.session.status,
@@ -582,6 +588,7 @@ export function useChat(sessionId: string) {
           authorAvatarUrl: d.authorAvatarUrl,
           channelType: d.channelType,
           channelId: d.channelId,
+          threadId: d.threadId,
           createdAt: new Date(d.createdAt * 1000),
         };
         setState((prev) => {
@@ -843,6 +850,12 @@ export function useChat(sessionId: string) {
         break;
       }
 
+      case 'thread.created':
+      case 'thread.updated': {
+        queryClient.invalidateQueries({ queryKey: threadKeys.list(sessionIdRef.current) });
+        break;
+      }
+
       case 'child-session': {
         const childMsg = message as WebSocketChildSessionMessage;
         setState((prev) => ({
@@ -1043,7 +1056,7 @@ export function useChat(sessionId: string) {
   });
 
   const sendMessage = useCallback(
-    (content: string, model?: string, attachments?: PromptAttachment[], channelType?: string, channelId?: string, queueModeOverride?: QueueMode) => {
+    (content: string, model?: string, attachments?: PromptAttachment[], channelType?: string, channelId?: string, queueModeOverride?: QueueMode, threadId?: string, continuationContext?: string) => {
       if (!isConnected) return;
 
       send({
@@ -1054,6 +1067,8 @@ export function useChat(sessionId: string) {
         queueMode: queueModeOverride || userQueueMode,
         ...(channelType ? { channelType } : {}),
         ...(channelId ? { channelId } : {}),
+        ...(threadId ? { threadId } : {}),
+        ...(continuationContext ? { continuationContext } : {}),
       });
       // Start thinking indicator when user sends a message
       setState((prev) => ({ ...prev, isAgentThinking: true }));

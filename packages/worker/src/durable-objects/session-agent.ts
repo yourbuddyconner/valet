@@ -1,7 +1,7 @@
 import type { Env } from '../env.js';
 import type { AppDb } from '../lib/drizzle.js';
 import { getDb } from '../lib/drizzle.js';
-import { updateSessionStatus, updateSessionMetrics, addActiveSeconds, updateSessionGitState, upsertSessionFileChanged, updateSessionTitle, createSession, createSessionGitState, getSession, getSessionGitState, getChildSessions, getSessionChannelBindings, listUserChannelBindings, readMemoryFile, listMemoryFiles, writeMemoryFile, patchMemoryFile, deleteMemoryFile, deleteMemoryFilesUnderPath, searchMemoryFiles, boostMemoryFileRelevance, listOrgRepositories, listPersonas, getUserById, getUsersByIds, createMailboxMessage, getSessionMailbox, markSessionMailboxRead, getOrchestratorIdentityByHandle, createSessionTask, getSessionTasks, getMyTasks, updateSessionTask, getUserTelegramConfig, getOrgSettings, enqueueWorkflowApprovalNotificationIfMissing, markWorkflowApprovalNotificationsRead, isNotificationWebEnabled, batchInsertAuditLog, batchUpsertMessages, updateUserDiscoveredModels, batchInsertUsageEvents, setCatalogCache } from '../lib/db.js';
+import { updateSessionStatus, updateSessionMetrics, addActiveSeconds, updateSessionGitState, upsertSessionFileChanged, updateSessionTitle, createSession, createSessionGitState, getSession, getSessionGitState, getChildSessions, getSessionChannelBindings, listUserChannelBindings, readMemoryFile, listMemoryFiles, writeMemoryFile, patchMemoryFile, deleteMemoryFile, deleteMemoryFilesUnderPath, searchMemoryFiles, boostMemoryFileRelevance, listOrgRepositories, listPersonas, getUserById, getUsersByIds, createMailboxMessage, getSessionMailbox, markSessionMailboxRead, getOrchestratorIdentityByHandle, createSessionTask, getSessionTasks, getMyTasks, updateSessionTask, getUserTelegramConfig, getOrgSettings, enqueueWorkflowApprovalNotificationIfMissing, markWorkflowApprovalNotificationsRead, isNotificationWebEnabled, batchInsertAuditLog, batchUpsertMessages, updateUserDiscoveredModels, batchInsertUsageEvents, setCatalogCache, updateThread, incrementThreadMessageCount } from '../lib/db.js';
 import { getCredential, type CredentialResult } from '../services/credentials.js';
 import { getSlackBotToken } from '../services/slack.js';
 import { listWorkflows, upsertWorkflow, getWorkflowByIdOrSlug, getWorkflowOwnerCheck, deleteWorkflowTriggers, deleteWorkflowById, updateWorkflow, getWorkflowById } from '../lib/db/workflows.js';
@@ -150,6 +150,8 @@ interface ClientMessage {
   args?: string;
   channelType?: string;
   channelId?: string;
+  threadId?: string;
+  continuationContext?: string;
   invocationId?: string;
   reason?: string;
 }
@@ -224,7 +226,7 @@ function deriveRuntimeStates(args: {
 type ToolCallStatus = 'pending' | 'running' | 'completed' | 'error';
 
 interface RunnerMessage {
-  type: 'stream' | 'result' | 'tool' | 'question' | 'screenshot' | 'error' | 'complete' | 'agentStatus' | 'create-pr' | 'update-pr' | 'list-pull-requests' | 'inspect-pull-request' | 'models' | 'aborted' | 'reverted' | 'diff' | 'review-result' | 'command-result' | 'ping' | 'git-state' | 'pr-created' | 'files-changed' | 'child-session' | 'title' | 'spawn-child' | 'session-message' | 'session-messages' | 'terminate-child' | 'self-terminate' | 'mem-read' | 'mem-write' | 'mem-patch' | 'mem-rm' | 'mem-search' | 'list-repos' | 'list-personas' | 'list-channels' | 'get-session-status' | 'list-child-sessions' | 'forward-messages' | 'read-repo-file' | 'workflow-list' | 'workflow-sync' | 'workflow-run' | 'workflow-executions' | 'workflow-api' | 'trigger-api' | 'execution-api' | 'skill-api' | 'persona-api' | 'workflow-execution-result' | 'workflow-chat-message' | 'model-switched' | 'tunnels' | 'mailbox-send' | 'mailbox-check' | 'task-create' | 'task-list' | 'task-update' | 'task-my' | 'channel-reply' | 'audio-transcript' | 'channel-session-created' | 'session-reset' | 'opencode-config-applied' | 'list-tools' | 'call-tool' | 'message.create' | 'message.part.text-delta' | 'message.part.tool-update' | 'message.finalize' | 'usage-report';
+  type: 'stream' | 'result' | 'tool' | 'question' | 'screenshot' | 'error' | 'complete' | 'agentStatus' | 'create-pr' | 'update-pr' | 'list-pull-requests' | 'inspect-pull-request' | 'models' | 'aborted' | 'reverted' | 'diff' | 'review-result' | 'command-result' | 'ping' | 'git-state' | 'pr-created' | 'files-changed' | 'child-session' | 'title' | 'spawn-child' | 'session-message' | 'session-messages' | 'terminate-child' | 'self-terminate' | 'mem-read' | 'mem-write' | 'mem-patch' | 'mem-rm' | 'mem-search' | 'list-repos' | 'list-personas' | 'list-channels' | 'get-session-status' | 'list-child-sessions' | 'forward-messages' | 'read-repo-file' | 'workflow-list' | 'workflow-sync' | 'workflow-run' | 'workflow-executions' | 'workflow-api' | 'trigger-api' | 'execution-api' | 'skill-api' | 'persona-api' | 'workflow-execution-result' | 'workflow-chat-message' | 'model-switched' | 'tunnels' | 'mailbox-send' | 'mailbox-check' | 'task-create' | 'task-list' | 'task-update' | 'task-my' | 'channel-reply' | 'audio-transcript' | 'channel-session-created' | 'session-reset' | 'opencode-config-applied' | 'list-tools' | 'call-tool' | 'message.create' | 'message.part.text-delta' | 'message.part.tool-update' | 'message.finalize' | 'usage-report' | 'thread.created' | 'thread.updated';
   restarted?: boolean;
   turnId?: string;
   delta?: string;
@@ -353,15 +355,21 @@ interface RunnerMessage {
   // Per-channel session tracking
   channelKey?: string;
   opencodeSessionId?: string;
+  // Thread routing
+  threadId?: string;
   role?: 'user' | 'assistant' | 'system';
   parts?: Record<string, unknown>;
   // Usage tracking
   entries?: Array<{ ocMessageId: string; model: string; inputTokens: number; outputTokens: number }>;
+  // Thread fields
+  summaryAdditions?: number;
+  summaryDeletions?: number;
+  summaryFiles?: number;
 }
 
 /** Messages sent from DO to clients */
 interface ClientOutbound {
-  type: 'message' | 'message.updated' | 'messages.removed' | 'stream' | 'chunk' | 'question' | 'status' | 'pong' | 'error' | 'user.joined' | 'user.left' | 'agentStatus' | 'models' | 'diff' | 'review-result' | 'command-result' | 'git-state' | 'pr-created' | 'files-changed' | 'child-session' | 'title' | 'audit_log' | 'model-switched' | 'toast' | 'action_approval_required' | 'action_approved' | 'action_denied' | 'action_expired' | 'integration-auth-required';
+  type: 'message' | 'message.updated' | 'messages.removed' | 'stream' | 'chunk' | 'question' | 'status' | 'pong' | 'error' | 'user.joined' | 'user.left' | 'agentStatus' | 'models' | 'diff' | 'review-result' | 'command-result' | 'git-state' | 'pr-created' | 'files-changed' | 'child-session' | 'title' | 'audit_log' | 'model-switched' | 'toast' | 'action_approval_required' | 'action_approved' | 'action_denied' | 'action_expired' | 'integration-auth-required' | 'thread.created' | 'thread.updated';
   [key: string]: unknown;
 }
 
@@ -413,6 +421,9 @@ interface RunnerOutbound {
   channelType?: string;
   channelId?: string;
   opencodeSessionId?: string;
+  // Thread routing
+  threadId?: string;
+  continuationContext?: string;
   // Orchestrator result fields
   memories?: unknown[];
   memory?: unknown;
@@ -620,6 +631,7 @@ export class SessionAgentDO {
     channelType?: string;
     channelId?: string;
     opencodeSessionId?: string;
+    threadId?: string;
   }>();
 
   private pendingChannelReply: {
@@ -675,6 +687,13 @@ export class SessionAgentDO {
 
       // Migrate: add message_format column for v2 parts-based messages
       try { this.ctx.storage.sql.exec("ALTER TABLE messages ADD COLUMN message_format TEXT NOT NULL DEFAULT 'v2'"); } catch { /* already exists */ }
+
+      // Migrate: add thread_id column for thread-aware messaging
+      try { this.ctx.storage.sql.exec('ALTER TABLE messages ADD COLUMN thread_id TEXT'); } catch { /* already exists */ }
+      try { this.ctx.storage.sql.exec('ALTER TABLE prompt_queue ADD COLUMN thread_id TEXT'); } catch { /* already exists */ }
+
+      // Migrate: add continuation_context column for queued thread continuations
+      try { this.ctx.storage.sql.exec('ALTER TABLE prompt_queue ADD COLUMN continuation_context TEXT'); } catch { /* already exists */ }
 
       this.initialized = true;
     });
@@ -777,7 +796,7 @@ export class SessionAgentDO {
       }
       case '/prompt': {
         // HTTP-based prompt submission (alternative to WebSocket)
-        const body = await request.json() as { content?: string; model?: string; attachments?: PromptAttachment[]; interrupt?: boolean; queueMode?: string; channelType?: string; channelId?: string; authorName?: string; authorEmail?: string; authorId?: string };
+        const body = await request.json() as { content?: string; model?: string; attachments?: PromptAttachment[]; interrupt?: boolean; queueMode?: string; channelType?: string; channelId?: string; threadId?: string; authorName?: string; authorEmail?: string; authorId?: string };
         const content = body.content ?? '';
         const attachments = sanitizePromptAttachments(body.attachments);
         console.log(`[SessionAgentDO] /prompt HTTP: content="${content.slice(0, 60)}" channelType=${body.channelType || 'none'} channelId=${body.channelId || 'none'} queueMode=${body.queueMode || 'default'} authorName=${body.authorName || 'none'} authorId=${body.authorId || 'none'}`);
@@ -797,13 +816,13 @@ export class SessionAgentDO {
 
         switch (effectiveMode) {
           case 'steer':
-            await this.handleInterruptPrompt(content, body.model, author, attachments, body.channelType, body.channelId);
+            await this.handleInterruptPrompt(content, body.model, author, attachments, body.channelType, body.channelId, body.threadId);
             break;
           case 'collect':
-            await this.handleCollectPrompt(content, body.model, author, attachments, body.channelType, body.channelId);
+            await this.handleCollectPrompt(content, body.model, author, attachments, body.channelType, body.channelId, body.threadId);
             break;
           default:
-            await this.handlePrompt(content, body.model, author, attachments, body.channelType, body.channelId);
+            await this.handlePrompt(content, body.model, author, attachments, body.channelType, body.channelId, body.threadId);
             break;
         }
         console.log(`[SessionAgentDO] /prompt HTTP: completed, runnerBusy=${this.getStateValue('runnerBusy')}`);
@@ -929,7 +948,7 @@ export class SessionAgentDO {
 
     // Send full session state as a single init message (prevents duplicates on reconnect)
     const messages = this.ctx.storage.sql
-      .exec('SELECT id, role, content, parts, author_id, author_email, author_name, author_avatar_url, channel_type, channel_id, message_format, created_at FROM messages ORDER BY created_at ASC')
+      .exec('SELECT id, role, content, parts, author_id, author_email, author_name, author_avatar_url, channel_type, channel_id, thread_id, message_format, created_at FROM messages ORDER BY created_at ASC')
       .toArray();
 
     const status = this.getStateValue('status') || 'idle';
@@ -983,6 +1002,7 @@ export class SessionAgentDO {
           authorAvatarUrl: msg.author_avatar_url || undefined,
           channelType: msg.channel_type || undefined,
           channelId: msg.channel_id || undefined,
+          threadId: msg.thread_id || undefined,
           createdAt: msg.created_at,
         })),
       },
@@ -1521,16 +1541,18 @@ export class SessionAgentDO {
         // Route through queue mode (Phase D)
         const wsChannelType = (msg as any).channelType as string | undefined;
         const wsChannelId = (msg as any).channelId as string | undefined;
+        const wsThreadId = msg.threadId;
+        const wsContinuationContext = msg.continuationContext;
         const wsQueueMode = (msg as any).queueMode || this.getStateValue('queueMode') || 'followup';
         switch (wsQueueMode) {
           case 'steer':
-            await this.handleInterruptPrompt(msg.content || '', msg.model, author, attachments, wsChannelType, wsChannelId);
+            await this.handleInterruptPrompt(msg.content || '', msg.model, author, attachments, wsChannelType, wsChannelId, wsThreadId);
             break;
           case 'collect':
-            await this.handleCollectPrompt(msg.content || '', msg.model, author, attachments, wsChannelType, wsChannelId);
+            await this.handleCollectPrompt(msg.content || '', msg.model, author, attachments, wsChannelType, wsChannelId, wsThreadId);
             break;
           default:
-            await this.handlePrompt(msg.content || '', msg.model, author, attachments, wsChannelType, wsChannelId);
+            await this.handlePrompt(msg.content || '', msg.model, author, attachments, wsChannelType, wsChannelId, wsThreadId, wsContinuationContext);
             break;
         }
         break;
@@ -1631,8 +1653,17 @@ export class SessionAgentDO {
     author?: { id: string; email: string; name?: string; avatarUrl?: string; gitName?: string; gitEmail?: string },
     attachments?: PromptAttachment[],
     channelType?: string,
-    channelId?: string
+    channelId?: string,
+    threadId?: string,
+    continuationContext?: string,
   ) {
+    // Translate threadId to channel routing so the Runner creates a separate
+    // OpenCode session per thread (Issue 1)
+    if (threadId && !channelType) {
+      channelType = 'thread';
+      channelId = threadId;
+    }
+
     // Update idle tracking
     this.setStateValue('lastUserActivityAt', String(Date.now()));
     this.rescheduleIdleAlarm();
@@ -1660,11 +1691,16 @@ export class SessionAgentDO {
     // Store user message with author info and channel metadata
     const messageId = crypto.randomUUID();
     this.ctx.storage.sql.exec(
-      'INSERT INTO messages (id, role, content, parts, author_id, author_email, author_name, author_avatar_url, channel_type, channel_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      'INSERT INTO messages (id, role, content, parts, author_id, author_email, author_name, author_avatar_url, channel_type, channel_id, thread_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
       messageId, 'user', content, serializedAttachmentParts,
       author?.id || null, author?.email || null, author?.name || null, author?.avatarUrl || null,
-      channelType || null, channelId || null
+      channelType || null, channelId || null, threadId || null
     );
+
+    // Increment thread message count for user message
+    if (threadId) {
+      this.ctx.waitUntil(incrementThreadMessageCount(this.env.DB, threadId));
+    }
 
     // Broadcast user message to all clients (includes author info + channel metadata)
     this.broadcastToClients({
@@ -1680,6 +1716,7 @@ export class SessionAgentDO {
         authorAvatarUrl: author?.avatarUrl,
         channelType,
         channelId,
+        threadId,
         createdAt: Math.floor(Date.now() / 1000),
       },
     });
@@ -1711,10 +1748,10 @@ export class SessionAgentDO {
       // — queue the prompt with author info + channel metadata
       const reason = !runnerConnected ? 'no runner connected' : 'runner not ready';
       this.ctx.storage.sql.exec(
-        "INSERT INTO prompt_queue (id, content, attachments, model, status, author_id, author_email, author_name, author_avatar_url, channel_type, channel_id, channel_key) VALUES (?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO prompt_queue (id, content, attachments, model, status, author_id, author_email, author_name, author_avatar_url, channel_type, channel_id, channel_key, thread_id, continuation_context) VALUES (?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         messageId, content, serializedQueuedAttachments, model || null,
         author?.id || null, author?.email || null, author?.name || null, author?.avatarUrl || null,
-        channelType || null, channelId || null, channelKey
+        channelType || null, channelId || null, channelKey, threadId || null, continuationContext || null
       );
       this.appendAuditLog(
         'prompt.queued',
@@ -1732,10 +1769,10 @@ export class SessionAgentDO {
       // Runner is processing another prompt — queue with author info + channel metadata
       console.log(`[SessionAgentDO] handlePrompt: QUEUING (runnerBusy=true) channel=${channelKey} messageId=${messageId}`);
       this.ctx.storage.sql.exec(
-        "INSERT INTO prompt_queue (id, content, attachments, model, status, author_id, author_email, author_name, author_avatar_url, channel_type, channel_id, channel_key) VALUES (?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO prompt_queue (id, content, attachments, model, status, author_id, author_email, author_name, author_avatar_url, channel_type, channel_id, channel_key, thread_id, continuation_context) VALUES (?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         messageId, content, serializedQueuedAttachments, model || null,
         author?.id || null, author?.email || null, author?.name || null, author?.avatarUrl || null,
-        channelType || null, channelId || null, channelKey
+        channelType || null, channelId || null, channelKey, threadId || null, continuationContext || null
       );
       this.appendAuditLog(
         'prompt.queued',
@@ -1752,10 +1789,10 @@ export class SessionAgentDO {
     console.log(`[SessionAgentDO] handlePrompt: DISPATCHING DIRECTLY channel=${channelKey} messageId=${messageId}`);
     // Insert into prompt_queue as 'processing' so it can be recovered if the runner disconnects
     this.ctx.storage.sql.exec(
-      "INSERT INTO prompt_queue (id, content, attachments, model, status, author_id, author_email, author_name, author_avatar_url, channel_type, channel_id, channel_key) VALUES (?, ?, ?, ?, 'processing', ?, ?, ?, ?, ?, ?, ?)",
+      "INSERT INTO prompt_queue (id, content, attachments, model, status, author_id, author_email, author_name, author_avatar_url, channel_type, channel_id, channel_key, thread_id, continuation_context) VALUES (?, ?, ?, ?, 'processing', ?, ?, ?, ?, ?, ?, ?, ?, ?)",
       messageId, content, serializedQueuedAttachments, model || null,
       author?.id || null, author?.email || null, author?.name || null, author?.avatarUrl || null,
-      channelType || null, channelId || null, channelKey
+      channelType || null, channelId || null, channelKey, threadId || null, continuationContext || null
     );
 
     // Forward directly to runner with author info + channel metadata
@@ -1789,6 +1826,7 @@ export class SessionAgentDO {
       attachments: normalizedAttachments.length > 0 ? normalizedAttachments : undefined,
       channelType,
       channelId,
+      threadId,
       authorId: author?.id,
       authorEmail: author?.email,
       authorName: author?.name,
@@ -1796,6 +1834,7 @@ export class SessionAgentDO {
       gitEmail: author?.gitEmail,
       opencodeSessionId: channelOcSessionId,
       modelPreferences: resolvedModelPrefs,
+      continuationContext,
     });
     if (!dispatched) {
       // Runner disappeared between the check and send — revert to queued for recovery
@@ -1876,7 +1915,14 @@ export class SessionAgentDO {
     attachments?: PromptAttachment[],
     channelType?: string,
     channelId?: string,
+    threadId?: string,
   ) {
+    // Translate threadId to channel routing (Issue 1)
+    if (threadId && !channelType) {
+      channelType = 'thread';
+      channelId = threadId;
+    }
+
     const runnerBusy = this.getStateValue('runnerBusy') === 'true';
     if (runnerBusy) {
       // Abort current work (channel-scoped if channel info provided)
@@ -1884,7 +1930,7 @@ export class SessionAgentDO {
     }
     // Queue the new prompt — when the runner confirms abort, handlePromptComplete
     // will drain the queue and send this prompt to the runner
-    await this.handlePrompt(content, model, author, attachments, channelType, channelId);
+    await this.handlePrompt(content, model, author, attachments, channelType, channelId, threadId);
   }
 
   // ─── Collect Mode (Phase D) ──────────────────────────────────────────
@@ -1896,6 +1942,7 @@ export class SessionAgentDO {
     attachments?: PromptAttachment[],
     channelType?: string,
     channelId?: string,
+    threadId?: string,
   ) {
     // Update idle tracking
     this.setStateValue('lastUserActivityAt', String(Date.now()));
@@ -1908,10 +1955,10 @@ export class SessionAgentDO {
     // Store user message immediately for display (including channel metadata)
     const messageId = crypto.randomUUID();
     this.ctx.storage.sql.exec(
-      'INSERT INTO messages (id, role, content, parts, author_id, author_email, author_name, author_avatar_url, channel_type, channel_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      'INSERT INTO messages (id, role, content, parts, author_id, author_email, author_name, author_avatar_url, channel_type, channel_id, thread_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
       messageId, 'user', content, serializedAttachmentParts,
       author?.id || null, author?.email || null, author?.name || null, author?.avatarUrl || null,
-      channelType || null, channelId || null,
+      channelType || null, channelId || null, threadId || null,
     );
 
     // Broadcast user message to clients (including channel metadata)
@@ -1928,6 +1975,7 @@ export class SessionAgentDO {
         authorAvatarUrl: author?.avatarUrl,
         channelType,
         channelId,
+        threadId,
         createdAt: Math.floor(Date.now() / 1000),
       },
     });
@@ -2349,11 +2397,12 @@ export class SessionAgentDO {
           channelType: msg.channelType || undefined,
           channelId: msg.channelId || undefined,
           opencodeSessionId: msg.opencodeSessionId || undefined,
+          threadId: msg.threadId || undefined,
         });
         // Insert a placeholder row in DO SQLite (will be UPSERTed on finalize)
         this.ctx.storage.sql.exec(
-          "INSERT OR IGNORE INTO messages (id, role, content, parts, message_format, channel_type, channel_id, opencode_session_id) VALUES (?, 'assistant', '', '[]', 'v2', ?, ?, ?)",
-          turnId, msg.channelType || null, msg.channelId || null, msg.opencodeSessionId || null
+          "INSERT OR IGNORE INTO messages (id, role, content, parts, message_format, channel_type, channel_id, opencode_session_id, thread_id) VALUES (?, 'assistant', '', '[]', 'v2', ?, ?, ?, ?)",
+          turnId, msg.channelType || null, msg.channelId || null, msg.opencodeSessionId || null, msg.threadId || null
         );
         // Broadcast message creation to clients
         this.broadcastToClients({
@@ -2366,6 +2415,7 @@ export class SessionAgentDO {
             createdAt: Math.floor(Date.now() / 1000),
             ...(msg.channelType ? { channelType: msg.channelType } : {}),
             ...(msg.channelId ? { channelId: msg.channelId } : {}),
+            ...(msg.threadId ? { threadId: msg.threadId } : {}),
           },
         });
         break;
@@ -2452,6 +2502,7 @@ export class SessionAgentDO {
             content: turn.text,
             parts: turn.parts,
             ...(turn.channelType ? { channelType: turn.channelType, channelId: turn.channelId } : {}),
+            ...(turn.threadId ? { threadId: turn.threadId } : {}),
           },
         });
         break;
@@ -2492,9 +2543,9 @@ export class SessionAgentDO {
         }
         // UPSERT to DO SQLite
         this.ctx.storage.sql.exec(
-          "INSERT OR REPLACE INTO messages (id, role, content, parts, message_format, channel_type, channel_id, opencode_session_id) VALUES (?, 'assistant', ?, ?, 'v2', ?, ?, ?)",
+          "INSERT OR REPLACE INTO messages (id, role, content, parts, message_format, channel_type, channel_id, opencode_session_id, thread_id) VALUES (?, 'assistant', ?, ?, 'v2', ?, ?, ?, ?)",
           turnId, finalContent, JSON.stringify(turn.parts),
-          turn.channelType || null, turn.channelId || null, turn.opencodeSessionId || null
+          turn.channelType || null, turn.channelId || null, turn.opencodeSessionId || null, turn.threadId || null
         );
         // Broadcast final message state
         this.broadcastToClients({
@@ -2505,12 +2556,17 @@ export class SessionAgentDO {
             content: finalContent,
             parts: turn.parts,
             ...(turn.channelType ? { channelType: turn.channelType, channelId: turn.channelId } : {}),
+            ...(turn.threadId ? { threadId: turn.threadId } : {}),
           },
         });
         // Track result content for auto channel reply
         if (this.pendingChannelReply && !this.pendingChannelReply.handled && finalContent) {
           this.pendingChannelReply.resultContent = finalContent;
           this.pendingChannelReply.resultMessageId = turnId;
+        }
+        // Increment thread message count for assistant message
+        if (turn.threadId) {
+          this.ctx.waitUntil(incrementThreadMessageCount(this.env.DB, turn.threadId));
         }
         // Clean up active turn
         this.activeTurns.delete(turnId);
@@ -2881,6 +2937,49 @@ export class SessionAgentDO {
           this.setChannelOcSessionId(csChannelKey, csOcSessionId);
           console.log(`[SessionAgentDO] Channel session created: ${csChannelKey} -> ${csOcSessionId}`);
         }
+        break;
+      }
+
+      case 'thread.created': {
+        const threadId = msg.threadId;
+        const threadOcSessionId = msg.opencodeSessionId;
+        if (threadId && threadOcSessionId) {
+          this.ctx.waitUntil(
+            updateThread(this.env.DB, threadId, { opencodeSessionId: threadOcSessionId })
+          );
+          console.log(`[SessionAgentDO] Thread created: ${threadId} -> ${threadOcSessionId}`);
+          this.broadcastToClients({
+            type: 'thread.created',
+            threadId,
+            opencodeSessionId: threadOcSessionId,
+          });
+        }
+        break;
+      }
+
+      case 'thread.updated': {
+        const threadId = msg.threadId;
+        if (threadId) {
+          const threadUpdates: Record<string, unknown> = {};
+          if (msg.title !== undefined) threadUpdates.title = msg.title;
+          if (msg.summaryAdditions !== undefined) threadUpdates.summaryAdditions = msg.summaryAdditions;
+          if (msg.summaryDeletions !== undefined) threadUpdates.summaryDeletions = msg.summaryDeletions;
+          if (msg.summaryFiles !== undefined) threadUpdates.summaryFiles = msg.summaryFiles;
+          if (Object.keys(threadUpdates).length > 0) {
+            this.ctx.waitUntil(
+              updateThread(this.env.DB, threadId, threadUpdates as any)
+            );
+          }
+          console.log(`[SessionAgentDO] Thread updated: ${threadId} title=${msg.title || '(unchanged)'}`);
+        }
+        this.broadcastToClients({
+          type: 'thread.updated',
+          threadId,
+          ...(msg.title !== undefined ? { title: msg.title } : {}),
+          ...(msg.summaryAdditions !== undefined ? { summaryAdditions: msg.summaryAdditions } : {}),
+          ...(msg.summaryDeletions !== undefined ? { summaryDeletions: msg.summaryDeletions } : {}),
+          ...(msg.summaryFiles !== undefined ? { summaryFiles: msg.summaryFiles } : {}),
+        });
         break;
       }
 
@@ -5754,7 +5853,7 @@ export class SessionAgentDO {
     // Query DO's internal messages for rows created after last flush
     const rows = this.ctx.storage.sql
       .exec(
-        'SELECT id, role, content, parts, author_id, author_email, author_name, author_avatar_url, channel_type, channel_id, opencode_session_id, message_format, created_at FROM messages WHERE created_at > ? ORDER BY created_at ASC LIMIT 50',
+        'SELECT id, role, content, parts, author_id, author_email, author_name, author_avatar_url, channel_type, channel_id, opencode_session_id, message_format, thread_id, created_at FROM messages WHERE created_at > ? ORDER BY created_at ASC LIMIT 50',
         lastFlushAt
       )
       .toArray();
@@ -5788,6 +5887,7 @@ export class SessionAgentDO {
         channelId: row.channel_id as string | null,
         opencodeSessionId: row.opencode_session_id as string | null,
         messageFormat: (row.message_format as string) || 'v2',
+        threadId: row.thread_id as string | null,
       })));
       // Update last flush timestamp — don't advance past any skipped active turns
       const latestFlushed = flushable[flushable.length - 1].created_at as number;
@@ -6545,7 +6645,7 @@ export class SessionAgentDO {
     }
 
     const next = this.ctx.storage.sql
-      .exec("SELECT id, content, attachments, model, author_id, author_email, author_name, channel_type, channel_id, queue_type, workflow_execution_id, workflow_payload FROM prompt_queue WHERE status = 'queued' ORDER BY created_at ASC LIMIT 1")
+      .exec("SELECT id, content, attachments, model, author_id, author_email, author_name, channel_type, channel_id, queue_type, workflow_execution_id, workflow_payload, thread_id, continuation_context FROM prompt_queue WHERE status = 'queued' ORDER BY created_at ASC LIMIT 1")
       .toArray();
 
     if (next.length === 0) {
@@ -6634,6 +6734,8 @@ export class SessionAgentDO {
     const queueModelPrefs = await this.resolveModelPreferences(queueOwnerDetails);
     const queueChannelKey = this.channelKeyFrom(queueChannelType, queueChannelId);
     const queueOcSessionId = this.getChannelOcSessionId(queueChannelKey);
+    const queueThreadId = (prompt.thread_id as string) || undefined;
+    const queueContinuationContext = (prompt.continuation_context as string) || undefined;
     const queueDispatched = this.sendToRunner({
       type: 'prompt',
       messageId: prompt.id as string,
@@ -6642,6 +6744,7 @@ export class SessionAgentDO {
       attachments: attachments.length > 0 ? attachments : undefined,
       channelType: queueChannelType,
       channelId: queueChannelId,
+      threadId: queueThreadId,
       authorId: authorId || undefined,
       authorEmail: (prompt.author_email as string) || undefined,
       authorName: (prompt.author_name as string) || undefined,
@@ -6649,6 +6752,7 @@ export class SessionAgentDO {
       gitEmail: authorDetails?.gitEmail,
       opencodeSessionId: queueOcSessionId,
       modelPreferences: queueModelPrefs,
+      continuationContext: queueContinuationContext,
     });
     if (!queueDispatched) {
       this.ctx.storage.sql.exec("UPDATE prompt_queue SET status = 'queued' WHERE id = ?", prompt.id as string);

@@ -65,6 +65,9 @@ export type {
   SkillVisibility,
   PersonaSkillAttachment,
   PersonaToolConfig,
+  SessionThread,
+  ThreadStatus,
+  ListThreadsResponse,
 } from '@valet/shared';
 
 export type { GitHub, Gmail, GoogleCalendar } from '@valet/shared';

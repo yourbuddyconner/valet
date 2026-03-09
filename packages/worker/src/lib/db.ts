@@ -31,3 +31,4 @@ export * from './db/usage.js';
 export * from './db/plugins.js';
 export * from './db/skills.js';
 export * from './db/persona-tools.js';
+export * from './db/threads.js';

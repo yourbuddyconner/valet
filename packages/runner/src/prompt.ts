@@ -729,6 +729,11 @@ export class PromptHandler {
       channel.opencodeSessionId = await this.createSession();
       this.ocSessionToChannel.set(channel.opencodeSessionId, channel);
       this.agentClient.sendChannelSessionCreated(channel.channelKey, channel.opencodeSessionId);
+      // Notify DO when a new OpenCode session is created for a thread channel
+      if (channel.channelKey.startsWith("thread:")) {
+        const threadId = channel.channelKey.slice(7);
+        this.agentClient.sendThreadCreated(threadId, channel.opencodeSessionId);
+      }
     }
     if (!this.eventStreamActive) {
       await this.startEventStream();
@@ -744,6 +749,11 @@ export class PromptHandler {
     channel.opencodeSessionId = await this.createSession();
     this.ocSessionToChannel.set(channel.opencodeSessionId, channel);
     this.agentClient.sendChannelSessionCreated(channel.channelKey, channel.opencodeSessionId);
+    // Notify DO when a new OpenCode session is created for a thread channel
+    if (channel.channelKey.startsWith("thread:")) {
+      const threadId = channel.channelKey.slice(7);
+      this.agentClient.sendThreadCreated(threadId, channel.opencodeSessionId);
+    }
     if (!this.eventStreamActive) {
       await this.startEventStream();
     }
@@ -793,15 +803,16 @@ export class PromptHandler {
     }
   }
 
-  private extractChannelContext(channel: ChannelSession): { channelType?: string; channelId?: string } {
+  private extractChannelContext(channel: ChannelSession): { channelType?: string; channelId?: string; threadId?: string } {
     const idx = channel.channelKey.indexOf(":");
     if (idx <= 0 || idx >= channel.channelKey.length - 1) {
       return {};
     }
-    return {
-      channelType: channel.channelKey.slice(0, idx),
-      channelId: channel.channelKey.slice(idx + 1),
-    };
+    const channelType = channel.channelKey.slice(0, idx);
+    const channelId = channel.channelKey.slice(idx + 1);
+    // For thread channels (key = "thread:<threadId>"), extract threadId
+    const threadId = channelType === "thread" ? channelId : undefined;
+    return { channelType, channelId, threadId };
   }
 
 
@@ -1246,8 +1257,8 @@ export class PromptHandler {
     });
   }
 
-  async handlePrompt(messageId: string, content: string, model?: string, author?: { authorId?: string; gitName?: string; gitEmail?: string; authorName?: string; authorEmail?: string }, modelPreferences?: string[], attachments?: PromptAttachment[], channelType?: string, channelId?: string, opencodeSessionId?: string): Promise<void> {
-    console.log(`[PromptHandler] Handling prompt ${messageId}: "${content.slice(0, 80)}"${model ? ` (model: ${model})` : ''}${author?.authorName ? ` (by: ${author.authorName})` : ''}${modelPreferences?.length ? ` (prefs: ${modelPreferences.length})` : ''}${attachments?.length ? ` (attachments: ${attachments.length})` : ''}${channelType ? ` (channel: ${channelType})` : ''}`);
+  async handlePrompt(messageId: string, content: string, model?: string, author?: { authorId?: string; gitName?: string; gitEmail?: string; authorName?: string; authorEmail?: string }, modelPreferences?: string[], attachments?: PromptAttachment[], channelType?: string, channelId?: string, opencodeSessionId?: string, continuationContext?: string): Promise<void> {
+    console.log(`[PromptHandler] Handling prompt ${messageId}: "${content.slice(0, 80)}"${model ? ` (model: ${model})` : ''}${author?.authorName ? ` (by: ${author.authorName})` : ''}${modelPreferences?.length ? ` (prefs: ${modelPreferences.length})` : ''}${attachments?.length ? ` (attachments: ${attachments.length})` : ''}${channelType ? ` (channel: ${channelType})` : ''}${continuationContext ? ' (with continuation context)' : ''}`);
 
     // Resolve per-channel session
     const channel = this.getOrCreateChannel(channelType, channelId);
@@ -1255,6 +1266,22 @@ export class PromptHandler {
     this.applyPersistedOpenCodeSessionId(channel, opencodeSessionId);
 
     try {
+      // If continuation context is provided, inject it as a context-setting first message
+      // before the actual user prompt. This happens when the user clicks "Continue" on an
+      // old thread and the DO generates a summary of the previous conversation.
+      if (continuationContext) {
+        console.log(`[PromptHandler] Injecting continuation context (${continuationContext.length} chars) for thread resumption`);
+        await this.ensureChannelOpenCodeSession(channel);
+        const sessionId = channel.opencodeSessionId!;
+
+        const contextPrompt = `You are continuing a conversation from a previous thread. Here is the context from that conversation:\n\n---\n\n${continuationContext}\n\n---\n\nThe user may reference topics from this previous conversation. Continue naturally.`;
+
+        const idlePromise = this.pollUntilIdle(sessionId, 60_000);
+        await this.sendPromptAsync(sessionId, contextPrompt);
+        await idlePromise;
+        console.log(`[PromptHandler] Continuation context injected successfully`);
+      }
+
       // Set git config for author attribution before processing
       if (author?.gitName || author?.authorName) {
         const name = author.gitName || author.authorName;
@@ -2091,10 +2118,12 @@ export class PromptHandler {
     const turnId = crypto.randomUUID();
     this.turnId = turnId;
     const channel = this.activeChannel;
+    const channelContext = channel ? this.extractChannelContext(channel) : {};
     this.agentClient.sendTurnCreate(turnId, {
-      channelType: channel?.channelKey.split(":")[0],
-      channelId: channel?.channelKey.split(":").slice(1).join(":"),
+      channelType: channelContext.channelType,
+      channelId: channelContext.channelId,
       opencodeSessionId: channel?.opencodeSessionId ?? undefined,
+      threadId: channelContext.threadId,
     });
   }
 
@@ -3092,10 +3121,28 @@ export class PromptHandler {
         break;
       }
 
+      case "session.updated": {
+        // Forward title/summary updates for thread channels to the DO
+        const updatedSessionId = (props.id ?? props.sessionID ?? props.sessionId) as string | undefined;
+        if (updatedSessionId) {
+          const updatedChannel = this.ocSessionToChannel.get(updatedSessionId);
+          if (updatedChannel && updatedChannel.channelKey.startsWith("thread:")) {
+            const threadId = updatedChannel.channelKey.slice(7);
+            const summary = props.summary as Record<string, unknown> | undefined;
+            this.agentClient.sendThreadUpdated(threadId, {
+              title: typeof props.title === "string" ? props.title : undefined,
+              summaryAdditions: typeof summary?.additions === "number" ? summary.additions : undefined,
+              summaryDeletions: typeof summary?.deletions === "number" ? summary.deletions : undefined,
+              summaryFiles: typeof summary?.files === "number" ? summary.files : undefined,
+            });
+          }
+        }
+        break;
+      }
+
       case "server.connected":
       case "server.heartbeat":
       case "session.created":
-      case "session.updated":
       case "session.deleted":
       case "session.diff":
       case "message.removed":

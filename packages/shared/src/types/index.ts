@@ -42,7 +42,9 @@ export type EventBusEventType =
   | 'notification'
   | 'action.approval_required'
   | 'action.approved'
-  | 'action.denied';
+  | 'action.denied'
+  | 'thread.created'
+  | 'thread.updated';
 
 export interface EventBusEvent {
   type: EventBusEventType;
@@ -195,7 +197,32 @@ export interface Message {
   channelType?: string;
   channelId?: string;
   opencodeSessionId?: string;
+  threadId?: string;
   createdAt: Date;
+}
+
+// Thread types
+export type ThreadStatus = 'active' | 'archived';
+
+export interface SessionThread {
+  id: string;
+  sessionId: string;
+  opencodeSessionId?: string;
+  title?: string;
+  summaryAdditions: number;
+  summaryDeletions: number;
+  summaryFiles: number;
+  status: ThreadStatus;
+  messageCount: number;
+  firstMessagePreview?: string;
+  createdAt: Date;
+  lastActiveAt: Date;
+}
+
+export interface ListThreadsResponse {
+  threads: SessionThread[];
+  cursor?: string;
+  hasMore: boolean;
 }
 
 // Diff types

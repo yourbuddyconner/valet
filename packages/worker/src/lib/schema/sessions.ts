@@ -49,6 +49,7 @@ export const messages = sqliteTable('messages', {
   opencodeSessionId: text(),
   authorAvatarUrl: text(),
   messageFormat: text().notNull().default('v1'),
+  threadId: text(),
   createdAt: text().default(sql`(datetime('now'))`),
 }, (table) => [
   index('idx_messages_session').on(table.sessionId),

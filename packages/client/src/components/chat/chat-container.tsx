@@ -5,6 +5,7 @@ import * as Dialog from '@radix-ui/react-dialog';
 import { useChat } from '@/hooks/use-chat';
 import type { IntegrationAuthError } from '@/hooks/use-chat';
 import { useSession, useSessionGitState, useUpdateSessionTitle, useSessionChildren } from '@/api/sessions';
+import { useCreateThread, useThreads } from '@/api/threads';
 import { useDrawer } from '@/routes/sessions/$sessionId';
 import { MessageList } from './message-list';
 import { ChatInput } from './chat-input';
@@ -21,15 +22,31 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { useAuthStore } from '@/stores/auth';
 import { useIsMobile } from '@/hooks/use-is-mobile';
 
+// Module-level store for continuation context to avoid URL search param size limits
+let pendingContinuationStore: { threadId: string; context: string } | null = null;
+export function setPendingContinuation(threadId: string, context: string) {
+  pendingContinuationStore = { threadId, context };
+}
+export function consumePendingContinuation(threadId: string): string | null {
+  if (pendingContinuationStore?.threadId === threadId) {
+    const ctx = pendingContinuationStore.context;
+    pendingContinuationStore = null;
+    return ctx;
+  }
+  return null;
+}
+
 interface ChatContainerProps {
   sessionId: string;
+  initialThreadId?: string;
+  initialContinuationContext?: string;
 }
 
 function isFinalSessionStatus(status: string) {
   return status === 'terminated' || status === 'archived';
 }
 
-export function ChatContainer({ sessionId }: ChatContainerProps) {
+export function ChatContainer({ sessionId, initialThreadId, initialContinuationContext }: ChatContainerProps) {
   const router = useRouter();
   const navigate = useNavigate();
   const isMobile = useIsMobile();
@@ -101,21 +118,54 @@ export function ChatContainer({ sessionId }: ChatContainerProps) {
   }, [selectedModel, drawer.setSelectedModel]);
 
 
+  // Thread state (orchestrator sessions only)
+  const [activeThreadId, setActiveThreadId] = useState<string | null>(initialThreadId ?? null);
+  const pendingContinuationContext = useRef<string | undefined>(
+    initialContinuationContext ?? (initialThreadId ? (consumePendingContinuation(initialThreadId) ?? undefined) : undefined)
+  );
+  const createThread = useCreateThread(sessionId);
+  const { data: threadsData } = useThreads(sessionId);
+  const activeThread = useMemo(
+    () => threadsData?.threads?.find((t) => t.id === activeThreadId),
+    [threadsData, activeThreadId]
+  );
+  const isOrchestrator = session?.isOrchestrator === true;
+
+  const handleNewThread = useCallback(async () => {
+    try {
+      const thread = await createThread.mutateAsync();
+      setActiveThreadId(thread.id);
+    } catch (err) {
+      console.error('[ChatContainer] Failed to create thread:', err);
+    }
+  }, [createThread]);
+
   // Channel switcher state (orchestrator sessions only)
   const [selectedChannel, setSelectedChannel] = useState<string | null>(null);
   const channels = useMemo(() => deriveChannels(messages), [messages]);
   const showChannelSwitcher = session?.isOrchestrator === true && channels.length >= 1;
 
   const filteredMessages = useMemo(() => {
-    if (!selectedChannel) return messages;
-    const [filterType, ...rest] = selectedChannel.split(':');
-    const filterId = rest.join(':') || 'default';
-    return messages.filter((msg) => {
-      const ct = msg.channelType || 'web';
-      const ci = msg.channelId || 'default';
-      return ct === filterType && ci === filterId;
-    });
-  }, [messages, selectedChannel]);
+    let filtered = messages;
+
+    // Filter by thread if active
+    if (activeThreadId) {
+      filtered = filtered.filter((msg) => msg.threadId === activeThreadId);
+    }
+
+    // Filter by channel if selected
+    if (selectedChannel) {
+      const [filterType, ...rest] = selectedChannel.split(':');
+      const filterId = rest.join(':') || 'default';
+      filtered = filtered.filter((msg) => {
+        const ct = msg.channelType || 'web';
+        const ci = msg.channelId || 'default';
+        return ct === filterType && ci === filterId;
+      });
+    }
+
+    return filtered;
+  }, [messages, selectedChannel, activeThreadId]);
 
   const selectedChannelOption = useMemo(
     () => (selectedChannel ? channels.find((c) => `${c.channelType}:${c.channelId}` === selectedChannel) : null),
@@ -145,9 +195,21 @@ export function ChatContainer({ sessionId }: ChatContainerProps) {
   }, [pendingQuestions, selectedChannel]);
 
   const handleSendMessage = useCallback(
-    (content: string, model?: string, attachments?: Parameters<typeof sendMessage>[2]) => {
+    async (content: string, model?: string, attachments?: Parameters<typeof sendMessage>[2]) => {
       const channelType = selectedChannelOption?.channelType;
       const channelId = selectedChannelOption?.channelId;
+
+      // For orchestrator sessions, auto-create a thread on first message if none is active
+      let threadId = activeThreadId;
+      if (isOrchestrator && !threadId) {
+        try {
+          const thread = await createThread.mutateAsync();
+          threadId = thread.id;
+          setActiveThreadId(threadId);
+        } catch (err) {
+          console.error('[ChatContainer] Failed to auto-create thread:', err);
+        }
+      }
 
       if (queueModePreference === 'followup' && isDispatchBusy) {
         setStagedQueuedPrompts((prev) => [
@@ -164,9 +226,11 @@ export function ChatContainer({ sessionId }: ChatContainerProps) {
         return;
       }
 
-      sendMessage(content, model, attachments, channelType, channelId, queueModePreference);
+      const continuation = pendingContinuationContext.current;
+      pendingContinuationContext.current = undefined;
+      sendMessage(content, model, attachments, channelType, channelId, queueModePreference, threadId ?? undefined, continuation);
     },
-    [sendMessage, selectedChannelOption, queueModePreference, isDispatchBusy]
+    [sendMessage, selectedChannelOption, queueModePreference, isDispatchBusy, activeThreadId, isOrchestrator, createThread]
   );
 
   const handleAbort = useCallback(() => {
@@ -319,9 +383,30 @@ export function ChatContainer({ sessionId }: ChatContainerProps) {
                 />
               </>
             )}
+            {isOrchestrator && activeThreadId && (
+              <>
+                <div className="h-3 w-px bg-neutral-200 dark:bg-neutral-800" />
+                <span className="truncate text-[11px] text-neutral-400 dark:text-neutral-500">
+                  {activeThread?.title || 'New thread'}
+                </span>
+              </>
+            )}
             <SessionStatusIndicator sessionStatus={displaySessionStatus} connectionStatus={connectionStatus} />
           </div>
           <div className="flex items-center gap-0.5">
+            {isOrchestrator && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={handleNewThread}
+                disabled={createThread.isPending}
+                className="h-6 gap-1 px-1.5 text-[11px] font-medium text-neutral-400 hover:text-neutral-700 dark:text-neutral-500 dark:hover:text-neutral-200"
+                title="Start a new thread"
+              >
+                <PlusIcon className="h-3 w-3" />
+                New Thread
+              </Button>
+            )}
             {canShareSession && (
               <Button
                 variant="ghost"
@@ -958,6 +1043,15 @@ function TerminalIcon({ className }: { className?: string }) {
     <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" className={className}>
       <polyline points="4 17 10 11 4 5" />
       <line x1="12" x2="20" y1="19" y2="19" />
+    </svg>
+  );
+}
+
+function PlusIcon({ className }: { className?: string }) {
+  return (
+    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" className={className}>
+      <path d="M12 5v14" />
+      <path d="M5 12h14" />
     </svg>
   );
 }
