@@ -274,6 +274,10 @@ async function main() {
     onCallTool: async (toolId, params) => {
       return await agentClient.requestCallTool(toolId, params);
     },
+    // Skill API
+    onSkillApi: async (action, payload) => {
+      return await agentClient.requestSkillApi(action, payload);
+    },
   });
   const promptHandler = new PromptHandler(opencodeUrl!, agentClient, sessionId!);
 

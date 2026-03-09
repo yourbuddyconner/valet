@@ -749,6 +749,15 @@ export class AgentClient {
     });
   }
 
+  // ─── Skill API ──────────────────────────────────────────────────
+
+  requestSkillApi(action: string, payload?: Record<string, unknown>): Promise<{ data?: unknown }> {
+    const requestId = crypto.randomUUID();
+    return this.createPendingRequest(requestId, MESSAGE_OP_TIMEOUT_MS, () => {
+      this.send({ type: "skill-api", requestId, action, payload });
+    });
+  }
+
   requestSelfTerminate(): void {
     this.send({ type: "self-terminate" });
     // Disconnect and exit — the DO will handle sandbox termination
@@ -1163,6 +1172,7 @@ export class AgentClient {
         case "workflow-api-result":
         case "trigger-api-result":
         case "execution-api-result":
+        case "skill-api-result":
           if (msg.error) {
             this.rejectPendingRequest(msg.requestId, msg.error);
           } else {

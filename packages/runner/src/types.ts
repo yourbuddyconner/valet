@@ -99,6 +99,7 @@ export type DOToRunnerMessage =
     }
   | { type: "list-tools-result"; requestId: string; tools?: unknown[]; error?: string; warnings?: Array<{ service: string; displayName: string; reason: string; message: string }> }
   | { type: "call-tool-result"; requestId: string; result?: unknown; error?: string }
+  | { type: "skill-api-result"; requestId: string; data?: unknown; error?: string }
   | { type: "call-tool-pending"; requestId: string; invocationId: string; message: string }
   | { type: "tunnel-delete"; name: string; actorId?: string; actorName?: string; actorEmail?: string }
   | { type: "opencode-command"; command: string; args?: string; requestId: string }
@@ -202,6 +203,7 @@ export type RunnerToDOMessage =
   | { type: "channel-reply"; requestId: string; channelType: string; channelId: string; message: string; imageBase64?: string; imageMimeType?: string; followUp?: boolean }
   | { type: "list-tools"; requestId: string; service?: string; query?: string }
   | { type: "call-tool"; requestId: string; toolId: string; params: Record<string, unknown> }
+  | { type: "skill-api"; requestId: string; action: string; payload?: Record<string, unknown> }
   | { type: "audio-transcript"; messageId: string; transcript: string }
   | { type: "command-result"; requestId: string; command: string; result?: unknown; error?: string }
   | { type: "channel-session-created"; channelKey: string; opencodeSessionId: string }

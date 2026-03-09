@@ -18,7 +18,7 @@ import { invokeAction, markExecuted, markFailed, approveInvocation, denyInvocati
 import { updateInvocationStatus } from '../lib/db/actions.js';
 import { getDisabledActionsIndex, isActionDisabled } from '../lib/db/disabled-actions.js';
 import { getActivePluginArtifacts, getPluginSettings, getAutoEnabledServices } from '../lib/db/plugins.js';
-import { getPersonaSkills, getOrgDefaultSkills } from '../lib/db.js';
+import { getPersonaSkills, getOrgDefaultSkills, searchSkills, listSkills, getSkill, createSkill, updateSkill, deleteSkill } from '../lib/db.js';
 import type { ChannelTarget, ChannelContext } from '@valet/sdk';
 import { validateWorkflowDefinition } from '../lib/workflow-definition.js';
 
@@ -224,7 +224,7 @@ function deriveRuntimeStates(args: {
 type ToolCallStatus = 'pending' | 'running' | 'completed' | 'error';
 
 interface RunnerMessage {
-  type: 'stream' | 'result' | 'tool' | 'question' | 'screenshot' | 'error' | 'complete' | 'agentStatus' | 'create-pr' | 'update-pr' | 'list-pull-requests' | 'inspect-pull-request' | 'models' | 'aborted' | 'reverted' | 'diff' | 'review-result' | 'command-result' | 'ping' | 'git-state' | 'pr-created' | 'files-changed' | 'child-session' | 'title' | 'spawn-child' | 'session-message' | 'session-messages' | 'terminate-child' | 'self-terminate' | 'mem-read' | 'mem-write' | 'mem-patch' | 'mem-rm' | 'mem-search' | 'list-repos' | 'list-personas' | 'list-channels' | 'get-session-status' | 'list-child-sessions' | 'forward-messages' | 'read-repo-file' | 'workflow-list' | 'workflow-sync' | 'workflow-run' | 'workflow-executions' | 'workflow-api' | 'trigger-api' | 'execution-api' | 'workflow-execution-result' | 'workflow-chat-message' | 'model-switched' | 'tunnels' | 'mailbox-send' | 'mailbox-check' | 'task-create' | 'task-list' | 'task-update' | 'task-my' | 'channel-reply' | 'audio-transcript' | 'channel-session-created' | 'session-reset' | 'opencode-config-applied' | 'list-tools' | 'call-tool' | 'message.create' | 'message.part.text-delta' | 'message.part.tool-update' | 'message.finalize' | 'usage-report';
+  type: 'stream' | 'result' | 'tool' | 'question' | 'screenshot' | 'error' | 'complete' | 'agentStatus' | 'create-pr' | 'update-pr' | 'list-pull-requests' | 'inspect-pull-request' | 'models' | 'aborted' | 'reverted' | 'diff' | 'review-result' | 'command-result' | 'ping' | 'git-state' | 'pr-created' | 'files-changed' | 'child-session' | 'title' | 'spawn-child' | 'session-message' | 'session-messages' | 'terminate-child' | 'self-terminate' | 'mem-read' | 'mem-write' | 'mem-patch' | 'mem-rm' | 'mem-search' | 'list-repos' | 'list-personas' | 'list-channels' | 'get-session-status' | 'list-child-sessions' | 'forward-messages' | 'read-repo-file' | 'workflow-list' | 'workflow-sync' | 'workflow-run' | 'workflow-executions' | 'workflow-api' | 'trigger-api' | 'execution-api' | 'skill-api' | 'workflow-execution-result' | 'workflow-chat-message' | 'model-switched' | 'tunnels' | 'mailbox-send' | 'mailbox-check' | 'task-create' | 'task-list' | 'task-update' | 'task-my' | 'channel-reply' | 'audio-transcript' | 'channel-session-created' | 'session-reset' | 'opencode-config-applied' | 'list-tools' | 'call-tool' | 'message.create' | 'message.part.text-delta' | 'message.part.tool-update' | 'message.finalize' | 'usage-report';
   restarted?: boolean;
   turnId?: string;
   delta?: string;
@@ -366,7 +366,7 @@ interface ClientOutbound {
 
 /** Messages sent from DO to runner */
 interface RunnerOutbound {
-  type: 'prompt' | 'answer' | 'stop' | 'abort' | 'revert' | 'diff' | 'review' | 'opencode-command' | 'pong' | 'init' | 'opencode-config' | 'plugin-content' | 'spawn-child-result' | 'session-message-result' | 'session-messages-result' | 'create-pr-result' | 'update-pr-result' | 'list-pull-requests-result' | 'inspect-pull-request-result' | 'terminate-child-result' | 'mem-read-result' | 'mem-write-result' | 'mem-patch-result' | 'mem-rm-result' | 'mem-search-result' | 'list-repos-result' | 'list-personas-result' | 'list-channels-result' | 'get-session-status-result' | 'list-child-sessions-result' | 'forward-messages-result' | 'read-repo-file-result' | 'workflow-list-result' | 'workflow-sync-result' | 'workflow-run-result' | 'workflow-executions-result' | 'workflow-api-result' | 'trigger-api-result' | 'execution-api-result' | 'workflow-execute' | 'tunnel-delete' | 'channel-reply-result' | 'list-tools-result' | 'call-tool-result' | 'call-tool-pending';
+  type: 'prompt' | 'answer' | 'stop' | 'abort' | 'revert' | 'diff' | 'review' | 'opencode-command' | 'pong' | 'init' | 'opencode-config' | 'plugin-content' | 'spawn-child-result' | 'session-message-result' | 'session-messages-result' | 'create-pr-result' | 'update-pr-result' | 'list-pull-requests-result' | 'inspect-pull-request-result' | 'terminate-child-result' | 'mem-read-result' | 'mem-write-result' | 'mem-patch-result' | 'mem-rm-result' | 'mem-search-result' | 'list-repos-result' | 'list-personas-result' | 'list-channels-result' | 'get-session-status-result' | 'list-child-sessions-result' | 'forward-messages-result' | 'read-repo-file-result' | 'workflow-list-result' | 'workflow-sync-result' | 'workflow-run-result' | 'workflow-executions-result' | 'workflow-api-result' | 'trigger-api-result' | 'execution-api-result' | 'skill-api-result' | 'workflow-execute' | 'tunnel-delete' | 'channel-reply-result' | 'list-tools-result' | 'call-tool-result' | 'call-tool-pending';
   config?: {
     tools?: Record<string, boolean>;
     providerKeys?: Record<string, string>;
@@ -3035,6 +3035,10 @@ export class SessionAgentDO {
         await this.handleTriggerApi(msg.requestId!, msg.action || '', msg.payload);
         break;
 
+      case 'skill-api':
+        await this.handleSkillApi(msg.requestId!, msg.action || '', msg.payload);
+        break;
+
       case 'execution-api':
         await this.handleExecutionApi(msg.requestId!, msg.action || '', msg.payload);
         break;
@@ -4473,6 +4477,133 @@ export class SessionAgentDO {
     } catch (err) {
       console.error('[SessionAgentDO] Trigger API error:', err);
       this.sendToRunner({ type: 'trigger-api-result', requestId, error: err instanceof Error ? err.message : String(err) } as any);
+    }
+  }
+
+  private async handleSkillApi(requestId: string, action: string, payload?: Record<string, unknown>) {
+    try {
+      const userId = this.getStateValue('userId')!;
+      const orgId = 'default';
+
+      if (action === 'search') {
+        const q = typeof payload?.q === 'string' ? payload.q : '';
+        const skills = await searchSkills(this.appDb, orgId, userId, q);
+        this.sendToRunner({ type: 'skill-api-result', requestId, data: { skills } } as any);
+        return;
+      }
+
+      if (action === 'list') {
+        const source = typeof payload?.source === 'string' ? payload.source as any : undefined;
+        const visibility = typeof payload?.visibility === 'string' ? payload.visibility as any : undefined;
+        const skills = await listSkills(this.appDb, orgId, userId, { source, visibility });
+        this.sendToRunner({ type: 'skill-api-result', requestId, data: { skills } } as any);
+        return;
+      }
+
+      if (action === 'get') {
+        const id = typeof payload?.id === 'string' ? payload.id : '';
+        if (!id) {
+          this.sendToRunner({ type: 'skill-api-result', requestId, error: 'id is required' } as any);
+          return;
+        }
+        const skill = await getSkill(this.appDb, id);
+        if (!skill) {
+          this.sendToRunner({ type: 'skill-api-result', requestId, error: 'Skill not found' } as any);
+          return;
+        }
+        if (skill.visibility === 'private' && skill.ownerId !== userId) {
+          this.sendToRunner({ type: 'skill-api-result', requestId, error: 'Skill not found' } as any);
+          return;
+        }
+        this.sendToRunner({ type: 'skill-api-result', requestId, data: { skill } } as any);
+        return;
+      }
+
+      if (action === 'create') {
+        const name = typeof payload?.name === 'string' ? payload.name.trim() : '';
+        const content = typeof payload?.content === 'string' ? payload.content : '';
+        if (!name || !content) {
+          this.sendToRunner({ type: 'skill-api-result', requestId, error: 'name and content are required' } as any);
+          return;
+        }
+        const slug = typeof payload?.slug === 'string' && payload.slug.trim()
+          ? payload.slug.trim()
+          : name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 100);
+        const description = typeof payload?.description === 'string' ? payload.description : undefined;
+        const visibility = payload?.visibility === 'shared' ? 'shared' as const : 'private' as const;
+        const skill = await createSkill(this.appDb, {
+          id: crypto.randomUUID(),
+          orgId,
+          ownerId: userId,
+          source: 'managed',
+          name,
+          slug,
+          description,
+          content,
+          visibility,
+        });
+        this.sendToRunner({ type: 'skill-api-result', requestId, data: { skill } } as any);
+        return;
+      }
+
+      if (action === 'update') {
+        const id = typeof payload?.id === 'string' ? payload.id : '';
+        if (!id) {
+          this.sendToRunner({ type: 'skill-api-result', requestId, error: 'id is required' } as any);
+          return;
+        }
+        const skill = await getSkill(this.appDb, id);
+        if (!skill) {
+          this.sendToRunner({ type: 'skill-api-result', requestId, error: 'Skill not found' } as any);
+          return;
+        }
+        if (skill.source !== 'managed') {
+          this.sendToRunner({ type: 'skill-api-result', requestId, error: 'Only managed skills can be updated' } as any);
+          return;
+        }
+        if (skill.ownerId !== userId) {
+          this.sendToRunner({ type: 'skill-api-result', requestId, error: 'Only the owner can update this skill' } as any);
+          return;
+        }
+        const updates: Record<string, string> = {};
+        if (typeof payload?.name === 'string') updates.name = payload.name;
+        if (typeof payload?.slug === 'string') updates.slug = payload.slug;
+        if (typeof payload?.description === 'string') updates.description = payload.description;
+        if (typeof payload?.content === 'string') updates.content = payload.content;
+        if (typeof payload?.visibility === 'string') updates.visibility = payload.visibility;
+        await updateSkill(this.appDb, id, updates);
+        this.sendToRunner({ type: 'skill-api-result', requestId, data: { skill: { ...skill, ...updates } } } as any);
+        return;
+      }
+
+      if (action === 'delete') {
+        const id = typeof payload?.id === 'string' ? payload.id : '';
+        if (!id) {
+          this.sendToRunner({ type: 'skill-api-result', requestId, error: 'id is required' } as any);
+          return;
+        }
+        const skill = await getSkill(this.appDb, id);
+        if (!skill) {
+          this.sendToRunner({ type: 'skill-api-result', requestId, error: 'Skill not found' } as any);
+          return;
+        }
+        if (skill.source !== 'managed') {
+          this.sendToRunner({ type: 'skill-api-result', requestId, error: 'Only managed skills can be deleted' } as any);
+          return;
+        }
+        if (skill.ownerId !== userId) {
+          this.sendToRunner({ type: 'skill-api-result', requestId, error: 'Only the owner can delete this skill' } as any);
+          return;
+        }
+        await deleteSkill(this.appDb, id);
+        this.sendToRunner({ type: 'skill-api-result', requestId, data: { deleted: true } } as any);
+        return;
+      }
+
+      this.sendToRunner({ type: 'skill-api-result', requestId, error: `Unsupported skill action: ${action}` } as any);
+    } catch (err) {
+      console.error('[SessionAgentDO] Skill API error:', err);
+      this.sendToRunner({ type: 'skill-api-result', requestId, error: err instanceof Error ? err.message : String(err) } as any);
     }
   }
 
