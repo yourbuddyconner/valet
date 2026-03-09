@@ -683,12 +683,19 @@ _wrangler-config: ## Generate wrangler.deploy.toml from .env.deploy values
 		echo "Error: Could not discover D1 database ID for '$(D1_DATABASE_NAME)'. Run: wrangler d1 create $(D1_DATABASE_NAME)"; \
 		exit 1; \
 	fi; \
+	MODAL_URL="$(MODAL_BACKEND_URL)"; \
+	if [ -z "$$MODAL_URL" ]; then \
+		MODAL_WS=$$(modal profile current 2>/dev/null | head -1 | awk '{print $$1}'); \
+		if [ -n "$$MODAL_WS" ]; then \
+			MODAL_URL="https://$$MODAL_WS--{label}.modal.run"; \
+		fi; \
+	fi; \
 	sed -e "s|\$${CF_WORKER_NAME}|$(CF_WORKER_NAME)|g" \
 		-e "s|\$${D1_DATABASE_NAME}|$(D1_DATABASE_NAME)|g" \
 		-e "s|\$${D1_DATABASE_ID}|$$DB_ID|g" \
 		-e "s|\$${R2_BUCKET_NAME}|$(R2_BUCKET_NAME)|g" \
 		-e "s|\$${ALLOWED_EMAILS}|$(ALLOWED_EMAILS)|g" \
-		-e "s|\$${MODAL_BACKEND_URL}|$(MODAL_BACKEND_URL)|g" \
+		-e "s|\$${MODAL_BACKEND_URL}|$$MODAL_URL|g" \
 		packages/worker/wrangler.toml > packages/worker/wrangler.deploy.toml
 
 deploy-migrate: ## Apply D1 migrations to production
