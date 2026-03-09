@@ -198,6 +198,30 @@ export interface Message {
   createdAt: Date;
 }
 
+// Thread types
+export type ThreadStatus = 'active' | 'archived';
+
+export interface SessionThread {
+  id: string;
+  sessionId: string;
+  opencodeSessionId?: string;
+  title?: string;
+  summaryAdditions: number;
+  summaryDeletions: number;
+  summaryFiles: number;
+  status: ThreadStatus;
+  messageCount: number;
+  firstMessagePreview?: string;
+  createdAt: Date;
+  lastActiveAt: Date;
+}
+
+export interface ListThreadsResponse {
+  threads: SessionThread[];
+  cursor?: string;
+  hasMore: boolean;
+}
+
 // Diff types
 export interface DiffFile {
   path: string;
