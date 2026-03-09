@@ -18,7 +18,7 @@ import { invokeAction, markExecuted, markFailed, approveInvocation, denyInvocati
 import { updateInvocationStatus } from '../lib/db/actions.js';
 import { getDisabledActionsIndex, isActionDisabled } from '../lib/db/disabled-actions.js';
 import { getActivePluginArtifacts, getPluginSettings, getAutoEnabledServices } from '../lib/db/plugins.js';
-import { getPersonaSkills, getOrgDefaultSkills, searchSkills, listSkills, getSkill, getSkillBySlug, createSkill, updateSkill, deleteSkill, getPersonaToolWhitelist, createPersona, updatePersona, deletePersona, getPersonaWithFiles, upsertPersonaFile } from '../lib/db.js';
+import { getPersonaSkills, getOrgDefaultSkills, searchSkills, listSkills, getSkill, getSkillBySlug, createSkill, updateSkill, deleteSkill, getPersonaToolWhitelist, createPersona, updatePersona, deletePersona, getPersonaWithFiles, upsertPersonaFile, attachSkillToPersona, detachSkillFromPersona, getPersonaSkillsForApi } from '../lib/db.js';
 import type { ChannelTarget, ChannelContext } from '@valet/sdk';
 import { validateWorkflowDefinition } from '../lib/workflow-definition.js';
 
@@ -4747,6 +4747,69 @@ export class SessionAgentDO {
           sortOrder: (payload?.sortOrder as number) ?? 0,
         });
         this.sendToRunner({ type: 'persona-api-result', requestId, data: { ok: true } });
+        return;
+      }
+
+      if (action === 'list-skills') {
+        const personaId = payload?.personaId as string;
+        if (!personaId) {
+          this.sendToRunner({ type: 'persona-api-result', requestId, error: 'personaId is required', statusCode: 400 });
+          return;
+        }
+        const persona = await getPersonaWithFiles(this.env.DB, personaId);
+        if (!persona) {
+          this.sendToRunner({ type: 'persona-api-result', requestId, error: 'Persona not found', statusCode: 404 });
+          return;
+        }
+        if (persona.visibility === 'private' && persona.createdBy !== userId) {
+          this.sendToRunner({ type: 'persona-api-result', requestId, error: 'Persona not found', statusCode: 404 });
+          return;
+        }
+        const skills = await getPersonaSkillsForApi(this.appDb, personaId);
+        this.sendToRunner({ type: 'persona-api-result', requestId, data: { skills } });
+        return;
+      }
+
+      if (action === 'attach-skill') {
+        const personaId = payload?.personaId as string;
+        const skillId = payload?.skillId as string;
+        const sortOrder = (payload?.sortOrder as number) ?? 0;
+        if (!personaId || !skillId) {
+          this.sendToRunner({ type: 'persona-api-result', requestId, error: 'personaId and skillId are required', statusCode: 400 });
+          return;
+        }
+        const persona = await getPersonaWithFiles(this.env.DB, personaId);
+        if (!persona) {
+          this.sendToRunner({ type: 'persona-api-result', requestId, error: 'Persona not found', statusCode: 404 });
+          return;
+        }
+        if (persona.createdBy !== userId) {
+          this.sendToRunner({ type: 'persona-api-result', requestId, error: 'Only the creator can modify this persona', statusCode: 403 });
+          return;
+        }
+        await attachSkillToPersona(this.appDb, crypto.randomUUID(), personaId, skillId, sortOrder);
+        this.sendToRunner({ type: 'persona-api-result', requestId, data: { attached: true } });
+        return;
+      }
+
+      if (action === 'detach-skill') {
+        const personaId = payload?.personaId as string;
+        const skillId = payload?.skillId as string;
+        if (!personaId || !skillId) {
+          this.sendToRunner({ type: 'persona-api-result', requestId, error: 'personaId and skillId are required', statusCode: 400 });
+          return;
+        }
+        const persona = await getPersonaWithFiles(this.env.DB, personaId);
+        if (!persona) {
+          this.sendToRunner({ type: 'persona-api-result', requestId, error: 'Persona not found', statusCode: 404 });
+          return;
+        }
+        if (persona.createdBy !== userId) {
+          this.sendToRunner({ type: 'persona-api-result', requestId, error: 'Only the creator can modify this persona', statusCode: 403 });
+          return;
+        }
+        await detachSkillFromPersona(this.appDb, personaId, skillId);
+        this.sendToRunner({ type: 'persona-api-result', requestId, data: { detached: true } });
         return;
       }
 
