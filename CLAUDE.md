@@ -132,17 +132,13 @@ make release             # Full idempotent release: install, build, push image, 
 
 ### Applying D1 Migrations to Production
 
-`make deploy` includes the migration step, but if you need to apply migrations separately (e.g. after a deploy that already ran, or to apply a new migration without a full redeploy):
+`make deploy` includes the migration step, but if you need to apply migrations separately:
 
 ```bash
-# Generate the deploy wrangler config (substitutes env vars), run migration, clean up
-make _wrangler-config && \
-  cd packages/worker && \
-  npx wrangler d1 migrations apply valet-db --remote -c wrangler.deploy.toml && \
-  rm -f wrangler.deploy.toml
+make deploy-migrate
 ```
 
-**Why this is needed:** The production `wrangler.toml` uses `${VAR}` placeholders for secrets. `make _wrangler-config` generates `wrangler.deploy.toml` with real values from `.env.deploy`. The plain `wrangler d1 migrations apply` command will fail with a validation error if you use the base `wrangler.toml` directly.
+All deploy targets (`deploy-worker`, `deploy-migrate`, `deploy-modal`, `deploy-client`) are thin wrappers around `scripts/deploy.sh` which auto-discovers config (D1 ID, Modal workspace URL, worker URL) from CLI tools when values aren't set in `.env.deploy`.
 
 ### Modal Backend Deployment
 

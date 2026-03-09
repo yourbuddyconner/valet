@@ -17,7 +17,7 @@
         workflow-create workflow-list workflow-run workflow-delete \
         trigger-create trigger-list trigger-run \
         bootstrap bootstrap-d1 bootstrap-r2 bootstrap-pages bootstrap-secrets \
-        release deploy deploy-worker deploy-modal deploy-client build-client generate-registries \
+        release deploy deploy-worker deploy-modal deploy-migrate deploy-client generate-registries \
         secrets-set secrets-list \
         image-build image-push \
         destroy destroy-worker destroy-d1 destroy-r2 destroy-pages destroy-modal
@@ -617,43 +617,23 @@ VERSION ?= $(shell git rev-parse --short HEAD 2>/dev/null || date +%Y%m%d%H%M%S)
 generate-registries: ## Generate auto-discovered plugin registry files
 	@cd packages/worker && bun scripts/generate-plugin-registry.ts
 
-release: ## Full idempotent release: install, build, push image, deploy worker + client
+release: ## Full idempotent release: install, build, push image, deploy all
 	@echo "$(GREEN)========================================$(NC)"
 	@echo "$(GREEN)Starting Release (version: $(VERSION))$(NC)"
 	@echo "$(GREEN)========================================$(NC)"
 	@echo ""
-	@echo "Step 1/7: Installing dependencies..."
+	@echo "Step 1/4: Installing dependencies..."
 	@$(PNPM) install --frozen-lockfile || $(PNPM) install
 	@echo "$(GREEN)✓ Dependencies installed$(NC)"
 	@echo ""
-	@echo "Generating plugin registries..."
-	@make generate-registries
-	@echo ""
-	@echo "Step 2/7: Type checking..."
+	@echo "Step 2/4: Type checking..."
 	@$(PNPM) run typecheck || echo "$(YELLOW)⚠ Type check had warnings$(NC)"
 	@echo ""
-	@echo "Step 3/7: Building and pushing OpenCode image to GHCR..."
+	@echo "Step 3/4: Building and pushing OpenCode image to GHCR..."
 	@make image-push VERSION=$(VERSION)
 	@echo ""
-	@echo "Step 4/7: Building client..."
-	@cd packages/client && VITE_API_URL=$(WORKER_PROD_URL)/api $(PNPM) run build
-	@echo "$(GREEN)✓ Client built$(NC)"
-	@echo ""
-	@echo "Step 5/7: Deploying Worker..."
-	@make _wrangler-config
-	@cd packages/worker && wrangler deploy -c wrangler.deploy.toml
-	@rm -f packages/worker/wrangler.deploy.toml
-	@echo "$(GREEN)✓ Worker deployed$(NC)"
-	@echo ""
-	@echo "Step 6/7: Running database migrations and seeding..."
-	@make _wrangler-config
-	@cd packages/worker && wrangler d1 migrations apply $(D1_DATABASE_NAME) --remote -c wrangler.deploy.toml
-	@rm -f packages/worker/wrangler.deploy.toml
-	@echo "$(GREEN)✓ Database migrated and seeded$(NC)"
-	@echo ""
-	@echo "Step 7/7: Deploying Client..."
-	@cd packages/client && wrangler pages deploy dist --project-name=$(PAGES_PROJECT_NAME)
-	@echo "$(GREEN)✓ Client deployed$(NC)"
+	@echo "Step 4/4: Deploying (worker + migrations + modal + client)..."
+	@./scripts/deploy.sh all
 	@echo ""
 	@echo "$(GREEN)========================================$(NC)"
 	@echo "$(GREEN)Release complete! (version: $(VERSION))$(NC)"
@@ -661,64 +641,21 @@ release: ## Full idempotent release: install, build, push image, deploy worker +
 	@echo ""
 	@echo "$(YELLOW)OpenCode Image:$(NC) $(GHCR_REPO):$(VERSION)"
 	@echo "$(YELLOW)Set OPENCODE_IMAGE in Cloudflare to this value.$(NC)"
-	@echo ""
-	@echo "$(YELLOW)Sign in with GitHub to get started.$(NC)"
 
 deploy: ## Deploy everything — auto-creates resources, discovers URLs
-	@./scripts/deploy.sh
+	@./scripts/deploy.sh all
 
-deploy-worker: generate-registries ## Deploy Cloudflare Worker
-	@make _wrangler-config
-	@echo "$(GREEN)Deploying Worker...$(NC)"
-	cd packages/worker && wrangler deploy -c wrangler.deploy.toml
-	@rm -f packages/worker/wrangler.deploy.toml
-	@echo "$(GREEN)✓ Worker deployed$(NC)"
-
-_wrangler-config: ## Generate wrangler.deploy.toml from .env.deploy values
-	@DB_ID="$(D1_DATABASE_ID)"; \
-	if [ -z "$$DB_ID" ]; then \
-		DB_ID=$$(wrangler d1 list --json 2>/dev/null | jq -r '.[] | select(.name=="$(D1_DATABASE_NAME)") | .uuid' 2>/dev/null); \
-	fi; \
-	if [ -z "$$DB_ID" ] || [ "$$DB_ID" = "null" ]; then \
-		echo "Error: Could not discover D1 database ID for '$(D1_DATABASE_NAME)'. Run: wrangler d1 create $(D1_DATABASE_NAME)"; \
-		exit 1; \
-	fi; \
-	MODAL_URL="$(MODAL_BACKEND_URL)"; \
-	if [ -z "$$MODAL_URL" ]; then \
-		MODAL_WS=$$(modal profile current 2>/dev/null | head -1 | awk '{print $$1}'); \
-		if [ -n "$$MODAL_WS" ]; then \
-			MODAL_URL="https://$$MODAL_WS--{label}.modal.run"; \
-		fi; \
-	fi; \
-	sed -e "s|\$${CF_WORKER_NAME}|$(CF_WORKER_NAME)|g" \
-		-e "s|\$${D1_DATABASE_NAME}|$(D1_DATABASE_NAME)|g" \
-		-e "s|\$${D1_DATABASE_ID}|$$DB_ID|g" \
-		-e "s|\$${R2_BUCKET_NAME}|$(R2_BUCKET_NAME)|g" \
-		-e "s|\$${ALLOWED_EMAILS}|$(ALLOWED_EMAILS)|g" \
-		-e "s|\$${MODAL_BACKEND_URL}|$$MODAL_URL|g" \
-		packages/worker/wrangler.toml > packages/worker/wrangler.deploy.toml
+deploy-worker: ## Deploy Cloudflare Worker (auto-discovers config)
+	@./scripts/deploy.sh worker
 
 deploy-migrate: ## Apply D1 migrations to production
-	@make _wrangler-config
-	@echo "$(GREEN)Applying D1 migrations...$(NC)"
-	cd packages/worker && wrangler d1 migrations apply $(D1_DATABASE_NAME) --remote -c wrangler.deploy.toml
-	@rm -f packages/worker/wrangler.deploy.toml
-	@echo "$(GREEN)✓ Migrations applied$(NC)"
+	@./scripts/deploy.sh migrate
 
 deploy-modal: ## Deploy Modal backend (includes runner)
-	@echo "$(GREEN)Deploying Modal backend...$(NC)"
-	$(MODAL_DEPLOY_CMD) backend/app.py
-	@echo "$(GREEN)✓ Modal backend deployed$(NC)"
+	@./scripts/deploy.sh modal
 
-deploy-client: build-client ## Deploy client to Cloudflare Pages
-	@echo "$(GREEN)Deploying client to Cloudflare Pages...$(NC)"
-	cd packages/client && wrangler pages deploy dist --project-name=$(PAGES_PROJECT_NAME)
-	@echo "$(GREEN)✓ Client deployed$(NC)"
-
-build-client: ## Build client for production
-	@echo "$(GREEN)Building client...$(NC)"
-	cd packages/client && VITE_API_URL=$(WORKER_PROD_URL)/api $(PNPM) run build
-	@echo "$(GREEN)✓ Client built$(NC)"
+deploy-client: ## Build and deploy client to Cloudflare Pages
+	@./scripts/deploy.sh client
 
 dev-client: ## Start client dev server
 	@echo "$(GREEN)Starting client on http://localhost:5173...$(NC)"
