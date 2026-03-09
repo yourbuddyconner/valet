@@ -4,6 +4,7 @@ import type {
   AgentPersona,
   PersonaVisibility,
   PersonaToolConfig,
+  PersonaSkillAttachment,
 } from './types';
 import { skillKeys } from './skills';
 
