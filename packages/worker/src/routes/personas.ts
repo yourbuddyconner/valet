@@ -261,3 +261,42 @@ personasRouter.delete('/:id/files/:fileId', async (c) => {
   await db.deletePersonaFile(c.get('db'), fileId);
   return c.json({ ok: true });
 });
+
+// ─── Persona-Skill Attachments ─────────────────────────────────────────────
+
+/**
+ * GET /api/personas/:id/skills
+ * List skills attached to a persona.
+ */
+personasRouter.get('/:id/skills', async (c) => {
+  const { id } = c.req.param();
+  const skills = await db.getPersonaSkills(c.get('db'), id);
+  return c.json({ skills });
+});
+
+const attachSkillSchema = z.object({
+  skillId: z.string().min(1),
+  sortOrder: z.number().int().min(0).optional(),
+});
+
+/**
+ * POST /api/personas/:id/skills
+ * Attach a skill to a persona.
+ */
+personasRouter.post('/:id/skills', zValidator('json', attachSkillSchema), async (c) => {
+  const { id } = c.req.param();
+  const body = c.req.valid('json');
+
+  await db.attachSkillToPersona(c.get('db'), crypto.randomUUID(), id, body.skillId, body.sortOrder ?? 0);
+  return c.json({ attached: true }, 201);
+});
+
+/**
+ * DELETE /api/personas/:id/skills/:skillId
+ * Detach a skill from a persona.
+ */
+personasRouter.delete('/:id/skills/:skillId', async (c) => {
+  const { id, skillId } = c.req.param();
+  await db.detachSkillFromPersona(c.get('db'), id, skillId);
+  return c.json({ detached: true });
+});
