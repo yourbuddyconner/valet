@@ -1098,6 +1098,58 @@ export function startGateway(port: number, callbacks: GatewayCallbacks): void {
     }
   });
 
+  // ─── Persona-Skill Attachments ─────────────────────────────────────────
+
+  app.get("/api/personas/:id/skills", async (c) => {
+    if (!callbacks.onPersonaApi) {
+      return c.json({ error: "Persona API handler not configured" }, 500);
+    }
+    try {
+      const id = c.req.param("id");
+      const result = await callbacks.onPersonaApi("list-skills", { personaId: id });
+      if (result.error) return c.json({ error: result.error }, (result.statusCode ?? 500) as ContentfulStatusCode);
+      return c.json(result.data ?? { skills: [] });
+    } catch (err) {
+      console.error("[Gateway] List persona skills error:", err);
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
+    }
+  });
+
+  app.post("/api/personas/:id/skills", async (c) => {
+    if (!callbacks.onPersonaApi) {
+      return c.json({ error: "Persona API handler not configured" }, 500);
+    }
+    try {
+      const id = c.req.param("id");
+      const body = await c.req.json() as Record<string, unknown>;
+      if (!body.skillId) {
+        return c.json({ error: "Missing required field: skillId" }, 400);
+      }
+      const result = await callbacks.onPersonaApi("attach-skill", { personaId: id, ...body });
+      if (result.error) return c.json({ error: result.error }, (result.statusCode ?? 500) as ContentfulStatusCode);
+      return c.json(result.data ?? { attached: true }, 201);
+    } catch (err) {
+      console.error("[Gateway] Attach skill to persona error:", err);
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
+    }
+  });
+
+  app.delete("/api/personas/:id/skills/:skillId", async (c) => {
+    if (!callbacks.onPersonaApi) {
+      return c.json({ error: "Persona API handler not configured" }, 500);
+    }
+    try {
+      const id = c.req.param("id");
+      const skillId = c.req.param("skillId");
+      const result = await callbacks.onPersonaApi("detach-skill", { personaId: id, skillId });
+      if (result.error) return c.json({ error: result.error }, (result.statusCode ?? 500) as ContentfulStatusCode);
+      return c.json(result.data ?? { detached: true });
+    } catch (err) {
+      console.error("[Gateway] Detach skill from persona error:", err);
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
+    }
+  });
+
   app.get("/api/channels", async (c) => {
     if (!callbacks.onListChannels) {
       return c.json({ error: "List channels handler not configured" }, 500);
