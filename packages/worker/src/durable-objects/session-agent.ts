@@ -1803,8 +1803,8 @@ export class SessionAgentDO {
     this.rescheduleIdleAlarm();
     console.log('[SessionAgentDO] handlePrompt: dispatching to runner (DO_CODE_VERSION=v2-pipeline-2)');
 
-    // Track channel context for auto-reply on completion
-    if (channelType && channelId) {
+    // Track channel context for auto-reply on completion (threads are web UI conversations, not external channels)
+    if (channelType && channelId && this.requiresExplicitChannelReply(channelType)) {
       this.pendingChannelReply = { channelType, channelId, resultContent: null, resultMessageId: null, handled: false };
 
       // Record a follow-up reminder so the agent gets nudged if it doesn't send a substantive reply
@@ -6716,10 +6716,10 @@ export class SessionAgentDO {
       this.setStateValue('currentPromptAuthorId', authorId);
     }
 
-    // Track channel context for auto-reply on completion
+    // Track channel context for auto-reply on completion (threads are web UI conversations, not external channels)
     const queueChannelType = (prompt.channel_type as string) || undefined;
     const queueChannelId = (prompt.channel_id as string) || undefined;
-    if (queueChannelType && queueChannelId) {
+    if (queueChannelType && queueChannelId && this.requiresExplicitChannelReply(queueChannelType)) {
       this.pendingChannelReply = { channelType: queueChannelType, channelId: queueChannelId, resultContent: null, resultMessageId: null, handled: false };
 
       // Record a follow-up reminder so the agent gets nudged if it doesn't send a substantive reply
@@ -8979,7 +8979,7 @@ export class SessionAgentDO {
   // ─── Channel Follow-up Helpers ─────────────────────────────────────
 
   private requiresExplicitChannelReply(channelType?: string): boolean {
-    return !!channelType && channelType !== 'web';
+    return !!channelType && channelType !== 'web' && channelType !== 'thread';
   }
 
   private insertChannelFollowup(channelType: string, channelId: string, content: string): void {
