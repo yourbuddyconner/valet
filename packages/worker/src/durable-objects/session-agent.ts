@@ -18,6 +18,7 @@ import { invokeAction, markExecuted, markFailed, approveInvocation, denyInvocati
 import { updateInvocationStatus } from '../lib/db/actions.js';
 import { getDisabledActionsIndex, isActionDisabled } from '../lib/db/disabled-actions.js';
 import { getActivePluginArtifacts, getPluginSettings, getAutoEnabledServices } from '../lib/db/plugins.js';
+import { getPersonaSkills, getOrgDefaultSkills } from '../lib/db.js';
 import type { ChannelTarget, ChannelContext } from '@valet/sdk';
 import { validateWorkflowDefinition } from '../lib/workflow-definition.js';
 
@@ -8643,6 +8644,27 @@ export class SessionAgentDO {
       }
     }
 
+    // Resolve skills from persona attachments or org defaults
+    const appDb = getDb(this.env.DB);
+    let resolvedSkills: Array<{ filename: string; content: string }> = [];
+    try {
+      // Check if this session has a personaId by looking up the session record
+      const sessionId = this.getStateValue('sessionId');
+      if (sessionId) {
+        const session = await getSession(appDb, sessionId);
+        if (session?.personaId) {
+          resolvedSkills = await getPersonaSkills(appDb, session.personaId);
+        } else {
+          resolvedSkills = await getOrgDefaultSkills(appDb, orgId);
+        }
+      } else {
+        resolvedSkills = await getOrgDefaultSkills(appDb, orgId);
+      }
+    } catch (err) {
+      console.warn('[SessionAgentDO] sendPluginContent: failed to resolve skills from DB', err);
+      // Fall back to empty skills
+    }
+
     const content = {
       personas: [
         ...artifacts.filter(a => a.type === 'persona').map(a => ({
@@ -8652,10 +8674,7 @@ export class SessionAgentDO {
         })),
         ...sessionPersonas,
       ],
-      skills: artifacts.filter(a => a.type === 'skill').map(a => ({
-        filename: a.filename,
-        content: a.content,
-      })),
+      skills: resolvedSkills,
       tools: artifacts.filter(a => a.type === 'tool').map(a => ({
         filename: a.filename,
         content: a.content,
