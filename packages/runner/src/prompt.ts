@@ -2636,7 +2636,7 @@ export class PromptHandler {
     }
     // Prefix content with channel context and user identity (agent sees this, users don't)
     let attributedContent = content;
-    if (channelType && channelId) {
+    if (channelType && channelId && channelType !== "thread") {
       attributedContent = `[via ${channelType} | chatId: ${channelId}] ${attributedContent}`;
     }
     if (author?.authorName || author?.authorEmail) {
