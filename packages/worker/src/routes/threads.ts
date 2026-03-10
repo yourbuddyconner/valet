@@ -13,7 +13,7 @@ export const threadsRouter = new Hono<{ Bindings: Env; Variables: Variables }>()
 threadsRouter.get('/:sessionId/threads', async (c) => {
   const user = c.get('user');
   const { sessionId } = c.req.param();
-  const { cursor, limit } = c.req.query();
+  const { cursor, limit, status } = c.req.query();
 
   await db.assertSessionAccess(c.get('db'), sessionId, user.id, 'viewer');
 
@@ -23,6 +23,7 @@ threadsRouter.get('/:sessionId/threads', async (c) => {
   const result = await db.listThreads(c.env.DB, sessionId, {
     cursor,
     limit: safeLimit,
+    status,
   });
 
   return c.json(result);
@@ -144,4 +145,32 @@ threadsRouter.post('/:sessionId/threads/:threadId/continue', async (c) => {
   const thread = await db.createThread(c.env.DB, { id, sessionId });
 
   return c.json({ thread, continuationContext }, 201);
+});
+
+/**
+ * PATCH /api/sessions/:sessionId/threads/:threadId
+ * Update thread status (active/archived).
+ */
+threadsRouter.patch('/:sessionId/threads/:threadId', async (c) => {
+  const user = c.get('user');
+  const { sessionId, threadId } = c.req.param();
+
+  await db.assertSessionAccess(c.get('db'), sessionId, user.id, 'collaborator');
+
+  const thread = await db.getThread(c.env.DB, threadId);
+  if (!thread || thread.sessionId !== sessionId) {
+    throw new NotFoundError('Thread', threadId);
+  }
+
+  const body = await c.req.json<{ status?: 'active' | 'archived' }>();
+  if (body.status && !['active', 'archived'].includes(body.status)) {
+    return c.json({ error: 'Invalid status' }, 400);
+  }
+
+  if (body.status) {
+    await db.updateThreadStatus(c.env.DB, threadId, body.status);
+  }
+
+  const updated = await db.getThread(c.env.DB, threadId);
+  return c.json({ thread: updated });
 });
