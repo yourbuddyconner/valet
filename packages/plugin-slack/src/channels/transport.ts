@@ -373,6 +373,52 @@ export class SlackTransport implements ChannelTransport {
     return result.ok;
   }
 
+  async resolveLabel(channelId: string, ctx: ChannelContext): Promise<string> {
+    // Composite channelId format: "teamId:slackChannelId:threadTs" or "teamId:slackChannelId"
+    const parts = channelId.split(':');
+    const slackChannelId = parts.length >= 2 ? parts[1] : parts[0];
+    const hasThread = parts.length >= 3;
+
+    // Try to resolve channel name via conversations.info
+    let channelName: string | undefined;
+    try {
+      const result = await slackApiCall('conversations.info', { channel: slackChannelId }, ctx.token);
+      if (result.ok) {
+        const channel = result.channel as Record<string, unknown> | undefined;
+        if (channel) {
+          const isDm = channel.is_im === true;
+          const isMpim = channel.is_mpim === true;
+          if (isDm) {
+            channelName = 'DM';
+          } else if (isMpim) {
+            channelName = (channel.name_normalized as string) || (channel.name as string) || 'Group DM';
+          } else {
+            channelName = (channel.name_normalized as string) || (channel.name as string);
+          }
+        }
+      }
+    } catch {
+      // Fall back to ID-based heuristic
+    }
+
+    // Fallback: detect type from channel ID prefix
+    if (!channelName) {
+      if (slackChannelId.startsWith('D')) {
+        channelName = 'DM';
+      } else if (slackChannelId.startsWith('G')) {
+        channelName = 'Group DM';
+      } else {
+        channelName = slackChannelId;
+      }
+    }
+
+    const suffix = hasThread ? ' (thread)' : '';
+    if (channelName === 'DM' || channelName === 'Group DM') {
+      return `Slack ${channelName}${suffix}`;
+    }
+    return `Slack #${channelName}${suffix}`;
+  }
+
   // Slack has no bot typing indicator API
   // sendTypingIndicator is intentionally omitted
 

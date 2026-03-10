@@ -1,7 +1,9 @@
 import { useMemo } from 'react';
+import { useQueries } from '@tanstack/react-query';
 import type { Message } from '@/api/types';
 import { formatChannelLabel } from '@valet/sdk';
 import { getChannelIcon, ChannelsIcon } from '@valet/sdk/ui';
+import { api } from '@/api/client';
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -48,6 +50,38 @@ export function deriveChannels(messages: Message[]): ChannelOption[] {
     }));
 }
 
+/** Resolve channel labels via transport plugins. Returns a map of "channelType:channelId" → resolved label. */
+function useResolvedLabels(channels: ChannelOption[]): Map<string, string> {
+  // Only resolve channels that aren't simple types (web, thread, api)
+  const resolvable = useMemo(
+    () => channels.filter((c) => c.channelType !== 'web' && c.channelType !== 'thread' && c.channelType !== 'api' && c.channelId !== 'default'),
+    [channels],
+  );
+
+  const results = useQueries({
+    queries: resolvable.map((ch) => ({
+      queryKey: ['channel-label', ch.channelType, ch.channelId] as const,
+      queryFn: () => api.get<{ label: string | null }>(
+        `/channels/label?channelType=${encodeURIComponent(ch.channelType)}&channelId=${encodeURIComponent(ch.channelId)}`
+      ),
+      staleTime: Infinity,
+      gcTime: 1000 * 60 * 60, // keep in cache for 1 hour
+    })),
+  });
+
+  return useMemo(() => {
+    const map = new Map<string, string>();
+    for (let i = 0; i < resolvable.length; i++) {
+      const ch = resolvable[i];
+      const result = results[i];
+      if (result.data?.label) {
+        map.set(`${ch.channelType}:${ch.channelId}`, result.data.label);
+      }
+    }
+    return map;
+  }, [resolvable, results]);
+}
+
 function ChannelIconForType({ channelType }: { channelType: string }) {
   const Icon = getChannelIcon(channelType);
   return <Icon className="h-3 w-3" />;
@@ -60,12 +94,19 @@ interface ChannelSwitcherProps {
 }
 
 export function ChannelSwitcher({ channels, selectedChannel, onSelectChannel }: ChannelSwitcherProps) {
+  const resolvedLabels = useResolvedLabels(channels);
+
+  const getLabel = (ch: ChannelOption) => {
+    const key = `${ch.channelType}:${ch.channelId}`;
+    return resolvedLabels.get(key) || ch.label;
+  };
+
   const selectedOption = useMemo(
     () => (selectedChannel ? channels.find((c) => `${c.channelType}:${c.channelId}` === selectedChannel) : null),
     [channels, selectedChannel]
   );
 
-  const label = selectedOption ? selectedOption.label : 'All channels';
+  const label = selectedOption ? getLabel(selectedOption) : 'All channels';
 
   return (
     <DropdownMenu>
@@ -97,7 +138,7 @@ export function ChannelSwitcher({ channels, selectedChannel, onSelectChannel }: 
               className={selectedChannel === key ? 'bg-surface-2 font-semibold' : ''}
             >
               <span className="mr-2"><ChannelIconForType channelType={ch.channelType} /></span>
-              <span className="flex-1">{ch.label}</span>
+              <span className="flex-1">{getLabel(ch)}</span>
               <span className="ml-2 font-mono text-[10px] text-neutral-400 dark:text-neutral-500">
                 {ch.messageCount}
               </span>

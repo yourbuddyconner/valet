@@ -101,6 +101,9 @@ export interface ChannelTransport {
   /** Delete a previously sent message (cleanup of transient/progress messages). */
   deleteMessage?(target: ChannelTarget, messageId: string, ctx: ChannelContext): Promise<boolean>;
 
+  /** Resolve a composite channelId to a human-readable label for display. */
+  resolveLabel?(channelId: string, ctx: ChannelContext): Promise<string>;
+
   /** Send a typing/activity indicator. */
   sendTypingIndicator?(target: ChannelTarget, ctx: ChannelContext): Promise<void>;
 

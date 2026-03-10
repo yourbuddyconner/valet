@@ -5,6 +5,9 @@ import { webManualScopeKey } from '@valet/shared';
 import type { Env, Variables } from '../env.js';
 import * as db from '../lib/db.js';
 import { dispatchOrchestratorPrompt } from '../lib/workflow-runtime.js';
+import { channelRegistry } from '../channels/registry.js';
+import { getSlackBotToken } from '../services/slack.js';
+import { getCredential } from '../services/credentials.js';
 
 export const channelsRouter = new Hono<{ Bindings: Env; Variables: Variables }>();
 
@@ -103,4 +106,43 @@ channelsRouter.post('/prompt', zValidator('json', promptSchema), async (c) => {
     orchestratorFallback: true,
     reason: result.dispatched ? undefined : result.reason,
   });
+});
+
+/**
+ * GET /api/channels/label?channelType=...&channelId=...
+ * Resolve a composite channelId to a human-readable label via the channel transport.
+ */
+channelsRouter.get('/channels/label', async (c) => {
+  const channelType = c.req.query('channelType');
+  const channelId = c.req.query('channelId');
+  if (!channelType || !channelId) {
+    return c.json({ error: 'channelType and channelId are required' }, 400);
+  }
+
+  const transport = channelRegistry.getTransport(channelType);
+  if (!transport?.resolveLabel) {
+    // No resolver — return a simple fallback
+    return c.json({ label: null });
+  }
+
+  // Resolve token: Slack uses org-level bot token, others use per-user credentials
+  const user = c.get('user');
+  let token: string | undefined;
+  if (channelType === 'slack') {
+    token = await getSlackBotToken(c.env) ?? undefined;
+  } else {
+    const credResult = await getCredential(c.env, user.id, channelType);
+    if (credResult.ok) token = credResult.credential.accessToken;
+  }
+
+  if (!token) {
+    return c.json({ label: null });
+  }
+
+  try {
+    const label = await transport.resolveLabel(channelId, { token, userId: user.id });
+    return c.json({ label });
+  } catch {
+    return c.json({ label: null });
+  }
 });
