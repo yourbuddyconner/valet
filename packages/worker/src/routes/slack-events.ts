@@ -269,7 +269,17 @@ slackEventsRouter.post('/slack/events', async (c) => {
         }),
       );
       console.log(`[Slack] Bound session response: status=${resp.status}`);
-      if (resp.ok) return c.json({ ok: true });
+      if (resp.ok) {
+        const slackTransport = transport as SlackTransport;
+        if (slackTransport.setThreadStatus && threadId) {
+          const statusTarget: ChannelTarget = { channelType: 'slack', channelId: message.channelId, threadId };
+          const statusCtx: ChannelContext = { token: botToken, userId };
+          c.executionCtx.waitUntil(
+            slackTransport.setThreadStatus(statusTarget, 'is thinking...', statusCtx)
+          );
+        }
+        return c.json({ ok: true });
+      }
     } catch (err) {
       console.error(`[Slack] Failed to route to session ${binding.sessionId}:`, err);
     }
@@ -294,6 +304,17 @@ slackEventsRouter.post('/slack/events', async (c) => {
     authorName: message.senderName,
     attachments: attachments.length > 0 ? attachments : undefined,
   });
+
+  if (result.dispatched) {
+    const slackTransport = transport as SlackTransport;
+    if (slackTransport.setThreadStatus && threadId) {
+      const statusTarget: ChannelTarget = { channelType: 'slack', channelId: message.channelId, threadId };
+      const statusCtx: ChannelContext = { token: botToken, userId };
+      c.executionCtx.waitUntil(
+        slackTransport.setThreadStatus(statusTarget, 'is thinking...', statusCtx)
+      );
+    }
+  }
 
   if (!result.dispatched) {
     const ctx: ChannelContext = { token: botToken, userId };
