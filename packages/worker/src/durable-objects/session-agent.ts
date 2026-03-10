@@ -8218,6 +8218,22 @@ export class SessionAgentDO {
           }
         : { markdown: message };
 
+      // Add persona identity for Slack messages
+      if (channelType === 'slack') {
+        try {
+          const identity = userId ? await getOrchestratorIdentity(this.appDb, userId) : null;
+          if (identity) {
+            outbound.platformOptions = {
+              ...outbound.platformOptions,
+              ...(identity.name ? { username: identity.name } : {}),
+              ...(identity.avatar ? { icon_url: identity.avatar } : {}),
+            };
+          }
+        } catch {
+          // Non-fatal
+        }
+      }
+
       const result = await transport.sendMessage(target, outbound, ctx);
       if (!result.success) {
         this.sendToRunner({ type: 'channel-reply-result', requestId, error: result.error || `${channelType} API error` } as any);
@@ -8972,7 +8988,22 @@ export class SessionAgentDO {
         const parsed = this.parseSlackChannelId(pending.channelType, pending.channelId);
         const target: ChannelTarget = { channelType: pending.channelType, channelId: parsed.channelId, threadId: parsed.threadId };
         const ctx: ChannelContext = { token, userId };
-        const result = await transport.sendMessage(target, { markdown: pending.resultContent }, ctx);
+        // Add persona identity for Slack messages
+        const outbound: import('@valet/sdk').OutboundMessage = { markdown: pending.resultContent };
+        if (pending.channelType === 'slack') {
+          try {
+            const identity = userId ? await getOrchestratorIdentity(this.appDb, userId) : null;
+            if (identity) {
+              outbound.platformOptions = {
+                ...(identity.name ? { username: identity.name } : {}),
+                ...(identity.avatar ? { icon_url: identity.avatar } : {}),
+              };
+            }
+          } catch {
+            // Non-fatal
+          }
+        }
+        const result = await transport.sendMessage(target, outbound, ctx);
         if (result.success) {
           console.log(`[SessionAgentDO] Auto channel reply sent to ${pending.channelType}:${pending.channelId}`);
           sent = true;
