@@ -8219,19 +8219,8 @@ export class SessionAgentDO {
         : { markdown: message };
 
       // Add persona identity for Slack messages
-      if (channelType === 'slack') {
-        try {
-          const identity = userId ? await getOrchestratorIdentity(this.appDb, userId) : null;
-          if (identity) {
-            outbound.platformOptions = {
-              ...outbound.platformOptions,
-              ...(identity.name ? { username: identity.name } : {}),
-              ...(identity.avatar ? { icon_url: identity.avatar } : {}),
-            };
-          }
-        } catch {
-          // Non-fatal
-        }
+      if (channelType === 'slack' && userId) {
+        outbound.platformOptions = { ...outbound.platformOptions, ...(await this.getSlackPersonaOptions(userId)) };
       }
 
       const result = await transport.sendMessage(target, outbound, ctx);
@@ -8991,17 +8980,7 @@ export class SessionAgentDO {
         // Add persona identity for Slack messages
         const outbound: import('@valet/sdk').OutboundMessage = { markdown: pending.resultContent };
         if (pending.channelType === 'slack') {
-          try {
-            const identity = userId ? await getOrchestratorIdentity(this.appDb, userId) : null;
-            if (identity) {
-              outbound.platformOptions = {
-                ...(identity.name ? { username: identity.name } : {}),
-                ...(identity.avatar ? { icon_url: identity.avatar } : {}),
-              };
-            }
-          } catch {
-            // Non-fatal
-          }
+          outbound.platformOptions = await this.getSlackPersonaOptions(userId);
         }
         const result = await transport.sendMessage(target, outbound, ctx);
         if (result.success) {
@@ -9041,6 +9020,25 @@ export class SessionAgentDO {
   }
 
   /**
+   * Look up orchestrator persona identity for Slack message customization.
+   * Returns platformOptions with username/icon_url, or empty object on failure.
+   */
+  private async getSlackPersonaOptions(userId: string): Promise<Record<string, unknown>> {
+    try {
+      const identity = await getOrchestratorIdentity(this.appDb, userId);
+      if (identity) {
+        return {
+          ...(identity.name ? { username: identity.name } : {}),
+          ...(identity.avatar ? { icon_url: identity.avatar } : {}),
+        };
+      }
+    } catch (err) {
+      console.warn('[SessionAgentDO] Failed to resolve Slack persona identity:', err);
+    }
+    return {};
+  }
+
+  /**
    * Start the Slack update loop: post an initial message with persona identity,
    * then update it as text streams in.
    */
@@ -9061,17 +9059,9 @@ export class SessionAgentDO {
     if (!parsed.threadId) return;
 
     // Look up orchestrator persona for custom name/avatar
-    let personaName: string | undefined;
-    let personaAvatar: string | undefined;
-    try {
-      const identity = await getOrchestratorIdentity(this.appDb, userId);
-      if (identity) {
-        personaName = identity.name;
-        personaAvatar = identity.avatar;
-      }
-    } catch {
-      // Non-fatal: fall back to default bot identity
-    }
+    const personaOptions = await this.getSlackPersonaOptions(userId);
+    const personaName = personaOptions.username as string | undefined;
+    const personaAvatar = personaOptions.icon_url as string | undefined;
 
     const target: ChannelTarget = { channelType: 'slack', channelId: parsed.channelId, threadId: parsed.threadId };
     const ctx: ChannelContext = { token, userId };
@@ -9079,10 +9069,7 @@ export class SessionAgentDO {
     // Post initial message with persona identity
     const result = await transport.sendMessage(target, {
       text: '...',
-      platformOptions: {
-        ...(personaName ? { username: personaName } : {}),
-        ...(personaAvatar ? { icon_url: personaAvatar } : {}),
-      },
+      platformOptions: personaOptions,
     }, ctx);
 
     if (!result.success || !result.messageId) {
@@ -9145,7 +9132,8 @@ export class SessionAgentDO {
     const ctx: ChannelContext = { token: loop.token, userId: this.getStateValue('userId') || '' };
 
     // Fire-and-forget; the accumulated text is the full message so far
-    transport.editMessage(target, loop.messageTs, { markdown: loop.accumulatedText }, ctx);
+    transport.editMessage(target, loop.messageTs, { markdown: loop.accumulatedText }, ctx)
+      .catch(err => console.error('[SessionAgentDO] Slack update flush failed:', err));
   }
 
   /**
