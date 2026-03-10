@@ -24,6 +24,15 @@ export const slackEventsRouter = new Hono<{ Bindings: Env; Variables: Variables 
  * Bot replies always thread on the invoking message.
  */
 slackEventsRouter.post('/slack/events', async (c) => {
+  // Slack retries events when it doesn't receive a 200 within ~3 seconds.
+  // Our handler is slow (Slack API calls, DB lookups), so retries are common.
+  // Skip retries to prevent duplicate message processing.
+  const retryNum = c.req.header('x-slack-retry-num');
+  if (retryNum) {
+    console.log(`[Slack] Skipping retry #${retryNum} (reason: ${c.req.header('x-slack-retry-reason') || 'unknown'})`);
+    return c.json({ ok: true });
+  }
+
   const rawBody = await c.req.text();
 
   // Parse JSON body (needed for url_verification before signature check)
