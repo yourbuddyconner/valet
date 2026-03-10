@@ -8,7 +8,7 @@ import {
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { api } from '@/api/client';
-import { useAvailableIntegrations, type AvailableService } from '@/api/integrations';
+import { useAvailableIntegrations, useConfigureIntegration, type AvailableService } from '@/api/integrations';
 import { useSetUserCredential } from '@/api/auth';
 import { useSetupTelegram } from '@/api/orchestrator';
 
@@ -76,6 +76,27 @@ const SERVICE_META: Record<string, ServiceMeta> = {
     icon: LinearIcon,
     description: 'Issues, projects, and teams',
   },
+  typefully: {
+    icon: TypefullyIcon,
+    description: 'Social media content scheduling and publishing',
+    connectionType: 'token',
+    tokenLabel: 'API Key',
+    tokenPlaceholder: 'tf_...',
+    tokenHelpText: (
+      <>
+        Get your API key from{' '}
+        <a
+          href="https://typefully.com/settings/api"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="font-medium underline hover:text-neutral-900 dark:hover:text-neutral-100"
+        >
+          Typefully Settings
+        </a>
+        .
+      </>
+    ),
+  },
   discord: {
     icon: DiscordIcon,
     description: 'Channels and messages',
@@ -103,6 +124,10 @@ interface ResolvedService {
   tokenPlaceholder?: string;
   tokenHelpText?: React.ReactNode;
   credentialProvider?: string;
+  /** True when this service comes from the integration registry (has an IntegrationPackage). */
+  fromRegistry?: boolean;
+  /** Entities to configure when creating the integration (from registry). */
+  supportedEntities?: string[];
 }
 
 function resolveService(svc: AvailableService): ResolvedService {
@@ -117,6 +142,8 @@ function resolveService(svc: AvailableService): ResolvedService {
     tokenPlaceholder: meta.tokenPlaceholder,
     tokenHelpText: meta.tokenHelpText,
     credentialProvider: meta.credentialProvider,
+    fromRegistry: true,
+    supportedEntities: svc.supportedEntities,
   };
 }
 
@@ -268,21 +295,34 @@ function TokenSetupStep({
   const [token, setToken] = React.useState('');
   const setCredential = useSetUserCredential();
   const setupTelegram = useSetupTelegram();
+  const configureIntegration = useConfigureIntegration();
 
-  const isPending = setCredential.isPending || setupTelegram.isPending;
+  const isPending = setCredential.isPending || setupTelegram.isPending || configureIntegration.isPending;
   const error = setCredential.isError
     ? 'Failed to save credential'
     : setupTelegram.isError
       ? ((setupTelegram.error as any)?.message?.includes('400')
         ? 'Invalid bot token'
         : 'Failed to connect')
-      : null;
+      : configureIntegration.isError
+        ? 'Failed to connect integration'
+        : null;
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!token.trim()) return;
 
-    if (service.id === 'telegram') {
+    if (service.fromRegistry) {
+      // Integration-registry services (e.g. Typefully) — create via integrations API
+      configureIntegration.mutate(
+        {
+          service: service.id as any,
+          credentials: { access_token: token.trim() },
+          config: { entities: service.supportedEntities ?? [] },
+        },
+        { onSuccess: onComplete },
+      );
+    } else if (service.id === 'telegram') {
       setupTelegram.mutate(
         { botToken: token.trim() },
         { onSuccess: onComplete },
@@ -428,6 +468,14 @@ function SlackIcon({ className }: { className?: string }) {
   return (
     <svg className={className} viewBox="0 0 24 24" fill="currentColor">
       <path d="M5.042 15.165a2.528 2.528 0 0 1-2.52 2.523A2.528 2.528 0 0 1 0 15.165a2.527 2.527 0 0 1 2.522-2.52h2.52v2.52zm1.271 0a2.527 2.527 0 0 1 2.521-2.52 2.527 2.527 0 0 1 2.521 2.52v6.313A2.528 2.528 0 0 1 8.834 24a2.528 2.528 0 0 1-2.521-2.522v-6.313zM8.834 5.042a2.528 2.528 0 0 1-2.521-2.52A2.528 2.528 0 0 1 8.834 0a2.528 2.528 0 0 1 2.521 2.522v2.52H8.834zm0 1.271a2.528 2.528 0 0 1 2.521 2.521 2.528 2.528 0 0 1-2.521 2.521H2.522A2.528 2.528 0 0 1 0 8.834a2.528 2.528 0 0 1 2.522-2.521h6.312zm10.122 2.521a2.528 2.528 0 0 1 2.522-2.521A2.528 2.528 0 0 1 24 8.834a2.528 2.528 0 0 1-2.522 2.521h-2.522V8.834zm-1.268 0a2.528 2.528 0 0 1-2.523 2.521 2.527 2.527 0 0 1-2.52-2.521V2.522A2.527 2.527 0 0 1 15.165 0a2.528 2.528 0 0 1 2.523 2.522v6.312zm-2.523 10.122a2.528 2.528 0 0 1 2.523 2.522A2.528 2.528 0 0 1 15.165 24a2.527 2.527 0 0 1-2.52-2.522v-2.522h2.52zm0-1.268a2.527 2.527 0 0 1-2.52-2.523 2.526 2.526 0 0 1 2.52-2.52h6.313A2.527 2.527 0 0 1 24 15.165a2.528 2.528 0 0 1-2.522 2.523h-6.313z" />
+    </svg>
+  );
+}
+
+function TypefullyIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="currentColor">
+      <path d="M3 5h18a1 1 0 0 1 0 2H3a1 1 0 0 1 0-2zm0 6h12a1 1 0 0 1 0 2H3a1 1 0 0 1 0-2zm0 6h8a1 1 0 0 1 0 2H3a1 1 0 0 1 0-2z" />
     </svg>
   );
 }

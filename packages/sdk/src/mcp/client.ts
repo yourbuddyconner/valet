@@ -14,13 +14,37 @@ export class McpClient {
   private url: string;
   private serviceName: string;
   private nextId = 1;
+  /** When set, token is sent as a URL query parameter instead of Authorization header. */
+  private authQueryParam?: string;
 
   /** Per-service session IDs to avoid re-initializing on every call. */
   private sessions = new Map<string, string | null>();
 
-  constructor(opts: { url: string; serviceName: string }) {
+  constructor(opts: { url: string; serviceName: string; authQueryParam?: string }) {
     this.url = opts.url;
     this.serviceName = opts.serviceName;
+    this.authQueryParam = opts.authQueryParam;
+  }
+
+  /** Build fetch URL and headers with auth + session. */
+  private buildFetchOpts(token?: string, sessionId?: string | null): { url: string; headers: Record<string, string> } {
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      Accept: 'application/json, text/event-stream',
+    };
+
+    let url = this.url;
+    if (token && this.authQueryParam) {
+      const sep = this.url.includes('?') ? '&' : '?';
+      url = `${this.url}${sep}${this.authQueryParam}=${encodeURIComponent(token)}`;
+    } else if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+    if (sessionId) {
+      headers['Mcp-Session-Id'] = sessionId;
+    }
+
+    return { url, headers };
   }
 
   /** Send a JSON-RPC request, handling both JSON and SSE response formats. */
@@ -37,18 +61,9 @@ export class McpClient {
       ...(params !== undefined && { params }),
     };
 
-    const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
-      Accept: 'application/json, text/event-stream',
-    };
-    if (token) {
-      headers['Authorization'] = `Bearer ${token}`;
-    }
-    if (sessionId) {
-      headers['Mcp-Session-Id'] = sessionId;
-    }
+    const { url: fetchUrl, headers } = this.buildFetchOpts(token, sessionId);
 
-    const res = await fetch(this.url, {
+    const res = await fetch(fetchUrl, {
       method: 'POST',
       headers,
       body: JSON.stringify(req),
@@ -113,19 +128,10 @@ export class McpClient {
       ...(params !== undefined && { params }),
     };
 
-    const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
-      Accept: 'application/json, text/event-stream',
-    };
-    if (token) {
-      headers['Authorization'] = `Bearer ${token}`;
-    }
-    if (sessionId) {
-      headers['Mcp-Session-Id'] = sessionId;
-    }
+    const { url: fetchUrl, headers } = this.buildFetchOpts(token, sessionId);
 
     // Fire and forget — notifications don't have responses
-    await fetch(this.url, {
+    await fetch(fetchUrl, {
       method: 'POST',
       headers,
       body: JSON.stringify(req),

@@ -19,6 +19,7 @@
     { "path": "../plugin-google-drive" },
     { "path": "../plugin-google-sheets" },
     { "path": "../plugin-linear" },
+    { "path": "../plugin-typefully" },
     { "path": "../plugin-notion" },
     { "path": "../plugin-sentry" },
     { "path": "../plugin-slack" },

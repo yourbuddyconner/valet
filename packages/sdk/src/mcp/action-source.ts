@@ -16,6 +16,8 @@ export interface McpActionSourceOptions {
   defaultRiskLevel?: RiskLevel;
   /** When true, calls MCP server without authentication (for public services). */
   noAuth?: boolean;
+  /** When set, token is sent as this URL query parameter instead of Authorization header. */
+  authQueryParam?: string;
 }
 
 /**
@@ -33,7 +35,7 @@ export class McpActionSource implements ActionSource {
   private noAuth: boolean;
 
   constructor(opts: McpActionSourceOptions) {
-    this.client = new McpClient({ url: opts.mcpUrl, serviceName: opts.serviceName });
+    this.client = new McpClient({ url: opts.mcpUrl, serviceName: opts.serviceName, authQueryParam: opts.authQueryParam });
     this.serviceName = opts.serviceName;
     this.defaultRiskLevel = opts.defaultRiskLevel ?? 'medium';
     this.noAuth = opts.noAuth ?? false;

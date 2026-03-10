@@ -1,0 +1,5 @@
+name: typefully
+version: 0.0.1
+description: Typefully integration for social media content management
+icon: "\U0001F4DD"
+actionType: mcp

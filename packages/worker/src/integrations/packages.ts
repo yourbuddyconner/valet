@@ -14,5 +14,6 @@ import pkg9 from '@valet/plugin-notion/actions';
 import pkg10 from '@valet/plugin-sentry/actions';
 import pkg11 from '@valet/plugin-slack/actions';
 import pkg12 from '@valet/plugin-stripe/actions';
+import pkg13 from '@valet/plugin-typefully/actions';
 
-export const installedIntegrations: IntegrationPackage[] = [pkg0, pkg1, pkg2, pkg3, pkg4, pkg5, pkg6, pkg7, pkg8, pkg9, pkg10, pkg11, pkg12];
+export const installedIntegrations: IntegrationPackage[] = [pkg0, pkg1, pkg2, pkg3, pkg4, pkg5, pkg6, pkg7, pkg8, pkg9, pkg10, pkg11, pkg12, pkg13];

@@ -610,6 +610,15 @@ The runner receives a \`tunnel-delete\` event and unregisters it.
     artifacts: [],
   },
   {
+    name: "typefully",
+    version: "0.0.1",
+    description: "Typefully integration for social media content management",
+    icon: "📝",
+    actionType: "mcp",
+    capabilities: ["actions"],
+    artifacts: [],
+  },
+  {
     name: "workflows",
     version: "0.0.1",
     description: "Workflow lifecycle and operations",

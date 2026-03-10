@@ -25,6 +25,7 @@
     { "path": "./packages/plugin-google-drive" },
     { "path": "./packages/plugin-google-sheets" },
     { "path": "./packages/plugin-linear" },
+    { "path": "./packages/plugin-typefully" },
     { "path": "./packages/plugin-notion" },
     { "path": "./packages/plugin-stripe" },
     { "path": "./packages/plugin-cloudflare" },

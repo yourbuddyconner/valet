@@ -28,6 +28,7 @@
     "@valet/plugin-google-drive": "workspace:*",
     "@valet/plugin-google-sheets": "workspace:*",
     "@valet/plugin-linear": "workspace:*",
+    "@valet/plugin-typefully": "workspace:*",
     "@valet/plugin-notion": "workspace:*",
     "@valet/plugin-sentry": "workspace:*",
     "@valet/plugin-slack": "workspace:*",
