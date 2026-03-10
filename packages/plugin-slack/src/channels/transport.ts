@@ -246,6 +246,14 @@ export class SlackTransport implements ChannelTransport {
       body.thread_ts = target.threadId;
     }
 
+    // Persona identity overrides (requires chat:write.customize scope)
+    if (message.platformOptions?.username) {
+      body.username = message.platformOptions.username;
+    }
+    if (message.platformOptions?.icon_url) {
+      body.icon_url = message.platformOptions.icon_url;
+    }
+
     const result = await slackApiCall('chat.postMessage', body, ctx.token);
 
     if (!result.ok) {
@@ -287,6 +295,57 @@ export class SlackTransport implements ChannelTransport {
       ts: messageId,
     }, ctx.token);
 
+    return result.ok;
+  }
+
+  // ─── Agent Surface (Agents & AI Apps) ─────────────────────────────────
+
+  /**
+   * Set the assistant thread status (shimmer "thinking" indicator).
+   * Shows as "<App Name> is thinking..." with a sweeping gradient animation.
+   * Auto-clears when a message is posted or after 2 minutes.
+   */
+  async setThreadStatus(
+    target: ChannelTarget,
+    status: string,
+    ctx: ChannelContext,
+    loadingMessages?: string[],
+  ): Promise<boolean> {
+    const body: Record<string, unknown> = {
+      channel_id: target.channelId,
+      thread_ts: target.threadId,
+      status,
+    };
+    if (loadingMessages && loadingMessages.length > 0) {
+      body.loading_messages = loadingMessages;
+    }
+    const result = await slackApiCall('assistant.threads.setStatus', body, ctx.token);
+    if (!result.ok) {
+      console.error(`[SlackTransport] setThreadStatus error: ${result.error}`);
+    }
+    return result.ok;
+  }
+
+  /**
+   * Set suggested prompts for an assistant thread.
+   */
+  async setSuggestedPrompts(
+    target: ChannelTarget,
+    prompts: Array<{ title: string; message: string }>,
+    ctx: ChannelContext,
+    title?: string,
+  ): Promise<boolean> {
+    const body: Record<string, unknown> = {
+      channel_id: target.channelId,
+      thread_ts: target.threadId,
+      prompts,
+    };
+    if (title) body.title = title;
+
+    const result = await slackApiCall('assistant.threads.setSuggestedPrompts', body, ctx.token);
+    if (!result.ok) {
+      console.error(`[SlackTransport] setSuggestedPrompts error: ${result.error}`);
+    }
     return result.ok;
   }
 
