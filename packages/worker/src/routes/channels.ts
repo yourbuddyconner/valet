@@ -142,7 +142,6 @@ channelsRouter.get('/channels/label', async (c) => {
 
   try {
     const label = await transport.resolveLabel(channelId, { token, userId: user.id });
-    console.log(`[ChannelLabel] Resolved: channelType=${channelType} channelId=${channelId} → ${label}`);
     return c.json({ label });
   } catch (err) {
     console.error(`[ChannelLabel] Failed to resolve: channelType=${channelType} channelId=${channelId}`, err);

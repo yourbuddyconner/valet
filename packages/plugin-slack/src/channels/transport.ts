@@ -39,6 +39,30 @@ async function slackApiCall(
   return (await resp.json()) as { ok: boolean; ts?: string; error?: string };
 }
 
+/** GET-based Slack API call for read methods (conversations.info, etc.) */
+async function slackApiGet(
+  method: string,
+  params: Record<string, string>,
+  token: string,
+): Promise<{ ok: boolean; error?: string; [key: string]: unknown }> {
+  const url = new URL(slackUrl(method));
+  for (const [k, v] of Object.entries(params)) {
+    url.searchParams.set(k, v);
+  }
+
+  const resp = await fetch(url.toString(), {
+    method: 'GET',
+    headers: { Authorization: `Bearer ${token}` },
+  });
+
+  if (!resp.ok) {
+    const text = await resp.text().catch(() => '');
+    return { ok: false, error: `Slack API HTTP ${resp.status}: ${text.slice(0, 200)}` };
+  }
+
+  return (await resp.json()) as { ok: boolean; error?: string; [key: string]: unknown };
+}
+
 // ─── Event subtypes to skip ─────────────────────────────────────────────────
 
 const SKIP_SUBTYPES = new Set([
@@ -414,10 +438,7 @@ export class SlackTransport implements ChannelTransport {
     // Try to resolve channel name via conversations.info
     let channelName: string | undefined;
     try {
-      const result = await slackApiCall('conversations.info', { channel: slackChannelId }, ctx.token);
-      if (!result.ok) {
-        console.log(`[SlackTransport] resolveLabel: conversations.info failed for ${slackChannelId}: ${result.error || 'unknown'}`);
-      }
+      const result = await slackApiGet('conversations.info', { channel: slackChannelId }, ctx.token);
       if (result.ok) {
         const channel = result.channel as Record<string, unknown> | undefined;
         if (channel) {
