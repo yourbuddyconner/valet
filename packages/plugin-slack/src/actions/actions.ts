@@ -97,7 +97,7 @@ const dmUser: ActionDefinition = {
   id: 'slack.dm_user',
   name: 'DM User',
   description: 'Send a direct message to any Slack workspace member by name or user ID.',
-  riskLevel: 'high',
+  riskLevel: 'low',
   params: z.object({
     user: z.string().describe('User ID (U...) or display name / real name'),
     text: z.string().describe('Message text'),
@@ -108,7 +108,7 @@ const postMessage: ActionDefinition = {
   id: 'slack.post_message',
   name: 'Post Message',
   description: 'Post a message to a Slack channel by name or ID. Include thread_ts to reply in a thread.',
-  riskLevel: 'high',
+  riskLevel: 'low',
   params: z.object({
     channel: z.string().describe('Channel name (e.g. "general") or channel ID (C...)'),
     text: z.string().describe('Message text'),
