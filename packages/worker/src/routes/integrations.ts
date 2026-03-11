@@ -108,7 +108,7 @@ integrationsRouter.get('/', async (c) => {
   const userIntegrations = await db.getUserIntegrations(c.get('db'), user.id);
 
   // Get org-scope integrations (visible to all members)
-  const orgIntegrations = await db.getOrgIntegrations(c.get('db'), user.id);
+  const orgIntegrations = await db.getOrgIntegrations(c.get('db'));
 
   // Don't expose sensitive data
   const sanitized = [

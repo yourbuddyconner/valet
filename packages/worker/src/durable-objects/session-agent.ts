@@ -8367,7 +8367,7 @@ export class SessionAgentDO {
       const [userIntegrations, orgIntegrations, autoServices, { disabledActions: disabledActionSet, disabledServices: disabledServiceSet }] =
         await Promise.all([
           getUserIntegrations(this.appDb, userId),
-          getOrgIntegrations(this.appDb, userId),
+          getOrgIntegrations(this.appDb),
           getAutoEnabledServices(this.env.DB),
           getDisabledActionsIndex(this.appDb),
         ]);
@@ -8584,7 +8584,7 @@ export class SessionAgentDO {
       // Fall back to org-scoped integrations
       let isOrgScoped = false;
       if (!activeIntegration) {
-        const orgIntegrations = await getOrgIntegrations(this.appDb, userId);
+        const orgIntegrations = await getOrgIntegrations(this.appDb);
         const orgMatch = orgIntegrations.find(
           (i) => i.service === service && i.status === 'active',
         );

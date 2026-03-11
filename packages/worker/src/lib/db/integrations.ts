@@ -1,5 +1,5 @@
 import type { Integration } from '@valet/shared';
-import { eq, and, ne, desc, sql } from 'drizzle-orm';
+import { eq, and, desc, sql } from 'drizzle-orm';
 import type { AppDb } from '../drizzle.js';
 import { toDate } from '../drizzle.js';
 import { integrations } from '../schema/index.js';
@@ -48,7 +48,7 @@ export async function getIntegration(db: AppDb, id: string): Promise<Integration
   return row ? rowToIntegration(row) : null;
 }
 
-export async function getOrgIntegrations(db: AppDb, excludeUserId: string): Promise<Array<{
+export async function getOrgIntegrations(db: AppDb): Promise<Array<{
   id: string;
   userId: string;
   service: string;
@@ -60,7 +60,7 @@ export async function getOrgIntegrations(db: AppDb, excludeUserId: string): Prom
   const rows = await db
     .select()
     .from(integrations)
-    .where(and(eq(integrations.scope, 'org'), ne(integrations.userId, excludeUserId)))
+    .where(eq(integrations.scope, 'org'))
     .orderBy(desc(integrations.createdAt));
 
   return rows.map((row) => ({
