@@ -3,3 +3,4 @@ version: 0.0.1
 description: Figma integration for design context, screenshots, and code connect
 icon: "\U0001F3A8"
 actionType: mcp
+enabled: false

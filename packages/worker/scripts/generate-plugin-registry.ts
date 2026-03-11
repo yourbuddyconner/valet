@@ -38,6 +38,7 @@ function parsePluginYaml(filePath: string): {
   icon?: string;
   actionType?: string;
   authRequired?: boolean;
+  enabled?: boolean;
 } {
   const text = readFileSync(filePath, 'utf-8');
   const result: Record<string, string> = {};
@@ -65,6 +66,7 @@ function parsePluginYaml(filePath: string): {
     icon: result.icon,
     actionType: result.actionType,
     authRequired: result.authRequired === 'false' ? false : undefined,
+    enabled: result.enabled === 'false' ? false : undefined,
   };
 }
 
@@ -98,6 +100,15 @@ const contentEntries: ContentEntry[] = [];
 for (const dir of pluginDirs) {
   const pluginPath = resolve(packagesDir, dir);
 
+  // Parse plugin.yaml first to check enabled status
+  const yamlPath = resolve(pluginPath, 'plugin.yaml');
+  if (!existsSync(yamlPath)) continue;
+
+  const meta = parsePluginYaml(yamlPath);
+
+  // Skip disabled plugins entirely
+  if (meta.enabled === false) continue;
+
   // Action/channel detection requires package.json (these are TS packages)
   const pkgJsonPath = resolve(pluginPath, 'package.json');
   if (existsSync(pkgJsonPath)) {
@@ -115,11 +126,6 @@ for (const dir of pluginDirs) {
   const hasActions = existsSync(resolve(pluginPath, 'src', 'actions', 'index.ts'));
   const hasChannels = existsSync(resolve(pluginPath, 'src', 'channels', 'index.ts'));
 
-  // Parse plugin.yaml for content registry
-  const yamlPath = resolve(pluginPath, 'plugin.yaml');
-  if (!existsSync(yamlPath)) continue;
-
-  const meta = parsePluginYaml(yamlPath);
   const capabilities: string[] = [];
   const artifacts: ContentEntry['artifacts'] = [];
 

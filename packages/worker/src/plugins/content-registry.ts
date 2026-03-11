@@ -260,15 +260,6 @@ timeout 10 agent-browser --headed wait --text "Welcome"     # Wait for specific 
     artifacts: [],
   },
   {
-    name: "figma",
-    version: "0.0.1",
-    description: "Figma integration for design context, screenshots, and code connect",
-    icon: "🎨",
-    actionType: "mcp",
-    capabilities: ["actions"],
-    artifacts: [],
-  },
-  {
     name: "github",
     version: "0.0.1",
     description: "GitHub integration for PRs, issues, repos, and webhooks",
