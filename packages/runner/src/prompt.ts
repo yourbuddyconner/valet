@@ -1825,7 +1825,15 @@ export class PromptHandler {
       }
     }
 
-    if (targetChannels.length === 0) return;
+    if (targetChannels.length === 0) {
+      // Always acknowledge the abort so the DO can drain its prompt queue.
+      // Without this, queued messages would be stuck forever waiting for the
+      // 'aborted' signal that triggers handlePromptComplete().
+      console.log(`[PromptHandler] Abort: no active channels to abort, sending aborted ack`);
+      this.agentClient.sendAborted();
+      this.agentClient.sendAgentStatus("idle");
+      return;
+    }
 
     console.log(`[PromptHandler] Aborting ${targetChannels.length} channel(s): ${targetChannels.map(c => c.channelKey).join(', ')}`);
 

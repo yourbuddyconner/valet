@@ -1311,6 +1311,33 @@ export class SessionAgentDO {
       }
     }
 
+    // ─── Stuck Queue Watchdog ────────────────────────────────────────
+    // Handles the case where runnerBusy=true but there are no processing
+    // entries — e.g. an abort acknowledgment was lost. If queued items exist
+    // and nothing is processing, force-drain the queue.
+    {
+      const queuedCount = this.getQueueLength();
+      if (queuedCount > 0 && this.getStateValue('runnerBusy') === 'true') {
+        const processingCount = Number(
+          this.ctx.storage.sql.exec("SELECT COUNT(*) AS c FROM prompt_queue WHERE status = 'processing'").one().c
+        );
+        if (processingCount === 0) {
+          const runnerSockets = this.ctx.getWebSockets('runner');
+          console.warn(`[SessionAgentDO] Watchdog: ${queuedCount} queued items with runnerBusy=true but 0 processing — recovering (runner=${runnerSockets.length > 0 ? 'connected' : 'disconnected'})`);
+          this.setStateValue('runnerBusy', 'false');
+          this.setStateValue('lastPromptDispatchedAt', '');
+          if (runnerSockets.length > 0) {
+            await this.sendNextQueuedPrompt();
+          }
+          this.broadcastToClients({
+            type: 'status',
+            data: { runnerBusy: this.getStateValue('runnerBusy') === 'true', watchdogRecovery: true },
+          });
+          this.appendAuditLog('watchdog.queue_recovery', `Recovered ${queuedCount} stuck queued items (0 processing)`);
+        }
+      }
+    }
+
     // ─── Error Safety-Net ────────────────────────────────────────────
     const errorSafetyNetStr = this.getStateValue('errorSafetyNetAt');
     if (errorSafetyNetStr) {
@@ -1795,7 +1822,7 @@ export class SessionAgentDO {
       );
       this.broadcastToClients({
         type: 'status',
-        data: { promptQueued: true, queuePosition: this.getQueueLength() },
+        data: { promptQueued: true, queuePosition: this.getQueueLength(), queueReason: 'waking' },
       });
       return;
     }
@@ -1816,7 +1843,7 @@ export class SessionAgentDO {
       );
       this.broadcastToClients({
         type: 'status',
-        data: { promptQueued: true, queuePosition: this.getQueueLength() },
+        data: { promptQueued: true, queuePosition: this.getQueueLength(), queueReason: 'busy' },
       });
       return;
     }

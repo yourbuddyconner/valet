@@ -754,7 +754,9 @@ export function useChat(sessionId: string) {
           } else if (data.promptQueued) {
             isAgentThinking = true;
             agentStatus = 'queued';
-            agentStatusDetail = 'Message queued — waking session...';
+            agentStatusDetail = data.queueReason === 'busy'
+              ? 'Message queued — waiting for agent...'
+              : 'Message queued — waking session...';
           }
 
           return {
