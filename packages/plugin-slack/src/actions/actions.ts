@@ -87,7 +87,7 @@ const dmOwner: ActionDefinition = {
   id: 'slack.dm_owner',
   name: 'DM Owner',
   description: 'Send a direct message to the session owner on Slack. No user lookup needed.',
-  riskLevel: 'high',
+  riskLevel: 'low',
   params: z.object({
     text: z.string().describe('Message text'),
   }),
