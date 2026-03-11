@@ -29,6 +29,7 @@
     { "path": "./packages/plugin-notion" },
     { "path": "./packages/plugin-stripe" },
     { "path": "./packages/plugin-cloudflare" },
+    { "path": "./packages/plugin-figma" },
     { "path": "./packages/plugin-sentry" },
     { "path": "./packages/plugin-deepwiki" },
     { "path": "./packages/plugin-telegram" },

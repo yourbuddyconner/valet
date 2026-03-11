@@ -162,6 +162,25 @@ importers:
         specifier: ^4.0.18
         version: 4.0.18(@types/node@25.0.9)(jiti@1.21.7)(tsx@4.21.0)
 
+  packages/plugin-figma:
+    dependencies:
+      '@valet/sdk':
+        specifier: workspace:*
+        version: link:../sdk
+      '@valet/shared':
+        specifier: workspace:*
+        version: link:../shared
+      zod:
+        specifier: ^3.22.4
+        version: 3.25.76
+    devDependencies:
+      typescript:
+        specifier: ^5.3.3
+        version: 5.9.3
+      vitest:
+        specifier: ^4.0.18
+        version: 4.0.18(@types/node@25.0.9)(jiti@1.21.7)(tsx@4.21.0)
+
   packages/plugin-github:
     dependencies:
       '@valet/sdk':
@@ -476,6 +495,9 @@ importers:
       '@valet/plugin-deepwiki':
         specifier: workspace:*
         version: link:../plugin-deepwiki
+      '@valet/plugin-figma':
+        specifier: workspace:*
+        version: link:../plugin-figma
       '@valet/plugin-github':
         specifier: workspace:*
         version: link:../plugin-github
