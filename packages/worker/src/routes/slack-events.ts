@@ -318,7 +318,7 @@ slackEventsRouter.post('/slack/events', async (c) => {
   // ─── Pull thread context for public channel mentions ──────────────────
   // FUTURE: push-model hook — in a push model, context would already be available
   // from real-time broadcast. This pull path fetches on-demand from Slack API.
-  let contentWithContext = message.text || '[Attachment]';
+  let threadContextPrefix: string | undefined;
   if (!isDm && threadId) {
     try {
       // Look up existing cursor for this user's view of the thread
@@ -335,7 +335,7 @@ slackEventsRouter.post('/slack/events', async (c) => {
       );
 
       if (context) {
-        contentWithContext = `${context}\n\n${contentWithContext}`;
+        threadContextPrefix = context;
       }
 
       // Advance cursor to current message (works for both new and existing mappings
@@ -360,7 +360,8 @@ slackEventsRouter.post('/slack/events', async (c) => {
   console.log(`[Slack] Orchestrator dispatch: userId=${userId} channelId=${dispatchChannelId}`);
   const result = await dispatchOrchestratorPrompt(c.env, {
     userId,
-    content: contentWithContext,
+    content: message.text || '[Attachment]',
+    contextPrefix: threadContextPrefix,
     channelType: 'slack',
     channelId: dispatchChannelId,
     threadId: orchestratorThreadId,

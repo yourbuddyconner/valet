@@ -264,6 +264,8 @@ export async function dispatchOrchestratorPrompt(
   params: {
     userId: string;
     content: string;
+    /** Context prepended to content for the agent but NOT saved to the message DB (e.g., thread history) */
+    contextPrefix?: string;
     authorName?: string;
     authorEmail?: string;
     channelType?: string;
@@ -305,13 +307,18 @@ export async function dispatchOrchestratorPrompt(
     threadId: params.threadId,
   });
 
+  // Agent sees context prefix + content; DB only stores the user's actual message
+  const agentContent = params.contextPrefix
+    ? `${params.contextPrefix}\n\n${content}`
+    : content;
+
   const doId = env.SESSIONS.idFromName(sessionId);
   const sessionDO = env.SESSIONS.get(doId);
   const doRes = await sessionDO.fetch(new Request('http://do/prompt', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      content,
+      content: agentContent,
       channelType: params.channelType,
       channelId: params.channelId,
       threadId: params.threadId,
