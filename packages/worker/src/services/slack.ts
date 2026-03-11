@@ -366,8 +366,9 @@ export async function getSlackBotInfo(
 export async function getSlackBotToken(env: Env): Promise<string | null> {
   const appDb = getDb(env.DB);
   const install = await db.getOrgSlackInstallAny(appDb);
-  if (!install) return null;
-  return decryptString(install.encryptedBotToken, env.ENCRYPTION_KEY);
+  if (install) return decryptString(install.encryptedBotToken, env.ENCRYPTION_KEY);
+  // Fall back to env var for simple bot-token-only setups
+  return env.SLACK_BOT_TOKEN || null;
 }
 
 // ─── Initiate Slack Link ────────────────────────────────────────────────────

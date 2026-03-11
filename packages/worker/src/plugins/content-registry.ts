@@ -586,6 +586,7 @@ The gateway \`/t/<name>\` paths still work for same-origin access within the san
     description: "Slack integration for actions (messages, channels, users) and channel transport",
     icon: "💬",
     capabilities: ["actions","channels"],
+    authRequired: false,
     artifacts: [],
   },
   {

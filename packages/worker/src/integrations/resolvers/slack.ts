@@ -14,18 +14,9 @@ export const slackCredentialResolver: CredentialResolver = async (
   scope,
   options,
 ) => {
-  if (scope === 'org') {
-    const botToken = await getSlackBotToken(env);
-    if (!botToken) {
-      return {
-        ok: false,
-        error: {
-          service,
-          reason: 'not_found',
-          message: 'No Slack bot token found. Reinstall in Settings.',
-        },
-      };
-    }
+  // Always try org-level bot token first (from DB install or SLACK_BOT_TOKEN env var)
+  const botToken = await getSlackBotToken(env);
+  if (botToken) {
     return {
       ok: true,
       credential: {
@@ -36,5 +27,17 @@ export const slackCredentialResolver: CredentialResolver = async (
     };
   }
 
-  return getCredential(env, userId, service, options);
+  // Fall back to per-user credentials (e.g. user-scoped OAuth)
+  if (scope === 'user') {
+    return getCredential(env, userId, service, options);
+  }
+
+  return {
+    ok: false,
+    error: {
+      service,
+      reason: 'not_found',
+      message: 'No Slack bot token found. Set SLACK_BOT_TOKEN or install in Settings.',
+    },
+  };
 };
