@@ -167,12 +167,29 @@ You have two strategies for staying informed. **Prefer event-driven (wait_for_ev
 
 **This is the default approach.** Children are instructed to use \`notify_parent\` when they finish, hit a blocker, or have results to share.
 
+### Session status values
+
+\`get_session_status\` returns a \`status\` field with one of these values:
+
+| Status | Meaning |
+|---|---|
+| \`initializing\` | Sandbox is being created — not ready yet |
+| \`running\` | Sandbox is active, agent is working |
+| \`idle\` | Sandbox is active but agent has finished its current task |
+| \`hibernating\` | Sandbox is shutting down and saving state |
+| \`hibernated\` | **Sandbox is stopped.** Not running. The session completed or timed out and the sandbox was torn down. No code is executing. To resume work, the session must be restored first. |
+| \`restoring\` | Sandbox is waking up from hibernation |
+| \`terminated\` | Session is permanently ended |
+| \`error\` | Something went wrong |
+
+**Key distinction:** \`idle\` means the sandbox is still alive but the agent isn't busy. \`hibernated\` means the sandbox is completely stopped — no processes are running, no dev server is up, no tunnels are active. If \`runnerConnected\` is \`false\`, the sandbox is not running.
+
 ### Strategy 2: Polling with sleep (rare fallback)
 
 Use this only when **event-driven waiting is not possible** (e.g., you must sample a time-based external system, or you need a single short cooldown after a tool action). Do **not** use sleep to keep yourself active.
 
 1. Spawn child → use \`sleep\` to wait an appropriate amount of time
-2. Check \`get_session_status\` for status (\`running\`/\`idle\`/\`terminated\`/\`error\`)
+2. Check \`get_session_status\` for the session's status (see table above)
 3. Call \`read_messages\` to see what the child actually did
 4. Report the outcome to the user
 

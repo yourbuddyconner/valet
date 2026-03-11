@@ -5,7 +5,8 @@ export default tool({
   description:
     "Get the current status of another agent session, including its recent messages. " +
     "Use this to check on child sessions' progress, see what they're working on, or determine if they're done. " +
-    "Only works with sessions belonging to the same user.",
+    "Key statuses: running (active), idle (sandbox alive but agent idle), hibernated (sandbox stopped — not running, no processes alive), terminated (ended permanently). " +
+    "If runnerConnected is false, the sandbox is not running. Only works with sessions belonging to the same user.",
   args: {
     session_id: tool.schema
       .string()
