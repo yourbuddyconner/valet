@@ -266,7 +266,8 @@ sessionsRouter.post('/:id/clear-queue', async (c) => {
 
 /**
  * GET /api/sessions/:id/messages
- * Get session message history
+ * Get session message history — reads from DO SQLite (authoritative) to avoid
+ * stale D1 data causing tool calls to disappear after page navigation.
  */
 sessionsRouter.get('/:id/messages', async (c) => {
   const user = c.get('user');
@@ -275,12 +276,19 @@ sessionsRouter.get('/:id/messages', async (c) => {
 
   await db.assertSessionAccess(c.get('db'), id, user.id, 'viewer');
 
-  const messages = await db.getSessionMessages(c.get('db'), id, {
-    limit: limit ? parseInt(limit) : undefined,
-    after,
-  });
+  // Proxy to the DO's /messages endpoint for authoritative data from DO SQLite.
+  // D1 can lag behind (debounced flushes, background waitUntil), causing tool call
+  // parts to appear as empty '[]' placeholders when loaded after page navigation.
+  const doId = c.env.SESSIONS.idFromName(id);
+  const sessionDO = c.env.SESSIONS.get(doId);
+  const params = new URLSearchParams();
+  if (limit) params.set('limit', limit);
+  if (after) params.set('after', after);
+  const qs = params.toString();
+  const doRes = await sessionDO.fetch(new Request(`http://do/messages${qs ? `?${qs}` : ''}`));
+  const data = await doRes.json();
 
-  return c.json({ messages });
+  return c.json(data);
 });
 
 /**

@@ -6864,20 +6864,22 @@ export class SessionAgentDO {
    * Query params: limit (default 20), after (ISO timestamp cursor)
    */
   private handleMessagesEndpoint(url: URL): Response {
-    const limit = parseInt(url.searchParams.get('limit') || '20', 10);
+    const limit = parseInt(url.searchParams.get('limit') || '5000', 10);
     const after = url.searchParams.get('after');
+    const sessionId = this.getStateValue('sessionId') || '';
+
+    const columns = 'id, role, content, parts, author_id, author_email, author_name, author_avatar_url, channel_type, channel_id, thread_id, message_format, created_at';
 
     let query: string;
     const params: (string | number)[] = [];
 
     if (after) {
       // Pagination: get messages after a cursor, oldest-first
-      query = 'SELECT id, role, content, parts, created_at FROM messages WHERE created_at > ? ORDER BY created_at ASC LIMIT ?';
+      query = `SELECT ${columns} FROM messages WHERE created_at > ? ORDER BY created_at ASC LIMIT ?`;
       params.push(after, limit);
     } else {
-      // Default: get the MOST RECENT messages, returned in chronological order.
-      // Subquery selects newest N rows (DESC), outer query re-sorts ASC.
-      query = 'SELECT * FROM (SELECT id, role, content, parts, created_at FROM messages ORDER BY created_at DESC LIMIT ?) ORDER BY created_at ASC';
+      // All messages in chronological order (default limit high enough for full history)
+      query = `SELECT ${columns} FROM messages ORDER BY created_at ASC LIMIT ?`;
       params.push(limit);
     }
 
@@ -6887,10 +6889,18 @@ export class SessionAgentDO {
 
     const messages = rows.map((r) => ({
       id: r.id as string,
+      sessionId,
       role: r.role as string,
       content: r.content as string,
       parts: r.parts ? JSON.parse(r.parts as string) : undefined,
-      createdAt: r.created_at as string,
+      authorId: r.author_id || undefined,
+      authorEmail: r.author_email || undefined,
+      authorName: r.author_name || undefined,
+      authorAvatarUrl: r.author_avatar_url || undefined,
+      channelType: r.channel_type || undefined,
+      channelId: r.channel_id || undefined,
+      threadId: r.thread_id || undefined,
+      createdAt: new Date((r.created_at as number) * 1000).toISOString(),
     }));
 
     return Response.json({ messages });
