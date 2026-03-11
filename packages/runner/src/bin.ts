@@ -13,7 +13,7 @@
 import { parseArgs } from "util";
 import { AgentClient } from "./agent-client.js";
 import { PromptHandler } from "./prompt.js";
-import { startGateway } from "./gateway.js";
+import { startGateway, cleanupAllCloudflared } from "./gateway.js";
 import { OpenCodeManager, type OpenCodeConfig } from "./opencode-manager.js";
 
 const { values } = parseArgs({
@@ -483,6 +483,7 @@ async function main() {
   // ─── Graceful Shutdown ────────────────────────────────────────────────
   const shutdown = async () => {
     console.log("[Runner] Shutting down...");
+    cleanupAllCloudflared();
     await openCodeManager.stop();
     agentClient.disconnect();
     process.exit(0);

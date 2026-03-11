@@ -13,11 +13,14 @@ export default tool({
         const errText = await res.text()
         return `Failed to list tunnels: ${errText}`
       }
-      const data = await res.json() as { tunnels?: Array<{ name: string; path: string; port: number; protocol?: string }> }
+      const data = await res.json() as { tunnels?: Array<{ name: string; path: string; port: number; protocol?: string; url?: string }> }
       const tunnels = data.tunnels || []
       if (tunnels.length === 0) return "No tunnels registered"
       return tunnels
-        .map((t) => `${t.name} -> ${t.path} (port ${t.port}${t.protocol ? `, ${t.protocol}` : ""})`)
+        .map((t) => {
+          const urlLine = t.url ? `  URL: ${t.url}` : `  Gateway: ${t.path}`
+          return `${t.name} (port ${t.port}${t.protocol ? `, ${t.protocol}` : ""})\n${urlLine}`
+        })
         .join("\n")
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)

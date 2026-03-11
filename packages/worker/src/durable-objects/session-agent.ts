@@ -328,7 +328,7 @@ interface RunnerMessage {
     } | null;
     error?: string | null;
   };
-  tunnels?: Array<{ name: string; port: number; protocol?: string; path: string }>;
+  tunnels?: Array<{ name: string; port: number; protocol?: string; path: string; url?: string }>;
   // Phase C: Mailbox + Task Board fields
   toSessionId?: string;
   toUserId?: string;
@@ -6428,7 +6428,7 @@ export class SessionAgentDO {
       }
     }
 
-    let tunnelsParsed: Array<{ name: string; port: number; protocol?: string; path: string }> | null = null;
+    let tunnelsParsed: Array<{ name: string; port: number; protocol?: string; path: string; url?: string }> | null = null;
     if (tunnelsRaw) {
       try {
         tunnelsParsed = JSON.parse(tunnelsRaw);
@@ -6440,7 +6440,8 @@ export class SessionAgentDO {
     const tunnels = Array.isArray(tunnelsParsed)
       ? tunnelsParsed.map((t) => ({
         ...t,
-        url: gatewayUrl ? `${gatewayUrl}${t.path}` : undefined,
+        // Prefer cloudflared URL (clean hostname, no path prefix), fall back to gateway path
+        url: t.url || (gatewayUrl ? `${gatewayUrl}${t.path}` : undefined),
       }))
       : null;
     const runtimeStates = deriveRuntimeStates({

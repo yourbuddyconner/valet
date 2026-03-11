@@ -200,7 +200,7 @@ export type RunnerToDOMessage =
   | { type: "execution-api"; requestId: string; action: string; payload?: Record<string, unknown> }
   | { type: "workflow-execution-result"; executionId: string; envelope: WorkflowRunResultEnvelope }
   | { type: "model-switched"; messageId: string; fromModel: string; toModel: string; reason: string }
-  | { type: "tunnels"; tunnels: Array<{ name: string; port: number; protocol?: string; path: string }> }
+  | { type: "tunnels"; tunnels: Array<{ name: string; port: number; protocol?: string; path: string; url?: string }> }
   | { type: "mailbox-send"; requestId: string; toSessionId?: string; toUserId?: string; toHandle?: string; messageType?: string; content: string; contextSessionId?: string; contextTaskId?: string; replyToId?: string }
   | { type: "mailbox-check"; requestId: string; limit?: number; after?: string }
   | { type: "task-create"; requestId: string; title: string; description?: string; sessionId?: string; parentTaskId?: string; blockedBy?: string[] }

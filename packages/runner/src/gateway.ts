@@ -28,10 +28,97 @@ interface TunnelEntry {
 
 interface TunnelDescriptor extends TunnelEntry {
   path: string;
+  url?: string;
+}
+
+interface CloudflaredProcess {
+  proc: ReturnType<typeof Bun.spawn>;
+  url: string;
 }
 
 const TUNNEL_NAME_RE = /^[a-zA-Z0-9_-]{1,32}$/;
 const tunnelRegistry = new Map<string, TunnelEntry>();
+const cloudflaredProcesses = new Map<string, CloudflaredProcess>();
+
+/**
+ * Spawn a cloudflared quick tunnel for a local port and wait for the public URL.
+ * Returns the public *.trycloudflare.com URL.
+ */
+async function spawnCloudflared(name: string, port: number): Promise<string> {
+  const proc = Bun.spawn(["cloudflared", "tunnel", "--url", `http://localhost:${port}`], {
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+
+  // cloudflared prints the URL to stderr
+  const decoder = new TextDecoder();
+  const url = await new Promise<string>((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      try { proc.kill(); } catch { /* already exited */ }
+      reject(new Error("Timed out waiting for cloudflared URL"));
+    }, 30_000);
+
+    const reader = proc.stderr.getReader();
+    let buffer = "";
+
+    function read() {
+      reader.read().then(({ done, value }) => {
+        if (done) {
+          clearTimeout(timeout);
+          try { proc.kill(); } catch { /* already exited */ }
+          reject(new Error("cloudflared exited before providing URL"));
+          return;
+        }
+        buffer += decoder.decode(value, { stream: true });
+        // Cap buffer to prevent unbounded growth
+        if (buffer.length > 16_384) buffer = buffer.slice(-8_192);
+        // cloudflared prints: https://random-words.trycloudflare.com
+        const match = buffer.match(/(https:\/\/[a-zA-Z0-9-]+\.trycloudflare\.com)/);
+        if (match) {
+          clearTimeout(timeout);
+          resolve(match[1]);
+          // Keep reading to drain stderr (prevent pipe backpressure)
+          function drain() {
+            reader.read().then(({ done }) => { if (!done) drain(); }).catch(() => {});
+          }
+          drain();
+        } else {
+          read();
+        }
+      });
+    }
+    read();
+  });
+
+  cloudflaredProcesses.set(name, { proc, url });
+  console.log(`[Gateway] cloudflared tunnel for "${name}" -> ${url}`);
+  return url;
+}
+
+/**
+ * Kill all cloudflared processes. Called on gateway/runner shutdown.
+ */
+export function cleanupAllCloudflared(): void {
+  for (const name of [...cloudflaredProcesses.keys()]) {
+    killCloudflared(name);
+  }
+}
+
+/**
+ * Kill a cloudflared process for a tunnel.
+ */
+function killCloudflared(name: string): void {
+  const entry = cloudflaredProcesses.get(name);
+  if (entry) {
+    try {
+      entry.proc.kill();
+    } catch {
+      // already exited
+    }
+    cloudflaredProcesses.delete(name);
+    console.log(`[Gateway] Killed cloudflared tunnel for "${name}"`);
+  }
+}
 
 // Session cookie name
 const SESSION_COOKIE = "gateway_session";
@@ -592,12 +679,17 @@ export interface GatewayCallbacks {
 
 export function startGateway(port: number, callbacks: GatewayCallbacks): void {
   console.log(`[Gateway] Starting auth gateway on port ${port}`);
+  // Kill any leftover cloudflared processes
+  for (const name of cloudflaredProcesses.keys()) {
+    killCloudflared(name);
+  }
   tunnelRegistry.clear();
 
   function serializeTunnels(): TunnelDescriptor[] {
     return Array.from(tunnelRegistry.values()).map((entry) => ({
       ...entry,
       path: `/t/${entry.name}`,
+      url: cloudflaredProcesses.get(entry.name)?.url,
     }));
   }
 
@@ -649,8 +741,17 @@ export function startGateway(port: number, callbacks: GatewayCallbacks): void {
       }
 
       tunnelRegistry.set(name, { name, port, protocol });
+
+      // Spawn cloudflared quick tunnel for a clean public URL
+      let url: string | undefined;
+      try {
+        url = await spawnCloudflared(name, port);
+      } catch (err) {
+        console.error(`[Gateway] Failed to start cloudflared for "${name}":`, err);
+      }
+
       notifyTunnelsUpdated();
-      return c.json({ ok: true, tunnel: { name, port, protocol, path: `/t/${name}` } });
+      return c.json({ ok: true, tunnel: { name, port, protocol, path: `/t/${name}`, url } });
     } catch (err) {
       console.error("[Gateway] Register tunnel error:", err);
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
@@ -665,6 +766,7 @@ export function startGateway(port: number, callbacks: GatewayCallbacks): void {
       return c.json({ error: "Tunnel not found" }, 404);
     }
 
+    killCloudflared(name);
     tunnelRegistry.delete(name);
     notifyTunnelsUpdated();
     return c.json({ ok: true });

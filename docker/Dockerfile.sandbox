@@ -48,6 +48,11 @@ RUN curl -fsSL -o /usr/local/bin/ttyd \
     "https://github.com/tsl0922/ttyd/releases/download/1.7.7/ttyd.x86_64" \
     && chmod +x /usr/local/bin/ttyd
 
+# cloudflared (Cloudflare Quick Tunnels for exposing services with unique hostnames)
+RUN curl -fsSL -o /usr/local/bin/cloudflared \
+    "https://github.com/cloudflare/cloudflared/releases/download/2026.2.0/cloudflared-linux-amd64" \
+    && chmod +x /usr/local/bin/cloudflared
+
 # ─── Runner Build ──────────────────────────────────────────────────────
 
 FROM base AS runner-build

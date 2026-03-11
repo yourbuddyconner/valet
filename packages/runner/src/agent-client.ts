@@ -270,7 +270,7 @@ export class AgentClient {
     this.send({ type: "model-switched", messageId, fromModel, toModel, reason });
   }
 
-  sendTunnels(tunnels: Array<{ name: string; port: number; protocol?: string; path: string }>): void {
+  sendTunnels(tunnels: Array<{ name: string; port: number; protocol?: string; path: string; url?: string }>): void {
     this.send({ type: "tunnels", tunnels });
   }
 

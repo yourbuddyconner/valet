@@ -3,7 +3,8 @@ import { tool } from "@opencode-ai/plugin"
 export default tool({
   description:
     "Register a tunnel for a local service running in the sandbox. " +
-    "This exposes it at /t/<name> through the authenticated gateway so the user can access it.",
+    "This creates a public URL (via Cloudflare Quick Tunnel) with its own unique hostname — " +
+    "no base path or prefix needed. Apps served through the tunnel work as if hosted at /.",
   args: {
     name: tool.schema
       .string()
@@ -33,9 +34,14 @@ export default tool({
         return `Failed to register tunnel: ${errText}`
       }
 
-      const data = await res.json() as { tunnel?: { name: string; path: string } }
+      const data = await res.json() as { tunnel?: { name: string; path: string; url?: string } }
+      const url = data.tunnel?.url
       const path = data.tunnel?.path || `/t/${args.name}`
-      return `Tunnel registered: ${args.name} -> ${path}`
+
+      if (url) {
+        return `Tunnel registered: ${args.name}\nPublic URL: ${url}\nGateway path: ${path} (fallback)`
+      }
+      return `Tunnel registered: ${args.name} -> ${path} (cloudflared unavailable, using gateway path)`
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
       return `Failed to register tunnel: ${msg}`
