@@ -2688,6 +2688,8 @@ export class PromptHandler {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
+      // @ts-expect-error Bun-specific option — disable default fetch timeout
+      timeout: false,
     });
 
     console.log(`[PromptHandler] prompt_async response: ${res.status} ${res.statusText}`);
@@ -2718,6 +2720,8 @@ export class PromptHandler {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
+      // @ts-expect-error Bun-specific option — disable default fetch timeout
+      timeout: false,
     });
 
     console.log(`[PromptHandler] prompt sync response: ${res.status} ${res.statusText} (content-type: ${res.headers.get("content-type")})`);
@@ -2814,6 +2818,8 @@ export class PromptHandler {
         const candidateRes = await fetch(url, {
           headers: { Accept: "text/event-stream" },
           signal,
+          // @ts-expect-error Bun-specific option — disable default fetch timeout
+          timeout: false,
         });
         console.log(
           `[PromptHandler] Event stream response (${path}): ${candidateRes.status} (type: ${candidateRes.headers.get("content-type")})`
