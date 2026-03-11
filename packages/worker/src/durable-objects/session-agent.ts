@@ -2046,9 +2046,9 @@ export class SessionAgentDO {
     const collectChannelKey = this.channelKeyFrom(channelType, channelId);
     const bufferStateKey = `collectBuffer:${collectChannelKey}`;
     const bufferRaw = this.getStateValue(bufferStateKey);
-    const buffer: Array<{ content: string; model?: string; author?: typeof author; attachments?: PromptAttachment[]; channelType?: string; channelId?: string }> =
+    const buffer: Array<{ content: string; model?: string; author?: typeof author; attachments?: PromptAttachment[]; channelType?: string; channelId?: string; threadId?: string }> =
       bufferRaw ? JSON.parse(bufferRaw) : [];
-    buffer.push({ content, model, author, attachments: normalizedAttachments.length > 0 ? normalizedAttachments : undefined, channelType, channelId });
+    buffer.push({ content, model, author, attachments: normalizedAttachments.length > 0 ? normalizedAttachments : undefined, channelType, channelId, threadId });
     this.setStateValue(bufferStateKey, JSON.stringify(buffer));
 
     // Set flush time (per-channel)
@@ -2124,7 +2124,7 @@ export class SessionAgentDO {
         continue;
       }
 
-      const buffer: Array<{ content: string; model?: string; author?: any; attachments?: PromptAttachment[]; channelType?: string; channelId?: string }> = JSON.parse(bufferRaw);
+      const buffer: Array<{ content: string; model?: string; author?: any; attachments?: PromptAttachment[]; channelType?: string; channelId?: string; threadId?: string }> = JSON.parse(bufferRaw);
       if (buffer.length === 0) {
         this.setStateValue(bufferStateKey, '');
         this.setStateValue(key, '');
@@ -2141,9 +2141,11 @@ export class SessionAgentDO {
       const allAttachments = buffer.flatMap((b) => b.attachments || []);
       const channelType = lastEntry.channelType;
       const channelId = lastEntry.channelId;
+      // Preserve threadId so the merged prompt maintains thread association
+      const threadId = lastEntry.threadId;
 
-      // Send merged prompt through normal flow with channel info
-      await this.handlePrompt(mergedContent, lastEntry.model, lastEntry.author, allAttachments, channelType, channelId);
+      // Send merged prompt through normal flow with channel and thread info
+      await this.handlePrompt(mergedContent, lastEntry.model, lastEntry.author, allAttachments, channelType, channelId, threadId);
       flushed = true;
     }
 
@@ -6042,13 +6044,13 @@ export class SessionAgentDO {
 
     if (await this.sendNextQueuedPrompt()) {
       console.log(`[SessionAgentDO] handlePromptComplete: dispatched next queued prompt, keeping runnerBusy=true`);
-      // More work in the queue — flush messages in the background
-      this.ctx.waitUntil(this.flushMessagesToD1());
+      // More work in the queue — flush messages synchronously so they survive hibernation
+      await this.flushMessagesToD1();
       return;
     }
 
-    // Runner is now idle — flush messages to D1
-    this.ctx.waitUntil(this.flushMessagesToD1());
+    // Runner is now idle — flush messages synchronously so they survive hibernation
+    await this.flushMessagesToD1();
 
     // Runner is now idle
     console.log(`[SessionAgentDO] handlePromptComplete: queue empty, setting runnerBusy=false`);
