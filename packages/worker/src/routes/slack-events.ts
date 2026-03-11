@@ -246,11 +246,6 @@ slackEventsRouter.post('/slack/events', async (c) => {
           userId,
         });
         console.log(`[Slack] Resolved thread: external=${threadId} → orchestrator=${orchestratorThreadId} session=${targetSessionId}`);
-
-        // Set initial cursor for new thread mappings (public channels only)
-        if (orchestratorThreadId && !isDm && messageId) {
-          await updateThreadCursor(c.env.DB, 'slack', message.channelId, threadId, userId, messageId);
-        }
       } catch (err) {
         // Thread resolution is best-effort — don't block message dispatch
         console.error(`[Slack] Failed to resolve thread mapping:`, err);
@@ -343,11 +338,11 @@ slackEventsRouter.post('/slack/events', async (c) => {
         contentWithContext = `${context}\n\n${contentWithContext}`;
       }
 
-      // Advance cursor to current message
-      if (existingMapping && messageId) {
+      // Advance cursor to current message (works for both new and existing mappings
+      // since getOrCreateChannelThread already created the row above)
+      if (messageId) {
         await updateThreadCursor(c.env.DB, 'slack', message.channelId, threadId, userId, messageId);
       }
-      // If no existing mapping, cursor will be set when getOrCreateChannelThread runs below
     } catch (err) {
       // Thread context is best-effort — don't block message dispatch
       console.error(`[Slack] Failed to fetch thread context:`, err);

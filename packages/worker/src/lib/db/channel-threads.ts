@@ -71,8 +71,8 @@ export async function getOrCreateChannelThread(
   await createThread(db, { id: threadId, sessionId: params.sessionId });
 
   // Insert mapping with INSERT OR IGNORE to handle concurrent racers.
-  // The unique index on (channel_type, channel_id, external_thread_id) ensures
-  // only the first writer wins; the second silently no-ops.
+  // The unique index on (channel_type, channel_id, external_thread_id, user_id)
+  // ensures only the first writer wins per user; the second silently no-ops.
   const mappingId = crypto.randomUUID();
   await db
     .prepare(
