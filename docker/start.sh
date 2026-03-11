@@ -22,6 +22,14 @@ rm -f /tmp/.X99-lock /tmp/.X11-unix/X99
 rm -f /root/.local/share/code-server/heartbeat /root/.local/share/code-server/*.sock
 Xvfb :99 -screen 0 1920x1080x24 &
 sleep 1
+# Pre-create fluxbox init file to suppress "Failed to read" config spam on stderr
+mkdir -p /root/.fluxbox
+cat > /root/.fluxbox/init <<'FBEOF'
+session.screen0.workspaces: 1
+session.screen0.toolbar.visible: false
+session.screen0.windowPlacement: RowSmartPlacement
+session.screen0.focusModel: ClickFocus
+FBEOF
 fluxbox &
 x11vnc -display :99 -forever -shared -rfbport 5900 -nopw -quiet &
 websockify --web /usr/share/novnc ${VNC_PORT} localhost:5900 &
