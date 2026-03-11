@@ -204,7 +204,7 @@ slackEventsRouter.post('/slack/events', async (c) => {
         threadId: isDm ? undefined : threadId,
       };
       await transport.sendMessage(target, {
-        markdown: "I don't recognize your Slack account yet. To get started, link your account in Valet:\n\n1. Log in to Valet\n2. Go to **Integrations** in the sidebar\n3. Click **Link Account** on the Slack card\n4. Find your name and enter the verification code I'll DM you",
+        markdown: `I don't recognize your Slack account yet. To get started, link your account in Valet:\n\n1. <${(c.env as Env).FRONTEND_URL || 'https://valet.bot'}|Log in to Valet>\n2. Go to **Integrations** in the sidebar\n3. Click **Link Account** on the Slack card\n4. Find your name and enter the verification code I'll DM you`,
       }, ctx);
     }
     return c.json({ ok: true });
