@@ -60,3 +60,4 @@ packages/client/*.js.map
 # Workspaces data (container volumes)
 workspaces/*
 !workspaces/.gitkeep
+.worktrees/
