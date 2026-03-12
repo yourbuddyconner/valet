@@ -4,10 +4,12 @@ import { credentials } from '../schema/index.js';
 
 export interface CredentialRow {
   id: string;
-  userId: string;
+  ownerType: string;
+  ownerId: string;
   provider: string;
   credentialType: string;
   encryptedData: string;
+  metadata: string | null;
   scopes: string | null;
   expiresAt: string | null;
   createdAt: string;
@@ -16,13 +18,23 @@ export interface CredentialRow {
 
 export async function getCredentialRow(
   db: AppDb,
-  userId: string,
+  ownerType: string,
+  ownerId: string,
   provider: string,
+  credentialType?: string,
 ): Promise<CredentialRow | null> {
+  const conditions = [
+    eq(credentials.ownerType, ownerType),
+    eq(credentials.ownerId, ownerId),
+    eq(credentials.provider, provider),
+  ];
+  if (credentialType) {
+    conditions.push(eq(credentials.credentialType, credentialType));
+  }
   const row = await db
     .select()
     .from(credentials)
-    .where(and(eq(credentials.userId, userId), eq(credentials.provider, provider)))
+    .where(and(...conditions))
     .get();
   return (row as CredentialRow | undefined) ?? null;
 }
@@ -31,10 +43,12 @@ export async function upsertCredential(
   db: AppDb,
   data: {
     id: string;
-    userId: string;
+    ownerType: string;
+    ownerId: string;
     provider: string;
     credentialType: string;
     encryptedData: string;
+    metadata?: string | null;
     scopes?: string | null;
     expiresAt?: string | null;
   },
@@ -43,18 +57,20 @@ export async function upsertCredential(
     .insert(credentials)
     .values({
       id: data.id,
-      userId: data.userId,
+      ownerType: data.ownerType,
+      ownerId: data.ownerId,
       provider: data.provider,
       credentialType: data.credentialType,
       encryptedData: data.encryptedData,
+      metadata: data.metadata ?? null,
       scopes: data.scopes ?? null,
       expiresAt: data.expiresAt ?? null,
     })
     .onConflictDoUpdate({
-      target: [credentials.userId, credentials.provider],
+      target: [credentials.ownerType, credentials.ownerId, credentials.provider, credentials.credentialType],
       set: {
-        credentialType: sql`excluded.credential_type`,
         encryptedData: sql`excluded.encrypted_data`,
+        metadata: sql`COALESCE(excluded.metadata, ${credentials.metadata})`,
         scopes: sql`COALESCE(excluded.scopes, ${credentials.scopes})`,
         expiresAt: sql`excluded.expires_at`,
         updatedAt: sql`datetime('now')`,
@@ -64,17 +80,19 @@ export async function upsertCredential(
 
 export async function deleteCredential(
   db: AppDb,
-  userId: string,
+  ownerType: string,
+  ownerId: string,
   provider: string,
 ): Promise<void> {
   await db
     .delete(credentials)
-    .where(and(eq(credentials.userId, userId), eq(credentials.provider, provider)));
+    .where(and(eq(credentials.ownerType, ownerType), eq(credentials.ownerId, ownerId), eq(credentials.provider, provider)));
 }
 
-export async function listCredentialsByUser(
+export async function listCredentialsByOwner(
   db: AppDb,
-  userId: string,
+  ownerType: string,
+  ownerId: string,
 ): Promise<Array<{
   provider: string;
   credentialType: string;
@@ -93,21 +111,22 @@ export async function listCredentialsByUser(
       updatedAt: credentials.updatedAt,
     })
     .from(credentials)
-    .where(eq(credentials.userId, userId));
+    .where(and(eq(credentials.ownerType, ownerType), eq(credentials.ownerId, ownerId)));
 }
 
 /**
  * Find credentials expiring within the given window (seconds from now).
- * Returns userId + provider pairs so the caller can attempt refresh.
+ * Returns ownerType + ownerId + provider tuples so the caller can attempt refresh.
  */
 export async function getExpiringCredentials(
   db: AppDb,
   windowSeconds: number,
-): Promise<Array<{ userId: string; provider: string; expiresAt: string }>> {
+): Promise<Array<{ ownerType: string; ownerId: string; provider: string; expiresAt: string }>> {
   const cutoff = new Date(Date.now() + windowSeconds * 1000).toISOString();
   return db
     .select({
-      userId: credentials.userId,
+      ownerType: credentials.ownerType,
+      ownerId: credentials.ownerId,
       provider: credentials.provider,
       expiresAt: credentials.expiresAt,
     })
@@ -122,13 +141,30 @@ export async function getExpiringCredentials(
 
 export async function hasCredential(
   db: AppDb,
-  userId: string,
+  ownerType: string,
+  ownerId: string,
   provider: string,
 ): Promise<boolean> {
   const row = await db
     .select({ id: credentials.id })
     .from(credentials)
-    .where(and(eq(credentials.userId, userId), eq(credentials.provider, provider)))
+    .where(and(eq(credentials.ownerType, ownerType), eq(credentials.ownerId, ownerId), eq(credentials.provider, provider)))
     .get();
   return !!row;
+}
+
+/**
+ * Resolve a repo-level credential, preferring org app_install over user app_install.
+ */
+export async function resolveRepoCredential(
+  db: AppDb,
+  provider: string,
+  orgId: string | undefined,
+  userId: string,
+): Promise<CredentialRow | null> {
+  if (orgId) {
+    const orgCred = await getCredentialRow(db, 'org', orgId, provider, 'app_install');
+    if (orgCred) return orgCred;
+  }
+  return getCredentialRow(db, 'user', userId, provider, 'app_install');
 }

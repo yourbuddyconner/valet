@@ -11,4 +11,4 @@ export const defaultCredentialResolver: CredentialResolver = (
   userId,
   _scope,
   options,
-) => getCredential(env, userId, service, options);
+) => getCredential(env, 'user', userId, service, options);

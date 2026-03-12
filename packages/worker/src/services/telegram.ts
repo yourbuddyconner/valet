@@ -46,7 +46,7 @@ export async function setupTelegramBot(
   }
 
   // Store bot token in unified credentials table
-  await storeCredential(env, userId, 'telegram', { bot_token: trimmedToken }, {
+  await storeCredential(env, 'user', userId, 'telegram', { bot_token: trimmedToken }, {
     credentialType: 'bot_token',
   });
 
@@ -94,7 +94,7 @@ export async function disconnectTelegramBot(
   env: Env,
   userId: string,
 ): Promise<void> {
-  const credResult = await getCredential(env, userId, 'telegram');
+  const credResult = await getCredential(env, 'user', userId, 'telegram');
   if (credResult.ok) {
     try {
       await fetch(botUrl(credResult.credential.accessToken, 'deleteWebhook'), {
@@ -107,7 +107,7 @@ export async function disconnectTelegramBot(
   }
 
   // Remove credential and metadata
-  await revokeCredential(env, userId, 'telegram');
+  await revokeCredential(env, 'user', userId, 'telegram');
   const appDb = getDb(env.DB);
   await db.deleteUserTelegramConfig(appDb, userId);
 }

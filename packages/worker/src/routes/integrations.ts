@@ -265,7 +265,7 @@ integrationsRouter.delete('/:id', async (c) => {
   }
 
   // Revoke credentials in unified credentials table
-  await revokeCredential(c.env, user.id, integration.service);
+  await revokeCredential(c.env, 'user', user.id, integration.service);
 
   // Delete integration record
   await db.deleteIntegration(c.get('db'), id);

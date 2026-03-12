@@ -25,7 +25,7 @@ channelWebhooksRouter.post('/:channelType/webhook/:userId', async (c) => {
   }
 
   const [credResult, config] = await Promise.all([
-    getCredential(c.env, userId, channelType),
+    getCredential(c.env, 'user', userId, channelType),
     channelType === 'telegram' ? db.getUserTelegramConfig(c.get('db'), userId) : Promise.resolve(null),
   ]);
   if (!credResult.ok) {

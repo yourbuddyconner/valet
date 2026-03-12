@@ -16,8 +16,8 @@ authRouter.get('/me', async (c) => {
 
   const [fullUser, hasGitHub, hasGoogle, orgSettings] = await Promise.all([
     db.getUserById(c.get('db'), authUser.id),
-    hasCredential(c.env, authUser.id, 'github'),
-    hasCredential(c.env, authUser.id, 'google'),
+    hasCredential(c.env, 'user', authUser.id, 'github'),
+    hasCredential(c.env, 'user', authUser.id, 'google'),
     db.getOrgSettings(c.get('db')),
   ]);
 
@@ -91,7 +91,7 @@ const VALID_CREDENTIAL_PROVIDERS = ['1password'] as const;
  */
 authRouter.get('/me/credentials', async (c) => {
   const user = c.get('user');
-  const creds = await listCredentials(c.env, user.id);
+  const creds = await listCredentials(c.env, 'user', user.id);
   return c.json(creds);
 });
 
@@ -112,7 +112,7 @@ authRouter.put('/me/credentials/:provider', async (c) => {
 
   const user = c.get('user');
 
-  await storeCredential(c.env, user.id, provider, { token: key }, {
+  await storeCredential(c.env, 'user', user.id, provider, { token: key }, {
     credentialType: 'service_account',
   });
 
@@ -126,7 +126,7 @@ authRouter.put('/me/credentials/:provider', async (c) => {
 authRouter.delete('/me/credentials/:provider', async (c) => {
   const provider = c.req.param('provider');
   const user = c.get('user');
-  await revokeCredential(c.env, user.id, provider);
+  await revokeCredential(c.env, 'user', user.id, provider);
   return c.json({ ok: true });
 });
 

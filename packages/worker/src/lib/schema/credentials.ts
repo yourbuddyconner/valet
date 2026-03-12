@@ -1,19 +1,20 @@
 import { sqliteTable, text, uniqueIndex, index } from 'drizzle-orm/sqlite-core';
 import { sql } from 'drizzle-orm';
-import { users } from './users.js';
 
 export const credentials = sqliteTable('credentials', {
   id: text().primaryKey(),
-  userId: text().notNull().references(() => users.id, { onDelete: 'cascade' }),
+  ownerType: text().notNull().default('user'),
+  ownerId: text().notNull(),
   provider: text().notNull(),
-  credentialType: text().notNull(),
+  credentialType: text().notNull().default('oauth2'),
   encryptedData: text().notNull(),
+  metadata: text(),
   scopes: text(),
   expiresAt: text(),
   createdAt: text().notNull().default(sql`(datetime('now'))`),
   updatedAt: text().notNull().default(sql`(datetime('now'))`),
 }, (table) => [
-  uniqueIndex('idx_credentials_user_provider').on(table.userId, table.provider),
-  index('idx_credentials_user').on(table.userId),
-  index('idx_credentials_provider').on(table.provider),
+  uniqueIndex('credentials_owner_unique').on(table.ownerType, table.ownerId, table.provider, table.credentialType),
+  index('credentials_owner_lookup').on(table.ownerType, table.ownerId),
+  index('credentials_provider').on(table.provider),
 ]);

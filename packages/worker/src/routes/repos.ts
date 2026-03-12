@@ -11,7 +11,7 @@ export const reposRouter = new Hono<{ Bindings: Env; Variables: Variables }>();
  * Get the user's decrypted GitHub access token. Throws if not connected.
  */
 async function getGitHubToken(env: Env, userId: string): Promise<string> {
-  const result = await getCredential(env, userId, 'github');
+  const result = await getCredential(env, 'user', userId, 'github');
   if (!result.ok) {
     throw new ValidationError('GitHub account not connected');
   }

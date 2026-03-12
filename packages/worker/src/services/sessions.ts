@@ -33,7 +33,7 @@ export function assertSessionShareable(session: Awaited<ReturnType<typeof db.ass
 
 export async function getGitHubTokenIfConnected(env: Env, userId: string): Promise<string | null> {
   try {
-    const result = await getCredential(env, userId, 'github');
+    const result = await getCredential(env, 'user', userId, 'github');
     if (!result.ok) return null;
     return result.credential.accessToken;
   } catch {

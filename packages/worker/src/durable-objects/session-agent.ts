@@ -593,12 +593,12 @@ export class SessionAgentDO {
   private discoveredToolRiskLevels = new Map<string, string>();
 
   /** In-memory credential cache to avoid repeated D1 lookups + PBKDF2 decryption.
-   *  Keyed by "userId:service", entries expire after CREDENTIAL_CACHE_TTL_MS. */
+   *  Keyed by "ownerType:ownerId:service:credentialType", entries expire after CREDENTIAL_CACHE_TTL_MS. */
   private credentialCache = new Map<string, { result: CredentialResult; expiresAt: number }>();
   private static readonly CREDENTIAL_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 
-  private getCachedCredential(userId: string, service: string): CredentialResult | null {
-    const key = `${userId}:${service}`;
+  private getCachedCredential(ownerType: string, ownerId: string, service: string, credentialType?: string): CredentialResult | null {
+    const key = `${ownerType}:${ownerId}:${service}:${credentialType || '*'}`;
     const entry = this.credentialCache.get(key);
     if (!entry || Date.now() > entry.expiresAt) {
       if (entry) this.credentialCache.delete(key);
@@ -607,16 +607,16 @@ export class SessionAgentDO {
     return entry.result;
   }
 
-  private setCachedCredential(userId: string, service: string, result: CredentialResult): void {
-    const key = `${userId}:${service}`;
+  private setCachedCredential(ownerType: string, ownerId: string, service: string, result: CredentialResult, credentialType?: string): void {
+    const key = `${ownerType}:${ownerId}:${service}:${credentialType || '*'}`;
     this.credentialCache.set(key, {
       result,
       expiresAt: Date.now() + SessionAgentDO.CREDENTIAL_CACHE_TTL_MS,
     });
   }
 
-  private invalidateCachedCredential(userId: string, service: string): void {
-    this.credentialCache.delete(`${userId}:${service}`);
+  private invalidateCachedCredential(ownerType: string, ownerId: string, service: string, credentialType?: string): void {
+    this.credentialCache.delete(`${ownerType}:${ownerId}:${service}:${credentialType || '*'}`);
   }
 
   // ─── Auto Channel Reply Tracking ─────────────────────────────────────
@@ -3419,7 +3419,7 @@ export class SessionAgentDO {
         // Inject git credentials if the parent doesn't have them (e.g. orchestrator)
         if (!childSpawnRequest.envVars.GITHUB_TOKEN) {
           try {
-            const ghResult = await getCredential(this.env, userId, 'github');
+            const ghResult = await getCredential(this.env, 'user', userId, 'github');
             if (ghResult.ok) {
               childSpawnRequest.envVars.GITHUB_TOKEN = ghResult.credential.accessToken;
             }
@@ -7058,7 +7058,7 @@ export class SessionAgentDO {
     // Try the current prompt author first (for multiplayer attribution)
     const promptAuthorId = this.getStateValue('currentPromptAuthorId');
     if (promptAuthorId) {
-      const authorResult = await getCredential(this.env, promptAuthorId, 'github');
+      const authorResult = await getCredential(this.env, 'user', promptAuthorId, 'github');
       if (authorResult.ok) {
         return authorResult.credential.accessToken;
       }
@@ -7068,7 +7068,7 @@ export class SessionAgentDO {
     const userId = this.getStateValue('userId');
     if (!userId) return null;
 
-    const result = await getCredential(this.env, userId, 'github');
+    const result = await getCredential(this.env, 'user', userId, 'github');
     if (!result.ok) return null;
 
     return result.credential.accessToken;
@@ -8306,7 +8306,7 @@ export class SessionAgentDO {
       if (channelType === 'slack') {
         token = await getSlackBotToken(this.env) ?? undefined;
       } else {
-        const credResult = await getCredential(this.env, userId, channelType);
+        const credResult = await getCredential(this.env, 'user', userId, channelType);
         if (credResult.ok) token = credResult.credential.accessToken;
       }
       if (!token) {
@@ -8477,7 +8477,7 @@ export class SessionAgentDO {
           const scope = isOrgScopedIntegration ? 'org' as const : 'user' as const;
 
           // Check credential cache first
-          let credResult = this.getCachedCredential(credentialUserId, integration.service);
+          let credResult = this.getCachedCredential('user', credentialUserId, integration.service);
           if (!credResult) {
             credResult = await integrationRegistry.resolveCredentials(integration.service, this.env, credentialUserId, scope);
             // If the initial credential fetch fails with a refreshable reason, try force-refresh
@@ -8488,7 +8488,7 @@ export class SessionAgentDO {
             // Only cache successful results — failure states (not_found, revoked) are
             // transient and should be re-checked so newly connected integrations work immediately.
             if (credResult.ok) {
-              this.setCachedCredential(credentialUserId, integration.service, credResult);
+              this.setCachedCredential('user', credentialUserId, integration.service, credResult);
             }
           }
 
@@ -8517,11 +8517,11 @@ export class SessionAgentDO {
           const credentialUserId = ('scope' in integration && integration.scope === 'org' && 'userId' in integration)
             ? (integration as { userId: string }).userId
             : userId;
-          this.invalidateCachedCredential(credentialUserId, integration.service);
+          this.invalidateCachedCredential('user', credentialUserId, integration.service);
           const refreshed = await integrationRegistry.resolveCredentials(integration.service, this.env, credentialUserId, isOrgScopedIntegration ? 'org' : 'user', { forceRefresh: true });
           if (refreshed.ok && refreshed.credential.refreshed) {
             console.log(`[SessionAgentDO] list-tools: ${integration.service} returned 0 actions, retrying with force-refreshed token`);
-            this.setCachedCredential(credentialUserId, integration.service, refreshed);
+            this.setCachedCredential('user', credentialUserId, integration.service, refreshed);
             credCtx = { credentials: { access_token: refreshed.credential.accessToken } };
             actions = await actionSource.listActions(credCtx);
           }
@@ -8677,10 +8677,10 @@ export class SessionAgentDO {
         const fallbackProvider = integrationRegistry.getProvider(service);
         let listCtx: { credentials: { access_token: string } } | undefined;
         if (fallbackProvider?.authType !== 'none') {
-          let listCredResult = this.getCachedCredential(userId, service)
+          let listCredResult = this.getCachedCredential('user', userId, service)
             || await integrationRegistry.resolveCredentials(service, this.env, userId, isOrgScoped ? 'org' : 'user');
           if (listCredResult.ok) {
-            this.setCachedCredential(userId, service, listCredResult);
+            this.setCachedCredential('user', userId, service, listCredResult);
           }
           listCtx = listCredResult.ok
             ? { credentials: { access_token: listCredResult.credential.accessToken } }
@@ -8810,10 +8810,10 @@ export class SessionAgentDO {
       credentials = {};
     } else {
       const scope = isOrgScoped ? 'org' as const : 'user' as const;
-      let credResult = this.getCachedCredential(userId, service)
+      let credResult = this.getCachedCredential('user', userId, service)
         || await integrationRegistry.resolveCredentials(service, this.env, userId, scope);
       if (credResult.ok) {
-        this.setCachedCredential(userId, service, credResult);
+        this.setCachedCredential('user', userId, service, credResult);
       }
       if (!credResult.ok) {
         const scopeLabel = isOrgScoped ? `org-scoped "${service}"` : `"${service}"`;
@@ -8859,10 +8859,10 @@ export class SessionAgentDO {
     if (provider?.authType !== 'none' && provider?.authType !== 'bot_token' && !actionResult.success && actionResult.error && /\b(401|403|unauthorized|invalid.credentials|token.*expired|token.*revoked)\b/i.test(actionResult.error)) {
       const scope = isOrgScoped ? 'org' as const : 'user' as const;
       console.log(`[SessionAgentDO] Tool "${toolId}" returned auth error, retrying with refreshed credentials`);
-      this.invalidateCachedCredential(userId, service);
+      this.invalidateCachedCredential('user', userId, service);
       const refreshedCred = await integrationRegistry.resolveCredentials(service, this.env, userId, scope, { forceRefresh: true });
       if (refreshedCred.ok) {
-        this.setCachedCredential(userId, service, refreshedCred);
+        this.setCachedCredential('user', userId, service, refreshedCred);
         const refreshedToken = refreshedCred.credential.accessToken;
         const refreshedCredentials: Record<string, string> = refreshedCred.credential.credentialType === 'bot_token'
           ? { bot_token: refreshedToken }
@@ -9115,7 +9115,7 @@ export class SessionAgentDO {
         if (pending.channelType === 'slack') {
           token = await getSlackBotToken(this.env) ?? undefined;
         } else {
-          const credResult = await getCredential(this.env, userId, pending.channelType);
+          const credResult = await getCredential(this.env, 'user', userId, pending.channelType);
           if (credResult.ok) token = credResult.credential.accessToken;
         }
         if (!token) {

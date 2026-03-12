@@ -257,7 +257,7 @@ export async function handleGitHubCallback(
   }
 
   // Store OAuth credential
-  await storeCredential(env, user.id, 'github', {
+  await storeCredential(env, 'user', user.id, 'github', {
     access_token: tokenData.access_token,
   }, {
     credentialType: 'oauth2',
@@ -362,7 +362,7 @@ export async function handleGoogleCallback(
       ? new Date(Date.now() + tokenData.expires_in * 1000).toISOString()
       : undefined;
 
-    await storeCredential(env, user.id, 'google', credentialData, {
+    await storeCredential(env, 'user', user.id, 'google', credentialData, {
       credentialType: 'oauth2',
       scopes: 'openid email profile',
       expiresAt,

@@ -88,7 +88,7 @@ export async function configureIntegration(
   }
 
   // Store credentials in unified credentials table
-  await storeCredential(env, userId, params.service, params.credentials, {
+  await storeCredential(env, 'user', userId, params.service, params.credentials, {
     credentialType: 'oauth2',
     scopes: params.config.entities.join(' '),
     expiresAt,

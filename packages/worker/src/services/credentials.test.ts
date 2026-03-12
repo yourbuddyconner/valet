@@ -6,7 +6,7 @@ vi.mock('../lib/db/credentials.js', () => ({
   getCredentialRow: vi.fn(),
   upsertCredential: vi.fn(),
   deleteCredential: vi.fn(),
-  listCredentialsByUser: vi.fn(),
+  listCredentialsByOwner: vi.fn(),
   hasCredential: vi.fn(),
 }));
 
@@ -36,11 +36,11 @@ import {
   resolveCredentials,
 } from './credentials.js';
 
-const mockDb = credentialDb as {
+const mockDb = credentialDb as unknown as {
   getCredentialRow: ReturnType<typeof vi.fn>;
   upsertCredential: ReturnType<typeof vi.fn>;
   deleteCredential: ReturnType<typeof vi.fn>;
-  listCredentialsByUser: ReturnType<typeof vi.fn>;
+  listCredentialsByOwner: ReturnType<typeof vi.fn>;
   hasCredential: ReturnType<typeof vi.fn>;
   getExpiringCredentials: ReturnType<typeof vi.fn>;
 };
@@ -60,7 +60,7 @@ describe('getCredential', () => {
   it('returns not_found when no row exists', async () => {
     mockDb.getCredentialRow.mockResolvedValue(null);
 
-    const result = await getCredential(fakeEnv, 'user-1', 'github');
+    const result = await getCredential(fakeEnv, 'user', 'user-1', 'github');
 
     expect(result.ok).toBe(false);
     if (!result.ok) {
@@ -72,10 +72,12 @@ describe('getCredential', () => {
   it('decrypts and returns credential (happy path)', async () => {
     mockDb.getCredentialRow.mockResolvedValue({
       id: 'cred-1',
-      userId: 'user-1',
+      ownerType: 'user',
+      ownerId: 'user-1',
       provider: 'github',
       credentialType: 'oauth2',
       encryptedData: 'encrypted-blob',
+      metadata: null,
       scopes: 'repo user',
       expiresAt: null,
       createdAt: '2025-01-01T00:00:00Z',
@@ -83,7 +85,7 @@ describe('getCredential', () => {
     });
     mockDecrypt.mockResolvedValue(JSON.stringify({ access_token: 'ghp_abc123' }));
 
-    const result = await getCredential(fakeEnv, 'user-1', 'github');
+    const result = await getCredential(fakeEnv, 'user', 'user-1', 'github');
 
     expect(result.ok).toBe(true);
     if (result.ok) {
@@ -98,10 +100,12 @@ describe('getCredential', () => {
   it('returns decryption_failed when decryption throws', async () => {
     mockDb.getCredentialRow.mockResolvedValue({
       id: 'cred-1',
-      userId: 'user-1',
+      ownerType: 'user',
+      ownerId: 'user-1',
       provider: 'github',
       credentialType: 'oauth2',
       encryptedData: 'bad-data',
+      metadata: null,
       scopes: null,
       expiresAt: null,
       createdAt: '2025-01-01T00:00:00Z',
@@ -109,7 +113,7 @@ describe('getCredential', () => {
     });
     mockDecrypt.mockRejectedValue(new Error('decrypt failed'));
 
-    const result = await getCredential(fakeEnv, 'user-1', 'github');
+    const result = await getCredential(fakeEnv, 'user', 'user-1', 'github');
 
     expect(result.ok).toBe(false);
     if (!result.ok) {
@@ -120,10 +124,12 @@ describe('getCredential', () => {
   it('returns decryption_failed when token field is missing', async () => {
     mockDb.getCredentialRow.mockResolvedValue({
       id: 'cred-1',
-      userId: 'user-1',
+      ownerType: 'user',
+      ownerId: 'user-1',
       provider: 'github',
       credentialType: 'oauth2',
       encryptedData: 'encrypted-blob',
+      metadata: null,
       scopes: null,
       expiresAt: null,
       createdAt: '2025-01-01T00:00:00Z',
@@ -132,7 +138,7 @@ describe('getCredential', () => {
     // No access_token, api_key, bot_token, or token field
     mockDecrypt.mockResolvedValue(JSON.stringify({ foo: 'bar' }));
 
-    const result = await getCredential(fakeEnv, 'user-1', 'github');
+    const result = await getCredential(fakeEnv, 'user', 'user-1', 'github');
 
     expect(result.ok).toBe(false);
     if (!result.ok) {
@@ -144,10 +150,12 @@ describe('getCredential', () => {
   it('extracts api_key when access_token is absent', async () => {
     mockDb.getCredentialRow.mockResolvedValue({
       id: 'cred-1',
-      userId: 'user-1',
+      ownerType: 'user',
+      ownerId: 'user-1',
       provider: 'openai',
       credentialType: 'api_key',
       encryptedData: 'encrypted-blob',
+      metadata: null,
       scopes: null,
       expiresAt: null,
       createdAt: '2025-01-01T00:00:00Z',
@@ -155,7 +163,7 @@ describe('getCredential', () => {
     });
     mockDecrypt.mockResolvedValue(JSON.stringify({ api_key: 'sk-abc123' }));
 
-    const result = await getCredential(fakeEnv, 'user-1', 'openai');
+    const result = await getCredential(fakeEnv, 'user', 'user-1', 'openai');
 
     expect(result.ok).toBe(true);
     if (result.ok) {
@@ -169,7 +177,7 @@ describe('storeCredential', () => {
     mockEncrypt.mockResolvedValue('encrypted-output');
     mockDb.upsertCredential.mockResolvedValue(undefined);
 
-    await storeCredential(fakeEnv, 'user-1', 'github', { access_token: 'ghp_abc' }, {
+    await storeCredential(fakeEnv, 'user', 'user-1', 'github', { access_token: 'ghp_abc' }, {
       credentialType: 'oauth2',
       scopes: 'repo',
       expiresAt: '2026-01-01T00:00:00Z',
@@ -182,7 +190,8 @@ describe('storeCredential', () => {
     expect(mockDb.upsertCredential).toHaveBeenCalledWith(
       fakeDrizzleDb,
       expect.objectContaining({
-        userId: 'user-1',
+        ownerType: 'user',
+        ownerId: 'user-1',
         provider: 'github',
         credentialType: 'oauth2',
         encryptedData: 'encrypted-output',
@@ -196,7 +205,7 @@ describe('storeCredential', () => {
     mockEncrypt.mockResolvedValue('enc');
     mockDb.upsertCredential.mockResolvedValue(undefined);
 
-    await storeCredential(fakeEnv, 'user-1', 'custom', { token: 'tok' });
+    await storeCredential(fakeEnv, 'user', 'user-1', 'custom', { token: 'tok' });
 
     expect(mockDb.upsertCredential).toHaveBeenCalledWith(
       fakeDrizzleDb,
@@ -209,20 +218,20 @@ describe('revokeCredential', () => {
   it('delegates to deleteCredential', async () => {
     mockDb.deleteCredential.mockResolvedValue(undefined);
 
-    await revokeCredential(fakeEnv, 'user-1', 'github');
+    await revokeCredential(fakeEnv, 'user', 'user-1', 'github');
 
-    expect(mockDb.deleteCredential).toHaveBeenCalledWith(fakeDrizzleDb, 'user-1', 'github');
+    expect(mockDb.deleteCredential).toHaveBeenCalledWith(fakeDrizzleDb, 'user', 'user-1', 'github');
   });
 });
 
 describe('listCredentials', () => {
   it('transforms rows', async () => {
-    mockDb.listCredentialsByUser.mockResolvedValue([
+    mockDb.listCredentialsByOwner.mockResolvedValue([
       { provider: 'github', credentialType: 'oauth2', scopes: 'repo', expiresAt: null, createdAt: '2025-01-01', updatedAt: '2025-01-01' },
       { provider: 'google', credentialType: 'oauth2', scopes: null, expiresAt: '2026-01-01', createdAt: '2025-06-01', updatedAt: '2025-06-01' },
     ]);
 
-    const result = await listCredentials(fakeEnv, 'user-1');
+    const result = await listCredentials(fakeEnv, 'user', 'user-1');
 
     expect(result).toHaveLength(2);
     expect(result[0].provider).toBe('github');
@@ -237,16 +246,16 @@ describe('hasCredential', () => {
   it('delegates to DB hasCredential', async () => {
     mockDb.hasCredential.mockResolvedValue(true);
 
-    const result = await hasCredential(fakeEnv, 'user-1', 'github');
+    const result = await hasCredential(fakeEnv, 'user', 'user-1', 'github');
 
     expect(result).toBe(true);
-    expect(mockDb.hasCredential).toHaveBeenCalledWith(fakeDrizzleDb, 'user-1', 'github');
+    expect(mockDb.hasCredential).toHaveBeenCalledWith(fakeDrizzleDb, 'user', 'user-1', 'github');
   });
 
   it('returns false when DB returns false', async () => {
     mockDb.hasCredential.mockResolvedValue(false);
 
-    const result = await hasCredential(fakeEnv, 'user-1', 'nonexistent');
+    const result = await hasCredential(fakeEnv, 'user', 'user-1', 'nonexistent');
 
     expect(result).toBe(false);
   });
@@ -254,11 +263,11 @@ describe('hasCredential', () => {
 
 describe('resolveCredentials', () => {
   it('resolves multiple providers', async () => {
-    mockDb.getCredentialRow.mockImplementation(async (_db: unknown, _userId: string, provider: string) => {
+    mockDb.getCredentialRow.mockImplementation(async (_db: unknown, _ownerType: string, _ownerId: string, provider: string) => {
       if (provider === 'github') {
         return {
-          id: 'cred-1', userId: 'user-1', provider: 'github', credentialType: 'oauth2',
-          encryptedData: 'enc-github', scopes: 'repo', expiresAt: null,
+          id: 'cred-1', ownerType: 'user', ownerId: 'user-1', provider: 'github', credentialType: 'oauth2',
+          encryptedData: 'enc-github', metadata: null, scopes: 'repo', expiresAt: null,
           createdAt: '2025-01-01', updatedAt: '2025-01-01',
         };
       }
@@ -266,7 +275,7 @@ describe('resolveCredentials', () => {
     });
     mockDecrypt.mockResolvedValue(JSON.stringify({ access_token: 'ghp_abc' }));
 
-    const results = await resolveCredentials(fakeEnv, 'user-1', ['github', 'slack']);
+    const results = await resolveCredentials(fakeEnv, 'user', 'user-1', ['github', 'slack']);
 
     expect(results.size).toBe(2);
 

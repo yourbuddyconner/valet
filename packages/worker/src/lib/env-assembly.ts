@@ -64,7 +64,7 @@ export async function assembleCredentialEnv(
 
   for (const { provider, envKey } of credentialEnvMap) {
     try {
-      const result = await getCredential(env, userId, provider);
+      const result = await getCredential(env, 'user', userId, provider);
       if (result.ok) {
         envVars[envKey] = result.credential.accessToken;
       }
@@ -153,7 +153,7 @@ export async function assembleGitHubEnv(
     return { envVars };
   }
 
-  const result = await getCredential(env, userId, 'github');
+  const result = await getCredential(env, 'user', userId, 'github');
   if (!result.ok) {
     return { envVars, error: 'GitHub account not connected. Sign in with GitHub first.' };
   }

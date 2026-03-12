@@ -131,7 +131,7 @@ channelsRouter.get('/channels/label', async (c) => {
   if (channelType === 'slack') {
     token = await getSlackBotToken(c.env) ?? undefined;
   } else {
-    const credResult = await getCredential(c.env, user.id, channelType);
+    const credResult = await getCredential(c.env, 'user', user.id, channelType);
     if (credResult.ok) token = credResult.credential.accessToken;
   }
 

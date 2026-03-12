@@ -2,11 +2,10 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { eq, and } from 'drizzle-orm';
 import { createTestDb } from '../../test-utils/db.js';
 import { credentials } from '../schema/credentials.js';
-import { users } from '../schema/users.js';
 import { sql } from 'drizzle-orm';
 
-const TEST_USER_ID = 'user-test-001';
-const TEST_EMAIL = 'test@example.com';
+const TEST_OWNER_TYPE = 'user';
+const TEST_OWNER_ID = 'user-test-001';
 
 describe('credentials DB layer', () => {
   let db: ReturnType<typeof createTestDb>['db'];
@@ -16,18 +15,13 @@ describe('credentials DB layer', () => {
     const testDb = createTestDb();
     db = testDb.db;
     sqlite = testDb.sqlite;
-
-    // Seed a test user (FK dependency)
-    db.insert(users).values({
-      id: TEST_USER_ID,
-      email: TEST_EMAIL,
-    }).run();
   });
 
   it('inserts and retrieves a credential row', () => {
     db.insert(credentials).values({
       id: 'cred-1',
-      userId: TEST_USER_ID,
+      ownerType: TEST_OWNER_TYPE,
+      ownerId: TEST_OWNER_ID,
       provider: 'github',
       credentialType: 'oauth2',
       encryptedData: 'enc-data-1',
@@ -37,11 +31,13 @@ describe('credentials DB layer', () => {
     const row = db
       .select()
       .from(credentials)
-      .where(and(eq(credentials.userId, TEST_USER_ID), eq(credentials.provider, 'github')))
+      .where(and(eq(credentials.ownerId, TEST_OWNER_ID), eq(credentials.provider, 'github')))
       .get();
 
     expect(row).toBeDefined();
     expect(row!.id).toBe('cred-1');
+    expect(row!.ownerType).toBe('user');
+    expect(row!.ownerId).toBe(TEST_OWNER_ID);
     expect(row!.provider).toBe('github');
     expect(row!.credentialType).toBe('oauth2');
     expect(row!.encryptedData).toBe('enc-data-1');
@@ -50,10 +46,11 @@ describe('credentials DB layer', () => {
     expect(row!.updatedAt).toBeDefined();
   });
 
-  it('upserts on conflict (same user+provider)', () => {
+  it('upserts on conflict (same owner+provider+credentialType)', () => {
     db.insert(credentials).values({
       id: 'cred-1',
-      userId: TEST_USER_ID,
+      ownerType: TEST_OWNER_TYPE,
+      ownerId: TEST_OWNER_ID,
       provider: 'github',
       credentialType: 'oauth2',
       encryptedData: 'original',
@@ -61,21 +58,21 @@ describe('credentials DB layer', () => {
 
     db.insert(credentials).values({
       id: 'cred-2',
-      userId: TEST_USER_ID,
+      ownerType: TEST_OWNER_TYPE,
+      ownerId: TEST_OWNER_ID,
       provider: 'github',
       credentialType: 'oauth2',
       encryptedData: 'updated',
     }).onConflictDoUpdate({
-      target: [credentials.userId, credentials.provider],
+      target: [credentials.ownerType, credentials.ownerId, credentials.provider, credentials.credentialType],
       set: {
-        credentialType: sql`excluded.credential_type`,
         encryptedData: sql`excluded.encrypted_data`,
         updatedAt: sql`datetime('now')`,
       },
     }).run();
 
     const rows = db.select().from(credentials)
-      .where(eq(credentials.userId, TEST_USER_ID))
+      .where(and(eq(credentials.ownerType, TEST_OWNER_TYPE), eq(credentials.ownerId, TEST_OWNER_ID)))
       .all();
 
     expect(rows).toHaveLength(1);
@@ -85,29 +82,30 @@ describe('credentials DB layer', () => {
   it('deletes a credential', () => {
     db.insert(credentials).values({
       id: 'cred-1',
-      userId: TEST_USER_ID,
+      ownerType: TEST_OWNER_TYPE,
+      ownerId: TEST_OWNER_ID,
       provider: 'github',
       credentialType: 'oauth2',
       encryptedData: 'data',
     }).run();
 
     db.delete(credentials)
-      .where(and(eq(credentials.userId, TEST_USER_ID), eq(credentials.provider, 'github')))
+      .where(and(eq(credentials.ownerType, TEST_OWNER_TYPE), eq(credentials.ownerId, TEST_OWNER_ID), eq(credentials.provider, 'github')))
       .run();
 
     const row = db
       .select()
       .from(credentials)
-      .where(and(eq(credentials.userId, TEST_USER_ID), eq(credentials.provider, 'github')))
+      .where(and(eq(credentials.ownerId, TEST_OWNER_ID), eq(credentials.provider, 'github')))
       .get();
 
     expect(row).toBeUndefined();
   });
 
-  it('lists credentials by user', () => {
+  it('lists credentials by owner', () => {
     db.insert(credentials).values([
-      { id: 'cred-1', userId: TEST_USER_ID, provider: 'github', credentialType: 'oauth2', encryptedData: 'a' },
-      { id: 'cred-2', userId: TEST_USER_ID, provider: 'google', credentialType: 'oauth2', encryptedData: 'b' },
+      { id: 'cred-1', ownerType: TEST_OWNER_TYPE, ownerId: TEST_OWNER_ID, provider: 'github', credentialType: 'oauth2', encryptedData: 'a' },
+      { id: 'cred-2', ownerType: TEST_OWNER_TYPE, ownerId: TEST_OWNER_ID, provider: 'google', credentialType: 'oauth2', encryptedData: 'b' },
     ]).run();
 
     const rows = db
@@ -120,7 +118,7 @@ describe('credentials DB layer', () => {
         updatedAt: credentials.updatedAt,
       })
       .from(credentials)
-      .where(eq(credentials.userId, TEST_USER_ID))
+      .where(and(eq(credentials.ownerType, TEST_OWNER_TYPE), eq(credentials.ownerId, TEST_OWNER_ID)))
       .all();
 
     expect(rows).toHaveLength(2);
@@ -131,7 +129,8 @@ describe('credentials DB layer', () => {
   it('hasCredential returns true when credential exists', () => {
     db.insert(credentials).values({
       id: 'cred-1',
-      userId: TEST_USER_ID,
+      ownerType: TEST_OWNER_TYPE,
+      ownerId: TEST_OWNER_ID,
       provider: 'github',
       credentialType: 'oauth2',
       encryptedData: 'data',
@@ -140,7 +139,7 @@ describe('credentials DB layer', () => {
     const row = db
       .select({ id: credentials.id })
       .from(credentials)
-      .where(and(eq(credentials.userId, TEST_USER_ID), eq(credentials.provider, 'github')))
+      .where(and(eq(credentials.ownerType, TEST_OWNER_TYPE), eq(credentials.ownerId, TEST_OWNER_ID), eq(credentials.provider, 'github')))
       .get();
 
     expect(!!row).toBe(true);
@@ -150,31 +149,17 @@ describe('credentials DB layer', () => {
     const row = db
       .select({ id: credentials.id })
       .from(credentials)
-      .where(and(eq(credentials.userId, TEST_USER_ID), eq(credentials.provider, 'nonexistent')))
+      .where(and(eq(credentials.ownerType, TEST_OWNER_TYPE), eq(credentials.ownerId, TEST_OWNER_ID), eq(credentials.provider, 'nonexistent')))
       .get();
 
     expect(!!row).toBe(false);
   });
 
-  it('cascades delete when user is deleted', () => {
+  it('enforces unique constraint on owner_type+owner_id+provider+credential_type', () => {
     db.insert(credentials).values({
       id: 'cred-1',
-      userId: TEST_USER_ID,
-      provider: 'github',
-      credentialType: 'oauth2',
-      encryptedData: 'data',
-    }).run();
-
-    db.delete(users).where(eq(users.id, TEST_USER_ID)).run();
-
-    const rows = db.select().from(credentials).all();
-    expect(rows).toHaveLength(0);
-  });
-
-  it('enforces unique constraint on user_id+provider', () => {
-    db.insert(credentials).values({
-      id: 'cred-1',
-      userId: TEST_USER_ID,
+      ownerType: TEST_OWNER_TYPE,
+      ownerId: TEST_OWNER_ID,
       provider: 'github',
       credentialType: 'oauth2',
       encryptedData: 'data-1',
@@ -183,11 +168,61 @@ describe('credentials DB layer', () => {
     expect(() => {
       db.insert(credentials).values({
         id: 'cred-2',
-        userId: TEST_USER_ID,
+        ownerType: TEST_OWNER_TYPE,
+        ownerId: TEST_OWNER_ID,
         provider: 'github',
         credentialType: 'oauth2',
         encryptedData: 'data-2',
       }).run();
     }).toThrow();
+  });
+
+  it('allows same provider with different credential types', () => {
+    db.insert(credentials).values({
+      id: 'cred-1',
+      ownerType: TEST_OWNER_TYPE,
+      ownerId: TEST_OWNER_ID,
+      provider: 'github',
+      credentialType: 'oauth2',
+      encryptedData: 'data-1',
+    }).run();
+
+    db.insert(credentials).values({
+      id: 'cred-2',
+      ownerType: TEST_OWNER_TYPE,
+      ownerId: TEST_OWNER_ID,
+      provider: 'github',
+      credentialType: 'app_install',
+      encryptedData: 'data-2',
+    }).run();
+
+    const rows = db.select().from(credentials)
+      .where(and(eq(credentials.ownerId, TEST_OWNER_ID), eq(credentials.provider, 'github')))
+      .all();
+
+    expect(rows).toHaveLength(2);
+  });
+
+  it('allows same provider for different owner types', () => {
+    db.insert(credentials).values({
+      id: 'cred-1',
+      ownerType: 'user',
+      ownerId: 'user-1',
+      provider: 'github',
+      credentialType: 'oauth2',
+      encryptedData: 'user-data',
+    }).run();
+
+    db.insert(credentials).values({
+      id: 'cred-2',
+      ownerType: 'org',
+      ownerId: 'org-1',
+      provider: 'github',
+      credentialType: 'app_install',
+      encryptedData: 'org-data',
+    }).run();
+
+    const rows = db.select().from(credentials).all();
+    expect(rows).toHaveLength(2);
   });
 });

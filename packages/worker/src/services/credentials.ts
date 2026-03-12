@@ -8,7 +8,7 @@ import { integrationRegistry } from '../integrations/registry.js';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
-export type CredentialType = 'oauth2' | 'api_key' | 'bot_token' | 'service_account';
+export type CredentialType = 'oauth2' | 'api_key' | 'bot_token' | 'service_account' | 'app_install';
 
 export interface ResolvedCredential {
   accessToken: string;
@@ -57,7 +57,8 @@ function extractAccessToken(data: CredentialData): string | undefined {
 
 async function refreshGoogleToken(
   env: Env,
-  userId: string,
+  ownerType: string,
+  ownerId: string,
   provider: string,
   data: CredentialData,
 ): Promise<CredentialResult> {
@@ -103,7 +104,8 @@ async function refreshGoogleToken(
   const db = getDb(env.DB);
   await credentialDb.upsertCredential(db, {
     id: crypto.randomUUID(),
-    userId,
+    ownerType,
+    ownerId,
     provider,
     credentialType: 'oauth2',
     encryptedData: encrypted,
@@ -135,7 +137,8 @@ function resolveOAuthConfigForProvider(provider: string, env: Env): OAuthConfig 
 
 async function attemptRefresh(
   env: Env,
-  userId: string,
+  ownerType: string,
+  ownerId: string,
   provider: string,
   data: CredentialData,
 ): Promise<CredentialResult> {
@@ -144,7 +147,7 @@ async function attemptRefresh(
     case 'google':
     case 'gmail':
     case 'google_calendar':
-      return refreshGoogleToken(env, userId, provider, data);
+      return refreshGoogleToken(env, ownerType, ownerId, provider, data);
     case 'github':
       return {
         ok: false,
@@ -182,7 +185,8 @@ async function attemptRefresh(
         const encrypted = await encryptCredentialData(newData, env.ENCRYPTION_KEY);
         await credentialDb.upsertCredential(db, {
           id: crypto.randomUUID(),
-          userId,
+          ownerType,
+          ownerId,
           provider,
           credentialType: 'oauth2',
           encryptedData: encrypted,
@@ -237,7 +241,8 @@ async function attemptRefresh(
     const db = getDb(env.DB);
     await credentialDb.upsertCredential(db, {
       id: crypto.randomUUID(),
-      userId,
+      ownerType,
+      ownerId,
       provider,
       credentialType: 'oauth2',
       encryptedData: encrypted,
@@ -268,12 +273,13 @@ async function attemptRefresh(
 
 export async function getCredential(
   env: Env,
-  userId: string,
+  ownerType: string,
+  ownerId: string,
   provider: string,
   options?: { forceRefresh?: boolean },
 ): Promise<CredentialResult> {
   const db = getDb(env.DB);
-  const row = await credentialDb.getCredentialRow(db, userId, provider);
+  const row = await credentialDb.getCredentialRow(db, ownerType, ownerId, provider);
   if (!row) {
     return {
       ok: false,
@@ -293,7 +299,7 @@ export async function getCredential(
 
   // Force refresh if requested (e.g. after a 401 from the API indicates the token is invalid)
   if (options?.forceRefresh && data.refresh_token) {
-    const refreshed = await attemptRefresh(env, userId, provider, data);
+    const refreshed = await attemptRefresh(env, ownerType, ownerId, provider, data);
     if (refreshed.ok) return refreshed;
     return {
       ok: false,
@@ -304,7 +310,7 @@ export async function getCredential(
   // Check expiration (with 60-second buffer)
   if (row.expiresAt && new Date(row.expiresAt).getTime() - Date.now() < 60_000) {
     if (data.refresh_token) {
-      const refreshed = await attemptRefresh(env, userId, provider, data);
+      const refreshed = await attemptRefresh(env, ownerType, ownerId, provider, data);
       if (refreshed.ok) return refreshed;
     }
     // Return potentially expired credential — caller can decide
@@ -333,13 +339,15 @@ export async function getCredential(
 
 export async function storeCredential(
   env: Env,
-  userId: string,
+  ownerType: string,
+  ownerId: string,
   provider: string,
   credentialData: Record<string, string>,
   options?: {
     credentialType?: CredentialType;
     scopes?: string;
     expiresAt?: string;
+    metadata?: Record<string, unknown>;
   },
 ): Promise<void> {
   const encrypted = await encryptCredentialData(credentialData, env.ENCRYPTION_KEY);
@@ -347,10 +355,12 @@ export async function storeCredential(
 
   await credentialDb.upsertCredential(db, {
     id: crypto.randomUUID(),
-    userId,
+    ownerType,
+    ownerId,
     provider,
     credentialType: options?.credentialType ?? 'api_key',
     encryptedData: encrypted,
+    metadata: options?.metadata ? JSON.stringify(options.metadata) : undefined,
     scopes: options?.scopes,
     expiresAt: options?.expiresAt,
   });
@@ -358,16 +368,18 @@ export async function storeCredential(
 
 export async function revokeCredential(
   env: Env,
-  userId: string,
+  ownerType: string,
+  ownerId: string,
   provider: string,
 ): Promise<void> {
   const db = getDb(env.DB);
-  await credentialDb.deleteCredential(db, userId, provider);
+  await credentialDb.deleteCredential(db, ownerType, ownerId, provider);
 }
 
 export async function listCredentials(
   env: Env,
-  userId: string,
+  ownerType: string,
+  ownerId: string,
 ): Promise<Array<{
   provider: string;
   credentialType: string;
@@ -376,7 +388,7 @@ export async function listCredentials(
   createdAt: string;
 }>> {
   const db = getDb(env.DB);
-  const rows = await credentialDb.listCredentialsByUser(db, userId);
+  const rows = await credentialDb.listCredentialsByOwner(db, ownerType, ownerId);
   return rows.map((row) => ({
     provider: row.provider,
     credentialType: row.credentialType,
@@ -388,13 +400,14 @@ export async function listCredentials(
 
 export async function resolveCredentials(
   env: Env,
-  userId: string,
+  ownerType: string,
+  ownerId: string,
   providers: string[],
 ): Promise<Map<string, CredentialResult>> {
   const results = new Map<string, CredentialResult>();
   await Promise.all(
     providers.map(async (provider) => {
-      results.set(provider, await getCredential(env, userId, provider));
+      results.set(provider, await getCredential(env, ownerType, ownerId, provider));
     }),
   );
   return results;
@@ -402,11 +415,12 @@ export async function resolveCredentials(
 
 export async function hasCredential(
   env: Env,
-  userId: string,
+  ownerType: string,
+  ownerId: string,
   provider: string,
 ): Promise<boolean> {
   const db = getDb(env.DB);
-  return credentialDb.hasCredential(db, userId, provider);
+  return credentialDb.hasCredential(db, ownerType, ownerId, provider);
 }
 
 /**
@@ -427,14 +441,14 @@ export async function refreshExpiringCredentials(
 
   for (const row of expiring) {
     try {
-      const result = await getCredential(env, row.userId, row.provider, { forceRefresh: true });
+      const result = await getCredential(env, row.ownerType, row.ownerId, row.provider, { forceRefresh: true });
       if (result.ok && result.credential.refreshed) {
         refreshed++;
       } else {
         failed++;
       }
     } catch (err) {
-      console.warn(`[CredentialRefresh] Failed to refresh ${row.provider} for user ${row.userId}:`, err);
+      console.warn(`[CredentialRefresh] Failed to refresh ${row.provider} for ${row.ownerType}:${row.ownerId}:`, err);
       failed++;
     }
   }

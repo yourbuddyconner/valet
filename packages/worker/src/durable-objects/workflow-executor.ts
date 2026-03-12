@@ -325,7 +325,7 @@ export class WorkflowExecutorDO implements DurableObject {
     envVars.GIT_USER_NAME = gitUserRow?.gitName || gitUserRow?.name || gitUserRow?.githubUsername || 'Valet User';
     envVars.GIT_USER_EMAIL = gitUserRow?.gitEmail || gitUserRow?.email || 'valet@example.local';
 
-    const ghResult = await getCredential(this.env, params.userId, 'github');
+    const ghResult = await getCredential(this.env, 'user', params.userId, 'github');
 
     if (ghResult.ok) {
       try {
