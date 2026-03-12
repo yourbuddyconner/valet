@@ -3,7 +3,7 @@ import { createFileRoute, Link, useNavigate } from '@tanstack/react-router';
 import { PageContainer, PageHeader } from '@/components/layout/page-container';
 import { useAuthStore } from '@/stores/auth';
 import { useLogout, useUpdateProfile } from '@/api/auth';
-import { useOrchestratorInfo, useUpdateOrchestratorIdentity, useCheckHandle, useNotificationPreferences, useUpdateNotificationPreferences, useIdentityLinks, useDeleteIdentityLink } from '@/api/orchestrator';
+import { useOrchestratorInfo, useUpdateOrchestratorIdentity, useCheckHandle, useNotificationPreferences, useUpdateNotificationPreferences, useIdentityLinks, useDeleteIdentityLink, useUploadAvatar, useDeleteAvatar } from '@/api/orchestrator';
 import { useAvailableModels } from '@/api/sessions';
 import type { ProviderModels } from '@/api/sessions';
 import type { QueueMode } from '@valet/shared';
@@ -731,6 +731,9 @@ function useDebounced(value: string, delayMs: number) {
 function OrchestratorIdentitySection() {
   const { data: orchInfo, isLoading } = useOrchestratorInfo();
   const updateIdentity = useUpdateOrchestratorIdentity();
+  const uploadAvatar = useUploadAvatar();
+  const deleteAvatar = useDeleteAvatar();
+  const avatarInputRef = React.useRef<HTMLInputElement>(null);
   const [name, setName] = React.useState('');
   const [handle, setHandle] = React.useState('');
   const [customInstructions, setCustomInstructions] = React.useState('');
@@ -779,6 +782,61 @@ function OrchestratorIdentitySection() {
         <p className="text-sm text-neutral-500 dark:text-neutral-400">
           Configure your personal orchestrator's name, handle, and instructions.
         </p>
+
+        {/* Avatar */}
+        <div>
+          <label className="text-sm font-medium text-neutral-700 dark:text-neutral-300">
+            Avatar
+          </label>
+          <div className="mt-1 flex items-center gap-3">
+            <button
+              type="button"
+              onClick={() => avatarInputRef.current?.click()}
+              className="group relative flex h-14 w-14 shrink-0 items-center justify-center overflow-hidden rounded-full border-2 border-dashed border-neutral-300 bg-neutral-50 transition-colors hover:border-neutral-400 hover:bg-neutral-100 dark:border-neutral-600 dark:bg-neutral-800 dark:hover:border-neutral-500 dark:hover:bg-neutral-700"
+            >
+              {orchInfo?.identity?.avatar ? (
+                <img src={orchInfo.identity.avatar} alt="" className="h-full w-full object-cover" />
+              ) : (
+                <span className="text-lg font-bold text-neutral-400 transition-colors group-hover:text-neutral-500 dark:text-neutral-500">
+                  {orchInfo?.identity?.name?.[0]?.toUpperCase() ?? '?'}
+                </span>
+              )}
+            </button>
+            <div className="flex flex-col gap-1">
+              <button
+                type="button"
+                onClick={() => avatarInputRef.current?.click()}
+                className="text-xs font-medium text-accent hover:underline"
+              >
+                {uploadAvatar.isPending ? 'Uploading...' : orchInfo?.identity?.avatar ? 'Change' : 'Upload'}
+              </button>
+              {orchInfo?.identity?.avatar && (
+                <button
+                  type="button"
+                  onClick={() => deleteAvatar.mutate()}
+                  className="text-xs text-neutral-400 hover:text-red-500 dark:text-neutral-500 dark:hover:text-red-400"
+                >
+                  {deleteAvatar.isPending ? 'Removing...' : 'Remove'}
+                </button>
+              )}
+            </div>
+            <input
+              ref={avatarInputRef}
+              type="file"
+              accept="image/png,image/jpeg,image/gif,image/webp"
+              className="hidden"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file) uploadAvatar.mutate(file);
+                e.target.value = '';
+              }}
+            />
+          </div>
+          {uploadAvatar.isError && (
+            <p className="mt-1 text-xs text-red-500">{(uploadAvatar.error as Error).message}</p>
+          )}
+        </div>
+
         <div>
           <label htmlFor="orch-name" className="text-sm font-medium text-neutral-700 dark:text-neutral-300">
             Name

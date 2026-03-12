@@ -8835,8 +8835,25 @@ export class SessionAgentDO {
       }
     }
 
+    // Resolve caller identity for orchestrator sessions (used by Slack for username/avatar override)
+    let callerIdentity: { name: string; avatar?: string } | undefined;
+    try {
+      const spawnRequestStr = this.getStateValue('spawnRequest');
+      if (spawnRequestStr) {
+        const spawnReq = JSON.parse(spawnRequestStr);
+        if (spawnReq.envVars?.IS_ORCHESTRATOR === 'true') {
+          const identity = await getOrchestratorIdentity(this.appDb, userId);
+          if (identity) {
+            callerIdentity = { name: identity.name, avatar: identity.avatar };
+          }
+        }
+      }
+    } catch {
+      // Non-critical — proceed without identity
+    }
+
     // Execute the action
-    let actionResult = await actionSource.execute(actionId, params, { credentials, userId });
+    let actionResult = await actionSource.execute(actionId, params, { credentials, userId, callerIdentity });
 
     // If auth error, retry once with force-refreshed credentials (skip no-auth and bot_token services which have nothing to refresh)
     if (provider?.authType !== 'none' && provider?.authType !== 'bot_token' && !actionResult.success && actionResult.error && /\b(401|403|unauthorized|invalid.credentials|token.*expired|token.*revoked)\b/i.test(actionResult.error)) {
@@ -8857,6 +8874,7 @@ export class SessionAgentDO {
         actionResult = await actionSource.execute(actionId, params, {
           credentials: refreshedCredentials,
           userId,
+          callerIdentity,
         });
       }
     }

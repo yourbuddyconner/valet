@@ -10,6 +10,7 @@ import {
   useCreateOrchestrator,
   useCheckHandle,
   useMemoryFiles,
+  useUploadAvatar,
 } from '@/api/orchestrator';
 import { MemoryExplorer } from '@/components/orchestrator/memory-explorer';
 import { useAutoRestartOrchestrator } from '@/hooks/use-auto-restart-orchestrator';
@@ -55,10 +56,21 @@ function SetupForm() {
   const [name, setName] = React.useState('');
   const [handle, setHandle] = React.useState('');
   const [customInstructions, setCustomInstructions] = React.useState('');
+  const [avatarPreview, setAvatarPreview] = React.useState<string | null>(null);
+  const [avatarFile, setAvatarFile] = React.useState<File | null>(null);
+  const fileInputRef = React.useRef<HTMLInputElement>(null);
+  const uploadAvatar = useUploadAvatar();
 
   const debouncedHandle = useDebounced(handle, 400);
   const handleCheck = useCheckHandle(debouncedHandle);
   const handleTaken = debouncedHandle.length >= 2 && handleCheck.data?.available === false;
+
+  function handleAvatarChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setAvatarFile(file);
+    setAvatarPreview(URL.createObjectURL(file));
+  }
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -71,7 +83,14 @@ function SetupForm() {
         customInstructions: customInstructions || undefined,
       },
       {
-        onSuccess: (data) => {
+        onSuccess: async (data) => {
+          if (avatarFile) {
+            try {
+              await uploadAvatar.mutateAsync(avatarFile);
+            } catch {
+              // Non-critical — orchestrator was created, avatar just failed
+            }
+          }
           navigate({
             to: '/sessions/$sessionId',
             params: { sessionId: data.sessionId },
@@ -92,6 +111,38 @@ function SetupForm() {
         <form onSubmit={handleSubmit} className="space-y-6">
           <div className="rounded-lg border border-neutral-200 bg-white p-6 dark:border-neutral-700 dark:bg-neutral-800">
             <div className="space-y-4">
+              {/* Avatar picker */}
+              <div className="flex flex-col items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  className="group relative flex h-20 w-20 items-center justify-center overflow-hidden rounded-full border-2 border-dashed border-neutral-300 bg-neutral-50 transition-colors hover:border-neutral-400 hover:bg-neutral-100 dark:border-neutral-600 dark:bg-neutral-800 dark:hover:border-neutral-500 dark:hover:bg-neutral-700"
+                >
+                  {avatarPreview ? (
+                    <img
+                      src={avatarPreview}
+                      alt="Avatar preview"
+                      className="h-full w-full object-cover"
+                    />
+                  ) : (
+                    <svg className="h-8 w-8 text-neutral-400 transition-colors group-hover:text-neutral-500 dark:text-neutral-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M6.827 6.175A2.31 2.31 0 015.186 7.23c-.38.054-.757.112-1.134.175C2.999 7.58 2.25 8.507 2.25 9.574V18a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9.574c0-1.067-.75-1.994-1.802-2.169a47.865 47.865 0 00-1.134-.175 2.31 2.31 0 01-1.64-1.055l-.822-1.316a2.192 2.192 0 00-1.736-1.039 48.774 48.774 0 00-5.232 0 2.192 2.192 0 00-1.736 1.039l-.821 1.316z" />
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M16.5 12.75a4.5 4.5 0 11-9 0 4.5 4.5 0 019 0z" />
+                    </svg>
+                  )}
+                </button>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/png,image/jpeg,image/gif,image/webp"
+                  onChange={handleAvatarChange}
+                  className="hidden"
+                />
+                <p className="text-xs text-neutral-400 dark:text-neutral-500">
+                  {avatarPreview ? 'Click to change' : 'Upload avatar'}
+                </p>
+              </div>
+
               <div>
                 <label
                   htmlFor="orch-name"

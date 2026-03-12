@@ -251,9 +251,13 @@ export function OrchestratorMetadataSidebar({
         {/* Identity */}
         <SidebarSection label="Identity">
           <div className="flex items-center gap-2">
-            <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-accent/10 font-mono text-[11px] font-bold text-accent">
-              {identity?.name?.[0]?.toUpperCase() ?? '?'}
-            </div>
+            {identity?.avatar ? (
+              <img src={identity.avatar} alt="" className="h-7 w-7 shrink-0 rounded-full object-cover" />
+            ) : (
+              <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-accent/10 font-mono text-[11px] font-bold text-accent">
+                {identity?.name?.[0]?.toUpperCase() ?? '?'}
+              </div>
+            )}
             <div className="min-w-0 flex-1">
               <div className="truncate font-mono text-[11px] font-medium text-neutral-700 dark:text-neutral-200">
                 {identity?.name ?? 'Orchestrator'}

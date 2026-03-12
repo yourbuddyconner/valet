@@ -42,8 +42,12 @@ export async function slackGet(
     }
   }
 
+  // URLSearchParams encodes commas to %2C, but Slack expects literal commas
+  // in list params like types=public_channel,private_channel
+  const finalUrl = url.toString().replace(/%2C/gi, ',');
+
   for (let attempt = 0; attempt < 3; attempt++) {
-    const res = await fetch(url.toString(), {
+    const res = await fetch(finalUrl, {
       method: 'GET',
       headers: { Authorization: `Bearer ${token}` },
     });

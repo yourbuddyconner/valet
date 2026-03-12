@@ -44,6 +44,7 @@ import { usageRouter } from './routes/usage.js';
 import { pluginsRouter } from './routes/plugins.js';
 import { skillsRouter } from './routes/skills.js';
 import { orgDefaultSkillsRouter } from './routes/org-default-skills.js';
+import { avatarsRouter } from './routes/avatars.js';
 import {
   enqueueWorkflowApprovalNotificationIfMissing,
   getTerminatedOrchestratorSessions,
@@ -84,7 +85,11 @@ const app = new Hono<{ Bindings: Env; Variables: Variables }>();
 app.use('*', requestId());
 app.use('*', dbMiddleware);
 app.use('*', logger());
-app.use('*', secureHeaders());
+app.use('*', async (c, next) => {
+  // Skip secureHeaders for avatar serving — needs cross-origin access for <img> loads
+  if (c.req.path.startsWith('/avatars/')) return next();
+  return secureHeaders()(c, next);
+});
 app.use(
   '*',
   cors({
@@ -131,6 +136,9 @@ app.route('/og', ogRouter);
 
 // Public invite validation (no auth required)
 app.route('/invites', invitesRouter);
+
+// Avatar serving (public, no auth — external services like Slack need to render these)
+app.route('/avatars', avatarsRouter);
 
 // Channel webhooks (unauthenticated — platforms send updates here)
 app.route('/channels', channelWebhooksRouter);

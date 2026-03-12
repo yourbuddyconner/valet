@@ -390,6 +390,90 @@ orchestratorRouter.get('/org-agents', async (c) => {
   }
 });
 
+// ─── Avatar Upload ──────────────────────────────────────────────────────
+
+const MAX_AVATAR_SIZE = 2 * 1024 * 1024; // 2 MB
+const ALLOWED_AVATAR_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
+
+/**
+ * POST /api/me/orchestrator/avatar
+ * Upload a profile picture. Accepts multipart form data with a `file` field.
+ * Stores in R2 and updates the identity's avatar URL.
+ */
+orchestratorRouter.post('/orchestrator/avatar', async (c) => {
+  const user = c.get('user');
+
+  const formData = await c.req.formData();
+  const file = formData.get('file');
+
+  if (!file || typeof file === 'string') {
+    return c.json({ error: 'file field is required' }, 400);
+  }
+
+  const blob = file as unknown as { type: string; size: number; name: string; stream(): ReadableStream; arrayBuffer(): Promise<ArrayBuffer> };
+
+  if (!ALLOWED_AVATAR_TYPES.has(blob.type)) {
+    return c.json({ error: 'File must be PNG, JPEG, GIF, or WebP' }, 400);
+  }
+
+  if (blob.size > MAX_AVATAR_SIZE) {
+    return c.json({ error: 'File must be under 2 MB' }, 400);
+  }
+
+  // Store in R2
+  const ext = blob.name?.split('.').pop() || 'png';
+  const r2Key = `avatars/${user.id}/${Date.now()}.${ext}`;
+
+  await c.env.STORAGE.put(r2Key, blob.stream(), {
+    httpMetadata: { contentType: blob.type },
+  });
+
+  // Build the public URL: route is /avatars/:userId/:key, R2 key is avatars/:userId/:key
+  const workerUrl = new URL(c.req.url).origin;
+  const filename = r2Key.split('/').pop()!;
+  const avatarUrl = `${workerUrl}/avatars/${user.id}/${filename}`;
+
+  // Update the identity record
+  const result = await orchestratorService.updateOrchestratorIdentity(c.get('db'), user.id, { avatar: avatarUrl });
+  if (!result.ok) {
+    return c.json({ error: 'Failed to update identity' }, 500);
+  }
+
+  return c.json({ avatar: avatarUrl, identity: result.identity });
+});
+
+/**
+ * DELETE /api/me/orchestrator/avatar
+ * Remove the orchestrator's avatar.
+ */
+orchestratorRouter.delete('/orchestrator/avatar', async (c) => {
+  const user = c.get('user');
+
+  const identity = await db.getOrchestratorIdentity(c.get('db'), user.id);
+  if (!identity?.avatar) {
+    return c.json({ success: true });
+  }
+
+  // Delete from R2 if it's our avatar
+  // URL path is /avatars/{userId}/{key}, R2 key is avatars/{userId}/{key}
+  try {
+    const url = new URL(identity.avatar);
+    const pathParts = url.pathname.replace(/^\/avatars\//, '').split('/');
+    // pathParts = [userId, filename] or [avatars, userId, filename] (legacy double-prefix)
+    const r2Key = pathParts[0] === 'avatars'
+      ? pathParts.join('/')
+      : `avatars/${pathParts.join('/')}`;
+    if (r2Key.startsWith(`avatars/${user.id}/`)) {
+      await c.env.STORAGE.delete(r2Key);
+    }
+  } catch {
+    // URL parsing failed — skip R2 delete
+  }
+
+  await orchestratorService.updateOrchestratorIdentity(c.get('db'), user.id, { avatar: '' });
+  return c.json({ success: true });
+});
+
 // ─── Identity Link Routes (Phase D) ──────────────────────────────────────
 
 orchestratorRouter.get('/identity-links', async (c) => {

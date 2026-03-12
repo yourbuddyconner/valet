@@ -141,13 +141,22 @@ function slimMessage(msg: Record<string, unknown>): Record<string, unknown> {
 }
 
 /** Helper to open a DM and send a message. */
-async function openAndSendDM(token: string, userId: string, text: string): Promise<ActionResult> {
+async function openAndSendDM(
+  token: string,
+  userId: string,
+  text: string,
+  callerIdentity?: { name: string; avatar?: string },
+): Promise<ActionResult> {
   const openRes = await slackFetch('conversations.open', token, { users: userId });
   if (!openRes.ok) return slackError(openRes);
   const openData = (await openRes.json()) as { ok: boolean; error?: string; channel?: { id?: string } };
   if (!openData.ok || !openData.channel?.id) return slackError(openRes, openData);
 
-  const res = await slackFetch('chat.postMessage', token, { channel: openData.channel.id, text });
+  const body: Record<string, unknown> = { channel: openData.channel.id, text };
+  if (callerIdentity?.name) body.username = callerIdentity.name;
+  if (callerIdentity?.avatar) body.icon_url = callerIdentity.avatar;
+
+  const res = await slackFetch('chat.postMessage', token, body);
   if (!res.ok) return slackError(res);
   const data = (await res.json()) as { ok: boolean; error?: string; ts?: string; channel?: string };
   if (!data.ok) return slackError(res, data);
@@ -171,12 +180,12 @@ async function executeAction(
         const p = dmOwner.params.parse(params);
         const ownerSlackId = ctx.credentials.owner_slack_user_id;
         if (!ownerSlackId) return { success: false, error: 'Owner has not linked their Slack identity. Ask them to link it in Settings > Integrations > Slack.' };
-        return openAndSendDM(token, ownerSlackId, p.text);
+        return openAndSendDM(token, ownerSlackId, p.text, ctx.callerIdentity);
       }
 
       case 'slack.dm_user': {
         const p = dmUser.params.parse(params);
-        return openAndSendDM(token, p.user, p.text);
+        return openAndSendDM(token, p.user, p.text, ctx.callerIdentity);
       }
 
       case 'slack.post_message': {
@@ -186,6 +195,8 @@ async function executeAction(
         const channel = p.channel.replace(/^#/, '');
         const body: Record<string, unknown> = { channel, text: p.text };
         if (p.thread_ts) body.thread_ts = p.thread_ts;
+        if (ctx.callerIdentity?.name) body.username = ctx.callerIdentity.name;
+        if (ctx.callerIdentity?.avatar) body.icon_url = ctx.callerIdentity.avatar;
 
         const res = await slackFetch('chat.postMessage', token, body);
         if (!res.ok) return slackError(res);
@@ -210,8 +221,8 @@ async function executeAction(
       }
 
       case 'slack.list_channels': {
-        // Single page — bot typically isn't in hundreds of channels
-        const res = await slackGet('conversations.list', token, {
+        // users.conversations returns only channels the bot is a member of
+        const res = await slackGet('users.conversations', token, {
           types: 'public_channel,private_channel',
           limit: 200,
           exclude_archived: true,
@@ -221,9 +232,7 @@ async function executeAction(
         if (!data.ok) return slackError(res, data);
 
         const channels = (data.channels || [])
-          .map((ch) => ch as Record<string, unknown>)
-          .filter((ch) => ch.is_member)
-          .map(slimChannel);
+          .map((ch) => slimChannel(ch as Record<string, unknown>));
 
         return { success: true, data: { channels } };
       }

@@ -28,11 +28,19 @@ export interface ActionDefinition<TParams extends z.ZodType = z.ZodType> {
   inputSchema?: Record<string, unknown>;
 }
 
+/** Identity of the caller (e.g. orchestrator persona). */
+export interface CallerIdentity {
+  name: string;
+  avatar?: string;
+}
+
 /** Context passed to action execution. */
 export interface ActionContext {
   credentials: IntegrationCredentials;
   userId: string;
   orgId?: string;
+  /** When the calling session has a persona identity (e.g. orchestrator), this is populated automatically. */
+  callerIdentity?: CallerIdentity;
 }
 
 /** Result of executing an action. */

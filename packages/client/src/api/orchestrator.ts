@@ -95,6 +95,47 @@ export function useUpdateOrchestratorIdentity() {
   });
 }
 
+export function useUploadAvatar() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (file: File) => {
+      const formData = new FormData();
+      formData.append('file', file);
+
+      const token = (await import('@/stores/auth')).useAuthStore.getState().token;
+      const apiBase = import.meta.env.VITE_API_URL || '/api';
+
+      const res = await fetch(`${apiBase}/me/orchestrator/avatar`, {
+        method: 'POST',
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        body: formData,
+      });
+
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error((data as any).error || 'Upload failed');
+      }
+
+      return res.json() as Promise<{ avatar: string; identity: OrchestratorIdentity }>;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: orchestratorKeys.all });
+    },
+  });
+}
+
+export function useDeleteAvatar() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: () => api.delete<{ success: boolean }>('/me/orchestrator/avatar'),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: orchestratorKeys.all });
+    },
+  });
+}
+
 export function useMemoryFiles(path?: string) {
   return useQuery({
     queryKey: orchestratorKeys.memoryFiles(path || ''),
