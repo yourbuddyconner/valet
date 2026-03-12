@@ -4,6 +4,7 @@ import type { AppDb } from '../lib/drizzle.js';
 import { getDb } from '../lib/drizzle.js';
 import { buildDoWebSocketUrl } from '../lib/do-ws-url.js';
 import { buildOrchestratorPersonaFiles } from '../lib/orchestrator-persona.js';
+import { createPersona, upsertPersonaFile } from '../lib/db/personas.js';
 import { generateRunnerToken, assembleProviderEnv, assembleCredentialEnv } from '../lib/env-assembly.js';
 import { ensureTodayJournal } from '../lib/db/memory-files.js';
 import { loadMemorySnapshot, formatMemorySnapshot } from '../lib/memory-snapshot.js';
@@ -19,10 +20,35 @@ export async function restartOrchestratorSession(
   env: Env,
   userId: string,
   userEmail: string,
-  identity: { id: string; name: string; handle: string; customInstructions?: string | null },
+  identity: { id: string; name: string; handle: string; customInstructions?: string | null; personaId?: string | null },
   requestUrl?: string
 ): Promise<{ sessionId: string }> {
   const appDb = getDb(env.DB);
+
+  // Backfill: create persona for orchestrators that predate persona support
+  if (!identity.personaId) {
+    const personaId = crypto.randomUUID();
+    await createPersona(appDb, {
+      id: personaId,
+      name: `${identity.name} (Orchestrator)`,
+      slug: `orchestrator-${identity.handle}`,
+      description: 'Auto-managed orchestrator persona',
+      visibility: 'private',
+      createdBy: userId,
+    });
+    if (identity.customInstructions) {
+      await upsertPersonaFile(appDb, {
+        id: crypto.randomUUID(),
+        personaId,
+        filename: 'custom-instructions.md',
+        content: identity.customInstructions,
+        sortOrder: 10,
+      });
+    }
+    await db.updateOrchestratorIdentity(appDb, identity.id, { personaId });
+    identity = { ...identity, personaId };
+  }
+
   const personaFiles = buildOrchestratorPersonaFiles(identity as any);
 
   // Ensure today's journal exists and load memory snapshot
@@ -46,6 +72,7 @@ export async function restartOrchestratorSession(
     title: `${identity.name} (Orchestrator)`,
     isOrchestrator: true,
     purpose: 'orchestrator',
+    personaId: identity.personaId ?? undefined,
   });
 
   // Build env vars (LLM keys + orchestrator flag)
@@ -174,6 +201,28 @@ export async function onboardOrchestrator(
     }
 
     const identityId = crypto.randomUUID();
+    const personaId = crypto.randomUUID();
+
+    // Create a real persona for the orchestrator (enables skill attachments)
+    await createPersona(appDb, {
+      id: personaId,
+      name: `${params.name} (Orchestrator)`,
+      slug: `orchestrator-${params.handle}`,
+      description: 'Auto-managed orchestrator persona',
+      visibility: 'private',
+      createdBy: userId,
+    });
+
+    if (params.customInstructions) {
+      await upsertPersonaFile(appDb, {
+        id: crypto.randomUUID(),
+        personaId,
+        filename: 'custom-instructions.md',
+        content: params.customInstructions,
+        sortOrder: 10,
+      });
+    }
+
     identity = await db.createOrchestratorIdentity(appDb, {
       id: identityId,
       userId,
@@ -181,6 +230,7 @@ export async function onboardOrchestrator(
       handle: params.handle,
       avatar: params.avatar,
       customInstructions: params.customInstructions,
+      personaId,
     });
   } else {
     await db.updateOrchestratorIdentity(appDb, identity.id, {
