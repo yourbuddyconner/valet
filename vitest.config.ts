@@ -6,8 +6,6 @@ export default defineConfig({
       'packages/worker',
       'packages/shared',
       'packages/sdk',
-      'packages/channel-telegram',
-      'packages/channel-slack',
     ],
   },
 });
