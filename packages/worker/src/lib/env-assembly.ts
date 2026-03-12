@@ -1,9 +1,11 @@
-import type { D1Database } from '@cloudflare/workers-types';
 import type { Env } from '../env.js';
+import type { RepoCredential } from '@valet/sdk/repos';
 import * as db from './db.js';
+import * as credentialDb from './db/credentials.js';
 import type { AppDb } from './drizzle.js';
-import { decryptString } from './crypto.js';
+import { decryptString, decryptStringPBKDF2 } from './crypto.js';
 import { getCredential } from '../services/credentials.js';
+import { repoProviderRegistry } from '../repos/registry.js';
 
 /**
  * Generate a 256-bit hex token for runner authentication.
@@ -139,41 +141,100 @@ export async function assembleBuiltInProviderModelConfigs(
 }
 
 /**
- * Assemble GitHub env vars (token + repo/branch config) for a session.
+ * Assemble repo env vars (token + repo/branch config) for a session,
+ * using the repo provider registry to resolve the correct provider.
  */
-export async function assembleGitHubEnv(
-  database: D1Database,
+export async function assembleRepoEnv(
+  appDb: AppDb,
   env: Env,
   userId: string,
-  opts: { repoUrl?: string; branch?: string; ref?: string }
-): Promise<{ envVars: Record<string, string>; error?: string }> {
+  orgId: string | undefined,
+  opts: { repoUrl?: string; branch?: string; ref?: string },
+): Promise<{ envVars: Record<string, string>; gitConfig: Record<string, string>; error?: string }> {
   const envVars: Record<string, string> = {};
+  const gitConfig: Record<string, string> = {};
 
   if (!opts.repoUrl) {
-    return { envVars };
+    return { envVars, gitConfig };
   }
 
-  const result = await getCredential(env, 'user', userId, 'github');
-  if (!result.ok) {
-    return { envVars, error: 'GitHub account not connected. Sign in with GitHub first.' };
+  // 1. Resolve which repo provider handles this URL
+  const provider = repoProviderRegistry.resolveByUrl(opts.repoUrl);
+  if (!provider) {
+    return { envVars, gitConfig, error: `No repo provider found for URL: ${opts.repoUrl}` };
   }
-  const githubToken = result.credential.accessToken;
 
-  // Fetch git user info from the users table
-  const userRow = await database.prepare('SELECT name, email, github_username, git_name, git_email FROM users WHERE id = ?')
-    .bind(userId)
-    .first<{ name: string | null; email: string | null; github_username: string | null; git_name: string | null; git_email: string | null }>();
-
-  envVars.GITHUB_TOKEN = githubToken;
-  envVars.REPO_URL = opts.repoUrl;
-  if (opts.branch) {
-    envVars.REPO_BRANCH = opts.branch;
+  // 2. Resolve the credential (org-level app_install preferred, then user-level)
+  const credRow = await credentialDb.resolveRepoCredential(appDb, provider.id, orgId, userId);
+  if (!credRow) {
+    return {
+      envVars,
+      gitConfig,
+      error: `No ${provider.displayName} credentials found. Connect ${provider.displayName} first.`,
+    };
   }
-  if (opts.ref) {
-    envVars.REPO_REF = opts.ref;
-  }
-  envVars.GIT_USER_NAME = userRow?.git_name || userRow?.name || userRow?.github_username || 'Valet User';
-  envVars.GIT_USER_EMAIL = userRow?.git_email || userRow?.email || '';
 
-  return { envVars };
+  // 3. Decrypt credential data and build RepoCredential
+  let credData: Record<string, unknown>;
+  try {
+    const json = await decryptStringPBKDF2(credRow.encryptedData, env.ENCRYPTION_KEY);
+    credData = JSON.parse(json);
+  } catch {
+    return {
+      envVars,
+      gitConfig,
+      error: `Failed to decrypt ${provider.displayName} credentials`,
+    };
+  }
+
+  const metadata: Record<string, string> = credRow.metadata ? JSON.parse(credRow.metadata) : {};
+  const repoCredential: RepoCredential = {
+    type: credRow.credentialType === 'app_install' ? 'installation' : 'token',
+    installationId: metadata.installationId,
+    accessToken: (credData.access_token || credData.token) as string | undefined,
+    expiresAt: credRow.expiresAt ?? undefined,
+    metadata,
+  };
+
+  // 4. Mint a fresh token
+  let freshToken: { accessToken: string; expiresAt?: string };
+  try {
+    freshToken = await provider.mintToken(repoCredential);
+  } catch (err) {
+    return {
+      envVars,
+      gitConfig,
+      error: `Failed to mint ${provider.displayName} token: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+
+  // 5. Get git user info from users table
+  const userRow = await db.getUserById(appDb, userId);
+  const gitUser = {
+    name: userRow?.gitName || userRow?.name || 'Valet User',
+    email: userRow?.gitEmail || userRow?.email || '',
+  };
+
+  // 6. Build a credential with the fresh token for assembleSessionEnv
+  const freshCredential: RepoCredential = {
+    ...repoCredential,
+    accessToken: freshToken.accessToken,
+    expiresAt: freshToken.expiresAt,
+  };
+
+  // 7. Call provider.assembleSessionEnv()
+  const sessionEnv = await provider.assembleSessionEnv(freshCredential, {
+    repoUrl: opts.repoUrl,
+    branch: opts.branch,
+    ref: opts.ref,
+    gitUser,
+  });
+
+  // Also pass the provider ID so the runner knows which provider to use for token refresh
+  sessionEnv.envVars.REPO_PROVIDER_ID = provider.id;
+
+  return {
+    envVars: sessionEnv.envVars,
+    gitConfig: sessionEnv.gitConfig,
+  };
 }

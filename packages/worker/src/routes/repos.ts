@@ -2,13 +2,56 @@ import { Hono } from 'hono';
 import { z } from 'zod';
 import { zValidator } from '@hono/zod-validator';
 import { ValidationError } from '@valet/shared';
+import type { RepoCredential } from '@valet/sdk/repos';
 import type { Env, Variables } from '../env.js';
 import { getCredential } from '../services/credentials.js';
+import { repoProviderRegistry } from '../repos/registry.js';
+import * as credentialDb from '../lib/db/credentials.js';
+import * as db from '../lib/db.js';
+import { getDb } from '../lib/drizzle.js';
+import { decryptStringPBKDF2 } from '../lib/crypto.js';
 
 export const reposRouter = new Hono<{ Bindings: Env; Variables: Variables }>();
 
 /**
+ * Resolve a repo credential for the given provider, preferring org app_install.
+ */
+async function resolveRepoCredentialForProvider(
+  env: Env,
+  userId: string,
+  providerId: string,
+): Promise<RepoCredential> {
+  const appDb = getDb(env.DB);
+
+  // Try org-level first, then user-level
+  const orgSettings = await db.getOrgSettings(appDb);
+  const credRow = await credentialDb.resolveRepoCredential(appDb, providerId, orgSettings?.id, userId);
+  if (!credRow) {
+    throw new ValidationError(`No ${providerId} credentials found. Connect ${providerId} first.`);
+  }
+
+  let credData: Record<string, unknown>;
+  try {
+    const json = await decryptStringPBKDF2(credRow.encryptedData, env.ENCRYPTION_KEY);
+    credData = JSON.parse(json);
+  } catch {
+    throw new ValidationError(`Failed to decrypt ${providerId} credentials`);
+  }
+
+  const metadata: Record<string, string> = credRow.metadata ? JSON.parse(credRow.metadata) : {};
+
+  return {
+    type: credRow.credentialType === 'app_install' ? 'installation' : 'token',
+    installationId: metadata.installationId,
+    accessToken: (credData.access_token || credData.token) as string | undefined,
+    expiresAt: credRow.expiresAt ?? undefined,
+    metadata,
+  };
+}
+
+/**
  * Get the user's decrypted GitHub access token. Throws if not connected.
+ * Used by GitHub-specific routes (pulls, issues, PR creation).
  */
 async function getGitHubToken(env: Env, userId: string): Promise<string> {
   const result = await getCredential(env, 'user', userId, 'github');
@@ -20,61 +63,50 @@ async function getGitHubToken(env: Env, userId: string): Promise<string> {
 
 /**
  * GET /api/repos
- * List the authenticated user's GitHub repositories
+ * List the authenticated user's repositories via the appropriate repo provider.
+ * Queries all registered repo providers and merges results.
  */
 reposRouter.get('/', async (c) => {
   const user = c.get('user');
   const page = parseInt(c.req.query('page') || '1');
-  const perPage = parseInt(c.req.query('per_page') || '30');
-  const sort = c.req.query('sort') || 'updated';
+  const search = c.req.query('search') || undefined;
+  const providerId = c.req.query('provider');
 
-  const token = await getGitHubToken(c.env, user.id);
+  const providers = providerId
+    ? [repoProviderRegistry.get(providerId)].filter(Boolean)
+    : repoProviderRegistry.list();
 
-  const res = await fetch(
-    `https://api.github.com/user/repos?sort=${sort}&per_page=${perPage}&page=${page}&type=all`,
-    {
-      headers: {
-        Authorization: `Bearer ${token}`,
-        Accept: 'application/vnd.github+json',
-        'User-Agent': 'Valet',
-      },
-    },
-  );
-
-  if (!res.ok) {
-    const err = await res.text();
-    console.error('GitHub repos fetch failed:', res.status, err);
-    return c.json({ error: 'Failed to fetch repositories' }, 502);
+  if (providers.length === 0) {
+    return c.json({ repos: [], page, perPage: 30 });
   }
 
-  const repos = (await res.json()) as Array<{
-    id: number;
-    name: string;
-    full_name: string;
+  const allRepos: Array<{
+    fullName: string;
+    url: string;
+    defaultBranch: string;
     private: boolean;
-    description: string | null;
-    html_url: string;
-    clone_url: string;
-    default_branch: string;
-    updated_at: string;
-    language: string | null;
-  }>;
+    provider: string;
+  }> = [];
+
+  for (const provider of providers) {
+    if (!provider) continue;
+    try {
+      const credential = await resolveRepoCredentialForProvider(c.env, user.id, provider.id);
+      const freshToken = await provider.mintToken(credential);
+      const freshCredential: RepoCredential = { ...credential, accessToken: freshToken.accessToken };
+      const result = await provider.listRepos(freshCredential, { page, search });
+      for (const repo of result.repos) {
+        allRepos.push({ ...repo, provider: provider.id });
+      }
+    } catch {
+      // Skip providers where the user has no credentials
+    }
+  }
 
   return c.json({
-    repos: repos.map((r) => ({
-      id: r.id,
-      name: r.name,
-      fullName: r.full_name,
-      private: r.private,
-      description: r.description,
-      url: r.html_url,
-      cloneUrl: r.clone_url,
-      defaultBranch: r.default_branch,
-      updatedAt: r.updated_at,
-      language: r.language,
-    })),
+    repos: allRepos,
     page,
-    perPage,
+    perPage: 30,
   });
 });
 
@@ -90,49 +122,36 @@ reposRouter.get('/validate', async (c) => {
     throw new ValidationError('Missing url parameter');
   }
 
-  // Extract owner/repo from GitHub URL
-  const match = url.match(/github\.com[/:]([^/]+)\/([^/.]+)/);
-  if (!match) {
-    return c.json({ valid: false, error: 'Not a valid GitHub repository URL' });
+  // Resolve which repo provider handles this URL
+  const provider = repoProviderRegistry.resolveByUrl(url);
+  if (!provider) {
+    return c.json({ valid: false, error: 'No repo provider found for this URL' });
   }
 
-  const [, owner, repo] = match;
-  const token = await getGitHubToken(c.env, user.id);
+  try {
+    const credential = await resolveRepoCredentialForProvider(c.env, user.id, provider.id);
+    const freshToken = await provider.mintToken(credential);
+    const freshCredential: RepoCredential = { ...credential, accessToken: freshToken.accessToken };
+    const validation = await provider.validateRepo(freshCredential, url);
 
-  const res = await fetch(`https://api.github.com/repos/${owner}/${repo}`, {
-    headers: {
-      Authorization: `Bearer ${token}`,
-      Accept: 'application/vnd.github+json',
-      'User-Agent': 'Valet',
-    },
-  });
+    if (!validation.accessible) {
+      return c.json({ valid: false, error: validation.error || 'Repository not accessible' });
+    }
 
-  if (res.status === 404) {
-    return c.json({ valid: false, error: 'Repository not found or not accessible' });
+    return c.json({
+      valid: true,
+      repo: {
+        fullName: url,
+        canPush: validation.permissions?.push ?? false,
+        provider: provider.id,
+      },
+    });
+  } catch (err) {
+    return c.json({
+      valid: false,
+      error: err instanceof ValidationError ? err.message : 'Failed to validate repository',
+    });
   }
-
-  if (!res.ok) {
-    return c.json({ valid: false, error: 'Failed to validate repository' });
-  }
-
-  const repoData = (await res.json()) as {
-    full_name: string;
-    default_branch: string;
-    private: boolean;
-    permissions: { push: boolean };
-    clone_url: string;
-  };
-
-  return c.json({
-    valid: true,
-    repo: {
-      fullName: repoData.full_name,
-      defaultBranch: repoData.default_branch,
-      private: repoData.private,
-      canPush: repoData.permissions?.push ?? false,
-      cloneUrl: repoData.clone_url,
-    },
-  });
 });
 
 /**

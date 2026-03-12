@@ -5,7 +5,7 @@ import type { AppDb } from '../lib/drizzle.js';
 import { getDb } from '../lib/drizzle.js';
 import { signJWT } from '../lib/jwt.js';
 import { buildDoWebSocketUrl } from '../lib/do-ws-url.js';
-import { generateRunnerToken, assembleProviderEnv, assembleCredentialEnv, assembleCustomProviders, assembleBuiltInProviderModelConfigs, assembleGitHubEnv } from '../lib/env-assembly.js';
+import { generateRunnerToken, assembleProviderEnv, assembleCredentialEnv, assembleCustomProviders, assembleBuiltInProviderModelConfigs, assembleRepoEnv } from '../lib/env-assembly.js';
 import { getCredential } from '../services/credentials.js';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
@@ -305,17 +305,23 @@ export async function createSession(
   // Built-in provider model allowlists
   const builtInProviderModelConfigs = await assembleBuiltInProviderModelConfigs(appDb);
 
-  // If repo URL provided, decrypt GitHub token and add repo/git env vars
+  // Resolve org ID for credential lookup
+  const orgSettings = await db.getOrgSettings(appDb);
+  const orgId = orgSettings?.id;
+
+  // If repo URL provided, resolve repo provider and assemble env vars
+  let repoGitConfig: Record<string, string> = {};
   if (params.repoUrl) {
-    const github = await assembleGitHubEnv(env.DB, env, params.userId, {
+    const repoEnv = await assembleRepoEnv(appDb, env, params.userId, orgId, {
       repoUrl: params.repoUrl,
       branch: params.branch,
       ref: params.ref,
     });
-    if (github.error) {
-      throw new ValidationError(github.error);
+    if (repoEnv.error) {
+      throw new ValidationError(repoEnv.error);
     }
-    Object.assign(envVars, github.envVars);
+    Object.assign(envVars, repoEnv.envVars);
+    repoGitConfig = repoEnv.gitConfig;
   }
 
   // Fetch user's idle timeout preference
@@ -345,6 +351,7 @@ export async function createSession(
     jwtSecret: env.ENCRYPTION_KEY,
     idleTimeoutSeconds,
     envVars,
+    gitConfig: Object.keys(repoGitConfig).length > 0 ? repoGitConfig : undefined,
     personaFiles,
     customProviders: customProviders.length > 0 ? customProviders : undefined,
     builtInProviderModelConfigs: builtInProviderModelConfigs.length > 0 ? builtInProviderModelConfigs : undefined,
@@ -380,7 +387,6 @@ export async function createSession(
 
   // Auto-create web channel binding
   try {
-    const orgSettings = await db.getOrgSettings(appDb);
     if (orgSettings) {
       await db.createChannelBinding(appDb, {
         id: crypto.randomUUID(),
