@@ -15,6 +15,7 @@
 
 import { Hono } from "hono";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
+import { gitCredentials } from "./git-credentials.js";
 
 const app = new Hono();
 
@@ -336,6 +337,25 @@ app.all("/opencode/*", async (c) => {
   } catch (err) {
     console.error(`[Gateway] OpenCode proxy error for ${target}:`, err);
     return new Response(`OpenCode proxy error: ${err}`, { status: 502 });
+  }
+});
+
+// Git credential helper endpoint — local access only, no JWT auth
+app.post("/git/credentials", async (c) => {
+  try {
+    const body = await c.req.text();
+    // Parse git credential request (key=value lines)
+    const lines = body.trim().split("\n");
+    const params: Record<string, string> = {};
+    for (const line of lines) {
+      const [k, v] = line.split("=", 2);
+      if (k && v) params[k] = v;
+    }
+
+    const result = await gitCredentials.getCredentials(params.host);
+    return c.text(result);
+  } catch (_err) {
+    return c.text("", 500);
   }
 });
 
