@@ -22,6 +22,7 @@
     "@valet/plugin-cloudflare": "workspace:*",
     "@valet/plugin-figma": "workspace:*",
     "@valet/plugin-deepwiki": "workspace:*",
+    "@valet/plugin-email-auth": "workspace:*",
     "@valet/plugin-github": "workspace:*",
     "@valet/plugin-gmail": "workspace:*",
     "@valet/plugin-google-calendar": "workspace:*",

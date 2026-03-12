@@ -1,0 +1,5 @@
+name: email-auth
+version: 0.1.0
+description: Email/password identity provider
+icon: key
+enabled: true

@@ -32,6 +32,7 @@
     { "path": "./packages/plugin-figma" },
     { "path": "./packages/plugin-sentry" },
     { "path": "./packages/plugin-deepwiki" },
+    { "path": "./packages/plugin-email-auth" },
     { "path": "./packages/plugin-telegram" },
     { "path": "./packages/worker" }
   ]

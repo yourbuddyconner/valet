@@ -162,6 +162,16 @@ importers:
         specifier: ^4.0.18
         version: 4.0.18(@types/node@25.0.9)(jiti@1.21.7)(tsx@4.21.0)
 
+  packages/plugin-email-auth:
+    dependencies:
+      '@valet/sdk':
+        specifier: workspace:*
+        version: link:../sdk
+    devDependencies:
+      typescript:
+        specifier: ^5.0.0
+        version: 5.9.3
+
   packages/plugin-figma:
     dependencies:
       '@valet/sdk':
@@ -495,6 +505,9 @@ importers:
       '@valet/plugin-deepwiki':
         specifier: workspace:*
         version: link:../plugin-deepwiki
+      '@valet/plugin-email-auth':
+        specifier: workspace:*
+        version: link:../plugin-email-auth
       '@valet/plugin-figma':
         specifier: workspace:*
         version: link:../plugin-figma

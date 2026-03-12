@@ -1,0 +1,14 @@
+{
+  "name": "@valet/plugin-email-auth",
+  "version": "0.1.0",
+  "type": "module",
+  "exports": {
+    "./identity": "./src/identity.ts"
+  },
+  "dependencies": {
+    "@valet/sdk": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "^5.0.0"
+  }
+}

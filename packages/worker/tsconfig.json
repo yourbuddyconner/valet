@@ -13,6 +13,7 @@
     { "path": "../plugin-cloudflare" },
     { "path": "../plugin-figma" },
     { "path": "../plugin-deepwiki" },
+    { "path": "../plugin-email-auth" },
     { "path": "../plugin-github" },
     { "path": "../plugin-gmail" },
     { "path": "../plugin-google-calendar" },
