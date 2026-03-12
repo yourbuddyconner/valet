@@ -28,6 +28,8 @@ const pluginDirs = readdirSync(packagesDir, { withFileTypes: true })
 
 const actionPlugins: { name: string; pkgName: string }[] = [];
 const channelPlugins: { name: string; pkgName: string }[] = [];
+const identityPlugins: { name: string; pkgName: string; exportName: string }[] = [];
+const repoPlugins: { name: string; pkgName: string; exportName: string }[] = [];
 
 // ── Helpers for content registry ────────────────────────────────────────────
 
@@ -82,6 +84,15 @@ function escapeTemplateContent(content: string): string {
   return content.replace(/\\/g, '\\\\').replace(/`/g, '\\`').replace(/\$\{/g, '\\${');
 }
 
+// ── Export name helpers ─────────────────────────────────────────────────────
+
+/** Extract the exported variable name matching a pattern from a source file. */
+function findExportedName(filePath: string, pattern: RegExp): string | null {
+  const content = readFileSync(filePath, 'utf-8');
+  const match = content.match(pattern);
+  return match?.[1] ?? null;
+}
+
 // ── Scan all plugins ────────────────────────────────────────────────────────
 
 interface ContentEntry {
@@ -120,6 +131,16 @@ for (const dir of pluginDirs) {
     }
     if (existsSync(resolve(pluginPath, 'src', 'channels', 'index.ts'))) {
       channelPlugins.push({ name: dir, pkgName });
+    }
+    const identityPath = resolve(pluginPath, 'src', 'identity.ts');
+    if (existsSync(identityPath)) {
+      const exportName = findExportedName(identityPath, /export const (\w+)\s*:\s*IdentityProvider/);
+      if (exportName) identityPlugins.push({ name: dir, pkgName, exportName });
+    }
+    const repoPath = resolve(pluginPath, 'src', 'repo.ts');
+    if (existsSync(repoPath)) {
+      const exportName = findExportedName(repoPath, /export const (\w+)\s*:\s*RepoProvider/);
+      if (exportName) repoPlugins.push({ name: dir, pkgName, exportName });
     }
   }
 
@@ -259,6 +280,30 @@ contentLines.push('');
 
 writeFileSync(resolve(workerRoot, 'src/plugins/content-registry.ts'), contentLines.join('\n'));
 
+// ── Identity provider packages ─────────────────────────────────────────────
+mkdirSync(resolve(workerRoot, 'src/identity'), { recursive: true });
+const idLines = [
+  HEADER,
+  "import type { IdentityProvider } from '@valet/sdk/identity';",
+  ...identityPlugins.map((p, i) => `import { ${p.exportName} as id${i} } from '${p.pkgName}/identity';`),
+  '',
+  `export const installedIdentityProviders: IdentityProvider[] = [${identityPlugins.map((_, i) => `id${i}`).join(', ')}];`,
+  '',
+];
+writeFileSync(resolve(workerRoot, 'src/identity/packages.ts'), idLines.join('\n'));
+
+// ── Repo provider packages ─────────────────────────────────────────────────
+mkdirSync(resolve(workerRoot, 'src/repos'), { recursive: true });
+const repoLines = [
+  HEADER,
+  "import type { RepoProvider } from '@valet/sdk/repos';",
+  ...repoPlugins.map((p, i) => `import { ${p.exportName} as rp${i} } from '${p.pkgName}/repo';`),
+  '',
+  `export const installedRepoProviders: RepoProvider[] = [${repoPlugins.map((_, i) => `rp${i}`).join(', ')}];`,
+  '',
+];
+writeFileSync(resolve(workerRoot, 'src/repos/packages.ts'), repoLines.join('\n'));
+
 console.log(
-  `Generated plugin registries: ${actionPlugins.length} integration(s), ${channelPlugins.length} channel(s), ${contentEntries.length} content entries`,
+  `Generated plugin registries: ${actionPlugins.length} integration(s), ${channelPlugins.length} channel(s), ${identityPlugins.length} identity provider(s), ${repoPlugins.length} repo provider(s), ${contentEntries.length} content entries`,
 );
