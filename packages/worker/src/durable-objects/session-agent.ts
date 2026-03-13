@@ -20,7 +20,7 @@ import { getDisabledActionsIndex, isActionDisabled } from '../lib/db/disabled-ac
 import { upsertMcpToolCache } from '../lib/db/mcp-tool-cache.js';
 import { getActivePluginArtifacts, getPluginSettings, getAutoEnabledServices } from '../lib/db/plugins.js';
 import { getPersonaSkills, getOrgDefaultSkills, searchSkills, listSkills, getSkill, getSkillBySlug, createSkill, updateSkill, deleteSkill, getPersonaToolWhitelist, createPersona, updatePersona, deletePersona, getPersonaWithFiles, upsertPersonaFile, attachSkillToPersona, detachSkillFromPersona, getPersonaSkillsForApi } from '../lib/db.js';
-import type { ChannelTarget, ChannelContext } from '@valet/sdk';
+import type { ChannelTarget, ChannelContext, ApprovalRequest, ApprovalMessageRef, ApprovalResolution } from '@valet/sdk';
 import { validateWorkflowDefinition } from '../lib/workflow-definition.js';
 
 // ─── WebSocket Message Types ───────────────────────────────────────────────
@@ -556,7 +556,8 @@ const SCHEMA_SQL = `
     params TEXT,
     is_org_scoped INTEGER NOT NULL DEFAULT 0,
     created_at INTEGER NOT NULL DEFAULT (unixepoch()),
-    expires_at INTEGER
+    expires_at INTEGER,
+    channel_refs TEXT
   );
 
   CREATE TABLE IF NOT EXISTS usage_events (
@@ -1392,7 +1393,7 @@ export class SessionAgentDO {
     // ─── Action Approval Expiry ─────────────────────────────────────
     const expiredActions = this.ctx.storage.sql
       .exec(
-        'SELECT invocation_id, request_id, tool_id, service, action_id FROM pending_action_approvals WHERE expires_at IS NOT NULL AND expires_at <= ?',
+        'SELECT invocation_id, request_id, tool_id, service, action_id, channel_refs FROM pending_action_approvals WHERE expires_at IS NOT NULL AND expires_at <= ?',
         nowSecs
       )
       .toArray();
@@ -1427,6 +1428,11 @@ export class SessionAgentDO {
       });
 
       this.appendAuditLog('agent.tool_call', `Action ${eaToolId} approval expired`, undefined, { invocationId: eaInvocationId });
+
+      const eaChannelRefs = (ea.channel_refs as string) || null;
+      this.ctx.waitUntil(
+        this.updateChannelApprovalStatus(eaChannelRefs, { status: 'expired' })
+      );
     }
 
     // ─── Periodic Metrics Flush ──────────────────────────────────────
@@ -8785,6 +8791,23 @@ export class SessionAgentDO {
 
         this.appendAuditLog('agent.tool_call', `Action ${toolId} requires approval (${riskLevel})`, undefined, { invocationId: invocationResult.invocationId, riskLevel });
 
+        // ─── Notify bound channels with approval request ───────────────
+        const approvalRequest: ApprovalRequest = {
+          invocationId: invocationResult.invocationId,
+          sessionId: sessionId || '',
+          toolId,
+          service,
+          actionId,
+          riskLevel,
+          params,
+          expiresAt: expiresAt * 1000,
+        };
+
+        // Fire-and-forget: send approval messages to all bound channels that support it
+        this.ctx.waitUntil(
+          this.sendChannelApprovalRequests(invocationResult.invocationId, approvalRequest)
+        );
+
         // Schedule alarm for expiry
         await this.ensureActionExpiryAlarm(expiresAt * 1000);
 
@@ -8931,6 +8954,7 @@ export class SessionAgentDO {
     const actionId = row.action_id as string;
     const params = row.params ? JSON.parse(row.params as string) : {};
     const isOrgScoped = (row.is_org_scoped as number) === 1;
+    const channelRefsJson = (row.channel_refs as string) || null;
 
     // Delete from local SQLite
     this.ctx.storage.sql.exec('DELETE FROM pending_action_approvals WHERE invocation_id = ?', invocationId);
@@ -8968,6 +8992,10 @@ export class SessionAgentDO {
     });
 
     this.appendAuditLog('agent.tool_call', `Action ${toolId} approved and executed`, undefined, { invocationId });
+
+    this.ctx.waitUntil(
+      this.updateChannelApprovalStatus(channelRefsJson, { status: 'approved', resolvedBy: userId })
+    );
   }
 
   /**
@@ -8988,6 +9016,7 @@ export class SessionAgentDO {
     const toolId = row.tool_id as string;
     const service = row.service as string;
     const actionId = row.action_id as string;
+    const channelRefsJson = (row.channel_refs as string) || null;
 
     // Delete from local SQLite
     this.ctx.storage.sql.exec('DELETE FROM pending_action_approvals WHERE invocation_id = ?', invocationId);
@@ -9025,6 +9054,107 @@ export class SessionAgentDO {
     });
 
     this.appendAuditLog('agent.tool_call', `Action ${toolId} denied${reason ? `: ${reason}` : ''}`, undefined, { invocationId });
+
+    const resolvedBy = this.getStateValue('userId') || 'system';
+    this.ctx.waitUntil(
+      this.updateChannelApprovalStatus(channelRefsJson, { status: 'denied', resolvedBy, reason })
+    );
+  }
+
+  private async sendChannelApprovalRequests(invocationId: string, approval: ApprovalRequest) {
+    try {
+      const sessionId = this.getStateValue('sessionId');
+      const userId = this.getStateValue('userId');
+      if (!sessionId || !userId) return;
+
+      const bindings = await getSessionChannelBindings(this.appDb, sessionId);
+      if (bindings.length === 0) return;
+
+      const refs: Array<{ channelType: string; ref: ApprovalMessageRef }> = [];
+
+      for (const binding of bindings) {
+        const transport = channelRegistry.getTransport(binding.channelType);
+        if (!transport?.sendApprovalRequest) continue;
+
+        // Resolve token (same pattern as handleChannelReply)
+        let token: string | undefined;
+        if (binding.channelType === 'slack') {
+          token = await getSlackBotToken(this.env) ?? undefined;
+        } else {
+          const credResult = await getCredential(this.env, userId, binding.channelType);
+          if (credResult.ok) token = credResult.credential.accessToken;
+        }
+        if (!token) continue;
+
+        // Build target from binding
+        const parsed = this.parseSlackChannelId(binding.channelType, binding.channelId);
+        const target: ChannelTarget = {
+          channelType: binding.channelType,
+          channelId: parsed.channelId,
+          threadId: parsed.threadId,
+        };
+        const ctx: ChannelContext = { token, userId };
+
+        const ref = await transport.sendApprovalRequest(target, approval, ctx);
+        if (ref) {
+          refs.push({ channelType: binding.channelType, ref });
+        }
+      }
+
+      // Store refs in local SQLite for later status updates
+      if (refs.length > 0) {
+        this.ctx.storage.sql.exec(
+          'UPDATE pending_action_approvals SET channel_refs = ? WHERE invocation_id = ?',
+          JSON.stringify(refs),
+          invocationId,
+        );
+      }
+    } catch (err) {
+      console.error('[SessionAgentDO] sendChannelApprovalRequests failed:', err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  private async updateChannelApprovalStatus(
+    channelRefsJson: string | null,
+    resolution: ApprovalResolution,
+  ) {
+    if (!channelRefsJson) return;
+
+    const userId = this.getStateValue('userId');
+    let refs: Array<{ channelType: string; ref: ApprovalMessageRef }>;
+    try {
+      refs = JSON.parse(channelRefsJson);
+    } catch {
+      return;
+    }
+
+    for (const { channelType, ref } of refs) {
+      const transport = channelRegistry.getTransport(channelType);
+      if (!transport?.updateApprovalStatus) continue;
+
+      let token: string | undefined;
+      if (channelType === 'slack') {
+        token = await getSlackBotToken(this.env) ?? undefined;
+      } else if (userId) {
+        const credResult = await getCredential(this.env, userId, channelType);
+        if (credResult.ok) token = credResult.credential.accessToken;
+      }
+      if (!token) continue;
+
+      const parsed = this.parseSlackChannelId(channelType, ref.channelId);
+      const target: ChannelTarget = {
+        channelType,
+        channelId: parsed.channelId,
+        threadId: parsed.threadId,
+      };
+      const ctx: ChannelContext = { token, userId: userId || '' };
+
+      try {
+        await transport.updateApprovalStatus(target, ref, resolution, ctx);
+      } catch (err) {
+        console.error(`[SessionAgentDO] updateApprovalStatus failed for ${channelType}:`, err instanceof Error ? err.message : String(err));
+      }
+    }
   }
 
   /**
