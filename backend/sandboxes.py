@@ -4,7 +4,21 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+import logging
 import modal
+
+# ConflictError is public API (Modal v1.3+) but may not exist in older
+# runtime SDKs injected into function containers. Fall back to catching
+# the raw grpclib.GRPCError that Modal is migrating away from.
+try:
+    _ConflictError = modal.exception.ConflictError
+except AttributeError:
+    try:
+        from grpclib.exceptions import GRPCError as _ConflictError
+    except ImportError:
+        _ConflictError = None
+
+logger = logging.getLogger(__name__)
 
 from config import (
     DEFAULT_IDLE_TIMEOUT_SECONDS,
@@ -158,9 +172,21 @@ class SandboxManager:
         sandbox = await modal.Sandbox.from_id.aio(sandbox_id)
         try:
             image = await sandbox.snapshot_filesystem.aio(timeout=55)
-        except modal.exception.ConflictError:
-            # Sandbox already exited (e.g. idle timeout) — can't snapshot
-            raise SandboxAlreadyFinishedError(sandbox_id)
+        except Exception as exc:
+            # Sandbox already exited (e.g. idle timeout) — can't snapshot.
+            # Use the resolved _ConflictError type when available, otherwise
+            # fall back to duck-typing the exception for resilience across
+            # Modal runtime SDK versions.
+            if _ConflictError is not None and isinstance(exc, _ConflictError):
+                raise SandboxAlreadyFinishedError(sandbox_id)
+            exc_type = type(exc).__name__
+            if exc_type in ("GRPCError", "ConflictError") and "already finished" in str(exc).lower():
+                raise SandboxAlreadyFinishedError(sandbox_id)
+            logger.warning(
+                "snapshot_and_terminate: unhandled %s for sandbox %s: %s",
+                exc_type, sandbox_id, exc,
+            )
+            raise
         await sandbox.terminate.aio()
         return image.object_id
 

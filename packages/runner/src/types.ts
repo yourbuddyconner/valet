@@ -40,6 +40,10 @@ export type DOToRunnerMessage =
       modelPreferences?: string[];
       channelType?: string; channelId?: string;
       threadId?: string;
+      /** Original channel info before thread normalization (e.g., slack:D123:threadTs).
+       *  Used by the Runner for the [via ...] attribution prefix so the agent knows
+       *  which external channel to reply to even when channelType is 'thread'. */
+      replyChannelType?: string; replyChannelId?: string;
       opencodeSessionId?: string;
       continuationContext?: string;
       authorId?: string; authorEmail?: string; authorName?: string;

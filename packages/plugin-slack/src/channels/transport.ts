@@ -6,6 +6,9 @@ import type {
   OutboundMessage,
   RoutingMetadata,
   SendResult,
+  InteractivePrompt,
+  InteractivePromptRef,
+  InteractiveResolution,
 } from '@valet/sdk';
 import { markdownToSlackMrkdwn } from './format.js';
 
@@ -480,4 +483,131 @@ export class SlackTransport implements ChannelTransport {
 
   // Slack Events API URL is configured in app settings, not per-user
   // registerWebhook / unregisterWebhook are intentionally omitted
+
+  // ─── Interactive Prompts ────────────────────────────────────────────
+
+  async sendInteractivePrompt(
+    target: ChannelTarget,
+    prompt: InteractivePrompt,
+    ctx: ChannelContext,
+  ): Promise<InteractivePromptRef | null> {
+    // If no actions, send plain text prompt for thread-reply input
+    if (!prompt.actions || prompt.actions.length === 0) {
+      const text = `*${prompt.title}*${prompt.body ? '\n' + prompt.body : ''}\n_Reply to this thread with your answer._`;
+      const body: Record<string, unknown> = {
+        channel: target.channelId,
+        text: this.formatMarkdown(text),
+        unfurl_links: false,
+      };
+      if (target.threadId) body.thread_ts = target.threadId;
+
+      const result = await slackApiCall('chat.postMessage', body, ctx.token);
+      if (!result.ok) {
+        console.error(`[SlackTransport] sendInteractivePrompt (text) error: ${result.error}`);
+        return null;
+      }
+      return { messageId: result.ts!, channelId: target.channelId };
+    }
+
+    // Build Block Kit message with buttons
+    const blocks: Record<string, unknown>[] = [
+      {
+        type: 'section',
+        text: {
+          type: 'mrkdwn',
+          text: `*${prompt.title}*${prompt.body ? '\n' + prompt.body : ''}`,
+        },
+      },
+    ];
+
+    if (prompt.expiresAt) {
+      const expiryUnix = Math.floor(prompt.expiresAt / 1000);
+      blocks.push({
+        type: 'context',
+        elements: [
+          {
+            type: 'mrkdwn',
+            text: `Expires <!date^${expiryUnix}^{date_short_pretty} at {time}|soon>`,
+          },
+        ],
+      });
+    }
+
+    // Encode sessionId:promptId in value so the interactive route can find the DO
+    // without requiring a D1 lookup (question prompts don't exist in D1)
+    const buttonValue = prompt.sessionId ? `${prompt.sessionId}:${prompt.id}` : prompt.id;
+
+    blocks.push({
+      type: 'actions',
+      elements: prompt.actions.map((action) => ({
+        type: 'button',
+        text: { type: 'plain_text' as const, text: action.label },
+        ...(action.style ? { style: action.style } : {}),
+        action_id: action.id,
+        value: buttonValue,
+      })),
+    });
+
+    const body: Record<string, unknown> = {
+      channel: target.channelId,
+      text: prompt.title,
+      blocks,
+      unfurl_links: false,
+    };
+    if (target.threadId) body.thread_ts = target.threadId;
+
+    const result = await slackApiCall('chat.postMessage', body, ctx.token);
+    if (!result.ok) {
+      console.error(`[SlackTransport] sendInteractivePrompt error: ${result.error}`);
+      return null;
+    }
+    return { messageId: result.ts!, channelId: target.channelId };
+  }
+
+  async updateInteractivePrompt(
+    _target: ChannelTarget,
+    ref: InteractivePromptRef,
+    resolution: InteractiveResolution,
+    ctx: ChannelContext,
+  ): Promise<void> {
+    let statusText: string;
+    if (resolution.actionId === '__expired__') {
+      statusText = '⏰ Expired';
+    } else if (resolution.actionId === 'approve') {
+      statusText = `✅ Approved by ${resolution.resolvedBy}`;
+    } else if (resolution.actionId === 'deny') {
+      statusText = `❌ Denied by ${resolution.resolvedBy}`;
+      if (resolution.value) statusText += `: ${resolution.value}`;
+    } else if (resolution.actionLabel || resolution.actionId) {
+      const label = resolution.actionLabel || resolution.actionId;
+      statusText = `*${label}* — selected by ${resolution.resolvedBy}`;
+    } else if (resolution.value) {
+      const preview = resolution.value.length > 100
+        ? resolution.value.slice(0, 97) + '...'
+        : resolution.value;
+      statusText = `Answered by ${resolution.resolvedBy}: ${preview}`;
+    } else {
+      statusText = `Resolved by ${resolution.resolvedBy}`;
+    }
+
+    // Prepend original question for context
+    if (resolution.promptTitle) {
+      statusText = `${resolution.promptTitle}\n\n${statusText}`;
+    }
+
+    const blocks = [
+      { type: 'section', text: { type: 'mrkdwn', text: statusText } },
+    ];
+
+    const result = await slackApiCall('chat.update', {
+      channel: ref.channelId,
+      ts: ref.messageId,
+      text: statusText,
+      blocks,
+    }, ctx.token);
+
+    if (!result.ok) {
+      console.error(`[SlackTransport] updateInteractivePrompt error: ${result.error}`);
+    }
+  }
 }

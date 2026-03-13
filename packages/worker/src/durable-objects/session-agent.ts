@@ -17,9 +17,10 @@ import { resolveMode } from '../services/action-policy.js';
 import { invokeAction, markExecuted, markFailed, approveInvocation, denyInvocation } from '../services/actions.js';
 import { updateInvocationStatus } from '../lib/db/actions.js';
 import { getDisabledActionsIndex, isActionDisabled } from '../lib/db/disabled-actions.js';
+import { upsertMcpToolCache } from '../lib/db/mcp-tool-cache.js';
 import { getActivePluginArtifacts, getPluginSettings, getAutoEnabledServices } from '../lib/db/plugins.js';
 import { getPersonaSkills, getOrgDefaultSkills, searchSkills, listSkills, getSkill, getSkillBySlug, createSkill, updateSkill, deleteSkill, getPersonaToolWhitelist, createPersona, updatePersona, deletePersona, getPersonaWithFiles, upsertPersonaFile, attachSkillToPersona, detachSkillFromPersona, getPersonaSkillsForApi } from '../lib/db.js';
-import type { ChannelTarget, ChannelContext } from '@valet/sdk';
+import type { ChannelTarget, ChannelContext, InteractivePrompt, InteractiveAction, InteractivePromptRef, InteractiveResolution } from '@valet/sdk';
 import { validateWorkflowDefinition } from '../lib/workflow-definition.js';
 
 // ─── WebSocket Message Types ───────────────────────────────────────────────
@@ -371,7 +372,7 @@ interface RunnerMessage {
 
 /** Messages sent from DO to clients */
 interface ClientOutbound {
-  type: 'message' | 'message.updated' | 'messages.removed' | 'stream' | 'chunk' | 'question' | 'status' | 'pong' | 'error' | 'user.joined' | 'user.left' | 'agentStatus' | 'models' | 'diff' | 'review-result' | 'command-result' | 'git-state' | 'pr-created' | 'files-changed' | 'child-session' | 'title' | 'audit_log' | 'model-switched' | 'toast' | 'action_approval_required' | 'action_approved' | 'action_denied' | 'action_expired' | 'integration-auth-required' | 'thread.created' | 'thread.updated';
+  type: 'message' | 'message.updated' | 'messages.removed' | 'stream' | 'chunk' | 'interactive_prompt' | 'interactive_prompt_resolved' | 'interactive_prompt_expired' | 'status' | 'pong' | 'error' | 'user.joined' | 'user.left' | 'agentStatus' | 'models' | 'diff' | 'review-result' | 'command-result' | 'git-state' | 'pr-created' | 'files-changed' | 'child-session' | 'title' | 'audit_log' | 'model-switched' | 'toast' | 'integration-auth-required' | 'thread.created' | 'thread.updated';
   [key: string]: unknown;
 }
 
@@ -423,6 +424,9 @@ interface RunnerOutbound {
   channelType?: string;
   channelId?: string;
   opencodeSessionId?: string;
+  // Original channel info before thread normalization (for [via ...] prefix in Runner)
+  replyChannelType?: string;
+  replyChannelId?: string;
   // Thread routing
   threadId?: string;
   continuationContext?: string;
@@ -488,14 +492,18 @@ const SCHEMA_SQL = `
     created_at INTEGER NOT NULL DEFAULT (unixepoch())
   );
 
-  CREATE TABLE IF NOT EXISTS questions (
+  CREATE TABLE IF NOT EXISTS interactive_prompts (
     id TEXT PRIMARY KEY,
-    text TEXT NOT NULL,
-    options TEXT, -- JSON array of option strings
-    status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'answered', 'expired')),
-    answer TEXT,
+    type TEXT NOT NULL,
+    request_id TEXT,
+    title TEXT NOT NULL,
+    body TEXT,
+    actions TEXT,
+    context TEXT,
+    channel_refs TEXT,
+    status TEXT NOT NULL DEFAULT 'pending',
     created_at INTEGER NOT NULL DEFAULT (unixepoch()),
-    expires_at INTEGER -- unix timestamp, NULL means no timeout
+    expires_at INTEGER
   );
 
   CREATE TABLE IF NOT EXISTS prompt_queue (
@@ -552,18 +560,6 @@ const SCHEMA_SQL = `
     channel_key TEXT PRIMARY KEY,
     busy INTEGER NOT NULL DEFAULT 0,
     opencode_session_id TEXT
-  );
-
-  CREATE TABLE IF NOT EXISTS pending_action_approvals (
-    invocation_id TEXT PRIMARY KEY,
-    request_id TEXT NOT NULL,
-    tool_id TEXT NOT NULL,
-    service TEXT NOT NULL,
-    action_id TEXT NOT NULL,
-    params TEXT,
-    is_org_scoped INTEGER NOT NULL DEFAULT 0,
-    created_at INTEGER NOT NULL DEFAULT (unixepoch()),
-    expires_at INTEGER
   );
 
   CREATE TABLE IF NOT EXISTS usage_events (
@@ -674,6 +670,22 @@ export class SessionAgentDO {
     // Hibernation recovery: check prompt_queue for processing row with channel metadata
     const recovered = this.recoverPendingChannelReply();
     return recovered ? { channelType: recovered.channelType, channelId: recovered.channelId } : null;
+  }
+
+  private sameChannelTarget(
+    a: { channelType?: string | null; channelId?: string | null } | null | undefined,
+    b: { channelType?: string | null; channelId?: string | null } | null | undefined,
+  ): boolean {
+    if (!a?.channelType || !a?.channelId || !b?.channelType || !b?.channelId) return false;
+    return a.channelType === b.channelType && a.channelId === b.channelId;
+  }
+
+  private getPromptOriginTarget(context: Record<string, unknown> | null | undefined): { channelType: string; channelId: string } | null {
+    if (!context || typeof context !== 'object') return null;
+    const channelType = typeof context.channelType === 'string' ? context.channelType : null;
+    const channelId = typeof context.channelId === 'string' ? context.channelId : null;
+    if (!channelType || !channelId) return null;
+    return { channelType, channelId };
   }
 
   constructor(ctx: DurableObjectState, env: Env) {
@@ -887,26 +899,23 @@ export class SessionAgentDO {
         });
         return Response.json({ success: true });
       }
-      case '/action-approved': {
+      case '/prompt-resolved': {
         if (request.method !== 'POST') {
           return new Response(JSON.stringify({ error: 'Method not allowed' }), { status: 405 });
         }
-        const body = await request.json() as { invocationId: string };
-        if (!body.invocationId) {
-          return new Response(JSON.stringify({ error: 'Missing invocationId' }), { status: 400 });
+        const body = await request.json() as { promptId: string; actionId?: string; value?: string; resolvedBy?: string };
+        if (!body.promptId) {
+          return new Response(JSON.stringify({ error: 'Missing promptId' }), { status: 400 });
         }
-        await this.handleActionApproved(body.invocationId);
-        return Response.json({ success: true });
-      }
-      case '/action-denied': {
-        if (request.method !== 'POST') {
-          return new Response(JSON.stringify({ error: 'Method not allowed' }), { status: 405 });
+        const ownerUserId = this.getStateValue('userId');
+        if (!body.resolvedBy || !ownerUserId || body.resolvedBy !== ownerUserId) {
+          return new Response(JSON.stringify({ error: 'Only the session owner can resolve this prompt' }), { status: 403 });
         }
-        const body = await request.json() as { invocationId: string; reason?: string };
-        if (!body.invocationId) {
-          return new Response(JSON.stringify({ error: 'Missing invocationId' }), { status: 400 });
-        }
-        await this.handleActionDenied(body.invocationId, body.reason);
+        await this.handlePromptResolved(body.promptId, {
+          actionId: body.actionId,
+          value: body.value,
+          resolvedBy: body.resolvedBy,
+        });
         return Response.json({ success: true });
       }
     }
@@ -1083,17 +1092,26 @@ export class SessionAgentDO {
       this.ctx.waitUntil(this.flushMessagesToD1());
     }
 
-    // Send any pending questions
-    const pendingQuestions = this.ctx.storage.sql
-      .exec("SELECT id, text, options FROM questions WHERE status = 'pending'")
+    // Send any pending interactive prompts
+    const pendingPrompts = this.ctx.storage.sql
+      .exec("SELECT * FROM interactive_prompts WHERE status = 'pending'")
       .toArray();
 
-    for (const q of pendingQuestions) {
+    for (const p of pendingPrompts) {
+      const sessionId = this.getStateValue('sessionId') || '';
+      const prompt: InteractivePrompt = {
+        id: p.id as string,
+        sessionId,
+        type: p.type as string,
+        title: p.title as string,
+        body: (p.body as string) || undefined,
+        actions: p.actions ? JSON.parse(p.actions as string) : [],
+        expiresAt: p.expires_at ? (p.expires_at as number) * 1000 : undefined,
+        context: p.context ? JSON.parse(p.context as string) : undefined,
+      };
       server.send(JSON.stringify({
-        type: 'question',
-        questionId: q.id,
-        text: q.text,
-        options: q.options ? JSON.parse(q.options as string) : undefined,
+        type: 'interactive_prompt',
+        prompt,
       }));
     }
 
@@ -1407,75 +1425,71 @@ export class SessionAgentDO {
       }
     }
 
-    // ─── Action Approval Expiry ─────────────────────────────────────
-    const expiredActions = this.ctx.storage.sql
+    // ─── Interactive Prompt Expiry ──────────────────────────────────
+    const expiredPrompts = this.ctx.storage.sql
       .exec(
-        'SELECT invocation_id, request_id, tool_id, service, action_id FROM pending_action_approvals WHERE expires_at IS NOT NULL AND expires_at <= ?',
+        'SELECT id, type, request_id, context, channel_refs FROM interactive_prompts WHERE expires_at IS NOT NULL AND expires_at <= ?',
         nowSecs
       )
       .toArray();
 
-    for (const ea of expiredActions) {
-      const eaInvocationId = ea.invocation_id as string;
-      const eaRequestId = ea.request_id as string;
-      const eaToolId = ea.tool_id as string;
-      const eaService = ea.service as string;
-      const eaActionId = ea.action_id as string;
+    for (const ep of expiredPrompts) {
+      const epId = ep.id as string;
+      const epType = ep.type as string;
+      const epRequestId = ep.request_id as string | null;
+      const epContext = ep.context ? JSON.parse(ep.context as string) : {};
+      const epChannelRefs = (ep.channel_refs as string) || null;
 
       // Delete from local SQLite
-      this.ctx.storage.sql.exec('DELETE FROM pending_action_approvals WHERE invocation_id = ?', eaInvocationId);
+      this.ctx.storage.sql.exec('DELETE FROM interactive_prompts WHERE id = ?', epId);
 
-      // Update D1 status to expired
-      this.ctx.waitUntil(
-        updateInvocationStatus(this.appDb, eaInvocationId, {
-          status: 'expired',
-        }).catch((err) => console.error('[SessionAgentDO] Failed to mark invocation expired:', err))
-      );
+      if (epType === 'approval') {
+        const toolId = epContext.toolId || '';
 
-      // Send error to runner to unblock the pending request
-      this.sendToRunner({ type: 'call-tool-result', requestId: eaRequestId, error: `Action "${eaToolId}" approval expired after 10 minutes` } as any);
+        // Update D1 status to expired (use invocationId from context, falls back to prompt ID)
+        const invocationId = epContext.invocationId || epId;
+        this.ctx.waitUntil(
+          updateInvocationStatus(this.appDb, invocationId, {
+            status: 'expired',
+          }).catch((err) => console.error('[SessionAgentDO] Failed to mark invocation expired:', err))
+        );
 
-      // Broadcast to clients
+        // Send error to runner to unblock the pending request
+        if (epRequestId) {
+          this.sendToRunner({ type: 'call-tool-result', requestId: epRequestId, error: `Action "${toolId}" approval expired after 10 minutes` } as any);
+        } else {
+          console.warn(`[SessionAgentDO] Approval prompt ${epId} expired with no request_id — runner may be stuck`);
+        }
+
+        this.appendAuditLog('agent.tool_call', `Action ${toolId} approval expired`, undefined, { invocationId: epId });
+      } else if (epType === 'question') {
+        this.sendToRunner({
+          type: 'answer',
+          questionId: epId,
+          answer: '__expired__',
+        });
+
+        this.appendAuditLog('agent.question', `Question ${epId} expired`, undefined, { questionId: epId });
+      }
+
+      // Broadcast expiry to clients
       this.broadcastToClients({
-        type: 'action_expired',
-        invocationId: eaInvocationId,
-        toolId: eaToolId,
-        service: eaService,
-        actionId: eaActionId,
+        type: 'interactive_prompt_expired',
+        promptId: epId,
+        promptType: epType,
+        context: epContext,
       });
 
-      this.appendAuditLog('agent.tool_call', `Action ${eaToolId} approval expired`, undefined, { invocationId: eaInvocationId });
+      // Update channel messages with expired status
+      if (epChannelRefs) {
+        this.ctx.waitUntil(
+          this.updateChannelInteractivePrompts(epChannelRefs, { actionId: '__expired__', resolvedBy: 'system' })
+        );
+      }
     }
 
     // ─── Periodic Metrics Flush ──────────────────────────────────────
     this.ctx.waitUntil(this.flushMetrics());
-
-    // ─── Question Expiry ──────────────────────────────────────────────
-    const expired = this.ctx.storage.sql
-      .exec(
-        "SELECT id, text FROM questions WHERE status = 'pending' AND expires_at IS NOT NULL AND expires_at <= ?",
-        nowSecs
-      )
-      .toArray();
-
-    for (const q of expired) {
-      this.ctx.storage.sql.exec(
-        "UPDATE questions SET status = 'expired' WHERE id = ?",
-        q.id as string
-      );
-
-      this.broadcastToClients({
-        type: 'status',
-        data: { questionExpired: q.id },
-      });
-
-      // Tell runner the question timed out (treated as no answer)
-      this.sendToRunner({
-        type: 'answer',
-        questionId: q.id as string,
-        answer: '__expired__',
-      });
-    }
 
     // ─── Channel Follow-up Reminders ────────────────────────────────
     const dueFollowups = this.ctx.storage.sql
@@ -1544,19 +1558,19 @@ export class SessionAgentDO {
       );
     }
 
-    // If there are still pending questions with future expiry, or pending followups, schedule next alarm
+    // If there are still pending interactive prompts with future expiry, or pending followups, schedule next alarm
     let nextAlarmMs: number | null = null;
 
     const nextExpiry = this.ctx.storage.sql
       .exec(
-        "SELECT MIN(expires_at) as next FROM questions WHERE status = 'pending' AND expires_at IS NOT NULL"
+        "SELECT MIN(expires_at) as next FROM interactive_prompts WHERE status = 'pending' AND expires_at IS NOT NULL"
       )
       .toArray();
 
     if (nextExpiry.length > 0 && nextExpiry[0].next) {
-      const questionMs = (nextExpiry[0].next as number) * 1000;
-      if (questionMs > now) {
-        nextAlarmMs = questionMs;
+      const promptMs = (nextExpiry[0].next as number) * 1000;
+      if (promptMs > now) {
+        nextAlarmMs = promptMs;
       }
     }
 
@@ -1589,17 +1603,6 @@ export class SessionAgentDO {
       const parentIdleMs = parseInt(alarmParentIdleStr);
       if (!isNaN(parentIdleMs) && parentIdleMs > now && (nextAlarmMs === null || parentIdleMs < nextAlarmMs)) {
         nextAlarmMs = parentIdleMs;
-      }
-    }
-
-    // Also consider pending action approval expiry
-    const nextActionExpiry = this.ctx.storage.sql
-      .exec('SELECT MIN(expires_at) as next FROM pending_action_approvals WHERE expires_at IS NOT NULL')
-      .toArray();
-    if (nextActionExpiry.length > 0 && nextActionExpiry[0].next) {
-      const actionExpiryMs = (nextActionExpiry[0].next as number) * 1000;
-      if (actionExpiryMs > now && (nextAlarmMs === null || actionExpiryMs < nextAlarmMs)) {
-        nextAlarmMs = actionExpiryMs;
       }
     }
 
@@ -1689,7 +1692,10 @@ export class SessionAgentDO {
           ws.send(JSON.stringify({ type: 'error', message: 'Missing invocationId' }));
           return;
         }
-        await this.handleActionApproved(msg.invocationId);
+        await this.handlePromptResolved(msg.invocationId, {
+          actionId: 'approve',
+          resolvedBy: this.getStateValue('userId') || 'user',
+        });
         break;
       }
 
@@ -1698,7 +1704,11 @@ export class SessionAgentDO {
           ws.send(JSON.stringify({ type: 'error', message: 'Missing invocationId' }));
           return;
         }
-        await this.handleActionDenied(msg.invocationId, msg.reason);
+        await this.handlePromptResolved(msg.invocationId, {
+          actionId: 'deny',
+          value: msg.reason,
+          resolvedBy: this.getStateValue('userId') || 'user',
+        });
         break;
       }
 
@@ -1750,6 +1760,39 @@ export class SessionAgentDO {
     continuationContext?: string,
     contextPrefix?: string,
   ) {
+    // ─── Thread-reply capture for free-text questions ──────────────────
+    // If there's a pending question with no actions (free-text) and this message
+    // came from a channel (not web UI) by the session owner, treat it as the answer.
+    const sessionOwnerId = this.getStateValue('userId');
+    if (channelType && channelType !== 'web' && author?.id && author.id === sessionOwnerId) {
+      const freeTextPrompts = this.ctx.storage.sql
+        .exec("SELECT id, context FROM interactive_prompts WHERE type = 'question' AND status = 'pending' AND (actions IS NULL OR actions = '[]')")
+        .toArray();
+
+      const matchingPrompt = freeTextPrompts.find((row) => {
+        let context: Record<string, unknown> | null = null;
+        if (typeof row.context === 'string' && row.context) {
+          try {
+            context = JSON.parse(row.context as string) as Record<string, unknown>;
+          } catch {
+            context = null;
+          }
+        }
+        const originTarget = this.getPromptOriginTarget(context);
+        return this.sameChannelTarget(originTarget, { channelType, channelId });
+      });
+
+      if (matchingPrompt) {
+        const promptId = matchingPrompt.id as string;
+        const answerText = content || '';
+        await this.handlePromptResolved(promptId, {
+          value: answerText,
+          resolvedBy: author.id,
+        });
+        return;
+      }
+    }
+
     // Preserve original channel info for reply tracking (e.g., slack:C123:thread_ts)
     // before normalizing to thread-based routing.
     const replyChannelType = channelType;
@@ -1940,6 +1983,10 @@ export class SessionAgentDO {
       channelType,
       channelId,
       threadId,
+      // Pass original channel info so the Runner can build the [via ...] prefix
+      // even when channelType has been rewritten to 'thread'.
+      replyChannelType: replyChannelType !== channelType ? replyChannelType : undefined,
+      replyChannelId: replyChannelId !== channelId ? replyChannelId : undefined,
       authorId: author?.id,
       authorEmail: author?.email,
       authorName: author?.name,
@@ -1959,41 +2006,9 @@ export class SessionAgentDO {
   }
 
   private async handleAnswer(questionId: string, answer: string | boolean) {
-    // Only answer if still pending
-    const existing = this.ctx.storage.sql
-      .exec("SELECT status FROM questions WHERE id = ?", questionId)
-      .toArray();
-    if (existing.length === 0 || existing[0].status !== 'pending') {
-      return; // Already answered or expired
-    }
-
-    // Update question in DB
-    this.ctx.storage.sql.exec(
-      "UPDATE questions SET status = 'answered', answer = ? WHERE id = ?",
-      String(answer), questionId
-    );
-
-    // Forward to runner
-    this.sendToRunner({
-      type: 'answer',
-      questionId,
-      answer,
-    });
-
-    // Broadcast to other clients that question was answered
-    this.broadcastToClients({
-      type: 'status',
-      data: { questionAnswered: questionId, answer: String(answer) },
-    });
-
-    this.appendAuditLog('user.answer', `Answered question: ${String(answer).slice(0, 80)}`, undefined, { questionId });
-
-    // Notify EventBus
-    this.notifyEventBus({
-      type: 'question.answered',
-      sessionId: this.getStateValue('sessionId'),
-      data: { questionId, answer: String(answer) },
-      timestamp: new Date().toISOString(),
+    await this.handlePromptResolved(questionId, {
+      value: String(answer),
+      resolvedBy: this.getStateValue('userId') || 'user',
     });
   }
 
@@ -2129,11 +2144,11 @@ export class SessionAgentDO {
     }
 
     const nextExpiry = this.ctx.storage.sql
-      .exec("SELECT MIN(expires_at) as next FROM questions WHERE status = 'pending' AND expires_at IS NOT NULL")
+      .exec("SELECT MIN(expires_at) as next FROM interactive_prompts WHERE status = 'pending' AND expires_at IS NOT NULL")
       .toArray();
     if (nextExpiry.length > 0 && nextExpiry[0].next) {
-      const questionMs = (nextExpiry[0].next as number) * 1000;
-      if (questionMs < earliestAlarm) earliestAlarm = questionMs;
+      const promptMs = (nextExpiry[0].next as number) * 1000;
+      if (promptMs < earliestAlarm) earliestAlarm = promptMs;
     }
 
     const nextFollowup = this.ctx.storage.sql
@@ -2357,31 +2372,62 @@ export class SessionAgentDO {
       }
 
       case 'question': {
-        // Store question and broadcast to all clients
+        // Store question as interactive prompt and broadcast to all clients
         const qId = msg.questionId || crypto.randomUUID();
         const questionCh = this.activeChannel;
         const QUESTION_TIMEOUT_SECS = 5 * 60; // 5 minutes
         const expiresAt = Math.floor(Date.now() / 1000) + QUESTION_TIMEOUT_SECS;
+        const sessionId = this.getStateValue('sessionId') || '';
+
+        const actions: InteractiveAction[] = msg.options
+          ? msg.options.map((opt, i) => ({ id: `option_${i}`, label: opt }))
+          : [];
+
+        const context: Record<string, unknown> = msg.options ? { options: msg.options } : {};
+        if (questionCh) {
+          context.channelType = questionCh.channelType;
+          context.channelId = questionCh.channelId;
+        }
+
         this.ctx.storage.sql.exec(
-          "INSERT INTO questions (id, text, options, status, expires_at) VALUES (?, ?, ?, 'pending', ?)",
-          qId, msg.text || '', msg.options ? JSON.stringify(msg.options) : null, expiresAt
-        );
-        this.broadcastToClients({
-          type: 'question',
-          questionId: qId,
-          text: msg.text,
-          options: msg.options,
+          `INSERT INTO interactive_prompts (id, type, request_id, title, actions, context, status, expires_at)
+           VALUES (?, 'question', ?, ?, ?, ?, 'pending', ?)`,
+          qId,
+          msg.requestId || null,
+          msg.text || '',
+          JSON.stringify(actions),
+          JSON.stringify(context),
           expiresAt,
+        );
+
+        const prompt: InteractivePrompt = {
+          id: qId,
+          sessionId,
+          type: 'question',
+          title: msg.text || '',
+          actions,
+          expiresAt: expiresAt * 1000,
+          context,
+        };
+
+        this.broadcastToClients({
+          type: 'interactive_prompt',
+          prompt,
           ...(questionCh ? { channelType: questionCh.channelType, channelId: questionCh.channelId } : {}),
         });
 
         // Schedule an alarm to expire the question if unanswered
         this.ctx.storage.setAlarm(Date.now() + QUESTION_TIMEOUT_SECS * 1000);
 
+        // Send channel interactive prompts
+        this.ctx.waitUntil(
+          this.sendChannelInteractivePrompts(qId, prompt)
+        );
+
         // Notify EventBus
         this.notifyEventBus({
           type: 'question.asked',
-          sessionId: this.getStateValue('sessionId'),
+          sessionId,
           data: { questionId: qId, text: msg.text || '' },
           timestamp: new Date().toISOString(),
         });
@@ -2399,7 +2445,7 @@ export class SessionAgentDO {
           await this.enqueueOwnerNotification({
             messageType: 'question',
             content: questionSummary,
-            contextSessionId: this.getStateValue('sessionId') || undefined,
+            contextSessionId: sessionId || undefined,
           });
         }
         break;
@@ -6910,6 +6956,9 @@ export class SessionAgentDO {
       channelType: queueChannelType,
       channelId: queueChannelId,
       threadId: queueThreadId,
+      // Pass original channel info so the Runner can build the [via ...] prefix
+      replyChannelType: queueReplyChannelType !== queueChannelType ? queueReplyChannelType : undefined,
+      replyChannelId: queueReplyChannelId !== queueChannelId ? queueReplyChannelId : undefined,
       authorId: authorId || undefined,
       authorEmail: (prompt.author_email as string) || undefined,
       authorName: (prompt.author_name as string) || undefined,
@@ -7689,16 +7738,16 @@ export class SessionAgentDO {
       }
     }
 
-    // Consider pending question expiry — use the earliest time
+    // Consider pending interactive prompt expiry — use the earliest time
     const nextExpiry = this.ctx.storage.sql
       .exec(
-        "SELECT MIN(expires_at) as next FROM questions WHERE status = 'pending' AND expires_at IS NOT NULL"
+        "SELECT MIN(expires_at) as next FROM interactive_prompts WHERE status = 'pending' AND expires_at IS NOT NULL"
       )
       .toArray();
     if (nextExpiry.length > 0 && nextExpiry[0].next) {
-      const questionExpiryMs = (nextExpiry[0].next as number) * 1000;
-      if (questionExpiryMs < earliestAlarm) {
-        earliestAlarm = questionExpiryMs;
+      const promptExpiryMs = (nextExpiry[0].next as number) * 1000;
+      if (promptExpiryMs < earliestAlarm) {
+        earliestAlarm = promptExpiryMs;
       }
     }
 
@@ -8481,6 +8530,7 @@ export class SessionAgentDO {
 
       const tools: unknown[] = [];
       const warnings: Array<{ service: string; displayName: string; reason: string; message: string; integrationId: string }> = [];
+      const mcpCacheEntries: Array<{ service: string; actionId: string; name: string; description: string; riskLevel: string }> = [];
 
       for (const integration of dedupedIntegrations) {
         // If filtering by service, skip non-matching integrations
@@ -8561,6 +8611,20 @@ export class SessionAgentDO {
         }
 
         console.log(`[SessionAgentDO] list-tools: ${integration.service} returned ${actions.length} actions`);
+
+        // Cache ALL discovered tools for the catalog/policy UI, before any filtering
+        for (const action of actions) {
+          const compositeId = `${integration.service}:${action.id}`;
+          this.discoveredToolRiskLevels.set(compositeId, action.riskLevel);
+          mcpCacheEntries.push({
+            service: integration.service,
+            actionId: action.id,
+            name: action.name,
+            description: action.description,
+            riskLevel: action.riskLevel,
+          });
+        }
+
         for (const action of actions) {
           // If query provided, filter by case-insensitive substring match on name/description/service
           if (query) {
@@ -8576,9 +8640,6 @@ export class SessionAgentDO {
           // Skip individually disabled actions
           if (disabledActionSet.has(compositeId)) continue;
 
-          // Cache discovered risk levels so handleCallTool doesn't need to re-fetch
-          this.discoveredToolRiskLevels.set(compositeId, action.riskLevel);
-
           tools.push({
             id: compositeId,
             name: action.name,
@@ -8587,6 +8648,14 @@ export class SessionAgentDO {
             params: action.inputSchema || this.serializeZodSchema(action.params),
           });
         }
+      }
+
+      // Fire-and-forget: persist discovered tools to D1 cache for the catalog endpoint.
+      // This allows MCP tools to appear in the policy editor UI even without live credentials.
+      if (mcpCacheEntries.length > 0) {
+        upsertMcpToolCache(this.appDb, mcpCacheEntries).catch((err) => {
+          console.warn('[SessionAgentDO] mcp tool cache upsert failed:', err instanceof Error ? err.message : String(err));
+        });
       }
 
       this.sendToRunner({
@@ -8744,18 +8813,43 @@ export class SessionAgentDO {
       if (invocationResult.outcome === 'pending_approval') {
         const expiresAt = Math.floor(Date.now() / 1000) + Math.floor(ACTION_APPROVAL_EXPIRY_MS / 1000);
 
-        // Store in local SQLite for alarm-based expiry and later execution
-        this.ctx.storage.sql.exec(
-          `INSERT OR REPLACE INTO pending_action_approvals
-            (invocation_id, request_id, tool_id, service, action_id, params, is_org_scoped, expires_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-          invocationResult.invocationId,
-          requestId,
+        const approvalContext: Record<string, unknown> = {
           toolId,
           service,
           actionId,
-          JSON.stringify(params),
-          isOrgScoped ? 1 : 0,
+          params,
+          riskLevel,
+          isOrgScoped,
+          invocationId: invocationResult.invocationId,
+        };
+        const approvalCh = this.activeChannel;
+        if (approvalCh) {
+          approvalContext.channelType = approvalCh.channelType;
+          approvalContext.channelId = approvalCh.channelId;
+        }
+
+        // Build body with params preview
+        let approvalBody = `\`${toolId}\` (risk: **${riskLevel}**)`;
+        if (params && Object.keys(params).length > 0) {
+          let paramsJson = JSON.stringify(params, null, 2);
+          if (paramsJson.length > 500) paramsJson = paramsJson.slice(0, 497) + '...';
+          approvalBody += `\n\`\`\`\n${paramsJson}\n\`\`\``;
+        }
+
+        // Store in interactive_prompts for alarm-based expiry and later execution
+        this.ctx.storage.sql.exec(
+          `INSERT OR REPLACE INTO interactive_prompts
+            (id, type, request_id, title, body, actions, context, status, expires_at)
+           VALUES (?, 'approval', ?, ?, ?, ?, ?, 'pending', ?)`,
+          invocationResult.invocationId,
+          requestId,
+          'Action requires approval',
+          approvalBody,
+          JSON.stringify([
+            { id: 'approve', label: 'Approve', style: 'primary' },
+            { id: 'deny', label: 'Deny', style: 'danger' },
+          ]),
+          JSON.stringify(approvalContext),
           expiresAt,
         );
 
@@ -8767,17 +8861,24 @@ export class SessionAgentDO {
           message: `Action "${toolId}" requires approval (risk level: ${riskLevel}). Waiting for human review.`,
         } as any);
 
+        const prompt: InteractivePrompt = {
+          id: invocationResult.invocationId,
+          sessionId: sessionId || '',
+          type: 'approval',
+          title: 'Action requires approval',
+          body: approvalBody,
+          actions: [
+            { id: 'approve', label: 'Approve', style: 'primary' },
+            { id: 'deny', label: 'Deny', style: 'danger' },
+          ],
+          expiresAt: expiresAt * 1000,
+          context: approvalContext,
+        };
+
         // Broadcast to connected clients
         this.broadcastToClients({
-          type: 'action_approval_required',
-          invocationId: invocationResult.invocationId,
-          toolId,
-          service,
-          actionId,
-          riskLevel,
-          params,
-          expiresAt: expiresAt * 1000,
-          sessionId,
+          type: 'interactive_prompt',
+          prompt,
         });
 
         // Publish to EventBus
@@ -8796,6 +8897,11 @@ export class SessionAgentDO {
         });
 
         this.appendAuditLog('agent.tool_call', `Action ${toolId} requires approval (${riskLevel})`, undefined, { invocationId: invocationResult.invocationId, riskLevel });
+
+        // Fire-and-forget: send interactive prompts to all bound channels
+        this.ctx.waitUntil(
+          this.sendChannelInteractivePrompts(invocationResult.invocationId, prompt)
+        );
 
         // Schedule alarm for expiry
         await this.ensureActionExpiryAlarm(expiresAt * 1000);
@@ -8923,120 +9029,309 @@ export class SessionAgentDO {
   }
 
   /**
-   * Handle an approved action invocation: re-resolve credentials and execute.
+   * Unified handler for resolving any interactive prompt (approval or question).
    */
-  private async handleActionApproved(invocationId: string) {
-    // Read from local SQLite
+  private async handlePromptResolved(promptId: string, resolution: InteractiveResolution) {
+    // Read from interactive_prompts
     const rows = this.ctx.storage.sql
-      .exec('SELECT * FROM pending_action_approvals WHERE invocation_id = ?', invocationId)
+      .exec("SELECT * FROM interactive_prompts WHERE id = ? AND status = 'pending'", promptId)
       .toArray();
 
     if (rows.length === 0) {
-      console.warn(`[SessionAgentDO] handleActionApproved: no pending approval found for ${invocationId}`);
+      console.warn(`[SessionAgentDO] handlePromptResolved: no pending prompt found for ${promptId}`);
       return;
     }
 
     const row = rows[0];
-    const requestId = row.request_id as string;
-    const toolId = row.tool_id as string;
-    const service = row.service as string;
-    const actionId = row.action_id as string;
-    const params = row.params ? JSON.parse(row.params as string) : {};
-    const isOrgScoped = (row.is_org_scoped as number) === 1;
+    const promptType = row.type as string;
+    const promptTitle = (row.title as string) || '';
+    const requestId = row.request_id as string | null;
+    const context = row.context ? JSON.parse(row.context as string) : {};
+    const channelRefsJson = (row.channel_refs as string) || null;
 
-    // Delete from local SQLite
-    this.ctx.storage.sql.exec('DELETE FROM pending_action_approvals WHERE invocation_id = ?', invocationId);
-
-    const userId = this.getStateValue('userId');
-    if (!userId) {
-      this.sendToRunner({ type: 'call-tool-result', requestId, error: 'No userId on session' } as any);
-      return;
+    // Resolve actionId → human-readable label from the stored actions list
+    let actionLabel: string | undefined;
+    if (resolution.actionId && row.actions) {
+      try {
+        const actions = JSON.parse(row.actions as string) as Array<{ id: string; label: string }>;
+        const match = actions.find(a => a.id === resolution.actionId);
+        if (match) actionLabel = match.label;
+      } catch { /* best-effort */ }
     }
 
-    // Update D1 status to approved with resolvedBy
-    await approveInvocation(this.appDb, invocationId, userId);
+    // Delete the row
+    this.ctx.storage.sql.exec('DELETE FROM interactive_prompts WHERE id = ?', promptId);
 
-    const actionSource = integrationRegistry.getActions(service);
-    await this.executeAction(requestId, toolId, service, actionId, params, isOrgScoped, userId, actionSource, invocationId);
-
+    const userId = this.getStateValue('userId');
     const sessionId = this.getStateValue('sessionId');
 
-    // Broadcast approval to clients
-    this.broadcastToClients({
-      type: 'action_approved',
-      invocationId,
-      toolId,
-      service,
-      actionId,
-    });
+    if (promptType === 'approval') {
+      const toolId = context.toolId || '';
+      const service = context.service || '';
+      const actionId = context.actionId || '';
+      const params = context.params || {};
+      const isOrgScoped = !!context.isOrgScoped;
 
-    // Publish to EventBus
-    this.notifyEventBus({
-      type: 'action.approved',
-      sessionId,
-      userId,
-      data: { invocationId, toolId, service, actionId },
-      timestamp: new Date().toISOString(),
-    });
+      if (resolution.actionId === 'approve') {
+        if (!userId) {
+          if (requestId) {
+            this.sendToRunner({ type: 'call-tool-result', requestId, error: 'No userId on session' } as any);
+          }
+          // Still update channel messages before returning
+          if (channelRefsJson) {
+            this.ctx.waitUntil(
+              this.updateChannelInteractivePrompts(channelRefsJson, { ...resolution, resolvedBy: 'system' })
+            );
+          }
+          return;
+        }
 
-    this.appendAuditLog('agent.tool_call', `Action ${toolId} approved and executed`, undefined, { invocationId });
+        // Update D1 status to approved
+        await approveInvocation(this.appDb, promptId, userId);
+
+        const actionSource = integrationRegistry.getActions(service);
+        if (requestId) {
+          await this.executeAction(requestId, toolId, service, actionId, params, isOrgScoped, userId, actionSource, promptId);
+        }
+
+        // Broadcast approval to clients
+        this.broadcastToClients({
+          type: 'interactive_prompt_resolved',
+          promptId,
+          promptType,
+          resolution,
+          context,
+        });
+
+        // Publish to EventBus
+        this.notifyEventBus({
+          type: 'action.approved',
+          sessionId,
+          userId,
+          data: { invocationId: promptId, toolId, service, actionId },
+          timestamp: new Date().toISOString(),
+        });
+
+        this.appendAuditLog('agent.tool_call', `Action ${toolId} approved and executed`, undefined, { invocationId: promptId });
+      } else {
+        // Deny
+        const reason = resolution.value;
+        await denyInvocation(this.appDb, promptId, userId || 'system', reason);
+
+        // Send error to runner
+        const errorMsg = reason
+          ? `Action "${toolId}" was denied: ${reason}`
+          : `Action "${toolId}" was denied by a reviewer`;
+        if (requestId) {
+          this.sendToRunner({ type: 'call-tool-result', requestId, error: errorMsg } as any);
+        }
+
+        // Broadcast denial to clients
+        this.broadcastToClients({
+          type: 'interactive_prompt_resolved',
+          promptId,
+          promptType,
+          resolution,
+          context,
+        });
+
+        // Publish to EventBus
+        this.notifyEventBus({
+          type: 'action.denied',
+          sessionId,
+          userId,
+          data: { invocationId: promptId, toolId, service, actionId, reason },
+          timestamp: new Date().toISOString(),
+        });
+
+        this.appendAuditLog('agent.tool_call', `Action ${toolId} denied${reason ? `: ${reason}` : ''}`, undefined, { invocationId: promptId });
+      }
+    } else if (promptType === 'question') {
+      // Send answer to runner — use the human-readable label when available
+      const answer = actionLabel || resolution.value || resolution.actionId || '';
+      this.sendToRunner({
+        type: 'answer',
+        questionId: promptId,
+        answer,
+      });
+
+      // Broadcast resolution to clients
+      this.broadcastToClients({
+        type: 'interactive_prompt_resolved',
+        promptId,
+        promptType,
+        resolution,
+      });
+
+      this.appendAuditLog('user.answer', `Answered question: ${String(answer).slice(0, 80)}`, undefined, { questionId: promptId });
+
+      // Notify EventBus
+      this.notifyEventBus({
+        type: 'question.answered',
+        sessionId,
+        data: { questionId: promptId, answer: String(answer) },
+        timestamp: new Date().toISOString(),
+      });
+    }
+
+    // Resolve display name and update channel messages
+    if (channelRefsJson) {
+      // Enrich resolution with label, title, and display name
+      let displayResolution: InteractiveResolution = {
+        ...resolution,
+        ...(actionLabel ? { actionLabel } : {}),
+        ...(promptTitle ? { promptTitle } : {}),
+      };
+      if (resolution.resolvedBy && userId) {
+        try {
+          const user = await getUserById(this.appDb, resolution.resolvedBy);
+          if (user?.name) {
+            displayResolution = { ...displayResolution, resolvedBy: user.name };
+          } else if (user?.email) {
+            displayResolution = { ...displayResolution, resolvedBy: user.email };
+          }
+        } catch { /* best-effort */ }
+      }
+
+      this.ctx.waitUntil(
+        this.updateChannelInteractivePrompts(channelRefsJson, displayResolution)
+      );
+    }
   }
 
-  /**
-   * Handle a denied action invocation.
-   */
-  private async handleActionDenied(invocationId: string, reason?: string) {
-    const rows = this.ctx.storage.sql
-      .exec('SELECT * FROM pending_action_approvals WHERE invocation_id = ?', invocationId)
-      .toArray();
+  private async sendChannelInteractivePrompts(promptId: string, prompt: InteractivePrompt) {
+    try {
+      const sessionId = this.getStateValue('sessionId');
+      const userId = this.getStateValue('userId');
+      if (!sessionId || !userId) return;
 
-    if (rows.length === 0) {
-      console.warn(`[SessionAgentDO] handleActionDenied: no pending approval found for ${invocationId}`);
+      const targets: Array<{ channelType: string; channelId: string }> = [];
+
+      const originTarget = this.getPromptOriginTarget(prompt.context);
+      if (originTarget && originTarget.channelType !== 'web') {
+        targets.push(originTarget);
+      } else {
+        // Collect channel targets to dispatch the prompt to.
+        // Start with D1 bindings (user-level first, then session-scoped fallback).
+        let bindings = await listUserChannelBindings(this.appDb, userId);
+        if (bindings.length === 0) {
+          bindings = await getSessionChannelBindings(this.appDb, sessionId);
+        }
+
+        // Build deduplicated set of non-web channel targets
+        const seen = new Set<string>();
+        for (const b of bindings) {
+          if (b.channelType === 'web') continue;
+          const key = `${b.channelType}:${b.channelId}`;
+          if (seen.has(key)) continue;
+          seen.add(key);
+          targets.push({ channelType: b.channelType, channelId: b.channelId });
+        }
+
+        // Also include the active channel (the channel that triggered this prompt).
+        // Orchestrator sessions often lack D1 bindings for Slack because messages are
+        // dispatched directly to the DO — the active channel fills that gap.
+        const active = this.activeChannel;
+        if (active && active.channelType !== 'web') {
+          const key = `${active.channelType}:${active.channelId}`;
+          if (!seen.has(key)) {
+            seen.add(key);
+            targets.push({ channelType: active.channelType, channelId: active.channelId });
+          }
+        }
+      }
+
+      if (targets.length === 0) return;
+
+      const refs: Array<{ channelType: string; ref: InteractivePromptRef }> = [];
+
+      for (const target of targets) {
+        const transport = channelRegistry.getTransport(target.channelType);
+        if (!transport?.sendInteractivePrompt) continue;
+
+        // Resolve token (same pattern as handleChannelReply)
+        let token: string | undefined;
+        if (target.channelType === 'slack') {
+          token = await getSlackBotToken(this.env) ?? undefined;
+        } else {
+          const credResult = await getCredential(this.env, 'user', userId, target.channelType);
+          if (credResult.ok) token = credResult.credential.accessToken;
+        }
+        if (!token) continue;
+
+        // Build target from binding
+        const parsed = this.parseSlackChannelId(target.channelType, target.channelId);
+        const channelTarget: ChannelTarget = {
+          channelType: target.channelType,
+          channelId: parsed.channelId,
+          threadId: parsed.threadId,
+        };
+        const ctx: ChannelContext = { token, userId };
+
+        const ref = await transport.sendInteractivePrompt(channelTarget, prompt, ctx);
+        if (ref) {
+          refs.push({ channelType: target.channelType, ref });
+        }
+      }
+
+      // Store refs in local SQLite for later status updates.
+      // Note: There is a race window here — if the prompt is resolved before this
+      // UPDATE runs, the row will already be deleted and channel refs are lost.
+      // In that case the Slack message won't be updated with resolution status.
+      // This is acceptable since the user already saw the resolution in the UI.
+      if (refs.length > 0) {
+        this.ctx.storage.sql.exec(
+          'UPDATE interactive_prompts SET channel_refs = ? WHERE id = ?',
+          JSON.stringify(refs),
+          promptId,
+        );
+      }
+    } catch (err) {
+      console.error('[SessionAgentDO] sendChannelInteractivePrompts failed:', err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  private async updateChannelInteractivePrompts(
+    channelRefsJson: string | null,
+    resolution: InteractiveResolution,
+  ) {
+    if (!channelRefsJson) return;
+
+    const userId = this.getStateValue('userId');
+    let refs: Array<{ channelType: string; ref: InteractivePromptRef }>;
+    try {
+      refs = JSON.parse(channelRefsJson);
+    } catch {
       return;
     }
 
-    const row = rows[0];
-    const requestId = row.request_id as string;
-    const toolId = row.tool_id as string;
-    const service = row.service as string;
-    const actionId = row.action_id as string;
+    for (const { channelType, ref } of refs) {
+      const transport = channelRegistry.getTransport(channelType);
+      if (!transport?.updateInteractivePrompt) continue;
 
-    // Delete from local SQLite
-    this.ctx.storage.sql.exec('DELETE FROM pending_action_approvals WHERE invocation_id = ?', invocationId);
+      let token: string | undefined;
+      if (channelType === 'slack') {
+        token = await getSlackBotToken(this.env) ?? undefined;
+      } else if (userId) {
+        const credResult = await getCredential(this.env, 'user', userId, channelType);
+        if (credResult.ok) token = credResult.credential.accessToken;
+      }
+      if (!token) continue;
 
-    const userId = this.getStateValue('userId');
+      const parsed = this.parseSlackChannelId(channelType, ref.channelId);
+      const target: ChannelTarget = {
+        channelType,
+        channelId: parsed.channelId,
+        threadId: parsed.threadId,
+      };
+      const ctx: ChannelContext = { token, userId: userId || '' };
 
-    // Update D1 status to denied
-    await denyInvocation(this.appDb, invocationId, userId || 'system', reason);
-
-    // Send error to runner to unblock the pending request
-    const errorMsg = reason
-      ? `Action "${toolId}" was denied: ${reason}`
-      : `Action "${toolId}" was denied by a reviewer`;
-    this.sendToRunner({ type: 'call-tool-result', requestId, error: errorMsg } as any);
-
-    const sessionId = this.getStateValue('sessionId');
-
-    // Broadcast denial to clients
-    this.broadcastToClients({
-      type: 'action_denied',
-      invocationId,
-      toolId,
-      service,
-      actionId,
-      reason,
-    });
-
-    // Publish to EventBus
-    this.notifyEventBus({
-      type: 'action.denied',
-      sessionId,
-      userId,
-      data: { invocationId, toolId, service, actionId, reason },
-      timestamp: new Date().toISOString(),
-    });
-
-    this.appendAuditLog('agent.tool_call', `Action ${toolId} denied${reason ? `: ${reason}` : ''}`, undefined, { invocationId });
+      try {
+        await transport.updateInteractivePrompt(target, ref, resolution, ctx);
+      } catch (err) {
+        console.error(`[SessionAgentDO] updateInteractivePrompt failed for ${channelType}:`, err instanceof Error ? err.message : String(err));
+      }
+    }
   }
 
   /**
@@ -9048,7 +9343,7 @@ export class SessionAgentDO {
     if (!currentAlarm || expiryMs < currentAlarm) {
       await this.ctx.storage.setAlarm(expiryMs);
     }
-    // Otherwise the existing alarm() handler will check pending_action_approvals
+    // Otherwise the existing alarm() handler will check interactive_prompts
   }
 
   /** Serialize a Zod schema into a simple param descriptor object for tool discovery. */

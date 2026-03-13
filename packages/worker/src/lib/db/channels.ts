@@ -146,6 +146,38 @@ export async function createChannelBinding(
   };
 }
 
+/**
+ * Ensure a channel binding exists for the given channel. Inserts a new row if no binding
+ * exists for the (channelType, channelId) pair; silently does nothing on conflict.
+ * Used by orchestrator dispatch to guarantee that Slack/Telegram bindings exist in D1
+ * so that downstream code (interactive prompts, list-channels) can discover them.
+ */
+export async function ensureChannelBinding(
+  db: AppDb,
+  data: {
+    sessionId: string;
+    channelType: ChannelType;
+    channelId: string;
+    userId: string;
+    orgId: string;
+  },
+): Promise<void> {
+  const scopeKey = `user:${data.userId}:${data.channelType}:${data.channelId}`;
+  await db.insert(channelBindings).values({
+    id: crypto.randomUUID(),
+    sessionId: data.sessionId,
+    channelType: data.channelType,
+    channelId: data.channelId,
+    scopeKey,
+    userId: data.userId,
+    orgId: data.orgId,
+    queueMode: 'followup',
+    collectDebounceMs: 3000,
+  }).onConflictDoNothing({
+    target: [channelBindings.channelType, channelBindings.channelId],
+  });
+}
+
 export async function getChannelBindingByScopeKey(db: AppDb, scopeKey: string): Promise<ChannelBinding | null> {
   const row = await db
     .select()

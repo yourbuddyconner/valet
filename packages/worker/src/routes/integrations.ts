@@ -17,6 +17,7 @@ import * as integrationService from '../services/integrations.js';
 import { integrationRegistry } from '../integrations/registry.js';
 import { revokeCredential } from '../services/credentials.js';
 import { getDb } from '../lib/drizzle.js';
+import { listMcpToolCache } from '../lib/db/mcp-tool-cache.js';
 
 export const integrationsRouter = new Hono<{ Bindings: Env; Variables: Variables }>();
 
@@ -176,6 +177,13 @@ integrationsRouter.get('/available', async (c) => {
 integrationsRouter.get('/actions', async (c) => {
   const serviceFilter = c.req.query('service');
   const packages = integrationRegistry.listPackages();
+
+  // Build a lookup of provider display names by service for cache entries
+  const displayNameMap = new Map<string, string>();
+  for (const pkg of packages) {
+    displayNameMap.set(pkg.service, pkg.provider.displayName);
+  }
+
   const catalog: Array<{
     service: string;
     serviceDisplayName: string;
@@ -185,12 +193,17 @@ integrationsRouter.get('/actions', async (c) => {
     riskLevel: string;
   }> = [];
 
+  // Track which service:actionId combos we've already added from static sources
+  const seen = new Set<string>();
+
   for (const pkg of packages) {
     if (serviceFilter && pkg.service !== serviceFilter) continue;
     // listActions may be async (e.g. MCP-backed sources). Without credentials
     // MCP sources return [] gracefully, which is fine for the catalog endpoint.
     const actions = await (pkg.actions?.listActions() ?? []);
     for (const a of actions) {
+      const key = `${pkg.service}:${a.id}`;
+      seen.add(key);
       catalog.push({
         service: pkg.service,
         serviceDisplayName: pkg.provider.displayName,
@@ -200,6 +213,29 @@ integrationsRouter.get('/actions', async (c) => {
         riskLevel: a.riskLevel,
       });
     }
+  }
+
+  // Merge cached MCP tool metadata (discovered at runtime by SessionAgentDO).
+  // This surfaces MCP-backed tools that can't be listed without credentials.
+  try {
+    const appDb = getDb(c.env.DB);
+    const cached = await listMcpToolCache(appDb, serviceFilter ?? undefined);
+    for (const entry of cached) {
+      const key = `${entry.service}:${entry.actionId}`;
+      if (seen.has(key)) continue; // static source already provided this tool
+      seen.add(key);
+      catalog.push({
+        service: entry.service,
+        serviceDisplayName: displayNameMap.get(entry.service) ?? entry.service,
+        actionId: entry.actionId,
+        name: entry.name,
+        description: entry.description,
+        riskLevel: entry.riskLevel,
+      });
+    }
+  } catch (err) {
+    // Cache read failure is non-fatal — static catalog still works
+    console.warn('[integrations/actions] mcp tool cache read failed:', err instanceof Error ? err.message : String(err));
   }
 
   return c.json({ actions: catalog });

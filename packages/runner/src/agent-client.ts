@@ -53,7 +53,7 @@ export class AgentClient {
   private hasEverConnected = false;
   private pendingTokenRefresh: { requestId: string; resolve: (result: { accessToken: string; expiresAt?: string }) => void } | null = null;
 
-  private promptHandler: ((messageId: string, content: string, model?: string, author?: PromptAuthor, modelPreferences?: string[], attachments?: PromptAttachment[], channelType?: string, channelId?: string, opencodeSessionId?: string, continuationContext?: string, threadId?: string) => void | Promise<void>) | null = null;
+  private promptHandler: ((messageId: string, content: string, model?: string, author?: PromptAuthor, modelPreferences?: string[], attachments?: PromptAttachment[], channelType?: string, channelId?: string, opencodeSessionId?: string, continuationContext?: string, threadId?: string, replyChannelType?: string, replyChannelId?: string) => void | Promise<void>) | null = null;
   private answerHandler: ((questionId: string, answer: string | boolean) => void | Promise<void>) | null = null;
   private stopHandler: (() => void) | null = null;
   private abortHandler: ((channelType?: string, channelId?: string) => void | Promise<void>) | null = null;
@@ -112,6 +112,7 @@ export class AgentClient {
       console.log(`[AgentClient] Connecting to DO: ${this.doUrl}`);
 
       let settled = false;
+      let socketOpened = false;
 
       try {
         this.ws = new WebSocket(url);
@@ -124,6 +125,7 @@ export class AgentClient {
 
       socket.addEventListener("open", () => {
         if (this.ws !== socket) return;
+        socketOpened = true;
         settled = true;
         console.log("[AgentClient] Connected to SessionAgent DO");
         this.reconnectAttempts = 0;
@@ -162,10 +164,11 @@ export class AgentClient {
         // Code 1002 = WebSocket upgrade rejected by server (HTTP 401/403/503 etc.)
         // Code 1006 = abnormal closure — Bun surfaces failed HTTP upgrades as 1006
         //   rather than 1002, so treat both as upgrade failures when the socket
-        //   never opened (settled is still false from the initial promise).
+        //   never opened. Use socketOpened (not settled) since the error handler
+        //   may set settled=true before the close handler runs.
         // Track consecutive upgrade failures — if the token was rotated (sandbox replaced),
         // exit the process so this stale sandbox stops consuming resources.
-        if (event.code === 1002 || (event.code === 1006 && !settled)) {
+        if (event.code === 1002 || (event.code === 1006 && !socketOpened)) {
           this.consecutiveUpgradeFailures++;
           if (this.consecutiveUpgradeFailures >= MAX_CONSECUTIVE_UPGRADE_FAILURES) {
             console.log(`[AgentClient] ${this.consecutiveUpgradeFailures} consecutive upgrade failures — token likely rotated, exiting`);
@@ -177,6 +180,7 @@ export class AgentClient {
         if (!settled) {
           settled = true;
           reject(new Error(event.reason || `WebSocket closed with code ${event.code}`));
+          // Don't scheduleReconnect here — the caller (bin.ts or reconnect handler) owns the retry.
           return;
         }
         if (!this.closing) {
@@ -190,7 +194,7 @@ export class AgentClient {
           settled = true;
           reject(new Error("WebSocket connection failed"));
         }
-        // Close event may follow and trigger reconnect
+        // Close event follows and handles upgrade failure counting + reject fallback
       });
     });
   }
@@ -840,7 +844,7 @@ export class AgentClient {
 
   // ─── Inbound Handlers (DO → Runner) ─────────────────────────────────
 
-  onPrompt(handler: (messageId: string, content: string, model?: string, author?: PromptAuthor, modelPreferences?: string[], attachments?: PromptAttachment[], channelType?: string, channelId?: string, opencodeSessionId?: string, continuationContext?: string, threadId?: string) => void | Promise<void>): void {
+  onPrompt(handler: (messageId: string, content: string, model?: string, author?: PromptAuthor, modelPreferences?: string[], attachments?: PromptAttachment[], channelType?: string, channelId?: string, opencodeSessionId?: string, continuationContext?: string, threadId?: string, replyChannelType?: string, replyChannelId?: string) => void | Promise<void>): void {
     this.promptHandler = handler;
   }
 
@@ -954,7 +958,7 @@ export class AgentClient {
           const author: PromptAuthor | undefined = (msg.authorId || msg.gitName || msg.gitEmail || msg.authorName || msg.authorEmail)
             ? { authorId: msg.authorId, gitName: msg.gitName, gitEmail: msg.gitEmail, authorName: msg.authorName, authorEmail: msg.authorEmail }
             : undefined;
-          await this.promptHandler?.(msg.messageId, msg.content, msg.model, author, msg.modelPreferences, msg.attachments, msg.channelType, msg.channelId, msg.opencodeSessionId, msg.continuationContext, msg.threadId);
+          await this.promptHandler?.(msg.messageId, msg.content, msg.model, author, msg.modelPreferences, msg.attachments, msg.channelType, msg.channelId, msg.opencodeSessionId, msg.continuationContext, msg.threadId, msg.replyChannelType, msg.replyChannelId);
           break;
         }
         case "answer":

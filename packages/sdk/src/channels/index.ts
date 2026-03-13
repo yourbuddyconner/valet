@@ -63,6 +63,41 @@ export interface ChannelContext {
   platformCache?: Record<string, unknown>;
 }
 
+// ─── Interactive Prompt Types ───────────────────────────────────────────────
+
+export interface InteractivePrompt {
+  id: string;
+  sessionId: string;
+  type: 'approval' | 'question' | (string & {});
+  title: string;
+  body?: string;
+  actions: InteractiveAction[];
+  expiresAt?: number;
+  context?: Record<string, unknown>;
+}
+
+export interface InteractiveAction {
+  id: string;
+  label: string;
+  style?: 'primary' | 'danger';
+}
+
+export interface InteractivePromptRef {
+  messageId: string;
+  channelId: string;
+  [key: string]: unknown;
+}
+
+export interface InteractiveResolution {
+  actionId?: string;
+  /** Human-readable label for the selected action (resolved from the prompt's actions list). */
+  actionLabel?: string;
+  value?: string;
+  /** Original prompt title, included so channel transports can show context in the resolved message. */
+  promptTitle?: string;
+  resolvedBy: string;
+}
+
 // ─── Routing Metadata (passed to parseInbound) ──────────────────────────────
 
 export interface RoutingMetadata {
@@ -112,6 +147,12 @@ export interface ChannelTransport {
 
   /** Unregister the webhook from the platform. */
   unregisterWebhook?(ctx: ChannelContext): Promise<boolean>;
+
+  /** Send an interactive prompt to a channel (e.g. Slack Block Kit buttons, or plain text for free-text questions). */
+  sendInteractivePrompt?(target: ChannelTarget, prompt: InteractivePrompt, ctx: ChannelContext): Promise<InteractivePromptRef | null>;
+
+  /** Update a previously sent interactive prompt with resolution status. */
+  updateInteractivePrompt?(target: ChannelTarget, ref: InteractivePromptRef, resolution: InteractiveResolution, ctx: ChannelContext): Promise<void>;
 }
 
 // ─── Integration Provider (re-exported from integrations module) ─────────────

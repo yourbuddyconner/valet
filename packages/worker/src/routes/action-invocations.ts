@@ -78,10 +78,10 @@ actionInvocationsRouter.post('/:id/approve', async (c) => {
   try {
     const doId = c.env.SESSIONS.idFromName(inv.sessionId);
     const stub = c.env.SESSIONS.get(doId);
-    await stub.fetch(new Request('https://session/action-approved', {
+    await stub.fetch(new Request('https://session/prompt-resolved', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ invocationId: id }),
+      body: JSON.stringify({ promptId: id, actionId: 'approve', resolvedBy: user.id }),
     }));
   } catch (err) {
     console.error('[action-invocations] Failed to notify DO of approval:', err);
@@ -115,10 +115,10 @@ actionInvocationsRouter.post('/:id/deny', async (c) => {
   try {
     const doId = c.env.SESSIONS.idFromName(inv.sessionId);
     const stub = c.env.SESSIONS.get(doId);
-    await stub.fetch(new Request('https://session/action-denied', {
+    await stub.fetch(new Request('https://session/prompt-resolved', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ invocationId: id, reason }),
+      body: JSON.stringify({ promptId: id, actionId: 'deny', value: reason, resolvedBy: user.id }),
     }));
   } catch (err) {
     console.error('[action-invocations] Failed to notify DO of denial:', err);

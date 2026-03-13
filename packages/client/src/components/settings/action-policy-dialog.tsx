@@ -145,6 +145,8 @@ function TypeaheadCombobox({
   placeholder,
   disabled,
   renderItem,
+  allowFreeText,
+  freeTextHint,
 }: {
   items: TypeaheadItem[];
   value: string;
@@ -152,6 +154,10 @@ function TypeaheadCombobox({
   placeholder: string;
   disabled?: boolean;
   renderItem?: (item: TypeaheadItem, highlighted: boolean) => React.ReactNode;
+  /** When true, the user can type a custom value that isn't in the list. */
+  allowFreeText?: boolean;
+  /** Hint text shown below the input when free-text is enabled. */
+  freeTextHint?: string;
 }) {
   const [query, setQuery] = React.useState('');
   const [showDropdown, setShowDropdown] = React.useState(false);
@@ -173,10 +179,23 @@ function TypeaheadCombobox({
     );
   }, [query, items]);
 
+  // Whether the current query text is an exact match to an existing item
+  const queryMatchesItem = React.useMemo(() => {
+    const q = query.trim();
+    if (!q) return false;
+    return items.some((i) => i.id === q || i.label.toLowerCase() === q.toLowerCase());
+  }, [query, items]);
+
+  // Show "Use custom value" option when free text is enabled and query doesn't match existing items
+  const showFreeTextOption = allowFreeText && query.trim() && !queryMatchesItem;
+
+  // Total selectable items in the dropdown (filtered + optional free-text entry)
+  const totalDropdownItems = filtered.length + (showFreeTextOption ? 1 : 0);
+
   // Reset highlight when filtered list changes
   React.useEffect(() => {
     setHighlightedIndex(0);
-  }, [filtered.length]);
+  }, [filtered.length, showFreeTextOption]);
 
   // Scroll highlighted item into view
   React.useEffect(() => {
@@ -185,19 +204,24 @@ function TypeaheadCombobox({
     item?.scrollIntoView({ block: 'nearest' });
   }, [highlightedIndex, showDropdown]);
 
-  // Click-outside dismiss
+  // Click-outside dismiss — commit free-text on blur if applicable
   React.useEffect(() => {
     function handleClick(e: MouseEvent) {
       if (
         dropdownRef.current && !dropdownRef.current.contains(e.target as Node) &&
         inputRef.current && !inputRef.current.contains(e.target as Node)
       ) {
+        // If user typed a free-text value and clicked away, commit it
+        if (allowFreeText && query.trim() && !queryMatchesItem) {
+          onChange(query.trim());
+          setQuery('');
+        }
         setShowDropdown(false);
       }
     }
     document.addEventListener('mousedown', handleClick);
     return () => document.removeEventListener('mousedown', handleClick);
-  }, []);
+  }, [allowFreeText, query, queryMatchesItem, onChange]);
 
   function handleSelect(id: string) {
     onChange(id);
@@ -206,14 +230,23 @@ function TypeaheadCombobox({
   }
 
   function handleKeyDown(e: React.KeyboardEvent) {
-    if (!showDropdown || filtered.length === 0) {
-      if (e.key === 'Escape') setShowDropdown(false);
+    if (e.key === 'Escape') {
+      setShowDropdown(false);
+      return;
+    }
+
+    if (!showDropdown || totalDropdownItems === 0) {
+      // Allow Enter to commit free-text even when dropdown is not shown
+      if (e.key === 'Enter' && allowFreeText && query.trim()) {
+        e.preventDefault();
+        handleSelect(query.trim());
+      }
       return;
     }
     switch (e.key) {
       case 'ArrowDown':
         e.preventDefault();
-        setHighlightedIndex((i) => Math.min(i + 1, filtered.length - 1));
+        setHighlightedIndex((i) => Math.min(i + 1, totalDropdownItems - 1));
         break;
       case 'ArrowUp':
         e.preventDefault();
@@ -221,12 +254,12 @@ function TypeaheadCombobox({
         break;
       case 'Enter':
         e.preventDefault();
-        if (filtered[highlightedIndex]) {
+        if (showFreeTextOption && highlightedIndex === filtered.length) {
+          // Free-text option is highlighted
+          handleSelect(query.trim());
+        } else if (filtered[highlightedIndex]) {
           handleSelect(filtered[highlightedIndex].id);
         }
-        break;
-      case 'Escape':
-        setShowDropdown(false);
         break;
     }
   }
@@ -257,6 +290,9 @@ function TypeaheadCombobox({
           disabled && 'cursor-not-allowed opacity-50',
         )}
       />
+      {allowFreeText && freeTextHint && !showDropdown && !value && (
+        <p className="mt-1 text-xs text-neutral-400 dark:text-neutral-500">{freeTextHint}</p>
+      )}
       {value && !showDropdown && (
         <button
           type="button"
@@ -272,7 +308,7 @@ function TypeaheadCombobox({
           </svg>
         </button>
       )}
-      {showDropdown && filtered.length > 0 && (
+      {showDropdown && (filtered.length > 0 || showFreeTextOption) && (
         <div
           ref={dropdownRef}
           className="absolute z-20 mt-1 max-h-60 w-full overflow-auto rounded-md border border-neutral-200 bg-white shadow-lg dark:border-neutral-700 dark:bg-neutral-800"
@@ -316,9 +352,29 @@ function TypeaheadCombobox({
               )}
             </button>
           ))}
+          {showFreeTextOption && (
+            <button
+              key="__free_text__"
+              type="button"
+              onMouseDown={(e) => {
+                e.preventDefault();
+                handleSelect(query.trim());
+              }}
+              onMouseEnter={() => setHighlightedIndex(filtered.length)}
+              className={cn(
+                'flex w-full items-center gap-2 border-t border-neutral-100 px-3 py-2 text-left text-sm dark:border-neutral-700',
+                highlightedIndex === filtered.length
+                  ? 'bg-neutral-100 dark:bg-neutral-700'
+                  : 'hover:bg-neutral-50 dark:hover:bg-neutral-700/50',
+              )}
+            >
+              <span className="text-neutral-500 dark:text-neutral-400">Use</span>
+              <span className="font-mono text-neutral-900 dark:text-neutral-100">{query.trim()}</span>
+            </button>
+          )}
         </div>
       )}
-      {showDropdown && filtered.length === 0 && query && (
+      {showDropdown && filtered.length === 0 && query && !allowFreeText && (
         <div className="absolute z-20 mt-1 w-full rounded-md border border-neutral-200 bg-white px-3 py-2 text-sm text-neutral-500 shadow-lg dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-400">
           No results for &ldquo;{query}&rdquo;
         </div>
@@ -608,7 +664,9 @@ export function ActionPolicyDialog({ open, onOpenChange, policy, onSave, isPendi
                   items={serviceItems}
                   value={service}
                   onChange={handleServiceChange}
-                  placeholder="Search services..."
+                  placeholder="Search services or type a name..."
+                  allowFreeText
+                  freeTextHint="Type a service name like &quot;linear&quot; if it doesn't appear in the list"
                 />
               </div>
             )}
@@ -623,8 +681,10 @@ export function ActionPolicyDialog({ open, onOpenChange, policy, onSave, isPendi
                   items={actionItems}
                   value={actionId}
                   onChange={setActionId}
-                  placeholder={service ? 'Search actions...' : 'Select a service first'}
+                  placeholder={service ? 'Search actions or type an ID...' : 'Select a service first'}
                   disabled={!service}
+                  allowFreeText
+                  freeTextHint="Type an action ID like &quot;linear.save_issue&quot; if it doesn't appear"
                 />
               </div>
             )}

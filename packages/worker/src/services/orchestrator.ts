@@ -294,6 +294,25 @@ export async function dispatchOrchestratorPrompt(
 
   console.log(`[OrchestratorDispatch] Dispatching to session=${sessionId} status=${session.status}`);
 
+  // Ensure a D1 channel binding exists for non-web channels so that downstream code
+  // (interactive prompts, list-channels, auto-replies) can discover the channel.
+  // Uses the dispatch-format channelId (e.g. "D123:thread_ts") and ON CONFLICT IGNORE.
+  if (params.channelType && params.channelId && params.channelType !== 'web') {
+    try {
+      const appDb = getDb(env.DB);
+      await db.ensureChannelBinding(appDb, {
+        sessionId,
+        channelType: params.channelType as any,
+        channelId: params.channelId,
+        userId: params.userId,
+        orgId: 'default',
+      });
+    } catch (err) {
+      // Best-effort — don't block message dispatch
+      console.warn(`[OrchestratorDispatch] Failed to ensure channel binding:`, err);
+    }
+  }
+
   // Normalize channel metadata to match what the DO stores: when a threadId is
   // present, the DO routes via thread:threadId. D1 must store the same values
   // so both stores are consistent for the same message.

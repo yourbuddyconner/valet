@@ -51,6 +51,7 @@ const runnerToken = values["runner-token"];
 const sessionId = values["session-id"];
 const gatewayPort = parseInt(values["gateway-port"] || "9000", 10);
 const INITIAL_CONNECT_MAX_DELAY_MS = 30_000;
+const INITIAL_CONNECT_MAX_ATTEMPTS = 30;
 const CONFIG_WAIT_TIMEOUT_MS = 30_000;
 
 // ─── Tool Whitelist ──────────────────────────────────────────────────────
@@ -340,9 +341,9 @@ async function main() {
   const promptHandler = new PromptHandler(opencodeUrl!, agentClient, sessionId!);
 
   // Register handlers
-  agentClient.onPrompt(async (messageId, content, model, author, modelPreferences, attachments, channelType, channelId, opencodeSessionId, continuationContext) => {
-    console.log(`[Runner] Received prompt: ${messageId}${model ? ` (model: ${model})` : ''}${author?.authorName ? ` (by: ${author.authorName})` : ''}${modelPreferences?.length ? ` (prefs: ${modelPreferences.length} models)` : ''}${attachments?.length ? ` (attachments: ${attachments.length})` : ''}${channelType ? ` (channel: ${channelType})` : ''}${continuationContext ? ' (with continuation context)' : ''}`);
-    await promptHandler.handlePrompt(messageId, content, model, author, modelPreferences, attachments, channelType, channelId, opencodeSessionId, continuationContext);
+  agentClient.onPrompt(async (messageId, content, model, author, modelPreferences, attachments, channelType, channelId, opencodeSessionId, continuationContext, _threadId, replyChannelType, replyChannelId) => {
+    console.log(`[Runner] Received prompt: ${messageId}${model ? ` (model: ${model})` : ''}${author?.authorName ? ` (by: ${author.authorName})` : ''}${modelPreferences?.length ? ` (prefs: ${modelPreferences.length} models)` : ''}${attachments?.length ? ` (attachments: ${attachments.length})` : ''}${channelType ? ` (channel: ${channelType})` : ''}${replyChannelType ? ` (replyChannel: ${replyChannelType})` : ''}${continuationContext ? ' (with continuation context)' : ''}`);
+    await promptHandler.handlePrompt(messageId, content, model, author, modelPreferences, attachments, channelType, channelId, opencodeSessionId, continuationContext, undefined, replyChannelType, replyChannelId);
   });
 
   agentClient.onAnswer(async (questionId, answer) => {
@@ -499,6 +500,7 @@ async function main() {
 
   // Initial connect must be resilient too. If the first websocket upgrade fails
   // (cold start/race/network blip), keep retrying instead of exiting the runner.
+  // Cap attempts so stale sandboxes (rotated session, broken network) don't retry forever.
   let initialConnectAttempt = 0;
   while (true) {
     initialConnectAttempt++;
@@ -506,9 +508,15 @@ async function main() {
       await agentClient.connect();
       break;
     } catch (err) {
+      if (initialConnectAttempt >= INITIAL_CONNECT_MAX_ATTEMPTS) {
+        console.error(
+          `[Runner] Initial DO connection failed after ${initialConnectAttempt} attempts — giving up`,
+        );
+        process.exit(1);
+      }
       const delayMs = Math.min(1000 * 2 ** (initialConnectAttempt - 1), INITIAL_CONNECT_MAX_DELAY_MS);
       console.error(
-        `[Runner] Initial DO connection failed (attempt ${initialConnectAttempt}). Retrying in ${delayMs}ms:`,
+        `[Runner] Initial DO connection failed (attempt ${initialConnectAttempt}/${INITIAL_CONNECT_MAX_ATTEMPTS}). Retrying in ${delayMs}ms:`,
         err,
       );
       await new Promise((resolve) => setTimeout(resolve, delayMs));

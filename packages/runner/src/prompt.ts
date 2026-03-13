@@ -608,6 +608,10 @@ export class PromptHandler {
   private idleWaiters = new Map<string, () => void>();
   private ephemeralContent = new Map<string, string>(); // accumulated text from SSE
 
+  // Original channel info for [via ...] attribution when channelType is 'thread'
+  private pendingReplyChannelType: string | undefined;
+  private pendingReplyChannelId: string | undefined;
+
   // OpenCode question requests (question tool)
   private pendingQuestionRequests = new Map<string, { answers: (string[] | null)[] }>();
   private promptToQuestion = new Map<string, { requestID: string; index: number }>();
@@ -1261,7 +1265,7 @@ export class PromptHandler {
     });
   }
 
-  async handlePrompt(messageId: string, content: string, model?: string, author?: { authorId?: string; gitName?: string; gitEmail?: string; authorName?: string; authorEmail?: string }, modelPreferences?: string[], attachments?: PromptAttachment[], channelType?: string, channelId?: string, opencodeSessionId?: string, continuationContext?: string, threadId?: string): Promise<void> {
+  async handlePrompt(messageId: string, content: string, model?: string, author?: { authorId?: string; gitName?: string; gitEmail?: string; authorName?: string; authorEmail?: string }, modelPreferences?: string[], attachments?: PromptAttachment[], channelType?: string, channelId?: string, opencodeSessionId?: string, continuationContext?: string, threadId?: string, replyChannelType?: string, replyChannelId?: string): Promise<void> {
     console.log(`[PromptHandler] Handling prompt ${messageId}: "${content.slice(0, 80)}"${model ? ` (model: ${model})` : ''}${author?.authorName ? ` (by: ${author.authorName})` : ''}${modelPreferences?.length ? ` (prefs: ${modelPreferences.length})` : ''}${attachments?.length ? ` (attachments: ${attachments.length})` : ''}${channelType ? ` (channel: ${channelType})` : ''}${continuationContext ? ' (with continuation context)' : ''}`);
 
     // Resolve per-channel session
@@ -1269,6 +1273,9 @@ export class PromptHandler {
     this.activeChannel = channel;
     // Store the orchestrator threadId so it flows through to message.create
     channel.promptThreadId = threadId ?? undefined;
+    // Store original channel info for [via ...] attribution prefix
+    this.pendingReplyChannelType = replyChannelType;
+    this.pendingReplyChannelId = replyChannelId;
     this.applyPersistedOpenCodeSessionId(channel, opencodeSessionId);
 
     try {
@@ -2648,10 +2655,15 @@ export class PromptHandler {
         ...(attachment.filename ? { filename: attachment.filename } : {}),
       });
     }
-    // Prefix content with channel context and user identity (agent sees this, users don't)
+    // Prefix content with channel context and user identity (agent sees this, users don't).
+    // When the DO rewrites channelType to 'thread' for unified routing, the original
+    // channel info is passed via replyChannelType/replyChannelId so the agent still
+    // knows which external channel to reply to.
     let attributedContent = content;
-    if (channelType && channelId && channelType !== "thread") {
-      attributedContent = `[via ${channelType} | chatId: ${channelId}] ${attributedContent}`;
+    const attrChannelType = this.pendingReplyChannelType || channelType;
+    const attrChannelId = this.pendingReplyChannelId || channelId;
+    if (attrChannelType && attrChannelId && attrChannelType !== "thread") {
+      attributedContent = `[via ${attrChannelType} | chatId: ${attrChannelId}] ${attributedContent}`;
     }
     if (author?.authorName || author?.authorEmail) {
       const name = author.authorName || 'Unknown';

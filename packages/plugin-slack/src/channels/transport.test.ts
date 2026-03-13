@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { SlackTransport } from './transport.js';
-import type { ChannelTarget, ChannelContext } from '@valet/sdk';
+import type { ChannelTarget, ChannelContext, InteractivePrompt } from '@valet/sdk';
 
 // Mock global fetch
 const mockFetch = vi.fn();
@@ -547,5 +547,43 @@ describe('SlackTransport', () => {
 
   it('does not implement unregisterWebhook', () => {
     expect((transport as any).unregisterWebhook).toBeUndefined();
+  });
+
+  // ─── sendInteractivePrompt ────────────────────────────────────────
+
+  describe('sendInteractivePrompt', () => {
+    const ctx: ChannelContext = { token: 'xoxb-test-token', userId: 'u1' };
+
+    it('posts interactive prompts into the exact Slack thread target', async () => {
+      mockFetch.mockResolvedValueOnce(
+        jsonResponse({ ok: true, ts: '1234567891.000000' })
+      );
+
+      const target: ChannelTarget = {
+        channelType: 'slack',
+        channelId: 'C456',
+        threadId: '1234567890.123456',
+      };
+      const prompt: InteractivePrompt = {
+        id: 'prompt-1',
+        sessionId: 'orchestrator:user-1',
+        type: 'approval',
+        title: 'Action requires approval',
+        actions: [
+          { id: 'approve', label: 'Approve', style: 'primary' },
+          { id: 'deny', label: 'Deny', style: 'danger' },
+        ],
+      };
+
+      const ref = await transport.sendInteractivePrompt(target, prompt, ctx);
+
+      expect(ref).toEqual({ messageId: '1234567891.000000', channelId: 'C456' });
+      const [url, opts] = mockFetch.mock.calls[0];
+      expect(url).toBe('https://slack.com/api/chat.postMessage');
+      const body = JSON.parse(opts.body);
+      expect(body.channel).toBe('C456');
+      expect(body.thread_ts).toBe('1234567890.123456');
+      expect(body.blocks[1].elements[0].value).toBe('orchestrator:user-1:prompt-1');
+    });
   });
 });
