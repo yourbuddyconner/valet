@@ -9128,6 +9128,18 @@ export class SessionAgentDO {
       return;
     }
 
+    // Resolve display name for resolvedBy (so Slack shows "Approved by Jane" not a UUID)
+    if ('resolvedBy' in resolution && resolution.resolvedBy && userId) {
+      try {
+        const user = await getUserById(this.appDb, resolution.resolvedBy);
+        if (user?.name) {
+          resolution = { ...resolution, resolvedBy: user.name };
+        } else if (user?.email) {
+          resolution = { ...resolution, resolvedBy: user.email };
+        }
+      } catch { /* best-effort */ }
+    }
+
     for (const { channelType, ref } of refs) {
       const transport = channelRegistry.getTransport(channelType);
       if (!transport?.updateApprovalStatus) continue;

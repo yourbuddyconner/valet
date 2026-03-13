@@ -496,9 +496,9 @@ export class SlackTransport implements ChannelTransport {
       : approval.riskLevel === 'medium' ? '🟡'
       : '🟢';
 
-    const paramsPreview = approval.params
-      ? '```' + JSON.stringify(approval.params, null, 2).slice(0, 500) + '```'
-      : '_No parameters_';
+    let paramsJson = approval.params ? JSON.stringify(approval.params, null, 2) : '';
+    if (paramsJson.length > 500) paramsJson = paramsJson.slice(0, 497) + '...';
+    const paramsPreview = paramsJson ? '```' + paramsJson + '```' : '_No parameters_';
 
     const expiryUnix = Math.floor(approval.expiresAt / 1000);
 
