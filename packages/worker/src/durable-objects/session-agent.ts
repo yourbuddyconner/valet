@@ -1404,9 +1404,10 @@ export class SessionAgentDO {
       if (epType === 'approval') {
         const toolId = epContext.toolId || '';
 
-        // Update D1 status to expired
+        // Update D1 status to expired (use invocationId from context, falls back to prompt ID)
+        const invocationId = epContext.invocationId || epId;
         this.ctx.waitUntil(
-          updateInvocationStatus(this.appDb, epId, {
+          updateInvocationStatus(this.appDb, invocationId, {
             status: 'expired',
           }).catch((err) => console.error('[SessionAgentDO] Failed to mark invocation expired:', err))
         );
@@ -1719,8 +1720,9 @@ export class SessionAgentDO {
   ) {
     // ─── Thread-reply capture for free-text questions ──────────────────
     // If there's a pending question with no actions (free-text) and this message
-    // came from a channel (not web UI), treat it as the answer.
-    if (channelType && channelType !== 'web') {
+    // came from a channel (not web UI) by the session owner, treat it as the answer.
+    const sessionOwnerId = this.getStateValue('userId');
+    if (channelType && channelType !== 'web' && author?.id && author.id === sessionOwnerId) {
       const freeTextPrompts = this.ctx.storage.sql
         .exec("SELECT id FROM interactive_prompts WHERE type = 'question' AND status = 'pending' AND (actions IS NULL OR actions = '[]')")
         .toArray();
@@ -1730,7 +1732,7 @@ export class SessionAgentDO {
         const answerText = content || '';
         await this.handlePromptResolved(promptId, {
           value: answerText,
-          resolvedBy: author?.id || this.getStateValue('userId') || 'user',
+          resolvedBy: author.id,
         });
         return;
       }
@@ -8971,6 +8973,12 @@ export class SessionAgentDO {
           if (requestId) {
             this.sendToRunner({ type: 'call-tool-result', requestId, error: 'No userId on session' } as any);
           }
+          // Still update channel messages before returning
+          if (channelRefsJson) {
+            this.ctx.waitUntil(
+              this.updateChannelInteractivePrompts(channelRefsJson, { ...resolution, resolvedBy: 'system' })
+            );
+          }
           return;
         }
 
@@ -9123,7 +9131,11 @@ export class SessionAgentDO {
         }
       }
 
-      // Store refs in local SQLite for later status updates
+      // Store refs in local SQLite for later status updates.
+      // Note: There is a race window here — if the prompt is resolved before this
+      // UPDATE runs, the row will already be deleted and channel refs are lost.
+      // In that case the Slack message won't be updated with resolution status.
+      // This is acceptable since the user already saw the resolution in the UI.
       if (refs.length > 0) {
         this.ctx.storage.sql.exec(
           'UPDATE interactive_prompts SET channel_refs = ? WHERE id = ?',

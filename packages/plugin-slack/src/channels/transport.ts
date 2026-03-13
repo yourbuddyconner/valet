@@ -533,6 +533,10 @@ export class SlackTransport implements ChannelTransport {
       });
     }
 
+    // Encode sessionId:promptId in value so the interactive route can find the DO
+    // without requiring a D1 lookup (question prompts don't exist in D1)
+    const buttonValue = prompt.sessionId ? `${prompt.sessionId}:${prompt.id}` : prompt.id;
+
     blocks.push({
       type: 'actions',
       elements: prompt.actions.map((action) => ({
@@ -540,7 +544,7 @@ export class SlackTransport implements ChannelTransport {
         text: { type: 'plain_text' as const, text: action.label },
         ...(action.style ? { style: action.style } : {}),
         action_id: action.id,
-        value: prompt.id,
+        value: buttonValue,
       })),
     });
 
