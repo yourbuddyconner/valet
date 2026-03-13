@@ -36,16 +36,8 @@ websockify --web /usr/share/novnc ${VNC_PORT} localhost:5900 &
 echo "[start.sh] VNC accessible on port ${VNC_PORT}"
 
 # ─── Git Configuration ─────────────────────────────────────────────────
-if [ -n "${GIT_USER_NAME:-}" ]; then
-  git config --global user.name "${GIT_USER_NAME}"
-fi
-if [ -n "${GIT_USER_EMAIL:-}" ]; then
-  git config --global user.email "${GIT_USER_EMAIL}"
-fi
-if [ -n "${GITHUB_TOKEN:-}" ]; then
-  git config --global credential.helper \
-    '!f() { echo "username=oauth2"; echo "password=${GITHUB_TOKEN}"; }; f'
-fi
+# Git credentials and repo cloning are handled by the Runner process.
+# start.sh only sets up the global gitignore.
 
 # Global gitignore — prevent sandbox-injected dirs from being committed
 cat > /root/.gitignore_global << 'GITIGNORE'
@@ -54,33 +46,13 @@ cat > /root/.gitignore_global << 'GITIGNORE'
 GITIGNORE
 git config --global core.excludesFile /root/.gitignore_global
 
-# ─── Clone Repository ─────────────────────────────────────────────────
-# Clone into /workspace/<repo-name> to support multiple repos in the future
+# ─── Workspace Setup ─────────────────────────────────────────────────
+# Repo cloning is handled by the Runner process. start.sh just sets up
+# a minimal workspace directory and writes initial repo context if available.
 WORK_DIR=/workspace
-if [ -n "${REPO_URL:-}" ]; then
-  # Extract repo name from URL (e.g. https://github.com/owner/repo.git -> repo)
-  REPO_NAME=$(basename "${REPO_URL}" .git)
-  CLONE_DIR="/workspace/${REPO_NAME}"
 
-  if [ ! -d "${CLONE_DIR}" ]; then
-    echo "[start.sh] Cloning ${REPO_URL} into ${CLONE_DIR}"
-    if [ -n "${REPO_BRANCH:-}" ]; then
-      git clone --branch "${REPO_BRANCH}" "${REPO_URL}" "${CLONE_DIR}"
-    else
-      git clone "${REPO_URL}" "${CLONE_DIR}"
-    fi
-  else
-    echo "[start.sh] ${CLONE_DIR} already exists, skipping clone"
-  fi
-  if [ -n "${REPO_REF:-}" ]; then
-    echo "[start.sh] Checking out ref ${REPO_REF}"
-    git -C "${CLONE_DIR}" checkout "${REPO_REF}"
-  fi
-  WORK_DIR="${CLONE_DIR}"
-fi
-
-# ─── Repo Context Injection ───────────────────────────────────────────
-# Add repository info to the system prompt for normal sessions.
+# Write minimal repo context so services starting before the Runner clones
+# have some awareness of the target repo.
 if [ -n "${REPO_URL:-}" ]; then
   mkdir -p "${WORK_DIR}/.valet/persona"
   {
@@ -90,19 +62,8 @@ if [ -n "${REPO_URL:-}" ]; then
     if [ -n "${REPO_BRANCH:-}" ]; then
       echo "- Branch: ${REPO_BRANCH}"
     fi
-    if [ -n "${REPO_REF:-}" ]; then
-      echo "- Ref: ${REPO_REF}"
-    fi
-    if [ -n "${CLONE_DIR:-}" ]; then
-      echo "- Working directory: ${WORK_DIR}"
-      if [ -d "${CLONE_DIR}/.git" ]; then
-        echo "- Repo already cloned: yes"
-      else
-        echo "- Repo already cloned: no"
-      fi
-    fi
     echo ""
-    echo "Use this repository as the primary source of truth for this session."
+    echo "The Runner will clone the repo and update this context after startup."
   } > "${WORK_DIR}/.valet/persona/00-repo-context.md"
 fi
 
