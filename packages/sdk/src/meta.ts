@@ -135,7 +135,11 @@ export function formatChannelLabel(channelType: string, channelId: string): stri
       slackId = parts[0];
     }
 
-    if (!slackId) return hasThread ? 'Slack (thread)' : 'Slack';
+    if (!slackId) {
+      // channelId is a human-readable name (e.g. "general") — show as #channel
+      const label = `Slack #${channelId}`;
+      return hasThread ? `${label} (thread)` : label;
+    }
 
     const prefix = slackId.startsWith('D') ? 'Slack DM' : slackId.startsWith('G') ? 'Slack Group DM' : `Slack #${slackId}`;
     return hasThread ? `${prefix} (thread)` : prefix;

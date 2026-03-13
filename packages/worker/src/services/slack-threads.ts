@@ -2,6 +2,7 @@ import { getSlackUserInfo } from './slack.js';
 
 const SLACK_API = 'https://slack.com/api';
 const MAX_THREAD_MESSAGES = 200;
+const MAX_DM_MESSAGES = 20;
 const MAX_RETRIES = 2;
 
 export interface ThreadContextMessage {
@@ -104,6 +105,106 @@ export async function fetchThreadReplies(
 }
 
 /**
+ * Fetch recent channel history from a DM channel via conversations.history.
+ * Returns up to MAX_DM_MESSAGES most recent messages newer than `oldest`.
+ * Used for DM rehydration where we want recent messages (not thread-specific replies).
+ */
+export async function fetchChannelHistory(
+  botToken: string,
+  channel: string,
+  oldest: string | null,
+): Promise<ThreadContextMessage[]> {
+  const allMessages: ThreadContextMessage[] = [];
+  let cursor: string | undefined;
+  let retryCount = 0;
+
+  do {
+    const params = new URLSearchParams({
+      channel,
+      limit: String(MAX_DM_MESSAGES),
+    });
+    if (oldest) {
+      params.set('oldest', oldest);
+      params.set('inclusive', 'false');
+    }
+    if (cursor) {
+      params.set('cursor', cursor);
+    }
+
+    let resp: Response;
+    try {
+      resp = await fetch(`${SLACK_API}/conversations.history?${params}`, {
+        method: 'GET',
+        headers: { Authorization: `Bearer ${botToken}` },
+      });
+    } catch (err) {
+      console.error(`[SlackThreads] conversations.history fetch error:`, err);
+      break;
+    }
+
+    // Retry on 429 rate limit with Retry-After backoff (max 2 retries)
+    if (resp.status === 429) {
+      if (++retryCount > MAX_RETRIES) {
+        console.error(`[SlackThreads] Rate limit retries exhausted`);
+        break;
+      }
+      const retryAfter = Math.min(parseInt(resp.headers.get('Retry-After') || '1', 10), 5);
+      console.log(`[SlackThreads] Rate limited, retrying after ${retryAfter}s (attempt ${retryCount}/${MAX_RETRIES})`);
+      await new Promise((resolve) => setTimeout(resolve, retryAfter * 1000));
+      continue;
+    }
+
+    if (!resp.ok) {
+      console.error(`[SlackThreads] conversations.history HTTP error: status=${resp.status}`);
+      break;
+    }
+
+    const result = (await resp.json()) as {
+      ok: boolean;
+      messages?: Array<{
+        ts: string;
+        user?: string;
+        username?: string;
+        text?: string;
+        subtype?: string;
+        bot_id?: string;
+        files?: Array<{ name: string }>;
+      }>;
+      has_more?: boolean;
+      response_metadata?: { next_cursor?: string };
+    };
+
+    if (!result.ok || !result.messages) break;
+
+    for (const msg of result.messages) {
+      allMessages.push({
+        ts: msg.ts,
+        userId: msg.user || null,
+        username: msg.username || null,
+        text: msg.text || '',
+        files: msg.files?.map((f) => ({ name: f.name })) || [],
+        isBotMessage: !!msg.bot_id || msg.subtype === 'bot_message',
+      });
+    }
+
+    // conversations.history returns newest-first; stop after first page
+    // if we already have enough messages or there are no more
+    cursor = result.has_more && allMessages.length < MAX_DM_MESSAGES
+      ? result.response_metadata?.next_cursor
+      : undefined;
+  } while (cursor);
+
+  // conversations.history returns newest-first, reverse to chronological order
+  allMessages.reverse();
+
+  // Cap at MAX_DM_MESSAGES (take most recent)
+  if (allMessages.length > MAX_DM_MESSAGES) {
+    return allMessages.slice(-MAX_DM_MESSAGES);
+  }
+  return allMessages;
+}
+
+/**
  * Resolve display names for a set of Slack user IDs.
  * Returns a Map of userId -> displayName.
  * Uses an in-memory cache scoped to this call to avoid redundant API requests.
@@ -198,4 +299,52 @@ export async function buildThreadContext(
   });
 
   return `--- Thread context (messages you haven't seen) ---\n${lines.join('\n')}\n--- End thread context ---`;
+}
+
+/**
+ * Build a formatted DM context string from recent DM channel history.
+ *
+ * Fetches recent messages from the DM channel, resolves display names,
+ * filters to messages newer than the cursor, and returns a formatted
+ * context block ready to prepend to the user's message.
+ *
+ * Returns null if there are no new context messages.
+ */
+export async function buildDmContext(
+  botToken: string,
+  channel: string,
+  lastSeenTs: string | null,
+  currentMessageTs: string,
+): Promise<string | null> {
+  const messages = await fetchChannelHistory(botToken, channel, lastSeenTs);
+
+  // Exclude the current invoking message (it will be sent separately)
+  const newMessages = messages.filter((msg) => msg.ts !== currentMessageTs);
+
+  if (newMessages.length === 0) return null;
+
+  // Collect user IDs that need name resolution (skip bot messages — they use username)
+  const userIdsToResolve = newMessages
+    .filter((msg) => !msg.isBotMessage && msg.userId)
+    .map((msg) => msg.userId!);
+
+  const nameMap = await resolveDisplayNames(botToken, userIdsToResolve);
+
+  // Format each message
+  const lines = newMessages.map((msg) => {
+    const timestamp = formatSlackTs(msg.ts);
+    const displayName = msg.isBotMessage
+      ? (msg.username || 'Bot')
+      : (msg.userId ? nameMap.get(msg.userId) || msg.userId : 'Unknown');
+
+    let content = msg.text;
+
+    for (const file of msg.files) {
+      content += ` [file: ${file.name}]`;
+    }
+
+    return `[${timestamp}] ${displayName}: ${content}`;
+  });
+
+  return `--- DM context (recent messages) ---\n${lines.join('\n')}\n--- End DM context ---`;
 }

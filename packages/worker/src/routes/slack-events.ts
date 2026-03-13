@@ -10,7 +10,7 @@ import { decryptString } from '../lib/crypto.js';
 import { dispatchOrchestratorPrompt } from '../lib/workflow-runtime.js';
 import { handleChannelCommand } from './channel-webhooks.js';
 import { getSlackUserInfo, getSlackBotInfo } from '../services/slack.js';
-import { buildThreadContext } from '../services/slack-threads.js';
+import { buildThreadContext, buildDmContext } from '../services/slack-threads.js';
 import { updateThreadCursor } from '../lib/db/channel-threads.js';
 
 export const slackEventsRouter = new Hono<{ Bindings: Env; Variables: Variables }>();
@@ -315,11 +315,42 @@ slackEventsRouter.post('/slack/events', async (c) => {
     console.log(`[Slack] No binding for DM, falling through to orchestrator`);
   }
 
-  // ─── Pull thread context for public channel mentions ──────────────────
+  // ─── Pull conversation context ─────────────────────────────────────────
+  // For DMs: fetch recent channel history for DM rehydration
+  // For channel threads: fetch thread replies (existing behavior)
   // FUTURE: push-model hook — in a push model, context would already be available
   // from real-time broadcast. This pull path fetches on-demand from Slack API.
   let threadContextPrefix: string | undefined;
-  if (!isDm && threadId) {
+  if (isDm) {
+    try {
+      // DM rehydration: fetch recent channel history
+      // Use threadId as the external thread key (for Agents & AI Apps threaded DMs)
+      // or fall back to channelId for unthreaded DMs
+      const externalThreadKey = threadId || message.channelId;
+      const existingMapping = await db.getChannelThreadMapping(
+        c.env.DB, 'slack', message.channelId, externalThreadKey, userId
+      );
+
+      const context = await buildDmContext(
+        botToken,
+        message.channelId,
+        existingMapping?.lastSeenTs || null,
+        messageId || threadId || '',
+      );
+
+      if (context) {
+        threadContextPrefix = context;
+      }
+
+      // Advance cursor to current message
+      if (messageId) {
+        await updateThreadCursor(c.env.DB, 'slack', message.channelId, externalThreadKey, userId, messageId);
+      }
+    } catch (err) {
+      // DM context is best-effort — don't block message dispatch
+      console.error(`[Slack] Failed to fetch DM context:`, err);
+    }
+  } else if (threadId) {
     try {
       // Look up existing cursor for this user's view of the thread
       const existingMapping = await db.getChannelThreadMapping(
