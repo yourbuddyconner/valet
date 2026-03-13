@@ -9097,53 +9097,66 @@ export class SessionAgentDO {
       const userId = this.getStateValue('userId');
       if (!sessionId || !userId) return;
 
-      // Use user-level bindings first (covers orchestrator-owned Slack bindings),
-      // falling back to session-scoped bindings — same pattern as handleListChannels.
+      // Collect channel targets to dispatch the prompt to.
+      // Start with D1 bindings (user-level first, then session-scoped fallback).
       let bindings = await listUserChannelBindings(this.appDb, userId);
       if (bindings.length === 0) {
         bindings = await getSessionChannelBindings(this.appDb, sessionId);
       }
-      // Filter out web bindings — prompts are already broadcast to web clients via WebSocket
-      bindings = bindings.filter(b => b.channelType !== 'web');
-      if (bindings.length === 0) return;
 
-      // Deduplicate by destination (user-level query may return multiple bindings for same channel)
+      // Build deduplicated set of non-web channel targets
       const seen = new Set<string>();
-      bindings = bindings.filter(b => {
+      const targets: Array<{ channelType: string; channelId: string }> = [];
+      for (const b of bindings) {
+        if (b.channelType === 'web') continue;
         const key = `${b.channelType}:${b.channelId}`;
-        if (seen.has(key)) return false;
+        if (seen.has(key)) continue;
         seen.add(key);
-        return true;
-      });
+        targets.push({ channelType: b.channelType, channelId: b.channelId });
+      }
+
+      // Also include the active channel (the channel that triggered this prompt).
+      // Orchestrator sessions often lack D1 bindings for Slack because messages are
+      // dispatched directly to the DO — the active channel fills that gap.
+      const active = this.activeChannel;
+      if (active && active.channelType !== 'web') {
+        const key = `${active.channelType}:${active.channelId}`;
+        if (!seen.has(key)) {
+          seen.add(key);
+          targets.push({ channelType: active.channelType, channelId: active.channelId });
+        }
+      }
+
+      if (targets.length === 0) return;
 
       const refs: Array<{ channelType: string; ref: InteractivePromptRef }> = [];
 
-      for (const binding of bindings) {
-        const transport = channelRegistry.getTransport(binding.channelType);
+      for (const target of targets) {
+        const transport = channelRegistry.getTransport(target.channelType);
         if (!transport?.sendInteractivePrompt) continue;
 
         // Resolve token (same pattern as handleChannelReply)
         let token: string | undefined;
-        if (binding.channelType === 'slack') {
+        if (target.channelType === 'slack') {
           token = await getSlackBotToken(this.env) ?? undefined;
         } else {
-          const credResult = await getCredential(this.env, userId, binding.channelType);
+          const credResult = await getCredential(this.env, userId, target.channelType);
           if (credResult.ok) token = credResult.credential.accessToken;
         }
         if (!token) continue;
 
         // Build target from binding
-        const parsed = this.parseSlackChannelId(binding.channelType, binding.channelId);
-        const target: ChannelTarget = {
-          channelType: binding.channelType,
+        const parsed = this.parseSlackChannelId(target.channelType, target.channelId);
+        const channelTarget: ChannelTarget = {
+          channelType: target.channelType,
           channelId: parsed.channelId,
           threadId: parsed.threadId,
         };
         const ctx: ChannelContext = { token, userId };
 
-        const ref = await transport.sendInteractivePrompt(target, prompt, ctx);
+        const ref = await transport.sendInteractivePrompt(channelTarget, prompt, ctx);
         if (ref) {
-          refs.push({ channelType: binding.channelType, ref });
+          refs.push({ channelType: target.channelType, ref });
         }
       }
 
