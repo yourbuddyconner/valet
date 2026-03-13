@@ -452,3 +452,128 @@ slackEventsRouter.post('/slack/events', async (c) => {
 
   return c.json({ ok: true });
 });
+
+/**
+ * POST /channels/slack/interactive — Slack interactive component handler
+ *
+ * Handles block_actions payloads (button clicks) for action approval.
+ * Payload arrives as application/x-www-form-urlencoded with a `payload` JSON field.
+ * Must respond with 200 within 3 seconds — actual processing is fire-and-forget.
+ */
+slackEventsRouter.post('/slack/interactive', async (c) => {
+  const rawBody = await c.req.text();
+
+  // Parse form-encoded body manually (payload is URL-encoded JSON)
+  const params = new URLSearchParams(rawBody);
+  const payloadStr = params.get('payload');
+  if (!payloadStr) {
+    return c.json({ error: 'Missing payload' }, 400);
+  }
+
+  let payload: Record<string, unknown>;
+  try {
+    payload = JSON.parse(payloadStr) as Record<string, unknown>;
+  } catch {
+    return c.json({ error: 'Invalid payload JSON' }, 400);
+  }
+
+  // Only handle block_actions
+  if (payload.type !== 'block_actions') {
+    return c.json({ ok: true });
+  }
+
+  // Extract team_id for signature verification
+  const team = payload.team as Record<string, unknown> | undefined;
+  const teamId = team?.id as string | undefined;
+  if (!teamId) {
+    return c.json({ error: 'Missing team_id' }, 400);
+  }
+
+  // Look up org-level Slack install for signing secret
+  const install = await db.getOrgSlackInstall(c.get('db'), teamId);
+  if (!install) {
+    return c.json({ ok: true });
+  }
+
+  // Verify Slack signature
+  const rawHeaders: Record<string, string> = {};
+  c.req.raw.headers.forEach((value, key) => {
+    rawHeaders[key] = value;
+  });
+
+  const signingSecret = install.encryptedSigningSecret
+    ? await decryptString(install.encryptedSigningSecret, c.env.ENCRYPTION_KEY)
+    : c.env.SLACK_SIGNING_SECRET;
+
+  if (signingSecret) {
+    const valid = await verifySlackSignature(rawHeaders, rawBody, signingSecret);
+    if (!valid) {
+      return c.json({ error: 'Invalid signature' }, 401);
+    }
+  }
+
+  // Extract action details
+  const actions = payload.actions as Array<Record<string, unknown>> | undefined;
+  const action = actions?.[0];
+  if (!action) {
+    return c.json({ ok: true });
+  }
+
+  const actionId = action.action_id as string;
+  const invocationId = action.value as string;
+  if (!invocationId || (actionId !== 'approve_action' && actionId !== 'deny_action')) {
+    return c.json({ ok: true });
+  }
+
+  // Resolve Slack user to internal user
+  const slackUser = payload.user as Record<string, unknown> | undefined;
+  const slackUserId = slackUser?.id as string | undefined;
+  if (!slackUserId) {
+    return c.json({ ok: true });
+  }
+
+  const userId = await db.resolveUserByExternalId(c.get('db'), 'slack', slackUserId);
+  if (!userId) {
+    console.log(`[Slack Interactive] No identity link for slack user=${slackUserId}`);
+    return c.json({ ok: true });
+  }
+
+  // Look up the invocation to find the session
+  const inv = await db.getInvocation(c.get('db'), invocationId);
+  if (!inv || inv.status !== 'pending') {
+    return c.json({ ok: true });
+  }
+
+  // Verify the Slack user owns this invocation
+  if (inv.userId !== userId) {
+    console.log(`[Slack Interactive] User ${userId} not authorized for invocation ${invocationId}`);
+    return c.json({ ok: true });
+  }
+
+  // Respond to Slack immediately (3-second deadline)
+  // Process approval/denial asynchronously
+  c.executionCtx.waitUntil((async () => {
+    try {
+      const doId = c.env.SESSIONS.idFromName(inv.sessionId);
+      const stub = c.env.SESSIONS.get(doId);
+
+      if (actionId === 'approve_action') {
+        await stub.fetch(new Request('https://session/action-approved', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ invocationId }),
+        }));
+      } else {
+        await stub.fetch(new Request('https://session/action-denied', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ invocationId }),
+        }));
+      }
+    } catch (err) {
+      console.error('[Slack Interactive] Failed to notify DO:', err);
+    }
+  })());
+
+  return c.json({ ok: true });
+});
