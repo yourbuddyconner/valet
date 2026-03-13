@@ -525,10 +525,12 @@ slackEventsRouter.post('/slack/interactive', async (c) => {
     return c.json({ ok: true });
   }
 
-  // Button value is encoded as "sessionId:promptId" or just "promptId" (legacy)
+  // Button value is encoded as "sessionId:promptId" or just "promptId" (legacy).
+  // Use lastIndexOf because sessionId may contain colons (e.g. "orchestrator:userId").
+  // The promptId is always a UUID (no colons).
   let sessionId: string | undefined;
   let promptId: string;
-  const colonIdx = rawValue.indexOf(':');
+  const colonIdx = rawValue.lastIndexOf(':');
   if (colonIdx > 0) {
     sessionId = rawValue.slice(0, colonIdx);
     promptId = rawValue.slice(colonIdx + 1);
