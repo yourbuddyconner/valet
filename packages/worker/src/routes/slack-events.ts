@@ -521,7 +521,7 @@ slackEventsRouter.post('/slack/interactive', async (c) => {
 
   const actionId = action.action_id as string;
   const invocationId = action.value as string;
-  if (!invocationId || (actionId !== 'approve_action' && actionId !== 'deny_action')) {
+  if (!invocationId || !actionId) {
     return c.json({ ok: true });
   }
 
@@ -551,25 +551,20 @@ slackEventsRouter.post('/slack/interactive', async (c) => {
   }
 
   // Respond to Slack immediately (3-second deadline)
-  // Process approval/denial asynchronously
+  // Process resolution asynchronously
   c.executionCtx.waitUntil((async () => {
     try {
       const doId = c.env.SESSIONS.idFromName(inv.sessionId);
       const stub = c.env.SESSIONS.get(doId);
-
-      if (actionId === 'approve_action') {
-        await stub.fetch(new Request('https://session/action-approved', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ invocationId }),
-        }));
-      } else {
-        await stub.fetch(new Request('https://session/action-denied', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ invocationId }),
-        }));
-      }
+      await stub.fetch(new Request('https://session/prompt-resolved', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          promptId: invocationId,
+          actionId,
+          resolvedBy: userId,
+        }),
+      }));
     } catch (err) {
       console.error('[Slack Interactive] Failed to notify DO:', err);
     }
