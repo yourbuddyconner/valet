@@ -48,14 +48,17 @@ export const useAuthStore = create<AuthState>()(
     {
       name: 'valet-auth',
       partialize: (state) => ({
-        token: state.token,
+        // Security: Do not persist auth token to localStorage (XSS risk)
+        // token: state.token,  // ← Removed: keep in-memory only
         user: state.user,
         orgModelPreferences: state.orgModelPreferences,
-        isAuthenticated: state.isAuthenticated,
+        // Note: isAuthenticated will be recomputed on hydration based on token presence
       }),
       onRehydrateStorage: () => (state) => {
         if (state) {
           state.setHydrated(true);
+          // After hydration, token will be null (not persisted)
+          // App should validate session via secure httpOnly cookie or refresh endpoint
         }
       },
     }
