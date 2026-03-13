@@ -22,7 +22,6 @@ Valet uses an org-level Slack integration. One admin installs the app for the en
   },
   "features": {
     "app_home": {
-      "home_tab_enabled": false,
       "messages_tab_enabled": true,
       "messages_tab_read_only_enabled": false
     },
@@ -35,15 +34,21 @@ Valet uses an org-level Slack integration. One admin installs the app for the en
     "scopes": {
       "bot": [
         "app_mentions:read",
+        "assistant:write",
         "channels:history",
+        "channels:read",
         "chat:write",
+        "chat:write.customize",
         "chat:write.public",
         "files:read",
         "groups:history",
+        "groups:read",
         "im:history",
         "im:read",
         "im:write",
-        "users:read"
+        "reactions:write",
+        "users:read",
+        "users:read.email"
       ]
     }
   },
@@ -52,10 +57,16 @@ Valet uses an org-level Slack integration. One admin installs the app for the en
       "request_url": "https://YOUR_WORKER_URL/channels/slack/events",
       "bot_events": [
         "app_mention",
+        "assistant_thread_started",
+        "assistant_thread_context_changed",
         "message.channels",
         "message.groups",
         "message.im"
       ]
+    },
+    "interactivity": {
+      "is_enabled": true,
+      "request_url": "https://YOUR_WORKER_URL/channels/slack/interactive"
     },
     "org_deploy_enabled": false,
     "socket_mode_enabled": false,
@@ -124,15 +135,21 @@ Once linked, messages you send in Slack channels where the bot is present will r
 | Scope | Purpose |
 |-------|---------|
 | `app_mentions:read` | React to @Valet mentions in channels |
+| `assistant:write` | Agents & AI Apps surface (thread status, suggested prompts) |
 | `channels:history` | Read messages in public channels the bot is in |
+| `channels:read` | Look up channel info for display labels |
+| `chat:write` | Send messages and replies |
+| `chat:write.customize` | Send messages with custom username/avatar (persona identity) |
+| `chat:write.public` | Post in channels the bot hasn't joined |
+| `files:read` | Access file attachments shared in messages |
 | `groups:history` | Read messages in private channels the bot is invited to |
+| `groups:read` | Look up private channel info |
 | `im:history` | Read direct messages to the bot |
 | `im:read` | List DM conversations (for verification flow) |
 | `im:write` | Open DMs with users (for verification code delivery) |
-| `chat:write` | Send messages and replies |
-| `chat:write.public` | Post in channels the bot hasn't joined |
-| `files:read` | Access file attachments shared in messages |
+| `reactions:write` | Add emoji reactions to messages |
 | `users:read` | List workspace members (for the link typeahead) |
+| `users:read.email` | Look up users by email for identity linking |
 
 ## Troubleshooting
 
