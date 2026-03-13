@@ -520,9 +520,20 @@ slackEventsRouter.post('/slack/interactive', async (c) => {
   }
 
   const actionId = action.action_id as string;
-  const invocationId = action.value as string;
-  if (!invocationId || (actionId !== 'approve_action' && actionId !== 'deny_action')) {
+  const rawValue = action.value as string;
+  if (!rawValue || !actionId) {
     return c.json({ ok: true });
+  }
+
+  // Button value is encoded as "sessionId:promptId" or just "promptId" (legacy)
+  let sessionId: string | undefined;
+  let promptId: string;
+  const colonIdx = rawValue.indexOf(':');
+  if (colonIdx > 0) {
+    sessionId = rawValue.slice(0, colonIdx);
+    promptId = rawValue.slice(colonIdx + 1);
+  } else {
+    promptId = rawValue;
   }
 
   // Resolve Slack user to internal user
@@ -538,38 +549,34 @@ slackEventsRouter.post('/slack/interactive', async (c) => {
     return c.json({ ok: true });
   }
 
-  // Look up the invocation to find the session
-  const inv = await db.getInvocation(c.get('db'), invocationId);
-  if (!inv || inv.status !== 'pending') {
-    return c.json({ ok: true });
-  }
-
-  // Verify the Slack user owns this invocation
-  if (inv.userId !== userId) {
-    console.log(`[Slack Interactive] User ${userId} not authorized for invocation ${invocationId}`);
-    return c.json({ ok: true });
+  // Resolve session ID: use encoded sessionId if available, otherwise fall back to D1 lookup
+  if (!sessionId) {
+    const inv = await db.getInvocation(c.get('db'), promptId);
+    if (!inv || inv.status !== 'pending') {
+      return c.json({ ok: true });
+    }
+    if (inv.userId !== userId) {
+      console.log(`[Slack Interactive] User ${userId} not authorized for invocation ${promptId}`);
+      return c.json({ ok: true });
+    }
+    sessionId = inv.sessionId;
   }
 
   // Respond to Slack immediately (3-second deadline)
-  // Process approval/denial asynchronously
+  // Process resolution asynchronously — the DO validates prompt existence and ownership
   c.executionCtx.waitUntil((async () => {
     try {
-      const doId = c.env.SESSIONS.idFromName(inv.sessionId);
+      const doId = c.env.SESSIONS.idFromName(sessionId!);
       const stub = c.env.SESSIONS.get(doId);
-
-      if (actionId === 'approve_action') {
-        await stub.fetch(new Request('https://session/action-approved', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ invocationId }),
-        }));
-      } else {
-        await stub.fetch(new Request('https://session/action-denied', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ invocationId }),
-        }));
-      }
+      await stub.fetch(new Request('https://session/prompt-resolved', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          promptId,
+          actionId,
+          resolvedBy: userId,
+        }),
+      }));
     } catch (err) {
       console.error('[Slack Interactive] Failed to notify DO:', err);
     }

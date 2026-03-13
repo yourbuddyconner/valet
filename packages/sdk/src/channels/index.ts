@@ -63,29 +63,36 @@ export interface ChannelContext {
   platformCache?: Record<string, unknown>;
 }
 
-// ─── Approval Types ─────────────────────────────────────────────────────────
+// ─── Interactive Prompt Types ───────────────────────────────────────────────
 
-export interface ApprovalRequest {
-  invocationId: string;
+export interface InteractivePrompt {
+  id: string;
   sessionId: string;
-  toolId: string;
-  service: string;
-  actionId: string;
-  riskLevel: string;
-  params?: Record<string, unknown>;
-  expiresAt: number;
+  type: 'approval' | 'question' | (string & {});
+  title: string;
+  body?: string;
+  actions: InteractiveAction[];
+  expiresAt?: number;
+  context?: Record<string, unknown>;
 }
 
-export interface ApprovalMessageRef {
+export interface InteractiveAction {
+  id: string;
+  label: string;
+  style?: 'primary' | 'danger';
+}
+
+export interface InteractivePromptRef {
   messageId: string;
   channelId: string;
   [key: string]: unknown;
 }
 
-export type ApprovalResolution =
-  | { status: 'approved'; resolvedBy: string }
-  | { status: 'denied'; resolvedBy: string; reason?: string }
-  | { status: 'expired' };
+export interface InteractiveResolution {
+  actionId?: string;
+  value?: string;
+  resolvedBy: string;
+}
 
 // ─── Routing Metadata (passed to parseInbound) ──────────────────────────────
 
@@ -137,11 +144,11 @@ export interface ChannelTransport {
   /** Unregister the webhook from the platform. */
   unregisterWebhook?(ctx: ChannelContext): Promise<boolean>;
 
-  /** Send an interactive approval request to a channel (e.g. Slack Block Kit buttons). */
-  sendApprovalRequest?(target: ChannelTarget, approval: ApprovalRequest, ctx: ChannelContext): Promise<ApprovalMessageRef | null>;
+  /** Send an interactive prompt to a channel (e.g. Slack Block Kit buttons, or plain text for free-text questions). */
+  sendInteractivePrompt?(target: ChannelTarget, prompt: InteractivePrompt, ctx: ChannelContext): Promise<InteractivePromptRef | null>;
 
-  /** Update a previously sent approval message with resolution status. */
-  updateApprovalStatus?(target: ChannelTarget, ref: ApprovalMessageRef, resolution: ApprovalResolution, ctx: ChannelContext): Promise<void>;
+  /** Update a previously sent interactive prompt with resolution status. */
+  updateInteractivePrompt?(target: ChannelTarget, ref: InteractivePromptRef, resolution: InteractiveResolution, ctx: ChannelContext): Promise<void>;
 }
 
 // ─── Integration Provider (re-exported from integrations module) ─────────────

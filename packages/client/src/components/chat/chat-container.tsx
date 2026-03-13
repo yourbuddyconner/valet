@@ -9,8 +9,7 @@ import { useActiveThread, useCreateThread } from '@/api/threads';
 import { useDrawer } from '@/routes/sessions/$sessionId';
 import { MessageList } from './message-list';
 import { ChatInput } from './chat-input';
-import { QuestionPrompt } from './question-prompt';
-import { ActionApprovalCard } from '@/components/session/action-approval-card';
+import { InteractivePromptCard } from '@/components/session/interactive-prompt-card';
 import { ThreadSidebar } from './thread-sidebar';
 import { SessionActionsMenu } from '@/components/sessions/session-actions-menu';
 import { ShareSessionDialog } from '@/components/sessions/share-session-dialog';
@@ -59,7 +58,7 @@ export function ChatContainer({ sessionId, initialThreadId, initialContinuationC
   const {
     messages,
     sessionStatus,
-    pendingQuestions,
+    interactivePrompts,
     connectionStatus,
     isConnected,
     runnerConnected,
@@ -78,7 +77,6 @@ export function ChatContainer({ sessionId, initialThreadId, initialContinuationC
     childSessionEvents,
     connectedUsers,
     executeCommand,
-    pendingActionApprovals,
     approveActionWs,
     denyActionWs,
     integrationAuthErrors,
@@ -430,20 +428,11 @@ export function ChatContainer({ sessionId, initialThreadId, initialContinuationC
               connectedUsers={connectedUsers}
             />
           </div>
-          {pendingQuestions.map((q) => (
-            <QuestionPrompt
-              key={q.questionId}
-              questionId={q.questionId}
-              text={q.text}
-              options={q.options}
-              expiresAt={q.expiresAt}
+          {interactivePrompts.map((prompt) => (
+            <InteractivePromptCard
+              key={prompt.id}
+              prompt={prompt}
               onAnswer={answerQuestion}
-            />
-          ))}
-          {pendingActionApprovals.map((a) => (
-            <ActionApprovalCard
-              key={a.invocationId}
-              approval={a}
               onApproveWs={approveActionWs}
               onDenyWs={denyActionWs}
             />
