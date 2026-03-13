@@ -150,7 +150,7 @@ export async function assembleRepoEnv(
   userId: string,
   orgId: string | undefined,
   opts: { repoUrl?: string; branch?: string; ref?: string },
-): Promise<{ envVars: Record<string, string>; gitConfig: Record<string, string>; error?: string }> {
+): Promise<{ envVars: Record<string, string>; gitConfig: Record<string, string>; token?: string; expiresAt?: string; error?: string }> {
   const envVars: Record<string, string> = {};
   const gitConfig: Record<string, string> = {};
 
@@ -236,5 +236,7 @@ export async function assembleRepoEnv(
   return {
     envVars: sessionEnv.envVars,
     gitConfig: sessionEnv.gitConfig,
+    token: freshToken.accessToken,
+    expiresAt: freshToken.expiresAt,
   };
 }

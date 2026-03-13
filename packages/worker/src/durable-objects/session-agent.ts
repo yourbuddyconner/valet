@@ -8,7 +8,7 @@ import { listWorkflows, upsertWorkflow, getWorkflowByIdOrSlug, getWorkflowOwnerC
 import { listTriggers, getTrigger, deleteTrigger, createTrigger, getTriggerForRun, updateTriggerLastRun, findScheduleTriggerByNameAndWorkflow, findScheduleTriggersByWorkflow, findScheduleTriggersByName, updateTriggerFull } from '../lib/db/triggers.js';
 import { getExecution, getExecutionWithWorkflowName, getExecutionForAuth, getExecutionSteps, getExecutionOwnerAndStatus, checkIdempotencyKey, createExecution, completeExecutionFull, upsertExecutionStep, listExecutions } from '../lib/db/executions.js';
 import { checkWorkflowConcurrency, createWorkflowSession, dispatchOrchestratorPrompt, enqueueWorkflowExecution, sha256Hex } from '../lib/workflow-runtime.js';
-import { assembleCustomProviders, assembleBuiltInProviderModelConfigs } from '../lib/env-assembly.js';
+import { assembleCustomProviders, assembleBuiltInProviderModelConfigs, assembleRepoEnv } from '../lib/env-assembly.js';
 import { resolveAvailableModels } from '../services/model-catalog.js';
 import { channelRegistry } from '../channels/registry.js';
 import { integrationRegistry } from '../integrations/registry.js';
@@ -226,7 +226,7 @@ function deriveRuntimeStates(args: {
 type ToolCallStatus = 'pending' | 'running' | 'completed' | 'error';
 
 interface RunnerMessage {
-  type: 'stream' | 'result' | 'tool' | 'question' | 'screenshot' | 'error' | 'complete' | 'agentStatus' | 'create-pr' | 'update-pr' | 'list-pull-requests' | 'inspect-pull-request' | 'models' | 'aborted' | 'reverted' | 'diff' | 'review-result' | 'command-result' | 'ping' | 'git-state' | 'pr-created' | 'files-changed' | 'child-session' | 'title' | 'spawn-child' | 'session-message' | 'session-messages' | 'terminate-child' | 'self-terminate' | 'mem-read' | 'mem-write' | 'mem-patch' | 'mem-rm' | 'mem-search' | 'list-repos' | 'list-personas' | 'list-channels' | 'get-session-status' | 'list-child-sessions' | 'forward-messages' | 'read-repo-file' | 'workflow-list' | 'workflow-sync' | 'workflow-run' | 'workflow-executions' | 'workflow-api' | 'trigger-api' | 'execution-api' | 'skill-api' | 'persona-api' | 'workflow-execution-result' | 'workflow-chat-message' | 'model-switched' | 'tunnels' | 'mailbox-send' | 'mailbox-check' | 'task-create' | 'task-list' | 'task-update' | 'task-my' | 'channel-reply' | 'audio-transcript' | 'channel-session-created' | 'session-reset' | 'opencode-config-applied' | 'list-tools' | 'call-tool' | 'message.create' | 'message.part.text-delta' | 'message.part.tool-update' | 'message.finalize' | 'usage-report' | 'thread.created' | 'thread.updated';
+  type: 'stream' | 'result' | 'tool' | 'question' | 'screenshot' | 'error' | 'complete' | 'agentStatus' | 'create-pr' | 'update-pr' | 'list-pull-requests' | 'inspect-pull-request' | 'models' | 'aborted' | 'reverted' | 'diff' | 'review-result' | 'command-result' | 'ping' | 'git-state' | 'pr-created' | 'files-changed' | 'child-session' | 'title' | 'spawn-child' | 'session-message' | 'session-messages' | 'terminate-child' | 'self-terminate' | 'mem-read' | 'mem-write' | 'mem-patch' | 'mem-rm' | 'mem-search' | 'list-repos' | 'list-personas' | 'list-channels' | 'get-session-status' | 'list-child-sessions' | 'forward-messages' | 'read-repo-file' | 'workflow-list' | 'workflow-sync' | 'workflow-run' | 'workflow-executions' | 'workflow-api' | 'trigger-api' | 'execution-api' | 'skill-api' | 'persona-api' | 'workflow-execution-result' | 'workflow-chat-message' | 'model-switched' | 'tunnels' | 'mailbox-send' | 'mailbox-check' | 'task-create' | 'task-list' | 'task-update' | 'task-my' | 'channel-reply' | 'audio-transcript' | 'channel-session-created' | 'session-reset' | 'opencode-config-applied' | 'list-tools' | 'call-tool' | 'message.create' | 'message.part.text-delta' | 'message.part.tool-update' | 'message.finalize' | 'usage-report' | 'thread.created' | 'thread.updated' | 'repo:refresh-token' | 'repo:clone-complete';
   restarted?: boolean;
   turnId?: string;
   delta?: string;
@@ -365,6 +365,8 @@ interface RunnerMessage {
   summaryAdditions?: number;
   summaryDeletions?: number;
   summaryFiles?: number;
+  // Repo clone result
+  success?: boolean;
 }
 
 /** Messages sent from DO to clients */
@@ -375,7 +377,7 @@ interface ClientOutbound {
 
 /** Messages sent from DO to runner */
 interface RunnerOutbound {
-  type: 'prompt' | 'answer' | 'stop' | 'abort' | 'revert' | 'diff' | 'review' | 'opencode-command' | 'pong' | 'init' | 'opencode-config' | 'plugin-content' | 'spawn-child-result' | 'session-message-result' | 'session-messages-result' | 'create-pr-result' | 'update-pr-result' | 'list-pull-requests-result' | 'inspect-pull-request-result' | 'terminate-child-result' | 'mem-read-result' | 'mem-write-result' | 'mem-patch-result' | 'mem-rm-result' | 'mem-search-result' | 'list-repos-result' | 'list-personas-result' | 'list-channels-result' | 'get-session-status-result' | 'list-child-sessions-result' | 'forward-messages-result' | 'read-repo-file-result' | 'workflow-list-result' | 'workflow-sync-result' | 'workflow-run-result' | 'workflow-executions-result' | 'workflow-api-result' | 'trigger-api-result' | 'execution-api-result' | 'skill-api-result' | 'persona-api-result' | 'workflow-execute' | 'tunnel-delete' | 'channel-reply-result' | 'list-tools-result' | 'call-tool-result' | 'call-tool-pending';
+  type: 'prompt' | 'answer' | 'stop' | 'abort' | 'revert' | 'diff' | 'review' | 'opencode-command' | 'pong' | 'init' | 'opencode-config' | 'plugin-content' | 'repo-config' | 'repo-token-refreshed' | 'spawn-child-result' | 'session-message-result' | 'session-messages-result' | 'create-pr-result' | 'update-pr-result' | 'list-pull-requests-result' | 'inspect-pull-request-result' | 'terminate-child-result' | 'mem-read-result' | 'mem-write-result' | 'mem-patch-result' | 'mem-rm-result' | 'mem-search-result' | 'list-repos-result' | 'list-personas-result' | 'list-channels-result' | 'get-session-status-result' | 'list-child-sessions-result' | 'forward-messages-result' | 'read-repo-file-result' | 'workflow-list-result' | 'workflow-sync-result' | 'workflow-run-result' | 'workflow-executions-result' | 'workflow-api-result' | 'trigger-api-result' | 'execution-api-result' | 'skill-api-result' | 'persona-api-result' | 'workflow-execute' | 'tunnel-delete' | 'channel-reply-result' | 'list-tools-result' | 'call-tool-result' | 'call-tool-pending';
   config?: {
     tools?: Record<string, boolean>;
     providerKeys?: Record<string, string>;
@@ -460,6 +462,12 @@ interface RunnerOutbound {
     tools: Array<{ filename: string; content: string }>;
     allowRepoContent: boolean;
   };
+  // Repo config fields (repo-config / repo-token-refreshed)
+  token?: string;
+  expiresAt?: string;
+  gitConfig?: Record<string, string>;
+  repoUrl?: string;
+  branch?: string;
 }
 
 // ─── Durable SQLite Table Schemas ──────────────────────────────────────────
@@ -1147,6 +1155,7 @@ export class SessionAgentDO {
     // updated keys (e.g. admin rotated a provider key while sandbox was hibernated).
     this.sendOpenCodeConfig();
     this.sendPluginContent();
+    this.sendRepoConfig();
 
     // Don't dispatch queued work immediately — the runner isn't ready yet.
     // It needs to start its event stream, discover models, and create OpenCode sessions.
@@ -3301,6 +3310,20 @@ export class SessionAgentDO {
       case 'call-tool':
         await this.handleCallTool(msg.requestId!, msg.toolId!, msg.params ?? {});
         break;
+
+      case 'repo:refresh-token': {
+        await this.handleRepoTokenRefresh();
+        break;
+      }
+
+      case 'repo:clone-complete': {
+        if (msg.success !== false) {
+          console.log('[SessionAgentDO] Repo clone completed successfully');
+        } else {
+          console.error('[SessionAgentDO] Repo clone failed:', msg.error);
+        }
+        break;
+      }
 
       case 'ping':
         // Keepalive from runner — respond with pong
@@ -9286,6 +9309,83 @@ export class SessionAgentDO {
 
     console.log(`[SessionAgentDO] Sending opencode-config to runner (providers=${Object.keys(config.providerKeys!).length}, customProviders=${config.customProviders?.length ?? 0}, builtInModelConfigs=${config.builtInProviderModelConfigs?.length ?? 0}, isOrchestrator=${config.isOrchestrator})`);
     this.sendToRunner({ type: 'opencode-config', config });
+  }
+
+  private async sendRepoConfig(): Promise<void> {
+    const sessionId = this.getStateValue('sessionId');
+    if (!sessionId) return;
+
+    const gitState = await getSessionGitState(this.appDb, sessionId);
+    const repoUrl = gitState?.sourceRepoUrl;
+    if (!repoUrl) return;
+
+    const userId = this.getStateValue('userId');
+    if (!userId) return;
+
+    const orgId = 'default'; // TODO: resolve from user's org
+
+    try {
+      const repoEnv = await assembleRepoEnv(this.appDb, this.env, userId, orgId, {
+        repoUrl,
+        branch: gitState.branch ?? undefined,
+        ref: gitState.ref ?? undefined,
+      });
+
+      if (repoEnv.error) {
+        console.warn(`[SessionAgentDO] sendRepoConfig: ${repoEnv.error}`);
+        return;
+      }
+
+      if (repoEnv.token) {
+        this.sendToRunner({
+          type: 'repo-config',
+          token: repoEnv.token,
+          expiresAt: repoEnv.expiresAt,
+          gitConfig: repoEnv.gitConfig,
+          repoUrl,
+          branch: gitState.branch ?? undefined,
+          ref: gitState.ref ?? undefined,
+        });
+        console.log(`[SessionAgentDO] Sent repo-config to runner for ${repoUrl}`);
+      }
+    } catch (err) {
+      console.error('[SessionAgentDO] Failed to assemble repo config for runner:', err);
+    }
+  }
+
+  private async handleRepoTokenRefresh(): Promise<void> {
+    const sessionId = this.getStateValue('sessionId');
+    if (!sessionId) return;
+
+    const gitState = await getSessionGitState(this.appDb, sessionId);
+    const repoUrl = gitState?.sourceRepoUrl;
+    if (!repoUrl) return;
+
+    const userId = this.getStateValue('userId');
+    if (!userId) return;
+
+    const orgId = 'default'; // TODO: resolve from user's org
+
+    try {
+      const repoEnv = await assembleRepoEnv(this.appDb, this.env, userId, orgId, {
+        repoUrl,
+        branch: gitState.branch ?? undefined,
+      });
+
+      if (repoEnv.error || !repoEnv.token) {
+        console.error('[SessionAgentDO] Failed to refresh repo token:', repoEnv.error);
+        return;
+      }
+
+      this.sendToRunner({
+        type: 'repo-token-refreshed',
+        token: repoEnv.token,
+        expiresAt: repoEnv.expiresAt,
+      });
+      console.log('[SessionAgentDO] Sent refreshed repo token to runner');
+    } catch (err) {
+      console.error('[SessionAgentDO] Failed to refresh repo token:', err);
+    }
   }
 
   private async sendPluginContent(): Promise<void> {
