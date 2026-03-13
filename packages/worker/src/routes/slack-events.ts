@@ -321,12 +321,40 @@ slackEventsRouter.post('/slack/events', async (c) => {
   // FUTURE: push-model hook — in a push model, context would already be available
   // from real-time broadcast. This pull path fetches on-demand from Slack API.
   let threadContextPrefix: string | undefined;
-  if (isDm) {
+  if (isDm && threadId) {
     try {
-      // DM rehydration: fetch recent channel history
-      // Use threadId as the external thread key (for Agents & AI Apps threaded DMs)
-      // or fall back to channelId for unthreaded DMs
-      const externalThreadKey = threadId || message.channelId;
+      // Agents & AI Apps DMs are threaded — each conversation is a thread
+      // under a root message. Use conversations.replies (via buildThreadContext)
+      // to get the actual conversation, not conversations.history which only
+      // returns root messages.
+      const existingMapping = await db.getChannelThreadMapping(
+        c.env.DB, 'slack', message.channelId, threadId, userId
+      );
+
+      const context = await buildThreadContext(
+        botToken,
+        message.channelId,
+        threadId,
+        existingMapping?.lastSeenTs || null,
+        messageId || threadId,
+      );
+
+      if (context) {
+        threadContextPrefix = context;
+      }
+
+      // Advance cursor to current message
+      if (messageId) {
+        await updateThreadCursor(c.env.DB, 'slack', message.channelId, threadId, userId, messageId);
+      }
+    } catch (err) {
+      // DM context is best-effort — don't block message dispatch
+      console.error(`[Slack] Failed to fetch DM context:`, err);
+    }
+  } else if (isDm) {
+    try {
+      // Unthreaded DMs (legacy/non-AI-app format) — use channel history
+      const externalThreadKey = message.channelId;
       const existingMapping = await db.getChannelThreadMapping(
         c.env.DB, 'slack', message.channelId, externalThreadKey, userId
       );
@@ -335,7 +363,7 @@ slackEventsRouter.post('/slack/events', async (c) => {
         botToken,
         message.channelId,
         existingMapping?.lastSeenTs || null,
-        messageId || threadId || '',
+        messageId || '',
       );
 
       if (context) {
@@ -347,7 +375,6 @@ slackEventsRouter.post('/slack/events', async (c) => {
         await updateThreadCursor(c.env.DB, 'slack', message.channelId, externalThreadKey, userId, messageId);
       }
     } catch (err) {
-      // DM context is best-effort — don't block message dispatch
       console.error(`[Slack] Failed to fetch DM context:`, err);
     }
   } else if (threadId) {
