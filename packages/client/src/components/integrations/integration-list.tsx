@@ -1,7 +1,7 @@
 import * as React from 'react';
 import { useIntegrations } from '@/api/integrations';
 import { useUserCredentials, useDeleteUserCredential } from '@/api/auth';
-import { useTelegramConfig, useDisconnectTelegram } from '@/api/orchestrator';
+import { useTelegramConfig, useDisconnectTelegram, useUpdateTelegramConfig } from '@/api/orchestrator';
 import {
   useSlackUserStatus,
   useSlackWorkspaceUsers,
@@ -213,8 +213,11 @@ function OnePasswordCard() {
   );
 }
 
-function TelegramCard({ config }: { config: { botUsername: string; webhookActive: boolean } }) {
+function TelegramCard({ config }: { config: { botUsername: string; webhookActive: boolean; ownerTelegramUserId?: string } }) {
   const disconnectTelegram = useDisconnectTelegram();
+  const updateConfig = useUpdateTelegramConfig();
+  const [editingOwner, setEditingOwner] = React.useState(false);
+  const [ownerValue, setOwnerValue] = React.useState(config.ownerTelegramUserId || '');
 
   return (
     <Card>
@@ -232,7 +235,45 @@ function TelegramCard({ config }: { config: { botUsername: string; webhookActive
           </div>
         </div>
       </CardHeader>
-      <CardContent>
+      <CardContent className="space-y-3">
+        <div>
+          <label className="text-xs font-medium text-neutral-500 dark:text-neutral-400">Owner Telegram User ID</label>
+          {editingOwner ? (
+            <div className="mt-1 flex items-center gap-2">
+              <input
+                type="text"
+                value={ownerValue}
+                onChange={(e) => setOwnerValue(e.target.value)}
+                className="flex-1 rounded border px-2 py-1 text-sm dark:border-neutral-600 dark:bg-neutral-800"
+                placeholder="Telegram user ID"
+              />
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => {
+                  updateConfig.mutate({ ownerTelegramUserId: ownerValue }, {
+                    onSuccess: () => setEditingOwner(false),
+                  });
+                }}
+                disabled={updateConfig.isPending}
+              >
+                Save
+              </Button>
+              <Button variant="secondary" size="sm" onClick={() => setEditingOwner(false)}>
+                Cancel
+              </Button>
+            </div>
+          ) : (
+            <div className="mt-1 flex items-center gap-2">
+              <p className="text-sm text-neutral-700 dark:text-neutral-300">
+                {config.ownerTelegramUserId || 'Not set — send /start to your bot'}
+              </p>
+              <Button variant="secondary" size="sm" onClick={() => setEditingOwner(true)}>
+                Edit
+              </Button>
+            </div>
+          )}
+        </div>
         <div className="flex items-center justify-between">
           <p className="text-xs text-neutral-500 dark:text-neutral-400">
             Bot connected to orchestrator

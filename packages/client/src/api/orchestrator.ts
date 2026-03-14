@@ -427,3 +427,15 @@ export function useDisconnectTelegram() {
     },
   });
 }
+
+export function useUpdateTelegramConfig() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (data: { ownerTelegramUserId?: string }) =>
+      api.patch<{ config: UserTelegramConfig }>('/me/telegram', data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: orchestratorKeys.telegram() });
+    },
+  });
+}
