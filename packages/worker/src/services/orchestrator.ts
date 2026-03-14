@@ -28,25 +28,30 @@ export async function restartOrchestratorSession(
   // Backfill: create persona for orchestrators that predate persona support
   if (!identity.personaId) {
     const personaId = crypto.randomUUID();
-    await createPersona(appDb, {
-      id: personaId,
-      name: `${identity.name} (Orchestrator)`,
-      slug: `orchestrator-${identity.handle}`,
-      description: 'Auto-managed orchestrator persona',
-      visibility: 'private',
-      createdBy: userId,
-    });
-    if (identity.customInstructions) {
-      await upsertPersonaFile(appDb, {
-        id: crypto.randomUUID(),
-        personaId,
-        filename: 'custom-instructions.md',
-        content: identity.customInstructions,
-        sortOrder: 10,
+    const slug = `orchestrator-${identity.handle}-${personaId.slice(0, 8)}`;
+    try {
+      await createPersona(appDb, {
+        id: personaId,
+        name: `${identity.name} (Orchestrator)`,
+        slug,
+        description: 'Auto-managed orchestrator persona',
+        visibility: 'private',
+        createdBy: userId,
       });
+      if (identity.customInstructions) {
+        await upsertPersonaFile(appDb, {
+          id: crypto.randomUUID(),
+          personaId,
+          filename: 'custom-instructions.md',
+          content: identity.customInstructions,
+          sortOrder: 10,
+        });
+      }
+      await db.updateOrchestratorIdentity(appDb, identity.id, { personaId });
+      identity = { ...identity, personaId };
+    } catch (err) {
+      console.warn('[Orchestrator] Failed to backfill persona, continuing without:', err);
     }
-    await db.updateOrchestratorIdentity(appDb, identity.id, { personaId });
-    identity = { ...identity, personaId };
   }
 
   const personaFiles = buildOrchestratorPersonaFiles(identity as any);
@@ -207,7 +212,7 @@ export async function onboardOrchestrator(
     await createPersona(appDb, {
       id: personaId,
       name: `${params.name} (Orchestrator)`,
-      slug: `orchestrator-${params.handle}`,
+      slug: `orchestrator-${params.handle}-${personaId.slice(0, 8)}`,
       description: 'Auto-managed orchestrator persona',
       visibility: 'private',
       createdBy: userId,

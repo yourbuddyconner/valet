@@ -5143,12 +5143,17 @@ export class SessionAgentDO {
 
       if (action === 'update-instructions') {
         const instructions = (payload?.instructions ?? payload?.customInstructions) as string | undefined;
+        if (instructions === undefined) {
+          this.sendToRunner({ type: 'identity-api-result', requestId, error: 'instructions field is required', statusCode: 400 } as any);
+          return;
+        }
         const identity = await getOrchestratorIdentity(this.appDb, userId);
         if (!identity) {
           this.sendToRunner({ type: 'identity-api-result', requestId, error: 'Identity not found', statusCode: 404 } as any);
           return;
         }
-        await updateOrchestratorIdentity(this.appDb, identity.id, { customInstructions: instructions || undefined });
+        // Use nullish coalescing: empty string clears instructions, undefined is rejected above
+        await updateOrchestratorIdentity(this.appDb, identity.id, { customInstructions: instructions || null } as any);
         // Also update the linked persona file if a personaId exists
         if (identity.personaId) {
           await upsertPersonaFile(this.appDb, {
