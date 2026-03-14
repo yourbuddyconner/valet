@@ -40,6 +40,83 @@ channelWebhooksRouter.post('/:channelType/webhook/:userId', async (c) => {
     rawHeaders[key] = value;
   });
 
+  // ─── Telegram: Handle callback_query (inline keyboard button clicks) ──
+  if (channelType === 'telegram') {
+    let update: Record<string, unknown>;
+    try {
+      update = JSON.parse(rawBody) as Record<string, unknown>;
+    } catch {
+      return c.json({ ok: true });
+    }
+
+    const callbackQuery = update.callback_query as Record<string, unknown> | undefined;
+    if (callbackQuery) {
+      const callbackId = callbackQuery.id as string;
+      const callbackData = callbackQuery.data as string | undefined;
+      const from = callbackQuery.from as Record<string, unknown> | undefined;
+      const fromId = from?.id ? String(from.id) : '';
+
+      // Verify owner
+      if (config?.ownerTelegramUserId && fromId !== config.ownerTelegramUserId) {
+        // Answer the callback to dismiss spinner, but don't process
+        await fetch(`https://api.telegram.org/bot${botToken}/answerCallbackQuery`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ callback_query_id: callbackId, text: 'Not authorized' }),
+        });
+        return c.json({ ok: true });
+      }
+
+      // Answer the callback query to dismiss loading spinner
+      await fetch(`https://api.telegram.org/bot${botToken}/answerCallbackQuery`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ callback_query_id: callbackId }),
+      });
+
+      // Parse callback_data: "actionId|sessionId:promptId"
+      if (callbackData) {
+        const pipeIdx = callbackData.indexOf('|');
+        if (pipeIdx > 0) {
+          const actionId = callbackData.slice(0, pipeIdx);
+          const rest = callbackData.slice(pipeIdx + 1);
+          const colonIdx = rest.lastIndexOf(':');
+          let sessionId: string | undefined;
+          let promptId: string;
+          if (colonIdx > 0) {
+            sessionId = rest.slice(0, colonIdx);
+            promptId = rest.slice(colonIdx + 1);
+          } else {
+            promptId = rest;
+          }
+
+          if (sessionId && promptId) {
+            // Fire-and-forget: resolve prompt on session DO
+            c.executionCtx.waitUntil((async () => {
+              try {
+                const doId = c.env.SESSIONS.idFromName(sessionId!);
+                const stub = c.env.SESSIONS.get(doId);
+                await stub.fetch(new Request('https://session/prompt-resolved', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({
+                    promptId,
+                    actionId,
+                    resolvedBy: userId,
+                  }),
+                }));
+              } catch (err) {
+                console.error('[Telegram callback_query] Failed to notify DO:', err);
+              }
+            })());
+          }
+        }
+      }
+
+      return c.json({ ok: true });
+    }
+  }
+
   // Parse inbound message
   const message = await transport.parseInbound(rawHeaders, rawBody, {
     userId,
