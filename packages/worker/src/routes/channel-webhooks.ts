@@ -51,6 +51,40 @@ channelWebhooksRouter.post('/:channelType/webhook/:userId', async (c) => {
     return c.json({ ok: true });
   }
 
+  // ─── Telegram: Owner verification + group chat filtering ─────────────
+  if (channelType === 'telegram' && config) {
+    const ownerTelegramUserId = config.ownerTelegramUserId;
+
+    // If owner is set, verify sender matches
+    if (ownerTelegramUserId && message.senderId !== ownerTelegramUserId) {
+      console.log(`[Channel:${channelType}] Ignoring non-owner message: sender=${message.senderId} owner=${ownerTelegramUserId}`);
+      return c.json({ ok: true });
+    }
+
+    // Parse raw body again for chat.type (not available on InboundMessage)
+    let chatType: string | undefined;
+    try {
+      const update = JSON.parse(rawBody) as Record<string, unknown>;
+      const msg = (update.message ?? update.edited_message) as Record<string, unknown> | undefined;
+      const chat = msg?.chat as Record<string, unknown> | undefined;
+      chatType = chat?.type as string | undefined;
+    } catch { /* ignore */ }
+
+    const isGroup = chatType === 'group' || chatType === 'supergroup';
+
+    if (isGroup && !message.command) {
+      // In groups without privacy mode bypass (bot is admin), we only get
+      // commands and replies anyway. If privacy mode is off (bot is admin),
+      // we also get regular messages — check for @bot mention.
+      const botUsername = config.botUsername;
+      const isMention = botUsername && message.text?.includes(`@${botUsername}`);
+      if (!isMention) {
+        console.log(`[Channel:${channelType}] Ignoring non-mention group message`);
+        return c.json({ ok: true });
+      }
+    }
+  }
+
   // Handle slash commands
   if (message.command) {
     const ctx: ChannelContext = { token: botToken, userId };
@@ -63,6 +97,41 @@ channelWebhooksRouter.post('/:channelType/webhook/:userId', async (c) => {
   const parts = transport.scopeKeyParts(message, userId);
   const scopeKey = channelScopeKey(userId, parts.channelType, parts.channelId);
   const binding = await db.getChannelBindingByScopeKey(c.get('db'), scopeKey);
+
+  // ─── Resolve orchestrator thread (Telegram) ──────────────────────────
+  let orchestratorThreadId: string | undefined;
+  if (channelType === 'telegram') {
+    let targetSessionId: string | undefined;
+
+    if (binding) {
+      targetSessionId = binding.sessionId;
+    } else {
+      const orchSession = await db.getOrchestratorSession(c.env.DB, userId);
+      targetSessionId = orchSession?.id;
+    }
+
+    if (targetSessionId) {
+      const THREAD_RESOLVE_RETRIES = 3;
+      for (let attempt = 1; attempt <= THREAD_RESOLVE_RETRIES; attempt++) {
+        try {
+          orchestratorThreadId = await db.getOrCreateChannelThread(c.env.DB, {
+            channelType: 'telegram',
+            channelId: message.channelId,
+            externalThreadId: message.channelId,
+            sessionId: targetSessionId,
+            userId,
+          });
+          console.log(`[Channel:${channelType}] Resolved thread: chat=${message.channelId} → orchestrator=${orchestratorThreadId}`);
+          break;
+        } catch (err) {
+          console.error(`[Channel:${channelType}] Thread resolution attempt ${attempt}/${THREAD_RESOLVE_RETRIES} failed:`, err);
+          if (attempt < THREAD_RESOLVE_RETRIES) {
+            await new Promise((r) => setTimeout(r, 100 * attempt));
+          }
+        }
+      }
+    }
+  }
 
   if (binding) {
     console.log(`[Channel:${channelType}] Bound session dispatch: session=${binding.sessionId} channelId=${message.channelId}`);
@@ -87,6 +156,7 @@ channelWebhooksRouter.post('/:channelType/webhook/:userId', async (c) => {
             queueMode: binding.queueMode,
             channelType,
             channelId: message.channelId,
+            threadId: orchestratorThreadId,
             authorName: message.senderName,
           }),
         }),
@@ -114,6 +184,7 @@ channelWebhooksRouter.post('/:channelType/webhook/:userId', async (c) => {
     content: message.text || '[Attachment]',
     channelType,
     channelId: message.channelId,
+    threadId: orchestratorThreadId,
     authorName: message.senderName,
     attachments: attachments.length > 0 ? attachments : undefined,
   });
