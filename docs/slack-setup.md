@@ -28,6 +28,19 @@ Valet uses an org-level Slack integration. One admin installs the app for the en
     "bot_user": {
       "display_name": "Valet",
       "always_online": true
+    },
+    "assistant_view": {
+      "assistant_description": "Your on-demand coding assistant for your entire Slack workspace. Ask questions, automate tasks, and get coding help right in Slack.",
+      "suggested_prompts": [
+        {
+          "title": "How are you doing?",
+          "message": "Howdy doodee?! How you doing?",
+        },
+        {
+          "title": "Give me ideas",
+          "message": "Can you please describe what kinds of work you can and can't do, and give me ideas for things that you can help out with?",
+        }
+      ]
     }
   },
   "oauth_config": {
@@ -54,7 +67,7 @@ Valet uses an org-level Slack integration. One admin installs the app for the en
   },
   "settings": {
     "event_subscriptions": {
-      "request_url": "https://YOUR_WORKER_URL/channels/slack/events",
+      "request_url": "https://WORKER_URL/channels/slack/events",
       "bot_events": [
         "app_mention",
         "assistant_thread_started",
@@ -66,7 +79,7 @@ Valet uses an org-level Slack integration. One admin installs the app for the en
     },
     "interactivity": {
       "is_enabled": true,
-      "request_url": "https://YOUR_WORKER_URL/channels/slack/interactive"
+      "request_url": "https://WORKER_URL/channels/slack/interactive"
     },
     "org_deploy_enabled": false,
     "socket_mode_enabled": false,
