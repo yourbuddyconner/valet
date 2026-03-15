@@ -1,0 +1,4 @@
+name: codestorage
+version: 0.0.1
+description: code.storage repo provider for git clone/push session runtime
+icon: "🧱"

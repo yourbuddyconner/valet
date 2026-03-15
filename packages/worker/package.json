@@ -20,6 +20,7 @@
   "dependencies": {
     "@valet/sdk": "workspace:*",
     "@valet/plugin-cloudflare": "workspace:*",
+    "@valet/plugin-codestorage": "workspace:*",
     "@valet/plugin-figma": "workspace:*",
     "@valet/plugin-deepwiki": "workspace:*",
     "@valet/plugin-email-auth": "workspace:*",
