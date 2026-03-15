@@ -1,7 +1,7 @@
 import type { Env } from '../env.js';
 import type { AppDb } from '../lib/drizzle.js';
 import { getDb } from '../lib/drizzle.js';
-import { updateSessionStatus, updateSessionMetrics, addActiveSeconds, updateSessionGitState, upsertSessionFileChanged, updateSessionTitle, createSession, createSessionGitState, getSession, getSessionGitState, getChildSessions, getSessionChannelBindings, listUserChannelBindings, readMemoryFile, listMemoryFiles, writeMemoryFile, patchMemoryFile, deleteMemoryFile, deleteMemoryFilesUnderPath, searchMemoryFiles, boostMemoryFileRelevance, listOrgRepositories, listPersonas, getUserById, getUsersByIds, createMailboxMessage, getSessionMailbox, markSessionMailboxRead, getOrchestratorIdentity, getOrchestratorIdentityByHandle, createSessionTask, getSessionTasks, getMyTasks, updateSessionTask, getUserTelegramConfig, getOrgSettings, enqueueWorkflowApprovalNotificationIfMissing, markWorkflowApprovalNotificationsRead, isNotificationWebEnabled, batchInsertAuditLog, batchUpsertMessages, updateUserDiscoveredModels, batchInsertUsageEvents, setCatalogCache, updateThread, incrementThreadMessageCount, getUserIdentityLinks } from '../lib/db.js';
+import { updateSessionStatus, updateSessionMetrics, addActiveSeconds, updateSessionGitState, upsertSessionFileChanged, updateSessionTitle, createSession, createSessionGitState, getSession, getSessionGitState, getChildSessions, getSessionChannelBindings, listUserChannelBindings, readMemoryFile, listMemoryFiles, writeMemoryFile, patchMemoryFile, deleteMemoryFile, deleteMemoryFilesUnderPath, searchMemoryFiles, boostMemoryFileRelevance, listOrgRepositories, listPersonas, getUserById, getUsersByIds, createMailboxMessage, getSessionMailbox, markSessionMailboxRead, getOrchestratorIdentity, getOrchestratorIdentityByHandle, createSessionTask, getSessionTasks, getMyTasks, updateSessionTask, getUserTelegramConfig, getOrgSettings, enqueueWorkflowApprovalNotificationIfMissing, markWorkflowApprovalNotificationsRead, isNotificationWebEnabled, batchInsertAuditLog, batchUpsertMessages, updateUserDiscoveredModels, batchInsertUsageEvents, setCatalogCache, updateThread, incrementThreadMessageCount, getThread, getUserIdentityLinks } from '../lib/db.js';
 import { getCredential, type CredentialResult } from '../services/credentials.js';
 import { getSlackBotToken } from '../services/slack.js';
 import { listWorkflows, upsertWorkflow, getWorkflowByIdOrSlug, getWorkflowOwnerCheck, deleteWorkflowTriggers, deleteWorkflowById, updateWorkflow, getWorkflowById } from '../lib/db/workflows.js';
@@ -2750,7 +2750,7 @@ export class SessionAgentDO {
         }
         // Increment thread message count for assistant message
         if (turn.threadId) {
-          this.ctx.waitUntil(incrementThreadMessageCount(this.env.DB, turn.threadId));
+          this.ctx.waitUntil(this.incrementAndMaybeSummarize(turn.threadId));
         }
         // Clean up active turn
         this.activeTurns.delete(turnId);
@@ -8078,6 +8078,55 @@ export class SessionAgentDO {
       });
     } catch {
       // EventBus not available
+    }
+  }
+
+  // ─── Thread Auto-Summarize ──────────────────────────────────────────────
+
+  /** Threshold message count at which to auto-summarize the thread title. */
+  private static readonly THREAD_SUMMARIZE_THRESHOLD = 5;
+
+  /**
+   * Increment a thread's message count and, if the threshold is crossed,
+   * call the OpenCode summarize endpoint to generate a better title.
+   */
+  private async incrementAndMaybeSummarize(threadId: string): Promise<void> {
+    const newCount = await incrementThreadMessageCount(this.env.DB, threadId);
+
+    if (newCount !== SessionAgentDO.THREAD_SUMMARIZE_THRESHOLD) return;
+
+    // Fetch thread to get the OpenCode session ID for summarization
+    const thread = await getThread(this.env.DB, threadId);
+    if (!thread?.opencodeSessionId) return;
+
+    try {
+      const response = await this.handleProxy(
+        new Request('http://do/proxy/session/' + thread.opencodeSessionId + '/summarize', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({}),
+        }),
+        new URL('http://do/proxy/session/' + thread.opencodeSessionId + '/summarize'),
+      );
+
+      if (!response.ok) {
+        console.warn(`[SessionAgentDO] Thread summarize failed: threadId=${threadId} status=${response.status}`);
+        return;
+      }
+
+      const data = await response.json() as { summary?: string };
+      if (data.summary) {
+        await updateThread(this.env.DB, threadId, { title: data.summary });
+        this.broadcastToClients({
+          type: 'thread.updated',
+          threadId,
+          title: data.summary,
+        });
+        console.log(`[SessionAgentDO] Thread auto-summarized: threadId=${threadId} title="${data.summary.slice(0, 60)}"`);
+      }
+    } catch (err) {
+      // Summarization is best-effort — don't block message processing
+      console.warn(`[SessionAgentDO] Thread summarize error: threadId=${threadId}`, err);
     }
   }
 

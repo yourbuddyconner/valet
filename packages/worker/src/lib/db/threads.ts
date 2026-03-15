@@ -202,14 +202,23 @@ export async function updateThreadStatus(
     .run();
 }
 
+/**
+ * Increment the message count for a thread and return the new count.
+ */
 export async function incrementThreadMessageCount(
   db: D1Database,
   threadId: string
-): Promise<void> {
+): Promise<number> {
   await db
     .prepare(
       "UPDATE session_threads SET message_count = message_count + 1, last_active_at = datetime('now') WHERE id = ?"
     )
     .bind(threadId)
     .run();
+  // D1 doesn't support RETURNING — read back the new count
+  const row = await db
+    .prepare('SELECT message_count FROM session_threads WHERE id = ?')
+    .bind(threadId)
+    .first();
+  return (row?.message_count as number) ?? 0;
 }
