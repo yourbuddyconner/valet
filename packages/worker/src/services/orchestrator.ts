@@ -80,6 +80,20 @@ export async function restartOrchestratorSession(
     personaId: identity.personaId ?? undefined,
   });
 
+  // Migrate channel bindings from any previous orchestrator sessions to the new one.
+  // Without this, stale bindings point to terminated DOs that accept but never process prompts.
+  // Must run AFTER createSession so the FK constraint on session_id is satisfied.
+  try {
+    await env.DB.prepare(
+      `UPDATE channel_bindings SET session_id = ?
+       WHERE user_id = ? AND session_id IN (
+         SELECT id FROM sessions WHERE user_id = ? AND is_orchestrator = 1 AND status IN ('terminated', 'archived', 'error')
+       )`
+    ).bind(sessionId, userId, userId).run();
+  } catch (err) {
+    console.warn('[restartOrchestrator] Failed to migrate bindings:', err);
+  }
+
   // Build env vars (LLM keys + orchestrator flag)
   const providerVars = await assembleProviderEnv(appDb, env);
   const credentialVars = await assembleCredentialEnv(appDb, env, userId);

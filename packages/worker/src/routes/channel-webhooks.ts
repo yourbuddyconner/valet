@@ -202,7 +202,17 @@ channelWebhooksRouter.post('/:channelType/webhook/:userId', async (c) => {
   // Build scope key and look up channel binding
   const parts = transport.scopeKeyParts(message, userId);
   const scopeKey = channelScopeKey(userId, parts.channelType, parts.channelId);
-  const binding = await db.getChannelBindingByScopeKey(c.get('db'), scopeKey);
+  let binding = await db.getChannelBindingByScopeKey(c.get('db'), scopeKey);
+
+  // Evict stale bindings that point to terminated/archived/error sessions
+  if (binding) {
+    const boundSession = await db.getSession(c.get('db'), binding.sessionId);
+    if (boundSession && ['terminated', 'archived', 'error'].includes(boundSession.status)) {
+      console.log(`[Channel:${channelType}] Evicting stale binding: session=${binding.sessionId} status=${boundSession.status}`);
+      await db.deleteChannelBinding(c.get('db'), binding.id);
+      binding = null;
+    }
+  }
 
   // ─── Resolve orchestrator thread (Telegram) ──────────────────────────
   let orchestratorThreadId: string | undefined;
