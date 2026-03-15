@@ -21,14 +21,21 @@ export type ListSkillsFilters = {
 
 async function syncSkillFts(db: AppDb, skillId: string): Promise<void> {
   try {
-    // Delete existing FTS entry by matching rowid via subquery
-    await db.run(sql`
-      DELETE FROM skills_fts WHERE rowid = (SELECT rowid FROM skills WHERE id = ${skillId})
-    `);
-    // Re-insert from skills table
+    // Fetch the skill row first — INSERT...SELECT into FTS5 virtual tables
+    // fails on D1 at runtime, so we insert with explicit values instead.
+    const row = await db.all<{ rowid: number; name: string; description: string; content: string }>(
+      sql`SELECT rowid, name, COALESCE(description, '') as description, content FROM skills WHERE id = ${skillId}`,
+    );
+    if (row.length === 0) return;
+
+    const { rowid, name, description, content } = row[0];
+
+    // Delete existing FTS entry
+    await db.run(sql`DELETE FROM skills_fts WHERE rowid = ${rowid}`);
+    // Re-insert with explicit values
     await db.run(sql`
       INSERT INTO skills_fts(rowid, name, description, content)
-      SELECT rowid, name, COALESCE(description, ''), content FROM skills WHERE id = ${skillId}
+      VALUES (${rowid}, ${name}, ${description}, ${content})
     `);
   } catch (err) {
     // FTS sync is best-effort — don't block skill upserts if FTS fails
@@ -38,9 +45,11 @@ async function syncSkillFts(db: AppDb, skillId: string): Promise<void> {
 
 async function deleteSkillFts(db: AppDb, skillId: string): Promise<void> {
   try {
-    await db.run(sql`
-      DELETE FROM skills_fts WHERE rowid = (SELECT rowid FROM skills WHERE id = ${skillId})
-    `);
+    const row = await db.all<{ rowid: number }>(
+      sql`SELECT rowid FROM skills WHERE id = ${skillId}`,
+    );
+    if (row.length === 0) return;
+    await db.run(sql`DELETE FROM skills_fts WHERE rowid = ${row[0].rowid}`);
   } catch (err) {
     console.error(`[skills] FTS delete failed for skill ${skillId}:`, err);
   }
