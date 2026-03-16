@@ -364,7 +364,7 @@ export class SlackTransport implements ChannelTransport {
     // Step 2: Upload file content
     const uploadResp = await fetch(uploadUrl, {
       method: 'POST',
-      body: fileBytes,
+      body: fileBytes as unknown as BodyInit,
     });
 
     if (!uploadResp.ok) {

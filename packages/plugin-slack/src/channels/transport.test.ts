@@ -825,7 +825,7 @@ describe('SlackTransport', () => {
 
       const result = await transport.sendMessage(target, {
         attachments: [{
-          type: inbound!.attachments[0].type,
+          type: inbound!.attachments[0].type as 'image' | 'file',
           url: inbound!.attachments[0].url,
           mimeType: inbound!.attachments[0].mimeType,
           fileName: inbound!.attachments[0].fileName,
