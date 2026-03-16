@@ -3378,7 +3378,7 @@ export class SessionAgentDO {
         break;
 
       case 'call-tool':
-        await this.handleCallTool(msg.requestId!, msg.toolId!, msg.params ?? {});
+        await this.handleCallTool(msg.requestId!, msg.toolId!, msg.params ?? {}, msg.summary);
         break;
 
       case 'repo:refresh-token': {
@@ -8836,7 +8836,7 @@ export class SessionAgentDO {
     }
   }
 
-  private async handleCallTool(requestId: string, toolId: string, params: Record<string, unknown>) {
+  private async handleCallTool(requestId: string, toolId: string, params: Record<string, unknown>, summary?: string) {
     try {
       const userId = this.getStateValue('userId');
       const sessionId = this.getStateValue('sessionId');
@@ -8943,6 +8943,15 @@ export class SessionAgentDO {
 
       // ─── Require Approval ──────────────────────────────────────────────
       if (invocationResult.outcome === 'pending_approval') {
+        if (!summary) {
+          this.sendToRunner({
+            type: 'call-tool-result',
+            requestId,
+            error: `Action "${toolId}" requires approval but no summary was provided. The call_tool summary parameter is required.`,
+          } as any);
+          return;
+        }
+
         const expiresAt = Math.floor(Date.now() / 1000) + Math.floor(ACTION_APPROVAL_EXPIRY_MS / 1000);
 
         const approvalContext: Record<string, unknown> = {
@@ -8953,6 +8962,7 @@ export class SessionAgentDO {
           riskLevel,
           isOrgScoped,
           invocationId: invocationResult.invocationId,
+          summary,
         };
         const approvalCh = this.activeChannel;
         if (approvalCh) {
@@ -8960,13 +8970,8 @@ export class SessionAgentDO {
           approvalContext.channelId = approvalCh.channelId;
         }
 
-        // Build body with params preview
-        let approvalBody = `\`${toolId}\` (risk: **${riskLevel}**)`;
-        if (params && Object.keys(params).length > 0) {
-          let paramsJson = JSON.stringify(params, null, 2);
-          if (paramsJson.length > 500) paramsJson = paramsJson.slice(0, 497) + '...';
-          approvalBody += `\n\`\`\`\n${paramsJson}\n\`\`\``;
-        }
+        // Use model-provided summary as the approval body
+        const approvalBody = summary;
 
         // Store in interactive_prompts for alarm-based expiry and later execution
         this.ctx.storage.sql.exec(
