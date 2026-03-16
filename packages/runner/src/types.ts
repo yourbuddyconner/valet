@@ -216,7 +216,7 @@ export type RunnerToDOMessage =
   | { type: "task-my"; requestId: string; status?: string }
   | { type: "channel-reply"; requestId: string; channelType: string; channelId: string; message: string; imageBase64?: string; imageMimeType?: string; followUp?: boolean }
   | { type: "list-tools"; requestId: string; service?: string; query?: string }
-  | { type: "call-tool"; requestId: string; toolId: string; params: Record<string, unknown> }
+  | { type: "call-tool"; requestId: string; toolId: string; params: Record<string, unknown>; summary?: string }
   | { type: "skill-api"; requestId: string; action: string; payload?: Record<string, unknown> }
   | { type: "persona-api"; requestId: string; action: string; payload?: Record<string, unknown> }
   | { type: "identity-api"; requestId: string; action: string; payload?: Record<string, unknown> }
