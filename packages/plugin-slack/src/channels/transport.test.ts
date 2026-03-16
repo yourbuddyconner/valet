@@ -455,6 +455,117 @@ describe('SlackTransport', () => {
       expect(result!.attachments).toHaveLength(0);
     });
 
+    it('prefers Slack thumbnail over full-size image when available', async () => {
+      const fakeThumbBytes = new Uint8Array([137, 80, 78, 71]); // PNG magic bytes
+      mockFetch.mockResolvedValueOnce(
+        new Response(fakeThumbBytes, { status: 200 }),
+      );
+
+      const body = JSON.stringify({
+        type: 'event_callback',
+        team_id: 'T123',
+        event: {
+          type: 'message',
+          subtype: 'file_share',
+          channel: 'C456',
+          user: 'U789',
+          text: 'big photo',
+          ts: '1234567890.123456',
+          files: [
+            {
+              url_private: 'https://files.slack.com/files-pri/T123-F456/huge_photo.png',
+              mimetype: 'image/png',
+              name: 'huge_photo.png',
+              size: 8 * 1024 * 1024, // 8MB original
+              filetype: 'png',
+              thumb_1024: 'https://files.slack.com/files-tmb/T123-F456/huge_photo_1024.png',
+              thumb_720: 'https://files.slack.com/files-tmb/T123-F456/huge_photo_720.png',
+            },
+          ],
+        },
+      });
+
+      const result = await transport.parseInbound({}, body, { userId: 'u1', botToken: 'xoxb-test' });
+      expect(result).not.toBeNull();
+      expect(result!.attachments).toHaveLength(1);
+      expect(result!.attachments[0].url).toMatch(/^data:image\/png;base64,/);
+
+      // Should have downloaded the thumb_1024, not url_private
+      const [fetchUrl] = mockFetch.mock.calls[0];
+      expect(fetchUrl).toBe('https://files.slack.com/files-tmb/T123-F456/huge_photo_1024.png');
+    });
+
+    it('falls back to url_private when no thumbnails available for images', async () => {
+      const fakeImageBytes = new Uint8Array([137, 80, 78, 71]);
+      mockFetch.mockResolvedValueOnce(
+        new Response(fakeImageBytes, { status: 200 }),
+      );
+
+      const body = JSON.stringify({
+        type: 'event_callback',
+        team_id: 'T123',
+        event: {
+          type: 'message',
+          subtype: 'file_share',
+          channel: 'C456',
+          user: 'U789',
+          text: '',
+          ts: '1234567890.123456',
+          files: [
+            {
+              url_private: 'https://files.slack.com/files-pri/T123-F456/photo.png',
+              mimetype: 'image/png',
+              name: 'photo.png',
+              size: 5000,
+              filetype: 'png',
+              // no thumb_* fields
+            },
+          ],
+        },
+      });
+
+      const result = await transport.parseInbound({}, body, { userId: 'u1', botToken: 'xoxb-test' });
+      expect(result!.attachments).toHaveLength(1);
+      const [fetchUrl] = mockFetch.mock.calls[0];
+      expect(fetchUrl).toBe('https://files.slack.com/files-pri/T123-F456/photo.png');
+    });
+
+    it('does not use thumbnails for non-image files', async () => {
+      const fakePdfBytes = new Uint8Array([0x25, 0x50, 0x44, 0x46]);
+      mockFetch.mockResolvedValueOnce(
+        new Response(fakePdfBytes, { status: 200 }),
+      );
+
+      const body = JSON.stringify({
+        type: 'event_callback',
+        team_id: 'T123',
+        event: {
+          type: 'message',
+          subtype: 'file_share',
+          channel: 'C456',
+          user: 'U789',
+          text: '',
+          ts: '1234567890.123456',
+          files: [
+            {
+              url_private: 'https://files.slack.com/files-pri/T123-F456/doc.pdf',
+              mimetype: 'application/pdf',
+              name: 'doc.pdf',
+              size: 5000,
+              filetype: 'pdf',
+              thumb_720: 'https://files.slack.com/files-tmb/T123-F456/doc_720.png',
+            },
+          ],
+        },
+      });
+
+      const result = await transport.parseInbound({}, body, { userId: 'u1', botToken: 'xoxb-test' });
+      expect(result!.attachments).toHaveLength(1);
+      // Should download the original PDF, not the thumbnail
+      const [fetchUrl] = mockFetch.mock.calls[0];
+      expect(fetchUrl).toBe('https://files.slack.com/files-pri/T123-F456/doc.pdf');
+    });
+
     it('parses slash command patterns in text', async () => {
       const body = JSON.stringify({
         type: 'event_callback',

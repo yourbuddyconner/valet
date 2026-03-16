@@ -253,16 +253,26 @@ export class SlackTransport implements ChannelTransport {
         const isImage = mime.startsWith('image/') ||
           ['png', 'jpg', 'jpeg', 'gif', 'webp'].includes(filetype || '');
 
-        // Skip files over 10MB
-        if (size && size > MAX_FILE_DOWNLOAD_BYTES) {
+        // For images, prefer a Slack-generated thumbnail over the full-size file.
+        // Slack provides thumb_1024, thumb_720, thumb_480, thumb_360 as private URLs.
+        // This avoids downloading multi-MB photos when a ~100KB thumbnail suffices.
+        let downloadUrl = urlPrivate;
+        if (isImage) {
+          const thumb = (file.thumb_1024 || file.thumb_720 || file.thumb_480 || file.thumb_360) as string | undefined;
+          if (thumb) downloadUrl = thumb;
+        }
+
+        // Skip files over 10MB (thumbnails are always well under this)
+        const downloadSize = downloadUrl !== urlPrivate ? undefined : size;
+        if (downloadSize && downloadSize > MAX_FILE_DOWNLOAD_BYTES) {
           console.warn(`[SlackTransport] Skipping file ${name}: ${size} bytes exceeds 10MB limit`);
           continue;
         }
 
         // Download and convert to base64 data URL if bot token is available
-        let url = urlPrivate;
+        let url = downloadUrl;
         if (botToken) {
-          const dataUrl = await downloadSlackFile(urlPrivate, botToken, mime);
+          const dataUrl = await downloadSlackFile(downloadUrl, botToken, mime);
           if (!dataUrl) {
             console.warn(`[SlackTransport] Failed to download file: ${name}`);
             continue;
