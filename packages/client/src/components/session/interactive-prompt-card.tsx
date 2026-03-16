@@ -29,6 +29,115 @@ function useCountdown(expiresAt?: number) {
   return remaining;
 }
 
+// ─── Param Formatting Utilities ─────────────────────────────────────────────
+
+function humanizeKey(key: string): string {
+  return key
+    .replace(/([a-z])([A-Z])/g, '$1 $2')
+    .replace(/_/g, ' ')
+    .replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+function looksLikeId(value: string): boolean {
+  return /^[a-f0-9-]{20,}$/i.test(value) || /^[A-Za-z0-9_-]{15,}$/.test(value);
+}
+
+function looksLikeMarkdown(value: string): boolean {
+  return /[#*_`\[\]|]/.test(value) && value.length > 50;
+}
+
+function ParamValue({ value }: { value: unknown }) {
+  if (value === null || value === undefined) {
+    return <span className="italic text-neutral-400">null</span>;
+  }
+
+  if (typeof value === 'boolean') {
+    return <span className="font-mono text-xs">{String(value)}</span>;
+  }
+
+  if (typeof value === 'number') {
+    return <span className="font-mono text-xs">{value}</span>;
+  }
+
+  if (typeof value === 'string') {
+    if (looksLikeId(value)) {
+      return <code className="rounded bg-neutral-100 px-1 py-0.5 font-mono text-xs dark:bg-neutral-800">{value}</code>;
+    }
+    if (value.length > 200 && looksLikeMarkdown(value)) {
+      return (
+        <div className="mt-1 max-h-48 overflow-auto rounded border border-neutral-200 bg-neutral-50 p-2 text-xs dark:border-neutral-700 dark:bg-neutral-800/50">
+          <pre className="whitespace-pre-wrap">{value}</pre>
+        </div>
+      );
+    }
+    if (value.length > 200) {
+      return <span className="text-xs">{value.slice(0, 200)}&hellip;</span>;
+    }
+    return <span className="text-xs">{value}</span>;
+  }
+
+  if (Array.isArray(value)) {
+    if (value.length === 0) return <span className="italic text-neutral-400">[]</span>;
+    if (value.every((v) => typeof v === 'string') && value.length <= 5) {
+      return <span className="text-xs">{value.join(', ')}</span>;
+    }
+    return (
+      <ul className="ml-4 list-disc text-xs">
+        {value.map((item, i) => (
+          <li key={i}><ParamValue value={item} /></li>
+        ))}
+      </ul>
+    );
+  }
+
+  if (typeof value === 'object') {
+    return (
+      <div className="ml-2 border-l border-neutral-200 pl-2 dark:border-neutral-700">
+        {Object.entries(value as Record<string, unknown>).map(([k, v]) => (
+          <div key={k} className="mt-1">
+            <span className="text-xs font-medium text-neutral-500 dark:text-neutral-400">{humanizeKey(k)}: </span>
+            <ParamValue value={v} />
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  return <span className="text-xs">{String(value)}</span>;
+}
+
+function ExpandableParams({ params }: { params: Record<string, unknown> }) {
+  const [expanded, setExpanded] = React.useState(false);
+  const entries = Object.entries(params);
+
+  if (entries.length === 0) return null;
+
+  return (
+    <div className="mt-2">
+      <button
+        type="button"
+        onClick={() => setExpanded(!expanded)}
+        className="flex items-center gap-1 text-xs text-neutral-500 hover:text-neutral-700 dark:text-neutral-400 dark:hover:text-neutral-200"
+      >
+        <span className={`inline-block transition-transform ${expanded ? 'rotate-90' : ''}`}>&#9654;</span>
+        {expanded ? 'Hide details' : 'Show details'}
+      </button>
+      {expanded && (
+        <div className="mt-2 space-y-1.5 rounded border border-neutral-200 bg-white p-2 dark:border-neutral-700 dark:bg-neutral-800/50">
+          {entries.map(([key, value]) => (
+            <div key={key}>
+              <span className="text-xs font-medium text-neutral-500 dark:text-neutral-400">{humanizeKey(key)}: </span>
+              <ParamValue value={value} />
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Main Component ─────────────────────────────────────────────────────────
+
 interface InteractivePromptCardProps {
   prompt: InteractivePromptState;
   onAnswer: (promptId: string, answer: string | boolean) => void;
@@ -46,12 +155,13 @@ export function InteractivePromptCard({ prompt, onAnswer, onApproveWs, onDenyWs 
   const isLoading = approveMutation.isPending || denyMutation.isPending;
   const isApproval = prompt.type === 'approval';
 
-  // For approval prompts, extract invocationId from context
   const invocationId = (prompt.context?.invocationId as string) ?? prompt.id;
+  const toolId = prompt.context?.toolId as string | undefined;
+  const riskLevel = prompt.context?.riskLevel as string | undefined;
+  const params = prompt.context?.params as Record<string, unknown> | undefined;
 
   function handleActionClick(actionId: string) {
     if (isApproval) {
-      // Route through HTTP approve/deny endpoints
       if (actionId === 'approve') {
         if (onApproveWs) {
           onApproveWs(invocationId);
@@ -66,7 +176,6 @@ export function InteractivePromptCard({ prompt, onAnswer, onApproveWs, onDenyWs 
         }
       }
     } else {
-      // Question-type: send the action label as the answer
       const action = prompt.actions.find((a) => a.id === actionId);
       if (action) {
         onAnswer(prompt.id, action.label);
@@ -86,25 +195,20 @@ export function InteractivePromptCard({ prompt, onAnswer, onApproveWs, onDenyWs 
 
   return (
     <div className="my-2 rounded-lg border border-amber-200 bg-amber-50 p-3 dark:border-amber-800/50 dark:bg-amber-900/20">
-      <div className="flex items-start justify-between gap-2">
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2">
+      {/* Header: action name + risk badge + countdown */}
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2 min-w-0">
+          {isApproval && toolId ? (
+            <code className="truncate text-xs text-neutral-500 dark:text-neutral-400">{toolId}</code>
+          ) : (
             <span className="text-sm font-medium text-neutral-900 dark:text-neutral-100">
               {prompt.title}
             </span>
-            {isApproval && typeof prompt.context?.riskLevel === 'string' && (
-              <Badge variant={riskBadgeVariant(prompt.context.riskLevel)}>
-                {prompt.context.riskLevel}
-              </Badge>
-            )}
-          </div>
-          {prompt.body && (
-            <p className="mt-1 text-xs text-neutral-600 dark:text-neutral-400">
-              {prompt.body}
-            </p>
+          )}
+          {isApproval && riskLevel && (
+            <Badge variant={riskBadgeVariant(riskLevel)}>{riskLevel}</Badge>
           )}
         </div>
-
         {!isResolved && countdown && countdown !== 'expired' && (
           <span className="shrink-0 text-xs text-neutral-500 dark:text-neutral-400">
             {countdown}
@@ -112,6 +216,19 @@ export function InteractivePromptCard({ prompt, onAnswer, onApproveWs, onDenyWs 
         )}
       </div>
 
+      {/* Summary: model-provided explanation */}
+      {prompt.body && (
+        <p className="mt-1.5 text-sm text-neutral-800 dark:text-neutral-200">
+          {prompt.body}
+        </p>
+      )}
+
+      {/* Expandable detail: formatted params */}
+      {isApproval && params && Object.keys(params).length > 0 && !isResolved && (
+        <ExpandableParams params={params} />
+      )}
+
+      {/* Action buttons or freeform input */}
       {isResolved ? (
         <div className="mt-2">
           <Badge variant={prompt.status === 'resolved' ? 'success' : 'secondary'}>
