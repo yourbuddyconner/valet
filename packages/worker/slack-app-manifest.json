@@ -25,6 +25,7 @@
         "chat:write.customize",
         "chat:write.public",
         "files:read",
+        "files:write",
         "groups:history",
         "groups:read",
         "im:history",
