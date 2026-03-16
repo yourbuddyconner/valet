@@ -877,11 +877,11 @@ export class SessionAgentDO {
         return Response.json({ success: true });
       }
       case '/system-message': {
-        const body = await request.json() as { content: string; parts?: Record<string, unknown>; wake?: boolean };
+        const body = await request.json() as { content: string; parts?: Record<string, unknown>; wake?: boolean; threadId?: string };
         if (!body.content) {
           return new Response(JSON.stringify({ error: 'Missing content' }), { status: 400 });
         }
-        await this.handleSystemMessage(body.content, body.parts, body.wake);
+        await this.handleSystemMessage(body.content, body.parts, body.wake, body.threadId);
         return Response.json({ success: true });
       }
       case '/workflow-execute': {
@@ -3415,6 +3415,16 @@ export class SessionAgentDO {
     try {
       const parentSessionId = this.getStateValue('sessionId')!;
       const userId = this.getStateValue('userId')!;
+
+      // Resolve the parent's active threadId so the child can route notifications back
+      let parentThreadId: string | undefined;
+      const spawnThreadRow = this.ctx.storage.sql
+        .exec("SELECT thread_id FROM prompt_queue WHERE status = 'processing' ORDER BY created_at DESC LIMIT 1")
+        .toArray();
+      if (spawnThreadRow.length > 0 && spawnThreadRow[0].thread_id) {
+        parentThreadId = spawnThreadRow[0].thread_id as string;
+      }
+
       const spawnRequestStr = this.getStateValue('spawnRequest');
       const backendUrl = this.getStateValue('backendUrl');
       const terminateUrl = this.getStateValue('terminateUrl');
@@ -3562,6 +3572,7 @@ export class SessionAgentDO {
           spawnRequest: childSpawnRequest,
           initialPrompt: params.task,
           initialModel: params.model,
+          parentThreadId,
         }),
       }));
 
@@ -6283,6 +6294,7 @@ export class SessionAgentDO {
       idleTimeoutMs?: number;
       initialPrompt?: string;
       initialModel?: string;
+      parentThreadId?: string;
     };
 
     // Clear old session data (messages, queue, audit log, followups) for a fresh start.
@@ -6307,6 +6319,11 @@ export class SessionAgentDO {
     this.setStateValue('runningStartedAt', '');
     this.setStateValue('initialModel', '');
     this.setStateValue('initialPrompt', '');
+    this.setStateValue('parentThreadId', '');
+
+    if (body.parentThreadId) {
+      this.setStateValue('parentThreadId', body.parentThreadId);
+    }
 
     if (body.sandboxId) {
       this.setStateValue('sandboxId', body.sandboxId);
@@ -6724,6 +6741,7 @@ export class SessionAgentDO {
       const parentSessionId = session?.parentSessionId;
       if (!parentSessionId) return;
       const childTitle = session?.title || session?.workspace || `Child ${sessionId.slice(0, 8)}`;
+      const parentThreadId = this.getStateValue('parentThreadId') || undefined;
       const parentDoId = this.env.SESSIONS.idFromName(parentSessionId);
       const parentDO = this.env.SESSIONS.get(parentDoId);
       await parentDO.fetch(new Request('http://do/system-message', {
@@ -6736,6 +6754,7 @@ export class SessionAgentDO {
             systemAvatarKey: 'child-session',
           },
           wake: options?.wake ?? true,
+          threadId: parentThreadId,
         }),
       }));
     } catch (err) {
@@ -6743,19 +6762,19 @@ export class SessionAgentDO {
     }
   }
 
-  private async handleSystemMessage(content: string, parts?: Record<string, unknown>, wake?: boolean) {
+  private async handleSystemMessage(content: string, parts?: Record<string, unknown>, wake?: boolean, threadId?: string) {
     const messageId = crypto.randomUUID();
     const serializedParts = parts ? JSON.stringify(parts) : null;
 
     if (serializedParts) {
       this.ctx.storage.sql.exec(
-        'INSERT INTO messages (id, role, content, parts) VALUES (?, ?, ?, ?)',
-        messageId, 'system', content, serializedParts
+        'INSERT INTO messages (id, role, content, parts, thread_id) VALUES (?, ?, ?, ?, ?)',
+        messageId, 'system', content, serializedParts, threadId || null
       );
     } else {
       this.ctx.storage.sql.exec(
-        'INSERT INTO messages (id, role, content) VALUES (?, ?, ?)',
-        messageId, 'system', content
+        'INSERT INTO messages (id, role, content, thread_id) VALUES (?, ?, ?, ?)',
+        messageId, 'system', content, threadId || null
       );
     }
 
@@ -6766,6 +6785,7 @@ export class SessionAgentDO {
         role: 'system',
         content,
         parts: parts || undefined,
+        ...(threadId ? { threadId } : {}),
         createdAt: Math.floor(Date.now() / 1000),
       },
     });
@@ -6776,15 +6796,15 @@ export class SessionAgentDO {
         // Queue the prompt so the runner picks it up after connecting.
         // performWake() does NOT dequeue — upgradeRunner() does when the runner connects.
         this.ctx.storage.sql.exec(
-          "INSERT INTO prompt_queue (id, content, status) VALUES (?, ?, 'queued')",
-          messageId, content
+          "INSERT INTO prompt_queue (id, content, status, thread_id) VALUES (?, ?, 'queued', ?)",
+          messageId, content, threadId || null
         );
         this.ctx.waitUntil(this.performWake());
       } else if (status === 'restoring') {
         // Wake already in progress — just queue the prompt for when the runner connects.
         this.ctx.storage.sql.exec(
-          "INSERT INTO prompt_queue (id, content, status) VALUES (?, ?, 'queued')",
-          messageId, content
+          "INSERT INTO prompt_queue (id, content, status, thread_id) VALUES (?, ?, 'queued', ?)",
+          messageId, content, threadId || null
         );
       } else if (status === 'running') {
         // Dispatch the system event as a prompt so the runner wakes up and can
@@ -6794,8 +6814,8 @@ export class SessionAgentDO {
         if (runnerSockets.length > 0 && !runnerBusy) {
           // Runner is connected and idle — insert as 'processing' for recoverability, then dispatch
           this.ctx.storage.sql.exec(
-            "INSERT INTO prompt_queue (id, content, status) VALUES (?, ?, 'processing')",
-            messageId, content
+            "INSERT INTO prompt_queue (id, content, status, thread_id) VALUES (?, ?, 'processing', ?)",
+            messageId, content, threadId || null
           );
           this.setStateValue('runnerBusy', 'true');
           this.setStateValue('lastPromptDispatchedAt', String(Date.now()));
@@ -6810,6 +6830,7 @@ export class SessionAgentDO {
             type: 'prompt',
             messageId,
             content,
+            threadId: threadId || undefined,
             opencodeSessionId: sysOcSessionId,
             modelPreferences: sysModelPrefs,
           });
@@ -6823,8 +6844,8 @@ export class SessionAgentDO {
         } else {
           // Runner busy or not connected — queue the prompt
           this.ctx.storage.sql.exec(
-            "INSERT INTO prompt_queue (id, content, status) VALUES (?, ?, 'queued')",
-            messageId, content
+            "INSERT INTO prompt_queue (id, content, status, thread_id) VALUES (?, ?, 'queued', ?)",
+            messageId, content, threadId || null
           );
         }
       }
