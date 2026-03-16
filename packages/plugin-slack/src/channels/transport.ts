@@ -66,6 +66,32 @@ async function slackApiGet(
   return (await resp.json()) as { ok: boolean; error?: string; [key: string]: unknown };
 }
 
+const MAX_FILE_DOWNLOAD_BYTES = 10 * 1024 * 1024; // 10 MB
+
+/** Download a Slack file via url_private, returning a base64 data URL. */
+async function downloadSlackFile(
+  urlPrivate: string,
+  token: string,
+  mimeType: string,
+): Promise<string | null> {
+  try {
+    const resp = await fetch(urlPrivate, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!resp.ok) return null;
+
+    const buffer = await resp.arrayBuffer();
+    const bytes = new Uint8Array(buffer);
+    let binary = '';
+    for (let i = 0; i < bytes.length; i++) {
+      binary += String.fromCharCode(bytes[i]);
+    }
+    return `data:${mimeType};base64,${btoa(binary)}`;
+  } catch {
+    return null;
+  }
+}
+
 // ─── Event subtypes to skip ─────────────────────────────────────────────────
 
 const SKIP_SUBTYPES = new Set([
@@ -212,6 +238,8 @@ export class SlackTransport implements ChannelTransport {
     const attachments: InboundMessage['attachments'] = [];
 
     if (files && files.length > 0) {
+      const botToken = routing.botToken as string | undefined;
+
       for (const file of files) {
         const urlPrivate = file.url_private as string | undefined;
         const mimetype = file.mimetype as string | undefined;
@@ -221,13 +249,31 @@ export class SlackTransport implements ChannelTransport {
 
         if (!urlPrivate) continue;
 
-        const isImage = mimetype?.startsWith('image/') ||
+        const mime = mimetype || 'application/octet-stream';
+        const isImage = mime.startsWith('image/') ||
           ['png', 'jpg', 'jpeg', 'gif', 'webp'].includes(filetype || '');
+
+        // Skip files over 10MB
+        if (size && size > MAX_FILE_DOWNLOAD_BYTES) {
+          console.warn(`[SlackTransport] Skipping file ${name}: ${size} bytes exceeds 10MB limit`);
+          continue;
+        }
+
+        // Download and convert to base64 data URL if bot token is available
+        let url = urlPrivate;
+        if (botToken) {
+          const dataUrl = await downloadSlackFile(urlPrivate, botToken, mime);
+          if (!dataUrl) {
+            console.warn(`[SlackTransport] Failed to download file: ${name}`);
+            continue;
+          }
+          url = dataUrl;
+        }
 
         attachments.push({
           type: isImage ? 'image' : 'file',
-          url: urlPrivate,
-          mimeType: mimetype || 'application/octet-stream',
+          url,
+          mimeType: mime,
           fileName: name,
           size,
         });

@@ -330,6 +330,131 @@ describe('SlackTransport', () => {
       expect(result!.attachments[0].mimeType).toBe('application/pdf');
     });
 
+    it('downloads file_share images as base64 data URLs when botToken provided', async () => {
+      const fakeImageBytes = new Uint8Array([137, 80, 78, 71]); // PNG magic bytes
+      mockFetch.mockResolvedValueOnce(
+        new Response(fakeImageBytes, { status: 200 }),
+      );
+
+      const body = JSON.stringify({
+        type: 'event_callback',
+        team_id: 'T123',
+        event: {
+          type: 'message',
+          subtype: 'file_share',
+          channel: 'C456',
+          user: 'U789',
+          text: 'check this out',
+          ts: '1234567890.123456',
+          files: [
+            {
+              url_private: 'https://files.slack.com/files-pri/T123-F456/photo.png',
+              mimetype: 'image/png',
+              name: 'photo.png',
+              size: 4,
+              filetype: 'png',
+            },
+          ],
+        },
+      });
+
+      const result = await transport.parseInbound({}, body, { userId: 'u1', botToken: 'xoxb-test' });
+      expect(result).not.toBeNull();
+      expect(result!.attachments).toHaveLength(1);
+      expect(result!.attachments[0].type).toBe('image');
+      expect(result!.attachments[0].url).toMatch(/^data:image\/png;base64,/);
+      expect(result!.attachments[0].mimeType).toBe('image/png');
+
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+      const [fetchUrl, fetchOpts] = mockFetch.mock.calls[0];
+      expect(fetchUrl).toBe('https://files.slack.com/files-pri/T123-F456/photo.png');
+      expect(fetchOpts.headers.Authorization).toBe('Bearer xoxb-test');
+    });
+
+    it('falls back to url_private when botToken is not provided', async () => {
+      const body = JSON.stringify({
+        type: 'event_callback',
+        team_id: 'T123',
+        event: {
+          type: 'message',
+          subtype: 'file_share',
+          channel: 'C456',
+          user: 'U789',
+          text: 'file here',
+          ts: '1234567890.123456',
+          files: [
+            {
+              url_private: 'https://files.slack.com/files-pri/T123-F456/photo.png',
+              mimetype: 'image/png',
+              name: 'photo.png',
+              size: 4,
+              filetype: 'png',
+            },
+          ],
+        },
+      });
+
+      const result = await transport.parseInbound({}, body, { userId: 'u1' });
+      expect(result!.attachments[0].url).toBe('https://files.slack.com/files-pri/T123-F456/photo.png');
+    });
+
+    it('skips files larger than 10MB during download', async () => {
+      const body = JSON.stringify({
+        type: 'event_callback',
+        team_id: 'T123',
+        event: {
+          type: 'message',
+          subtype: 'file_share',
+          channel: 'C456',
+          user: 'U789',
+          text: '',
+          ts: '1234567890.123456',
+          files: [
+            {
+              url_private: 'https://files.slack.com/files-pri/T123-F456/huge.zip',
+              mimetype: 'application/zip',
+              name: 'huge.zip',
+              size: 11 * 1024 * 1024,
+              filetype: 'zip',
+            },
+          ],
+        },
+      });
+
+      const result = await transport.parseInbound({}, body, { userId: 'u1', botToken: 'xoxb-test' });
+      expect(result!.attachments).toHaveLength(0);
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it('gracefully handles download failure', async () => {
+      mockFetch.mockResolvedValueOnce(new Response('Forbidden', { status: 403 }));
+
+      const body = JSON.stringify({
+        type: 'event_callback',
+        team_id: 'T123',
+        event: {
+          type: 'message',
+          subtype: 'file_share',
+          channel: 'C456',
+          user: 'U789',
+          text: 'file',
+          ts: '1234567890.123456',
+          files: [
+            {
+              url_private: 'https://files.slack.com/files-pri/T123-F456/secret.png',
+              mimetype: 'image/png',
+              name: 'secret.png',
+              size: 1000,
+              filetype: 'png',
+            },
+          ],
+        },
+      });
+
+      const result = await transport.parseInbound({}, body, { userId: 'u1', botToken: 'xoxb-test' });
+      expect(result!.attachments).toHaveLength(0);
+    });
+
     it('parses slash command patterns in text', async () => {
       const body = JSON.stringify({
         type: 'event_callback',
