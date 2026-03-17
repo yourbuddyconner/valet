@@ -18,16 +18,29 @@ Scopes requested: `repo read:user user:email` (needed for repo cloning and PR cr
 
 ## Google OAuth (Optional)
 
-Google OAuth in Valet is handled by the Worker routes:
-- `GET /auth/google`
-- `GET /auth/google/callback`
+Google OAuth is used for two separate flows with different redirect URIs:
 
-The app currently requests these scopes:
-- `openid`
-- `email`
-- `profile`
+1. **Sign-in** — User login via `GET /auth/google` → callback to the **worker**
+2. **Integration OAuth** — Connecting Google services (Drive, Gmail, Sheets, etc.) → callback to the **frontend**
 
-### 1. Configure OAuth Consent Screen
+The sign-in flow requests scopes: `openid`, `email`, `profile`.
+Integration flows request service-specific scopes (e.g., `https://www.googleapis.com/auth/drive.readonly`).
+
+Both flows use the **same** Google OAuth Client ID/Secret.
+
+### 1. Enable Google APIs
+
+Each Google integration requires its corresponding API to be enabled. Go to `APIs & Services` -> `Library` and enable:
+
+- **Google Drive API** — required for Google Drive integration
+- **Google Sheets API** — required for Google Sheets integration
+- **Gmail API** — required for Gmail integration
+- **Google Calendar API** — required for Google Calendar integration
+- **Google Docs API** — required for Google Docs integration
+
+Google returns a misleading `redirect_uri_mismatch` error if the requested scope's API is not enabled, even when the redirect URI is correctly configured.
+
+### 2. Configure OAuth Consent Screen
 
 1. Open [Google Cloud Console](https://console.cloud.google.com/).
 2. Select or create a Google Cloud project for Valet.
@@ -40,21 +53,28 @@ The app currently requests these scopes:
    - `openid`
    - `email`
    - `profile`
+   - Any Google API scopes needed by integrations (Drive, Gmail, Sheets, Calendar, etc.)
 7. If app type is `External` and publishing status is `Testing`, add test users who are allowed to sign in.
 
-### 2. Create OAuth Client Credentials
+### 3. Create OAuth Client Credentials
 
 1. Go to `APIs & Services` -> `Credentials`.
 2. Click `Create Credentials` -> `OAuth client ID`.
 3. Application type: `Web application`.
-4. Add authorized redirect URIs:
-   - Dev: `http://localhost:8787/auth/google/callback`
-   - Production: `https://<your-worker>.workers.dev/auth/google/callback`
+4. Add **all** authorized redirect URIs — both sign-in (worker) and integration (frontend) callbacks:
+
+   | Flow | Dev | Production |
+   |------|-----|------------|
+   | Sign-in | `http://localhost:8787/auth/google/callback` | `https://<your-worker>.workers.dev/auth/google/callback` |
+   | Integrations | `http://localhost:5173/integrations/callback` | `https://<your-frontend-domain>/integrations/callback` |
+
+   The sign-in callback goes to the **worker** URL. The integrations callback goes to the **frontend** URL (the client-side app handles the OAuth redirect and forwards the code to the worker).
+
 5. Save and copy:
    - `Client ID`
    - `Client Secret`
 
-### 3. Set Worker Credentials
+### 4. Set Worker Credentials
 
 Local dev (`packages/worker/.dev.vars`):
 
@@ -71,7 +91,7 @@ npx wrangler secret put GOOGLE_CLIENT_ID
 npx wrangler secret put GOOGLE_CLIENT_SECRET
 ```
 
-### 4. Verify Locally
+### 5. Verify Locally
 
 1. Start the worker (`make dev-worker` or `make dev-all`).
 2. Visit `http://localhost:8787/auth/google`.
