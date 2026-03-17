@@ -125,12 +125,21 @@ export async function getAutoEnabledServices(
     )
     .bind(orgId)
     .all();
-  return (result.results || []).map((row: any) => row.name as string);
+  return (result.results || []).map((row: any) => pluginNameToService(row.name as string));
+}
+
+/**
+ * Converts a plugin name (e.g. 'google-drive') to the service identifier
+ * used by the integration registry and credentials table (e.g. 'google_drive').
+ */
+export function pluginNameToService(name: string): string {
+  return name.replace(/-/g, '_');
 }
 
 /**
  * Returns service names for plugins that have been disabled by an admin.
  * Used by SessionAgentDO to block tool discovery and invocation.
+ * Names are normalized to service identifiers (hyphens → underscores).
  */
 export async function getDisabledPluginServices(
   db: D1Database,
@@ -143,7 +152,7 @@ export async function getDisabledPluginServices(
     )
     .bind(orgId)
     .all();
-  return new Set((result.results || []).map((row: any) => row.name as string));
+  return new Set((result.results || []).map((row: any) => pluginNameToService(row.name as string)));
 }
 
 // ─── Artifacts ──────────────────────────────────────────────────────────────

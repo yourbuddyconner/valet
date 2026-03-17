@@ -57,17 +57,23 @@ export async function getOrgSessionAggregate(
   const row = await db
     .prepare(`
       SELECT
-        COUNT(*) as total_sessions,
+        (SELECT COUNT(*) FROM sessions WHERE created_at >= ? AND is_orchestrator = 0 AND COALESCE(purpose, 'interactive') != 'workflow')
+          + (SELECT COUNT(DISTINCT user_id) FROM sessions WHERE created_at >= ? AND is_orchestrator = 1)
+          as total_sessions,
         SUM(CASE WHEN status IN ('running', 'idle', 'initializing') THEN 1 ELSE 0 END) as active_sessions,
-        COUNT(DISTINCT workspace) as unique_repos,
-        COALESCE(SUM(message_count), 0) as total_messages,
+        COUNT(DISTINCT CASE WHEN is_orchestrator = 0 THEN workspace END) as unique_repos,
+        (SELECT COUNT(*) FROM messages m
+          INNER JOIN sessions s ON s.id = m.session_id
+          WHERE m.created_at >= ? AND m.role IN ('user', 'assistant')
+            AND COALESCE(s.purpose, 'interactive') != 'workflow'
+        ) as total_messages,
         COALESCE(SUM(tool_call_count), 0) as total_tool_calls,
         COALESCE(SUM(active_seconds), 0) as total_duration
       FROM sessions
       WHERE created_at >= ?
         AND COALESCE(purpose, 'interactive') != 'workflow'
     `)
-    .bind(periodStart)
+    .bind(periodStart, periodStart, periodStart, periodStart)
     .first<SessionAggregateRow>();
 
   return row!;
@@ -81,10 +87,16 @@ export async function getUserSessionAggregate(
   const row = await db
     .prepare(`
       SELECT
-        COUNT(*) as total_sessions,
+        (SELECT COUNT(*) FROM sessions WHERE user_id = ? AND created_at >= ? AND is_orchestrator = 0 AND COALESCE(purpose, 'interactive') != 'workflow')
+          + (SELECT MIN(1, COUNT(*)) FROM sessions WHERE user_id = ? AND created_at >= ? AND is_orchestrator = 1)
+          as total_sessions,
         SUM(CASE WHEN status IN ('running', 'idle', 'initializing') THEN 1 ELSE 0 END) as active_sessions,
-        COUNT(DISTINCT workspace) as unique_repos,
-        COALESCE(SUM(message_count), 0) as total_messages,
+        COUNT(DISTINCT CASE WHEN is_orchestrator = 0 THEN workspace END) as unique_repos,
+        (SELECT COUNT(*) FROM messages m
+          INNER JOIN sessions s ON s.id = m.session_id
+          WHERE m.created_at >= ? AND m.role IN ('user', 'assistant')
+            AND s.user_id = ? AND COALESCE(s.purpose, 'interactive') != 'workflow'
+        ) as total_messages,
         COALESCE(SUM(tool_call_count), 0) as total_tool_calls,
         COALESCE(SUM(active_seconds), 0) as total_duration
       FROM sessions
@@ -92,7 +104,7 @@ export async function getUserSessionAggregate(
         AND created_at >= ?
         AND COALESCE(purpose, 'interactive') != 'workflow'
     `)
-    .bind(userId, periodStart)
+    .bind(userId, periodStart, userId, periodStart, periodStart, userId, userId, periodStart)
     .first<SessionAggregateRow>();
 
   return row!;
@@ -106,14 +118,16 @@ export async function getPrevPeriodAggregate(
   const row = await db
     .prepare(`
       SELECT
-        COUNT(*) as count,
-        COALESCE(SUM(message_count), 0) as messages
-      FROM sessions
-      WHERE created_at >= ?
-        AND created_at < ?
-        AND COALESCE(purpose, 'interactive') != 'workflow'
+        (SELECT COUNT(*) FROM sessions WHERE created_at >= ? AND created_at < ? AND is_orchestrator = 0 AND COALESCE(purpose, 'interactive') != 'workflow')
+          + (SELECT COUNT(DISTINCT user_id) FROM sessions WHERE created_at >= ? AND created_at < ? AND is_orchestrator = 1)
+          as count,
+        (SELECT COUNT(*) FROM messages m
+          INNER JOIN sessions s ON s.id = m.session_id
+          WHERE m.created_at >= ? AND m.created_at < ? AND m.role IN ('user', 'assistant')
+            AND COALESCE(s.purpose, 'interactive') != 'workflow'
+        ) as messages
     `)
-    .bind(prevStart, periodStart)
+    .bind(prevStart, periodStart, prevStart, periodStart, prevStart, periodStart)
     .first<PrevPeriodAggregateRow>();
 
   return row ?? { count: 0, messages: 0 };
@@ -130,22 +144,38 @@ export async function getSessionActivityByDay(
         SELECT date(?, '-' || ? || ' days')
         UNION ALL
         SELECT date(date, '+1 day') FROM dates WHERE date < date('now')
-      )
-      SELECT
-        d.date,
-        COALESCE(sc.cnt, 0) as sessions,
-        COALESCE(sc.msgs, 0) as messages
-      FROM dates d
-      LEFT JOIN (
-        SELECT date(created_at) as day, COUNT(*) as cnt, COALESCE(SUM(message_count), 0) as msgs
+      ),
+      session_counts AS (
+        SELECT
+          date(created_at) as day,
+          COUNT(CASE WHEN is_orchestrator = 0 THEN 1 END)
+            + COUNT(DISTINCT CASE WHEN is_orchestrator = 1 THEN user_id END) as cnt
         FROM sessions
         WHERE created_at >= ?
           AND COALESCE(purpose, 'interactive') != 'workflow'
         GROUP BY day
-      ) sc ON sc.day = d.date
+      ),
+      message_counts AS (
+        SELECT
+          date(m.created_at) as day,
+          COUNT(*) as msgs
+        FROM messages m
+        INNER JOIN sessions s ON s.id = m.session_id
+        WHERE m.created_at >= ?
+          AND COALESCE(s.purpose, 'interactive') != 'workflow'
+          AND m.role IN ('user', 'assistant')
+        GROUP BY day
+      )
+      SELECT
+        d.date,
+        COALESCE(sc.cnt, 0) as sessions,
+        COALESCE(mc.msgs, 0) as messages
+      FROM dates d
+      LEFT JOIN session_counts sc ON sc.day = d.date
+      LEFT JOIN message_counts mc ON mc.day = d.date
       ORDER BY d.date
     `)
-    .bind(periodStart, periodDays, periodStart)
+    .bind(periodStart, periodDays, periodStart, periodStart)
     .all();
 
   return (result.results ?? []).map((r: Record<string, unknown>) => ({
