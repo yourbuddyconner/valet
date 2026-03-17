@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { buildFieldMask, normalizeFormat, normalizeFormatsResponse } from './formatting.js';
+import { buildFieldMask, normalizeFormat, normalizeFormatsResponse, buildRepeatCellRequest, buildUpdateCellsRequest, buildMergeRequests, parseA1Range } from './formatting.js';
+import type { CellFormat, Merge } from './formatting.js';
 
 describe('buildFieldMask', () => {
   it('returns mask for a single top-level property', () => {
@@ -184,5 +185,111 @@ describe('normalizeFormatsResponse', () => {
     expect(result.merges).toEqual([
       { sheetId: 0, startRowIndex: 0, endRowIndex: 2, startColumnIndex: 0, endColumnIndex: 3 },
     ]);
+  });
+});
+
+describe('parseA1Range', () => {
+  it('parses Sheet1!A1:C3', () => {
+    expect(parseA1Range('Sheet1!A1:C3', 0)).toEqual({
+      sheetId: 0, startRowIndex: 0, endRowIndex: 3, startColumnIndex: 0, endColumnIndex: 3,
+    });
+  });
+
+  it('parses A1:B2 (no sheet name) with given sheetId', () => {
+    expect(parseA1Range('A1:B2', 0)).toEqual({
+      sheetId: 0, startRowIndex: 0, endRowIndex: 2, startColumnIndex: 0, endColumnIndex: 2,
+    });
+  });
+
+  it('parses multi-letter columns like AA1:AC5', () => {
+    expect(parseA1Range('AA1:AC5', 0)).toEqual({
+      sheetId: 0, startRowIndex: 0, endRowIndex: 5, startColumnIndex: 26, endColumnIndex: 29,
+    });
+  });
+
+  it('parses single cell A1', () => {
+    expect(parseA1Range('A1', 0)).toEqual({
+      sheetId: 0, startRowIndex: 0, endRowIndex: 1, startColumnIndex: 0, endColumnIndex: 1,
+    });
+  });
+
+  it('handles quoted sheet names', () => {
+    expect(parseA1Range("'My Sheet'!B2:D4", 5)).toEqual({
+      sheetId: 5, startRowIndex: 1, endRowIndex: 4, startColumnIndex: 1, endColumnIndex: 4,
+    });
+  });
+});
+
+describe('buildRepeatCellRequest', () => {
+  it('builds a repeatCell request with correct range and fields', () => {
+    const format: CellFormat = { backgroundColor: { red: 1 }, textFormat: { bold: true } };
+    const result = buildRepeatCellRequest(
+      { sheetId: 0, startRowIndex: 0, endRowIndex: 3, startColumnIndex: 0, endColumnIndex: 3 },
+      format,
+    );
+    expect(result).toEqual({
+      repeatCell: {
+        range: { sheetId: 0, startRowIndex: 0, endRowIndex: 3, startColumnIndex: 0, endColumnIndex: 3 },
+        cell: { userEnteredFormat: format },
+        fields: expect.stringContaining('userEnteredFormat.backgroundColor'),
+      },
+    });
+    expect(result.repeatCell.fields).toContain('userEnteredFormat.textFormat.bold');
+  });
+});
+
+describe('buildUpdateCellsRequest', () => {
+  it('builds updateCells request with per-cell formats and values', () => {
+    const values = [['Hello', 42]];
+    const formats: CellFormat[][] = [[
+      { backgroundColor: { red: 1 } },
+      { textFormat: { bold: true } },
+    ]];
+    const result = buildUpdateCellsRequest(
+      { sheetId: 0, startRowIndex: 0, endRowIndex: 1, startColumnIndex: 0, endColumnIndex: 2 },
+      formats,
+      values,
+    );
+    expect(result.updateCells.start).toEqual({ sheetId: 0, rowIndex: 0, columnIndex: 0 });
+    expect(result.updateCells.rows).toHaveLength(1);
+    expect(result.updateCells.rows[0].values).toHaveLength(2);
+    expect(result.updateCells.rows[0].values[0].userEnteredFormat).toEqual({ backgroundColor: { red: 1 } });
+    expect(result.updateCells.rows[0].values[0].userEnteredValue).toEqual({ stringValue: 'Hello' });
+    expect(result.updateCells.rows[0].values[1].userEnteredFormat).toEqual({ textFormat: { bold: true } });
+    expect(result.updateCells.rows[0].values[1].userEnteredValue).toEqual({ numberValue: 42 });
+    expect(result.updateCells.fields).toContain('userEnteredFormat');
+    expect(result.updateCells.fields).toContain('userEnteredValue');
+  });
+
+  it('builds updateCells request with formats only (no values)', () => {
+    const formats: CellFormat[][] = [[{ backgroundColor: { red: 0.5 } }]];
+    const result = buildUpdateCellsRequest(
+      { sheetId: 0, startRowIndex: 0, endRowIndex: 1, startColumnIndex: 0, endColumnIndex: 1 },
+      formats,
+    );
+    expect(result.updateCells.rows[0].values[0].userEnteredFormat).toEqual({ backgroundColor: { red: 0.5 } });
+    expect(result.updateCells.rows[0].values[0]).not.toHaveProperty('userEnteredValue');
+    expect(result.updateCells.fields).not.toContain('userEnteredValue');
+  });
+});
+
+describe('buildMergeRequests', () => {
+  it('builds merge requests', () => {
+    const merges: Merge[] = [
+      { sheetId: 0, startRowIndex: 0, endRowIndex: 2, startColumnIndex: 0, endColumnIndex: 3 },
+    ];
+    const result = buildMergeRequests(merges, false);
+    expect(result).toEqual([
+      { mergeCells: { range: merges[0], mergeType: 'MERGE_ALL' } },
+    ]);
+  });
+
+  it('builds unmerge + merge requests when unmerge is true', () => {
+    const merges: Merge[] = [
+      { sheetId: 0, startRowIndex: 0, endRowIndex: 2, startColumnIndex: 0, endColumnIndex: 3 },
+    ];
+    const result = buildMergeRequests(merges, true);
+    expect(result[0]).toHaveProperty('unmergeCells');
+    expect(result[1]).toHaveProperty('mergeCells');
   });
 });

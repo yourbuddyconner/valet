@@ -207,3 +207,145 @@ export function normalizeFormatsResponse(
 
   return { range: requestedRange, formats, merges };
 }
+
+// ─── A1 Range Parsing ───────────────────────────────────────────────────────
+
+export interface GridRange {
+  sheetId: number;
+  startRowIndex: number;
+  endRowIndex: number;
+  startColumnIndex: number;
+  endColumnIndex: number;
+}
+
+function columnToIndex(col: string): number {
+  let index = 0;
+  for (let i = 0; i < col.length; i++) {
+    index = index * 26 + (col.charCodeAt(i) - 64);
+  }
+  return index - 1;
+}
+
+function parseCellRef(ref: string): { col: number; row: number } {
+  const match = ref.match(/^([A-Z]+)(\d+)$/);
+  if (!match) throw new Error(`Invalid cell reference: ${ref}`);
+  return { col: columnToIndex(match[1]), row: parseInt(match[2], 10) - 1 };
+}
+
+export function parseA1Range(range: string, sheetId: number): GridRange {
+  let rangeOnly = range;
+  const bangIndex = range.indexOf('!');
+  if (bangIndex !== -1) {
+    rangeOnly = range.slice(bangIndex + 1);
+  }
+
+  const parts = rangeOnly.split(':');
+  const start = parseCellRef(parts[0]);
+
+  if (parts.length === 1) {
+    return {
+      sheetId,
+      startRowIndex: start.row,
+      endRowIndex: start.row + 1,
+      startColumnIndex: start.col,
+      endColumnIndex: start.col + 1,
+    };
+  }
+
+  const end = parseCellRef(parts[1]);
+  return {
+    sheetId,
+    startRowIndex: start.row,
+    endRowIndex: end.row + 1,
+    startColumnIndex: start.col,
+    endColumnIndex: end.col + 1,
+  };
+}
+
+// ─── batchUpdate Request Builders ───────────────────────────────────────────
+
+export function buildRepeatCellRequest(
+  range: GridRange,
+  format: CellFormat,
+): { repeatCell: { range: GridRange; cell: { userEnteredFormat: CellFormat }; fields: string } } {
+  return {
+    repeatCell: {
+      range,
+      cell: { userEnteredFormat: format },
+      fields: buildFieldMask(format),
+    },
+  };
+}
+
+function toUserEnteredValue(val: unknown): Record<string, unknown> {
+  if (val === null || val === undefined || val === '') return { stringValue: '' };
+  if (typeof val === 'number') return { numberValue: val };
+  if (typeof val === 'boolean') return { boolValue: val };
+  const s = String(val);
+  if (s.startsWith('=')) return { formulaValue: s };
+  return { stringValue: s };
+}
+
+export function buildUpdateCellsRequest(
+  range: GridRange,
+  formats: CellFormat[][],
+  values?: unknown[][],
+): {
+  updateCells: {
+    start: { sheetId: number; rowIndex: number; columnIndex: number };
+    rows: Array<{ values: Array<Record<string, unknown>> }>;
+    fields: string;
+  };
+} {
+  const hasValues = values !== undefined;
+
+  const allFormatPaths = new Set<string>();
+  for (const row of formats) {
+    for (const fmt of row) {
+      const mask = buildFieldMask(fmt);
+      if (mask) mask.split(',').forEach((p) => allFormatPaths.add(p));
+    }
+  }
+
+  const fieldParts = [...allFormatPaths];
+  if (hasValues) fieldParts.push('userEnteredValue');
+  const fields = fieldParts.join(',');
+
+  const rows = formats.map((fmtRow, rowIdx) => ({
+    values: fmtRow.map((fmt, colIdx) => {
+      const cell: Record<string, unknown> = {};
+      if (Object.keys(fmt).length > 0) cell.userEnteredFormat = fmt;
+      if (hasValues && values[rowIdx] !== undefined) {
+        cell.userEnteredValue = toUserEnteredValue(values[rowIdx][colIdx]);
+      }
+      return cell;
+    }),
+  }));
+
+  return {
+    updateCells: {
+      start: { sheetId: range.sheetId, rowIndex: range.startRowIndex, columnIndex: range.startColumnIndex },
+      rows,
+      fields,
+    },
+  };
+}
+
+export function buildMergeRequests(
+  merges: Merge[],
+  unmergeFirst: boolean,
+): Array<Record<string, unknown>> {
+  const requests: Array<Record<string, unknown>> = [];
+
+  if (unmergeFirst) {
+    for (const merge of merges) {
+      requests.push({ unmergeCells: { range: merge } });
+    }
+  }
+
+  for (const merge of merges) {
+    requests.push({ mergeCells: { range: merge, mergeType: 'MERGE_ALL' } });
+  }
+
+  return requests;
+}
