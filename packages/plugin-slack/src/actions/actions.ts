@@ -1,11 +1,21 @@
 import { z } from 'zod';
 import type { ActionDefinition, ActionSource, ActionContext, ActionResult } from '@valet/sdk';
 import { slackFetch, slackGet } from './api.js';
+import { checkPrivateChannelAccess } from './channel-access.js';
 
 /** Build a descriptive error from a Slack API response. */
 async function slackError(res: Response, data?: { ok: boolean; error?: string }): Promise<ActionResult> {
   if (data && !data.ok) return { success: false, error: `Slack API error: ${data.error || 'unknown'}` };
   return { success: false, error: `Slack API ${res.status}: ${res.statusText}` };
+}
+
+/** Guard that checks private channel membership. Returns an error ActionResult if denied, or null if allowed. */
+async function guardPrivateChannel(token: string, channelId: string, ctx: ActionContext): Promise<ActionResult | null> {
+  const result = await checkPrivateChannelAccess(token, channelId, ctx.credentials.owner_slack_user_id);
+  if (!result.allowed) {
+    return { success: false, error: result.error || 'Access denied' };
+  }
+  return null;
 }
 
 // ─── Action Definitions ──────────────────────────────────────────────────────
@@ -196,6 +206,12 @@ async function executeAction(
         // Slack's chat.postMessage natively accepts #channel-name, so just pass it through.
         // Strip leading # if present — Slack wants bare name or ID.
         const channel = p.channel.replace(/^#/, '');
+        // Only check channels identified by ID (C.../G...) — names resolve to public channels only
+        const isChannelId = /^[CG]/.test(channel);
+        if (isChannelId) {
+          const denied = await guardPrivateChannel(token, channel, ctx);
+          if (denied) return denied;
+        }
         const body: Record<string, unknown> = { channel, text: p.text };
         if (p.thread_ts) body.thread_ts = p.thread_ts;
         if (ctx.callerIdentity?.name) body.username = ctx.callerIdentity.name;
@@ -211,6 +227,8 @@ async function executeAction(
 
       case 'slack.add_reaction': {
         const p = addReaction.params.parse(params);
+        const denied = await guardPrivateChannel(token, p.channel, ctx);
+        if (denied) return denied;
         const res = await slackFetch('reactions.add', token, {
           channel: p.channel,
           timestamp: p.timestamp,
@@ -257,11 +275,32 @@ async function executeAction(
           channels = channels.filter((ch) => typeof ch.name === 'string' && ch.name.toLowerCase().startsWith(pfx));
         }
 
+        // Filter out private channels the owner doesn't have access to
+        const ownerSlackUserId = ctx.credentials.owner_slack_user_id;
+        if (ownerSlackUserId) {
+          const privateChannels = channels.filter((ch) => ch.is_private === true);
+          if (privateChannels.length > 0) {
+            const accessChecks = await Promise.all(
+              privateChannels.map(async (ch) => {
+                const result = await checkPrivateChannelAccess(token, ch.id as string, ownerSlackUserId);
+                return { id: ch.id, allowed: result.allowed };
+              }),
+            );
+            const deniedIds = new Set(accessChecks.filter((c) => !c.allowed).map((c) => c.id));
+            channels = channels.filter((ch) => !deniedIds.has(ch.id));
+          }
+        } else {
+          // No linked identity — filter out all private channels
+          channels = channels.filter((ch) => ch.is_private !== true);
+        }
+
         return { success: true, data: { channels, total: channels.length } };
       }
 
       case 'slack.read_history': {
         const p = readHistory.params.parse(params);
+        const denied = await guardPrivateChannel(token, p.channel, ctx);
+        if (denied) return denied;
         const res = await slackGet('conversations.history', token, {
           channel: p.channel,
           limit: p.limit || 20,
@@ -276,6 +315,8 @@ async function executeAction(
 
       case 'slack.read_thread': {
         const p = readThread.params.parse(params);
+        const denied = await guardPrivateChannel(token, p.channel, ctx);
+        if (denied) return denied;
         const res = await slackGet('conversations.replies', token, {
           channel: p.channel,
           ts: p.thread_ts,
