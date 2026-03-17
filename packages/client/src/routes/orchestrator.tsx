@@ -9,6 +9,7 @@ import {
   useOrchestratorInfo,
   useCreateOrchestrator,
   useCheckHandle,
+  useCheckName,
   useMemoryFiles,
   useUploadAvatar,
 } from '@/api/orchestrator';
@@ -49,10 +50,22 @@ function OrchestratorPage() {
 // Setup Form (migrated from orchestrator-setup.tsx)
 // ---------------------------------------------------------------------------
 
+const SUGGESTED_NAMES = [
+  'Atlas', 'Beacon', 'Cleo', 'Dash', 'Echo', 'Fable', 'Glow', 'Haven',
+  'Iris', 'Juno', 'Kit', 'Lark', 'Maple', 'Nova', 'Opal', 'Piper',
+  'Quinn', 'Robin', 'Sage', 'Teal', 'Unity', 'Vale', 'Wren', 'Zara',
+  'Aspen', 'Birch', 'Cedar', 'Dune', 'Ember', 'Frost', 'Grove', 'Heath',
+];
+
+function pickSuggestedName(): string {
+  return SUGGESTED_NAMES[Math.floor(Math.random() * SUGGESTED_NAMES.length)];
+}
+
 function SetupForm() {
   const navigate = useNavigate();
   const createOrchestrator = useCreateOrchestrator();
 
+  const [suggestedName] = React.useState(pickSuggestedName);
   const [name, setName] = React.useState('');
   const [handle, setHandle] = React.useState('');
   const [customInstructions, setCustomInstructions] = React.useState('');
@@ -65,6 +78,10 @@ function SetupForm() {
   const handleCheck = useCheckHandle(debouncedHandle);
   const handleTaken = debouncedHandle.length >= 2 && handleCheck.data?.available === false;
 
+  const debouncedName = useDebounced(name, 400);
+  const nameCheck = useCheckName(debouncedName);
+  const nameTaken = debouncedName.length >= 2 && nameCheck.data?.available === false;
+
   function handleAvatarChange(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -74,7 +91,7 @@ function SetupForm() {
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (handleTaken) return;
+    if (handleTaken || nameTaken) return;
 
     createOrchestrator.mutate(
       {
@@ -156,12 +173,22 @@ function SetupForm() {
                   required
                   value={name}
                   onChange={(e) => setName(e.target.value)}
-                  placeholder="Jarvis"
-                  className="mt-1 block w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm text-neutral-900 placeholder:text-neutral-400 focus:border-neutral-500 focus:outline-none focus:ring-1 focus:ring-neutral-500 dark:border-neutral-600 dark:bg-neutral-900 dark:text-neutral-100 dark:placeholder:text-neutral-500 dark:focus:border-neutral-400 dark:focus:ring-neutral-400"
+                  placeholder={suggestedName}
+                  className={`mt-1 block w-full rounded-md border bg-white px-3 py-2 text-sm text-neutral-900 placeholder:text-neutral-400 focus:outline-none focus:ring-1 dark:bg-neutral-900 dark:text-neutral-100 dark:placeholder:text-neutral-500 ${
+                    nameTaken
+                      ? 'border-red-400 focus:border-red-500 focus:ring-red-500 dark:border-red-500 dark:focus:border-red-400 dark:focus:ring-red-400'
+                      : 'border-neutral-300 focus:border-neutral-500 focus:ring-neutral-500 dark:border-neutral-600 dark:focus:border-neutral-400 dark:focus:ring-neutral-400'
+                  }`}
                 />
-                <p className="mt-1 text-xs text-neutral-400 dark:text-neutral-500">
-                  Your orchestrator's display name
-                </p>
+                {nameTaken ? (
+                  <p className="mt-1 text-xs text-red-500 dark:text-red-400">
+                    The name "{debouncedName}" is already in use
+                  </p>
+                ) : (
+                  <p className="mt-1 text-xs text-neutral-400 dark:text-neutral-500">
+                    Your orchestrator's display name — must be unique
+                  </p>
+                )}
               </div>
 
               <div>
@@ -183,7 +210,7 @@ function SetupForm() {
                         e.target.value.toLowerCase().replace(/[^a-z0-9_-]/g, '')
                       )
                     }
-                    placeholder="jarvis"
+                    placeholder={suggestedName.toLowerCase()}
                     className={`block w-full rounded-md border bg-white px-3 py-2 text-sm text-neutral-900 placeholder:text-neutral-400 focus:outline-none focus:ring-1 dark:bg-neutral-900 dark:text-neutral-100 dark:placeholder:text-neutral-500 ${
                       handleTaken
                         ? 'border-red-400 focus:border-red-500 focus:ring-red-500 dark:border-red-500 dark:focus:border-red-400 dark:focus:ring-red-400'
@@ -233,7 +260,7 @@ function SetupForm() {
 
           <Button
             type="submit"
-            disabled={!name || !handle || handleTaken || createOrchestrator.isPending}
+            disabled={!name || !handle || handleTaken || nameTaken || createOrchestrator.isPending}
             className="w-full"
           >
             {createOrchestrator.isPending ? 'Creating...' : 'Create Orchestrator'}

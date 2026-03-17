@@ -16,6 +16,11 @@ import {
 } from '../lib/db.js';
 import * as adminService from '../services/admin.js';
 
+function safeJsonParse(value: unknown): unknown {
+  if (typeof value !== 'string') return undefined;
+  try { return JSON.parse(value); } catch { return value; }
+}
+
 export const adminRouter = new Hono<{ Bindings: Env; Variables: Variables }>();
 
 // All admin routes require admin role
@@ -286,4 +291,144 @@ adminRouter.delete('/custom-providers/:providerId', async (c) => {
   const providerId = c.req.param('providerId');
   await deleteCustomProvider(c.get('db'), providerId);
   return c.json({ ok: true });
+});
+
+// --- Orchestrators ---
+
+adminRouter.get('/orchestrators', async (c) => {
+  const rows = await c.env.DB.prepare(`
+    SELECT
+      s.id AS session_id,
+      s.user_id,
+      s.status,
+      s.created_at,
+      s.last_active_at,
+      u.email AS user_email,
+      u.name AS user_name,
+      oi.name AS identity_name,
+      oi.handle AS identity_handle,
+      oi.avatar AS identity_avatar
+    FROM sessions s
+    JOIN users u ON u.id = s.user_id
+    LEFT JOIN orchestrator_identities oi ON oi.user_id = s.user_id
+    WHERE s.is_orchestrator = 1
+      AND s.status NOT IN ('archived')
+    ORDER BY s.last_active_at DESC
+  `).all();
+
+  const sessionIds = (rows.results ?? []).map((r: any) => r.session_id as string);
+
+  // Batch-fetch channel bindings for all orchestrator sessions
+  let channelMap = new Map<string, Array<{ channelType: string; channelId: string; slackChannelId?: string }>>();
+  if (sessionIds.length > 0) {
+    const placeholders = sessionIds.map(() => '?').join(',');
+    const bindings = await c.env.DB.prepare(
+      `SELECT session_id, channel_type, channel_id, slack_channel_id FROM channel_bindings WHERE session_id IN (${placeholders})`
+    ).bind(...sessionIds).all();
+
+    for (const b of (bindings.results ?? []) as any[]) {
+      const list = channelMap.get(b.session_id) ?? [];
+      list.push({ channelType: b.channel_type, channelId: b.channel_id, slackChannelId: b.slack_channel_id || undefined });
+      channelMap.set(b.session_id, list);
+    }
+  }
+
+  const orchestrators = (rows.results ?? []).map((r: any) => ({
+    sessionId: r.session_id,
+    userId: r.user_id,
+    status: r.status,
+    userEmail: r.user_email,
+    userName: r.user_name || undefined,
+    identityName: r.identity_name || undefined,
+    identityHandle: r.identity_handle || undefined,
+    identityAvatar: r.identity_avatar || undefined,
+    channels: channelMap.get(r.session_id) ?? [],
+    createdAt: r.created_at,
+    lastActiveAt: r.last_active_at,
+  }));
+
+  return c.json(orchestrators);
+});
+
+// --- Action Invocation Log ---
+
+adminRouter.get('/action-log', async (c) => {
+  const service = c.req.query('service');
+  const userId = c.req.query('userId');
+  const limitStr = c.req.query('limit');
+  const cursor = c.req.query('cursor');
+  const limit = limitStr ? Math.min(parseInt(limitStr, 10) || 50, 200) : 50;
+
+  let query = `
+    SELECT
+      ai.id,
+      ai.session_id,
+      ai.user_id,
+      ai.service,
+      ai.action_id,
+      ai.risk_level,
+      ai.resolved_mode,
+      ai.status,
+      ai.params,
+      ai.result,
+      ai.error,
+      ai.executed_at,
+      ai.created_at,
+      u.email AS user_email,
+      u.name AS user_name,
+      oi.name AS identity_name,
+      oi.handle AS identity_handle
+    FROM action_invocations ai
+    JOIN users u ON u.id = ai.user_id
+    LEFT JOIN orchestrator_identities oi ON oi.user_id = ai.user_id
+    WHERE 1=1
+  `;
+  const params: (string | number)[] = [];
+
+  if (service) {
+    query += ' AND ai.service = ?';
+    params.push(service);
+  }
+  if (userId) {
+    query += ' AND ai.user_id = ?';
+    params.push(userId);
+  }
+  if (cursor) {
+    query += ' AND ai.created_at < ?';
+    params.push(cursor);
+  }
+
+  query += ' ORDER BY ai.created_at DESC LIMIT ?';
+  params.push(limit + 1);
+
+  const rows = await c.env.DB.prepare(query).bind(...params).all();
+  const results = rows.results ?? [];
+  const hasMore = results.length > limit;
+  const page = results.slice(0, limit);
+
+  const entries = page.map((r: any) => ({
+    id: r.id,
+    sessionId: r.session_id,
+    userId: r.user_id,
+    userEmail: r.user_email,
+    userName: r.user_name || undefined,
+    identityName: r.identity_name || undefined,
+    identityHandle: r.identity_handle || undefined,
+    service: r.service,
+    actionId: r.action_id,
+    riskLevel: r.risk_level,
+    resolvedMode: r.resolved_mode,
+    status: r.status,
+    params: safeJsonParse(r.params),
+    result: safeJsonParse(r.result),
+    error: r.error || undefined,
+    executedAt: r.executed_at || undefined,
+    createdAt: r.created_at,
+  }));
+
+  return c.json({
+    entries,
+    cursor: hasMore ? (page[page.length - 1] as any).created_at : undefined,
+    hasMore,
+  });
 });

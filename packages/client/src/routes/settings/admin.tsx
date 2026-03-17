@@ -19,11 +19,13 @@ import {
   useOrgUsers,
   useUpdateUserRole,
   useRemoveUser,
+  useAdminOrchestrators,
+  useAdminActionLog,
 } from '@/api/admin';
 import { useOrgRepos, useCreateOrgRepo, useDeleteOrgRepo, useSetRepoPersonaDefault } from '@/api/org-repos';
 import { usePersonas } from '@/api/personas';
 import type { UserRole, CustomProviderModel } from '@valet/shared';
-import { formatDate } from '../../lib/format';
+import { formatDate, formatTime, formatDateTime } from '../../lib/format';
 import { Input } from '@/components/ui/input';
 import { useAvailableModels } from '@/api/sessions';
 import type { ProviderModels } from '@/api/sessions';
@@ -37,6 +39,7 @@ import { useDisabledActions, useSetServiceDisabledState } from '@/api/disabled-a
 import type { DisabledAction } from '@valet/shared';
 import { useOrgDefaultSkills, useUpdateOrgDefaultSkills } from '@/api/org-default-skills';
 import { SkillPicker } from '@/components/skills/skill-picker';
+import { LoadMoreButton } from '@/components/ui/load-more-button';
 
 export const Route = createFileRoute('/settings/admin')({
   component: AdminSettingsPage,
@@ -76,6 +79,8 @@ function AdminSettingsPage() {
         <OrgReposSection />
         <LLMKeysSection />
         <SlackInstallSection />
+        <OrchestratorsSection />
+        <ActionLogSection />
         <CustomProvidersSection />
         <AccessControlSection />
         <InvitesSection />
@@ -696,6 +701,208 @@ function SlackIcon({ className }: { className?: string }) {
     <svg className={className} viewBox="0 0 24 24" fill="currentColor">
       <path d="M5.042 15.165a2.528 2.528 0 0 1-2.52 2.523A2.528 2.528 0 0 1 0 15.165a2.527 2.527 0 0 1 2.522-2.52h2.52v2.52zm1.271 0a2.527 2.527 0 0 1 2.521-2.52 2.527 2.527 0 0 1 2.521 2.52v6.313A2.528 2.528 0 0 1 8.834 24a2.528 2.528 0 0 1-2.521-2.522v-6.313zM8.834 5.042a2.528 2.528 0 0 1-2.521-2.52A2.528 2.528 0 0 1 8.834 0a2.528 2.528 0 0 1 2.521 2.522v2.52H8.834zm0 1.271a2.528 2.528 0 0 1 2.521 2.521 2.528 2.528 0 0 1-2.521 2.521H2.522A2.528 2.528 0 0 1 0 8.834a2.528 2.528 0 0 1 2.522-2.521h6.312zm10.122 2.521a2.528 2.528 0 0 1 2.522-2.521A2.528 2.528 0 0 1 24 8.834a2.528 2.528 0 0 1-2.522 2.521h-2.522V8.834zm-1.268 0a2.528 2.528 0 0 1-2.523 2.521 2.527 2.527 0 0 1-2.52-2.521V2.522A2.527 2.527 0 0 1 15.165 0a2.528 2.528 0 0 1 2.523 2.522v6.312zm-2.523 10.122a2.528 2.528 0 0 1 2.523 2.522A2.528 2.528 0 0 1 15.165 24a2.527 2.527 0 0 1-2.52-2.522v-2.522h2.52zm0-1.268a2.527 2.527 0 0 1-2.52-2.523 2.526 2.526 0 0 1 2.52-2.52h6.313A2.527 2.527 0 0 1 24 15.165a2.528 2.528 0 0 1-2.522 2.523h-6.313z" />
     </svg>
+  );
+}
+
+// --- Orchestrators ---
+
+function OrchestratorsSection() {
+  const { data: orchestrators, isLoading } = useAdminOrchestrators();
+  const navigate = useNavigate();
+
+  const statusVariant = (status: string): 'success' | 'warning' | 'error' | 'secondary' => {
+    if (status === 'running' || status === 'idle') return 'success';
+    if (status === 'error' || status === 'terminated') return 'error';
+    if (status === 'hibernated' || status === 'hibernating') return 'warning';
+    return 'secondary';
+  };
+
+  const channelLabel = (ch: { channelType: string; channelId: string; slackChannelId?: string }) => {
+    if (ch.channelType === 'slack' && ch.slackChannelId) return `#${ch.slackChannelId}`;
+    if (ch.channelType === 'slack') return `slack:${ch.channelId.slice(0, 12)}`;
+    if (ch.channelType === 'telegram') return `telegram:${ch.channelId.slice(0, 12)}`;
+    return `${ch.channelType}:${ch.channelId.slice(0, 12)}`;
+  };
+
+  return (
+    <Section title="Orchestrators">
+      <p className="text-sm text-neutral-500 dark:text-neutral-400">
+        Active orchestrator agents and their connected channels. Each orchestrator is owned by a user and can post messages to bound channels.
+      </p>
+      {isLoading ? (
+        <p className="mt-3 text-sm text-neutral-400">Loading...</p>
+      ) : !orchestrators?.length ? (
+        <p className="mt-3 text-sm text-neutral-400">No orchestrators configured.</p>
+      ) : (
+        <div className="mt-3 overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-neutral-200 text-left text-xs font-medium uppercase tracking-wider text-neutral-500 dark:border-neutral-700 dark:text-neutral-400">
+                <th className="pb-2 pr-4">Identity</th>
+                <th className="pb-2 pr-4">Owner</th>
+                <th className="pb-2 pr-4">Status</th>
+                <th className="pb-2 pr-4">Channels</th>
+                <th className="pb-2 pr-4">Last Active</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-neutral-100 dark:divide-neutral-700/50">
+              {orchestrators.map((orch) => (
+                <tr key={orch.sessionId} className="group">
+                  <td className="py-2 pr-4">
+                    <button
+                      type="button"
+                      onClick={() => navigate({ to: '/sessions/$sessionId', params: { sessionId: orch.sessionId } })}
+                      className="flex items-center gap-2 text-left hover:underline"
+                    >
+                      {orch.identityAvatar && (
+                        <img src={orch.identityAvatar} alt="" className="h-5 w-5 rounded-full" />
+                      )}
+                      <span className="font-medium text-neutral-900 dark:text-neutral-100">
+                        {orch.identityName || 'Unnamed'}
+                      </span>
+                      {orch.identityHandle && (
+                        <span className="text-neutral-400 dark:text-neutral-500">@{orch.identityHandle}</span>
+                      )}
+                    </button>
+                  </td>
+                  <td className="py-2 pr-4 text-neutral-600 dark:text-neutral-300">
+                    {orch.userName || orch.userEmail}
+                  </td>
+                  <td className="py-2 pr-4">
+                    <Badge variant={statusVariant(orch.status)}>{orch.status}</Badge>
+                  </td>
+                  <td className="py-2 pr-4">
+                    {orch.channels.length === 0 ? (
+                      <span className="text-neutral-400">none</span>
+                    ) : (
+                      <div className="flex flex-wrap gap-1">
+                        {orch.channels.map((ch, i) => (
+                          <Badge key={i} variant="secondary">{channelLabel(ch)}</Badge>
+                        ))}
+                      </div>
+                    )}
+                  </td>
+                  <td className="py-2 pr-4 text-neutral-500 dark:text-neutral-400">
+                    {formatDate(orch.lastActiveAt)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </Section>
+  );
+}
+
+// --- Action Log ---
+
+function ActionLogSection() {
+  const [serviceFilter, setServiceFilter] = React.useState<string>('');
+  const { data, isLoading, fetchNextPage, isFetchingNextPage, hasNextPage } = useAdminActionLog({
+    service: serviceFilter || undefined,
+  });
+
+  const entries = data?.entries ?? [];
+
+  const statusVariant = (status: string): 'success' | 'warning' | 'error' | 'secondary' => {
+    if (status === 'executed') return 'success';
+    if (status === 'failed' || status === 'denied') return 'error';
+    if (status === 'pending') return 'warning';
+    return 'secondary';
+  };
+
+  const formatParams = (params?: Record<string, unknown>): string => {
+    if (!params) return '';
+    const { text, channel, user, ...rest } = params;
+    const parts: string[] = [];
+    if (channel) parts.push(`channel: ${channel}`);
+    if (user) parts.push(`user: ${user}`);
+    if (text) {
+      const t = String(text);
+      parts.push(t.length > 80 ? t.slice(0, 80) + '...' : t);
+    }
+    if (parts.length === 0) {
+      const json = JSON.stringify(rest);
+      return json.length > 100 ? json.slice(0, 100) + '...' : json;
+    }
+    return parts.join(' | ');
+  };
+
+  const services = React.useMemo(() => {
+    const set = new Set(entries.map((e) => e.service));
+    return [...set].sort();
+  }, [entries]);
+
+  return (
+    <Section title="Action Log">
+      <p className="text-sm text-neutral-500 dark:text-neutral-400">
+        Audit trail of all action invocations across orchestrators. Every message sent to external channels is logged here with full user attribution.
+      </p>
+      <div className="mt-3 flex items-center gap-2">
+        <select
+          value={serviceFilter}
+          onChange={(e) => setServiceFilter(e.target.value)}
+          className={selectClass + ' !mt-0 !max-w-[200px]'}
+        >
+          <option value="">All services</option>
+          {services.map((s) => (
+            <option key={s} value={s}>{s}</option>
+          ))}
+        </select>
+      </div>
+      {isLoading ? (
+        <p className="mt-3 text-sm text-neutral-400">Loading...</p>
+      ) : !entries.length ? (
+        <p className="mt-3 text-sm text-neutral-400">No action invocations found.</p>
+      ) : (
+        <div className="mt-3 overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-neutral-200 text-left text-xs font-medium uppercase tracking-wider text-neutral-500 dark:border-neutral-700 dark:text-neutral-400">
+                <th className="pb-2 pr-4">Time</th>
+                <th className="pb-2 pr-4">User</th>
+                <th className="pb-2 pr-4">Action</th>
+                <th className="pb-2 pr-4">Status</th>
+                <th className="pb-2 pr-4">Details</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-neutral-100 dark:divide-neutral-700/50">
+              {entries.map((entry) => (
+                <tr key={entry.id}>
+                  <td className="whitespace-nowrap py-2 pr-4 text-neutral-500 dark:text-neutral-400" title={formatDateTime(entry.createdAt)}>
+                    {formatTime(entry.createdAt)}
+                  </td>
+                  <td className="py-2 pr-4">
+                    <div className="text-neutral-900 dark:text-neutral-100">
+                      {entry.userName || entry.userEmail}
+                    </div>
+                    {entry.identityHandle && (
+                      <div className="text-xs text-neutral-400">via @{entry.identityHandle}</div>
+                    )}
+                  </td>
+                  <td className="py-2 pr-4">
+                    <Badge variant="secondary">{entry.service}</Badge>
+                    <span className="ml-1 text-neutral-700 dark:text-neutral-300">{entry.actionId}</span>
+                  </td>
+                  <td className="py-2 pr-4">
+                    <Badge variant={statusVariant(entry.status)}>{entry.status}</Badge>
+                  </td>
+                  <td className="max-w-xs truncate py-2 pr-4 text-neutral-500 dark:text-neutral-400" title={entry.params ? JSON.stringify(entry.params) : undefined}>
+                    {entry.error || formatParams(entry.params)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <LoadMoreButton
+            onClick={() => fetchNextPage()}
+            isLoading={isFetchingNextPage}
+            hasMore={hasNextPage ?? false}
+          />
+        </div>
+      )}
+    </Section>
   );
 }
 

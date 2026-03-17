@@ -66,6 +66,18 @@ export function useCheckHandle(handle: string) {
   });
 }
 
+export function useCheckName(name: string) {
+  return useQuery({
+    queryKey: [...orchestratorKeys.all, 'check-name', name] as const,
+    queryFn: () =>
+      api.get<{ available: boolean; name: string }>(
+        `/me/orchestrator/check-name?name=${encodeURIComponent(name)}`
+      ),
+    enabled: name.length >= 2,
+    staleTime: 10_000,
+  });
+}
+
 export function useOrchestratorIdentity() {
   return useQuery({
     queryKey: orchestratorKeys.identity(),

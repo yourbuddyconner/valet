@@ -86,6 +86,9 @@ orchestratorRouter.post('/orchestrator', zValidator('json', createOrchestratorSc
     if (result.reason === 'handle_taken') {
       return c.json({ error: 'Handle already taken' }, 409);
     }
+    if (result.reason === 'name_taken') {
+      return c.json({ error: 'Name already taken' }, 409);
+    }
   }
 
   if (result.ok) {
@@ -123,6 +126,9 @@ orchestratorRouter.put('/orchestrator/identity', zValidator('json', updateIdenti
     if (result.error === 'handle_taken') {
       return c.json({ error: 'Handle already taken' }, 409);
     }
+    if (result.error === 'name_taken') {
+      return c.json({ error: 'Name already taken' }, 409);
+    }
   }
 
   if (result.ok) {
@@ -144,6 +150,21 @@ orchestratorRouter.get('/orchestrator/check-handle', async (c) => {
   const user = c.get('user');
   const available = !existing || existing.userId === user.id;
   return c.json({ available, handle });
+});
+
+/**
+ * GET /api/me/orchestrator/check-name?name=foo
+ * Checks if an orchestrator display name is already in use (case-insensitive).
+ */
+orchestratorRouter.get('/orchestrator/check-name', async (c) => {
+  const name = c.req.query('name');
+  if (!name) {
+    return c.json({ error: 'name query param required' }, 400);
+  }
+  const existing = await db.getOrchestratorIdentityByName(c.get('db'), name);
+  const user = c.get('user');
+  const available = !existing || existing.userId === user.id;
+  return c.json({ available, name });
 });
 
 // ─── Memory File Routes ─────────────────────────────────────────────────

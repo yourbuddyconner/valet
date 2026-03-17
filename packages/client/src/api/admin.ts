@@ -1,4 +1,4 @@
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient, useInfiniteQuery } from '@tanstack/react-query';
 import { api } from './client';
 import type { OrgSettings, OrgApiKey, Invite, User, CustomProvider } from '@valet/shared';
 
@@ -10,6 +10,8 @@ export const adminKeys = {
   customProviders: () => [...adminKeys.all, 'custom-providers'] as const,
   invites: () => [...adminKeys.all, 'invites'] as const,
   users: () => [...adminKeys.all, 'users'] as const,
+  orchestrators: () => [...adminKeys.all, 'orchestrators'] as const,
+  actionLog: (filters?: Record<string, unknown>) => [...adminKeys.all, 'action-log', filters] as const,
 };
 
 // --- Org Settings ---
@@ -134,6 +136,73 @@ export function useRemoveUser() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: adminKeys.users() });
     },
+  });
+}
+
+// --- Orchestrators ---
+
+export interface AdminOrchestrator {
+  sessionId: string;
+  userId: string;
+  status: string;
+  userEmail: string;
+  userName?: string;
+  identityName?: string;
+  identityHandle?: string;
+  identityAvatar?: string;
+  channels: Array<{ channelType: string; channelId: string; slackChannelId?: string }>;
+  createdAt: string;
+  lastActiveAt: string;
+}
+
+export function useAdminOrchestrators() {
+  return useQuery({
+    queryKey: adminKeys.orchestrators(),
+    queryFn: () => api.get<AdminOrchestrator[]>('/admin/orchestrators'),
+  });
+}
+
+// --- Action Log ---
+
+export interface ActionLogEntry {
+  id: string;
+  sessionId: string;
+  userId: string;
+  userEmail: string;
+  userName?: string;
+  identityName?: string;
+  identityHandle?: string;
+  service: string;
+  actionId: string;
+  riskLevel: string;
+  resolvedMode: string;
+  status: string;
+  params?: Record<string, unknown>;
+  result?: Record<string, unknown>;
+  error?: string;
+  executedAt?: string;
+  createdAt: string;
+}
+
+export function useAdminActionLog(filters?: { service?: string; userId?: string }) {
+  return useInfiniteQuery({
+    queryKey: adminKeys.actionLog(filters),
+    queryFn: ({ pageParam }) => {
+      const params = new URLSearchParams();
+      if (filters?.service) params.set('service', filters.service);
+      if (filters?.userId) params.set('userId', filters.userId);
+      params.set('limit', '50');
+      if (pageParam) params.set('cursor', pageParam);
+      return api.get<{ entries: ActionLogEntry[]; cursor?: string; hasMore: boolean }>(
+        `/admin/action-log?${params.toString()}`
+      );
+    },
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (lastPage) => lastPage.cursor,
+    select: (data) => ({
+      entries: data.pages.flatMap((page) => page.entries),
+      hasMore: data.pages[data.pages.length - 1]?.hasMore ?? false,
+    }),
   });
 }
 

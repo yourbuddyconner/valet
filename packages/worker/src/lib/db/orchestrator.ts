@@ -62,6 +62,15 @@ export async function getOrchestratorIdentityByHandle(db: AppDb, handle: string,
   return row ? rowToIdentity(row) : null;
 }
 
+export async function getOrchestratorIdentityByName(db: AppDb, name: string, orgId: string = 'default'): Promise<OrchestratorIdentity | null> {
+  const row = await db
+    .select()
+    .from(orchestratorIdentities)
+    .where(and(sql`lower(${orchestratorIdentities.name}) = lower(${name})`, eq(orchestratorIdentities.orgId, orgId)))
+    .get();
+  return row ? rowToIdentity(row) : null;
+}
+
 export async function createOrchestratorIdentity(
   db: AppDb,
   data: { id: string; userId: string; name: string; handle: string; avatar?: string; customInstructions?: string; personaId?: string; orgId?: string }

@@ -194,7 +194,8 @@ export interface OnboardOrchestratorParams {
 export type OnboardOrchestratorResult =
   | { ok: true; sessionId: string; identity: any; session: any }
   | { ok: false; reason: 'already_exists' }
-  | { ok: false; reason: 'handle_taken' };
+  | { ok: false; reason: 'handle_taken' }
+  | { ok: false; reason: 'name_taken' };
 
 export async function onboardOrchestrator(
   env: Env,
@@ -218,6 +219,10 @@ export async function onboardOrchestrator(
     const handleTaken = await db.getOrchestratorIdentityByHandle(appDb, params.handle);
     if (handleTaken) {
       return { ok: false, reason: 'handle_taken' };
+    }
+    const nameTaken = await db.getOrchestratorIdentityByName(appDb, params.name);
+    if (nameTaken) {
+      return { ok: false, reason: 'name_taken' };
     }
 
     const identityId = crypto.randomUUID();
@@ -297,7 +302,8 @@ export async function getOrchestratorInfo(env: Env, userId: string): Promise<Orc
 export type UpdateIdentityResult =
   | { ok: true; identity: any }
   | { ok: false; error: 'not_found' }
-  | { ok: false; error: 'handle_taken' };
+  | { ok: false; error: 'handle_taken' }
+  | { ok: false; error: 'name_taken' };
 
 export async function updateOrchestratorIdentity(
   database: AppDb,
@@ -313,6 +319,13 @@ export async function updateOrchestratorIdentity(
     const handleTaken = await db.getOrchestratorIdentityByHandle(database, updates.handle);
     if (handleTaken) {
       return { ok: false, error: 'handle_taken' };
+    }
+  }
+
+  if (updates.name && updates.name !== identity.name) {
+    const nameTaken = await db.getOrchestratorIdentityByName(database, updates.name);
+    if (nameTaken) {
+      return { ok: false, error: 'name_taken' };
     }
   }
 
