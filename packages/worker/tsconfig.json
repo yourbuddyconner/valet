@@ -11,6 +11,7 @@
     { "path": "../shared" },
     { "path": "../sdk" },
     { "path": "../plugin-cloudflare" },
+    { "path": "../plugin-codestorage" },
     { "path": "../plugin-figma" },
     { "path": "../plugin-deepwiki" },
     { "path": "../plugin-email-auth" },

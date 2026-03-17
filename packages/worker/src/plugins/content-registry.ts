@@ -251,6 +251,14 @@ timeout 10 agent-browser --headed wait --text "Welcome"     # Wait for specific 
     artifacts: [],
   },
   {
+    name: "codestorage",
+    version: "0.0.1",
+    description: "code.storage repo provider for git clone/push session runtime",
+    icon: "🧱",
+    capabilities: [],
+    artifacts: [],
+  },
+  {
     name: "deepwiki",
     version: "0.0.1",
     description: "DeepWiki integration for repository knowledge base",

@@ -19,7 +19,7 @@ function parseCodeStorageRepoUrl(repoUrl: string): ParsedRepoUrl | null {
   if (!match) return null;
 
   const host = match[1];
-  const path = match[2].replace(/^\/+/, '').replace(/\.git$/i, '');
+  const path = match[2].replace(/^\/+/, '');
   return {
     host,
     path,
@@ -120,7 +120,11 @@ export const codestorageRepoProvider: RepoProvider = {
     const token = asToken(credential);
 
     if (!apiBase) {
-      // Clone/push-only bootstrap mode: URL is syntactically valid and token exists.
+      // Bootstrap mode: no API base configured, so we can't verify the repo
+      // server-side. We accept the URL if it parses and a token exists. A typo'd
+      // URL or revoked token will surface as a clone-time error, which is acceptable
+      // for this initial backend-first rollout — full validation requires apiBase
+      // (derived from credential metadata) to be configured.
       return {
         accessible: true,
         permissions: { push: true, pull: true, admin: false },
@@ -160,6 +164,10 @@ export const codestorageRepoProvider: RepoProvider = {
   },
 
   async assembleSessionEnv(_credential: RepoCredential, opts) {
+    // Note: the minted token is not embedded here. The Runner's git-setup.ts
+    // configures a global git credential.helper that calls back to the Runner
+    // gateway (/git/credentials), which invokes mintToken() on-demand. The t@
+    // username in the clone URL ensures git triggers a credential lookup.
     const parsed = parseCodeStorageRepoUrl(opts.repoUrl);
     if (!parsed) {
       throw new Error('Invalid code.storage repository URL');
