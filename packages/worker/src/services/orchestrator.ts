@@ -364,6 +364,22 @@ export async function dispatchOrchestratorPrompt(
 
   console.log(`[OrchestratorDispatch] Dispatching to session=${sessionId} status=${session.status}`);
 
+  // Ensure a threadId is set for orchestrator sessions. The frontend filters
+  // messages by active thread, so messages without a threadId are invisible.
+  if (!params.threadId) {
+    try {
+      let thread = await db.getActiveThread(env.DB, sessionId);
+      if (!thread) {
+        const id = crypto.randomUUID();
+        thread = await db.createThread(env.DB, { id, sessionId });
+      }
+      params.threadId = thread.id;
+      console.log(`[OrchestratorDispatch] Auto-resolved threadId=${thread.id} for session=${sessionId}`);
+    } catch (err) {
+      console.warn(`[OrchestratorDispatch] Failed to resolve thread:`, err);
+    }
+  }
+
   // Ensure a D1 channel binding exists for non-web channels so that downstream code
   // (interactive prompts, list-channels, auto-replies) can discover the channel.
   // Uses the dispatch-format channelId (e.g. "D123:thread_ts") and ON CONFLICT IGNORE.
