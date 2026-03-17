@@ -1,6 +1,8 @@
 import { z } from 'zod';
 import type { ActionDefinition, ActionSource, ActionContext, ActionResult } from '@valet/sdk';
 import { sheetsFetch, sheetsError } from './api.js';
+import { cellFormatSchema, mergeSchema, normalizeFormatsResponse, parseA1Range, buildRepeatCellRequest, buildUpdateCellsRequest, buildMergeRequests } from './formatting.js';
+import type { CellFormat } from './formatting.js';
 
 // ─── Action Definitions ──────────────────────────────────────────────────────
 
@@ -44,28 +46,32 @@ const readMultipleRanges: ActionDefinition = {
 const writeRange: ActionDefinition = {
   id: 'sheets.write_range',
   name: 'Write Range',
-  description: 'Write values to a range using A1 notation',
+  description: 'Write values to a range using A1 notation. Optionally include formatting to style cells in the same call.',
   riskLevel: 'medium',
   params: z.object({
     spreadsheetId: z.string().describe('The spreadsheet ID'),
     range: z.string().describe('A1 notation range (e.g. "Sheet1!A1:D3")'),
     values: z.array(z.array(z.union([z.string(), z.number(), z.boolean(), z.null()]))).describe('2D array of values (rows × columns)'),
     valueInputOption: z.enum(['RAW', 'USER_ENTERED']).optional()
-      .describe('How input should be interpreted (default: USER_ENTERED, which parses formulas)'),
+      .describe('How input should be interpreted (default: USER_ENTERED). Ignored when formatting is provided.'),
+    format: cellFormatSchema.optional().describe('Single format applied to all written cells'),
+    formats: z.array(z.array(cellFormatSchema)).optional().describe('Per-cell formatting (must match values dimensions)'),
   }),
 };
 
 const appendRows: ActionDefinition = {
   id: 'sheets.append_rows',
   name: 'Append Rows',
-  description: 'Append rows after the last row with data in a range',
+  description: 'Append rows after the last row with data in a range. Optionally include formatting to style the appended rows.',
   riskLevel: 'medium',
   params: z.object({
     spreadsheetId: z.string().describe('The spreadsheet ID'),
     range: z.string().describe('A1 notation range to search for data (e.g. "Sheet1!A:D")'),
     values: z.array(z.array(z.union([z.string(), z.number(), z.boolean(), z.null()]))).describe('2D array of rows to append'),
     valueInputOption: z.enum(['RAW', 'USER_ENTERED']).optional()
-      .describe('How input should be interpreted (default: USER_ENTERED)'),
+      .describe('How input should be interpreted (default: USER_ENTERED). Ignored when formatting is provided.'),
+    format: cellFormatSchema.optional().describe('Single format applied to all appended cells'),
+    formats: z.array(z.array(cellFormatSchema)).optional().describe('Per-cell formatting (must match values dimensions)'),
   }),
 };
 
@@ -113,6 +119,32 @@ const deleteSheet: ActionDefinition = {
   }),
 };
 
+const readFormatting: ActionDefinition = {
+  id: 'sheets.read_formatting',
+  name: 'Read Formatting',
+  description: 'Read cell formatting (colors, bold, borders, alignment, etc.) from a range. Use this to inspect existing styles before writing data so you can match them.',
+  riskLevel: 'low',
+  params: z.object({
+    spreadsheetId: z.string().describe('The spreadsheet ID'),
+    range: z.string().describe('A1 notation range to inspect (e.g. "Sheet1!A1:F10")'),
+  }),
+};
+
+const formatCells: ActionDefinition = {
+  id: 'sheets.format_cells',
+  name: 'Format Cells',
+  description: 'Apply formatting (colors, bold, borders, alignment, number format, etc.) to a range. Use "format" for uniform styling or "formats" for per-cell styling. Can also merge/unmerge cells.',
+  riskLevel: 'medium',
+  params: z.object({
+    spreadsheetId: z.string().describe('The spreadsheet ID'),
+    range: z.string().describe('A1 notation range to format (e.g. "Sheet1!A1:F10")'),
+    format: cellFormatSchema.optional().describe('Single format applied to all cells in the range'),
+    formats: z.array(z.array(cellFormatSchema)).optional().describe('Per-cell formatting grid (must match range dimensions)'),
+    merges: z.array(mergeSchema).optional().describe('Merge regions to apply (0-based row/column indices)'),
+    unmerge: z.boolean().optional().describe('If true, unmerge all cells in range before applying new merges'),
+  }),
+};
+
 const allActions: ActionDefinition[] = [
   getSpreadsheet,
   readRange,
@@ -123,7 +155,50 @@ const allActions: ActionDefinition[] = [
   createSpreadsheet,
   addSheet,
   deleteSheet,
+  readFormatting,
+  formatCells,
 ];
+
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+
+async function resolveSheetId(spreadsheetId: string, range: string, token: string): Promise<number> {
+  const bangIndex = range.indexOf('!');
+  let sheetName = bangIndex !== -1 ? range.slice(0, bangIndex).replace(/^'|'$/g, '') : '';
+
+  const qs = new URLSearchParams({ fields: 'sheets.properties.sheetId,sheets.properties.title' });
+  const res = await sheetsFetch(`/${encodeURIComponent(spreadsheetId)}?${qs}`, token);
+  if (!res.ok) return 0;
+  const data = await res.json() as { sheets: Array<{ properties: { sheetId: number; title: string } }> };
+
+  if (!sheetName) return data.sheets[0]?.properties?.sheetId ?? 0;
+  const sheet = data.sheets.find((s) => s.properties.title === sheetName);
+  return sheet?.properties?.sheetId ?? 0;
+}
+
+async function findNextEmptyRow(spreadsheetId: string, range: string, token: string): Promise<number> {
+  const res = await sheetsFetch(`/${encodeURIComponent(spreadsheetId)}/values/${range}`, token);
+  if (!res.ok) return 0;
+  const data = await res.json() as { values?: unknown[][] };
+  return data.values?.length ?? 0;
+}
+
+function columnLetterToIndex(col: string): number {
+  let index = 0;
+  for (let i = 0; i < col.length; i++) {
+    index = index * 26 + (col.charCodeAt(i) - 64);
+  }
+  return index - 1;
+}
+
+function extractStartColumnIndex(range: string): number {
+  let rangeOnly = range;
+  const bangIndex = range.indexOf('!');
+  if (bangIndex !== -1) {
+    rangeOnly = range.slice(bangIndex + 1);
+  }
+  const colMatch = rangeOnly.match(/^([A-Z]+)/);
+  return colMatch ? columnLetterToIndex(colMatch[1]) : 0;
+}
 
 // ─── Action Execution ────────────────────────────────────────────────────────
 
@@ -199,6 +274,28 @@ async function executeAction(
 
       case 'sheets.write_range': {
         const p = writeRange.params.parse(params);
+
+        if (p.format || p.formats) {
+          const sheetId = await resolveSheetId(p.spreadsheetId, p.range, token);
+          const gridRange = parseA1Range(p.range, sheetId);
+
+          let cellFormats: CellFormat[][];
+          if (p.formats) {
+            cellFormats = p.formats;
+          } else {
+            cellFormats = p.values.map((row: unknown[]) => row.map(() => p.format!));
+          }
+
+          const request = buildUpdateCellsRequest(gridRange, cellFormats, p.values);
+          const res = await sheetsFetch(
+            `/${encodeURIComponent(p.spreadsheetId)}:batchUpdate`,
+            token,
+            { method: 'POST', body: JSON.stringify({ requests: [request] }) },
+          );
+          if (!res.ok) return sheetsError(res);
+          return { success: true, data: await res.json() };
+        }
+
         const inputOption = p.valueInputOption || 'USER_ENTERED';
         const qs = new URLSearchParams({ valueInputOption: inputOption });
         const res = await sheetsFetch(
@@ -219,6 +316,37 @@ async function executeAction(
 
       case 'sheets.append_rows': {
         const p = appendRows.params.parse(params);
+
+        if (p.format || p.formats) {
+          const sheetId = await resolveSheetId(p.spreadsheetId, p.range, token);
+          const nextRow = await findNextEmptyRow(p.spreadsheetId, p.range, token);
+
+          const startColIndex = extractStartColumnIndex(p.range);
+          const startRange = {
+            sheetId,
+            startRowIndex: nextRow,
+            endRowIndex: nextRow + p.values.length,
+            startColumnIndex: startColIndex,
+            endColumnIndex: startColIndex + (p.values[0]?.length ?? 0),
+          };
+
+          let cellFormats: CellFormat[][];
+          if (p.formats) {
+            cellFormats = p.formats;
+          } else {
+            cellFormats = p.values.map((row: unknown[]) => row.map(() => p.format!));
+          }
+
+          const request = buildUpdateCellsRequest(startRange, cellFormats, p.values);
+          const res = await sheetsFetch(
+            `/${encodeURIComponent(p.spreadsheetId)}:batchUpdate`,
+            token,
+            { method: 'POST', body: JSON.stringify({ requests: [request] }) },
+          );
+          if (!res.ok) return sheetsError(res);
+          return { success: true, data: await res.json() };
+        }
+
         const inputOption = p.valueInputOption || 'USER_ENTERED';
         const qs = new URLSearchParams({
           valueInputOption: inputOption,
@@ -299,6 +427,58 @@ async function executeAction(
         );
         if (!res.ok) return sheetsError(res);
         return { success: true };
+      }
+
+      case 'sheets.read_formatting': {
+        const p = readFormatting.params.parse(params);
+        const fields = [
+          'sheets.properties.sheetId',
+          'sheets.properties.title',
+          'sheets.data.rowData.values.userEnteredFormat',
+          'sheets.merges',
+        ].join(',');
+        const qs = new URLSearchParams({ ranges: p.range, fields });
+        const res = await sheetsFetch(
+          `/${encodeURIComponent(p.spreadsheetId)}?${qs}`,
+          token,
+        );
+        if (!res.ok) return sheetsError(res);
+        const data = await res.json();
+        return { success: true, data: normalizeFormatsResponse(data, p.range) };
+      }
+
+      case 'sheets.format_cells': {
+        const p = formatCells.params.parse(params);
+        if (!p.format && !p.formats && !p.merges) {
+          return { success: false, error: 'At least one of format, formats, or merges must be provided' };
+        }
+
+        const sheetId = await resolveSheetId(p.spreadsheetId, p.range, token);
+        const gridRange = parseA1Range(p.range, sheetId);
+
+        const requests: Array<Record<string, unknown>> = [];
+
+        if (p.format) {
+          requests.push(buildRepeatCellRequest(gridRange, p.format));
+        } else if (p.formats) {
+          requests.push(buildUpdateCellsRequest(gridRange, p.formats));
+        }
+
+        if (p.merges) {
+          requests.push(...buildMergeRequests(p.merges, p.unmerge ?? false));
+        }
+
+        const res = await sheetsFetch(
+          `/${encodeURIComponent(p.spreadsheetId)}:batchUpdate`,
+          token,
+          { method: 'POST', body: JSON.stringify({ requests }) },
+        );
+        if (!res.ok) return sheetsError(res);
+
+        return {
+          success: true,
+          data: { updatedRange: p.range, mergesApplied: p.merges?.length ?? 0 },
+        };
       }
 
       default:
