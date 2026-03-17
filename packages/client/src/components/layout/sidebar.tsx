@@ -1,11 +1,20 @@
 import { Link, useRouterState } from '@tanstack/react-router';
 import { cn } from '@/lib/cn';
 import { useUIStore } from '@/stores/ui';
-import { useNotificationCount } from '@/api/orchestrator';
+import { useNotificationCount, useOrchestratorInfo } from '@/api/orchestrator';
 
-const navItems = [
+type NavItem = {
+  href: string;
+  label: string;
+  icon: React.ComponentType<{ className?: string }>;
+  showBadge?: boolean;
+  indent?: boolean;
+};
+
+const staticNavItems: NavItem[] = [
   { href: '/', label: 'Dashboard', icon: DashboardIcon },
   { href: '/orchestrator', label: 'Orchestrator', icon: OrchestratorIcon },
+  // Orchestrator Chat is inserted dynamically after Orchestrator
   { href: '/inbox', label: 'Notifications', icon: InboxIcon, showBadge: true },
   { href: '/automation', label: 'Automation', icon: AutomationIcon },
   { href: '/sessions', label: 'Sessions', icon: SessionsIcon },
@@ -19,6 +28,18 @@ export function Sidebar() {
   const router = useRouterState();
   const currentPath = router.location.pathname;
   const { data: inboxCount } = useNotificationCount();
+  const { data: orchInfo } = useOrchestratorInfo();
+
+  // Build nav items with dynamic orchestrator chat link
+  const navItems: NavItem[] = staticNavItems.flatMap((item) => {
+    if (item.href === '/orchestrator' && orchInfo?.sessionId) {
+      return [
+        item,
+        { href: `/sessions/${orchInfo.sessionId}`, label: 'Chat', icon: ChatIcon, indent: true },
+      ];
+    }
+    return [item];
+  });
 
   return (
     <aside
@@ -69,6 +90,7 @@ export function Sidebar() {
                   to={item.href}
                   className={cn(
                     'group flex items-center gap-3 rounded-md px-2.5 py-1.5 text-[13px] font-medium transition-colors',
+                    item.indent && !sidebarCollapsed && 'pl-7',
                     isActive
                       ? 'bg-accent/10 text-accent dark:bg-accent/10 dark:text-accent'
                       : 'text-neutral-500 hover:bg-neutral-100 hover:text-neutral-900 dark:text-neutral-500 dark:hover:bg-neutral-800/60 dark:hover:text-neutral-200'
@@ -201,6 +223,14 @@ function SkillsIcon({ className }: { className?: string }) {
   return (
     <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" className={className}>
       <path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1 0-5H20" />
+    </svg>
+  );
+}
+
+function ChatIcon({ className }: { className?: string }) {
+  return (
+    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" className={className}>
+      <path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z" />
     </svg>
   );
 }

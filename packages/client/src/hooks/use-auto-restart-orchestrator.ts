@@ -8,12 +8,12 @@ import { useOrchestratorInfo, useCreateOrchestrator } from '@/api/orchestrator';
  * Uses a ref to prevent retry loops — only attempts once per needsRestart
  * detection cycle, resets when the flag clears (successful restart).
  */
-export function useAutoRestartOrchestrator() {
+export function useAutoRestartOrchestrator(enabled = true) {
   const { data: orchInfo } = useOrchestratorInfo();
   const createOrchestrator = useCreateOrchestrator();
   const attemptedRef = useRef(false);
 
-  const needsRestart = orchInfo?.needsRestart ?? false;
+  const needsRestart = enabled && (orchInfo?.needsRestart ?? false);
   const identity = orchInfo?.identity;
 
   // Reset the attempt flag when needsRestart clears (restart succeeded)

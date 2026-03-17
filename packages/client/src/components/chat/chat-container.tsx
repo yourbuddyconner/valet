@@ -20,6 +20,7 @@ import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useAuthStore } from '@/stores/auth';
 import { useIsMobile } from '@/hooks/use-is-mobile';
+import { useAutoRestartOrchestrator } from '@/hooks/use-auto-restart-orchestrator';
 
 // Module-level store for continuation context to avoid URL search param size limits
 let pendingContinuationStore: { threadId: string; context: string } | null = null;
@@ -118,6 +119,8 @@ export function ChatContainer({ sessionId, initialThreadId, initialContinuationC
     initialContinuationContext ?? (initialThreadId ? (consumePendingContinuation(initialThreadId) ?? undefined) : undefined)
   );
   const isOrchestrator = session?.isOrchestrator === true;
+  // Auto-restart orchestrator if it enters error/terminated state while viewing chat
+  useAutoRestartOrchestrator(isOrchestrator);
   const createThread = useCreateThread(sessionId);
 
   // Auto-select the active thread on mount for orchestrator sessions when no

@@ -25,6 +25,7 @@ interface SessionActionsMenuProps {
 }
 
 const ACTIVE_STATUSES: SessionStatus[] = ['running', 'idle', 'initializing', 'hibernated', 'restoring', 'hibernating'];
+const REFRESHABLE_STATUSES: SessionStatus[] = [...ACTIVE_STATUSES, 'error'];
 const HIBERNATABLE_STATUSES: SessionStatus[] = ['running'];
 const DELETABLE_STATUSES: SessionStatus[] = ['terminated', 'archived', 'error'];
 
@@ -41,6 +42,7 @@ export function SessionActionsMenu({
   const hibernateMutation = useHibernateSession();
 
   const canTerminate = ACTIVE_STATUSES.includes(session.status);
+  const canRefresh = REFRESHABLE_STATUSES.includes(session.status);
   const canHibernate = HIBERNATABLE_STATUSES.includes(session.status);
   const canDelete = DELETABLE_STATUSES.includes(session.status);
 
@@ -85,7 +87,7 @@ export function SessionActionsMenu({
               {hibernateMutation.isPending ? 'Hibernating...' : 'Hibernate Session'}
             </DropdownMenuItem>
           )}
-          {canTerminate && isOrchestrator && (
+          {canRefresh && isOrchestrator && (
             <DropdownMenuItem onClick={() => setDialog('refresh')}>
               Refresh Orchestrator
             </DropdownMenuItem>

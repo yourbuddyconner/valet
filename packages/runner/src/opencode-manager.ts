@@ -41,11 +41,19 @@ export class OpenCodeManager {
   private stopping = false;
   private configLock: Promise<void> = Promise.resolve();
   private configApplyCounter = 0;
+  private autoRestartTimer: ReturnType<typeof setTimeout> | null = null;
+  private consecutiveCrashes = 0;
+  private lastCrashAt = 0;
 
   private readonly workspaceDir: string;
   private readonly port: number;
   private readonly configSourceDir: string;
   private readonly authJsonPath: string;
+
+  /** Max consecutive crashes before giving up auto-restart */
+  private static readonly MAX_CONSECUTIVE_CRASHES = 5;
+  /** Reset crash counter if stable for this long (ms) */
+  private static readonly CRASH_RESET_INTERVAL = 60_000;
 
   constructor(options: OpenCodeManagerOptions) {
     this.workspaceDir = options.workspaceDir;
@@ -73,6 +81,10 @@ export class OpenCodeManager {
    * Gracefully stop OpenCode: SIGTERM → grace period → SIGKILL.
    */
   async stop(): Promise<void> {
+    if (this.autoRestartTimer) {
+      clearTimeout(this.autoRestartTimer);
+      this.autoRestartTimer = null;
+    }
     if (!this.process) return;
     this.stopping = true;
     this.healthy = false;
@@ -345,14 +357,55 @@ export class OpenCodeManager {
       stderr: "inherit",
     });
 
-    // Monitor for unexpected exit
+    // Monitor for unexpected exit and auto-restart
     this.process.exited.then((code) => {
       if (!this.stopping) {
         console.error(`[OpenCodeManager] OpenCode exited unexpectedly with code ${code}`);
         this.healthy = false;
         this.process = null;
+        this.scheduleAutoRestart();
       }
     });
+  }
+
+  private scheduleAutoRestart(): void {
+    if (!this.currentConfig) return;
+
+    // Reset crash counter if we were stable for a while
+    const now = Date.now();
+    if (now - this.lastCrashAt > OpenCodeManager.CRASH_RESET_INTERVAL) {
+      this.consecutiveCrashes = 0;
+    }
+    this.lastCrashAt = now;
+    this.consecutiveCrashes++;
+
+    if (this.consecutiveCrashes > OpenCodeManager.MAX_CONSECUTIVE_CRASHES) {
+      console.error(
+        `[OpenCodeManager] OpenCode crashed ${this.consecutiveCrashes} times consecutively, giving up auto-restart`
+      );
+      return;
+    }
+
+    // Exponential backoff: 2s, 4s, 8s, 16s, 32s
+    const delayMs = Math.min(2000 * Math.pow(2, this.consecutiveCrashes - 1), 32_000);
+    console.log(
+      `[OpenCodeManager] Scheduling auto-restart in ${delayMs}ms (crash ${this.consecutiveCrashes}/${OpenCodeManager.MAX_CONSECUTIVE_CRASHES})`
+    );
+
+    this.autoRestartTimer = setTimeout(async () => {
+      this.autoRestartTimer = null;
+      if (this.stopping || this.process) return;
+      try {
+        console.log("[OpenCodeManager] Auto-restarting OpenCode after crash");
+        await this.spawnProcess();
+        await this.waitForHealth();
+        console.log("[OpenCodeManager] Auto-restart successful");
+      } catch (err) {
+        console.error("[OpenCodeManager] Auto-restart failed:", err);
+        // waitForHealth failure means process is likely dead again,
+        // the exit handler will schedule another restart
+      }
+    }, delayMs);
   }
 
   private async waitForHealth(): Promise<void> {
@@ -367,6 +420,7 @@ export class OpenCodeManager {
         const res = await fetch(url);
         if (res.ok) {
           this.healthy = true;
+          this.consecutiveCrashes = 0;
           console.log("[OpenCodeManager] OpenCode is healthy");
           return;
         }
