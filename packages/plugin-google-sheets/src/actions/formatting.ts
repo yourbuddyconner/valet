@@ -125,3 +125,85 @@ export function buildFieldMask(format: CellFormat): string {
 
   return paths.join(',');
 }
+
+// ─── API Response Normalization ─────────────────────────────────────────────
+
+export function normalizeFormat(raw: Record<string, unknown>): CellFormat {
+  const result: CellFormat = {};
+
+  // backgroundColor: prefer plain, fallback to backgroundColorStyle.rgbColor
+  if (raw.backgroundColor) {
+    result.backgroundColor = raw.backgroundColor as Color;
+  } else if (raw.backgroundColorStyle) {
+    const style = raw.backgroundColorStyle as { rgbColor?: Color };
+    if (style.rgbColor) result.backgroundColor = style.rgbColor;
+  }
+
+  // textFormat: normalize foregroundColor inside it
+  if (raw.textFormat) {
+    const tf = raw.textFormat as Record<string, unknown>;
+    const normalized: CellFormat['textFormat'] = {};
+
+    if (tf.bold !== undefined) normalized.bold = tf.bold as boolean;
+    if (tf.italic !== undefined) normalized.italic = tf.italic as boolean;
+    if (tf.strikethrough !== undefined) normalized.strikethrough = tf.strikethrough as boolean;
+    if (tf.underline !== undefined) normalized.underline = tf.underline as boolean;
+    if (tf.fontSize !== undefined) normalized.fontSize = tf.fontSize as number;
+    if (tf.fontFamily !== undefined) normalized.fontFamily = tf.fontFamily as string;
+
+    if (tf.foregroundColor) {
+      normalized.foregroundColor = tf.foregroundColor as Color;
+    } else if (tf.foregroundColorStyle) {
+      const style = tf.foregroundColorStyle as { rgbColor?: Color };
+      if (style.rgbColor) normalized.foregroundColor = style.rgbColor;
+    }
+
+    if (Object.keys(normalized).length > 0) result.textFormat = normalized;
+  }
+
+  if (raw.horizontalAlignment) result.horizontalAlignment = raw.horizontalAlignment as CellFormat['horizontalAlignment'];
+  if (raw.verticalAlignment) result.verticalAlignment = raw.verticalAlignment as CellFormat['verticalAlignment'];
+  if (raw.wrapStrategy) result.wrapStrategy = raw.wrapStrategy as CellFormat['wrapStrategy'];
+  if (raw.numberFormat) result.numberFormat = raw.numberFormat as CellFormat['numberFormat'];
+  if (raw.borders) result.borders = raw.borders as CellFormat['borders'];
+
+  return result;
+}
+
+interface SheetsFormattingApiResponse {
+  sheets: Array<{
+    properties?: { sheetId: number; title: string };
+    data: Array<{
+      rowData?: Array<{
+        values?: Array<{ userEnteredFormat?: Record<string, unknown> }>;
+      }>;
+    }>;
+    merges?: Merge[];
+  }>;
+}
+
+export function normalizeFormatsResponse(
+  apiResponse: SheetsFormattingApiResponse,
+  requestedRange: string,
+): { range: string; formats: CellFormat[][]; merges: Merge[] } {
+  const sheet = apiResponse.sheets[0];
+  const rowData = sheet?.data?.[0]?.rowData ?? [];
+
+  const formats: CellFormat[][] = rowData.map((row) => {
+    const values = row.values ?? [];
+    return values.map((cell) => {
+      if (!cell.userEnteredFormat) return {};
+      return normalizeFormat(cell.userEnteredFormat);
+    });
+  });
+
+  const merges: Merge[] = (sheet?.merges ?? []).map((m) => ({
+    startRowIndex: m.startRowIndex,
+    endRowIndex: m.endRowIndex,
+    startColumnIndex: m.startColumnIndex,
+    endColumnIndex: m.endColumnIndex,
+    sheetId: m.sheetId,
+  }));
+
+  return { range: requestedRange, formats, merges };
+}
