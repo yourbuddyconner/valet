@@ -12,16 +12,6 @@ class RepoProviderRegistry {
     return this.providers.get(id);
   }
 
-  /** Resolve which repo provider handles a given URL */
-  resolveByUrl(repoUrl: string): RepoProvider | undefined {
-    for (const provider of this.providers.values()) {
-      if (provider.urlPatterns.some((p) => p.test(repoUrl))) {
-        return provider;
-      }
-    }
-    return undefined;
-  }
-
   /** Return ALL providers whose URL patterns match. */
   resolveAllByUrl(repoUrl: string): RepoProvider[] {
     const matches: RepoProvider[] = [];

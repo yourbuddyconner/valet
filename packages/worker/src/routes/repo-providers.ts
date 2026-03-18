@@ -90,16 +90,26 @@ repoProviderRouter.get('/:provider/install', async (c) => {
 repoProviderRouter.get('/:provider/installations', async (c) => {
   const providerId = c.req.param('provider');
   const user = c.get('user');
-  const db = getDb(c.env.DB);
+  const appDb = getDb(c.env.DB);
 
   // Get user-level installations
-  const userCreds = await credentialDb.listCredentialsByOwner(db, 'user', user.id);
+  const userCreds = await credentialDb.listCredentialsByOwner(appDb, 'user', user.id);
   const userInstalls = userCreds.filter(cred => cred.provider === providerId && cred.credentialType === 'app_install');
 
-  // TODO: Get org-level installations (needs orgId from user context)
+  // Get org-level installations
+  const orgSettings = await db.getOrgSettings(appDb);
+  const orgInstalls = orgSettings?.id
+    ? (await credentialDb.listCredentialsByOwner(appDb, 'org', orgSettings.id))
+        .filter(cred => cred.provider === providerId && cred.credentialType === 'app_install')
+    : [];
 
   return c.json({
     installations: [
+      ...orgInstalls.map(i => ({
+        level: 'org',
+        provider: i.provider,
+        createdAt: i.createdAt,
+      })),
       ...userInstalls.map(i => ({
         level: 'personal',
         provider: i.provider,

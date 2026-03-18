@@ -19,6 +19,8 @@ export const githubAppRepoProvider: RepoProvider = {
     const search = opts?.search;
 
     if (search) {
+      // Note: /search/repositories may return repos outside the App's installation scope.
+      // Installation tokens limit write access but search results are not filtered.
       const res = await githubFetch(
         `/search/repositories?q=${encodeURIComponent(search)}+in:name&per_page=30&page=${page}`,
         token,

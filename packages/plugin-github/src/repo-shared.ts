@@ -18,6 +18,7 @@ function pemToArrayBuffer(pem: string): ArrayBuffer {
   return bytes.buffer;
 }
 
+/** Base64url encode. Only safe for small buffers (<~10KB) due to spread operator. */
 function base64url(data: ArrayBuffer | Uint8Array | string): string {
   let b64: string;
   if (typeof data === 'string') {
