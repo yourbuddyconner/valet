@@ -135,16 +135,3 @@ export const sessionShareLinks = sqliteTable('session_share_links', {
   index('idx_ssl_token').on(table.token),
 ]);
 
-export const sessionAuditLog = sqliteTable('session_audit_log', {
-  id: text().primaryKey(),
-  sessionId: text().notNull(),
-  eventType: text().notNull(),
-  summary: text().notNull(),
-  actorId: text(),
-  metadata: text({ mode: 'json' }).$type<Record<string, unknown>>(),
-  createdAt: text().notNull().default(sql`(datetime('now'))`),
-  flushedAt: text(),
-}, (table) => [
-  index('idx_session_audit_log_session_id').on(table.sessionId, table.createdAt),
-  index('idx_session_audit_log_event_type').on(table.sessionId, table.eventType),
-]);

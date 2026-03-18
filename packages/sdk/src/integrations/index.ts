@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { Analytics } from '../analytics/index.js';
 
 // ─── Credentials ─────────────────────────────────────────────────────────────
 
@@ -41,6 +42,8 @@ export interface ActionContext {
   orgId?: string;
   /** When the calling session has a persona identity (e.g. orchestrator), this is populated automatically. */
   callerIdentity?: CallerIdentity;
+  /** Analytics emitter for plugin-specific events. Optional so existing plugins don't break. */
+  analytics?: Analytics;
 }
 
 /** Result of executing an action. */

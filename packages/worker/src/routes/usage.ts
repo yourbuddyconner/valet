@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import type { Env, Variables } from '../env.js';
 import type { UsageStatsResponse } from '@valet/shared';
-import { getUsageHeroStats, getUsageByDay, getUsageByUser, getUsageByModel, getUsageByUserModel, getSandboxHeroStats, getSandboxByDay, getSandboxByUser } from '../lib/db/usage.js';
+import { getUsageHeroStats, getUsageByDay, getUsageByUser, getUsageByModel, getUsageByUserModel, getSandboxHeroStats, getSandboxByDay, getSandboxByUser } from '../lib/db/analytics.js';
 import { getModelPricing } from '../services/model-catalog.js';
 import { computeSandboxCost, DEFAULT_CPU_CORES, DEFAULT_MEMORY_GIB } from '../services/sandbox-pricing.js';
 import { getDb } from '../lib/drizzle.js';

@@ -533,6 +533,7 @@ export class PromptHandler {
   private eventStreamAbort: AbortController | null = null;
   private responseTimeoutId: ReturnType<typeof setTimeout> | null = null;
   private firstResponseTimeoutId: ReturnType<typeof setTimeout> | null = null;
+  private lastPromptSentAt: number = 0;
 
   // Per-channel OpenCode session state
   private channels = new Map<string, ChannelSession>();
@@ -1373,6 +1374,7 @@ export class PromptHandler {
       // Notify client that agent is thinking
       this.agentClient.sendAgentStatus("thinking");
       this.awaitingAssistantForAttempt = true;
+      this.lastPromptSentAt = Date.now();
 
       // Mark sync prompt in flight so SSE-side finalizeResponse is suppressed
       channel.syncPromptInFlight = true;
@@ -1541,6 +1543,17 @@ export class PromptHandler {
     }
 
     console.log(`[PromptHandler] Sending complete`);
+
+    // Emit llm_response timing — measure total time from prompt sent to completion
+    if (this.lastPromptSentAt > 0) {
+      const durationMs = Date.now() - this.lastPromptSentAt;
+      this.agentClient.sendAnalyticsEvents([{
+        eventType: 'llm_response',
+        durationMs,
+      }]);
+      this.lastPromptSentAt = 0;
+    }
+
     this.agentClient.sendComplete();
     this.agentClient.sendAgentStatus("idle");
 

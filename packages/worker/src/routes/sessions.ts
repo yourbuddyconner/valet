@@ -401,25 +401,6 @@ sessionsRouter.get('/:id/children', async (c) => {
 });
 
 /**
- * GET /api/sessions/:id/audit-log
- * Get the audit log for a session.
- */
-sessionsRouter.get('/:id/audit-log', async (c) => {
-  const user = c.get('user');
-  const { id } = c.req.param();
-  const { limit, after, eventType } = c.req.query();
-
-  await db.assertSessionAccess(c.get('db'), id, user.id, 'viewer');
-
-  const entries = await db.getSessionAuditLog(c.get('db'), id, {
-    limit: limit ? parseInt(limit) : undefined,
-    after,
-    eventType,
-  });
-  return c.json({ entries });
-});
-
-/**
  * GET /api/sessions/:id/files-changed
  * Get files changed in a session.
  */

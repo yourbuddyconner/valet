@@ -41,6 +41,7 @@ import { actionPoliciesRouter } from './routes/action-policies.js';
 import { disabledActionsRouter } from './routes/disabled-actions.js';
 import { actionInvocationsRouter } from './routes/action-invocations.js';
 import { usageRouter } from './routes/usage.js';
+import { analyticsRouter } from './routes/analytics.js';
 import { pluginsRouter } from './routes/plugins.js';
 import { skillsRouter } from './routes/skills.js';
 import { orgDefaultSkillsRouter } from './routes/org-default-skills.js';
@@ -179,6 +180,7 @@ app.route('/api/action-invocations', actionInvocationsRouter);
 app.route('/api/me/slack', slackUserRouter);
 app.route('/api/invites', invitesApiRouter);
 app.route('/api/usage', usageRouter);
+app.route('/api/analytics', analyticsRouter);
 app.route('/api/plugins', pluginsRouter);
 app.route('/api/skills', skillsRouter);
 app.route('/api/repo-providers', repoProviderRouter);
@@ -229,6 +231,25 @@ const scheduled: ExportedHandlerScheduledHandler<Env> = async (event, env, ctx) 
       }
     } catch (error) {
       console.error('Journal prune error:', error);
+    }
+
+    // Delete analytics events older than 90 days (batched to avoid D1 timeout)
+    try {
+      const cutoff = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString();
+      let totalDeleted = 0;
+      let deleted: number;
+      do {
+        const result = await env.DB.prepare(
+          'DELETE FROM analytics_events WHERE id IN (SELECT id FROM analytics_events WHERE created_at < ? LIMIT 1000)'
+        ).bind(cutoff).run();
+        deleted = result.meta.changes ?? 0;
+        totalDeleted += deleted;
+      } while (deleted >= 1000);
+      if (totalDeleted > 0) {
+        console.log(`Analytics retention: deleted ${totalDeleted} events older than 90 days`);
+      }
+    } catch (error) {
+      console.error('Analytics retention error:', error);
     }
   }
 

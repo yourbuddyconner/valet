@@ -914,33 +914,6 @@ export interface ProviderModelEntry { id: string; name: string }
 export interface ProviderModels { provider: string; models: ProviderModelEntry[] }
 export type AvailableModels = ProviderModels[];
 
-// Audit log types
-export type AuditLogEventType =
-  | 'session.started'
-  | 'session.terminated'
-  | 'session.hibernated'
-  | 'session.restored'
-  | 'user.prompt'
-  | 'user.abort'
-  | 'user.answer'
-  | 'user.joined'
-  | 'user.left'
-  | 'agent.tool_call'
-  | 'agent.tool_completed'
-  | 'agent.error'
-  | 'agent.turn_complete'
-  | 'git.pr_created';
-
-export interface AuditLogEntry {
-  id: string;
-  sessionId: string;
-  eventType: AuditLogEventType;
-  summary: string;
-  actorId?: string;
-  metadata?: Record<string, unknown>;
-  createdAt: string;
-}
-
 // ─── Action Policy Types ────────────────────────────────────────────────────
 
 export type ActionMode = 'allow' | 'require_approval' | 'deny';
@@ -1025,6 +998,60 @@ export interface UsageStatsResponse {
     callCount: number;
     percentage: number;
   }>;
+  period: number;
+}
+
+// ─── Analytics Performance Types ─────────────────────────────────────────────
+
+export interface AnalyticsPerformanceResponse {
+  hero: {
+    turnLatencyP50: number | null;
+    turnLatencyP95: number | null;
+    queueWaitP50: number | null;
+    sandboxWakeP50: number | null;
+    errorRate: number;
+    turnCount: number;
+    errorCount: number;
+  };
+  trend: Array<{
+    date: string;
+    p50: number | null;
+    p95: number | null;
+    count: number;
+  }>;
+  stages: Array<{
+    eventType: string;
+    count: number;
+    p50: number | null;
+    p95: number | null;
+  }>;
+  slowPaths: Array<{
+    dimension: string;
+    value: string;
+    count: number;
+    p50: number | null;
+    p95: number | null;
+  }>;
+  period: number;
+}
+
+export interface AnalyticsEventsResponse {
+  events: Array<{
+    id: string;
+    eventType: string;
+    sessionId: string;
+    userId: string | null;
+    turnId: string | null;
+    durationMs: number | null;
+    channel: string | null;
+    model: string | null;
+    toolName: string | null;
+    errorCode: string | null;
+    summary: string | null;
+    properties: Record<string, unknown> | null;
+    createdAt: string;
+  }>;
+  total: number;
   period: number;
 }
 

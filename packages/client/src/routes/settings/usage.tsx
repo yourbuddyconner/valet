@@ -8,6 +8,8 @@ import { UsageHeroMetrics } from '@/components/usage/hero-metrics';
 import { CostChart } from '@/components/usage/cost-chart';
 import { ModelBreakdownTable } from '@/components/usage/model-breakdown-table';
 import { UserBreakdownTable } from '@/components/usage/user-breakdown-table';
+import { PerformanceTab } from '@/components/analytics/performance-tab';
+import { EventsTab } from '@/components/analytics/events-tab';
 
 export const Route = createFileRoute('/settings/usage')({
   component: UsagePage,
@@ -17,6 +19,7 @@ function UsagePage() {
   const user = useAuthStore((s) => s.user);
   const navigate = useNavigate();
   const [period, setPeriod] = React.useState(720); // default 30 days in hours
+  const [tab, setTab] = React.useState<'billing' | 'performance' | 'events'>('billing');
 
   // Redirect non-admins
   React.useEffect(() => {
@@ -24,8 +27,6 @@ function UsagePage() {
       navigate({ to: '/settings', search: { tab: 'general' } });
     }
   }, [user, navigate]);
-
-  const { data, isLoading } = useUsageStats(period);
 
   if (!user || user.role !== 'admin') {
     return null;
@@ -35,37 +36,67 @@ function UsagePage() {
     <PageContainer>
       <div className="flex items-center justify-between">
         <PageHeader
-          title="Usage & Cost"
-          description="LLM token usage and cost breakdown across your organization"
+          title="Analytics"
+          description="Usage, performance, and event analytics across your organization"
         />
         <PeriodSelector value={period} onChange={setPeriod} />
       </div>
 
-      {isLoading ? (
-        <UsageSkeleton />
-      ) : data ? (
-        <div className="space-y-6">
-          <UsageHeroMetrics
-            totalCost={data.hero.totalCost}
-            totalInputTokens={data.hero.totalInputTokens}
-            totalOutputTokens={data.hero.totalOutputTokens}
-            totalSessions={data.hero.totalSessions}
-            totalUsers={data.hero.totalUsers}
-            sandboxCost={data.hero.sandboxCost}
-            sandboxActiveSeconds={data.hero.sandboxActiveSeconds}
-          />
-          <CostChart data={data.costByDay} />
-          <div className="grid gap-6 lg:grid-cols-2">
-            <ModelBreakdownTable data={data.byModel} />
-            <UserBreakdownTable data={data.byUser} />
-          </div>
-        </div>
-      ) : (
-        <div className="flex h-64 items-center justify-center text-sm text-neutral-400">
-          No usage data available
-        </div>
-      )}
+      <div className="flex gap-1 border-b border-neutral-200 dark:border-neutral-800">
+        {(['billing', 'performance', 'events'] as const).map((t) => (
+          <button
+            key={t}
+            onClick={() => setTab(t)}
+            className={`px-4 py-2 text-sm font-medium capitalize transition-colors ${
+              tab === t
+                ? 'border-b-2 border-neutral-900 text-neutral-900 dark:border-neutral-100 dark:text-neutral-100'
+                : 'text-neutral-500 hover:text-neutral-700 dark:text-neutral-400 dark:hover:text-neutral-200'
+            }`}
+          >
+            {t}
+          </button>
+        ))}
+      </div>
+
+      {tab === 'billing' && <BillingContent period={period} />}
+      {tab === 'performance' && <PerformanceTab period={period} />}
+      {tab === 'events' && <EventsTab period={period} />}
     </PageContainer>
+  );
+}
+
+function BillingContent({ period }: { period: number }) {
+  const { data, isLoading } = useUsageStats(period);
+
+  if (isLoading) {
+    return <UsageSkeleton />;
+  }
+
+  if (!data) {
+    return (
+      <div className="flex h-64 items-center justify-center text-sm text-neutral-400">
+        No usage data available
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-6">
+      <UsageHeroMetrics
+        totalCost={data.hero.totalCost}
+        totalInputTokens={data.hero.totalInputTokens}
+        totalOutputTokens={data.hero.totalOutputTokens}
+        totalSessions={data.hero.totalSessions}
+        totalUsers={data.hero.totalUsers}
+        sandboxCost={data.hero.sandboxCost}
+        sandboxActiveSeconds={data.hero.sandboxActiveSeconds}
+      />
+      <CostChart data={data.costByDay} />
+      <div className="grid gap-6 lg:grid-cols-2">
+        <ModelBreakdownTable data={data.byModel} />
+        <UserBreakdownTable data={data.byUser} />
+      </div>
+    </div>
   );
 }
 
