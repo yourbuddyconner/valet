@@ -31,7 +31,7 @@ CREATE INDEX IF NOT EXISTS idx_analytics_events_model_created
   ON analytics_events(model, created_at);
 
 -- Migrate usage_events → analytics_events as 'llm_call' events (backfill user_id from sessions)
-INSERT INTO analytics_events (id, event_type, session_id, user_id, turn_id, model, input_tokens, output_tokens, created_at, properties)
+INSERT OR IGNORE INTO analytics_events (id, event_type, session_id, user_id, turn_id, model, input_tokens, output_tokens, created_at, properties)
 SELECT
   ue.id,
   'llm_call',
@@ -47,7 +47,7 @@ FROM usage_events ue
 LEFT JOIN sessions s ON s.id = ue.session_id;
 
 -- Migrate session_audit_log → analytics_events (backfill user_id from sessions)
-INSERT INTO analytics_events (id, event_type, session_id, user_id, summary, actor_id, properties, created_at)
+INSERT OR IGNORE INTO analytics_events (id, event_type, session_id, user_id, summary, actor_id, properties, created_at)
 SELECT
   sal.id,
   sal.event_type,
