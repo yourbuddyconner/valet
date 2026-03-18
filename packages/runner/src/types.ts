@@ -243,6 +243,14 @@ export type RunnerToDOMessage =
         inputTokens: number;
         outputTokens: number;
       }>;
+    }
+  | {
+      type: 'analytics:emit';
+      events: Array<{
+        eventType: string;
+        durationMs?: number;
+        properties?: Record<string, unknown>;
+      }>;
     };
 
 /** Structured review result data */

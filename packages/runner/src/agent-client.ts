@@ -367,6 +367,11 @@ export class AgentClient {
     this.send({ type: "usage-report", turnId, entries });
   }
 
+  sendAnalyticsEvents(events: Array<{ eventType: string; durationMs?: number; properties?: Record<string, unknown> }>): void {
+    if (events.length === 0) return;
+    this.send({ type: 'analytics:emit', events });
+  }
+
   // ─── Request/Response (Runner → DO → Runner) ─────────────────────────
 
   requestSpawnChild(params: {

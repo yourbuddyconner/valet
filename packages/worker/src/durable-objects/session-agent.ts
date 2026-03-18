@@ -229,7 +229,7 @@ function deriveRuntimeStates(args: {
 type ToolCallStatus = 'pending' | 'running' | 'completed' | 'error';
 
 interface RunnerMessage {
-  type: 'stream' | 'result' | 'tool' | 'question' | 'screenshot' | 'error' | 'complete' | 'agentStatus' | 'create-pr' | 'update-pr' | 'list-pull-requests' | 'inspect-pull-request' | 'models' | 'aborted' | 'reverted' | 'diff' | 'review-result' | 'command-result' | 'ping' | 'git-state' | 'pr-created' | 'files-changed' | 'child-session' | 'title' | 'spawn-child' | 'session-message' | 'session-messages' | 'terminate-child' | 'self-terminate' | 'mem-read' | 'mem-write' | 'mem-patch' | 'mem-rm' | 'mem-search' | 'list-repos' | 'list-personas' | 'list-channels' | 'get-session-status' | 'list-child-sessions' | 'forward-messages' | 'read-repo-file' | 'workflow-list' | 'workflow-sync' | 'workflow-run' | 'workflow-executions' | 'workflow-api' | 'trigger-api' | 'execution-api' | 'skill-api' | 'persona-api' | 'identity-api' | 'workflow-execution-result' | 'workflow-chat-message' | 'model-switched' | 'tunnels' | 'mailbox-send' | 'mailbox-check' | 'task-create' | 'task-list' | 'task-update' | 'task-my' | 'channel-reply' | 'audio-transcript' | 'channel-session-created' | 'session-reset' | 'opencode-config-applied' | 'list-tools' | 'call-tool' | 'message.create' | 'message.part.text-delta' | 'message.part.tool-update' | 'message.finalize' | 'usage-report' | 'thread.created' | 'thread.updated' | 'repo:refresh-token' | 'repo:clone-complete';
+  type: 'stream' | 'result' | 'tool' | 'question' | 'screenshot' | 'error' | 'complete' | 'agentStatus' | 'create-pr' | 'update-pr' | 'list-pull-requests' | 'inspect-pull-request' | 'models' | 'aborted' | 'reverted' | 'diff' | 'review-result' | 'command-result' | 'ping' | 'git-state' | 'pr-created' | 'files-changed' | 'child-session' | 'title' | 'spawn-child' | 'session-message' | 'session-messages' | 'terminate-child' | 'self-terminate' | 'mem-read' | 'mem-write' | 'mem-patch' | 'mem-rm' | 'mem-search' | 'list-repos' | 'list-personas' | 'list-channels' | 'get-session-status' | 'list-child-sessions' | 'forward-messages' | 'read-repo-file' | 'workflow-list' | 'workflow-sync' | 'workflow-run' | 'workflow-executions' | 'workflow-api' | 'trigger-api' | 'execution-api' | 'skill-api' | 'persona-api' | 'identity-api' | 'workflow-execution-result' | 'workflow-chat-message' | 'model-switched' | 'tunnels' | 'mailbox-send' | 'mailbox-check' | 'task-create' | 'task-list' | 'task-update' | 'task-my' | 'channel-reply' | 'audio-transcript' | 'channel-session-created' | 'session-reset' | 'opencode-config-applied' | 'list-tools' | 'call-tool' | 'message.create' | 'message.part.text-delta' | 'message.part.tool-update' | 'message.finalize' | 'usage-report' | 'thread.created' | 'thread.updated' | 'repo:refresh-token' | 'repo:clone-complete' | 'analytics:emit';
   restarted?: boolean;
   turnId?: string;
   delta?: string;
@@ -1184,6 +1184,12 @@ export class SessionAgentDO {
     this.ctx.acceptWebSocket(server, ['runner']);
     console.log('[SessionAgentDO] Runner connected');
 
+    // Emit runner_connect timing — measure time from sandbox start to runner WebSocket
+    const runningStart = parseInt(this.getStateValue('runningStartedAt') || '0', 10);
+    if (runningStart > 0) {
+      this.emitEvent('runner_connect', { durationMs: Date.now() - runningStart });
+    }
+
     // Mark runner as not-yet-ready. The runner needs to start OpenCode,
     // discover models, etc. before it can accept prompts. Prompts arriving
     // before the runner signals agentStatus: idle will be queued.
@@ -1913,6 +1919,7 @@ export class SessionAgentDO {
         channelType || null, channelId || null, channelKey, threadId || null, continuationContext || null,
         contextPrefix || null, replyChannelType || null, replyChannelId || null
       );
+      this.setStateValue('promptReceivedAt', String(Date.now()));
       this.emitAuditEvent(
         'prompt.queued',
         `Queued: ${reason} (status=${status || 'unknown'}, sandbox=${sandboxId ? 'yes' : 'no'}, queued=${this.getQueueLength()})`,
@@ -1935,6 +1942,7 @@ export class SessionAgentDO {
         channelType || null, channelId || null, channelKey, threadId || null, continuationContext || null,
         contextPrefix || null, replyChannelType || null, replyChannelId || null
       );
+      this.setStateValue('promptReceivedAt', String(Date.now()));
       this.emitAuditEvent(
         'prompt.queued',
         `Queued: runner busy (status=${status || 'unknown'}, sandbox=${sandboxId ? 'yes' : 'no'}, queued=${this.getQueueLength()})`,
@@ -1948,6 +1956,7 @@ export class SessionAgentDO {
     }
 
     console.log(`[SessionAgentDO] handlePrompt: DISPATCHING DIRECTLY channel=${channelKey} messageId=${messageId}`);
+    this.setStateValue('promptReceivedAt', String(Date.now()));
     // Insert into prompt_queue as 'processing' so it can be recovered if the runner disconnects
     this.ctx.storage.sql.exec(
       "INSERT INTO prompt_queue (id, content, attachments, model, status, author_id, author_email, author_name, author_avatar_url, channel_type, channel_id, channel_key, thread_id, continuation_context, context_prefix, reply_channel_type, reply_channel_id) VALUES (?, ?, ?, ?, 'processing', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -2534,6 +2543,10 @@ export class SessionAgentDO {
           messageId: errId,
           error: msg.error || msg.content,
           ...(errCh ? { channelType: errCh.channelType, channelId: errCh.channelId } : {}),
+        });
+        this.emitEvent('turn_error', {
+          errorCode: 'agent_error',
+          properties: { message: errorText.slice(0, 200) },
         });
         this.emitAuditEvent('agent.error', errorText.slice(0, 120));
 
@@ -3389,6 +3402,21 @@ export class SessionAgentDO {
           console.log('[SessionAgentDO] Repo clone completed successfully');
         } else {
           console.error('[SessionAgentDO] Repo clone failed:', msg.error);
+        }
+        break;
+      }
+
+      case 'analytics:emit': {
+        const events = (msg as any).events;
+        if (Array.isArray(events)) {
+          for (const event of events) {
+            if (event.eventType && typeof event.eventType === 'string') {
+              this.emitEvent(event.eventType, {
+                durationMs: typeof event.durationMs === 'number' ? event.durationMs : undefined,
+                properties: event.properties && typeof event.properties === 'object' ? event.properties : undefined,
+              });
+            }
+          }
         }
         break;
       }
@@ -6229,6 +6257,17 @@ export class SessionAgentDO {
   private async handlePromptComplete() {
     this.setStateValue('lastPromptDispatchedAt', '');
     this.setStateValue('errorSafetyNetAt', '');
+
+    // Emit turn_complete timing — measure total time from prompt received to completion
+    const promptStart = parseInt(this.getStateValue('promptReceivedAt') || '0', 10);
+    if (promptStart > 0) {
+      this.emitEvent('turn_complete', {
+        durationMs: Date.now() - promptStart,
+        channel: this.activeChannel?.channelType || undefined,
+      });
+      this.setStateValue('promptReceivedAt', '');
+    }
+
     this.emitAuditEvent('agent.turn_complete', 'Agent turn completed');
 
     // Mark any processing prompt_queue entries as completed
@@ -6429,6 +6468,7 @@ export class SessionAgentDO {
   ): Promise<void> {
     const sessionId = this.getStateValue('sessionId');
     try {
+      const sandboxWakeStart = Date.now();
       const response = await fetch(backendUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -6444,6 +6484,8 @@ export class SessionAgentDO {
         sandboxId: string;
         tunnelUrls: Record<string, string>;
       };
+
+      this.emitEvent('sandbox_wake', { durationMs: Date.now() - sandboxWakeStart });
 
       // Store sandbox info
       this.setStateValue('sandboxId', result.sandboxId);
@@ -7081,6 +7123,16 @@ export class SessionAgentDO {
     this.setStateValue('lastParentIdleNotice', '');
     this.setStateValue('parentIdleNotifyAt', '');
     this.rescheduleIdleAlarm();
+
+    // Emit queue_wait timing — measure how long the prompt waited before dispatch
+    const queuedAt = parseInt(this.getStateValue('promptReceivedAt') || '0', 10);
+    if (queuedAt > 0) {
+      this.emitEvent('queue_wait', {
+        durationMs: Date.now() - queuedAt,
+        channel: queueChannelType || undefined,
+      });
+    }
+
     this.broadcastToClients({
       type: 'status',
       data: { promptDequeued: true, remaining: this.getQueueLength() },
@@ -7751,6 +7803,7 @@ export class SessionAgentDO {
 
       const spawnRequest = JSON.parse(spawnRequestStr);
 
+      const restoreStart = Date.now();
       const response = await fetch(restoreUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -7769,6 +7822,11 @@ export class SessionAgentDO {
         sandboxId: string;
         tunnelUrls: Record<string, string>;
       };
+
+      this.emitEvent('sandbox_restore', {
+        durationMs: Date.now() - restoreStart,
+        properties: { snapshot_id: snapshotImageId },
+      });
 
       // Update state with new sandbox info
       this.setStateValue('sandboxId', result.sandboxId);
