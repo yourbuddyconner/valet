@@ -139,8 +139,17 @@ for (const dir of pluginDirs) {
     }
     const repoPath = resolve(pluginPath, 'src', 'repo.ts');
     if (existsSync(repoPath)) {
-      const exportName = findExportedName(repoPath, /export const (\w+)\s*:\s*RepoProvider/);
-      if (exportName) repoPlugins.push({ name: dir, pkgName, exportName });
+      const repoContent = readFileSync(repoPath, 'utf-8');
+      // Match both `export const name: RepoProvider` and `export { name } from '...'`
+      const directExportRegex = /export const (\w+)\s*:\s*RepoProvider/g;
+      const reExportRegex = /export\s*\{\s*(\w+)\s*\}\s*from/g;
+      let m;
+      while ((m = directExportRegex.exec(repoContent)) !== null) {
+        repoPlugins.push({ name: dir, pkgName, exportName: m[1] });
+      }
+      while ((m = reExportRegex.exec(repoContent)) !== null) {
+        repoPlugins.push({ name: dir, pkgName, exportName: m[1] });
+      }
     }
   }
 
