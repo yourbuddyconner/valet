@@ -77,43 +77,6 @@ export async function batchInsertAnalyticsEvents(
   await db.batch(stmts);
 }
 
-// ─── Legacy-compatible batch insert for usage events (DO flush) ─────────────
-
-export async function batchInsertUsageEvents(
-  db: D1Database,
-  sessionId: string,
-  entries: Array<{
-    localId: number;
-    turnId: string;
-    ocMessageId: string;
-    model: string;
-    inputTokens: number;
-    outputTokens: number;
-    createdAt: number;
-  }>,
-): Promise<void> {
-  if (entries.length === 0) return;
-
-  const stmts = entries.map((entry) =>
-    db.prepare(
-      `INSERT OR IGNORE INTO analytics_events
-        (id, event_type, session_id, turn_id, model, input_tokens, output_tokens, created_at, properties)
-       VALUES (?, 'llm_call', ?, ?, ?, ?, ?, datetime(?, 'unixepoch'), ?)`
-    ).bind(
-      `${sessionId}:${entry.localId}`,
-      sessionId,
-      entry.turnId,
-      entry.model,
-      entry.inputTokens,
-      entry.outputTokens,
-      entry.createdAt,
-      JSON.stringify({ oc_message_id: entry.ocMessageId }),
-    )
-  );
-
-  await db.batch(stmts);
-}
-
 // ─── Billing / Usage Aggregate Queries ──────────────────────────────────────
 
 export interface UsageHeroStats {
@@ -453,57 +416,33 @@ export async function getPerfTrend(
   eventType: string,
   periodStart: string,
 ): Promise<PerfTrendRow[]> {
-  // Get daily counts first
-  const dailyCounts = await db
+  const result = await db
     .prepare(`
-      SELECT
-        date(created_at) as date,
-        COUNT(*) as cnt
+      SELECT date(created_at) as date, duration_ms
       FROM analytics_events
-      WHERE event_type = ?
-        AND created_at >= ?
-        AND duration_ms IS NOT NULL
-      GROUP BY date(created_at)
-      ORDER BY date ASC
+      WHERE event_type = ? AND created_at >= ? AND duration_ms IS NOT NULL
+      ORDER BY date(created_at), duration_ms
     `)
     .bind(eventType, periodStart)
     .all();
 
-  const days = (dailyCounts.results ?? []) as Array<Record<string, unknown>>;
-  if (days.length === 0) return [];
-
-  // For each day, compute P50 and P95 using OFFSET
-  const results: PerfTrendRow[] = [];
-  for (const day of days) {
-    const date = String(day.date);
-    const count = Number(day.cnt);
-    const p50Offset = Math.floor(count * 0.5);
-    const p95Offset = Math.min(Math.floor(count * 0.95), count - 1);
-
-    const [p50Row, p95Row] = await Promise.all([
-      db.prepare(`
-        SELECT duration_ms FROM analytics_events
-        WHERE event_type = ? AND date(created_at) = ? AND duration_ms IS NOT NULL
-        ORDER BY duration_ms ASC
-        LIMIT 1 OFFSET ?
-      `).bind(eventType, date, p50Offset).first<{ duration_ms: number }>(),
-      db.prepare(`
-        SELECT duration_ms FROM analytics_events
-        WHERE event_type = ? AND date(created_at) = ? AND duration_ms IS NOT NULL
-        ORDER BY duration_ms ASC
-        LIMIT 1 OFFSET ?
-      `).bind(eventType, date, p95Offset).first<{ duration_ms: number }>(),
-    ]);
-
-    results.push({
-      date,
-      p50: p50Row?.duration_ms ?? null,
-      p95: p95Row?.duration_ms ?? null,
-      count,
-    });
+  const rows = result.results ?? [];
+  const byDay = new Map<string, number[]>();
+  for (const r of rows) {
+    const date = String(r.date);
+    const arr = byDay.get(date) ?? [];
+    arr.push(Number(r.duration_ms));
+    byDay.set(date, arr);
   }
 
-  return results;
+  return Array.from(byDay.entries())
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([date, durations]) => ({
+      date,
+      p50: durations[Math.floor(durations.length * 0.5)] ?? null,
+      p95: durations[Math.floor(durations.length * 0.95)] ?? null,
+      count: durations.length,
+    }));
 }
 
 export interface StageBreakdownRow {
@@ -517,54 +456,33 @@ export async function getStageBreakdown(
   db: D1Database,
   periodStart: string,
 ): Promise<StageBreakdownRow[]> {
-  // Get all stage event types with counts
-  const stages = await db
+  const result = await db
     .prepare(`
-      SELECT
-        event_type,
-        COUNT(*) as cnt
+      SELECT event_type, duration_ms
       FROM analytics_events
-      WHERE created_at >= ?
-        AND duration_ms IS NOT NULL
-      GROUP BY event_type
-      ORDER BY COUNT(*) DESC
+      WHERE created_at >= ? AND duration_ms IS NOT NULL
+      ORDER BY event_type, duration_ms
     `)
     .bind(periodStart)
     .all();
 
-  const rows = (stages.results ?? []) as Array<Record<string, unknown>>;
-  const results: StageBreakdownRow[] = [];
-
-  for (const row of rows) {
-    const eventType = String(row.event_type);
-    const count = Number(row.cnt);
-    const p50Offset = Math.floor(count * 0.5);
-    const p95Offset = Math.min(Math.floor(count * 0.95), count - 1);
-
-    const [p50Row, p95Row] = await Promise.all([
-      db.prepare(`
-        SELECT duration_ms FROM analytics_events
-        WHERE event_type = ? AND created_at >= ? AND duration_ms IS NOT NULL
-        ORDER BY duration_ms ASC
-        LIMIT 1 OFFSET ?
-      `).bind(eventType, periodStart, p50Offset).first<{ duration_ms: number }>(),
-      db.prepare(`
-        SELECT duration_ms FROM analytics_events
-        WHERE event_type = ? AND created_at >= ? AND duration_ms IS NOT NULL
-        ORDER BY duration_ms ASC
-        LIMIT 1 OFFSET ?
-      `).bind(eventType, periodStart, p95Offset).first<{ duration_ms: number }>(),
-    ]);
-
-    results.push({
-      eventType,
-      p50: p50Row?.duration_ms ?? null,
-      p95: p95Row?.duration_ms ?? null,
-      count,
-    });
+  const rows = result.results ?? [];
+  const byType = new Map<string, number[]>();
+  for (const r of rows) {
+    const eventType = String(r.event_type);
+    const arr = byType.get(eventType) ?? [];
+    arr.push(Number(r.duration_ms));
+    byType.set(eventType, arr);
   }
 
-  return results;
+  return Array.from(byType.entries())
+    .sort(([, a], [, b]) => b.length - a.length)
+    .map(([eventType, durations]) => ({
+      eventType,
+      p50: durations[Math.floor(durations.length * 0.5)] ?? null,
+      p95: durations[Math.floor(durations.length * 0.95)] ?? null,
+      count: durations.length,
+    }));
 }
 
 export interface ErrorRateStats {
@@ -636,8 +554,9 @@ export async function getEventFeed(
   const binds: unknown[] = [periodStart];
 
   if (options.typePrefix) {
-    whereClause += ' AND event_type LIKE ?';
-    binds.push(`${options.typePrefix}%`);
+    const escaped = options.typePrefix.replace(/%/g, '\\%').replace(/_/g, '\\_');
+    whereClause += " AND event_type LIKE ? ESCAPE '\\'";
+    binds.push(`${escaped}%`);
   }
 
   const countRow = await db
@@ -690,54 +609,35 @@ export async function getSlowPaths(
   periodStart: string,
   dimension: 'model' | 'channel' | 'tool_name',
 ): Promise<SlowPathRow[]> {
-  const groups = await db
+  const result = await db
     .prepare(`
-      SELECT
-        ${dimension} as dim,
-        COUNT(*) as cnt
+      SELECT ${dimension} as dim, duration_ms
       FROM analytics_events
       WHERE event_type = 'turn_complete'
         AND created_at >= ?
         AND duration_ms IS NOT NULL
         AND ${dimension} IS NOT NULL
-      GROUP BY ${dimension}
-      ORDER BY COUNT(*) DESC
-      LIMIT 20
+      ORDER BY ${dimension}, duration_ms
     `)
     .bind(periodStart)
     .all();
 
-  const rows = (groups.results ?? []) as Array<Record<string, unknown>>;
-  const results: SlowPathRow[] = [];
-
-  for (const row of rows) {
-    const dim = String(row.dim);
-    const count = Number(row.cnt);
-    const p50Offset = Math.floor(count * 0.5);
-    const p95Offset = Math.min(Math.floor(count * 0.95), count - 1);
-
-    const [p50Row, p95Row] = await Promise.all([
-      db.prepare(`
-        SELECT duration_ms FROM analytics_events
-        WHERE event_type = 'turn_complete' AND ${dimension} = ? AND created_at >= ? AND duration_ms IS NOT NULL
-        ORDER BY duration_ms ASC
-        LIMIT 1 OFFSET ?
-      `).bind(dim, periodStart, p50Offset).first<{ duration_ms: number }>(),
-      db.prepare(`
-        SELECT duration_ms FROM analytics_events
-        WHERE event_type = 'turn_complete' AND ${dimension} = ? AND created_at >= ? AND duration_ms IS NOT NULL
-        ORDER BY duration_ms ASC
-        LIMIT 1 OFFSET ?
-      `).bind(dim, periodStart, p95Offset).first<{ duration_ms: number }>(),
-    ]);
-
-    results.push({
-      dimension: dim,
-      p50: p50Row?.duration_ms ?? null,
-      p95: p95Row?.duration_ms ?? null,
-      count,
-    });
+  const rows = result.results ?? [];
+  const byDim = new Map<string, number[]>();
+  for (const r of rows) {
+    const dim = String(r.dim);
+    const arr = byDim.get(dim) ?? [];
+    arr.push(Number(r.duration_ms));
+    byDim.set(dim, arr);
   }
 
-  return results;
+  return Array.from(byDim.entries())
+    .sort(([, a], [, b]) => b.length - a.length)
+    .slice(0, 20)
+    .map(([dim, durations]) => ({
+      dimension: dim,
+      p50: durations[Math.floor(durations.length * 0.5)] ?? null,
+      p95: durations[Math.floor(durations.length * 0.95)] ?? null,
+      count: durations.length,
+    }));
 }

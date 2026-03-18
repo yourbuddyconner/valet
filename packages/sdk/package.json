@@ -35,8 +35,8 @@
       "import": "./dist/repos/index.js"
     },
     "./analytics": {
-      "import": "./src/analytics/index.ts",
-      "types": "./src/analytics/index.ts"
+      "types": "./dist/analytics/index.d.ts",
+      "import": "./dist/analytics/index.js"
     }
   },
   "scripts": {

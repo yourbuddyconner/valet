@@ -94,7 +94,7 @@ export function PerfHeroMetrics({ hero }: PerfHeroMetricsProps) {
       <HeroMetricCard
         icon={<AlertIcon />}
         label="Error Rate"
-        value={`${hero.errorRate.toFixed(1)}%`}
+        value={`${(hero.errorRate * 100).toFixed(1)}%`}
         tooltip={`${hero.errorCount} errors / ${hero.turnCount} turns`}
         index={3}
       />

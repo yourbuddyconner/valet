@@ -6261,9 +6261,16 @@ export class SessionAgentDO {
     // Emit turn_complete timing — measure total time from prompt received to completion
     const promptStart = parseInt(this.getStateValue('promptReceivedAt') || '0', 10);
     if (promptStart > 0) {
+      // Read model from the processing prompt_queue entry before it's marked completed
+      const processingRow = this.ctx.storage.sql
+        .exec("SELECT model FROM prompt_queue WHERE status = 'processing' LIMIT 1")
+        .toArray()[0];
+      const turnModel = processingRow?.model ? String(processingRow.model) : undefined;
       this.emitEvent('turn_complete', {
         durationMs: Date.now() - promptStart,
         channel: this.activeChannel?.channelType || undefined,
+        model: turnModel,
+        queueMode: this.getStateValue('queueMode') || undefined,
       });
       this.setStateValue('promptReceivedAt', '');
     }
@@ -8324,18 +8331,18 @@ export class SessionAgentDO {
           await batchInsertAnalyticsEvents(this.env.DB, sessionId, userId, unflushed.map((row) => ({
             id: `${sessionId}:${row.id as number}`,
             eventType: row.event_type as string,
-            turnId: (row.turn_id as string) || undefined,
-            durationMs: (row.duration_ms as number) || undefined,
-            channel: (row.channel as string) || undefined,
-            model: (row.model as string) || undefined,
-            queueMode: (row.queue_mode as string) || undefined,
-            inputTokens: (row.input_tokens as number) || undefined,
-            outputTokens: (row.output_tokens as number) || undefined,
-            toolName: (row.tool_name as string) || undefined,
-            errorCode: (row.error_code as string) || undefined,
-            summary: (row.summary as string) || undefined,
-            actorId: (row.actor_id as string) || undefined,
-            properties: (row.properties as string) || undefined,
+            turnId: row.turn_id != null ? (row.turn_id as string) : undefined,
+            durationMs: row.duration_ms != null ? (row.duration_ms as number) : undefined,
+            channel: row.channel != null ? (row.channel as string) : undefined,
+            model: row.model != null ? (row.model as string) : undefined,
+            queueMode: row.queue_mode != null ? (row.queue_mode as string) : undefined,
+            inputTokens: row.input_tokens != null ? (row.input_tokens as number) : undefined,
+            outputTokens: row.output_tokens != null ? (row.output_tokens as number) : undefined,
+            toolName: row.tool_name != null ? (row.tool_name as string) : undefined,
+            errorCode: row.error_code != null ? (row.error_code as string) : undefined,
+            summary: row.summary != null ? (row.summary as string) : undefined,
+            actorId: row.actor_id != null ? (row.actor_id as string) : undefined,
+            properties: row.properties != null ? (row.properties as string) : undefined,
             createdAt: new Date((row.created_at as number) * 1000).toISOString(),
           })));
           const flushedIds = unflushed.map((r) => r.id as number);
