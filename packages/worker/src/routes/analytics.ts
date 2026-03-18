@@ -7,6 +7,7 @@ import {
   getStageBreakdown,
   getErrorRate,
   getSlowPaths,
+  getThroughputStats,
   getEventFeed,
 } from '../lib/db/analytics.js';
 
@@ -25,11 +26,12 @@ analyticsRouter.get('/performance', async (c) => {
 
   const db = c.env.DB;
 
-  const [turnPercentiles, queuePercentiles, wakePercentiles, errorRate, trend, stages, slowByChannel, slowByModel] = await Promise.all([
+  const [turnPercentiles, queuePercentiles, wakePercentiles, errorRate, throughput, trend, stages, slowByChannel, slowByModel] = await Promise.all([
     getPercentiles(db, 'turn_complete', periodStart),
     getPercentiles(db, 'queue_wait', periodStart),
     getPercentiles(db, 'runner_idle', periodStart),
     getErrorRate(db, periodStart),
+    getThroughputStats(db, periodStart),
     getPerfTrend(db, 'turn_complete', periodStart),
     getStageBreakdown(db, periodStart),
     getSlowPaths(db, periodStart, 'channel'),
@@ -50,6 +52,7 @@ analyticsRouter.get('/performance', async (c) => {
       errorRate: errorRate.errorRate,
       turnCount: errorRate.totalCompleted,
       errorCount: errorRate.totalErrors,
+      tokensPerSecP50: throughput.medianTokensPerSec,
     },
     trend,
     stages,

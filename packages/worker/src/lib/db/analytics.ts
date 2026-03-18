@@ -523,6 +523,53 @@ export async function getErrorRate(
   };
 }
 
+// ─── Throughput ─────────────────────────────────────────────────────────────
+
+export interface ThroughputStats {
+  medianTokensPerSec: number | null;
+  count: number;
+}
+
+export async function getThroughputStats(
+  db: D1Database,
+  periodStart: string,
+): Promise<ThroughputStats> {
+  const countRow = await db
+    .prepare(`
+      SELECT COUNT(*) as cnt
+      FROM analytics_events
+      WHERE event_type = 'llm_response'
+        AND created_at >= ?
+        AND properties IS NOT NULL
+        AND json_extract(properties, '$.tokens_per_sec') > 0
+    `)
+    .bind(periodStart)
+    .first<{ cnt: number }>();
+
+  const count = countRow?.cnt ?? 0;
+  if (count === 0) return { medianTokensPerSec: null, count: 0 };
+
+  const medianOffset = Math.floor((count - 1) * 0.5);
+  const row = await db
+    .prepare(`
+      SELECT json_extract(properties, '$.tokens_per_sec') as tps
+      FROM analytics_events
+      WHERE event_type = 'llm_response'
+        AND created_at >= ?
+        AND properties IS NOT NULL
+        AND json_extract(properties, '$.tokens_per_sec') > 0
+      ORDER BY json_extract(properties, '$.tokens_per_sec') ASC
+      LIMIT 1 OFFSET ?
+    `)
+    .bind(periodStart, medianOffset)
+    .first<{ tps: number }>();
+
+  return {
+    medianTokensPerSec: row?.tps ?? null,
+    count,
+  };
+}
+
 // ─── Event Feed ─────────────────────────────────────────────────────────────
 
 export interface EventFeedRow {

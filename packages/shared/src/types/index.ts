@@ -1012,6 +1012,7 @@ export interface AnalyticsPerformanceResponse {
     errorRate: number;
     turnCount: number;
     errorCount: number;
+    tokensPerSecP50: number | null;
   };
   trend: Array<{
     date: string;

@@ -1544,12 +1544,26 @@ export class PromptHandler {
 
     console.log(`[PromptHandler] Sending complete`);
 
-    // Emit llm_response timing — measure total time from prompt sent to completion
+    // Emit llm_response timing with token counts for throughput analysis
     if (this.lastPromptSentAt > 0) {
       const durationMs = Date.now() - this.lastPromptSentAt;
+      const usageChannel = this.activeChannel;
+      let inputTokens = 0;
+      let outputTokens = 0;
+      if (usageChannel) {
+        for (const entry of usageChannel.usageEntries.values()) {
+          inputTokens += entry.inputTokens;
+          outputTokens += entry.outputTokens;
+        }
+      }
       this.agentClient.sendAnalyticsEvents([{
         eventType: 'llm_response',
         durationMs,
+        properties: {
+          input_tokens: inputTokens,
+          output_tokens: outputTokens,
+          tokens_per_sec: durationMs > 0 ? Math.round((outputTokens / durationMs) * 1000) : 0,
+        },
       }]);
       this.lastPromptSentAt = 0;
     }

@@ -9,6 +9,7 @@ interface PerfHeroMetricsProps {
     errorRate: number;
     turnCount: number;
     errorCount: number;
+    tokensPerSecP50: number | null;
   };
 }
 
@@ -57,6 +58,14 @@ function SandboxIcon() {
   );
 }
 
+function SpeedIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
+    </svg>
+  );
+}
+
 function AlertIcon() {
   return (
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -69,7 +78,7 @@ function AlertIcon() {
 
 export function PerfHeroMetrics({ hero }: PerfHeroMetricsProps) {
   return (
-    <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+    <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
       <HeroMetricCard
         icon={<ClockIcon />}
         label="Turn Latency"
@@ -92,11 +101,18 @@ export function PerfHeroMetrics({ hero }: PerfHeroMetricsProps) {
         index={2}
       />
       <HeroMetricCard
+        icon={<SpeedIcon />}
+        label="Throughput"
+        value={hero.tokensPerSecP50 != null ? `${hero.tokensPerSecP50} tok/s` : 'N/A'}
+        tooltip="P50 output tokens per second across LLM responses"
+        index={3}
+      />
+      <HeroMetricCard
         icon={<AlertIcon />}
         label="Error Rate"
         value={`${(hero.errorRate * 100).toFixed(1)}%`}
         tooltip={`${hero.errorCount} errors / ${hero.turnCount} turns`}
-        index={3}
+        index={4}
       />
     </div>
   );
