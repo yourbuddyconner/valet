@@ -1028,6 +1028,58 @@ export interface UsageStatsResponse {
   period: number;
 }
 
+// ─── Analytics Performance Types ─────────────────────────────────────────────
+
+export interface AnalyticsPerformanceResponse {
+  hero: {
+    turnLatencyP50: number | null;
+    turnLatencyP95: number | null;
+    queueWaitP50: number | null;
+    sandboxWakeP50: number | null;
+    errorRate: number;
+    turnCount: number;
+    errorCount: number;
+  };
+  trend: Array<{
+    date: string;
+    p50: number | null;
+    p95: number | null;
+    count: number;
+  }>;
+  stages: Array<{
+    eventType: string;
+    count: number;
+    p50: number | null;
+    p95: number | null;
+  }>;
+  slowPaths: Array<{
+    dimension: string;
+    value: string;
+    count: number;
+    p50: number | null;
+    p95: number | null;
+  }>;
+  period: number;
+}
+
+export interface AnalyticsEventsResponse {
+  events: Array<{
+    id: string;
+    eventType: string;
+    sessionId: string;
+    userId: string | null;
+    turnId: string | null;
+    durationMs: number | null;
+    channel: string | null;
+    model: string | null;
+    summary: string | null;
+    properties: Record<string, unknown> | null;
+    createdAt: string;
+  }>;
+  total: number;
+  period: number;
+}
+
 // Plugin types
 export interface OrgPlugin {
   id: string;
