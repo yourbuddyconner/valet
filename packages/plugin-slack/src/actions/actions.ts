@@ -71,7 +71,8 @@ const readHistory: ActionDefinition = {
   riskLevel: 'low',
   params: z.object({
     channel: z.string().describe('Channel ID (C...)'),
-    limit: z.number().int().min(1).max(100).optional().describe('Max messages (default 20)'),
+    limit: z.number().int().min(1).max(200).optional().describe('Max messages per page (default 100, max 200)'),
+    cursor: z.string().optional().describe('Pagination cursor from a previous response\'s next_cursor'),
   }),
 };
 
@@ -264,16 +265,19 @@ async function executeAction(
         const p = readHistory.params.parse(params);
         const denied = await guardPrivateChannel(token, p.channel, ctx);
         if (denied) return denied;
-        const res = await slackGet('conversations.history', token, {
+        const query: Record<string, unknown> = {
           channel: p.channel,
-          limit: p.limit || 20,
-        });
+          limit: p.limit || 100,
+        };
+        if (p.cursor) query.cursor = p.cursor;
+        const res = await slackGet('conversations.history', token, query);
         if (!res.ok) return slackError(res);
-        const data = (await res.json()) as { ok: boolean; error?: string; messages?: unknown[]; has_more?: boolean };
+        const data = (await res.json()) as { ok: boolean; error?: string; messages?: unknown[]; has_more?: boolean; response_metadata?: { next_cursor?: string } };
         if (!data.ok) return slackError(res, data);
 
         const messages = (data.messages || []).map((m) => slimMessage(m as Record<string, unknown>));
-        return { success: true, data: { messages, has_more: data.has_more } };
+        const next_cursor = data.response_metadata?.next_cursor || undefined;
+        return { success: true, data: { messages, has_more: data.has_more, ...(next_cursor ? { next_cursor } : {}) } };
       }
 
       case 'slack.read_thread': {

@@ -197,6 +197,10 @@ const EMERGENCY_TIMEOUT_MS = 60_000;
 // If the model/provider never responds, this prevents the session from hanging forever.
 const FIRST_RESPONSE_TIMEOUT_MS = 90_000;
 
+// Hard ceiling on a single sync prompt attempt. Prevents the sync fetch from blocking
+// forever when OpenCode enters an internal provider retry loop (e.g. repeated 429/5xx).
+const SYNC_PROMPT_TIMEOUT_MS = 300_000; // 5 minutes
+
 // Review polling configuration
 const REVIEW_POLL_INTERVAL_MS = 500;
 const REVIEW_TIMEOUT_MS = 120_000;
@@ -1401,6 +1405,19 @@ export class PromptHandler {
           this.awaitingAssistantForAttempt = true;
         }
 
+        // Create an AbortController with a hard timeout to prevent blocking forever
+        // when OpenCode enters an internal provider retry loop (repeated 429/5xx).
+        const syncAbort = new AbortController();
+        const sessionId = channel.opencodeSessionId;
+        const syncTimeoutId = setTimeout(() => {
+          console.log(`[PromptHandler] Sync prompt timeout (${SYNC_PROMPT_TIMEOUT_MS}ms) — aborting fetch and OpenCode session`);
+          syncAbort.abort();
+          // Abort the OpenCode session to stop its internal retry loop
+          if (sessionId) {
+            fetch(`${this.opencodeUrl}/session/${sessionId}/abort`, { method: "POST" }).catch(() => undefined);
+          }
+        }, SYNC_PROMPT_TIMEOUT_MS);
+
         try {
           console.log(`[PromptHandler] Sending sync prompt ${messageId} (channel: ${channel.channelKey})${currentModel ? ` (model: ${currentModel})` : ''}`);
           const { result } = await this.sendPromptSyncWithRecovery(channel, effectiveContent, {
@@ -1409,6 +1426,7 @@ export class PromptHandler {
             author,
             channelType,
             channelId,
+            signal: syncAbort.signal,
           });
           console.log(`[PromptHandler] Sync prompt ${messageId} returned (channel: ${channel.channelKey}) result=${result ? 'present' : 'null'}`);
 
@@ -1448,6 +1466,12 @@ export class PromptHandler {
           return;
         } catch (err) {
           const errMsg = err instanceof Error ? err.message : String(err);
+          // Treat sync timeout abort as a retriable error for failover
+          if (syncAbort.signal.aborted) {
+            lastModelError = "Model did not respond (sync prompt timed out)";
+            console.log(`[PromptHandler] Sync prompt timed out for ${messageId} — trying next model`);
+            continue;
+          }
           if (isRetriableProviderError(errMsg)) {
             lastModelError = errMsg;
             console.log(`[PromptHandler] Retriable exception for ${messageId}: ${errMsg} — trying next model`);
@@ -1456,6 +1480,8 @@ export class PromptHandler {
           // Non-retriable exception — finalize with error
           await this.finalizeSyncResponse(null, errMsg);
           return;
+        } finally {
+          clearTimeout(syncTimeoutId);
         }
       }
 
@@ -2757,6 +2783,7 @@ export class PromptHandler {
     author?: PromptAuthor,
     channelType?: string,
     channelId?: string,
+    signal?: AbortSignal,
   ): Promise<{ info: OpenCodeMessageInfo; parts: unknown[] } | null> {
     const url = `${this.opencodeUrl}/session/${sessionId}/message`;
     console.log(`[PromptHandler] POST ${url}${model ? ` (model: ${model})` : ''}${attachments?.length ? ` (attachments: ${attachments.length})` : ''}`);
@@ -2767,6 +2794,7 @@ export class PromptHandler {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
+      signal,
       // @ts-expect-error Bun-specific option — disable default fetch timeout
       timeout: false,
     });
@@ -2807,6 +2835,7 @@ export class PromptHandler {
       author?: PromptAuthor;
       channelType?: string;
       channelId?: string;
+      signal?: AbortSignal;
     },
   ): Promise<{ sessionId: string; result: { info: OpenCodeMessageInfo; parts: unknown[] } | null }> {
     let currentSessionId = await this.ensureChannelOpenCodeSession(channel);
@@ -2820,6 +2849,7 @@ export class PromptHandler {
         options?.author,
         options?.channelType,
         options?.channelId,
+        options?.signal,
       );
       return { sessionId: currentSessionId, result };
     } catch (err) {
@@ -2836,6 +2866,7 @@ export class PromptHandler {
         options?.author,
         options?.channelType,
         options?.channelId,
+        options?.signal,
       );
       return { sessionId: recreatedSessionId, result };
     }
