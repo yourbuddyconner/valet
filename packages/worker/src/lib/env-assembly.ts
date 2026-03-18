@@ -174,21 +174,18 @@ export async function assembleRepoEnv(
     return {
       envVars,
       gitConfig,
-      error: `No GitHub credentials found. Link your GitHub account or ask an org admin to install the GitHub App.`,
+      error: `No ${credentialProvider} credentials found. Link your account or ask an org admin to install the app.`,
     };
   }
 
   // 3. Pick the right provider based on credential type
-  const providerId = resolved.credentialType === 'oauth2' ? 'github-oauth' : 'github-app';
-  const provider = repoProviderRegistry.get(providerId);
-  if (!provider) {
-    // Fallback: use first matching provider (backward compat)
-    const fallback = providers[0];
-    if (!fallback) {
-      return { envVars, gitConfig, error: `Repo provider '${providerId}' not registered` };
-    }
+  const providerId = resolved.credentialType === 'oauth2'
+    ? `${credentialProvider}-oauth`
+    : `${credentialProvider}-app`;
+  const selectedProvider = repoProviderRegistry.get(providerId);
+  if (!selectedProvider) {
+    return { envVars, gitConfig, error: `Repo provider '${providerId}' not registered` };
   }
-  const selectedProvider = provider || providers[0];
 
   const credRow = resolved.credential;
 
@@ -201,7 +198,7 @@ export async function assembleRepoEnv(
     return {
       envVars,
       gitConfig,
-      error: `Failed to decrypt GitHub credentials`,
+      error: `Failed to decrypt ${credentialProvider} credentials`,
     };
   }
 
@@ -225,7 +222,7 @@ export async function assembleRepoEnv(
     return {
       envVars,
       gitConfig,
-      error: `Failed to mint GitHub token: ${err instanceof Error ? err.message : String(err)}`,
+      error: `Failed to mint ${credentialProvider} token: ${err instanceof Error ? err.message : String(err)}`,
     };
   }
 

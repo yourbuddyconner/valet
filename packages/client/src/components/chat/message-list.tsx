@@ -25,6 +25,7 @@ interface MessageListProps {
   connectedUsers?: ConnectedUser[];
 }
 
+<<<<<<< Updated upstream
 /**
  * Group messages into "turns" for rendering.
  *
@@ -63,10 +64,25 @@ export function MessageList({ messages, isAgentThinking, agentStatus, agentStatu
   const didInitialScrollRef = useRef(false);
 
   // Track scroll position via scroll listener
+=======
+export function MessageList({ messages, streamingContent, isAgentThinking, agentStatus, agentStatusDetail }: MessageListProps) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const bottomRef = useRef<HTMLDivElement>(null);
+  const userScrolledUpRef = useRef(false);
+  const [showScrollButton, setShowScrollButton] = useState(false);
+
+  const isNearBottom = useCallback(() => {
+    const el = containerRef.current;
+    if (!el) return true;
+    return el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+  }, []);
+
+>>>>>>> Stashed changes
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
 
+<<<<<<< Updated upstream
     function handleScroll() {
       if (!el) return;
       const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
@@ -76,6 +92,66 @@ export function MessageList({ messages, isAgentThinking, agentStatus, agentStatu
 
     el.addEventListener('scroll', handleScroll, { passive: true });
     return () => el.removeEventListener('scroll', handleScroll);
+=======
+    // Detect user intent to scroll UP via wheel event.
+    // Wheel events are NEVER fired by programmatic scrolling —
+    // this cleanly separates user scrolling from our scrollTop assignments.
+    const handleWheel = (e: WheelEvent) => {
+      if (e.deltaY < 0) {
+        userScrolledUpRef.current = true;
+        setShowScrollButton(true);
+      }
+    };
+
+    // Same for touch: detect upward swipe (finger moves down = content scrolls up)
+    let touchStartY = 0;
+    const handleTouchStart = (e: TouchEvent) => {
+      touchStartY = e.touches[0].clientY;
+    };
+    const handleTouchMove = (e: TouchEvent) => {
+      if (e.touches[0].clientY > touchStartY + 10) {
+        userScrolledUpRef.current = true;
+        setShowScrollButton(true);
+      }
+    };
+
+    // When user scrolls back to bottom (by any means), re-enable auto-scroll
+    const handleScroll = () => {
+      if (userScrolledUpRef.current && isNearBottom()) {
+        userScrolledUpRef.current = false;
+        setShowScrollButton(false);
+      }
+    };
+
+    el.addEventListener('wheel', handleWheel, { passive: true });
+    el.addEventListener('touchstart', handleTouchStart, { passive: true });
+    el.addEventListener('touchmove', handleTouchMove, { passive: true });
+    el.addEventListener('scroll', handleScroll, { passive: true });
+    return () => {
+      el.removeEventListener('wheel', handleWheel);
+      el.removeEventListener('touchstart', handleTouchStart);
+      el.removeEventListener('touchmove', handleTouchMove);
+      el.removeEventListener('scroll', handleScroll);
+    };
+  }, [isNearBottom]);
+
+  // Auto-scroll: set scrollTop directly (synchronous, no animation to fight with)
+  useEffect(() => {
+    if (userScrolledUpRef.current) return;
+    const el = containerRef.current;
+    if (el) {
+      el.scrollTop = el.scrollHeight;
+    }
+  }, [messages, streamingContent, isAgentThinking]);
+
+  const scrollToBottom = useCallback(() => {
+    userScrolledUpRef.current = false;
+    setShowScrollButton(false);
+    const el = containerRef.current;
+    if (el) {
+      el.scrollTop = el.scrollHeight;
+    }
+>>>>>>> Stashed changes
   }, []);
 
   // Initial load: scroll to bottom when messages first appear
@@ -138,6 +214,7 @@ export function MessageList({ messages, isAgentThinking, agentStatus, agentStatu
                 return <MessageItem key={msg.id} message={msg} onRevert={onRevert} connectedUsers={connectedUsers} />;
               }
 
+<<<<<<< Updated upstream
               return (
                 <AssistantTurn
                   key={turn.messages[0].id}
@@ -159,6 +236,9 @@ export function MessageList({ messages, isAgentThinking, agentStatus, agentStatu
 
       {/* Scroll to bottom button */}
       {!isEmpty && (
+=======
+      {showScrollButton && (
+>>>>>>> Stashed changes
         <button
           type="button"
           onClick={scrollToBottom}

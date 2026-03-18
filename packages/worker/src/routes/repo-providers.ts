@@ -5,6 +5,7 @@ import { repoProviderRegistry } from '../repos/registry.js';
 import { storeCredential } from '../services/credentials.js';
 import { getDb } from '../lib/drizzle.js';
 import * as credentialDb from '../lib/db/credentials.js';
+import * as db from '../lib/db.js';
 
 export const repoProviderRouter = new Hono<{ Bindings: Env; Variables: Variables }>();
 
@@ -52,7 +53,6 @@ repoProviderRouter.get('/github-oauth/link', async (c) => {
 repoProviderRouter.get('/:provider/install', async (c) => {
   const providerId = c.req.param('provider');
   const level = c.req.query('level') || 'personal';
-  const orgId = c.req.query('orgId');
   const user = c.get('user');
 
   if (providerId !== 'github') {
@@ -64,15 +64,21 @@ repoProviderRouter.get('/:provider/install', async (c) => {
     return c.json({ error: 'GitHub App not configured' }, 500);
   }
 
-  // For org-level installs, include the org ID in the state
-  if (level === 'org' && !orgId) {
-    return c.json({ error: 'Org context required for org-level install' }, 400);
+  // For org-level installs, resolve org from DB (not client-supplied)
+  let orgId: string | undefined;
+  if (level === 'org') {
+    const appDb = getDb(c.env.DB);
+    const orgSettings = await db.getOrgSettings(appDb);
+    orgId = orgSettings?.id;
+    if (!orgId) {
+      return c.json({ error: 'Org context required for org-level install' }, 400);
+    }
   }
 
   // State is a signed JWT to prevent forgery
   const now = Math.floor(Date.now() / 1000);
   const state = await signJWT(
-    { sub: user.id, sid: level, orgId: level === 'org' ? orgId : undefined, iat: now, exp: now + 10 * 60 } as any,
+    { sub: user.id, sid: level, orgId, iat: now, exp: now + 10 * 60 } as any,
     c.env.ENCRYPTION_KEY,
   );
   const installUrl = `https://github.com/apps/${appSlug}/installations/new?state=${encodeURIComponent(state)}`;

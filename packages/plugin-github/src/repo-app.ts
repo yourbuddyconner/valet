@@ -1,4 +1,4 @@
-import type { RepoProvider, RepoCredential, RepoList } from '@valet/sdk/repos';
+import type { RepoProvider, RepoCredential } from '@valet/sdk/repos';
 import { githubFetch } from './actions/api.js';
 import { GITHUB_URL_PATTERNS, mapGitHubRepo, mintInstallationToken, validateGitHubRepo } from './repo-shared.js';
 
