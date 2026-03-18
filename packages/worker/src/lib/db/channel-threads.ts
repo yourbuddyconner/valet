@@ -143,3 +143,25 @@ export async function updateThreadCursor(
     .bind(lastSeenTs, channelType, channelId, externalThreadId, userId)
     .run();
 }
+
+/**
+ * Reverse lookup: given an internal threadId, return the origin channel
+ * (the channel that first created this thread). Returns the earliest mapping.
+ */
+export async function getThreadOriginChannel(
+  db: D1Database,
+  threadId: string,
+): Promise<{ channelType: string; channelId: string } | null> {
+  const row = await db
+    .prepare(
+      'SELECT channel_type, channel_id FROM channel_thread_mappings WHERE thread_id = ? ORDER BY created_at ASC LIMIT 1'
+    )
+    .bind(threadId)
+    .first();
+
+  if (!row) return null;
+  return {
+    channelType: row.channel_type as string,
+    channelId: row.channel_id as string,
+  };
+}
