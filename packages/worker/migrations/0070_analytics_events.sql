@@ -44,7 +44,7 @@ SELECT
   ue.created_at,
   json_object('oc_message_id', ue.oc_message_id)
 FROM usage_events ue
-LEFT JOIN sessions s ON s.id = ue.session_id;
+INNER JOIN sessions s ON s.id = ue.session_id;
 
 -- Migrate session_audit_log → analytics_events (backfill user_id from sessions)
 INSERT OR IGNORE INTO analytics_events (id, event_type, session_id, user_id, summary, actor_id, properties, created_at)
@@ -58,7 +58,7 @@ SELECT
   sal.metadata,
   sal.created_at
 FROM session_audit_log sal
-LEFT JOIN sessions s ON s.id = sal.session_id;
+INNER JOIN sessions s ON s.id = sal.session_id;
 
 -- Drop old tables
 DROP TABLE IF EXISTS usage_events;
