@@ -28,7 +28,7 @@ analyticsRouter.get('/performance', async (c) => {
   const [turnPercentiles, queuePercentiles, wakePercentiles, errorRate, trend, stages, slowByChannel, slowByModel] = await Promise.all([
     getPercentiles(db, 'turn_complete', periodStart),
     getPercentiles(db, 'queue_wait', periodStart),
-    getPercentiles(db, 'sandbox_wake', periodStart),
+    getPercentiles(db, 'runner_idle', periodStart),
     getErrorRate(db, periodStart),
     getPerfTrend(db, 'turn_complete', periodStart),
     getStageBreakdown(db, periodStart),

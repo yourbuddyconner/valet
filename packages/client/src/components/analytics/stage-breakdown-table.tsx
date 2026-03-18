@@ -12,10 +12,11 @@ interface StageBreakdownTableProps {
 const STAGE_LABELS: Record<string, string> = {
   queue_wait: 'Queue Wait',
   llm_response: 'LLM Response',
-  sandbox_wake: 'Sandbox Wake',
-  sandbox_restore: 'Sandbox Restore',
+  sandbox_wake: 'Sandbox Spawn API',
+  sandbox_restore: 'Sandbox Restore API',
   tool_exec: 'Tool Exec',
   runner_connect: 'Runner Connect',
+  runner_idle: 'Sandbox Ready (total)',
 };
 
 function formatStageName(eventType: string): string {

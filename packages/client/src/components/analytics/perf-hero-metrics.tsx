@@ -86,9 +86,9 @@ export function PerfHeroMetrics({ hero }: PerfHeroMetricsProps) {
       />
       <HeroMetricCard
         icon={<SandboxIcon />}
-        label="Sandbox Wake"
+        label="Sandbox Ready"
         value={formatDuration(hero.sandboxWakeP50)}
-        tooltip="P50 sandbox wake time"
+        tooltip="P50 time from sandbox spawn to agent ready"
         index={2}
       />
       <HeroMetricCard

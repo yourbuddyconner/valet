@@ -452,7 +452,7 @@ export interface StageBreakdownRow {
   count: number;
 }
 
-const STAGE_EVENT_TYPES = ['queue_wait', 'sandbox_wake', 'sandbox_restore', 'llm_response', 'tool_exec', 'runner_connect'];
+const STAGE_EVENT_TYPES = ['queue_wait', 'sandbox_wake', 'sandbox_restore', 'llm_response', 'tool_exec', 'runner_connect', 'runner_idle'];
 
 export async function getStageBreakdown(
   db: D1Database,

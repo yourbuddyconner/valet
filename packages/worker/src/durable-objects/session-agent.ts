@@ -2812,6 +2812,13 @@ export class SessionAgentDO {
           if (wasInitializing) {
             this.setStateValue('runnerReady', 'true');
             console.log('[SessionAgentDO] Runner is now ready (first idle after connect)');
+
+            // Emit runner_idle — full time from sandbox spawn/restore to agent ready
+            const wakeStart = parseInt(this.getStateValue('sandboxWakeStartedAt') || '0', 10);
+            if (wakeStart > 0) {
+              this.emitEvent('runner_idle', { durationMs: Date.now() - wakeStart });
+              this.setStateValue('sandboxWakeStartedAt', '');
+            }
           }
 
           const currentRunnerBusy = this.getStateValue('runnerBusy') === 'true';
@@ -6383,6 +6390,7 @@ export class SessionAgentDO {
     this.setStateValue('tunnelUrls', '');
     this.setStateValue('tunnels', '');
     this.setStateValue('runningStartedAt', '');
+    this.setStateValue('sandboxWakeStartedAt', '');
     this.setStateValue('initialModel', '');
     this.setStateValue('initialPrompt', '');
     this.setStateValue('parentThreadId', '');
@@ -6497,6 +6505,7 @@ export class SessionAgentDO {
   ): Promise<void> {
     const sessionId = this.getStateValue('sessionId');
     try {
+      this.setStateValue('sandboxWakeStartedAt', String(Date.now()));
       const sandboxWakeStart = Date.now();
       const response = await fetch(backendUrl, {
         method: 'POST',
@@ -7841,6 +7850,7 @@ export class SessionAgentDO {
 
       const spawnRequest = JSON.parse(spawnRequestStr);
 
+      this.setStateValue('sandboxWakeStartedAt', String(Date.now()));
       const restoreStart = Date.now();
       const response = await fetch(restoreUrl, {
         method: 'POST',
@@ -8322,6 +8332,7 @@ export class SessionAgentDO {
    */
   private clearRunningStarted(): void {
     this.setStateValue('runningStartedAt', '');
+    this.setStateValue('sandboxWakeStartedAt', '');
   }
 
   /**
