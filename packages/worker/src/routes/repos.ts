@@ -23,9 +23,11 @@ async function resolveRepoCredentialForProvider(
 ): Promise<RepoCredential> {
   const appDb = getDb(env.DB);
 
-  // Try org-level first, then user-level
+  // Credentials are stored under a shared provider name (e.g. 'github'),
+  // not per-provider IDs like 'github-oauth' / 'github-app'.
+  const credentialProvider = providerId.replace(/-(?:oauth|app)$/, '');
   const orgSettings = await db.getOrgSettings(appDb);
-  const resolved = await credentialDb.resolveRepoCredential(appDb, providerId, orgSettings?.id, userId);
+  const resolved = await credentialDb.resolveRepoCredential(appDb, credentialProvider, orgSettings?.id, userId);
   if (!resolved) {
     throw new ValidationError(`No ${providerId} credentials found. Connect ${providerId} first.`);
   }
@@ -136,11 +138,22 @@ reposRouter.get('/validate', async (c) => {
     throw new ValidationError('Missing url parameter');
   }
 
-  // Resolve which repo provider handles this URL
-  const provider = repoProviderRegistry.resolveByUrl(url);
-  if (!provider) {
+  // Resolve which repo providers handle this URL
+  const providers = repoProviderRegistry.resolveAllByUrl(url);
+  if (providers.length === 0) {
     return c.json({ valid: false, error: 'No repo provider found for this URL' });
   }
+
+  // Use credential-driven resolution: find the best credential, then pick the matching provider
+  const credentialProvider = providers[0].id.replace(/-(?:oauth|app)$/, '');
+  const appDb = getDb(c.env.DB);
+  const orgSettings = await db.getOrgSettings(appDb);
+  const resolved = await credentialDb.resolveRepoCredential(appDb, credentialProvider, orgSettings?.id, user.id);
+  if (!resolved) {
+    return c.json({ valid: false, error: `No ${credentialProvider} credentials found. Connect ${credentialProvider} first.` });
+  }
+  const providerId = resolved.credentialType === 'oauth2' ? `${credentialProvider}-oauth` : `${credentialProvider}-app`;
+  const provider = repoProviderRegistry.get(providerId) || providers[0];
 
   try {
     const credential = await resolveRepoCredentialForProvider(c.env, user.id, provider.id);
