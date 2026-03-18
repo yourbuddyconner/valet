@@ -339,18 +339,6 @@ export class OpenCodeManager {
   private async spawnProcess(): Promise<void> {
     console.log(`[OpenCodeManager] Spawning opencode serve --port ${this.port} (cwd: ${this.workspaceDir})`);
 
-    // Log version
-    try {
-      const versionProc = Bun.spawn(["opencode", "--version"], {
-        stdout: "pipe",
-        stderr: "pipe",
-      });
-      const versionOut = await new Response(versionProc.stdout).text();
-      console.log(`[OpenCodeManager] OpenCode version: ${versionOut.trim()}`);
-    } catch {
-      console.log("[OpenCodeManager] OpenCode version: unknown");
-    }
-
     this.process = Bun.spawn(["opencode", "serve", "--port", String(this.port)], {
       cwd: this.workspaceDir,
       stdout: "inherit",
@@ -410,7 +398,8 @@ export class OpenCodeManager {
 
   private async waitForHealth(): Promise<void> {
     const url = `http://localhost:${this.port}/health`;
-    const maxRetries = 60;
+    const maxRetries = 150;
+    const pollIntervalMs = 200;
     let retry = 0;
 
     console.log("[OpenCodeManager] Waiting for OpenCode health...");
@@ -428,7 +417,7 @@ export class OpenCodeManager {
         // Not ready yet
       }
       retry++;
-      await new Promise((resolve) => setTimeout(resolve, 1000));
+      await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
     }
 
     throw new Error(`OpenCode failed to become healthy after ${maxRetries} retries`);

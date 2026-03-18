@@ -52,7 +52,6 @@ const sessionId = values["session-id"];
 const gatewayPort = parseInt(values["gateway-port"] || "9000", 10);
 const INITIAL_CONNECT_MAX_DELAY_MS = 30_000;
 const INITIAL_CONNECT_MAX_ATTEMPTS = 30;
-const CONFIG_WAIT_TIMEOUT_MS = 30_000;
 
 // ─── Tool Whitelist ──────────────────────────────────────────────────────
 // When a persona has tool whitelisting configured, this stores the whitelist.
@@ -498,11 +497,6 @@ async function main() {
   process.on("SIGTERM", shutdown);
   process.on("SIGINT", shutdown);
 
-  // Brief delay before first connection — the sandbox may boot before the Worker
-  // finishes calling /start on the DO to store our runner token (race condition).
-  console.log("[Runner] Waiting 3s for DO initialization...");
-  await new Promise((resolve) => setTimeout(resolve, 3000));
-
   // Initial connect must be resilient too. If the first websocket upgrade fails
   // (cold start/race/network blip), keep retrying instead of exiting the runner.
   // Cap attempts so stale sandboxes (rotated session, broken network) don't retry forever.
@@ -531,6 +525,7 @@ async function main() {
   // ─── Wait for DO config, then start OpenCode (single start) ─────────
   console.log("[Runner] Waiting for opencode-config from DO...");
 
+  const CONFIG_WAIT_TIMEOUT_MS = 30_000;
   const doConfig = await Promise.race([
     firstConfigPromise,
     new Promise<null>((resolve) => setTimeout(() => resolve(null), CONFIG_WAIT_TIMEOUT_MS)),
@@ -563,20 +558,23 @@ async function main() {
   await openCodeManager.start(initialConfig);
   console.log(`[Runner] OpenCode URL: ${openCodeManager.getUrl()}`);
 
-  // Discover available models with the full config in place
-  const models = await promptHandler.fetchAvailableModels();
-  if (models.length > 0) {
-    agentClient.sendModels(models);
-    console.log(`[Runner] Sent ${models.length} provider(s) to DO`);
-  }
-
   // Ack config to the DO
   agentClient.sendOpenCodeConfigApplied(true, false);
 
-  // Signal readiness AFTER OpenCode is fully started and models discovered.
+  // Signal readiness immediately — don't block on model discovery.
   // This triggers the DO to drain any queued prompts.
   agentClient.sendAgentStatus("idle");
   console.log("[Runner] Ready — sent initial agentStatus: idle to DO");
+
+  // Discover models in background — not needed for prompt handling
+  promptHandler.fetchAvailableModels().then((models) => {
+    if (models.length > 0) {
+      agentClient.sendModels(models);
+      console.log(`[Runner] Sent ${models.length} provider(s) to DO`);
+    }
+  }).catch((err) => {
+    console.warn("[Runner] Background model discovery failed:", err);
+  });
 }
 
 main().catch((err) => {

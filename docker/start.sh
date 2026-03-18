@@ -21,7 +21,7 @@ echo "[start.sh] Starting VNC stack (Xvfb + fluxbox + x11vnc + websockify)"
 rm -f /tmp/.X99-lock /tmp/.X11-unix/X99
 rm -f /root/.local/share/code-server/heartbeat /root/.local/share/code-server/*.sock
 Xvfb :99 -screen 0 1920x1080x24 &
-sleep 1
+sleep 0.3
 # Pre-create fluxbox init file to suppress "Failed to read" config spam on stderr
 mkdir -p /root/.fluxbox
 cat > /root/.fluxbox/init <<'FBEOF'
@@ -88,19 +88,7 @@ echo "[start.sh] Starting TTYD on port ${TTYD_PORT}"
 # -p: Port
 # The command after -- is what runs in the terminal
 ttyd -W -p ${TTYD_PORT} bash -c "cd ${WORK_DIR} && exec bash -l" 2>&1 &
-TTYD_PID=$!
-sleep 2
-if ! kill -0 $TTYD_PID 2>/dev/null; then
-  echo "[start.sh] ERROR: TTYD failed to start!"
-  # Try to get any error output
-  wait $TTYD_PID 2>&1 || true
-else
-  echo "[start.sh] TTYD started with PID ${TTYD_PID}"
-  # Verify TTYD is listening
-  if command -v ss &>/dev/null; then
-    ss -tlnp | grep ":${TTYD_PORT}" || echo "[start.sh] WARNING: TTYD not listening on port ${TTYD_PORT}"
-  fi
-fi
+echo "[start.sh] TTYD started in background"
 
 # ─── Runner Process (manages OpenCode lifecycle) ─────────────────────
 # The Runner now owns the full OpenCode lifecycle: writing config files,

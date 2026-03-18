@@ -7,6 +7,10 @@ Chromium, TTYD.
 Uses debian:bookworm-slim with add_python="3.12" (Debian 12, GLIBC 2.36).
 This satisfies wrangler's requirement for GLIBC 2.32+ and ships Chromium
 as a normal apt package.
+
+Layer ordering strategy: stable, heavy layers first; frequently-changing
+layers (runner, start.sh, opencode config) last. This maximizes Modal
+layer cache hits across deploys.
 """
 
 import modal
@@ -20,7 +24,10 @@ def get_base_image() -> modal.Image:
     """Build the full sandbox image with all dev environment services."""
     return (
         modal.Image.from_registry("debian:bookworm-slim", add_python="3.12")
+        # ─── Single apt layer: all system packages ──────────────────────
+        # Merging apt_install calls avoids redundant apt-get update runs.
         .apt_install(
+            # Base tools
             "git",
             "curl",
             "wget",
@@ -34,7 +41,20 @@ def get_base_image() -> modal.Image:
             "openssh-client",
             "bash",
             "procps",
+            # VNC stack + browser
+            "xvfb",
+            "fluxbox",
+            "x11vnc",
+            "websockify",
+            "novnc",
+            "chromium",
+            "imagemagick",
+            "xdotool",
+            "ffmpeg",
+            # Build tools (for whisper.cpp)
+            "cmake",
         )
+        # ─── Stable runtimes (rarely change) ────────────────────────────
         # Install Node.js
         .run_commands(
             f"curl -fsSL https://deb.nodesource.com/setup_{NODE_VERSION}.x | bash -",
@@ -45,7 +65,30 @@ def get_base_image() -> modal.Image:
         .run_commands(
             "curl -fsSL https://bun.sh/install | bash",
         )
-        # Install OpenCode CLI + agent-browser
+        # ─── Stable binaries (never change unless version bumped) ───────
+        # whisper.cpp (speech-to-text) — build from source. Placed early
+        # because it's ~120s and never changes.
+        .run_commands(
+            "git clone --depth 1 https://github.com/ggml-org/whisper.cpp /tmp/whisper-build",
+            "cd /tmp/whisper-build && cmake -B build && cmake --build build --config Release -j$(nproc)",
+            "cp /tmp/whisper-build/build/bin/whisper-cli /usr/local/bin/whisper-cli",
+            "cp /tmp/whisper-build/build/src/libwhisper.so* /usr/local/lib/",
+            "cp /tmp/whisper-build/build/ggml/src/libggml*.so* /usr/local/lib/",
+            "ldconfig",
+            "rm -rf /tmp/whisper-build",
+        )
+        # TTYD, cloudflared, code-server — single layer for small binaries
+        .run_commands(
+            # TTYD (web terminal)
+            'curl -fsSL -o /usr/local/bin/ttyd "https://github.com/tsl0922/ttyd/releases/download/1.7.7/ttyd.x86_64"',
+            "chmod +x /usr/local/bin/ttyd",
+            # cloudflared (Cloudflare Quick Tunnels)
+            'curl -fsSL -o /usr/local/bin/cloudflared "https://github.com/cloudflare/cloudflared/releases/download/2026.2.0/cloudflared-linux-amd64"',
+            "chmod +x /usr/local/bin/cloudflared",
+            # code-server (VS Code in browser)
+            "curl -fsSL https://code-server.dev/install.sh | sh",
+        )
+        # ─── OpenCode + Playwright (changes when OPENCODE_VERSION bumps) ─
         .run_commands(
             f"npm install -g opencode-ai@{OPENCODE_VERSION} agent-browser",
         )
@@ -61,45 +104,19 @@ def get_base_image() -> modal.Image:
             "fi",
             "chmod -R a+rX /ms-playwright",
         )
-        # code-server (VS Code in browser)
+        # ─── Workspace + shell setup (stable) ──────────────────────────
         .run_commands(
-            "curl -fsSL https://code-server.dev/install.sh | sh",
+            # Create workspace directory
+            "mkdir -p /workspace",
+            # Setup bash prompt and environment for terminals
+            "echo 'export PS1=\"agent@sandbox:\\w\\$ \"' > /root/.bashrc",
+            "echo 'alias ls=\"ls --color=auto\"' >> /root/.bashrc",
+            "echo 'alias ll=\"ls -la\"' >> /root/.bashrc",
+            "echo 'export BUN_INSTALL=\"/root/.bun\"' >> /root/.bashrc",
+            "echo 'export PATH=\"$BUN_INSTALL/bin:$PATH\"' >> /root/.bashrc",
+            "cp /root/.bashrc /etc/bash.bashrc",
         )
-        # VNC stack: Xvfb + fluxbox + x11vnc + websockify + noVNC + Chromium
-        .apt_install(
-            "xvfb",
-            "fluxbox",
-            "x11vnc",
-            "websockify",
-            "novnc",
-            "chromium",
-            "imagemagick",
-            "xdotool",
-            "ffmpeg",
-        )
-        # TTYD (web terminal)
-        .run_commands(
-            'curl -fsSL -o /usr/local/bin/ttyd "https://github.com/tsl0922/ttyd/releases/download/1.7.7/ttyd.x86_64"',
-            "chmod +x /usr/local/bin/ttyd",
-        )
-        # cloudflared (Cloudflare Quick Tunnels for unique per-tunnel hostnames)
-        .run_commands(
-            'curl -fsSL -o /usr/local/bin/cloudflared "https://github.com/cloudflare/cloudflared/releases/download/2026.2.0/cloudflared-linux-amd64"',
-            "chmod +x /usr/local/bin/cloudflared",
-        )
-        # whisper.cpp (speech-to-text) — build from source with shared libs installed
-        .apt_install("cmake")
-        .run_commands(
-            "git clone --depth 1 https://github.com/ggml-org/whisper.cpp /tmp/whisper-build",
-            "cd /tmp/whisper-build && cmake -B build && cmake --build build --config Release -j$(nproc)",
-            "cp /tmp/whisper-build/build/bin/whisper-cli /usr/local/bin/whisper-cli",
-            "cp /tmp/whisper-build/build/src/libwhisper.so* /usr/local/lib/",
-            "cp /tmp/whisper-build/build/ggml/src/libggml*.so* /usr/local/lib/",
-            "ldconfig",
-            "rm -rf /tmp/whisper-build",
-        )
-        # Cache-bust: place version BEFORE runner copy so bumping it invalidates the runner layer
-        .run_commands("echo 'RUNNER_VERSION=2026-02-22-v113-v2-turn-id-fix'")
+        # ─── Frequently-changing layers (last for cache efficiency) ─────
         # Runner package (Bun/TS — runs inside sandbox)
         # Exclude node_modules - it contains symlinks to monorepo root that cause timeouts
         # We run bun install inside the container anyway
@@ -109,9 +126,9 @@ def get_base_image() -> modal.Image:
             copy=True,
             ignore=["node_modules", "*.log"],
         )
-        .run_commands("cd /runner && /root/.bun/bin/bun install")
-        # Expose workflow CLI as a first-class sandbox command
         .run_commands(
+            "cd /runner && /root/.bun/bin/bun install",
+            # Expose workflow CLI as a first-class sandbox command
             "printf '#!/bin/bash\\nexec /root/.bun/bin/bun run /runner/src/workflow-cli.ts \"$@\"\\n' > /usr/local/bin/workflow",
             "chmod +x /usr/local/bin/workflow",
         )
@@ -132,19 +149,6 @@ def get_base_image() -> modal.Image:
             "ln -s /opencode-superpowers/.opencode/plugins/superpowers.js /opencode-config/plugins/superpowers.js",
             "ln -s /opencode-superpowers/skills /opencode-config/skills/superpowers",
         )
-        # Create workspace directory
-        .run_commands("mkdir -p /workspace")
-        # Setup bash prompt and environment for terminals
-        .run_commands(
-            # Create a proper .bashrc with prompt using echo
-            "echo 'export PS1=\"agent@sandbox:\\w\\$ \"' > /root/.bashrc",
-            "echo 'alias ls=\"ls --color=auto\"' >> /root/.bashrc",
-            "echo 'alias ll=\"ls -la\"' >> /root/.bashrc",
-            "echo 'export BUN_INSTALL=\"/root/.bun\"' >> /root/.bashrc",
-            "echo 'export PATH=\"$BUN_INSTALL/bin:$PATH\"' >> /root/.bashrc",
-            # Also create /etc/bash.bashrc for system-wide defaults
-            "cp /root/.bashrc /etc/bash.bashrc",
-        )
         .env(
             {
                 "BUN_INSTALL": "/root/.bun",
@@ -152,7 +156,7 @@ def get_base_image() -> modal.Image:
                 "DISPLAY": ":99",
                 "HOME": "/root",
                 # Force image rebuild on deploy (change this value to trigger rebuild)
-                "IMAGE_BUILD_VERSION": "2026-03-16-v9-opencode-auto-restart",
+                "IMAGE_BUILD_VERSION": "2026-03-18-v10-startup-optimizations",
                 "AGENT_BROWSER_EXECUTABLE_PATH": "/usr/bin/chromium",
                 "AGENT_BROWSER_PROFILE": "/root/.agent-browser-profile",
                 "PLAYWRIGHT_BROWSERS_PATH": "/ms-playwright",
