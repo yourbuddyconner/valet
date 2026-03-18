@@ -158,23 +158,41 @@ export async function assembleRepoEnv(
     return { envVars, gitConfig };
   }
 
-  // 1. Resolve which repo provider handles this URL
-  const provider = repoProviderRegistry.resolveByUrl(opts.repoUrl);
-  if (!provider) {
+  // 1. Find all providers that handle this URL
+  const providers = repoProviderRegistry.resolveAllByUrl(opts.repoUrl);
+  if (providers.length === 0) {
     return { envVars, gitConfig, error: `No repo provider found for URL: ${opts.repoUrl}` };
   }
 
-  // 2. Resolve the credential (org-level app_install preferred, then user-level)
-  const credRow = await credentialDb.resolveRepoCredential(appDb, provider.id, orgId, userId);
-  if (!credRow) {
+  // 2. Resolve the credential (user-first priority)
+  // Credentials are stored under a shared provider name (e.g. 'github'),
+  // not per-provider IDs like 'github-oauth' / 'github-app'.
+  // Derive the credential provider name from the first matching provider's ID prefix.
+  const credentialProvider = providers[0].id.replace(/-(?:oauth|app)$/, '');
+  const resolved = await credentialDb.resolveRepoCredential(appDb, credentialProvider, orgId, userId);
+  if (!resolved) {
     return {
       envVars,
       gitConfig,
-      error: `No ${provider.displayName} credentials found. Connect ${provider.displayName} first.`,
+      error: `No GitHub credentials found. Link your GitHub account or ask an org admin to install the GitHub App.`,
     };
   }
 
-  // 3. Decrypt credential data and build RepoCredential
+  // 3. Pick the right provider based on credential type
+  const providerId = resolved.credentialType === 'oauth2' ? 'github-oauth' : 'github-app';
+  const provider = repoProviderRegistry.get(providerId);
+  if (!provider) {
+    // Fallback: use first matching provider (backward compat)
+    const fallback = providers[0];
+    if (!fallback) {
+      return { envVars, gitConfig, error: `Repo provider '${providerId}' not registered` };
+    }
+  }
+  const selectedProvider = provider || providers[0];
+
+  const credRow = resolved.credential;
+
+  // 4. Decrypt credential data and build RepoCredential
   let credData: Record<string, unknown>;
   try {
     const json = await decryptStringPBKDF2(credRow.encryptedData, env.ENCRYPTION_KEY);
@@ -183,13 +201,11 @@ export async function assembleRepoEnv(
     return {
       envVars,
       gitConfig,
-      error: `Failed to decrypt ${provider.displayName} credentials`,
+      error: `Failed to decrypt GitHub credentials`,
     };
   }
 
   const metadata: Record<string, string> = credRow.metadata ? JSON.parse(credRow.metadata) : {};
-  // Merge decrypted credential fields into metadata so providers can access
-  // secrets (e.g. app_id, private_key) that are stored encrypted in D1
   for (const [k, v] of Object.entries(credData)) {
     if (typeof v === 'string') metadata[k] = v;
   }
@@ -201,42 +217,42 @@ export async function assembleRepoEnv(
     metadata,
   };
 
-  // 4. Mint a fresh token
+  // 5. Mint a fresh token
   let freshToken: { accessToken: string; expiresAt?: string };
   try {
-    freshToken = await provider.mintToken(repoCredential);
+    freshToken = await selectedProvider.mintToken(repoCredential);
   } catch (err) {
     return {
       envVars,
       gitConfig,
-      error: `Failed to mint ${provider.displayName} token: ${err instanceof Error ? err.message : String(err)}`,
+      error: `Failed to mint GitHub token: ${err instanceof Error ? err.message : String(err)}`,
     };
   }
 
-  // 5. Get git user info from users table
+  // 6. Get git user info from users table
   const userRow = await db.getUserById(appDb, userId);
   const gitUser = {
     name: userRow?.gitName || userRow?.name || 'Valet User',
     email: userRow?.gitEmail || userRow?.email || '',
   };
 
-  // 6. Build a credential with the fresh token for assembleSessionEnv
+  // 7. Build a credential with the fresh token for assembleSessionEnv
   const freshCredential: RepoCredential = {
     ...repoCredential,
     accessToken: freshToken.accessToken,
     expiresAt: freshToken.expiresAt,
   };
 
-  // 7. Call provider.assembleSessionEnv()
-  const sessionEnv = await provider.assembleSessionEnv(freshCredential, {
+  // 8. Call provider.assembleSessionEnv()
+  // Note: App provider ignores gitUser and uses valet[bot] identity
+  const sessionEnv = await selectedProvider.assembleSessionEnv(freshCredential, {
     repoUrl: opts.repoUrl,
     branch: opts.branch,
     ref: opts.ref,
     gitUser,
   });
 
-  // Also pass the provider ID so the runner knows which provider to use for token refresh
-  sessionEnv.envVars.REPO_PROVIDER_ID = provider.id;
+  sessionEnv.envVars.REPO_PROVIDER_ID = selectedProvider.id;
 
   return {
     envVars: sessionEnv.envVars,
