@@ -87,6 +87,8 @@ analyticsRouter.get('/events', async (c) => {
     durationMs: e.durationMs,
     channel: e.channel,
     model: e.model,
+    toolName: e.toolName,
+    errorCode: e.errorCode,
     summary: e.summary,
     createdAt: e.createdAt,
     properties: e.properties ? (() => { try { return JSON.parse(e.properties!) as Record<string, unknown>; } catch { return null; } })() : null,

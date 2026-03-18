@@ -1045,6 +1045,8 @@ export interface AnalyticsEventsResponse {
     durationMs: number | null;
     channel: string | null;
     model: string | null;
+    toolName: string | null;
+    errorCode: string | null;
     summary: string | null;
     properties: Record<string, unknown> | null;
     createdAt: string;

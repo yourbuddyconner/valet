@@ -2055,6 +2055,9 @@ export class SessionAgentDO {
       status: 'idle',
     });
 
+    // Clear promptReceivedAt so stale timestamps don't inflate turn_complete durations
+    this.setStateValue('promptReceivedAt', '');
+
     this.emitAuditEvent('user.abort', `User aborted agent${channelType ? ` (channel: ${channelType}:${channelId})` : ''}`);
   }
 
@@ -3409,7 +3412,8 @@ export class SessionAgentDO {
       case 'analytics:emit': {
         const events = (msg as any).events;
         if (Array.isArray(events)) {
-          for (const event of events) {
+          const capped = events.slice(0, 100);
+          for (const event of capped) {
             if (event.eventType && typeof event.eventType === 'string') {
               this.emitEvent(event.eventType, {
                 durationMs: typeof event.durationMs === 'number' ? event.durationMs : undefined,

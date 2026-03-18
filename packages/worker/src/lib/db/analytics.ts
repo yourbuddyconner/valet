@@ -379,8 +379,8 @@ export async function getPercentiles(
   const count = countRow?.cnt ?? 0;
   if (count === 0) return { p50: null, p95: null, count: 0 };
 
-  const p50Offset = Math.floor(count * 0.5);
-  const p95Offset = Math.floor(count * 0.95);
+  const p50Offset = Math.floor((count - 1) * 0.5);
+  const p95Offset = Math.floor((count - 1) * 0.95);
 
   const [p50Row, p95Row] = await Promise.all([
     db.prepare(`
@@ -439,8 +439,8 @@ export async function getPerfTrend(
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([date, durations]) => ({
       date,
-      p50: durations[Math.floor(durations.length * 0.5)] ?? null,
-      p95: durations[Math.floor(durations.length * 0.95)] ?? null,
+      p50: durations[Math.floor((durations.length - 1) * 0.5)] ?? null,
+      p95: durations[Math.floor((durations.length - 1) * 0.95)] ?? null,
       count: durations.length,
     }));
 }
@@ -479,8 +479,8 @@ export async function getStageBreakdown(
     .sort(([, a], [, b]) => b.length - a.length)
     .map(([eventType, durations]) => ({
       eventType,
-      p50: durations[Math.floor(durations.length * 0.5)] ?? null,
-      p95: durations[Math.floor(durations.length * 0.95)] ?? null,
+      p50: durations[Math.floor((durations.length - 1) * 0.5)] ?? null,
+      p95: durations[Math.floor((durations.length - 1) * 0.95)] ?? null,
       count: durations.length,
     }));
 }
@@ -636,8 +636,8 @@ export async function getSlowPaths(
     .slice(0, 20)
     .map(([dim, durations]) => ({
       dimension: dim,
-      p50: durations[Math.floor(durations.length * 0.5)] ?? null,
-      p95: durations[Math.floor(durations.length * 0.95)] ?? null,
+      p50: durations[Math.floor((durations.length - 1) * 0.5)] ?? null,
+      p95: durations[Math.floor((durations.length - 1) * 0.95)] ?? null,
       count: durations.length,
     }));
 }

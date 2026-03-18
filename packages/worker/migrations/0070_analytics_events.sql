@@ -30,31 +30,35 @@ CREATE INDEX IF NOT EXISTS idx_analytics_events_user_type_created
 CREATE INDEX IF NOT EXISTS idx_analytics_events_model_created
   ON analytics_events(model, created_at);
 
--- Migrate usage_events → analytics_events as 'llm_call' events
-INSERT INTO analytics_events (id, event_type, session_id, turn_id, model, input_tokens, output_tokens, created_at, properties)
+-- Migrate usage_events → analytics_events as 'llm_call' events (backfill user_id from sessions)
+INSERT INTO analytics_events (id, event_type, session_id, user_id, turn_id, model, input_tokens, output_tokens, created_at, properties)
 SELECT
-  id,
+  ue.id,
   'llm_call',
-  session_id,
-  turn_id,
-  model,
-  input_tokens,
-  output_tokens,
-  created_at,
-  json_object('oc_message_id', oc_message_id)
-FROM usage_events;
+  ue.session_id,
+  s.user_id,
+  ue.turn_id,
+  ue.model,
+  ue.input_tokens,
+  ue.output_tokens,
+  ue.created_at,
+  json_object('oc_message_id', ue.oc_message_id)
+FROM usage_events ue
+LEFT JOIN sessions s ON s.id = ue.session_id;
 
--- Migrate session_audit_log → analytics_events
-INSERT INTO analytics_events (id, event_type, session_id, summary, actor_id, properties, created_at)
+-- Migrate session_audit_log → analytics_events (backfill user_id from sessions)
+INSERT INTO analytics_events (id, event_type, session_id, user_id, summary, actor_id, properties, created_at)
 SELECT
-  id,
-  event_type,
-  session_id,
-  summary,
-  actor_id,
-  metadata,
-  created_at
-FROM session_audit_log;
+  sal.id,
+  sal.event_type,
+  sal.session_id,
+  s.user_id,
+  sal.summary,
+  sal.actor_id,
+  sal.metadata,
+  sal.created_at
+FROM session_audit_log sal
+LEFT JOIN sessions s ON s.id = sal.session_id;
 
 -- Drop old tables
 DROP TABLE IF EXISTS usage_events;

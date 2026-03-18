@@ -233,12 +233,20 @@ const scheduled: ExportedHandlerScheduledHandler<Env> = async (event, env, ctx) 
       console.error('Journal prune error:', error);
     }
 
-    // Delete analytics events older than 90 days
+    // Delete analytics events older than 90 days (batched to avoid D1 timeout)
     try {
       const cutoff = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString();
-      const result = await env.DB.prepare('DELETE FROM analytics_events WHERE created_at < ?').bind(cutoff).run();
-      if (result.meta.changes > 0) {
-        console.log(`Analytics retention: deleted ${result.meta.changes} events older than 90 days`);
+      let totalDeleted = 0;
+      let deleted: number;
+      do {
+        const result = await env.DB.prepare(
+          'DELETE FROM analytics_events WHERE id IN (SELECT id FROM analytics_events WHERE created_at < ? LIMIT 1000)'
+        ).bind(cutoff).run();
+        deleted = result.meta.changes ?? 0;
+        totalDeleted += deleted;
+      } while (deleted >= 1000);
+      if (totalDeleted > 0) {
+        console.log(`Analytics retention: deleted ${totalDeleted} events older than 90 days`);
       }
     } catch (error) {
       console.error('Analytics retention error:', error);
