@@ -9407,42 +9407,53 @@ export class SessionAgentDO {
       if (!sessionId || !userId) return;
 
       const targets: Array<{ channelType: string; channelId: string }> = [];
+      const seen = new Set<string>();
 
+      // 1. Origin target: the channel stored in the approval context at creation time
+      //    (set from activeChannel when the approval was created)
       const originTarget = this.getPromptOriginTarget(prompt.context);
       if (originTarget && originTarget.channelType !== 'web') {
+        const key = `${originTarget.channelType}:${originTarget.channelId}`;
+        seen.add(key);
         targets.push(originTarget);
-      } else {
-        // Collect channel targets to dispatch the prompt to.
-        // Start with D1 bindings (user-level first, then session-scoped fallback).
-        let bindings = await listUserChannelBindings(this.appDb, userId);
-        if (bindings.length === 0) {
-          bindings = await getSessionChannelBindings(this.appDb, sessionId);
-        }
+      }
 
-        // Build deduplicated set of non-web channel targets
-        const seen = new Set<string>();
-        for (const b of bindings) {
-          if (b.channelType === 'web') continue;
-          const key = `${b.channelType}:${b.channelId}`;
-          if (seen.has(key)) continue;
+      // 2. Caller target: the currently active channel (may differ from origin
+      //    if a different Slack thread is subscribed to the same orchestrator thread)
+      const callerTarget = this.activeChannel;
+      if (callerTarget && callerTarget.channelType !== 'web') {
+        const key = `${callerTarget.channelType}:${callerTarget.channelId}`;
+        if (!seen.has(key)) {
           seen.add(key);
-          targets.push({ channelType: b.channelType, channelId: b.channelId });
-        }
-
-        // Also include the active channel (the channel that triggered this prompt).
-        // Orchestrator sessions often lack D1 bindings for Slack because messages are
-        // dispatched directly to the DO — the active channel fills that gap.
-        const active = this.activeChannel;
-        if (active && active.channelType !== 'web') {
-          const key = `${active.channelType}:${active.channelId}`;
-          if (!seen.has(key)) {
-            seen.add(key);
-            targets.push({ channelType: active.channelType, channelId: active.channelId });
-          }
+          targets.push(callerTarget);
         }
       }
 
-      if (targets.length === 0) return;
+      // Fail closed: if we have no non-web channel targets, check whether this
+      // session even has external channel bindings. If it does, something went
+      // wrong with channel context propagation — log loudly and surface an error
+      // to the web UI. If it doesn't (pure web-only session), this is expected
+      // and we return silently — the approval is already visible in the web UI
+      // via broadcastToClients (called before this method).
+      if (targets.length === 0) {
+        const hasExternalBindings = (await listUserChannelBindings(this.appDb, userId))
+          .some(b => b.channelType !== 'web');
+        if (hasExternalBindings) {
+          console.error(
+            `[SessionAgentDO] sendChannelInteractivePrompts: No origin or caller channel for prompt ${promptId} — refusing to broadcast. ` +
+            `Session has external channel bindings but no channel context was propagated. ` +
+            `Approval is visible in web UI only. sessionId=${sessionId} userId=${userId}`
+          );
+          this.broadcastToClients({
+            type: 'error',
+            data: {
+              message: 'Approval could not be delivered to Slack: no origin channel context. Please approve via the web dashboard.',
+              promptId,
+            },
+          });
+        }
+        return;
+      }
 
       const refs: Array<{ channelType: string; ref: InteractivePromptRef }> = [];
 
