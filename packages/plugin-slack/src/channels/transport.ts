@@ -80,7 +80,19 @@ async function downloadSlackFile(
     });
     if (!resp.ok) return null;
 
+    // Guard against unexpectedly large responses (e.g. thumbnails with no size check)
+    const contentLength = resp.headers.get('Content-Length');
+    if (contentLength && parseInt(contentLength, 10) > MAX_FILE_DOWNLOAD_BYTES) {
+      console.warn(`[SlackTransport] Skipping download: Content-Length ${contentLength} exceeds limit`);
+      return null;
+    }
+
     const buffer = await resp.arrayBuffer();
+    if (buffer.byteLength > MAX_FILE_DOWNLOAD_BYTES) {
+      console.warn(`[SlackTransport] Skipping download: response body ${buffer.byteLength} bytes exceeds limit`);
+      return null;
+    }
+
     const bytes = new Uint8Array(buffer);
     let binary = '';
     for (let i = 0; i < bytes.length; i++) {

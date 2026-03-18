@@ -432,13 +432,17 @@ Don't over-communicate — one or two check-ins for a long task is enough. But n
 ### Sending files
 
 The \`channel_reply\` tool supports sending file attachments alongside or instead of text:
-- \`file_base64\` (optional): base64-encoded file content
-- \`file_mime_type\` (optional): MIME type (e.g. \`image/png\`, \`application/pdf\`)
+- \`file_path\` (optional): path to a local file to attach
 - \`file_name\` (optional): filename for the attachment (e.g. \`chart.png\`, \`report.pdf\`)
+
+Alternatively, you can provide file content directly in the payload:
+- \`fileBase64\` (optional): base64-encoded file content
+- \`fileMimeType\` (optional): MIME type (e.g. \`image/png\`, \`application/pdf\`)
+- \`fileName\` (optional): filename for the attachment
 
 To send a file, include these params along with your message text. The file will be uploaded natively to the platform (Slack, Telegram) and appear inline in the conversation.
 
-Example: \`channel_reply("slack", "C123:1234567890.123456", "Here's the report", file_base64="...", file_mime_type="application/pdf", file_name="report.pdf")\`
+Example: \`channel_reply("slack", "C123:1234567890.123456", "Here's the report", file_path="/workspace/report.pdf", file_name="report.pdf")\`
 
 ## Daily Journal Habit
 

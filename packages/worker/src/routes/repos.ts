@@ -4,8 +4,7 @@ import { zValidator } from '@hono/zod-validator';
 import { ValidationError } from '@valet/shared';
 import type { RepoCredential } from '@valet/sdk/repos';
 import type { Env, Variables } from '../env.js';
-import { getCredential } from '../services/credentials.js';
-import { repoProviderRegistry } from '../repos/registry.js';
+import { repoProviderRegistry, stripProviderSuffix } from '../repos/registry.js';
 import * as credentialDb from '../lib/db/credentials.js';
 import * as db from '../lib/db.js';
 import { getDb } from '../lib/drizzle.js';
@@ -14,7 +13,9 @@ import { decryptStringPBKDF2 } from '../lib/crypto.js';
 export const reposRouter = new Hono<{ Bindings: Env; Variables: Variables }>();
 
 /**
- * Resolve a repo credential for the given provider, preferring org app_install.
+ * Resolve a repo credential for a specific provider type.
+ * Maps the provider ID to the expected credential type and looks it up directly,
+ * rather than using the global priority resolver.
  */
 async function resolveRepoCredentialForProvider(
   env: Env,
@@ -25,14 +26,29 @@ async function resolveRepoCredentialForProvider(
 
   // Credentials are stored under a shared provider name (e.g. 'github'),
   // not per-provider IDs like 'github-oauth' / 'github-app'.
-  const credentialProvider = providerId.replace(/-(?:oauth|app)$/, '');
-  const orgSettings = await db.getOrgSettings(appDb);
-  const resolved = await credentialDb.resolveRepoCredential(appDb, credentialProvider, orgSettings?.id, userId);
-  if (!resolved) {
-    throw new ValidationError(`No ${providerId} credentials found. Connect ${providerId} first.`);
+  const credentialProvider = stripProviderSuffix(providerId);
+
+  // Determine the credential type from the provider ID suffix
+  const isApp = providerId.endsWith('-app');
+  const credentialType = isApp ? 'app_install' : 'oauth2';
+
+  // For app providers, check org-level first, then user-level
+  let credRow: credentialDb.CredentialRow | null = null;
+  if (isApp) {
+    const orgSettings = await db.getOrgSettings(appDb);
+    if (orgSettings?.id) {
+      credRow = await credentialDb.getCredentialRow(appDb, 'org', orgSettings.id, credentialProvider, credentialType);
+    }
+    if (!credRow) {
+      credRow = await credentialDb.getCredentialRow(appDb, 'user', userId, credentialProvider, credentialType);
+    }
+  } else {
+    credRow = await credentialDb.getCredentialRow(appDb, 'user', userId, credentialProvider, credentialType);
   }
 
-  const credRow = resolved.credential;
+  if (!credRow) {
+    throw new ValidationError(`No ${providerId} credentials found. Connect ${providerId} first.`);
+  }
 
   let credData: Record<string, unknown>;
   try {
@@ -64,21 +80,28 @@ async function resolveRepoCredentialForProvider(
  * then org App installation, then user App installation.
  */
 async function getGitHubToken(env: Env, userId: string): Promise<string> {
-  // Try user OAuth first
-  const oauthResult = await getCredential(env, 'user', userId, 'github', { credentialType: 'oauth2' });
-  if (oauthResult.ok) {
-    return oauthResult.credential.accessToken;
-  }
-
-  // Fall back to App installation token via credential resolver
   const appDb = getDb(env.DB);
   const orgSettings = await db.getOrgSettings(appDb);
   const resolved = await credentialDb.resolveRepoCredential(appDb, 'github', orgSettings?.id, userId);
-  if (!resolved || resolved.credentialType !== 'app_install') {
+  if (!resolved) {
     throw new ValidationError('GitHub account not connected. Link your GitHub account or ask an org admin to install the GitHub App.');
   }
 
-  // Mint a fresh token from the App installation
+  // For OAuth tokens, return directly
+  if (resolved.credentialType === 'oauth2') {
+    let credData: Record<string, unknown>;
+    try {
+      const json = await decryptStringPBKDF2(resolved.credential.encryptedData, env.ENCRYPTION_KEY);
+      credData = JSON.parse(json);
+    } catch {
+      throw new ValidationError('Failed to decrypt GitHub credentials');
+    }
+    const token = (credData.access_token || credData.token) as string | undefined;
+    if (!token) throw new ValidationError('GitHub OAuth credential has no access token');
+    return token;
+  }
+
+  // For App installations, mint a fresh token
   const credRow = resolved.credential;
   let credData: Record<string, unknown>;
   try {
@@ -130,6 +153,7 @@ reposRouter.get('/', async (c) => {
   }
 
   const allRepos: Array<Record<string, unknown>> = [];
+  const seenFullNames = new Set<string>();
 
   for (const provider of providers) {
     if (!provider) continue;
@@ -139,6 +163,9 @@ reposRouter.get('/', async (c) => {
       const freshCredential: RepoCredential = { ...credential, accessToken: freshToken.accessToken };
       const result = await provider.listRepos(freshCredential, { page, search });
       for (const repo of result.repos) {
+        // Deduplicate repos by fullName across providers
+        if (seenFullNames.has(repo.fullName)) continue;
+        seenFullNames.add(repo.fullName);
         allRepos.push({
           id: repo.id ?? 0,
           name: repo.name ?? repo.fullName.split('/').pop() ?? '',
@@ -184,7 +211,7 @@ reposRouter.get('/validate', async (c) => {
   }
 
   // Use credential-driven resolution: find the best credential, then pick the matching provider
-  const credentialProvider = providers[0].id.replace(/-(?:oauth|app)$/, '');
+  const credentialProvider = stripProviderSuffix(providers[0].id);
   const appDb = getDb(c.env.DB);
   const orgSettings = await db.getOrgSettings(appDb);
   const resolved = await credentialDb.resolveRepoCredential(appDb, credentialProvider, orgSettings?.id, user.id);

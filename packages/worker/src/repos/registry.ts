@@ -30,6 +30,15 @@ class RepoProviderRegistry {
 
 export const repoProviderRegistry = new RepoProviderRegistry();
 
+/**
+ * Derive the shared credential provider name from a provider ID.
+ * e.g. 'github-oauth' → 'github', 'github-app' → 'github'
+ * TODO: Replace with an explicit `credentialProvider` field on RepoProvider interface.
+ */
+export function stripProviderSuffix(providerId: string): string {
+  return providerId.replace(/-(?:oauth|app)$/, '');
+}
+
 // Auto-register discovered repo providers
 for (const provider of installedRepoProviders) {
   repoProviderRegistry.register(provider);

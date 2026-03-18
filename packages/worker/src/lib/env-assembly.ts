@@ -5,7 +5,7 @@ import * as credentialDb from './db/credentials.js';
 import type { AppDb } from './drizzle.js';
 import { decryptString, decryptStringPBKDF2 } from './crypto.js';
 import { getCredential } from '../services/credentials.js';
-import { repoProviderRegistry } from '../repos/registry.js';
+import { repoProviderRegistry, stripProviderSuffix } from '../repos/registry.js';
 
 /**
  * Generate a 256-bit hex token for runner authentication.
@@ -167,8 +167,7 @@ export async function assembleRepoEnv(
   // 2. Resolve the credential (user-first priority)
   // Credentials are stored under a shared provider name (e.g. 'github'),
   // not per-provider IDs like 'github-oauth' / 'github-app'.
-  // Derive the credential provider name from the first matching provider's ID prefix.
-  const credentialProvider = providers[0].id.replace(/-(?:oauth|app)$/, '');
+  const credentialProvider = stripProviderSuffix(providers[0].id);
   const resolved = await credentialDb.resolveRepoCredential(appDb, credentialProvider, orgId, userId);
   if (!resolved) {
     return {

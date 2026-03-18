@@ -83,10 +83,19 @@ export async function deleteCredential(
   ownerType: string,
   ownerId: string,
   provider: string,
+  credentialType?: string,
 ): Promise<void> {
+  const conditions = [
+    eq(credentials.ownerType, ownerType),
+    eq(credentials.ownerId, ownerId),
+    eq(credentials.provider, provider),
+  ];
+  if (credentialType) {
+    conditions.push(eq(credentials.credentialType, credentialType));
+  }
   await db
     .delete(credentials)
-    .where(and(eq(credentials.ownerType, ownerType), eq(credentials.ownerId, ownerId), eq(credentials.provider, provider)));
+    .where(and(...conditions));
 }
 
 export async function deleteCredentialsByProvider(
