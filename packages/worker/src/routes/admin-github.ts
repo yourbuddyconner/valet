@@ -19,9 +19,14 @@ adminGitHubRouter.use('*', adminMiddleware);
  * GET /api/admin/github — Get current GitHub config (secrets redacted)
  */
 adminGitHubRouter.get('/', async (c) => {
-  const svc = await getServiceConfig<GitHubServiceConfig, GitHubServiceMetadata>(
-    c.get('db'), c.env.ENCRYPTION_KEY, 'github',
-  );
+  let svc: Awaited<ReturnType<typeof getServiceConfig<GitHubServiceConfig, GitHubServiceMetadata>>> = null;
+  try {
+    svc = await getServiceConfig<GitHubServiceConfig, GitHubServiceMetadata>(
+      c.get('db'), c.env.ENCRYPTION_KEY, 'github',
+    );
+  } catch {
+    // Table may not exist yet if migration hasn't been applied
+  }
 
   if (!svc) {
     // Check env var fallback

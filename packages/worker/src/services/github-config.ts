@@ -32,22 +32,26 @@ export interface GitHubConfig {
  * Resolve GitHub config from D1 first, fall back to env vars.
  */
 export async function getGitHubConfig(env: Env, db: AppDb): Promise<GitHubConfig | null> {
-  // Try D1 first
-  const svc = await getServiceConfig<GitHubServiceConfig, GitHubServiceMetadata>(
-    db, env.ENCRYPTION_KEY, 'github',
-  );
+  // Try D1 first (catch table-not-found if migration hasn't run yet)
+  try {
+    const svc = await getServiceConfig<GitHubServiceConfig, GitHubServiceMetadata>(
+      db, env.ENCRYPTION_KEY, 'github',
+    );
 
-  if (svc) {
-    return {
-      oauthClientId: svc.config.oauthClientId,
-      oauthClientSecret: svc.config.oauthClientSecret,
-      appId: svc.config.appId,
-      appPrivateKey: svc.config.appPrivateKey,
-      appSlug: svc.config.appSlug,
-      appWebhookSecret: svc.config.appWebhookSecret,
-      appInstallationId: svc.metadata.appInstallationId,
-      appAccessibleOwners: svc.metadata.accessibleOwners,
-    };
+    if (svc) {
+      return {
+        oauthClientId: svc.config.oauthClientId,
+        oauthClientSecret: svc.config.oauthClientSecret,
+        appId: svc.config.appId,
+        appPrivateKey: svc.config.appPrivateKey,
+        appSlug: svc.config.appSlug,
+        appWebhookSecret: svc.config.appWebhookSecret,
+        appInstallationId: svc.metadata.appInstallationId,
+        appAccessibleOwners: svc.metadata.accessibleOwners,
+      };
+    }
+  } catch {
+    // D1 table may not exist yet — fall through to env vars
   }
 
   // Fall back to env vars
@@ -67,5 +71,10 @@ export async function getGitHubConfig(env: Env, db: AppDb): Promise<GitHubConfig
  * Get just the GitHub metadata (accessible owners) without decrypting secrets.
  */
 export async function getGitHubMetadata(db: AppDb): Promise<GitHubServiceMetadata | null> {
-  return getServiceMetadata<GitHubServiceMetadata>(db, 'github');
+  try {
+    return await getServiceMetadata<GitHubServiceMetadata>(db, 'github');
+  } catch {
+    // Table may not exist yet if migration hasn't been applied
+    return null;
+  }
 }

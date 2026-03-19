@@ -62,19 +62,23 @@ export async function getOrgSlackInstall(
   encryptionKey: string,
   teamId: string,
 ): Promise<SlackInstallInfo | null> {
-  const result = await getServiceConfig<SlackServiceConfig, SlackServiceMetadata>(db, encryptionKey, 'slack');
-  if (result) {
-    if (result.metadata.teamId !== teamId) return null;
-    return {
-      teamId: result.metadata.teamId,
-      teamName: result.metadata.teamName || null,
-      botUserId: result.metadata.botUserId,
-      appId: result.metadata.appId || null,
-      botToken: result.config.botToken,
-      signingSecret: result.config.signingSecret || null,
-      configuredBy: result.configuredBy,
-      updatedAt: result.updatedAt,
-    };
+  try {
+    const result = await getServiceConfig<SlackServiceConfig, SlackServiceMetadata>(db, encryptionKey, 'slack');
+    if (result) {
+      if (result.metadata.teamId !== teamId) return null;
+      return {
+        teamId: result.metadata.teamId,
+        teamName: result.metadata.teamName || null,
+        botUserId: result.metadata.botUserId,
+        appId: result.metadata.appId || null,
+        botToken: result.config.botToken,
+        signingSecret: result.config.signingSecret || null,
+        configuredBy: result.configuredBy,
+        updatedAt: result.updatedAt,
+      };
+    }
+  } catch {
+    // Table may not exist yet — fall through to legacy table
   }
 
   // Legacy fallback: read from org_slack_installs, migrate to new table
@@ -117,18 +121,22 @@ export async function getOrgSlackInstallAny(
   db: AppDb,
   encryptionKey: string,
 ): Promise<SlackInstallInfo | null> {
-  const result = await getServiceConfig<SlackServiceConfig, SlackServiceMetadata>(db, encryptionKey, 'slack');
-  if (result) {
-    return {
-      teamId: result.metadata.teamId,
-      teamName: result.metadata.teamName || null,
-      botUserId: result.metadata.botUserId,
-      appId: result.metadata.appId || null,
-      botToken: result.config.botToken,
-      signingSecret: result.config.signingSecret || null,
-      configuredBy: result.configuredBy,
-      updatedAt: result.updatedAt,
-    };
+  try {
+    const result = await getServiceConfig<SlackServiceConfig, SlackServiceMetadata>(db, encryptionKey, 'slack');
+    if (result) {
+      return {
+        teamId: result.metadata.teamId,
+        teamName: result.metadata.teamName || null,
+        botUserId: result.metadata.botUserId,
+        appId: result.metadata.appId || null,
+        botToken: result.config.botToken,
+        signingSecret: result.config.signingSecret || null,
+        configuredBy: result.configuredBy,
+        updatedAt: result.updatedAt,
+      };
+    }
+  } catch {
+    // Table may not exist yet — fall through to legacy table
   }
 
   // Legacy fallback: read from org_slack_installs, migrate to new table
