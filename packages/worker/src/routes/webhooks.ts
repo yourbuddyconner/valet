@@ -2,6 +2,8 @@ import { Hono } from 'hono';
 import type { Env, Variables } from '../env.js';
 import { integrationRegistry } from '../integrations/registry.js';
 import * as webhookService from '../services/webhooks.js';
+import { getDb } from '../lib/drizzle.js';
+import { getGitHubConfig } from '../services/github-config.js';
 
 export const webhooksRouter = new Hono<{ Bindings: Env; Variables: Variables }>();
 
@@ -69,7 +71,8 @@ webhooksRouter.post('/github', async (c) => {
   const rawBody = await c.req.raw.clone().text();
 
   // Verify webhook signature via trigger source
-  const webhookSecret = c.env.GITHUB_WEBHOOK_SECRET;
+  const ghConfig = await getGitHubConfig(c.env, getDb(c.env.DB));
+  const webhookSecret = ghConfig?.appWebhookSecret;
   if (webhookSecret) {
     const triggers = integrationRegistry.getTriggers('github');
     if (triggers) {

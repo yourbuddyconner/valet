@@ -5,6 +5,7 @@ import { getDb } from '../lib/drizzle.js';
 import { storeCredential } from './credentials.js';
 import { hashPassword, verifyPassword } from '@valet/plugin-email-auth/identity';
 import { verifyGoogleIdToken } from '@valet/plugin-google-auth/identity';
+import { getGitHubConfig } from './github-config.js';
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -284,13 +285,20 @@ export async function handleGitHubCallback(
 ): Promise<OAuthCallbackResult> {
   const { storeCredential } = await import('../services/credentials.js');
 
+  // Resolve GitHub config from D1 or env vars
+  const appDb = getDb(env.DB);
+  const ghConfig = await getGitHubConfig(env, appDb);
+  if (!ghConfig) {
+    return { ok: false, error: 'github_not_configured' };
+  }
+
   // Exchange code for access token
   const tokenRes = await fetch('https://github.com/login/oauth/access_token', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
     body: JSON.stringify({
-      client_id: env.GITHUB_CLIENT_ID,
-      client_secret: env.GITHUB_CLIENT_SECRET,
+      client_id: ghConfig.oauthClientId,
+      client_secret: ghConfig.oauthClientSecret,
       code: params.code,
       redirect_uri: `${params.workerUrl}/auth/github/callback`,
     }),
@@ -364,7 +372,6 @@ export async function handleGitHubCallback(
 
   const githubId = String(profile.id);
 
-  const appDb = getDb(env.DB);
   // Find user by github_id, then by email, or create new
   let user = await db.findUserByGitHubId(appDb, githubId);
   let isNewUser = false;

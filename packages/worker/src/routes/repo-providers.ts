@@ -6,6 +6,7 @@ import { storeCredential } from '../services/credentials.js';
 import { getDb } from '../lib/drizzle.js';
 import * as credentialDb from '../lib/db/credentials.js';
 import * as db from '../lib/db.js';
+import { getGitHubConfig } from '../services/github-config.js';
 
 export const repoProviderRouter = new Hono<{ Bindings: Env; Variables: Variables }>();
 
@@ -25,8 +26,8 @@ repoProviderRouter.get('/', async (c) => {
 repoProviderRouter.get('/github-oauth/link', async (c) => {
   const user = c.get('user');
 
-  const clientId = c.env.GITHUB_CLIENT_ID;
-  if (!clientId) {
+  const ghConfig = await getGitHubConfig(c.env, c.get('db'));
+  if (!ghConfig) {
     return c.json({ error: 'GitHub OAuth not configured' }, 500);
   }
 
@@ -40,7 +41,7 @@ repoProviderRouter.get('/github-oauth/link', async (c) => {
   const redirectUri = `${frontendUrl.replace(/\/$/, '')}/auth/github/repo-callback`;
 
   const params = new URLSearchParams({
-    client_id: clientId,
+    client_id: ghConfig.oauthClientId,
     redirect_uri: redirectUri,
     scope: 'repo',
     state,
@@ -59,8 +60,8 @@ repoProviderRouter.get('/:provider/install', async (c) => {
     return c.json({ error: 'Only GitHub App installation is supported' }, 400);
   }
 
-  const appSlug = c.env.GITHUB_APP_SLUG;
-  if (!appSlug) {
+  const ghConfig = await getGitHubConfig(c.env, c.get('db'));
+  if (!ghConfig?.appSlug) {
     return c.json({ error: 'GitHub App not configured' }, 500);
   }
 
@@ -81,7 +82,7 @@ repoProviderRouter.get('/:provider/install', async (c) => {
     { sub: user.id, sid: level, orgId, iat: now, exp: now + 10 * 60 } as any,
     c.env.ENCRYPTION_KEY,
   );
-  const installUrl = `https://github.com/apps/${appSlug}/installations/new?state=${encodeURIComponent(state)}`;
+  const installUrl = `https://github.com/apps/${ghConfig.appSlug}/installations/new?state=${encodeURIComponent(state)}`;
 
   return c.json({ url: installUrl });
 });
@@ -142,12 +143,18 @@ repoProviderCallbackRouter.get('/github-oauth/callback', async (c) => {
   const userId = payload.sub as string;
 
   // Exchange code for token
+  const appDb = getDb(c.env.DB);
+  const ghConfig = await getGitHubConfig(c.env, appDb);
+  if (!ghConfig) {
+    return c.redirect(`${frontendUrl}/settings?tab=repositories&error=github_not_configured`);
+  }
+
   const tokenRes = await fetch('https://github.com/login/oauth/access_token', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
     body: JSON.stringify({
-      client_id: c.env.GITHUB_CLIENT_ID,
-      client_secret: c.env.GITHUB_CLIENT_SECRET,
+      client_id: ghConfig.oauthClientId,
+      client_secret: ghConfig.oauthClientSecret,
       code,
     }),
   });
@@ -197,8 +204,10 @@ repoProviderCallbackRouter.get('/:provider/install/callback', async (c) => {
   const ownerType = level === 'org' && orgId ? 'org' as const : 'user' as const;
   const ownerId = level === 'org' && orgId ? orgId : userId;
 
-  // Validate required env vars before storing
-  if (!c.env.GITHUB_APP_ID || !c.env.GITHUB_APP_PRIVATE_KEY) {
+  // Validate required GitHub App config before storing
+  const appDb = getDb(c.env.DB);
+  const ghConfig = await getGitHubConfig(c.env, appDb);
+  if (!ghConfig?.appId || !ghConfig?.appPrivateKey) {
     return c.redirect(`${frontendUrl}/settings?tab=repositories&error=app_not_configured`);
   }
 
@@ -208,8 +217,8 @@ repoProviderCallbackRouter.get('/:provider/install/callback', async (c) => {
   if (setupAction === 'install') {
     await storeCredential(c.env, ownerType, ownerId, providerId, {
       installation_id: installationId,
-      app_id: c.env.GITHUB_APP_ID,
-      private_key: c.env.GITHUB_APP_PRIVATE_KEY,
+      app_id: ghConfig.appId,
+      private_key: ghConfig.appPrivateKey,
     }, {
       credentialType: 'app_install',
       metadata,
