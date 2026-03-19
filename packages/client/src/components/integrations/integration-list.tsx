@@ -9,8 +9,10 @@ import {
   useVerifySlackLink,
   useUnlinkSlack,
 } from '@/api/slack';
+import { useGitHubStatus } from '@/api/github';
 import { usePlugins } from '@/api/plugins';
 import { IntegrationCard } from './integration-card';
+import { GitHubCard } from './github-card';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -34,17 +36,18 @@ export function IntegrationList() {
   const { data: credentials, isLoading: credentialsLoading } = useUserCredentials();
   const { data: telegramConfig, isLoading: telegramLoading } = useTelegramConfig();
   const { data: slackStatus, isLoading: slackLoading } = useSlackUserStatus();
+  const { data: githubStatus, isLoading: githubLoading } = useGitHubStatus();
   const { data: plugins } = usePlugins();
 
   const hasOnePassword = credentials?.some((c) => c.provider === '1password');
   const hasTelegram = !!telegramConfig;
   const hasSlackInstalled = slackStatus?.installed;
 
-  const isLoading = integrationsLoading || credentialsLoading || telegramLoading || slackLoading;
+  const isLoading = integrationsLoading || credentialsLoading || telegramLoading || slackLoading || githubLoading;
 
   // Build a unified list of items to render
   const allItems = React.useMemo(() => {
-    const items: { key: string; type: '1password' | 'telegram' | 'slack' | 'api' | 'auto'; service: string; status: 'active' | 'pending' | 'error' | 'disconnected'; integration?: Integration; icon?: string; description?: string }[] = [];
+    const items: { key: string; type: '1password' | 'telegram' | 'slack' | 'github' | 'api' | 'auto'; service: string; status: 'active' | 'pending' | 'error' | 'disconnected'; integration?: Integration; icon?: string; description?: string }[] = [];
 
     if (hasOnePassword) {
       items.push({ key: '1password', type: '1password', service: '1password', status: 'active' });
@@ -58,6 +61,15 @@ export function IntegrationList() {
         type: 'slack',
         service: 'slack',
         status: slackStatus?.linked ? 'active' : 'pending',
+      });
+    }
+    // Always show GitHub card if OAuth is configured
+    if (githubStatus?.oauthConfigured) {
+      items.push({
+        key: 'github',
+        type: 'github',
+        service: 'github',
+        status: githubStatus.personal.linked ? 'active' : 'pending',
       });
     }
     if (data?.integrations) {
@@ -86,7 +98,7 @@ export function IntegrationList() {
     }
 
     return items;
-  }, [hasOnePassword, hasTelegram, hasSlackInstalled, slackStatus?.linked, data?.integrations, plugins]);
+  }, [hasOnePassword, hasTelegram, hasSlackInstalled, slackStatus?.linked, githubStatus?.oauthConfigured, githubStatus?.personal.linked, data?.integrations, plugins]);
 
   const filteredItems = React.useMemo(() => {
     return allItems.filter((item) => {
@@ -164,6 +176,9 @@ export function IntegrationList() {
             }
             if (item.type === 'slack') {
               return <SlackCard key={item.key} />;
+            }
+            if (item.type === 'github') {
+              return <GitHubCard key={item.key} />;
             }
             if (item.type === 'auto') {
               return <AutoEnabledCard key={item.key} service={item.service} icon={item.icon} description={item.description} />;
