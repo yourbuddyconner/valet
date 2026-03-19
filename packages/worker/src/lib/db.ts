@@ -34,3 +34,4 @@ export * from './db/persona-tools.js';
 export * from './db/threads.js';
 export * from './db/channel-threads.js';
 export * from './db/mcp-tool-cache.js';
+export * from './db/service-configs.js';
