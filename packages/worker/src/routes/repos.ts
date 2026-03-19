@@ -82,7 +82,7 @@ async function resolveRepoCredentialForProvider(
 async function getGitHubToken(env: Env, userId: string): Promise<string> {
   const appDb = getDb(env.DB);
   const orgSettings = await db.getOrgSettings(appDb);
-  const resolved = await credentialDb.resolveRepoCredential(appDb, 'github', orgSettings?.id, userId);
+  const resolved = await credentialDb.resolveRepoCredential(appDb, 'github', undefined, orgSettings?.id, userId);
   if (!resolved) {
     throw new ValidationError('GitHub account not connected. Link your GitHub account or ask an org admin to install the GitHub App.');
   }
@@ -214,7 +214,10 @@ reposRouter.get('/validate', async (c) => {
   const credentialProvider = stripProviderSuffix(providers[0].id);
   const appDb = getDb(c.env.DB);
   const orgSettings = await db.getOrgSettings(appDb);
-  const resolved = await credentialDb.resolveRepoCredential(appDb, credentialProvider, orgSettings?.id, user.id);
+  // Extract owner from URL for repo-aware resolution
+  const urlMatch = url.match(/github\.com[/:]([^/]+)\//);
+  const repoOwner = urlMatch?.[1];
+  const resolved = await credentialDb.resolveRepoCredential(appDb, credentialProvider, repoOwner, orgSettings?.id, user.id);
   if (!resolved) {
     return c.json({ valid: false, error: `No ${credentialProvider} credentials found. Connect ${credentialProvider} first.` });
   }

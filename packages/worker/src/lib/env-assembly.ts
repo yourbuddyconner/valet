@@ -168,7 +168,9 @@ export async function assembleRepoEnv(
   // Credentials are stored under a shared provider name (e.g. 'github'),
   // not per-provider IDs like 'github-oauth' / 'github-app'.
   const credentialProvider = stripProviderSuffix(providers[0].id);
-  const resolved = await credentialDb.resolveRepoCredential(appDb, credentialProvider, orgId, userId);
+  const repoUrlMatch = opts.repoUrl.match(/github\.com[/:]([^/]+)\//);
+  const repoOwner = repoUrlMatch?.[1];
+  const resolved = await credentialDb.resolveRepoCredential(appDb, credentialProvider, repoOwner, orgId, userId);
   if (!resolved) {
     return {
       envVars,
