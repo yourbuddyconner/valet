@@ -226,10 +226,13 @@ githubMeCallbackRouter.get('/callback', async (c) => {
     }
   }
 
-  // Upsert identity link — delete old one if it exists, then create new
+  // Upsert identity link — delete any existing link for this GitHub account
+  // (handles both re-linking by same user and transferring from another user)
+  await db.deleteIdentityLinkByExternalId(appDb, 'github', githubId);
+
+  // Also delete any other GitHub link for this user (e.g., previously linked a different account)
   const existingLinks = await db.getUserIdentityLinks(appDb, userId);
   const existingGithubLink = existingLinks.find((l) => l.provider === 'github');
-
   if (existingGithubLink) {
     await db.deleteIdentityLink(appDb, existingGithubLink.id, userId);
   }

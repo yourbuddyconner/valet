@@ -76,6 +76,13 @@ export async function deleteIdentityLink(db: AppDb, id: string, userId: string):
   return (result.meta?.changes ?? 0) > 0;
 }
 
+export async function deleteIdentityLinkByExternalId(db: AppDb, provider: string, externalId: string): Promise<boolean> {
+  const result = await db
+    .delete(userIdentityLinks)
+    .where(and(eq(userIdentityLinks.provider, provider), eq(userIdentityLinks.externalId, externalId)));
+  return (result.meta?.changes ?? 0) > 0;
+}
+
 export async function resolveUserByExternalId(
   db: AppDb,
   provider: string,
