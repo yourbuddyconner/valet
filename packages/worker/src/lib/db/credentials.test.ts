@@ -1,7 +1,9 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { eq, and } from 'drizzle-orm';
 import { createTestDb } from '../../test-utils/db.js';
 import { credentials } from '../schema/credentials.js';
+import { orgServiceConfigs } from '../schema/service-configs.js';
+import { users } from '../schema/users.js';
 import { sql } from 'drizzle-orm';
 import { resolveRepoCredential } from './credentials.js';
 
@@ -234,6 +236,13 @@ describe('resolveRepoCredential', () => {
   beforeEach(() => {
     const testDb = createTestDb();
     db = testDb.db;
+
+    // Insert a user row for foreign key constraints on orgServiceConfigs
+    db.insert(users).values({
+      id: 'admin',
+      email: 'admin@test.com',
+      role: 'admin',
+    }).run();
   });
 
   it('returns user OAuth when available (highest priority)', async () => {
@@ -254,7 +263,7 @@ describe('resolveRepoCredential', () => {
       encryptedData: 'app-data',
     }).run();
 
-    const result = await resolveRepoCredential(db as any, 'github', 'org-1', 'user-1');
+    const result = await resolveRepoCredential(db as any, 'github', undefined, 'org-1', 'user-1');
 
     expect(result).not.toBeNull();
     expect(result!.credentialType).toBe('oauth2');
@@ -271,7 +280,7 @@ describe('resolveRepoCredential', () => {
       encryptedData: 'app-data',
     }).run();
 
-    const result = await resolveRepoCredential(db as any, 'github', 'org-1', 'user-1');
+    const result = await resolveRepoCredential(db as any, 'github', undefined, 'org-1', 'user-1');
 
     expect(result).not.toBeNull();
     expect(result!.credentialType).toBe('app_install');
@@ -288,7 +297,7 @@ describe('resolveRepoCredential', () => {
       encryptedData: 'user-app-data',
     }).run();
 
-    const result = await resolveRepoCredential(db as any, 'github', 'org-1', 'user-1');
+    const result = await resolveRepoCredential(db as any, 'github', undefined, 'org-1', 'user-1');
 
     expect(result).not.toBeNull();
     expect(result!.credentialType).toBe('app_install');
@@ -296,7 +305,7 @@ describe('resolveRepoCredential', () => {
   });
 
   it('returns null when no credentials exist', async () => {
-    const result = await resolveRepoCredential(db as any, 'github', 'org-1', 'user-1');
+    const result = await resolveRepoCredential(db as any, 'github', undefined, 'org-1', 'user-1');
     expect(result).toBeNull();
   });
 
@@ -319,7 +328,7 @@ describe('resolveRepoCredential', () => {
     }).run();
 
     // No orgId → should skip org lookup, find user app_install
-    const result = await resolveRepoCredential(db as any, 'github', undefined, 'user-1');
+    const result = await resolveRepoCredential(db as any, 'github', undefined, undefined, 'user-1');
 
     expect(result).not.toBeNull();
     expect(result!.credential.id).toBe('cred-user-app');
@@ -351,9 +360,140 @@ describe('resolveRepoCredential', () => {
       encryptedData: 'user-app-data',
     }).run();
 
-    const result = await resolveRepoCredential(db as any, 'github', 'org-1', 'user-1');
+    const result = await resolveRepoCredential(db as any, 'github', undefined, 'org-1', 'user-1');
 
     expect(result!.credentialType).toBe('oauth2');
     expect(result!.credential.id).toBe('cred-oauth');
+  });
+
+  it('uses org App when repoOwner matches org App accessibleOwners', async () => {
+    db.insert(credentials).values({
+      id: 'cred-org-app',
+      ownerType: 'org',
+      ownerId: 'org-1',
+      provider: 'github',
+      credentialType: 'app_install',
+      encryptedData: 'org-app-data',
+    }).run();
+
+    // Insert org service config with accessibleOwners metadata
+    db.insert(orgServiceConfigs).values({
+      service: 'github',
+      encryptedConfig: 'encrypted',
+      metadata: JSON.stringify({ accessibleOwners: ['my-org', 'other-org'] }),
+      configuredBy: 'admin',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    }).run();
+
+    const result = await resolveRepoCredential(db as any, 'github', 'my-org', 'org-1', 'user-1');
+
+    expect(result).not.toBeNull();
+    expect(result!.credentialType).toBe('app_install');
+    expect(result!.credential.id).toBe('cred-org-app');
+  });
+
+  it('returns null when repoOwner does not match any installation accessibleOwners', async () => {
+    db.insert(credentials).values({
+      id: 'cred-org-app',
+      ownerType: 'org',
+      ownerId: 'org-1',
+      provider: 'github',
+      credentialType: 'app_install',
+      encryptedData: 'org-app-data',
+    }).run();
+
+    db.insert(orgServiceConfigs).values({
+      service: 'github',
+      encryptedConfig: 'encrypted',
+      metadata: JSON.stringify({ accessibleOwners: ['other-org'] }),
+      configuredBy: 'admin',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    }).run();
+
+    db.insert(credentials).values({
+      id: 'cred-user-app',
+      ownerType: 'user',
+      ownerId: 'user-1',
+      provider: 'github',
+      credentialType: 'app_install',
+      encryptedData: 'user-app-data',
+      metadata: JSON.stringify({ accessibleOwners: ['user-personal-org'] }),
+    }).run();
+
+    const result = await resolveRepoCredential(db as any, 'github', 'unknown-org', 'org-1', 'user-1');
+
+    expect(result).toBeNull();
+  });
+
+  it('uses user App when repoOwner matches user App metadata accessibleOwners', async () => {
+    db.insert(credentials).values({
+      id: 'cred-user-app',
+      ownerType: 'user',
+      ownerId: 'user-1',
+      provider: 'github',
+      credentialType: 'app_install',
+      encryptedData: 'user-app-data',
+      metadata: JSON.stringify({ accessibleOwners: ['user-personal-org'] }),
+    }).run();
+
+    const result = await resolveRepoCredential(db as any, 'github', 'user-personal-org', undefined, 'user-1');
+
+    expect(result).not.toBeNull();
+    expect(result!.credentialType).toBe('app_install');
+    expect(result!.credential.id).toBe('cred-user-app');
+  });
+
+  it('OAuth token wins regardless of repoOwner', async () => {
+    db.insert(credentials).values({
+      id: 'cred-oauth',
+      ownerType: 'user',
+      ownerId: 'user-1',
+      provider: 'github',
+      credentialType: 'oauth2',
+      encryptedData: 'oauth-data',
+    }).run();
+
+    db.insert(credentials).values({
+      id: 'cred-org-app',
+      ownerType: 'org',
+      ownerId: 'org-1',
+      provider: 'github',
+      credentialType: 'app_install',
+      encryptedData: 'org-app-data',
+    }).run();
+
+    db.insert(orgServiceConfigs).values({
+      service: 'github',
+      encryptedConfig: 'encrypted',
+      metadata: JSON.stringify({ accessibleOwners: ['my-org'] }),
+      configuredBy: 'admin',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    }).run();
+
+    const result = await resolveRepoCredential(db as any, 'github', 'my-org', 'org-1', 'user-1');
+
+    expect(result!.credentialType).toBe('oauth2');
+    expect(result!.credential.id).toBe('cred-oauth');
+  });
+
+  it('falls back to old behavior when repoOwner is undefined', async () => {
+    db.insert(credentials).values({
+      id: 'cred-org-app',
+      ownerType: 'org',
+      ownerId: 'org-1',
+      provider: 'github',
+      credentialType: 'app_install',
+      encryptedData: 'org-app-data',
+    }).run();
+
+    // No service config needed — repoOwner is undefined, so old behavior applies
+    const result = await resolveRepoCredential(db as any, 'github', undefined, 'org-1', 'user-1');
+
+    expect(result).not.toBeNull();
+    expect(result!.credentialType).toBe('app_install');
+    expect(result!.credential.id).toBe('cred-org-app');
   });
 });
