@@ -9,6 +9,7 @@ import * as credentialDb from '../lib/db/credentials.js';
 import * as db from '../lib/db.js';
 import { getDb } from '../lib/drizzle.js';
 import { decryptStringPBKDF2 } from '../lib/crypto.js';
+import { getGitHubConfig } from '../services/github-config.js';
 
 export const reposRouter = new Hono<{ Bindings: Env; Variables: Variables }>();
 
@@ -114,6 +115,13 @@ async function getGitHubToken(env: Env, userId: string, repoOwner?: string): Pro
   const metadata: Record<string, string> = credRow.metadata ? JSON.parse(credRow.metadata) : {};
   for (const [k, v] of Object.entries(credData)) {
     if (typeof v === 'string') metadata[k] = v;
+  }
+
+  // Supplement with App secrets from service config if not already present
+  if (!metadata.appId && !metadata.app_id) {
+    const ghConfig = await getGitHubConfig(env, appDb);
+    if (ghConfig?.appId) metadata.appId = ghConfig.appId;
+    if (ghConfig?.appPrivateKey) metadata.privateKey = ghConfig.appPrivateKey;
   }
 
   const provider = repoProviderRegistry.get('github-app');

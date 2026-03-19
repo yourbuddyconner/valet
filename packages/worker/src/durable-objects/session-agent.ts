@@ -6,6 +6,7 @@ import { getCredential, type CredentialResult } from '../services/credentials.js
 import { resolveRepoCredential, type CredentialRow } from '../lib/db/credentials.js';
 import { decryptStringPBKDF2 } from '../lib/crypto.js';
 import { repoProviderRegistry } from '../repos/registry.js';
+import { getGitHubConfig } from '../services/github-config.js';
 import type { RepoCredential } from '@valet/sdk/repos';
 import { getSlackBotToken } from '../services/slack.js';
 import { listWorkflows, upsertWorkflow, getWorkflowByIdOrSlug, getWorkflowOwnerCheck, deleteWorkflowTriggers, deleteWorkflowById, updateWorkflow, getWorkflowById } from '../lib/db/workflows.js';
@@ -7437,12 +7438,20 @@ export class SessionAgentDO {
       return (credData.access_token || credData.token) as string | null;
     }
 
-    // For App installations, mint a fresh token
+    // For App installations, mint a fresh token.
+    // The credential row may not contain appId/privateKey — those live in org_service_configs.
     const metadata: Record<string, string> = resolved.credential.metadata
       ? JSON.parse(resolved.credential.metadata)
       : {};
     for (const [k, v] of Object.entries(credData)) {
       if (typeof v === 'string') metadata[k] = v;
+    }
+
+    // Supplement with App secrets from service config if not already present
+    if (!metadata.appId && !metadata.app_id) {
+      const ghConfig = await getGitHubConfig(this.env, this.appDb);
+      if (ghConfig?.appId) metadata.appId = ghConfig.appId;
+      if (ghConfig?.appPrivateKey) metadata.privateKey = ghConfig.appPrivateKey;
     }
 
     const provider = repoProviderRegistry.get('github-app');

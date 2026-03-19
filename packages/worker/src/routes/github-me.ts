@@ -2,8 +2,8 @@ import { Hono } from 'hono';
 import type { Env, Variables } from '../env.js';
 import { signJWT, verifyJWT } from '../lib/jwt.js';
 import { getGitHubConfig, getGitHubMetadata } from '../services/github-config.js';
-import { storeCredential, revokeCredential } from '../services/credentials.js';
-import { getCredentialRow } from '../lib/db/credentials.js';
+import { storeCredential } from '../services/credentials.js';
+import { getCredentialRow, deleteCredential } from '../lib/db/credentials.js';
 import * as db from '../lib/db.js';
 import { getDb } from '../lib/drizzle.js';
 
@@ -110,8 +110,8 @@ githubMeRouter.delete('/link', async (c) => {
     await db.deleteIdentityLink(appDb, githubLink.id, user.id);
   }
 
-  // Delete GitHub OAuth credential
-  await revokeCredential(c.env, 'user', user.id, 'github');
+  // Delete only the GitHub OAuth credential (preserve any app_install credential)
+  await deleteCredential(appDb, 'user', user.id, 'github', 'oauth2');
 
   // Clear githubId and githubUsername on user record
   await db.updateUserGitHub(appDb, user.id, {
