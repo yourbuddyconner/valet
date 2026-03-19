@@ -1,6 +1,7 @@
 import { sqliteTable, text, integer, index, uniqueIndex } from 'drizzle-orm/sqlite-core';
 import { sql } from 'drizzle-orm';
 import { users } from './users.js';
+import { sessionThreads } from './threads.js';
 
 export const sessions = sqliteTable('sessions', {
   id: text().primaryKey(),
@@ -41,7 +42,7 @@ export const messages = sqliteTable('messages', {
   content: text().notNull(),
   parts: text({ mode: 'json' }),
   toolCalls: text({ mode: 'json' }),
-  authorId: text().references(() => users.id),
+  authorId: text().references(() => users.id, { onDelete: 'set null' }),
   authorEmail: text(),
   authorName: text(),
   channelType: text(),
@@ -49,10 +50,13 @@ export const messages = sqliteTable('messages', {
   opencodeSessionId: text(),
   authorAvatarUrl: text(),
   messageFormat: text().notNull().default('v1'),
-  threadId: text(),
+  threadId: text().references(() => sessionThreads.id, { onDelete: 'set null' }),
   createdAt: text().default(sql`(datetime('now'))`),
 }, (table) => [
   index('idx_messages_session').on(table.sessionId),
+  index('idx_messages_thread').on(table.threadId),
+  index('idx_messages_session_role').on(table.sessionId, table.role),
+  index('idx_messages_created_at').on(table.createdAt),
 ]);
 
 export const screenshots = sqliteTable('screenshots', {
@@ -112,7 +116,7 @@ export const sessionParticipants = sqliteTable('session_participants', {
   sessionId: text().notNull().references(() => sessions.id, { onDelete: 'cascade' }),
   userId: text().notNull().references(() => users.id, { onDelete: 'cascade' }),
   role: text().notNull().default('collaborator'),
-  addedBy: text().references(() => users.id),
+  addedBy: text().references(() => users.id, { onDelete: 'set null' }),
   createdAt: text().default(sql`(datetime('now'))`),
 }, (table) => [
   uniqueIndex('idx_sp_unique').on(table.sessionId, table.userId),
@@ -125,7 +129,7 @@ export const sessionShareLinks = sqliteTable('session_share_links', {
   sessionId: text().notNull().references(() => sessions.id, { onDelete: 'cascade' }),
   token: text().notNull().unique(),
   role: text().notNull().default('collaborator'),
-  createdBy: text().notNull().references(() => users.id),
+  createdBy: text().references(() => users.id, { onDelete: 'set null' }),
   expiresAt: text(),
   maxUses: integer(),
   useCount: integer().default(0),

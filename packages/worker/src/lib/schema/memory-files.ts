@@ -1,11 +1,12 @@
 import { sqliteTable, text, real, integer, index, uniqueIndex } from 'drizzle-orm/sqlite-core';
 import { sql } from 'drizzle-orm';
+import { users } from './users.js';
 
 // Note: orchestrator_memory_files_fts is an FTS5 virtual table and cannot be represented in Drizzle schema.
 // FTS5 queries must use raw SQL via d1.prepare().
 export const orchestratorMemoryFiles = sqliteTable('orchestrator_memory_files', {
   id: text().primaryKey(),
-  userId: text('user_id').notNull(),
+  userId: text('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
   orgId: text('org_id').notNull().default('default'),
   path: text().notNull(),
   content: text().notNull(),

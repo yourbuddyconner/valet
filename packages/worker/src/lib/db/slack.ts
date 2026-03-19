@@ -40,7 +40,7 @@ export interface SlackInstallInfo {
   appId: string | null;
   botToken: string;
   signingSecret: string | null;
-  configuredBy: string;
+  configuredBy: string | null;
   createdAt?: string;
   updatedAt?: string;
 }

@@ -1,9 +1,10 @@
 import { sqliteTable, text, integer, uniqueIndex, index } from 'drizzle-orm/sqlite-core';
 import { sql } from 'drizzle-orm';
+import { agentPersonas } from './personas.js';
 
 export const personaTools = sqliteTable('persona_tools', {
   id: text().primaryKey(),
-  personaId: text().notNull(),
+  personaId: text().notNull().references(() => agentPersonas.id, { onDelete: 'cascade' }),
   service: text().notNull(),
   actionId: text(),
   enabled: integer().notNull().default(1),

@@ -6,7 +6,7 @@ export const orgServiceConfigs = sqliteTable('org_service_configs', {
   service: text().primaryKey(),
   encryptedConfig: text('encrypted_config').notNull(),
   metadata: text(),
-  configuredBy: text('configured_by').notNull().references(() => users.id),
+  configuredBy: text('configured_by').references(() => users.id, { onDelete: 'set null' }),
   createdAt: text('created_at').notNull().default(sql`(datetime('now'))`),
   updatedAt: text('updated_at').notNull().default(sql`(datetime('now'))`),
 });

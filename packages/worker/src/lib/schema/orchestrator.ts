@@ -1,9 +1,10 @@
 import { sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core';
 import { sql } from 'drizzle-orm';
+import { users } from './users.js';
 
 export const orchestratorIdentities = sqliteTable('orchestrator_identities', {
   id: text().primaryKey(),
-  userId: text(),
+  userId: text().references(() => users.id, { onDelete: 'cascade' }),
   orgId: text().notNull().default('default'),
   type: text().notNull().default('personal'),
   name: text().notNull().default('Agent'),

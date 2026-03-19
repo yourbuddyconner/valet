@@ -10,7 +10,7 @@ export const orgSlackInstalls = sqliteTable('org_slack_installs', {
   appId: text(),
   encryptedBotToken: text().notNull(),
   encryptedSigningSecret: text(),
-  installedBy: text().notNull().references(() => users.id),
+  installedBy: text().references(() => users.id, { onDelete: 'set null' }),
   createdAt: text().notNull().default(sql`(datetime('now'))`),
   updatedAt: text().notNull().default(sql`(datetime('now'))`),
 }, (table) => [
@@ -19,7 +19,7 @@ export const orgSlackInstalls = sqliteTable('org_slack_installs', {
 
 export const slackLinkVerifications = sqliteTable('slack_link_verifications', {
   id: text().primaryKey(),
-  userId: text().notNull().references(() => users.id),
+  userId: text().notNull().references(() => users.id, { onDelete: 'cascade' }),
   slackUserId: text().notNull(),
   slackDisplayName: text(),
   code: text().notNull(),

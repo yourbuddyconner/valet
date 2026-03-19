@@ -862,7 +862,7 @@ export async function redeemShareLink(
     .where(eq(sessionShareLinks.token, token));
 
   // Add user as participant
-  await addSessionParticipant(db, link.sessionId, userId, link.role, link.createdBy);
+  await addSessionParticipant(db, link.sessionId, userId, link.role, link.createdBy ?? undefined);
 
   return { sessionId: link.sessionId, role: link.role };
 }

@@ -1,5 +1,6 @@
 import { sqliteTable, text, integer, uniqueIndex, index } from 'drizzle-orm/sqlite-core';
 import { sql } from 'drizzle-orm';
+import { agentPersonas } from './personas.js';
 
 export const skills = sqliteTable('skills', {
   id: text().primaryKey(),
@@ -21,8 +22,8 @@ export const skills = sqliteTable('skills', {
 
 export const personaSkills = sqliteTable('persona_skills', {
   id: text().primaryKey(),
-  personaId: text().notNull(),
-  skillId: text().notNull(),
+  personaId: text().notNull().references(() => agentPersonas.id, { onDelete: 'cascade' }),
+  skillId: text().notNull().references(() => skills.id, { onDelete: 'cascade' }),
   sortOrder: integer().notNull().default(0),
   createdAt: text().notNull().default(sql`(datetime('now'))`),
 }, (table) => [
@@ -34,7 +35,7 @@ export const personaSkills = sqliteTable('persona_skills', {
 export const orgDefaultSkills = sqliteTable('org_default_skills', {
   id: text().primaryKey(),
   orgId: text().notNull(),
-  skillId: text().notNull(),
+  skillId: text().notNull().references(() => skills.id, { onDelete: 'cascade' }),
   createdAt: text().notNull().default(sql`(datetime('now'))`),
 }, (table) => [
   uniqueIndex('idx_org_default_skills_unique').on(table.orgId, table.skillId),

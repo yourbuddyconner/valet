@@ -282,7 +282,7 @@ export interface SessionShareLink {
   sessionId: string;
   token: string;
   role: SessionParticipantRole;
-  createdBy: string;
+  createdBy: string | null;
   expiresAt?: Date;
   maxUses?: number;
   useCount: number;
@@ -312,7 +312,7 @@ export interface OrgApiKey {
   isSet: boolean;
   models?: Array<{ id: string; name?: string }>;
   showAllModels: boolean;
-  setBy: string;
+  setBy: string | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -330,7 +330,7 @@ export interface Invite {
   code: string;
   email?: string;
   role: UserRole;
-  invitedBy: string;
+  invitedBy: string | null;
   acceptedAt?: Date;
   acceptedBy?: string;
   expiresAt: Date;
@@ -467,7 +467,7 @@ export interface CustomProvider {
   hasKey: boolean;
   models: CustomProviderModel[];
   showAllModels: boolean;
-  setBy: string;
+  setBy: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -674,7 +674,7 @@ export interface AgentPersona {
   defaultModel?: string;
   visibility: PersonaVisibility;
   isDefault: boolean;
-  createdBy: string;
+  createdBy: string | null;
   creatorName?: string;
   files?: AgentPersonaFile[];
   fileCount?: number;
@@ -926,7 +926,7 @@ export interface ActionPolicy {
   actionId?: string;
   riskLevel?: string;
   mode: ActionMode;
-  createdBy: string;
+  createdBy: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -935,7 +935,7 @@ export interface DisabledAction {
   id: string;
   service: string;
   actionId?: string | null;
-  disabledBy: string;
+  disabledBy: string | null;
   createdAt: string;
 }
 

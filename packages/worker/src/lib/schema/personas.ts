@@ -1,5 +1,6 @@
 import { sqliteTable, text, integer, uniqueIndex } from 'drizzle-orm/sqlite-core';
 import { sql } from 'drizzle-orm';
+import { users } from './users.js';
 
 export const agentPersonas = sqliteTable('agent_personas', {
   id: text().primaryKey(),
@@ -11,7 +12,7 @@ export const agentPersonas = sqliteTable('agent_personas', {
   visibility: text().notNull().default('shared'),
   isDefault: integer({ mode: 'boolean' }).notNull().default(false),
   defaultModel: text(),
-  createdBy: text().notNull(),
+  createdBy: text().references(() => users.id, { onDelete: 'set null' }),
   createdAt: text().notNull().default(sql`(datetime('now'))`),
   updatedAt: text().notNull().default(sql`(datetime('now'))`),
 }, (table) => [

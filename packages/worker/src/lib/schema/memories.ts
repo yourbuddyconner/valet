@@ -4,7 +4,7 @@ import { users } from './users.js';
 
 export const agentMemories = sqliteTable('agent_memories', {
   id: text().primaryKey(),
-  userId: text().notNull().references(() => users.id),
+  userId: text().notNull().references(() => users.id, { onDelete: 'cascade' }),
   sessionId: text(),
   workspace: text(),
   content: text().notNull(),

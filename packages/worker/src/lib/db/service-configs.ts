@@ -9,7 +9,7 @@ export async function getServiceConfig<TConfig = Record<string, unknown>, TMeta 
   db: AppDb,
   encryptionKey: string,
   service: string,
-): Promise<{ config: TConfig; metadata: TMeta; configuredBy: string; updatedAt: string } | null> {
+): Promise<{ config: TConfig; metadata: TMeta; configuredBy: string | null; updatedAt: string } | null> {
   const row = await db
     .select()
     .from(orgServiceConfigs)
@@ -30,7 +30,7 @@ export async function setServiceConfig<TConfig = Record<string, unknown>, TMeta 
   service: string,
   config: TConfig,
   metadata: TMeta,
-  configuredBy: string,
+  configuredBy: string | null,
 ): Promise<void> {
   const encrypted = await encryptString(JSON.stringify(config), encryptionKey);
   const metaJson = JSON.stringify(metadata);
