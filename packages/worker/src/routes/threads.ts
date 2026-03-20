@@ -85,7 +85,7 @@ threadsRouter.get('/:sessionId/threads/:threadId', async (c) => {
   // Fetch messages for this thread using raw D1 query
   const result = await c.env.DB
     .prepare(
-      'SELECT * FROM messages WHERE session_id = ? AND thread_id = ? ORDER BY created_at ASC'
+      'SELECT * FROM messages WHERE session_id = ? AND thread_id = ? ORDER BY created_at_epoch ASC, created_at ASC'
     )
     .bind(sessionId, threadId)
     .all();

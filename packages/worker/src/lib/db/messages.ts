@@ -32,7 +32,7 @@ export async function getSessionMessages(
     .select()
     .from(messages)
     .where(and(...conditions))
-    .orderBy(asc(messages.createdAt))
+    .orderBy(asc(messages.createdAtEpoch), asc(messages.createdAt))
     .limit(limit);
 
   return rows.map((row): Message => ({
@@ -70,6 +70,7 @@ export async function batchUpsertMessages(
     opencodeSessionId: string | null;
     messageFormat: string;
     threadId?: string | null;
+    createdAt?: number;
   }>,
 ): Promise<void> {
   if (msgs.length === 0) return;
@@ -77,7 +78,7 @@ export async function batchUpsertMessages(
   // db.batch() must use raw D1 — Drizzle doesn't wrap batch
   const stmts = msgs.map((msg) =>
     db.prepare(
-      'INSERT OR REPLACE INTO messages (id, session_id, role, content, parts, author_id, author_email, author_name, author_avatar_url, channel_type, channel_id, opencode_session_id, message_format, thread_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+      'INSERT OR REPLACE INTO messages (id, session_id, role, content, parts, author_id, author_email, author_name, author_avatar_url, channel_type, channel_id, opencode_session_id, message_format, thread_id, created_at_epoch) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
     ).bind(
       msg.id,
       sessionId,
@@ -93,6 +94,7 @@ export async function batchUpsertMessages(
       msg.opencodeSessionId,
       msg.messageFormat || 'v2',
       msg.threadId || null,
+      msg.createdAt || null,
     )
   );
 

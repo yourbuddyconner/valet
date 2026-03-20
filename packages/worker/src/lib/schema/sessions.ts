@@ -52,6 +52,7 @@ export const messages = sqliteTable('messages', {
   messageFormat: text().notNull().default('v1'),
   threadId: text().references(() => sessionThreads.id, { onDelete: 'set null' }),
   createdAt: text().default(sql`(datetime('now'))`),
+  createdAtEpoch: integer(),
 }, (table) => [
   index('idx_messages_session').on(table.sessionId),
   index('idx_messages_thread').on(table.threadId),
