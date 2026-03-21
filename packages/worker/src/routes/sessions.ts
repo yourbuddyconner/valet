@@ -241,8 +241,8 @@ sessionsRouter.post('/:id/messages', zValidator('json', sendMessageSchema), asyn
   const { id } = c.req.param();
   const body = c.req.valid('json');
 
-  const result = await sessionService.sendSessionMessage(c.env, id, user.id, user.email, body.content);
-  return c.json({ success: true, messageId: result.messageId });
+  await sessionService.sendSessionMessage(c.env, id, user.id, user.email, body.content);
+  return c.json({ success: true });
 });
 
 /**

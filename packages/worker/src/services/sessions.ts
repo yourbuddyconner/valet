@@ -559,7 +559,7 @@ export async function sendSessionMessage(
   userId: string,
   userEmail: string,
   content: string,
-): Promise<{ messageId: string }> {
+): Promise<{ success: true }> {
   const appDb = getDb(env.DB);
   const session = await db.assertSessionAccess(appDb, sessionId, userId, 'collaborator');
 
@@ -581,8 +581,7 @@ export async function sendSessionMessage(
     throw new Error(`Failed to deliver prompt: ${err}`);
   }
 
-  // Message ID is managed by the DO's MessageStore; return a tracking ID for the API response.
-  return { messageId: crypto.randomUUID() };
+  return { success: true };
 }
 
 // ─── Terminate Session ──────────────────────────────────────────────────────

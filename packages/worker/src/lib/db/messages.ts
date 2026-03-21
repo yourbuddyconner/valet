@@ -5,17 +5,6 @@ import type { AppDb } from '../drizzle.js';
 import { toDate } from '../drizzle.js';
 import { messages } from '../schema/index.js';
 
-export async function saveMessage(
-  db: D1Database,
-  data: { id: string; sessionId: string; role: string; content: string; toolCalls?: unknown[]; parts?: unknown; authorId?: string; authorEmail?: string; authorName?: string; authorAvatarUrl?: string; channelType?: string; channelId?: string; opencodeSessionId?: string; threadId?: string | null }
-): Promise<void> {
-  // INSERT OR IGNORE needs raw SQL — Drizzle doesn't support it for SQLite
-  await db
-    .prepare('INSERT OR IGNORE INTO messages (id, session_id, role, content, tool_calls, parts, author_id, author_email, author_name, author_avatar_url, channel_type, channel_id, opencode_session_id, thread_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
-    .bind(data.id, data.sessionId, data.role, data.content, data.toolCalls ? JSON.stringify(data.toolCalls) : null, data.parts ? JSON.stringify(data.parts) : null, data.authorId || null, data.authorEmail || null, data.authorName || null, data.authorAvatarUrl || null, data.channelType || null, data.channelId || null, data.opencodeSessionId || null, data.threadId || null)
-    .run();
-}
-
 export async function getSessionMessages(
   db: AppDb,
   sessionId: string,
@@ -75,10 +64,27 @@ export async function batchUpsertMessages(
 ): Promise<void> {
   if (msgs.length === 0) return;
 
-  // db.batch() must use raw D1 — Drizzle doesn't wrap batch
+  // db.batch() must use raw D1 — Drizzle doesn't wrap batch.
+  // Use ON CONFLICT ... DO UPDATE to preserve existing created_at and tool_calls
+  // columns (INSERT OR REPLACE deletes then re-inserts, destroying defaults).
   const stmts = msgs.map((msg) =>
     db.prepare(
-      'INSERT OR REPLACE INTO messages (id, session_id, role, content, parts, author_id, author_email, author_name, author_avatar_url, channel_type, channel_id, opencode_session_id, message_format, thread_id, created_at_epoch) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+      `INSERT INTO messages (id, session_id, role, content, parts, author_id, author_email, author_name, author_avatar_url, channel_type, channel_id, opencode_session_id, message_format, thread_id, created_at_epoch)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET
+         role = excluded.role,
+         content = excluded.content,
+         parts = excluded.parts,
+         author_id = excluded.author_id,
+         author_email = excluded.author_email,
+         author_name = excluded.author_name,
+         author_avatar_url = excluded.author_avatar_url,
+         channel_type = excluded.channel_type,
+         channel_id = excluded.channel_id,
+         opencode_session_id = excluded.opencode_session_id,
+         message_format = excluded.message_format,
+         thread_id = excluded.thread_id,
+         created_at_epoch = excluded.created_at_epoch`
     ).bind(
       msg.id,
       sessionId,
