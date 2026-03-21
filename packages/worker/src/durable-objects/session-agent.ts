@@ -2383,7 +2383,9 @@ export class SessionAgentDO {
       }
 
       case 'workflow-chat-message': {
-        const role = msg.role === 'assistant' || msg.role === 'system' ? msg.role : 'user';
+        const ALLOWED_ROLES = new Set(['user', 'assistant', 'system']);
+        const rawRole = typeof msg.role === 'string' ? msg.role : 'user';
+        const role = (ALLOWED_ROLES.has(rawRole) ? rawRole : 'user') as 'user' | 'assistant' | 'system';
         const content = (msg.content || '').trim();
         if (!content) break;
 
@@ -2401,7 +2403,7 @@ export class SessionAgentDO {
           : (partsObj && typeof partsObj.opencodeSessionId === 'string' ? partsObj.opencodeSessionId : null);
         this.messageStore.writeMessage({
           id: workflowMsgId,
-          role: role as 'user' | 'assistant' | 'system',
+          role,
           content,
           parts: partsJson,
           channelType: workflowChannelType,
@@ -7099,10 +7101,10 @@ export class SessionAgentDO {
     const after = url.searchParams.get('after');
     const sessionId = this.getStateValue('sessionId') || '';
 
-    const afterCreatedAt = after ? parseInt(after, 10) : undefined;
+    const afterCreatedAt = after != null ? parseInt(after, 10) : undefined;
     const rows = this.messageStore.getMessages({
       limit,
-      ...(afterCreatedAt ? { afterCreatedAt } : {}),
+      ...(afterCreatedAt !== undefined ? { afterCreatedAt } : {}),
     });
 
     const messages = rows.map((r) => ({
