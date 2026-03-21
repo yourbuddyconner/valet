@@ -6,7 +6,7 @@ export const integrations = sqliteTable('integrations', {
   id: text().primaryKey(),
   userId: text().notNull().references(() => users.id, { onDelete: 'cascade' }),
   service: text().notNull(),
-  config: text({ mode: 'json' }).notNull().$type<{ entities: string[]; filters?: Record<string, unknown> }>().default({}),
+  config: text({ mode: 'json' }).notNull().$type<{ entities: string[]; filters?: Record<string, unknown> }>().default({ entities: [] }),
   status: text().notNull().default('pending'),
   errorMessage: text(),
   lastSyncedAt: text(),
