@@ -31,6 +31,7 @@ import type { ChannelTarget, ChannelContext, InteractivePrompt, InteractiveActio
 import { validateWorkflowDefinition } from '../lib/workflow-definition.js';
 import { MessageStore } from './message-store.js';
 import { ChannelRouter } from './channel-router.js';
+import { PromptQueue } from './prompt-queue.js';
 import { resolveOrchestratorPersona } from '../services/persona.js';
 import { sendChannelReply } from '../services/channel-reply.js';
 
@@ -632,6 +633,7 @@ export class SessionAgentDO {
   // If the agent explicitly calls channel_reply for that channel, we mark it
   // handled so we don't double-send.
   private messageStore!: MessageStore;
+  private promptQueue!: PromptQueue;
 
   /** Debounce timer for flushing messages to D1 during active turns. */
   private d1FlushTimer: ReturnType<typeof setTimeout> | null = null;
@@ -658,8 +660,11 @@ export class SessionAgentDO {
       return { channelType: snapshot.channelType, channelId: snapshot.channelId };
     }
     // Hibernation recovery: check prompt_queue for processing row with channel metadata
-    const recovered = this.recoverPendingChannelReply();
-    return recovered ? { channelType: recovered.channelType, channelId: recovered.channelId } : null;
+    const recovered = this.promptQueue.getProcessingChannelContext();
+    if (recovered) {
+      console.log(`[SessionAgentDO] Recovered pendingChannelReply from prompt_queue: ${recovered.channelType}:${recovered.channelId}`);
+    }
+    return recovered;
   }
 
   private sameChannelTarget(
@@ -686,35 +691,8 @@ export class SessionAgentDO {
     this.ctx.blockConcurrencyWhile(async () => {
       this.ctx.storage.sql.exec(SCHEMA_SQL);
       this.messageStore = new MessageStore(this.ctx.storage.sql);
-
-      // Migrate existing DOs: add author_avatar_url columns if missing
-      try { this.ctx.storage.sql.exec('ALTER TABLE prompt_queue ADD COLUMN author_avatar_url TEXT'); } catch { /* already exists */ }
-      try { this.ctx.storage.sql.exec('ALTER TABLE prompt_queue ADD COLUMN attachments TEXT'); } catch { /* already exists */ }
-
-      // Migrate existing DOs: add channel metadata columns
-      try { this.ctx.storage.sql.exec('ALTER TABLE prompt_queue ADD COLUMN channel_type TEXT'); } catch { /* already exists */ }
-      try { this.ctx.storage.sql.exec('ALTER TABLE prompt_queue ADD COLUMN channel_id TEXT'); } catch { /* already exists */ }
-
-      // Migrate existing DOs: add per-channel session tracking columns
-      try { this.ctx.storage.sql.exec('ALTER TABLE prompt_queue ADD COLUMN channel_key TEXT'); } catch { /* already exists */ }
-
-      // Migrate existing DOs: add model column to prompt_queue
-      try { this.ctx.storage.sql.exec('ALTER TABLE prompt_queue ADD COLUMN model TEXT'); } catch { /* already exists */ }
-      try { this.ctx.storage.sql.exec("ALTER TABLE prompt_queue ADD COLUMN queue_type TEXT NOT NULL DEFAULT 'prompt'"); } catch { /* already exists */ }
-      try { this.ctx.storage.sql.exec('ALTER TABLE prompt_queue ADD COLUMN workflow_execution_id TEXT'); } catch { /* already exists */ }
-      try { this.ctx.storage.sql.exec('ALTER TABLE prompt_queue ADD COLUMN workflow_payload TEXT'); } catch { /* already exists */ }
-      this.ctx.storage.sql.exec("UPDATE prompt_queue SET queue_type = 'prompt' WHERE queue_type IS NULL OR queue_type = ''");
-
-      // Migrate: add thread_id column for thread-aware messaging
-      try { this.ctx.storage.sql.exec('ALTER TABLE prompt_queue ADD COLUMN thread_id TEXT'); } catch { /* already exists */ }
-
-      // Migrate: add continuation_context column for queued thread continuations
-      try { this.ctx.storage.sql.exec('ALTER TABLE prompt_queue ADD COLUMN continuation_context TEXT'); } catch { /* already exists */ }
-
-      // Migrate: add context_prefix + reply channel columns for thread context routing
-      try { this.ctx.storage.sql.exec('ALTER TABLE prompt_queue ADD COLUMN context_prefix TEXT'); } catch { /* already exists */ }
-      try { this.ctx.storage.sql.exec('ALTER TABLE prompt_queue ADD COLUMN reply_channel_type TEXT'); } catch { /* already exists */ }
-      try { this.ctx.storage.sql.exec('ALTER TABLE prompt_queue ADD COLUMN reply_channel_id TEXT'); } catch { /* already exists */ }
+      this.promptQueue = new PromptQueue(this.ctx.storage.sql);
+      this.promptQueue.runMigrations();
 
       this.initialized = true;
     });
@@ -809,9 +787,9 @@ export class SessionAgentDO {
       }
       case '/queue-mode': {
         const body = await request.json() as { queueMode: string; collectDebounceMs?: number };
-        this.setStateValue('queueMode', body.queueMode);
+        this.promptQueue.queueMode = body.queueMode;
         if (body.collectDebounceMs !== undefined) {
-          this.setStateValue('collectDebounceMs', String(body.collectDebounceMs));
+          this.promptQueue.collectDebounceMs = body.collectDebounceMs;
         }
         return Response.json({ success: true });
       }
@@ -833,8 +811,8 @@ export class SessionAgentDO {
         }
         // Route prompts through the selected queue mode. If none is provided,
         // fall back to the DO's configured default.
-        const effectiveMode = body.interrupt ? 'steer' : (body.queueMode || this.getStateValue('queueMode') || 'followup');
-        console.log(`[SessionAgentDO] /prompt HTTP: effectiveMode=${effectiveMode} runnerBusy=${this.getStateValue('runnerBusy')} runnerSockets=${this.ctx.getWebSockets('runner').length}`);
+        const effectiveMode = body.interrupt ? 'steer' : (body.queueMode || this.promptQueue.queueMode || 'followup');
+        console.log(`[SessionAgentDO] /prompt HTTP: effectiveMode=${effectiveMode} runnerBusy=${this.promptQueue.runnerBusy} runnerSockets=${this.ctx.getWebSockets('runner').length}`);
 
         const author = (body.authorId || body.authorEmail) ? {
           id: body.authorId || '',
@@ -853,7 +831,7 @@ export class SessionAgentDO {
             await this.handlePrompt(content, body.model, author, attachments, body.channelType, body.channelId, body.threadId, undefined, body.contextPrefix, body.replyTo);
             break;
         }
-        console.log(`[SessionAgentDO] /prompt HTTP: completed, runnerBusy=${this.getStateValue('runnerBusy')}`);
+        console.log(`[SessionAgentDO] /prompt HTTP: completed, runnerBusy=${this.promptQueue.runnerBusy}`);
         return Response.json({ success: true });
       }
       case '/system-message': {
@@ -1035,8 +1013,8 @@ export class SessionAgentDO {
       data: {
         sandboxRunning: !!sandboxId,
         runnerConnected: this.ctx.getWebSockets('runner').length > 0,
-        runnerBusy: this.getStateValue('runnerBusy') === 'true',
-        promptsQueued: this.getQueueLength(),
+        runnerBusy: this.promptQueue.runnerBusy,
+        promptsQueued: this.promptQueue.length,
         connectedClients: this.getClientSockets().length + 1,
         connectedUsers,
         availableModels,
@@ -1063,8 +1041,8 @@ export class SessionAgentDO {
         data: {
           sandboxRunning: !!sandboxId,
           runnerConnected: this.ctx.getWebSockets('runner').length > 0,
-          runnerBusy: this.getStateValue('runnerBusy') === 'true',
-          promptsQueued: this.getQueueLength(),
+          runnerBusy: this.promptQueue.runnerBusy,
+          promptsQueued: this.promptQueue.length,
           connectedClients: this.getClientSockets().length + 1,
           connectedUsers,
           availableModels,
@@ -1184,7 +1162,7 @@ export class SessionAgentDO {
     // Don't dispatch queued work immediately — the runner isn't ready yet.
     // It needs to start its event stream, discover models, and create OpenCode sessions.
     // The queue will be drained when the runner signals readiness via `agentStatus: idle`.
-    const queuedCount = this.getQueueLength();
+    const queuedCount = this.promptQueue.length;
     const hasInitialPrompt = !!this.getStateValue('initialPrompt');
     console.log(`[SessionAgentDO] Runner connected: deferring dispatch until runner ready (queued=${queuedCount}, hasInitialPrompt=${hasInitialPrompt})`);
 
@@ -1229,13 +1207,11 @@ export class SessionAgentDO {
     if (isRunner) {
       console.log(`[SessionAgentDO] Runner disconnected: code=${code} reason="${reason || 'unknown'}"`);
       // Revert any processing prompt back to queued so it can be retried
-      this.ctx.storage.sql.exec(
-        "UPDATE prompt_queue SET status = 'queued' WHERE status = 'processing'"
-      );
-      this.setStateValue('runnerBusy', 'false');
+      this.promptQueue.revertProcessingToQueued();
+      this.promptQueue.runnerBusy = false;
       this.setStateValue('runnerReady', 'false');
 
-      const queueLength = this.getQueueLength();
+      const queueLength = this.promptQueue.length;
       this.broadcastToClients({
         type: 'status',
         data: {
@@ -1305,14 +1281,7 @@ export class SessionAgentDO {
     const nowSecs = Math.floor(now / 1000);
 
     // ─── Collect Mode Flush Check (Phase D) ──────────────────────────
-    // Check both per-channel keys (collectFlushAt:{channelKey}) and legacy key (collectFlushAt)
-    const perChannelFlushRows = this.ctx.storage.sql
-      .exec("SELECT value FROM state WHERE key LIKE 'collectFlushAt:%' AND value != '' LIMIT 1")
-      .toArray();
-    const hasPerChannelFlush = perChannelFlushRows.length > 0 && parseInt(perChannelFlushRows[0].value as string) <= now;
-    const legacyCollectFlushAt = this.getStateValue('collectFlushAt');
-    const hasLegacyFlush = !!legacyCollectFlushAt && now >= parseInt(legacyCollectFlushAt);
-    if (hasPerChannelFlush || hasLegacyFlush) {
+    if (this.promptQueue.hasCollectFlushDue() || this.promptQueue.hasLegacyCollectFlushDue()) {
       await this.flushCollectBuffer();
     }
 
@@ -1334,24 +1303,20 @@ export class SessionAgentDO {
 
     // ─── Stuck-Processing Watchdog ─────────────────────────────────────
     const WATCHDOG_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
-    const lastDispatchStr = this.getStateValue('lastPromptDispatchedAt');
-    if (lastDispatchStr) {
-      const lastDispatch = parseInt(lastDispatchStr);
-      if (!isNaN(lastDispatch) && (now - lastDispatch) >= WATCHDOG_TIMEOUT_MS) {
-        const runnerBusyFlag = this.getStateValue('runnerBusy') === 'true';
-        const runnerSockets = this.ctx.getWebSockets('runner');
-        if (runnerBusyFlag && runnerSockets.length === 0) {
-          console.warn(`[SessionAgentDO] Watchdog: prompt stuck in processing for ${Math.round((now - lastDispatch) / 1000)}s with no runner — recovering`);
-          this.ctx.storage.sql.exec("UPDATE prompt_queue SET status = 'queued' WHERE status = 'processing'");
-          this.setStateValue('runnerBusy', 'false');
-          this.setStateValue('lastPromptDispatchedAt', '');
-          await this.flushPendingChannelReply();
-          this.broadcastToClients({
-            type: 'status',
-            data: { runnerBusy: false, watchdogRecovery: true },
-          });
-          this.emitAuditEvent('watchdog.recovery', `Reverted stuck processing prompt after ${Math.round((now - lastDispatch) / 1000)}s`);
-        }
+    if (this.promptQueue.isStuckProcessing(WATCHDOG_TIMEOUT_MS)) {
+      const runnerSockets = this.ctx.getWebSockets('runner');
+      if (this.promptQueue.runnerBusy && runnerSockets.length === 0) {
+        const elapsed = Math.round((now - this.promptQueue.lastPromptDispatchedAt) / 1000);
+        console.warn(`[SessionAgentDO] Watchdog: prompt stuck in processing for ${elapsed}s with no runner — recovering`);
+        this.promptQueue.revertProcessingToQueued();
+        this.promptQueue.runnerBusy = false;
+        this.promptQueue.clearDispatchTimers();
+        await this.flushPendingChannelReply();
+        this.broadcastToClients({
+          type: 'status',
+          data: { runnerBusy: false, watchdogRecovery: true },
+        });
+        this.emitAuditEvent('watchdog.recovery', `Reverted stuck processing prompt after ${elapsed}s`);
       }
     }
 
@@ -1360,22 +1325,19 @@ export class SessionAgentDO {
     // entries — e.g. an abort acknowledgment was lost. If queued items exist
     // and nothing is processing, force-drain the queue.
     {
-      const queuedCount = this.getQueueLength();
-      if (queuedCount > 0 && this.getStateValue('runnerBusy') === 'true') {
-        const processingCount = Number(
-          this.ctx.storage.sql.exec("SELECT COUNT(*) AS c FROM prompt_queue WHERE status = 'processing'").one().c
-        );
-        if (processingCount === 0) {
+      const queuedCount = this.promptQueue.length;
+      if (queuedCount > 0 && this.promptQueue.runnerBusy) {
+        if (this.promptQueue.processingCount === 0) {
           const runnerSockets = this.ctx.getWebSockets('runner');
           console.warn(`[SessionAgentDO] Watchdog: ${queuedCount} queued items with runnerBusy=true but 0 processing — recovering (runner=${runnerSockets.length > 0 ? 'connected' : 'disconnected'})`);
-          this.setStateValue('runnerBusy', 'false');
-          this.setStateValue('lastPromptDispatchedAt', '');
+          this.promptQueue.runnerBusy = false;
+          this.promptQueue.clearDispatchTimers();
           if (runnerSockets.length > 0) {
             await this.sendNextQueuedPrompt();
           }
           this.broadcastToClients({
             type: 'status',
-            data: { runnerBusy: this.getStateValue('runnerBusy') === 'true', watchdogRecovery: true },
+            data: { runnerBusy: this.promptQueue.runnerBusy, watchdogRecovery: true },
           });
           this.emitAuditEvent('watchdog.queue_recovery', `Recovered ${queuedCount} stuck queued items (0 processing)`);
         }
@@ -1383,19 +1345,17 @@ export class SessionAgentDO {
     }
 
     // ─── Error Safety-Net ────────────────────────────────────────────
-    const errorSafetyNetStr = this.getStateValue('errorSafetyNetAt');
-    if (errorSafetyNetStr) {
-      const errorSafetyNet = parseInt(errorSafetyNetStr);
-      if (!isNaN(errorSafetyNet) && now >= errorSafetyNet) {
-        const runnerBusyFlag2 = this.getStateValue('runnerBusy') === 'true';
-        if (runnerBusyFlag2) {
+    {
+      const errorSafetyNet = this.promptQueue.errorSafetyNetAt;
+      if (errorSafetyNet && now >= errorSafetyNet) {
+        if (this.promptQueue.runnerBusy) {
           console.warn('[SessionAgentDO] Error safety-net: forcing prompt complete after error timeout');
-          this.setStateValue('errorSafetyNetAt', '');
+          this.promptQueue.errorSafetyNetAt = 0;
           await this.flushPendingChannelReply();
           await this.handlePromptComplete();
           this.emitAuditEvent('error.safety_net', 'Forced prompt complete after error safety-net timeout');
         } else {
-          this.setStateValue('errorSafetyNetAt', '');
+          this.promptQueue.errorSafetyNetAt = 0;
         }
       }
     }
@@ -1407,8 +1367,8 @@ export class SessionAgentDO {
       if (!isNaN(parentIdleNotifyAt) && now >= parentIdleNotifyAt) {
         // Re-verify idle conditions before sending
         const idleStatus = this.getStateValue('status');
-        const idleRunnerBusy = this.getStateValue('runnerBusy') === 'true';
-        const idleQueued = this.getQueueLength();
+        const idleRunnerBusy = this.promptQueue.runnerBusy;
+        const idleQueued = this.promptQueue.length;
         const idleLast = this.getStateValue('lastParentIdleNotice');
         const idleSessionId = this.getStateValue('sessionId');
 
@@ -1634,7 +1594,7 @@ export class SessionAgentDO {
         const wsChannelId = (msg as any).channelId as string | undefined;
         const wsThreadId = msg.threadId;
         const wsContinuationContext = msg.continuationContext;
-        const wsQueueMode = (msg as any).queueMode || this.getStateValue('queueMode') || 'followup';
+        const wsQueueMode = (msg as any).queueMode || this.promptQueue.queueMode || 'followup';
         switch (wsQueueMode) {
           case 'steer':
             await this.handleInterruptPrompt(msg.content || '', msg.model, author, attachments, wsChannelType, wsChannelId, wsThreadId);
@@ -1829,7 +1789,7 @@ export class SessionAgentDO {
 
     // Track the current prompt author for PR attribution (Part 6)
     if (author?.id) {
-      this.setStateValue('currentPromptAuthorId', author.id);
+      this.promptQueue.currentPromptAuthorId = author.id;
     }
 
     // If hibernated, auto-trigger wake before processing
@@ -1897,13 +1857,13 @@ export class SessionAgentDO {
 
     // Check if runner is busy / ready
     const channelKey = this.channelKeyFrom(channelType, channelId);
-    const runnerBusy = this.getStateValue('runnerBusy') === 'true';
+    const runnerBusy = this.promptQueue.runnerBusy;
     const runnerSockets = this.ctx.getWebSockets('runner');
     const runnerConnected = runnerSockets.length > 0;
     const runnerReady = this.getStateValue('runnerReady') !== 'false';
     const status = this.getStateValue('status');
     const sandboxId = this.getStateValue('sandboxId');
-    const queuedCount = this.getQueueLength();
+    const queuedCount = this.promptQueue.length;
 
     // Resolve the effective reply target early so it can be persisted in prompt_queue.
     // Prefer explicit replyTo from the prompt envelope (set by plugin routes).
@@ -1922,22 +1882,21 @@ export class SessionAgentDO {
       // No runner connected or runner still initializing (OpenCode not healthy yet)
       // — queue the prompt with author info + channel metadata
       const reason = !runnerConnected ? 'no runner connected' : 'runner not ready';
-      this.ctx.storage.sql.exec(
-        "INSERT INTO prompt_queue (id, content, attachments, model, status, author_id, author_email, author_name, author_avatar_url, channel_type, channel_id, channel_key, thread_id, continuation_context, context_prefix, reply_channel_type, reply_channel_id) VALUES (?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        messageId, content, serializedQueuedAttachments, model || null,
-        author?.id || null, author?.email || null, author?.name || null, author?.avatarUrl || null,
-        channelType || null, channelId || null, channelKey, threadId || null, continuationContext || null,
-        contextPrefix || null, effectiveReplyTo?.channelType || null, effectiveReplyTo?.channelId || null
-      );
-      this.setStateValue('promptReceivedAt', String(Date.now()));
+      this.promptQueue.enqueue({
+        id: messageId, content, attachments: serializedQueuedAttachments, model,
+        authorId: author?.id, authorEmail: author?.email, authorName: author?.name, authorAvatarUrl: author?.avatarUrl,
+        channelType, channelId, channelKey, threadId, continuationContext, contextPrefix,
+        replyChannelType: effectiveReplyTo?.channelType, replyChannelId: effectiveReplyTo?.channelId,
+      });
+      this.promptQueue.stampPromptReceived();
       this.emitAuditEvent(
         'prompt.queued',
-        `Queued: ${reason} (status=${status || 'unknown'}, sandbox=${sandboxId ? 'yes' : 'no'}, queued=${this.getQueueLength()})`,
+        `Queued: ${reason} (status=${status || 'unknown'}, sandbox=${sandboxId ? 'yes' : 'no'}, queued=${this.promptQueue.length})`,
         author?.id
       );
       this.broadcastToClients({
         type: 'status',
-        data: { promptQueued: true, queuePosition: this.getQueueLength(), queueReason: 'waking' },
+        data: { promptQueued: true, queuePosition: this.promptQueue.length, queueReason: 'waking' },
       });
       return;
     }
@@ -1945,40 +1904,37 @@ export class SessionAgentDO {
     if (runnerBusy) {
       // Runner is processing another prompt — queue with author info + channel metadata
       console.log(`[SessionAgentDO] handlePrompt: QUEUING (runnerBusy=true) channel=${channelKey} messageId=${messageId}`);
-      this.ctx.storage.sql.exec(
-        "INSERT INTO prompt_queue (id, content, attachments, model, status, author_id, author_email, author_name, author_avatar_url, channel_type, channel_id, channel_key, thread_id, continuation_context, context_prefix, reply_channel_type, reply_channel_id) VALUES (?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        messageId, content, serializedQueuedAttachments, model || null,
-        author?.id || null, author?.email || null, author?.name || null, author?.avatarUrl || null,
-        channelType || null, channelId || null, channelKey, threadId || null, continuationContext || null,
-        contextPrefix || null, effectiveReplyTo?.channelType || null, effectiveReplyTo?.channelId || null
-      );
-      this.setStateValue('promptReceivedAt', String(Date.now()));
+      this.promptQueue.enqueue({
+        id: messageId, content, attachments: serializedQueuedAttachments, model,
+        authorId: author?.id, authorEmail: author?.email, authorName: author?.name, authorAvatarUrl: author?.avatarUrl,
+        channelType, channelId, channelKey, threadId, continuationContext, contextPrefix,
+        replyChannelType: effectiveReplyTo?.channelType, replyChannelId: effectiveReplyTo?.channelId,
+      });
+      this.promptQueue.stampPromptReceived();
       this.emitAuditEvent(
         'prompt.queued',
-        `Queued: runner busy (status=${status || 'unknown'}, sandbox=${sandboxId ? 'yes' : 'no'}, queued=${this.getQueueLength()})`,
+        `Queued: runner busy (status=${status || 'unknown'}, sandbox=${sandboxId ? 'yes' : 'no'}, queued=${this.promptQueue.length})`,
         author?.id
       );
       this.broadcastToClients({
         type: 'status',
-        data: { promptQueued: true, queuePosition: this.getQueueLength(), queueReason: 'busy' },
+        data: { promptQueued: true, queuePosition: this.promptQueue.length, queueReason: 'busy' },
       });
       return;
     }
 
     console.log(`[SessionAgentDO] handlePrompt: DISPATCHING DIRECTLY channel=${channelKey} messageId=${messageId}`);
-    this.setStateValue('promptReceivedAt', String(Date.now()));
+    this.promptQueue.stampPromptReceived();
     // Insert into prompt_queue as 'processing' so it can be recovered if the runner disconnects
-    this.ctx.storage.sql.exec(
-      "INSERT INTO prompt_queue (id, content, attachments, model, status, author_id, author_email, author_name, author_avatar_url, channel_type, channel_id, channel_key, thread_id, continuation_context, context_prefix, reply_channel_type, reply_channel_id) VALUES (?, ?, ?, ?, 'processing', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-      messageId, content, serializedQueuedAttachments, model || null,
-      author?.id || null, author?.email || null, author?.name || null, author?.avatarUrl || null,
-      channelType || null, channelId || null, channelKey, threadId || null, continuationContext || null,
-      contextPrefix || null, effectiveReplyTo?.channelType || null, effectiveReplyTo?.channelId || null
-    );
+    this.promptQueue.enqueue({
+      id: messageId, content, attachments: serializedQueuedAttachments, model, status: 'processing',
+      authorId: author?.id, authorEmail: author?.email, authorName: author?.name, authorAvatarUrl: author?.avatarUrl,
+      channelType, channelId, channelKey, threadId, continuationContext, contextPrefix,
+      replyChannelType: effectiveReplyTo?.channelType, replyChannelId: effectiveReplyTo?.channelId,
+    });
 
     // Forward directly to runner with author info + channel metadata
-    this.setStateValue('runnerBusy', 'true');
-    this.setStateValue('lastPromptDispatchedAt', String(Date.now()));
+    this.promptQueue.stampDispatched();
     this.setStateValue('lastParentIdleNotice', '');
     this.setStateValue('parentIdleNotifyAt', '');
     this.rescheduleIdleAlarm();
@@ -2033,8 +1989,8 @@ export class SessionAgentDO {
     });
     if (!dispatched) {
       // Runner disappeared between the check and send — revert to queued for recovery
-      this.ctx.storage.sql.exec("UPDATE prompt_queue SET status = 'queued' WHERE id = ?", messageId);
-      this.setStateValue('runnerBusy', 'false');
+      this.promptQueue.revertProcessingToQueued(messageId);
+      this.promptQueue.runnerBusy = false;
       this.channelRouter.clear();
       this.emitAuditEvent('prompt.dispatch_failed', `Dispatch failed, reverted to queue: ${messageId}`);
     }
@@ -2051,14 +2007,11 @@ export class SessionAgentDO {
     if (channelType && channelId) {
       // Channel-scoped abort — only clear this channel's queued prompts
       const channelKey = this.channelKeyFrom(channelType, channelId);
-      this.ctx.storage.sql.exec(
-        "DELETE FROM prompt_queue WHERE status = 'queued' AND channel_key = ?",
-        channelKey
-      );
+      this.promptQueue.clearQueued(channelKey);
       this.sendToRunner({ type: 'abort', channelType, channelId });
     } else {
       // Global abort — clear all queued prompts
-      this.ctx.storage.sql.exec("DELETE FROM prompt_queue WHERE status = 'queued'");
+      this.promptQueue.clearQueued();
       this.sendToRunner({ type: 'abort' });
     }
 
@@ -2069,7 +2022,7 @@ export class SessionAgentDO {
     });
 
     // Clear promptReceivedAt so stale timestamps don't inflate turn_complete durations
-    this.setStateValue('promptReceivedAt', '');
+    this.promptQueue.clearPromptReceived();
 
     this.emitAuditEvent('user.abort', `User aborted agent${channelType ? ` (channel: ${channelType}:${channelId})` : ''}`);
   }
@@ -2096,7 +2049,7 @@ export class SessionAgentDO {
     const abortChannelType = threadId ? 'thread' : channelType;
     const abortChannelId = threadId ? threadId : channelId;
 
-    const runnerBusy = this.getStateValue('runnerBusy') === 'true';
+    const runnerBusy = this.promptQueue.runnerBusy;
     if (runnerBusy) {
       // Abort current work (channel-scoped if channel info provided)
       await this.handleAbort(abortChannelType, abortChannelId);
@@ -2168,25 +2121,20 @@ export class SessionAgentDO {
 
     // Append to collect buffer (stored as JSON in state table, keyed by channel)
     const collectChannelKey = this.channelKeyFrom(channelType, channelId);
-    const bufferStateKey = `collectBuffer:${collectChannelKey}`;
-    const bufferRaw = this.getStateValue(bufferStateKey);
-    const buffer: Array<{ content: string; model?: string; author?: typeof author; attachments?: PromptAttachment[]; channelType?: string; channelId?: string; threadId?: string; contextPrefix?: string }> =
-      bufferRaw ? JSON.parse(bufferRaw) : [];
-    buffer.push({ content, model, author, attachments: normalizedAttachments.length > 0 ? normalizedAttachments : undefined, channelType, channelId, threadId, contextPrefix });
-    this.setStateValue(bufferStateKey, JSON.stringify(buffer));
-
-    // Set flush time (per-channel)
-    const debounceMs = parseInt(this.getStateValue('collectDebounceMs') || '3000');
-    const flushAt = Date.now() + debounceMs;
-    this.setStateValue(`collectFlushAt:${collectChannelKey}`, String(flushAt));
+    const bufferLength = this.promptQueue.appendToCollectBuffer(collectChannelKey, {
+      content, model, author,
+      attachments: normalizedAttachments.length > 0 ? normalizedAttachments : undefined,
+      channelType, channelId, threadId, contextPrefix,
+    });
 
     // Schedule alarm for collect flush (uses min of flush and existing idle alarm)
+    const flushAt = Date.now() + this.promptQueue.collectDebounceMs;
     this.rescheduleCollectAlarm(flushAt);
 
     // Broadcast collect status
     this.broadcastToClients({
       type: 'status',
-      data: { collectPending: true, collectCount: buffer.length },
+      data: { collectPending: true, collectCount: bufferLength },
     });
   }
 
@@ -2227,74 +2175,23 @@ export class SessionAgentDO {
   }
 
   private async flushCollectBuffer(): Promise<void> {
-    // Flush all per-channel collect buffers that are ready
-    const stateRows = this.ctx.storage.sql
-      .exec("SELECT key, value FROM state WHERE key LIKE 'collectFlushAt:%'")
-      .toArray();
+    const flushes = this.promptQueue.getReadyCollectFlushes();
 
-    const now = Date.now();
-    let flushed = false;
-
-    for (const row of stateRows) {
-      const key = row.key as string;
-      const flushAt = parseInt(row.value as string);
-      if (!flushAt || now < flushAt) continue;
-
-      const channelKey = key.replace('collectFlushAt:', '');
-      const bufferStateKey = `collectBuffer:${channelKey}`;
-      const bufferRaw = this.getStateValue(bufferStateKey);
-      if (!bufferRaw) {
-        this.setStateValue(key, '');
-        continue;
-      }
-
-      const buffer: Array<{ content: string; model?: string; author?: any; attachments?: PromptAttachment[]; channelType?: string; channelId?: string; threadId?: string; contextPrefix?: string }> = JSON.parse(bufferRaw);
-      if (buffer.length === 0) {
-        this.setStateValue(bufferStateKey, '');
-        this.setStateValue(key, '');
-        continue;
-      }
-
-      // Clear buffer and flush state for this channel
-      this.setStateValue(bufferStateKey, '');
-      this.setStateValue(key, '');
-
+    for (const { buffer } of flushes) {
       // Merge messages
       const mergedContent = buffer.map((b) => b.content).join('\n\n---\n\n');
       const lastEntry = buffer[buffer.length - 1];
       const allAttachments = buffer.flatMap((b) => b.attachments || []);
-      const channelType = lastEntry.channelType;
-      const channelId = lastEntry.channelId;
-      // Preserve threadId so the merged prompt maintains thread association
-      const threadId = lastEntry.threadId;
-      // Use the first entry's contextPrefix (thread history from initial invocation)
       const mergedContextPrefix = buffer.find((b) => b.contextPrefix)?.contextPrefix;
 
-      // Send merged prompt through normal flow with channel and thread info
-      await this.handlePrompt(mergedContent, lastEntry.model, lastEntry.author, allAttachments, channelType, channelId, threadId, undefined, mergedContextPrefix);
-      flushed = true;
+      await this.handlePrompt(
+        mergedContent, lastEntry.model, lastEntry.author as any, allAttachments as PromptAttachment[],
+        lastEntry.channelType, lastEntry.channelId, lastEntry.threadId,
+        undefined, mergedContextPrefix,
+      );
     }
 
-    // Also check legacy non-keyed buffer for backward compatibility
-    const legacyBufferRaw = this.getStateValue('collectBuffer');
-    if (legacyBufferRaw) {
-      const legacyFlushAt = this.getStateValue('collectFlushAt');
-      if (legacyFlushAt && now >= parseInt(legacyFlushAt)) {
-        const buffer: Array<{ content: string; model?: string; author?: any; attachments?: PromptAttachment[] }> = JSON.parse(legacyBufferRaw);
-        if (buffer.length > 0) {
-          this.setStateValue('collectBuffer', '');
-          this.setStateValue('collectFlushAt', '');
-          const mergedContent = buffer.map((b) => b.content).join('\n\n---\n\n');
-          const lastEntry = buffer[buffer.length - 1];
-          const allAttachments = buffer.flatMap((b) => b.attachments || []);
-          await this.handlePrompt(mergedContent, lastEntry.model, lastEntry.author, allAttachments);
-          flushed = true;
-        }
-      }
-    }
-
-    if (flushed) {
-      // Broadcast collect complete
+    if (flushes.length > 0) {
       this.broadcastToClients({
         type: 'status',
         data: { collectPending: false, collectCount: 0 },
@@ -2564,7 +2461,7 @@ export class SessionAgentDO {
 
         // Safety-net: if runner doesn't send 'complete' within 60s, force flush
         const ERROR_SAFETY_NET_MS = 60_000;
-        this.setStateValue('errorSafetyNetAt', String(Date.now() + ERROR_SAFETY_NET_MS));
+        this.promptQueue.errorSafetyNetAt = Date.now() + ERROR_SAFETY_NET_MS;
         this.rescheduleIdleAlarm();
 
         // Publish session.errored to EventBus
@@ -2589,12 +2486,7 @@ export class SessionAgentDO {
         // Resolve threadId: prefer Runner-provided value, fall back to the currently-processing prompt's threadId
         let resolvedThreadId = msg.threadId || undefined;
         if (!resolvedThreadId) {
-          const processingRow = this.ctx.storage.sql
-            .exec("SELECT thread_id FROM prompt_queue WHERE status = 'processing' ORDER BY created_at DESC LIMIT 1")
-            .toArray();
-          if (processingRow.length > 0 && processingRow[0].thread_id) {
-            resolvedThreadId = processingRow[0].thread_id as string;
-          }
+          resolvedThreadId = this.promptQueue.getProcessingThreadId() || undefined;
         }
         console.log(`[SessionAgentDO] V2 message.create: turnId=${turnId} threadId=${resolvedThreadId || 'none'}`);
         this.messageStore.createTurn(turnId, {
@@ -2701,7 +2593,7 @@ export class SessionAgentDO {
       case 'complete': {
         // Prompt finished — auto-reply to originating channel if needed
         const pendingSnapshot = this.channelRouter.pendingSnapshot;
-        console.log(`[SessionAgentDO] Complete received: pendingChannelReply=${pendingSnapshot ? `${pendingSnapshot.channelType}:${pendingSnapshot.channelId} handled=${pendingSnapshot.handled} resultContent=${pendingSnapshot.resultContent?.length ?? 0}chars` : 'null'} queueLength=${this.getQueueLength()} runnerBusy=${this.getStateValue('runnerBusy')}`);
+        console.log(`[SessionAgentDO] Complete received: pendingChannelReply=${pendingSnapshot ? `${pendingSnapshot.channelType}:${pendingSnapshot.channelId} handled=${pendingSnapshot.handled} resultContent=${pendingSnapshot.resultContent?.length ?? 0}chars` : 'null'} queueLength=${this.promptQueue.length} runnerBusy=${this.promptQueue.runnerBusy}`);
         await this.flushPendingChannelReply();
         // Check queue for next
         console.log(`[SessionAgentDO] Complete: flushed channel reply, now draining queue`);
@@ -2736,8 +2628,8 @@ export class SessionAgentDO {
             }
           }
 
-          const currentRunnerBusy = this.getStateValue('runnerBusy') === 'true';
-          const currentQueueLen = this.getQueueLength();
+          const currentRunnerBusy = this.promptQueue.runnerBusy;
+          const currentQueueLen = this.promptQueue.length;
           console.log(`[SessionAgentDO] agentStatus: idle (runnerBusy=${currentRunnerBusy}, runnerConnected=${this.ctx.getWebSockets('runner').length > 0}, queued=${currentQueueLen})`);
 
           // When runner is truly idle (not processing a prompt), check for deferred work.
@@ -2752,8 +2644,8 @@ export class SessionAgentDO {
             } catch (drainErr) {
               // Revert stuck processing items so the watchdog or next idle signal can retry
               console.error('[SessionAgentDO] agentStatus idle: queue drain failed, reverting processing→queued:', drainErr);
-              this.ctx.storage.sql.exec("UPDATE prompt_queue SET status = 'queued' WHERE status = 'processing'");
-              this.setStateValue('runnerBusy', 'false');
+              this.promptQueue.revertProcessingToQueued();
+              this.promptQueue.runnerBusy = false;
             }
           } else if (!currentRunnerBusy) {
             // Check for initial prompt (from create-from-PR/Issue) — only if no queued work
@@ -2775,10 +2667,7 @@ export class SessionAgentDO {
                   createdAt: Math.floor(Date.now() / 1000),
                 },
               });
-              this.ctx.storage.sql.exec(
-                "INSERT INTO prompt_queue (id, content, status) VALUES (?, ?, 'processing')",
-                messageId, initialPrompt
-              );
+              this.promptQueue.enqueue({ id: messageId, content: initialPrompt, status: 'processing' });
               const ipOwnerId = this.getStateValue('userId');
               const ipOwnerDetails = ipOwnerId ? await this.getUserDetails(ipOwnerId) : undefined;
               const ipModelPrefs = await this.resolveModelPreferences(ipOwnerDetails);
@@ -2794,8 +2683,7 @@ export class SessionAgentDO {
                 opencodeSessionId: this.getChannelOcSessionId(this.channelKeyFrom(undefined, undefined)),
                 modelPreferences: ipModelPrefs,
               });
-              this.setStateValue('runnerBusy', 'true');
-              this.setStateValue('lastPromptDispatchedAt', String(Date.now()));
+              this.promptQueue.stampDispatched();
               console.log(`[SessionAgentDO] agentStatus idle: dispatched initial prompt ${messageId}`);
             }
           }
@@ -2806,7 +2694,7 @@ export class SessionAgentDO {
           // The `complete` handler (handlePromptComplete) is the single source of truth.
           this.notifyParentIfIdle();
         } else if (msg.status === 'thinking' || msg.status === 'tool_calling' || msg.status === 'streaming') {
-          this.setStateValue('runnerBusy', 'true');
+          this.promptQueue.runnerBusy = true;
           this.setStateValue('lastParentIdleNotice', '');
           this.setStateValue('parentIdleNotifyAt', '');
         }
@@ -2878,7 +2766,7 @@ export class SessionAgentDO {
 
       case 'aborted':
         // Runner confirmed abort — mark idle, broadcast
-        this.setStateValue('runnerBusy', 'false');
+        this.promptQueue.runnerBusy = false;
         this.broadcastToClients({
           type: 'agentStatus',
           status: 'idle',
@@ -3395,13 +3283,7 @@ export class SessionAgentDO {
       const userId = this.getStateValue('userId')!;
 
       // Resolve the parent's active threadId so the child can route notifications back
-      let parentThreadId: string | undefined;
-      const spawnThreadRow = this.ctx.storage.sql
-        .exec("SELECT thread_id FROM prompt_queue WHERE status = 'processing' ORDER BY created_at DESC LIMIT 1")
-        .toArray();
-      if (spawnThreadRow.length > 0 && spawnThreadRow[0].thread_id) {
-        parentThreadId = spawnThreadRow[0].thread_id as string;
-      }
+      let parentThreadId: string | undefined = this.promptQueue.getProcessingThreadId() || undefined;
 
       const spawnRequestStr = this.getStateValue('spawnRequest');
       const backendUrl = this.getStateValue('backendUrl');
@@ -6169,42 +6051,28 @@ export class SessionAgentDO {
 
 
   private async handlePromptComplete() {
-    this.setStateValue('lastPromptDispatchedAt', '');
-    this.setStateValue('errorSafetyNetAt', '');
+    this.promptQueue.clearDispatchTimers();
 
     // Emit turn_complete timing — measure total time from prompt received to completion
-    const promptStart = parseInt(this.getStateValue('promptReceivedAt') || '0', 10);
+    const promptStart = this.promptQueue.promptReceivedAt;
     if (promptStart > 0) {
       // Read model from the processing prompt_queue entry before it's marked completed
-      const processingRow = this.ctx.storage.sql
-        .exec("SELECT model FROM prompt_queue WHERE status = 'processing' LIMIT 1")
-        .toArray()[0];
-      const turnModel = processingRow?.model ? String(processingRow.model) : undefined;
+      const turnModel = this.promptQueue.getProcessingModel() || undefined;
       this.emitEvent('turn_complete', {
         durationMs: Date.now() - promptStart,
         channel: this.activeChannel?.channelType || undefined,
         model: turnModel,
-        queueMode: this.getStateValue('queueMode') || undefined,
+        queueMode: this.promptQueue.queueMode || undefined,
       });
-      this.setStateValue('promptReceivedAt', '');
+      this.promptQueue.clearPromptReceived();
     }
 
     this.emitAuditEvent('agent.turn_complete', 'Agent turn completed');
 
-    // Mark any processing prompt_queue entries as completed
-    const processingCount = this.ctx.storage.sql
-      .exec("SELECT COUNT(*) AS count FROM prompt_queue WHERE status = 'processing'")
-      .toArray()[0]?.count ?? 0;
-    this.ctx.storage.sql.exec(
-      "UPDATE prompt_queue SET status = 'completed' WHERE status = 'processing'"
-    );
+    // Mark processing → completed, then prune
+    const processingCount = this.promptQueue.markCompleted();
 
-    // Prune old completed entries to prevent unbounded storage growth
-    this.ctx.storage.sql.exec(
-      "DELETE FROM prompt_queue WHERE status = 'completed'"
-    );
-
-    const queuedAfterPrune = this.getQueueLength();
+    const queuedAfterPrune = this.promptQueue.length;
     console.log(`[SessionAgentDO] handlePromptComplete: marked ${processingCount} processing→completed, queuedRemaining=${queuedAfterPrune}`);
 
     if (await this.sendNextQueuedPrompt()) {
@@ -6219,7 +6087,7 @@ export class SessionAgentDO {
 
     // Runner is now idle
     console.log(`[SessionAgentDO] handlePromptComplete: queue empty, setting runnerBusy=false`);
-    this.setStateValue('runnerBusy', 'false');
+    this.promptQueue.runnerBusy = false;
     this.broadcastToClients({
       type: 'status',
       data: { runnerBusy: false },
@@ -6258,7 +6126,7 @@ export class SessionAgentDO {
     // Clear old session data (messages, queue, audit log, followups) for a fresh start.
     // This is important for well-known DOs (orchestrators) that get reused.
     this.messageStore.reset();
-    this.ctx.storage.sql.exec('DELETE FROM prompt_queue');
+    this.promptQueue.clearAll();
     this.ctx.storage.sql.exec('DELETE FROM analytics_events');
     this.ctx.storage.sql.exec('DELETE FROM channel_followups');
 
@@ -6268,7 +6136,7 @@ export class SessionAgentDO {
     this.setStateValue('workspace', body.workspace);
     this.setStateValue('runnerToken', body.runnerToken);
     this.setStateValue('status', 'initializing');
-    this.setStateValue('runnerBusy', 'false');
+    this.promptQueue.runnerBusy = false;
 
     // Clear stale state from previous lifecycle
     this.setStateValue('sandboxId', '');
@@ -6316,8 +6184,8 @@ export class SessionAgentDO {
     }
 
     // Initialize queue mode (Phase D)
-    this.setStateValue('queueMode', (body as any).queueMode || 'followup');
-    this.setStateValue('collectDebounceMs', String((body as any).collectDebounceMs || 3000));
+    this.promptQueue.queueMode = (body as any).queueMode || 'followup';
+    this.promptQueue.collectDebounceMs = (body as any).collectDebounceMs || 3000;
 
     // Channel follow-up reminder interval (default: 5 minutes)
     if ((body as any).channelFollowupIntervalMs) {
@@ -6560,8 +6428,8 @@ export class SessionAgentDO {
     this.setStateValue('tunnelUrls', '');
     this.setStateValue('tunnels', '');
     this.setStateValue('snapshotImageId', '');
-    this.setStateValue('runnerBusy', 'false');
-    this.ctx.storage.sql.exec('DELETE FROM prompt_queue');
+    this.promptQueue.runnerBusy = false;
+    this.promptQueue.clearAll();
 
     // Sync status to D1
     if (sessionId) {
@@ -6613,13 +6481,13 @@ export class SessionAgentDO {
     const workspace = this.getStateValue('workspace');
     const tunnelUrls = this.getStateValue('tunnelUrls');
     const tunnelsRaw = this.getStateValue('tunnels');
-    const runnerBusy = this.getStateValue('runnerBusy') === 'true';
+    const runnerBusy = this.promptQueue.runnerBusy;
 
     const messageCount = this.ctx.storage.sql
       .exec('SELECT COUNT(*) as count FROM messages')
       .toArray()[0]?.count ?? 0;
 
-    const queueLength = this.getQueueLength();
+    const queueLength = this.promptQueue.length;
     const clientCount = this.getClientSockets().length;
     const runnerConnected = this.ctx.getWebSockets('runner').length > 0;
     const connectedUsers = this.getConnectedUserIds();
@@ -6685,8 +6553,8 @@ export class SessionAgentDO {
     if (!sessionId) return;
     const status = this.getStateValue('status');
     if (status !== 'running') return;
-    const runnerBusy = this.getStateValue('runnerBusy') === 'true';
-    const queued = this.getQueueLength();
+    const runnerBusy = this.promptQueue.runnerBusy;
+    const queued = this.promptQueue.length;
     if (runnerBusy || queued > 0) return;
 
     const last = this.getStateValue('lastParentIdleNotice');
@@ -6754,31 +6622,20 @@ export class SessionAgentDO {
       const status = this.getStateValue('status');
       if (status === 'hibernated') {
         // Queue the prompt so the runner picks it up after connecting.
-        // performWake() does NOT dequeue — upgradeRunner() does when the runner connects.
-        this.ctx.storage.sql.exec(
-          "INSERT INTO prompt_queue (id, content, status, thread_id) VALUES (?, ?, 'queued', ?)",
-          messageId, content, threadId || null
-        );
+        this.promptQueue.enqueue({ id: messageId, content, threadId });
         this.ctx.waitUntil(this.performWake());
       } else if (status === 'restoring') {
         // Wake already in progress — just queue the prompt for when the runner connects.
-        this.ctx.storage.sql.exec(
-          "INSERT INTO prompt_queue (id, content, status, thread_id) VALUES (?, ?, 'queued', ?)",
-          messageId, content, threadId || null
-        );
+        this.promptQueue.enqueue({ id: messageId, content, threadId });
       } else if (status === 'running') {
         // Dispatch the system event as a prompt so the runner wakes up and can
         // decide whether to act on it (e.g. child session idle/completed events).
-        const runnerBusy = this.getStateValue('runnerBusy') === 'true';
+        const runnerBusy = this.promptQueue.runnerBusy;
         const runnerSockets = this.ctx.getWebSockets('runner');
         if (runnerSockets.length > 0 && !runnerBusy) {
           // Runner is connected and idle — insert as 'processing' for recoverability, then dispatch
-          this.ctx.storage.sql.exec(
-            "INSERT INTO prompt_queue (id, content, status, thread_id) VALUES (?, ?, 'processing', ?)",
-            messageId, content, threadId || null
-          );
-          this.setStateValue('runnerBusy', 'true');
-          this.setStateValue('lastPromptDispatchedAt', String(Date.now()));
+          this.promptQueue.enqueue({ id: messageId, content, threadId, status: 'processing' });
+          this.promptQueue.stampDispatched();
           this.setStateValue('lastParentIdleNotice', '');
           this.setStateValue('parentIdleNotifyAt', '');
           const ownerId = this.getStateValue('userId');
@@ -6795,18 +6652,15 @@ export class SessionAgentDO {
             modelPreferences: sysModelPrefs,
           });
           if (!sysDispatched) {
-            this.ctx.storage.sql.exec("UPDATE prompt_queue SET status = 'queued' WHERE id = ?", messageId);
-            this.setStateValue('runnerBusy', 'false');
-            this.setStateValue('lastPromptDispatchedAt', '');
+            this.promptQueue.revertProcessingToQueued(messageId);
+            this.promptQueue.runnerBusy = false;
+            this.promptQueue.clearDispatchTimers();
             this.emitAuditEvent('prompt.dispatch_failed', `System prompt dispatch failed, reverted: ${messageId.slice(0, 8)}`);
           }
           this.rescheduleIdleAlarm();
         } else {
           // Runner busy or not connected — queue the prompt
-          this.ctx.storage.sql.exec(
-            "INSERT INTO prompt_queue (id, content, status, thread_id) VALUES (?, ?, 'queued', ?)",
-            messageId, content, threadId || null
-          );
+          this.promptQueue.enqueue({ id: messageId, content, threadId });
         }
       }
     }
@@ -6836,12 +6690,10 @@ export class SessionAgentDO {
     const status = this.getStateValue('status');
     const queueWorkflowDispatch = (reason: string) => {
       const queueId = crypto.randomUUID();
-      this.ctx.storage.sql.exec(
-        "INSERT INTO prompt_queue (id, content, queue_type, workflow_execution_id, workflow_payload, status) VALUES (?, '', 'workflow_execute', ?, ?, 'queued')",
-        queueId,
-        executionId,
-        JSON.stringify(payload),
-      );
+      this.promptQueue.enqueue({
+        id: queueId, content: '', queueType: 'workflow_execute',
+        workflowExecutionId: executionId, workflowPayload: JSON.stringify(payload),
+      });
       this.emitAuditEvent(
         'workflow.dispatch_queued',
         `Workflow execution queued (${executionId.slice(0, 8)}): ${reason}`,
@@ -6864,14 +6716,12 @@ export class SessionAgentDO {
       return queueWorkflowDispatch('runner_not_connected');
     }
 
-    const runnerBusy = this.getStateValue('runnerBusy') === 'true';
-    if (runnerBusy) {
+    if (this.promptQueue.runnerBusy) {
       return queueWorkflowDispatch('runner_busy');
     }
 
     this.setStateValue('lastUserActivityAt', String(Date.now()));
-    this.setStateValue('runnerBusy', 'true');
-    this.setStateValue('lastPromptDispatchedAt', String(Date.now()));
+    this.promptQueue.stampDispatched();
     this.rescheduleIdleAlarm();
     this.setStateValue('lastParentIdleNotice', '');
     this.setStateValue('parentIdleNotifyAt', '');
@@ -6886,7 +6736,7 @@ export class SessionAgentDO {
       modelPreferences: dispatchModelPrefs,
     });
     if (!directWfDispatched) {
-      this.setStateValue('runnerBusy', 'false');
+      this.promptQueue.runnerBusy = false;
       return queueWorkflowDispatch('runner_send_failed');
     }
 
@@ -6907,38 +6757,24 @@ export class SessionAgentDO {
       return false;
     }
 
-    const next = this.ctx.storage.sql
-      .exec("SELECT id, content, attachments, model, author_id, author_email, author_name, channel_type, channel_id, queue_type, workflow_execution_id, workflow_payload, thread_id, continuation_context, context_prefix, reply_channel_type, reply_channel_id FROM prompt_queue WHERE status = 'queued' ORDER BY created_at ASC LIMIT 1")
-      .toArray();
-
-    if (next.length === 0) {
+    const prompt = this.promptQueue.dequeueNext();
+    if (!prompt) {
       console.log(`[SessionAgentDO] sendNextQueuedPrompt: no queued items`);
       return false;
     }
-    console.log(`[SessionAgentDO] sendNextQueuedPrompt: found queued item id=${next[0].id} channelType=${next[0].channel_type || 'none'} channelId=${next[0].channel_id || 'none'} queueType=${next[0].queue_type || 'prompt'}`);
+    console.log(`[SessionAgentDO] sendNextQueuedPrompt: found queued item id=${prompt.id} channelType=${prompt.channelType || 'none'} channelId=${prompt.channelId || 'none'} queueType=${prompt.queueType || 'prompt'}`);
 
-    const prompt = next[0];
-    this.ctx.storage.sql.exec(
-      "UPDATE prompt_queue SET status = 'processing' WHERE id = ?",
-      prompt.id as string
-    );
-
-    const queueType = ((prompt.queue_type as string) || 'prompt').trim() || 'prompt';
-    if (queueType === 'workflow_execute') {
-      const queuedExecutionId = ((prompt.workflow_execution_id as string) || '').trim();
-      const queuedPayload = parseQueuedWorkflowPayload(prompt.workflow_payload);
+    if (prompt.queueType === 'workflow_execute') {
+      const queuedExecutionId = (prompt.workflowExecutionId || '').trim();
+      const queuedPayload = parseQueuedWorkflowPayload(prompt.workflowPayload);
       if (!queuedExecutionId || !queuedPayload) {
-        this.ctx.storage.sql.exec(
-          "UPDATE prompt_queue SET status = 'completed' WHERE id = ?",
-          prompt.id as string
-        );
-        console.warn(`[SessionAgentDO] Dropping malformed queued workflow dispatch id=${String(prompt.id)}`);
+        this.promptQueue.dropEntry(prompt.id);
+        console.warn(`[SessionAgentDO] Dropping malformed queued workflow dispatch id=${prompt.id}`);
         return this.sendNextQueuedPrompt();
       }
 
       this.channelRouter.clear();
-      this.setStateValue('runnerBusy', 'true');
-      this.setStateValue('lastPromptDispatchedAt', String(Date.now()));
+      this.promptQueue.stampDispatched();
       this.setStateValue('lastParentIdleNotice', '');
       this.setStateValue('parentIdleNotifyAt', '');
       const queueOwnerId = this.getStateValue('userId');
@@ -6951,14 +6787,14 @@ export class SessionAgentDO {
         modelPreferences: queueModelPrefs,
       });
       if (!wfDispatched) {
-        this.ctx.storage.sql.exec("UPDATE prompt_queue SET status = 'queued' WHERE id = ?", prompt.id as string);
-        this.setStateValue('runnerBusy', 'false');
+        this.promptQueue.revertProcessingToQueued(prompt.id);
+        this.promptQueue.runnerBusy = false;
         this.emitAuditEvent('workflow.dispatch_failed', `Workflow dispatch failed, reverted to queue: ${queuedExecutionId.slice(0, 8)}`);
         return false;
       }
       this.broadcastToClients({
         type: 'status',
-        data: { promptDequeued: true, remaining: this.getQueueLength() },
+        data: { promptDequeued: true, remaining: this.promptQueue.length },
       });
       this.emitAuditEvent(
         'workflow.dispatch',
@@ -6970,36 +6806,30 @@ export class SessionAgentDO {
     }
 
     // Look up git details from cache for the prompt author
-    const authorId = prompt.author_id as string | null;
+    const authorId = prompt.authorId;
     const authorDetails = authorId ? this.userDetailsCache.get(authorId) : undefined;
     const attachments = parseQueuedPromptAttachments(prompt.attachments);
 
     // Track current prompt author for PR attribution
     if (authorId) {
-      this.setStateValue('currentPromptAuthorId', authorId);
+      this.promptQueue.currentPromptAuthorId = authorId;
     }
 
     // Track channel context for auto-reply on completion using the ORIGINAL channel
-    // (e.g., slack:C123:thread_ts), not the normalized thread routing key.
-    const queueChannelType = (prompt.channel_type as string) || undefined;
-    const queueChannelId = (prompt.channel_id as string) || undefined;
-    const queueThreadId = (prompt.thread_id as string) || undefined;
-    // Reply channel was resolved and persisted at enqueue time (effectiveReplyTo).
-    // Trust whatever was stored — it already filters out web/thread.
-    const queueReplyChannelType = (prompt.reply_channel_type as string) || undefined;
-    const queueReplyChannelId = (prompt.reply_channel_id as string) || undefined;
+    const queueChannelType = prompt.channelType || undefined;
+    const queueChannelId = prompt.channelId || undefined;
+    const queueThreadId = prompt.threadId || undefined;
+    const queueReplyChannelType = prompt.replyChannelType || undefined;
+    const queueReplyChannelId = prompt.replyChannelId || undefined;
     this.channelRouter.clear();
     if (queueReplyChannelType && queueReplyChannelId) {
       this.channelRouter.trackReply({ channelType: queueReplyChannelType, channelId: queueReplyChannelId });
-
-      // Record a follow-up reminder so the agent gets nudged if it doesn't send a substantive reply
-      this.insertChannelFollowup(queueReplyChannelType, queueReplyChannelId, prompt.content as string);
+      this.insertChannelFollowup(queueReplyChannelType, queueReplyChannelId, prompt.content);
     } else if (queueThreadId) {
-      // Web UI steering of a thread — recover origin channel (same as direct dispatch path)
       const origin = await getThreadOriginChannel(this.env.DB, queueThreadId);
       if (origin && origin.channelType !== 'web' && origin.channelType !== 'thread') {
         this.channelRouter.trackReply({ channelType: origin.channelType, channelId: origin.channelId });
-        this.insertChannelFollowup(origin.channelType, origin.channelId, prompt.content as string);
+        this.insertChannelFollowup(origin.channelType, origin.channelId, prompt.content);
       }
     }
 
@@ -7009,49 +6839,45 @@ export class SessionAgentDO {
     const queueModelPrefs = await this.resolveModelPreferences(queueOwnerDetails);
     const queueChannelKey = this.channelKeyFrom(queueChannelType, queueChannelId);
     const queueOcSessionId = this.getChannelOcSessionId(queueChannelKey);
-    const queueContinuationContext = (prompt.continuation_context as string) || undefined;
-    const queueContextPrefix = (prompt.context_prefix as string) || undefined;
 
     // Agent sees contextPrefix + content; stored messages only have the user's actual message
-    const queueAgentContent = queueContextPrefix
-      ? `${queueContextPrefix}\n\n${prompt.content as string}`
-      : prompt.content as string;
+    const queueAgentContent = prompt.contextPrefix
+      ? `${prompt.contextPrefix}\n\n${prompt.content}`
+      : prompt.content;
 
     const queueDispatched = this.sendToRunner({
       type: 'prompt',
-      messageId: prompt.id as string,
+      messageId: prompt.id,
       content: queueAgentContent,
-      model: (prompt.model as string) || undefined,
+      model: prompt.model || undefined,
       attachments: attachments.length > 0 ? attachments : undefined,
       channelType: queueChannelType,
       channelId: queueChannelId,
       threadId: queueThreadId,
-      // Pass original channel info so the Runner can build the [via ...] prefix
       replyChannelType: queueReplyChannelType !== queueChannelType ? queueReplyChannelType : undefined,
       replyChannelId: queueReplyChannelId !== queueChannelId ? queueReplyChannelId : undefined,
       authorId: authorId || undefined,
-      authorEmail: (prompt.author_email as string) || undefined,
-      authorName: (prompt.author_name as string) || undefined,
+      authorEmail: prompt.authorEmail || undefined,
+      authorName: prompt.authorName || undefined,
       gitName: authorDetails?.gitName,
       gitEmail: authorDetails?.gitEmail,
       opencodeSessionId: queueOcSessionId,
       modelPreferences: queueModelPrefs,
-      continuationContext: queueContinuationContext,
+      continuationContext: prompt.continuationContext || undefined,
     });
     if (!queueDispatched) {
-      this.ctx.storage.sql.exec("UPDATE prompt_queue SET status = 'queued' WHERE id = ?", prompt.id as string);
+      this.promptQueue.revertProcessingToQueued(prompt.id);
       this.channelRouter.clear();
-      this.emitAuditEvent('prompt.dispatch_failed', `Queue dispatch failed, reverted: ${(prompt.id as string).slice(0, 8)}`);
+      this.emitAuditEvent('prompt.dispatch_failed', `Queue dispatch failed, reverted: ${prompt.id.slice(0, 8)}`);
       return false;
     }
-    this.setStateValue('runnerBusy', 'true');
-    this.setStateValue('lastPromptDispatchedAt', String(Date.now()));
+    this.promptQueue.stampDispatched();
     this.setStateValue('lastParentIdleNotice', '');
     this.setStateValue('parentIdleNotifyAt', '');
     this.rescheduleIdleAlarm();
 
     // Emit queue_wait timing — measure how long the prompt waited before dispatch
-    const queuedAt = parseInt(this.getStateValue('promptReceivedAt') || '0', 10);
+    const queuedAt = this.promptQueue.promptReceivedAt;
     if (queuedAt > 0) {
       this.emitEvent('queue_wait', {
         durationMs: Date.now() - queuedAt,
@@ -7061,7 +6887,7 @@ export class SessionAgentDO {
 
     this.broadcastToClients({
       type: 'status',
-      data: { promptDequeued: true, remaining: this.getQueueLength() },
+      data: { promptDequeued: true, remaining: this.promptQueue.length },
     });
     return true;
   }
@@ -7103,8 +6929,7 @@ export class SessionAgentDO {
 
 
   private async handleClearQueue(): Promise<Response> {
-    const cleared = this.getQueueLength();
-    this.ctx.storage.sql.exec("DELETE FROM prompt_queue WHERE status = 'queued'");
+    const cleared = this.promptQueue.clearQueued();
 
     this.broadcastToClients({
       type: 'status',
@@ -7217,7 +7042,7 @@ export class SessionAgentDO {
     const repoOwner = urlMatch?.[1];
 
     // Try the current prompt author first (for multiplayer attribution)
-    const promptAuthorId = this.getStateValue('currentPromptAuthorId');
+    const promptAuthorId = this.promptQueue.currentPromptAuthorId;
     if (promptAuthorId) {
       const token = await this.resolveGitHubTokenForUser(promptAuthorId, repoOwner, orgId);
       if (token) return token;
@@ -7652,7 +7477,7 @@ export class SessionAgentDO {
         this.setStateValue('sandboxId', '');
         this.setStateValue('tunnelUrls', '');
         this.setStateValue('tunnels', '');
-        this.setStateValue('runnerBusy', 'false');
+        this.promptQueue.runnerBusy = false;
         this.setStateValue('status', 'terminated');
         this.broadcastToClients({
           type: 'status',
@@ -7685,7 +7510,7 @@ export class SessionAgentDO {
       this.setStateValue('sandboxId', '');
       this.setStateValue('tunnelUrls', '');
       this.setStateValue('tunnels', '');
-      this.setStateValue('runnerBusy', 'false');
+      this.promptQueue.runnerBusy = false;
       this.setStateValue('status', 'hibernated');
 
       this.broadcastToClients({
@@ -7703,13 +7528,11 @@ export class SessionAgentDO {
       console.log(`[SessionAgentDO] Session ${sessionId} hibernated, snapshot: ${result.snapshotImageId}`);
 
       // Revert any in-flight prompts (don't rely on webSocketClose timing)
-      this.ctx.storage.sql.exec(
-        "UPDATE prompt_queue SET status = 'queued' WHERE status = 'processing'"
-      );
+      this.promptQueue.revertProcessingToQueued();
 
       // If prompts were queued during the hibernation transition (e.g. scheduled
       // tasks arriving while we were snapshotting), auto-wake to process them.
-      const queuedDuringHibernate = this.getQueueLength();
+      const queuedDuringHibernate = this.promptQueue.length;
       if (queuedDuringHibernate > 0) {
         console.log(
           `[SessionAgentDO] ${queuedDuringHibernate} prompt(s) queued during hibernation — auto-waking`
@@ -7907,24 +7730,18 @@ export class SessionAgentDO {
     }
 
     // Also consider stuck-processing watchdog deadline
-    const dispatchStr = this.getStateValue('lastPromptDispatchedAt');
-    if (dispatchStr) {
-      const dispatchMs = parseInt(dispatchStr);
-      if (!isNaN(dispatchMs)) {
-        const watchdogMs = dispatchMs + 5 * 60 * 1000; // 5 min timeout
-        if (watchdogMs < earliestAlarm) {
-          earliestAlarm = watchdogMs;
-        }
+    const dispatchMs = this.promptQueue.lastPromptDispatchedAt;
+    if (dispatchMs > 0) {
+      const watchdogMs = dispatchMs + 5 * 60 * 1000; // 5 min timeout
+      if (watchdogMs < earliestAlarm) {
+        earliestAlarm = watchdogMs;
       }
     }
 
     // Also consider error safety-net deadline
-    const safetyNetStr = this.getStateValue('errorSafetyNetAt');
-    if (safetyNetStr) {
-      const safetyNetMs = parseInt(safetyNetStr);
-      if (!isNaN(safetyNetMs) && safetyNetMs < earliestAlarm) {
-        earliestAlarm = safetyNetMs;
-      }
+    const safetyNetMs = this.promptQueue.errorSafetyNetAt;
+    if (safetyNetMs > 0 && safetyNetMs < earliestAlarm) {
+      earliestAlarm = safetyNetMs;
     }
 
     // Also consider parent idle debounce deadline
@@ -7942,27 +7759,6 @@ export class SessionAgentDO {
     }
   }
 
-  // ─── Hibernation Recovery Helpers ──────────────────────────────────────
-
-  /**
-   * Recover pendingChannelReply from the processing prompt_queue row.
-   * Used when in-memory pendingChannelReply is lost due to DO hibernation.
-   */
-  private recoverPendingChannelReply(): { channelType: string; channelId: string } | null {
-    const rows = this.ctx.storage.sql
-      .exec("SELECT channel_type, channel_id, reply_channel_type, reply_channel_id FROM prompt_queue WHERE status = 'processing' LIMIT 1")
-      .toArray();
-    if (rows.length === 0) return null;
-
-    // Prefer reply channel (original Slack channel) over normalized thread channel
-    const channelType = (rows[0].reply_channel_type as string) || (rows[0].channel_type as string) || null;
-    const channelId = (rows[0].reply_channel_id as string) || (rows[0].channel_id as string) || null;
-    if (!channelType || !channelId) return null;
-
-    console.log(`[SessionAgentDO] Recovered pendingChannelReply from prompt_queue: ${channelType}:${channelId}`);
-    return { channelType, channelId };
-  }
-
   // ─── Helpers ───────────────────────────────────────────────────────────
 
   private getStateValue(key: string): string | undefined {
@@ -7977,13 +7773,6 @@ export class SessionAgentDO {
       'INSERT OR REPLACE INTO state (key, value) VALUES (?, ?)',
       key, value
     );
-  }
-
-  private getQueueLength(): number {
-    const result = this.ctx.storage.sql
-      .exec("SELECT COUNT(*) as count FROM prompt_queue WHERE status = 'queued'")
-      .toArray();
-    return (result[0]?.count as number) ?? 0;
   }
 
   private getClientSockets(): WebSocket[] {
@@ -9663,7 +9452,7 @@ export class SessionAgentDO {
   private async flushPendingChannelReply() {
     // Hibernation recovery: if in-memory state was lost, reconstruct from prompt_queue
     if (!this.channelRouter.hasPending) {
-      const recovered = this.recoverPendingChannelReply();
+      const recovered = this.promptQueue.getProcessingChannelContext();
       if (recovered) {
         console.log(`[SessionAgentDO] flushPendingChannelReply: recovered from SQLite: ${recovered.channelType}:${recovered.channelId}`);
         this.channelRouter.recover(recovered.channelType, recovered.channelId);
