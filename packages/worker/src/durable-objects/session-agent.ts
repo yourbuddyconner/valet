@@ -33,6 +33,7 @@ import { MessageStore } from './message-store.js';
 import { ChannelRouter } from './channel-router.js';
 import { PromptQueue } from './prompt-queue.js';
 import { RunnerLink, type RunnerMessage, type RunnerOutbound, type AgentStatus, type PromptAttachment, type RunnerMessageHandlers, type WorkflowExecutionDispatchPayload } from './runner-link.js';
+import { SessionState, type SessionLifecycleStatus } from './session-state.js';
 import { resolveOrchestratorPersona } from '../services/persona.js';
 import { sendChannelReply } from '../services/channel-reply.js';
 
@@ -154,7 +155,6 @@ interface ClientMessage {
   reason?: string;
 }
 
-type SessionLifecycleStatus = 'initializing' | 'running' | 'idle' | 'hibernating' | 'hibernated' | 'restoring' | 'terminated' | 'archived' | 'error';
 type SandboxRuntimeState = 'starting' | 'running' | 'hibernating' | 'hibernated' | 'restoring' | 'stopped' | 'error';
 type AgentRuntimeState = 'starting' | 'busy' | 'idle' | 'queued' | 'sleeping' | 'standby' | 'stopped' | 'error';
 type JointRuntimeState = 'starting' | 'running_busy' | 'running_idle' | 'queued' | 'waking' | 'sleeping' | 'standby' | 'stopped' | 'error';
@@ -368,6 +368,7 @@ export class SessionAgentDO {
   private messageStore!: MessageStore;
   private promptQueue!: PromptQueue;
   private runnerLink!: RunnerLink;
+  private sessionState!: SessionState;
 
   /** Debounce timer for flushing messages to D1 during active turns. */
   private d1FlushTimer: ReturnType<typeof setTimeout> | null = null;
@@ -424,13 +425,14 @@ export class SessionAgentDO {
     // Run schema migration on construction (blockConcurrencyWhile ensures it completes before any request)
     this.ctx.blockConcurrencyWhile(async () => {
       this.ctx.storage.sql.exec(SCHEMA_SQL);
+      this.sessionState = new SessionState(this.ctx.storage.sql);
       this.messageStore = new MessageStore(this.ctx.storage.sql);
       this.promptQueue = new PromptQueue(this.ctx.storage.sql);
       this.promptQueue.runMigrations();
       this.runnerLink = new RunnerLink({
         getRunnerSockets: () => this.ctx.getWebSockets('runner'),
-        getState: (key) => this.getStateValue(key),
-        setState: (key, value) => this.setStateValue(key, value),
+        getState: (key) => this.sessionState.get(key),
+        setState: (key, value) => this.sessionState.set(key, value),
       });
 
       this.initialized = true;
@@ -520,8 +522,7 @@ export class SessionAgentDO {
       case '/webhook-update':
         return this.handleWebhookUpdate(request);
       case '/models': {
-        const raw = this.getStateValue('availableModels');
-        const models = raw ? JSON.parse(raw) : [];
+        const models = this.sessionState.availableModels || [];
         return Response.json({ models });
       }
       case '/queue-mode': {
@@ -535,7 +536,7 @@ export class SessionAgentDO {
       case '/prompt': {
         // Reject prompts if the session is in a terminal state — no runner will ever
         // connect to process queued prompts, so accepting them would silently drop messages.
-        const promptStatus = this.getStateValue('status');
+        const promptStatus = this.sessionState.status;
         if (promptStatus === 'terminated' || promptStatus === 'archived' || promptStatus === 'error') {
           return new Response(JSON.stringify({ error: `Session is ${promptStatus}` }), { status: 409 });
         }
@@ -614,7 +615,7 @@ export class SessionAgentDO {
         if (!body.promptId) {
           return new Response(JSON.stringify({ error: 'Missing promptId' }), { status: 400 });
         }
-        const ownerUserId = this.getStateValue('userId');
+        const ownerUserId = this.sessionState.userId;
         if (!body.resolvedBy || !ownerUserId || body.resolvedBy !== ownerUserId) {
           return new Response(JSON.stringify({ error: 'Only the session owner can resolve this prompt' }), { status: 403 });
         }
@@ -693,12 +694,12 @@ export class SessionAgentDO {
       .exec('SELECT id, role, content, parts, author_id, author_email, author_name, author_avatar_url, channel_type, channel_id, thread_id, message_format, created_at FROM messages ORDER BY created_at ASC')
       .toArray();
 
-    const status = this.getStateValue('status') || 'idle';
-    const sandboxId = this.getStateValue('sandboxId');
+    const status = this.sessionState.status;
+    const sandboxId = this.sessionState.sandboxId;
     const connectedUsers = await this.getConnectedUsersWithDetails();
-    const sessionId = this.getStateValue('sessionId');
-    const workspace = this.getStateValue('workspace') || '';
-    const title = this.getStateValue('title');
+    const sessionId = this.sessionState.sessionId;
+    const workspace = this.sessionState.workspace;
+    const title = this.sessionState.title;
 
     // Resolve authoritative model catalog from D1 (not from Runner discovery)
     let availableModels: import('@valet/shared').AvailableModels | undefined;
@@ -707,12 +708,11 @@ export class SessionAgentDO {
     } catch (err) {
       console.error('[SessionAgentDO] Failed to resolve available models for init:', err);
       // Fall back to Runner-discovered models if catalog resolution fails
-      const availableModelsRaw = this.getStateValue('availableModels');
-      availableModels = availableModelsRaw ? JSON.parse(availableModelsRaw) : undefined;
+      availableModels = this.sessionState.availableModels;
     }
 
     // Resolve default model: user prefs → org prefs, validated against catalog
-    const initOwnerId = this.getStateValue('userId');
+    const initOwnerId = this.sessionState.userId;
     const initOwnerDetails = initOwnerId ? await this.getUserDetails(initOwnerId) : undefined;
     const initModelPrefs = await this.resolveModelPreferences(initOwnerDetails);
     const candidateDefault = initModelPrefs?.[0] ?? null;
@@ -805,7 +805,7 @@ export class SessionAgentDO {
       .toArray();
 
     for (const p of pendingPrompts) {
-      const sessionId = this.getStateValue('sessionId') || '';
+      const sessionId = this.sessionState.sessionId;
       const prompt: InteractivePrompt = {
         id: p.id as string,
         sessionId,
@@ -836,7 +836,7 @@ export class SessionAgentDO {
     // Notify EventBus
     this.notifyEventBus({
       type: 'session.update',
-      sessionId: this.getStateValue('sessionId'),
+      sessionId: this.sessionState.sessionId,
       userId,
       data: { event: 'user.joined', connectedUsers },
       timestamp: new Date().toISOString(),
@@ -879,7 +879,7 @@ export class SessionAgentDO {
     console.log('[SessionAgentDO] Runner connected');
 
     // Emit runner_connect timing — measure time from sandbox start to runner WebSocket
-    const runningStart = parseInt(this.getStateValue('runningStartedAt') || '0', 10);
+    const runningStart = this.sessionState.runningStartedAt;
     if (runningStart > 0) {
       this.emitEvent('runner_connect', { durationMs: Date.now() - runningStart });
     }
@@ -900,7 +900,7 @@ export class SessionAgentDO {
     // It needs to start its event stream, discover models, and create OpenCode sessions.
     // The queue will be drained when the runner signals readiness via `agentStatus: idle`.
     const queuedCount = this.promptQueue.length;
-    const hasInitialPrompt = !!this.getStateValue('initialPrompt');
+    const hasInitialPrompt = !!this.sessionState.initialPrompt;
     console.log(`[SessionAgentDO] Runner connected: deferring dispatch until runner ready (queued=${queuedCount}, hasInitialPrompt=${hasInitialPrompt})`);
 
     this.broadcastToClients({
@@ -935,7 +935,7 @@ export class SessionAgentDO {
         parsed as RunnerMessage,
         this.runnerHandlers,
         () => {
-          this.setStateValue('lastUserActivityAt', String(Date.now()));
+          this.sessionState.lastUserActivityAt = Date.now();
           this.rescheduleIdleAlarm();
         },
       );
@@ -995,7 +995,7 @@ export class SessionAgentDO {
 
           this.notifyEventBus({
             type: 'session.update',
-            sessionId: this.getStateValue('sessionId'),
+            sessionId: this.sessionState.sessionId,
             userId,
             data: { event: 'user.left', connectedUsers: this.getConnectedUserIds() },
             timestamp: new Date().toISOString(),
@@ -1030,14 +1030,11 @@ export class SessionAgentDO {
     }
 
     // ─── Idle Hibernate Check ─────────────────────────────────────────
-    const status = this.getStateValue('status');
-    const idleTimeoutMsStr = this.getStateValue('idleTimeoutMs');
-    const lastActivityStr = this.getStateValue('lastUserActivityAt');
+    const status = this.sessionState.status;
+    const idleTimeoutMs = this.sessionState.idleTimeoutMs;
+    const lastActivity = this.sessionState.lastUserActivityAt;
 
-    if (status === 'running' && idleTimeoutMsStr && lastActivityStr) {
-      const idleTimeoutMs = parseInt(idleTimeoutMsStr);
-      const lastActivity = parseInt(lastActivityStr);
-
+    if (status === 'running' && idleTimeoutMs && lastActivity) {
       if (now - lastActivity >= idleTimeoutMs) {
         // Trigger hibernate
         this.ctx.waitUntil(this.performHibernate());
@@ -1103,21 +1100,20 @@ export class SessionAgentDO {
     }
 
     // ─── Parent Idle Debounce Flush ─────────────────────────────────
-    const parentIdleNotifyAtStr = this.getStateValue('parentIdleNotifyAt');
-    if (parentIdleNotifyAtStr) {
-      const parentIdleNotifyAt = parseInt(parentIdleNotifyAtStr);
-      if (!isNaN(parentIdleNotifyAt) && now >= parentIdleNotifyAt) {
+    const parentIdleNotifyAt = this.sessionState.parentIdleNotifyAt;
+    if (parentIdleNotifyAt) {
+      if (now >= parentIdleNotifyAt) {
         // Re-verify idle conditions before sending
-        const idleStatus = this.getStateValue('status');
+        const idleStatus = this.sessionState.status;
         const idleRunnerBusy = this.promptQueue.runnerBusy;
         const idleQueued = this.promptQueue.length;
-        const idleLast = this.getStateValue('lastParentIdleNotice');
-        const idleSessionId = this.getStateValue('sessionId');
+        const idleLast = this.sessionState.lastParentIdleNotice;
+        const idleSessionId = this.sessionState.sessionId;
 
-        this.setStateValue('parentIdleNotifyAt', '');
+        this.sessionState.parentIdleNotifyAt = 0;
 
         if (idleSessionId && idleStatus === 'running' && !idleRunnerBusy && idleQueued === 0 && idleLast !== 'true') {
-          this.setStateValue('lastParentIdleNotice', 'true');
+          this.sessionState.lastParentIdleNotice = 'true';
           this.ctx.waitUntil(this.notifyParentEvent(`Child session event: ${idleSessionId} is idle.`, { wake: true }));
         }
       }
@@ -1200,8 +1196,8 @@ export class SessionAgentDO {
     for (const fu of dueFollowups) {
       const channelType = fu.channel_type as string;
       const channelId = fu.channel_id as string;
-      const intervalMs = parseInt(this.getStateValue('channelFollowupIntervalMs') || '300000');
-      const lifecycleStatus = this.getStateValue('status');
+      const intervalMs = this.sessionState.channelFollowupIntervalMs;
+      const lifecycleStatus = this.sessionState.status;
 
       // Avoid waking/restoring churn: only inject follow-up prompts while fully running.
       if (lifecycleStatus !== 'running') {
@@ -1283,24 +1279,21 @@ export class SessionAgentDO {
     }
 
     // Also consider idle timeout for next alarm
-    const alarmStatus = this.getStateValue('status');
-    const alarmIdleTimeoutMsStr = this.getStateValue('idleTimeoutMs');
-    const alarmLastActivityStr = this.getStateValue('lastUserActivityAt');
-    if (alarmStatus === 'running' && alarmIdleTimeoutMsStr && alarmLastActivityStr) {
-      const idleTimeoutMs = parseInt(alarmIdleTimeoutMsStr);
-      const lastActivity = parseInt(alarmLastActivityStr);
-      const idleAlarmMs = lastActivity + idleTimeoutMs;
+    const alarmStatus = this.sessionState.status;
+    const alarmIdleTimeoutMs = this.sessionState.idleTimeoutMs;
+    const alarmLastActivity = this.sessionState.lastUserActivityAt;
+    if (alarmStatus === 'running' && alarmIdleTimeoutMs && alarmLastActivity) {
+      const idleAlarmMs = alarmLastActivity + alarmIdleTimeoutMs;
       if (idleAlarmMs > now && (nextAlarmMs === null || idleAlarmMs < nextAlarmMs)) {
         nextAlarmMs = idleAlarmMs;
       }
     }
 
     // Also consider parent idle debounce deadline
-    const alarmParentIdleStr = this.getStateValue('parentIdleNotifyAt');
-    if (alarmParentIdleStr) {
-      const parentIdleMs = parseInt(alarmParentIdleStr);
-      if (!isNaN(parentIdleMs) && parentIdleMs > now && (nextAlarmMs === null || parentIdleMs < nextAlarmMs)) {
-        nextAlarmMs = parentIdleMs;
+    const alarmParentIdleMs = this.sessionState.parentIdleNotifyAt;
+    if (alarmParentIdleMs) {
+      if (alarmParentIdleMs > now && (nextAlarmMs === null || alarmParentIdleMs < nextAlarmMs)) {
+        nextAlarmMs = alarmParentIdleMs;
       }
     }
 
@@ -1392,7 +1385,7 @@ export class SessionAgentDO {
         }
         await this.handlePromptResolved(msg.invocationId, {
           actionId: 'approve',
-          resolvedBy: this.getStateValue('userId') || 'user',
+          resolvedBy: this.sessionState.userId || 'user',
         });
         break;
       }
@@ -1405,7 +1398,7 @@ export class SessionAgentDO {
         await this.handlePromptResolved(msg.invocationId, {
           actionId: 'deny',
           value: msg.reason,
-          resolvedBy: this.getStateValue('userId') || 'user',
+          resolvedBy: this.sessionState.userId || 'user',
         });
         break;
       }
@@ -1460,7 +1453,7 @@ export class SessionAgentDO {
     channelType: string | undefined,
     channelId: string | undefined,
   ): Promise<boolean> {
-    const sessionOwnerId = this.getStateValue('userId');
+    const sessionOwnerId = this.sessionState.userId;
     if (!channelType || channelType === 'web' || !author?.id || author.id !== sessionOwnerId) {
       return false;
     }
@@ -1526,7 +1519,7 @@ export class SessionAgentDO {
     }
 
     // Update idle tracking
-    this.setStateValue('lastUserActivityAt', String(Date.now()));
+    this.sessionState.lastUserActivityAt = Date.now();
     this.rescheduleIdleAlarm();
 
     // Track the current prompt author for PR attribution (Part 6)
@@ -1535,7 +1528,7 @@ export class SessionAgentDO {
     }
 
     // If hibernated, auto-trigger wake before processing
-    const currentStatus = this.getStateValue('status');
+    const currentStatus = this.sessionState.status;
     if (currentStatus === 'hibernated') {
       // Fire wake in background — prompt will be queued since runner won't be connected yet
       this.ctx.waitUntil(this.performWake());
@@ -1602,8 +1595,8 @@ export class SessionAgentDO {
     const runnerBusy = this.promptQueue.runnerBusy;
     const runnerConnected = this.runnerLink.isConnected;
     const runnerReady = this.runnerLink.isReady;
-    const status = this.getStateValue('status');
-    const sandboxId = this.getStateValue('sandboxId');
+    const status = this.sessionState.status;
+    const sandboxId = this.sessionState.sandboxId;
     const queuedCount = this.promptQueue.length;
 
     // Resolve the effective reply target early so it can be persisted in prompt_queue.
@@ -1676,8 +1669,8 @@ export class SessionAgentDO {
 
     // Forward directly to runner with author info + channel metadata
     this.promptQueue.stampDispatched();
-    this.setStateValue('lastParentIdleNotice', '');
-    this.setStateValue('parentIdleNotifyAt', '');
+    this.sessionState.lastParentIdleNotice = undefined;
+    this.sessionState.parentIdleNotifyAt = 0;
     this.rescheduleIdleAlarm();
     console.log('[SessionAgentDO] handlePrompt: dispatching to runner (DO_CODE_VERSION=v2-pipeline-2)');
 
@@ -1697,7 +1690,7 @@ export class SessionAgentDO {
     }
 
     // Resolve model preferences: user prefs > org prefs fallback
-    const ownerId = this.getStateValue('userId');
+    const ownerId = this.sessionState.userId;
     const ownerDetails = ownerId ? await this.getUserDetails(ownerId) : undefined;
     const resolvedModelPrefs = await this.resolveModelPreferences(ownerDetails);
     // Agent sees contextPrefix + content; stored messages/queue only have the user's actual message
@@ -1740,7 +1733,7 @@ export class SessionAgentDO {
   private async handleAnswer(questionId: string, answer: string | boolean) {
     await this.handlePromptResolved(questionId, {
       value: String(answer),
-      resolvedBy: this.getStateValue('userId') || 'user',
+      resolvedBy: this.sessionState.userId || 'user',
     });
   }
 
@@ -1821,7 +1814,7 @@ export class SessionAgentDO {
     }
 
     // Update idle tracking
-    this.setStateValue('lastUserActivityAt', String(Date.now()));
+    this.sessionState.lastUserActivityAt = Date.now();
     this.rescheduleIdleAlarm();
 
     const normalizedAttachments = sanitizePromptAttachments(attachments);
@@ -1883,10 +1876,10 @@ export class SessionAgentDO {
     // Use the earliest of: collect flush, idle timeout, question expiry, channel followups
     let earliestAlarm = flushAt;
 
-    const idleTimeoutMsStr = this.getStateValue('idleTimeoutMs');
-    const lastActivityStr = this.getStateValue('lastUserActivityAt');
-    if (idleTimeoutMsStr && lastActivityStr) {
-      const idleAlarm = parseInt(lastActivityStr) + parseInt(idleTimeoutMsStr);
+    const idleTimeoutMs = this.sessionState.idleTimeoutMs;
+    const lastActivity = this.sessionState.lastUserActivityAt;
+    if (idleTimeoutMs && lastActivity) {
+      const idleAlarm = lastActivity + idleTimeoutMs;
       if (idleAlarm < earliestAlarm) earliestAlarm = idleAlarm;
     }
 
@@ -1906,10 +1899,9 @@ export class SessionAgentDO {
       if (followupMs < earliestAlarm) earliestAlarm = followupMs;
     }
 
-    const parentIdleStr = this.getStateValue('parentIdleNotifyAt');
-    if (parentIdleStr) {
-      const parentIdleMs = parseInt(parentIdleStr);
-      if (!isNaN(parentIdleMs) && parentIdleMs < earliestAlarm) earliestAlarm = parentIdleMs;
+    const parentIdleMs = this.sessionState.parentIdleNotifyAt;
+    if (parentIdleMs && parentIdleMs < earliestAlarm) {
+      earliestAlarm = parentIdleMs;
     }
 
     this.ctx.storage.setAlarm(earliestAlarm);
@@ -1994,9 +1986,9 @@ export class SessionAgentDO {
 
       'tunnels': (msg) => {
         if (Array.isArray(msg.tunnels)) {
-          this.setStateValue('tunnels', JSON.stringify(msg.tunnels));
+          this.sessionState.tunnels = msg.tunnels;
         } else {
-          this.setStateValue('tunnels', '');
+          this.sessionState.tunnels = [];
         }
       },
 
@@ -2047,7 +2039,7 @@ export class SessionAgentDO {
         const questionCh = this.activeChannel;
         const QUESTION_TIMEOUT_SECS = 5 * 60; // 5 minutes
         const expiresAt = Math.floor(Date.now() / 1000) + QUESTION_TIMEOUT_SECS;
-        const sessionId = this.getStateValue('sessionId') || '';
+        const sessionId = this.sessionState.sessionId;
 
         const actions: InteractiveAction[] = msg.options
           ? msg.options.map((opt, i) => ({ id: `option_${i}`, label: opt }))
@@ -2101,7 +2093,7 @@ export class SessionAgentDO {
           data: { questionId: qId, text: msg.text || '' },
           timestamp: new Date().toISOString(),
         });
-        const ownerUserId = this.getStateValue('userId') || undefined;
+        const ownerUserId = this.sessionState.userId || undefined;
         const questionSummary = msg.text?.trim()
           ? `Agent question: ${msg.text.trim()}`
           : 'Agent requested a decision.';
@@ -2205,15 +2197,15 @@ export class SessionAgentDO {
         // Publish session.errored to EventBus
         this.notifyEventBus({
           type: 'session.errored',
-          sessionId: this.getStateValue('sessionId') || undefined,
-          userId: this.getStateValue('userId') || undefined,
+          sessionId: this.sessionState.sessionId || undefined,
+          userId: this.sessionState.userId || undefined,
           data: { error: errorText, messageId: errId },
           timestamp: new Date().toISOString(),
         });
         await this.enqueueOwnerNotification({
           messageType: 'escalation',
           content: `Session error: ${errorText}`,
-          contextSessionId: this.getStateValue('sessionId') || undefined,
+          contextSessionId: this.sessionState.sessionId || undefined,
         });
       },
 
@@ -2353,10 +2345,10 @@ export class SessionAgentDO {
             console.log('[SessionAgentDO] Runner is now ready (first idle after connect)');
 
             // Emit runner_idle — full time from sandbox spawn/restore to agent ready
-            const wakeStart = parseInt(this.getStateValue('sandboxWakeStartedAt') || '0', 10);
+            const wakeStart = this.sessionState.sandboxWakeStartedAt;
             if (wakeStart > 0) {
               this.emitEvent('runner_idle', { durationMs: Date.now() - wakeStart });
-              this.setStateValue('sandboxWakeStartedAt', '');
+              this.sessionState.sandboxWakeStartedAt = 0;
             }
           }
 
@@ -2381,9 +2373,9 @@ export class SessionAgentDO {
             }
           } else if (!currentRunnerBusy) {
             // Check for initial prompt (from create-from-PR/Issue) — only if no queued work
-            const initialPrompt = this.getStateValue('initialPrompt');
+            const initialPrompt = this.sessionState.initialPrompt;
             if (initialPrompt) {
-              this.setStateValue('initialPrompt', '');
+              this.sessionState.initialPrompt = undefined;
               const messageId = crypto.randomUUID();
               this.messageStore.writeMessage({
                 id: messageId,
@@ -2400,12 +2392,12 @@ export class SessionAgentDO {
                 },
               });
               this.promptQueue.enqueue({ id: messageId, content: initialPrompt, status: 'processing' });
-              const ipOwnerId = this.getStateValue('userId');
+              const ipOwnerId = this.sessionState.userId;
               const ipOwnerDetails = ipOwnerId ? await this.getUserDetails(ipOwnerId) : undefined;
               const ipModelPrefs = await this.resolveModelPreferences(ipOwnerDetails);
-              const initialModel = this.getStateValue('initialModel');
+              const initialModel = this.sessionState.initialModel;
               if (initialModel) {
-                this.setStateValue('initialModel', '');
+                this.sessionState.initialModel = undefined;
               }
               this.runnerLink.send({
                 type: 'prompt',
@@ -2427,8 +2419,8 @@ export class SessionAgentDO {
           this.notifyParentIfIdle();
         } else if (msg.status === 'thinking' || msg.status === 'tool_calling' || msg.status === 'streaming') {
           this.promptQueue.runnerBusy = true;
-          this.setStateValue('lastParentIdleNotice', '');
-          this.setStateValue('parentIdleNotifyAt', '');
+          this.sessionState.lastParentIdleNotice = undefined;
+          this.sessionState.parentIdleNotifyAt = 0;
         }
       },
 
@@ -2459,10 +2451,10 @@ export class SessionAgentDO {
         // Runner discovered available models — store for internal use (failover, context limits)
         // but do NOT broadcast to clients. The UI uses the Worker-resolved catalog from init.
         if (msg.models) {
-          this.setStateValue('availableModels', JSON.stringify(msg.models));
+          this.sessionState.availableModels = msg.models;
           const modelsJson = JSON.stringify(msg.models);
           // Persist to D1 so the settings typeahead works without a running session
-          const userId = this.getStateValue('userId');
+          const userId = this.sessionState.userId;
           if (userId) {
             updateUserDiscoveredModels(this.appDb, userId, modelsJson)
               .catch((err: unknown) => console.error('[SessionAgentDO] Failed to cache models to D1:', err));
@@ -2548,7 +2540,7 @@ export class SessionAgentDO {
 
       'git-state': (msg) => {
         // Runner reports current git branch/commit state
-        const sessionId = this.getStateValue('sessionId');
+        const sessionId = this.sessionState.sessionId;
         if (sessionId) {
           const gitUpdates: Record<string, string | number> = {};
           if (msg.branch !== undefined) gitUpdates.branch = msg.branch;
@@ -2573,7 +2565,7 @@ export class SessionAgentDO {
 
       'pr-created': (msg) => {
         // Runner reports a PR was created
-        const sessionIdPr = this.getStateValue('sessionId');
+        const sessionIdPr = this.sessionState.sessionId;
         if (sessionIdPr && msg.number) {
           updateSessionGitState(this.appDb, sessionIdPr, {
             prNumber: msg.number,
@@ -2599,7 +2591,7 @@ export class SessionAgentDO {
 
       'files-changed': (msg) => {
         // Runner reports files changed — upsert in D1, broadcast to clients
-        const sessionIdFc = this.getStateValue('sessionId');
+        const sessionIdFc = this.sessionState.sessionId;
         const filesChanged = (msg as any).files as Array<{ path: string; status: string; additions?: number; deletions?: number }> | undefined;
         if (sessionIdFc && Array.isArray(filesChanged)) {
           for (const file of filesChanged) {
@@ -2630,10 +2622,10 @@ export class SessionAgentDO {
 
       'title': (msg) => {
         // Runner reports session title update
-        const sessionIdTitle = this.getStateValue('sessionId');
+        const sessionIdTitle = this.sessionState.sessionId;
         const newTitle = msg.title || msg.content;
         if (sessionIdTitle && newTitle) {
-          this.setStateValue('title', newTitle);
+          this.sessionState.title = newTitle;
           updateSessionTitle(this.appDb, sessionIdTitle, newTitle).catch((err) =>
             console.error('[SessionAgentDO] Failed to update session title:', err),
           );
@@ -2995,24 +2987,22 @@ export class SessionAgentDO {
     },
   ) {
     try {
-      const parentSessionId = this.getStateValue('sessionId')!;
-      const userId = this.getStateValue('userId')!;
+      const parentSessionId = this.sessionState.sessionId;
+      const userId = this.sessionState.userId;
 
       // Resolve the parent's active threadId so the child can route notifications back
       let parentThreadId: string | undefined = this.promptQueue.getProcessingThreadId() || undefined;
 
-      const spawnRequestStr = this.getStateValue('spawnRequest');
-      const backendUrl = this.getStateValue('backendUrl');
-      const terminateUrl = this.getStateValue('terminateUrl');
-      const hibernateUrl = this.getStateValue('hibernateUrl');
-      const restoreUrl = this.getStateValue('restoreUrl');
+      const parentSpawnRequest = this.sessionState.spawnRequest;
+      const backendUrl = this.sessionState.backendUrl;
+      const terminateUrl = this.sessionState.terminateUrl;
+      const hibernateUrl = this.sessionState.hibernateUrl;
+      const restoreUrl = this.sessionState.restoreUrl;
 
-      if (!spawnRequestStr || !backendUrl) {
+      if (!parentSpawnRequest || !backendUrl) {
         this.runnerLink.send({ type: 'spawn-child-result', requestId, error: 'Session not configured for spawning children (missing spawnRequest or backendUrl)' });
         return;
       }
-
-      const parentSpawnRequest = JSON.parse(spawnRequestStr);
 
       // Query parent's git state to use as defaults for the child
       const parentGitState = await getSessionGitState(this.appDb, parentSessionId);
@@ -3070,14 +3060,14 @@ export class SessionAgentDO {
       const childDoWsUrl = parentDoWsUrl.replace(parentSessionId, childSessionId);
 
       // Build child spawn request, inheriting parent env vars
-      const childSpawnRequest = {
+      const childSpawnRequest: Record<string, unknown> & { envVars: Record<string, string> } = {
         ...parentSpawnRequest,
         sessionId: childSessionId,
         doWsUrl: childDoWsUrl,
         runnerToken: childRunnerToken,
         workspace: params.workspace,
         envVars: {
-          ...parentSpawnRequest.envVars,
+          ...(parentSpawnRequest.envVars as Record<string, string> | undefined),
           PARENT_SESSION_ID: parentSessionId,
         },
       };
@@ -3129,8 +3119,7 @@ export class SessionAgentDO {
       const childDoId = this.env.SESSIONS.idFromName(childSessionId);
       const childDO = this.env.SESSIONS.get(childDoId);
 
-      const idleTimeoutMsStr = this.getStateValue('idleTimeoutMs');
-      const idleTimeoutMs = idleTimeoutMsStr ? parseInt(idleTimeoutMsStr) : 900_000;
+      const idleTimeoutMs = this.sessionState.idleTimeoutMs;
 
       await childDO.fetch(new Request('http://do/start', {
         method: 'POST',
@@ -3165,7 +3154,7 @@ export class SessionAgentDO {
 
   private async handleSessionMessage(requestId: string, targetSessionId: string, content: string, interrupt?: boolean) {
     try {
-      const userId = this.getStateValue('userId')!;
+      const userId = this.sessionState.userId;
 
       // Verify target session belongs to the same user
       const targetSession = await getSession(this.appDb, targetSessionId);
@@ -3203,7 +3192,7 @@ export class SessionAgentDO {
 
   private async handleSessionMessages(requestId: string, targetSessionId: string, limit?: number, after?: string) {
     try {
-      const userId = this.getStateValue('userId')!;
+      const userId = this.sessionState.userId;
 
       // Verify target session belongs to the same user
       const targetSession = await getSession(this.appDb, targetSessionId);
@@ -3236,7 +3225,7 @@ export class SessionAgentDO {
 
   private async handleForwardMessages(requestId: string, targetSessionId: string, limit?: number, after?: string) {
     try {
-      const userId = this.getStateValue('userId')!;
+      const userId = this.sessionState.userId;
 
       // Verify target session belongs to the same user
       const targetSession = await getSession(this.appDb, targetSessionId);
@@ -3330,8 +3319,8 @@ export class SessionAgentDO {
 
   private async handleTerminateChild(requestId: string, childSessionId: string) {
     try {
-      const sessionId = this.getStateValue('sessionId')!;
-      const userId = this.getStateValue('userId')!;
+      const sessionId = this.sessionState.sessionId;
+      const userId = this.sessionState.userId;
 
       // Verify the child belongs to this parent session
       const childSession = await getSession(this.appDb, childSessionId);
@@ -3371,7 +3360,7 @@ export class SessionAgentDO {
   }
 
   private async handleSelfTerminate() {
-    const sessionId = this.getStateValue('sessionId');
+    const sessionId = this.sessionState.sessionId;
     console.log(`[SessionAgentDO] Session ${sessionId} self-terminating (task complete)`);
 
     // Reuse handleStop which handles sandbox teardown, cascade, etc.
@@ -3382,7 +3371,7 @@ export class SessionAgentDO {
 
   private async handleMemRead(requestId: string, path?: string) {
     try {
-      const userId = this.getStateValue('userId')!;
+      const userId = this.sessionState.userId;
       const p = path || '';
 
       if (!p || p.endsWith('/')) {
@@ -3403,7 +3392,7 @@ export class SessionAgentDO {
 
   private async handleMemWrite(requestId: string, path: string, content: string) {
     try {
-      const userId = this.getStateValue('userId')!;
+      const userId = this.sessionState.userId;
       const file = await writeMemoryFile(this.env.DB, userId, path, content);
       this.runnerLink.send({ type: 'mem-write-result', requestId, file } as any);
     } catch (err) {
@@ -3414,7 +3403,7 @@ export class SessionAgentDO {
 
   private async handleMemPatch(requestId: string, path: string, operations: any) {
     try {
-      const userId = this.getStateValue('userId')!;
+      const userId = this.sessionState.userId;
       const result = await patchMemoryFile(this.env.DB, userId, path, operations);
       this.runnerLink.send({ type: 'mem-patch-result', requestId, result } as any);
     } catch (err) {
@@ -3425,7 +3414,7 @@ export class SessionAgentDO {
 
   private async handleMemRm(requestId: string, path: string) {
     try {
-      const userId = this.getStateValue('userId')!;
+      const userId = this.sessionState.userId;
       let deleted: number;
       if (path.endsWith('/')) {
         deleted = await deleteMemoryFilesUnderPath(this.env.DB, userId, path);
@@ -3441,7 +3430,7 @@ export class SessionAgentDO {
 
   private async handleMemSearch(requestId: string, query: string, path?: string, limit?: number) {
     try {
-      const userId = this.getStateValue('userId')!;
+      const userId = this.sessionState.userId;
       const results = await searchMemoryFiles(this.env.DB, userId, query, path, limit ?? 20);
       this.runnerLink.send({ type: 'mem-search-result', requestId, results } as any);
     } catch (err) {
@@ -3495,7 +3484,7 @@ export class SessionAgentDO {
 
   private async handleWorkflowList(requestId: string) {
     try {
-      const userId = this.getStateValue('userId')!;
+      const userId = this.sessionState.userId;
       const result = await listWorkflows(this.appDb, userId);
 
       const workflows = (result.results || []).map((row) => {
@@ -3536,7 +3525,7 @@ export class SessionAgentDO {
     },
   ) {
     try {
-      const userId = this.getStateValue('userId')!;
+      const userId = this.sessionState.userId;
       const name = (params.name || '').trim();
       if (!name) {
         this.runnerLink.send({ type: 'workflow-sync-result', requestId, error: 'Workflow name is required' } as any);
@@ -3601,12 +3590,11 @@ export class SessionAgentDO {
   }
 
   private deriveWorkerOriginFromSpawnRequest(): string | undefined {
-    const spawnRequestRaw = this.getStateValue('spawnRequest');
-    if (!spawnRequestRaw) return undefined;
+    const spawnRequest = this.sessionState.spawnRequest;
+    if (!spawnRequest) return undefined;
 
     try {
-      const parsed = JSON.parse(spawnRequestRaw) as { doWsUrl?: unknown };
-      const doWsUrl = typeof parsed?.doWsUrl === 'string' ? parsed.doWsUrl.trim() : '';
+      const doWsUrl = typeof spawnRequest.doWsUrl === 'string' ? (spawnRequest.doWsUrl as string).trim() : '';
       if (!doWsUrl) return undefined;
       return new URL(doWsUrl).origin;
     } catch {
@@ -3621,7 +3609,7 @@ export class SessionAgentDO {
     repoContext?: { repoUrl?: string; branch?: string; ref?: string; sourceRepoFullName?: string },
   ) {
     try {
-      const userId = this.getStateValue('userId')!;
+      const userId = this.sessionState.userId;
       const workflowLookupId = (workflowId || '').trim();
       if (!workflowLookupId) {
         this.runnerLink.send({ type: 'workflow-run-result', requestId, error: 'workflowId is required' } as any);
@@ -3738,7 +3726,7 @@ export class SessionAgentDO {
 
   private async handleWorkflowExecutions(requestId: string, workflowId?: string, limit?: number) {
     try {
-      const userId = this.getStateValue('userId')!;
+      const userId = this.sessionState.userId;
       const max = Math.min(Math.max(limit || 20, 1), 200);
       const parseMaybeJson = (raw: unknown) => {
         if (raw === null || raw === undefined) return null;
@@ -3824,7 +3812,7 @@ export class SessionAgentDO {
 
   private async handleWorkflowApi(requestId: string, action: string, payload?: Record<string, unknown>) {
     try {
-      const userId = this.getStateValue('userId')!;
+      const userId = this.sessionState.userId;
       const workflowIdOrSlug = typeof payload?.workflowId === 'string' ? payload.workflowId.trim() : '';
       if (!workflowIdOrSlug) {
         this.runnerLink.send({ type: 'workflow-api-result', requestId, error: 'workflowId is required' } as any);
@@ -3962,7 +3950,7 @@ export class SessionAgentDO {
 
   private async handleTriggerApi(requestId: string, action: string, payload?: Record<string, unknown>) {
     try {
-      const userId = this.getStateValue('userId')!;
+      const userId = this.sessionState.userId;
 
       if (action === 'list') {
         const result = await listTriggers(this.env.DB, userId);
@@ -4381,7 +4369,7 @@ export class SessionAgentDO {
 
   private async handleSkillApi(requestId: string, action: string, payload?: Record<string, unknown>) {
     try {
-      const userId = this.getStateValue('userId')!;
+      const userId = this.sessionState.userId;
       const orgId = await this.resolveOrgId() ?? 'default';
 
       if (action === 'search') {
@@ -4513,7 +4501,7 @@ export class SessionAgentDO {
 
   private async handlePersonaApi(requestId: string, action: string, payload?: Record<string, unknown>) {
     try {
-      const userId = this.getStateValue('userId')!;
+      const userId = this.sessionState.userId;
 
       if (action === 'get') {
         const id = payload?.id as string;
@@ -4727,7 +4715,7 @@ export class SessionAgentDO {
 
   private async handleIdentityApi(requestId: string, action: string, payload?: Record<string, unknown>) {
     try {
-      const userId = this.getStateValue('userId')!;
+      const userId = this.sessionState.userId;
 
       if (action === 'get') {
         const identity = await getOrchestratorIdentity(this.appDb, userId);
@@ -4771,11 +4759,10 @@ export class SessionAgentDO {
           if (updatedIdentity) {
             const personaFiles = buildOrchestratorPersonaFiles(updatedIdentity as any);
             // Update stored spawnRequest so future sendPluginContent calls use fresh files
-            const spawnRequestStr = this.getStateValue('spawnRequest');
-            if (spawnRequestStr) {
-              const spawnRequest = JSON.parse(spawnRequestStr);
+            const spawnRequest = this.sessionState.spawnRequest;
+            if (spawnRequest) {
               spawnRequest.personaFiles = personaFiles;
-              this.setStateValue('spawnRequest', JSON.stringify(spawnRequest));
+              this.sessionState.spawnRequest = spawnRequest;
             }
             await this.sendPluginContent();
           }
@@ -4794,7 +4781,7 @@ export class SessionAgentDO {
 
   private async handleExecutionApi(requestId: string, action: string, payload?: Record<string, unknown>) {
     try {
-      const userId = this.getStateValue('userId')!;
+      const userId = this.sessionState.userId;
       const executionId = typeof payload?.executionId === 'string' ? payload.executionId.trim() : '';
       if (!executionId) {
         this.runnerLink.send({ type: 'execution-api-result', requestId, error: 'executionId is required' } as any);
@@ -5025,7 +5012,7 @@ export class SessionAgentDO {
       return;
     }
 
-    const currentSessionId = this.getStateValue('sessionId');
+    const currentSessionId = this.sessionState.sessionId;
     if (execution.session_id && currentSessionId && execution.session_id !== currentSessionId) {
       console.warn(
         `[SessionAgentDO] Ignoring workflow result for ${executionId}: execution bound to ${execution.session_id}, this DO is ${currentSessionId}`,
@@ -5486,7 +5473,7 @@ export class SessionAgentDO {
 
   private async handleListPersonas(requestId: string) {
     try {
-      const userId = this.getStateValue('userId')!;
+      const userId = this.sessionState.userId;
       const personas = await listPersonas(this.env.DB, userId);
       this.runnerLink.send({ type: 'list-personas-result', requestId, personas } as any);
     } catch (err) {
@@ -5497,8 +5484,8 @@ export class SessionAgentDO {
 
   private async handleListChannels(requestId: string) {
     try {
-      const userId = this.getStateValue('userId');
-      const sessionId = this.getStateValue('sessionId')!;
+      const userId = this.sessionState.userId;
+      const sessionId = this.sessionState.sessionId;
 
       let bindings = userId
         ? await listUserChannelBindings(this.appDb, userId)
@@ -5528,7 +5515,7 @@ export class SessionAgentDO {
 
   private async handleListChildSessions(requestId: string) {
     try {
-      const sessionId = this.getStateValue('sessionId')!;
+      const sessionId = this.sessionState.sessionId;
       const { children } = await getChildSessions(this.env.DB, sessionId);
       this.runnerLink.send({ type: 'list-child-sessions-result', requestId, children } as any);
     } catch (err) {
@@ -5639,7 +5626,7 @@ export class SessionAgentDO {
 
   private async handleGetSessionStatus(requestId: string, targetSessionId: string) {
     try {
-      const userId = this.getStateValue('userId')!;
+      const userId = this.sessionState.userId;
       const session = await getSession(this.appDb, targetSessionId);
       if (!session || session.userId !== userId) {
         this.runnerLink.send({ type: 'get-session-status-result', requestId, error: 'Session not found or access denied' } as any);
@@ -5717,7 +5704,7 @@ export class SessionAgentDO {
   }
 
   private async flushMessagesToD1(): Promise<void> {
-    const sessionId = this.getStateValue('sessionId');
+    const sessionId = this.sessionState.sessionId;
     if (!sessionId) return;
     try {
       const count = await this.messageStore.flushToD1(this.env.DB, sessionId, batchUpsertMessages);
@@ -5847,56 +5834,56 @@ export class SessionAgentDO {
     this.ctx.storage.sql.exec('DELETE FROM channel_followups');
 
     // Store session state in durable SQLite
-    this.setStateValue('sessionId', body.sessionId);
-    this.setStateValue('userId', body.userId);
-    this.setStateValue('workspace', body.workspace);
+    this.sessionState.set('sessionId', body.sessionId);
+    this.sessionState.set('userId', body.userId);
+    this.sessionState.set('workspace', body.workspace);
     this.runnerLink.token = body.runnerToken;
-    this.setStateValue('status', 'initializing');
+    this.sessionState.status = 'initializing';
     this.promptQueue.runnerBusy = false;
 
     // Clear stale state from previous lifecycle
-    this.setStateValue('sandboxId', '');
-    this.setStateValue('tunnelUrls', '');
-    this.setStateValue('tunnels', '');
-    this.setStateValue('runningStartedAt', '');
-    this.setStateValue('sandboxWakeStartedAt', '');
-    this.setStateValue('initialModel', '');
-    this.setStateValue('initialPrompt', '');
-    this.setStateValue('parentThreadId', '');
+    this.sessionState.sandboxId = undefined;
+    this.sessionState.tunnelUrls = null;
+    this.sessionState.tunnels = [];
+    this.sessionState.runningStartedAt = 0;
+    this.sessionState.sandboxWakeStartedAt = 0;
+    this.sessionState.initialModel = undefined;
+    this.sessionState.initialPrompt = undefined;
+    this.sessionState.parentThreadId = undefined;
 
     if (body.parentThreadId) {
-      this.setStateValue('parentThreadId', body.parentThreadId);
+      this.sessionState.parentThreadId = body.parentThreadId;
     }
 
     if (body.sandboxId) {
-      this.setStateValue('sandboxId', body.sandboxId);
+      this.sessionState.sandboxId = body.sandboxId;
     }
     if (body.tunnelUrls) {
-      this.setStateValue('tunnelUrls', JSON.stringify(body.tunnelUrls));
+      this.sessionState.tunnelUrls = body.tunnelUrls;
     }
     if (body.terminateUrl) {
-      this.setStateValue('terminateUrl', body.terminateUrl);
+      this.sessionState.terminateUrl = body.terminateUrl;
     }
     if (body.hibernateUrl) {
-      this.setStateValue('hibernateUrl', body.hibernateUrl);
+      this.sessionState.hibernateUrl = body.hibernateUrl;
     }
     if (body.restoreUrl) {
-      this.setStateValue('restoreUrl', body.restoreUrl);
+      this.sessionState.restoreUrl = body.restoreUrl;
     }
     if (body.idleTimeoutMs) {
-      this.setStateValue('idleTimeoutMs', String(body.idleTimeoutMs));
+      this.sessionState.idleTimeoutMs = body.idleTimeoutMs;
     }
     if (body.backendUrl) {
-      this.setStateValue('backendUrl', body.backendUrl);
+      this.sessionState.backendUrl = body.backendUrl;
     }
     if (body.spawnRequest) {
-      this.setStateValue('spawnRequest', JSON.stringify(body.spawnRequest));
+      this.sessionState.spawnRequest = body.spawnRequest;
     }
     if (body.initialPrompt) {
-      this.setStateValue('initialPrompt', body.initialPrompt);
+      this.sessionState.initialPrompt = body.initialPrompt;
     }
     if (body.initialModel) {
-      this.setStateValue('initialModel', body.initialModel);
+      this.sessionState.initialModel = body.initialModel;
     }
 
     // Initialize queue mode (Phase D)
@@ -5905,15 +5892,15 @@ export class SessionAgentDO {
 
     // Channel follow-up reminder interval (default: 5 minutes)
     if ((body as any).channelFollowupIntervalMs) {
-      this.setStateValue('channelFollowupIntervalMs', String((body as any).channelFollowupIntervalMs));
+      this.sessionState.channelFollowupIntervalMs = (body as any).channelFollowupIntervalMs;
     }
 
     // Initialize idle tracking
-    this.setStateValue('lastUserActivityAt', String(Date.now()));
+    this.sessionState.lastUserActivityAt = Date.now();
 
     // If sandbox info was provided directly, we're already running
     if (body.sandboxId && body.tunnelUrls) {
-      this.setStateValue('status', 'running');
+      this.sessionState.status = 'running';
       this.markRunningStarted();
       updateSessionStatus(this.appDb, body.sessionId, 'running', body.sandboxId).catch((err) =>
         console.error('[SessionAgentDO] Failed to sync status to D1:', err),
@@ -5972,9 +5959,9 @@ export class SessionAgentDO {
     terminateUrl: string,
     spawnRequest: Record<string, unknown>,
   ): Promise<void> {
-    const sessionId = this.getStateValue('sessionId');
+    const sessionId = this.sessionState.sessionId;
     try {
-      this.setStateValue('sandboxWakeStartedAt', String(Date.now()));
+      this.sessionState.sandboxWakeStartedAt = Date.now();
       const sandboxWakeStart = Date.now();
       const response = await fetch(backendUrl, {
         method: 'POST',
@@ -5995,9 +5982,9 @@ export class SessionAgentDO {
       this.emitEvent('sandbox_wake', { durationMs: Date.now() - sandboxWakeStart });
 
       // Store sandbox info
-      this.setStateValue('sandboxId', result.sandboxId);
-      this.setStateValue('tunnelUrls', JSON.stringify(result.tunnelUrls));
-      this.setStateValue('status', 'running');
+      this.sessionState.sandboxId = result.sandboxId;
+      this.sessionState.tunnelUrls = result.tunnelUrls;
+      this.sessionState.status = 'running';
       this.markRunningStarted();
 
       // Sync status to D1 so sessions list shows correct status
@@ -6020,7 +6007,7 @@ export class SessionAgentDO {
     } catch (err) {
       console.error(`[SessionAgentDO] Failed to spawn sandbox for session ${sessionId}:`, err);
       const errorText = `Failed to create sandbox: ${err instanceof Error ? err.message : String(err)}`;
-      this.setStateValue('status', 'error');
+      this.sessionState.status = 'error';
       if (sessionId) {
         updateSessionStatus(this.appDb, sessionId, 'error', undefined, errorText).catch((e) =>
           console.error('[SessionAgentDO] Failed to sync error status to D1:', e),
@@ -6047,7 +6034,7 @@ export class SessionAgentDO {
       this.notifyEventBus({
         type: 'session.errored',
         sessionId: sessionId || undefined,
-        userId: this.getStateValue('userId') || undefined,
+        userId: this.sessionState.userId || undefined,
         data: { error: err instanceof Error ? err.message : String(err) },
         timestamp: new Date().toISOString(),
       });
@@ -6060,10 +6047,10 @@ export class SessionAgentDO {
   }
 
   private async handleStop(reason: string = 'user_stopped'): Promise<Response> {
-    const sandboxId = this.getStateValue('sandboxId');
-    const sessionId = this.getStateValue('sessionId');
-    const terminateUrl = this.getStateValue('terminateUrl');
-    const currentStatus = this.getStateValue('status');
+    const sandboxId = this.sessionState.sandboxId;
+    const sessionId = this.sessionState.sessionId;
+    const terminateUrl = this.sessionState.terminateUrl;
+    const currentStatus = this.sessionState.status;
 
     // Idempotency: if already terminated, skip all side-effects
     if (currentStatus === 'terminated') {
@@ -6139,11 +6126,11 @@ export class SessionAgentDO {
     this.ctx.storage.deleteAlarm();
 
     // Update state
-    this.setStateValue('status', 'terminated');
-    this.setStateValue('sandboxId', '');
-    this.setStateValue('tunnelUrls', '');
-    this.setStateValue('tunnels', '');
-    this.setStateValue('snapshotImageId', '');
+    this.sessionState.status = 'terminated';
+    this.sessionState.sandboxId = undefined;
+    this.sessionState.tunnelUrls = null;
+    this.sessionState.tunnels = [];
+    this.sessionState.snapshotImageId = undefined;
     this.promptQueue.runnerBusy = false;
     this.promptQueue.clearAll();
 
@@ -6166,7 +6153,7 @@ export class SessionAgentDO {
     this.notifyEventBus({
       type: 'session.completed',
       sessionId: sessionId || undefined,
-      userId: this.getStateValue('userId') || undefined,
+      userId: this.sessionState.userId || undefined,
       data: { sandboxId: sandboxId || null, reason },
       timestamp: new Date().toISOString(),
     });
@@ -6190,13 +6177,13 @@ export class SessionAgentDO {
   }
 
   private async handleStatus(): Promise<Response> {
-    const status = this.getStateValue('status') || 'idle';
-    const sandboxId = this.getStateValue('sandboxId');
-    const sessionId = this.getStateValue('sessionId');
-    const userId = this.getStateValue('userId');
-    const workspace = this.getStateValue('workspace');
-    const tunnelUrls = this.getStateValue('tunnelUrls');
-    const tunnelsRaw = this.getStateValue('tunnels');
+    const status = this.sessionState.status;
+    const sandboxId = this.sessionState.sandboxId;
+    const sessionId = this.sessionState.sessionId;
+    const userId = this.sessionState.userId;
+    const workspace = this.sessionState.workspace;
+    const tunnelUrlsParsed = this.sessionState.tunnelUrls;
+    const tunnelsParsed = this.sessionState.tunnels;
     const runnerBusy = this.promptQueue.runnerBusy;
 
     const messageCount = this.ctx.storage.sql
@@ -6207,25 +6194,8 @@ export class SessionAgentDO {
     const clientCount = this.getClientSockets().length;
     const runnerConnected = this.runnerLink.isConnected;
     const connectedUsers = this.getConnectedUserIds();
-    const runningStartedAt = this.getStateValue('runningStartedAt');
+    const runningStartedAt = this.sessionState.runningStartedAt;
 
-    let tunnelUrlsParsed: Record<string, string> | null = null;
-    if (tunnelUrls) {
-      try {
-        tunnelUrlsParsed = JSON.parse(tunnelUrls);
-      } catch {
-        tunnelUrlsParsed = null;
-      }
-    }
-
-    let tunnelsParsed: Array<{ name: string; port: number; protocol?: string; path: string; url?: string }> | null = null;
-    if (tunnelsRaw) {
-      try {
-        tunnelsParsed = JSON.parse(tunnelsRaw);
-      } catch {
-        tunnelsParsed = null;
-      }
-    }
     const gatewayUrl = tunnelUrlsParsed?.gateway;
     const tunnels = Array.isArray(tunnelsParsed)
       ? tunnelsParsed.map((t) => ({
@@ -6260,36 +6230,36 @@ export class SessionAgentDO {
       queuedPrompts: queueLength,
       connectedClients: clientCount,
       connectedUsers,
-      runningStartedAt: runningStartedAt ? parseInt(runningStartedAt) : null,
+      runningStartedAt: runningStartedAt || null,
     });
   }
 
   private notifyParentIfIdle() {
-    const sessionId = this.getStateValue('sessionId');
+    const sessionId = this.sessionState.sessionId;
     if (!sessionId) return;
-    const status = this.getStateValue('status');
+    const status = this.sessionState.status;
     if (status !== 'running') return;
     const runnerBusy = this.promptQueue.runnerBusy;
     const queued = this.promptQueue.length;
     if (runnerBusy || queued > 0) return;
 
-    const last = this.getStateValue('lastParentIdleNotice');
+    const last = this.sessionState.lastParentIdleNotice;
     if (last === 'true') return;
-    const existing = this.getStateValue('parentIdleNotifyAt');
+    const existing = this.sessionState.parentIdleNotifyAt;
     if (existing) return; // debounce already pending
-    this.setStateValue('parentIdleNotifyAt', String(Date.now() + PARENT_IDLE_DEBOUNCE_MS));
+    this.sessionState.parentIdleNotifyAt = Date.now() + PARENT_IDLE_DEBOUNCE_MS;
     this.rescheduleIdleAlarm();
   }
 
   private async notifyParentEvent(content: string, options?: { wake?: boolean }) {
     try {
-      const sessionId = this.getStateValue('sessionId');
+      const sessionId = this.sessionState.sessionId;
       if (!sessionId) return;
       const session = await getSession(this.appDb, sessionId);
       const parentSessionId = session?.parentSessionId;
       if (!parentSessionId) return;
       const childTitle = session?.title || session?.workspace || `Child ${sessionId.slice(0, 8)}`;
-      const parentThreadId = this.getStateValue('parentThreadId') || undefined;
+      const parentThreadId = this.sessionState.parentThreadId;
       const parentDoId = this.env.SESSIONS.idFromName(parentSessionId);
       const parentDO = this.env.SESSIONS.get(parentDoId);
       await parentDO.fetch(new Request('http://do/system-message', {
@@ -6335,7 +6305,7 @@ export class SessionAgentDO {
     });
 
     if (wake) {
-      const status = this.getStateValue('status');
+      const status = this.sessionState.status;
       if (status === 'hibernated') {
         // Queue the prompt so the runner picks it up after connecting.
         this.promptQueue.enqueue({ id: messageId, content, threadId });
@@ -6351,9 +6321,9 @@ export class SessionAgentDO {
           // Runner is connected and idle — insert as 'processing' for recoverability, then dispatch
           this.promptQueue.enqueue({ id: messageId, content, threadId, status: 'processing' });
           this.promptQueue.stampDispatched();
-          this.setStateValue('lastParentIdleNotice', '');
-          this.setStateValue('parentIdleNotifyAt', '');
-          const ownerId = this.getStateValue('userId');
+          this.sessionState.lastParentIdleNotice = undefined;
+          this.sessionState.parentIdleNotifyAt = 0;
+          const ownerId = this.sessionState.userId;
           const ownerDetails = ownerId ? await this.getUserDetails(ownerId) : undefined;
           const sysModelPrefs = await this.resolveModelPreferences(ownerDetails);
           const sysChannelKey = this.channelKeyFrom(undefined, undefined);
@@ -6402,7 +6372,7 @@ export class SessionAgentDO {
       return Response.json({ error: 'payload.payload must be an object' }, { status: 400 });
     }
 
-    const status = this.getStateValue('status');
+    const status = this.sessionState.status;
     const queueWorkflowDispatch = (reason: string) => {
       const queueId = crypto.randomUUID();
       this.promptQueue.enqueue({
@@ -6434,12 +6404,12 @@ export class SessionAgentDO {
       return queueWorkflowDispatch('runner_busy');
     }
 
-    this.setStateValue('lastUserActivityAt', String(Date.now()));
+    this.sessionState.lastUserActivityAt = Date.now();
     this.promptQueue.stampDispatched();
     this.rescheduleIdleAlarm();
-    this.setStateValue('lastParentIdleNotice', '');
-    this.setStateValue('parentIdleNotifyAt', '');
-    const dispatchOwnerId = this.getStateValue('userId');
+    this.sessionState.lastParentIdleNotice = undefined;
+    this.sessionState.parentIdleNotifyAt = 0;
+    const dispatchOwnerId = this.sessionState.userId;
     const dispatchOwnerDetails = dispatchOwnerId ? await this.getUserDetails(dispatchOwnerId) : undefined;
     const dispatchModelPrefs = await this.resolveModelPreferences(dispatchOwnerDetails);
 
@@ -6488,9 +6458,9 @@ export class SessionAgentDO {
 
       this.channelRouter.clear();
       this.promptQueue.stampDispatched();
-      this.setStateValue('lastParentIdleNotice', '');
-      this.setStateValue('parentIdleNotifyAt', '');
-      const queueOwnerId = this.getStateValue('userId');
+      this.sessionState.lastParentIdleNotice = undefined;
+      this.sessionState.parentIdleNotifyAt = 0;
+      const queueOwnerId = this.sessionState.userId;
       const queueOwnerDetails = queueOwnerId ? await this.getUserDetails(queueOwnerId) : undefined;
       const queueModelPrefs = await this.resolveModelPreferences(queueOwnerDetails);
       const wfDispatched = this.runnerLink.send({
@@ -6547,7 +6517,7 @@ export class SessionAgentDO {
     }
 
     // Resolve model preferences from session owner (with org fallback)
-    const queueOwnerId = this.getStateValue('userId');
+    const queueOwnerId = this.sessionState.userId;
     const queueOwnerDetails = queueOwnerId ? await this.getUserDetails(queueOwnerId) : undefined;
     const queueModelPrefs = await this.resolveModelPreferences(queueOwnerDetails);
     const queueChannelKey = this.channelKeyFrom(queueChannelType, queueChannelId);
@@ -6585,8 +6555,8 @@ export class SessionAgentDO {
       return false;
     }
     this.promptQueue.stampDispatched();
-    this.setStateValue('lastParentIdleNotice', '');
-    this.setStateValue('parentIdleNotifyAt', '');
+    this.sessionState.lastParentIdleNotice = undefined;
+    this.sessionState.parentIdleNotifyAt = 0;
     this.rescheduleIdleAlarm();
 
     // Emit queue_wait timing — measure how long the prompt waited before dispatch
@@ -6613,7 +6583,7 @@ export class SessionAgentDO {
   private handleMessagesEndpoint(url: URL): Response {
     const limit = parseInt(url.searchParams.get('limit') || '5000', 10);
     const after = url.searchParams.get('after');
-    const sessionId = this.getStateValue('sessionId') || '';
+    const sessionId = this.sessionState.sessionId;
 
     const afterCreatedAt = after != null ? parseInt(after, 10) : undefined;
     const rows = this.messageStore.getMessages({
@@ -6668,12 +6638,10 @@ export class SessionAgentDO {
   }
 
   private async handleProxy(request: Request, url: URL): Promise<Response> {
-    const tunnelUrlsRaw = this.getStateValue('tunnelUrls');
-    if (!tunnelUrlsRaw) {
+    const tunnelUrls = this.sessionState.tunnelUrls;
+    if (!tunnelUrls) {
       return Response.json({ error: 'Sandbox not running' }, { status: 503 });
     }
-
-    const tunnelUrls = JSON.parse(tunnelUrlsRaw);
     // Route through gateway's /opencode proxy to avoid Modal encrypted tunnel issues
     // on the direct OpenCode port. Fall back to direct opencode URL if gateway not available.
     const gatewayUrl = tunnelUrls.gateway;
@@ -6748,7 +6716,7 @@ export class SessionAgentDO {
     const orgId = orgSettings?.id;
 
     // Extract repo owner from session's repo URL for repo-aware resolution
-    const sessionId = this.getStateValue('sessionId');
+    const sessionId = this.sessionState.sessionId;
     const gitState = sessionId ? await getSessionGitState(this.appDb, sessionId) : null;
     const repoUrl = gitState?.sourceRepoUrl;
     const urlMatch = repoUrl?.match(/github\.com[/:]([^/]+)\//);
@@ -6762,7 +6730,7 @@ export class SessionAgentDO {
     }
 
     // Fall back to session creator
-    const userId = this.getStateValue('userId');
+    const userId = this.sessionState.userId;
     if (!userId) return null;
 
     return this.resolveGitHubTokenForUser(userId, repoOwner, orgId);
@@ -6844,7 +6812,7 @@ export class SessionAgentDO {
       return { owner, repo };
     }
 
-    const sessionId = this.getStateValue('sessionId');
+    const sessionId = this.sessionState.sessionId;
     const gitState = sessionId ? await getSessionGitState(this.appDb, sessionId) : null;
     const repoUrl = gitState?.sourceRepoUrl;
     if (!repoUrl) {
@@ -6862,7 +6830,7 @@ export class SessionAgentDO {
   // ─── PR Creation ──────────────────────────────────────────────────────
 
   private async handleCreatePR(msg: { requestId?: string; branch: string; title: string; body?: string; base?: string }) {
-    const sessionId = this.getStateValue('sessionId');
+    const sessionId = this.sessionState.sessionId;
     const requestId = msg.requestId;
 
     // Notify clients that PR creation is in progress
@@ -6995,7 +6963,7 @@ export class SessionAgentDO {
   // ─── PR Update ────────────────────────────────────────────────────────
 
   private async handleUpdatePR(msg: { requestId?: string; prNumber: number; title?: string; body?: string; state?: string; labels?: string[] }) {
-    const sessionId = this.getStateValue('sessionId');
+    const sessionId = this.sessionState.sessionId;
     const requestId = msg.requestId;
 
     try {
@@ -7108,7 +7076,7 @@ export class SessionAgentDO {
   // ─── Hibernate / Wake ──────────────────────────────────────────────────
 
   private async handleHibernate(): Promise<Response> {
-    const status = this.getStateValue('status');
+    const status = this.sessionState.status;
 
     if (status === 'hibernated' || status === 'hibernating') {
       return Response.json({ status, message: 'Already hibernated or hibernating' });
@@ -7123,7 +7091,7 @@ export class SessionAgentDO {
   }
 
   private async handleWake(): Promise<Response> {
-    const status = this.getStateValue('status');
+    const status = this.sessionState.status;
 
     if (status === 'running' || status === 'restoring') {
       return Response.json({ status, message: 'Already running or restoring' });
@@ -7138,9 +7106,9 @@ export class SessionAgentDO {
   }
 
   private async performHibernate(): Promise<void> {
-    const sessionId = this.getStateValue('sessionId');
-    const sandboxId = this.getStateValue('sandboxId');
-    const hibernateUrl = this.getStateValue('hibernateUrl');
+    const sessionId = this.sessionState.sessionId;
+    const sandboxId = this.sessionState.sandboxId;
+    const hibernateUrl = this.sessionState.hibernateUrl;
 
     if (!sandboxId || !hibernateUrl) {
       console.error('[SessionAgentDO] Cannot hibernate: missing sandboxId or hibernateUrl');
@@ -7154,7 +7122,7 @@ export class SessionAgentDO {
       await this.flushMetrics();
 
       // Set status to hibernating
-      this.setStateValue('status', 'hibernating');
+      this.sessionState.status = 'hibernating';
       this.broadcastToClients({
         type: 'status',
         data: { status: 'hibernating' },
@@ -7187,11 +7155,11 @@ export class SessionAgentDO {
         for (const ws of runnerSockets409) {
           try { ws.close(1000, 'Sandbox already exited'); } catch { /* ignore */ }
         }
-        this.setStateValue('sandboxId', '');
-        this.setStateValue('tunnelUrls', '');
-        this.setStateValue('tunnels', '');
+        this.sessionState.sandboxId = undefined;
+        this.sessionState.tunnelUrls = null;
+        this.sessionState.tunnels = [];
         this.promptQueue.runnerBusy = false;
-        this.setStateValue('status', 'terminated');
+        this.sessionState.status = 'terminated';
         this.broadcastToClients({
           type: 'status',
           data: { status: 'terminated', sandboxRunning: false },
@@ -7219,12 +7187,12 @@ export class SessionAgentDO {
       }
 
       // Store snapshot info and clear sandbox info
-      this.setStateValue('snapshotImageId', result.snapshotImageId);
-      this.setStateValue('sandboxId', '');
-      this.setStateValue('tunnelUrls', '');
-      this.setStateValue('tunnels', '');
+      this.sessionState.snapshotImageId = result.snapshotImageId;
+      this.sessionState.sandboxId = undefined;
+      this.sessionState.tunnelUrls = null;
+      this.sessionState.tunnels = [];
       this.promptQueue.runnerBusy = false;
-      this.setStateValue('status', 'hibernated');
+      this.sessionState.status = 'hibernated';
 
       this.broadcastToClients({
         type: 'status',
@@ -7255,7 +7223,7 @@ export class SessionAgentDO {
     } catch (err) {
       console.error(`[SessionAgentDO] Failed to hibernate session ${sessionId}:`, err);
       const errorText = `Failed to hibernate: ${err instanceof Error ? err.message : String(err)}`;
-      this.setStateValue('status', 'error');
+      this.sessionState.status = 'error';
       if (sessionId) {
         updateSessionStatus(this.appDb, sessionId, 'error', undefined, errorText).catch((e) =>
           console.error('[SessionAgentDO] Failed to sync error status to D1:', e),
@@ -7282,21 +7250,21 @@ export class SessionAgentDO {
 
   private async performWake(): Promise<void> {
     // Guard against concurrent wake calls (e.g. two prompts arriving while hibernated)
-    const currentStatus = this.getStateValue('status');
+    const currentStatus = this.sessionState.status;
     if (currentStatus === 'restoring' || currentStatus === 'running') {
       console.log(`[SessionAgentDO] performWake skipped — already ${currentStatus}`);
       return;
     }
 
-    const sessionId = this.getStateValue('sessionId');
-    const snapshotImageId = this.getStateValue('snapshotImageId');
-    const restoreUrl = this.getStateValue('restoreUrl');
-    const spawnRequestStr = this.getStateValue('spawnRequest');
+    const sessionId = this.sessionState.sessionId;
+    const snapshotImageId = this.sessionState.snapshotImageId;
+    const restoreUrl = this.sessionState.restoreUrl;
+    const spawnRequest = this.sessionState.spawnRequest;
 
-    if (!snapshotImageId || !restoreUrl || !spawnRequestStr) {
+    if (!snapshotImageId || !restoreUrl || !spawnRequest) {
       const errorText = 'Cannot wake: missing snapshotImageId, restoreUrl, or spawnRequest';
       console.error(`[SessionAgentDO] ${errorText}`);
-      this.setStateValue('status', 'error');
+      this.sessionState.status = 'error';
       if (sessionId) {
         updateSessionStatus(this.appDb, sessionId, 'error', undefined, errorText).catch((e) =>
           console.error('[SessionAgentDO] Failed to sync error status to D1:', e),
@@ -7308,7 +7276,7 @@ export class SessionAgentDO {
     }
 
     try {
-      this.setStateValue('status', 'restoring');
+      this.sessionState.status = 'restoring';
       this.broadcastToClients({
         type: 'status',
         data: { status: 'restoring' },
@@ -7319,9 +7287,7 @@ export class SessionAgentDO {
         );
       }
 
-      const spawnRequest = JSON.parse(spawnRequestStr);
-
-      this.setStateValue('sandboxWakeStartedAt', String(Date.now()));
+      this.sessionState.sandboxWakeStartedAt = Date.now();
       const restoreStart = Date.now();
       const response = await fetch(restoreUrl, {
         method: 'POST',
@@ -7348,12 +7314,12 @@ export class SessionAgentDO {
       });
 
       // Update state with new sandbox info
-      this.setStateValue('sandboxId', result.sandboxId);
-      this.setStateValue('tunnelUrls', JSON.stringify(result.tunnelUrls));
-      this.setStateValue('snapshotImageId', '');
-      this.setStateValue('status', 'running');
+      this.sessionState.sandboxId = result.sandboxId;
+      this.sessionState.tunnelUrls = result.tunnelUrls;
+      this.sessionState.snapshotImageId = undefined;
+      this.sessionState.status = 'running';
       this.markRunningStarted();
-      this.setStateValue('lastUserActivityAt', String(Date.now()));
+      this.sessionState.lastUserActivityAt = Date.now();
 
       this.rescheduleIdleAlarm();
 
@@ -7377,7 +7343,7 @@ export class SessionAgentDO {
     } catch (err) {
       console.error(`[SessionAgentDO] Failed to restore session ${sessionId}:`, err);
       const errorText = `Failed to restore session: ${err instanceof Error ? err.message : String(err)}`;
-      this.setStateValue('status', 'error');
+      this.sessionState.status = 'error';
       if (sessionId) {
         updateSessionStatus(this.appDb, sessionId, 'error', undefined, errorText).catch((e) =>
           console.error('[SessionAgentDO] Failed to sync error status to D1:', e),
@@ -7410,12 +7376,9 @@ export class SessionAgentDO {
     // Start with a far-future default; idle timeout narrows it if configured
     let earliestAlarm = Infinity;
 
-    const idleTimeoutMsStr = this.getStateValue('idleTimeoutMs');
-    if (idleTimeoutMsStr) {
-      const idleTimeoutMs = parseInt(idleTimeoutMsStr);
-      if (!isNaN(idleTimeoutMs) && idleTimeoutMs > 0) {
-        earliestAlarm = Date.now() + idleTimeoutMs;
-      }
+    const idleTimeoutMs = this.sessionState.idleTimeoutMs;
+    if (idleTimeoutMs > 0) {
+      earliestAlarm = Date.now() + idleTimeoutMs;
     }
 
     // Consider pending interactive prompt expiry — use the earliest time
@@ -7458,12 +7421,9 @@ export class SessionAgentDO {
     }
 
     // Also consider parent idle debounce deadline
-    const parentIdleStr = this.getStateValue('parentIdleNotifyAt');
-    if (parentIdleStr) {
-      const parentIdleMs = parseInt(parentIdleStr);
-      if (!isNaN(parentIdleMs) && parentIdleMs < earliestAlarm) {
-        earliestAlarm = parentIdleMs;
-      }
+    const parentIdleMs = this.sessionState.parentIdleNotifyAt;
+    if (parentIdleMs && parentIdleMs < earliestAlarm) {
+      earliestAlarm = parentIdleMs;
     }
 
     // Only set alarm if we have at least one deadline
@@ -7473,20 +7433,6 @@ export class SessionAgentDO {
   }
 
   // ─── Helpers ───────────────────────────────────────────────────────────
-
-  private getStateValue(key: string): string | undefined {
-    const rows = this.ctx.storage.sql
-      .exec('SELECT value FROM state WHERE key = ?', key)
-      .toArray();
-    return rows.length > 0 ? (rows[0].value as string) : undefined;
-  }
-
-  private setStateValue(key: string, value: string): void {
-    this.ctx.storage.sql.exec(
-      'INSERT OR REPLACE INTO state (key, value) VALUES (?, ?)',
-      key, value
-    );
-  }
 
   private getClientSockets(): WebSocket[] {
     // Get all websockets, then filter to client-tagged ones
@@ -7662,7 +7608,7 @@ export class SessionAgentDO {
     contextTaskId?: string;
     replyToId?: string;
   }): Promise<void> {
-    const toUserId = this.getStateValue('userId');
+    const toUserId = this.sessionState.userId;
     if (!toUserId) return;
 
     const normalizedContent = params.content.trim();
@@ -7679,7 +7625,7 @@ export class SessionAgentDO {
       if (!webEnabled) return;
 
       await createMailboxMessage(this.appDb, {
-        fromSessionId: this.getStateValue('sessionId') || undefined,
+        fromSessionId: this.sessionState.sessionId || undefined,
         toUserId,
         messageType,
         content: normalizedContent.slice(0, 10_000),
@@ -7697,7 +7643,7 @@ export class SessionAgentDO {
    * Stores a timestamp so we can later compute elapsed active seconds.
    */
   private markRunningStarted(): void {
-    this.setStateValue('runningStartedAt', String(Date.now()));
+    this.sessionState.runningStartedAt = Date.now();
   }
 
   /**
@@ -7706,12 +7652,9 @@ export class SessionAgentDO {
    * Also called periodically from flushMetrics to avoid losing time if the DO restarts.
    */
   private async flushActiveSeconds(): Promise<void> {
-    const sessionId = this.getStateValue('sessionId');
-    const startStr = this.getStateValue('runningStartedAt');
-    if (!sessionId || !startStr) return;
-
-    const startMs = parseInt(startStr);
-    if (isNaN(startMs)) return;
+    const sessionId = this.sessionState.sessionId;
+    const startMs = this.sessionState.runningStartedAt;
+    if (!sessionId || !startMs) return;
 
     const elapsedSeconds = Math.floor((Date.now() - startMs) / 1000);
     if (elapsedSeconds > 0) {
@@ -7722,15 +7665,15 @@ export class SessionAgentDO {
       }
     }
     // Reset the start marker to now so we don't double-count on next flush
-    this.setStateValue('runningStartedAt', String(Date.now()));
+    this.sessionState.runningStartedAt = Date.now();
   }
 
   /**
    * Clear the running start marker (when leaving running state permanently).
    */
   private clearRunningStarted(): void {
-    this.setStateValue('runningStartedAt', '');
-    this.setStateValue('sandboxWakeStartedAt', '');
+    this.sessionState.runningStartedAt = 0;
+    this.sessionState.sandboxWakeStartedAt = 0;
   }
 
   /**
@@ -7738,7 +7681,7 @@ export class SessionAgentDO {
    * Called at lifecycle boundaries (stop, hibernate, alarm) and after each agent turn.
    */
   private async flushMetrics(): Promise<void> {
-    const sessionId = this.getStateValue('sessionId');
+    const sessionId = this.sessionState.sessionId;
     if (!sessionId) return;
 
     try {
@@ -7755,7 +7698,7 @@ export class SessionAgentDO {
       await updateSessionMetrics(this.appDb, sessionId, { messageCount, toolCallCount });
 
       // Flush active seconds if currently running
-      const status = this.getStateValue('status');
+      const status = this.sessionState.status;
       if (status === 'running') {
         await this.flushActiveSeconds();
       }
@@ -7766,7 +7709,7 @@ export class SessionAgentDO {
         .toArray();
 
       if (unflushed.length > 0) {
-        const userId = this.getStateValue('userId') || null;
+        const userId = this.sessionState.userId || null;
         try {
           await batchInsertAnalyticsEvents(this.env.DB, sessionId, userId, unflushed.map((row) => ({
             id: `${sessionId}:${row.id as number}`,
@@ -7897,8 +7840,8 @@ export class SessionAgentDO {
 
   private async handleMailboxSend(requestId: string, msg: RunnerMessage) {
     try {
-      const sessionId = this.getStateValue('sessionId');
-      const userId = this.getStateValue('userId');
+      const sessionId = this.sessionState.sessionId;
+      const userId = this.sessionState.userId;
 
       // Resolve @handle to userId if provided
       let toUserId = msg.toUserId;
@@ -7931,7 +7874,7 @@ export class SessionAgentDO {
 
   private async handleMailboxCheck(requestId: string, limit?: number, after?: string) {
     try {
-      const sessionId = this.getStateValue('sessionId');
+      const sessionId = this.sessionState.sessionId;
       if (!sessionId) {
         this.runnerLink.send({ type: 'mailbox-check-result', requestId, error: 'No session ID' } as any);
         return;
@@ -7956,7 +7899,7 @@ export class SessionAgentDO {
 
   private async handleTaskCreate(requestId: string, msg: RunnerMessage) {
     try {
-      const sessionId = this.getStateValue('sessionId');
+      const sessionId = this.sessionState.sessionId;
       if (!sessionId) {
         this.runnerLink.send({ type: 'task-create-result', requestId, error: 'No session ID' } as any);
         return;
@@ -7987,7 +7930,7 @@ export class SessionAgentDO {
 
   private async handleTaskList(requestId: string, status?: string, limit?: number) {
     try {
-      const sessionId = this.getStateValue('sessionId');
+      const sessionId = this.sessionState.sessionId;
       if (!sessionId) {
         this.runnerLink.send({ type: 'task-list-result', requestId, error: 'No session ID' } as any);
         return;
@@ -8029,7 +7972,7 @@ export class SessionAgentDO {
 
   private async handleTaskMy(requestId: string, status?: string) {
     try {
-      const sessionId = this.getStateValue('sessionId');
+      const sessionId = this.sessionState.sessionId;
       if (!sessionId) {
         this.runnerLink.send({ type: 'task-my-result', requestId, error: 'No session ID' } as any);
         return;
@@ -8069,7 +8012,7 @@ export class SessionAgentDO {
     fileName?: string,          // new generic param
   ) {
     try {
-      const userId = this.getStateValue('userId');
+      const userId = this.sessionState.userId;
       if (!userId) {
         this.runnerLink.send({ type: 'channel-reply-result', requestId, error: 'No userId on session' } as any);
         return;
@@ -8191,7 +8134,7 @@ export class SessionAgentDO {
 
   private async handleListTools(requestId: string, service?: string, query?: string) {
     try {
-      const userId = this.getStateValue('userId');
+      const userId = this.sessionState.userId;
       if (!userId) {
         this.runnerLink.send({ type: 'list-tools-result', requestId, error: 'No userId on session' } as any);
         return;
@@ -8414,8 +8357,8 @@ export class SessionAgentDO {
 
   private async handleCallTool(requestId: string, toolId: string, params: Record<string, unknown>, summary?: string) {
     try {
-      const userId = this.getStateValue('userId');
-      const sessionId = this.getStateValue('sessionId');
+      const userId = this.sessionState.userId;
+      const sessionId = this.sessionState.sessionId;
       if (!userId) {
         this.runnerLink.send({ type: 'call-tool-result', requestId, error: 'No userId on session' } as any);
         return;
@@ -8702,10 +8645,10 @@ export class SessionAgentDO {
     // Resolve caller identity for orchestrator sessions (used by Slack for username/avatar override)
     let callerIdentity: { name: string; avatar?: string } | undefined;
     try {
-      const spawnRequestStr = this.getStateValue('spawnRequest');
-      if (spawnRequestStr) {
-        const spawnReq = JSON.parse(spawnRequestStr);
-        if (spawnReq.envVars?.IS_ORCHESTRATOR === 'true') {
+      const spawnRequest = this.sessionState.spawnRequest;
+      if (spawnRequest) {
+        const envVars = spawnRequest.envVars as Record<string, string> | undefined;
+        if (envVars?.IS_ORCHESTRATOR === 'true') {
           const identity = await getOrchestratorIdentity(this.appDb, userId);
           if (identity) {
             callerIdentity = { name: identity.name, avatar: identity.avatar };
@@ -8812,8 +8755,8 @@ export class SessionAgentDO {
     // Delete the row
     this.ctx.storage.sql.exec('DELETE FROM interactive_prompts WHERE id = ?', promptId);
 
-    const userId = this.getStateValue('userId');
-    const sessionId = this.getStateValue('sessionId');
+    const userId = this.sessionState.userId;
+    const sessionId = this.sessionState.sessionId;
 
     if (promptType === 'approval') {
       const toolId = context.toolId || '';
@@ -8951,8 +8894,8 @@ export class SessionAgentDO {
 
   private async sendChannelInteractivePrompts(promptId: string, prompt: InteractivePrompt) {
     try {
-      const sessionId = this.getStateValue('sessionId');
-      const userId = this.getStateValue('userId');
+      const sessionId = this.sessionState.sessionId;
+      const userId = this.sessionState.userId;
       if (!sessionId || !userId) return;
 
       const targets: Array<{ channelType: string; channelId: string }> = [];
@@ -9058,7 +9001,7 @@ export class SessionAgentDO {
   ) {
     if (!channelRefsJson) return;
 
-    const userId = this.getStateValue('userId');
+    const userId = this.sessionState.userId;
     let refs: Array<{ channelType: string; ref: InteractivePromptRef }>;
     try {
       refs = JSON.parse(channelRefsJson);
@@ -9189,7 +9132,7 @@ export class SessionAgentDO {
     }
     console.log(`[SessionAgentDO] flushPendingChannelReply: sending to ${pending.channelType}:${pending.channelId} (${pending.content.length} chars)`);
 
-    const userId = this.getStateValue('userId');
+    const userId = this.sessionState.userId;
     if (!userId) return;
 
     // Resolve token: Slack uses org-level bot token, other channels use per-user credentials
@@ -9247,7 +9190,7 @@ export class SessionAgentDO {
 
     const id = crypto.randomUUID();
     const now = Date.now();
-    const intervalMs = parseInt(this.getStateValue('channelFollowupIntervalMs') || '300000');
+    const intervalMs = this.sessionState.channelFollowupIntervalMs;
     const truncated = (content || '').slice(0, 200);
 
     this.ctx.storage.sql.exec(
@@ -9272,17 +9215,9 @@ export class SessionAgentDO {
    * providers from D1 so admin changes take effect without session restart.
    */
   private async sendOpenCodeConfig(): Promise<void> {
-    const spawnRequestStr = this.getStateValue('spawnRequest');
-    if (!spawnRequestStr) {
+    const spawnRequest = this.sessionState.spawnRequest as { envVars?: Record<string, string>; customProviders?: Array<{ providerId: string; displayName: string; baseUrl: string; apiKey?: string; models: Array<{ id: string; name?: string; contextLimit?: number; outputLimit?: number }> }> } | undefined;
+    if (!spawnRequest) {
       console.warn('[SessionAgentDO] sendOpenCodeConfig: no spawnRequest in state, skipping');
-      return;
-    }
-
-    let spawnRequest: { envVars?: Record<string, string>; customProviders?: Array<{ providerId: string; displayName: string; baseUrl: string; apiKey?: string; models: Array<{ id: string; name?: string; contextLimit?: number; outputLimit?: number }> }> };
-    try {
-      spawnRequest = JSON.parse(spawnRequestStr);
-    } catch {
-      console.warn('[SessionAgentDO] sendOpenCodeConfig: failed to parse spawnRequest');
       return;
     }
 
@@ -9336,14 +9271,14 @@ export class SessionAgentDO {
   }
 
   private async sendRepoConfig(): Promise<void> {
-    const sessionId = this.getStateValue('sessionId');
+    const sessionId = this.sessionState.sessionId;
     if (!sessionId) return;
 
     const gitState = await getSessionGitState(this.appDb, sessionId);
     const repoUrl = gitState?.sourceRepoUrl;
     if (!repoUrl) return;
 
-    const userId = this.getStateValue('userId');
+    const userId = this.sessionState.userId;
     if (!userId) return;
 
     const orgId = await this.resolveOrgId();
@@ -9378,14 +9313,14 @@ export class SessionAgentDO {
   }
 
   private async handleRepoTokenRefresh(requestId?: string): Promise<void> {
-    const sessionId = this.getStateValue('sessionId');
+    const sessionId = this.sessionState.sessionId;
     if (!sessionId) return;
 
     const gitState = await getSessionGitState(this.appDb, sessionId);
     const repoUrl = gitState?.sourceRepoUrl;
     if (!repoUrl) return;
 
-    const userId = this.getStateValue('userId');
+    const userId = this.sessionState.userId;
     if (!userId) return;
 
     const orgId = await this.resolveOrgId();
@@ -9428,15 +9363,11 @@ export class SessionAgentDO {
 
     // Get persona files from spawnRequest (session-specific personas from identity)
     let sessionPersonas: Array<{ filename: string; content: string; sortOrder: number }> = [];
-    const spawnRequestStr = this.getStateValue('spawnRequest');
-    if (spawnRequestStr) {
-      try {
-        const spawnRequest = JSON.parse(spawnRequestStr);
-        if (spawnRequest.personaFiles && Array.isArray(spawnRequest.personaFiles)) {
-          sessionPersonas = spawnRequest.personaFiles;
-        }
-      } catch {
-        // ignore
+    const spawnRequest = this.sessionState.spawnRequest;
+    if (spawnRequest) {
+      const personaFiles = spawnRequest.personaFiles;
+      if (personaFiles && Array.isArray(personaFiles)) {
+        sessionPersonas = personaFiles;
       }
     }
 
@@ -9446,7 +9377,7 @@ export class SessionAgentDO {
     let toolWhitelist: { services: string[]; excludedActions: Array<{ service: string; actionId: string }> } | null = null;
     try {
       // Check if this session has a personaId by looking up the session record
-      const sessionId = this.getStateValue('sessionId');
+      const sessionId = this.sessionState.sessionId;
       if (sessionId) {
         const session = await getSession(appDb, sessionId);
         if (session?.personaId) {
