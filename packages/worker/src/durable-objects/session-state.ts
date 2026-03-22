@@ -23,6 +23,8 @@ export interface SessionStartParams {
   sessionId: string;
   userId: string;
   workspace: string;
+  sandboxId?: string;
+  tunnelUrls?: Record<string, string>;
   backendUrl?: string;
   terminateUrl?: string;
   hibernateUrl?: string;
@@ -319,20 +321,37 @@ export class SessionState {
    * This replaces the sequence of setStateValue calls in the start handler.
    */
   initialize(params: SessionStartParams): void {
+    // Identity + lifecycle
     this.set('sessionId', params.sessionId);
     this.set('userId', params.userId);
     this.set('workspace', params.workspace);
-    this.set('status', 'initializing');
+    this.status = 'initializing';
 
-    if (params.backendUrl) this.set('backendUrl', params.backendUrl);
-    if (params.terminateUrl) this.set('terminateUrl', params.terminateUrl);
-    if (params.hibernateUrl) this.set('hibernateUrl', params.hibernateUrl);
-    if (params.restoreUrl) this.set('restoreUrl', params.restoreUrl);
-    if (params.idleTimeoutMs) this.set('idleTimeoutMs', String(params.idleTimeoutMs));
-    if (params.spawnRequest) this.set('spawnRequest', JSON.stringify(params.spawnRequest));
-    if (params.initialPrompt) this.set('initialPrompt', params.initialPrompt);
-    if (params.initialModel) this.set('initialModel', params.initialModel);
-    if (params.parentThreadId) this.set('parentThreadId', params.parentThreadId);
-    if (params.channelFollowupIntervalMs) this.set('channelFollowupIntervalMs', String(params.channelFollowupIntervalMs));
+    // Clear stale state from previous lifecycle
+    this.sandboxId = undefined;
+    this.tunnelUrls = null;
+    this.tunnels = [];
+    this.runningStartedAt = 0;
+    this.sandboxWakeStartedAt = 0;
+    this.initialPrompt = undefined;
+    this.initialModel = undefined;
+    this.parentThreadId = undefined;
+
+    // Set optional fields
+    if (params.sandboxId) this.sandboxId = params.sandboxId;
+    if (params.tunnelUrls) this.tunnelUrls = params.tunnelUrls;
+    if (params.backendUrl) this.backendUrl = params.backendUrl;
+    if (params.terminateUrl) this.terminateUrl = params.terminateUrl;
+    if (params.hibernateUrl) this.hibernateUrl = params.hibernateUrl;
+    if (params.restoreUrl) this.restoreUrl = params.restoreUrl;
+    if (params.idleTimeoutMs) this.idleTimeoutMs = params.idleTimeoutMs;
+    if (params.spawnRequest) this.spawnRequest = params.spawnRequest;
+    if (params.initialPrompt) this.initialPrompt = params.initialPrompt;
+    if (params.initialModel) this.initialModel = params.initialModel;
+    if (params.parentThreadId) this.parentThreadId = params.parentThreadId;
+    if (params.channelFollowupIntervalMs) this.channelFollowupIntervalMs = params.channelFollowupIntervalMs;
+
+    // Initialize idle tracking
+    this.lastUserActivityAt = Date.now();
   }
 }

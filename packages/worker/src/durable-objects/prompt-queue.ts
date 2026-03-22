@@ -86,11 +86,26 @@ export interface CollectFlush {
 
 // ─── PromptQueue ─────────────────────────────────────────────────────────────
 
+export interface PromptQueueDeps {
+  getState: (key: string) => string | undefined;
+  setState: (key: string, value: string) => void;
+}
+
 export class PromptQueue {
   private sql: SqlStorage;
+  private deps: PromptQueueDeps;
 
-  constructor(sql: SqlStorage) {
+  constructor(sql: SqlStorage, deps?: PromptQueueDeps) {
     this.sql = sql;
+    this.deps = deps ?? {
+      getState: (key) => {
+        const rows = sql.exec('SELECT value FROM state WHERE key = ?', key).toArray();
+        return rows.length > 0 ? (rows[0].value as string) : undefined;
+      },
+      setState: (key, value) => {
+        sql.exec('INSERT OR REPLACE INTO state (key, value) VALUES (?, ?)', key, value);
+      },
+    };
   }
 
   /**
@@ -455,17 +470,11 @@ export class PromptQueue {
   // ─── Internal Helpers ──────────────────────────────────────────────────────
 
   private getState(key: string): string | undefined {
-    const rows = this.sql
-      .exec('SELECT value FROM state WHERE key = ?', key)
-      .toArray();
-    return rows.length > 0 ? (rows[0].value as string) : undefined;
+    return this.deps.getState(key);
   }
 
   private setState(key: string, value: string): void {
-    this.sql.exec(
-      'INSERT OR REPLACE INTO state (key, value) VALUES (?, ?)',
-      key, value,
-    );
+    this.deps.setState(key, value);
   }
 
   private rowToEntry(row: Record<string, unknown>): QueueEntry {

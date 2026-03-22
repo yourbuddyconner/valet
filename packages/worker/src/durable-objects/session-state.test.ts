@@ -345,5 +345,58 @@ describe('SessionState', () => {
       expect(ss.initialPrompt).toBeUndefined();
       expect(ss.parentThreadId).toBeUndefined();
     });
+
+    it('clears stale state from previous lifecycle', () => {
+      // Simulate a previous session's state
+      ss.sandboxId = 'old-sandbox';
+      ss.tunnelUrls = { opencode: 'https://old.com' };
+      ss.tunnels = [{ name: 'web', port: 8080, path: '/' }];
+      ss.runningStartedAt = 9999;
+      ss.sandboxWakeStartedAt = 8888;
+      ss.initialPrompt = 'old prompt';
+      ss.initialModel = 'old-model';
+      ss.parentThreadId = 'old-thread';
+
+      ss.initialize({
+        sessionId: 'sess-4',
+        userId: 'user-4',
+        workspace: '/ws',
+      });
+
+      expect(ss.sandboxId).toBeUndefined();
+      expect(ss.tunnelUrls).toBeNull();
+      expect(ss.tunnels).toEqual([]);
+      expect(ss.runningStartedAt).toBe(0);
+      expect(ss.sandboxWakeStartedAt).toBe(0);
+      expect(ss.initialPrompt).toBeUndefined();
+      expect(ss.initialModel).toBeUndefined();
+      expect(ss.parentThreadId).toBeUndefined();
+    });
+
+    it('sets lastUserActivityAt to current time', () => {
+      const before = Date.now();
+      ss.initialize({
+        sessionId: 'sess-5',
+        userId: 'user-5',
+        workspace: '/ws',
+      });
+      const after = Date.now();
+
+      expect(ss.lastUserActivityAt).toBeGreaterThanOrEqual(before);
+      expect(ss.lastUserActivityAt).toBeLessThanOrEqual(after);
+    });
+
+    it('sets sandboxId and tunnelUrls when provided', () => {
+      ss.initialize({
+        sessionId: 'sess-6',
+        userId: 'user-6',
+        workspace: '/ws',
+        sandboxId: 'sb-123',
+        tunnelUrls: { opencode: 'https://oc.com', gateway: 'https://gw.com' },
+      });
+
+      expect(ss.sandboxId).toBe('sb-123');
+      expect(ss.tunnelUrls).toEqual({ opencode: 'https://oc.com', gateway: 'https://gw.com' });
+    });
   });
 });

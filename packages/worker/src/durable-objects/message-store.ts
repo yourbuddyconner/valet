@@ -529,6 +529,16 @@ export class MessageStore {
     return rows.map((r) => this.rowToMessageRow(r));
   }
 
+  /** Find the most recent assistant message for a given channel. Used for hibernation recovery. */
+  getLatestAssistantForChannel(channelType: string, channelId: string): { id: string; content: string } | null {
+    const rows = this.sql.exec<MessageSqlRow>(
+      `SELECT ${MESSAGE_COLUMNS} FROM messages WHERE role = 'assistant' AND channel_type = ? AND channel_id = ? ORDER BY created_at DESC LIMIT 1`,
+      channelType, channelId,
+    ).toArray();
+    if (rows.length === 0 || !rows[0].content) return null;
+    return { id: rows[0].id as string, content: rows[0].content as string };
+  }
+
   /**
    * Update the parts JSON of an existing message. Used by audio-transcript handler.
    * Bumps seq so the change is flushed to D1.

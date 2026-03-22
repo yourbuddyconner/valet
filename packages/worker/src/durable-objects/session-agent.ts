@@ -33,7 +33,7 @@ import { MessageStore } from './message-store.js';
 import { ChannelRouter } from './channel-router.js';
 import { PromptQueue } from './prompt-queue.js';
 import { RunnerLink, type RunnerMessage, type RunnerOutbound, type AgentStatus, type PromptAttachment, type RunnerMessageHandlers, type WorkflowExecutionDispatchPayload } from './runner-link.js';
-import { SessionState, type SessionLifecycleStatus } from './session-state.js';
+import { SessionState, type SessionLifecycleStatus, type SessionStartParams } from './session-state.js';
 import { resolveOrchestratorPersona } from '../services/persona.js';
 import { sendChannelReply } from '../services/channel-reply.js';
 
@@ -427,12 +427,15 @@ export class SessionAgentDO {
       this.ctx.storage.sql.exec(SCHEMA_SQL);
       this.sessionState = new SessionState(this.ctx.storage.sql);
       this.messageStore = new MessageStore(this.ctx.storage.sql);
-      this.promptQueue = new PromptQueue(this.ctx.storage.sql);
+      const stateDeps = {
+        getState: (key: string) => this.sessionState.get(key),
+        setState: (key: string, value: string) => this.sessionState.set(key, value),
+      };
+      this.promptQueue = new PromptQueue(this.ctx.storage.sql, stateDeps);
       this.promptQueue.runMigrations();
       this.runnerLink = new RunnerLink({
         getRunnerSockets: () => this.ctx.getWebSockets('runner'),
-        getState: (key) => this.sessionState.get(key),
-        setState: (key, value) => this.sessionState.set(key, value),
+        ...stateDeps,
       });
 
       this.initialized = true;
@@ -5801,29 +5804,11 @@ export class SessionAgentDO {
   // ─── Internal Endpoints ────────────────────────────────────────────────
 
   private async handleStart(request: Request): Promise<Response> {
-    const body = await request.json() as {
-      sessionId: string;
-      userId: string;
-      workspace: string;
+    const body = await request.json() as SessionStartParams & {
       runnerToken: string;
-      sandboxId?: string;
-      tunnelUrls?: {
-        opencode: string;
-        gateway: string;
-        vscode?: string;
-        vnc?: string;
-        ttyd?: string;
-      };
-      // For async sandbox spawning (DO calls Modal in the background)
-      backendUrl?: string;
-      terminateUrl?: string;
-      hibernateUrl?: string;
-      restoreUrl?: string;
-      spawnRequest?: Record<string, unknown>;
-      idleTimeoutMs?: number;
-      initialPrompt?: string;
-      initialModel?: string;
-      parentThreadId?: string;
+      tunnelUrls?: Record<string, string>;
+      queueMode?: string;
+      collectDebounceMs?: number;
     };
 
     // Clear old session data (messages, queue, audit log, followups) for a fresh start.
@@ -5833,70 +5818,12 @@ export class SessionAgentDO {
     this.ctx.storage.sql.exec('DELETE FROM analytics_events');
     this.ctx.storage.sql.exec('DELETE FROM channel_followups');
 
-    // Store session state in durable SQLite
-    this.sessionState.set('sessionId', body.sessionId);
-    this.sessionState.set('userId', body.userId);
-    this.sessionState.set('workspace', body.workspace);
+    // Initialize all session state (clears stale values, sets identity + optional fields)
+    this.sessionState.initialize(body);
     this.runnerLink.token = body.runnerToken;
-    this.sessionState.status = 'initializing';
     this.promptQueue.runnerBusy = false;
-
-    // Clear stale state from previous lifecycle
-    this.sessionState.sandboxId = undefined;
-    this.sessionState.tunnelUrls = null;
-    this.sessionState.tunnels = [];
-    this.sessionState.runningStartedAt = 0;
-    this.sessionState.sandboxWakeStartedAt = 0;
-    this.sessionState.initialModel = undefined;
-    this.sessionState.initialPrompt = undefined;
-    this.sessionState.parentThreadId = undefined;
-
-    if (body.parentThreadId) {
-      this.sessionState.parentThreadId = body.parentThreadId;
-    }
-
-    if (body.sandboxId) {
-      this.sessionState.sandboxId = body.sandboxId;
-    }
-    if (body.tunnelUrls) {
-      this.sessionState.tunnelUrls = body.tunnelUrls;
-    }
-    if (body.terminateUrl) {
-      this.sessionState.terminateUrl = body.terminateUrl;
-    }
-    if (body.hibernateUrl) {
-      this.sessionState.hibernateUrl = body.hibernateUrl;
-    }
-    if (body.restoreUrl) {
-      this.sessionState.restoreUrl = body.restoreUrl;
-    }
-    if (body.idleTimeoutMs) {
-      this.sessionState.idleTimeoutMs = body.idleTimeoutMs;
-    }
-    if (body.backendUrl) {
-      this.sessionState.backendUrl = body.backendUrl;
-    }
-    if (body.spawnRequest) {
-      this.sessionState.spawnRequest = body.spawnRequest;
-    }
-    if (body.initialPrompt) {
-      this.sessionState.initialPrompt = body.initialPrompt;
-    }
-    if (body.initialModel) {
-      this.sessionState.initialModel = body.initialModel;
-    }
-
-    // Initialize queue mode (Phase D)
-    this.promptQueue.queueMode = (body as any).queueMode || 'followup';
-    this.promptQueue.collectDebounceMs = (body as any).collectDebounceMs || 3000;
-
-    // Channel follow-up reminder interval (default: 5 minutes)
-    if ((body as any).channelFollowupIntervalMs) {
-      this.sessionState.channelFollowupIntervalMs = (body as any).channelFollowupIntervalMs;
-    }
-
-    // Initialize idle tracking
-    this.sessionState.lastUserActivityAt = Date.now();
+    this.promptQueue.queueMode = body.queueMode || 'followup';
+    this.promptQueue.collectDebounceMs = body.collectDebounceMs || 3000;
 
     // If sandbox info was provided directly, we're already running
     if (body.sandboxId && body.tunnelUrls) {
@@ -9113,14 +9040,9 @@ export class SessionAgentDO {
         console.log(`[SessionAgentDO] flushPendingChannelReply: recovered from SQLite: ${recovered.channelType}:${recovered.channelId}`);
         this.channelRouter.recover(recovered.channelType, recovered.channelId);
         // Look up the most recent assistant message for resultContent
-        const recentMsg = this.ctx.storage.sql
-          .exec(
-            "SELECT id, content FROM messages WHERE role = 'assistant' AND channel_type = ? AND channel_id = ? ORDER BY created_at DESC LIMIT 1",
-            recovered.channelType, recovered.channelId
-          )
-          .toArray();
-        if (recentMsg.length > 0 && recentMsg[0].content) {
-          this.channelRouter.setResult(recentMsg[0].content as string, recentMsg[0].id as string);
+        const recentMsg = this.messageStore.getLatestAssistantForChannel(recovered.channelType, recovered.channelId);
+        if (recentMsg) {
+          this.channelRouter.setResult(recentMsg.content, recentMsg.id);
         }
       }
     }
