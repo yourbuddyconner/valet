@@ -32,26 +32,11 @@ import { validateWorkflowDefinition } from '../lib/workflow-definition.js';
 import { MessageStore } from './message-store.js';
 import { ChannelRouter } from './channel-router.js';
 import { PromptQueue } from './prompt-queue.js';
+import { RunnerLink, type RunnerMessage, type RunnerOutbound, type AgentStatus, type PromptAttachment, type RunnerMessageHandlers, type WorkflowExecutionDispatchPayload } from './runner-link.js';
 import { resolveOrchestratorPersona } from '../services/persona.js';
 import { sendChannelReply } from '../services/channel-reply.js';
 
 // ─── WebSocket Message Types ───────────────────────────────────────────────
-
-interface PromptAttachment {
-  type: 'file';
-  mime: string;
-  url: string;
-  filename?: string;
-}
-
-interface WorkflowExecutionDispatchPayload {
-  kind: 'run' | 'resume';
-  executionId: string;
-  workflowHash?: string;
-  resumeToken?: string;
-  decision?: 'approve' | 'deny';
-  payload: Record<string, unknown>;
-}
 
 const MAX_PROMPT_ATTACHMENTS = 8;
 const MAX_PROMPT_ATTACHMENT_URL_LENGTH = 12_000_000;
@@ -169,8 +154,6 @@ interface ClientMessage {
   reason?: string;
 }
 
-/** Agent status values for activity indication */
-type AgentStatus = 'idle' | 'thinking' | 'tool_calling' | 'streaming' | 'error';
 type SessionLifecycleStatus = 'initializing' | 'running' | 'idle' | 'hibernating' | 'hibernated' | 'restoring' | 'terminated' | 'archived' | 'error';
 type SandboxRuntimeState = 'starting' | 'running' | 'hibernating' | 'hibernated' | 'restoring' | 'stopped' | 'error';
 type AgentRuntimeState = 'starting' | 'busy' | 'idle' | 'queued' | 'sleeping' | 'standby' | 'stopped' | 'error';
@@ -234,260 +217,10 @@ function deriveRuntimeStates(args: {
   return { sandboxState, agentState, jointState };
 }
 
-/** Messages sent by the runner to the DO */
-/** Tool call status values */
-type ToolCallStatus = 'pending' | 'running' | 'completed' | 'error';
-
-interface RunnerMessage {
-  type: 'stream' | 'result' | 'tool' | 'question' | 'screenshot' | 'error' | 'complete' | 'agentStatus' | 'create-pr' | 'update-pr' | 'list-pull-requests' | 'inspect-pull-request' | 'models' | 'aborted' | 'reverted' | 'diff' | 'review-result' | 'command-result' | 'ping' | 'git-state' | 'pr-created' | 'files-changed' | 'child-session' | 'title' | 'spawn-child' | 'session-message' | 'session-messages' | 'terminate-child' | 'self-terminate' | 'mem-read' | 'mem-write' | 'mem-patch' | 'mem-rm' | 'mem-search' | 'list-repos' | 'list-personas' | 'list-channels' | 'get-session-status' | 'list-child-sessions' | 'forward-messages' | 'read-repo-file' | 'workflow-list' | 'workflow-sync' | 'workflow-run' | 'workflow-executions' | 'workflow-api' | 'trigger-api' | 'execution-api' | 'skill-api' | 'persona-api' | 'identity-api' | 'workflow-execution-result' | 'workflow-chat-message' | 'model-switched' | 'tunnels' | 'mailbox-send' | 'mailbox-check' | 'task-create' | 'task-list' | 'task-update' | 'task-my' | 'channel-reply' | 'audio-transcript' | 'channel-session-created' | 'session-reset' | 'opencode-config-applied' | 'list-tools' | 'call-tool' | 'message.create' | 'message.part.text-delta' | 'message.part.tool-update' | 'message.finalize' | 'usage-report' | 'thread.created' | 'thread.updated' | 'repo:refresh-token' | 'repo:clone-complete' | 'analytics:emit';
-  restarted?: boolean;
-  turnId?: string;
-  delta?: string;
-  callId?: string;
-  finalText?: string;
-  transcript?: string;
-  prNumber?: number;
-  targetSessionId?: string;
-  interrupt?: boolean;
-  limit?: number;
-  after?: string;
-  task?: string;
-  workspace?: string;
-  repoUrl?: string;
-  messageId?: string;
-  content?: string;
-  questionId?: string;
-  text?: string;
-  options?: string[];
-  callID?: string;
-  toolName?: string;
-  args?: unknown;
-  result?: unknown;
-  data?: string | { files?: { path: string; status: string; diff?: string }[] } | Record<string, unknown>; // base64 screenshot, diff payload, or review result
-  description?: string;
-  error?: string;
-  status?: AgentStatus | ToolCallStatus;
-  detail?: string;
-  branch?: string;
-  name?: string;
-  title?: string;
-  body?: string;
-  base?: string;
-  models?: { provider: string; models: { id: string; name: string }[] }[];
-  requestId?: string;
-  id?: string;
-  messageIds?: string[];
-  files?: { path: string; status: string; diff?: string }[];
-  number?: number;
-  url?: string;
-  baseBranch?: string;
-  commitCount?: number;
-  sourceType?: string;
-  sourcePrNumber?: number;
-  sourceIssueNumber?: number;
-  sourceRepoFullName?: string;
-  labels?: string[];
-  state?: string;
-  owner?: string;
-  repo?: string;
-  filesLimit?: number;
-  commentsLimit?: number;
-  childSessionId?: string;
-  diffFiles?: unknown;
-  // Memory file system fields
-  query?: string;
-  operations?: unknown[];
-  // Legacy fields
-  category?: string;
-  memoryId?: string;
-  relevance?: number;
-  source?: string;
-  // Model failover fields
-  fromModel?: string;
-  toModel?: string;
-  reason?: string;
-  model?: string;
-  personaId?: string;
-  path?: string;
-  ref?: string;
-  executionId?: string;
-  workflowId?: string;
-  slug?: string;
-  version?: string;
-  dataJson?: Record<string, unknown>;
-  variables?: Record<string, unknown>;
-  action?: string;
-  payload?: Record<string, unknown>;
-  envelope?: {
-    ok?: boolean;
-    status?: 'ok' | 'needs_approval' | 'cancelled' | 'failed';
-    executionId?: string;
-    output?: Record<string, unknown>;
-    steps?: Array<{
-      stepId: string;
-      status: string;
-      attempt?: number;
-      input?: unknown;
-      output?: unknown;
-      error?: string;
-      startedAt?: string;
-      completedAt?: string;
-    }>;
-    requiresApproval?: {
-      stepId: string;
-      prompt: string;
-      items: unknown[];
-      resumeToken: string;
-    } | null;
-    error?: string | null;
-  };
-  tunnels?: Array<{ name: string; port: number; protocol?: string; path: string; url?: string }>;
-  // Phase C: Mailbox + Task Board fields
-  toSessionId?: string;
-  toUserId?: string;
-  toHandle?: string;
-  messageType?: string;
-  contextSessionId?: string;
-  contextTaskId?: string;
-  replyToId?: string;
-  taskId?: string;
-  sessionId?: string;
-  parentTaskId?: string;
-  blockedBy?: string[];
-  // Phase D: Channel Reply fields
-  channelType?: string;
-  channelId?: string;
-  message?: string;
-  imageBase64?: string;
-  imageMimeType?: string;
-  followUp?: boolean;
-  fileBase64?: string;
-  fileMimeType?: string;
-  fileName?: string;
-  // Tool Discovery & Invocation fields
-  toolId?: string;
-  params?: Record<string, unknown>;
-  summary?: string;
-  service?: string;
-  // Per-channel session tracking
-  channelKey?: string;
-  opencodeSessionId?: string;
-  // Thread routing
-  threadId?: string;
-  role?: 'user' | 'assistant' | 'system';
-  parts?: Record<string, unknown>;
-  // Usage tracking
-  entries?: Array<{ ocMessageId: string; model: string; inputTokens: number; outputTokens: number }>;
-  // Thread fields
-  summaryAdditions?: number;
-  summaryDeletions?: number;
-  summaryFiles?: number;
-  // Repo clone result
-  success?: boolean;
-}
-
 /** Messages sent from DO to clients */
 interface ClientOutbound {
   type: 'message' | 'message.updated' | 'messages.removed' | 'stream' | 'chunk' | 'interactive_prompt' | 'interactive_prompt_resolved' | 'interactive_prompt_expired' | 'status' | 'pong' | 'error' | 'user.joined' | 'user.left' | 'agentStatus' | 'models' | 'diff' | 'review-result' | 'command-result' | 'git-state' | 'pr-created' | 'files-changed' | 'child-session' | 'title' | 'audit_log' | 'model-switched' | 'toast' | 'integration-auth-required' | 'thread.created' | 'thread.updated';
   [key: string]: unknown;
-}
-
-/** Messages sent from DO to runner */
-interface RunnerOutbound {
-  type: 'prompt' | 'answer' | 'stop' | 'abort' | 'revert' | 'diff' | 'review' | 'opencode-command' | 'pong' | 'init' | 'opencode-config' | 'plugin-content' | 'repo-config' | 'repo-token-refreshed' | 'spawn-child-result' | 'session-message-result' | 'session-messages-result' | 'create-pr-result' | 'update-pr-result' | 'list-pull-requests-result' | 'inspect-pull-request-result' | 'terminate-child-result' | 'mem-read-result' | 'mem-write-result' | 'mem-patch-result' | 'mem-rm-result' | 'mem-search-result' | 'list-repos-result' | 'list-personas-result' | 'list-channels-result' | 'get-session-status-result' | 'list-child-sessions-result' | 'forward-messages-result' | 'read-repo-file-result' | 'workflow-list-result' | 'workflow-sync-result' | 'workflow-run-result' | 'workflow-executions-result' | 'workflow-api-result' | 'trigger-api-result' | 'execution-api-result' | 'skill-api-result' | 'persona-api-result' | 'identity-api-result' | 'workflow-execute' | 'tunnel-delete' | 'channel-reply-result' | 'list-tools-result' | 'call-tool-result' | 'call-tool-pending';
-  config?: {
-    tools?: Record<string, boolean>;
-    providerKeys?: Record<string, string>;
-    instructions?: string[];
-    isOrchestrator?: boolean;
-    customProviders?: Array<{
-      providerId: string;
-      displayName: string;
-      baseUrl: string;
-      apiKey?: string;
-      models: Array<{ id: string; name?: string; contextLimit?: number; outputLimit?: number }>;
-    }>;
-    builtInProviderModelConfigs?: Array<{
-      providerId: string;
-      models: Array<{ id: string; name?: string }>;
-      showAllModels: boolean;
-    }>;
-  };
-  command?: string;
-  messageId?: string;
-  content?: string;
-  model?: string;
-  attachments?: PromptAttachment[];
-  questionId?: string;
-  answer?: string | boolean;
-  requestId?: string;
-  childSessionId?: string;
-  success?: boolean;
-  error?: string;
-  statusCode?: number;
-  messages?: Array<{ role: string; content: string; createdAt: string }>;
-  number?: number;
-  url?: string;
-  title?: string;
-  state?: string;
-  // Author attribution (multiplayer)
-  authorId?: string;
-  authorEmail?: string;
-  authorName?: string;
-  gitName?: string;
-  gitEmail?: string;
-  // Channel metadata
-  channelType?: string;
-  channelId?: string;
-  opencodeSessionId?: string;
-  // Original channel info before thread normalization (for [via ...] prefix in Runner)
-  replyChannelType?: string;
-  replyChannelId?: string;
-  // Thread routing
-  threadId?: string;
-  continuationContext?: string;
-  // Orchestrator result fields
-  memories?: unknown[];
-  memory?: unknown;
-  repos?: unknown[];
-  personas?: unknown[];
-  channels?: unknown[];
-  sessionStatus?: unknown;
-  pulls?: unknown[];
-  data?: unknown;
-  // Forward messages result
-  count?: number;
-  sourceSessionId?: string;
-  workflows?: unknown[];
-  workflow?: unknown;
-  execution?: unknown;
-  executions?: unknown[];
-  steps?: unknown[];
-  executionId?: string;
-  payload?: WorkflowExecutionDispatchPayload;
-  // Model failover
-  modelPreferences?: string[];
-  encoding?: string;
-  truncated?: boolean;
-  path?: string;
-  repo?: string;
-  ref?: string;
-  name?: string;
-  actorId?: string;
-  actorName?: string;
-  actorEmail?: string;
-  pluginContent?: {
-    personas: Array<{ filename: string; content: string; sortOrder: number }>;
-    skills: Array<{ filename: string; content: string }>;
-    tools: Array<{ filename: string; content: string }>;
-    allowRepoContent: boolean;
-  };
-  // Repo config fields (repo-config / repo-token-refreshed)
-  token?: string;
-  expiresAt?: string;
-  gitConfig?: Record<string, string>;
-  repoUrl?: string;
-  branch?: string;
 }
 
 // ─── Durable SQLite Table Schemas ──────────────────────────────────────────
@@ -634,6 +367,7 @@ export class SessionAgentDO {
   // handled so we don't double-send.
   private messageStore!: MessageStore;
   private promptQueue!: PromptQueue;
+  private runnerLink!: RunnerLink;
 
   /** Debounce timer for flushing messages to D1 during active turns. */
   private d1FlushTimer: ReturnType<typeof setTimeout> | null = null;
@@ -693,6 +427,11 @@ export class SessionAgentDO {
       this.messageStore = new MessageStore(this.ctx.storage.sql);
       this.promptQueue = new PromptQueue(this.ctx.storage.sql);
       this.promptQueue.runMigrations();
+      this.runnerLink = new RunnerLink({
+        getRunnerSockets: () => this.ctx.getWebSockets('runner'),
+        getState: (key) => this.getStateValue(key),
+        setState: (key, value) => this.setStateValue(key, value),
+      });
 
       this.initialized = true;
     });
@@ -812,7 +551,7 @@ export class SessionAgentDO {
         // Route prompts through the selected queue mode. If none is provided,
         // fall back to the DO's configured default.
         const effectiveMode = body.interrupt ? 'steer' : (body.queueMode || this.promptQueue.queueMode || 'followup');
-        console.log(`[SessionAgentDO] /prompt HTTP: effectiveMode=${effectiveMode} runnerBusy=${this.promptQueue.runnerBusy} runnerSockets=${this.ctx.getWebSockets('runner').length}`);
+        console.log(`[SessionAgentDO] /prompt HTTP: effectiveMode=${effectiveMode} runnerBusy=${this.promptQueue.runnerBusy} runnerConnected=${this.runnerLink.isConnected}`);
 
         const author = (body.authorId || body.authorEmail) ? {
           id: body.authorId || '',
@@ -1012,7 +751,7 @@ export class SessionAgentDO {
       },
       data: {
         sandboxRunning: !!sandboxId,
-        runnerConnected: this.ctx.getWebSockets('runner').length > 0,
+        runnerConnected: this.runnerLink.isConnected,
         runnerBusy: this.promptQueue.runnerBusy,
         promptsQueued: this.promptQueue.length,
         connectedClients: this.getClientSockets().length + 1,
@@ -1040,7 +779,7 @@ export class SessionAgentDO {
         session: { id: sessionId, status, workspace, title, messages: [] },
         data: {
           sandboxRunning: !!sandboxId,
-          runnerConnected: this.ctx.getWebSockets('runner').length > 0,
+          runnerConnected: this.runnerLink.isConnected,
           runnerBusy: this.promptQueue.runnerBusy,
           promptsQueued: this.promptQueue.length,
           connectedClients: this.getClientSockets().length + 1,
@@ -1112,7 +851,7 @@ export class SessionAgentDO {
 
   private async upgradeRunner(_request: Request, url: URL): Promise<Response> {
     const token = url.searchParams.get('token');
-    const expectedToken = this.getStateValue('runnerToken');
+    const expectedToken = this.runnerLink.token;
 
     // DO not yet initialized — runner connected before /start was called (race condition)
     if (!expectedToken) {
@@ -1145,10 +884,8 @@ export class SessionAgentDO {
       this.emitEvent('runner_connect', { durationMs: Date.now() - runningStart });
     }
 
-    // Mark runner as not-yet-ready. The runner needs to start OpenCode,
-    // discover models, etc. before it can accept prompts. Prompts arriving
-    // before the runner signals agentStatus: idle will be queued.
-    this.setStateValue('runnerReady', 'false');
+    // Mark runner as not-yet-ready via RunnerLink
+    this.runnerLink.onConnect();
 
     // Send init message to runner
     server.send(JSON.stringify({ type: 'init' }));
@@ -1194,7 +931,14 @@ export class SessionAgentDO {
     console.log(`[SessionAgentDO] WebSocket message: isRunner=${isRunner}, type=${parsed.type}, data=${data.slice(0, 200)}`);
 
     if (isRunner) {
-      await this.handleRunnerMessage(parsed as RunnerMessage);
+      await this.runnerLink.handleMessage(
+        parsed as RunnerMessage,
+        this.runnerHandlers,
+        () => {
+          this.setStateValue('lastUserActivityAt', String(Date.now()));
+          this.rescheduleIdleAlarm();
+        },
+      );
     } else {
       await this.handleClientMessage(ws, parsed as ClientMessage);
     }
@@ -1209,7 +953,7 @@ export class SessionAgentDO {
       // Revert any processing prompt back to queued so it can be retried
       this.promptQueue.revertProcessingToQueued();
       this.promptQueue.runnerBusy = false;
-      this.setStateValue('runnerReady', 'false');
+      this.runnerLink.onDisconnect();
 
       const queueLength = this.promptQueue.length;
       this.broadcastToClients({
@@ -1304,8 +1048,7 @@ export class SessionAgentDO {
     // ─── Stuck-Processing Watchdog ─────────────────────────────────────
     const WATCHDOG_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
     if (this.promptQueue.isStuckProcessing(WATCHDOG_TIMEOUT_MS)) {
-      const runnerSockets = this.ctx.getWebSockets('runner');
-      if (this.promptQueue.runnerBusy && runnerSockets.length === 0) {
+      if (this.promptQueue.runnerBusy && !this.runnerLink.isConnected) {
         const elapsed = Math.round((now - this.promptQueue.lastPromptDispatchedAt) / 1000);
         console.warn(`[SessionAgentDO] Watchdog: prompt stuck in processing for ${elapsed}s with no runner — recovering`);
         this.promptQueue.revertProcessingToQueued();
@@ -1328,11 +1071,10 @@ export class SessionAgentDO {
       const queuedCount = this.promptQueue.length;
       if (queuedCount > 0 && this.promptQueue.runnerBusy) {
         if (this.promptQueue.processingCount === 0) {
-          const runnerSockets = this.ctx.getWebSockets('runner');
-          console.warn(`[SessionAgentDO] Watchdog: ${queuedCount} queued items with runnerBusy=true but 0 processing — recovering (runner=${runnerSockets.length > 0 ? 'connected' : 'disconnected'})`);
+          console.warn(`[SessionAgentDO] Watchdog: ${queuedCount} queued items with runnerBusy=true but 0 processing — recovering (runner=${this.runnerLink.isConnected ? 'connected' : 'disconnected'})`);
           this.promptQueue.runnerBusy = false;
           this.promptQueue.clearDispatchTimers();
-          if (runnerSockets.length > 0) {
+          if (this.runnerLink.isConnected) {
             await this.sendNextQueuedPrompt();
           }
           this.broadcastToClients({
@@ -1412,14 +1154,14 @@ export class SessionAgentDO {
 
         // Send error to runner to unblock the pending request
         if (epRequestId) {
-          this.sendToRunner({ type: 'call-tool-result', requestId: epRequestId, error: `Action "${toolId}" approval expired after 10 minutes` } as any);
+          this.runnerLink.send({ type: 'call-tool-result', requestId: epRequestId, error: `Action "${toolId}" approval expired after 10 minutes` } as any);
         } else {
           console.warn(`[SessionAgentDO] Approval prompt ${epId} expired with no request_id — runner may be stuck`);
         }
 
         this.emitAuditEvent('agent.tool_call', `Action ${toolId} approval expired`, undefined, { invocationId: epId });
       } else if (epType === 'question') {
-        this.sendToRunner({
+        this.runnerLink.send({
           type: 'answer',
           questionId: epId,
           answer: '__expired__',
@@ -1639,7 +1381,7 @@ export class SessionAgentDO {
 
       case 'review': {
         const reviewRequestId = crypto.randomUUID();
-        this.sendToRunner({ type: 'review', requestId: reviewRequestId });
+        this.runnerLink.send({ type: 'review', requestId: reviewRequestId });
         break;
       }
 
@@ -1679,7 +1421,7 @@ export class SessionAgentDO {
           case 'undo':
           case 'redo':
           case 'compact':
-            this.sendToRunner({
+            this.runnerLink.send({
               type: 'opencode-command',
               command: cmd,
               args: cmdArgs,
@@ -1689,7 +1431,7 @@ export class SessionAgentDO {
           case 'new-session': {
             const channelType = msg.channelType || 'web';
             const channelId = msg.channelId || 'default';
-            this.sendToRunner({
+            this.runnerLink.send({
               type: 'new-session',
               channelType,
               channelId,
@@ -1858,9 +1600,8 @@ export class SessionAgentDO {
     // Check if runner is busy / ready
     const channelKey = this.channelKeyFrom(channelType, channelId);
     const runnerBusy = this.promptQueue.runnerBusy;
-    const runnerSockets = this.ctx.getWebSockets('runner');
-    const runnerConnected = runnerSockets.length > 0;
-    const runnerReady = this.getStateValue('runnerReady') !== 'false';
+    const runnerConnected = this.runnerLink.isConnected;
+    const runnerReady = this.runnerLink.isReady;
     const status = this.getStateValue('status');
     const sandboxId = this.getStateValue('sandboxId');
     const queuedCount = this.promptQueue.length;
@@ -1965,7 +1706,7 @@ export class SessionAgentDO {
       : content;
 
     const channelOcSessionId = this.getChannelOcSessionId(channelKey);
-    const dispatched = this.sendToRunner({
+    const dispatched = this.runnerLink.send({
       type: 'prompt',
       messageId,
       content: agentContent,
@@ -2008,11 +1749,11 @@ export class SessionAgentDO {
       // Channel-scoped abort — only clear this channel's queued prompts
       const channelKey = this.channelKeyFrom(channelType, channelId);
       this.promptQueue.clearQueued(channelKey);
-      this.sendToRunner({ type: 'abort', channelType, channelId });
+      this.runnerLink.send({ type: 'abort', channelType, channelId });
     } else {
       // Global abort — clear all queued prompts
       this.promptQueue.clearQueued();
-      this.sendToRunner({ type: 'abort' });
+      this.runnerLink.send({ type: 'abort' });
     }
 
     // Broadcast status immediately (runner will confirm with 'aborted')
@@ -2207,7 +1948,7 @@ export class SessionAgentDO {
     if (removedIds.length === 0) return;
 
     // Forward to runner so OpenCode can revert too
-    this.sendToRunner({ type: 'revert', messageId });
+    this.runnerLink.send({ type: 'revert', messageId });
 
     // Broadcast removal to all clients
     this.broadcastToClients({
@@ -2218,22 +1959,25 @@ export class SessionAgentDO {
 
   private async handleDiff() {
     const requestId = crypto.randomUUID();
-    this.sendToRunner({ type: 'diff', requestId });
+    this.runnerLink.send({ type: 'diff', requestId });
   }
 
-  // ─── Runner Message Handling ───────────────────────────────────────────
+  // ─── Runner Message Handlers ──────────────────────────────────────────
+  // Handler map for incoming runner messages. Each key corresponds to a
+  // RunnerMessage.type, each value is an (async) handler function.
+  // RunnerLink dispatches to these via runnerLink.handleMessage().
 
-  private async handleRunnerMessage(msg: RunnerMessage) {
-    console.log(`[SessionAgentDO] Runner message: type=${msg.type}`);
-
-    // Reset idle timer on any runner activity — agent work counts as session activity
-    if (msg.type === 'agentStatus' || msg.type === 'message.create' || msg.type === 'message.part.text-delta' || msg.type === 'message.part.tool-update' || msg.type === 'message.finalize') {
-      this.setStateValue('lastUserActivityAt', String(Date.now()));
-      this.rescheduleIdleAlarm();
+  private _runnerHandlers?: RunnerMessageHandlers;
+  private get runnerHandlers(): RunnerMessageHandlers {
+    if (!this._runnerHandlers) {
+      this._runnerHandlers = this.buildRunnerHandlers();
     }
+    return this._runnerHandlers;
+  }
 
-    switch (msg.type) {
-      case 'usage-report': {
+  private buildRunnerHandlers(): RunnerMessageHandlers {
+    return {
+      'usage-report': (msg) => {
         const entries = msg.entries;
         if (Array.isArray(entries)) {
           for (const entry of entries) {
@@ -2246,24 +1990,22 @@ export class SessionAgentDO {
             });
           }
         }
-        break;
-      }
+      },
 
-      case 'tunnels': {
+      'tunnels': (msg) => {
         if (Array.isArray(msg.tunnels)) {
           this.setStateValue('tunnels', JSON.stringify(msg.tunnels));
         } else {
           this.setStateValue('tunnels', '');
         }
-        break;
-      }
+      },
 
-      case 'workflow-chat-message': {
+      'workflow-chat-message': (msg) => {
         const ALLOWED_ROLES = new Set(['user', 'assistant', 'system']);
         const rawRole = typeof msg.role === 'string' ? msg.role : 'user';
         const role = (ALLOWED_ROLES.has(rawRole) ? rawRole : 'user') as 'user' | 'assistant' | 'system';
         const content = (msg.content || '').trim();
-        if (!content) break;
+        if (!content) return;
 
         const workflowMsgId = crypto.randomUUID();
         const partsObj = msg.parts && typeof msg.parts === 'object' ? msg.parts as Record<string, unknown> : null;
@@ -2297,10 +2039,9 @@ export class SessionAgentDO {
             createdAt: Math.floor(Date.now() / 1000),
           },
         });
-        break;
-      }
+      },
 
-      case 'question': {
+      'question': async (msg) => {
         // Store question as interactive prompt and broadcast to all clients
         const qId = msg.questionId || crypto.randomUUID();
         const questionCh = this.activeChannel;
@@ -2377,10 +2118,9 @@ export class SessionAgentDO {
             contextSessionId: sessionId || undefined,
           });
         }
-        break;
-      }
+      },
 
-      case 'screenshot': {
+      'screenshot': (msg) => {
         // Store screenshot reference and broadcast
         const ssId = crypto.randomUUID();
         const ssCh = this.activeChannel;
@@ -2403,10 +2143,9 @@ export class SessionAgentDO {
             ...(ssCh ? { channelType: ssCh.channelType, channelId: ssCh.channelId } : {}),
           },
         });
-        break;
-      }
+      },
 
-      case 'audio-transcript': {
+      'audio-transcript': (msg) => {
         // Runner transcribed audio attachments — update the original user message parts with transcript
         if (msg.messageId && msg.transcript) {
           const existing = this.messageStore.getMessage(msg.messageId);
@@ -2430,10 +2169,9 @@ export class SessionAgentDO {
             });
           }
         }
-        break;
-      }
+      },
 
-      case 'error': {
+      'error': async (msg) => {
         // Store error and broadcast
         // Always generate a new ID — msg.messageId is the prompt's user message ID,
         // which already exists in the messages table (PRIMARY KEY conflict).
@@ -2477,11 +2215,10 @@ export class SessionAgentDO {
           content: `Session error: ${errorText}`,
           contextSessionId: this.getStateValue('sessionId') || undefined,
         });
-        break;
-      }
+      },
 
       // ─── V2 Parts-Based Message Protocol ──────────────────────────────
-      case 'message.create': {
+      'message.create': (msg) => {
         const turnId = msg.turnId!;
         // Resolve threadId: prefer Runner-provided value, fall back to the currently-processing prompt's threadId
         let resolvedThreadId = msg.threadId || undefined;
@@ -2509,14 +2246,13 @@ export class SessionAgentDO {
             ...(resolvedThreadId ? { threadId: resolvedThreadId } : {}),
           },
         });
-        break;
-      }
+      },
 
-      case 'message.part.text-delta': {
+      'message.part.text-delta': (msg) => {
         if (!this.messageStore.getTurnSnapshot(msg.turnId!)) {
           if (!this.messageStore.recoverTurn(msg.turnId!)) {
             console.warn(`[SessionAgentDO] text-delta for unknown turn ${msg.turnId}`);
-            break;
+            return;
           }
         }
         this.messageStore.appendTextDelta(msg.turnId!, msg.delta || '');
@@ -2528,14 +2264,13 @@ export class SessionAgentDO {
           messageId: msg.turnId,
           ...(turn.metadata.channelType ? { channelType: turn.metadata.channelType, channelId: turn.metadata.channelId } : {}),
         });
-        break;
-      }
+      },
 
-      case 'message.part.tool-update': {
+      'message.part.tool-update': (msg) => {
         if (!this.messageStore.getTurnSnapshot(msg.turnId!)) {
           if (!this.messageStore.recoverTurn(msg.turnId!)) {
             console.warn(`[SessionAgentDO] tool-update for unknown turn ${msg.turnId}`);
-            break;
+            return;
           }
         }
         this.messageStore.updateToolCall(msg.turnId!, msg.callId!, msg.toolName!, msg.status!, msg.args, msg.result, msg.error);
@@ -2553,19 +2288,18 @@ export class SessionAgentDO {
             ...(snapshot.metadata.threadId ? { threadId: snapshot.metadata.threadId } : {}),
           },
         });
-        break;
-      }
+      },
 
-      case 'message.finalize': {
+      'message.finalize': (msg) => {
         const turnId = msg.turnId!;
         if (!this.messageStore.getTurnSnapshot(turnId)) {
           if (!this.messageStore.recoverTurn(turnId)) {
             console.warn(`[SessionAgentDO] finalize for unknown turn ${turnId}`);
-            break;
+            return;
           }
         }
         const final = this.messageStore.finalizeTurn(turnId, msg.finalText, msg.reason, msg.error);
-        if (!final) break;
+        if (!final) return;
         // Broadcast final message state
         this.broadcastToClients({
           type: 'message.updated',
@@ -2587,10 +2321,9 @@ export class SessionAgentDO {
           this.ctx.waitUntil(this.incrementAndMaybeSummarize(final.metadata.threadId));
         }
         console.log(`[SessionAgentDO] V2 turn finalized: ${turnId} (${final.content.length} chars, ${final.parts.length} parts)`);
-        break;
-      }
+      },
 
-      case 'complete': {
+      'complete': async (msg) => {
         // Prompt finished — auto-reply to originating channel if needed
         const pendingSnapshot = this.channelRouter.pendingSnapshot;
         console.log(`[SessionAgentDO] Complete received: pendingChannelReply=${pendingSnapshot ? `${pendingSnapshot.channelType}:${pendingSnapshot.channelId} handled=${pendingSnapshot.handled} resultContent=${pendingSnapshot.resultContent?.length ?? 0}chars` : 'null'} queueLength=${this.promptQueue.length} runnerBusy=${this.promptQueue.runnerBusy}`);
@@ -2600,10 +2333,9 @@ export class SessionAgentDO {
         await this.handlePromptComplete();
         // Flush metrics after each agent turn
         this.ctx.waitUntil(this.flushMetrics());
-        break;
-      }
+      },
 
-      case 'agentStatus': {
+      'agentStatus': async (msg) => {
         // Forward agent status to all clients for real-time activity indication
         const statusCh = this.activeChannel;
         this.broadcastToClients({
@@ -2615,9 +2347,9 @@ export class SessionAgentDO {
         if (msg.status === 'idle') {
           // If runner was initializing (not yet ready), mark it ready now.
           // This is the signal that OpenCode is healthy and models are discovered.
-          const wasInitializing = this.getStateValue('runnerReady') === 'false';
+          const wasInitializing = !this.runnerLink.isReady;
           if (wasInitializing) {
-            this.setStateValue('runnerReady', 'true');
+            this.runnerLink.ready = true;
             console.log('[SessionAgentDO] Runner is now ready (first idle after connect)');
 
             // Emit runner_idle — full time from sandbox spawn/restore to agent ready
@@ -2630,7 +2362,7 @@ export class SessionAgentDO {
 
           const currentRunnerBusy = this.promptQueue.runnerBusy;
           const currentQueueLen = this.promptQueue.length;
-          console.log(`[SessionAgentDO] agentStatus: idle (runnerBusy=${currentRunnerBusy}, runnerConnected=${this.ctx.getWebSockets('runner').length > 0}, queued=${currentQueueLen})`);
+          console.log(`[SessionAgentDO] agentStatus: idle (runnerBusy=${currentRunnerBusy}, runnerConnected=${this.runnerLink.isConnected}, queued=${currentQueueLen})`);
 
           // When runner is truly idle (not processing a prompt), check for deferred work.
           // This handles the post-restore case: runner connects, initializes, then signals
@@ -2675,7 +2407,7 @@ export class SessionAgentDO {
               if (initialModel) {
                 this.setStateValue('initialModel', '');
               }
-              this.sendToRunner({
+              this.runnerLink.send({
                 type: 'prompt',
                 messageId,
                 content: initialPrompt,
@@ -2698,10 +2430,9 @@ export class SessionAgentDO {
           this.setStateValue('lastParentIdleNotice', '');
           this.setStateValue('parentIdleNotifyAt', '');
         }
-        break;
-      }
+      },
 
-      case 'create-pr': {
+      'create-pr': async (msg) => {
         // Runner requests PR creation — call GitHub API directly
         await this.handleCreatePR({
           requestId: msg.requestId,
@@ -2710,10 +2441,9 @@ export class SessionAgentDO {
           body: msg.body,
           base: msg.base,
         });
-        break;
-      }
+      },
 
-      case 'update-pr': {
+      'update-pr': async (msg) => {
         // Runner requests PR update — call GitHub API directly
         await this.handleUpdatePR({
           requestId: msg.requestId,
@@ -2723,10 +2453,9 @@ export class SessionAgentDO {
           state: msg.state,
           labels: msg.labels,
         });
-        break;
-      }
+      },
 
-      case 'models':
+      'models': (msg) => {
         // Runner discovered available models — store for internal use (failover, context limits)
         // but do NOT broadcast to clients. The UI uses the Worker-resolved catalog from init.
         if (msg.models) {
@@ -2742,9 +2471,9 @@ export class SessionAgentDO {
           setCatalogCache(this.appDb, 'runner:discovered', modelsJson)
             .catch((err: unknown) => console.error('[SessionAgentDO] Failed to cache org-level discovered models:', err));
         }
-        break;
+      },
 
-      case 'model-switched': {
+      'model-switched': (msg) => {
         // Runner switched models due to provider error — store notice and broadcast
         const switchId = crypto.randomUUID();
         const switchText = `Model switched from ${msg.fromModel} to ${msg.toModel}: ${msg.reason}`;
@@ -2761,10 +2490,9 @@ export class SessionAgentDO {
           reason: msg.reason,
         });
         this.emitAuditEvent('agent.error', switchText.slice(0, 120));
-        break;
-      }
+      },
 
-      case 'aborted':
+      'aborted': async (msg) => {
         // Runner confirmed abort — mark idle, broadcast
         this.promptQueue.runnerBusy = false;
         this.broadcastToClients({
@@ -2777,14 +2505,14 @@ export class SessionAgentDO {
         });
         // Drain the queue — if prompts were queued after abort, process them now
         await this.handlePromptComplete();
-        break;
+      },
 
-      case 'reverted':
+      'reverted': (msg) => {
         // Runner confirmed revert — log for now
         console.log(`[SessionAgentDO] Revert confirmed for messages: ${msg.messageIds?.join(', ')}`);
-        break;
+      },
 
-      case 'diff':
+      'diff': (msg) => {
         // Runner returned diff data — broadcast to clients
         // Runner sends { type, requestId, data: { files } } or { type, requestId, files }
         const diffPayload = typeof msg.data === 'object' && msg.data !== null ? msg.data as Record<string, unknown> : null;
@@ -2794,9 +2522,9 @@ export class SessionAgentDO {
           requestId: msg.requestId,
           data: { files: diffFiles },
         });
-        break;
+      },
 
-      case 'review-result':
+      'review-result': (msg) => {
         // Runner returned structured review result — broadcast to clients (not stored in DB)
         this.broadcastToClients({
           type: 'review-result',
@@ -2805,9 +2533,9 @@ export class SessionAgentDO {
           diffFiles: msg.diffFiles,
           error: msg.error,
         });
-        break;
+      },
 
-      case 'command-result':
+      'command-result': (msg) => {
         // Runner returned OpenCode command result — broadcast to clients
         this.broadcastToClients({
           type: 'command-result',
@@ -2816,9 +2544,9 @@ export class SessionAgentDO {
           result: (msg as any).result ?? msg.data,
           error: msg.error,
         });
-        break;
+      },
 
-      case 'git-state': {
+      'git-state': (msg) => {
         // Runner reports current git branch/commit state
         const sessionId = this.getStateValue('sessionId');
         if (sessionId) {
@@ -2841,10 +2569,9 @@ export class SessionAgentDO {
             commitCount: msg.commitCount,
           },
         } as any);
-        break;
-      }
+      },
 
-      case 'pr-created': {
+      'pr-created': (msg) => {
         // Runner reports a PR was created
         const sessionIdPr = this.getStateValue('sessionId');
         if (sessionIdPr && msg.number) {
@@ -2868,10 +2595,9 @@ export class SessionAgentDO {
           },
         } as any);
         this.emitAuditEvent('git.pr_created', `PR #${msg.number}: ${msg.title || ''}`, undefined, { prNumber: msg.number, prUrl: msg.url });
-        break;
-      }
+      },
 
-      case 'files-changed': {
+      'files-changed': (msg) => {
         // Runner reports files changed — upsert in D1, broadcast to clients
         const sessionIdFc = this.getStateValue('sessionId');
         const filesChanged = (msg as any).files as Array<{ path: string; status: string; additions?: number; deletions?: number }> | undefined;
@@ -2891,20 +2617,18 @@ export class SessionAgentDO {
           type: 'files-changed',
           files: filesChanged ?? [],
         } as any);
-        break;
-      }
+      },
 
-      case 'child-session': {
+      'child-session': (msg) => {
         // Runner reports a child/sub-agent session was spawned
         this.broadcastToClients({
           type: 'child-session',
           childSessionId: (msg as any).childSessionId,
           title: msg.title,
         } as any);
-        break;
-      }
+      },
 
-      case 'title': {
+      'title': (msg) => {
         // Runner reports session title update
         const sessionIdTitle = this.getStateValue('sessionId');
         const newTitle = msg.title || msg.content;
@@ -2918,10 +2642,9 @@ export class SessionAgentDO {
           type: 'title',
           title: newTitle,
         } as any);
-        break;
-      }
+      },
 
-      case 'spawn-child':
+      'spawn-child': async (msg) => {
         await this.handleSpawnChild(msg.requestId!, {
           task: msg.task!,
           workspace: msg.workspace!,
@@ -2936,21 +2659,21 @@ export class SessionAgentDO {
           model: msg.model,
           personaId: msg.personaId,
         });
-        break;
+      },
 
-      case 'session-message':
+      'session-message': async (msg) => {
         await this.handleSessionMessage(msg.requestId!, msg.targetSessionId!, msg.content!, msg.interrupt);
-        break;
+      },
 
-      case 'session-messages':
+      'session-messages': async (msg) => {
         await this.handleSessionMessages(msg.requestId!, msg.targetSessionId!, msg.limit, msg.after);
-        break;
+      },
 
-      case 'terminate-child':
+      'terminate-child': async (msg) => {
         await this.handleTerminateChild(msg.requestId!, msg.childSessionId!);
-        break;
+      },
 
-      case 'channel-session-created': {
+      'channel-session-created': (msg) => {
         // Runner reports a new per-channel OpenCode session — store in channel_state
         const csChannelKey = msg.channelKey as string | undefined;
         const csOcSessionId = msg.opencodeSessionId as string | undefined;
@@ -2958,10 +2681,9 @@ export class SessionAgentDO {
           this.setChannelOcSessionId(csChannelKey, csOcSessionId);
           console.log(`[SessionAgentDO] Channel session created: ${csChannelKey} -> ${csOcSessionId}`);
         }
-        break;
-      }
+      },
 
-      case 'thread.created': {
+      'thread.created': (msg) => {
         const threadId = msg.threadId;
         const threadOcSessionId = msg.opencodeSessionId;
         if (threadId && threadOcSessionId) {
@@ -2975,10 +2697,9 @@ export class SessionAgentDO {
             opencodeSessionId: threadOcSessionId,
           });
         }
-        break;
-      }
+      },
 
-      case 'thread.updated': {
+      'thread.updated': (msg) => {
         const threadId = msg.threadId;
         if (threadId) {
           const threadUpdates: Record<string, unknown> = {};
@@ -3001,10 +2722,9 @@ export class SessionAgentDO {
           ...(msg.summaryDeletions !== undefined ? { summaryDeletions: msg.summaryDeletions } : {}),
           ...(msg.summaryFiles !== undefined ? { summaryFiles: msg.summaryFiles } : {}),
         });
-        break;
-      }
+      },
 
-      case 'session-reset': {
+      'session-reset': (msg) => {
         // Runner confirmed session rotation — insert visual break marker
         const breakId = crypto.randomUUID();
         const srChannelType = (msg as any).channelType as string | undefined;
@@ -3029,14 +2749,13 @@ export class SessionAgentDO {
             channelId: srChannelId,
           },
         });
-        break;
-      }
+      },
 
-      case 'self-terminate':
+      'self-terminate': async (msg) => {
         await this.handleSelfTerminate();
-        break;
+      },
 
-      case 'opencode-config-applied': {
+      'opencode-config-applied': (msg) => {
         if (msg.error) {
           console.error(`[SessionAgentDO] OpenCode config apply failed: ${msg.error}`);
           this.emitAuditEvent('opencode.config_error', `Config apply failed: ${msg.error}`);
@@ -3046,44 +2765,43 @@ export class SessionAgentDO {
             this.emitAuditEvent('opencode.config_applied', 'OpenCode restarted with new config');
           }
         }
-        break;
-      }
+      },
 
       // ─── Memory File Operations ────────────────────────────────────────
-      case 'mem-read':
+      'mem-read': async (msg) => {
         await this.handleMemRead(msg.requestId!, msg.path);
-        break;
+      },
 
-      case 'mem-write':
+      'mem-write': async (msg) => {
         await this.handleMemWrite(msg.requestId!, msg.path!, msg.content!);
-        break;
+      },
 
-      case 'mem-patch':
+      'mem-patch': async (msg) => {
         await this.handleMemPatch(msg.requestId!, msg.path!, msg.operations);
-        break;
+      },
 
-      case 'mem-rm':
+      'mem-rm': async (msg) => {
         await this.handleMemRm(msg.requestId!, msg.path!);
-        break;
+      },
 
-      case 'mem-search':
+      'mem-search': async (msg) => {
         await this.handleMemSearch(msg.requestId!, msg.query!, msg.path, msg.limit);
-        break;
+      },
 
-      case 'list-repos':
+      'list-repos': async (msg) => {
         await this.handleListRepos(msg.requestId!, msg.source);
-        break;
+      },
 
-      case 'list-pull-requests':
+      'list-pull-requests': async (msg) => {
         await this.handleListPullRequests(msg.requestId!, {
           owner: msg.owner,
           repo: msg.repo,
           state: msg.state,
           limit: msg.limit,
         });
-        break;
+      },
 
-      case 'inspect-pull-request':
+      'inspect-pull-request': async (msg) => {
         await this.handleInspectPullRequest(msg.requestId!, {
           prNumber: msg.prNumber!,
           owner: msg.owner,
@@ -3091,24 +2809,25 @@ export class SessionAgentDO {
           filesLimit: msg.filesLimit,
           commentsLimit: msg.commentsLimit,
         });
-        break;
+      },
 
-      case 'list-personas':
+      'list-personas': async (msg) => {
         await this.handleListPersonas(msg.requestId!);
-        break;
+      },
 
-      case 'list-channels':
+      'list-channels': async (msg) => {
         await this.handleListChannels(msg.requestId!);
-        break;
+      },
 
-      case 'get-session-status':
+      'get-session-status': async (msg) => {
         await this.handleGetSessionStatus(msg.requestId!, msg.targetSessionId!);
-        break;
+      },
 
-      case 'list-child-sessions':
+      'list-child-sessions': async (msg) => {
         await this.handleListChildSessions(msg.requestId!);
-        break;
-      case 'read-repo-file':
+      },
+
+      'read-repo-file': async (msg) => {
         await this.handleReadRepoFile(msg.requestId!, {
           owner: msg.owner,
           repo: msg.repo,
@@ -3116,17 +2835,17 @@ export class SessionAgentDO {
           path: msg.path,
           ref: msg.ref,
         });
-        break;
+      },
 
-      case 'forward-messages':
+      'forward-messages': async (msg) => {
         await this.handleForwardMessages(msg.requestId!, msg.targetSessionId!, msg.limit, msg.after);
-        break;
+      },
 
-      case 'workflow-list':
+      'workflow-list': async (msg) => {
         await this.handleWorkflowList(msg.requestId!);
-        break;
+      },
 
-      case 'workflow-sync':
+      'workflow-sync': async (msg) => {
         await this.handleWorkflowSync(msg.requestId!, {
           id: msg.id || msg.workflowId,
           slug: msg.slug,
@@ -3137,107 +2856,105 @@ export class SessionAgentDO {
             ? (msg.data as Record<string, unknown>)
             : msg.dataJson,
         });
-        break;
+      },
 
-      case 'workflow-run':
+      'workflow-run': async (msg) => {
         await this.handleWorkflowRun(msg.requestId!, msg.workflowId!, msg.variables, {
           repoUrl: msg.repoUrl,
           branch: msg.branch,
           ref: msg.ref,
           sourceRepoFullName: msg.sourceRepoFullName,
         });
-        break;
+      },
 
-      case 'workflow-executions':
+      'workflow-executions': async (msg) => {
         await this.handleWorkflowExecutions(msg.requestId!, msg.workflowId, msg.limit);
-        break;
+      },
 
-      case 'workflow-api':
+      'workflow-api': async (msg) => {
         await this.handleWorkflowApi(msg.requestId!, msg.action || '', msg.payload);
-        break;
+      },
 
-      case 'trigger-api':
+      'trigger-api': async (msg) => {
         await this.handleTriggerApi(msg.requestId!, msg.action || '', msg.payload);
-        break;
+      },
 
-      case 'skill-api':
+      'skill-api': async (msg) => {
         await this.handleSkillApi(msg.requestId!, msg.action || '', msg.payload);
-        break;
+      },
 
-      case 'persona-api':
+      'persona-api': async (msg) => {
         await this.handlePersonaApi(msg.requestId!, msg.action || '', msg.payload);
-        break;
+      },
 
-      case 'identity-api':
+      'identity-api': async (msg) => {
         await this.handleIdentityApi(msg.requestId!, msg.action || '', msg.payload);
-        break;
+      },
 
-      case 'execution-api':
+      'execution-api': async (msg) => {
         await this.handleExecutionApi(msg.requestId!, msg.action || '', msg.payload);
-        break;
+      },
 
-      case 'workflow-execution-result':
+      'workflow-execution-result': async (msg) => {
         await this.handleWorkflowExecutionResult(msg);
-        break;
+      },
 
       // ─── Phase C: Mailbox + Task Board ──────────────────────────────
-      case 'mailbox-send':
+      'mailbox-send': async (msg) => {
         await this.handleMailboxSend(msg.requestId!, msg);
-        break;
+      },
 
-      case 'mailbox-check':
+      'mailbox-check': async (msg) => {
         await this.handleMailboxCheck(msg.requestId!, msg.limit, msg.after);
-        break;
+      },
 
-      case 'task-create':
+      'task-create': async (msg) => {
         await this.handleTaskCreate(msg.requestId!, msg);
-        break;
+      },
 
-      case 'task-list':
+      'task-list': async (msg) => {
         await this.handleTaskList(msg.requestId!, msg.status, msg.limit);
-        break;
+      },
 
-      case 'task-update':
+      'task-update': async (msg) => {
         await this.handleTaskUpdate(msg.requestId!, msg.taskId!, msg);
-        break;
+      },
 
-      case 'task-my':
+      'task-my': async (msg) => {
         await this.handleTaskMy(msg.requestId!, msg.status);
-        break;
+      },
 
       // ─── Phase D: Channel Reply ──────────────────────────────────────
-      case 'channel-reply':
+      'channel-reply': async (msg) => {
         await this.handleChannelReply(
           msg.requestId!, msg.channelType!, msg.channelId!, msg.message || '',
           msg.imageBase64, msg.imageMimeType, msg.followUp,
           msg.fileBase64, msg.fileMimeType, msg.fileName,
         );
-        break;
+      },
 
       // ─── Tool Discovery & Invocation ──────────────────────────────────
-      case 'list-tools':
+      'list-tools': async (msg) => {
         await this.handleListTools(msg.requestId!, msg.service, msg.query);
-        break;
+      },
 
-      case 'call-tool':
+      'call-tool': async (msg) => {
         await this.handleCallTool(msg.requestId!, msg.toolId!, msg.params ?? {}, msg.summary);
-        break;
+      },
 
-      case 'repo:refresh-token': {
+      'repo:refresh-token': async (msg) => {
         await this.handleRepoTokenRefresh(msg.requestId);
-        break;
-      }
+      },
 
-      case 'repo:clone-complete': {
+      'repo:clone-complete': (msg) => {
         if (msg.success !== false) {
           console.log('[SessionAgentDO] Repo clone completed successfully');
         } else {
           console.error('[SessionAgentDO] Repo clone failed:', msg.error);
         }
-        break;
-      }
+      },
 
-      case 'analytics:emit': {
+      'analytics:emit': (msg) => {
         const events = (msg as any).events;
         if (Array.isArray(events)) {
           const capped = events.slice(0, 100);
@@ -3258,14 +2975,13 @@ export class SessionAgentDO {
             }
           }
         }
-        break;
-      }
+      },
 
-      case 'ping':
+      'ping': () => {
         // Keepalive from runner — respond with pong
-        this.sendToRunner({ type: 'pong' });
-        break;
-    }
+        this.runnerLink.send({ type: 'pong' });
+      },
+    };
   }
 
   // ─── Cross-Session Operations ─────────────────────────────────────────
@@ -3292,7 +3008,7 @@ export class SessionAgentDO {
       const restoreUrl = this.getStateValue('restoreUrl');
 
       if (!spawnRequestStr || !backendUrl) {
-        this.sendToRunner({ type: 'spawn-child-result', requestId, error: 'Session not configured for spawning children (missing spawnRequest or backendUrl)' });
+        this.runnerLink.send({ type: 'spawn-child-result', requestId, error: 'Session not configured for spawning children (missing spawnRequest or backendUrl)' });
         return;
       }
 
@@ -3436,10 +3152,10 @@ export class SessionAgentDO {
         }),
       }));
 
-      this.sendToRunner({ type: 'spawn-child-result', requestId, childSessionId });
+      this.runnerLink.send({ type: 'spawn-child-result', requestId, childSessionId });
     } catch (err) {
       console.error('[SessionAgentDO] Failed to spawn child:', err);
-      this.sendToRunner({
+      this.runnerLink.send({
         type: 'spawn-child-result',
         requestId,
         error: err instanceof Error ? err.message : String(err),
@@ -3454,7 +3170,7 @@ export class SessionAgentDO {
       // Verify target session belongs to the same user
       const targetSession = await getSession(this.appDb, targetSessionId);
       if (!targetSession || targetSession.userId !== userId) {
-        this.sendToRunner({ type: 'session-message-result', requestId, error: 'Session not found or access denied' });
+        this.runnerLink.send({ type: 'session-message-result', requestId, error: 'Session not found or access denied' });
         return;
       }
 
@@ -3470,14 +3186,14 @@ export class SessionAgentDO {
 
       if (!resp.ok) {
         const errText = await resp.text();
-        this.sendToRunner({ type: 'session-message-result', requestId, error: `Target DO returned ${resp.status}: ${errText}` });
+        this.runnerLink.send({ type: 'session-message-result', requestId, error: `Target DO returned ${resp.status}: ${errText}` });
         return;
       }
 
-      this.sendToRunner({ type: 'session-message-result', requestId, success: true });
+      this.runnerLink.send({ type: 'session-message-result', requestId, success: true });
     } catch (err) {
       console.error('[SessionAgentDO] Failed to send message:', err);
-      this.sendToRunner({
+      this.runnerLink.send({
         type: 'session-message-result',
         requestId,
         error: err instanceof Error ? err.message : String(err),
@@ -3492,14 +3208,14 @@ export class SessionAgentDO {
       // Verify target session belongs to the same user
       const targetSession = await getSession(this.appDb, targetSessionId);
       if (!targetSession || targetSession.userId !== userId) {
-        this.sendToRunner({ type: 'session-messages-result', requestId, error: 'Session not found or access denied' });
+        this.runnerLink.send({ type: 'session-messages-result', requestId, error: 'Session not found or access denied' });
         return;
       }
 
       // Fetch messages from the target DO's local SQLite (not D1)
       const messages = await this.fetchMessagesFromDO(targetSessionId, limit || 20, after);
 
-      this.sendToRunner({
+      this.runnerLink.send({
         type: 'session-messages-result',
         requestId,
         messages: messages.map((m: { role: string; content: string; createdAt: string }) => ({
@@ -3510,7 +3226,7 @@ export class SessionAgentDO {
       });
     } catch (err) {
       console.error('[SessionAgentDO] Failed to read messages:', err);
-      this.sendToRunner({
+      this.runnerLink.send({
         type: 'session-messages-result',
         requestId,
         error: err instanceof Error ? err.message : String(err),
@@ -3525,7 +3241,7 @@ export class SessionAgentDO {
       // Verify target session belongs to the same user
       const targetSession = await getSession(this.appDb, targetSessionId);
       if (!targetSession || targetSession.userId !== userId) {
-        this.sendToRunner({ type: 'forward-messages-result', requestId, error: 'Session not found or access denied' });
+        this.runnerLink.send({ type: 'forward-messages-result', requestId, error: 'Session not found or access denied' });
         return;
       }
 
@@ -3533,7 +3249,7 @@ export class SessionAgentDO {
       const messages = await this.fetchMessagesFromDO(targetSessionId, limit || 20, after);
 
       if (messages.length === 0) {
-        this.sendToRunner({ type: 'forward-messages-result', requestId, count: 0, sourceSessionId: targetSessionId });
+        this.runnerLink.send({ type: 'forward-messages-result', requestId, count: 0, sourceSessionId: targetSessionId });
         return;
       }
 
@@ -3575,7 +3291,7 @@ export class SessionAgentDO {
         });
       }
 
-      this.sendToRunner({
+      this.runnerLink.send({
         type: 'forward-messages-result',
         requestId,
         count: messages.length,
@@ -3583,7 +3299,7 @@ export class SessionAgentDO {
       });
     } catch (err) {
       console.error('[SessionAgentDO] Failed to forward messages:', err);
-      this.sendToRunner({
+      this.runnerLink.send({
         type: 'forward-messages-result',
         requestId,
         error: err instanceof Error ? err.message : String(err),
@@ -3620,11 +3336,11 @@ export class SessionAgentDO {
       // Verify the child belongs to this parent session
       const childSession = await getSession(this.appDb, childSessionId);
       if (!childSession || childSession.userId !== userId) {
-        this.sendToRunner({ type: 'terminate-child-result', requestId, error: 'Child session not found or access denied' });
+        this.runnerLink.send({ type: 'terminate-child-result', requestId, error: 'Child session not found or access denied' });
         return;
       }
       if (childSession.parentSessionId !== sessionId) {
-        this.sendToRunner({ type: 'terminate-child-result', requestId, error: 'Session is not a child of this session' });
+        this.runnerLink.send({ type: 'terminate-child-result', requestId, error: 'Session is not a child of this session' });
         return;
       }
 
@@ -3639,14 +3355,14 @@ export class SessionAgentDO {
 
       if (!resp.ok) {
         const errText = await resp.text();
-        this.sendToRunner({ type: 'terminate-child-result', requestId, error: `Child DO returned ${resp.status}: ${errText}` });
+        this.runnerLink.send({ type: 'terminate-child-result', requestId, error: `Child DO returned ${resp.status}: ${errText}` });
         return;
       }
 
-      this.sendToRunner({ type: 'terminate-child-result', requestId, success: true });
+      this.runnerLink.send({ type: 'terminate-child-result', requestId, success: true });
     } catch (err) {
       console.error('[SessionAgentDO] Failed to terminate child:', err);
-      this.sendToRunner({
+      this.runnerLink.send({
         type: 'terminate-child-result',
         requestId,
         error: err instanceof Error ? err.message : String(err),
@@ -3671,17 +3387,17 @@ export class SessionAgentDO {
 
       if (!p || p.endsWith('/')) {
         const files = await listMemoryFiles(this.appDb, userId, p);
-        this.sendToRunner({ type: 'mem-read-result', requestId, files } as any);
+        this.runnerLink.send({ type: 'mem-read-result', requestId, files } as any);
       } else {
         const file = await readMemoryFile(this.appDb, userId, p);
         if (file) {
           boostMemoryFileRelevance(this.appDb, userId, p).catch(() => {});
         }
-        this.sendToRunner({ type: 'mem-read-result', requestId, file } as any);
+        this.runnerLink.send({ type: 'mem-read-result', requestId, file } as any);
       }
     } catch (err) {
       console.error('[SessionAgentDO] Failed to read memory file:', err);
-      this.sendToRunner({ type: 'mem-read-result', requestId, error: err instanceof Error ? err.message : String(err) } as any);
+      this.runnerLink.send({ type: 'mem-read-result', requestId, error: err instanceof Error ? err.message : String(err) } as any);
     }
   }
 
@@ -3689,10 +3405,10 @@ export class SessionAgentDO {
     try {
       const userId = this.getStateValue('userId')!;
       const file = await writeMemoryFile(this.env.DB, userId, path, content);
-      this.sendToRunner({ type: 'mem-write-result', requestId, file } as any);
+      this.runnerLink.send({ type: 'mem-write-result', requestId, file } as any);
     } catch (err) {
       console.error('[SessionAgentDO] Failed to write memory file:', err);
-      this.sendToRunner({ type: 'mem-write-result', requestId, error: err instanceof Error ? err.message : String(err) } as any);
+      this.runnerLink.send({ type: 'mem-write-result', requestId, error: err instanceof Error ? err.message : String(err) } as any);
     }
   }
 
@@ -3700,10 +3416,10 @@ export class SessionAgentDO {
     try {
       const userId = this.getStateValue('userId')!;
       const result = await patchMemoryFile(this.env.DB, userId, path, operations);
-      this.sendToRunner({ type: 'mem-patch-result', requestId, result } as any);
+      this.runnerLink.send({ type: 'mem-patch-result', requestId, result } as any);
     } catch (err) {
       console.error('[SessionAgentDO] Failed to patch memory file:', err);
-      this.sendToRunner({ type: 'mem-patch-result', requestId, error: err instanceof Error ? err.message : String(err) } as any);
+      this.runnerLink.send({ type: 'mem-patch-result', requestId, error: err instanceof Error ? err.message : String(err) } as any);
     }
   }
 
@@ -3716,10 +3432,10 @@ export class SessionAgentDO {
       } else {
         deleted = await deleteMemoryFile(this.env.DB, userId, path);
       }
-      this.sendToRunner({ type: 'mem-rm-result', requestId, deleted } as any);
+      this.runnerLink.send({ type: 'mem-rm-result', requestId, deleted } as any);
     } catch (err) {
       console.error('[SessionAgentDO] Failed to delete memory file:', err);
-      this.sendToRunner({ type: 'mem-rm-result', requestId, error: err instanceof Error ? err.message : String(err) } as any);
+      this.runnerLink.send({ type: 'mem-rm-result', requestId, error: err instanceof Error ? err.message : String(err) } as any);
     }
   }
 
@@ -3727,10 +3443,10 @@ export class SessionAgentDO {
     try {
       const userId = this.getStateValue('userId')!;
       const results = await searchMemoryFiles(this.env.DB, userId, query, path, limit ?? 20);
-      this.sendToRunner({ type: 'mem-search-result', requestId, results } as any);
+      this.runnerLink.send({ type: 'mem-search-result', requestId, results } as any);
     } catch (err) {
       console.error('[SessionAgentDO] Failed to search memory files:', err);
-      this.sendToRunner({ type: 'mem-search-result', requestId, error: err instanceof Error ? err.message : String(err) } as any);
+      this.runnerLink.send({ type: 'mem-search-result', requestId, error: err instanceof Error ? err.message : String(err) } as any);
     }
   }
 
@@ -3739,7 +3455,7 @@ export class SessionAgentDO {
       if (source === 'github') {
         const githubToken = await this.getGitHubToken();
         if (!githubToken) {
-          this.sendToRunner({ type: 'list-repos-result', requestId, error: 'No GitHub token found — user must connect GitHub in settings' } as any);
+          this.runnerLink.send({ type: 'list-repos-result', requestId, error: 'No GitHub token found — user must connect GitHub in settings' } as any);
           return;
         }
         // Fetch user's repos from GitHub API (up to 100, sorted by last push)
@@ -3752,7 +3468,7 @@ export class SessionAgentDO {
         });
         if (!res.ok) {
           const errText = await res.text();
-          this.sendToRunner({ type: 'list-repos-result', requestId, error: `GitHub API error (${res.status}): ${errText}` } as any);
+          this.runnerLink.send({ type: 'list-repos-result', requestId, error: `GitHub API error (${res.status}): ${errText}` } as any);
           return;
         }
         const ghRepos = await res.json() as { full_name: string; html_url: string; clone_url: string; description: string | null; language: string | null; default_branch: string; private: boolean; pushed_at: string }[];
@@ -3766,14 +3482,14 @@ export class SessionAgentDO {
           visibility: r.private ? 'private' : 'public',
           lastPushed: r.pushed_at,
         }));
-        this.sendToRunner({ type: 'list-repos-result', requestId, repos } as any);
+        this.runnerLink.send({ type: 'list-repos-result', requestId, repos } as any);
       } else {
         const repos = await listOrgRepositories(this.env.DB);
-        this.sendToRunner({ type: 'list-repos-result', requestId, repos } as any);
+        this.runnerLink.send({ type: 'list-repos-result', requestId, repos } as any);
       }
     } catch (err) {
       console.error('[SessionAgentDO] Failed to list repos:', err);
-      this.sendToRunner({ type: 'list-repos-result', requestId, error: err instanceof Error ? err.message : String(err) } as any);
+      this.runnerLink.send({ type: 'list-repos-result', requestId, error: err instanceof Error ? err.message : String(err) } as any);
     }
   }
 
@@ -3801,10 +3517,10 @@ export class SessionAgentDO {
         };
       });
 
-      this.sendToRunner({ type: 'workflow-list-result', requestId, workflows } as any);
+      this.runnerLink.send({ type: 'workflow-list-result', requestId, workflows } as any);
     } catch (err) {
       console.error('[SessionAgentDO] Failed to list workflows:', err);
-      this.sendToRunner({ type: 'workflow-list-result', requestId, error: err instanceof Error ? err.message : String(err) } as any);
+      this.runnerLink.send({ type: 'workflow-list-result', requestId, error: err instanceof Error ? err.message : String(err) } as any);
     }
   }
 
@@ -3823,12 +3539,12 @@ export class SessionAgentDO {
       const userId = this.getStateValue('userId')!;
       const name = (params.name || '').trim();
       if (!name) {
-        this.sendToRunner({ type: 'workflow-sync-result', requestId, error: 'Workflow name is required' } as any);
+        this.runnerLink.send({ type: 'workflow-sync-result', requestId, error: 'Workflow name is required' } as any);
         return;
       }
       const validation = validateWorkflowDefinition(params.data);
       if (!validation.valid) {
-        this.sendToRunner({ type: 'workflow-sync-result', requestId, error: `Invalid workflow definition: ${validation.errors[0]}` } as any);
+        this.runnerLink.send({ type: 'workflow-sync-result', requestId, error: `Invalid workflow definition: ${validation.errors[0]}` } as any);
         return;
       }
 
@@ -3866,10 +3582,10 @@ export class SessionAgentDO {
         updatedAt: now,
       };
 
-      this.sendToRunner({ type: 'workflow-sync-result', requestId, success: true, workflow } as any);
+      this.runnerLink.send({ type: 'workflow-sync-result', requestId, success: true, workflow } as any);
     } catch (err) {
       console.error('[SessionAgentDO] Failed to sync workflow:', err);
-      this.sendToRunner({ type: 'workflow-sync-result', requestId, error: err instanceof Error ? err.message : String(err) } as any);
+      this.runnerLink.send({ type: 'workflow-sync-result', requestId, error: err instanceof Error ? err.message : String(err) } as any);
     }
   }
 
@@ -3908,7 +3624,7 @@ export class SessionAgentDO {
       const userId = this.getStateValue('userId')!;
       const workflowLookupId = (workflowId || '').trim();
       if (!workflowLookupId) {
-        this.sendToRunner({ type: 'workflow-run-result', requestId, error: 'workflowId is required' } as any);
+        this.runnerLink.send({ type: 'workflow-run-result', requestId, error: 'workflowId is required' } as any);
         return;
       }
 
@@ -3920,13 +3636,13 @@ export class SessionAgentDO {
       } | null;
 
       if (!workflow) {
-        this.sendToRunner({ type: 'workflow-run-result', requestId, error: `Workflow not found: ${workflowLookupId}` } as any);
+        this.runnerLink.send({ type: 'workflow-run-result', requestId, error: `Workflow not found: ${workflowLookupId}` } as any);
         return;
       }
 
       const concurrency = await checkWorkflowConcurrency(this.appDb, userId);
       if (!concurrency.allowed) {
-        this.sendToRunner({
+        this.runnerLink.send({
           type: 'workflow-run-result',
           requestId,
           error: `Too many concurrent executions (${concurrency.reason})`,
@@ -3942,7 +3658,7 @@ export class SessionAgentDO {
       } | null;
 
       if (existing) {
-        this.sendToRunner({
+        this.runnerLink.send({
           type: 'workflow-run-result',
           requestId,
           execution: {
@@ -4002,7 +3718,7 @@ export class SessionAgentDO {
         workerOrigin,
       });
 
-      this.sendToRunner({
+      this.runnerLink.send({
         type: 'workflow-run-result',
         requestId,
         execution: {
@@ -4016,7 +3732,7 @@ export class SessionAgentDO {
       } as any);
     } catch (err) {
       console.error('[SessionAgentDO] Failed to run workflow:', err);
-      this.sendToRunner({ type: 'workflow-run-result', requestId, error: err instanceof Error ? err.message : String(err) } as any);
+      this.runnerLink.send({ type: 'workflow-run-result', requestId, error: err instanceof Error ? err.message : String(err) } as any);
     }
   }
 
@@ -4037,7 +3753,7 @@ export class SessionAgentDO {
       if (workflowId) {
         const workflow = await getWorkflowOwnerCheck(this.appDb, userId, workflowId);
         if (!workflow) {
-          this.sendToRunner({ type: 'workflow-executions-result', requestId, executions: [] } as any);
+          this.runnerLink.send({ type: 'workflow-executions-result', requestId, executions: [] } as any);
           return;
         }
         workflowFilterId = workflow.id;
@@ -4064,10 +3780,10 @@ export class SessionAgentDO {
         sessionId: row.session_id,
       }));
 
-      this.sendToRunner({ type: 'workflow-executions-result', requestId, executions } as any);
+      this.runnerLink.send({ type: 'workflow-executions-result', requestId, executions } as any);
     } catch (err) {
       console.error('[SessionAgentDO] Failed to list workflow executions:', err);
-      this.sendToRunner({ type: 'workflow-executions-result', requestId, error: err instanceof Error ? err.message : String(err) } as any);
+      this.runnerLink.send({ type: 'workflow-executions-result', requestId, error: err instanceof Error ? err.message : String(err) } as any);
     }
   }
 
@@ -4111,31 +3827,31 @@ export class SessionAgentDO {
       const userId = this.getStateValue('userId')!;
       const workflowIdOrSlug = typeof payload?.workflowId === 'string' ? payload.workflowId.trim() : '';
       if (!workflowIdOrSlug) {
-        this.sendToRunner({ type: 'workflow-api-result', requestId, error: 'workflowId is required' } as any);
+        this.runnerLink.send({ type: 'workflow-api-result', requestId, error: 'workflowId is required' } as any);
         return;
       }
 
       const existing = await getWorkflowByIdOrSlug(this.appDb, userId, workflowIdOrSlug) as Record<string, unknown> | null;
 
       if (!existing) {
-        this.sendToRunner({ type: 'workflow-api-result', requestId, error: `Workflow not found: ${workflowIdOrSlug}` } as any);
+        this.runnerLink.send({ type: 'workflow-api-result', requestId, error: `Workflow not found: ${workflowIdOrSlug}` } as any);
         return;
       }
 
       if (action === 'get') {
-        this.sendToRunner({ type: 'workflow-api-result', requestId, data: { workflow: this.normalizeWorkflowRow(existing) } } as any);
+        this.runnerLink.send({ type: 'workflow-api-result', requestId, data: { workflow: this.normalizeWorkflowRow(existing) } } as any);
         return;
       }
 
       if (action === 'delete') {
         await deleteWorkflowTriggers(this.appDb, existing.id as string, userId);
         await deleteWorkflowById(this.appDb, existing.id as string, userId);
-        this.sendToRunner({ type: 'workflow-api-result', requestId, data: { success: true } } as any);
+        this.runnerLink.send({ type: 'workflow-api-result', requestId, data: { success: true } } as any);
         return;
       }
 
       if (action !== 'update') {
-        this.sendToRunner({ type: 'workflow-api-result', requestId, error: `Unsupported workflow action: ${action}` } as any);
+        this.runnerLink.send({ type: 'workflow-api-result', requestId, error: `Unsupported workflow action: ${action}` } as any);
         return;
       }
 
@@ -4145,7 +3861,7 @@ export class SessionAgentDO {
       if (payload && Object.prototype.hasOwnProperty.call(payload, 'name')) {
         const nextName = typeof payload.name === 'string' ? payload.name : '';
         if (!nextName.trim()) {
-          this.sendToRunner({ type: 'workflow-api-result', requestId, error: 'name must be a non-empty string' } as any);
+          this.runnerLink.send({ type: 'workflow-api-result', requestId, error: 'name must be a non-empty string' } as any);
           return;
         }
         updates.push('name = ?');
@@ -4154,7 +3870,7 @@ export class SessionAgentDO {
       if (payload && Object.prototype.hasOwnProperty.call(payload, 'description')) {
         const nextDescription = payload.description;
         if (nextDescription !== null && typeof nextDescription !== 'string') {
-          this.sendToRunner({ type: 'workflow-api-result', requestId, error: 'description must be a string or null' } as any);
+          this.runnerLink.send({ type: 'workflow-api-result', requestId, error: 'description must be a string or null' } as any);
           return;
         }
         updates.push('description = ?');
@@ -4163,7 +3879,7 @@ export class SessionAgentDO {
       if (payload && Object.prototype.hasOwnProperty.call(payload, 'slug')) {
         const nextSlug = payload.slug;
         if (nextSlug !== null && typeof nextSlug !== 'string') {
-          this.sendToRunner({ type: 'workflow-api-result', requestId, error: 'slug must be a string or null' } as any);
+          this.runnerLink.send({ type: 'workflow-api-result', requestId, error: 'slug must be a string or null' } as any);
           return;
         }
         updates.push('slug = ?');
@@ -4172,7 +3888,7 @@ export class SessionAgentDO {
       if (payload && Object.prototype.hasOwnProperty.call(payload, 'version')) {
         const nextVersion = payload.version;
         if (typeof nextVersion !== 'string' || !nextVersion.trim()) {
-          this.sendToRunner({ type: 'workflow-api-result', requestId, error: 'version must be a non-empty string' } as any);
+          this.runnerLink.send({ type: 'workflow-api-result', requestId, error: 'version must be a non-empty string' } as any);
           return;
         }
         updates.push('version = ?');
@@ -4181,7 +3897,7 @@ export class SessionAgentDO {
       if (payload && Object.prototype.hasOwnProperty.call(payload, 'enabled')) {
         const nextEnabled = payload.enabled;
         if (typeof nextEnabled !== 'boolean') {
-          this.sendToRunner({ type: 'workflow-api-result', requestId, error: 'enabled must be a boolean' } as any);
+          this.runnerLink.send({ type: 'workflow-api-result', requestId, error: 'enabled must be a boolean' } as any);
           return;
         }
         updates.push('enabled = ?');
@@ -4190,7 +3906,7 @@ export class SessionAgentDO {
       if (payload && Object.prototype.hasOwnProperty.call(payload, 'tags')) {
         const nextTags = payload.tags;
         if (!Array.isArray(nextTags) || nextTags.some((tag) => typeof tag !== 'string')) {
-          this.sendToRunner({ type: 'workflow-api-result', requestId, error: 'tags must be an array of strings' } as any);
+          this.runnerLink.send({ type: 'workflow-api-result', requestId, error: 'tags must be an array of strings' } as any);
           return;
         }
         updates.push('tags = ?');
@@ -4199,12 +3915,12 @@ export class SessionAgentDO {
       if (payload && Object.prototype.hasOwnProperty.call(payload, 'data')) {
         const nextData = payload.data;
         if (!nextData || typeof nextData !== 'object' || Array.isArray(nextData)) {
-          this.sendToRunner({ type: 'workflow-api-result', requestId, error: 'data must be an object' } as any);
+          this.runnerLink.send({ type: 'workflow-api-result', requestId, error: 'data must be an object' } as any);
           return;
         }
         const validation = validateWorkflowDefinition(nextData);
         if (!validation.valid) {
-          this.sendToRunner({ type: 'workflow-api-result', requestId, error: `Invalid workflow definition: ${validation.errors[0]}` } as any);
+          this.runnerLink.send({ type: 'workflow-api-result', requestId, error: `Invalid workflow definition: ${validation.errors[0]}` } as any);
           return;
         }
         updates.push('data = ?');
@@ -4212,7 +3928,7 @@ export class SessionAgentDO {
       }
 
       if (updates.length === 0) {
-        this.sendToRunner({ type: 'workflow-api-result', requestId, data: { workflow: this.normalizeWorkflowRow(existing) } } as any);
+        this.runnerLink.send({ type: 'workflow-api-result', requestId, data: { workflow: this.normalizeWorkflowRow(existing) } } as any);
         return;
       }
 
@@ -4224,14 +3940,14 @@ export class SessionAgentDO {
       await updateWorkflow(this.env.DB, existing.id as string, updates, values);
       const updated = await getWorkflowById(this.appDb, existing.id as string) as Record<string, unknown> | null;
 
-      this.sendToRunner({
+      this.runnerLink.send({
         type: 'workflow-api-result',
         requestId,
         data: { workflow: this.normalizeWorkflowRow(updated || existing) },
       } as any);
     } catch (err) {
       console.error('[SessionAgentDO] Workflow API error:', err);
-      this.sendToRunner({ type: 'workflow-api-result', requestId, error: err instanceof Error ? err.message : String(err) } as any);
+      this.runnerLink.send({ type: 'workflow-api-result', requestId, error: err instanceof Error ? err.message : String(err) } as any);
     }
   }
 
@@ -4279,22 +3995,22 @@ export class SessionAgentDO {
           triggers = triggers.filter((trigger) => trigger.enabled === enabledFilter);
         }
 
-        this.sendToRunner({ type: 'trigger-api-result', requestId, data: { triggers } } as any);
+        this.runnerLink.send({ type: 'trigger-api-result', requestId, data: { triggers } } as any);
         return;
       }
 
       if (action === 'delete') {
         const triggerId = typeof payload?.triggerId === 'string' ? payload.triggerId.trim() : '';
         if (!triggerId) {
-          this.sendToRunner({ type: 'trigger-api-result', requestId, error: 'triggerId is required' } as any);
+          this.runnerLink.send({ type: 'trigger-api-result', requestId, error: 'triggerId is required' } as any);
           return;
         }
         const result = await deleteTrigger(this.appDb, triggerId, userId);
         if ((result.meta?.changes || 0) === 0) {
-          this.sendToRunner({ type: 'trigger-api-result', requestId, error: `Trigger not found: ${triggerId}` } as any);
+          this.runnerLink.send({ type: 'trigger-api-result', requestId, error: `Trigger not found: ${triggerId}` } as any);
           return;
         }
-        this.sendToRunner({ type: 'trigger-api-result', requestId, data: { success: true } } as any);
+        this.runnerLink.send({ type: 'trigger-api-result', requestId, data: { success: true } } as any);
         return;
       }
 
@@ -4309,7 +4025,7 @@ export class SessionAgentDO {
           : null;
 
         if (isUpdate && !existing) {
-          this.sendToRunner({ type: 'trigger-api-result', requestId, error: `Trigger not found: ${triggerId}` } as any);
+          this.runnerLink.send({ type: 'trigger-api-result', requestId, error: `Trigger not found: ${triggerId}` } as any);
           return;
         }
 
@@ -4319,14 +4035,14 @@ export class SessionAgentDO {
             ? (this.parseJsonOrNull(existing.config) as Record<string, unknown> | null)
             : null;
         if (!rawConfig || typeof rawConfig.type !== 'string') {
-          this.sendToRunner({ type: 'trigger-api-result', requestId, error: 'config with type is required' } as any);
+          this.runnerLink.send({ type: 'trigger-api-result', requestId, error: 'config with type is required' } as any);
           return;
         }
 
         const nextNameRaw = typeof payload?.name === 'string' ? payload.name : (typeof existing?.name === 'string' ? existing.name : '');
         const nextName = (nextNameRaw || '').trim();
         if (!nextName) {
-          this.sendToRunner({ type: 'trigger-api-result', requestId, error: 'name is required' } as any);
+          this.runnerLink.send({ type: 'trigger-api-result', requestId, error: 'name is required' } as any);
           return;
         }
 
@@ -4337,7 +4053,7 @@ export class SessionAgentDO {
         if (typeof workflowIdPayload === 'string' && workflowIdPayload.trim()) {
           workflowId = await this.resolveWorkflowIdForUser(userId, workflowIdPayload);
           if (!workflowId) {
-            this.sendToRunner({ type: 'trigger-api-result', requestId, error: `Workflow not found: ${workflowIdPayload}` } as any);
+            this.runnerLink.send({ type: 'trigger-api-result', requestId, error: `Workflow not found: ${workflowIdPayload}` } as any);
             return;
           }
         } else if (workflowIdPayload === null) {
@@ -4348,7 +4064,7 @@ export class SessionAgentDO {
         if (rawConfig.type === 'schedule' && target === 'orchestrator') {
           const prompt = typeof rawConfig.prompt === 'string' ? rawConfig.prompt.trim() : '';
           if (!prompt) {
-            this.sendToRunner({ type: 'trigger-api-result', requestId, error: 'schedule prompt is required when target=orchestrator' } as any);
+            this.runnerLink.send({ type: 'trigger-api-result', requestId, error: 'schedule prompt is required when target=orchestrator' } as any);
             return;
           }
         }
@@ -4390,7 +4106,7 @@ export class SessionAgentDO {
         }
 
         if (this.requiresWorkflowForTriggerConfig(rawConfig) && !workflowId) {
-          this.sendToRunner({ type: 'trigger-api-result', requestId, error: 'workflowId is required for this trigger type' } as any);
+          this.runnerLink.send({ type: 'trigger-api-result', requestId, error: 'workflowId is required for this trigger type' } as any);
           return;
         }
 
@@ -4409,7 +4125,7 @@ export class SessionAgentDO {
         if (variableMapping) {
           for (const [key, value] of Object.entries(variableMapping)) {
             if (typeof value !== 'string') {
-              this.sendToRunner({ type: 'trigger-api-result', requestId, error: `variableMapping.${key} must be a string` } as any);
+              this.runnerLink.send({ type: 'trigger-api-result', requestId, error: `variableMapping.${key} must be a string` } as any);
               return;
             }
           }
@@ -4446,7 +4162,7 @@ export class SessionAgentDO {
 
         const row = await getTrigger(this.env.DB, userId, targetTriggerId) as Record<string, unknown> | null;
 
-        this.sendToRunner({
+        this.runnerLink.send({
           type: 'trigger-api-result',
           requestId,
           data: {
@@ -4474,20 +4190,20 @@ export class SessionAgentDO {
       if (action === 'run') {
         const triggerId = typeof payload?.triggerId === 'string' ? payload.triggerId.trim() : '';
         if (!triggerId) {
-          this.sendToRunner({ type: 'trigger-api-result', requestId, error: 'triggerId is required' } as any);
+          this.runnerLink.send({ type: 'trigger-api-result', requestId, error: 'triggerId is required' } as any);
           return;
         }
 
         const row = await getTriggerForRun(this.env.DB, userId, triggerId);
 
         if (!row) {
-          this.sendToRunner({ type: 'trigger-api-result', requestId, error: `Trigger not found: ${triggerId}` } as any);
+          this.runnerLink.send({ type: 'trigger-api-result', requestId, error: `Trigger not found: ${triggerId}` } as any);
           return;
         }
 
         const config = this.parseJsonOrNull(row.config) as Record<string, unknown> | null;
         if (!config) {
-          this.sendToRunner({ type: 'trigger-api-result', requestId, error: 'Invalid trigger config' } as any);
+          this.runnerLink.send({ type: 'trigger-api-result', requestId, error: 'Invalid trigger config' } as any);
           return;
         }
         const target = this.scheduleTargetFromConfig(config);
@@ -4495,7 +4211,7 @@ export class SessionAgentDO {
         if (config.type === 'schedule' && target === 'orchestrator') {
           const prompt = typeof config.prompt === 'string' ? config.prompt.trim() : '';
           if (!prompt) {
-            this.sendToRunner({ type: 'trigger-api-result', requestId, error: 'Schedule orchestrator trigger requires prompt' } as any);
+            this.runnerLink.send({ type: 'trigger-api-result', requestId, error: 'Schedule orchestrator trigger requires prompt' } as any);
             return;
           }
 
@@ -4507,7 +4223,7 @@ export class SessionAgentDO {
           if (dispatch.dispatched) {
             await updateTriggerLastRun(this.appDb, triggerId, now);
           }
-          this.sendToRunner({
+          this.runnerLink.send({
             type: 'trigger-api-result',
             requestId,
             data: dispatch.dispatched
@@ -4530,13 +4246,13 @@ export class SessionAgentDO {
         }
 
         if (!row.wf_id || !row.workflow_data) {
-          this.sendToRunner({ type: 'trigger-api-result', requestId, error: 'Trigger is not linked to a workflow' } as any);
+          this.runnerLink.send({ type: 'trigger-api-result', requestId, error: 'Trigger is not linked to a workflow' } as any);
           return;
         }
 
         const concurrency = await checkWorkflowConcurrency(this.appDb, userId);
         if (!concurrency.allowed) {
-          this.sendToRunner({
+          this.runnerLink.send({
             type: 'trigger-api-result',
             requestId,
             error: `Too many concurrent workflow executions (${concurrency.reason})`,
@@ -4571,7 +4287,7 @@ export class SessionAgentDO {
         } | null;
 
         if (existingExecution) {
-          this.sendToRunner({
+          this.runnerLink.send({
             type: 'trigger-api-result',
             requestId,
             data: {
@@ -4637,7 +4353,7 @@ export class SessionAgentDO {
           workerOrigin,
         });
 
-        this.sendToRunner({
+        this.runnerLink.send({
           type: 'trigger-api-result',
           requestId,
           data: {
@@ -4656,10 +4372,10 @@ export class SessionAgentDO {
         return;
       }
 
-      this.sendToRunner({ type: 'trigger-api-result', requestId, error: `Unsupported trigger action: ${action}` } as any);
+      this.runnerLink.send({ type: 'trigger-api-result', requestId, error: `Unsupported trigger action: ${action}` } as any);
     } catch (err) {
       console.error('[SessionAgentDO] Trigger API error:', err);
-      this.sendToRunner({ type: 'trigger-api-result', requestId, error: err instanceof Error ? err.message : String(err) } as any);
+      this.runnerLink.send({ type: 'trigger-api-result', requestId, error: err instanceof Error ? err.message : String(err) } as any);
     }
   }
 
@@ -4672,7 +4388,7 @@ export class SessionAgentDO {
         const q = typeof payload?.q === 'string' ? payload.q : '';
         const source = typeof payload?.source === 'string' ? payload.source as any : undefined;
         const skills = await searchSkills(this.appDb, orgId, userId, q, { source });
-        this.sendToRunner({ type: 'skill-api-result', requestId, data: { skills } });
+        this.runnerLink.send({ type: 'skill-api-result', requestId, data: { skills } });
         return;
       }
 
@@ -4680,14 +4396,14 @@ export class SessionAgentDO {
         const source = typeof payload?.source === 'string' ? payload.source as any : undefined;
         const visibility = typeof payload?.visibility === 'string' ? payload.visibility as any : undefined;
         const skills = await listSkills(this.appDb, orgId, userId, { source, visibility });
-        this.sendToRunner({ type: 'skill-api-result', requestId, data: { skills } });
+        this.runnerLink.send({ type: 'skill-api-result', requestId, data: { skills } });
         return;
       }
 
       if (action === 'get') {
         const id = typeof payload?.id === 'string' ? payload.id : '';
         if (!id) {
-          this.sendToRunner({ type: 'skill-api-result', requestId, error: 'id is required', statusCode: 400 });
+          this.runnerLink.send({ type: 'skill-api-result', requestId, error: 'id is required', statusCode: 400 });
           return;
         }
         // Try by ID first, then fall back to slug lookup
@@ -4696,14 +4412,14 @@ export class SessionAgentDO {
           skill = await getSkillBySlug(this.appDb, orgId, id, userId);
         }
         if (!skill) {
-          this.sendToRunner({ type: 'skill-api-result', requestId, error: 'Skill not found', statusCode: 404 });
+          this.runnerLink.send({ type: 'skill-api-result', requestId, error: 'Skill not found', statusCode: 404 });
           return;
         }
         if (skill.visibility === 'private' && skill.ownerId !== userId) {
-          this.sendToRunner({ type: 'skill-api-result', requestId, error: 'Skill not found', statusCode: 404 });
+          this.runnerLink.send({ type: 'skill-api-result', requestId, error: 'Skill not found', statusCode: 404 });
           return;
         }
-        this.sendToRunner({ type: 'skill-api-result', requestId, data: { skill } });
+        this.runnerLink.send({ type: 'skill-api-result', requestId, data: { skill } });
         return;
       }
 
@@ -4711,7 +4427,7 @@ export class SessionAgentDO {
         const name = typeof payload?.name === 'string' ? payload.name.trim() : '';
         const content = typeof payload?.content === 'string' ? payload.content : '';
         if (!name || !content) {
-          this.sendToRunner({ type: 'skill-api-result', requestId, error: 'name and content are required', statusCode: 400 });
+          this.runnerLink.send({ type: 'skill-api-result', requestId, error: 'name and content are required', statusCode: 400 });
           return;
         }
         const slug = typeof payload?.slug === 'string' && payload.slug.trim()
@@ -4730,27 +4446,27 @@ export class SessionAgentDO {
           content,
           visibility,
         });
-        this.sendToRunner({ type: 'skill-api-result', requestId, data: { skill } });
+        this.runnerLink.send({ type: 'skill-api-result', requestId, data: { skill } });
         return;
       }
 
       if (action === 'update') {
         const id = typeof payload?.id === 'string' ? payload.id : '';
         if (!id) {
-          this.sendToRunner({ type: 'skill-api-result', requestId, error: 'id is required', statusCode: 400 });
+          this.runnerLink.send({ type: 'skill-api-result', requestId, error: 'id is required', statusCode: 400 });
           return;
         }
         const skill = await getSkill(this.appDb, id);
         if (!skill) {
-          this.sendToRunner({ type: 'skill-api-result', requestId, error: 'Skill not found', statusCode: 404 });
+          this.runnerLink.send({ type: 'skill-api-result', requestId, error: 'Skill not found', statusCode: 404 });
           return;
         }
         if (skill.source !== 'managed') {
-          this.sendToRunner({ type: 'skill-api-result', requestId, error: 'Only managed skills can be updated', statusCode: 403 });
+          this.runnerLink.send({ type: 'skill-api-result', requestId, error: 'Only managed skills can be updated', statusCode: 403 });
           return;
         }
         if (skill.ownerId !== userId) {
-          this.sendToRunner({ type: 'skill-api-result', requestId, error: 'Only the owner can update this skill', statusCode: 403 });
+          this.runnerLink.send({ type: 'skill-api-result', requestId, error: 'Only the owner can update this skill', statusCode: 403 });
           return;
         }
         const updates: Record<string, string> = {};
@@ -4760,38 +4476,38 @@ export class SessionAgentDO {
         if (typeof payload?.content === 'string') updates.content = payload.content;
         if (typeof payload?.visibility === 'string') updates.visibility = payload.visibility;
         await updateSkill(this.appDb, id, updates);
-        this.sendToRunner({ type: 'skill-api-result', requestId, data: { skill: { ...skill, ...updates } } });
+        this.runnerLink.send({ type: 'skill-api-result', requestId, data: { skill: { ...skill, ...updates } } });
         return;
       }
 
       if (action === 'delete') {
         const id = typeof payload?.id === 'string' ? payload.id : '';
         if (!id) {
-          this.sendToRunner({ type: 'skill-api-result', requestId, error: 'id is required', statusCode: 400 });
+          this.runnerLink.send({ type: 'skill-api-result', requestId, error: 'id is required', statusCode: 400 });
           return;
         }
         const skill = await getSkill(this.appDb, id);
         if (!skill) {
-          this.sendToRunner({ type: 'skill-api-result', requestId, error: 'Skill not found', statusCode: 404 });
+          this.runnerLink.send({ type: 'skill-api-result', requestId, error: 'Skill not found', statusCode: 404 });
           return;
         }
         if (skill.source !== 'managed') {
-          this.sendToRunner({ type: 'skill-api-result', requestId, error: 'Only managed skills can be deleted', statusCode: 403 });
+          this.runnerLink.send({ type: 'skill-api-result', requestId, error: 'Only managed skills can be deleted', statusCode: 403 });
           return;
         }
         if (skill.ownerId !== userId) {
-          this.sendToRunner({ type: 'skill-api-result', requestId, error: 'Only the owner can delete this skill', statusCode: 403 });
+          this.runnerLink.send({ type: 'skill-api-result', requestId, error: 'Only the owner can delete this skill', statusCode: 403 });
           return;
         }
         await deleteSkill(this.appDb, id);
-        this.sendToRunner({ type: 'skill-api-result', requestId, data: { deleted: true } });
+        this.runnerLink.send({ type: 'skill-api-result', requestId, data: { deleted: true } });
         return;
       }
 
-      this.sendToRunner({ type: 'skill-api-result', requestId, error: `Unsupported skill action: ${action}`, statusCode: 400 });
+      this.runnerLink.send({ type: 'skill-api-result', requestId, error: `Unsupported skill action: ${action}`, statusCode: 400 });
     } catch (err) {
       console.error('[SessionAgentDO] Skill API error:', err);
-      this.sendToRunner({ type: 'skill-api-result', requestId, error: err instanceof Error ? err.message : String(err), statusCode: 500 });
+      this.runnerLink.send({ type: 'skill-api-result', requestId, error: err instanceof Error ? err.message : String(err), statusCode: 500 });
     }
   }
 
@@ -4802,19 +4518,19 @@ export class SessionAgentDO {
       if (action === 'get') {
         const id = payload?.id as string;
         if (!id) {
-          this.sendToRunner({ type: 'persona-api-result', requestId, error: 'id is required', statusCode: 400 });
+          this.runnerLink.send({ type: 'persona-api-result', requestId, error: 'id is required', statusCode: 400 });
           return;
         }
         const persona = await getPersonaWithFiles(this.env.DB, id);
         if (!persona) {
-          this.sendToRunner({ type: 'persona-api-result', requestId, error: 'Persona not found', statusCode: 404 });
+          this.runnerLink.send({ type: 'persona-api-result', requestId, error: 'Persona not found', statusCode: 404 });
           return;
         }
         if (persona.visibility === 'private' && persona.createdBy !== userId) {
-          this.sendToRunner({ type: 'persona-api-result', requestId, error: 'Persona not found', statusCode: 404 });
+          this.runnerLink.send({ type: 'persona-api-result', requestId, error: 'Persona not found', statusCode: 404 });
           return;
         }
-        this.sendToRunner({ type: 'persona-api-result', requestId, data: { persona } });
+        this.runnerLink.send({ type: 'persona-api-result', requestId, data: { persona } });
         return;
       }
 
@@ -4822,7 +4538,7 @@ export class SessionAgentDO {
         const name = payload?.name as string;
         const slug = payload?.slug as string;
         if (!name || !slug) {
-          this.sendToRunner({ type: 'persona-api-result', requestId, error: 'name and slug are required', statusCode: 400 });
+          this.runnerLink.send({ type: 'persona-api-result', requestId, error: 'name and slug are required', statusCode: 400 });
           return;
         }
         const personaId = crypto.randomUUID();
@@ -4849,23 +4565,23 @@ export class SessionAgentDO {
             });
           }
         }
-        this.sendToRunner({ type: 'persona-api-result', requestId, data: { persona } });
+        this.runnerLink.send({ type: 'persona-api-result', requestId, data: { persona } });
         return;
       }
 
       if (action === 'update') {
         const id = payload?.id as string;
         if (!id) {
-          this.sendToRunner({ type: 'persona-api-result', requestId, error: 'id is required', statusCode: 400 });
+          this.runnerLink.send({ type: 'persona-api-result', requestId, error: 'id is required', statusCode: 400 });
           return;
         }
         const persona = await getPersonaWithFiles(this.env.DB, id);
         if (!persona) {
-          this.sendToRunner({ type: 'persona-api-result', requestId, error: 'Persona not found', statusCode: 404 });
+          this.runnerLink.send({ type: 'persona-api-result', requestId, error: 'Persona not found', statusCode: 404 });
           return;
         }
         if (persona.createdBy !== userId) {
-          this.sendToRunner({ type: 'persona-api-result', requestId, error: 'Only the creator can update this persona', statusCode: 403 });
+          this.runnerLink.send({ type: 'persona-api-result', requestId, error: 'Only the creator can update this persona', statusCode: 403 });
           return;
         }
         const updates: Record<string, unknown> = {};
@@ -4876,27 +4592,27 @@ export class SessionAgentDO {
         if (payload?.defaultModel !== undefined) updates.defaultModel = payload.defaultModel;
         if (payload?.visibility) updates.visibility = payload.visibility;
         await updatePersona(this.appDb, id, updates);
-        this.sendToRunner({ type: 'persona-api-result', requestId, data: { ok: true } });
+        this.runnerLink.send({ type: 'persona-api-result', requestId, data: { ok: true } });
         return;
       }
 
       if (action === 'delete') {
         const id = payload?.id as string;
         if (!id) {
-          this.sendToRunner({ type: 'persona-api-result', requestId, error: 'id is required', statusCode: 400 });
+          this.runnerLink.send({ type: 'persona-api-result', requestId, error: 'id is required', statusCode: 400 });
           return;
         }
         const persona = await getPersonaWithFiles(this.env.DB, id);
         if (!persona) {
-          this.sendToRunner({ type: 'persona-api-result', requestId, error: 'Persona not found', statusCode: 404 });
+          this.runnerLink.send({ type: 'persona-api-result', requestId, error: 'Persona not found', statusCode: 404 });
           return;
         }
         if (persona.createdBy !== userId) {
-          this.sendToRunner({ type: 'persona-api-result', requestId, error: 'Only the creator can delete this persona', statusCode: 403 });
+          this.runnerLink.send({ type: 'persona-api-result', requestId, error: 'Only the creator can delete this persona', statusCode: 403 });
           return;
         }
         await deletePersona(this.appDb, id);
-        this.sendToRunner({ type: 'persona-api-result', requestId, data: { deleted: true } });
+        this.runnerLink.send({ type: 'persona-api-result', requestId, data: { deleted: true } });
         return;
       }
 
@@ -4905,16 +4621,16 @@ export class SessionAgentDO {
         const filename = payload?.filename as string;
         const content = payload?.content as string;
         if (!personaId || !filename || !content) {
-          this.sendToRunner({ type: 'persona-api-result', requestId, error: 'personaId, filename, and content are required', statusCode: 400 });
+          this.runnerLink.send({ type: 'persona-api-result', requestId, error: 'personaId, filename, and content are required', statusCode: 400 });
           return;
         }
         const persona = await getPersonaWithFiles(this.env.DB, personaId);
         if (!persona) {
-          this.sendToRunner({ type: 'persona-api-result', requestId, error: 'Persona not found', statusCode: 404 });
+          this.runnerLink.send({ type: 'persona-api-result', requestId, error: 'Persona not found', statusCode: 404 });
           return;
         }
         if (persona.createdBy !== userId) {
-          this.sendToRunner({ type: 'persona-api-result', requestId, error: 'Only the creator can edit this persona', statusCode: 403 });
+          this.runnerLink.send({ type: 'persona-api-result', requestId, error: 'Only the creator can edit this persona', statusCode: 403 });
           return;
         }
         await upsertPersonaFile(this.appDb, {
@@ -4924,27 +4640,27 @@ export class SessionAgentDO {
           content,
           sortOrder: (payload?.sortOrder as number) ?? 0,
         });
-        this.sendToRunner({ type: 'persona-api-result', requestId, data: { ok: true } });
+        this.runnerLink.send({ type: 'persona-api-result', requestId, data: { ok: true } });
         return;
       }
 
       if (action === 'list-skills') {
         const personaId = payload?.personaId as string;
         if (!personaId) {
-          this.sendToRunner({ type: 'persona-api-result', requestId, error: 'personaId is required', statusCode: 400 });
+          this.runnerLink.send({ type: 'persona-api-result', requestId, error: 'personaId is required', statusCode: 400 });
           return;
         }
         const persona = await getPersonaWithFiles(this.env.DB, personaId);
         if (!persona) {
-          this.sendToRunner({ type: 'persona-api-result', requestId, error: 'Persona not found', statusCode: 404 });
+          this.runnerLink.send({ type: 'persona-api-result', requestId, error: 'Persona not found', statusCode: 404 });
           return;
         }
         if (persona.visibility === 'private' && persona.createdBy !== userId) {
-          this.sendToRunner({ type: 'persona-api-result', requestId, error: 'Persona not found', statusCode: 404 });
+          this.runnerLink.send({ type: 'persona-api-result', requestId, error: 'Persona not found', statusCode: 404 });
           return;
         }
         const skills = await getPersonaSkillsForApi(this.appDb, personaId);
-        this.sendToRunner({ type: 'persona-api-result', requestId, data: { skills } });
+        this.runnerLink.send({ type: 'persona-api-result', requestId, data: { skills } });
         return;
       }
 
@@ -4953,25 +4669,25 @@ export class SessionAgentDO {
         const skillId = payload?.skillId as string;
         const sortOrder = (payload?.sortOrder as number) ?? 0;
         if (!personaId || !skillId) {
-          this.sendToRunner({ type: 'persona-api-result', requestId, error: 'personaId and skillId are required', statusCode: 400 });
+          this.runnerLink.send({ type: 'persona-api-result', requestId, error: 'personaId and skillId are required', statusCode: 400 });
           return;
         }
         const persona = await getPersonaWithFiles(this.env.DB, personaId);
         if (!persona) {
-          this.sendToRunner({ type: 'persona-api-result', requestId, error: 'Persona not found', statusCode: 404 });
+          this.runnerLink.send({ type: 'persona-api-result', requestId, error: 'Persona not found', statusCode: 404 });
           return;
         }
         if (persona.createdBy !== userId) {
-          this.sendToRunner({ type: 'persona-api-result', requestId, error: 'Only the creator can modify this persona', statusCode: 403 });
+          this.runnerLink.send({ type: 'persona-api-result', requestId, error: 'Only the creator can modify this persona', statusCode: 403 });
           return;
         }
         const skill = await getSkill(this.appDb, skillId);
         if (!skill) {
-          this.sendToRunner({ type: 'persona-api-result', requestId, error: 'Skill not found', statusCode: 404 });
+          this.runnerLink.send({ type: 'persona-api-result', requestId, error: 'Skill not found', statusCode: 404 });
           return;
         }
         await attachSkillToPersona(this.appDb, crypto.randomUUID(), personaId, skillId, sortOrder);
-        this.sendToRunner({ type: 'persona-api-result', requestId, data: { attached: true } });
+        this.runnerLink.send({ type: 'persona-api-result', requestId, data: { attached: true } });
         return;
       }
 
@@ -4979,31 +4695,31 @@ export class SessionAgentDO {
         const personaId = payload?.personaId as string;
         const skillId = payload?.skillId as string;
         if (!personaId || !skillId) {
-          this.sendToRunner({ type: 'persona-api-result', requestId, error: 'personaId and skillId are required', statusCode: 400 });
+          this.runnerLink.send({ type: 'persona-api-result', requestId, error: 'personaId and skillId are required', statusCode: 400 });
           return;
         }
         const persona = await getPersonaWithFiles(this.env.DB, personaId);
         if (!persona) {
-          this.sendToRunner({ type: 'persona-api-result', requestId, error: 'Persona not found', statusCode: 404 });
+          this.runnerLink.send({ type: 'persona-api-result', requestId, error: 'Persona not found', statusCode: 404 });
           return;
         }
         if (persona.createdBy !== userId) {
-          this.sendToRunner({ type: 'persona-api-result', requestId, error: 'Only the creator can modify this persona', statusCode: 403 });
+          this.runnerLink.send({ type: 'persona-api-result', requestId, error: 'Only the creator can modify this persona', statusCode: 403 });
           return;
         }
         const changes = await detachSkillFromPersona(this.appDb, personaId, skillId);
         if (changes === 0) {
-          this.sendToRunner({ type: 'persona-api-result', requestId, error: 'Skill was not attached to this persona', statusCode: 404 });
+          this.runnerLink.send({ type: 'persona-api-result', requestId, error: 'Skill was not attached to this persona', statusCode: 404 });
           return;
         }
-        this.sendToRunner({ type: 'persona-api-result', requestId, data: { detached: true } });
+        this.runnerLink.send({ type: 'persona-api-result', requestId, data: { detached: true } });
         return;
       }
 
-      this.sendToRunner({ type: 'persona-api-result', requestId, error: `Unsupported persona action: ${action}`, statusCode: 400 });
+      this.runnerLink.send({ type: 'persona-api-result', requestId, error: `Unsupported persona action: ${action}`, statusCode: 400 });
     } catch (err) {
       console.error('[SessionAgentDO] Persona API error:', err);
-      this.sendToRunner({ type: 'persona-api-result', requestId, error: err instanceof Error ? err.message : String(err), statusCode: 500 });
+      this.runnerLink.send({ type: 'persona-api-result', requestId, error: err instanceof Error ? err.message : String(err), statusCode: 500 });
     }
   }
 
@@ -5016,22 +4732,22 @@ export class SessionAgentDO {
       if (action === 'get') {
         const identity = await getOrchestratorIdentity(this.appDb, userId);
         if (!identity) {
-          this.sendToRunner({ type: 'identity-api-result', requestId, error: 'Identity not found', statusCode: 404 } as any);
+          this.runnerLink.send({ type: 'identity-api-result', requestId, error: 'Identity not found', statusCode: 404 } as any);
           return;
         }
-        this.sendToRunner({ type: 'identity-api-result', requestId, data: { identity } } as any);
+        this.runnerLink.send({ type: 'identity-api-result', requestId, data: { identity } } as any);
         return;
       }
 
       if (action === 'update-instructions') {
         const instructions = (payload?.instructions ?? payload?.customInstructions) as string | undefined;
         if (instructions === undefined) {
-          this.sendToRunner({ type: 'identity-api-result', requestId, error: 'instructions field is required', statusCode: 400 } as any);
+          this.runnerLink.send({ type: 'identity-api-result', requestId, error: 'instructions field is required', statusCode: 400 } as any);
           return;
         }
         const identity = await getOrchestratorIdentity(this.appDb, userId);
         if (!identity) {
-          this.sendToRunner({ type: 'identity-api-result', requestId, error: 'Identity not found', statusCode: 404 } as any);
+          this.runnerLink.send({ type: 'identity-api-result', requestId, error: 'Identity not found', statusCode: 404 } as any);
           return;
         }
         // Use nullish coalescing: empty string clears instructions, undefined is rejected above
@@ -5046,7 +4762,7 @@ export class SessionAgentDO {
             sortOrder: 10,
           });
         }
-        this.sendToRunner({ type: 'identity-api-result', requestId, data: { ok: true } } as any);
+        this.runnerLink.send({ type: 'identity-api-result', requestId, data: { ok: true } } as any);
 
         // Hot-reload: rebuild persona files and re-send to runner so OpenCode
         // picks up the change immediately (it watches .valet/persona/*.md).
@@ -5069,10 +4785,10 @@ export class SessionAgentDO {
         return;
       }
 
-      this.sendToRunner({ type: 'identity-api-result', requestId, error: `Unsupported identity action: ${action}`, statusCode: 400 } as any);
+      this.runnerLink.send({ type: 'identity-api-result', requestId, error: `Unsupported identity action: ${action}`, statusCode: 400 } as any);
     } catch (err) {
       console.error('[SessionAgentDO] Identity API error:', err);
-      this.sendToRunner({ type: 'identity-api-result', requestId, error: err instanceof Error ? err.message : String(err), statusCode: 500 } as any);
+      this.runnerLink.send({ type: 'identity-api-result', requestId, error: err instanceof Error ? err.message : String(err), statusCode: 500 } as any);
     }
   }
 
@@ -5081,7 +4797,7 @@ export class SessionAgentDO {
       const userId = this.getStateValue('userId')!;
       const executionId = typeof payload?.executionId === 'string' ? payload.executionId.trim() : '';
       if (!executionId) {
-        this.sendToRunner({ type: 'execution-api-result', requestId, error: 'executionId is required' } as any);
+        this.runnerLink.send({ type: 'execution-api-result', requestId, error: 'executionId is required' } as any);
         return;
       }
 
@@ -5089,11 +4805,11 @@ export class SessionAgentDO {
         const row = await getExecution(this.env.DB, executionId, userId);
 
         if (!row) {
-          this.sendToRunner({ type: 'execution-api-result', requestId, error: `Execution not found: ${executionId}` } as any);
+          this.runnerLink.send({ type: 'execution-api-result', requestId, error: `Execution not found: ${executionId}` } as any);
           return;
         }
 
-        this.sendToRunner({
+        this.runnerLink.send({
           type: 'execution-api-result',
           requestId,
           data: {
@@ -5124,7 +4840,7 @@ export class SessionAgentDO {
         const execution = await getExecutionForAuth(this.appDb, executionId);
 
         if (!execution || execution.user_id !== userId) {
-          this.sendToRunner({ type: 'execution-api-result', requestId, error: `Execution not found: ${executionId}` } as any);
+          this.runnerLink.send({ type: 'execution-api-result', requestId, error: `Execution not found: ${executionId}` } as any);
           return;
         }
 
@@ -5206,7 +4922,7 @@ export class SessionAgentDO {
             sequence,
           }));
 
-        this.sendToRunner({ type: 'execution-api-result', requestId, data: { steps } } as any);
+        this.runnerLink.send({ type: 'execution-api-result', requestId, data: { steps } } as any);
         return;
       }
 
@@ -5215,13 +4931,13 @@ export class SessionAgentDO {
         const resumeToken = typeof payload?.resumeToken === 'string' ? payload.resumeToken : '';
         const reason = typeof payload?.reason === 'string' ? payload.reason : undefined;
         if (!resumeToken) {
-          this.sendToRunner({ type: 'execution-api-result', requestId, error: 'resumeToken is required' } as any);
+          this.runnerLink.send({ type: 'execution-api-result', requestId, error: 'resumeToken is required' } as any);
           return;
         }
 
         const execution = await getExecutionOwnerAndStatus(this.appDb, executionId) as { user_id: string; status: string } | null;
         if (!execution || execution.user_id !== userId) {
-          this.sendToRunner({ type: 'execution-api-result', requestId, error: `Execution not found: ${executionId}` } as any);
+          this.runnerLink.send({ type: 'execution-api-result', requestId, error: `Execution not found: ${executionId}` } as any);
           return;
         }
 
@@ -5240,7 +4956,7 @@ export class SessionAgentDO {
 
         if (!response.ok) {
           const errorBody = await response.json<{ error?: string }>().catch((): { error?: string } => ({ error: undefined }));
-          this.sendToRunner({
+          this.runnerLink.send({
             type: 'execution-api-result',
             requestId,
             error: errorBody.error || `Failed to apply approval decision (${response.status})`,
@@ -5249,7 +4965,7 @@ export class SessionAgentDO {
         }
 
         const result = await response.json<{ ok: boolean; status: string }>();
-        this.sendToRunner({ type: 'execution-api-result', requestId, data: { success: true, status: result.status } } as any);
+        this.runnerLink.send({ type: 'execution-api-result', requestId, data: { success: true, status: result.status } } as any);
         return;
       }
 
@@ -5257,7 +4973,7 @@ export class SessionAgentDO {
         const reason = typeof payload?.reason === 'string' ? payload.reason : undefined;
         const execution = await getExecutionOwnerAndStatus(this.appDb, executionId) as { user_id: string; status: string } | null;
         if (!execution || execution.user_id !== userId) {
-          this.sendToRunner({ type: 'execution-api-result', requestId, error: `Execution not found: ${executionId}` } as any);
+          this.runnerLink.send({ type: 'execution-api-result', requestId, error: `Execution not found: ${executionId}` } as any);
           return;
         }
 
@@ -5274,7 +4990,7 @@ export class SessionAgentDO {
 
         if (!response.ok) {
           const errorBody = await response.json<{ error?: string }>().catch((): { error?: string } => ({ error: undefined }));
-          this.sendToRunner({
+          this.runnerLink.send({
             type: 'execution-api-result',
             requestId,
             error: errorBody.error || `Failed to cancel execution (${response.status})`,
@@ -5283,14 +4999,14 @@ export class SessionAgentDO {
         }
 
         const result = await response.json<{ ok: boolean; status: string }>();
-        this.sendToRunner({ type: 'execution-api-result', requestId, data: { success: true, status: result.status } } as any);
+        this.runnerLink.send({ type: 'execution-api-result', requestId, data: { success: true, status: result.status } } as any);
         return;
       }
 
-      this.sendToRunner({ type: 'execution-api-result', requestId, error: `Unsupported execution action: ${action}` } as any);
+      this.runnerLink.send({ type: 'execution-api-result', requestId, error: `Unsupported execution action: ${action}` } as any);
     } catch (err) {
       console.error('[SessionAgentDO] Execution API error:', err);
-      this.sendToRunner({ type: 'execution-api-result', requestId, error: err instanceof Error ? err.message : String(err) } as any);
+      this.runnerLink.send({ type: 'execution-api-result', requestId, error: err instanceof Error ? err.message : String(err) } as any);
     }
   }
 
@@ -5408,7 +5124,7 @@ export class SessionAgentDO {
     try {
       const githubToken = await this.getGitHubToken();
       if (!githubToken) {
-        this.sendToRunner({ type: 'list-pull-requests-result', requestId, error: 'No GitHub token found — user must connect GitHub in settings' } as any);
+        this.runnerLink.send({ type: 'list-pull-requests-result', requestId, error: 'No GitHub token found — user must connect GitHub in settings' } as any);
         return;
       }
 
@@ -5429,7 +5145,7 @@ export class SessionAgentDO {
 
       if (!res.ok) {
         const errText = await res.text();
-        this.sendToRunner({ type: 'list-pull-requests-result', requestId, error: `GitHub API error (${res.status}): ${errText}` } as any);
+        this.runnerLink.send({ type: 'list-pull-requests-result', requestId, error: `GitHub API error (${res.status}): ${errText}` } as any);
         return;
       }
 
@@ -5448,7 +5164,7 @@ export class SessionAgentDO {
         labels: Array<{ name: string }>;
       }>;
 
-      this.sendToRunner({
+      this.runnerLink.send({
         type: 'list-pull-requests-result',
         requestId,
         pulls: pulls.map((pr) => ({
@@ -5470,7 +5186,7 @@ export class SessionAgentDO {
       } as any);
     } catch (err) {
       console.error('[SessionAgentDO] Failed to list pull requests:', err);
-      this.sendToRunner({ type: 'list-pull-requests-result', requestId, error: err instanceof Error ? err.message : String(err) } as any);
+      this.runnerLink.send({ type: 'list-pull-requests-result', requestId, error: err instanceof Error ? err.message : String(err) } as any);
     }
   }
 
@@ -5481,7 +5197,7 @@ export class SessionAgentDO {
     try {
       const githubToken = await this.getGitHubToken();
       if (!githubToken) {
-        this.sendToRunner({ type: 'inspect-pull-request-result', requestId, error: 'No GitHub token found — user must connect GitHub in settings' } as any);
+        this.runnerLink.send({ type: 'inspect-pull-request-result', requestId, error: 'No GitHub token found — user must connect GitHub in settings' } as any);
         return;
       }
 
@@ -5499,7 +5215,7 @@ export class SessionAgentDO {
 
       if (!prResp.ok) {
         const errText = await prResp.text();
-        this.sendToRunner({ type: 'inspect-pull-request-result', requestId, error: `GitHub API error (${prResp.status}): ${errText}` } as any);
+        this.runnerLink.send({ type: 'inspect-pull-request-result', requestId, error: `GitHub API error (${prResp.status}): ${errText}` } as any);
         return;
       }
 
@@ -5681,7 +5397,7 @@ export class SessionAgentDO {
         return acc;
       }, {}) ?? {};
 
-      this.sendToRunner({
+      this.runnerLink.send({
         type: 'inspect-pull-request-result',
         requestId,
         data: {
@@ -5764,7 +5480,7 @@ export class SessionAgentDO {
       } as any);
     } catch (err) {
       console.error('[SessionAgentDO] Failed to inspect pull request:', err);
-      this.sendToRunner({ type: 'inspect-pull-request-result', requestId, error: err instanceof Error ? err.message : String(err) } as any);
+      this.runnerLink.send({ type: 'inspect-pull-request-result', requestId, error: err instanceof Error ? err.message : String(err) } as any);
     }
   }
 
@@ -5772,10 +5488,10 @@ export class SessionAgentDO {
     try {
       const userId = this.getStateValue('userId')!;
       const personas = await listPersonas(this.env.DB, userId);
-      this.sendToRunner({ type: 'list-personas-result', requestId, personas } as any);
+      this.runnerLink.send({ type: 'list-personas-result', requestId, personas } as any);
     } catch (err) {
       console.error('[SessionAgentDO] Failed to list personas:', err);
-      this.sendToRunner({ type: 'list-personas-result', requestId, error: err instanceof Error ? err.message : String(err) } as any);
+      this.runnerLink.send({ type: 'list-personas-result', requestId, error: err instanceof Error ? err.message : String(err) } as any);
     }
   }
 
@@ -5803,10 +5519,10 @@ export class SessionAgentDO {
         unique.push(binding);
       }
 
-      this.sendToRunner({ type: 'list-channels-result', requestId, channels: unique } as any);
+      this.runnerLink.send({ type: 'list-channels-result', requestId, channels: unique } as any);
     } catch (err) {
       console.error('[SessionAgentDO] Failed to list channels:', err);
-      this.sendToRunner({ type: 'list-channels-result', requestId, error: err instanceof Error ? err.message : String(err) } as any);
+      this.runnerLink.send({ type: 'list-channels-result', requestId, error: err instanceof Error ? err.message : String(err) } as any);
     }
   }
 
@@ -5814,10 +5530,10 @@ export class SessionAgentDO {
     try {
       const sessionId = this.getStateValue('sessionId')!;
       const { children } = await getChildSessions(this.env.DB, sessionId);
-      this.sendToRunner({ type: 'list-child-sessions-result', requestId, children } as any);
+      this.runnerLink.send({ type: 'list-child-sessions-result', requestId, children } as any);
     } catch (err) {
       console.error('[SessionAgentDO] Failed to list child sessions:', err);
-      this.sendToRunner({ type: 'list-child-sessions-result', requestId, error: err instanceof Error ? err.message : String(err) } as any);
+      this.runnerLink.send({ type: 'list-child-sessions-result', requestId, error: err instanceof Error ? err.message : String(err) } as any);
     }
   }
 
@@ -5828,12 +5544,12 @@ export class SessionAgentDO {
     try {
       const githubToken = await this.getGitHubToken();
       if (!githubToken) {
-        this.sendToRunner({ type: 'read-repo-file-result', requestId, error: 'No GitHub token found — user must connect GitHub in settings' } as any);
+        this.runnerLink.send({ type: 'read-repo-file-result', requestId, error: 'No GitHub token found — user must connect GitHub in settings' } as any);
         return;
       }
 
       if (!params.path) {
-        this.sendToRunner({ type: 'read-repo-file-result', requestId, error: 'Missing file path' } as any);
+        this.runnerLink.send({ type: 'read-repo-file-result', requestId, error: 'Missing file path' } as any);
         return;
       }
 
@@ -5875,7 +5591,7 @@ export class SessionAgentDO {
 
       if (!res.ok) {
         const errText = await res.text();
-        this.sendToRunner({ type: 'read-repo-file-result', requestId, error: `GitHub API error (${res.status}): ${errText}` } as any);
+        this.runnerLink.send({ type: 'read-repo-file-result', requestId, error: `GitHub API error (${res.status}): ${errText}` } as any);
         return;
       }
 
@@ -5888,7 +5604,7 @@ export class SessionAgentDO {
       };
 
       if (data.type === 'dir') {
-        this.sendToRunner({ type: 'read-repo-file-result', requestId, error: `Path is a directory: ${params.path}` } as any);
+        this.runnerLink.send({ type: 'read-repo-file-result', requestId, error: `Path is a directory: ${params.path}` } as any);
         return;
       }
 
@@ -5905,7 +5621,7 @@ export class SessionAgentDO {
         truncated = true;
       }
 
-      this.sendToRunner({
+      this.runnerLink.send({
         type: 'read-repo-file-result',
         requestId,
         content,
@@ -5917,7 +5633,7 @@ export class SessionAgentDO {
       } as any);
     } catch (err) {
       console.error('[SessionAgentDO] Failed to read repo file:', err);
-      this.sendToRunner({ type: 'read-repo-file-result', requestId, error: err instanceof Error ? err.message : String(err) } as any);
+      this.runnerLink.send({ type: 'read-repo-file-result', requestId, error: err instanceof Error ? err.message : String(err) } as any);
     }
   }
 
@@ -5926,7 +5642,7 @@ export class SessionAgentDO {
       const userId = this.getStateValue('userId')!;
       const session = await getSession(this.appDb, targetSessionId);
       if (!session || session.userId !== userId) {
-        this.sendToRunner({ type: 'get-session-status-result', requestId, error: 'Session not found or access denied' } as any);
+        this.runnerLink.send({ type: 'get-session-status-result', requestId, error: 'Session not found or access denied' } as any);
         return;
       }
 
@@ -5959,7 +5675,7 @@ export class SessionAgentDO {
       const runnerConnected = liveStatus?.runnerConnected ?? false;
       const agentStatus = runnerBusy || queuedPrompts > 0 ? 'working' : 'idle';
 
-      this.sendToRunner({
+      this.runnerLink.send({
         type: 'get-session-status-result',
         requestId,
         sessionStatus: {
@@ -5980,7 +5696,7 @@ export class SessionAgentDO {
       } as any);
     } catch (err) {
       console.error('[SessionAgentDO] Failed to get session status:', err);
-      this.sendToRunner({ type: 'get-session-status-result', requestId, error: err instanceof Error ? err.message : String(err) } as any);
+      this.runnerLink.send({ type: 'get-session-status-result', requestId, error: err instanceof Error ? err.message : String(err) } as any);
     }
   }
 
@@ -6134,7 +5850,7 @@ export class SessionAgentDO {
     this.setStateValue('sessionId', body.sessionId);
     this.setStateValue('userId', body.userId);
     this.setStateValue('workspace', body.workspace);
-    this.setStateValue('runnerToken', body.runnerToken);
+    this.runnerLink.token = body.runnerToken;
     this.setStateValue('status', 'initializing');
     this.promptQueue.runnerBusy = false;
 
@@ -6364,7 +6080,7 @@ export class SessionAgentDO {
     await this.flushMessagesToD1();
 
     // Tell runner to stop
-    this.sendToRunner({ type: 'stop' });
+    this.runnerLink.send({ type: 'stop' });
 
     // Close all runner connections
     const runnerSockets = this.ctx.getWebSockets('runner');
@@ -6489,7 +6205,7 @@ export class SessionAgentDO {
 
     const queueLength = this.promptQueue.length;
     const clientCount = this.getClientSockets().length;
-    const runnerConnected = this.ctx.getWebSockets('runner').length > 0;
+    const runnerConnected = this.runnerLink.isConnected;
     const connectedUsers = this.getConnectedUserIds();
     const runningStartedAt = this.getStateValue('runningStartedAt');
 
@@ -6631,8 +6347,7 @@ export class SessionAgentDO {
         // Dispatch the system event as a prompt so the runner wakes up and can
         // decide whether to act on it (e.g. child session idle/completed events).
         const runnerBusy = this.promptQueue.runnerBusy;
-        const runnerSockets = this.ctx.getWebSockets('runner');
-        if (runnerSockets.length > 0 && !runnerBusy) {
+        if (this.runnerLink.isConnected && !runnerBusy) {
           // Runner is connected and idle — insert as 'processing' for recoverability, then dispatch
           this.promptQueue.enqueue({ id: messageId, content, threadId, status: 'processing' });
           this.promptQueue.stampDispatched();
@@ -6643,7 +6358,7 @@ export class SessionAgentDO {
           const sysModelPrefs = await this.resolveModelPreferences(ownerDetails);
           const sysChannelKey = this.channelKeyFrom(undefined, undefined);
           const sysOcSessionId = this.getChannelOcSessionId(sysChannelKey);
-          const sysDispatched = this.sendToRunner({
+          const sysDispatched = this.runnerLink.send({
             type: 'prompt',
             messageId,
             content,
@@ -6711,8 +6426,7 @@ export class SessionAgentDO {
       return queueWorkflowDispatch(`session_not_ready:${status}`);
     }
 
-    const runnerSockets = this.ctx.getWebSockets('runner');
-    if (runnerSockets.length === 0) {
+    if (!this.runnerLink.isConnected) {
       return queueWorkflowDispatch('runner_not_connected');
     }
 
@@ -6729,7 +6443,7 @@ export class SessionAgentDO {
     const dispatchOwnerDetails = dispatchOwnerId ? await this.getUserDetails(dispatchOwnerId) : undefined;
     const dispatchModelPrefs = await this.resolveModelPreferences(dispatchOwnerDetails);
 
-    const directWfDispatched = this.sendToRunner({
+    const directWfDispatched = this.runnerLink.send({
       type: 'workflow-execute',
       executionId,
       payload,
@@ -6751,8 +6465,7 @@ export class SessionAgentDO {
   }
 
   private async sendNextQueuedPrompt(): Promise<boolean> {
-    const runnerSockets = this.ctx.getWebSockets('runner');
-    if (runnerSockets.length === 0) {
+    if (!this.runnerLink.isConnected) {
       console.log(`[SessionAgentDO] sendNextQueuedPrompt: no runner sockets, skipping`);
       return false;
     }
@@ -6780,7 +6493,7 @@ export class SessionAgentDO {
       const queueOwnerId = this.getStateValue('userId');
       const queueOwnerDetails = queueOwnerId ? await this.getUserDetails(queueOwnerId) : undefined;
       const queueModelPrefs = await this.resolveModelPreferences(queueOwnerDetails);
-      const wfDispatched = this.sendToRunner({
+      const wfDispatched = this.runnerLink.send({
         type: 'workflow-execute',
         executionId: queuedExecutionId,
         payload: queuedPayload,
@@ -6845,7 +6558,7 @@ export class SessionAgentDO {
       ? `${prompt.contextPrefix}\n\n${prompt.content}`
       : prompt.content;
 
-    const queueDispatched = this.sendToRunner({
+    const queueDispatched = this.runnerLink.send({
       type: 'prompt',
       messageId: prompt.id,
       content: queueAgentContent,
@@ -7247,7 +6960,7 @@ export class SessionAgentDO {
 
       // Send result back to runner
       if (requestId) {
-        this.sendToRunner({
+        this.runnerLink.send({
           type: 'create-pr-result',
           requestId,
           number: prData.number,
@@ -7264,7 +6977,7 @@ export class SessionAgentDO {
 
       // Send error result back to runner
       if (requestId) {
-        this.sendToRunner({
+        this.runnerLink.send({
           type: 'create-pr-result',
           requestId,
           error: errorText,
@@ -7367,7 +7080,7 @@ export class SessionAgentDO {
 
       // Send result back to runner
       if (requestId) {
-        this.sendToRunner({
+        this.runnerLink.send({
           type: 'update-pr-result',
           requestId,
           number: prData.number,
@@ -7383,7 +7096,7 @@ export class SessionAgentDO {
       console.error('[SessionAgentDO] Failed to update PR:', errorText);
 
       if (requestId) {
-        this.sendToRunner({
+        this.runnerLink.send({
           type: 'update-pr-result',
           requestId,
           error: errorText,
@@ -7469,7 +7182,7 @@ export class SessionAgentDO {
         // calling handleStop() instead, or using an 'error' status to distinguish
         // infrastructure-caused termination from intentional stops.
         console.log(`[SessionAgentDO] Session ${sessionId} sandbox already finished, marking as terminated`);
-        this.sendToRunner({ type: 'stop' });
+        this.runnerLink.send({ type: 'stop' });
         const runnerSockets409 = this.ctx.getWebSockets('runner');
         for (const ws of runnerSockets409) {
           try { ws.close(1000, 'Sandbox already exited'); } catch { /* ignore */ }
@@ -7499,7 +7212,7 @@ export class SessionAgentDO {
       const result = await response.json() as { snapshotImageId: string };
 
       // Now that snapshot is taken and sandbox terminated, stop runner and close connections
-      this.sendToRunner({ type: 'stop' });
+      this.runnerLink.send({ type: 'stop' });
       const runnerSockets = this.ctx.getWebSockets('runner');
       for (const ws of runnerSockets) {
         try { ws.close(1000, 'Session hibernating'); } catch { /* ignore */ }
@@ -8166,7 +7879,7 @@ export class SessionAgentDO {
   ) {
     if (!name) return;
 
-    this.sendToRunner({
+    this.runnerLink.send({
       type: 'tunnel-delete',
       name,
       actorId: actor?.actorId,
@@ -8192,7 +7905,7 @@ export class SessionAgentDO {
       if (msg.toHandle && !toUserId && !msg.toSessionId) {
         const identity = await getOrchestratorIdentityByHandle(this.appDb, msg.toHandle);
         if (!identity) {
-          this.sendToRunner({ type: 'mailbox-send-result', requestId, error: `Handle @${msg.toHandle} not found` } as any);
+          this.runnerLink.send({ type: 'mailbox-send-result', requestId, error: `Handle @${msg.toHandle} not found` } as any);
           return;
         }
         toUserId = identity.userId;
@@ -8210,9 +7923,9 @@ export class SessionAgentDO {
         replyToId: msg.replyToId,
       });
 
-      this.sendToRunner({ type: 'mailbox-send-result', requestId, messageId: message.id } as any);
+      this.runnerLink.send({ type: 'mailbox-send-result', requestId, messageId: message.id } as any);
     } catch (err) {
-      this.sendToRunner({ type: 'mailbox-send-result', requestId, error: err instanceof Error ? err.message : String(err) } as any);
+      this.runnerLink.send({ type: 'mailbox-send-result', requestId, error: err instanceof Error ? err.message : String(err) } as any);
     }
   }
 
@@ -8220,7 +7933,7 @@ export class SessionAgentDO {
     try {
       const sessionId = this.getStateValue('sessionId');
       if (!sessionId) {
-        this.sendToRunner({ type: 'mailbox-check-result', requestId, error: 'No session ID' } as any);
+        this.runnerLink.send({ type: 'mailbox-check-result', requestId, error: 'No session ID' } as any);
         return;
       }
 
@@ -8235,9 +7948,9 @@ export class SessionAgentDO {
         await markSessionMailboxRead(this.appDb, sessionId);
       }
 
-      this.sendToRunner({ type: 'mailbox-check-result', requestId, messages } as any);
+      this.runnerLink.send({ type: 'mailbox-check-result', requestId, messages } as any);
     } catch (err) {
-      this.sendToRunner({ type: 'mailbox-check-result', requestId, error: err instanceof Error ? err.message : String(err) } as any);
+      this.runnerLink.send({ type: 'mailbox-check-result', requestId, error: err instanceof Error ? err.message : String(err) } as any);
     }
   }
 
@@ -8245,7 +7958,7 @@ export class SessionAgentDO {
     try {
       const sessionId = this.getStateValue('sessionId');
       if (!sessionId) {
-        this.sendToRunner({ type: 'task-create-result', requestId, error: 'No session ID' } as any);
+        this.runnerLink.send({ type: 'task-create-result', requestId, error: 'No session ID' } as any);
         return;
       }
 
@@ -8266,9 +7979,9 @@ export class SessionAgentDO {
         blockedBy: msg.blockedBy,
       });
 
-      this.sendToRunner({ type: 'task-create-result', requestId, task } as any);
+      this.runnerLink.send({ type: 'task-create-result', requestId, task } as any);
     } catch (err) {
-      this.sendToRunner({ type: 'task-create-result', requestId, error: err instanceof Error ? err.message : String(err) } as any);
+      this.runnerLink.send({ type: 'task-create-result', requestId, error: err instanceof Error ? err.message : String(err) } as any);
     }
   }
 
@@ -8276,7 +7989,7 @@ export class SessionAgentDO {
     try {
       const sessionId = this.getStateValue('sessionId');
       if (!sessionId) {
-        this.sendToRunner({ type: 'task-list-result', requestId, error: 'No session ID' } as any);
+        this.runnerLink.send({ type: 'task-list-result', requestId, error: 'No session ID' } as any);
         return;
       }
 
@@ -8287,9 +8000,9 @@ export class SessionAgentDO {
       }
 
       const tasks = await getSessionTasks(this.env.DB, orchestratorSessionId, { status, limit });
-      this.sendToRunner({ type: 'task-list-result', requestId, tasks } as any);
+      this.runnerLink.send({ type: 'task-list-result', requestId, tasks } as any);
     } catch (err) {
-      this.sendToRunner({ type: 'task-list-result', requestId, error: err instanceof Error ? err.message : String(err) } as any);
+      this.runnerLink.send({ type: 'task-list-result', requestId, error: err instanceof Error ? err.message : String(err) } as any);
     }
   }
 
@@ -8304,13 +8017,13 @@ export class SessionAgentDO {
       });
 
       if (!task) {
-        this.sendToRunner({ type: 'task-update-result', requestId, error: 'Task not found' } as any);
+        this.runnerLink.send({ type: 'task-update-result', requestId, error: 'Task not found' } as any);
         return;
       }
 
-      this.sendToRunner({ type: 'task-update-result', requestId, task } as any);
+      this.runnerLink.send({ type: 'task-update-result', requestId, task } as any);
     } catch (err) {
-      this.sendToRunner({ type: 'task-update-result', requestId, error: err instanceof Error ? err.message : String(err) } as any);
+      this.runnerLink.send({ type: 'task-update-result', requestId, error: err instanceof Error ? err.message : String(err) } as any);
     }
   }
 
@@ -8318,14 +8031,14 @@ export class SessionAgentDO {
     try {
       const sessionId = this.getStateValue('sessionId');
       if (!sessionId) {
-        this.sendToRunner({ type: 'task-my-result', requestId, error: 'No session ID' } as any);
+        this.runnerLink.send({ type: 'task-my-result', requestId, error: 'No session ID' } as any);
         return;
       }
 
       const tasks = await getMyTasks(this.env.DB, sessionId, { status });
-      this.sendToRunner({ type: 'task-my-result', requestId, tasks } as any);
+      this.runnerLink.send({ type: 'task-my-result', requestId, tasks } as any);
     } catch (err) {
-      this.sendToRunner({ type: 'task-my-result', requestId, error: err instanceof Error ? err.message : String(err) } as any);
+      this.runnerLink.send({ type: 'task-my-result', requestId, error: err instanceof Error ? err.message : String(err) } as any);
     }
   }
 
@@ -8358,13 +8071,13 @@ export class SessionAgentDO {
     try {
       const userId = this.getStateValue('userId');
       if (!userId) {
-        this.sendToRunner({ type: 'channel-reply-result', requestId, error: 'No userId on session' } as any);
+        this.runnerLink.send({ type: 'channel-reply-result', requestId, error: 'No userId on session' } as any);
         return;
       }
 
       const transport = channelRegistry.getTransport(channelType);
       if (!transport) {
-        this.sendToRunner({ type: 'channel-reply-result', requestId, error: `Unsupported channel type: ${channelType}` } as any);
+        this.runnerLink.send({ type: 'channel-reply-result', requestId, error: `Unsupported channel type: ${channelType}` } as any);
         return;
       }
 
@@ -8377,7 +8090,7 @@ export class SessionAgentDO {
         if (credResult.ok) token = credResult.credential.accessToken;
       }
       if (!token) {
-        this.sendToRunner({ type: 'channel-reply-result', requestId, error: `No ${channelType} config for user` } as any);
+        this.runnerLink.send({ type: 'channel-reply-result', requestId, error: `No ${channelType} config for user` } as any);
         return;
       }
 
@@ -8411,7 +8124,7 @@ export class SessionAgentDO {
 
       const result = await transport.sendMessage(target, outbound, ctx);
       if (!result.success) {
-        this.sendToRunner({ type: 'channel-reply-result', requestId, error: result.error || `${channelType} API error` } as any);
+        this.runnerLink.send({ type: 'channel-reply-result', requestId, error: result.error || `${channelType} API error` } as any);
         return;
       }
 
@@ -8423,7 +8136,7 @@ export class SessionAgentDO {
         this.resolveChannelFollowups(channelType, channelId);
       }
 
-      this.sendToRunner({ type: 'channel-reply-result', requestId, success: true } as any);
+      this.runnerLink.send({ type: 'channel-reply-result', requestId, success: true } as any);
 
       // Explicitly clear the shimmer "thinking" indicator for Slack
       if (channelType === 'slack') {
@@ -8466,7 +8179,7 @@ export class SessionAgentDO {
         });
       }
     } catch (err) {
-      this.sendToRunner({
+      this.runnerLink.send({
         type: 'channel-reply-result',
         requestId,
         error: err instanceof Error ? err.message : String(err),
@@ -8480,7 +8193,7 @@ export class SessionAgentDO {
     try {
       const userId = this.getStateValue('userId');
       if (!userId) {
-        this.sendToRunner({ type: 'list-tools-result', requestId, error: 'No userId on session' } as any);
+        this.runnerLink.send({ type: 'list-tools-result', requestId, error: 'No userId on session' } as any);
         return;
       }
 
@@ -8653,7 +8366,7 @@ export class SessionAgentDO {
         });
       }
 
-      this.sendToRunner({
+      this.runnerLink.send({
         type: 'list-tools-result',
         requestId,
         tools,
@@ -8691,7 +8404,7 @@ export class SessionAgentDO {
         }
       }
     } catch (err) {
-      this.sendToRunner({
+      this.runnerLink.send({
         type: 'list-tools-result',
         requestId,
         error: err instanceof Error ? err.message : String(err),
@@ -8704,14 +8417,14 @@ export class SessionAgentDO {
       const userId = this.getStateValue('userId');
       const sessionId = this.getStateValue('sessionId');
       if (!userId) {
-        this.sendToRunner({ type: 'call-tool-result', requestId, error: 'No userId on session' } as any);
+        this.runnerLink.send({ type: 'call-tool-result', requestId, error: 'No userId on session' } as any);
         return;
       }
 
       // Parse toolId: "service:actionId"
       const colonIndex = toolId.indexOf(':');
       if (colonIndex === -1) {
-        this.sendToRunner({ type: 'call-tool-result', requestId, error: `Invalid tool ID format "${toolId}". Expected "service:actionId" (e.g. "gmail:gmail.send_email")` } as any);
+        this.runnerLink.send({ type: 'call-tool-result', requestId, error: `Invalid tool ID format "${toolId}". Expected "service:actionId" (e.g. "gmail:gmail.send_email")` } as any);
         return;
       }
       const service = toolId.slice(0, colonIndex);
@@ -8719,7 +8432,7 @@ export class SessionAgentDO {
 
       // Safety net: reject disabled actions even if the tool ID was guessed
       if (await isActionDisabled(this.appDb, service, actionId)) {
-        this.sendToRunner({ type: 'call-tool-result', requestId, error: `Action "${toolId}" is disabled by your organization.` } as any);
+        this.runnerLink.send({ type: 'call-tool-result', requestId, error: `Action "${toolId}" is disabled by your organization.` } as any);
         return;
       }
 
@@ -8731,7 +8444,7 @@ export class SessionAgentDO {
         };
       }
       if (this.disabledPluginServicesCache.services.has(service)) {
-        this.sendToRunner({ type: 'call-tool-result', requestId, error: `Action "${toolId}" is disabled by your organization.` } as any);
+        this.runnerLink.send({ type: 'call-tool-result', requestId, error: `Action "${toolId}" is disabled by your organization.` } as any);
         return;
       }
 
@@ -8763,14 +8476,14 @@ export class SessionAgentDO {
       }
 
       if (!activeIntegration) {
-        this.sendToRunner({ type: 'call-tool-result', requestId, error: `Integration "${service}" is not active. Configure it in Settings > Integrations.` } as any);
+        this.runnerLink.send({ type: 'call-tool-result', requestId, error: `Integration "${service}" is not active. Configure it in Settings > Integrations.` } as any);
         return;
       }
 
       // Look up ActionSource
       const actionSource = integrationRegistry.getActions(service);
       if (!actionSource) {
-        this.sendToRunner({ type: 'call-tool-result', requestId, error: `No integration package found for service "${service}".` } as any);
+        this.runnerLink.send({ type: 'call-tool-result', requestId, error: `No integration package found for service "${service}".` } as any);
         return;
       }
 
@@ -8811,7 +8524,7 @@ export class SessionAgentDO {
 
       // ─── Deny ──────────────────────────────────────────────────────────
       if (invocationResult.outcome === 'denied') {
-        this.sendToRunner({ type: 'call-tool-result', requestId, error: `Action "${toolId}" denied by policy (risk level: ${riskLevel})` } as any);
+        this.runnerLink.send({ type: 'call-tool-result', requestId, error: `Action "${toolId}" denied by policy (risk level: ${riskLevel})` } as any);
         this.emitAuditEvent('agent.tool_call', `Action ${toolId} denied by policy`, undefined, { invocationId: invocationResult.invocationId, riskLevel });
         return;
       }
@@ -8819,7 +8532,7 @@ export class SessionAgentDO {
       // ─── Require Approval ──────────────────────────────────────────────
       if (invocationResult.outcome === 'pending_approval') {
         if (!summary) {
-          this.sendToRunner({
+          this.runnerLink.send({
             type: 'call-tool-result',
             requestId,
             error: `Action "${toolId}" requires approval but no summary was provided. The call_tool summary parameter is required.`,
@@ -8866,7 +8579,7 @@ export class SessionAgentDO {
         );
 
         // Notify runner to extend its timeout
-        this.sendToRunner({
+        this.runnerLink.send({
           type: 'call-tool-pending',
           requestId,
           invocationId: invocationResult.invocationId,
@@ -8924,7 +8637,7 @@ export class SessionAgentDO {
       // ─── Allow — execute immediately ───────────────────────────────────
       await this.executeAction(requestId, toolId, service, actionId, params, isOrgScoped, userId, actionSource, invocationResult.invocationId);
     } catch (err) {
-      this.sendToRunner({
+      this.runnerLink.send({
         type: 'call-tool-result',
         requestId,
         error: err instanceof Error ? err.message : String(err),
@@ -8948,7 +8661,7 @@ export class SessionAgentDO {
     invocationId: string,
   ) {
     if (!actionSource) {
-      this.sendToRunner({ type: 'call-tool-result', requestId, error: `No integration package found for service "${service}".` } as any);
+      this.runnerLink.send({ type: 'call-tool-result', requestId, error: `No integration package found for service "${service}".` } as any);
       await markFailed(this.appDb, invocationId, 'No integration package found');
       return;
     }
@@ -8968,7 +8681,7 @@ export class SessionAgentDO {
       }
       if (!credResult.ok) {
         const scopeLabel = isOrgScoped ? `org-scoped "${service}"` : `"${service}"`;
-        this.sendToRunner({ type: 'call-tool-result', requestId, error: `No credentials found for ${scopeLabel}: ${credResult.error.message}. Connect it in Settings > Integrations.` } as any);
+        this.runnerLink.send({ type: 'call-tool-result', requestId, error: `No credentials found for ${scopeLabel}: ${credResult.error.message}. Connect it in Settings > Integrations.` } as any);
         await markFailed(this.appDb, invocationId, `No credentials: ${credResult.error.message}`);
         return;
       }
@@ -9058,10 +8771,10 @@ export class SessionAgentDO {
     // Record result and send to runner
     if (!actionResult.success) {
       await markFailed(this.appDb, invocationId, actionResult.error || 'Action failed');
-      this.sendToRunner({ type: 'call-tool-result', requestId, error: actionResult.error || 'Action failed' } as any);
+      this.runnerLink.send({ type: 'call-tool-result', requestId, error: actionResult.error || 'Action failed' } as any);
     } else {
       await markExecuted(this.appDb, invocationId, actionResult.data);
-      this.sendToRunner({ type: 'call-tool-result', requestId, result: actionResult.data } as any);
+      this.runnerLink.send({ type: 'call-tool-result', requestId, result: actionResult.data } as any);
     }
   }
 
@@ -9112,7 +8825,7 @@ export class SessionAgentDO {
       if (resolution.actionId === 'approve') {
         if (!userId) {
           if (requestId) {
-            this.sendToRunner({ type: 'call-tool-result', requestId, error: 'No userId on session' } as any);
+            this.runnerLink.send({ type: 'call-tool-result', requestId, error: 'No userId on session' } as any);
           }
           // Still update channel messages before returning
           if (channelRefsJson) {
@@ -9160,7 +8873,7 @@ export class SessionAgentDO {
           ? `Action "${toolId}" was denied: ${reason}`
           : `Action "${toolId}" was denied by a reviewer`;
         if (requestId) {
-          this.sendToRunner({ type: 'call-tool-result', requestId, error: errorMsg } as any);
+          this.runnerLink.send({ type: 'call-tool-result', requestId, error: errorMsg } as any);
         }
 
         // Broadcast denial to clients
@@ -9186,7 +8899,7 @@ export class SessionAgentDO {
     } else if (promptType === 'question') {
       // Send answer to runner — use the human-readable label when available
       const answer = actionLabel || resolution.value || resolution.actionId || '';
-      this.sendToRunner({
+      this.runnerLink.send({
         type: 'answer',
         questionId: promptId,
         answer,
@@ -9619,7 +9332,7 @@ export class SessionAgentDO {
     }
 
     console.log(`[SessionAgentDO] Sending opencode-config to runner (providers=${Object.keys(config.providerKeys!).length}, customProviders=${config.customProviders?.length ?? 0}, builtInModelConfigs=${config.builtInProviderModelConfigs?.length ?? 0}, isOrchestrator=${config.isOrchestrator})`);
-    this.sendToRunner({ type: 'opencode-config', config });
+    this.runnerLink.send({ type: 'opencode-config', config });
   }
 
   private async sendRepoConfig(): Promise<void> {
@@ -9648,7 +9361,7 @@ export class SessionAgentDO {
       }
 
       if (repoEnv.token) {
-        this.sendToRunner({
+        this.runnerLink.send({
           type: 'repo-config',
           token: repoEnv.token,
           expiresAt: repoEnv.expiresAt,
@@ -9688,7 +9401,7 @@ export class SessionAgentDO {
         return;
       }
 
-      this.sendToRunner({
+      this.runnerLink.send({
         type: 'repo-token-refreshed',
         token: repoEnv.token,
         expiresAt: repoEnv.expiresAt,
@@ -9773,31 +9486,7 @@ export class SessionAgentDO {
     };
 
     console.log(`[SessionAgentDO] Sending plugin-content: ${content.personas.length} persona(s), ${content.skills.length} skill(s), ${content.tools.length} tool(s), allowRepoContent=${content.allowRepoContent}, toolWhitelist=${toolWhitelist ? `${toolWhitelist.services.length} service(s)` : 'none'}`);
-    this.sendToRunner({ type: 'plugin-content', pluginContent: content });
+    this.runnerLink.send({ type: 'plugin-content', pluginContent: content });
   }
 
-  private sendToRunner(message: RunnerOutbound): boolean {
-    if (message.type === 'prompt') {
-      console.log(`[SessionAgentDO] sendToRunner prompt: messageId=${message.messageId}`);
-    }
-    const runners = this.ctx.getWebSockets('runner');
-    if (runners.length === 0) {
-      console.warn(`[SessionAgentDO] sendToRunner: no runner sockets available for type=${message.type}`);
-      return false;
-    }
-    const payload = JSON.stringify(message);
-    let sent = false;
-    for (const ws of runners) {
-      try {
-        ws.send(payload);
-        sent = true;
-      } catch {
-        // Runner may have disconnected
-      }
-    }
-    if (!sent) {
-      console.warn(`[SessionAgentDO] sendToRunner: all sends failed for type=${message.type}`);
-    }
-    return sent;
-  }
 }

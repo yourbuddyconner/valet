@@ -1,7 +1,6 @@
 /**
  * sendChannelReply — auto-reply dispatch for text-only channel replies.
  *
- * Extracted from session-agent.ts's flushPendingChannelReply.
  * Handles transport resolution and message sending only.
  *
  * Does NOT:

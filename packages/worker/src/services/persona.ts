@@ -1,7 +1,6 @@
 /**
  * Persona resolution — looks up orchestrator identity for channel reply attribution.
  *
- * Extracted from session-agent.ts's `getSlackPersonaOptions()`.
  * Returns a generic persona shape that any channel transport can consume
  * via `ChannelContext.persona`.
  */

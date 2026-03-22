@@ -2,8 +2,7 @@
  * ChannelRouter — reply tracking and delivery orchestration.
  *
  * Owns the in-memory state for whether the current prompt cycle should auto-reply
- * to an originating channel on turn completion. Extracted from session-agent.ts's
- * `pendingChannelReply` field and related tracking logic.
+ * to an originating channel on turn completion.
  *
  * Stateless across prompt cycles — scoped to a single turn. The DO is responsible
  * for calling `trackReply()` at prompt dispatch time and `consumePendingReply()`

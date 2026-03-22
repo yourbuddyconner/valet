@@ -1,7 +1,7 @@
 /**
  * MessageStore — encapsulates all DO-local message persistence and streaming turn state.
  *
- * Phase 1 of SessionAgentDO decomposition. This class owns:
+ * Owns:
  * - The `messages` and `replication_state` tables in DO SQLite
  * - A monotonic sequence counter (`seq`) that bumps on every SQLite mutation
  * - In-memory `activeTurns` map for streaming turn assembly

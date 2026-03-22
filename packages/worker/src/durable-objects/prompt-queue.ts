@@ -1,7 +1,7 @@
 /**
  * PromptQueue — prompt queue state machine, collect mode, and dispatch state.
  *
- * Phase 3 of SessionAgentDO decomposition. This class owns:
+ * Owns:
  * - The `prompt_queue` table in DO SQLite (all CRUD)
  * - Queue-related keys in the `state` table (runnerBusy, promptReceivedAt,
  *   lastPromptDispatchedAt, currentPromptAuthorId, queueMode, collectDebounceMs,
@@ -287,7 +287,6 @@ export class PromptQueue {
   //
   // These state keys track the runner's busy/idle status and prompt timing.
   // They live in the `state` KV table alongside other session state.
-  // Phase 5 (SessionState) will absorb any remaining keys.
 
   get runnerBusy(): boolean {
     return this.getState('runnerBusy') === 'true';
