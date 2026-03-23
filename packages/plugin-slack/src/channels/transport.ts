@@ -66,7 +66,8 @@ async function slackApiGet(
   return (await resp.json()) as { ok: boolean; error?: string; [key: string]: unknown };
 }
 
-const MAX_FILE_DOWNLOAD_BYTES = 10 * 1024 * 1024; // 10 MB
+const MAX_IMAGE_DOWNLOAD_BYTES = 10 * 1024 * 1024; // 10 MB (images use thumbnails anyway)
+const MAX_FILE_DOWNLOAD_BYTES = 25 * 1024 * 1024; // 25 MB (PDFs, documents)
 
 /** Download a Slack file via url_private, returning a base64 data URL. */
 async function downloadSlackFile(
@@ -274,10 +275,11 @@ export class SlackTransport implements ChannelTransport {
           if (thumb) downloadUrl = thumb;
         }
 
-        // Skip files over 10MB (thumbnails are always well under this)
+        // Skip files over size limit (images have thumbnails so use tighter limit)
+        const sizeLimit = isImage ? MAX_IMAGE_DOWNLOAD_BYTES : MAX_FILE_DOWNLOAD_BYTES;
         const downloadSize = downloadUrl !== urlPrivate ? undefined : size;
-        if (downloadSize && downloadSize > MAX_FILE_DOWNLOAD_BYTES) {
-          console.warn(`[SlackTransport] Skipping file ${name}: ${size} bytes exceeds 10MB limit`);
+        if (downloadSize && downloadSize > sizeLimit) {
+          console.warn(`[SlackTransport] Skipping file ${name}: ${size} bytes exceeds ${sizeLimit / 1024 / 1024}MB limit`);
           continue;
         }
 
