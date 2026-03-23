@@ -1,8 +1,9 @@
 import type { Env } from '../env.js';
 import type { AppDb } from '../lib/drizzle.js';
 import { getDb } from '../lib/drizzle.js';
-import { updateSessionStatus, updateSessionMetrics, addActiveSeconds, updateSessionGitState, upsertSessionFileChanged, updateSessionTitle, createSession, createSessionGitState, getSession, getSessionGitState, getChildSessions, getSessionChannelBindings, listUserChannelBindings, readMemoryFile, listMemoryFiles, writeMemoryFile, patchMemoryFile, deleteMemoryFile, deleteMemoryFilesUnderPath, searchMemoryFiles, boostMemoryFileRelevance, listOrgRepositories, listPersonas, getUserById, getUsersByIds, createMailboxMessage, getSessionMailbox, markSessionMailboxRead, getOrchestratorIdentity, getOrchestratorIdentityByHandle, createSessionTask, getSessionTasks, getMyTasks, updateSessionTask, getUserTelegramConfig, getOrgSettings, enqueueWorkflowApprovalNotificationIfMissing, markWorkflowApprovalNotificationsRead, isNotificationWebEnabled, batchInsertAnalyticsEvents, batchUpsertMessages, updateUserDiscoveredModels, setCatalogCache, updateThread, incrementThreadMessageCount, getThread, getUserIdentityLinks, getUserSlackIdentityLink, getThreadOriginChannel } from '../lib/db.js';
+import { updateSessionStatus, updateSessionMetrics, addActiveSeconds, updateSessionGitState, upsertSessionFileChanged, updateSessionTitle, createSession, createSessionGitState, getSession, getSessionGitState, getChildSessions, getSessionChannelBindings, listUserChannelBindings, listOrgRepositories, listPersonas, getUserById, getUsersByIds, createMailboxMessage, getSessionMailbox, markSessionMailboxRead, getOrchestratorIdentity, getOrchestratorIdentityByHandle, createSessionTask, getSessionTasks, getMyTasks, updateSessionTask, getUserTelegramConfig, getOrgSettings, enqueueWorkflowApprovalNotificationIfMissing, markWorkflowApprovalNotificationsRead, isNotificationWebEnabled, batchInsertAnalyticsEvents, batchUpsertMessages, updateUserDiscoveredModels, setCatalogCache, updateThread, incrementThreadMessageCount, getThread, getUserIdentityLinks, getUserSlackIdentityLink, getThreadOriginChannel } from '../lib/db.js';
 import { getCredential, type CredentialResult } from '../services/credentials.js';
+import { memRead, memWrite, memPatch, memRm, memSearch } from '../services/session-memory.js';
 import { resolveRepoCredential, type CredentialRow } from '../lib/db/credentials.js';
 import { decryptStringPBKDF2 } from '../lib/crypto.js';
 import { repoProviderRegistry } from '../repos/registry.js';
@@ -2532,23 +2533,53 @@ export class SessionAgentDO {
 
       // ─── Memory File Operations ────────────────────────────────────────
       'mem-read': async (msg) => {
-        await this.handleMemRead(msg.requestId!, msg.path);
+        const userId = this.sessionState.userId;
+        try {
+          const result = await memRead(this.appDb, userId, msg.path);
+          this.runnerLink.send({ type: 'mem-read-result', requestId: msg.requestId!, ...result } as any);
+        } catch (err) {
+          this.runnerLink.send({ type: 'mem-read-result', requestId: msg.requestId!, error: err instanceof Error ? err.message : String(err) } as any);
+        }
       },
 
       'mem-write': async (msg) => {
-        await this.handleMemWrite(msg.requestId!, msg.path!, msg.content!);
+        const userId = this.sessionState.userId;
+        try {
+          const result = await memWrite(this.env.DB, userId, msg.path!, msg.content!);
+          this.runnerLink.send({ type: 'mem-write-result', requestId: msg.requestId!, ...result } as any);
+        } catch (err) {
+          this.runnerLink.send({ type: 'mem-write-result', requestId: msg.requestId!, error: err instanceof Error ? err.message : String(err) } as any);
+        }
       },
 
       'mem-patch': async (msg) => {
-        await this.handleMemPatch(msg.requestId!, msg.path!, msg.operations);
+        const userId = this.sessionState.userId;
+        try {
+          const result = await memPatch(this.env.DB, userId, msg.path!, msg.operations);
+          this.runnerLink.send({ type: 'mem-patch-result', requestId: msg.requestId!, ...result } as any);
+        } catch (err) {
+          this.runnerLink.send({ type: 'mem-patch-result', requestId: msg.requestId!, error: err instanceof Error ? err.message : String(err) } as any);
+        }
       },
 
       'mem-rm': async (msg) => {
-        await this.handleMemRm(msg.requestId!, msg.path!);
+        const userId = this.sessionState.userId;
+        try {
+          const result = await memRm(this.env.DB, userId, msg.path!);
+          this.runnerLink.send({ type: 'mem-rm-result', requestId: msg.requestId!, ...result } as any);
+        } catch (err) {
+          this.runnerLink.send({ type: 'mem-rm-result', requestId: msg.requestId!, error: err instanceof Error ? err.message : String(err) } as any);
+        }
       },
 
       'mem-search': async (msg) => {
-        await this.handleMemSearch(msg.requestId!, msg.query!, msg.path, msg.limit);
+        const userId = this.sessionState.userId;
+        try {
+          const result = await memSearch(this.env.DB, userId, msg.query!, msg.path, msg.limit);
+          this.runnerLink.send({ type: 'mem-search-result', requestId: msg.requestId!, ...result } as any);
+        } catch (err) {
+          this.runnerLink.send({ type: 'mem-search-result', requestId: msg.requestId!, error: err instanceof Error ? err.message : String(err) } as any);
+        }
       },
 
       'list-repos': async (msg) => {
@@ -3139,76 +3170,6 @@ export class SessionAgentDO {
   }
 
   // ─── Orchestrator Operations ────────────────────────────────────────────
-
-  private async handleMemRead(requestId: string, path?: string) {
-    try {
-      const userId = this.sessionState.userId;
-      const p = path || '';
-
-      if (!p || p.endsWith('/')) {
-        const files = await listMemoryFiles(this.appDb, userId, p);
-        this.runnerLink.send({ type: 'mem-read-result', requestId, files } as any);
-      } else {
-        const file = await readMemoryFile(this.appDb, userId, p);
-        if (file) {
-          boostMemoryFileRelevance(this.appDb, userId, p).catch(() => {});
-        }
-        this.runnerLink.send({ type: 'mem-read-result', requestId, file } as any);
-      }
-    } catch (err) {
-      console.error('[SessionAgentDO] Failed to read memory file:', err);
-      this.runnerLink.send({ type: 'mem-read-result', requestId, error: err instanceof Error ? err.message : String(err) } as any);
-    }
-  }
-
-  private async handleMemWrite(requestId: string, path: string, content: string) {
-    try {
-      const userId = this.sessionState.userId;
-      const file = await writeMemoryFile(this.env.DB, userId, path, content);
-      this.runnerLink.send({ type: 'mem-write-result', requestId, file } as any);
-    } catch (err) {
-      console.error('[SessionAgentDO] Failed to write memory file:', err);
-      this.runnerLink.send({ type: 'mem-write-result', requestId, error: err instanceof Error ? err.message : String(err) } as any);
-    }
-  }
-
-  private async handleMemPatch(requestId: string, path: string, operations: any) {
-    try {
-      const userId = this.sessionState.userId;
-      const result = await patchMemoryFile(this.env.DB, userId, path, operations);
-      this.runnerLink.send({ type: 'mem-patch-result', requestId, result } as any);
-    } catch (err) {
-      console.error('[SessionAgentDO] Failed to patch memory file:', err);
-      this.runnerLink.send({ type: 'mem-patch-result', requestId, error: err instanceof Error ? err.message : String(err) } as any);
-    }
-  }
-
-  private async handleMemRm(requestId: string, path: string) {
-    try {
-      const userId = this.sessionState.userId;
-      let deleted: number;
-      if (path.endsWith('/')) {
-        deleted = await deleteMemoryFilesUnderPath(this.env.DB, userId, path);
-      } else {
-        deleted = await deleteMemoryFile(this.env.DB, userId, path);
-      }
-      this.runnerLink.send({ type: 'mem-rm-result', requestId, deleted } as any);
-    } catch (err) {
-      console.error('[SessionAgentDO] Failed to delete memory file:', err);
-      this.runnerLink.send({ type: 'mem-rm-result', requestId, error: err instanceof Error ? err.message : String(err) } as any);
-    }
-  }
-
-  private async handleMemSearch(requestId: string, query: string, path?: string, limit?: number) {
-    try {
-      const userId = this.sessionState.userId;
-      const results = await searchMemoryFiles(this.env.DB, userId, query, path, limit ?? 20);
-      this.runnerLink.send({ type: 'mem-search-result', requestId, results } as any);
-    } catch (err) {
-      console.error('[SessionAgentDO] Failed to search memory files:', err);
-      this.runnerLink.send({ type: 'mem-search-result', requestId, error: err instanceof Error ? err.message : String(err) } as any);
-    }
-  }
 
   private async handleListRepos(requestId: string, source?: string) {
     try {
