@@ -683,6 +683,27 @@ export class SessionAgentDO {
     }
 
     // Notify other clients that a user joined (with enriched user details)
+    // Guard against status race: if status changed during init assembly
+    // (e.g. spawnSandbox completed via waitUntil while we were building the
+    // init payload), send a corrective status message so the client doesn't
+    // stay stuck on the stale status from the init message.
+    const currentStatus = this.sessionState.status;
+    if (currentStatus !== status) {
+      const currentSandboxId = this.sessionState.sandboxId;
+      try {
+        server.send(JSON.stringify({
+          type: 'status',
+          data: {
+            status: currentStatus,
+            sandboxRunning: !!currentSandboxId,
+            runnerConnected: this.runnerLink.isConnected,
+            runnerBusy: this.promptQueue.runnerBusy,
+            tunnelUrls: this.sessionState.tunnelUrls,
+          },
+        }));
+      } catch { /* socket may have closed */ }
+    }
+
     const userDetails = this.userDetailsCache.get(userId);
     this.broadcastToClients({
       type: 'user.joined',
