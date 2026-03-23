@@ -1371,6 +1371,32 @@ export class PromptHandler {
         }
       }
 
+      // Extract text from PDF attachments before sending to OpenCode
+      const hasPdf = effectiveAttachments.some(a => a.mime === 'application/pdf');
+      if (hasPdf) {
+        let pdfExtracted = false;
+        try {
+          const { extractions, remaining } = await this.extractPdfText(effectiveAttachments);
+          effectiveAttachments = remaining; // remaining already excludes successfully processed PDFs
+          if (extractions.length > 0) {
+            pdfExtracted = true;
+            const pdfBlock = extractions
+              .map(e => `[Extracted text from ${e.filename || 'PDF'}]\n${e.text}`)
+              .join('\n\n');
+            effectiveContent = effectiveContent
+              ? `${pdfBlock}\n\n${effectiveContent}`
+              : pdfBlock;
+          }
+        } catch (err) {
+          console.error('[PromptHandler] Failed to extract PDF text:', err);
+        }
+        // Strip any remaining PDFs — OpenCode can't process raw PDF files
+        effectiveAttachments = effectiveAttachments.filter(a => a.mime !== 'application/pdf');
+        if (!pdfExtracted && !effectiveContent?.trim()) {
+          effectiveContent = '[The user sent a PDF but text extraction failed. Please ask them to share the content as text instead.]';
+        }
+      }
+
       // Store failover state (use post-transcription values so model failover doesn't re-transcribe)
       this.currentModelPreferences = failoverChain.length > 0 ? failoverChain : undefined;
       this.pendingRetryContent = effectiveContent;
@@ -2717,6 +2743,59 @@ export class PromptHandler {
     }
 
     return { transcriptions, remaining };
+  }
+
+  /**
+   * Extract text from PDF attachments using LiteParse.
+   * Returns extracted text and remaining non-PDF attachments.
+   */
+  private async extractPdfText(
+    attachments: PromptAttachment[],
+  ): Promise<{ extractions: Array<{ text: string; filename?: string }>; remaining: PromptAttachment[] }> {
+    const { LiteParse } = await import('@llamaindex/liteparse');
+    const parser = new LiteParse({ ocrEnabled: false, outputFormat: 'text', maxPages: 100 });
+    const extractions: Array<{ text: string; filename?: string }> = [];
+    const remaining: PromptAttachment[] = [];
+
+    for (const attachment of attachments) {
+      if (attachment.mime !== 'application/pdf') {
+        remaining.push(attachment);
+        continue;
+      }
+
+      try {
+        // Decode base64 data URL to buffer
+        const commaIdx = attachment.url.indexOf(',');
+        if (commaIdx === -1) {
+          console.error('[PromptHandler] PDF attachment has invalid data URL');
+          remaining.push(attachment);
+          continue;
+        }
+        const base64Data = attachment.url.slice(commaIdx + 1);
+        const buffer = Buffer.from(base64Data, 'base64');
+
+        // Parse with timeout to guard against malicious PDFs
+        const parsePromise = parser.parse(buffer);
+        const timeoutPromise = new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error('PDF parse timeout after 30s')), 30_000),
+        );
+        const result = await Promise.race([parsePromise, timeoutPromise]);
+        const text = result.text?.trim();
+
+        if (text) {
+          extractions.push({ text, filename: attachment.filename });
+          console.log(`[PromptHandler] Extracted PDF text (${attachment.filename || 'document.pdf'}): ${text.length} chars`);
+        } else {
+          console.warn(`[PromptHandler] PDF extraction returned empty text for ${attachment.filename || 'document.pdf'}`);
+          remaining.push(attachment);
+        }
+      } catch (err) {
+        console.error('[PromptHandler] PDF text extraction error:', err);
+        remaining.push(attachment);
+      }
+    }
+
+    return { extractions, remaining };
   }
 
   private buildPromptBody(

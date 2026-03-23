@@ -62,9 +62,6 @@ export type ToolCallStatus = 'pending' | 'running' | 'completed' | 'error';
 /** Agent status values */
 export type AgentStatus = 'idle' | 'thinking' | 'tool_calling' | 'streaming' | 'error';
 
-// DiffFile is imported from ./index.js (already defined in shared types)
-export type { DiffFile } from './index.js';
-
 /** Individual finding from a code review */
 export interface ReviewFinding {
   id: string;

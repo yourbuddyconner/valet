@@ -8,7 +8,7 @@ import {
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { api } from '@/api/client';
-import { useAvailableIntegrations, useConfigureIntegration, type AvailableService } from '@/api/integrations';
+import { useAvailableIntegrations, useIntegrations, useConfigureIntegration, type AvailableService } from '@/api/integrations';
 import { useSetUserCredential } from '@/api/auth';
 import { useSetupTelegram } from '@/api/orchestrator';
 import {
@@ -197,17 +197,24 @@ export function ConnectIntegrationDialog({
   const [selectedService, setSelectedService] = React.useState<ResolvedService | null>(null);
   const [connecting, setConnecting] = React.useState<string | null>(null);
   const { data, isLoading } = useAvailableIntegrations();
+  const { data: existingData } = useIntegrations();
 
   // Merge token-based services + API-sourced OAuth services, filtering out
-  // admin-disabled and pre-configured services.
+  // admin-disabled, pre-configured, and already-connected services.
   const services = React.useMemo(() => {
     const disabled = new Set(data?.disabledServices ?? []);
-    const tokenServices = buildTokenServices(disabled);
+    const connected = new Set<string>(
+      (existingData?.integrations ?? [])
+        .filter((i) => i.status === 'active' || i.status === 'pending')
+        .map((i) => i.service),
+    );
+    const tokenServices = buildTokenServices(disabled)
+      .filter((svc) => !connected.has(svc.id));
     const oauthServices = (data?.services ?? [])
-      .filter((svc) => !PRE_CONFIGURED_SERVICES.has(svc.service))
+      .filter((svc) => !PRE_CONFIGURED_SERVICES.has(svc.service) && !connected.has(svc.service))
       .map(resolveService);
     return [...tokenServices, ...oauthServices];
-  }, [data]);
+  }, [data, existingData]);
 
   function handleClose(isOpen: boolean) {
     if (!isOpen) {

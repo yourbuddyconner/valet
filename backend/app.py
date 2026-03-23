@@ -18,6 +18,7 @@ fn_image = (
     .add_local_python_source("session", "sandboxes", "config", "images")
     .add_local_dir("docker", remote_path="/root/docker")
     .add_local_dir("packages/runner", remote_path="/root/packages/runner")
+    .add_local_dir("packages/shared", remote_path="/root/packages/shared")
 )
 
 from sandboxes import SandboxAlreadyFinishedError

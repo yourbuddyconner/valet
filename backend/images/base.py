@@ -117,17 +117,27 @@ def get_base_image() -> modal.Image:
             "cp /root/.bashrc /etc/bash.bashrc",
         )
         # ─── Frequently-changing layers (last for cache efficiency) ─────
-        # Runner package (Bun/TS — runs inside sandbox)
-        # Exclude node_modules - it contains symlinks to monorepo root that cause timeouts
-        # We run bun install inside the container anyway
+        # Runner + shared packages in a minimal workspace so workspace:* deps resolve.
+        # Shared is type-only at runtime (Bun strips type imports) but bun install
+        # needs it present to resolve the dependency.
+        .add_local_dir(
+            "/root/packages/shared",
+            "/valet/packages/shared",
+            copy=True,
+            ignore=["node_modules", "*.log"],
+        )
         .add_local_dir(
             "/root/packages/runner",
-            "/runner",
+            "/valet/packages/runner",
             copy=True,
             ignore=["node_modules", "*.log"],
         )
         .run_commands(
-            "cd /runner && /root/.bun/bin/bun install",
+            # Create workspace root and install all deps
+            'echo \'{"private":true,"workspaces":["packages/*"]}\' > /valet/package.json',
+            "cd /valet && /root/.bun/bin/bun install",
+            # Symlink runner at /runner for start.sh and workflow CLI
+            "ln -s /valet/packages/runner /runner",
             # Expose workflow CLI as a first-class sandbox command
             "printf '#!/bin/bash\\nexec /root/.bun/bin/bun run /runner/src/workflow-cli.ts \"$@\"\\n' > /usr/local/bin/workflow",
             "chmod +x /usr/local/bin/workflow",
@@ -156,7 +166,7 @@ def get_base_image() -> modal.Image:
                 "DISPLAY": ":99",
                 "HOME": "/root",
                 # Force image rebuild on deploy (change this value to trigger rebuild)
-                "IMAGE_BUILD_VERSION": "2026-03-18-v10-startup-optimizations",
+                "IMAGE_BUILD_VERSION": "2026-03-22-v11-pdf-support",
                 "AGENT_BROWSER_EXECUTABLE_PATH": "/usr/bin/chromium",
                 "AGENT_BROWSER_PROFILE": "/root/.agent-browser-profile",
                 "PLAYWRIGHT_BROWSERS_PATH": "/ms-playwright",

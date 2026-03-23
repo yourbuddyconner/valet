@@ -42,7 +42,7 @@ import {
   processWorkflowExecutionResult as processWorkflowExecutionResultSvc,
   buildWorkflowDispatch,
 } from '../services/session-workflows.js';
-import { sanitizePromptAttachments, attachmentPartsForMessage, parseQueuedPromptAttachments } from '../lib/utils/prompt-validation.js';
+import { sanitizePromptAttachments, attachmentPartsForMessage, parseQueuedPromptAttachments, SUPPORTED_FILE_TYPES_DESCRIPTION } from '../lib/utils/prompt-validation.js';
 import { parseQueuedWorkflowPayload, deriveRuntimeStates } from '../lib/utils/runtime.js';
 
 // ─── WebSocket Message Types ───────────────────────────────────────────────
@@ -404,7 +404,10 @@ export class SessionAgentDO {
         // HTTP-based prompt submission (alternative to WebSocket)
         const body = await request.json() as { content?: string; contextPrefix?: string; model?: string; attachments?: PromptAttachment[]; interrupt?: boolean; queueMode?: string; channelType?: string; channelId?: string; threadId?: string; authorName?: string; authorEmail?: string; authorId?: string; replyTo?: { channelType: string; channelId: string } };
         const content = body.content ?? '';
-        const attachments = sanitizePromptAttachments(body.attachments);
+        const { attachments, rejectedTypes } = sanitizePromptAttachments(body.attachments);
+        if (rejectedTypes.length > 0) {
+          console.warn(`[SessionAgentDO] /prompt HTTP: rejected file types: ${rejectedTypes.join(', ')}`);
+        }
         console.log(`[SessionAgentDO] /prompt HTTP: content="${content.slice(0, 60)}" channelType=${body.channelType || 'none'} channelId=${body.channelId || 'none'} queueMode=${body.queueMode || 'default'} authorName=${body.authorName || 'none'} authorId=${body.authorId || 'none'}`);
         if (!content && attachments.length === 0) {
           return new Response(JSON.stringify({ error: 'Missing content or attachments' }), { status: 400 });
@@ -1135,7 +1138,14 @@ export class SessionAgentDO {
   private async handleClientMessage(ws: WebSocket, msg: ClientMessage) {
     switch (msg.type) {
       case 'prompt': {
-        const attachments = sanitizePromptAttachments(msg.attachments);
+        const { attachments, rejectedTypes } = sanitizePromptAttachments(msg.attachments);
+        if (rejectedTypes.length > 0) {
+          console.warn(`[SessionAgentDO] Client prompt: rejected file types: ${rejectedTypes.join(', ')}`);
+          ws.send(JSON.stringify({
+            type: 'error',
+            message: `Unsupported file type: ${rejectedTypes.join(', ')}. I can handle ${SUPPORTED_FILE_TYPES_DESCRIPTION}.`,
+          }));
+        }
         if (!msg.content && attachments.length === 0) {
           ws.send(JSON.stringify({ type: 'error', message: 'Missing content or attachments' }));
           return;
@@ -1365,7 +1375,7 @@ export class SessionAgentDO {
     // is disconnecting). performHibernate() checks the queue after completing
     // and auto-wakes if needed.
 
-    const normalizedAttachments = sanitizePromptAttachments(attachments);
+    const { attachments: normalizedAttachments } = sanitizePromptAttachments(attachments);
     const attachmentParts = attachmentPartsForMessage(normalizedAttachments);
     const serializedAttachmentParts = attachmentParts.length > 0 ? JSON.stringify(attachmentParts) : null;
     const serializedQueuedAttachments = normalizedAttachments.length > 0 ? JSON.stringify(normalizedAttachments) : null;
@@ -1645,7 +1655,10 @@ export class SessionAgentDO {
     this.lifecycle.touchActivity();
     this.rescheduleIdleAlarm();
 
-    const normalizedAttachments = sanitizePromptAttachments(attachments);
+    const { attachments: normalizedAttachments, rejectedTypes } = sanitizePromptAttachments(attachments);
+    if (rejectedTypes.length > 0) {
+      console.warn(`[SessionAgentDO] Channel prompt: rejected file types: ${rejectedTypes.join(', ')}`);
+    }
     const attachmentParts = attachmentPartsForMessage(normalizedAttachments);
     const serializedAttachmentParts = attachmentParts.length > 0 ? JSON.stringify(attachmentParts) : null;
 
@@ -1753,7 +1766,7 @@ export class SessionAgentDO {
 
   // ─── Runner Message Handlers ──────────────────────────────────────────
   // Handler map for incoming runner messages. Each key corresponds to a
-  // RunnerMessage.type, each value is an (async) handler function.
+  // RunnerToDOMessage.type, each value is an (async) handler function.
   // RunnerLink dispatches to these via runnerLink.handleMessage().
 
   private _runnerHandlers?: RunnerMessageHandlers;
@@ -2101,9 +2114,11 @@ export class SessionAgentDO {
             ...(final.metadata.threadId ? { threadId: final.metadata.threadId } : {}),
           },
         });
-        // Track result content for auto channel reply
-        if (final.content) {
-          this.channelRouter.setResult(final.content, turnId);
+        // Track result content for auto channel reply.
+        // For error-only turns with no text content, use the error message.
+        const replyContent = final.content || (msg.reason === 'error' && msg.error ? `Error: ${msg.error}` : '');
+        if (replyContent) {
+          this.channelRouter.setResult(replyContent, turnId);
         }
         // Increment thread message count for assistant message
         if (final.metadata.threadId) {
@@ -3861,7 +3876,7 @@ export class SessionAgentDO {
     // Look up git details from cache for the prompt author
     const authorId = prompt.authorId;
     const authorDetails = authorId ? this.userDetailsCache.get(authorId) : undefined;
-    const attachments = parseQueuedPromptAttachments(prompt.attachments);
+    const { attachments } = parseQueuedPromptAttachments(prompt.attachments);
 
     // Track current prompt author for PR attribution
     if (authorId) {

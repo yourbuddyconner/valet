@@ -25,7 +25,6 @@ import type {
   ToolCallStatus,
 } from '@valet/shared';
 
-// Re-export protocol types so existing consumers can keep importing from here
 export type {
   RunnerToDOMessage,
   DOToRunnerMessage,
@@ -36,15 +35,6 @@ export type {
   AgentStatus,
   ToolCallStatus,
 };
-
-// ─── Legacy Aliases ──────────────────────────────────────────────────────────
-// These preserve backward compatibility for consumers that import the old names.
-
-/** @deprecated Use `RunnerToDOMessage` instead */
-export type RunnerMessage = RunnerToDOMessage;
-
-/** @deprecated Use `DOToRunnerMessage` instead */
-export type RunnerOutbound = DOToRunnerMessage;
 
 // ─── Handler Types ────────────────────────────────────────────────────────────
 

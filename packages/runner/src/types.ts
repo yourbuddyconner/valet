@@ -1,7 +1,7 @@
 // ─── Runner ↔ DO WebSocket Protocol ────────────────────────────────────────
 //
 // All protocol types are defined in @valet/shared and re-exported here
-// for backward compatibility with existing runner imports.
+// so runner-internal code can import from a single local module.
 
 export type {
   // Supporting types
