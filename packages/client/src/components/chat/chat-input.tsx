@@ -383,9 +383,15 @@ export function ChatInput({
       );
 
       // Read non-image files (PDFs etc.) as-is
+      // TODO: Upload large files to R2 and pass a URL reference instead of base64
+      const MAX_FILE_SIZE = 25 * 1024 * 1024; // 25 MB
       const otherResults = await Promise.all(
         otherFiles.map(async (file) => {
           try {
+            if (file.size > MAX_FILE_SIZE) {
+              toastError(`${file.name} is too large (${(file.size / 1024 / 1024).toFixed(0)}MB). Maximum file size is 25MB.`);
+              return null;
+            }
             const url = await readFileAsDataUrl(file);
             return { type: 'file' as const, mime: file.type || 'application/octet-stream', url, filename: file.name };
           } catch (err) {
