@@ -26,7 +26,7 @@ import { updateInvocationStatus } from '../lib/db/actions.js';
 import { getDisabledActionsIndex, isActionDisabled } from '../lib/db/disabled-actions.js';
 import { upsertMcpToolCache } from '../lib/db/mcp-tool-cache.js';
 import { getActivePluginArtifacts, getPluginSettings, getAutoEnabledServices, getDisabledPluginServices } from '../lib/db/plugins.js';
-import { getPersonaSkills, getOrgDefaultSkills, searchSkills, listSkills, getSkill, getSkillBySlug, createSkill, updateSkill, deleteSkill, getPersonaToolWhitelist, createPersona, updatePersona, deletePersona, getPersonaWithFiles, upsertPersonaFile, attachSkillToPersona, detachSkillFromPersona, getPersonaSkillsForApi } from '../lib/db.js';
+import { getPersonaSkills, getOrgDefaultSkills, getSkill, getPersonaToolWhitelist, createPersona, updatePersona, deletePersona, getPersonaWithFiles, upsertPersonaFile, attachSkillToPersona, detachSkillFromPersona, getPersonaSkillsForApi } from '../lib/db.js';
 import type { ChannelTarget, ChannelContext, InteractivePrompt, InteractiveAction, InteractivePromptRef, InteractiveResolution } from '@valet/sdk';
 import { validateWorkflowDefinition } from '../lib/workflow-definition.js';
 import { MessageStore } from './message-store.js';
@@ -40,6 +40,7 @@ import { sendChannelReply } from '../services/channel-reply.js';
 import { mailboxSend, mailboxCheck } from '../services/session-mailbox.js';
 import { taskCreate, taskList, taskUpdate, taskMy } from '../services/session-tasks.js';
 import { handleIdentityAction } from '../services/session-identity.js';
+import { handleSkillAction } from '../services/session-skills.js';
 import { sanitizePromptAttachments, attachmentPartsForMessage, parseQueuedPromptAttachments } from '../lib/utils/prompt-validation.js';
 import { parseQueuedWorkflowPayload, deriveRuntimeStates } from '../lib/utils/runtime.js';
 
@@ -2676,7 +2677,24 @@ export class SessionAgentDO {
       },
 
       'skill-api': async (msg) => {
-        await this.handleSkillApi(msg.requestId!, msg.action || '', msg.payload);
+        try {
+          const orgId = await this.resolveOrgId() ?? 'default';
+          const result = await handleSkillAction(
+            this.appDb,
+            orgId,
+            this.sessionState.userId,
+            msg.action || '',
+            msg.payload,
+          );
+          if (result.error) {
+            this.runnerLink.send({ type: 'skill-api-result', requestId: msg.requestId!, error: result.error, statusCode: result.statusCode });
+            return;
+          }
+          this.runnerLink.send({ type: 'skill-api-result', requestId: msg.requestId!, data: result.data });
+        } catch (err) {
+          console.error('[SessionAgentDO] Skill API error:', err);
+          this.runnerLink.send({ type: 'skill-api-result', requestId: msg.requestId!, error: err instanceof Error ? err.message : String(err), statusCode: 500 });
+        }
       },
 
       'persona-api': async (msg) => {
@@ -4214,138 +4232,6 @@ export class SessionAgentDO {
     } catch (err) {
       console.error('[SessionAgentDO] Trigger API error:', err);
       this.runnerLink.send({ type: 'trigger-api-result', requestId, error: err instanceof Error ? err.message : String(err) } as any);
-    }
-  }
-
-  private async handleSkillApi(requestId: string, action: string, payload?: Record<string, unknown>) {
-    try {
-      const userId = this.sessionState.userId;
-      const orgId = await this.resolveOrgId() ?? 'default';
-
-      if (action === 'search') {
-        const q = typeof payload?.q === 'string' ? payload.q : '';
-        const source = typeof payload?.source === 'string' ? payload.source as any : undefined;
-        const skills = await searchSkills(this.appDb, orgId, userId, q, { source });
-        this.runnerLink.send({ type: 'skill-api-result', requestId, data: { skills } });
-        return;
-      }
-
-      if (action === 'list') {
-        const source = typeof payload?.source === 'string' ? payload.source as any : undefined;
-        const visibility = typeof payload?.visibility === 'string' ? payload.visibility as any : undefined;
-        const skills = await listSkills(this.appDb, orgId, userId, { source, visibility });
-        this.runnerLink.send({ type: 'skill-api-result', requestId, data: { skills } });
-        return;
-      }
-
-      if (action === 'get') {
-        const id = typeof payload?.id === 'string' ? payload.id : '';
-        if (!id) {
-          this.runnerLink.send({ type: 'skill-api-result', requestId, error: 'id is required', statusCode: 400 });
-          return;
-        }
-        // Try by ID first, then fall back to slug lookup
-        let skill = await getSkill(this.appDb, id);
-        if (!skill) {
-          skill = await getSkillBySlug(this.appDb, orgId, id, userId);
-        }
-        if (!skill) {
-          this.runnerLink.send({ type: 'skill-api-result', requestId, error: 'Skill not found', statusCode: 404 });
-          return;
-        }
-        if (skill.visibility === 'private' && skill.ownerId !== userId) {
-          this.runnerLink.send({ type: 'skill-api-result', requestId, error: 'Skill not found', statusCode: 404 });
-          return;
-        }
-        this.runnerLink.send({ type: 'skill-api-result', requestId, data: { skill } });
-        return;
-      }
-
-      if (action === 'create') {
-        const name = typeof payload?.name === 'string' ? payload.name.trim() : '';
-        const content = typeof payload?.content === 'string' ? payload.content : '';
-        if (!name || !content) {
-          this.runnerLink.send({ type: 'skill-api-result', requestId, error: 'name and content are required', statusCode: 400 });
-          return;
-        }
-        const slug = typeof payload?.slug === 'string' && payload.slug.trim()
-          ? payload.slug.trim()
-          : name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 100);
-        const description = typeof payload?.description === 'string' ? payload.description : undefined;
-        const visibility = payload?.visibility === 'shared' ? 'shared' as const : 'private' as const;
-        const skill = await createSkill(this.appDb, {
-          id: crypto.randomUUID(),
-          orgId,
-          ownerId: userId,
-          source: 'managed',
-          name,
-          slug,
-          description,
-          content,
-          visibility,
-        });
-        this.runnerLink.send({ type: 'skill-api-result', requestId, data: { skill } });
-        return;
-      }
-
-      if (action === 'update') {
-        const id = typeof payload?.id === 'string' ? payload.id : '';
-        if (!id) {
-          this.runnerLink.send({ type: 'skill-api-result', requestId, error: 'id is required', statusCode: 400 });
-          return;
-        }
-        const skill = await getSkill(this.appDb, id);
-        if (!skill) {
-          this.runnerLink.send({ type: 'skill-api-result', requestId, error: 'Skill not found', statusCode: 404 });
-          return;
-        }
-        if (skill.source !== 'managed') {
-          this.runnerLink.send({ type: 'skill-api-result', requestId, error: 'Only managed skills can be updated', statusCode: 403 });
-          return;
-        }
-        if (skill.ownerId !== userId) {
-          this.runnerLink.send({ type: 'skill-api-result', requestId, error: 'Only the owner can update this skill', statusCode: 403 });
-          return;
-        }
-        const updates: Record<string, string> = {};
-        if (typeof payload?.name === 'string') updates.name = payload.name;
-        if (typeof payload?.slug === 'string') updates.slug = payload.slug;
-        if (typeof payload?.description === 'string') updates.description = payload.description;
-        if (typeof payload?.content === 'string') updates.content = payload.content;
-        if (typeof payload?.visibility === 'string') updates.visibility = payload.visibility;
-        await updateSkill(this.appDb, id, updates);
-        this.runnerLink.send({ type: 'skill-api-result', requestId, data: { skill: { ...skill, ...updates } } });
-        return;
-      }
-
-      if (action === 'delete') {
-        const id = typeof payload?.id === 'string' ? payload.id : '';
-        if (!id) {
-          this.runnerLink.send({ type: 'skill-api-result', requestId, error: 'id is required', statusCode: 400 });
-          return;
-        }
-        const skill = await getSkill(this.appDb, id);
-        if (!skill) {
-          this.runnerLink.send({ type: 'skill-api-result', requestId, error: 'Skill not found', statusCode: 404 });
-          return;
-        }
-        if (skill.source !== 'managed') {
-          this.runnerLink.send({ type: 'skill-api-result', requestId, error: 'Only managed skills can be deleted', statusCode: 403 });
-          return;
-        }
-        if (skill.ownerId !== userId) {
-          this.runnerLink.send({ type: 'skill-api-result', requestId, error: 'Only the owner can delete this skill', statusCode: 403 });
-          return;
-        }
-        await deleteSkill(this.appDb, id);
-        this.runnerLink.send({ type: 'skill-api-result', requestId, data: { deleted: true } });
-        return;
-      }
-
-      this.runnerLink.send({ type: 'skill-api-result', requestId, error: `Unsupported skill action: ${action}`, statusCode: 400 });
-    } catch (err) {
-      console.error('[SessionAgentDO] Skill API error:', err);
-      this.runnerLink.send({ type: 'skill-api-result', requestId, error: err instanceof Error ? err.message : String(err), statusCode: 500 });
     }
   }
 
