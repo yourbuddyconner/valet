@@ -33,6 +33,9 @@ export function MessageItem({ message, onRevert, connectedUsers }: MessageItemPr
   // Extract audio parts for inline player
   const audioParts = getAudioParts(message.parts);
 
+  // Extract file attachment parts (PDFs, documents)
+  const fileParts = getFileParts(message.parts);
+
   // Extract structured tool data from parts (for tool messages)
   const toolData = isTool ? getToolCallFromParts(message.parts) : null;
   const workflowDispatchMeta = parseWorkflowDispatchMessage(message.content);
@@ -98,6 +101,13 @@ export function MessageItem({ message, onRevert, connectedUsers }: MessageItemPr
             <div className="mb-2 space-y-1.5">
               {audioParts.map((audio, i) => (
                 <AudioPlayer key={i} src={audio.src} filename={audio.filename} transcript={audio.transcript} />
+              ))}
+            </div>
+          )}
+          {fileParts.length > 0 && (
+            <div className="mb-2 flex flex-wrap gap-1.5">
+              {fileParts.map((file, i) => (
+                <FileChip key={i} {...file} />
               ))}
             </div>
           )}
@@ -471,6 +481,50 @@ function AudioPlayer({ src, filename, transcript }: { src: string; filename?: st
       </div>
     )}
     </>
+  );
+}
+
+/** Extract non-image/audio file attachments (PDFs, documents) from message parts. */
+interface FilePartData {
+  filename: string;
+  mimeType: string;
+}
+
+function getFileParts(parts: unknown): FilePartData[] {
+  if (!parts || typeof parts !== 'object') return [];
+  const result: FilePartData[] = [];
+  const items = Array.isArray(parts) ? parts : [parts];
+
+  for (const part of items) {
+    if (!part || typeof part !== 'object') continue;
+    const p = part as Record<string, unknown>;
+    if (p.type === 'file' && typeof p.mimeType === 'string') {
+      result.push({
+        filename: typeof p.filename === 'string' ? p.filename : 'file',
+        mimeType: p.mimeType,
+      });
+    }
+  }
+  return result;
+}
+
+function FileChip({ filename, mimeType }: FilePartData) {
+  const isPdf = mimeType === 'application/pdf';
+  return (
+    <div className="inline-flex items-center gap-1.5 rounded-md border border-neutral-200 bg-neutral-50 px-2.5 py-1.5 text-xs text-neutral-700 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-300">
+      {isPdf ? (
+        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-red-500">
+          <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z" />
+          <polyline points="14 2 14 8 20 8" />
+        </svg>
+      ) : (
+        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-neutral-400">
+          <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z" />
+          <polyline points="14 2 14 8 20 8" />
+        </svg>
+      )}
+      <span className="max-w-[200px] truncate">{filename}</span>
+    </div>
   );
 }
 
