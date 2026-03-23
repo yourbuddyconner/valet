@@ -90,7 +90,6 @@ export class OpenCodeManager {
     this.healthy = false;
 
     const proc = this.process;
-    this.process = null;
 
     console.log("[OpenCodeManager] Stopping OpenCode");
 
@@ -116,6 +115,8 @@ export class OpenCodeManager {
       await proc.exited;
     }
 
+    // Clear process reference AFTER it has fully exited
+    this.process = null;
     console.log("[OpenCodeManager] OpenCode stopped");
   }
 
@@ -336,7 +337,27 @@ export class OpenCodeManager {
 
   // ─── Process Management ─────────────────────────────────────────────
 
+  /** Wait until nothing is listening on the target port. */
+  private async waitForPortFree(): Promise<void> {
+    const maxAttempts = 25; // 5 seconds total
+    for (let i = 0; i < maxAttempts; i++) {
+      try {
+        const res = await fetch(`http://localhost:${this.port}/health`);
+        // Port is still occupied — wait and retry
+        console.log(`[OpenCodeManager] Port ${this.port} still in use (attempt ${i + 1}/${maxAttempts}), waiting...`);
+        await new Promise((r) => setTimeout(r, 200));
+      } catch {
+        // Connection refused — port is free
+        return;
+      }
+    }
+    console.warn(`[OpenCodeManager] Port ${this.port} still occupied after ${maxAttempts} attempts, proceeding anyway`);
+  }
+
   private async spawnProcess(): Promise<void> {
+    // Ensure the port is free before spawning to prevent "Failed to start server" crashes
+    await this.waitForPortFree();
+
     console.log(`[OpenCodeManager] Spawning opencode serve --port ${this.port} (cwd: ${this.workspaceDir})`);
 
     this.process = Bun.spawn(["opencode", "serve", "--port", String(this.port)], {
