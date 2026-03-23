@@ -19,8 +19,8 @@ import type { ChannelTarget, ChannelContext, InteractivePrompt, InteractiveActio
 import { MessageStore } from './message-store.js';
 import { ChannelRouter } from './channel-router.js';
 import { PromptQueue } from './prompt-queue.js';
-import { RunnerLink, type RunnerMessage, type RunnerOutbound, type AgentStatus, type PromptAttachment, type RunnerMessageHandlers, type WorkflowExecutionDispatchPayload } from './runner-link.js';
-import { SessionState, type SessionLifecycleStatus, type SessionStartParams } from './session-state.js';
+import { RunnerLink, type RunnerMessage, type RunnerOutbound, type PromptAttachment, type RunnerMessageHandlers, type WorkflowExecutionDispatchPayload } from './runner-link.js';
+import { SessionState, type SessionStartParams } from './session-state.js';
 import { SessionLifecycle, SandboxAlreadyExitedError } from './session-lifecycle.js';
 import { resolveOrchestratorPersona } from '../services/persona.js';
 import { sendChannelReply } from '../services/channel-reply.js';
@@ -30,7 +30,7 @@ import { handleIdentityAction } from '../services/session-identity.js';
 import { handleSkillAction } from '../services/session-skills.js';
 import { handlePersonaAction, listPersonasForRunner } from '../services/session-personas.js';
 import { spawnChild, sendSessionMessage, getSessionMessages, forwardMessages, terminateChild, listChildSessions, getSessionStatus, listChannels } from '../services/session-cross.js';
-import { listTools as listToolsSvc, resolveActionPolicy, executeAction as executeActionSvc, type CredentialCache, type ExecuteActionResult } from '../services/session-tools.js';
+import { listTools as listToolsSvc, resolveActionPolicy, executeAction as executeActionSvc, type CredentialCache } from '../services/session-tools.js';
 import {
   workflowList as workflowListSvc,
   workflowSync as workflowSyncSvc,
@@ -41,8 +41,6 @@ import {
   handleExecutionAction as handleExecutionActionSvc,
   processWorkflowExecutionResult as processWorkflowExecutionResultSvc,
   buildWorkflowDispatch,
-  deriveWorkerOriginFromSpawnRequest,
-  deriveRepoFullName,
 } from '../services/session-workflows.js';
 import { sanitizePromptAttachments, attachmentPartsForMessage, parseQueuedPromptAttachments } from '../lib/utils/prompt-validation.js';
 import { parseQueuedWorkflowPayload, deriveRuntimeStates } from '../lib/utils/runtime.js';
