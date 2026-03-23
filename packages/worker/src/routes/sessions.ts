@@ -246,6 +246,39 @@ sessionsRouter.post('/:id/messages', zValidator('json', sendMessageSchema), asyn
 });
 
 /**
+ * POST /api/sessions/:id/prompt
+ * Send a prompt with attachments to the session agent.
+ * Used by the web UI for large payloads that exceed the WebSocket frame limit.
+ */
+sessionsRouter.post('/:id/prompt', async (c) => {
+  const user = c.get('user');
+  const { id } = c.req.param();
+
+  await db.assertSessionAccess(c.get('db'), id, user.id, 'collaborator');
+
+  const body = await c.req.json();
+  const doId = c.env.SESSIONS.idFromName(id);
+  const sessionDO = c.env.SESSIONS.get(doId);
+
+  const res = await sessionDO.fetch(new Request('http://do/prompt', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      ...body,
+      authorId: user.id,
+      authorEmail: user.email,
+    }),
+  }));
+
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    return c.json({ error: text || 'Prompt failed' }, res.status as any);
+  }
+
+  return c.json({ success: true });
+});
+
+/**
  * POST /api/sessions/:id/clear-queue
  * Clear the prompt queue for a session.
  */
