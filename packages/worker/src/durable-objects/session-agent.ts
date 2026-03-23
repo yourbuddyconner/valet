@@ -37,103 +37,14 @@ import { SessionState, type SessionLifecycleStatus, type SessionStartParams } fr
 import { SessionLifecycle, SandboxAlreadyExitedError } from './session-lifecycle.js';
 import { resolveOrchestratorPersona } from '../services/persona.js';
 import { sendChannelReply } from '../services/channel-reply.js';
+import { MAX_PROMPT_ATTACHMENTS, MAX_PROMPT_ATTACHMENT_URL_LENGTH, MAX_TOTAL_ATTACHMENT_BYTES, parseBase64DataUrl, sanitizePromptAttachments, attachmentPartsForMessage, parseQueuedPromptAttachments } from '../lib/utils/prompt-validation.js';
+import { parseQueuedWorkflowPayload, deriveRuntimeStates } from '../lib/utils/runtime.js';
 
 // ─── WebSocket Message Types ───────────────────────────────────────────────
 
-const MAX_PROMPT_ATTACHMENTS = 8;
-const MAX_PROMPT_ATTACHMENT_URL_LENGTH = 12_000_000;
-/** Total base64 across all attachments — safety cap below 32 MiB WS limit. */
-const MAX_TOTAL_ATTACHMENT_BYTES = 25_000_000;
 const MAX_CHANNEL_FOLLOWUP_REMINDERS = 3;
 const PARENT_IDLE_DEBOUNCE_MS = 10_000;
 const ACTION_APPROVAL_EXPIRY_MS = 10 * 60 * 1000; // 10 minutes
-
-function parseBase64DataUrl(url: string): string | null {
-  const commaIndex = url.indexOf(',');
-  if (commaIndex === -1) return null;
-  const data = url.slice(commaIndex + 1).replace(/\s+/g, '');
-  return data.length > 0 ? data : null;
-}
-
-function sanitizePromptAttachments(input: unknown): PromptAttachment[] {
-  if (!Array.isArray(input)) return [];
-  const result: PromptAttachment[] = [];
-
-  for (const item of input) {
-    if (!item || typeof item !== 'object') continue;
-    const record = item as Record<string, unknown>;
-    if (record.type !== 'file') continue;
-    if (typeof record.mime !== 'string' || typeof record.url !== 'string') continue;
-
-    const mime = record.mime.trim().toLowerCase();
-    const url = record.url.trim();
-    if (!mime.startsWith('image/') && !mime.startsWith('audio/')) continue;
-    if (!url.startsWith('data:') || !url.includes(';base64,')) continue;
-    if (url.length > MAX_PROMPT_ATTACHMENT_URL_LENGTH) continue;
-
-    const filename = typeof record.filename === 'string' ? record.filename.slice(0, 255) : undefined;
-    result.push({ type: 'file', mime, url, filename });
-    if (result.length >= MAX_PROMPT_ATTACHMENTS) break;
-  }
-
-  // Cap total attachment size to stay safely under the 32 MiB WS limit
-  let totalLen = 0;
-  const capped: PromptAttachment[] = [];
-  for (const att of result) {
-    totalLen += att.url.length;
-    if (totalLen > MAX_TOTAL_ATTACHMENT_BYTES) break;
-    capped.push(att);
-  }
-  return capped;
-}
-
-function attachmentPartsForMessage(attachments: PromptAttachment[]): Array<Record<string, unknown>> {
-  const parts: Array<Record<string, unknown>> = [];
-  for (const attachment of attachments) {
-    const data = parseBase64DataUrl(attachment.url);
-    if (!data) continue;
-
-    if (attachment.mime.startsWith('image/')) {
-      parts.push({
-        type: 'image',
-        data,
-        mimeType: attachment.mime,
-        ...(attachment.filename ? { filename: attachment.filename } : {}),
-      });
-    } else if (attachment.mime.startsWith('audio/')) {
-      parts.push({
-        type: 'audio',
-        data,
-        mimeType: attachment.mime,
-        ...(attachment.filename ? { filename: attachment.filename } : {}),
-      });
-    }
-  }
-  return parts;
-}
-
-function parseQueuedPromptAttachments(raw: unknown): PromptAttachment[] {
-  if (typeof raw !== 'string' || !raw) return [];
-  try {
-    return sanitizePromptAttachments(JSON.parse(raw));
-  } catch {
-    return [];
-  }
-}
-
-function parseQueuedWorkflowPayload(raw: unknown): WorkflowExecutionDispatchPayload | null {
-  if (typeof raw !== 'string' || !raw) return null;
-  try {
-    const parsed = JSON.parse(raw) as WorkflowExecutionDispatchPayload;
-    if (!parsed || typeof parsed !== 'object') return null;
-    if (parsed.kind !== 'run' && parsed.kind !== 'resume') return null;
-    if (typeof parsed.executionId !== 'string' || !parsed.executionId) return null;
-    if (!parsed.payload || typeof parsed.payload !== 'object' || Array.isArray(parsed.payload)) return null;
-    return parsed;
-  } catch {
-    return null;
-  }
-}
 
 /** Messages sent by browser clients to the DO */
 interface ClientMessage {
@@ -154,68 +65,6 @@ interface ClientMessage {
   continuationContext?: string;
   invocationId?: string;
   reason?: string;
-}
-
-type SandboxRuntimeState = 'starting' | 'running' | 'hibernating' | 'hibernated' | 'restoring' | 'stopped' | 'error';
-type AgentRuntimeState = 'starting' | 'busy' | 'idle' | 'queued' | 'sleeping' | 'standby' | 'stopped' | 'error';
-type JointRuntimeState = 'starting' | 'running_busy' | 'running_idle' | 'queued' | 'waking' | 'sleeping' | 'standby' | 'stopped' | 'error';
-
-function deriveRuntimeStates(args: {
-  lifecycleStatus: string;
-  sandboxId?: string | null;
-  runnerConnected: boolean;
-  runnerBusy: boolean;
-  queuedPrompts: number;
-}): {
-  sandboxState: SandboxRuntimeState;
-  agentState: AgentRuntimeState;
-  jointState: JointRuntimeState;
-} {
-  const lifecycle = args.lifecycleStatus as SessionLifecycleStatus;
-  const hasSandbox = !!args.sandboxId;
-  const hasQueue = args.queuedPrompts > 0;
-
-  const sandboxState: SandboxRuntimeState = (() => {
-    if (lifecycle === 'error') return 'error';
-    if (lifecycle === 'terminated' || lifecycle === 'archived') return 'stopped';
-    if (lifecycle === 'hibernating') return 'hibernating';
-    if (lifecycle === 'hibernated') return 'hibernated';
-    if (lifecycle === 'restoring') return 'restoring';
-    if (lifecycle === 'initializing') return 'starting';
-    if (hasSandbox) return 'running';
-    if (hasQueue) return 'restoring';
-    return 'stopped';
-  })();
-
-  const agentState: AgentRuntimeState = (() => {
-    if (lifecycle === 'error') return 'error';
-    if (lifecycle === 'terminated' || lifecycle === 'archived') return 'stopped';
-    if (lifecycle === 'hibernating' || lifecycle === 'hibernated') return 'sleeping';
-    if (lifecycle === 'initializing' || lifecycle === 'restoring') {
-      return hasQueue ? 'queued' : 'starting';
-    }
-    if (hasQueue && !args.runnerConnected) return 'queued';
-    if (args.runnerConnected && args.runnerBusy) return 'busy';
-    if (hasQueue) return 'queued';
-    if (hasSandbox && args.runnerConnected) return 'idle';
-    if (hasSandbox && !args.runnerConnected) return 'standby';
-    return 'standby';
-  })();
-
-  const jointState: JointRuntimeState = (() => {
-    if (agentState === 'error') return 'error';
-    if (agentState === 'stopped') return 'stopped';
-    if (agentState === 'sleeping') return 'sleeping';
-    if (sandboxState === 'starting') return 'starting';
-    if (sandboxState === 'restoring') return hasQueue ? 'waking' : 'starting';
-    if (agentState === 'busy') return 'running_busy';
-    if (agentState === 'idle') return 'running_idle';
-    if (agentState === 'queued') return hasSandbox ? 'queued' : 'waking';
-    if (agentState === 'standby') return 'standby';
-    return 'starting';
-  })();
-
-  return { sandboxState, agentState, jointState };
 }
 
 /** Messages sent from DO to clients */
