@@ -1,9 +1,9 @@
 import type { PromptAttachment } from '../../durable-objects/runner-link.js';
 
 export const MAX_PROMPT_ATTACHMENTS = 8;
-export const MAX_PROMPT_ATTACHMENT_URL_LENGTH = 12_000_000;
-/** Total base64 across all attachments — safety cap below 32 MiB WS limit. */
-export const MAX_TOTAL_ATTACHMENT_BYTES = 25_000_000;
+export const MAX_PROMPT_ATTACHMENT_URL_LENGTH = 90_000_000;
+/** Total base64 across all attachments. */
+export const MAX_TOTAL_ATTACHMENT_BYTES = 90_000_000;
 
 /** MIME type prefixes that are accepted for prompt attachments. */
 const SUPPORTED_MIME_PREFIXES = ['image/', 'audio/'] as const;
