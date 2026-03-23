@@ -1,7 +1,7 @@
 import type { Env } from '../env.js';
 import type { AppDb } from '../lib/drizzle.js';
 import { getDb } from '../lib/drizzle.js';
-import { updateSessionStatus, updateSessionMetrics, addActiveSeconds, updateSessionGitState, upsertSessionFileChanged, updateSessionTitle, createSession, createSessionGitState, getSession, getSessionGitState, getChildSessions, getSessionChannelBindings, listUserChannelBindings, listOrgRepositories, listPersonas, getUserById, getUsersByIds, createMailboxMessage, getOrchestratorIdentity, createSessionTask, getSessionTasks, getMyTasks, updateSessionTask, getUserTelegramConfig, getOrgSettings, enqueueWorkflowApprovalNotificationIfMissing, markWorkflowApprovalNotificationsRead, isNotificationWebEnabled, batchInsertAnalyticsEvents, batchUpsertMessages, updateUserDiscoveredModels, setCatalogCache, updateThread, incrementThreadMessageCount, getThread, getUserIdentityLinks, getUserSlackIdentityLink, getThreadOriginChannel } from '../lib/db.js';
+import { updateSessionStatus, updateSessionMetrics, addActiveSeconds, updateSessionGitState, upsertSessionFileChanged, updateSessionTitle, createSession, createSessionGitState, getSession, getSessionGitState, getChildSessions, getSessionChannelBindings, listUserChannelBindings, listOrgRepositories, listPersonas, getUserById, getUsersByIds, createMailboxMessage, getOrchestratorIdentity, getUserTelegramConfig, getOrgSettings, enqueueWorkflowApprovalNotificationIfMissing, markWorkflowApprovalNotificationsRead, isNotificationWebEnabled, batchInsertAnalyticsEvents, batchUpsertMessages, updateUserDiscoveredModels, setCatalogCache, updateThread, incrementThreadMessageCount, getThread, getUserIdentityLinks, getUserSlackIdentityLink, getThreadOriginChannel } from '../lib/db.js';
 import { getCredential, type CredentialResult } from '../services/credentials.js';
 import { memRead, memWrite, memPatch, memRm, memSearch } from '../services/session-memory.js';
 import { resolveRepoCredential, type CredentialRow } from '../lib/db/credentials.js';
@@ -39,6 +39,7 @@ import { SessionLifecycle, SandboxAlreadyExitedError } from './session-lifecycle
 import { resolveOrchestratorPersona } from '../services/persona.js';
 import { sendChannelReply } from '../services/channel-reply.js';
 import { mailboxSend, mailboxCheck } from '../services/session-mailbox.js';
+import { taskCreate, taskList, taskUpdate, taskMy } from '../services/session-tasks.js';
 import { MAX_PROMPT_ATTACHMENTS, MAX_PROMPT_ATTACHMENT_URL_LENGTH, MAX_TOTAL_ATTACHMENT_BYTES, parseBase64DataUrl, sanitizePromptAttachments, attachmentPartsForMessage, parseQueuedPromptAttachments } from '../lib/utils/prompt-validation.js';
 import { parseQueuedWorkflowPayload, deriveRuntimeStates } from '../lib/utils/runtime.js';
 
@@ -2736,19 +2737,74 @@ export class SessionAgentDO {
       },
 
       'task-create': async (msg) => {
-        await this.handleTaskCreate(msg.requestId!, msg);
+        try {
+          const result = await taskCreate(
+            this.appDb,
+            this.env.DB,
+            this.sessionState.sessionId,
+            this.sessionState.userId,
+            {
+              sessionId: msg.sessionId,
+              title: msg.title!,
+              description: msg.description,
+              parentTaskId: msg.parentTaskId,
+              blockedBy: msg.blockedBy,
+            },
+          );
+          this.runnerLink.send({ type: 'task-create-result', requestId: msg.requestId!, ...result } as any);
+        } catch (err) {
+          this.runnerLink.send({ type: 'task-create-result', requestId: msg.requestId!, error: err instanceof Error ? err.message : String(err) } as any);
+        }
       },
 
       'task-list': async (msg) => {
-        await this.handleTaskList(msg.requestId!, msg.status, msg.limit);
+        try {
+          const result = await taskList(
+            this.appDb,
+            this.env.DB,
+            this.sessionState.sessionId,
+            msg.status,
+            msg.limit,
+          );
+          this.runnerLink.send({ type: 'task-list-result', requestId: msg.requestId!, ...result } as any);
+        } catch (err) {
+          this.runnerLink.send({ type: 'task-list-result', requestId: msg.requestId!, error: err instanceof Error ? err.message : String(err) } as any);
+        }
       },
 
       'task-update': async (msg) => {
-        await this.handleTaskUpdate(msg.requestId!, msg.taskId!, msg);
+        try {
+          const result = await taskUpdate(
+            this.appDb,
+            this.env.DB,
+            this.sessionState.sessionId,
+            msg.taskId!,
+            {
+              status: msg.status as string | undefined,
+              result: msg.result as string | undefined,
+              description: msg.description,
+              sessionId: msg.sessionId,
+              title: msg.title,
+            },
+          );
+          this.runnerLink.send({ type: 'task-update-result', requestId: msg.requestId!, ...result } as any);
+        } catch (err) {
+          this.runnerLink.send({ type: 'task-update-result', requestId: msg.requestId!, error: err instanceof Error ? err.message : String(err) } as any);
+        }
       },
 
       'task-my': async (msg) => {
-        await this.handleTaskMy(msg.requestId!, msg.status);
+        try {
+          const result = await taskMy(
+            this.appDb,
+            this.env.DB,
+            this.sessionState.sessionId,
+            msg.status,
+          );
+          this.runnerLink.send({ type: 'task-my-result', requestId: msg.requestId!, ...result } as any);
+        } catch (err) {
+          this.runnerLink.send({ type: 'task-my-result', requestId: msg.requestId!, error: err instanceof Error ? err.message : String(err) } as any);
+        }
       },
 
       // ─── Phase D: Channel Reply ──────────────────────────────────────
@@ -7364,96 +7420,6 @@ export class SessionAgentDO {
     const summary = `${who} disabled tunnel "${name}"`;
     this.emitAuditEvent('tunnel.disabled', summary, actor?.actorId, { name });
     await this.handleSystemMessage(summary, { type: 'tunnel.disabled', name });
-  }
-
-  // ─── Phase C: Mailbox + Task Board Handlers ─────────────────────────
-
-  private async handleTaskCreate(requestId: string, msg: RunnerMessage) {
-    try {
-      const sessionId = this.sessionState.sessionId;
-      if (!sessionId) {
-        this.runnerLink.send({ type: 'task-create-result', requestId, error: 'No session ID' } as any);
-        return;
-      }
-
-      // Determine orchestrator session ID: own session for orchestrators,
-      // or look up parent for child sessions
-      let orchestratorSessionId = sessionId;
-      const session = await getSession(this.appDb, sessionId);
-      if (session?.parentSessionId) {
-        orchestratorSessionId = session.parentSessionId;
-      }
-
-      const task = await createSessionTask(this.appDb, {
-        orchestratorSessionId,
-        sessionId: msg.sessionId,
-        title: msg.title!,
-        description: msg.description,
-        parentTaskId: msg.parentTaskId,
-        blockedBy: msg.blockedBy,
-      });
-
-      this.runnerLink.send({ type: 'task-create-result', requestId, task } as any);
-    } catch (err) {
-      this.runnerLink.send({ type: 'task-create-result', requestId, error: err instanceof Error ? err.message : String(err) } as any);
-    }
-  }
-
-  private async handleTaskList(requestId: string, status?: string, limit?: number) {
-    try {
-      const sessionId = this.sessionState.sessionId;
-      if (!sessionId) {
-        this.runnerLink.send({ type: 'task-list-result', requestId, error: 'No session ID' } as any);
-        return;
-      }
-
-      let orchestratorSessionId = sessionId;
-      const session = await getSession(this.appDb, sessionId);
-      if (session?.parentSessionId) {
-        orchestratorSessionId = session.parentSessionId;
-      }
-
-      const tasks = await getSessionTasks(this.env.DB, orchestratorSessionId, { status, limit });
-      this.runnerLink.send({ type: 'task-list-result', requestId, tasks } as any);
-    } catch (err) {
-      this.runnerLink.send({ type: 'task-list-result', requestId, error: err instanceof Error ? err.message : String(err) } as any);
-    }
-  }
-
-  private async handleTaskUpdate(requestId: string, taskId: string, msg: RunnerMessage) {
-    try {
-      const task = await updateSessionTask(this.env.DB, taskId, {
-        status: msg.status as string | undefined,
-        result: msg.result as string | undefined,
-        description: msg.description,
-        sessionId: msg.sessionId,
-        title: msg.title,
-      });
-
-      if (!task) {
-        this.runnerLink.send({ type: 'task-update-result', requestId, error: 'Task not found' } as any);
-        return;
-      }
-
-      this.runnerLink.send({ type: 'task-update-result', requestId, task } as any);
-    } catch (err) {
-      this.runnerLink.send({ type: 'task-update-result', requestId, error: err instanceof Error ? err.message : String(err) } as any);
-    }
-  }
-
-  private async handleTaskMy(requestId: string, status?: string) {
-    try {
-      const sessionId = this.sessionState.sessionId;
-      if (!sessionId) {
-        this.runnerLink.send({ type: 'task-my-result', requestId, error: 'No session ID' } as any);
-        return;
-      }
-
-      const tasks = await getMyTasks(this.env.DB, sessionId, { status });
-      this.runnerLink.send({ type: 'task-my-result', requestId, tasks } as any);
-    } catch (err) {
-      this.runnerLink.send({ type: 'task-my-result', requestId, error: err instanceof Error ? err.message : String(err) } as any);
-    }
   }
 
   // ─── Phase D: Channel Reply Handler ──────────────────────────────────
