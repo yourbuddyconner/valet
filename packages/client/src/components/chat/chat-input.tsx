@@ -84,14 +84,21 @@ function truncatePath(path: string, maxLen = 60): string {
   return result;
 }
 
-function hasImageInDataTransfer(dataTransfer: DataTransfer | null): boolean {
+const SUPPORTED_DROP_TYPES = new Set(['application/pdf']);
+
+function isSupportedFile(file: File): boolean {
+  return isImageFile(file) || SUPPORTED_DROP_TYPES.has(file.type)
+    || file.name.toLowerCase().endsWith('.pdf');
+}
+
+function hasSupportedFileInDataTransfer(dataTransfer: DataTransfer | null): boolean {
   if (!dataTransfer) return false;
   if (dataTransfer.files && dataTransfer.files.length > 0) {
-    return Array.from(dataTransfer.files).some((file) => isImageFile(file));
+    return Array.from(dataTransfer.files).some((file) => isSupportedFile(file));
   }
   if (dataTransfer.items && dataTransfer.items.length > 0) {
     return Array.from(dataTransfer.items).some(
-      (item) => item.kind === 'file' && (item.type.startsWith('image/') || item.type === '')
+      (item) => item.kind === 'file' && (item.type.startsWith('image/') || item.type === '' || SUPPORTED_DROP_TYPES.has(item.type))
     );
   }
   return false;
@@ -338,13 +345,17 @@ export function ChatInput({
     });
   }, []);
 
-  const appendImageAttachments = useCallback(async (files: File[]) => {
-    // Log all incoming files for debugging format issues (especially HEIC)
+  const appendFileAttachments = useCallback(async (files: File[]) => {
+    // Log all incoming files for debugging format issues
     for (const f of files) {
-      console.log(`[image] input file: name=${f.name} type="${f.type}" size=${f.size} isImage=${isImageFile(f)}`);
+      console.log(`[attachment] input file: name=${f.name} type="${f.type}" size=${f.size} isImage=${isImageFile(f)} isPdf=${f.type === 'application/pdf'}`);
     }
-    const imageFiles = files.filter((file) => isImageFile(file));
-    if (imageFiles.length === 0) return;
+    const supported = files.filter((file) => isSupportedFile(file));
+    if (supported.length === 0) return;
+
+    // Separate images (need processing) from other files (just read as-is)
+    const imageFiles = supported.filter((f) => isImageFile(f));
+    const otherFiles = supported.filter((f) => !isImageFile(f));
 
     // Merge with existing original files, enforce limit
     const mergedFiles = [...originalFilesRef.current, ...imageFiles].slice(0, MAX_IMAGE_ATTACHMENTS);
@@ -352,40 +363,41 @@ export function ChatInput({
 
     setIsCompressing(true);
     try {
-      const results = await Promise.all(
+      // Process images
+      const imageResults = await Promise.all(
         mergedFiles.map(async (file) => {
           try {
-            // Process if format needs conversion or file needs compression
             if (needsProcessing(file) || needsCompression(file, budget)) {
               const url = await processImage(file, budget);
-              // processImage returns JPEG from canvas, but falls back to raw
-              // data URL if canvas fails — detect MIME from the data URL prefix
               const mime = url.startsWith('data:image/jpeg') ? 'image/jpeg' : (file.type || 'image/jpeg');
-              return {
-                type: 'file' as const,
-                mime,
-                url,
-                filename: file.name,
-              };
+              return { type: 'file' as const, mime, url, filename: file.name };
             }
-            // Supported format, small enough — read as-is
             const url = await readFileAsDataUrl(file);
-            return {
-              type: 'file' as const,
-              mime: file.type || 'image/jpeg',
-              url,
-              filename: file.name,
-            };
+            return { type: 'file' as const, mime: file.type || 'image/jpeg', url, filename: file.name };
           } catch (err) {
-            console.error('[image] failed to process:', file.name, err);
+            console.error('[attachment] failed to process image:', file.name, err);
             toastError(`Failed to process image: ${file.name}`);
             return null;
           }
         })
       );
 
-      const next: PromptAttachment[] = results.filter((r) => r !== null);
-      originalFilesRef.current = mergedFiles.slice(0, next.length);
+      // Read non-image files (PDFs etc.) as-is
+      const otherResults = await Promise.all(
+        otherFiles.map(async (file) => {
+          try {
+            const url = await readFileAsDataUrl(file);
+            return { type: 'file' as const, mime: file.type || 'application/octet-stream', url, filename: file.name };
+          } catch (err) {
+            console.error('[attachment] failed to read file:', file.name, err);
+            toastError(`Failed to read file: ${file.name}`);
+            return null;
+          }
+        })
+      );
+
+      const next: PromptAttachment[] = [...imageResults, ...otherResults].filter((r) => r !== null);
+      originalFilesRef.current = mergedFiles.slice(0, imageResults.filter(r => r !== null).length);
       setAttachments(next);
     } finally {
       setIsCompressing(false);
@@ -395,11 +407,11 @@ export function ChatInput({
   const handleImageSelect = useCallback(async (event: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(event.target.files || []);
     if (files.length === 0) return;
-    await appendImageAttachments(files);
+    await appendFileAttachments(files);
 
     // Allow selecting the same file again later.
     event.target.value = '';
-  }, [appendImageAttachments]);
+  }, [appendFileAttachments]);
 
   const resetDragState = useCallback(() => {
     dragDepthRef.current = 0;
@@ -407,7 +419,7 @@ export function ChatInput({
   }, []);
 
   const handleDragEnter = useCallback((event: React.DragEvent<HTMLFormElement>) => {
-    if (!hasImageInDataTransfer(event.dataTransfer)) return;
+    if (!hasSupportedFileInDataTransfer(event.dataTransfer)) return;
     event.preventDefault();
     event.stopPropagation();
     dragDepthRef.current += 1;
@@ -415,7 +427,7 @@ export function ChatInput({
   }, []);
 
   const handleDragOver = useCallback((event: React.DragEvent<HTMLFormElement>) => {
-    if (!hasImageInDataTransfer(event.dataTransfer)) return;
+    if (!hasSupportedFileInDataTransfer(event.dataTransfer)) return;
     event.preventDefault();
     event.stopPropagation();
     event.dataTransfer.dropEffect = 'copy';
@@ -423,7 +435,7 @@ export function ChatInput({
   }, [isDragOver]);
 
   const handleDragLeave = useCallback((event: React.DragEvent<HTMLFormElement>) => {
-    if (!hasImageInDataTransfer(event.dataTransfer)) return;
+    if (!hasSupportedFileInDataTransfer(event.dataTransfer)) return;
     event.preventDefault();
     event.stopPropagation();
     dragDepthRef.current = Math.max(0, dragDepthRef.current - 1);
@@ -433,14 +445,14 @@ export function ChatInput({
   }, []);
 
   const handleDrop = useCallback((event: React.DragEvent<HTMLFormElement>) => {
-    if (!hasImageInDataTransfer(event.dataTransfer)) return;
+    if (!hasSupportedFileInDataTransfer(event.dataTransfer)) return;
     event.preventDefault();
     event.stopPropagation();
     const files = Array.from(event.dataTransfer.files || []);
     resetDragState();
     if (files.length === 0 || disabled || sendDisabled) return;
-    void appendImageAttachments(files);
-  }, [appendImageAttachments, disabled, resetDragState, sendDisabled]);
+    void appendFileAttachments(files);
+  }, [appendFileAttachments, disabled, resetDragState, sendDisabled]);
 
   const handlePaste = useCallback((event: React.ClipboardEvent) => {
     if (disabled || sendDisabled) return;
@@ -451,8 +463,8 @@ export function ChatInput({
       .filter((f): f is File => f !== null);
     if (imageFiles.length === 0) return;
     event.preventDefault();
-    void appendImageAttachments(imageFiles);
-  }, [appendImageAttachments, disabled, sendDisabled]);
+    void appendFileAttachments(imageFiles);
+  }, [appendFileAttachments, disabled, sendDisabled]);
 
   const removeAttachment = useCallback((index: number) => {
     setAttachments((prev) => prev.filter((_, i) => i !== index));
