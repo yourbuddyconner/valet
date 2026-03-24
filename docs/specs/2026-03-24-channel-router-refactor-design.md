@@ -18,7 +18,7 @@ Beyond the bug, channel dispatch logic is scattered across three places in sessi
 1. Remove the auto-reply code path entirely — all channel messages sent exclusively via explicit `channel_reply` tool calls
 2. Consolidate **all outbound channel dispatch** into `ChannelRouter` — explicit replies, interactive prompt sends, and interactive prompt updates
 3. Move Slack shimmer clearing into the Slack transport where it belongs
-4. Extract composite channelId parsing (`channel:thread_ts`) to a shared utility
+4. Move composite channelId parsing into the transport layer via a `parseTarget` interface method
 5. Keep follow-up reminders as a soft safety net
 
 ## Non-Goals
@@ -41,10 +41,10 @@ It is a **helper class scoped to one DO instance** — not a Durable Object, not
 interface ChannelRouterDeps {
   /** Resolve auth token for a channel. Implementation branches on channelType (Slack uses org-level bot token, others use per-user credentials). */
   resolveToken(channelType: string, userId: string): Promise<string | undefined>;
-  /** Resolve persona identity for Slack messages. Must not throw — returns undefined if unavailable. */
+  /** Resolve persona identity for channel messages. Called for all channels — transports ignore it if unused. Must not throw — returns undefined if unavailable. */
   resolvePersona(userId: string): Promise<Persona | undefined>;
-  /** Callback when a substantive reply is sent — DO uses this to resolve follow-up reminders. */
-  onReplySent(channelType: string, channelId: string): void;
+  /** Callback when a substantive reply is sent — DO uses this to resolve follow-up reminders. Awaited by sendReply to prevent data loss on hibernation. */
+  onReplySent(channelType: string, channelId: string): Promise<void>;
 }
 ```
 
@@ -87,11 +87,11 @@ interface SendReplyResult {
 Internal flow:
 1. Resolve transport via `channelRegistry.getTransport(channelType)`
 2. Resolve token via `deps.resolveToken(channelType, userId)`
-3. Parse composite channelId via shared `parseCompositeChannelId()`
+3. Parse channelId via `transport.parseTarget?.(channelId) ?? { channelType, channelId }` (see Composite ChannelId Parsing section)
 4. Build `OutboundMessage` with attachments if present
-5. Resolve persona via `deps.resolvePersona(userId)` for Slack
+5. Resolve persona via `deps.resolvePersona(userId)` — called for all channel types, set on `ctx.persona`. Transports that don't use persona (Telegram, etc.) simply ignore it. This avoids a `channelType === 'slack'` guard in ChannelRouter and makes the design extensible for future channels that support custom identity (Discord, Teams).
 6. Call `transport.sendMessage(target, outbound, ctx)`
-7. On success, call `deps.onReplySent(channelType, channelId)` if `followUp !== false`
+7. On success, `await deps.onReplySent(channelType, channelId)` if `followUp !== false` (must be awaited — the callback writes to SQLite and a hibernation between send and write would lose the followup resolution)
 8. Return result
 
 #### sendInteractivePrompt
@@ -107,7 +107,7 @@ interface SendInteractivePromptOpts {
 Internal flow (per target):
 1. Resolve transport, check `transport.sendInteractivePrompt` exists
 2. Resolve token via `deps.resolveToken(channelType, userId)`
-3. Parse composite channelId via shared `parseCompositeChannelId()`
+3. Parse channelId via `transport.parseTarget?.(channelId) ?? { channelType, channelId }`
 4. Call `transport.sendInteractivePrompt(target, prompt, ctx)`
 5. Collect and return refs
 
@@ -126,31 +126,35 @@ interface UpdateInteractivePromptOpts {
 Internal flow (per ref):
 1. Resolve transport, check `transport.updateInteractivePrompt` exists
 2. Resolve token via `deps.resolveToken(channelType, userId)`
-3. Parse composite channelId via shared `parseCompositeChannelId()`
+3. Parse channelId via `transport.parseTarget?.(ref.channelId) ?? { channelType, channelId: ref.channelId }`
 4. Call `transport.updateInteractivePrompt(target, ref, resolution, ctx)`
 5. Log and swallow errors per-ref (matches current behavior)
 
-### Composite ChannelId Parsing — Shared Utility
+### Composite ChannelId Parsing — Transport-Owned
 
-The `parseCompositeChannelId` function is currently duplicated: `parseSlackChannelId()` on session-agent.ts and `parseCompositeChannelId()` in `services/channel-reply.ts`. Both do the same thing — split `"C123:thread_ts"` into `{ channelId, threadId }`.
-
-Extract to a shared utility in the SDK channel module (`@valet/sdk/channels`) since it's a transport-layer concern:
+The `parseSlackChannelId()` on session-agent.ts and `parseCompositeChannelId()` in `services/channel-reply.ts` both encode Slack-specific knowledge (splitting `"C123:thread_ts"` into `{ channelId, threadId }`). Rather than extracting this to a shared SDK utility (which would put Slack-specific format knowledge in shared code), add an optional `parseTarget` method to the `ChannelTransport` interface:
 
 ```ts
-// packages/sdk/src/channels/index.ts
-export function parseCompositeChannelId(
-  channelType: string,
-  channelId: string,
-): ChannelTarget {
-  if (channelType === 'slack' && channelId.includes(':')) {
+// packages/sdk/src/channels/index.ts — added to ChannelTransport interface
+/** Parse a composite channelId into a ChannelTarget. Used by ChannelRouter before dispatch. */
+parseTarget?(channelId: string): ChannelTarget;
+```
+
+Slack implements it:
+```ts
+// packages/plugin-slack/src/channels/transport.ts
+parseTarget(channelId: string): ChannelTarget {
+  if (channelId.includes(':')) {
     const idx = channelId.indexOf(':');
-    return { channelType, channelId: channelId.slice(0, idx), threadId: channelId.slice(idx + 1) };
+    return { channelType: 'slack', channelId: channelId.slice(0, idx), threadId: channelId.slice(idx + 1) };
   }
-  return { channelType, channelId };
+  return { channelType: 'slack', channelId };
 }
 ```
 
-ChannelRouter imports this. `parseSlackChannelId()` is removed from session-agent.ts.
+ChannelRouter calls `transport.parseTarget?.(channelId) ?? { channelType, channelId }` before every dispatch. Transports that don't need composite parsing (Telegram, etc.) simply don't implement the method. Future channels with their own composite ID formats implement `parseTarget` themselves — no shared utility needs updating.
+
+`parseSlackChannelId()` is removed from session-agent.ts. `parseCompositeChannelId()` in `services/channel-reply.ts` is deleted with the file.
 
 ### What Gets Removed
 
@@ -252,8 +256,8 @@ The Telegram transport uses the same `ChannelTransport` contract. It does not us
 |------|--------|
 | `packages/worker/src/durable-objects/channel-router.ts` | Rewrite: deps injection, `sendReply`, `sendInteractivePrompt`, `updateInteractivePrompt`, active channel tracking |
 | `packages/worker/src/durable-objects/session-agent.ts` | Remove auto-reply code, delegate all channel dispatch to ChannelRouter, remove `parseSlackChannelId`, slim `handleChannelReply`/`sendChannelInteractivePrompts`/`updateChannelInteractivePrompts` to thin wrappers |
-| `packages/sdk/src/channels/index.ts` | Add exported `parseCompositeChannelId()` utility |
-| `packages/plugin-slack/src/channels/transport.ts` | Clear shimmer after successful `sendMessage` |
+| `packages/sdk/src/channels/index.ts` | Add optional `parseTarget` method to `ChannelTransport` interface |
+| `packages/plugin-slack/src/channels/transport.ts` | Implement `parseTarget()` for composite `channel:thread_ts` parsing; clear shimmer after successful `sendMessage` |
 | `packages/plugin-slack/src/channels/transport.test.ts` | Update tests for shimmer-on-send behavior |
 | `packages/worker/src/services/channel-reply.ts` | Delete |
 | `packages/worker/src/durable-objects/channel-router.test.ts` | Rewrite for new ChannelRouter API |
@@ -272,7 +276,7 @@ The Telegram transport uses the same `ChannelTransport` contract. It does not us
 - [ ] No internal/orchestrator messages leak to Slack
 - [ ] No double-posting of replies
 - [ ] Slack shimmer cleared by transport, not by DO
-- [ ] Composite channelId parsing extracted to shared SDK utility
+- [ ] Composite channelId parsing owned by transport via `parseTarget` interface method
 - [ ] `parseSlackChannelId` removed from session-agent.ts
 - [ ] `channelRegistry` no longer imported directly by session-agent.ts
 - [ ] Follow-up reminders still function as a soft safety net
