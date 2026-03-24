@@ -9,7 +9,7 @@ import { channelRegistry } from '../channels/registry.js';
 import * as db from '../lib/db.js';
 import { dispatchOrchestratorPrompt } from '../lib/workflow-runtime.js';
 import { handleChannelCommand } from './channel-webhooks.js';
-import { getSlackUserInfo, getSlackBotInfo } from '../services/slack.js';
+import { getSlackUserInfo, getSlackBotInfo, handleReactionDeletion } from '../services/slack.js';
 import { buildThreadContext, buildDmContext } from '../services/slack-threads.js';
 import { updateThreadCursor } from '../lib/db/channel-threads.js';
 
@@ -98,6 +98,29 @@ slackEventsRouter.post('/slack/events', async (c) => {
   // Extract event-level fields for routing decisions before full parse
   const event = payload.event as Record<string, unknown> | undefined;
   const eventType = event?.type as string | undefined;
+
+  // ─── Reaction-based message deletion ────────────────────────────────
+  if (eventType === 'reaction_added') {
+    const reaction = event?.reaction as string | undefined;
+    if (reaction === 'x') {
+      const item = event?.item as { channel?: string; ts?: string } | undefined;
+      const reactingUser = event?.user as string | undefined;
+      if (item?.channel && item?.ts && reactingUser) {
+        c.executionCtx.waitUntil(
+          handleReactionDeletion(botToken, item.channel, item.ts, reactingUser, c.env)
+            .then((result) => {
+              if (result.deleted) {
+                console.log(`[Slack] Reaction deletion: channel=${item.channel} ts=${item.ts}`);
+              } else {
+                console.log(`[Slack] Reaction deletion skipped: ${result.reason}`);
+              }
+            })
+            .catch((err) => console.error('[Slack] Reaction deletion error:', err))
+        );
+      }
+    }
+    return c.json({ ok: true });
+  }
 
   // Assistant thread events store user_id inside event.assistant_thread, not event.user
   const isAssistantEvent = eventType === 'assistant_thread_started' || eventType === 'assistant_thread_context_changed';
