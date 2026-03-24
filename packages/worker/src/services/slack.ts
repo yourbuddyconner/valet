@@ -526,6 +526,7 @@ export async function handleReactionDeletion(
       latest: messageTs,
       limit: 1,
       inclusive: true,
+      include_all_metadata: true,
     }),
   });
 
