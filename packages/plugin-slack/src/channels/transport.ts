@@ -42,6 +42,33 @@ async function slackApiCall(
   return (await resp.json()) as { ok: boolean; ts?: string; error?: string };
 }
 
+async function slackApiCallForm(
+  method: string,
+  body: Record<string, string | number>,
+  token: string,
+): Promise<{ ok: boolean; ts?: string; error?: string; [key: string]: unknown }> {
+  const form = new URLSearchParams();
+  for (const [key, value] of Object.entries(body)) {
+    form.set(key, String(value));
+  }
+
+  const resp = await fetch(slackUrl(method), {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded; charset=utf-8',
+      Authorization: `Bearer ${token}`,
+    },
+    body: form.toString(),
+  });
+
+  if (!resp.ok) {
+    const text = await resp.text().catch(() => '');
+    return { ok: false, error: `Slack API HTTP ${resp.status}: ${text.slice(0, 200)}` };
+  }
+
+  return (await resp.json()) as { ok: boolean; ts?: string; error?: string };
+}
+
 /** GET-based Slack API call for read methods (conversations.info, etc.) */
 async function slackApiGet(
   method: string,
@@ -384,7 +411,7 @@ export class SlackTransport implements ChannelTransport {
     const filename = attachment.fileName || `file-${Date.now()}`;
 
     // Step 1: Get upload URL
-    const uploadUrlResult = await slackApiCall('files.getUploadURLExternal', {
+    const uploadUrlResult = await slackApiCallForm('files.getUploadURLExternal', {
       filename,
       length: fileBytes.length,
     }, token);

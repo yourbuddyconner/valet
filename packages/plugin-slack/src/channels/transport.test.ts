@@ -804,9 +804,10 @@ describe('SlackTransport', () => {
       // Verify getUploadURLExternal call
       const [url1, opts1] = mockFetch.mock.calls[0];
       expect(url1).toBe('https://slack.com/api/files.getUploadURLExternal');
-      const body1 = JSON.parse(opts1.body);
-      expect(body1.filename).toBe('chart.png');
-      expect(body1.length).toBeGreaterThan(0);
+      expect(opts1.headers['Content-Type']).toBe('application/x-www-form-urlencoded; charset=utf-8');
+      const body1 = new URLSearchParams(String(opts1.body));
+      expect(body1.get('filename')).toBe('chart.png');
+      expect(Number(body1.get('length'))).toBeGreaterThan(0);
 
       // Verify upload to pre-signed URL
       const [url2, opts2] = mockFetch.mock.calls[1];
