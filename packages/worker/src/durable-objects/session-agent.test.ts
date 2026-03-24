@@ -240,35 +240,58 @@ function createMockCtx() {
   return { ctx, sql, waitUntil, initPromise: () => initPromise };
 }
 
+function createMockDb() {
+  return {
+    prepare: vi.fn(() => ({
+      bind: vi.fn(() => ({
+        first: vi.fn().mockResolvedValue(null),
+        run: vi.fn().mockResolvedValue({ success: true }),
+        all: vi.fn().mockResolvedValue({ results: [] }),
+      })),
+    })),
+  };
+}
+
+async function createTestAgent(opts?: { sockets?: Array<{ send: ReturnType<typeof vi.fn> }> }) {
+  const { ctx, sql, waitUntil, initPromise } = createMockCtx();
+  const sockets = opts?.sockets ?? [];
+  (ctx.getWebSockets as unknown as ReturnType<typeof vi.fn>).mockReturnValue(sockets);
+
+  const agent = new SessionAgentDO(ctx, { DB: createMockDb() } as any);
+  await initPromise();
+
+  (agent as any).sessionState.set('sessionId', 'orchestrator:user-1');
+  (agent as any).sessionState.set('userId', 'user-1');
+  (agent as any).sessionState.set('status', 'running');
+
+  const broadcasts: Array<Record<string, unknown>> = [];
+  (agent as any).broadcastToClients = vi.fn((message: Record<string, unknown>) => {
+    broadcasts.push(message);
+  });
+  (agent as any).sendChannelInteractivePrompts = vi.fn().mockResolvedValue(undefined);
+  (agent as any).notifyEventBus = vi.fn();
+  (agent as any).emitEvent = vi.fn();
+  (agent as any).emitAuditEvent = vi.fn();
+  (agent as any).flushMessagesToD1 = vi.fn().mockResolvedValue(undefined);
+  (agent as any).isUserConnected = vi.fn().mockReturnValue(true);
+  (agent as any).sendToastToUser = vi.fn();
+  (agent as any).enqueueOwnerNotification = vi.fn().mockResolvedValue(undefined);
+  (agent as any).getUserDetails = vi.fn().mockResolvedValue(undefined);
+  (agent as any).resolveModelPreferences = vi.fn().mockResolvedValue([]);
+  (agent as any).rescheduleIdleAlarm = vi.fn();
+  (agent as any).lifecycle.touchActivity = vi.fn();
+
+  return { agent, sql, waitUntil, broadcasts, ctx, sockets };
+}
+
 describe('SessionAgentDO', () => {
   beforeEach(() => {
     vi.restoreAllMocks();
   });
 
   it('does not reuse stale Slack channel context for a later web-only question', async () => {
-    const { ctx, sql, waitUntil, initPromise } = createMockCtx();
-    const agent = new SessionAgentDO(ctx, { DB: {} } as any);
-    await initPromise();
-
-    (agent as any).sessionState.set('sessionId', 'session-1');
-    (agent as any).sessionState.set('userId', 'user-1');
-    (agent as any).sessionState.set('status', 'running');
-
-    const broadcasts: Array<Record<string, unknown>> = [];
-    const sendChannelInteractivePrompts = vi.fn().mockResolvedValue(undefined);
-
-    (agent as any).broadcastToClients = vi.fn((message: Record<string, unknown>) => {
-      broadcasts.push(message);
-    });
-    (agent as any).sendChannelInteractivePrompts = sendChannelInteractivePrompts;
-    (agent as any).notifyEventBus = vi.fn();
-    (agent as any).emitEvent = vi.fn();
-    (agent as any).emitAuditEvent = vi.fn();
-    (agent as any).flushMessagesToD1 = vi.fn().mockResolvedValue(undefined);
-    (agent as any).sendNextQueuedPrompt = vi.fn().mockResolvedValue(false);
-    (agent as any).isUserConnected = vi.fn().mockReturnValue(true);
-    (agent as any).sendToastToUser = vi.fn();
-    (agent as any).enqueueOwnerNotification = vi.fn().mockResolvedValue(undefined);
+    const { agent, sql, waitUntil, broadcasts } = await createTestAgent();
+    const sendChannelInteractivePrompts = (agent as any).sendChannelInteractivePrompts as ReturnType<typeof vi.fn>;
 
     (agent as any).channelRouter.setActiveChannel({ channelType: 'slack', channelId: 'C123' });
     (agent as any).promptQueue.enqueue({
@@ -323,5 +346,120 @@ describe('SessionAgentDO', () => {
     const storedPrompt = sql.interactivePrompts.get('q-web');
     expect(storedPrompt).toBeTruthy();
     expect(JSON.parse(storedPrompt!.context)).toEqual({ options: ['Yes', 'No'] });
+  });
+
+  it('keeps assistant turns on the current orchestrator thread after the processing row is gone', async () => {
+    const { agent, broadcasts } = await createTestAgent();
+    (agent as any).sessionState.set('currentThreadId', 'thread-keep-visible');
+
+    await (agent as any).runnerHandlers['message.create']({
+      type: 'message.create',
+      turnId: 'turn-1',
+    });
+
+    const created = broadcasts.find((message) => message.type === 'message');
+    expect(created).toBeTruthy();
+    expect(created?.data).toMatchObject({
+      id: 'turn-1',
+      role: 'assistant',
+      threadId: 'thread-keep-visible',
+    });
+  });
+
+  it('persists currentThreadId from a direct threaded prompt for later assistant turns', async () => {
+    const runnerSocket = { send: vi.fn() };
+    const { agent, broadcasts } = await createTestAgent({ sockets: [runnerSocket] });
+
+    await (agent as any).handlePrompt(
+      'continue this thread',
+      undefined,
+      undefined,
+      undefined,
+      'web',
+      'default',
+      'thread-direct',
+    );
+
+    expect((agent as any).sessionState.currentThreadId).toBe('thread-direct');
+
+    await (agent as any).handlePromptComplete();
+    await (agent as any).runnerHandlers['message.create']({
+      type: 'message.create',
+      turnId: 'turn-direct',
+    });
+
+    const created = broadcasts.find((message) => {
+      const data = message.data as Record<string, unknown> | undefined;
+      return message.type === 'message' && data?.id === 'turn-direct';
+    });
+    expect((created?.data as Record<string, unknown> | undefined)).toMatchObject({
+      id: 'turn-direct',
+      threadId: 'thread-direct',
+    });
+  });
+
+  it('persists currentThreadId from a queued threaded prompt for later assistant turns', async () => {
+    const runnerSocket = { send: vi.fn() };
+    const { agent, broadcasts } = await createTestAgent({ sockets: [runnerSocket] });
+
+    (agent as any).promptQueue.enqueue({
+      id: 'queued-threaded',
+      content: 'queued work',
+      status: 'queued',
+      channelType: 'thread',
+      channelId: 'thread-queued',
+      channelKey: 'thread:thread-queued',
+      threadId: 'thread-queued',
+    });
+
+    const dispatched = await (agent as any).sendNextQueuedPrompt();
+    expect(dispatched).toBe(true);
+    expect((agent as any).sessionState.currentThreadId).toBe('thread-queued');
+
+    await (agent as any).handlePromptComplete();
+    await (agent as any).runnerHandlers['message.create']({
+      type: 'message.create',
+      turnId: 'turn-queued',
+    });
+
+    const created = broadcasts.find((message) => {
+      const data = message.data as Record<string, unknown> | undefined;
+      return message.type === 'message' && data?.id === 'turn-queued';
+    });
+    expect((created?.data as Record<string, unknown> | undefined)).toMatchObject({
+      id: 'turn-queued',
+      threadId: 'thread-queued',
+    });
+  });
+
+  it('preserves threadId through tool updates and finalize once the turn is created', async () => {
+    const { agent, broadcasts } = await createTestAgent();
+    (agent as any).sessionState.set('currentThreadId', 'thread-parts');
+
+    await (agent as any).runnerHandlers['message.create']({
+      type: 'message.create',
+      turnId: 'turn-parts',
+    });
+    await (agent as any).runnerHandlers['message.part.tool-update']({
+      type: 'message.part.tool-update',
+      turnId: 'turn-parts',
+      callId: 'tool-1',
+      toolName: 'channel_reply',
+      status: 'completed',
+      result: { ok: true },
+    });
+    await (agent as any).runnerHandlers['message.finalize']({
+      type: 'message.finalize',
+      turnId: 'turn-parts',
+      reason: 'end_turn',
+      finalText: 'done',
+    });
+
+    const updates = broadcasts.filter((message) => message.type === 'message.updated');
+    expect(updates).not.toHaveLength(0);
+    for (const update of updates) {
+      const data = update.data as Record<string, unknown> | undefined;
+      expect(data?.threadId).toBe('thread-parts');
+    }
   });
 });

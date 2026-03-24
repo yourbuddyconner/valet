@@ -180,6 +180,14 @@ export class SessionState {
     this.set('parentThreadId', val || '');
   }
 
+  get currentThreadId(): string | undefined {
+    return this.get('currentThreadId') || undefined;
+  }
+
+  set currentThreadId(val: string | undefined) {
+    this.set('currentThreadId', val || '');
+  }
+
   // ─── Timing ───────────────────────────────────────────────────────
 
   get idleTimeoutMs(): number {
@@ -336,6 +344,7 @@ export class SessionState {
     this.initialPrompt = undefined;
     this.initialModel = undefined;
     this.parentThreadId = undefined;
+    this.currentThreadId = undefined;
 
     // Set optional fields
     if (params.sandboxId) this.sandboxId = params.sandboxId;
@@ -349,6 +358,7 @@ export class SessionState {
     if (params.initialPrompt) this.initialPrompt = params.initialPrompt;
     if (params.initialModel) this.initialModel = params.initialModel;
     if (params.parentThreadId) this.parentThreadId = params.parentThreadId;
+    if (params.parentThreadId) this.currentThreadId = params.parentThreadId;
     if (params.channelFollowupIntervalMs !== undefined) this.channelFollowupIntervalMs = params.channelFollowupIntervalMs;
 
     // Initialize idle tracking

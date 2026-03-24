@@ -1348,6 +1348,7 @@ export class SessionAgentDO {
     // This ensures all messages targeting the same orchestrator thread converge on
     // a single OpenCode session so the agent sees the full conversation.
     if (threadId) {
+      this.sessionState.currentThreadId = threadId;
       channelType = 'thread';
       channelId = threadId;
     }
@@ -2019,6 +2020,9 @@ export class SessionAgentDO {
         let resolvedThreadId = msg.threadId || undefined;
         if (!resolvedThreadId) {
           resolvedThreadId = this.promptQueue.getProcessingThreadId() || undefined;
+        }
+        if (!resolvedThreadId) {
+          resolvedThreadId = this.sessionState.currentThreadId;
         }
         console.log(`[SessionAgentDO] V2 message.create: turnId=${turnId} threadId=${resolvedThreadId || 'none'}`);
         this.messageStore.createTurn(turnId, {
@@ -3904,6 +3908,9 @@ export class SessionAgentDO {
     const queueThreadId = prompt.threadId || undefined;
     const queueReplyChannelType = prompt.replyChannelType || undefined;
     const queueReplyChannelId = prompt.replyChannelId || undefined;
+    if (queueThreadId) {
+      this.sessionState.currentThreadId = queueThreadId;
+    }
     this.channelRouter.clearActiveChannel();
     if (queueReplyChannelType && queueReplyChannelId) {
       this.channelRouter.setActiveChannel({ channelType: queueReplyChannelType, channelId: queueReplyChannelId });
