@@ -2124,12 +2124,6 @@ export class SessionAgentDO {
             ...(final.metadata.threadId ? { threadId: final.metadata.threadId } : {}),
           },
         });
-        // Track result content for auto channel reply.
-        // For error-only turns with no text content, use the error message.
-        const replyContent = final.content || (msg.reason === 'error' && msg.error ? `Error: ${msg.error}` : '');
-        if (replyContent) {
-          this.channelRouter.setResult(replyContent, turnId);
-        }
         // Increment thread message count for assistant message
         if (final.metadata.threadId) {
           this.ctx.waitUntil(this.incrementAndMaybeSummarize(final.metadata.threadId));
