@@ -158,6 +158,9 @@ export interface ChannelTransport {
 
   /** Update a previously sent interactive prompt with resolution status. */
   updateInteractivePrompt?(target: ChannelTarget, ref: InteractivePromptRef, resolution: InteractiveResolution, ctx: ChannelContext): Promise<void>;
+
+  /** Parse a composite channelId into a ChannelTarget. Transports with encoded IDs (e.g. Slack channel:thread_ts) implement this. */
+  parseTarget?(channelId: string): ChannelTarget;
 }
 
 // ─── Integration Provider (re-exported from integrations module) ─────────────

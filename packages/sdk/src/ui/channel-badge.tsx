@@ -1,6 +1,6 @@
 import type { JSX } from 'react';
 import { getChannelMeta } from '../meta.js';
-import { getChannelIcon, SendIcon } from './icons.js';
+import { getChannelIcon } from './icons.js';
 
 interface ChannelBadgeProps {
   channelType: string;
@@ -15,19 +15,6 @@ export function ChannelBadge({ channelType, className }: ChannelBadgeProps): JSX
     <span className={className ?? 'inline-flex items-center gap-1 rounded-full bg-blue-500/10 px-1.5 py-0.5 font-mono text-[9px] font-medium text-blue-500 dark:bg-blue-500/15 dark:text-blue-400'}>
       <Icon className="h-2.5 w-2.5" />
       via {meta.displayName.toLowerCase()}
-    </span>
-  );
-}
-
-/** Badge showing that an assistant message was sent to a channel. */
-export function ChannelSentBadge({ channelType, className }: ChannelBadgeProps): JSX.Element {
-  const meta = getChannelMeta(channelType);
-  const Icon = getChannelIcon(meta.iconId);
-  return (
-    <span className={className ?? 'inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-1.5 py-0.5 font-mono text-[9px] font-medium text-emerald-600 dark:bg-emerald-500/15 dark:text-emerald-400'}>
-      <Icon className="h-2.5 w-2.5" />
-      <SendIcon className="h-2 w-2" />
-      sent to {meta.displayName.toLowerCase()}
     </span>
   );
 }

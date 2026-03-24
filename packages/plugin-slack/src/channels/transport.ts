@@ -347,6 +347,19 @@ export class SlackTransport implements ChannelTransport {
     return markdownToSlackMrkdwn(markdown);
   }
 
+  parseTarget(channelId: string): ChannelTarget {
+    const colonIndex = channelId.indexOf(':');
+    if (colonIndex === -1) {
+      return { channelType: 'slack', channelId };
+    }
+
+    return {
+      channelType: 'slack',
+      channelId: channelId.slice(0, colonIndex),
+      threadId: channelId.slice(colonIndex + 1),
+    };
+  }
+
   /** Upload a file to Slack via the v2 upload API. */
   private async uploadFile(
     target: ChannelTarget,
@@ -419,6 +432,13 @@ export class SlackTransport implements ChannelTransport {
     message: OutboundMessage,
     ctx: ChannelContext,
   ): Promise<SendResult> {
+    const clearShimmerIfNeeded = async (): Promise<void> => {
+      if (!target.threadId) return;
+      await this.setThreadStatus(target, '', ctx).catch((error) => {
+        console.warn('[SlackTransport] Failed to clear shimmer after send:', error);
+      });
+    };
+
     // Upload file attachments first
     if (message.attachments && message.attachments.length > 0) {
       for (const attachment of message.attachments) {
@@ -431,7 +451,10 @@ export class SlackTransport implements ChannelTransport {
 
     // Send text message (or return early if attachment-only)
     const text = message.markdown || message.text || '';
-    if (!text) return { success: true };
+    if (!text) {
+      await clearShimmerIfNeeded();
+      return { success: true };
+    }
 
     const formatted = this.formatMarkdown(text);
 
@@ -471,6 +494,8 @@ export class SlackTransport implements ChannelTransport {
     if (!result.ok) {
       return { success: false, error: `Slack chat.postMessage error: ${result.error}` };
     }
+
+    await clearShimmerIfNeeded();
 
     return { success: true, messageId: result.ts };
   }

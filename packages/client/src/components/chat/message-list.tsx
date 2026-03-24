@@ -10,7 +10,6 @@ import { useDrawer } from '@/routes/sessions/$sessionId';
 import type { ChildSessionEvent, ConnectedUser } from '@/hooks/use-chat';
 import type { ChildSessionSummary } from '@/api/types';
 import { MessageCopyButton } from './message-copy-button';
-import { ChannelSentBadge } from '@valet/sdk/ui';
 
 type AgentStatus = 'idle' | 'thinking' | 'tool_calling' | 'streaming' | 'error' | 'queued';
 
@@ -181,8 +180,6 @@ function AssistantTurn({ message }: { message: Message }) {
     .filter(Boolean)
     .join('\n\n');
 
-  const sentToChannel = message.channelType ? message : undefined;
-
   return (
     <div className="group relative flex gap-3 py-3 animate-fade-in">
       <div className="flex h-5 w-5 shrink-0 items-center justify-center rounded-md bg-accent/8 text-accent mt-0.5">
@@ -200,7 +197,6 @@ function AssistantTurn({ message }: { message: Message }) {
           {copyText.length > 0 && (
             <MessageCopyButton text={copyText} className="text-[10px]" />
           )}
-          {sentToChannel && <ChannelSentBadge channelType={sentToChannel.channelType!} />}
         </div>
 
         <div className="space-y-1.5 border-l-[1.5px] border-accent/15 pl-3 dark:border-accent/10">

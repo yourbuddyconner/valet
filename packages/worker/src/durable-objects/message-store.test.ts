@@ -158,7 +158,6 @@ function createStatefulMockSql(opts?: {
       // Handle UPDATE messages
       if (query.startsWith('UPDATE messages')) {
         if (query.includes('channel_type = ?') && query.includes('channel_id = ?') && query.includes('seq = ?')) {
-          // stampChannelDelivery
           const channelType = params[0] as string;
           const channelId = params[1] as string;
           const seq = params[2] as number;
@@ -745,24 +744,7 @@ describe('MessageStore', () => {
     });
   });
 
-  describe('Task 3: stampChannelDelivery + Read Methods', () => {
-    it('stampChannelDelivery emits UPDATE with seq bump', () => {
-      const sql = createMockSql();
-      const store = new MessageStore(sql);
-
-      store.writeMessage({ id: 'msg-1', role: 'assistant', content: 'Reply' });
-      const callCountBefore = sql.calls.length;
-
-      const seq = store.stampChannelDelivery('msg-1', 'slack', 'C456');
-      expect(seq).toBe(2); // writeMessage used seq 1
-
-      const updateCalls = sql.calls.slice(callCountBefore).filter((c) =>
-        c.query.includes('UPDATE messages'),
-      );
-      expect(updateCalls.length).toBe(1);
-      expect(updateCalls[0].params).toEqual(['slack', 'C456', 2, 'msg-1']);
-    });
-
+  describe('Task 3: Read Methods', () => {
     it('getMessage returns a MessageRow for existing message', () => {
       const sql = createStatefulMockSql();
       const store = new MessageStore(sql);
@@ -925,14 +907,12 @@ describe('MessageStore', () => {
       const s3 = store.updateToolCall('t1', 'c1', 'tool', 'running')!;
       store.finalizeTurn('t1', 'done');
       const s5 = store.writeMessage({ id: 'm2', role: 'system', content: 'b' });
-      const s6 = store.stampChannelDelivery('m1', 'slack', 'C1');
 
       expect(s1).toBe(1);
       expect(s2).toBe(2);
       expect(s3).toBe(3);
       // finalizeTurn returns snapshot, not seq directly — but it bumped seq
       expect(s5).toBe(5);
-      expect(s6).toBe(6);
     });
   });
 

@@ -281,8 +281,8 @@ export class PromptQueue {
   }
 
   /**
-   * Get channel context from the processing entry.
-   * Used for hibernation recovery of channel reply state.
+   * Get external channel context from the processing entry.
+   * Used for hibernation recovery of active external-channel state.
    * Prefers reply_channel_type/reply_channel_id over channel_type/channel_id.
    */
   getProcessingChannelContext(): { channelType: string; channelId: string } | null {
@@ -294,6 +294,7 @@ export class PromptQueue {
     const channelType = (rows[0].reply_channel_type as string) || (rows[0].channel_type as string) || null;
     const channelId = (rows[0].reply_channel_id as string) || (rows[0].channel_id as string) || null;
     if (!channelType || !channelId) return null;
+    if (channelType === 'web' || channelType === 'thread') return null;
 
     return { channelType, channelId };
   }

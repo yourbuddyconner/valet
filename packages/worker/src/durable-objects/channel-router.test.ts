@@ -1,271 +1,305 @@
-import { describe, it, expect, beforeEach } from 'vitest';
-import { ChannelRouter, type ReplyIntent } from './channel-router.js';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { InteractivePrompt, InteractiveResolution } from '@valet/sdk';
+import { ChannelRouter, type ChannelRouterDeps } from './channel-router.js';
+
+function mockDeps(overrides?: Partial<ChannelRouterDeps>): ChannelRouterDeps {
+  return {
+    resolveToken: vi.fn().mockResolvedValue('mock-token'),
+    resolvePersona: vi.fn().mockResolvedValue(undefined),
+    onReplySent: vi.fn().mockResolvedValue(undefined),
+    ...overrides,
+  };
+}
+
+const mockTransport = {
+  channelType: 'slack',
+  sendMessage: vi.fn().mockResolvedValue({ success: true, messageId: 'ts123' }),
+  sendInteractivePrompt: vi.fn().mockResolvedValue({ channelId: 'C123', messageId: 'msg1' }),
+  updateInteractivePrompt: vi.fn().mockResolvedValue(undefined),
+  parseTarget: vi.fn((channelId: string) => {
+    if (channelId.includes(':')) {
+      const idx = channelId.indexOf(':');
+      return {
+        channelType: 'slack',
+        channelId: channelId.slice(0, idx),
+        threadId: channelId.slice(idx + 1),
+      };
+    }
+    return { channelType: 'slack', channelId };
+  }),
+};
+
+vi.mock('../channels/registry.js', () => ({
+  channelRegistry: {
+    getTransport: vi.fn((type: string) => (type === 'slack' ? mockTransport : null)),
+  },
+}));
 
 describe('ChannelRouter', () => {
   let router: ChannelRouter;
+  let deps: ChannelRouterDeps;
 
   beforeEach(() => {
-    router = new ChannelRouter();
+    vi.clearAllMocks();
+    deps = mockDeps();
+    router = new ChannelRouter(deps);
   });
 
-  // ── trackReply ──────────────────────────────────────────────────────────
-
-  describe('trackReply', () => {
-    it('starts with no pending reply', () => {
-      expect(router.hasPending).toBe(false);
-      expect(router.pendingSnapshot).toBeNull();
+  describe('activeChannel', () => {
+    it('returns null initially', () => {
+      expect(router.activeChannel).toBeNull();
     });
 
-    it('tracks a reply target', () => {
-      router.trackReply({ channelType: 'slack', channelId: 'C123:thread_ts' });
+    it('returns channel after setActiveChannel', () => {
+      router.setActiveChannel({ channelType: 'slack', channelId: 'C123' });
+      expect(router.activeChannel).toEqual({ channelType: 'slack', channelId: 'C123' });
+    });
 
-      expect(router.hasPending).toBe(true);
-      expect(router.pendingSnapshot).toEqual({
+    it('atomically replaces previous value', () => {
+      router.setActiveChannel({ channelType: 'slack', channelId: 'C123' });
+      router.setActiveChannel({ channelType: 'telegram', channelId: 'T456' });
+      expect(router.activeChannel).toEqual({ channelType: 'telegram', channelId: 'T456' });
+    });
+
+    it('returns null after clearActiveChannel', () => {
+      router.setActiveChannel({ channelType: 'slack', channelId: 'C123' });
+      router.clearActiveChannel();
+      expect(router.activeChannel).toBeNull();
+    });
+
+    it('recovers from hibernation', () => {
+      router.recoverActiveChannel('slack', 'C123');
+      expect(router.activeChannel).toEqual({ channelType: 'slack', channelId: 'C123' });
+    });
+  });
+
+  describe('sendReply', () => {
+    it('resolves transport, token, persona and sends', async () => {
+      const result = await router.sendReply({
+        userId: 'u1',
         channelType: 'slack',
-        channelId: 'C123:thread_ts',
-        resultContent: null,
-        resultMessageId: null,
-        handled: false,
+        channelId: 'C123:1234.5678',
+        message: 'hello',
       });
+
+      expect(result).toEqual({ success: true });
+      expect(deps.resolveToken).toHaveBeenCalledWith('slack', 'u1');
+      expect(deps.resolvePersona).toHaveBeenCalledWith('u1');
+      expect(mockTransport.parseTarget).toHaveBeenCalledWith('C123:1234.5678');
+      expect(mockTransport.sendMessage).toHaveBeenCalledWith(
+        { channelType: 'slack', channelId: 'C123', threadId: '1234.5678' },
+        { markdown: 'hello' },
+        expect.objectContaining({ token: 'mock-token', userId: 'u1' }),
+      );
     });
 
-    it('overwrites previous tracking on new prompt', () => {
-      router.trackReply({ channelType: 'slack', channelId: 'C123:t1' });
-      router.trackReply({ channelType: 'telegram', channelId: 'chat_456' });
-
-      expect(router.pendingSnapshot?.channelType).toBe('telegram');
-      expect(router.pendingSnapshot?.channelId).toBe('chat_456');
-    });
-  });
-
-  // ── setResult ───────────────────────────────────────────────────────────
-
-  describe('setResult', () => {
-    it('attaches result content to pending reply', () => {
-      router.trackReply({ channelType: 'slack', channelId: 'C123:t1' });
-      router.setResult('Hello from the agent', 'msg-001');
-
-      expect(router.pendingSnapshot?.resultContent).toBe('Hello from the agent');
-      expect(router.pendingSnapshot?.resultMessageId).toBe('msg-001');
-    });
-
-    it('no-ops when no pending reply', () => {
-      router.setResult('Hello', 'msg-001');
-      expect(router.hasPending).toBe(false);
-    });
-
-    it('no-ops when pending reply is already handled', () => {
-      router.trackReply({ channelType: 'slack', channelId: 'C123:t1' });
-      router.markHandled('slack', 'C123:t1');
-      router.setResult('Hello', 'msg-001');
-
-      expect(router.pendingSnapshot?.resultContent).toBeNull();
-    });
-
-    it('overwrites previous result on subsequent finalize', () => {
-      router.trackReply({ channelType: 'slack', channelId: 'C123:t1' });
-      router.setResult('First attempt', 'msg-001');
-      router.setResult('Second attempt', 'msg-002');
-
-      expect(router.pendingSnapshot?.resultContent).toBe('Second attempt');
-      expect(router.pendingSnapshot?.resultMessageId).toBe('msg-002');
-    });
-  });
-
-  // ── markHandled ─────────────────────────────────────────────────────────
-
-  describe('markHandled', () => {
-    it('marks matching channel as handled', () => {
-      router.trackReply({ channelType: 'slack', channelId: 'C123:t1' });
-      router.markHandled('slack', 'C123:t1');
-
-      expect(router.pendingSnapshot?.handled).toBe(true);
-    });
-
-    it('does not mark if channel does not match', () => {
-      router.trackReply({ channelType: 'slack', channelId: 'C123:t1' });
-      router.markHandled('slack', 'C999:t2');
-
-      expect(router.pendingSnapshot?.handled).toBe(false);
-    });
-
-    it('does not mark if channel type does not match', () => {
-      router.trackReply({ channelType: 'slack', channelId: 'C123:t1' });
-      router.markHandled('telegram', 'C123:t1');
-
-      expect(router.pendingSnapshot?.handled).toBe(false);
-    });
-
-    it('no-ops when no pending reply', () => {
-      // Should not throw
-      router.markHandled('slack', 'C123:t1');
-      expect(router.hasPending).toBe(false);
-    });
-  });
-
-  // ── consumePendingReply ─────────────────────────────────────────────────
-
-  describe('consumePendingReply', () => {
-    it('returns reply intent when result is set and not handled', () => {
-      router.trackReply({ channelType: 'slack', channelId: 'C123:t1' });
-      router.setResult('Agent response', 'msg-001');
-
-      const intent = router.consumePendingReply();
-
-      expect(intent).toEqual({
+    it('calls onReplySent on success when followUp is not false', async () => {
+      await router.sendReply({
+        userId: 'u1',
         channelType: 'slack',
-        channelId: 'C123:t1',
-        content: 'Agent response',
-        messageId: 'msg-001',
-      } satisfies ReplyIntent);
+        channelId: 'C123',
+        message: 'hi',
+      });
+
+      expect(deps.onReplySent).toHaveBeenCalledWith('slack', 'C123');
     });
 
-    it('clears state after consumption', () => {
-      router.trackReply({ channelType: 'slack', channelId: 'C123:t1' });
-      router.setResult('Agent response', 'msg-001');
-
-      router.consumePendingReply();
-
-      expect(router.hasPending).toBe(false);
-      expect(router.consumePendingReply()).toBeNull();
-    });
-
-    it('returns null when no pending reply', () => {
-      expect(router.consumePendingReply()).toBeNull();
-    });
-
-    it('returns null when pending reply was handled', () => {
-      router.trackReply({ channelType: 'slack', channelId: 'C123:t1' });
-      router.setResult('Agent response', 'msg-001');
-      router.markHandled('slack', 'C123:t1');
-
-      expect(router.consumePendingReply()).toBeNull();
-    });
-
-    it('returns null when no result content was set', () => {
-      router.trackReply({ channelType: 'slack', channelId: 'C123:t1' });
-
-      expect(router.consumePendingReply()).toBeNull();
-    });
-
-    it('clears state even when returning null', () => {
-      router.trackReply({ channelType: 'slack', channelId: 'C123:t1' });
-
-      router.consumePendingReply();
-
-      expect(router.hasPending).toBe(false);
-    });
-  });
-
-  // ── recover ─────────────────────────────────────────────────────────────
-
-  describe('recover', () => {
-    it('rehydrates pending state from prompt_queue data', () => {
-      router.recover('slack', 'C123:t1');
-
-      expect(router.hasPending).toBe(true);
-      expect(router.pendingSnapshot).toEqual({
+    it('does not call onReplySent when followUp is false', async () => {
+      await router.sendReply({
+        userId: 'u1',
         channelType: 'slack',
-        channelId: 'C123:t1',
-        resultContent: null,
-        resultMessageId: null,
-        handled: false,
+        channelId: 'C123',
+        message: 'hi',
+        followUp: false,
       });
+
+      expect(deps.onReplySent).not.toHaveBeenCalled();
     });
 
-    it('allows setting result after recovery', () => {
-      router.recover('slack', 'C123:t1');
-      router.setResult('Recovered response', 'msg-recovered');
+    it('returns error for unknown channel type', async () => {
+      const result = await router.sendReply({
+        userId: 'u1',
+        channelType: 'unknown',
+        channelId: 'X',
+        message: 'hi',
+      });
 
-      const intent = router.consumePendingReply();
-      expect(intent).toEqual({
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('Unsupported channel type');
+    });
+
+    it('returns error when no token available', async () => {
+      deps = mockDeps({ resolveToken: vi.fn().mockResolvedValue(undefined) });
+      router = new ChannelRouter(deps);
+
+      const result = await router.sendReply({
+        userId: 'u1',
         channelType: 'slack',
-        channelId: 'C123:t1',
-        content: 'Recovered response',
-        messageId: 'msg-recovered',
+        channelId: 'C123',
+        message: 'hi',
       });
-    });
-  });
 
-  // ── clear ───────────────────────────────────────────────────────────────
-
-  describe('clear', () => {
-    it('resets all state', () => {
-      router.trackReply({ channelType: 'slack', channelId: 'C123:t1' });
-      router.setResult('Hello', 'msg-001');
-
-      router.clear();
-
-      expect(router.hasPending).toBe(false);
-      expect(router.consumePendingReply()).toBeNull();
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('No');
     });
 
-    it('no-ops when already empty', () => {
-      router.clear();
-      expect(router.hasPending).toBe(false);
-    });
-  });
+    it('returns error when resolveToken throws', async () => {
+      deps = mockDeps({ resolveToken: vi.fn().mockRejectedValue(new Error('boom')) });
+      router = new ChannelRouter(deps);
 
-  // ── pendingSnapshot immutability ────────────────────────────────────────
-
-  describe('pendingSnapshot', () => {
-    it('returns a copy, not the internal state', () => {
-      router.trackReply({ channelType: 'slack', channelId: 'C123:t1' });
-
-      const snapshot = router.pendingSnapshot!;
-      // Use Object.assign to bypass Readonly for this mutation test
-      Object.assign(snapshot, { handled: true, resultContent: 'tampered' });
-
-      // Internal state should be unaffected
-      expect(router.pendingSnapshot?.handled).toBe(false);
-      expect(router.pendingSnapshot?.resultContent).toBeNull();
-    });
-  });
-
-  // ── Full lifecycle ──────────────────────────────────────────────────────
-
-  describe('full lifecycle', () => {
-    it('happy path: track → setResult → consume', () => {
-      router.trackReply({ channelType: 'slack', channelId: 'C123:t1' });
-      router.setResult('The answer is 42', 'msg-final');
-
-      const intent = router.consumePendingReply();
-      expect(intent).not.toBeNull();
-      expect(intent!.content).toBe('The answer is 42');
-      expect(router.hasPending).toBe(false);
-    });
-
-    it('explicit reply path: track → markHandled → consume returns null', () => {
-      router.trackReply({ channelType: 'slack', channelId: 'C123:t1' });
-      router.setResult('The answer is 42', 'msg-final');
-      router.markHandled('slack', 'C123:t1');
-
-      expect(router.consumePendingReply()).toBeNull();
-    });
-
-    it('dispatch failure path: track → clear', () => {
-      router.trackReply({ channelType: 'slack', channelId: 'C123:t1' });
-      router.clear();
-
-      expect(router.consumePendingReply()).toBeNull();
-    });
-
-    it('hibernation recovery path: recover → setResult → consume', () => {
-      router.recover('telegram', 'chat_789');
-      router.setResult('Post-hibernation response', 'msg-wake');
-
-      const intent = router.consumePendingReply();
-      expect(intent).toEqual({
-        channelType: 'telegram',
-        channelId: 'chat_789',
-        content: 'Post-hibernation response',
-        messageId: 'msg-wake',
+      const result = await router.sendReply({
+        userId: 'u1',
+        channelType: 'slack',
+        channelId: 'C123',
+        message: 'hi',
       });
+
+      expect(result).toEqual({ success: false, error: 'boom' });
     });
 
-    it('web UI prompt (no channel): never tracks, consume returns null', () => {
-      // DO simply never calls trackReply for web prompts
-      expect(router.consumePendingReply()).toBeNull();
+    it('builds outbound with file attachment', async () => {
+      await router.sendReply({
+        userId: 'u1',
+        channelType: 'slack',
+        channelId: 'C123',
+        message: 'see file',
+        fileBase64: 'abc123',
+        fileMimeType: 'application/pdf',
+        fileName: 'doc.pdf',
+      });
+
+      const outbound = mockTransport.sendMessage.mock.calls[0][1];
+      expect(outbound.attachments).toHaveLength(1);
+      expect(outbound.attachments[0].type).toBe('file');
+      expect(outbound.attachments[0].fileName).toBe('doc.pdf');
+    });
+
+    it('normalizes legacy imageBase64 to file attachment', async () => {
+      await router.sendReply({
+        userId: 'u1',
+        channelType: 'slack',
+        channelId: 'C123',
+        message: 'see image',
+        imageBase64: 'img123',
+        imageMimeType: 'image/png',
+      });
+
+      const outbound = mockTransport.sendMessage.mock.calls[0][1];
+      expect(outbound.attachments).toHaveLength(1);
+      expect(outbound.attachments[0].type).toBe('image');
+    });
+
+    it('sends successfully even if resolvePersona throws', async () => {
+      deps = mockDeps({ resolvePersona: vi.fn().mockRejectedValue(new Error('no slack')) });
+      router = new ChannelRouter(deps);
+
+      const result = await router.sendReply({
+        userId: 'u1',
+        channelType: 'slack',
+        channelId: 'C123',
+        message: 'hi',
+      });
+
+      expect(result).toEqual({ success: true });
+      expect(mockTransport.sendMessage).toHaveBeenCalled();
+    });
+
+    it('prefers fileBase64 over imageBase64', async () => {
+      await router.sendReply({
+        userId: 'u1',
+        channelType: 'slack',
+        channelId: 'C123',
+        message: 'both',
+        fileBase64: 'file',
+        fileMimeType: 'application/pdf',
+        imageBase64: 'img',
+        imageMimeType: 'image/png',
+      });
+
+      const outbound = mockTransport.sendMessage.mock.calls[0][1];
+      expect(outbound.attachments).toHaveLength(1);
+      expect(outbound.attachments[0].mimeType).toBe('application/pdf');
+    });
+
+    it('still succeeds if onReplySent throws after the message is sent', async () => {
+      deps = mockDeps({ onReplySent: vi.fn().mockRejectedValue(new Error('side effect failed')) });
+      router = new ChannelRouter(deps);
+
+      const result = await router.sendReply({
+        userId: 'u1',
+        channelType: 'slack',
+        channelId: 'C123',
+        message: 'hi',
+      });
+
+      expect(result).toEqual({ success: true });
+      expect(mockTransport.sendMessage).toHaveBeenCalledTimes(1);
+      expect(deps.onReplySent).toHaveBeenCalledWith('slack', 'C123');
+    });
+  });
+
+  describe('sendInteractivePrompt', () => {
+    it('dispatches to each target and returns refs with channelType', async () => {
+      const prompt: InteractivePrompt = {
+        id: 'p1',
+        sessionId: 's1',
+        type: 'approval',
+        title: 'ok?',
+        actions: [],
+      };
+
+      const refs = await router.sendInteractivePrompt({
+        userId: 'u1',
+        targets: [{ channelType: 'slack', channelId: 'C123:ts' }],
+        prompt,
+      });
+
+      expect(refs).toHaveLength(1);
+      expect(refs[0].channelType).toBe('slack');
+      expect(refs[0].ref).toEqual({ channelId: 'C123', messageId: 'msg1' });
+    });
+
+    it('skips targets with no transport', async () => {
+      const prompt: InteractivePrompt = {
+        id: 'p1',
+        sessionId: 's1',
+        type: 'approval',
+        title: 'ok?',
+        actions: [],
+      };
+
+      const refs = await router.sendInteractivePrompt({
+        userId: 'u1',
+        targets: [{ channelType: 'unknown', channelId: 'X' }],
+        prompt,
+      });
+
+      expect(refs).toHaveLength(0);
+    });
+  });
+
+  describe('updateInteractivePrompt', () => {
+    it('dispatches update to each ref', async () => {
+      const resolution: InteractiveResolution = { actionId: 'approve', resolvedBy: 'user' };
+
+      await router.updateInteractivePrompt({
+        userId: 'u1',
+        refs: [{ channelType: 'slack', ref: { channelId: 'C123', messageId: 'msg1' } }],
+        resolution,
+      });
+
+      expect(mockTransport.updateInteractivePrompt).toHaveBeenCalledTimes(1);
+    });
+
+    it('swallows errors per-ref', async () => {
+      mockTransport.updateInteractivePrompt.mockRejectedValueOnce(new Error('fail'));
+      const resolution: InteractiveResolution = { actionId: 'approve', resolvedBy: 'user' };
+
+      await router.updateInteractivePrompt({
+        userId: 'u1',
+        refs: [{ channelType: 'slack', ref: { channelId: 'C123', messageId: 'msg1' } }],
+        resolution,
+      });
     });
   });
 });

@@ -18,7 +18,7 @@ describe('SlackTransport', () => {
 
   beforeEach(() => {
     transport = new SlackTransport();
-    vi.clearAllMocks();
+    mockFetch.mockReset();
   });
 
   // ─── Properties ────────────────────────────────────────────────────
@@ -75,6 +75,27 @@ describe('SlackTransport', () => {
   it('delegates to markdownToSlackMrkdwn', () => {
     const result = transport.formatMarkdown('**bold**');
     expect(result).toBe('*bold*');
+  });
+
+  // ─── parseTarget ──────────────────────────────────────────────────
+
+  describe('parseTarget', () => {
+    it('splits composite channel:thread_ts into channelId and threadId', () => {
+      const result = transport.parseTarget('C123ABC:1234567890.123456');
+      expect(result).toEqual({
+        channelType: 'slack',
+        channelId: 'C123ABC',
+        threadId: '1234567890.123456',
+      });
+    });
+
+    it('returns bare channelId when no colon present', () => {
+      const result = transport.parseTarget('C123ABC');
+      expect(result).toEqual({
+        channelType: 'slack',
+        channelId: 'C123ABC',
+      });
+    });
   });
 
   // ─── parseInbound ─────────────────────────────────────────────────
@@ -661,6 +682,9 @@ describe('SlackTransport', () => {
       mockFetch.mockResolvedValueOnce(
         jsonResponse({ ok: true, ts: '1234567891.000000' })
       );
+      mockFetch.mockResolvedValueOnce(
+        jsonResponse({ ok: true })
+      );
 
       const threadTarget: ChannelTarget = {
         channelType: 'slack',
@@ -672,6 +696,44 @@ describe('SlackTransport', () => {
 
       const body = JSON.parse(mockFetch.mock.calls[0][1].body);
       expect(body.thread_ts).toBe('1234567890.123456');
+    });
+
+    it('clears shimmer after successful threaded sendMessage', async () => {
+      const threadTarget: ChannelTarget = {
+        channelType: 'slack',
+        channelId: 'C456',
+        threadId: '1234567890.123456',
+      };
+
+      mockFetch.mockResolvedValueOnce(
+        jsonResponse({ ok: true, ts: '1234567891.000000' })
+      );
+      mockFetch.mockResolvedValueOnce(
+        jsonResponse({ ok: true })
+      );
+
+      const result = await transport.sendMessage(threadTarget, { text: 'threaded reply' }, ctx);
+
+      expect(result.success).toBe(true);
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+
+      const shimmerCall = mockFetch.mock.calls[1];
+      expect(shimmerCall[0]).toBe('https://slack.com/api/assistant.threads.setStatus');
+      const shimmerBody = JSON.parse(shimmerCall[1].body);
+      expect(shimmerBody.channel_id).toBe('C456');
+      expect(shimmerBody.thread_ts).toBe('1234567890.123456');
+      expect(shimmerBody.status).toBe('');
+    });
+
+    it('does not clear shimmer for non-threaded sendMessage', async () => {
+      mockFetch.mockResolvedValueOnce(
+        jsonResponse({ ok: true, ts: '1234567891.000000' })
+      );
+
+      const result = await transport.sendMessage(target, { text: 'plain text' }, ctx);
+
+      expect(result.success).toBe(true);
+      expect(mockFetch).toHaveBeenCalledTimes(1);
     });
 
     it('returns error on API failure', async () => {
@@ -718,6 +780,8 @@ describe('SlackTransport', () => {
       mockFetch.mockResolvedValueOnce(new Response('OK', { status: 200 }));
       // 3. files.completeUploadExternal response
       mockFetch.mockResolvedValueOnce(jsonResponse({ ok: true }));
+      // 4. shimmer clear for threaded attachment-only send
+      mockFetch.mockResolvedValueOnce(jsonResponse({ ok: true }));
 
       const target: ChannelTarget = { channelType: 'slack', channelId: 'C456', threadId: '111.222' };
 
@@ -735,7 +799,7 @@ describe('SlackTransport', () => {
       );
 
       expect(result.success).toBe(true);
-      expect(mockFetch).toHaveBeenCalledTimes(3);
+      expect(mockFetch).toHaveBeenCalledTimes(4);
 
       // Verify getUploadURLExternal call
       const [url1, opts1] = mockFetch.mock.calls[0];
@@ -756,6 +820,13 @@ describe('SlackTransport', () => {
       expect(body3.files).toEqual([{ id: 'F_UPLOAD_1' }]);
       expect(body3.channel_id).toBe('C456');
       expect(body3.thread_ts).toBe('111.222');
+
+      const [url4, opts4] = mockFetch.mock.calls[3];
+      expect(url4).toBe('https://slack.com/api/assistant.threads.setStatus');
+      const body4 = JSON.parse(opts4.body);
+      expect(body4.channel_id).toBe('C456');
+      expect(body4.thread_ts).toBe('111.222');
+      expect(body4.status).toBe('');
     });
 
     it('sends text alongside file attachment as separate message', async () => {
@@ -765,8 +836,11 @@ describe('SlackTransport', () => {
       );
       mockFetch.mockResolvedValueOnce(new Response('OK', { status: 200 }));
       mockFetch.mockResolvedValueOnce(jsonResponse({ ok: true }));
+      mockFetch.mockResolvedValueOnce(jsonResponse({ ok: true }));
       // chat.postMessage for text
       mockFetch.mockResolvedValueOnce(jsonResponse({ ok: true, ts: '111.333' }));
+      // shimmer clear
+      mockFetch.mockResolvedValueOnce(jsonResponse({ ok: true }));
 
       const result = await transport.sendMessage(
         { channelType: 'slack', channelId: 'C456', threadId: '111.222' },
@@ -783,10 +857,40 @@ describe('SlackTransport', () => {
       );
 
       expect(result.success).toBe(true);
-      // 3 for upload + 1 for text
-      expect(mockFetch).toHaveBeenCalledTimes(4);
+      // 3 for upload + 1 for text + 1 for shimmer clear
+      expect(mockFetch).toHaveBeenCalledTimes(5);
       const [textUrl] = mockFetch.mock.calls[3];
       expect(textUrl).toBe('https://slack.com/api/chat.postMessage');
+    });
+
+    it('clears shimmer after successful threaded attachment-only sendMessage', async () => {
+      const setThreadStatusSpy = vi.spyOn(transport, 'setThreadStatus').mockResolvedValue(true);
+      mockFetch.mockResolvedValueOnce(
+        jsonResponse({ ok: true, upload_url: 'https://upload.example.com', file_id: 'F1' }),
+      );
+      mockFetch.mockResolvedValueOnce(new Response('OK', { status: 200 }));
+      mockFetch.mockResolvedValueOnce(jsonResponse({ ok: true }));
+
+      const result = await transport.sendMessage(
+        { channelType: 'slack', channelId: 'C456', threadId: '111.222' },
+        {
+          attachments: [{
+            type: 'file' as const,
+            url: 'data:application/pdf;base64,JVBERi0=',
+            mimeType: 'application/pdf',
+            fileName: 'report.pdf',
+          }],
+        },
+        ctx,
+      );
+
+      expect(result.success).toBe(true);
+      expect(mockFetch).toHaveBeenCalledTimes(3);
+      expect(setThreadStatusSpy).toHaveBeenCalledWith(
+        { channelType: 'slack', channelId: 'C456', threadId: '111.222' },
+        '',
+        ctx,
+      );
     });
 
     it('returns error when file upload fails at getUploadURLExternal', async () => {
@@ -930,6 +1034,7 @@ describe('SlackTransport', () => {
       );
       mockFetch.mockResolvedValueOnce(new Response('OK', { status: 200 }));
       mockFetch.mockResolvedValueOnce(jsonResponse({ ok: true }));
+      mockFetch.mockResolvedValueOnce(jsonResponse({ ok: true }));
 
       const target: ChannelTarget = { channelType: 'slack', channelId: 'C456', threadId: '1234567890.123456' };
       const ctx: ChannelContext = { token: 'xoxb-test', userId: 'u1' };
@@ -944,8 +1049,8 @@ describe('SlackTransport', () => {
       }, ctx);
 
       expect(result.success).toBe(true);
-      // 1 for inbound download + 3 for outbound upload = 4 total
-      expect(mockFetch).toHaveBeenCalledTimes(4);
+      // 1 for inbound download + 3 for outbound upload + 1 shimmer clear
+      expect(mockFetch).toHaveBeenCalledTimes(5);
     });
   });
 

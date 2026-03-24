@@ -467,24 +467,6 @@ export class MessageStore {
     };
   }
 
-  // ─── Task 3: stampChannelDelivery + Read Methods ─────────────────────
-
-  /**
-   * Stamp a message with channel delivery metadata. Bumps seq so the change
-   * is picked up by the next D1 flush.
-   */
-  stampChannelDelivery(messageId: string, channelType: string, channelId: string): number {
-    const seq = this.bumpSeq();
-    this.sql.exec(
-      'UPDATE messages SET channel_type = ?, channel_id = ?, seq = ? WHERE id = ?',
-      channelType,
-      channelId,
-      seq,
-      messageId,
-    );
-    return seq;
-  }
-
   /** Read a single message by ID. */
   getMessage(id: string): MessageRow | null {
     const rows = this.sql.exec<MessageSqlRow>(
@@ -527,16 +509,6 @@ export class MessageStore {
 
     const rows = this.sql.exec<MessageSqlRow>(query, ...params).toArray();
     return rows.map((r) => this.rowToMessageRow(r));
-  }
-
-  /** Find the most recent assistant message for a given channel. Used for hibernation recovery. */
-  getLatestAssistantForChannel(channelType: string, channelId: string): { id: string; content: string } | null {
-    const rows = this.sql.exec<MessageSqlRow>(
-      `SELECT ${MESSAGE_COLUMNS} FROM messages WHERE role = 'assistant' AND channel_type = ? AND channel_id = ? ORDER BY created_at DESC LIMIT 1`,
-      channelType, channelId,
-    ).toArray();
-    if (rows.length === 0 || !rows[0].content) return null;
-    return { id: rows[0].id as string, content: rows[0].content as string };
   }
 
   /**
