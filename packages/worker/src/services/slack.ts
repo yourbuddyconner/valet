@@ -487,3 +487,105 @@ export async function verifySlackLink(
 
   return { ok: true, identityLink };
 }
+
+// ─── Reaction-Based Message Deletion ─────────────────────────────────────────
+
+export interface ReactionDeletionResult {
+  deleted: boolean;
+  reason?: string;
+}
+
+/**
+ * Handle a reaction_added event for message deletion.
+ * Fetches the reacted-to message, checks ownership metadata, deletes if authorized.
+ */
+export async function handleReactionDeletion(
+  botToken: string,
+  channel: string,
+  messageTs: string,
+  reactingSlackUserId: string,
+  env: Env,
+): Promise<ReactionDeletionResult> {
+  const appDb = getDb(env.DB);
+
+  // 1. Resolve reacting Slack user → Valet user
+  const valetUserId = await db.resolveUserByExternalId(appDb, 'slack', reactingSlackUserId);
+  if (!valetUserId) {
+    return { deleted: false, reason: 'not_valet_user' };
+  }
+
+  // 2. Fetch the message to read its metadata
+  const historyResp = await fetch(`${SLACK_API}/conversations.history`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json; charset=utf-8',
+      Authorization: `Bearer ${botToken}`,
+    },
+    body: JSON.stringify({
+      channel,
+      latest: messageTs,
+      limit: 1,
+      inclusive: true,
+    }),
+  });
+
+  if (!historyResp.ok) {
+    return { deleted: false, reason: 'history_fetch_failed' };
+  }
+
+  const historyData = (await historyResp.json()) as {
+    ok: boolean;
+    messages?: Array<{
+      ts: string;
+      metadata?: { event_type: string; event_payload: { userId?: string } };
+    }>;
+  };
+
+  if (!historyData.ok || !historyData.messages?.length) {
+    return { deleted: false, reason: 'message_not_found' };
+  }
+
+  const message = historyData.messages[0];
+
+  // 3. Check metadata ownership
+  if (message.metadata?.event_type !== 'valet_bot_message') {
+    return { deleted: false, reason: 'not_valet_message' };
+  }
+
+  const messageOwnerId = message.metadata.event_payload?.userId;
+  if (messageOwnerId !== valetUserId) {
+    return { deleted: false, reason: 'not_owner' };
+  }
+
+  // 4. Delete the message
+  const deleteResp = await fetch(`${SLACK_API}/chat.delete`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json; charset=utf-8',
+      Authorization: `Bearer ${botToken}`,
+    },
+    body: JSON.stringify({ channel, ts: messageTs }),
+  });
+
+  const deleteData = (await deleteResp.json()) as { ok: boolean; error?: string };
+  if (!deleteData.ok) {
+    console.error(`[Slack] chat.delete failed: ${deleteData.error}`);
+    return { deleted: false, reason: 'delete_failed' };
+  }
+
+  // 5. Send ephemeral confirmation
+  await fetch(`${SLACK_API}/chat.postEphemeral`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json; charset=utf-8',
+      Authorization: `Bearer ${botToken}`,
+    },
+    body: JSON.stringify({
+      channel,
+      user: reactingSlackUserId,
+      text: 'Message deleted.',
+    }),
+  });
+
+  return { deleted: true };
+}
