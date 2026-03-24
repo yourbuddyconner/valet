@@ -41,14 +41,14 @@ It is a **helper class scoped to one DO instance** — not a Durable Object, not
 interface ChannelRouterDeps {
   /** Resolve auth token for a channel. Implementation branches on channelType (Slack uses org-level bot token, others use per-user credentials). */
   resolveToken(channelType: string, userId: string): Promise<string | undefined>;
-  /** Resolve persona identity for Slack messages. */
+  /** Resolve persona identity for Slack messages. Must not throw — returns undefined if unavailable. */
   resolvePersona(userId: string): Promise<Persona | undefined>;
   /** Callback when a substantive reply is sent — DO uses this to resolve follow-up reminders. */
   onReplySent(channelType: string, channelId: string): void;
 }
 ```
 
-The `resolveToken` callback is implemented by the DO using `getSlackBotToken(env)` for Slack and `getCredential(env, 'user', userId, channelType)` for other channels. These imports stay on session-agent.ts.
+The `resolveToken` callback is implemented by the DO using `getSlackBotToken(env)` for Slack and `getCredential(env, 'user', userId, channelType)` for other channels. The `resolvePersona` callback wraps `resolveOrchestratorPersona(appDb, userId)` with a `.catch(() => undefined)` guard since persona resolution can throw when Slack isn't linked — a missing persona should degrade gracefully (send without persona), not fail the send. All three imports (`getSlackBotToken`, `getCredential`, `resolveOrchestratorPersona`) stay on session-agent.ts.
 
 #### Public API
 
@@ -57,9 +57,9 @@ The `resolveToken` callback is implemented by the DO using `getSlackBotToken(env
 | `setActiveChannel(channel)` | Track which channel the current prompt is associated with. Called at prompt dispatch. |
 | `clearActiveChannel()` | Clear on new prompt cycle or dispatch failure. |
 | `get activeChannel` | Current channel context. Used by agent status broadcasts, approvals, etc. |
-| `recoverActiveChannel(channelType, channelId)` | Restore tracking state after DO hibernation from prompt_queue data. |
+| `recoverActiveChannel(channelType, channelId)` | Restore tracking state after DO hibernation from prompt_queue data. Sets in-memory state so subsequent `activeChannel` reads return it without hitting SQLite again. |
 | `sendReply(opts): Promise<SendReplyResult>` | Explicit reply dispatch (text + optional file/image attachments). |
-| `sendInteractivePrompt(opts): Promise<InteractivePromptRef[]>` | Send an interactive prompt (e.g. approval) to one or more channel targets. |
+| `sendInteractivePrompt(opts): Promise<Array<{ channelType: string; ref: InteractivePromptRef }>>` | Send an interactive prompt (e.g. approval) to one or more channel targets. |
 | `updateInteractivePrompt(opts): Promise<void>` | Update a previously sent interactive prompt with resolution status. |
 
 #### sendReply
@@ -186,14 +186,13 @@ ChannelRouter imports this. `parseSlackChannelId()` is removed from session-agen
 - **Runner communication:** Receiving `channel-reply` WebSocket message, calling `channelRouter.sendReply()`, forwarding result back via `runnerLink.send()`
 - **Image message store write + broadcast:** After successful reply with image, writes system message to messageStore and broadcasts to web clients
   - `// TODO: Treat web UI as a channel — this is the primary remaining coupling between channel dispatch and the DO's message/broadcast layer`
-- **Interactive prompt SQLite bookkeeping:** Storing channel refs after `sendInteractivePrompt()`, reading them for `updateInteractivePrompt()`. The DO methods become thin wrappers:
+- **Interactive prompt target collection + SQLite bookkeeping:** The DO's `sendChannelInteractivePrompts()` retains all pre-dispatch logic: building the `targets` array from origin + caller channels, deduplication, fail-closed `listUserChannelBindings` check, and error broadcast to web clients. Only the per-target dispatch loop moves to ChannelRouter. The DO methods become thin wrappers around the dispatch call:
   ```ts
-  // ~10 lines each instead of ~45/~40
-  private async sendChannelInteractivePrompts(...) {
-    const refs = await this.channelRouter.sendInteractivePrompt({ userId, targets, prompt });
-    if (refs.length > 0) {
-      this.ctx.storage.sql.exec('UPDATE interactive_prompts SET channel_refs = ? WHERE id = ?', JSON.stringify(refs), promptId);
-    }
+  // Target collection + fail-closed check stays here (~20 lines)
+  // Then dispatch + storage (~5 lines):
+  const refs = await this.channelRouter.sendInteractivePrompt({ userId, targets, prompt });
+  if (refs.length > 0) {
+    this.ctx.storage.sql.exec('UPDATE interactive_prompts SET channel_refs = ? WHERE id = ?', JSON.stringify(refs), promptId);
   }
   ```
 - **Follow-up SQLite writes:** `insertChannelFollowup()` at prompt dispatch, `resolveChannelFollowups()` triggered by `onReplySent` callback
