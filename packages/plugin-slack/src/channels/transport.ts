@@ -468,6 +468,14 @@ export class SlackTransport implements ChannelTransport {
       ];
     }
 
+    // Ownership metadata for reaction-based deletion
+    if (ctx.userId) {
+      body.metadata = {
+        event_type: 'valet_bot_message',
+        event_payload: { userId: ctx.userId },
+      };
+    }
+
     const result = await slackApiCall('chat.postMessage', body, ctx.token);
 
     if (!result.ok) {
