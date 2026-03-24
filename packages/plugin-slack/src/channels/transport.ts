@@ -476,6 +476,7 @@ export class SlackTransport implements ChannelTransport {
       };
     }
 
+    console.log(`[Slack] sendMessage: metadata=${JSON.stringify(body.metadata)} userId=${ctx.userId}`);
     const result = await slackApiCall('chat.postMessage', body, ctx.token);
 
     if (!result.ok) {
