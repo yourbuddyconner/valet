@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import type { Env, Variables } from '../env.js';
 import { signJWT, verifyJWT } from '../lib/jwt.js';
+import { handleLoginOAuthCallback } from './oauth.js';
 import { getGitHubConfig, getGitHubMetadata } from '../services/github-config.js';
 import { storeCredential } from '../services/credentials.js';
 import { getCredentialRow, deleteCredential } from '../lib/db/credentials.js';
@@ -127,7 +128,9 @@ githubMeRouter.delete('/link', async (c) => {
 export const githubMeCallbackRouter = new Hono<{ Bindings: Env; Variables: Variables }>();
 
 /**
- * GET /callback — GitHub OAuth callback for identity linking
+ * GET /callback — GitHub OAuth callback
+ * Handles both identity linking (purpose=github-link) and login OAuth.
+ * If the state JWT is not for github-link, falls through to the login OAuth handler.
  */
 githubMeCallbackRouter.get('/callback', async (c) => {
   const code = c.req.query('code');
@@ -140,8 +143,13 @@ githubMeCallbackRouter.get('/callback', async (c) => {
 
   // Verify JWT state token
   const payload = await verifyJWT(stateParam, c.env.ENCRYPTION_KEY);
-  if (!payload || !payload.sub || (payload as any).purpose !== 'github-link') {
+  if (!payload || !payload.sub) {
     return c.redirect(`${frontendUrl}/integrations?github=error&reason=invalid_state`);
+  }
+
+  // If this isn't a github-link flow, delegate to the login OAuth callback handler
+  if ((payload as any).purpose !== 'github-link') {
+    return handleLoginOAuthCallback(c.env, c.req.raw, 'github', code, stateParam);
   }
 
   const userId = payload.sub as string;

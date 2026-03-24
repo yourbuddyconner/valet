@@ -231,49 +231,67 @@ oauthRouter.get('/:provider', async (c) => {
   return c.redirect(authUrl);
 });
 
-// GET /auth/:provider/callback — handle OAuth/OIDC callback
-oauthRouter.get('/:provider/callback', async (c) => {
-  const frontendUrl = getFrontendUrl(c.env);
-  const providerId = c.req.param('provider');
-  const code = c.req.query('code');
-  const state = c.req.query('state');
+/**
+ * Handle an OAuth/OIDC login callback for a given provider.
+ * Extracted so it can be called from both the oauthRouter and the
+ * githubMeCallbackRouter (which intercepts /auth/github/callback).
+ */
+export async function handleLoginOAuthCallback(
+  env: Env,
+  req: Request,
+  providerId: string,
+  code: string,
+  state: string,
+): Promise<Response> {
+  const frontendUrl = getFrontendUrl(env);
 
-  if (!code || !state) return c.redirect(`${frontendUrl}/login?error=missing_params`);
-
-  const stateResult = await parseStateJWT(state, c.env);
-  if (!stateResult.valid) return c.redirect(`${frontendUrl}/login?error=invalid_state`);
+  const stateResult = await parseStateJWT(state, env);
+  if (!stateResult.valid) return Response.redirect(`${frontendUrl}/login?error=invalid_state`, 302);
 
   // Verify state was issued for this provider (prevents cross-provider state confusion)
   if (stateResult.provider !== providerId) {
-    return c.redirect(`${frontendUrl}/login?error=invalid_state`);
+    return Response.redirect(`${frontendUrl}/login?error=invalid_state`, 302);
   }
 
   const provider = identityRegistry.get(providerId);
-  if (!provider) return c.redirect(`${frontendUrl}/login?error=unknown_provider`);
+  if (!provider) return Response.redirect(`${frontendUrl}/login?error=unknown_provider`, 302);
 
-  if (!(await isLoginProviderEnabled(c.env, providerId))) {
-    return c.redirect(`${frontendUrl}/login?error=provider_disabled`);
+  if (!(await isLoginProviderEnabled(env, providerId))) {
+    return Response.redirect(`${frontendUrl}/login?error=provider_disabled`, 302);
   }
 
   try {
-    const workerUrl = getWorkerUrl(c.env, c.req.raw);
-    const config = resolveProviderConfig(c.env, provider);
+    const workerUrl = getWorkerUrl(env, req);
+    const config = resolveProviderConfig(env, provider);
     const identity = await provider.handleCallback(config, {
       code,
       state,
       redirectUri: `${workerUrl}/auth/${providerId}/callback`,
     });
 
-    const result = await oauthService.finalizeIdentityLogin(c.env, identity, providerId, stateResult.inviteCode);
-    if (!result.ok) return c.redirect(`${frontendUrl}/login?error=${result.error}`);
+    const result = await oauthService.finalizeIdentityLogin(env, identity, providerId, stateResult.inviteCode);
+    if (!result.ok) return Response.redirect(`${frontendUrl}/login?error=${result.error}`, 302);
 
-    return c.redirect(
-      `${frontendUrl}/auth/callback?token=${encodeURIComponent(result.sessionToken)}&provider=${providerId}`
+    return Response.redirect(
+      `${frontendUrl}/auth/callback?token=${encodeURIComponent(result.sessionToken)}&provider=${providerId}`,
+      302,
     );
   } catch (err) {
     console.error(`${providerId} OAuth error:`, err);
-    return c.redirect(`${frontendUrl}/login?error=oauth_error`);
+    return Response.redirect(`${frontendUrl}/login?error=oauth_error`, 302);
   }
+}
+
+// GET /auth/:provider/callback — handle OAuth/OIDC callback
+oauthRouter.get('/:provider/callback', async (c) => {
+  const providerId = c.req.param('provider');
+  const code = c.req.query('code');
+  const state = c.req.query('state');
+  const frontendUrl = getFrontendUrl(c.env);
+
+  if (!code || !state) return c.redirect(`${frontendUrl}/login?error=missing_params`);
+
+  return handleLoginOAuthCallback(c.env, c.req.raw, providerId, code, state);
 });
 
 // POST /auth/:provider/callback — handle SAML POST callback
