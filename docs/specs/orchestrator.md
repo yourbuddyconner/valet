@@ -121,6 +121,22 @@ Maps external channel interactions to sessions.
 
 **Indexes:** unique on `(channelType, channelId)`, on `scopeKey`.
 
+## Personal Orchestrator Channel Access
+
+Personal orchestrators are intentionally limited to private user-controlled surfaces:
+
+- Web UI session chat
+- Slack DMs (`channel_type === 'im'`)
+
+Shared Slack surfaces are explicitly out of scope for personal orchestrators:
+
+- Public channels
+- Private channels
+- Multi-person group chats
+- Threads attached to any of the above
+
+Inbound Slack events from shared surfaces must return `200 OK` without identity resolution, thread-context pull, memory-backed prompt dispatch, or explanatory reply. This is a temporary risk-reduction measure to prevent personal-scope data, including indirectly surfaced memory/context, from leaking into shared channels before org orchestrators and their permission model exist.
+
 ### `user_identity_links` table
 
 Links user accounts to external platform identities.

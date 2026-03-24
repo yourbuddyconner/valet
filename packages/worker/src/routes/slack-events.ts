@@ -15,13 +15,17 @@ import { updateThreadCursor } from '../lib/db/channel-threads.js';
 
 export const slackEventsRouter = new Hono<{ Bindings: Env; Variables: Variables }>();
 
+function canInvokePersonalOrchestratorFromSlackSurface(slackChannelType: string | undefined): boolean {
+  return slackChannelType === 'im';
+}
+
 /**
  * POST /channels/slack/events — Slack Events API handler
  *
  * Routing rules:
- * 1. DMs (channel_type === 'im') → always route
- * 2. @mention (event.type === 'app_mention') → route to mentioning user's orchestrator
- *    with thread context pulled from Slack API
+ * 1. DMs (channel_type === 'im') → route to the user's personal orchestrator
+ * 2. Shared Slack surfaces (public/private channels, group chats, threads) → ignore (200 OK)
+ *    Personal orchestrators are intentionally restricted to Slack DMs and the web UI.
  * 3. Everything else → ignore (200 OK)
  *
  * FUTURE (push model): Non-mention messages in tracked threads could be broadcast
@@ -171,13 +175,16 @@ slackEventsRouter.post('/slack/events', async (c) => {
   const threadId = threadTs || messageId;
 
   // ─── Routing decision ──────────────────────────────────────────────────
-  const isDm = slackChannelType === 'im';
+  const isDm = canInvokePersonalOrchestratorFromSlackSurface(slackChannelType);
   const isMention = slackEventType === 'app_mention';
 
-  if (!isDm && !isMention) {
-    // Regular channel message (no mention) → ignore
-    // FUTURE: push-model hook — broadcast to subscribed orchestrators for ambient awareness
-    console.log(`[Slack] Ignoring non-mention channel message: channel=${message.channelId}`);
+  if (!isDm) {
+    // Shared Slack surfaces are out of bounds for personal orchestrators.
+    // FUTURE: org orchestrator routing can hook in here once shared-channel
+    // permissions are modeled explicitly.
+    console.log(
+      `[Slack] Ignoring shared-surface event for personal orchestrator: channel=${message.channelId} type=${slackChannelType || 'unknown'} event=${slackEventType || 'unknown'}`
+    );
     return c.json({ ok: true });
   }
 
@@ -203,9 +210,9 @@ slackEventsRouter.post('/slack/events', async (c) => {
   }
 
   // ─── Private channel access check (defense in depth) ─────────────────
-  // Slack prevents non-members from posting in private channels, but we
-  // verify membership explicitly to guard against edge cases (e.g., user
-  // removed between posting and our processing).
+  // Currently unreachable because personal orchestrators are DM-only on Slack.
+  // Keep the guard in place so org-orchestrator shared-channel routing can
+  // reuse it without reintroducing an authorization gap later.
   if (isMention && !isDm) {
     const access = await checkPrivateChannelAccess(botToken, message.channelId, slackUserId!);
     if (!access.allowed && access.isPrivate) {
@@ -230,8 +237,6 @@ slackEventsRouter.post('/slack/events', async (c) => {
         binding = null;
       }
     }
-  } else {
-    console.log(`[Slack] Public channel mention — skipping binding lookup, using multi-orchestrator routing`);
   }
 
   // ─── Resolve orchestrator thread ──────────────────────────────────────

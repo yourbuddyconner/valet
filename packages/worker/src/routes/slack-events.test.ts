@@ -14,6 +14,10 @@ const {
   getOrchestratorSessionMock,
   getOrCreateChannelThreadMock,
   getChannelThreadMappingMock,
+  parseInboundMock,
+  sendMessageMock,
+  setThreadStatusMock,
+  scopeKeyPartsMock,
 } = vi.hoisted(() => ({
   getOrgSlackInstallMock: vi.fn(),
   resolveUserByExternalIdMock: vi.fn(),
@@ -27,6 +31,10 @@ const {
   getOrchestratorSessionMock: vi.fn(),
   getOrCreateChannelThreadMock: vi.fn(),
   getChannelThreadMappingMock: vi.fn(),
+  parseInboundMock: vi.fn(),
+  sendMessageMock: vi.fn(),
+  setThreadStatusMock: vi.fn(),
+  scopeKeyPartsMock: vi.fn(),
 }));
 
 vi.mock('../lib/db.js', () => ({
@@ -83,23 +91,10 @@ vi.mock('../lib/db/channel-threads.js', () => ({
 vi.mock('../channels/registry.js', () => ({
   channelRegistry: {
     getTransport: vi.fn(() => ({
-      parseInbound: vi.fn(async () => ({
-        channelType: 'slack',
-        channelId: 'C_PRIVATE',
-        senderId: 'UMENTIONER',
-        senderName: 'Test User',
-        text: '@Bot hello',
-        attachments: [],
-        messageId: '1234567890.123456',
-        metadata: {
-          teamId: 'T123',
-          slackEventType: 'app_mention',
-          slackChannelType: 'group',
-        },
-      })),
-      scopeKeyParts: vi.fn(() => ({ channelType: 'slack', channelId: 'T123:C_PRIVATE' })),
-      sendMessage: vi.fn(),
-      setThreadStatus: vi.fn(),
+      parseInbound: parseInboundMock,
+      scopeKeyParts: scopeKeyPartsMock,
+      sendMessage: sendMessageMock,
+      setThreadStatus: setThreadStatusMock,
     })),
   },
 }));
@@ -166,6 +161,21 @@ describe('slackEventsRouter /slack/interactive', () => {
       configuredBy: 'user-1',
     });
     verifySlackSignatureMock.mockReturnValue(true);
+    parseInboundMock.mockResolvedValue({
+      channelType: 'slack',
+      channelId: 'C_PRIVATE',
+      senderId: 'UMENTIONER',
+      senderName: 'Test User',
+      text: '@Bot hello',
+      attachments: [],
+      messageId: '1234567890.123456',
+      metadata: {
+        teamId: 'T123',
+        slackEventType: 'app_mention',
+        slackChannelType: 'group',
+      },
+    });
+    scopeKeyPartsMock.mockReturnValue({ channelType: 'slack', channelId: 'T123:C_PRIVATE' });
   });
 
   it('returns an explicit Slack error when a linked non-owner clicks a prompt button', async () => {
@@ -257,6 +267,21 @@ describe('private channel access control on inbound mentions', () => {
     });
     verifySlackSignatureMock.mockReturnValue(true);
     resolveUserByExternalIdMock.mockResolvedValue('user-1');
+    parseInboundMock.mockResolvedValue({
+      channelType: 'slack',
+      channelId: 'C_PRIVATE',
+      senderId: 'UMENTIONER',
+      senderName: 'Test User',
+      text: '@Bot hello',
+      attachments: [],
+      messageId: '1234567890.123456',
+      metadata: {
+        teamId: 'T123',
+        slackEventType: 'app_mention',
+        slackChannelType: 'group',
+      },
+    });
+    scopeKeyPartsMock.mockReturnValue({ channelType: 'slack', channelId: 'T123:C_PRIVATE' });
   });
 
   it('silently ignores app_mention from a private channel when user is not a member', async () => {
@@ -278,11 +303,8 @@ describe('private channel access control on inbound mentions', () => {
     expect(dispatchOrchestratorPromptMock).not.toHaveBeenCalled();
   });
 
-  it('allows app_mention from a private channel when user is a member', async () => {
+  it('silently ignores app_mention from a private channel even when user is a member', async () => {
     checkPrivateChannelAccessMock.mockResolvedValue({ allowed: true, isPrivate: true });
-    dispatchOrchestratorPromptMock.mockResolvedValue({ dispatched: true });
-    getOrchestratorSessionMock.mockResolvedValue({ id: 'orchestrator:user-1' });
-    getOrCreateChannelThreadMock.mockResolvedValue('thread-uuid-1');
 
     const app = buildApp();
     const res = await app.fetch(
@@ -292,6 +314,112 @@ describe('private channel access control on inbound mentions', () => {
     );
 
     expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true });
+    expect(getOrchestratorSessionMock).not.toHaveBeenCalled();
+    expect(dispatchOrchestratorPromptMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('personal orchestrator Slack surface policy', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    getOrgSlackInstallMock.mockResolvedValue({
+      signingSecret: 'decrypted-secret',
+      botToken: 'decrypted-token',
+      teamId: 'T123',
+      botUserId: 'B123',
+      teamName: null,
+      appId: null,
+      configuredBy: 'user-1',
+    });
+    verifySlackSignatureMock.mockReturnValue(true);
+    resolveUserByExternalIdMock.mockResolvedValue('user-1');
+    scopeKeyPartsMock.mockReturnValue({ channelType: 'slack', channelId: 'D123' });
+  });
+
+  it('silently ignores public-channel mentions before personal orchestrator resolution', async () => {
+    parseInboundMock.mockResolvedValue({
+      channelType: 'slack',
+      channelId: 'C_PUBLIC',
+      senderId: 'UMENTIONER',
+      senderName: 'Test User',
+      text: '@Bot hello',
+      attachments: [],
+      messageId: '1234567890.123456',
+      metadata: {
+        teamId: 'T123',
+        slackEventType: 'app_mention',
+        slackChannelType: 'channel',
+      },
+    });
+
+    const app = buildApp();
+    const res = await app.fetch(
+      buildMentionEventRequest('C_PUBLIC', 'channel', 'UMENTIONER'),
+      { DB: {}, ENCRYPTION_KEY: 'k', SLACK_SIGNING_SECRET: 's' } as any,
+      { waitUntil: vi.fn() } as any,
+    );
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true });
+    expect(resolveUserByExternalIdMock).not.toHaveBeenCalled();
+    expect(getOrchestratorSessionMock).not.toHaveBeenCalled();
+    expect(dispatchOrchestratorPromptMock).not.toHaveBeenCalled();
+    expect(sendMessageMock).not.toHaveBeenCalled();
+  });
+
+  it('still routes Slack DMs to the personal orchestrator', async () => {
+    parseInboundMock.mockResolvedValue({
+      channelType: 'slack',
+      channelId: 'D123',
+      senderId: 'UDM',
+      senderName: 'DM User',
+      text: 'hello from dm',
+      attachments: [],
+      messageId: '1234567890.123456',
+      metadata: {
+        teamId: 'T123',
+        slackEventType: 'message',
+        slackChannelType: 'im',
+      },
+    });
+    getChannelBindingByScopeKeyMock.mockResolvedValue(null);
+    getOrchestratorSessionMock.mockResolvedValue({ id: 'orchestrator:user-1' });
+    getOrCreateChannelThreadMock.mockResolvedValue('thread-uuid-dm');
+    getChannelThreadMappingMock.mockResolvedValue(null);
+    dispatchOrchestratorPromptMock.mockResolvedValue({ dispatched: true });
+
+    const app = buildApp();
+    const waitUntil = vi.fn();
+    const res = await app.fetch(
+      new Request('http://localhost/slack/events', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'x-slack-signature': 'v0=test',
+          'x-slack-request-timestamp': String(Math.floor(Date.now() / 1000)),
+        },
+        body: JSON.stringify({
+          type: 'event_callback',
+          team_id: 'T123',
+          event: {
+            type: 'message',
+            user: 'UDM',
+            text: 'hello from dm',
+            channel: 'D123',
+            channel_type: 'im',
+            ts: '1234567890.123456',
+          },
+        }),
+      }),
+      { DB: {}, ENCRYPTION_KEY: 'k', SLACK_SIGNING_SECRET: 's' } as any,
+      { waitUntil } as any,
+    );
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true });
+    expect(resolveUserByExternalIdMock).toHaveBeenCalledOnce();
     expect(dispatchOrchestratorPromptMock).toHaveBeenCalledOnce();
+    expect(sendMessageMock).not.toHaveBeenCalled();
   });
 });
