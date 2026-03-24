@@ -59,6 +59,7 @@ Valet uses an org-level Slack integration. One admin installs the app for the en
         "im:history",
         "im:read",
         "im:write",
+        "reactions:read",
         "reactions:write",
         "users:read",
         "users:read.email"
@@ -74,7 +75,8 @@ Valet uses an org-level Slack integration. One admin installs the app for the en
         "assistant_thread_context_changed",
         "message.channels",
         "message.groups",
-        "message.im"
+        "message.im",
+        "reaction_added"
       ]
     },
     "interactivity": {
@@ -160,6 +162,7 @@ Once linked, messages you send in Slack channels where the bot is present will r
 | `im:history` | Read direct messages to the bot |
 | `im:read` | List DM conversations (for verification flow) |
 | `im:write` | Open DMs with users (for verification code delivery) |
+| `reactions:read` | Receive reaction events (for reaction-based message deletion) |
 | `reactions:write` | Add emoji reactions to messages |
 | `users:read` | List workspace members (for the link typeahead) |
 | `users:read.email` | Look up users by email for identity linking |
