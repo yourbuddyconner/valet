@@ -226,11 +226,8 @@ describe("OpenCodeManager", () => {
       crashCount++;
     });
 
-    // Don't await — it will never resolve because health never succeeds.
-    // The configPromise waits on nextHealthy() which will never be called.
-    // We intentionally let it dangle; the test verifies fatal behavior.
-    // eslint-disable-next-line @typescript-eslint/no-floating-promises
-    manager.setDesiredConfig(testConfig);
+    // setDesiredConfig will reject when fatal state is entered — catch it
+    manager.setDesiredConfig(testConfig).catch(() => {});
 
     await vi.waitFor(
       () => {

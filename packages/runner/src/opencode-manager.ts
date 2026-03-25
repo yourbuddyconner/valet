@@ -67,7 +67,7 @@ export class OpenCodeManager {
   private crashCount = 0;
   private lastHealthyAt = 0;
   private wake = createDeferred();
-  private healthyWaiters: Array<() => void> = [];
+  private healthyWaiters: Array<{ resolve: () => void; reject: (err: Error) => void }> = [];
 
   private readonly configWriter: { write(config: OpenCodeConfig): void };
   private readonly port: number;
@@ -111,7 +111,7 @@ export class OpenCodeManager {
       this.signal();
     }
 
-    await this.nextHealthy();
+    await this.nextHealthy(); // throws if fatal or shutdown
     return { restarted: true };
   }
 
@@ -193,6 +193,7 @@ export class OpenCodeManager {
     // Loop exited — clean up
     this.process = null;
     this.runningConfig = null;
+    this.rejectHealthyWaiters("OpenCode manager shut down");
   }
 
   // ─── Private Helpers ────────────────────────────────────────────────
@@ -203,13 +204,21 @@ export class OpenCodeManager {
   }
 
   private nextHealthy(): Promise<void> {
-    return new Promise(resolve => this.healthyWaiters.push(resolve));
+    return new Promise((resolve, reject) => {
+      this.healthyWaiters.push({ resolve, reject });
+    });
   }
 
   private resolveHealthyWaiters(): void {
     const waiters = this.healthyWaiters;
     this.healthyWaiters = [];
-    for (const resolve of waiters) resolve();
+    for (const w of waiters) w.resolve();
+  }
+
+  private rejectHealthyWaiters(reason: string): void {
+    const waiters = this.healthyWaiters;
+    this.healthyWaiters = [];
+    for (const w of waiters) w.reject(new Error(reason));
   }
 
   private configChanged(): boolean {
@@ -225,12 +234,21 @@ export class OpenCodeManager {
 
   private enterFatal(): void {
     console.error(`[OpenCodeManager] ${this.crashCount} consecutive crashes, entering fatal state`);
+    this.rejectHealthyWaiters("OpenCode entered fatal state after too many crashes");
     this.fatalCallback?.();
   }
 
   private killProcess(): void {
     if (!this.process) return;
-    try { this.process.kill("SIGTERM"); } catch {}
+    const proc = this.process;
+    try { proc.kill("SIGTERM"); } catch {}
+    // Escalate to SIGKILL if process doesn't exit within 5s
+    setTimeout(() => {
+      if (proc.exitCode === null) {
+        console.log("[OpenCodeManager] Grace period expired, sending SIGKILL");
+        try { proc.kill("SIGKILL"); } catch {}
+      }
+    }, 5000);
   }
 
   private spawn(): Subprocess {
