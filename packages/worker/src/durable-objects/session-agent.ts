@@ -219,6 +219,11 @@ export class SessionAgentDO {
   private sessionState!: SessionState;
   private lifecycle!: SessionLifecycle;
 
+  /** Timestamp when the runner disconnected. Null if connected or never connected.
+   *  After 60s without reconnection, the session is terminated. */
+  private runnerDisconnectedAt: number | null = null;
+  private static readonly RUNNER_GRACE_PERIOD_MS = 60_000;
+
   /** Debounce timer for flushing messages to D1 during active turns. */
   private d1FlushTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -731,6 +736,9 @@ export class SessionAgentDO {
     this.ctx.acceptWebSocket(server, ['runner']);
     console.log('[SessionAgentDO] Runner connected');
 
+    // Clear grace period — runner reconnected in time
+    this.runnerDisconnectedAt = null;
+
     // Emit runner_connect timing — measure time from sandbox start to runner WebSocket
     const runningStart = this.sessionState.runningStartedAt;
     if (runningStart > 0) {
@@ -808,6 +816,10 @@ export class SessionAgentDO {
       this.promptQueue.runnerBusy = false;
       this.runnerLink.onDisconnect();
 
+      // Start grace period — if runner doesn't reconnect within 60s, terminate
+      this.runnerDisconnectedAt = Date.now();
+      this.lifecycle.scheduleAlarm(this.collectAlarmDeadlines());
+
       const queueLength = this.promptQueue.length;
       this.broadcastToClients({
         type: 'status',
@@ -874,8 +886,22 @@ export class SessionAgentDO {
   // ─── Alarm Handler ────────────────────────────────────────────────────
 
   async alarm() {
+    // ─── Early Exit: terminal states don't need alarms ──────────────
+    const status = this.sessionState.status;
+    if (['terminated', 'archived', 'error', 'hibernated'].includes(status)) {
+      return; // don't re-arm
+    }
+
     const now = Date.now();
     const nowSecs = Math.floor(now / 1000);
+
+    // ─── Runner Grace Period Check ──────────────────────────────────
+    if (this.runnerDisconnectedAt && now - this.runnerDisconnectedAt >= SessionAgentDO.RUNNER_GRACE_PERIOD_MS) {
+      console.log(`[SessionAgentDO] Runner did not reconnect within ${SessionAgentDO.RUNNER_GRACE_PERIOD_MS / 1000}s — terminating session`);
+      this.runnerDisconnectedAt = null;
+      await this.handleStop('sandbox_lost');
+      return; // handleStop transitions to terminal, no re-arm needed
+    }
 
     // ─── Collect Mode Flush Check (Phase D) ──────────────────────────
     if (this.promptQueue.hasCollectFlushDue() || this.promptQueue.hasLegacyCollectFlushDue()) {
@@ -1026,10 +1052,8 @@ export class SessionAgentDO {
       }
     }
 
-    // ─── Periodic Metrics Flush (skipped during D1 overload recovery) ──
-    // TODO: re-enable once D1 load is stable. Metrics are still flushed
-    // at lifecycle boundaries (stop, hibernate, complete).
-    // this.ctx.waitUntil(this.flushMetrics());
+    // Metrics flush removed from alarm handler — flushed at lifecycle
+    // boundaries only (stop, hibernate, prompt complete).
 
     // ─── Channel Follow-up Reminders ────────────────────────────────
     const dueFollowups = this.ctx.storage.sql
@@ -1098,8 +1122,16 @@ export class SessionAgentDO {
       );
     }
 
-    // Re-arm alarm — consolidated scheduling includes all deadline sources
-    this.lifecycle.scheduleAlarm(this.collectAlarmDeadlines());
+    // ─── Conditional Re-arm ────────────────────────────────────────────
+    const deadlines = this.collectAlarmDeadlines();
+    const hasWork = deadlines.some(d => d !== null);
+    const hasConnections = this.runnerLink.isConnected || this.getClientSockets().length > 0;
+    const hasPendingGrace = this.runnerDisconnectedAt !== null;
+
+    if (hasWork || hasConnections || hasPendingGrace) {
+      this.lifecycle.scheduleAlarm(deadlines);
+    }
+    // else: nothing to do — let Cloudflare evict this DO from memory
   }
 
   // ─── Client Message Handling ───────────────────────────────────────────
@@ -4294,7 +4326,12 @@ export class SessionAgentDO {
     // Parent idle debounce
     const parentIdle = this.sessionState.parentIdleNotifyAt || null;
 
-    return [promptExpiry, followupMs, watchdog, safetyNet, parentIdle];
+    // Runner disconnect grace period
+    const gracePeriod = this.runnerDisconnectedAt
+      ? this.runnerDisconnectedAt + SessionAgentDO.RUNNER_GRACE_PERIOD_MS
+      : null;
+
+    return [promptExpiry, followupMs, watchdog, safetyNet, parentIdle, gracePeriod];
   }
 
   private rescheduleIdleAlarm(): void {
