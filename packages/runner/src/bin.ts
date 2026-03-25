@@ -16,6 +16,29 @@ import { PromptHandler } from "./prompt.js";
 import { startGateway, cleanupAllCloudflared } from "./gateway.js";
 import { OpenCodeManager, type OpenCodeConfig } from "./opencode-manager.js";
 
+function mergeOpenCodeConfig(
+  current: OpenCodeConfig,
+  partial: Partial<OpenCodeConfig>,
+): OpenCodeConfig {
+  return {
+    tools: partial.tools !== undefined
+      ? { ...current.tools, ...partial.tools }
+      : { ...current.tools },
+    providerKeys: partial.providerKeys !== undefined
+      ? { ...current.providerKeys, ...partial.providerKeys }
+      : { ...current.providerKeys },
+    instructions: partial.instructions !== undefined
+      ? partial.instructions
+      : [...current.instructions],
+    isOrchestrator: partial.isOrchestrator !== undefined
+      ? partial.isOrchestrator
+      : current.isOrchestrator,
+    customProviders: partial.customProviders !== undefined
+      ? partial.customProviders
+      : current.customProviders,
+  };
+}
+
 const { values } = parseArgs({
   args: Bun.argv.slice(2),
   options: {
@@ -338,7 +361,7 @@ async function main() {
 
   agentClient.onStop(async () => {
     console.log("[Runner] Received stop signal, shutting down");
-    await openCodeManager.stop();
+    await openCodeManager.shutdown();
     agentClient.disconnect();
     process.exit(0);
   });
@@ -409,12 +432,14 @@ async function main() {
       return;
     }
 
-    // Subsequent configs: hot-reload via applyConfig (for admin config pushes)
+    // Subsequent configs: hot-reload via setDesiredConfig (for admin config pushes)
     try {
       promptHandler.setProviderModelConfigs(config.customProviders, config.builtInProviderModelConfigs);
       await promptHandler.handleOpenCodeRestart();
-      const result = await openCodeManager.applyConfig(config);
+      const merged = mergeOpenCodeConfig(currentConfig, config);
+      const result = await openCodeManager.setDesiredConfig(merged);
       if (result.restarted) {
+        currentConfig = merged;
         await promptHandler.handleOpenCodeRestarted();
       }
       agentClient.sendOpenCodeConfigApplied(true, result.restarted);
@@ -471,7 +496,7 @@ async function main() {
   const shutdown = async () => {
     console.log("[Runner] Shutting down...");
     cleanupAllCloudflared();
-    await openCodeManager.stop();
+    await openCodeManager.shutdown();
     agentClient.disconnect();
     process.exit(0);
   };
@@ -513,18 +538,12 @@ async function main() {
     new Promise<null>((resolve) => setTimeout(() => resolve(null), CONFIG_WAIT_TIMEOUT_MS)),
   ]);
 
-  const initialConfig = buildInitialConfig();
+  let currentConfig = buildInitialConfig();
 
   if (doConfig) {
     console.log("[Runner] Got opencode-config from DO, merging with env config");
     // Merge DO config on top of env-based config
-    Object.assign(initialConfig, {
-      tools: { ...initialConfig.tools, ...(doConfig.tools || {}) },
-      providerKeys: { ...initialConfig.providerKeys, ...(doConfig.providerKeys || {}) },
-      instructions: doConfig.instructions ?? initialConfig.instructions,
-      isOrchestrator: doConfig.isOrchestrator ?? initialConfig.isOrchestrator,
-      customProviders: doConfig.customProviders ?? initialConfig.customProviders,
-    });
+    currentConfig = mergeOpenCodeConfig(currentConfig, doConfig);
     // Set provider/model filtering from DO config before model discovery
     promptHandler.setProviderModelConfigs(
       (doConfig as any).customProviders,
@@ -536,8 +555,8 @@ async function main() {
     resolveFirstConfig = null;
   }
 
-  console.log(`[Runner] Starting OpenCode with ${Object.keys(initialConfig.providerKeys).length} provider key(s)`);
-  await openCodeManager.start(initialConfig);
+  console.log(`[Runner] Starting OpenCode with ${Object.keys(currentConfig.providerKeys).length} provider key(s)`);
+  await openCodeManager.setDesiredConfig(currentConfig);
   console.log(`[Runner] OpenCode URL: ${openCodeManager.getUrl()}`);
 
   // Ack config to the DO
