@@ -23,6 +23,9 @@ function deriveApiHostFromFrontend(frontendHost: string, workerName?: string): s
     return frontendHost.replace(/^app\./, 'api.');
   }
 
+  // NOTE: pages.dev URLs (e.g. foo-client.pages.dev) don't include the account
+  // subdomain that workers.dev requires (e.g. foo.valet-turnkey.workers.dev).
+  // Set API_PUBLIC_URL as a worker secret to avoid hitting this fallback.
   if (isPagesHost(frontendHost)) {
     const pagesLabel = frontendHost.slice(0, -PAGES_DEV_SUFFIX.length);
     if (pagesLabel.endsWith('-client')) {
