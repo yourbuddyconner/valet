@@ -1026,8 +1026,10 @@ export class SessionAgentDO {
       }
     }
 
-    // ─── Periodic Metrics Flush ──────────────────────────────────────
-    this.ctx.waitUntil(this.flushMetrics());
+    // ─── Periodic Metrics Flush (skipped during D1 overload recovery) ──
+    // TODO: re-enable once D1 load is stable. Metrics are still flushed
+    // at lifecycle boundaries (stop, hibernate, complete).
+    // this.ctx.waitUntil(this.flushMetrics());
 
     // ─── Channel Follow-up Reminders ────────────────────────────────
     const dueFollowups = this.ctx.storage.sql
