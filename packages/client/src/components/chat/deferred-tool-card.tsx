@@ -16,7 +16,7 @@ export function DeferredToolCard({ tool }: { tool: ToolCallData }) {
 
   return (
     <Suspense fallback={<SummaryToolCard tool={tool} loading />}>
-      <ToolCard tool={tool} />
+      <ToolCard tool={tool} initiallyEngaged />
     </Suspense>
   );
 }

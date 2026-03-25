@@ -26,11 +26,27 @@ const PatchCard = lazy(() => import('./patch-card').then((m) => ({ default: m.Pa
 
 export type { ToolCallData, ToolCallStatus } from './types';
 
+export function shouldShowToolCardSummary({
+  engaged,
+  initiallyEngaged = false,
+}: {
+  engaged: boolean;
+  initiallyEngaged?: boolean;
+}) {
+  return !(engaged || initiallyEngaged);
+}
+
 /** Route a tool call to its specialized card component */
-export function ToolCard({ tool }: { tool: ToolCallData }) {
+export function ToolCard({
+  tool,
+  initiallyEngaged = false,
+}: {
+  tool: ToolCallData;
+  initiallyEngaged?: boolean;
+}) {
   const [engaged, setEngaged] = useState(false);
 
-  if (!engaged) {
+  if (shouldShowToolCardSummary({ engaged, initiallyEngaged })) {
     return <SummaryToolCard tool={tool} onExpand={() => setEngaged(true)} />;
   }
 
