@@ -222,6 +222,7 @@ function createMockCtx() {
   const sql = createMockSql();
   let initPromise: Promise<void> = Promise.resolve();
   const waitUntil = vi.fn((promise: Promise<unknown>) => promise);
+  const acceptedSockets: Array<{ socket: unknown; tags: string[] }> = [];
 
   const ctx = {
     storage: {
@@ -233,11 +234,17 @@ function createMockCtx() {
       initPromise = Promise.resolve(fn());
       return initPromise;
     },
+    acceptWebSocket(socket: unknown, tags: string[]) {
+      acceptedSockets.push({ socket, tags });
+    },
     getWebSockets: vi.fn(() => []),
+    getTags(socket: unknown) {
+      return acceptedSockets.find((entry) => entry.socket === socket)?.tags ?? [];
+    },
     waitUntil,
   } as unknown as DurableObjectState;
 
-  return { ctx, sql, waitUntil, initPromise: () => initPromise };
+  return { ctx, sql, waitUntil, initPromise: () => initPromise, acceptedSockets };
 }
 
 function createMockDb() {
@@ -346,6 +353,61 @@ describe('SessionAgentDO', () => {
     const storedPrompt = sql.interactivePrompts.get('q-web');
     expect(storedPrompt).toBeTruthy();
     expect(JSON.parse(storedPrompt!.context)).toEqual({ options: ['Yes', 'No'] });
+  });
+
+  it('sends a minimal init payload during client websocket upgrade', async () => {
+    const send = vi.fn();
+    const serverSocket = { send };
+    const clientSocket = {};
+    class MockWebSocketPair {
+      0 = clientSocket;
+      1 = serverSocket;
+    }
+    vi.stubGlobal('WebSocketPair', MockWebSocketPair as unknown as typeof WebSocketPair);
+
+    const { agent, ctx } = await createTestAgent();
+    (agent as any).sessionState.set('workspace', '/workspace/project');
+    (agent as any).sessionState.set('title', 'Latency test');
+    (agent as any).sessionState.set('sandboxId', 'sandbox-123');
+    (agent as any).promptQueue.runnerBusy = true;
+    (agent as any).promptQueue.enqueue({
+      id: 'queued-turn',
+      content: 'hello',
+      status: 'queued',
+    });
+
+    await (agent as any).upgradeClient(
+      new Request('https://example.com/api/sessions/test/ws?role=client&userId=user-1', {
+        headers: { Upgrade: 'websocket' },
+      }),
+      new URL('https://example.com/api/sessions/test/ws?role=client&userId=user-1'),
+    ).catch((err: unknown) => {
+      // Node's Response implementation rejects status 101, but the init frame
+      // has already been sent by this point, which is what this test verifies.
+      expect(err).toBeInstanceOf(RangeError);
+    });
+
+    expect((ctx as any).acceptWebSocket).toBeDefined();
+    expect(send).toHaveBeenCalled();
+
+    const initMessage = JSON.parse(send.mock.calls[0][0] as string);
+    expect(initMessage.type).toBe('init');
+    expect(initMessage.session).toEqual({
+      id: 'orchestrator:user-1',
+      status: 'running',
+      workspace: '/workspace/project',
+      title: 'Latency test',
+    });
+    expect(initMessage.data).toMatchObject({
+      sandboxRunning: true,
+      runnerConnected: false,
+      runnerBusy: true,
+      promptsQueued: 1,
+      connectedClients: 1,
+    });
+    expect(initMessage.session).not.toHaveProperty('messages');
+    expect(initMessage.data).not.toHaveProperty('availableModels');
+    expect(initMessage.data).not.toHaveProperty('auditLog');
   });
 
   it('keeps assistant turns on the current orchestrator thread after the processing row is gone', async () => {

@@ -91,6 +91,7 @@ export interface IntegrationAuthError {
 
 interface ChatState {
   messages: Message[];
+  historyReady: boolean;
   status: SessionStatus;
   interactivePrompts: InteractivePromptState[];
   connectedUsers: ConnectedUser[];
@@ -120,7 +121,7 @@ interface WebSocketInitMessage {
     status: SessionStatus;
     workspace: string;
     title?: string;
-    messages: Array<{
+    messages?: Array<{
       id: string;
       role: 'user' | 'assistant' | 'system' | 'tool';
       content: string;
@@ -336,8 +337,15 @@ interface WebSocketIntegrationAuthRequiredMessage {
   services: Array<{ service: string; displayName: string; reason: string }>;
 }
 
+interface WebSocketModelsMessage {
+  type: 'models';
+  models: ProviderModels[];
+  defaultModel?: string | null;
+}
+
 type WebSocketChatMessage =
   | WebSocketInitMessage
+  | WebSocketModelsMessage
   | WebSocketMessageMessage
   | WebSocketMessageUpdatedMessage
   | WebSocketStatusMessage
@@ -370,6 +378,7 @@ type WebSocketChatMessage =
 function createInitialState(): ChatState {
   return {
     messages: [],
+    historyReady: false,
     status: 'initializing',
     interactivePrompts: [],
     connectedUsers: [],
@@ -465,12 +474,12 @@ export function useChat(sessionId: string) {
       threadId?: string;
       createdAt: string;
     }> }>(`/sessions/${sessionId}/messages`).then((res) => {
-      if (cancelled || !res.messages?.length) return;
+      if (cancelled) return;
       d1LoadedRef.current = true;
       setState((prev) => {
         // Merge D1 messages with any already present (from WebSocket init that may have arrived first)
         const existing = new Map(prev.messages.map((m) => [m.id, m]));
-        for (const m of res.messages) {
+        for (const m of res.messages ?? []) {
           if (!existing.has(m.id)) {
             existing.set(m.id, {
               id: m.id,
@@ -493,7 +502,7 @@ export function useChat(sessionId: string) {
         const merged = Array.from(existing.values()).sort(
           (a, b) => a.createdAt.getTime() - b.createdAt.getTime()
         );
-        return { ...prev, messages: merged };
+        return { ...prev, messages: merged, historyReady: true };
       });
     }).catch((err) => {
       console.warn('[useChat] Failed to load messages from D1:', err);
@@ -542,7 +551,7 @@ export function useChat(sessionId: string) {
         // Merge init messages with any already loaded from D1 REST API.
         // WebSocket init has the most up-to-date parts (from DO SQLite),
         // D1 may have older messages that weren't in the init (if init was truncated).
-        const initMessages = message.session.messages.map((m) => ({
+        const initMessages = (message.session.messages ?? []).map((m) => ({
           id: m.id,
           sessionId: sessionIdRef.current,
           role: m.role,
@@ -593,6 +602,7 @@ export function useChat(sessionId: string) {
           return {
             ...prev,
             messages: sortedMessages,
+            historyReady: true,
             status: message.session.status,
             interactivePrompts: [],
             connectedUsers: normalizedUsers,
@@ -619,7 +629,7 @@ export function useChat(sessionId: string) {
           const raw = typeof message.data?.defaultModel === 'string' ? message.data.defaultModel : null;
           const doDefaultModel = raw && allIds.includes(raw) ? raw : null;
 
-          if (message.session.messages.length === 0 && initMessages.length === 0 && !d1LoadedRef.current) {
+          if ((message.session.messages?.length ?? 0) === 0 && initMessages.length === 0 && !d1LoadedRef.current) {
             // Fresh session — clear stale localStorage and apply DO default
             try {
               localStorage.removeItem(`valet:model:${sessionIdRef.current}`);
@@ -640,6 +650,33 @@ export function useChat(sessionId: string) {
               if (doDefaultModel) handleModelChange(doDefaultModel);
             }
           }
+        }
+        break;
+      }
+
+      case 'models': {
+        const modelsMsg = message as WebSocketModelsMessage;
+        const nextModels = Array.isArray(modelsMsg.models) ? modelsMsg.models : [];
+        if (nextModels.length === 0) break;
+
+        setState((prev) => ({
+          ...prev,
+          availableModels: nextModels,
+        }));
+
+        const allIds = nextModels.flatMap((p: ProviderModels) => p.models.map((m: { id: string }) => m.id));
+        const rawDefault = typeof modelsMsg.defaultModel === 'string' ? modelsMsg.defaultModel : null;
+        const defaultModel = rawDefault && allIds.includes(rawDefault) ? rawDefault : null;
+
+        try {
+          const persisted = localStorage.getItem(`valet:model:${sessionIdRef.current}`) || '';
+          if (persisted && allIds.includes(persisted)) {
+            handleModelChange(persisted);
+          } else if (defaultModel) {
+            handleModelChange(defaultModel);
+          }
+        } catch {
+          if (defaultModel) handleModelChange(defaultModel);
         }
         break;
       }
@@ -1365,6 +1402,7 @@ export function useChat(sessionId: string) {
 
   return {
     messages: state.messages,
+    historyReady: state.historyReady,
     sessionStatus: state.status,
     interactivePrompts: state.interactivePrompts,
     connectedUsers: state.connectedUsers,

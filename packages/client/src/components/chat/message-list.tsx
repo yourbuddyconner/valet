@@ -3,8 +3,9 @@ import type { Message } from '@/api/types';
 import type { MessagePart } from '@valet/shared';
 import { MessageItem } from './message-item';
 import { ThinkingIndicator } from './thinking-indicator';
-import { MarkdownContent } from './markdown';
-import { ToolCard, type ToolCallData, type ToolCallStatus } from './tool-cards';
+import { DeferredMarkdownContent } from './markdown/deferred-markdown-content';
+import { DeferredToolCard } from './deferred-tool-card';
+import type { ToolCallData, ToolCallStatus } from './tool-cards/types';
 import { ChildSessionInlineList } from './child-session-card';
 import { useDrawer } from '@/routes/sessions/$sessionId';
 import type { ChildSessionEvent, ConnectedUser } from '@/hooks/use-chat';
@@ -216,7 +217,7 @@ function V2PartRenderer({ part }: { part: MessagePart }) {
       if (!part.text) return null;
       return (
         <div>
-          <MarkdownContent content={part.text} />
+          <DeferredMarkdownContent content={part.text} isStreaming={part.streaming} />
           {part.streaming && (
             <span className="inline-block h-3.5 w-1.5 animate-pulse bg-accent/60 ml-0.5 align-text-bottom rounded-sm" />
           )}
@@ -230,7 +231,7 @@ function V2PartRenderer({ part }: { part: MessagePart }) {
         args: part.args ?? null,
         result: part.result ?? null,
       };
-      return <ToolCard tool={toolData} />;
+      return <DeferredToolCard tool={toolData} />;
     }
     case 'error':
       return (

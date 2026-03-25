@@ -1,7 +1,6 @@
-import { useState, useEffect, useRef, useCallback, useMemo, type ReactNode } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo, lazy, Suspense } from 'react';
 import { useNavigate, useRouter } from '@tanstack/react-router';
 import { useQueryClient } from '@tanstack/react-query';
-import * as Dialog from '@radix-ui/react-dialog';
 import { useChat } from '@/hooks/use-chat';
 import type { IntegrationAuthError } from '@/hooks/use-chat';
 import { useSession, useSessionGitState, useUpdateSessionTitle, useSessionChildren } from '@/api/sessions';
@@ -9,10 +8,8 @@ import { useActiveThread, useCreateThread } from '@/api/threads';
 import { useDrawer } from '@/routes/sessions/$sessionId';
 import { MessageList } from './message-list';
 import { ChatInput } from './chat-input';
-import { InteractivePromptCard } from '@/components/session/interactive-prompt-card';
-import { ThreadSidebar } from './thread-sidebar';
-import { SessionActionsMenu } from '@/components/sessions/session-actions-menu';
-import { ShareSessionDialog } from '@/components/sessions/share-session-dialog';
+import { shouldShowChatSkeleton } from './chat-loading';
+import { getDisplaySessionStatus } from './session-status';
 import { api } from '@/api/client';
 import type { QueueMode } from '@valet/shared';
 import { Badge } from '@/components/ui/badge';
@@ -21,6 +18,31 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { useAuthStore } from '@/stores/auth';
 import { useIsMobile } from '@/hooks/use-is-mobile';
 import { useAutoRestartOrchestrator } from '@/hooks/use-auto-restart-orchestrator';
+
+const InteractivePromptCard = lazy(async () => {
+  const mod = await import('@/components/session/interactive-prompt-card');
+  return { default: mod.InteractivePromptCard };
+});
+
+const ThreadSidebar = lazy(async () => {
+  const mod = await import('./thread-sidebar');
+  return { default: mod.ThreadSidebar };
+});
+
+const SessionActionsMenu = lazy(async () => {
+  const mod = await import('@/components/sessions/session-actions-menu');
+  return { default: mod.SessionActionsMenu };
+});
+
+const ShareSessionDialog = lazy(async () => {
+  const mod = await import('@/components/sessions/share-session-dialog');
+  return { default: mod.ShareSessionDialog };
+});
+
+const MobileActionsSheet = lazy(async () => {
+  const mod = await import('./mobile-actions-sheet');
+  return { default: mod.MobileActionsSheet };
+});
 
 // Module-level store for continuation context to avoid URL search param size limits
 let pendingContinuationStore: { threadId: string; context: string } | null = null;
@@ -58,6 +80,7 @@ export function ChatContainer({ sessionId, initialThreadId, initialContinuationC
   const authUser = useAuthStore((s) => s.user);
   const {
     messages,
+    historyReady,
     sessionStatus,
     interactivePrompts,
     connectionStatus,
@@ -250,13 +273,20 @@ export function ChatContainer({ sessionId, initialThreadId, initialContinuationC
     setIsEditingTitle(false);
   }, [editTitleValue, sessionTitle, session?.title, sessionId, updateTitle]);
 
-  const isLoading = connectionStatus === 'connecting';
+  const isLoading = shouldShowChatSkeleton({
+    connectionStatus,
+    historyReady,
+    messageCount: messages.length,
+  });
   const isTerminated = isFinalSessionStatus(sessionStatus);
   const isDisabled = !isConnected || isTerminated;
   const isAgentActive = (isAgentThinking && agentStatus !== 'queued') || agentStatus === 'thinking' || agentStatus === 'tool_calling' || agentStatus === 'streaming';
-  const displaySessionStatus = !isTerminated && agentStatus === 'queued' && !runnerConnected
-    ? 'restoring'
-    : sessionStatus;
+  const displaySessionStatus = getDisplaySessionStatus({
+    sessionStatus,
+    connectionStatus,
+    agentStatus,
+    runnerConnected,
+  });
   const hideChrome = isMobile && composerFocused;
 
   // Clear any stale overlay (no longer using layout-level transition overlays)
@@ -331,12 +361,14 @@ export function ChatContainer({ sessionId, initialThreadId, initialContinuationC
               </Button>
             )}
             {session && (
-              <SessionActionsMenu
-                session={{ id: sessionId, workspace: session.workspace, status: sessionStatus }}
-                isOrchestrator={session.isOrchestrator}
-                showOpen={false}
-                showEditorLink={false}
-              />
+              <Suspense fallback={<HeaderActionFallback />}>
+                <SessionActionsMenu
+                  session={{ id: sessionId, workspace: session.workspace, status: sessionStatus }}
+                  isOrchestrator={session.isOrchestrator}
+                  showOpen={false}
+                  showEditorLink={false}
+                />
+              </Suspense>
             )}
           </div>
         </header>
@@ -397,13 +429,15 @@ export function ChatContainer({ sessionId, initialThreadId, initialContinuationC
         </div>
       )}
 
-      {canShareSession && (
-        <ShareSessionDialog
-          sessionId={sessionId}
-          open={shareOpen}
-          onOpenChange={setShareOpen}
-          isOwner={isOwner}
-        />
+      {canShareSession && shareOpen && (
+        <Suspense fallback={null}>
+          <ShareSessionDialog
+            sessionId={sessionId}
+            open={shareOpen}
+            onOpenChange={setShareOpen}
+            isOwner={isOwner}
+          />
+        </Suspense>
       )}
 
       {isLoading ? (
@@ -411,12 +445,14 @@ export function ChatContainer({ sessionId, initialThreadId, initialContinuationC
       ) : (
         <div className="flex min-h-0 flex-1 flex-row">
           {isOrchestrator && (
-            <ThreadSidebar
-              sessionId={sessionId}
-              activeThreadId={activeThreadId}
-              onSelectThread={setActiveThreadId}
-              onNewThread={handleNewThread}
-            />
+            <Suspense fallback={<ThreadSidebarFallback />}>
+              <ThreadSidebar
+                sessionId={sessionId}
+                activeThreadId={activeThreadId}
+                onSelectThread={setActiveThreadId}
+                onNewThread={handleNewThread}
+              />
+            </Suspense>
           )}
           <div className="flex min-h-0 min-w-0 flex-1 flex-col">
           <div className="relative flex min-h-0 flex-1 flex-col">
@@ -432,13 +468,14 @@ export function ChatContainer({ sessionId, initialThreadId, initialContinuationC
             />
           </div>
           {interactivePrompts.map((prompt) => (
-            <InteractivePromptCard
-              key={prompt.id}
-              prompt={prompt}
-              onAnswer={answerQuestion}
-              onApproveWs={approveActionWs}
-              onDenyWs={denyActionWs}
-            />
+            <Suspense key={prompt.id} fallback={<InteractivePromptCardFallback />}>
+              <InteractivePromptCard
+                prompt={prompt}
+                onAnswer={answerQuestion}
+                onApproveWs={approveActionWs}
+                onDenyWs={denyActionWs}
+              />
+            </Suspense>
           ))}
           {integrationAuthErrors.length > 0 && (
             <IntegrationReauthBanner
@@ -514,19 +551,23 @@ export function ChatContainer({ sessionId, initialThreadId, initialContinuationC
             onCommand={handleCommand}
           />
           {isMobile && (
-            <MobileActionsSheet
-              open={mobileActionsOpen}
-              onOpenChange={setMobileActionsOpen}
-              onVscode={() => drawer.openVscode()}
-              onDesktop={() => drawer.openDesktop()}
-              onTerminal={() => drawer.openTerminal()}
-              onFiles={() => drawer.openFiles()}
-              onReview={() => drawer.openReview()}
-              onLogs={() => drawer.openLogs()}
-              onInfo={() => drawer.toggleSidebar()}
-              onShare={canShareSession ? () => setShareOpen(true) : undefined}
-              prUrl={gitState?.prUrl || undefined}
-            />
+            mobileActionsOpen ? (
+              <Suspense fallback={null}>
+                <MobileActionsSheet
+                  open={mobileActionsOpen}
+                  onOpenChange={setMobileActionsOpen}
+                  onVscode={() => drawer.openVscode()}
+                  onDesktop={() => drawer.openDesktop()}
+                  onTerminal={() => drawer.openTerminal()}
+                  onFiles={() => drawer.openFiles()}
+                  onReview={() => drawer.openReview()}
+                  onLogs={() => drawer.openLogs()}
+                  onInfo={() => drawer.toggleSidebar()}
+                  onShare={canShareSession ? () => setShareOpen(true) : undefined}
+                  prUrl={gitState?.prUrl || undefined}
+                />
+              </Suspense>
+            ) : null
           )}
         </div>
         </div>
@@ -540,6 +581,7 @@ function SessionStatusBadge({ status, errorMessage }: { status: string; errorMes
     string,
     'default' | 'success' | 'warning' | 'error' | 'secondary'
   > = {
+    connecting: 'warning',
     initializing: 'warning',
     running: 'success',
     idle: 'default',
@@ -556,7 +598,7 @@ function SessionStatusBadge({ status, errorMessage }: { status: string; errorMes
 
 function SessionStatusIndicator({ sessionStatus, connectionStatus }: { sessionStatus: string; connectionStatus: string }) {
   // Determine color and animation based on session state
-  const isTransitioning = sessionStatus === 'hibernating' || sessionStatus === 'restoring' || sessionStatus === 'initializing';
+  const isTransitioning = sessionStatus === 'hibernating' || sessionStatus === 'restoring' || sessionStatus === 'initializing' || sessionStatus === 'connecting';
   const isRunning = sessionStatus === 'running' || sessionStatus === 'idle';
   const isSleeping = sessionStatus === 'hibernated';
   const isTerminated = sessionStatus === 'terminated' || sessionStatus === 'archived';
@@ -576,7 +618,13 @@ function SessionStatusIndicator({ sessionStatus, connectionStatus }: { sessionSt
     title = 'Terminated';
   } else if (isTransitioning) {
     color = 'bg-amber-400';
-    title = sessionStatus === 'initializing' ? 'Starting...' : sessionStatus === 'hibernating' ? 'Hibernating...' : 'Waking...';
+    title = sessionStatus === 'connecting'
+      ? 'Connecting...'
+      : sessionStatus === 'initializing'
+        ? 'Starting...'
+        : sessionStatus === 'hibernating'
+          ? 'Hibernating...'
+          : 'Waking...';
     spin = true;
   } else if (isSleeping) {
     color = 'bg-neutral-400 dark:bg-neutral-500';
@@ -619,6 +667,20 @@ function SessionStatusIndicator({ sessionStatus, connectionStatus }: { sessionSt
   );
 }
 
+function HeaderActionFallback() {
+  return (
+    <Button
+      variant="ghost"
+      size="sm"
+      disabled
+      className="h-7 w-7 px-0 text-neutral-300 dark:text-neutral-700"
+    >
+      <MoreVerticalIcon className="h-4 w-4" />
+      <span className="sr-only">Loading session actions</span>
+    </Button>
+  );
+}
+
 function ChatSkeleton() {
   return (
     <div className="flex-1 p-4">
@@ -632,6 +694,33 @@ function ChatSkeleton() {
             </div>
           </div>
         ))}
+      </div>
+    </div>
+  );
+}
+
+function ThreadSidebarFallback() {
+  return (
+    <div className="flex w-[210px] shrink-0 flex-col border-r border-neutral-200 bg-surface-0 dark:border-neutral-800 dark:bg-surface-0">
+      <div className="border-b border-neutral-100 px-3 py-2 dark:border-neutral-800/50">
+        <Skeleton className="h-4 w-16" />
+      </div>
+      <div className="space-y-2 px-3 py-3">
+        <Skeleton className="h-7 w-full" />
+        <Skeleton className="h-7 w-full" />
+        <Skeleton className="h-7 w-[85%]" />
+      </div>
+    </div>
+  );
+}
+
+function InteractivePromptCardFallback() {
+  return (
+    <div className="my-2 rounded-lg border border-amber-200 bg-amber-50 p-3 dark:border-amber-800/50 dark:bg-amber-900/20">
+      <div className="space-y-2">
+        <Skeleton className="h-4 w-32" />
+        <Skeleton className="h-4 w-full" />
+        <Skeleton className="h-8 w-40" />
       </div>
     </div>
   );
@@ -749,97 +838,6 @@ function XIcon({ className }: { className?: string }) {
   );
 }
 
-interface MobileActionsSheetProps {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  onVscode: () => void;
-  onDesktop: () => void;
-  onTerminal: () => void;
-  onFiles: () => void;
-  onReview: () => void;
-  onLogs: () => void;
-  onInfo: () => void;
-  onShare?: () => void;
-  prUrl?: string;
-}
-
-function MobileActionsSheet({
-  open,
-  onOpenChange,
-  onVscode,
-  onDesktop,
-  onTerminal,
-  onFiles,
-  onReview,
-  onLogs,
-  onInfo,
-  onShare,
-  prUrl,
-}: MobileActionsSheetProps) {
-  const run = (fn: () => void) => {
-    onOpenChange(false);
-    fn();
-  };
-
-  return (
-    <Dialog.Root open={open} onOpenChange={onOpenChange}>
-      <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 z-[60] bg-black/45 backdrop-blur-[1px]" />
-        <Dialog.Content className="fixed inset-x-0 bottom-0 z-[61] rounded-t-2xl border-t border-neutral-200 bg-surface-0 p-3 pb-[calc(env(safe-area-inset-bottom)+0.75rem)] shadow-2xl dark:border-neutral-800 dark:bg-surface-1">
-          <Dialog.Title className="mb-2 px-1 font-mono text-[11px] font-semibold uppercase tracking-[0.08em] text-neutral-500 dark:text-neutral-400">
-            Actions
-          </Dialog.Title>
-          <div className="grid grid-cols-2 gap-2">
-            <MobileActionButton icon={<EditorIcon className="h-4 w-4" />} label="VS Code" onClick={() => run(onVscode)} />
-            <MobileActionButton icon={<DesktopIcon className="h-4 w-4" />} label="Desktop" onClick={() => run(onDesktop)} />
-            <MobileActionButton icon={<TerminalIcon className="h-4 w-4" />} label="Terminal" onClick={() => run(onTerminal)} />
-            <MobileActionButton icon={<FilesIcon className="h-4 w-4" />} label="Files" onClick={() => run(onFiles)} />
-            <MobileActionButton icon={<ReviewIcon className="h-4 w-4" />} label="Review" onClick={() => run(onReview)} />
-            <MobileActionButton icon={<LogsIcon className="h-4 w-4" />} label="Logs" onClick={() => run(onLogs)} />
-            <MobileActionButton icon={<InfoIcon className="h-4 w-4" />} label="Session Info" onClick={() => run(onInfo)} />
-            {onShare && (
-              <MobileActionButton icon={<ShareIcon className="h-4 w-4" />} label="Share" onClick={() => run(onShare)} />
-            )}
-            {prUrl && (
-              <a
-                href={prUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="col-span-2 flex h-11 items-center justify-center gap-2 rounded-xl border border-neutral-200 bg-surface-1 px-3 text-[13px] font-medium text-neutral-700 dark:border-neutral-700 dark:bg-surface-2 dark:text-neutral-300"
-                onClick={() => onOpenChange(false)}
-              >
-                <PRIcon className="h-4 w-4" />
-                Open PR
-              </a>
-            )}
-          </div>
-        </Dialog.Content>
-      </Dialog.Portal>
-    </Dialog.Root>
-  );
-}
-
-function MobileActionButton({
-  icon,
-  label,
-  onClick,
-}: {
-  icon: ReactNode;
-  label: string;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className="flex h-11 items-center justify-center gap-2 rounded-xl border border-neutral-200 bg-surface-1 px-3 text-[13px] font-medium text-neutral-700 active:scale-[0.98] dark:border-neutral-700 dark:bg-surface-2 dark:text-neutral-300"
-    >
-      {icon}
-      {label}
-    </button>
-  );
-}
-
 function BackIcon({ className }: { className?: string }) {
   return (
     <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" className={className}>
@@ -950,6 +948,27 @@ function ShareIcon({ className }: { className?: string }) {
       <path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8" />
       <polyline points="16 6 12 2 8 6" />
       <line x1="12" x2="12" y1="2" y2="15" />
+    </svg>
+  );
+}
+
+function MoreVerticalIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      width="24"
+      height="24"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.75"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+    >
+      <circle cx="12" cy="12" r="1" />
+      <circle cx="12" cy="5" r="1" />
+      <circle cx="12" cy="19" r="1" />
     </svg>
   );
 }

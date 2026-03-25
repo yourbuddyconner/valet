@@ -540,64 +540,15 @@ export class SessionAgentDO {
       userId
     );
 
-    // Cache user details for author attribution (only fetch if not already cached)
-    if (!this.userDetailsCache.has(userId)) {
-      try {
-        const user = await getUserById(this.appDb, userId);
-        if (user) {
-          this.userDetailsCache.set(userId, {
-            id: user.id,
-            email: user.email,
-            name: user.name || undefined,
-            avatarUrl: user.avatarUrl || undefined,
-            gitName: user.gitName || undefined,
-            gitEmail: user.gitEmail || undefined,
-            modelPreferences: user.modelPreferences,
-          });
-        }
-      } catch (err) {
-        console.error('Failed to fetch user details for cache:', err);
-      }
-    }
-
-    // Send full session state as a single init message (prevents duplicates on reconnect)
-    const messages = this.ctx.storage.sql
-      .exec('SELECT id, role, content, parts, author_id, author_email, author_name, author_avatar_url, channel_type, channel_id, thread_id, message_format, created_at FROM messages ORDER BY created_at ASC')
-      .toArray();
-
     const status = this.sessionState.status;
     const sandboxId = this.sessionState.sandboxId;
-    const connectedUsers = await this.getConnectedUsersWithDetails();
+    const connectedUsers = this.getConnectedUserIds();
     const sessionId = this.sessionState.sessionId;
     const workspace = this.sessionState.workspace;
     const title = this.sessionState.title;
 
-    // Resolve authoritative model catalog from D1 (not from Runner discovery)
-    let availableModels: import('@valet/shared').AvailableModels | undefined;
-    try {
-      availableModels = await resolveAvailableModels(this.appDb, this.env);
-    } catch (err) {
-      console.error('[SessionAgentDO] Failed to resolve available models for init:', err);
-      // Fall back to Runner-discovered models if catalog resolution fails
-      availableModels = this.sessionState.availableModels;
-    }
-
-    // Resolve default model: user prefs → org prefs, validated against catalog
-    const initOwnerId = this.sessionState.userId;
-    const initOwnerDetails = initOwnerId ? await this.getUserDetails(initOwnerId) : undefined;
-    const initModelPrefs = await this.resolveModelPreferences(initOwnerDetails);
-    const candidateDefault = initModelPrefs?.[0] ?? null;
-    // Validate that the default model actually exists in the resolved catalog
-    const defaultModel = candidateDefault && availableModels
-      ? (availableModels.some((p) => p.models.some((m) => m.id === candidateDefault)) ? candidateDefault : null)
-      : candidateDefault;
-
-    // Load audit log for late joiners
-    const auditLogRows = this.ctx.storage.sql
-      .exec("SELECT event_type, summary, actor_id, properties as metadata, created_at FROM analytics_events WHERE summary IS NOT NULL ORDER BY id ASC")
-      .toArray();
-
-    // Build init payload — messages included for clients that haven't loaded from D1 yet
+    // Keep the websocket handshake lightweight. The transcript comes from the
+    // REST history endpoint; richer session metadata is streamed after open.
     const initPayload = JSON.stringify({
       type: 'init',
       session: {
@@ -605,20 +556,6 @@ export class SessionAgentDO {
         status,
         workspace,
         title,
-        messages: messages.map((msg) => ({
-          id: msg.id,
-          role: msg.role,
-          content: msg.content,
-          parts: msg.parts ? JSON.parse(msg.parts as string) : undefined,
-          authorId: msg.author_id || undefined,
-          authorEmail: msg.author_email || undefined,
-          authorName: msg.author_name || undefined,
-          authorAvatarUrl: msg.author_avatar_url || undefined,
-          channelType: msg.channel_type || undefined,
-          channelId: msg.channel_id || undefined,
-          threadId: msg.thread_id || undefined,
-          createdAt: msg.created_at,
-        })),
       },
       data: {
         sandboxRunning: !!sandboxId,
@@ -627,48 +564,12 @@ export class SessionAgentDO {
         promptsQueued: this.promptQueue.length,
         connectedClients: this.getClientSockets().length + 1,
         connectedUsers,
-        availableModels,
-        defaultModel,
-        auditLog: auditLogRows.map((row) => ({
-          eventType: row.event_type,
-          summary: row.summary,
-          actorId: row.actor_id || undefined,
-          metadata: row.metadata ? JSON.parse(row.metadata as string) : undefined,
-          createdAt: row.created_at,
-        })),
       },
     });
 
-    try {
-      server.send(initPayload);
-    } catch (err) {
-      // Init payload too large for WebSocket frame (1MB limit).
-      // Send a lightweight init without messages — the client will load from D1 REST API.
-      console.error(`[SessionAgentDO] Init payload too large (${(initPayload.length / 1024).toFixed(0)}KB), sending without messages:`, err);
-      server.send(JSON.stringify({
-        type: 'init',
-        session: { id: sessionId, status, workspace, title, messages: [] },
-        data: {
-          sandboxRunning: !!sandboxId,
-          runnerConnected: this.runnerLink.isConnected,
-          runnerBusy: this.promptQueue.runnerBusy,
-          promptsQueued: this.promptQueue.length,
-          connectedClients: this.getClientSockets().length + 1,
-          connectedUsers,
-          availableModels,
-          defaultModel,
-          auditLog: auditLogRows.map((row) => ({
-            eventType: row.event_type,
-            summary: row.summary,
-            actorId: row.actor_id || undefined,
-            metadata: row.metadata ? JSON.parse(row.metadata as string) : undefined,
-            createdAt: row.created_at,
-          })),
-        },
-      }));
-      // Trigger a flush so D1 has the latest data for the REST API fallback
-      this.ctx.waitUntil(this.flushMessagesToD1());
-    }
+    server.send(initPayload);
+
+    this.ctx.waitUntil(this.sendDeferredClientInit(server, userId));
 
     // Send any pending interactive prompts
     const pendingPrompts = this.ctx.storage.sql
@@ -715,7 +616,74 @@ export class SessionAgentDO {
       } catch { /* socket may have closed */ }
     }
 
-    const userDetails = this.userDetailsCache.get(userId);
+    return new Response(null, {
+      status: 101,
+      webSocket: client,
+      headers: { 'Sec-WebSocket-Protocol': 'valet' },
+    });
+  }
+
+  private async sendDeferredClientInit(server: WebSocket, userId: string): Promise<void> {
+    let userDetails = this.userDetailsCache.get(userId);
+    if (!userDetails) {
+      try {
+        const user = await getUserById(this.appDb, userId);
+        if (user) {
+          userDetails = {
+            id: user.id,
+            email: user.email,
+            name: user.name || undefined,
+            avatarUrl: user.avatarUrl || undefined,
+            gitName: user.gitName || undefined,
+            gitEmail: user.gitEmail || undefined,
+            modelPreferences: user.modelPreferences,
+          };
+          this.userDetailsCache.set(userId, userDetails);
+        }
+      } catch (err) {
+        console.error('Failed to fetch user details for cache:', err);
+      }
+    }
+
+    try {
+      const availableModels = await resolveAvailableModels(this.appDb, this.env);
+      const initOwnerId = this.sessionState.userId;
+      const initOwnerDetails = initOwnerId ? await this.getUserDetails(initOwnerId) : undefined;
+      const initModelPrefs = await this.resolveModelPreferences(initOwnerDetails);
+      const candidateDefault = initModelPrefs?.[0] ?? null;
+      const defaultModel = candidateDefault && availableModels
+        ? (availableModels.some((p) => p.models.some((m) => m.id === candidateDefault)) ? candidateDefault : null)
+        : candidateDefault;
+      server.send(JSON.stringify({
+        type: 'models',
+        models: availableModels,
+        defaultModel,
+      }));
+    } catch (err) {
+      console.error('[SessionAgentDO] Failed to resolve deferred models for client init:', err);
+    }
+
+    const auditLogRows = this.ctx.storage.sql
+      .exec("SELECT event_type, summary, actor_id, properties as metadata, created_at FROM analytics_events WHERE summary IS NOT NULL ORDER BY id ASC")
+      .toArray();
+    for (const row of auditLogRows) {
+      try {
+        server.send(JSON.stringify({
+          type: 'audit_log',
+          entry: {
+            eventType: row.event_type,
+            summary: row.summary,
+            actorId: row.actor_id || undefined,
+            metadata: row.metadata ? JSON.parse(row.metadata as string) : undefined,
+            createdAt: row.created_at,
+          },
+        }));
+      } catch {
+        break;
+      }
+    }
+
+    const connectedUsers = await this.getConnectedUsersWithDetails();
     this.broadcastToClients({
       type: 'user.joined',
       userId,
@@ -725,19 +693,12 @@ export class SessionAgentDO {
 
     this.emitAuditEvent('user.joined', `${userDetails?.name || userDetails?.email || userId} joined`, userId);
 
-    // Notify EventBus
     this.notifyEventBus({
       type: 'session.update',
       sessionId: this.sessionState.sessionId,
       userId,
       data: { event: 'user.joined', connectedUsers },
       timestamp: new Date().toISOString(),
-    });
-
-    return new Response(null, {
-      status: 101,
-      webSocket: client,
-      headers: { 'Sec-WebSocket-Protocol': 'valet' },
     });
   }
 

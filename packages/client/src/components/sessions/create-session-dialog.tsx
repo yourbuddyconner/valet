@@ -82,7 +82,7 @@ function useSessionStatus(sessionId: string | null) {
         if (msg.type === 'init' && msg.session?.status) {
           statusRef.current = msg.session.status;
           setStatus(msg.session.status as SessionStatus);
-          if (msg.session.runnerConnected) {
+          if (msg.data?.runnerConnected) {
             runnerConnectedRef.current = true;
             setRunnerConnected(true);
           }

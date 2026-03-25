@@ -1,20 +1,24 @@
 import { lazy, Suspense } from 'react';
 import type { ToolCallData } from './types';
-import { BashCard } from './bash-card';
-import { GlobCard } from './glob-card';
-import { GrepCard } from './grep-card';
-import { TodoWriteCard, TodoReadCard } from './todo-card';
-import { ListCard } from './list-card';
-import { QuestionCard } from './question-card';
-import { WebFetchCard } from './webfetch-card';
-import { LspCard } from './lsp-card';
-import { SkillCard } from './skill-card';
-import { SpawnSessionCard } from './spawn-session-card';
-import { SendMessageCard, ReadMessagesCard } from './session-message-card';
-import { TaskCard } from './task-card';
-import { GenericCard } from './generic-card';
+import { useState } from 'react';
+import { SummaryToolCard } from './summary-card';
+import { ToolCardExpansionIntentContext } from './tool-card-shell';
 
-// Lazy-load cards that import @pierre/diffs/react (~800KB)
+const BashCard = lazy(() => import('./bash-card').then((m) => ({ default: m.BashCard })));
+const GlobCard = lazy(() => import('./glob-card').then((m) => ({ default: m.GlobCard })));
+const GrepCard = lazy(() => import('./grep-card').then((m) => ({ default: m.GrepCard })));
+const TodoWriteCard = lazy(() => import('./todo-card').then((m) => ({ default: m.TodoWriteCard })));
+const TodoReadCard = lazy(() => import('./todo-card').then((m) => ({ default: m.TodoReadCard })));
+const ListCard = lazy(() => import('./list-card').then((m) => ({ default: m.ListCard })));
+const QuestionCard = lazy(() => import('./question-card').then((m) => ({ default: m.QuestionCard })));
+const WebFetchCard = lazy(() => import('./webfetch-card').then((m) => ({ default: m.WebFetchCard })));
+const LspCard = lazy(() => import('./lsp-card').then((m) => ({ default: m.LspCard })));
+const SkillCard = lazy(() => import('./skill-card').then((m) => ({ default: m.SkillCard })));
+const SpawnSessionCard = lazy(() => import('./spawn-session-card').then((m) => ({ default: m.SpawnSessionCard })));
+const SendMessageCard = lazy(() => import('./session-message-card').then((m) => ({ default: m.SendMessageCard })));
+const ReadMessagesCard = lazy(() => import('./session-message-card').then((m) => ({ default: m.ReadMessagesCard })));
+const TaskCard = lazy(() => import('./task-card').then((m) => ({ default: m.TaskCard })));
+const GenericCard = lazy(() => import('./generic-card').then((m) => ({ default: m.GenericCard })));
 const ReadCard = lazy(() => import('./read-card').then((m) => ({ default: m.ReadCard })));
 const EditCard = lazy(() => import('./edit-card').then((m) => ({ default: m.EditCard })));
 const WriteCard = lazy(() => import('./write-card').then((m) => ({ default: m.WriteCard })));
@@ -24,9 +28,20 @@ export type { ToolCallData, ToolCallStatus } from './types';
 
 /** Route a tool call to its specialized card component */
 export function ToolCard({ tool }: { tool: ToolCallData }) {
+  const [engaged, setEngaged] = useState(false);
+
+  if (!engaged) {
+    return <SummaryToolCard tool={tool} onExpand={() => setEngaged(true)} />;
+  }
+
   const card = resolveToolCard(tool);
-  // Suspense boundary for lazy-loaded diff cards (read, edit, write, patch)
-  return <Suspense fallback={<GenericCard tool={tool} />}>{card}</Suspense>;
+  return (
+    <Suspense fallback={<SummaryToolCard tool={tool} loading />}>
+      <ToolCardExpansionIntentContext.Provider value={true}>
+        {card}
+      </ToolCardExpansionIntentContext.Provider>
+    </Suspense>
+  );
 }
 
 function resolveToolCard(tool: ToolCallData) {

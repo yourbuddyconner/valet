@@ -2,8 +2,9 @@ import { useState, useRef, useCallback, useEffect } from 'react';
 import type { Message } from '@/api/types';
 import type { ConnectedUser } from '@/hooks/use-chat';
 import { formatTime } from '@/lib/format';
-import { MarkdownContent } from './markdown';
-import { ToolCard, type ToolCallData, type ToolCallStatus } from './tool-cards';
+import { DeferredMarkdownContent } from './markdown/deferred-markdown-content';
+import { DeferredToolCard } from './deferred-tool-card';
+import type { ToolCallData, ToolCallStatus } from './tool-cards/types';
 import { useDrawer } from '@/routes/sessions/$sessionId';
 import { Avatar, AvatarImage, AvatarFallback } from '@/components/ui/avatar';
 import { MessageCopyButton } from './message-copy-button';
@@ -113,7 +114,7 @@ export function MessageItem({ message, onRevert, connectedUsers }: MessageItemPr
           )}
           {showMessageContent(message.content || '', audioParts.length > 0) && (
             <div className="user-bubble rounded-2xl rounded-br-md bg-neutral-900 px-4 py-2.5 text-white shadow-sm dark:bg-neutral-100 dark:text-neutral-900 dark:shadow-none [&_.markdown-body]:text-white/95 [&_.markdown-body]:dark:text-neutral-900">
-              <MarkdownContent content={message.content || ''} />
+              <DeferredMarkdownContent content={message.content || ''} />
             </div>
           )}
           <div className="mt-1 flex items-center justify-end gap-2 px-1">
@@ -221,7 +222,7 @@ export function MessageItem({ message, onRevert, connectedUsers }: MessageItemPr
             )}
           </div>
           <div className="rounded-2xl rounded-bl-md bg-amber-500/[0.08] px-3 py-2 text-amber-800 shadow-sm dark:bg-amber-500/[0.12] dark:text-amber-100 dark:shadow-none">
-            <MarkdownContent content={message.content || ''} />
+            <DeferredMarkdownContent content={message.content || ''} />
           </div>
         </div>
       </div>
@@ -232,7 +233,7 @@ export function MessageItem({ message, onRevert, connectedUsers }: MessageItemPr
   if (isTool && toolData) {
     return (
       <div className="py-1">
-        <ToolCard tool={toolData} />
+        <DeferredToolCard tool={toolData} />
       </div>
     );
   }
@@ -256,7 +257,7 @@ export function MessageItem({ message, onRevert, connectedUsers }: MessageItemPr
           )}
         </div>
         <div className="border-l-[1.5px] border-accent/15 pl-3 dark:border-accent/10">
-          <MarkdownContent content={message.content || ''} />
+          <DeferredMarkdownContent content={message.content || ''} />
         </div>
         {screenshotParts.length > 0 && (
           <div className="mt-2 space-y-2">

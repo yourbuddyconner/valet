@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react';
+import { createContext, useContext, useState, type ReactNode } from 'react';
 import { cn } from '@/lib/cn';
 import type { ToolCallStatus } from './types';
 import { ChevronIcon } from './icons';
@@ -18,7 +18,13 @@ interface ToolCardShellProps {
   defaultExpanded?: boolean;
   /** Status accent color override */
   accentClass?: string;
+  /** Force an expand affordance even before heavy content is loaded */
+  expandable?: boolean;
+  /** Optional callback for custom expansion behavior */
+  onToggle?: () => void;
 }
+
+export const ToolCardExpansionIntentContext = createContext<boolean | null>(null);
 
 const STATUS_COLORS: Record<ToolCallStatus, string> = {
   pending: 'text-neutral-400 dark:text-neutral-500',
@@ -41,10 +47,14 @@ export function ToolCardShell({
   summary,
   children,
   defaultExpanded = false,
+  expandable,
+  onToggle,
 }: ToolCardShellProps) {
-  const [expanded, setExpanded] = useState(defaultExpanded);
+  const expansionIntent = useContext(ToolCardExpansionIntentContext);
+  const [expanded, setExpanded] = useState(expansionIntent ?? defaultExpanded);
   const isActive = status === 'pending' || status === 'running';
   const hasContent = !!children;
+  const isExpandable = expandable ?? hasContent;
 
   return (
     <div
@@ -57,21 +67,27 @@ export function ToolCardShell({
       {/* Header — always visible */}
       <button
         type="button"
-        onClick={() => hasContent && setExpanded(!expanded)}
-        disabled={!hasContent}
+        onClick={() => {
+          if (!isExpandable) return;
+          if (hasContent) {
+            setExpanded(!expanded);
+          }
+          onToggle?.();
+        }}
+        disabled={!isExpandable}
         className={cn(
           'flex w-full items-center gap-2 px-2.5 py-1.5 text-left',
           'transition-colors duration-100',
-          hasContent && 'hover:bg-neutral-50 dark:hover:bg-white/[0.02]',
-          !hasContent && 'cursor-default',
+          isExpandable && 'hover:bg-neutral-50 dark:hover:bg-white/[0.02]',
+          !isExpandable && 'cursor-default',
         )}
       >
         {/* Expand chevron */}
-        {hasContent ? (
+        {isExpandable ? (
           <ChevronIcon
             className={cn(
               'h-3 w-3 shrink-0 text-neutral-400 transition-transform duration-150 dark:text-neutral-500',
-              expanded && 'rotate-90',
+              hasContent && expanded && 'rotate-90',
             )}
           />
         ) : (
