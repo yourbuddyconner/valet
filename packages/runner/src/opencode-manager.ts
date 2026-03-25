@@ -124,6 +124,11 @@ export class OpenCodeManager {
    * Stop then start with new config. Serialized via promise lock.
    */
   async restart(config: OpenCodeConfig): Promise<void> {
+    // Cancel any pending auto-restart — this explicit restart supersedes it
+    if (this.autoRestartTimer) {
+      clearTimeout(this.autoRestartTimer);
+      this.autoRestartTimer = null;
+    }
     console.log("[OpenCodeManager] Restarting OpenCode with new config");
     await this.stop();
     await this.start(config);
@@ -337,18 +342,30 @@ export class OpenCodeManager {
 
   // ─── Process Management ─────────────────────────────────────────────
 
-  /** Wait until nothing is listening on the target port. */
-  private async waitForPortFree(): Promise<void> {
-    const maxAttempts = 25; // 5 seconds total
+  /** Kill any process listening on the target port and wait for it to free up. */
+  private async ensurePortFree(): Promise<void> {
+    // First try to kill whatever is on the port
+    try {
+      const proc = Bun.spawnSync(["fuser", "-k", `${this.port}/tcp`], {
+        stderr: "pipe",
+      });
+      if (proc.exitCode === 0) {
+        console.log(`[OpenCodeManager] Killed process(es) on port ${this.port}`);
+      }
+    } catch {
+      // fuser not available or no process on port — fine
+    }
+
+    // Wait briefly for port to actually free
+    const maxAttempts = 15;
     for (let i = 0; i < maxAttempts; i++) {
       try {
-        const res = await fetch(`http://localhost:${this.port}/health`);
-        // Port is still occupied — wait and retry
-        console.log(`[OpenCodeManager] Port ${this.port} still in use (attempt ${i + 1}/${maxAttempts}), waiting...`);
+        await fetch(`http://localhost:${this.port}/health`);
+        // Still responding — wait
+        if (i === 0) console.log(`[OpenCodeManager] Waiting for port ${this.port} to free...`);
         await new Promise((r) => setTimeout(r, 200));
       } catch {
-        // Connection refused — port is free
-        return;
+        return; // Connection refused — port is free
       }
     }
     console.warn(`[OpenCodeManager] Port ${this.port} still occupied after ${maxAttempts} attempts, proceeding anyway`);
@@ -356,7 +373,7 @@ export class OpenCodeManager {
 
   private async spawnProcess(): Promise<void> {
     // Ensure the port is free before spawning to prevent "Failed to start server" crashes
-    await this.waitForPortFree();
+    await this.ensurePortFree();
 
     console.log(`[OpenCodeManager] Spawning opencode serve --port ${this.port} (cwd: ${this.workspaceDir})`);
 
@@ -401,19 +418,23 @@ export class OpenCodeManager {
       `[OpenCodeManager] Scheduling auto-restart in ${delayMs}ms (crash ${this.consecutiveCrashes}/${OpenCodeManager.MAX_CONSECUTIVE_CRASHES})`
     );
 
-    this.autoRestartTimer = setTimeout(async () => {
+    this.autoRestartTimer = setTimeout(() => {
       this.autoRestartTimer = null;
-      if (this.stopping || this.process) return;
-      try {
-        console.log("[OpenCodeManager] Auto-restarting OpenCode after crash");
-        await this.spawnProcess();
-        await this.waitForHealth();
-        console.log("[OpenCodeManager] Auto-restart successful");
-      } catch (err) {
-        console.error("[OpenCodeManager] Auto-restart failed:", err);
-        // waitForHealth failure means process is likely dead again,
-        // the exit handler will schedule another restart
-      }
+      if (this.stopping) return;
+
+      // Serialize with applyConfig to prevent concurrent spawns
+      const next = this.configLock.then(async () => {
+        if (this.stopping || this.process) return;
+        try {
+          console.log("[OpenCodeManager] Auto-restarting OpenCode after crash");
+          await this.spawnProcess();
+          await this.waitForHealth();
+          console.log("[OpenCodeManager] Auto-restart successful");
+        } catch (err) {
+          console.error("[OpenCodeManager] Auto-restart failed:", err);
+        }
+      });
+      this.configLock = next.then(() => {});
     }, delayMs);
   }
 
@@ -430,7 +451,9 @@ export class OpenCodeManager {
         const res = await fetch(url);
         if (res.ok) {
           this.healthy = true;
-          this.consecutiveCrashes = 0;
+          // Don't reset consecutiveCrashes here — the health check can hit a
+          // stale process still holding the port. Crash counter resets only
+          // via the time-based threshold in scheduleAutoRestart().
           console.log("[OpenCodeManager] OpenCode is healthy");
           return;
         }
