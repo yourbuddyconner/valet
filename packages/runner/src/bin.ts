@@ -435,10 +435,11 @@ async function main() {
     // Subsequent configs: hot-reload via setDesiredConfig (for admin config pushes)
     try {
       promptHandler.setProviderModelConfigs(config.customProviders, config.builtInProviderModelConfigs);
-      await promptHandler.handleOpenCodeRestart();
       const merged = mergeOpenCodeConfig(currentConfig, config);
+      // Check if config actually changed before canceling in-flight work
       const result = await openCodeManager.setDesiredConfig(merged);
       if (result.restarted) {
+        await promptHandler.handleOpenCodeRestart();
         currentConfig = merged;
         await promptHandler.handleOpenCodeRestarted();
       }

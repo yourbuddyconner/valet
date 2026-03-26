@@ -44,7 +44,7 @@ export interface OpenCodeManagerOptions {
   // Test injection points
   spawnFn?: (cmd: string[], opts: any) => Subprocess;
   spawnSyncFn?: (cmd: string[], opts: any) => { exitCode: number };
-  fetchFn?: (url: string) => Promise<Response>;
+  fetchFn?: (url: string, opts?: RequestInit) => Promise<Response>;
   configWriter?: { write(config: OpenCodeConfig): void };
 }
 
@@ -56,6 +56,8 @@ export class OpenCodeManager {
   static readonly HEALTH_MAX_RETRIES = 150;
   static readonly BACKOFF_BASE_MS = 2000;
   static readonly BACKOFF_MAX_MS = 32_000;
+  static readonly KILL_GRACE_MS = 2000;
+  static readonly FETCH_TIMEOUT_MS = 2000;
 
   // ─── State ──────────────────────────────────────────────────────────
   private desired: 'up' | 'down' = 'down';
@@ -74,7 +76,7 @@ export class OpenCodeManager {
   private readonly workspaceDir: string;
   private readonly spawnFn: (cmd: string[], opts: any) => Subprocess;
   private readonly spawnSyncFn: (cmd: string[], opts: any) => { exitCode: number };
-  private readonly fetchFn: (url: string) => Promise<Response>;
+  private readonly fetchFn: (url: string, opts?: RequestInit) => Promise<Response>;
 
   // Event callbacks
   private fatalCallback?: () => void;
@@ -85,7 +87,7 @@ export class OpenCodeManager {
     this.port = options.port;
     this.spawnFn = options.spawnFn ?? ((cmd, opts) => Bun.spawn(cmd, opts));
     this.spawnSyncFn = options.spawnSyncFn ?? ((cmd, opts) => Bun.spawnSync(cmd, opts));
-    this.fetchFn = options.fetchFn ?? ((url) => fetch(url));
+    this.fetchFn = options.fetchFn ?? ((url, opts?) => fetch(url, opts));
     this.configWriter = options.configWriter ?? new OpenCodeConfigWriter({
       workspaceDir: options.workspaceDir,
       configSourceDir: options.configSourceDir,
@@ -107,7 +109,7 @@ export class OpenCodeManager {
       this.loopRunning = true;
       this.loopPromise = this.runLoop().finally(() => { this.loopRunning = false; });
     } else {
-      this.killProcess();
+      await this.killProcess();
       this.signal();
     }
 
@@ -118,7 +120,7 @@ export class OpenCodeManager {
   async shutdown(): Promise<void> {
     if (!this.loopRunning) return;
     this.desired = 'down';
-    this.killProcess();
+    await this.killProcess();
     this.signal();
     if (this.loopPromise) await this.loopPromise;
   }
@@ -169,8 +171,19 @@ export class OpenCodeManager {
       this.resolveHealthyWaiters();
       this.lastHealthyAt = Date.now();
 
-      // 5. Block until process exits
-      await proc.exited;
+      // 5. Block until process exits OR wake signal (config change / shutdown).
+      //    Re-evaluate on each wake: a stale signal (from a prior killProcess)
+      //    might resolve the wake promise after the loop already moved on.
+      //    Without this loop, the stale signal would cause an immediate kill
+      //    of the new healthy process.
+      while (proc.exitCode === null && this.desired === 'up' && !this.configChanged()) {
+        await Promise.race([proc.exited, this.wake.promise]);
+      }
+
+      // Kill the process if it's still alive (config change or shutdown)
+      if (proc.exitCode === null) {
+        await this.killProcess();
+      }
 
       // 6. Check why
       if (this.desired !== 'up') break;
@@ -238,17 +251,30 @@ export class OpenCodeManager {
     this.fatalCallback?.();
   }
 
-  private killProcess(): void {
+  /** Send SIGTERM, escalate to SIGKILL after grace period, wait for exit. */
+  private async killProcess(): Promise<void> {
     if (!this.process) return;
     const proc = this.process;
+
     try { proc.kill("SIGTERM"); } catch {}
-    // Escalate to SIGKILL if process doesn't exit within 5s
-    setTimeout(() => {
-      if (proc.exitCode === null) {
-        console.log("[OpenCodeManager] Grace period expired, sending SIGKILL");
-        try { proc.kill("SIGKILL"); } catch {}
-      }
-    }, 5000);
+
+    // Wait for graceful exit or escalate to SIGKILL
+    const exited = await Promise.race([
+      proc.exited.then(() => true as const),
+      sleep(OpenCodeManager.KILL_GRACE_MS).then(() => false as const),
+    ]);
+
+    if (!exited && proc.exitCode === null) {
+      console.log("[OpenCodeManager] Grace period expired, sending SIGKILL");
+      try { proc.kill("SIGKILL"); } catch {}
+      await proc.exited;
+    }
+
+    // Only null the reference if it still points to the process we killed.
+    // The run loop may have already spawned a replacement via spawn().
+    if (this.process === proc) {
+      this.process = null;
+    }
   }
 
   private spawn(): Subprocess {
@@ -263,8 +289,9 @@ export class OpenCodeManager {
   }
 
   private async ensurePortFree(): Promise<void> {
+    // SIGKILL anything listening on the port
     try {
-      const proc = this.spawnSyncFn(["fuser", "-k", `${this.port}/tcp`], { stderr: "pipe" });
+      const proc = this.spawnSyncFn(["fuser", "-k", "-KILL", `${this.port}/tcp`], { stderr: "pipe" });
       if (proc.exitCode === 0) {
         console.log(`[OpenCodeManager] Killed process(es) on port ${this.port}`);
       }
@@ -272,21 +299,31 @@ export class OpenCodeManager {
 
     const maxAttempts = 15;
     for (let i = 0; i < maxAttempts; i++) {
-      try {
-        await this.fetchFn(`http://localhost:${this.port}/health`);
-        if (i === 0) console.log(`[OpenCodeManager] Waiting for port ${this.port} to free...`);
-        await sleep(200);
-      } catch {
-        return;
-      }
+      if (!await this.isPortListening()) return;
+      if (i === 0) console.log(`[OpenCodeManager] Waiting for port ${this.port} to free...`);
+      await sleep(200);
     }
     console.warn(`[OpenCodeManager] Port ${this.port} still occupied after ${maxAttempts} attempts, proceeding anyway`);
+  }
+
+  /** Check if anything is listening on the port using a time-bounded fetch. */
+  private async isPortListening(): Promise<boolean> {
+    try {
+      await this.fetchFn(`http://localhost:${this.port}/health`, {
+        signal: AbortSignal.timeout(OpenCodeManager.FETCH_TIMEOUT_MS),
+      });
+      return true; // got a response → something is listening
+    } catch {
+      return false; // connection refused or timeout → port is free
+    }
   }
 
   private async checkHealth(proc: Subprocess): Promise<boolean> {
     if (proc.exitCode !== null) return false;
     try {
-      const res = await this.fetchFn(`http://localhost:${this.port}/health`);
+      const res = await this.fetchFn(`http://localhost:${this.port}/health`, {
+        signal: AbortSignal.timeout(OpenCodeManager.FETCH_TIMEOUT_MS),
+      });
       return res.ok;
     } catch {
       return false;

@@ -145,6 +145,8 @@ describe("OpenCodeManager", () => {
     (OpenCodeManager as any).BACKOFF_BASE_MS = 1;
     (OpenCodeManager as any).BACKOFF_MAX_MS = 5;
     (OpenCodeManager as any).CRASH_RESET_MS = 100;
+    (OpenCodeManager as any).KILL_GRACE_MS = 50;
+    (OpenCodeManager as any).FETCH_TIMEOUT_MS = 500;
   });
 
   afterEach(() => {
@@ -154,6 +156,8 @@ describe("OpenCodeManager", () => {
     (OpenCodeManager as any).BACKOFF_BASE_MS = 2000;
     (OpenCodeManager as any).BACKOFF_MAX_MS = 32_000;
     (OpenCodeManager as any).CRASH_RESET_MS = 60_000;
+    (OpenCodeManager as any).KILL_GRACE_MS = 2000;
+    (OpenCodeManager as any).FETCH_TIMEOUT_MS = 2000;
   });
 
   it("setDesiredConfig starts process and resolves when healthy", async () => {
