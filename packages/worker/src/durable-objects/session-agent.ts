@@ -20,7 +20,7 @@ import { ChannelRouter } from './channel-router.js';
 import { PromptQueue } from './prompt-queue.js';
 import { RunnerLink, type RunnerToDOMessage, type DOToRunnerMessage, type PromptAttachment, type RunnerMessageHandlers, type WorkflowExecutionDispatchPayload, type DOMessageOf } from './runner-link.js';
 import { SessionState, type SessionStartParams } from './session-state.js';
-import { SessionLifecycle, SandboxAlreadyExitedError } from './session-lifecycle.js';
+import { SessionLifecycle, SandboxAlreadyExitedError, SandboxSnapshotFailedError } from './session-lifecycle.js';
 import { resolveOrchestratorPersona } from '../services/persona.js';
 import { mailboxSend, mailboxCheck } from '../services/session-mailbox.js';
 import { taskCreate, taskList, taskUpdate, taskMy } from '../services/session-tasks.js';
@@ -910,6 +910,9 @@ export class SessionAgentDO {
 
     // ─── Idle Hibernate Check ─────────────────────────────────────────
     if (this.lifecycle.checkIdleTimeout()) {
+      // Set status immediately to prevent re-entrant hibernation from subsequent alarms.
+      // performHibernate() checks this guard and skips if already in progress.
+      this.sessionState.status = 'hibernating';
       this.ctx.waitUntil(this.performHibernate());
       // Don't return — still process question expiry below
     }
@@ -1125,10 +1128,14 @@ export class SessionAgentDO {
     // ─── Conditional Re-arm ────────────────────────────────────────────
     const deadlines = this.collectAlarmDeadlines();
     const hasWork = deadlines.some(d => d !== null);
+    const hasIdleDeadline =
+      this.sessionState.status === 'running'
+      && this.sessionState.idleTimeoutMs > 0
+      && this.sessionState.lastUserActivityAt > 0;
     const hasConnections = this.runnerLink.isConnected || this.getClientSockets().length > 0;
     const hasPendingGrace = this.runnerDisconnectedAt !== null;
 
-    if (hasWork || hasConnections || hasPendingGrace) {
+    if (hasWork || hasIdleDeadline || hasConnections || hasPendingGrace) {
       this.lifecycle.scheduleAlarm(deadlines);
     }
     // else: nothing to do — let Cloudflare evict this DO from memory
@@ -4118,8 +4125,18 @@ export class SessionAgentDO {
   private async performHibernate(): Promise<void> {
     const sessionId = this.sessionState.sessionId;
 
+    // Concurrency guard — prevents duplicate hibernate calls from overlapping alarms.
+    // The alarm handler sets status to 'hibernating' before ctx.waitUntil(performHibernate()),
+    // so subsequent alarm ticks will see a non-running status and skip.
+    const currentStatus = this.sessionState.status;
+    if (currentStatus !== 'hibernating') {
+      console.log(`[SessionAgentDO] performHibernate skipped — status is ${currentStatus}`);
+      return;
+    }
+
     if (!this.sessionState.sandboxId || !this.sessionState.hibernateUrl) {
       console.error('[SessionAgentDO] Cannot hibernate: missing sandboxId or hibernateUrl');
+      this.sessionState.status = 'running';
       return;
     }
 
@@ -4129,8 +4146,7 @@ export class SessionAgentDO {
       this.lifecycle.clearRunningStarted();
       await this.flushMetrics();
 
-      // Intermediate status — clients see this immediately
-      this.sessionState.status = 'hibernating';
+      // Status already set to 'hibernating' by alarm handler — broadcast to clients
       this.broadcastToClients({ type: 'status', data: { status: 'hibernating' } });
       if (sessionId) {
         updateSessionStatus(this.appDb, sessionId, 'hibernating').catch((e) =>
@@ -4182,6 +4198,17 @@ export class SessionAgentDO {
       if (err instanceof SandboxAlreadyExitedError) {
         console.log(`[SessionAgentDO] Session ${sessionId} sandbox already finished — routing to handleStop`);
         await this.handleStop('sandbox_exited');
+        return;
+      }
+
+      if (err instanceof SandboxSnapshotFailedError) {
+        console.warn(`[SessionAgentDO] Session ${sessionId} snapshot failed — terminating instead: ${err.message}`);
+        // The sandbox is still alive (snapshot_and_terminate only calls terminate on
+        // success). Terminate it explicitly before routing through handleStop.
+        // Don't reset status to 'running' — active time was already flushed at the top
+        // of performHibernate(), and faking 'running' would double-flush active seconds.
+        await this.lifecycle.terminateSandbox();
+        await this.handleStop('snapshot_failed');
         return;
       }
 
