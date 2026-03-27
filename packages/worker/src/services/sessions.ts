@@ -664,15 +664,20 @@ export async function getEnrichedChildSessions(
   opts: { limit?: number; cursor?: string; status?: string; hideTerminated?: boolean },
 ) {
   const appDb = getDb(env.DB);
-  await db.assertSessionAccess(appDb, parentSessionId, userId, 'viewer');
+  const session = await db.assertSessionAccess(appDb, parentSessionId, userId, 'viewer');
 
   const excludeStatuses = opts.hideTerminated ? ['terminated', 'archived', 'error'] : undefined;
+
+  // For orchestrator sessions, widen the query to span all orchestrator
+  // sessions for this user (session IDs rotate on hibernation/restore).
+  const isOrchestrator = session.isOrchestrator || session.purpose === 'orchestrator';
 
   const result = await db.getChildSessions(env.DB, parentSessionId, {
     limit: opts.limit,
     cursor: opts.cursor,
     status: opts.status,
     excludeStatuses,
+    userId: isOrchestrator ? userId : undefined,
   });
 
   const enrichedChildren = await enrichChildrenWithRuntimeStatus(env, result.children);

@@ -9,21 +9,29 @@ export const threadsRouter = new Hono<{ Bindings: Env; Variables: Variables }>()
 /**
  * GET /api/sessions/:sessionId/threads
  * List threads for a session (paginated).
+ *
+ * For orchestrator sessions, returns threads across ALL of the user's
+ * orchestrator sessions so history survives session rotation/hibernation.
  */
 threadsRouter.get('/:sessionId/threads', async (c) => {
   const user = c.get('user');
   const { sessionId } = c.req.param();
   const { cursor, limit, status } = c.req.query();
 
-  await db.assertSessionAccess(c.get('db'), sessionId, user.id, 'viewer');
+  const session = await db.assertSessionAccess(c.get('db'), sessionId, user.id, 'viewer');
 
   const parsedLimit = limit ? parseInt(limit, 10) : 20;
   const safeLimit = Number.isNaN(parsedLimit) ? 20 : Math.min(Math.max(parsedLimit, 1), 100);
+
+  // For orchestrator sessions, widen the query to span all orchestrator
+  // sessions for this user (session IDs rotate on hibernation/restore).
+  const isOrchestrator = session.isOrchestrator || session.purpose === 'orchestrator';
 
   const result = await db.listThreads(c.env.DB, sessionId, {
     cursor,
     limit: safeLimit,
     status,
+    userId: isOrchestrator ? user.id : undefined,
   });
 
   return c.json(result);
@@ -70,24 +78,41 @@ threadsRouter.get('/:sessionId/threads/active', async (c) => {
 /**
  * GET /api/sessions/:sessionId/threads/:threadId
  * Get thread detail with messages.
+ *
+ * For orchestrator sessions, allows viewing threads that belong to any
+ * of the user's orchestrator sessions (not just the current one).
  */
 threadsRouter.get('/:sessionId/threads/:threadId', async (c) => {
   const user = c.get('user');
   const { sessionId, threadId } = c.req.param();
 
-  await db.assertSessionAccess(c.get('db'), sessionId, user.id, 'viewer');
+  const session = await db.assertSessionAccess(c.get('db'), sessionId, user.id, 'viewer');
 
   const thread = await db.getThread(c.env.DB, threadId);
-  if (!thread || thread.sessionId !== sessionId) {
+  if (!thread) {
     throw new NotFoundError('Thread', threadId);
   }
 
-  // Fetch messages for this thread using raw D1 query
+  // For orchestrator sessions, the thread may belong to a different
+  // (rotated) orchestrator session for the same user — allow access.
+  const isOrchestrator = session.isOrchestrator || session.purpose === 'orchestrator';
+  if (thread.sessionId !== sessionId) {
+    if (!isOrchestrator) {
+      throw new NotFoundError('Thread', threadId);
+    }
+    // Verify the thread's session is also an orchestrator owned by this user
+    const threadSession = await db.assertSessionAccess(c.get('db'), thread.sessionId, user.id, 'viewer');
+    if (!threadSession.isOrchestrator && threadSession.purpose !== 'orchestrator') {
+      throw new NotFoundError('Thread', threadId);
+    }
+  }
+
+  // Fetch messages using the thread's actual session ID (may differ from the URL param)
   const result = await c.env.DB
     .prepare(
       'SELECT * FROM messages WHERE session_id = ? AND thread_id = ? ORDER BY created_at_epoch ASC, created_at ASC'
     )
-    .bind(sessionId, threadId)
+    .bind(thread.sessionId, threadId)
     .all();
 
   const messages: Message[] = (result.results || []).map((row: any) => ({
@@ -112,24 +137,40 @@ threadsRouter.get('/:sessionId/threads/:threadId', async (c) => {
 /**
  * POST /api/sessions/:sessionId/threads/:threadId/continue
  * Create a new thread as a continuation of an old one.
+ *
+ * For orchestrator sessions, allows continuing threads from any of the
+ * user's orchestrator sessions.
  */
 threadsRouter.post('/:sessionId/threads/:threadId/continue', async (c) => {
   const user = c.get('user');
   const { sessionId, threadId } = c.req.param();
 
-  await db.assertSessionAccess(c.get('db'), sessionId, user.id, 'collaborator');
+  const session = await db.assertSessionAccess(c.get('db'), sessionId, user.id, 'collaborator');
 
   const oldThread = await db.getThread(c.env.DB, threadId);
-  if (!oldThread || oldThread.sessionId !== sessionId) {
+  if (!oldThread) {
     throw new NotFoundError('Thread', threadId);
   }
 
+  // For orchestrator sessions, the thread may belong to a rotated sibling session
+  const isOrchestrator = session.isOrchestrator || session.purpose === 'orchestrator';
+  if (oldThread.sessionId !== sessionId) {
+    if (!isOrchestrator) {
+      throw new NotFoundError('Thread', threadId);
+    }
+    const threadSession = await db.assertSessionAccess(c.get('db'), oldThread.sessionId, user.id, 'collaborator');
+    if (!threadSession.isOrchestrator && threadSession.purpose !== 'orchestrator') {
+      throw new NotFoundError('Thread', threadId);
+    }
+  }
+
   // Fetch last ~20 messages from the old thread for continuation context
+  // (use the thread's actual session ID)
   const msgResult = await c.env.DB
     .prepare(
       'SELECT role, content FROM messages WHERE session_id = ? AND thread_id = ? ORDER BY created_at DESC LIMIT 20'
     )
-    .bind(sessionId, threadId)
+    .bind(oldThread.sessionId, threadId)
     .all();
 
   const oldMessages = (msgResult.results || []).reverse();
@@ -150,16 +191,31 @@ threadsRouter.post('/:sessionId/threads/:threadId/continue', async (c) => {
 /**
  * PATCH /api/sessions/:sessionId/threads/:threadId
  * Update thread status (active/archived).
+ *
+ * For orchestrator sessions, allows updating threads from any of the
+ * user's orchestrator sessions.
  */
 threadsRouter.patch('/:sessionId/threads/:threadId', async (c) => {
   const user = c.get('user');
   const { sessionId, threadId } = c.req.param();
 
-  await db.assertSessionAccess(c.get('db'), sessionId, user.id, 'collaborator');
+  const session = await db.assertSessionAccess(c.get('db'), sessionId, user.id, 'collaborator');
 
   const thread = await db.getThread(c.env.DB, threadId);
-  if (!thread || thread.sessionId !== sessionId) {
+  if (!thread) {
     throw new NotFoundError('Thread', threadId);
+  }
+
+  // For orchestrator sessions, the thread may belong to a rotated sibling session
+  const isOrchestrator = session.isOrchestrator || session.purpose === 'orchestrator';
+  if (thread.sessionId !== sessionId) {
+    if (!isOrchestrator) {
+      throw new NotFoundError('Thread', threadId);
+    }
+    const threadSession = await db.assertSessionAccess(c.get('db'), thread.sessionId, user.id, 'collaborator');
+    if (!threadSession.isOrchestrator && threadSession.purpose !== 'orchestrator') {
+      throw new NotFoundError('Thread', threadId);
+    }
   }
 
   const body = await c.req.json<{ status?: 'active' | 'archived' }>();

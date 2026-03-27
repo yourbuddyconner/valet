@@ -39,6 +39,8 @@ export interface GetChildSessionsOptions {
   cursor?: string;
   status?: string;
   excludeStatuses?: string[];
+  /** When set, return children of ALL orchestrator sessions for this user. */
+  userId?: string;
 }
 
 export interface PaginatedChildSessions {
@@ -505,12 +507,26 @@ export async function getChildSessions(
   parentSessionId: string,
   options: GetChildSessionsOptions = {}
 ): Promise<PaginatedChildSessions> {
-  const { limit = 20, cursor, status, excludeStatuses } = options;
+  const { limit = 20, cursor, status, excludeStatuses, userId } = options;
 
   // Build WHERE clauses — raw SQL is used here because of dynamic NOT IN
   // and the LEFT JOIN with session_git_state for child summaries.
-  const whereClauses = ['s.parent_session_id = ?'];
-  const binds: (string | number)[] = [parentSessionId];
+  //
+  // When userId is provided, widen the query to include children of ALL
+  // orchestrator sessions for that user. This ensures thread history
+  // survives orchestrator session rotation (new rotation UUID on restore).
+  const whereClauses: string[] = [];
+  const binds: (string | number)[] = [];
+
+  if (userId) {
+    whereClauses.push(
+      `s.parent_session_id IN (SELECT id FROM sessions WHERE user_id = ? AND purpose = 'orchestrator')`
+    );
+    binds.push(userId);
+  } else {
+    whereClauses.push('s.parent_session_id = ?');
+    binds.push(parentSessionId);
+  }
 
   if (status) {
     whereClauses.push('s.status = ?');
