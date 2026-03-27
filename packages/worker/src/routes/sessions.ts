@@ -420,6 +420,9 @@ sessionsRouter.post('/bulk-delete', zValidator('json', bulkDeleteSchema), async 
 /**
  * GET /api/sessions/:id/children
  * Get child sessions for a parent session (paginated).
+ *
+ * For orchestrator sessions, returns children across ALL of the user's
+ * orchestrator sessions so history survives session rotation/hibernation.
  */
 sessionsRouter.get('/:id/children', async (c) => {
   const user = c.get('user');

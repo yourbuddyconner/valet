@@ -78,9 +78,13 @@ export async function getActiveThread(
 export async function listThreads(
   db: D1Database,
   sessionId: string,
-  options: { cursor?: string; limit?: number; status?: string } = {}
+  options: { cursor?: string; limit?: number; status?: string; userId?: string } = {}
 ): Promise<{ threads: SessionThread[]; cursor?: string; hasMore: boolean }> {
   const limit = options.limit || 20;
+
+  // When userId is provided, list threads across ALL orchestrator sessions for
+  // this user so that thread history survives orchestrator session rotation.
+  const crossSession = !!options.userId;
 
   let query = `
     SELECT t.*,
@@ -96,10 +100,22 @@ export async function listThreads(
     LEFT JOIN (
       SELECT DISTINCT thread_id, channel_type, channel_id
       FROM channel_thread_mappings
-    ) ctm ON ctm.thread_id = t.id
-    WHERE t.session_id = ?`;
+    ) ctm ON ctm.thread_id = t.id`;
 
-  const params: (string | number)[] = [sessionId];
+  const params: (string | number)[] = [];
+
+  if (crossSession) {
+    query += `
+    WHERE t.session_id IN (
+      SELECT id FROM sessions
+      WHERE user_id = ? AND purpose = 'orchestrator'
+    )`;
+    params.push(options.userId!);
+  } else {
+    query += `
+    WHERE t.session_id = ?`;
+    params.push(sessionId);
+  }
 
   if (options.status) {
     query += ' AND t.status = ?';
