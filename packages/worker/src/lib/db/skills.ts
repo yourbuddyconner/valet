@@ -19,6 +19,22 @@ export type ListSkillsFilters = {
 
 // ─── FTS Sync ───────────────────────────────────────────────────────────────
 
+type RawD1Client = {
+  prepare: (query: string) => {
+    bind: (...args: unknown[]) => {
+      run: () => Promise<unknown>;
+    };
+  };
+};
+
+function getRawD1Client(db: AppDb): RawD1Client | null {
+  const client = (db as { session?: { client?: unknown } }).session?.client;
+  if (!client || typeof client !== 'object' || !('prepare' in client)) {
+    return null;
+  }
+  return client as RawD1Client;
+}
+
 async function syncSkillFts(db: AppDb, skillId: string): Promise<void> {
   try {
     // Fetch the skill row first — INSERT...SELECT into FTS5 virtual tables
@@ -35,9 +51,18 @@ async function syncSkillFts(db: AppDb, skillId: string): Promise<void> {
     // content isn't needed for search relevance.
     const truncatedContent = content.length > 2000 ? content.slice(0, 2000) : content;
 
-    // Delete existing FTS entry
+    const rawClient = getRawD1Client(db);
+    if (rawClient) {
+      await rawClient.prepare('DELETE FROM skills_fts WHERE rowid = ?').bind(rowid).run();
+      await rawClient
+        .prepare('INSERT INTO skills_fts(rowid, name, description, content) VALUES (?, ?, ?, ?)')
+        .bind(rowid, name, description, truncatedContent)
+        .run();
+      return;
+    }
+
+    // Better-sqlite3 test path fallback.
     await db.run(sql`DELETE FROM skills_fts WHERE rowid = ${rowid}`);
-    // Re-insert with explicit values
     await db.run(sql`
       INSERT INTO skills_fts(rowid, name, description, content)
       VALUES (${rowid}, ${name}, ${description}, ${truncatedContent})
@@ -54,6 +79,13 @@ async function deleteSkillFts(db: AppDb, skillId: string): Promise<void> {
       sql`SELECT rowid FROM skills WHERE id = ${skillId}`,
     );
     if (row.length === 0) return;
+
+    const rawClient = getRawD1Client(db);
+    if (rawClient) {
+      await rawClient.prepare('DELETE FROM skills_fts WHERE rowid = ?').bind(row[0].rowid).run();
+      return;
+    }
+
     await db.run(sql`DELETE FROM skills_fts WHERE rowid = ${row[0].rowid}`);
   } catch (err) {
     console.error(`[skills] FTS delete failed for skill ${skillId}:`, err);
