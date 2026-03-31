@@ -405,6 +405,13 @@ export type RunnerToDOMessage =
       error?: string;
     }
   | { type: 'ping' }
+  | {
+      type: 'runner-health';
+      kind: 'opencode_crash' | 'opencode_fatal' | 'upgrade_failure';
+      exitCode?: number;
+      crashCount?: number;
+      message?: string;
+    }
   | { type: 'mem-read'; requestId: string; path?: string }
   | { type: 'mem-write'; requestId: string; path: string; content: string }
   | { type: 'mem-patch'; requestId: string; path: string; operations: unknown[] }
