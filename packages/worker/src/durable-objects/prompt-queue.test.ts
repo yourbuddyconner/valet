@@ -582,6 +582,23 @@ describe('PromptQueue', () => {
     });
   });
 
+  describe('idleQueuedSince', () => {
+    it('is 0 by default', () => {
+      expect(pq.idleQueuedSince).toBe(0);
+    });
+
+    it('stores and retrieves a timestamp', () => {
+      pq.idleQueuedSince = 1711921234000;
+      expect(pq.idleQueuedSince).toBe(1711921234000);
+    });
+
+    it('clears when set to 0', () => {
+      pq.idleQueuedSince = 1711921234000;
+      pq.idleQueuedSince = 0;
+      expect(pq.idleQueuedSince).toBe(0);
+    });
+  });
+
   // ─── Migrations ───────────────────────────────────────────────────────
 
   describe('runMigrations', () => {

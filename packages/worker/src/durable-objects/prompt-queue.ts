@@ -380,6 +380,14 @@ export class PromptQueue {
     this.setState('errorSafetyNetAt', ms ? String(ms) : '');
   }
 
+  get idleQueuedSince(): number {
+    return parseInt(this.getState('idleQueuedSince') || '0', 10);
+  }
+
+  set idleQueuedSince(ms: number) {
+    this.setState('idleQueuedSince', ms ? String(ms) : '');
+  }
+
   // ─── Collect Mode ──────────────────────────────────────────────────────────
 
   /** Append an entry to the per-channel collect buffer. Returns new buffer length. */
