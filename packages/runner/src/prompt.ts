@@ -677,6 +677,13 @@ export class PromptHandler {
     }
   }
 
+  isAnyChannelBusy(): boolean {
+    for (const ch of this.channels.values()) {
+      if (ch.activeMessageId) return true;
+    }
+    return false;
+  }
+
   /** Get or create a ChannelSession for the given channel. */
   getOrCreateChannel(channelType?: string, channelId?: string): ChannelSession {
     const key = ChannelSession.channelKeyFrom(channelType, channelId);

@@ -51,6 +51,7 @@ export class AgentClient {
   private consecutiveUpgradeFailures = 0;
   private hasEverConnected = false;
   private pendingTokenRefresh: { requestId: string; resolve: (result: { accessToken: string; expiresAt?: string }) => void } | null = null;
+  private reconnectCallback?: () => void;
 
   private promptHandler: ((messageId: string, content: string, model?: string, author?: PromptAuthor, modelPreferences?: string[], attachments?: PromptAttachment[], channelType?: string, channelId?: string, opencodeSessionId?: string, continuationContext?: string, threadId?: string, replyChannelType?: string, replyChannelId?: string) => void | Promise<void>) | null = null;
   private answerHandler: ((questionId: string, answer: string | boolean) => void | Promise<void>) | null = null;
@@ -129,10 +130,14 @@ export class AgentClient {
         console.log("[AgentClient] Connected to SessionAgent DO");
         this.reconnectAttempts = 0;
         this.consecutiveUpgradeFailures = 0;
+        const isReconnect = this.hasEverConnected;
         this.hasEverConnected = true;
         this.flushBuffer();
         this.startPing();
         resolve();
+        if (isReconnect && this.reconnectCallback) {
+          this.reconnectCallback();
+        }
       });
 
       socket.addEventListener("message", (event) => {
@@ -825,6 +830,10 @@ export class AgentClient {
 
   onStop(handler: () => void): void {
     this.stopHandler = handler;
+  }
+
+  onReconnect(cb: () => void): void {
+    this.reconnectCallback = cb;
   }
 
   onAbort(handler: (channelType?: string, channelId?: string) => void | Promise<void>): void {
