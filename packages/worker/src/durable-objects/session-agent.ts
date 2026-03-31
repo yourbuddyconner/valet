@@ -21,6 +21,7 @@ import { PromptQueue } from './prompt-queue.js';
 import { RunnerLink, type RunnerToDOMessage, type DOToRunnerMessage, type PromptAttachment, type RunnerMessageHandlers, type WorkflowExecutionDispatchPayload, type DOMessageOf } from './runner-link.js';
 import { SessionState, type SessionStartParams } from './session-state.js';
 import { SessionLifecycle, SandboxAlreadyExitedError, SandboxSnapshotFailedError } from './session-lifecycle.js';
+import { SessionHealthMonitor, type HealthSnapshot } from './session-health-monitor.js';
 import { resolveOrchestratorPersona } from '../services/persona.js';
 import { mailboxSend, mailboxCheck } from '../services/session-mailbox.js';
 import { taskCreate, taskList, taskUpdate, taskMy } from '../services/session-tasks.js';
@@ -223,6 +224,8 @@ export class SessionAgentDO {
    *  After 60s without reconnection, the session is terminated. */
   private runnerDisconnectedAt: number | null = null;
   private static readonly RUNNER_GRACE_PERIOD_MS = 60_000;
+
+  private readonly healthMonitor = new SessionHealthMonitor();
 
   /** Debounce timer for flushing messages to D1 during active turns. */
   private d1FlushTimer: ReturnType<typeof setTimeout> | null = null;
@@ -884,6 +887,23 @@ export class SessionAgentDO {
     ws.close(1011, 'Internal error');
   }
 
+  private buildHealthSnapshot(): HealthSnapshot {
+    return {
+      now: Date.now(),
+      runnerConnected: this.runnerLink.isConnected,
+      runnerReady: this.runnerLink.isReady,
+      runnerBusy: this.promptQueue.runnerBusy,
+      queuedCount: this.promptQueue.length,
+      processingCount: this.promptQueue.processingCount,
+      lastDispatchedAt: this.promptQueue.lastPromptDispatchedAt,
+      idleQueuedSince: this.promptQueue.idleQueuedSince,
+      errorSafetyNetAt: this.promptQueue.errorSafetyNetAt,
+      sessionStatus: this.sessionState.status,
+      runnerDisconnectedAt: this.runnerDisconnectedAt,
+      runnerConnectedAt: this.runnerLink.connectedAt,
+    };
+  }
+
   // ─── Alarm Handler ────────────────────────────────────────────────────
 
   async alarm() {
@@ -918,58 +938,47 @@ export class SessionAgentDO {
       // Don't return — still process question expiry below
     }
 
-    // ─── Stuck-Processing Watchdog ─────────────────────────────────────
-    const WATCHDOG_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
-    if (this.promptQueue.isStuckProcessing(WATCHDOG_TIMEOUT_MS)) {
-      if (this.promptQueue.runnerBusy && !this.runnerLink.isConnected) {
-        const elapsed = Math.round((now - this.promptQueue.lastPromptDispatchedAt) / 1000);
-        console.warn(`[SessionAgentDO] Watchdog: prompt stuck in processing for ${elapsed}s with no runner — recovering`);
-        this.promptQueue.revertProcessingToQueued();
-        this.promptQueue.runnerBusy = false;
-        this.promptQueue.clearDispatchTimers();
+    // ─── Health Monitor ──────────────────────────────────────────────────
+    {
+      const snapshot = this.buildHealthSnapshot();
+      const result = this.healthMonitor.check(snapshot);
+
+      for (const event of result.events) {
+        this.emitEvent(event.eventType, {
+          summary: event.cause,
+          properties: event.properties,
+        });
+      }
+
+      for (const action of result.actions) {
+        switch (action.type) {
+          case 'revert_and_drain':
+            this.promptQueue.revertProcessingToQueued();
+            this.promptQueue.runnerBusy = false;
+            this.promptQueue.clearDispatchTimers();
+            this.promptQueue.idleQueuedSince = 0;
+            if (this.runnerLink.isConnected) {
+              await this.sendNextQueuedPrompt();
+            }
+            break;
+          case 'drain_queue':
+            this.promptQueue.idleQueuedSince = 0;
+            await this.sendNextQueuedPrompt();
+            break;
+          case 'force_complete':
+            this.promptQueue.errorSafetyNetAt = 0;
+            await this.handlePromptComplete();
+            break;
+          case 'mark_not_busy':
+            this.promptQueue.runnerBusy = false;
+            this.promptQueue.clearDispatchTimers();
+            break;
+        }
         this.broadcastToClients({
           type: 'status',
-          data: { runnerBusy: false, watchdogRecovery: true },
+          data: { runnerBusy: this.promptQueue.runnerBusy, watchdogRecovery: true },
         });
-        this.emitAuditEvent('watchdog.recovery', `Reverted stuck processing prompt after ${elapsed}s`);
-      }
-    }
-
-    // ─── Stuck Queue Watchdog ────────────────────────────────────────
-    // Handles the case where runnerBusy=true but there are no processing
-    // entries — e.g. an abort acknowledgment was lost. If queued items exist
-    // and nothing is processing, force-drain the queue.
-    {
-      const queuedCount = this.promptQueue.length;
-      if (queuedCount > 0 && this.promptQueue.runnerBusy) {
-        if (this.promptQueue.processingCount === 0) {
-          console.warn(`[SessionAgentDO] Watchdog: ${queuedCount} queued items with runnerBusy=true but 0 processing — recovering (runner=${this.runnerLink.isConnected ? 'connected' : 'disconnected'})`);
-          this.promptQueue.runnerBusy = false;
-          this.promptQueue.clearDispatchTimers();
-          if (this.runnerLink.isConnected) {
-            await this.sendNextQueuedPrompt();
-          }
-          this.broadcastToClients({
-            type: 'status',
-            data: { runnerBusy: this.promptQueue.runnerBusy, watchdogRecovery: true },
-          });
-          this.emitAuditEvent('watchdog.queue_recovery', `Recovered ${queuedCount} stuck queued items (0 processing)`);
-        }
-      }
-    }
-
-    // ─── Error Safety-Net ────────────────────────────────────────────
-    {
-      const errorSafetyNet = this.promptQueue.errorSafetyNetAt;
-      if (errorSafetyNet && now >= errorSafetyNet) {
-        if (this.promptQueue.runnerBusy) {
-          console.warn('[SessionAgentDO] Error safety-net: forcing prompt complete after error timeout');
-          this.promptQueue.errorSafetyNetAt = 0;
-          await this.handlePromptComplete();
-          this.emitAuditEvent('error.safety_net', 'Forced prompt complete after error safety-net timeout');
-        } else {
-          this.promptQueue.errorSafetyNetAt = 0;
-        }
+        this.emitAuditEvent(`watchdog.${action.type}`, action.reason);
       }
     }
 
@@ -1517,6 +1526,7 @@ export class SessionAgentDO {
 
     // Forward directly to runner with author info + channel metadata
     this.promptQueue.stampDispatched();
+    this.promptQueue.idleQueuedSince = 0;
     this.sessionState.lastParentIdleNotice = undefined;
     this.sessionState.parentIdleNotifyAt = 0;
     this.rescheduleIdleAlarm();
@@ -3292,6 +3302,15 @@ export class SessionAgentDO {
     // Runner is now idle — flush messages synchronously so they survive hibernation
     await this.flushMessagesToD1();
 
+    // Track idle-queued timing for watchdog
+    if (this.promptQueue.length > 0) {
+      if (!this.promptQueue.idleQueuedSince) {
+        this.promptQueue.idleQueuedSince = Date.now();
+      }
+    } else {
+      this.promptQueue.idleQueuedSince = 0;
+    }
+
     // Runner is now idle
     console.log(`[SessionAgentDO] handlePromptComplete: queue empty, setting runnerBusy=false`);
     this.promptQueue.runnerBusy = false;
@@ -3859,6 +3878,7 @@ export class SessionAgentDO {
 
       this.channelRouter.clearActiveChannel();
       this.promptQueue.stampDispatched();
+      this.promptQueue.idleQueuedSince = 0;
       this.sessionState.lastParentIdleNotice = undefined;
       this.sessionState.parentIdleNotifyAt = 0;
       const queueOwnerId = this.sessionState.userId;
@@ -3959,6 +3979,7 @@ export class SessionAgentDO {
       return false;
     }
     this.promptQueue.stampDispatched();
+    this.promptQueue.idleQueuedSince = 0;
     this.sessionState.lastParentIdleNotice = undefined;
     this.sessionState.parentIdleNotifyAt = 0;
     this.rescheduleIdleAlarm();
