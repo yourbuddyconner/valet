@@ -314,6 +314,7 @@ export function OrchestratorMetadataSidebar({
           <Link
             to="/sessions/$sessionId/threads"
             params={{ sessionId }}
+            search={{ page: undefined }}
             className="inline-flex items-center gap-1.5 rounded-sm border border-border/60 bg-surface-1/40 px-2 py-1 font-mono text-[10px] text-neutral-600 transition-colors hover:bg-surface-1 hover:text-accent dark:bg-surface-2/40 dark:text-neutral-400 dark:hover:bg-surface-2 dark:hover:text-accent"
           >
             Thread History

@@ -6,12 +6,14 @@ const {
   assertSessionAccessMock,
   getThreadMock,
   getThreadMessagesMock,
+  listThreadsMock,
   createThreadMock,
   updateThreadStatusMock,
 } = vi.hoisted(() => ({
   assertSessionAccessMock: vi.fn(),
   getThreadMock: vi.fn(),
   getThreadMessagesMock: vi.fn(),
+  listThreadsMock: vi.fn(),
   createThreadMock: vi.fn(),
   updateThreadStatusMock: vi.fn(),
 }));
@@ -20,6 +22,7 @@ vi.mock('../lib/db.js', () => ({
   assertSessionAccess: assertSessionAccessMock,
   getThread: getThreadMock,
   getThreadMessages: getThreadMessagesMock,
+  listThreads: listThreadsMock,
   createThread: createThreadMock,
   updateThreadStatus: updateThreadStatusMock,
 }));
@@ -41,6 +44,71 @@ describe('threadsRouter POST /:sessionId/threads/:threadId/continue', () => {
   beforeEach(() => {
     vi.resetAllMocks();
     getThreadMessagesMock.mockResolvedValue([]);
+    listThreadsMock.mockResolvedValue({ threads: [], hasMore: false });
+  });
+
+  it('returns numbered thread-history pagination metadata when page params are provided', async () => {
+    assertSessionAccessMock.mockResolvedValue({
+      id: 'orchestrator:user-1:new',
+      userId: 'user-1',
+      purpose: 'orchestrator',
+      isOrchestrator: true,
+    });
+
+    listThreadsMock.mockResolvedValue({
+      threads: [
+        {
+          id: 'thread-page-2',
+          sessionId: 'orchestrator:user-1:new',
+          status: 'active',
+          messageCount: 5,
+          summaryAdditions: 0,
+          summaryDeletions: 0,
+          summaryFiles: 0,
+          createdAt: new Date('2026-04-01T10:00:00Z'),
+          lastActiveAt: new Date('2026-04-01T10:05:00Z'),
+        },
+      ],
+      hasMore: true,
+      page: 2,
+      pageSize: 30,
+      totalCount: 65,
+      totalPages: 3,
+    });
+
+    const app = buildApp();
+    const res = await app.fetch(
+      new Request('http://localhost/orchestrator:user-1:new/threads?page=2&pageSize=30'),
+      { DB: {} } as any
+    );
+
+    expect(res.status).toBe(200);
+    expect(listThreadsMock).toHaveBeenCalledWith({}, 'orchestrator:user-1:new', {
+      limit: 30,
+      page: 2,
+      pageSize: 30,
+      userId: 'user-1',
+    });
+    expect(await res.json()).toEqual({
+      threads: [
+        {
+          id: 'thread-page-2',
+          sessionId: 'orchestrator:user-1:new',
+          status: 'active',
+          messageCount: 5,
+          summaryAdditions: 0,
+          summaryDeletions: 0,
+          summaryFiles: 0,
+          createdAt: '2026-04-01T10:00:00.000Z',
+          lastActiveAt: '2026-04-01T10:05:00.000Z',
+        },
+      ],
+      hasMore: true,
+      page: 2,
+      pageSize: 30,
+      totalCount: 65,
+      totalPages: 3,
+    });
   });
 
   it('merges historical and resumed messages by durable thread id in thread detail', async () => {

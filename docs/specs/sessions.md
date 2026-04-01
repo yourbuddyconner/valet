@@ -403,6 +403,15 @@ For orchestrator sessions, thread identity is durable across sandbox hibernation
 5. If the persisted OpenCode session is verified missing and the runner recreates it, only then may the runner inject bounded continuation context as fallback.
 6. `POST /api/sessions/:sessionId/threads/:threadId/continue` reopens the existing thread. It does not mint a new thread. If the thread was archived, it is reactivated first.
 
+### Thread History Listing
+
+`GET /api/sessions/:sessionId/threads` supports two read modes:
+
+1. Cursor mode for lightweight list consumers such as the thread sidebar. This returns `threads`, `cursor`, and `hasMore`.
+2. Numbered page mode for the Thread History screen. When `page` and `pageSize` are supplied, the response additionally includes `page`, `pageSize`, `totalCount`, and `totalPages`.
+
+For orchestrator sessions, both modes read across all of the user's orchestrator session rows so historical threads survive orchestrator rotation. The Thread History UI uses page-number pagination with a fixed page size of 30 threads.
+
 ### Prompt Completion
 
 1. Runner sends `complete` message.

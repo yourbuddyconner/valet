@@ -40,6 +40,7 @@ function ThreadDetailPage() {
           <Link
             to="/sessions/$sessionId/threads"
             params={{ sessionId }}
+            search={{ page: undefined }}
             className="font-mono text-[11px] text-neutral-400 transition-colors hover:text-neutral-700 dark:text-neutral-500 dark:hover:text-neutral-200"
           >
             &larr; Threads

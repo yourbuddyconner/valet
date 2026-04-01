@@ -62,16 +62,19 @@ async function assertOrchestratorThreadAccess(
 threadsRouter.get('/:sessionId/threads', async (c) => {
   const user = c.get('user');
   const { sessionId } = c.req.param();
-  const { cursor, limit, status } = c.req.query();
+  const { cursor, limit, status, page, pageSize } = c.req.query();
 
   const session = await db.assertSessionAccess(c.get('db'), sessionId, user.id, 'viewer');
 
-  const parsedLimit = limit ? parseInt(limit, 10) : 20;
+  const parsedLimit = pageSize ? parseInt(pageSize, 10) : limit ? parseInt(limit, 10) : 20;
   const safeLimit = Number.isNaN(parsedLimit) ? 20 : Math.min(Math.max(parsedLimit, 1), 100);
+  const parsedPage = page ? parseInt(page, 10) : undefined;
+  const safePage = parsedPage && !Number.isNaN(parsedPage) ? Math.max(parsedPage, 1) : undefined;
 
   const result = await db.listThreads(c.env.DB, sessionId, {
     cursor,
     limit: safeLimit,
+    ...(safePage ? { page: safePage, pageSize: safeLimit } : {}),
     status,
     userId: isOrchestratorSession(session) ? user.id : undefined,
   });

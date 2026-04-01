@@ -2,21 +2,30 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from './client';
 import type { SessionThread, ListThreadsResponse, Message } from './types';
 
+export type PaginatedThreadsResponse = ListThreadsResponse & {
+  page?: number;
+  pageSize?: number;
+  totalCount?: number;
+  totalPages?: number;
+};
+
 export const threadKeys = {
   all: ['threads'] as const,
   lists: () => [...threadKeys.all, 'list'] as const,
-  list: (sessionId: string) => [...threadKeys.lists(), sessionId] as const,
+  list: (sessionId: string, page?: number, pageSize?: number) => [...threadKeys.lists(), sessionId, page ?? null, pageSize ?? null] as const,
   details: () => [...threadKeys.all, 'detail'] as const,
   detail: (sessionId: string, threadId: string) =>
     [...threadKeys.details(), sessionId, threadId] as const,
   active: (sessionId: string) => [...threadKeys.all, 'active', sessionId] as const,
 };
 
-export function useThreads(sessionId: string) {
+export function useThreads(sessionId: string, options?: { page?: number; pageSize?: number }) {
   return useQuery({
-    queryKey: threadKeys.list(sessionId),
+    queryKey: threadKeys.list(sessionId, options?.page, options?.pageSize),
     queryFn: () =>
-      api.get<ListThreadsResponse>(`/sessions/${sessionId}/threads`),
+      api.get<PaginatedThreadsResponse>(
+        `/sessions/${sessionId}/threads${options?.page ? `?page=${options.page}&pageSize=${options.pageSize ?? 30}` : ''}`
+      ),
     enabled: !!sessionId,
   });
 }

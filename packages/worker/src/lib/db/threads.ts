@@ -78,15 +78,17 @@ export async function getActiveThread(
 export async function listThreads(
   db: D1Database,
   sessionId: string,
-  options: { cursor?: string; limit?: number; status?: string; userId?: string } = {}
-): Promise<{ threads: SessionThread[]; cursor?: string; hasMore: boolean }> {
+  options: { cursor?: string; limit?: number; status?: string; userId?: string; page?: number; pageSize?: number } = {}
+): Promise<{ threads: SessionThread[]; cursor?: string; hasMore: boolean; page?: number; pageSize?: number; totalCount?: number; totalPages?: number }> {
   const limit = options.limit || 20;
+  const page = options.page;
+  const pageSize = options.pageSize || limit;
 
   // When userId is provided, list threads across ALL orchestrator sessions for
   // this user so that thread history survives orchestrator session rotation.
   const crossSession = !!options.userId;
 
-  let query = `
+  const previewJoin = `
     SELECT t.*,
       (SELECT SUBSTR(m.content, 1, 120)
        FROM messages m
@@ -102,25 +104,55 @@ export async function listThreads(
       FROM channel_thread_mappings
     ) ctm ON ctm.thread_id = t.id`;
 
+  let whereClause = '';
   const params: (string | number)[] = [];
 
   if (crossSession) {
-    query += `
+    whereClause += `
     WHERE t.session_id IN (
       SELECT id FROM sessions
       WHERE user_id = ? AND purpose = 'orchestrator'
     )`;
     params.push(options.userId!);
   } else {
-    query += `
+    whereClause += `
     WHERE t.session_id = ?`;
     params.push(sessionId);
   }
 
   if (options.status) {
-    query += ' AND t.status = ?';
+    whereClause += ' AND t.status = ?';
     params.push(options.status);
   }
+
+  if (page && page > 0) {
+    const countResult = await db
+      .prepare(`SELECT COUNT(*) as count FROM session_threads t ${whereClause}`)
+      .bind(...params)
+      .first<{ count?: number }>();
+    const totalCount = Number(countResult?.count ?? 0);
+    const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
+    const safePage = Math.min(page, totalPages);
+    const offset = (safePage - 1) * pageSize;
+
+    const pageRowsResult = await db
+      .prepare(`${previewJoin} ${whereClause} ORDER BY t.last_active_at DESC LIMIT ? OFFSET ?`)
+      .bind(...params, pageSize, offset)
+      .all();
+    const pageRows = pageRowsResult.results || [];
+    const threads = pageRows.map((row: any) => rowToThread(row));
+
+    return {
+      threads,
+      hasMore: safePage < totalPages,
+      page: safePage,
+      pageSize,
+      totalCount,
+      totalPages,
+    };
+  }
+
+  let query = `${previewJoin} ${whereClause}`;
 
   if (options.cursor) {
     query += ' AND t.last_active_at < ?';

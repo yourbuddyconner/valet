@@ -225,6 +225,10 @@ export interface ListThreadsResponse {
   threads: SessionThread[];
   cursor?: string;
   hasMore: boolean;
+  page?: number;
+  pageSize?: number;
+  totalCount?: number;
+  totalPages?: number;
 }
 
 // Diff types
