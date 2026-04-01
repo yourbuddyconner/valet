@@ -1,6 +1,7 @@
 import { createFileRoute, Link, useNavigate } from '@tanstack/react-router';
 import { useThread, useContinueThread } from '@/api/threads';
 import { MessageList } from '@/components/chat/message-list';
+import { setPendingContinuation } from '@/components/chat/chat-container';
 import { formatRelativeTime } from '@/lib/format';
 
 export const Route = createFileRoute('/sessions/$sessionId/threads/$threadId')({
@@ -19,6 +20,9 @@ function ThreadDetailPage() {
   const handleContinue = () => {
     continueThread.mutate(threadId, {
       onSuccess: (data) => {
+        if (data.continuationContext) {
+          setPendingContinuation(data.thread.id, data.continuationContext);
+        }
         void navigate({
           to: '/sessions/$sessionId',
           params: { sessionId },

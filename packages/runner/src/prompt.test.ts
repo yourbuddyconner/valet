@@ -273,7 +273,7 @@ describe("PromptHandler thread resume", () => {
     expect(agentClient.sendError).not.toHaveBeenCalled();
   });
 
-  it("does not inject continuation context when there is no persisted session id", async () => {
+  it("injects continuation context when resuming a legacy thread with no persisted session id", async () => {
     const agentClient = createAgentClientMock();
     const handler = createHandler(agentClient);
 
@@ -310,15 +310,24 @@ describe("PromptHandler thread resume", () => {
       "thread",
       "thread-4",
       undefined,
-      "old summary that should not be injected",
+      "old summary that should be injected for legacy resume",
       "thread-4",
     );
 
     expect(fetchCalls.map((call) => `${call.method} ${call.url}`)).toEqual([
       "POST http://opencode.test/session",
+      "POST http://opencode.test/session/new-session-without-persisted-id/prompt_async",
       "POST http://opencode.test/session/new-session-without-persisted-id/message",
     ]);
     expect(fetchCalls[1]?.body).toMatchObject({
+      parts: [
+        {
+          type: "text",
+          text: expect.stringContaining("old summary that should be injected for legacy resume"),
+        },
+      ],
+    });
+    expect(fetchCalls[2]?.body).toMatchObject({
       parts: [{ type: "text", text: "start from here" }],
     });
     expect(agentClient.sendThreadCreated).toHaveBeenCalledWith("thread-4", "new-session-without-persisted-id");

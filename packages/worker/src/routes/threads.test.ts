@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { Hono } from 'hono';
+import type { D1Database } from '@cloudflare/workers-types';
 
 const {
   assertSessionAccessMock,
@@ -35,7 +36,7 @@ function buildApp() {
 
 describe('threadsRouter POST /:sessionId/threads/:threadId/continue', () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
   });
 
   it('returns the existing thread for orchestrator resume instead of creating a new thread', async () => {
@@ -43,6 +44,7 @@ describe('threadsRouter POST /:sessionId/threads/:threadId/continue', () => {
       id: 'thread-1',
       sessionId: 'orchestrator:user-1:old',
       status: 'active',
+      opencodeSessionId: 'persisted-thread-1',
     };
 
     assertSessionAccessMock
@@ -82,6 +84,7 @@ describe('threadsRouter POST /:sessionId/threads/:threadId/continue', () => {
       id: 'thread-2',
       sessionId: 'orchestrator:user-1:old',
       status: 'archived',
+      opencodeSessionId: 'persisted-thread-2',
     };
 
     const reactivatedThread = {
@@ -121,6 +124,59 @@ describe('threadsRouter POST /:sessionId/threads/:threadId/continue', () => {
     expect(await res.json()).toEqual({
       thread: reactivatedThread,
       resumed: true,
+    });
+  });
+
+  it('returns continuation context for legacy threads without a persisted OpenCode session', async () => {
+    const legacyThread = {
+      id: 'thread-3',
+      sessionId: 'orchestrator:user-1:old',
+      status: 'active',
+      opencodeSessionId: undefined,
+    };
+
+    assertSessionAccessMock
+      .mockResolvedValueOnce({
+        id: 'orchestrator:user-1:new',
+        userId: 'user-1',
+        purpose: 'orchestrator',
+        isOrchestrator: true,
+      })
+      .mockResolvedValueOnce({
+        id: 'orchestrator:user-1:old',
+        userId: 'user-1',
+        purpose: 'orchestrator',
+        isOrchestrator: true,
+      });
+
+    getThreadMock.mockResolvedValue(legacyThread);
+
+    const dbMock = {
+      prepare: vi.fn(() => ({
+        bind: vi.fn(() => ({
+          all: vi.fn().mockResolvedValue({
+            results: [
+              { role: 'assistant', content: 'Earlier answer' },
+              { role: 'user', content: 'Earlier question' },
+            ],
+          }),
+        })),
+      })),
+    } as unknown as Pick<D1Database, 'prepare'>;
+
+    const app = buildApp();
+    const res = await app.fetch(
+      new Request('http://localhost/orchestrator:user-1:new/threads/thread-3/continue', {
+        method: 'POST',
+      }),
+      { DB: dbMock } as any
+    );
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({
+      thread: legacyThread,
+      resumed: true,
+      continuationContext: '[user]: Earlier question\n[assistant]: Earlier answer',
     });
   });
 });

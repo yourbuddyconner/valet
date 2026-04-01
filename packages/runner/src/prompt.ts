@@ -1335,19 +1335,12 @@ export class PromptHandler {
 
     try {
       const hasPersistedSession = typeof opencodeSessionId === "string" && opencodeSessionId.trim().length > 0;
-      let resumeSessionWasRecreated = false;
-
       if (hasPersistedSession) {
         const ensuredSessionId = await this.ensureChannelOpenCodeSession(channel);
         const resyncedSession = await this.resyncAdoptedSession(channel, ensuredSessionId);
-        resumeSessionWasRecreated = resyncedSession.recreated;
-      }
-
-      // Continuation context is fallback-only. Reuse the persisted OpenCode
-      // session when possible, and inject the summary only after that persisted
-      // session has been verified missing and replaced.
-      if (continuationContext && hasPersistedSession && resumeSessionWasRecreated) {
-        await this.injectContinuationContext(channel.opencodeSessionId!, continuationContext);
+        if (continuationContext && resyncedSession.recreated) {
+          await this.injectContinuationContext(resyncedSession.sessionId, continuationContext);
+        }
       }
 
       // Set git config for author attribution before processing
@@ -1523,7 +1516,8 @@ export class PromptHandler {
             channelType,
             channelId,
             signal: syncAbort.signal,
-            continuationContext: hasPersistedSession ? continuationContext : undefined,
+            continuationContext,
+            resumeWithoutPersistedSession: !hasPersistedSession,
           });
           console.log(`[PromptHandler] Sync prompt ${messageId} returned (channel: ${channel.channelKey}) result=${result ? 'present' : 'null'}`);
 
@@ -3000,12 +2994,13 @@ export class PromptHandler {
       channelId?: string;
       signal?: AbortSignal;
       continuationContext?: string;
+      resumeWithoutPersistedSession?: boolean;
     },
   ): Promise<{ sessionId: string; result: { info: OpenCodeMessageInfo; parts: unknown[] } | null }> {
     let currentSessionId = await this.ensureChannelOpenCodeSession(channel);
     const resyncedSession = await this.resyncAdoptedSession(channel, currentSessionId);
     currentSessionId = resyncedSession.sessionId;
-    if (resyncedSession.recreated && options?.continuationContext) {
+    if (options?.continuationContext && (options.resumeWithoutPersistedSession || resyncedSession.recreated)) {
       await this.injectContinuationContext(currentSessionId, options.continuationContext);
     }
     try {
