@@ -29,6 +29,7 @@ export type RecoveryAction =
   | { type: 'drain_queue'; reason: string }
   | { type: 'force_complete'; reason: string }
   | { type: 'mark_not_busy'; reason: string }
+  | { type: 'clear_safety_net'; reason: string }
 
 export interface RecoveryEvent {
   eventType: 'session.recovery';
@@ -50,7 +51,10 @@ export class SessionHealthMonitor {
     const actions: RecoveryAction[] = [];
     const events: RecoveryEvent[] = [];
 
-    if (snapshot.sessionStatus !== 'running') {
+    // Skip terminal/hibernated states — but allow 'running', 'hibernating',
+    // 'restoring', 'initializing' so watchdogs still fire during transitions.
+    const skip = new Set(['terminated', 'archived', 'error', 'hibernated']);
+    if (skip.has(snapshot.sessionStatus)) {
       return { actions, events };
     }
 
@@ -106,8 +110,13 @@ export class SessionHealthMonitor {
     if (!s.errorSafetyNetAt) return;
     if (s.now < s.errorSafetyNetAt) return;
 
+    // Always clear the expired safety-net to prevent repeated events.
+    // force_complete also clears it, but when runner isn't busy we still
+    // need the clear_safety_net action.
     if (s.runnerBusy) {
       actions.push({ type: 'force_complete', reason: 'Forced prompt complete after error safety-net timeout' });
+    } else {
+      actions.push({ type: 'clear_safety_net', reason: 'Cleared expired error safety-net (runner not busy)' });
     }
     events.push({ eventType: 'session.recovery', cause: 'error_safety_net', properties: this.buildProperties(s, { errorSafetyNetAt: s.errorSafetyNetAt, staleDurationMs: s.now - s.errorSafetyNetAt }) });
   }

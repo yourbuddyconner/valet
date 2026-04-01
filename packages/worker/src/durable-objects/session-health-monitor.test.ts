@@ -28,10 +28,27 @@ describe('SessionHealthMonitor', () => {
     expect(result.events).toHaveLength(0);
   });
 
-  it('returns nothing for non-running sessions', () => {
-    const result = monitor.check(baseSnapshot({ sessionStatus: 'hibernated', queuedCount: 5, idleQueuedSince: 1 }));
-    expect(result.actions).toHaveLength(0);
-    expect(result.events).toHaveLength(0);
+  it('returns nothing for terminal/hibernated sessions', () => {
+    for (const sessionStatus of ['terminated', 'archived', 'error', 'hibernated']) {
+      const result = monitor.check(baseSnapshot({ sessionStatus, queuedCount: 5, idleQueuedSince: 1 }));
+      expect(result.actions).toHaveLength(0);
+      expect(result.events).toHaveLength(0);
+    }
+  });
+
+  it('still evaluates during hibernating/restoring/initializing', () => {
+    const now = Date.now();
+    for (const sessionStatus of ['hibernating', 'restoring', 'initializing']) {
+      const result = monitor.check(baseSnapshot({
+        sessionStatus,
+        now,
+        runnerBusy: false,
+        runnerConnected: true,
+        queuedCount: 2,
+        idleQueuedSince: now - 65_000,
+      }));
+      expect(result.actions.length).toBeGreaterThan(0);
+    }
   });
 
   describe('stuck processing', () => {
@@ -79,10 +96,10 @@ describe('SessionHealthMonitor', () => {
       expect(result.events[0].cause).toBe('error_safety_net');
     });
 
-    it('emits event but no action when not busy', () => {
+    it('clears safety-net and emits event when not busy', () => {
       const now = Date.now();
       const result = monitor.check(baseSnapshot({ now, runnerBusy: false, errorSafetyNetAt: now - 1000 }));
-      expect(result.actions).toHaveLength(0);
+      expect(result.actions).toEqual([{ type: 'clear_safety_net', reason: expect.any(String) }]);
       expect(result.events[0].cause).toBe('error_safety_net');
     });
 

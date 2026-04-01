@@ -818,6 +818,10 @@ export class SessionAgentDO {
       // Revert any processing prompt back to queued so it can be retried
       this.promptQueue.revertProcessingToQueued();
       this.promptQueue.runnerBusy = false;
+      // Track idle-queued timing if items remain after revert
+      if (this.promptQueue.length > 0 && !this.promptQueue.idleQueuedSince) {
+        this.promptQueue.idleQueuedSince = Date.now();
+      }
       this.runnerLink.onDisconnect();
 
       // Start grace period — if runner doesn't reconnect within 60s, terminate
@@ -962,8 +966,9 @@ export class SessionAgentDO {
             }
             break;
           case 'drain_queue':
-            this.promptQueue.idleQueuedSince = 0;
-            await this.sendNextQueuedPrompt();
+            if (await this.sendNextQueuedPrompt()) {
+              this.promptQueue.idleQueuedSince = 0;
+            }
             break;
           case 'force_complete':
             this.promptQueue.errorSafetyNetAt = 0;
@@ -972,6 +977,9 @@ export class SessionAgentDO {
           case 'mark_not_busy':
             this.promptQueue.runnerBusy = false;
             this.promptQueue.clearDispatchTimers();
+            break;
+          case 'clear_safety_net':
+            this.promptQueue.errorSafetyNetAt = 0;
             break;
         }
         this.broadcastToClients({
