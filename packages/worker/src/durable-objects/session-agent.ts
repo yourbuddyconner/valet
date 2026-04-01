@@ -3992,6 +3992,7 @@ export class SessionAgentDO {
     this.rescheduleIdleAlarm();
     this.sessionState.lastParentIdleNotice = undefined;
     this.sessionState.parentIdleNotifyAt = 0;
+    this.sessionState.waitSubscription = null;
     const dispatchOwnerId = this.sessionState.userId;
     const dispatchOwnerDetails = dispatchOwnerId ? await this.getUserDetails(dispatchOwnerId) : undefined;
     const dispatchModelPrefs = await this.resolveModelPreferences(dispatchOwnerDetails);
@@ -4088,6 +4089,7 @@ export class SessionAgentDO {
       this.promptQueue.idleQueuedSince = 0;
       this.sessionState.lastParentIdleNotice = undefined;
       this.sessionState.parentIdleNotifyAt = 0;
+      this.sessionState.waitSubscription = null;
       const queueOwnerId = this.sessionState.userId;
       const queueOwnerDetails = queueOwnerId ? await this.getUserDetails(queueOwnerId) : undefined;
       const queueModelPrefs = await this.resolveModelPreferences(queueOwnerDetails);
