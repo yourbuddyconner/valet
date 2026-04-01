@@ -38,6 +38,8 @@ export interface EnqueueParams {
   contextPrefix?: string | null;
   replyChannelType?: string | null;
   replyChannelId?: string | null;
+  childSessionId?: string | null;
+  childStatus?: string | null;
 }
 
 export interface QueueEntry {
@@ -59,6 +61,8 @@ export interface QueueEntry {
   contextPrefix: string | null;
   replyChannelType: string | null;
   replyChannelId: string | null;
+  childSessionId: string | null;
+  childStatus: string | null;
 }
 
 export interface CollectBufferEntry {
@@ -130,6 +134,8 @@ export class PromptQueue {
     try { this.sql.exec('ALTER TABLE prompt_queue ADD COLUMN context_prefix TEXT'); } catch { /* already exists */ }
     try { this.sql.exec('ALTER TABLE prompt_queue ADD COLUMN reply_channel_type TEXT'); } catch { /* already exists */ }
     try { this.sql.exec('ALTER TABLE prompt_queue ADD COLUMN reply_channel_id TEXT'); } catch { /* already exists */ }
+    try { this.sql.exec('ALTER TABLE prompt_queue ADD COLUMN child_session_id TEXT'); } catch { /* already exists */ }
+    try { this.sql.exec('ALTER TABLE prompt_queue ADD COLUMN child_status TEXT'); } catch { /* already exists */ }
   }
 
   // ─── Core Queue Operations ───────────────────────────────────────────────
@@ -151,7 +157,7 @@ export class PromptQueue {
     }
 
     this.sql.exec(
-      "INSERT INTO prompt_queue (id, content, attachments, model, status, author_id, author_email, author_name, author_avatar_url, channel_type, channel_id, channel_key, thread_id, continuation_context, context_prefix, reply_channel_type, reply_channel_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      "INSERT INTO prompt_queue (id, content, attachments, model, status, author_id, author_email, author_name, author_avatar_url, channel_type, channel_id, channel_key, thread_id, continuation_context, context_prefix, reply_channel_type, reply_channel_id, child_session_id, child_status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
       params.id,
       params.content,
       params.attachments || null,
@@ -169,6 +175,8 @@ export class PromptQueue {
       params.contextPrefix || null,
       params.replyChannelType || null,
       params.replyChannelId || null,
+      params.childSessionId || null,
+      params.childStatus || null,
     );
   }
 
@@ -179,7 +187,7 @@ export class PromptQueue {
   dequeueNext(): QueueEntry | null {
     const rows = this.sql
       .exec(
-        "SELECT id, content, attachments, model, author_id, author_email, author_name, channel_type, channel_id, channel_key, queue_type, workflow_execution_id, workflow_payload, thread_id, continuation_context, context_prefix, reply_channel_type, reply_channel_id FROM prompt_queue WHERE status = 'queued' ORDER BY created_at ASC LIMIT 1",
+        "SELECT id, content, attachments, model, author_id, author_email, author_name, channel_type, channel_id, channel_key, queue_type, workflow_execution_id, workflow_payload, thread_id, continuation_context, context_prefix, reply_channel_type, reply_channel_id, child_session_id, child_status FROM prompt_queue WHERE status = 'queued' ORDER BY created_at ASC LIMIT 1",
       )
       .toArray();
 
@@ -506,6 +514,8 @@ export class PromptQueue {
       contextPrefix: (row.context_prefix as string) || null,
       replyChannelType: (row.reply_channel_type as string) || null,
       replyChannelId: (row.reply_channel_id as string) || null,
+      childSessionId: (row.child_session_id as string) || null,
+      childStatus: (row.child_status as string) || null,
     };
   }
 }

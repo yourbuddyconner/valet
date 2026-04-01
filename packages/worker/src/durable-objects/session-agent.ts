@@ -3887,21 +3887,25 @@ export class SessionAgentDO {
         sysChannelId = threadId;
       }
 
+      // Extract child metadata for queue-level filtering
+      const queueChildSessionId = (parts?.childSessionId as string) || undefined;
+      const queueChildStatus = (parts?.childStatus as string) || undefined;
+
       const status = this.sessionState.status;
       if (status === 'hibernated') {
         // Queue the prompt so the runner picks it up after connecting.
-        this.promptQueue.enqueue({ id: messageId, content, threadId, channelType: sysChannelType, channelId: sysChannelId });
+        this.promptQueue.enqueue({ id: messageId, content, threadId, channelType: sysChannelType, channelId: sysChannelId, childSessionId: queueChildSessionId, childStatus: queueChildStatus });
         this.ctx.waitUntil(this.performWake());
       } else if (status === 'restoring') {
         // Wake already in progress — just queue the prompt for when the runner connects.
-        this.promptQueue.enqueue({ id: messageId, content, threadId, channelType: sysChannelType, channelId: sysChannelId });
+        this.promptQueue.enqueue({ id: messageId, content, threadId, channelType: sysChannelType, channelId: sysChannelId, childSessionId: queueChildSessionId, childStatus: queueChildStatus });
       } else if (status === 'running') {
         // Dispatch the system event as a prompt so the runner wakes up and can
         // decide whether to act on it (e.g. child session idle/completed events).
         const runnerBusy = this.promptQueue.runnerBusy;
         if (this.runnerLink.isConnected && !runnerBusy) {
           // Runner is connected and idle — insert as 'processing' for recoverability, then dispatch
-          this.promptQueue.enqueue({ id: messageId, content, threadId, channelType: sysChannelType, channelId: sysChannelId, status: 'processing' });
+          this.promptQueue.enqueue({ id: messageId, content, threadId, channelType: sysChannelType, channelId: sysChannelId, status: 'processing', childSessionId: queueChildSessionId, childStatus: queueChildStatus });
           this.promptQueue.stampDispatched();
           this.sessionState.lastParentIdleNotice = undefined;
           this.sessionState.parentIdleNotifyAt = 0;
@@ -3934,7 +3938,7 @@ export class SessionAgentDO {
           this.rescheduleIdleAlarm();
         } else {
           // Runner busy or not connected — queue the prompt
-          this.promptQueue.enqueue({ id: messageId, content, threadId, channelType: sysChannelType, channelId: sysChannelId });
+          this.promptQueue.enqueue({ id: messageId, content, threadId, channelType: sysChannelType, channelId: sysChannelId, childSessionId: queueChildSessionId, childStatus: queueChildStatus });
         }
       }
     }
@@ -4019,21 +4023,65 @@ export class SessionAgentDO {
       return false;
     }
 
-    const prompt = this.promptQueue.dequeueNext();
+    // Dequeue loop: skip filtered child events and malformed entries without recursion.
+    let prompt = this.promptQueue.dequeueNext();
+    while (prompt) {
+      console.log(`[SessionAgentDO] sendNextQueuedPrompt: found queued item id=${prompt.id} channelType=${prompt.channelType || 'none'} channelId=${prompt.channelId || 'none'} queueType=${prompt.queueType || 'prompt'}`);
+
+      // Apply wait subscription filter to queued child events.
+      // Events queued while the agent was busy may not match the subscription
+      // the agent registered via wait_for_event — drop them and try the next entry.
+      let shouldSkip = false;
+      if (prompt.childSessionId) {
+        const queueSub = this.sessionState.waitSubscription;
+        if (queueSub) {
+          const terminalStatuses = new Set(['terminated', 'error', 'hibernated']);
+          const notifyOn = queueSub.notifyOn || 'terminal';
+
+          if (queueSub.sessionIds?.length && !queueSub.sessionIds.includes(prompt.childSessionId)) {
+            console.log(`[SessionAgentDO] sendNextQueuedPrompt: dropping child event from ${prompt.childSessionId} (not in watched list)`);
+            shouldSkip = true;
+          } else if (queueSub.statuses?.length) {
+            if (!prompt.childStatus || !queueSub.statuses.includes(prompt.childStatus)) {
+              console.log(`[SessionAgentDO] sendNextQueuedPrompt: dropping child event ${prompt.childStatus} (not in ${queueSub.statuses.join(',')})`);
+              shouldSkip = true;
+            }
+          } else if (notifyOn === 'terminal') {
+            if (!prompt.childStatus || !terminalStatuses.has(prompt.childStatus)) {
+              console.log(`[SessionAgentDO] sendNextQueuedPrompt: dropping non-terminal child event ${prompt.childStatus}`);
+              shouldSkip = true;
+            }
+          }
+        }
+      }
+
+      // Drop malformed workflow entries
+      if (!shouldSkip && prompt.queueType === 'workflow_execute') {
+        const queuedExecutionId = (prompt.workflowExecutionId || '').trim();
+        const queuedPayload = parseQueuedWorkflowPayload(prompt.workflowPayload);
+        if (!queuedExecutionId || !queuedPayload) {
+          console.warn(`[SessionAgentDO] Dropping malformed queued workflow dispatch id=${prompt.id}`);
+          shouldSkip = true;
+        }
+      }
+
+      if (shouldSkip) {
+        this.promptQueue.dropEntry(prompt.id);
+        prompt = this.promptQueue.dequeueNext();
+        continue;
+      }
+
+      break;
+    }
+
     if (!prompt) {
       console.log(`[SessionAgentDO] sendNextQueuedPrompt: no queued items`);
       return false;
     }
-    console.log(`[SessionAgentDO] sendNextQueuedPrompt: found queued item id=${prompt.id} channelType=${prompt.channelType || 'none'} channelId=${prompt.channelId || 'none'} queueType=${prompt.queueType || 'prompt'}`);
 
     if (prompt.queueType === 'workflow_execute') {
       const queuedExecutionId = (prompt.workflowExecutionId || '').trim();
-      const queuedPayload = parseQueuedWorkflowPayload(prompt.workflowPayload);
-      if (!queuedExecutionId || !queuedPayload) {
-        this.promptQueue.dropEntry(prompt.id);
-        console.warn(`[SessionAgentDO] Dropping malformed queued workflow dispatch id=${prompt.id}`);
-        return this.sendNextQueuedPrompt();
-      }
+      const queuedPayload = parseQueuedWorkflowPayload(prompt.workflowPayload)!;
 
       this.channelRouter.clearActiveChannel();
       this.promptQueue.stampDispatched();
