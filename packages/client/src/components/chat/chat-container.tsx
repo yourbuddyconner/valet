@@ -18,6 +18,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { useAuthStore } from '@/stores/auth';
 import { useIsMobile } from '@/hooks/use-is-mobile';
 import { useAutoRestartOrchestrator } from '@/hooks/use-auto-restart-orchestrator';
+import { getEffectiveActiveThreadId } from './thread-selection';
 
 const InteractivePromptCard = lazy(async () => {
   const mod = await import('@/components/session/interactive-prompt-card');
@@ -138,7 +139,6 @@ export function ChatContainer({ sessionId, initialThreadId, initialContinuationC
 
 
   // Thread state (orchestrator sessions only)
-  const [activeThreadId, setActiveThreadId] = useState<string | null>(initialThreadId ?? null);
   const pendingContinuationContext = useRef<string | undefined>(
     initialContinuationContext ?? (initialThreadId ? (consumePendingContinuation(initialThreadId) ?? undefined) : undefined)
   );
@@ -154,20 +154,40 @@ export function ChatContainer({ sessionId, initialThreadId, initialContinuationC
     sessionId,
     isOrchestrator && !initialThreadId,
   );
+  const activeThreadId = getEffectiveActiveThreadId(initialThreadId, serverActiveThread?.id);
+
+  const selectThread = useCallback(
+    (threadId: string) => {
+      void navigate({
+        to: '/sessions/$sessionId',
+        params: { sessionId },
+        search: { threadId },
+        replace: true,
+      });
+    },
+    [navigate, sessionId]
+  );
+
   useEffect(() => {
-    if (serverActiveThread && !activeThreadId) {
-      setActiveThreadId(serverActiveThread.id);
-    }
-  }, [serverActiveThread, activeThreadId, setActiveThreadId]);
+    if (!isOrchestrator) return;
+    if (initialThreadId) return;
+    if (!serverActiveThread?.id) return;
+    void navigate({
+      to: '/sessions/$sessionId',
+      params: { sessionId },
+      search: { threadId: serverActiveThread.id },
+      replace: true,
+    });
+  }, [initialThreadId, isOrchestrator, navigate, serverActiveThread?.id, sessionId]);
 
   const handleNewThread = useCallback(async () => {
     try {
       const thread = await createThread.mutateAsync();
-      setActiveThreadId(thread.id);
+      selectThread(thread.id);
     } catch (err) {
       console.error('[ChatContainer] Failed to create thread:', err);
     }
-  }, [createThread]);
+  }, [createThread, selectThread]);
 
   // When switching to a thread, eagerly load its messages from the server.
   // This handles past threads whose messages were purged from the DO after restart.
@@ -458,7 +478,7 @@ export function ChatContainer({ sessionId, initialThreadId, initialContinuationC
               <ThreadSidebar
                 sessionId={sessionId}
                 activeThreadId={activeThreadId}
-                onSelectThread={setActiveThreadId}
+                onSelectThread={selectThread}
                 onNewThread={handleNewThread}
               />
             </Suspense>
