@@ -360,11 +360,13 @@ async function main() {
   const promptHandler = new PromptHandler(opencodeUrl!, agentClient, sessionId!);
 
   agentClient.onReconnect(() => {
-    if (!promptHandler.isAnyChannelBusy()) {
+    if (!promptHandler.isOpenCodeConnected()) {
+      console.log('[Runner] Reconnected but OpenCode SSE not active — skipping idle emit');
+    } else if (promptHandler.isAnyChannelBusy()) {
+      console.log('[Runner] Reconnected while busy — skipping idle emit, SSE will send it when done');
+    } else {
       console.log('[Runner] Reconnected while idle — sending agentStatus idle to drain queued work');
       agentClient.sendAgentStatus('idle');
-    } else {
-      console.log('[Runner] Reconnected while busy — skipping idle emit, SSE will send it when done');
     }
   });
 

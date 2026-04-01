@@ -751,6 +751,7 @@ export class SessionAgentDO {
     // Mark runner as not-yet-ready via RunnerLink
     this.runnerLink.onConnect();
     this.runnerLink.connectedAt = Date.now();
+    this.rescheduleIdleAlarm(); // arm ready-timeout watchdog
 
     // Send init message to runner
     server.send(JSON.stringify({ type: 'init' }));
@@ -821,6 +822,7 @@ export class SessionAgentDO {
       // Track idle-queued timing if items remain after revert
       if (this.promptQueue.length > 0 && !this.promptQueue.idleQueuedSince) {
         this.promptQueue.idleQueuedSince = Date.now();
+        this.rescheduleIdleAlarm();
       }
       this.runnerLink.onDisconnect();
 
@@ -3334,6 +3336,7 @@ export class SessionAgentDO {
     if (this.promptQueue.length > 0) {
       if (!this.promptQueue.idleQueuedSince) {
         this.promptQueue.idleQueuedSince = Date.now();
+        this.rescheduleIdleAlarm();
       }
     } else {
       this.promptQueue.idleQueuedSince = 0;
@@ -4422,7 +4425,17 @@ export class SessionAgentDO {
       ? this.runnerDisconnectedAt + SessionAgentDO.RUNNER_GRACE_PERIOD_MS
       : null;
 
-    return [promptExpiry, followupMs, watchdog, safetyNet, parentIdle, gracePeriod];
+    // Idle-queue-stuck watchdog (items queued with runnerBusy=false)
+    const idleQueued = this.promptQueue.idleQueuedSince;
+    const idleQueueDeadline = idleQueued > 0 ? idleQueued + 60 * 1000 : null;
+
+    // Ready timeout (runner connected but never became ready)
+    const connectedAt = this.runnerLink.connectedAt;
+    const readyDeadline = connectedAt && this.runnerLink.isConnected && !this.runnerLink.isReady
+      ? connectedAt + 2 * 60 * 1000
+      : null;
+
+    return [promptExpiry, followupMs, watchdog, safetyNet, parentIdle, gracePeriod, idleQueueDeadline, readyDeadline];
   }
 
   private rescheduleIdleAlarm(): void {
