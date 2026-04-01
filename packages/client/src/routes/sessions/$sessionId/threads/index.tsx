@@ -1,7 +1,7 @@
 import { createFileRoute, Link } from '@tanstack/react-router';
 import { useThreads } from '@/api/threads';
 import { formatRelativeTime } from '@/lib/format';
-import { getThreadHistoryPages } from '../../thread-history-pagination';
+import { getThreadHistoryPages } from '../../-thread-history-pagination';
 
 export const Route = createFileRoute('/sessions/$sessionId/threads/')({
   component: ThreadHistoryPage,

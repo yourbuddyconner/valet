@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { getThreadHistoryPages } from './thread-history-pagination';
+import { getThreadHistoryPages } from './-thread-history-pagination';
 
 describe('getThreadHistoryPages', () => {
   it('returns a compact page window around the current page', () => {
