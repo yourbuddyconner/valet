@@ -121,4 +121,85 @@ describe('sessionsRouter GET /:id/messages', () => {
       ],
     });
   });
+
+  it('merges live DO messages with archived orchestrator thread history on refresh', async () => {
+    assertSessionAccessMock
+      .mockResolvedValueOnce({
+        id: 'orchestrator:user-1:new',
+        userId: 'user-1',
+        purpose: 'orchestrator',
+        isOrchestrator: true,
+      })
+      .mockResolvedValueOnce({
+        id: 'orchestrator:user-1:old',
+        userId: 'user-1',
+        purpose: 'orchestrator',
+        isOrchestrator: true,
+      });
+
+    getThreadMock.mockResolvedValue({
+      id: 'thread-1',
+      sessionId: 'orchestrator:user-1:old',
+    });
+
+    getThreadMessagesMock.mockResolvedValue([
+      {
+        id: 'msg-old',
+        sessionId: 'orchestrator:user-1:old',
+        role: 'user',
+        content: 'historic message',
+        threadId: 'thread-1',
+        createdAt: new Date('2026-03-31T12:00:00Z'),
+      },
+    ]);
+
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({
+        messages: [
+          {
+            id: 'msg-new',
+            sessionId: 'orchestrator:user-1:new',
+            role: 'assistant',
+            content: 'new resumed message',
+            threadId: 'thread-1',
+            createdAt: '2026-03-31T12:05:00.000Z',
+          },
+        ],
+      }), { status: 200 })
+    );
+
+    const app = buildApp();
+    const res = await app.fetch(
+      new Request('http://localhost/orchestrator:user-1:new/messages?threadId=thread-1'),
+      {
+        DB: {},
+        SESSIONS: {
+          idFromName: vi.fn((name: string) => `do:${name}`),
+          get: vi.fn(() => ({ fetch: fetchMock })),
+        },
+      } as any
+    );
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({
+      messages: [
+        {
+          id: 'msg-old',
+          sessionId: 'orchestrator:user-1:old',
+          role: 'user',
+          content: 'historic message',
+          threadId: 'thread-1',
+          createdAt: '2026-03-31T12:00:00.000Z',
+        },
+        {
+          id: 'msg-new',
+          sessionId: 'orchestrator:user-1:new',
+          role: 'assistant',
+          content: 'new resumed message',
+          threadId: 'thread-1',
+          createdAt: '2026-03-31T12:05:00.000Z',
+        },
+      ],
+    });
+  });
 });

@@ -5,12 +5,58 @@ import type { Env, Variables } from '../env.js';
 import * as db from '../lib/db.js';
 import * as sessionService from '../services/sessions.js';
 import { resolveAvailableModels } from '../services/model-catalog.js';
-import { NotFoundError, type AgentSession } from '@valet/shared';
+import { NotFoundError, type AgentSession, type Message } from '@valet/shared';
 
 export const sessionsRouter = new Hono<{ Bindings: Env; Variables: Variables }>();
 
 function isOrchestratorSession(session: AgentSession): boolean {
   return !!session.isOrchestrator || session.purpose === 'orchestrator';
+}
+
+function mergeMessagesPreferDo(doMessages: unknown[] | undefined, persistedMessages: Message[]): Message[] {
+  const merged = new Map<string, Message>();
+
+  for (const message of persistedMessages) {
+    merged.set(message.id, message);
+  }
+
+  for (const raw of doMessages || []) {
+    const message = raw as {
+      id: string;
+      sessionId: string;
+      role: Message['role'];
+      content: string;
+      parts?: Message['parts'];
+      authorId?: string;
+      authorEmail?: string;
+      authorName?: string;
+      authorAvatarUrl?: string;
+      channelType?: string;
+      channelId?: string;
+      threadId?: string;
+      createdAt: string;
+    };
+
+    merged.set(message.id, {
+      id: message.id,
+      sessionId: message.sessionId,
+      role: message.role,
+      content: message.content,
+      parts: message.parts,
+      authorId: message.authorId,
+      authorEmail: message.authorEmail,
+      authorName: message.authorName,
+      authorAvatarUrl: message.authorAvatarUrl,
+      channelType: message.channelType,
+      channelId: message.channelId,
+      threadId: message.threadId,
+      createdAt: new Date(message.createdAt),
+    });
+  }
+
+  return Array.from(merged.values()).sort(
+    (a, b) => a.createdAt.getTime() - b.createdAt.getTime()
+  );
 }
 
 // Validation schemas
@@ -330,10 +376,10 @@ sessionsRouter.get('/:id/messages', async (c) => {
   const doRes = await sessionDO.fetch(new Request(`http://do/messages${qs ? `?${qs}` : ''}`));
   const data = await doRes.json() as { messages?: unknown[] };
 
-  // For thread-specific queries, the DO may have no messages if the session was
-  // restarted (orchestrators call messageStore.reset() on start). Fall back to
-  // D1 which retains the full historical archive.
-  if (threadId && (!data.messages || data.messages.length === 0)) {
+  // For thread-specific queries, merge the DO's live messages with D1's
+  // historical archive. Resumed threads can span multiple orchestrator session
+  // rows, so relying on either source alone can drop continuity after refresh.
+  if (threadId) {
     if (isOrchestratorSession(session)) {
       const thread = await db.getThread(c.env.DB, threadId);
       if (!thread) {
@@ -351,7 +397,7 @@ sessionsRouter.get('/:id/messages', async (c) => {
         ...(limit ? { limit: parseInt(limit, 10) } : {}),
         ...(after ? { after } : {}),
       });
-      return c.json({ messages: d1Messages });
+      return c.json({ messages: mergeMessagesPreferDo(data.messages, d1Messages) });
     }
 
     const d1Messages = await db.getSessionMessages(c.get('db'), id, {
@@ -359,7 +405,7 @@ sessionsRouter.get('/:id/messages', async (c) => {
       ...(after ? { after } : {}),
       threadId,
     });
-    return c.json({ messages: d1Messages });
+    return c.json({ messages: mergeMessagesPreferDo(data.messages, d1Messages) });
   }
 
   return c.json(data);
