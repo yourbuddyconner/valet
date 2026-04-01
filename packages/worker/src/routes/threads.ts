@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import type { D1Database } from '@cloudflare/workers-types';
 import type { Env, Variables } from '../env.js';
 import { NotFoundError } from '@valet/shared';
-import type { Message, AgentSession, SessionThread, SessionParticipantRole } from '@valet/shared';
+import type { AgentSession, SessionThread, SessionParticipantRole } from '@valet/shared';
 import type { AppDb } from '../lib/drizzle.js';
 import * as db from '../lib/db.js';
 
@@ -137,29 +137,7 @@ threadsRouter.get('/:sessionId/threads/:threadId', async (c) => {
 
   await assertOrchestratorThreadAccess(c.get('db'), session, thread, user.id, 'viewer');
 
-  // Fetch messages using the thread's actual session ID (may differ from the URL param)
-  const result = await c.env.DB
-    .prepare(
-      'SELECT * FROM messages WHERE session_id = ? AND thread_id = ? ORDER BY created_at_epoch ASC, created_at ASC'
-    )
-    .bind(thread.sessionId, threadId)
-    .all();
-
-  const messages: Message[] = (result.results || []).map((row: any) => ({
-    id: row.id,
-    sessionId: row.session_id,
-    role: row.role as Message['role'],
-    content: row.content,
-    parts: row.parts ? JSON.parse(row.parts) : undefined,
-    authorId: row.author_id || undefined,
-    authorEmail: row.author_email || undefined,
-    authorName: row.author_name || undefined,
-    authorAvatarUrl: row.author_avatar_url || undefined,
-    channelType: row.channel_type || undefined,
-    channelId: row.channel_id || undefined,
-    opencodeSessionId: row.opencode_session_id || undefined,
-    createdAt: new Date(row.created_at),
-  }));
+  const messages = await db.getThreadMessages(c.get('db'), threadId);
 
   return c.json({ thread, messages });
 });

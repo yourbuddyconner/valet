@@ -5,11 +5,13 @@ import type { D1Database } from '@cloudflare/workers-types';
 const {
   assertSessionAccessMock,
   getThreadMock,
+  getThreadMessagesMock,
   createThreadMock,
   updateThreadStatusMock,
 } = vi.hoisted(() => ({
   assertSessionAccessMock: vi.fn(),
   getThreadMock: vi.fn(),
+  getThreadMessagesMock: vi.fn(),
   createThreadMock: vi.fn(),
   updateThreadStatusMock: vi.fn(),
 }));
@@ -17,6 +19,7 @@ const {
 vi.mock('../lib/db.js', () => ({
   assertSessionAccess: assertSessionAccessMock,
   getThread: getThreadMock,
+  getThreadMessages: getThreadMessagesMock,
   createThread: createThreadMock,
   updateThreadStatus: updateThreadStatusMock,
 }));
@@ -37,6 +40,80 @@ function buildApp() {
 describe('threadsRouter POST /:sessionId/threads/:threadId/continue', () => {
   beforeEach(() => {
     vi.resetAllMocks();
+    getThreadMessagesMock.mockResolvedValue([]);
+  });
+
+  it('merges historical and resumed messages by durable thread id in thread detail', async () => {
+    const thread = {
+      id: 'thread-detail',
+      sessionId: 'orchestrator:user-1:old',
+      status: 'active',
+      opencodeSessionId: 'persisted-thread',
+    };
+
+    assertSessionAccessMock
+      .mockResolvedValueOnce({
+        id: 'orchestrator:user-1:new',
+        userId: 'user-1',
+        purpose: 'orchestrator',
+        isOrchestrator: true,
+      })
+      .mockResolvedValueOnce({
+        id: 'orchestrator:user-1:old',
+        userId: 'user-1',
+        purpose: 'orchestrator',
+        isOrchestrator: true,
+      });
+
+    getThreadMock.mockResolvedValue(thread);
+    getThreadMessagesMock.mockResolvedValue([
+      {
+        id: 'msg-old',
+        sessionId: 'orchestrator:user-1:old',
+        role: 'user',
+        content: 'old message',
+        threadId: 'thread-detail',
+        createdAt: new Date('2026-04-01T10:00:00Z'),
+      },
+      {
+        id: 'msg-new',
+        sessionId: 'orchestrator:user-1:new',
+        role: 'assistant',
+        content: 'new message',
+        threadId: 'thread-detail',
+        createdAt: new Date('2026-04-01T10:05:00Z'),
+      },
+    ]);
+
+    const app = buildApp();
+    const res = await app.fetch(
+      new Request('http://localhost/orchestrator:user-1:new/threads/thread-detail'),
+      { DB: {} } as any
+    );
+
+    expect(res.status).toBe(200);
+    expect(getThreadMessagesMock).toHaveBeenCalledWith({}, 'thread-detail');
+    expect(await res.json()).toEqual({
+      thread,
+      messages: [
+        {
+          id: 'msg-old',
+          sessionId: 'orchestrator:user-1:old',
+          role: 'user',
+          content: 'old message',
+          threadId: 'thread-detail',
+          createdAt: '2026-04-01T10:00:00.000Z',
+        },
+        {
+          id: 'msg-new',
+          sessionId: 'orchestrator:user-1:new',
+          role: 'assistant',
+          content: 'new message',
+          threadId: 'thread-detail',
+          createdAt: '2026-04-01T10:05:00.000Z',
+        },
+      ],
+    });
   });
 
   it('returns the existing thread for orchestrator resume instead of creating a new thread', async () => {

@@ -45,6 +45,43 @@ export async function getSessionMessages(
   }));
 }
 
+export async function getThreadMessages(
+  db: AppDb,
+  threadId: string,
+  options: { limit?: number; after?: string } = {}
+): Promise<Message[]> {
+  const limit = options.limit || 5000;
+
+  const conditions = [eq(messages.threadId, threadId)];
+  if (options.after) {
+    conditions.push(gt(messages.createdAt, options.after));
+  }
+
+  const rows = await db
+    .select()
+    .from(messages)
+    .where(and(...conditions))
+    .orderBy(asc(messages.createdAtEpoch), asc(messages.createdAt))
+    .limit(limit);
+
+  return rows.map((row): Message => ({
+    id: row.id,
+    sessionId: row.sessionId,
+    role: row.role as Message['role'],
+    content: row.content,
+    parts: row.parts as Message['parts'],
+    authorId: row.authorId || undefined,
+    authorEmail: row.authorEmail || undefined,
+    authorName: row.authorName || undefined,
+    authorAvatarUrl: row.authorAvatarUrl || undefined,
+    channelType: row.channelType || undefined,
+    channelId: row.channelId || undefined,
+    opencodeSessionId: row.opencodeSessionId || undefined,
+    threadId: row.threadId || undefined,
+    createdAt: toDate(row.createdAt),
+  }));
+}
+
 export async function batchUpsertMessages(
   db: D1Database,
   sessionId: string,

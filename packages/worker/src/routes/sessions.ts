@@ -334,8 +334,6 @@ sessionsRouter.get('/:id/messages', async (c) => {
   // restarted (orchestrators call messageStore.reset() on start). Fall back to
   // D1 which retains the full historical archive.
   if (threadId && (!data.messages || data.messages.length === 0)) {
-    let messageSessionId = id;
-
     if (isOrchestratorSession(session)) {
       const thread = await db.getThread(c.env.DB, threadId);
       if (!thread) {
@@ -349,10 +347,14 @@ sessionsRouter.get('/:id/messages', async (c) => {
         }
       }
 
-      messageSessionId = thread.sessionId;
+      const d1Messages = await db.getThreadMessages(c.get('db'), threadId, {
+        ...(limit ? { limit: parseInt(limit, 10) } : {}),
+        ...(after ? { after } : {}),
+      });
+      return c.json({ messages: d1Messages });
     }
 
-    const d1Messages = await db.getSessionMessages(c.get('db'), messageSessionId, {
+    const d1Messages = await db.getSessionMessages(c.get('db'), id, {
       ...(limit ? { limit: parseInt(limit, 10) } : {}),
       ...(after ? { after } : {}),
       threadId,

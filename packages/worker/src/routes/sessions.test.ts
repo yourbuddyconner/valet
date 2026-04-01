@@ -5,12 +5,14 @@ const {
   assertSessionAccessMock,
   getThreadMock,
   getSessionMessagesMock,
+  getThreadMessagesMock,
   getOrgSettingsMock,
   getUserSessionsMock,
 } = vi.hoisted(() => ({
   assertSessionAccessMock: vi.fn(),
   getThreadMock: vi.fn(),
   getSessionMessagesMock: vi.fn(),
+  getThreadMessagesMock: vi.fn(),
   getOrgSettingsMock: vi.fn(),
   getUserSessionsMock: vi.fn(),
 }));
@@ -19,6 +21,7 @@ vi.mock('../lib/db.js', () => ({
   assertSessionAccess: assertSessionAccessMock,
   getThread: getThreadMock,
   getSessionMessages: getSessionMessagesMock,
+  getThreadMessages: getThreadMessagesMock,
   getOrgSettings: getOrgSettingsMock,
   getUserSessions: getUserSessionsMock,
 }));
@@ -53,6 +56,7 @@ describe('sessionsRouter GET /:id/messages', () => {
     vi.clearAllMocks();
     getOrgSettingsMock.mockResolvedValue({});
     getUserSessionsMock.mockResolvedValue({ sessions: [], hasMore: false });
+    getThreadMessagesMock.mockResolvedValue([]);
   });
 
   it('falls back to the thread owning orchestrator session when a rotated thread is requested', async () => {
@@ -75,7 +79,7 @@ describe('sessionsRouter GET /:id/messages', () => {
       sessionId: 'orchestrator:user-1:old',
     });
 
-    getSessionMessagesMock.mockResolvedValue([
+    getThreadMessagesMock.mockResolvedValue([
       {
         id: 'msg-1',
         sessionId: 'orchestrator:user-1:old',
@@ -103,11 +107,7 @@ describe('sessionsRouter GET /:id/messages', () => {
     );
 
     expect(res.status).toBe(200);
-    expect(getSessionMessagesMock).toHaveBeenCalledWith(
-      {},
-      'orchestrator:user-1:old',
-      { threadId: 'thread-1' }
-    );
+    expect(getThreadMessagesMock).toHaveBeenCalledWith({}, 'thread-1', {});
     expect(await res.json()).toEqual({
       messages: [
         {
