@@ -3593,6 +3593,7 @@ export class SessionAgentDO {
         content: `Session failed to start: ${errorText}`,
         contextSessionId: sessionId || undefined,
       });
+      await this.notifyParentEvent(`Child session event: ${sessionId} errored (${errorText}).`, { wake: true, childStatus: 'error' });
     }
   }
 
@@ -4435,6 +4436,7 @@ export class SessionAgentDO {
 
       this.emitAuditEvent('session.hibernated', 'Session hibernated');
       console.log(`[SessionAgentDO] Session ${sessionId} hibernated, snapshot: ${result.snapshotImageId}`);
+      await this.notifyParentEvent(`Child session event: ${sessionId} hibernated.`, { wake: true, childStatus: 'hibernated' });
 
       this.promptQueue.revertProcessingToQueued();
 
@@ -4479,6 +4481,7 @@ export class SessionAgentDO {
       });
       this.broadcastToClients({ type: 'status', data: { status: 'error' } });
       this.broadcastToClients({ type: 'error', messageId: errId, error: errorText });
+      await this.notifyParentEvent(`Child session event: ${sessionId} errored (${errorText}).`, { wake: true, childStatus: 'error' });
     }
   }
 
@@ -4503,6 +4506,7 @@ export class SessionAgentDO {
       }
       this.broadcastToClients({ type: 'status', data: { status: 'error' } });
       this.broadcastToClients({ type: 'error', error: errorText });
+      await this.notifyParentEvent(`Child session event: ${sessionId} errored (${errorText}).`, { wake: true, childStatus: 'error' });
       return;
     }
 
@@ -4572,6 +4576,7 @@ export class SessionAgentDO {
       });
       this.broadcastToClients({ type: 'status', data: { status: 'error' } });
       this.broadcastToClients({ type: 'error', messageId: errId, error: errorText });
+      await this.notifyParentEvent(`Child session event: ${sessionId} errored (${errorText}).`, { wake: true, childStatus: 'error' });
     }
   }
 
