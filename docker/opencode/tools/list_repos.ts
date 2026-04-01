@@ -16,10 +16,11 @@ export default tool({
   },
   async execute(args) {
     try {
-      const params = new URLSearchParams()
-      if (args.source) params.set("source", args.source)
-      const qs = params.toString()
-      const res = await fetch(`http://localhost:9000/api/org-repos${qs ? `?${qs}` : ""}`)
+      const url =
+        args.source === "github"
+          ? "http://localhost:9000/api/repos"
+          : "http://localhost:9000/api/repos/org"
+      const res = await fetch(url)
 
       if (!res.ok) {
         const errText = await res.text()

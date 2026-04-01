@@ -261,6 +261,9 @@ githubMeCallbackRouter.get('/callback', async (c) => {
     scopes: grantedScopes,
   });
 
+  // Keep tool discovery in sync with the dedicated GitHub link flow.
+  await db.ensureIntegration(appDb, userId, 'github');
+
   // Update user record with GitHub info
   await db.updateUserGitHub(appDb, userId, {
     githubId,

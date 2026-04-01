@@ -194,6 +194,8 @@ The registry creates **fresh instances** each time — credentials must be set b
 
 GitHub has a **dual integration architecture**. The generic framework class exists for data sync, but the production GitHub functionality is implemented through dedicated routes and services, using OAuth tokens stored in D1 (not the integration framework's DO).
 
+When a user links GitHub through the dedicated `/api/me/github/link` flow, the worker must also mark the `github` integration active so `list_tools(service="github")` exposes the GitHub action catalog immediately.
+
 ### API Proxy Routes (`/api/repos`)
 
 | Method | Path | Description |
