@@ -50,6 +50,8 @@ git config --global core.excludesFile /root/.gitignore_global
 # Repo cloning is handled by the Runner process. start.sh just sets up
 # a minimal workspace directory and writes initial repo context if available.
 WORK_DIR=/workspace
+mkdir -p "${WORK_DIR}/.opencode/state"
+export OPENCODE_DB="${WORK_DIR}/.opencode/state/opencode.db"
 
 # Write minimal repo context so services starting before the Runner clones
 # have some awareness of the target repo.

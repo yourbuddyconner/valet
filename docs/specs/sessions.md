@@ -73,6 +73,24 @@ This spec covers:
 | `messageFormat` | text | Format identifier |
 | `createdAt` | text | ISO datetime |
 
+### `session_threads` table
+
+Tracks orchestrator conversation threads. `sessionId` identifies the owning session row in D1, while `id` is the stable conversation handle that survives orchestrator session rotation and runner restarts.
+
+| Column | Type | Notes |
+|--------|------|-------|
+| `id` | text PK | Thread identifier |
+| `sessionId` | text NOT NULL | Owning session row in D1 |
+| `opencodeSessionId` | text | Persisted OpenCode session bound to the thread |
+| `title` | text | Agent-generated thread title |
+| `status` | text NOT NULL | `active` or `archived` |
+| `messageCount` | integer | Message count for sidebar/UI |
+| `summaryAdditions` | integer | Git diff summary additions |
+| `summaryDeletions` | integer | Git diff summary deletions |
+| `summaryFiles` | integer | Git diff summary file count |
+| `createdAt` | text | ISO datetime |
+| `lastActiveAt` | text | ISO datetime |
+
 ### `session_git_state` table
 
 1:1 with sessions. Tracks source context and PR state.
@@ -284,7 +302,7 @@ Client connects via `GET /api/sessions/:id/ws?role=client&userId={userId}&token=
 
 | Type | Purpose | Key Fields |
 |------|---------|-----------|
-| `prompt` | Send message | `content`, `model?`, `attachments?`, `queueMode?`, `channelType?`, `channelId?` |
+| `prompt` | Send message | `content`, `model?`, `attachments?`, `queueMode?`, `channelType?`, `channelId?`, `threadId?`, `continuationContext?` |
 | `answer` | Answer question | `questionId`, `answer` |
 | `abort` | Cancel current operation | `channelType?`, `channelId?` |
 | `revert` | Undo message | `messageId` |
@@ -373,6 +391,17 @@ Three queue modes determine how prompts are processed:
 - Runner disconnect: all `processing` entries revert to `queued`.
 - 5-minute watchdog alarm: detects stuck `processing` prompts when no runner connected.
 - Error safety-net alarm: forces completion if runner reports error but never sends `complete`.
+
+### Thread Resume
+
+For orchestrator sessions, thread identity is durable across sandbox hibernation, runner restarts, and orchestrator session rotation:
+
+1. The UI selects a historical thread by `threadId`. Loading that thread is display-only and reads messages using the thread's owning `sessionId`.
+2. Sending a new prompt with `threadId` causes the DO to normalize routing to channel `thread:<threadId>`, so all resumed messages converge on one thread channel.
+3. `session_threads.opencodeSessionId` is the primary resume binding for that thread. The runner adopts that persisted OpenCode session before sending the first resumed prompt.
+4. If the persisted OpenCode session still exists, the prompt continues in-place with no synthetic continuation prompt.
+5. If the persisted OpenCode session is verified missing and the runner recreates it, only then may the runner inject bounded continuation context as fallback.
+6. `POST /api/sessions/:sessionId/threads/:threadId/continue` reopens the existing thread. It does not mint a new thread. If the thread was archived, it is reactivated first.
 
 ### Prompt Completion
 
@@ -500,6 +529,7 @@ Active sessions (`initializing`, `running`, `idle`, `restoring`) are counted per
 - Child session spawning and cascade termination
 - Model discovery, preferences, and failover
 - Persona support
+- Same-thread orchestrator resume with persisted OpenCode session reuse
 
 ### Stubbed / Unused
 - **SSE endpoint** (`GET /api/sessions/:id/events`): sends heartbeats only, no real events.

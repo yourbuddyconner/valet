@@ -1,0 +1,126 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { Hono } from 'hono';
+
+const {
+  assertSessionAccessMock,
+  getThreadMock,
+  createThreadMock,
+  updateThreadStatusMock,
+} = vi.hoisted(() => ({
+  assertSessionAccessMock: vi.fn(),
+  getThreadMock: vi.fn(),
+  createThreadMock: vi.fn(),
+  updateThreadStatusMock: vi.fn(),
+}));
+
+vi.mock('../lib/db.js', () => ({
+  assertSessionAccess: assertSessionAccessMock,
+  getThread: getThreadMock,
+  createThread: createThreadMock,
+  updateThreadStatus: updateThreadStatusMock,
+}));
+
+import { threadsRouter } from './threads.js';
+
+function buildApp() {
+  const app = new Hono();
+  app.use('*', async (c, next) => {
+    (c as any).set('user', { id: 'user-1', email: 'user@example.com', role: 'user' } as any);
+    (c as any).set('db', {} as any);
+    await next();
+  });
+  app.route('/', threadsRouter);
+  return app;
+}
+
+describe('threadsRouter POST /:sessionId/threads/:threadId/continue', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('returns the existing thread for orchestrator resume instead of creating a new thread', async () => {
+    const existingThread = {
+      id: 'thread-1',
+      sessionId: 'orchestrator:user-1:old',
+      status: 'active',
+    };
+
+    assertSessionAccessMock
+      .mockResolvedValueOnce({
+        id: 'orchestrator:user-1:new',
+        userId: 'user-1',
+        purpose: 'orchestrator',
+        isOrchestrator: true,
+      })
+      .mockResolvedValueOnce({
+        id: 'orchestrator:user-1:old',
+        userId: 'user-1',
+        purpose: 'orchestrator',
+        isOrchestrator: true,
+      });
+
+    getThreadMock.mockResolvedValue(existingThread);
+
+    const app = buildApp();
+    const res = await app.fetch(
+      new Request('http://localhost/orchestrator:user-1:new/threads/thread-1/continue', {
+        method: 'POST',
+      }),
+      { DB: {} } as any
+    );
+
+    expect(res.status).toBe(200);
+    expect(createThreadMock).not.toHaveBeenCalled();
+    expect(await res.json()).toEqual({
+      thread: existingThread,
+      resumed: true,
+    });
+  });
+
+  it('reactivates an archived thread before resuming it', async () => {
+    const archivedThread = {
+      id: 'thread-2',
+      sessionId: 'orchestrator:user-1:old',
+      status: 'archived',
+    };
+
+    const reactivatedThread = {
+      ...archivedThread,
+      status: 'active',
+    };
+
+    assertSessionAccessMock
+      .mockResolvedValueOnce({
+        id: 'orchestrator:user-1:new',
+        userId: 'user-1',
+        purpose: 'orchestrator',
+        isOrchestrator: true,
+      })
+      .mockResolvedValueOnce({
+        id: 'orchestrator:user-1:old',
+        userId: 'user-1',
+        purpose: 'orchestrator',
+        isOrchestrator: true,
+      });
+
+    getThreadMock
+      .mockResolvedValueOnce(archivedThread)
+      .mockResolvedValueOnce(reactivatedThread);
+
+    const app = buildApp();
+    const res = await app.fetch(
+      new Request('http://localhost/orchestrator:user-1:new/threads/thread-2/continue', {
+        method: 'POST',
+      }),
+      { DB: {} } as any
+    );
+
+    expect(res.status).toBe(200);
+    expect(createThreadMock).not.toHaveBeenCalled();
+    expect(updateThreadStatusMock).toHaveBeenCalledWith({}, 'thread-2', 'active');
+    expect(await res.json()).toEqual({
+      thread: reactivatedThread,
+      resumed: true,
+    });
+  });
+});

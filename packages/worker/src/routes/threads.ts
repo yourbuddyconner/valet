@@ -147,7 +147,7 @@ threadsRouter.get('/:sessionId/threads/:threadId', async (c) => {
 
 /**
  * POST /api/sessions/:sessionId/threads/:threadId/continue
- * Create a new thread as a continuation of an old one.
+ * Resume an existing thread in the active chat view.
  *
  * For orchestrator sessions, allows continuing threads from any of the
  * user's orchestrator sessions.
@@ -158,35 +158,20 @@ threadsRouter.post('/:sessionId/threads/:threadId/continue', async (c) => {
 
   const session = await db.assertSessionAccess(c.get('db'), sessionId, user.id, 'collaborator');
 
-  const oldThread = await db.getThread(c.env.DB, threadId);
-  if (!oldThread) {
+  const thread = await db.getThread(c.env.DB, threadId);
+  if (!thread) {
     throw new NotFoundError('Thread', threadId);
   }
 
-  await assertOrchestratorThreadAccess(c.get('db'), session, oldThread, user.id, 'collaborator');
+  await assertOrchestratorThreadAccess(c.get('db'), session, thread, user.id, 'collaborator');
 
-  // Fetch last ~20 messages from the old thread for continuation context
-  // (use the thread's actual session ID)
-  const msgResult = await c.env.DB
-    .prepare(
-      'SELECT role, content FROM messages WHERE session_id = ? AND thread_id = ? ORDER BY created_at DESC LIMIT 20'
-    )
-    .bind(oldThread.sessionId, threadId)
-    .all();
+  if (thread.status === 'archived') {
+    await db.updateThreadStatus(c.env.DB, threadId, 'active');
+    const reactivated = await db.getThread(c.env.DB, threadId);
+    return c.json({ thread: reactivated ?? { ...thread, status: 'active' }, resumed: true });
+  }
 
-  const oldMessages = (msgResult.results || []).reverse();
-  const continuationContext = oldMessages
-    .map((row: any) => {
-      const content = (row.content as string) || '';
-      const truncated = content.length > 500 ? content.slice(0, 500) + '...' : content;
-      return `[${row.role}]: ${truncated}`;
-    })
-    .join('\n');
-
-  const id = crypto.randomUUID();
-  const thread = await db.createThread(c.env.DB, { id, sessionId });
-
-  return c.json({ thread, continuationContext }, 201);
+  return c.json({ thread, resumed: true });
 });
 
 /**

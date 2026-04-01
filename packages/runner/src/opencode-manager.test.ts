@@ -172,6 +172,16 @@ describe("OpenCodeManager", () => {
     await manager.shutdown();
   });
 
+  it("spawns OpenCode with a workspace-pinned OPENCODE_DB", async () => {
+    const { manager, spawnCalls } = createTestManager({ killTriggersExit: true });
+
+    await manager.setDesiredConfig(testConfig);
+
+    expect(spawnCalls[0].opts.env.OPENCODE_DB).toBe("/workspace/.opencode/state/opencode.db");
+
+    await manager.shutdown();
+  });
+
   it("same config returns restarted: false", async () => {
     const { manager, spawnCalls } = createTestManager({ killTriggersExit: true });
 

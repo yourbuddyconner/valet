@@ -151,6 +151,11 @@ interface WorkflowExecutionDispatchPayload {
   payload: Record<string, unknown>;
 }
 
+interface SessionResyncResult {
+  sessionId: string;
+  recreated: boolean;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object";
 }
@@ -713,9 +718,10 @@ export class PromptHandler {
     channel.adoptedPersistedSession = true;
   }
 
-  private async resyncAdoptedSession(channel: ChannelSession, sessionId: string): Promise<string> {
-    if (!channel.adoptedPersistedSession) return sessionId;
-    channel.adoptedPersistedSession = false;
+  private async resyncAdoptedSession(channel: ChannelSession, sessionId: string): Promise<SessionResyncResult> {
+    if (!channel.adoptedPersistedSession) {
+      return { sessionId, recreated: false };
+    }
 
     try {
       // Verify the persisted session still exists and check its status.
@@ -723,11 +729,16 @@ export class PromptHandler {
       // can cause OpenCode to enter a state where subsequent prompts are silently dropped.
       const statusRes = await fetch(`${this.opencodeUrl}/session/${sessionId}`);
       if (statusRes.status === 404 || statusRes.status === 410) {
+        channel.adoptedPersistedSession = false;
         console.warn("[PromptHandler] Persisted OpenCode session missing; recreating");
-        return this.recreateChannelOpenCodeSession(channel);
+        return {
+          sessionId: await this.recreateChannelOpenCodeSession(channel),
+          recreated: true,
+        };
       }
 
       if (statusRes.ok) {
+        channel.adoptedPersistedSession = false;
         const sessionData = await statusRes.json().catch(() => null) as Record<string, unknown> | null;
         const status = sessionData?.status as Record<string, unknown> | string | undefined;
         const statusType = typeof status === "string" ? status : (status as Record<string, unknown>)?.type;
@@ -738,12 +749,17 @@ export class PromptHandler {
         } else {
           console.log(`[PromptHandler] Persisted session is ${statusType ?? "idle"} — no abort needed`);
         }
+      } else {
+        console.warn(`[PromptHandler] Persisted session verify returned ${statusRes.status}; deferring resume fallback decision`);
       }
     } catch (err) {
       console.warn("[PromptHandler] Failed to resync adopted session:", err);
     }
 
-    return channel.opencodeSessionId || sessionId;
+    return {
+      sessionId: channel.opencodeSessionId || sessionId,
+      recreated: false,
+    };
   }
 
   private buildModelFailoverChain(primaryModel?: string, modelPreferences?: string[]): string[] {
@@ -777,6 +793,16 @@ export class PromptHandler {
     return channel.opencodeSessionId;
   }
 
+  private async injectContinuationContext(sessionId: string, continuationContext: string): Promise<void> {
+    console.log(`[PromptHandler] Injecting continuation context (${continuationContext.length} chars) for thread resumption`);
+    const contextPrompt = `You are continuing a conversation from a previous thread. Here is the context from that conversation:\n\n---\n\n${continuationContext}\n\n---\n\nThe user may reference topics from this previous conversation. Continue naturally.`;
+
+    const idlePromise = this.pollUntilIdle(sessionId, 60_000);
+    await this.sendPromptAsync(sessionId, contextPrompt);
+    await idlePromise;
+    console.log(`[PromptHandler] Continuation context injected successfully`);
+  }
+
   private async recreateChannelOpenCodeSession(channel: ChannelSession): Promise<string> {
     const oldId = channel.opencodeSessionId;
     if (oldId) {
@@ -808,7 +834,7 @@ export class PromptHandler {
     },
   ): Promise<string> {
     let currentSessionId = await this.ensureChannelOpenCodeSession(channel);
-    currentSessionId = await this.resyncAdoptedSession(channel, currentSessionId);
+    currentSessionId = (await this.resyncAdoptedSession(channel, currentSessionId)).sessionId;
     try {
       await this.sendPromptAsync(
         currentSessionId,
@@ -1308,20 +1334,20 @@ export class PromptHandler {
     this.applyPersistedOpenCodeSessionId(channel, opencodeSessionId);
 
     try {
-      // If continuation context is provided, inject it as a context-setting first message
-      // before the actual user prompt. This happens when the user clicks "Continue" on an
-      // old thread and the DO generates a summary of the previous conversation.
-      if (continuationContext) {
-        console.log(`[PromptHandler] Injecting continuation context (${continuationContext.length} chars) for thread resumption`);
-        await this.ensureChannelOpenCodeSession(channel);
-        const sessionId = channel.opencodeSessionId!;
+      const hasPersistedSession = typeof opencodeSessionId === "string" && opencodeSessionId.trim().length > 0;
+      let resumeSessionWasRecreated = false;
 
-        const contextPrompt = `You are continuing a conversation from a previous thread. Here is the context from that conversation:\n\n---\n\n${continuationContext}\n\n---\n\nThe user may reference topics from this previous conversation. Continue naturally.`;
+      if (hasPersistedSession) {
+        const ensuredSessionId = await this.ensureChannelOpenCodeSession(channel);
+        const resyncedSession = await this.resyncAdoptedSession(channel, ensuredSessionId);
+        resumeSessionWasRecreated = resyncedSession.recreated;
+      }
 
-        const idlePromise = this.pollUntilIdle(sessionId, 60_000);
-        await this.sendPromptAsync(sessionId, contextPrompt);
-        await idlePromise;
-        console.log(`[PromptHandler] Continuation context injected successfully`);
+      // Continuation context is fallback-only. Reuse the persisted OpenCode
+      // session when possible, and inject the summary only after that persisted
+      // session has been verified missing and replaced.
+      if (continuationContext && hasPersistedSession && resumeSessionWasRecreated) {
+        await this.injectContinuationContext(channel.opencodeSessionId!, continuationContext);
       }
 
       // Set git config for author attribution before processing
@@ -1497,6 +1523,7 @@ export class PromptHandler {
             channelType,
             channelId,
             signal: syncAbort.signal,
+            continuationContext: hasPersistedSession ? continuationContext : undefined,
           });
           console.log(`[PromptHandler] Sync prompt ${messageId} returned (channel: ${channel.channelKey}) result=${result ? 'present' : 'null'}`);
 
@@ -2972,10 +2999,15 @@ export class PromptHandler {
       channelType?: string;
       channelId?: string;
       signal?: AbortSignal;
+      continuationContext?: string;
     },
   ): Promise<{ sessionId: string; result: { info: OpenCodeMessageInfo; parts: unknown[] } | null }> {
     let currentSessionId = await this.ensureChannelOpenCodeSession(channel);
-    currentSessionId = await this.resyncAdoptedSession(channel, currentSessionId);
+    const resyncedSession = await this.resyncAdoptedSession(channel, currentSessionId);
+    currentSessionId = resyncedSession.sessionId;
+    if (resyncedSession.recreated && options?.continuationContext) {
+      await this.injectContinuationContext(currentSessionId, options.continuationContext);
+    }
     try {
       const result = await this.sendPromptSync(
         currentSessionId,
@@ -2994,6 +3026,9 @@ export class PromptHandler {
       }
       console.warn("[PromptHandler] OpenCode session missing; recreating session and retrying prompt");
       const recreatedSessionId = await this.recreateChannelOpenCodeSession(channel);
+      if (options?.continuationContext) {
+        await this.injectContinuationContext(recreatedSessionId, options.continuationContext);
+      }
       const result = await this.sendPromptSync(
         recreatedSessionId,
         content,

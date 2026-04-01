@@ -113,9 +113,11 @@ Data flows bidirectionally: user prompts go DO -> Runner -> OpenCode. Agent resp
 ```bash
 export DISPLAY=:99
 export HOME=/root
+export OPENCODE_DB=/workspace/.opencode/state/opencode.db
 ```
 
 Sets display for VNC and establishes port constants.
+`start.sh` also ensures `/workspace/.opencode/state` exists before the runner starts so OpenCode's SQLite database lives on the workspace volume instead of ephemeral home-directory storage.
 
 ### Step 2 — VNC Stack
 
@@ -305,7 +307,7 @@ Manages the OpenCode server process lifecycle.
 **`start()` sequence:**
 1. **writeConfigFiles()**: Write `auth.json` (provider keys, mode 0o600), merge base `opencode.json` with tool toggles, custom instructions, and custom providers, write to `{workspace}/.opencode/opencode.json`.
 2. **copyToolsAndSkills()**: Copy tools from `/opencode-config/tools/` to workspace `.opencode/tools/`. For orchestrators: remove `complete_session.ts` and `notify_parent.ts`. Copy skills directories recursively.
-3. **spawnProcess()**: `Bun.spawn(["opencode", "serve", "--port", "4096"], { cwd: workspaceDir })`. Monitors for unexpected exit.
+3. **spawnProcess()**: `Bun.spawn(["opencode", "serve", "--port", "4096"], { cwd: workspaceDir, env: { ...process.env, OPENCODE_DB: "/workspace/.opencode/state/opencode.db" } })`. Monitors for unexpected exit.
 4. **waitForHealth()**: Poll `http://localhost:4096/health` every 1s, up to 60 retries.
 
 **Config hot-reload (`applyConfig()`):** Serialized via promise chain. Compares new config via JSON stringify — only restarts if something changed. Restart: SIGTERM, 5s grace, SIGKILL, then fresh `start()`.
@@ -315,6 +317,7 @@ Manages the OpenCode server process lifecycle.
 The prompt handler (`prompt.ts`, ~2700 lines) bridges OpenCode's SSE event stream to the DO's WebSocket protocol.
 
 **Per-channel session architecture:** Each communication channel (web, Telegram, Slack) gets its own `ChannelSession` with its own OpenCode session ID, tracking state, and message mappings. Channel keys: `"web:default"`, `"telegram:12345"`, etc.
+Thread channels (`"thread:<threadId>"`) additionally reuse the persisted `session_threads.opencode_session_id` binding from D1. On the first resumed prompt after runner startup, the prompt handler verifies `GET /session/:id`; only a verified missing session triggers recreation and fallback continuation injection.
 
 **Prompt flow:**
 1. Receive prompt from DO (messageId, content, model, author, attachments, channel context).
@@ -351,7 +354,7 @@ The prompt handler (`prompt.ts`, ~2700 lines) bridges OpenCode's SSE event strea
 
 | Type | Purpose | Key Fields |
 |------|---------|-----------|
-| `prompt` | New user prompt | `messageId`, `content`, `model?`, `attachments?`, `modelPreferences?`, `channelType?`, `channelId?`, `opencodeSessionId?`, author fields |
+| `prompt` | New user prompt | `messageId`, `content`, `model?`, `attachments?`, `modelPreferences?`, `channelType?`, `channelId?`, `opencodeSessionId?`, `threadId?`, `continuationContext?`, author fields |
 | `answer` | Answer to question | `questionId`, `answer` |
 | `stop` | Shutdown signal | — |
 | `abort` | Cancel current operation | `channelType?`, `channelId?` |
@@ -525,8 +528,10 @@ Messages sent by the runner while the WebSocket is disconnected are queued in an
 - Full internal API for OpenCode tool communication
 - Dynamic tunnel registration and proxying
 - Runner initialization with OpenCode management
+- OpenCode SQLite persistence on the workspace volume via `OPENCODE_DB`
 - V2 parts-based streaming protocol with hibernation recovery
 - Per-channel OpenCode session architecture
+- Persisted thread-session adoption with fallback-only continuation injection
 - Model failover chain
 - Modal backend: create, terminate, hibernate, restore, delete-workspace
 - Config hot-reload without losing state
