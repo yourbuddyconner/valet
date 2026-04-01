@@ -50,6 +50,17 @@ const MAX_CHANNEL_FOLLOWUP_REMINDERS = 3;
 const PARENT_IDLE_DEBOUNCE_MS = 10_000;
 const ACTION_APPROVAL_EXPIRY_MS = 10 * 60 * 1000; // 10 minutes
 
+function buildThreadContinuationContext(rows: Array<{ role?: unknown; content?: unknown }>): string {
+  return rows
+    .map((row) => {
+      const role = typeof row.role === 'string' ? row.role : 'assistant';
+      const content = typeof row.content === 'string' ? row.content : '';
+      const truncated = content.length > 500 ? `${content.slice(0, 500)}...` : content;
+      return `[${role}]: ${truncated}`;
+    })
+    .join('\n');
+}
+
 /** Messages sent by browser clients to the DO */
 interface ClientMessage {
   type: 'prompt' | 'answer' | 'ping' | 'abort' | 'revert' | 'diff' | 'review' | 'command' | 'approve-action' | 'deny-action';
@@ -1389,6 +1400,20 @@ export class SessionAgentDO {
       channelType = 'thread';
       channelId = threadId;
     }
+    const channelKey = this.channelKeyFrom(channelType, channelId);
+
+    if (threadId) {
+      const inMemoryThreadSessionId = this.getChannelOcSessionId(channelKey);
+      if (!inMemoryThreadSessionId || !continuationContext) {
+        const hydrated = await this.hydrateThreadResumeContext(threadId);
+        if (!inMemoryThreadSessionId && hydrated.opencodeSessionId) {
+          this.setChannelOcSessionId(channelKey, hydrated.opencodeSessionId);
+        }
+        if (!continuationContext && hydrated.continuationContext) {
+          continuationContext = hydrated.continuationContext;
+        }
+      }
+    }
 
     // Update idle tracking
     this.lifecycle.touchActivity();
@@ -1463,7 +1488,6 @@ export class SessionAgentDO {
     );
 
     // Check if runner is busy / ready
-    const channelKey = this.channelKeyFrom(channelType, channelId);
     const runnerBusy = this.promptQueue.runnerBusy;
     const runnerConnected = this.runnerLink.isConnected;
     const runnerReady = this.runnerLink.isReady;
@@ -3308,6 +3332,34 @@ export class SessionAgentDO {
       .toArray();
     const value = row[0]?.opencode_session_id as string | null | undefined;
     return value || undefined;
+  }
+
+  private async hydrateThreadResumeContext(threadId: string): Promise<{ opencodeSessionId?: string; continuationContext?: string }> {
+    const threadRow = await this.env.DB
+      .prepare('SELECT session_id, opencode_session_id FROM session_threads WHERE id = ?')
+      .bind(threadId)
+      .first<{ session_id?: string | null; opencode_session_id?: string | null }>();
+
+    const persistedSessionId = threadRow?.opencode_session_id || undefined;
+    if (persistedSessionId) {
+      return { opencodeSessionId: persistedSessionId };
+    }
+
+    const owningSessionId = threadRow?.session_id;
+    if (!owningSessionId) {
+      return {};
+    }
+
+    const msgResult = await this.env.DB
+      .prepare(
+        'SELECT role, content FROM messages WHERE session_id = ? AND thread_id = ? ORDER BY created_at DESC LIMIT 20'
+      )
+      .bind(owningSessionId, threadId)
+      .all<{ role?: string; content?: string }>();
+
+    const rows = (msgResult.results || []).reverse();
+    const continuationContext = buildThreadContinuationContext(rows);
+    return continuationContext ? { continuationContext } : {};
   }
 
 

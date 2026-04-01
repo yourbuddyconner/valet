@@ -247,24 +247,41 @@ function createMockCtx() {
   return { ctx, sql, waitUntil, initPromise: () => initPromise, acceptedSockets };
 }
 
-function createMockDb() {
+function createMockDb(options?: {
+  threadRow?: { session_id?: string | null; opencode_session_id?: string | null } | null;
+  threadMessages?: Array<{ role?: string; content?: string }>;
+}) {
   return {
-    prepare: vi.fn(() => ({
+    prepare: vi.fn((query: string) => ({
       bind: vi.fn(() => ({
-        first: vi.fn().mockResolvedValue(null),
+        first: vi.fn().mockResolvedValue(
+          query.includes('FROM session_threads')
+            ? (options?.threadRow ?? null)
+            : null
+        ),
         run: vi.fn().mockResolvedValue({ success: true }),
-        all: vi.fn().mockResolvedValue({ results: [] }),
+        all: vi.fn().mockResolvedValue({
+          results: query.includes('FROM messages')
+            ? (options?.threadMessages ?? [])
+            : [],
+        }),
       })),
     })),
   };
 }
 
-async function createTestAgent(opts?: { sockets?: Array<{ send: ReturnType<typeof vi.fn> }> }) {
+async function createTestAgent(opts?: {
+  sockets?: Array<{ send: ReturnType<typeof vi.fn> }>;
+  dbOptions?: {
+    threadRow?: { session_id?: string | null; opencode_session_id?: string | null } | null;
+    threadMessages?: Array<{ role?: string; content?: string }>;
+  };
+}) {
   const { ctx, sql, waitUntil, initPromise } = createMockCtx();
   const sockets = opts?.sockets ?? [];
   (ctx.getWebSockets as unknown as ReturnType<typeof vi.fn>).mockReturnValue(sockets);
 
-  const agent = new SessionAgentDO(ctx, { DB: createMockDb() } as any);
+  const agent = new SessionAgentDO(ctx, { DB: createMockDb(opts?.dbOptions) } as any);
   await initPromise();
 
   (agent as any).sessionState.set('sessionId', 'orchestrator:user-1');
@@ -471,6 +488,75 @@ describe('SessionAgentDO', () => {
       id: 'turn-direct',
       threadId: 'thread-direct',
     });
+  });
+
+  it('hydrates a persisted OpenCode session id for a cold resumed thread before dispatch', async () => {
+    const runnerSocket = { send: vi.fn() };
+    const { agent } = await createTestAgent({
+      sockets: [runnerSocket],
+      dbOptions: {
+        threadRow: {
+          session_id: 'orchestrator:user-1:old',
+          opencode_session_id: 'persisted-thread-session',
+        },
+      },
+    });
+
+    await (agent as any).handlePrompt(
+      'resume persisted thread',
+      undefined,
+      undefined,
+      undefined,
+      'web',
+      'default',
+      'thread-persisted',
+    );
+
+    const sent = JSON.parse(runnerSocket.send.mock.calls.at(-1)?.[0] as string);
+    expect(sent).toMatchObject({
+      type: 'prompt',
+      threadId: 'thread-persisted',
+      channelType: 'thread',
+      channelId: 'thread-persisted',
+      opencodeSessionId: 'persisted-thread-session',
+    });
+  });
+
+  it('hydrates continuation context for a cold legacy thread before dispatch', async () => {
+    const runnerSocket = { send: vi.fn() };
+    const { agent } = await createTestAgent({
+      sockets: [runnerSocket],
+      dbOptions: {
+        threadRow: {
+          session_id: 'orchestrator:user-1:old',
+          opencode_session_id: null,
+        },
+        threadMessages: [
+          { role: 'assistant', content: 'Earlier answer' },
+          { role: 'user', content: 'Earlier question' },
+        ],
+      },
+    });
+
+    await (agent as any).handlePrompt(
+      'resume legacy thread',
+      undefined,
+      undefined,
+      undefined,
+      'web',
+      'default',
+      'thread-legacy',
+    );
+
+    const sent = JSON.parse(runnerSocket.send.mock.calls.at(-1)?.[0] as string);
+    expect(sent).toMatchObject({
+      type: 'prompt',
+      threadId: 'thread-legacy',
+      channelType: 'thread',
+      channelId: 'thread-legacy',
+      continuationContext: '[user]: Earlier question\n[assistant]: Earlier answer',
+    });
+    expect(sent.opencodeSessionId).toBeUndefined();
   });
 
   it('persists currentThreadId from a queued threaded prompt for later assistant turns', async () => {
