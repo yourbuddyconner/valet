@@ -1400,6 +1400,66 @@ export function useChat(sessionId: string) {
     }));
   }, []);
 
+  // Load messages for a specific thread (fetches from D1 fallback if DO has none).
+  // Used when switching to a past thread whose messages were purged from the DO
+  // after an orchestrator restart.
+  const loadedThreadsRef = useRef(new Set<string>());
+  const loadThreadMessages = useCallback((threadId: string) => {
+    if (!threadId || loadedThreadsRef.current.has(threadId)) return;
+    // Check if we already have messages for this thread
+    const hasMessages = state.messages.some((m) => m.threadId === threadId);
+    if (hasMessages) {
+      loadedThreadsRef.current.add(threadId);
+      return;
+    }
+    loadedThreadsRef.current.add(threadId);
+    api.get<{ messages: Array<{
+      id: string;
+      sessionId: string;
+      role: 'user' | 'assistant' | 'system' | 'tool';
+      content: string;
+      parts?: MessagePart[];
+      authorId?: string;
+      authorEmail?: string;
+      authorName?: string;
+      authorAvatarUrl?: string;
+      channelType?: string;
+      channelId?: string;
+      threadId?: string;
+      createdAt: string;
+    }> }>(`/sessions/${sessionIdRef.current}/messages?threadId=${encodeURIComponent(threadId)}`).then((res) => {
+      if (!res.messages?.length) return;
+      setState((prev) => {
+        const existing = new Map(prev.messages.map((m) => [m.id, m]));
+        for (const m of res.messages) {
+          if (!existing.has(m.id)) {
+            existing.set(m.id, {
+              id: m.id,
+              sessionId: m.sessionId,
+              role: m.role,
+              content: m.content,
+              parts: m.parts,
+              authorId: m.authorId,
+              authorEmail: m.authorEmail,
+              authorName: m.authorName,
+              authorAvatarUrl: m.authorAvatarUrl,
+              channelType: m.channelType,
+              channelId: m.channelId,
+              threadId: m.threadId,
+              createdAt: new Date(m.createdAt),
+            });
+          }
+        }
+        const merged = Array.from(existing.values()).sort(
+          (a, b) => a.createdAt.getTime() - b.createdAt.getTime()
+        );
+        return { ...prev, messages: merged };
+      });
+    }).catch((err) => {
+      console.warn('[useChat] Failed to load thread messages:', err);
+    });
+  }, [state.messages]);
+
   return {
     messages: state.messages,
     historyReady: state.historyReady,
@@ -1445,5 +1505,6 @@ export function useChat(sessionId: string) {
         send({ type: 'deny-action', invocationId } as any);
       }
     }, [isConnected, send]),
+    loadThreadMessages,
   };
 }

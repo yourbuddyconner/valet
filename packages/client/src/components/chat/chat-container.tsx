@@ -105,6 +105,7 @@ export function ChatContainer({ sessionId, initialThreadId, initialContinuationC
     denyActionWs,
     integrationAuthErrors,
     dismissIntegrationAuth,
+    loadThreadMessages,
   } = useChat(sessionId);
   type QueuedAttachments = Parameters<typeof sendMessage>[2];
   type QueuedPrompt = {
@@ -167,6 +168,14 @@ export function ChatContainer({ sessionId, initialThreadId, initialContinuationC
       console.error('[ChatContainer] Failed to create thread:', err);
     }
   }, [createThread]);
+
+  // When switching to a thread, eagerly load its messages from the server.
+  // This handles past threads whose messages were purged from the DO after restart.
+  useEffect(() => {
+    if (activeThreadId) {
+      loadThreadMessages(activeThreadId);
+    }
+  }, [activeThreadId, loadThreadMessages]);
 
   // While the active thread is still resolving for orchestrator sessions,
   // show no messages to avoid a flash of unfiltered content.

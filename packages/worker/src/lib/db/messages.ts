@@ -8,13 +8,16 @@ import { messages } from '../schema/index.js';
 export async function getSessionMessages(
   db: AppDb,
   sessionId: string,
-  options: { limit?: number; after?: string } = {}
+  options: { limit?: number; after?: string; threadId?: string } = {}
 ): Promise<Message[]> {
   const limit = options.limit || 5000;
 
   const conditions = [eq(messages.sessionId, sessionId)];
   if (options.after) {
     conditions.push(gt(messages.createdAt, options.after));
+  }
+  if (options.threadId) {
+    conditions.push(eq(messages.threadId, options.threadId));
   }
 
   const rows = await db

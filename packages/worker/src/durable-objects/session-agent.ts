@@ -4073,12 +4073,14 @@ export class SessionAgentDO {
   private handleMessagesEndpoint(url: URL): Response {
     const limit = parseInt(url.searchParams.get('limit') || '5000', 10);
     const after = url.searchParams.get('after');
+    const threadId = url.searchParams.get('threadId');
     const sessionId = this.sessionState.sessionId;
 
     const afterCreatedAt = after != null ? parseInt(after, 10) : undefined;
     const rows = this.messageStore.getMessages({
       limit,
       ...(afterCreatedAt !== undefined ? { afterCreatedAt } : {}),
+      ...(threadId ? { threadId } : {}),
     });
 
     const messages = rows.map((r) => ({
