@@ -5,7 +5,7 @@ import { docsFetch, driveFetch, apiError, executeBatchUpdate } from './api.js';
 import { docsToMarkdown } from './docs-to-markdown.js';
 import type { DocsBody, DocsLists } from './docs-to-markdown.js';
 import { convertMarkdownToRequests } from './markdown-to-docs.js';
-import { findSection, getBodyEndIndex, extractSections } from './sections.js';
+import { findSection, getBodyEndIndex, getBodyInsertIndex, extractSections } from './sections.js';
 import {
   parseUpdateOperation,
   requiresDocumentRead,
@@ -495,7 +495,12 @@ async function executeAction(
 
         // 2. If markdown provided, insert content
         if (markdown && markdown.trim()) {
-          const requests = convertMarkdownToRequests(markdown);
+          const createdDocResult = await fetchDocument(newDoc.documentId, token);
+          if (!createdDocResult.ok) return createdDocResult.error;
+
+          const body = (createdDocResult.doc.body ?? {}) as DocsBody;
+          const insertIndex = getBodyInsertIndex(body);
+          const requests = convertMarkdownToRequests(markdown, { startIndex: insertIndex });
           if (requests.length > 0) {
             const batchResult = await executeBatchUpdate(newDoc.documentId, token, requests, {
               preserveOrder: true,
@@ -581,10 +586,10 @@ async function executeAction(
         const result = await fetchDocument(normalizedDocumentId, token);
         if (!result.ok) return result.error;
         const body = (result.doc.body ?? {}) as DocsBody;
-        const endIndex = getBodyEndIndex(body);
+        const insertIndex = getBodyInsertIndex(body);
 
         // 2. Convert markdown to requests starting at end of document
-        const requests = convertMarkdownToRequests(markdown, { startIndex: endIndex - 1 });
+        const requests = convertMarkdownToRequests(markdown, { startIndex: insertIndex });
 
         // 3. Execute batch update
         const batchResult = await executeBatchUpdate(normalizedDocumentId, token, requests, {

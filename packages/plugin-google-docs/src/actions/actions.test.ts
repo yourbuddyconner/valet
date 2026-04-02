@@ -173,6 +173,46 @@ describe('google docs actions', () => {
     ]);
   });
 
+  it('reads a newly created document before inserting markdown content', async () => {
+    mockFetch
+      .mockResolvedValueOnce(okResponse({ documentId: 'doc-123', title: 'New Doc' }))
+      .mockResolvedValueOnce(okResponse({
+        body: {
+          content: [
+            {
+              paragraph: {
+                elements: [
+                  { startIndex: 1, endIndex: 2, textRun: { content: '\n' } },
+                ],
+              },
+            },
+          ],
+        },
+      }))
+      .mockResolvedValueOnce(okResponse());
+
+    const result = await googleDocsActions.execute(
+      'docs.create_document',
+      {
+        title: 'New Doc',
+        markdown: 'Hello world',
+      },
+      makeCtx(),
+    );
+
+    expect(result.success).toBe(true);
+    expect(mockFetch).toHaveBeenCalledTimes(3);
+    expect(mockFetch.mock.calls[0][0]).toContain('/documents');
+    expect(mockFetch.mock.calls[1][0]).toContain('/documents/doc-123');
+    const body = JSON.parse(mockFetch.mock.calls[2][1].body);
+    expect(body.requests[0]).toEqual({
+      insertText: {
+        location: { index: 1 },
+        text: 'Hello world',
+      },
+    });
+  });
+
   describe('docs.list_sections', () => {
     beforeEach(() => {
       mockFetch.mockReset();

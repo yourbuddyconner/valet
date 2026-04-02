@@ -160,3 +160,8 @@ export function getBodyEndIndex(body: DocsBody): number {
 
   return 1;
 }
+
+/** Get the last writable insertion index in the document body. */
+export function getBodyInsertIndex(body: DocsBody): number {
+  return Math.max(1, getBodyEndIndex(body) - 1);
+}

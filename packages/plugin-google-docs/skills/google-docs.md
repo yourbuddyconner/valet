@@ -87,7 +87,7 @@ This produces a document with proper headings, bold names, a clickable link, str
 - `insertText` — Insert text immediately after an anchor string that already exists in the document.
 
 **Input formats:**
-- `operationsJson` — Preferred when possible. Pass a normal JSON array of operations.
+- `operationsJson` — Preferred when possible. Pass a normal JSON array of operations, not a JSON string.
 - `operationsToon` — Supported for token-efficient prompts, but easier to misformat than JSON.
 
 **Document identifiers:**
@@ -129,6 +129,8 @@ operationsJson:
     after: "Marketing Owner:"
     text: " Jane Smith"
 ```
+
+`insertText` is anchor-based only. It does not accept a raw document index. If you need to insert near existing content, first read the document and choose a stable `after` anchor string that already exists.
 
 For `update_document`, first read the doc with `docs.read_document` to understand the structure:
 - Use the `[Table N]` labels in the readback to map table indices

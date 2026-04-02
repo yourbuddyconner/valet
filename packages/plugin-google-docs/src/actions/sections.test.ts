@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { extractSections, findSection, getBodyEndIndex } from './sections.js';
+import { extractSections, findSection, getBodyEndIndex, getBodyInsertIndex } from './sections.js';
 import type { DocsBody } from './docs-to-markdown.js';
 
 describe('extractSections', () => {
@@ -220,5 +220,46 @@ describe('getBodyEndIndex', () => {
       ],
     };
     expect(getBodyEndIndex(body)).toBe(45);
+  });
+});
+
+describe('getBodyInsertIndex', () => {
+  it('returns 1 for an empty document body', () => {
+    const body: DocsBody = {
+      content: [
+        {
+          paragraph: {
+            elements: [
+              { startIndex: 1, endIndex: 2, textRun: { content: '\n' } },
+            ],
+          },
+        },
+      ],
+    };
+
+    expect(getBodyInsertIndex(body)).toBe(1);
+  });
+
+  it('returns the last writable position before the trailing newline', () => {
+    const body: DocsBody = {
+      content: [
+        {
+          paragraph: {
+            elements: [
+              { startIndex: 1, endIndex: 20, textRun: { content: 'First paragraph.\n' } },
+            ],
+          },
+        },
+        {
+          paragraph: {
+            elements: [
+              { startIndex: 20, endIndex: 45, textRun: { content: 'Second paragraph.\n' } },
+            ],
+          },
+        },
+      ],
+    };
+
+    expect(getBodyInsertIndex(body)).toBe(44);
   });
 });
