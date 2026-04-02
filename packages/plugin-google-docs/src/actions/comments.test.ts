@@ -171,3 +171,63 @@ describe('docs.create_comment', () => {
   });
 });
 
+describe('docs.reply_to_comment', () => {
+  beforeEach(() => {
+    mockFetch.mockReset();
+  });
+
+  it('posts a reply to a comment', async () => {
+    mockFetch.mockResolvedValueOnce(
+      okResponse({
+        id: 'r-new',
+        content: 'Good point, fixing now',
+        author: { displayName: 'Agent' },
+      }),
+    );
+
+    const result = await googleDocsActions.execute(
+      'docs.reply_to_comment',
+      { documentId: 'doc-123', commentId: 'c1', content: 'Good point, fixing now' },
+      makeCtx(),
+    );
+
+    expect(result.success).toBe(true);
+    const [url, opts] = mockFetch.mock.calls[0];
+    expect(url).toContain('/files/doc-123/comments/c1/replies');
+    const body = JSON.parse(opts.body);
+    expect(body.content).toBe('Good point, fixing now');
+    expect(body.action).toBeUndefined();
+  });
+
+  it('resolves a comment when resolve is true', async () => {
+    mockFetch.mockResolvedValueOnce(
+      okResponse({ id: 'r-new', content: 'Fixed', action: 'resolve' }),
+    );
+
+    const result = await googleDocsActions.execute(
+      'docs.reply_to_comment',
+      { documentId: 'doc-123', commentId: 'c1', content: 'Fixed', resolve: true },
+      makeCtx(),
+    );
+
+    expect(result.success).toBe(true);
+    const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+    expect(body.action).toBe('resolve');
+  });
+
+  it('reopens a comment when reopen is true', async () => {
+    mockFetch.mockResolvedValueOnce(
+      okResponse({ id: 'r-new', content: 'Actually not fixed', action: 'reopen' }),
+    );
+
+    const result = await googleDocsActions.execute(
+      'docs.reply_to_comment',
+      { documentId: 'doc-123', commentId: 'c1', content: 'Actually not fixed', reopen: true },
+      makeCtx(),
+    );
+
+    expect(result.success).toBe(true);
+    const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+    expect(body.action).toBe('reopen');
+  });
+});

@@ -320,6 +320,21 @@ const createComment: ActionDefinition = {
   }),
 };
 
+const replyToComment: ActionDefinition = {
+  id: 'docs.reply_to_comment',
+  name: 'Reply to Comment',
+  description:
+    'Reply to a comment on a Google Doc. Set resolve: true to resolve the comment, or reopen: true to reopen a resolved comment. Resolving is done by posting a reply with action "resolve" — the resolved field on comments is read-only.',
+  riskLevel: 'medium',
+  params: z.object({
+    documentId: z.string().describe('Google Docs document ID or full Google Docs URL'),
+    commentId: z.string().describe('ID of the comment to reply to'),
+    content: z.string().describe('Reply text'),
+    resolve: z.boolean().optional().describe('Resolve the comment with this reply'),
+    reopen: z.boolean().optional().describe('Reopen a resolved comment with this reply'),
+  }),
+};
+
 const updateDocumentRuntimeParams = z.object({
   documentId: z.string(),
   operationsToon: z.string().optional(),
@@ -346,6 +361,7 @@ const allActions: ActionDefinition[] = [
   updateDocument,
   listComments,
   createComment,
+  replyToComment,
 ];
 
 // ─── Action Execution ────────────────────────────────────────────────────────
@@ -757,6 +773,32 @@ async function executeAction(
 
         const comment = await res.json();
         return { success: true, data: comment };
+      }
+
+      case 'docs.reply_to_comment': {
+        const { documentId, commentId, content, resolve, reopen } =
+          replyToComment.params.parse(params);
+        const normalizedDocumentId = normalizeDocumentId(documentId);
+
+        const replyBody: Record<string, string> = { content };
+        if (resolve) replyBody.action = 'resolve';
+        else if (reopen) replyBody.action = 'reopen';
+
+        const qs = new URLSearchParams({
+          fields: 'id,content,author(displayName,emailAddress),action',
+        });
+        const res = await driveFetch(
+          `/files/${encodeURIComponent(normalizedDocumentId)}/comments/${encodeURIComponent(commentId)}/replies?${qs}`,
+          token,
+          {
+            method: 'POST',
+            body: JSON.stringify(replyBody),
+          },
+        );
+        if (!res.ok) return await apiError(res, 'Drive');
+
+        const reply = await res.json();
+        return { success: true, data: reply };
       }
 
       default:
