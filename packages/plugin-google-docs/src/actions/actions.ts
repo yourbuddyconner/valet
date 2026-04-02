@@ -5,7 +5,7 @@ import { docsFetch, driveFetch, apiError, executeBatchUpdate } from './api.js';
 import { docsToMarkdown } from './docs-to-markdown.js';
 import type { DocsBody, DocsLists } from './docs-to-markdown.js';
 import { convertMarkdownToRequests } from './markdown-to-docs.js';
-import { findSection, getBodyEndIndex } from './sections.js';
+import { findSection, getBodyEndIndex, extractSections } from './sections.js';
 import {
   parseUpdateOperation,
   requiresDocumentRead,
@@ -298,6 +298,17 @@ const updateDocument: ActionDefinition = {
   }),
 };
 
+const listSections: ActionDefinition = {
+  id: 'docs.list_sections',
+  name: 'List Sections',
+  description: 'List all sections (headings) in a Google Doc with their levels and index ranges. Useful for understanding document structure before making targeted edits.',
+  riskLevel: 'low',
+  params: z.object({
+    documentId: z.string().describe('Google Docs document ID or full Google Docs URL'),
+    tabId: z.string().optional().describe('Specific tab ID (for multi-tab docs)'),
+  }),
+};
+
 const listComments: ActionDefinition = {
   id: 'docs.list_comments',
   name: 'List Comments',
@@ -359,6 +370,7 @@ const allActions: ActionDefinition[] = [
   insertSection,
   deleteSection,
   updateDocument,
+  listSections,
   listComments,
   createComment,
   replyToComment,
@@ -715,6 +727,38 @@ async function executeAction(
         }
 
         return { success: true, data: { documentId: normalizedDocumentId } };
+      }
+
+      case 'docs.list_sections': {
+        const { documentId, tabId } = listSections.params.parse(params);
+        const normalizedDocumentId = normalizeDocumentId(documentId);
+        const result = await fetchDocument(normalizedDocumentId, token);
+        if (!result.ok) return result.error;
+
+        let body: DocsBody;
+        if (tabId) {
+          const tabs = (result.doc as { tabs?: Array<{ tabProperties?: { tabId?: string }; body?: DocsBody; documentTab?: { body?: DocsBody } }> }).tabs;
+          const tab = tabs?.find((t) => t.tabProperties?.tabId === tabId);
+          if (!tab) {
+            return { success: false, error: `Tab '${tabId}' not found in document` };
+          }
+          body = tab.documentTab?.body ?? tab.body ?? {};
+        } else {
+          body = (result.doc.body ?? {}) as DocsBody;
+        }
+
+        const sections = extractSections(body);
+        return {
+          success: true,
+          data: {
+            sections: sections.map((s) => ({
+              heading: s.heading,
+              level: s.level,
+              startIndex: s.startIndex,
+              endIndex: s.endIndex,
+            })),
+          },
+        };
       }
 
       case 'docs.list_comments': {

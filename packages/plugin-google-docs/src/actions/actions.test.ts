@@ -173,6 +173,96 @@ describe('google docs actions', () => {
     ]);
   });
 
+  describe('docs.list_sections', () => {
+    beforeEach(() => {
+      mockFetch.mockReset();
+    });
+
+    it('returns all sections with heading, level, and index ranges', async () => {
+      const doc = {
+        body: {
+          content: [
+            {
+              paragraph: {
+                paragraphStyle: { namedStyleType: 'HEADING_1' },
+                elements: [
+                  { startIndex: 1, endIndex: 12, textRun: { content: 'Chapter 1\n' } },
+                ],
+              },
+            },
+            {
+              paragraph: {
+                elements: [
+                  { startIndex: 12, endIndex: 30, textRun: { content: 'Some body text.\n' } },
+                ],
+              },
+            },
+            {
+              paragraph: {
+                paragraphStyle: { namedStyleType: 'HEADING_2' },
+                elements: [
+                  { startIndex: 30, endIndex: 43, textRun: { content: 'Subsection\n' } },
+                ],
+              },
+            },
+            {
+              paragraph: {
+                paragraphStyle: { namedStyleType: 'HEADING_1' },
+                elements: [
+                  { startIndex: 43, endIndex: 54, textRun: { content: 'Chapter 2\n' } },
+                ],
+              },
+            },
+          ],
+        },
+      };
+
+      mockFetch.mockResolvedValueOnce(okResponse(doc));
+
+      const result = await googleDocsActions.execute(
+        'docs.list_sections',
+        { documentId: 'doc-123' },
+        makeCtx(),
+      );
+
+      expect(result.success).toBe(true);
+      const data = result.data as { sections: Array<{ heading: string; level: number; startIndex: number; endIndex: number }> };
+      expect(data.sections).toEqual([
+        { heading: 'Chapter 1', level: 1, startIndex: 1, endIndex: 43 },
+        { heading: 'Subsection', level: 2, startIndex: 30, endIndex: 43 },
+        { heading: 'Chapter 2', level: 1, startIndex: 43, endIndex: 54 },
+      ]);
+    });
+
+    it('returns empty array for document with no headings', async () => {
+      const doc = {
+        body: {
+          content: [
+            {
+              paragraph: {
+                elements: [
+                  { startIndex: 1, endIndex: 12, textRun: { content: 'Just text.\n' } },
+                ],
+              },
+            },
+          ],
+        },
+      };
+
+      mockFetch.mockResolvedValueOnce(okResponse(doc));
+
+      const result = await googleDocsActions.execute(
+        'docs.list_sections',
+        { documentId: 'doc-123' },
+        makeCtx(),
+      );
+
+      expect(result.success).toBe(true);
+      const data = result.data as { sections: unknown[] };
+      expect(data.sections).toEqual([]);
+    });
+  });
+
   it('rejects empty fillCell text before making API calls', async () => {
     const result = await googleDocsActions.execute(
       'docs.update_document',
