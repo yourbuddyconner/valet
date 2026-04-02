@@ -298,6 +298,17 @@ const updateDocument: ActionDefinition = {
   }),
 };
 
+const listComments: ActionDefinition = {
+  id: 'docs.list_comments',
+  name: 'List Comments',
+  description: 'List comments on a Google Doc. Returns unresolved comments by default.',
+  riskLevel: 'low',
+  params: z.object({
+    documentId: z.string().describe('Google Docs document ID or full Google Docs URL'),
+    includeResolved: z.boolean().optional().describe('Include resolved comments (default: false)'),
+  }),
+};
+
 const updateDocumentRuntimeParams = z.object({
   documentId: z.string(),
   operationsToon: z.string().optional(),
@@ -322,6 +333,7 @@ const allActions: ActionDefinition[] = [
   insertSection,
   deleteSection,
   updateDocument,
+  listComments,
 ];
 
 // ─── Action Execution ────────────────────────────────────────────────────────
@@ -675,6 +687,43 @@ async function executeAction(
         }
 
         return { success: true, data: { documentId: normalizedDocumentId } };
+      }
+
+      case 'docs.list_comments': {
+        const { documentId, includeResolved } = listComments.params.parse(params);
+        const normalizedDocumentId = normalizeDocumentId(documentId);
+
+        const commentFields = 'comments(id,content,author(displayName,emailAddress),resolved,quotedFileContent,replies(id,content,author(displayName,emailAddress),action)),nextPageToken';
+        const allComments: unknown[] = [];
+        let pageToken: string | undefined;
+
+        do {
+          const qs = new URLSearchParams({
+            fields: commentFields,
+            pageSize: '100',
+          });
+          if (pageToken) qs.set('pageToken', pageToken);
+
+          const res = await driveFetch(
+            `/files/${encodeURIComponent(normalizedDocumentId)}/comments?${qs}`,
+            token,
+          );
+          if (!res.ok) return await apiError(res, 'Drive');
+
+          const data = (await res.json()) as {
+            comments?: Array<{ resolved?: boolean }>;
+            nextPageToken?: string;
+          };
+
+          for (const comment of data.comments ?? []) {
+            if (!includeResolved && comment.resolved) continue;
+            allComments.push(comment);
+          }
+
+          pageToken = data.nextPageToken;
+        } while (pageToken);
+
+        return { success: true, data: { comments: allComments } };
       }
 
       default:

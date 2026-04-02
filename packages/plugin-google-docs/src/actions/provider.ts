@@ -6,7 +6,7 @@ const GOOGLE_AUTH = 'https://accounts.google.com/o/oauth2/v2/auth';
 
 const DOCS_SCOPES = [
   'https://www.googleapis.com/auth/documents',
-  'https://www.googleapis.com/auth/drive.metadata.readonly',
+  'https://www.googleapis.com/auth/drive',
 ];
 
 export const googleDocsProvider: IntegrationProvider = {
