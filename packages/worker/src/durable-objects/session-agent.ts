@@ -3416,6 +3416,14 @@ export class SessionAgentDO {
       // Mark processing → completed, then prune
       const processingCount = this.promptQueue.markCompletedById(messageId);
 
+      // If scoped messageId was already completed (e.g. dedup path sent a second
+      // complete for the same prompt), skip the queue drain and idle transition —
+      // the first complete already handled it.
+      if (messageId && processingCount === 0) {
+        console.log(`[SessionAgentDO] handlePromptComplete: messageId=${messageId} already completed, skipping`);
+        return;
+      }
+
       const queuedAfterPrune = this.promptQueue.length;
       console.log(`[SessionAgentDO] handlePromptComplete: marked ${processingCount} processing→completed, queuedRemaining=${queuedAfterPrune}`);
 
