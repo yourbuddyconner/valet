@@ -42,6 +42,7 @@ export interface RecoveryResult {
   events: RecoveryEvent[];
 }
 
+export const DISCONNECT_GRACE_MS = 5_000;
 const STUCK_PROCESSING_TIMEOUT_MS = 5 * 60 * 1000;
 const IDLE_QUEUE_STUCK_TIMEOUT_MS = 60 * 1000;
 const READY_TIMEOUT_MS = 2 * 60 * 1000;
@@ -85,7 +86,7 @@ export class SessionHealthMonitor {
     if (s.processingCount === 0) return;
     if (s.runnerConnected) return;
     // Don't revert during disconnect grace period — runner may reconnect
-    if (s.runnerDisconnectedAt && (s.now - s.runnerDisconnectedAt) < 5_000) return;
+    if (s.runnerDisconnectedAt && (s.now - s.runnerDisconnectedAt) < DISCONNECT_GRACE_MS) return;
     if (!s.lastDispatchedAt) return;
     const elapsed = s.now - s.lastDispatchedAt;
     if (elapsed < STUCK_PROCESSING_TIMEOUT_MS) return;

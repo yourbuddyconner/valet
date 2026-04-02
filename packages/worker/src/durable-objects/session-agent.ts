@@ -21,7 +21,7 @@ import { PromptQueue } from './prompt-queue.js';
 import { RunnerLink, type RunnerToDOMessage, type DOToRunnerMessage, type PromptAttachment, type RunnerMessageHandlers, type WorkflowExecutionDispatchPayload, type DOMessageOf } from './runner-link.js';
 import { SessionState, type SessionStartParams } from './session-state.js';
 import { SessionLifecycle, SandboxAlreadyExitedError, SandboxSnapshotFailedError } from './session-lifecycle.js';
-import { SessionHealthMonitor, type HealthSnapshot } from './session-health-monitor.js';
+import { SessionHealthMonitor, DISCONNECT_GRACE_MS, type HealthSnapshot } from './session-health-monitor.js';
 import { resolveOrchestratorPersona } from '../services/persona.js';
 import { mailboxSend, mailboxCheck } from '../services/session-mailbox.js';
 import { taskCreate, taskList, taskUpdate, taskMy } from '../services/session-tasks.js';
@@ -850,7 +850,7 @@ export class SessionAgentDO {
             this.rescheduleIdleAlarm();
           }
         }
-      }, 5_000);
+      }, DISCONNECT_GRACE_MS);
 
       this.runnerLink.onDisconnect();
 
