@@ -335,6 +335,126 @@ describe("PromptHandler thread resume", () => {
   });
 });
 
+describe("PromptHandler dedup guard", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("skips duplicate prompt when same messageId is already in flight as sync prompt", async () => {
+    const agentClient = createAgentClientMock();
+    const handler = createHandler(agentClient);
+
+    let fetchCalls: FetchCall[] = [];
+    let resolveSyncPrompt: (() => void) | undefined;
+
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      const body = typeof init?.body === "string" ? JSON.parse(init.body) : undefined;
+      fetchCalls.push({ url, method, body });
+
+      if (url === "http://opencode.test/session" && method === "POST") {
+        return jsonResponse({ id: "dedup-session" });
+      }
+
+      if (url === "http://opencode.test/session/dedup-session/message" && method === "POST") {
+        // Never resolves — simulates a sync prompt that is still in flight
+        return new Promise<Response>((resolve) => {
+          resolveSyncPrompt = () => resolve(jsonResponse({ info: { role: "assistant" }, parts: [] }));
+        });
+      }
+
+      throw new Error(`Unexpected fetch: ${method} ${url}`);
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    // Fire first prompt but don't await — it will hang on the sync fetch
+    const firstPromise = handler.handlePrompt(
+      "msg-1",
+      "first prompt",
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      "thread",
+      "ch-dedup",
+    );
+
+    // Wait until syncPromptInFlight is set (first prompt has reached the fetch)
+    await new Promise<void>((resolve) => {
+      const check = () => {
+        const channel = (handler as any).channels.get("thread:ch-dedup");
+        if (channel?.syncPromptInFlight) {
+          resolve();
+        } else {
+          setTimeout(check, 5);
+        }
+      };
+      check();
+    });
+
+    // Send duplicate — same messageId, same channel
+    await handler.handlePrompt(
+      "msg-1",
+      "first prompt",
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      "thread",
+      "ch-dedup",
+    );
+
+    // Duplicate path must send sendComplete to unblock the DO
+    expect(agentClient.sendComplete).toHaveBeenCalledWith("msg-1");
+
+    // Only one session creation and one sync prompt fetch should have been made
+    const sessionCreates = fetchCalls.filter((c) => c.url === "http://opencode.test/session" && c.method === "POST");
+    const syncPrompts = fetchCalls.filter((c) => c.url === "http://opencode.test/session/dedup-session/message" && c.method === "POST");
+    expect(sessionCreates).toHaveLength(1);
+    expect(syncPrompts).toHaveLength(1);
+
+    // Clean up the hanging promise
+    resolveSyncPrompt?.();
+    await firstPromise.catch(() => {});
+  });
+});
+
+describe("PromptHandler idle suppression", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("does not broadcast idle status while sync prompt is in flight", () => {
+    const agentClient = createAgentClientMock();
+    const handler = createHandler(agentClient);
+
+    const channel = (handler as any).getOrCreateChannel("thread", "ch-1");
+    channel.syncPromptInFlight = true;
+    channel.activeMessageId = "msg-1";
+    (handler as any).activeChannel = channel;
+
+    (handler as any).handleSessionStatus({ status: { type: "idle" } });
+
+    expect(agentClient.sendAgentStatus).not.toHaveBeenCalled();
+  });
+
+  it("broadcasts idle status when no sync prompt is in flight", () => {
+    const agentClient = createAgentClientMock();
+    const handler = createHandler(agentClient);
+
+    const channel = (handler as any).getOrCreateChannel("thread", "ch-1");
+    channel.syncPromptInFlight = false;
+    channel.activeMessageId = null;
+    (handler as any).activeChannel = channel;
+
+    (handler as any).handleSessionStatus({ status: { type: "idle" } });
+
+    expect(agentClient.sendAgentStatus).toHaveBeenCalledWith("idle");
+  });
+});
+
 describe("PromptHandler reconnect readiness", () => {
   afterEach(() => {
     vi.restoreAllMocks();
