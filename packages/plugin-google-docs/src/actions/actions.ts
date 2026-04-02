@@ -769,6 +769,9 @@ async function executeAction(
         const allComments: unknown[] = [];
         let pageToken: string | undefined;
 
+        const MAX_PAGES = 10;
+        let pages = 0;
+
         do {
           const qs = new URLSearchParams({
             fields: commentFields,
@@ -793,7 +796,8 @@ async function executeAction(
           }
 
           pageToken = data.nextPageToken;
-        } while (pageToken);
+          pages++;
+        } while (pageToken && pages < MAX_PAGES);
 
         return { success: true, data: { comments: allComments } };
       }
@@ -822,6 +826,9 @@ async function executeAction(
       case 'docs.reply_to_comment': {
         const { documentId, commentId, content, resolve, reopen } =
           replyToComment.params.parse(params);
+        if (resolve && reopen) {
+          return { success: false, error: 'Cannot both resolve and reopen a comment in the same reply' };
+        }
         const normalizedDocumentId = normalizeDocumentId(documentId);
 
         const replyBody: Record<string, string> = { content };
