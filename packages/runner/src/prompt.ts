@@ -3325,7 +3325,11 @@ export class PromptHandler {
         }
 
         if (!this.idleNotified) {
-          this.agentClient.sendAgentStatus("idle");
+          // Don't broadcast misleading idle while a sync prompt is in flight —
+          // the agent is not actually idle, OpenCode is between tool rounds.
+          if (!this.activeChannel?.syncPromptInFlight) {
+            this.agentClient.sendAgentStatus("idle");
+          }
           this.idleNotified = true;
         }
         break;
@@ -3766,7 +3770,9 @@ export class PromptHandler {
         );
       }
       if (!this.idleNotified) {
-        this.agentClient.sendAgentStatus("idle");
+        if (!this.activeChannel?.syncPromptInFlight) {
+          this.agentClient.sendAgentStatus("idle");
+        }
         this.idleNotified = true;
       }
     } else if (statusType === "busy") {
