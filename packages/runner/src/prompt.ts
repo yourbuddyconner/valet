@@ -4066,7 +4066,7 @@ export class PromptHandler {
       const messageId = this.activeMessageId;
       if (messageId) {
         this.agentClient.sendError(messageId, "The model did not respond. Try again or switch to a different model.");
-        this.agentClient.sendComplete(this.activeMessageId ?? undefined);
+        this.agentClient.sendComplete(messageId);
         this.agentClient.sendAgentStatus("idle");
         // Reset prompt state
         this.activeMessageId = null;
