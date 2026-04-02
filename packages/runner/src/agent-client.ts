@@ -254,8 +254,8 @@ export class AgentClient {
     this.send({ type: "error", messageId, error });
   }
 
-  sendComplete(): void {
-    this.send({ type: "complete" });
+  sendComplete(messageId?: string): void {
+    this.send({ type: "complete", ...(messageId ? { messageId } : {}) });
   }
 
   sendAgentStatus(status: AgentStatus, detail?: string): void {

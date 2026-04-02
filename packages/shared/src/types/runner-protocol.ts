@@ -315,7 +315,7 @@ export type RunnerToDOMessage =
   | { type: 'question'; questionId: string; text: string; options?: string[] }
   | { type: 'screenshot'; data: string; description: string }
   | { type: 'error'; messageId: string; error: string }
-  | { type: 'complete' }
+  | { type: 'complete'; messageId?: string }
   | { type: 'agentStatus'; status: AgentStatus; detail?: string }
   | {
       type: 'create-pr';

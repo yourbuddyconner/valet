@@ -1594,7 +1594,7 @@ export class PromptHandler {
       const errorMsg = err instanceof Error ? err.message : String(err);
       console.error("[PromptHandler] Error processing prompt:", errorMsg);
       this.agentClient.sendError(messageId, errorMsg);
-      this.agentClient.sendComplete();
+      this.agentClient.sendComplete(this.activeMessageId ?? undefined);
       this.agentClient.sendAgentStatus("idle");
     }
   }
@@ -1693,7 +1693,7 @@ export class PromptHandler {
       this.lastPromptSentAt = 0;
     }
 
-    this.agentClient.sendComplete();
+    this.agentClient.sendComplete(this.activeMessageId ?? undefined);
     this.agentClient.sendAgentStatus("idle");
 
     // Emit usage report for this turn
@@ -3628,7 +3628,7 @@ export class PromptHandler {
         });
 
         this.finalizeResponse(true);
-        this.agentClient.sendComplete();
+        this.agentClient.sendComplete(this.activeMessageId ?? undefined);
         this.agentClient.sendAgentStatus("idle");
         this.idleNotified = true;
       }
@@ -3952,7 +3952,7 @@ export class PromptHandler {
       }
 
       console.log(`[PromptHandler] Sending complete`);
-      this.agentClient.sendComplete();
+      this.agentClient.sendComplete(this.activeMessageId ?? undefined);
 
       // Notify client that agent is idle
       this.agentClient.sendAgentStatus("idle");
@@ -4051,7 +4051,7 @@ export class PromptHandler {
       const messageId = this.activeMessageId;
       if (messageId) {
         this.agentClient.sendError(messageId, "The model did not respond. Try again or switch to a different model.");
-        this.agentClient.sendComplete();
+        this.agentClient.sendComplete(this.activeMessageId ?? undefined);
         this.agentClient.sendAgentStatus("idle");
         // Reset prompt state
         this.activeMessageId = null;
