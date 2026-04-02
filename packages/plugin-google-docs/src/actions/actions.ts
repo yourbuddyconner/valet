@@ -285,7 +285,7 @@ const updateDocument: ActionDefinition = {
   id: 'docs.update_document',
   name: 'Update Document',
   description:
-    'Apply targeted edits to a Google Doc without replacing the full body. Accepts TOON-encoded operations or JSON operations for find-and-replace, table cell fill, and anchor-based text insertion while preserving existing formatting.',
+    'Apply targeted edits to a Google Doc without replacing the full body. Supports operations: replaceAll (global find-replace), replaceText (replace Nth occurrence of specific text), fillCell (table cell update), and insertText (anchor-based insertion). Accepts TOON-encoded or JSON operations.',
   riskLevel: 'high',
   params: z.object({
     documentId: z.string().describe('Google Docs document ID or full Google Docs URL'),

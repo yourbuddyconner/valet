@@ -30,10 +30,18 @@ export const insertTextOperationSchema = z.object({
   text: z.string().min(1).describe('Text to insert'),
 });
 
+export const replaceTextOperationSchema = z.object({
+  type: z.literal('replaceText'),
+  find: z.string().describe('Exact text to find in the document'),
+  replace: z.string().describe('Replacement text'),
+  occurrence: z.number().int().min(1).optional().describe('Which occurrence to target (default: 1, first occurrence)'),
+});
+
 export const updateDocumentOperationSchema = z.union([
   replaceAllOperationSchema,
   fillCellOperationSchema,
   insertTextOperationSchema,
+  replaceTextOperationSchema,
 ]);
 
 export type UpdateDocumentOperation = z.infer<typeof updateDocumentOperationSchema>;
@@ -72,6 +80,9 @@ export function parseUpdateOperation(input: unknown, index: number): UpdateDocum
     }
     case 'insertText': {
       return insertTextOperationSchema.parse(input);
+    }
+    case 'replaceText': {
+      return replaceTextOperationSchema.parse(input);
     }
     default:
       throw new Error(`Unknown operation type '${base.data.type}' at operations[${index}]`);
@@ -121,6 +132,13 @@ export function translateUpdateOperations(
     if (operation.type === 'insertText') {
       const translated = translateInsertTextOperation(body, operation, index, mutations);
       requests.push(translated.request);
+      mutations.push(translated.mutation);
+      continue;
+    }
+
+    if (operation.type === 'replaceText') {
+      const translated = translateReplaceTextOperation(body, operation, index, mutations);
+      requests.push(...translated.requests);
       mutations.push(translated.mutation);
       continue;
     }
@@ -252,6 +270,63 @@ function translateInsertTextOperation(
       startIndex: insertIndex,
       endIndex: insertIndex,
       newLength: operation.text.length,
+    },
+  };
+}
+
+function translateReplaceTextOperation(
+  body: DocsBody,
+  operation: Extract<UpdateDocumentOperation, { type: 'replaceText' }>,
+  operationIndex: number,
+  mutations: IndexMutation[],
+): { requests: DocsRequest[]; mutation: IndexMutation } {
+  const segments = collectTextSegments(body.content ?? []);
+  const fullText = segments.map((segment) => segment.text).join('');
+  const targetOccurrence = operation.occurrence ?? 1;
+
+  // Find the Nth occurrence
+  let searchFrom = 0;
+  let foundOffset = -1;
+  for (let n = 0; n < targetOccurrence; n++) {
+    foundOffset = fullText.indexOf(operation.find, searchFrom);
+    if (foundOffset === -1) break;
+    searchFrom = foundOffset + 1;
+  }
+
+  if (foundOffset === -1) {
+    const suffix = targetOccurrence > 1 ? ` (occurrence ${targetOccurrence})` : '';
+    throw new Error(
+      `operation[${operationIndex}]: text '${operation.find}' not found${suffix}`,
+    );
+  }
+
+  const indexMap = buildIndexMap(segments);
+  const docStartIndex = indexMap[foundOffset];
+  const docEndIndex = indexMap[foundOffset + operation.find.length - 1] + 1;
+
+  const adjustedStartIndex = adjustIndexForMutations(docStartIndex, mutations, operationIndex);
+  const adjustedEndIndex = adjustIndexForMutations(docEndIndex, mutations, operationIndex);
+
+  const requests: DocsRequest[] = [
+    {
+      deleteContentRange: {
+        range: { startIndex: adjustedStartIndex, endIndex: adjustedEndIndex },
+      },
+    },
+    {
+      insertText: {
+        location: { index: adjustedStartIndex },
+        text: operation.replace,
+      },
+    },
+  ];
+
+  return {
+    requests,
+    mutation: {
+      startIndex: docStartIndex,
+      endIndex: docEndIndex,
+      newLength: operation.replace.length,
     },
   };
 }
