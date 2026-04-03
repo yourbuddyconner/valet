@@ -3,7 +3,7 @@ import { ToolCardShell } from './tool-card-shell';
 import type { ToolCallData } from './types';
 
 export function ImageCard({ tool }: { tool: ToolCallData }) {
-  const [expanded, setExpanded] = useState(true);
+  const [expanded, setExpanded] = useState(false);
 
   const args = (tool.args ?? {}) as Record<string, unknown>;
   const result = tool.result as Record<string, unknown> | string | null;
@@ -47,7 +47,7 @@ export function ImageCard({ tool }: { tool: ToolCallData }) {
           </button>
           {!expanded && (
             <p className="mt-1 text-center text-[10px] text-neutral-400 dark:text-neutral-500">
-              Click to enlarge
+              Click to expand
             </p>
           )}
         </div>

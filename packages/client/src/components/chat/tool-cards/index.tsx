@@ -45,9 +45,10 @@ export function ToolCard({
   tool: ToolCallData;
   initiallyEngaged?: boolean;
 }) {
+  const alwaysOpen = isAlwaysOpenTool(tool.toolName);
   const [engaged, setEngaged] = useState(false);
 
-  if (shouldShowToolCardSummary({ engaged, initiallyEngaged })) {
+  if (!alwaysOpen && shouldShowToolCardSummary({ engaged, initiallyEngaged })) {
     return <SummaryToolCard tool={tool} onExpand={() => setEngaged(true)} />;
   }
 
@@ -59,6 +60,13 @@ export function ToolCard({
       </ToolCardExpansionIntentContext.Provider>
     </Suspense>
   );
+}
+
+const ALWAYS_OPEN_TOOLS = new Set(['send_image', 'screenshot']);
+
+function isAlwaysOpenTool(toolName: string): boolean {
+  const name = toolName.toLowerCase();
+  return ALWAYS_OPEN_TOOLS.has(name);
 }
 
 function resolveToolCard(tool: ToolCallData) {
