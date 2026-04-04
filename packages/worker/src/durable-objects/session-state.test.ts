@@ -158,16 +158,6 @@ describe('SessionState', () => {
     });
   });
 
-  describe('currentThreadId', () => {
-    it('reads/writes', () => {
-      expect(ss.currentThreadId).toBeUndefined();
-      ss.currentThreadId = 'thread-2';
-      expect(ss.currentThreadId).toBe('thread-2');
-      ss.currentThreadId = undefined;
-      expect(ss.currentThreadId).toBeUndefined();
-    });
-  });
-
   // ─── Timing ───────────────────────────────────────────────────────
 
   describe('timing', () => {

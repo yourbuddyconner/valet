@@ -180,14 +180,6 @@ export class SessionState {
     this.set('parentThreadId', val || '');
   }
 
-  get currentThreadId(): string | undefined {
-    return this.get('currentThreadId') || undefined;
-  }
-
-  set currentThreadId(val: string | undefined) {
-    this.set('currentThreadId', val || '');
-  }
-
   // ─── Timing ───────────────────────────────────────────────────────
 
   get idleTimeoutMs(): number {
@@ -356,8 +348,6 @@ export class SessionState {
     this.initialPrompt = undefined;
     this.initialModel = undefined;
     this.parentThreadId = undefined;
-    this.currentThreadId = undefined;
-
     // Set optional fields
     if (params.sandboxId) this.sandboxId = params.sandboxId;
     if (params.tunnelUrls) this.tunnelUrls = params.tunnelUrls;
