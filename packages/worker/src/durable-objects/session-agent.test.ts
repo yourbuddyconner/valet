@@ -648,4 +648,50 @@ describe('SessionAgentDO', () => {
       expect(data?.threadId).toBe('thread-parts');
     }
   });
+
+  it('does not leak thread ID from a Telegram turn into a subsequent web-UI turn', async () => {
+    const runnerSocket = { send: vi.fn() };
+    const { agent, broadcasts } = await createTestAgent({ sockets: [runnerSocket] });
+
+    // Turn 1: Telegram prompt with a threadId
+    await (agent as any).handlePrompt(
+      'telegram message',
+      undefined,
+      undefined,
+      undefined,
+      'telegram',
+      'chat-123',
+      'thread-telegram',
+      undefined, // continuationContext
+      undefined, // contextPrefix
+      { channelType: 'telegram', channelId: 'chat-123' }, // replyTo
+    );
+
+    // Complete turn 1
+    await (agent as any).handlePromptComplete();
+
+    // Turn 2: web-UI prompt with NO threadId
+    await (agent as any).handlePrompt(
+      'web message',
+      undefined,
+      undefined,
+      undefined,
+      'web',
+      'default',
+      undefined, // no threadId
+    );
+
+    // Runner sends message.create for turn 2
+    await (agent as any).runnerHandlers['message.create']({
+      type: 'message.create',
+      turnId: 'turn-web',
+    });
+
+    const created = broadcasts.find((message) => {
+      const data = message.data as Record<string, unknown> | undefined;
+      return message.type === 'message' && data?.id === 'turn-web';
+    });
+    // The web turn must NOT have the Telegram threadId
+    expect((created?.data as Record<string, unknown> | undefined)?.threadId).toBeUndefined();
+  });
 });
