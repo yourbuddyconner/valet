@@ -95,6 +95,30 @@ export async function restartOrchestratorSession(
     console.warn('[restartOrchestrator] Failed to migrate bindings:', err);
   }
 
+  // Migrate channel thread mappings from previous orchestrator sessions
+  try {
+    await env.DB.prepare(
+      `UPDATE channel_thread_mappings SET session_id = ?
+       WHERE user_id = ? AND session_id != ? AND session_id IN (
+         SELECT id FROM sessions WHERE user_id = ? AND is_orchestrator = 1
+       )`
+    ).bind(sessionId, userId, sessionId, userId).run();
+  } catch (err) {
+    console.warn('[restartOrchestrator] Failed to migrate thread mappings:', err);
+  }
+
+  // Migrate session_threads owned by previous orchestrator sessions
+  try {
+    await env.DB.prepare(
+      `UPDATE session_threads SET session_id = ?
+       WHERE session_id != ? AND session_id IN (
+         SELECT id FROM sessions WHERE user_id = ? AND is_orchestrator = 1
+       )`
+    ).bind(sessionId, sessionId, userId).run();
+  } catch (err) {
+    console.warn('[restartOrchestrator] Failed to migrate session threads:', err);
+  }
+
   // Build env vars (LLM keys + orchestrator flag)
   const providerVars = await assembleProviderEnv(appDb, env);
   const credentialVars = await assembleCredentialEnv(appDb, env, userId);
