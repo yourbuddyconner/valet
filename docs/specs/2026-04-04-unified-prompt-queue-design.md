@@ -23,9 +23,12 @@ The server-side `prompt_queue` is conceptually simplified for user prompts to: o
 
 ### Steer Semantics
 
-Steer (`{ type: 'prompt', queueMode: 'steer', content, threadId }`) aborts the current processing turn only. It does **not** clear the pending slot. If a pending followup exists when a steer arrives, the steer dispatches first and the pending followup dispatches after the steer completes (via `sendNextQueuedPrompt`).
+Steer (`{ type: 'prompt', queueMode: 'steer', content, threadId }`) aborts the current processing turn only. It does **not** clear the pending slot. If a pending followup exists when a steer arrives — whether from the same channel or a different one — the steer dispatches first and the pending followup dispatches after the steer completes (via `sendNextQueuedPrompt`).
 
-This prevents a channel integration from silently destroying a user's queued web followup. The steer is "abort current and do this now"; the pending item is preserved.
+This applies uniformly:
+- **Cross-channel:** Telegram steer while web followup is queued → web followup survives.
+- **Same-channel:** Slack steer while a previous Slack followup is queued → Slack followup survives.
+- The pending item represents the user's explicit intent. Steer only interrupts the active turn; it does not discard queued work. The user can cancel the pending item separately if desired.
 
 ### Queue Mode Defaults
 
@@ -48,6 +51,7 @@ Today, `handlePrompt` writes the user message to the message store and broadcast
 - **Runner busy (enqueue):** The prompt content, attachments, author metadata (including `author_avatar_url` — currently missing from `prompt_queue` row mapping and must be added), threadId, and channel context are stored only in the `prompt_queue` row. No message store write, no client broadcast. The `messageId` is generated at enqueue time and stored in the queue entry.
 - **At dispatch time** (`sendNextQueuedPrompt`): The user message is written to the message store using the pre-generated `messageId`, broadcast to clients, then dispatched to the runner. This brings the DO's message store into alignment with OpenCode's own history — both only contain messages that were actually processed.
 - **Audit event** (`user.prompt`): Also deferred to dispatch time for consistency.
+- **Thread bookkeeping** (`incrementThreadMessageCount`, `thread.created` broadcast): Also deferred to dispatch time. Today these run at enqueue time, which means a withdrawn followup permanently inflates the thread message count. With the deferred write, thread bookkeeping only runs for messages that actually dispatch.
 
 ### Implications
 
@@ -64,7 +68,7 @@ Today, `handlePrompt` writes the user message to the message store and broadcast
 **`queue.withdraw`**
 - Removes the single `queued` user-prompt entry from `prompt_queue`.
 - Broadcasts `{ type: 'queue.withdrawn', data: { messageId, content, attachments, threadId } }` to all clients.
-- If no queued entry exists, broadcasts `{ type: 'queue.withdrawn', data: null }` (no-op).
+- If no queued entry exists, this is a silent no-op — no broadcast is sent. This prevents double-withdraw races in multiplayer from producing confusing `null` broadcasts that could clear a client's text box.
 
 **`queue.promote`**
 - Atomically: removes the `queued` entry, calls `handleAbort` to abort the current turn, writes the user message to the message store, dispatches the prompt to the runner.
@@ -73,6 +77,7 @@ Today, `handlePrompt` writes the user message to the message store and broadcast
 - If the runner is not busy (turn completed between queue and promote), skips abort and dispatches directly.
 
 **`queue.replace`**
+- Wire format: `{ type: 'queue.replace', content: string, threadId?: string, model?: string, attachments?: Attachment[], channelType?: string, channelId?: string }`.
 - Atomic operation for "new content while pending exists": removes the existing `queued` entry (broadcasts `queue.withdrawn`), aborts the current turn, writes the new user message to the message store, dispatches the new prompt. This avoids the race window that would exist if withdraw and steer were sent as two separate messages (relevant in multiplayer where another client could enqueue between them).
 - If no queued entry exists, behaves identically to a steer prompt.
 
@@ -133,6 +138,7 @@ Hydrated from `pendingPrompt` in the init payload, updated by:
 |-------------|----------|-------|----------|
 | Idle | Has content | Send normally (`followup`, dispatches immediately) | Edit last own message (standard) |
 | Idle | Empty | No-op | Edit last own message (standard) |
+| Idle | Pending exists (transient) | No user action needed — server is dispatching the pending item via `sendNextQueuedPrompt`. Pending card disappears when `queue.state` arrives with `pending: null`. | No-op |
 | Busy | Has content, no pending | Send as `followup` (queued on server) | No-op |
 | Busy | Empty, pending exists | Send `queue.promote` (abort + dispatch pending) | Send `queue.withdraw`, populate text box with pending content |
 | Busy | Has content, pending exists | Send `queue.replace` (atomic: withdraw old + enqueue new as steer — abort current turn, discard old pending, dispatch new content) | Send `queue.withdraw`, populate text box with pending content |
@@ -148,6 +154,14 @@ Rendered above the text box (the current amber banner area). Visible only when `
 - Keyboard shortcut: Up arrow = Edit
 
 **Not in the chat flow.** The pending message does not appear in the message list. It enters the chat only when dispatched (at which point the server writes and broadcasts the user message).
+
+### Optimistic Client State
+
+Between the user pressing Enter and the server confirming via `queue.state`, there is a 10-100ms window where no pending card is visible. The client should:
+1. Clear the text box immediately on Enter.
+2. Set an optimistic `pendingFollowup` from the content just sent (before server confirmation).
+3. Reconcile when `queue.state` arrives — replace the optimistic entry with the server-confirmed one (which includes the `messageId`).
+4. If the server rejects (e.g., WebSocket disconnected), restore the content to the text box and show an error.
 
 ### Cancelled/Withdrawn Message Rendering
 
@@ -191,11 +205,17 @@ The user's queued work is never silently destroyed.
 3. Enforce single-slot: before enqueueing, check for existing `queued` user-prompt entries. If one exists, withdraw it (broadcast `queue.withdrawn`) before inserting the new one.
 4. Broadcast `queue.state` after enqueueing.
 
+### `prompt_queue` Read Path Fix
+
+The `QueueEntry` interface, `dequeueNext()` SELECT query, and `rowToEntry()` mapping in `prompt-queue.ts` are all missing `author_avatar_url`. This column is written at enqueue time but never read back. With deferred writes this becomes a data loss bug — the avatar URL must be available at dispatch time for the message store write. Add `authorAvatarUrl` to `QueueEntry`, the `dequeueNext()` SELECT, and `rowToEntry()`.
+
 ### `sendNextQueuedPrompt` Changes
 
-1. After dequeuing, write the user message to the message store using the queue entry's `messageId`.
-2. Broadcast the user message to clients (the message enters the chat at this point).
-3. Dispatch to runner as before.
+1. After dequeuing, write the user message to the message store using the queue entry's `messageId`, including all author metadata (`authorId`, `authorEmail`, `authorName`, `authorAvatarUrl`).
+2. Call `incrementThreadMessageCount` and broadcast `thread.created` if the entry has a `threadId` (deferred from enqueue time).
+3. Broadcast the user message to clients (the message enters the chat at this point).
+4. Emit `user.prompt` audit event.
+5. Dispatch to runner as before.
 
 ### `handleAbort` Changes
 
@@ -213,6 +233,43 @@ The user's queued work is never silently destroyed.
 
 No protocol change needed. The endpoint already accepts `queueMode` in the request body. Channel webhooks pass `queueMode: 'steer'` (new default) or `binding.queueMode`. The deferred message write applies to the HTTP path identically.
 
+### `/clear-queue` Endpoint
+
+The existing `/clear-queue` HTTP endpoint (`handleClearQueue`) clears all queued entries and broadcasts `{ type: 'status', data: { queueCleared: true, cleared } }`. Under the new semantics:
+
+1. For each cleared user-prompt entry, broadcast `{ type: 'queue.withdrawn', data: { messageId, content, ... } }` so clients can update the pending card.
+2. Follow with `{ type: 'queue.state', data: { pending: null } }`.
+3. Keep the existing `queueCleared` broadcast for backwards compatibility.
+
+The Slack `/stop` command flow (abort + clear-queue) continues to work: abort interrupts the current turn, clear-queue removes the pending followup.
+
+### `ClientMessage` Type Update
+
+The `ClientMessage` type in `session-agent.ts` (currently `type: 'prompt' | 'answer' | 'ping' | 'abort' | ...`) must be extended with the new message types: `'queue.withdraw'`, `'queue.promote'`, `'queue.replace'`.
+
+### Crash Recovery and Idempotency
+
+With deferred writes, the user message is written to the message store during `sendNextQueuedPrompt`. If the DO crashes between `dequeueNext()` (which marks the entry as `processing`) and the `messageStore.writeMessage` call:
+
+1. On recovery, `revertProcessingToQueued()` puts the entry back to `queued`.
+2. `sendNextQueuedPrompt` dequeues it again and attempts the message write.
+3. The message write must be **idempotent** — use `INSERT OR IGNORE` or check for existing `messageId` before writing, since the entry may have been partially processed before the crash.
+
+For entries that were dispatched to the runner before the crash (message already written, runner was processing), `revertProcessingToQueued` will re-dispatch them. The message write must not create a duplicate — the idempotency guard handles this.
+
+### Collect Mode Interaction
+
+Collect mode is out of scope but interacts with steer. Today, `handleAbort` clears queued entries which could include a pending collect flush that was already inserted into `prompt_queue`. With the new semantics (abort does not clear the queue), a collect-mode flush that was queued before a steer will dispatch after the steer completes. This is correct behavior — the collected messages represent user intent and should not be silently discarded.
+
+### Observability
+
+New primitives should emit audit events for debuggability:
+- `queue.withdraw` → `emitAuditEvent('user.queue_withdraw', ...)`
+- `queue.promote` → `emitAuditEvent('user.queue_promote', ...)`
+- `queue.replace` → `emitAuditEvent('user.queue_replace', ...)`
+
+The health monitor / idle queue watchdog does not need changes — it triggers `sendNextQueuedPrompt` which now includes the deferred message write. The idempotency guard (above) prevents duplicate messages from watchdog-triggered re-dispatches.
+
 ---
 
 ## Migration / Backwards Compatibility
@@ -222,6 +279,7 @@ No protocol change needed. The endpoint already accepts `queueMode` in the reque
 - The `promptsQueued` field in the init payload is preserved for backwards compatibility.
 - `stagedQueuedPrompts` is deleted from the client. No migration needed — it was ephemeral React state.
 - The `QueuedPrompt` type is replaced by the `pendingFollowup` server-hydrated state.
+- **Behavioral change for old clients:** Old clients previously saw queued user messages in the chat immediately. With deferred writes, they see them at dispatch time instead. In multiplayer, an old client and new client will see different timing. This is an acceptable improvement — messages should only appear in the chat when the agent will process them.
 
 ---
 
