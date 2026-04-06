@@ -61,6 +61,8 @@ export function consumePendingContinuation(threadId: string): string | null {
 
 interface ChatContainerProps {
   sessionId: string;
+  /** Route param used for navigation — may be the "orchestrator" alias. Defaults to sessionId. */
+  routeSessionId?: string;
   initialThreadId?: string;
   initialContinuationContext?: string;
 }
@@ -69,10 +71,13 @@ function isFinalSessionStatus(status: string) {
   return status === 'terminated' || status === 'archived';
 }
 
-export function ChatContainer({ sessionId, initialThreadId, initialContinuationContext }: ChatContainerProps) {
+export function ChatContainer({ sessionId, routeSessionId, initialThreadId, initialContinuationContext }: ChatContainerProps) {
   const router = useRouter();
   const navigate = useNavigate();
   const isMobile = useIsMobile();
+  // Use the route-level param for navigations so the URL stays stable
+  // (e.g. "/sessions/orchestrator" instead of "/sessions/orchestrator:user-1:abc").
+  const navSessionId = routeSessionId ?? sessionId;
   const { data: session } = useSession(sessionId);
   const { data: gitState } = useSessionGitState(sessionId);
   const { data: childSessions } = useSessionChildren(sessionId);
@@ -147,38 +152,37 @@ export function ChatContainer({ sessionId, initialThreadId, initialContinuationC
   useAutoRestartOrchestrator(isOrchestrator);
   const createThread = useCreateThread(sessionId);
 
-  // Auto-select the active thread on mount for orchestrator sessions when no
-  // threadId was provided in the URL. The endpoint returns the current active
-  // thread (or creates one if none exists), so we always land on the right thread.
+  // Orchestrator thread selection is kept in component state so the URL
+  // stays clean (/sessions/orchestrator with no query params).  Non-
+  // orchestrator sessions continue to use the URL search param.
+  const [localThreadId, setLocalThreadId] = useState<string | null>(initialThreadId ?? null);
+
   const { data: serverActiveThread } = useActiveThread(
     sessionId,
-    isOrchestrator && !initialThreadId,
+    isOrchestrator && !initialThreadId && !localThreadId,
   );
-  const activeThreadId = getEffectiveActiveThreadId(initialThreadId, serverActiveThread?.id);
+
+  // For orchestrator: prefer local state, then server active thread.
+  // For normal sessions: use the URL search param, then server active thread.
+  const activeThreadId = isOrchestrator
+    ? (localThreadId ?? serverActiveThread?.id ?? null)
+    : getEffectiveActiveThreadId(initialThreadId, serverActiveThread?.id);
 
   const selectThread = useCallback(
     (threadId: string) => {
-      void navigate({
-        to: '/sessions/$sessionId',
-        params: { sessionId },
-        search: { threadId },
-        replace: true,
-      });
+      if (isOrchestrator) {
+        setLocalThreadId(threadId);
+      } else {
+        void navigate({
+          to: '/sessions/$sessionId',
+          params: { sessionId: navSessionId },
+          search: { threadId },
+          replace: true,
+        });
+      }
     },
-    [navigate, sessionId]
+    [isOrchestrator, navigate, navSessionId]
   );
-
-  useEffect(() => {
-    if (!isOrchestrator) return;
-    if (initialThreadId) return;
-    if (!serverActiveThread?.id) return;
-    void navigate({
-      to: '/sessions/$sessionId',
-      params: { sessionId },
-      search: { threadId: serverActiveThread.id },
-      replace: true,
-    });
-  }, [initialThreadId, isOrchestrator, navigate, serverActiveThread?.id, sessionId]);
 
   const handleNewThread = useCallback(async () => {
     try {
@@ -199,7 +203,7 @@ export function ChatContainer({ sessionId, initialThreadId, initialContinuationC
 
   // While the active thread is still resolving for orchestrator sessions,
   // show no messages to avoid a flash of unfiltered content.
-  const isResolvingThread = isOrchestrator && !initialThreadId && !activeThreadId;
+  const isResolvingThread = isOrchestrator && !activeThreadId;
 
   const filteredMessages = useMemo(() => {
     if (isResolvingThread) return [];
