@@ -10,7 +10,9 @@ import {
 import type { GitHubServiceConfig, GitHubServiceMetadata } from '../services/github-config.js';
 import { storeCredential } from '../services/credentials.js';
 import { mintGitHubAppJWT } from '../services/github-app-jwt.js';
-import { signJWT } from '../lib/jwt.js';
+import { signJWT, verifyJWT } from '../lib/jwt.js';
+import { getDb } from '../lib/drizzle.js';
+import { getServiceMetadata } from '../lib/db/service-configs.js';
 import * as db from '../lib/db.js';
 
 export const adminGitHubRouter = new Hono<{ Bindings: Env; Variables: Variables }>();
@@ -333,4 +335,82 @@ adminGitHubRouter.post('/app/verify', async (c) => {
     accessibleOwners,
     repositoryCount: reposData.repositories.length,
   });
+});
+
+/**
+ * GitHub App manifest callback — mounted outside /api/* (no auth middleware).
+ * User identity is derived from the signed state JWT.
+ */
+export const githubAppSetupCallbackRouter = new Hono<{ Bindings: Env; Variables: Variables }>();
+
+githubAppSetupCallbackRouter.get('/app/setup', async (c) => {
+  const code = c.req.query('code');
+  const stateParam = c.req.query('state');
+  const frontendUrl = (c.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/$/, '');
+
+  if (!code || !stateParam) {
+    return c.redirect(`${frontendUrl}/settings?tab=github&error=missing_params`);
+  }
+
+  // Verify state JWT
+  const payload = await verifyJWT(stateParam, c.env.ENCRYPTION_KEY);
+  if (!payload || !payload.sub || (payload as any).purpose !== 'app-manifest') {
+    return c.redirect(`${frontendUrl}/settings?tab=github&error=invalid_state`);
+  }
+
+  // Check jti for replay protection
+  const appDb = getDb(c.env.DB);
+  const nonceStore = await getServiceMetadata<{ jti: string; exp: number }>(appDb, 'github_manifest_nonce').catch(() => null);
+  if (!nonceStore || nonceStore.jti !== (payload as any).jti) {
+    return c.redirect(`${frontendUrl}/settings?tab=github&error=invalid_or_replayed_state`);
+  }
+  // Consume the nonce
+  await updateServiceMetadata(appDb, 'github_manifest_nonce', { jti: '', exp: 0 });
+
+  // Exchange code for app credentials
+  const conversionRes = await fetch(`https://api.github.com/app-manifests/${code}/conversions`, {
+    method: 'POST',
+    headers: {
+      Accept: 'application/vnd.github+json',
+      'User-Agent': 'valet-app',
+    },
+  });
+
+  if (!conversionRes.ok) {
+    const errText = await conversionRes.text();
+    console.error('GitHub manifest conversion failed:', conversionRes.status, errText);
+    return c.redirect(`${frontendUrl}/settings?tab=github&error=conversion_failed`);
+  }
+
+  const appData = await conversionRes.json() as {
+    id: number;
+    slug: string;
+    name: string;
+    client_id: string;
+    client_secret: string;
+    pem: string;
+    webhook_secret: string;
+    owner: { login: string; type: string };
+  };
+
+  // Store everything in org_service_configs
+  const config: GitHubServiceConfig = {
+    oauthClientId: appData.client_id,
+    oauthClientSecret: appData.client_secret,
+    appId: String(appData.id),
+    appPrivateKey: appData.pem,
+    appSlug: appData.slug,
+    appWebhookSecret: appData.webhook_secret,
+  };
+
+  const metadata: GitHubServiceMetadata = {
+    appOwner: appData.owner.login,
+    appOwnerType: appData.owner.type,
+    appName: appData.name,
+  };
+
+  const userId = payload.sub as string;
+  await setServiceConfig(appDb, c.env.ENCRYPTION_KEY, 'github', config, metadata, userId);
+
+  return c.redirect(`${frontendUrl}/settings?tab=github&created=true`);
 });

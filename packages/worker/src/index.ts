@@ -35,7 +35,7 @@ import { notificationQueueRouter } from './routes/mailbox.js';
 import { channelsRouter } from './routes/channels.js';
 import { telegramApiRouter } from './routes/telegram.js';
 import { slackAdminRouter, slackUserRouter } from './routes/slack.js';
-import { adminGitHubRouter } from './routes/admin-github.js';
+import { adminGitHubRouter, githubAppSetupCallbackRouter } from './routes/admin-github.js';
 import { slackEventsRouter } from './routes/slack-events.js';
 import { channelWebhooksRouter } from './routes/channel-webhooks.js';
 import { actionPoliciesRouter } from './routes/action-policies.js';
@@ -158,6 +158,9 @@ app.route('/channels', slackEventsRouter);
 
 // Repo provider callbacks (unauthenticated — GitHub redirects here after app install)
 app.route('/repo-providers', repoProviderCallbackRouter);
+
+// GitHub App manifest callback (unauthenticated — GitHub redirects here after app creation)
+app.route('/github', githubAppSetupCallbackRouter);
 
 // Protected API routes
 app.use('/api/*', authMiddleware);
