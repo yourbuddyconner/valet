@@ -174,8 +174,7 @@ export async function hasCredential(
 /**
  * Resolve a repo-level credential, preferring:
  * 1. user-level oauth2 (personal GitHub OAuth — commits as user)
- * 2. org/user app_install whose accessibleOwners covers repoOwner
- * 3. (when repoOwner is undefined) fall back to any app_install
+ * 2. org-level app_install (single installation model)
  */
 export async function resolveRepoCredential(
   db: AppDb,
@@ -188,43 +187,23 @@ export async function resolveRepoCredential(
   const userOAuth = await getCredentialRow(db, 'user', userId, provider, 'oauth2');
   if (userOAuth) return { credential: userOAuth, credentialType: 'oauth2' };
 
-  // 2. If repoOwner is provided, check which App installation covers it
-  if (repoOwner) {
-    // Check org App's accessible owners
-    if (orgId) {
-      const orgInstall = await getCredentialRow(db, 'org', orgId, provider, 'app_install');
-      if (orgInstall) {
+  // 2. Org-level App installation (single installation model)
+  if (orgId) {
+    const orgInstall = await getCredentialRow(db, 'org', orgId, provider, 'app_install');
+    if (orgInstall) {
+      // If repoOwner is provided, verify the installation covers it
+      if (repoOwner) {
         const meta = await getServiceMetadata<GitHubServiceMetadata>(db, 'github');
         if (meta?.accessibleOwners?.includes(repoOwner)) {
           return { credential: orgInstall, credentialType: 'app_install' };
         }
+        // Installation doesn't cover this owner
+        return null;
       }
+      // No repoOwner specified — return org install
+      return { credential: orgInstall, credentialType: 'app_install' };
     }
-
-    // Check user App installation's accessible owners (stored in credential metadata)
-    const userInstall = await getCredentialRow(db, 'user', userId, provider, 'app_install');
-    if (userInstall && userInstall.metadata) {
-      try {
-        const meta = JSON.parse(userInstall.metadata);
-        if (meta.accessibleOwners?.includes(repoOwner)) {
-          return { credential: userInstall, credentialType: 'app_install' };
-        }
-      } catch {
-        // Bad metadata, skip
-      }
-    }
-
-    // No installation covers this owner
-    return null;
   }
-
-  // 3. repoOwner is undefined (non-repo-scoped operation) — fall back to old behavior
-  if (orgId) {
-    const orgInstall = await getCredentialRow(db, 'org', orgId, provider, 'app_install');
-    if (orgInstall) return { credential: orgInstall, credentialType: 'app_install' };
-  }
-  const userInstall = await getCredentialRow(db, 'user', userId, provider, 'app_install');
-  if (userInstall) return { credential: userInstall, credentialType: 'app_install' };
 
   return null;
 }

@@ -287,7 +287,7 @@ describe('resolveRepoCredential', () => {
     expect(result!.credential.id).toBe('cred-app');
   });
 
-  it('returns user App install (legacy) when no OAuth or org App exists', async () => {
+  it('returns null when only user-level app_install exists (no user OAuth or org install)', async () => {
     db.insert(credentials).values({
       id: 'cred-user-app',
       ownerType: 'user',
@@ -299,9 +299,7 @@ describe('resolveRepoCredential', () => {
 
     const result = await resolveRepoCredential(db as any, 'github', undefined, 'org-1', 'user-1');
 
-    expect(result).not.toBeNull();
-    expect(result!.credentialType).toBe('app_install');
-    expect(result!.credential.id).toBe('cred-user-app');
+    expect(result).toBeNull();
   });
 
   it('returns null when no credentials exist', async () => {
@@ -309,7 +307,7 @@ describe('resolveRepoCredential', () => {
     expect(result).toBeNull();
   });
 
-  it('skips org lookup when no orgId provided', async () => {
+  it('returns null when no orgId provided and only app_install credentials exist', async () => {
     db.insert(credentials).values({
       id: 'cred-org-app',
       ownerType: 'org',
@@ -327,11 +325,10 @@ describe('resolveRepoCredential', () => {
       encryptedData: 'user-data',
     }).run();
 
-    // No orgId → should skip org lookup, find user app_install
+    // No orgId → skip org lookup, user app_install no longer consulted
     const result = await resolveRepoCredential(db as any, 'github', undefined, undefined, 'user-1');
 
-    expect(result).not.toBeNull();
-    expect(result!.credential.id).toBe('cred-user-app');
+    expect(result).toBeNull();
   });
 
   it('prefers user OAuth over org App install even when both exist', async () => {
@@ -427,7 +424,7 @@ describe('resolveRepoCredential', () => {
     expect(result).toBeNull();
   });
 
-  it('uses user App when repoOwner matches user App metadata accessibleOwners', async () => {
+  it('returns null when only user-level app_install covers repoOwner (no org install)', async () => {
     db.insert(credentials).values({
       id: 'cred-user-app',
       ownerType: 'user',
@@ -440,9 +437,7 @@ describe('resolveRepoCredential', () => {
 
     const result = await resolveRepoCredential(db as any, 'github', 'user-personal-org', undefined, 'user-1');
 
-    expect(result).not.toBeNull();
-    expect(result!.credentialType).toBe('app_install');
-    expect(result!.credential.id).toBe('cred-user-app');
+    expect(result).toBeNull();
   });
 
   it('OAuth token wins regardless of repoOwner', async () => {
