@@ -486,18 +486,19 @@ git commit -m "refactor: migrate all GitHub env var reads to getGitHubConfig hel
 Implements the endpoints from the spec:
 - `GET /api/admin/github` — returns config with secrets redacted
 - `PUT /api/admin/github/oauth` — sets OAuth App client ID + secret
-- `PUT /api/admin/github/app` — sets GitHub App credentials
-- `DELETE /api/admin/github/oauth` — removes OAuth config
-- `DELETE /api/admin/github/app` — removes App config
-- `POST /api/admin/github/app/verify` — tests App config, stores installationId and accessibleOwners
+- `POST /api/admin/github/app/manifest` — generates manifest + GitHub form URL for App creation
+- `POST /api/admin/github/app/refresh` — re-syncs installation metadata from GitHub
+- `DELETE /api/admin/github/oauth` — removes entire GitHub config (app + OAuth + credential)
+
+> **Note:** `PUT /app`, `DELETE /app`, and `POST /app/verify` were replaced by the manifest flow. See `docs/specs/2026-04-07-github-app-manifest-flow-design.md`.
 
 All endpoints use `adminMiddleware`. Uses `setServiceConfig<GitHubServiceConfig, GitHubServiceMetadata>` for storage.
 
-The verify endpoint:
+The refresh endpoint:
 1. Mints a JWT from App ID + private key
-2. Calls `GET https://api.github.com/app/installations` to find the installation
+2. Calls `GET https://api.github.com/app/installations` to find the installation (enforces single-installation model)
 3. Calls `GET https://api.github.com/installation/repositories` with installation token to get accessible owners
-4. Stores `installationId`, `accessibleOwners`, `accessibleOwnersRefreshedAt` in metadata
+4. Stores `installationId`, `accessibleOwners`, `accessibleOwnersRefreshedAt`, `repositoryCount` in metadata
 5. Returns the list of accessible owners for display
 
 - [ ] **Step 2: Mount in index.ts**
@@ -541,10 +542,9 @@ export const adminGitHubKeys = {
 
 useAdminGitHubConfig()           // GET /api/admin/github
 useSetGitHubOAuth()              // PUT /api/admin/github/oauth
-useSetGitHubApp()                // PUT /api/admin/github/app
-useDeleteGitHubOAuth()           // DELETE /api/admin/github/oauth
-useDeleteGitHubApp()             // DELETE /api/admin/github/app
-useVerifyGitHubApp()             // POST /api/admin/github/app/verify
+useCreateGitHubAppManifest()     // POST /api/admin/github/app/manifest
+useRefreshGitHubApp()            // POST /api/admin/github/app/refresh
+useDeleteGitHubConfig()          // DELETE /api/admin/github/oauth
 ```
 
 - [ ] **Step 2: Create the GitHub config component**

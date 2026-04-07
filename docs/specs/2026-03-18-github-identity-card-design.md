@@ -149,12 +149,13 @@ All callers of `getOrgSlackInstall()` / `getOrgSlackInstallAny()` / `saveOrgSlac
 |----------|--------|---------|
 | `GET /api/admin/github` | GET | Get current GitHub config (secrets redacted) |
 | `PUT /api/admin/github/oauth` | PUT | Set OAuth App client ID + secret |
-| `PUT /api/admin/github/app` | PUT | Set GitHub App ID + private key + slug |
-| `DELETE /api/admin/github/oauth` | DELETE | Remove OAuth App config |
-| `DELETE /api/admin/github/app` | DELETE | Remove GitHub App config |
-| `POST /api/admin/github/app/verify` | POST | Test App config by fetching installation info + accessible repos |
+| `POST /api/admin/github/app/manifest` | POST | Generate manifest + GitHub form URL for App creation |
+| `POST /api/admin/github/app/refresh` | POST | Re-sync installation metadata from GitHub |
+| `DELETE /api/admin/github/oauth` | DELETE | Remove entire GitHub config (app + OAuth + credential) |
 
-The verify endpoint mints a JWT from the App credentials, lists installations, and stores the `installationId` and `accessibleOwners` in the metadata column. "Save & Verify" is atomic: if verification fails, the config is not saved. The admin can also re-verify an existing config to refresh `accessibleOwners`.
+> **Note:** `PUT /app`, `DELETE /app`, and `POST /app/verify` were replaced by the manifest flow in `docs/specs/2026-04-07-github-app-manifest-flow-design.md`.
+
+The refresh endpoint mints a JWT from the App credentials, lists installations (enforcing single-installation model), and updates `installationId`, `accessibleOwners`, and `repositoryCount` in the metadata column.
 
 #### Admin UI
 
@@ -323,7 +324,7 @@ For operations that are not repo-scoped (e.g., listing all repos), the user OAut
 #### Storing and refreshing accessible owners
 
 The `accessibleOwners` list in the `org_service_configs` metadata for `'github'` is populated:
-- When the admin saves and verifies GitHub App config (`POST /api/admin/github/app/verify`)
+- When the admin refreshes the GitHub App config (`POST /api/admin/github/app/refresh`)
 - On `installation_repositories` webhook events (not currently handled — noted as day-one gap, manual re-verify via admin UI as interim)
 - Lazily: if `resolveRepoCredential` can't find a match, and the metadata's `accessibleOwnersRefreshedAt` is older than 1 hour, refresh the list inline and retry. Cap at one refresh attempt per resolution to avoid loops. Store the refresh timestamp to prevent thundering herd.
 

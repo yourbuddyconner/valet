@@ -33,15 +33,12 @@ async function resolveRepoCredentialForProvider(
   const isApp = providerId.endsWith('-app');
   const credentialType = isApp ? 'app_install' : 'oauth2';
 
-  // For app providers, check org-level first, then user-level
+  // For app providers, use org-level only (single installation model)
   let credRow: credentialDb.CredentialRow | null = null;
   if (isApp) {
     const orgSettings = await db.getOrgSettings(appDb);
     if (orgSettings?.id) {
       credRow = await credentialDb.getCredentialRow(appDb, 'org', orgSettings.id, credentialProvider, credentialType);
-    }
-    if (!credRow) {
-      credRow = await credentialDb.getCredentialRow(appDb, 'user', userId, credentialProvider, credentialType);
     }
   } else {
     credRow = await credentialDb.getCredentialRow(appDb, 'user', userId, credentialProvider, credentialType);
