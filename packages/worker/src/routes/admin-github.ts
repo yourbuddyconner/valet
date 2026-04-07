@@ -10,6 +10,7 @@ import {
 import type { GitHubServiceConfig, GitHubServiceMetadata } from '../services/github-config.js';
 import { storeCredential } from '../services/credentials.js';
 import { mintGitHubAppJWT } from '../services/github-app-jwt.js';
+import { signJWT } from '../lib/jwt.js';
 import * as db from '../lib/db.js';
 
 export const adminGitHubRouter = new Hono<{ Bindings: Env; Variables: Variables }>();
@@ -60,6 +61,70 @@ adminGitHubRouter.get('/', async (c) => {
     configuredBy: svc.configuredBy,
     updatedAt: svc.updatedAt,
   });
+});
+
+/**
+ * POST /api/admin/github/app/manifest — Generate manifest + form URL for GitHub App creation
+ */
+adminGitHubRouter.post('/app/manifest', async (c) => {
+  const user = c.get('user');
+  const body = await c.req.json<{ githubOrg: string }>();
+
+  if (!body.githubOrg?.trim()) {
+    return c.json({ error: 'githubOrg is required' }, 400);
+  }
+
+  // Check if app is already configured
+  const existing = await getServiceConfig<GitHubServiceConfig, GitHubServiceMetadata>(
+    c.get('db'), c.env.ENCRYPTION_KEY, 'github',
+  ).catch(() => null);
+
+  if (existing?.config.appId) {
+    return c.json({ error: 'GitHub App is already configured. Delete it first to create a new one.' }, 400);
+  }
+
+  const orgSettings = await db.getOrgSettings(c.get('db'));
+  const orgName = orgSettings?.name || 'Valet';
+  const frontendUrl = (c.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/$/, '');
+  const workerUrl = (c.env.API_PUBLIC_URL || new URL(c.req.url).origin).replace(/\/$/, '');
+
+  // Signed state JWT with jti for replay protection
+  const now = Math.floor(Date.now() / 1000);
+  const jti = crypto.randomUUID();
+  const state = await signJWT(
+    { sub: user.id, purpose: 'app-manifest', jti, iat: now, exp: now + 10 * 60 } as any,
+    c.env.ENCRYPTION_KEY,
+  );
+
+  // Store jti for one-time consumption (10 min TTL)
+  await updateServiceMetadata(c.get('db'), 'github_manifest_nonce', { jti, exp: now + 600 });
+
+  const githubOrg = body.githubOrg.trim();
+  const manifest = {
+    name: `Valet (${orgName})`,
+    url: frontendUrl,
+    hook_attributes: {
+      url: `${workerUrl}/api/webhooks/github`,
+      active: true,
+    },
+    redirect_url: `${workerUrl}/github/app/setup`,
+    callback_urls: [
+      `${workerUrl}/auth/github/callback`,
+      `${frontendUrl}/auth/github/repo-callback`,
+    ],
+    setup_url: `${workerUrl}/repo-providers/github/install/callback`,
+    setup_events_enabled: true,
+    public: false,
+    default_permissions: {
+      contents: 'read',
+      metadata: 'read',
+    },
+    default_events: ['push', 'pull_request'],
+  };
+
+  const url = `https://github.com/organizations/${encodeURIComponent(githubOrg)}/settings/apps/new?state=${encodeURIComponent(state)}`;
+
+  return c.json({ url, manifest });
 });
 
 /**
