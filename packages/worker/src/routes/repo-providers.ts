@@ -7,6 +7,8 @@ import { getDb } from '../lib/drizzle.js';
 import * as credentialDb from '../lib/db/credentials.js';
 import * as db from '../lib/db.js';
 import { getGitHubConfig } from '../services/github-config.js';
+import { updateServiceMetadata } from '../lib/db/service-configs.js';
+import { adminMiddleware } from '../middleware/admin.js';
 
 export const repoProviderRouter = new Hono<{ Bindings: Env; Variables: Variables }>();
 
@@ -50,8 +52,8 @@ repoProviderRouter.get('/github-oauth/link', async (c) => {
   return c.json({ url: `https://github.com/login/oauth/authorize?${params}` });
 });
 
-// Get GitHub App installation URL (org-level only)
-repoProviderRouter.get('/:provider/install', async (c) => {
+// Get GitHub App installation URL (org-level only, admin required)
+repoProviderRouter.get('/:provider/install', adminMiddleware, async (c) => {
   const providerId = c.req.param('provider');
   const level = c.req.query('level') || 'org';
   const user = c.get('user');
@@ -200,9 +202,7 @@ repoProviderCallbackRouter.get('/:provider/install/callback', async (c) => {
     return c.redirect(`${frontendUrl}/settings?tab=github&error=app_not_configured`);
   }
 
-  // Store the installation credential
-  const metadata: Record<string, string> = { installationId };
-
+  // Store the installation credential and update service metadata
   if (setupAction === 'install') {
     await storeCredential(c.env, ownerType, ownerId, providerId, {
       installation_id: installationId,
@@ -210,7 +210,15 @@ repoProviderCallbackRouter.get('/:provider/install/callback', async (c) => {
       private_key: ghConfig.appPrivateKey,
     }, {
       credentialType: 'app_install',
-      metadata,
+      metadata: { installationId },
+    });
+
+    // Update service metadata so the UI knows the app is installed
+    const { getServiceMetadata } = await import('../lib/db/service-configs.js');
+    const existingMeta = await getServiceMetadata<Record<string, unknown>>(appDb, 'github').catch(() => ({}));
+    await updateServiceMetadata(appDb, 'github', {
+      ...existingMeta,
+      appInstallationId: installationId,
     });
   }
 

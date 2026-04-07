@@ -7,6 +7,7 @@ import {
   useRefreshGitHubApp,
   useDeleteGitHubConfig,
 } from '@/api/admin-github';
+import { api } from '@/api/client';
 
 const inputClass =
   'mt-1 block w-full max-w-md rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm text-neutral-900 placeholder:text-neutral-400 focus:border-neutral-500 focus:outline-none focus:ring-1 focus:ring-neutral-500 dark:border-neutral-600 dark:bg-neutral-900 dark:text-neutral-100 dark:placeholder:text-neutral-500 dark:focus:border-neutral-400 dark:focus:ring-neutral-400';
@@ -228,10 +229,7 @@ function InstallButton() {
   async function handleInstall() {
     setLoading(true);
     try {
-      const res = await fetch('/api/repo-providers/github/install?level=org', {
-        credentials: 'include',
-      });
-      const data = await res.json() as { url?: string; error?: string };
+      const data = await api.get<{ url?: string; error?: string }>('/repo-providers/github/install?level=org');
       if (data.url) {
         window.location.href = data.url;
       }

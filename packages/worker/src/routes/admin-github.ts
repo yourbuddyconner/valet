@@ -9,6 +9,7 @@ import {
 } from '../lib/db/service-configs.js';
 import type { GitHubServiceConfig, GitHubServiceMetadata } from '../services/github-config.js';
 import { storeCredential } from '../services/credentials.js';
+import * as credentialDb from '../lib/db/credentials.js';
 import { mintGitHubAppJWT } from '../services/github-app-jwt.js';
 import { signJWT, verifyJWT } from '../lib/jwt.js';
 import { getDb } from '../lib/drizzle.js';
@@ -104,8 +105,8 @@ adminGitHubRouter.post('/app/manifest', async (c) => {
     c.env.ENCRYPTION_KEY,
   );
 
-  // Store jti for one-time consumption (10 min TTL)
-  await updateServiceMetadata(c.get('db'), 'github_manifest_nonce', { jti, exp: now + 600 });
+  // Store jti for one-time consumption (10 min TTL) — use setServiceConfig (upsert) since the row may not exist yet
+  await setServiceConfig(c.get('db'), c.env.ENCRYPTION_KEY, 'github_manifest_nonce', {}, { jti, exp: now + 600 }, user.id);
 
   const githubOrg = body.githubOrg.trim();
   const manifest = {
@@ -170,9 +171,14 @@ adminGitHubRouter.put('/oauth', async (c) => {
 });
 
 /**
- * DELETE /api/admin/github/oauth — Remove OAuth config (removes entire GitHub config)
+ * DELETE /api/admin/github/oauth — Remove entire GitHub config + org credential
  */
 adminGitHubRouter.delete('/oauth', async (c) => {
+  // Remove the org app_install credential so resolveRepoCredential stops using it
+  const orgSettings = await db.getOrgSettings(c.get('db'));
+  if (orgSettings?.id) {
+    await credentialDb.deleteCredential(c.get('db'), 'org', orgSettings.id, 'github', 'app_install');
+  }
   await deleteServiceConfig(c.get('db'), 'github');
   return c.json({ success: true });
 });
@@ -258,6 +264,10 @@ adminGitHubRouter.post('/app/refresh', async (c) => {
       'User-Agent': 'valet-app',
     },
   });
+
+  if (!reposRes.ok) {
+    return c.json({ error: 'Failed to list installation repositories' }, 400);
+  }
 
   const reposData = await reposRes.json() as {
     total_count: number;
