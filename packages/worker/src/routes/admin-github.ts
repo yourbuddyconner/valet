@@ -44,20 +44,26 @@ adminGitHubRouter.get('/', async (c) => {
     });
   }
 
+  const hasApp = !!svc.config.appId;
   return c.json({
     source: 'database',
     oauth: {
       configured: true,
       clientId: svc.config.oauthClientId,
+      viaApp: hasApp,
     },
-    app: svc.config.appId
+    app: hasApp
       ? {
           configured: true,
           appId: svc.config.appId,
           appSlug: svc.config.appSlug,
+          appName: svc.metadata.appName,
+          appOwner: svc.metadata.appOwner,
+          appOwnerType: svc.metadata.appOwnerType,
           installationId: svc.metadata.appInstallationId,
           accessibleOwners: svc.metadata.accessibleOwners,
           accessibleOwnersRefreshedAt: svc.metadata.accessibleOwnersRefreshedAt,
+          repositoryCount: svc.metadata.repositoryCount,
         }
       : null,
     configuredBy: svc.configuredBy,
