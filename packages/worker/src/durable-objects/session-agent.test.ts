@@ -1001,4 +1001,103 @@ describe('SessionAgentDO', () => {
     const queueState = broadcasts.find((b) => b.type === 'queue.state');
     expect(queueState?.data).toMatchObject({ pending: null });
   });
+
+  it('queue.withdraw removes pending and broadcasts content', async () => {
+    const { agent, broadcasts } = await createTestAgent();
+    const mockWs = { send: vi.fn() };
+
+    (agent as any).promptQueue.enqueue({
+      id: 'pending-withdraw',
+      content: 'withdraw me',
+      status: 'queued',
+      channelType: 'web',
+      channelId: 'default',
+      channelKey: 'web:default',
+      threadId: 'thread-1',
+    });
+
+    await (agent as any).handleClientMessage(mockWs, {
+      type: 'queue.withdraw',
+    });
+
+    expect((agent as any).promptQueue.length).toBe(0);
+
+    const withdrawn = broadcasts.find((b) => b.type === 'queue.withdrawn');
+    expect(withdrawn).toBeTruthy();
+    expect((withdrawn as any).data.messageId).toBe('pending-withdraw');
+    expect((withdrawn as any).data.content).toBe('withdraw me');
+    expect((withdrawn as any).data.threadId).toBe('thread-1');
+
+    // Should also broadcast queue.state with pending: null
+    const queueState = broadcasts.find((b) => b.type === 'queue.state');
+    expect(queueState?.data).toMatchObject({ pending: null });
+  });
+
+  it('queue.withdraw is silent no-op when nothing is queued', async () => {
+    const { agent, broadcasts } = await createTestAgent();
+    const mockWs = { send: vi.fn() };
+
+    await (agent as any).handleClientMessage(mockWs, {
+      type: 'queue.withdraw',
+    });
+
+    const withdrawn = broadcasts.find((b) => b.type === 'queue.withdrawn');
+    expect(withdrawn).toBeUndefined();
+  });
+
+  it('queue.promote dispatches directly when runner is idle', async () => {
+    const runnerSocket = { send: vi.fn() };
+    const { agent } = await createTestAgent({ sockets: [runnerSocket] });
+
+    (agent as any).promptQueue.enqueue({
+      id: 'pending-promote',
+      content: 'promote me',
+      status: 'queued',
+      channelType: 'web',
+      channelId: 'default',
+      channelKey: 'web:default',
+    });
+
+    await (agent as any).handleClientMessage({ send: vi.fn() }, {
+      type: 'queue.promote',
+    });
+
+    // Should have dispatched directly (no abort needed)
+    const promptSent = runnerSocket.send.mock.calls.some(
+      (call: unknown[]) => JSON.parse(call[0] as string).type === 'prompt'
+    );
+    expect(promptSent).toBe(true);
+  });
+
+  it('queue.replace withdraws old, aborts, and dispatches new content', async () => {
+    const runnerSocket = { send: vi.fn() };
+    const { agent, broadcasts } = await createTestAgent({ sockets: [runnerSocket] });
+
+    (agent as any).promptQueue.runnerBusy = true;
+
+    (agent as any).promptQueue.enqueue({
+      id: 'old-pending',
+      content: 'old content',
+      status: 'queued',
+      channelType: 'web',
+      channelId: 'default',
+      channelKey: 'web:default',
+    });
+
+    await (agent as any).handleClientMessage({ send: vi.fn() }, {
+      type: 'queue.replace',
+      content: 'new replacement content',
+    });
+
+    // Old entry should have been withdrawn
+    const withdrawn = broadcasts.find((b) => b.type === 'queue.withdrawn');
+    expect(withdrawn).toBeTruthy();
+    expect((withdrawn as any).data.content).toBe('old content');
+
+    // Abort should have been sent
+    const abortSent = runnerSocket.send.mock.calls.some(
+      (call: unknown[]) => JSON.parse(call[0] as string).type === 'abort'
+    );
+    expect(abortSent).toBe(true);
+  });
 });

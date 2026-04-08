@@ -84,7 +84,7 @@ export function buildForwardedParts(
 
 /** Messages sent by browser clients to the DO */
 interface ClientMessage {
-  type: 'prompt' | 'answer' | 'ping' | 'abort' | 'revert' | 'diff' | 'review' | 'command' | 'approve-action' | 'deny-action';
+  type: 'prompt' | 'answer' | 'ping' | 'abort' | 'revert' | 'diff' | 'review' | 'command' | 'approve-action' | 'deny-action' | 'queue.withdraw' | 'queue.promote' | 'queue.replace';
   content?: string;
   model?: string;
   queueMode?: 'followup' | 'collect' | 'steer';
@@ -1355,6 +1355,99 @@ export class SessionAgentDO {
           default:
             ws.send(JSON.stringify({ type: 'error', message: `Unknown command: ${cmd}` }));
         }
+        break;
+      }
+
+      case 'queue.withdraw': {
+        const withdrawn = this.promptQueue.withdrawQueued();
+        if (withdrawn) {
+          this.broadcastToClients({
+            type: 'queue.withdrawn',
+            data: {
+              messageId: withdrawn.id,
+              content: withdrawn.content,
+              attachments: withdrawn.attachments ? JSON.parse(withdrawn.attachments) : undefined,
+              threadId: withdrawn.threadId,
+            },
+          });
+          this.broadcastToClients({
+            type: 'queue.state',
+            data: { pending: null },
+          });
+          this.emitAuditEvent('user.queue_withdraw', `Withdrew pending prompt ${withdrawn.id}`);
+        }
+        break;
+      }
+
+      case 'queue.promote': {
+        const entry = this.promptQueue.withdrawQueued();
+        if (!entry) break; // no-op if nothing queued
+
+        if (this.promptQueue.runnerBusy) {
+          await this.handleAbort();
+        }
+
+        // Dispatch the withdrawn entry via handlePrompt
+        await this.handlePrompt(
+          entry.content,
+          entry.model || undefined,
+          entry.authorId ? { id: entry.authorId, email: entry.authorEmail || '', name: entry.authorName || undefined, avatarUrl: entry.authorAvatarUrl || undefined } : undefined,
+          entry.attachments ? JSON.parse(entry.attachments) : undefined,
+          entry.channelType || undefined,
+          entry.channelId || undefined,
+          entry.threadId || undefined,
+          entry.continuationContext || undefined,
+          entry.contextPrefix || undefined,
+          entry.replyChannelType && entry.replyChannelId
+            ? { channelType: entry.replyChannelType, channelId: entry.replyChannelId }
+            : undefined,
+        );
+        this.emitAuditEvent('user.queue_promote', `Promoted pending prompt ${entry.id}`);
+        break;
+      }
+
+      case 'queue.replace': {
+        // Withdraw existing pending (if any)
+        const existing = this.promptQueue.withdrawQueued();
+        if (existing) {
+          this.broadcastToClients({
+            type: 'queue.withdrawn',
+            data: {
+              messageId: existing.id,
+              content: existing.content,
+              attachments: existing.attachments ? JSON.parse(existing.attachments) : undefined,
+              threadId: existing.threadId,
+            },
+          });
+          this.emitAuditEvent('user.queue_withdraw', `Replaced pending prompt ${existing.id}`);
+        }
+
+        // Extract author from WebSocket tag (same as prompt case)
+        const clientTag = this.ctx.getTags(ws).find((t: string) => t.startsWith('client:'));
+        const userId = clientTag?.replace('client:', '');
+        const userDetails = userId ? this.userDetailsCache.get(userId) : undefined;
+        const replaceAuthor = userDetails ? {
+          id: userDetails.id,
+          email: userDetails.email,
+          name: userDetails.name,
+          avatarUrl: userDetails.avatarUrl,
+          gitName: userDetails.gitName,
+          gitEmail: userDetails.gitEmail,
+        } : userId ? { id: userId, email: '', name: undefined, avatarUrl: undefined, gitName: undefined, gitEmail: undefined } : undefined;
+
+        const { attachments: replaceAttachments } = sanitizePromptAttachments(msg.attachments);
+
+        // Abort + dispatch new content as steer
+        await this.handleInterruptPrompt(
+          msg.content || '',
+          msg.model,
+          replaceAuthor,
+          replaceAttachments,
+          (msg as any).channelType,
+          (msg as any).channelId,
+          (msg as any).threadId,
+        );
+        this.emitAuditEvent('user.queue_replace', 'Replaced with new content');
         break;
       }
     }
