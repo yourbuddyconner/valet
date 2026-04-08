@@ -10,10 +10,10 @@ import { toastError } from '@/hooks/use-toast';
 
 interface ChatInputProps {
   onSend: (content: string, model?: string, attachments?: PromptAttachment[]) => void;
-  /** Called when Enter is pressed on an empty composer while a staged queued message exists. */
-  onSteerQueued?: () => void;
-  /** Whether there is at least one staged queued message waiting locally. */
-  hasQueuedDraft?: boolean;
+  /** Called when Enter is pressed on an empty composer while a pending followup exists. */
+  onPromotePending?: () => void;
+  /** Whether there is a pending followup queued on the server. */
+  hasPendingFollowup?: boolean;
   disabled?: boolean;
   /** Blocks sending but keeps textarea interactive (e.g. during hibernate transitions) */
   sendDisabled?: boolean;
@@ -36,6 +36,10 @@ interface ChatInputProps {
   onFocusChange?: (focused: boolean) => void;
   /** Called when a slash command is executed (e.g. /diff, /stop) */
   onCommand?: (command: string, args?: string) => void;
+  /** External value to inject into the textarea (e.g. from withdrawn pending followup) */
+  externalValue?: string | null;
+  /** Called after externalValue has been consumed */
+  onExternalValueConsumed?: () => void;
 }
 
 interface FlatModel {
@@ -106,8 +110,8 @@ function hasSupportedFileInDataTransfer(dataTransfer: DataTransfer | null): bool
 
 export function ChatInput({
   onSend,
-  onSteerQueued,
-  hasQueuedDraft = false,
+  onPromotePending,
+  hasPendingFollowup = false,
   disabled = false,
   sendDisabled = false,
   placeholder = 'Ask or build anything...',
@@ -124,6 +128,8 @@ export function ChatInput({
   onOpenActions,
   onFocusChange,
   onCommand,
+  externalValue,
+  onExternalValueConsumed,
 }: ChatInputProps) {
   const [value, setValue] = useState('');
   const [attachments, setAttachments] = useState<PromptAttachment[]>([]);
@@ -142,6 +148,17 @@ export function ChatInput({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const dragDepthRef = useRef(0);
   const textareaRef = inputRef ?? internalRef;
+
+  // Consume external value (e.g. from withdrawn pending followup)
+  useEffect(() => {
+    if (externalValue != null && externalValue !== '') {
+      setValue(externalValue);
+      onExternalValueConsumed?.();
+      // Focus the textarea after injecting value
+      requestAnimationFrame(() => textareaRef.current?.focus());
+    }
+  }, [externalValue, onExternalValueConsumed, textareaRef]);
+
   const overlayRef = useRef<HTMLDivElement>(null);
   const fileOverlayRef = useRef<HTMLDivElement>(null);
   const commandOverlayRef = useRef<HTMLDivElement>(null);
@@ -508,8 +525,8 @@ export function ChatInput({
     e.preventDefault();
     const hasText = !!value.trim();
     if (!hasText && attachments.length === 0) {
-      if (!disabled && !sendDisabled && !isSendingFiles && hasQueuedDraft && onSteerQueued) {
-        onSteerQueued();
+      if (!disabled && !sendDisabled && !isSendingFiles && hasPendingFollowup && onPromotePending) {
+        onPromotePending();
       }
       return;
     }
@@ -1037,8 +1054,8 @@ export function ChatInput({
               ? 'hibernated — focus to restore'
                 : sessionStatus === 'hibernating'
                   ? 'hibernating...'
-                : hasQueuedDraft
-                  ? 'queued locally — enter again to steer latest · shift+enter for new line'
+                : hasPendingFollowup
+                  ? 'queued — enter to dispatch now · shift+enter for new line'
                 : isAgentActive
                   ? 'esc to stop · shift+enter for new line · @ files · / commands · drag images · mic'
                   : 'enter to send · shift+enter for new line · @ files · / commands · drag images · mic'}

@@ -112,15 +112,11 @@ export function ChatContainer({ sessionId, routeSessionId, initialThreadId, init
     integrationAuthErrors,
     dismissIntegrationAuth,
     loadThreadMessages,
+    pendingFollowup,
+    queueWithdraw,
+    queuePromote,
+    queueReplace,
   } = useChat(sessionId);
-  type QueuedAttachments = Parameters<typeof sendMessage>[2];
-  type QueuedPrompt = {
-    id: string;
-    content: string;
-    model?: string;
-    attachments?: QueuedAttachments;
-  };
-  const [stagedQueuedPrompts, setStagedQueuedPrompts] = useState<QueuedPrompt[]>([]);
   const queueModePreference = (authUser?.uiQueueMode ?? 'followup') as QueueMode;
   const isDispatchBusy = isAgentThinking
     || agentStatus === 'thinking'
@@ -216,16 +212,15 @@ export function ChatContainer({ sessionId, routeSessionId, initialThreadId, init
 
   const handleSendMessage = useCallback(
     async (content: string, model?: string, attachments?: Parameters<typeof sendMessage>[2]) => {
-      if (queueModePreference === 'followup' && isDispatchBusy) {
-        setStagedQueuedPrompts((prev) => [
-          ...prev,
-          {
-            id: crypto.randomUUID(),
-            content,
-            model,
-            attachments,
-          },
-        ]);
+      // If no content but pending exists and busy, promote
+      if (!content.trim() && pendingFollowup && isDispatchBusy) {
+        queuePromote();
+        return;
+      }
+
+      if (pendingFollowup && isDispatchBusy) {
+        // Already have a pending followup + user typed new content = replace
+        queueReplace(content, model, attachments as any, activeThreadId ?? undefined);
         return;
       }
 
@@ -233,7 +228,7 @@ export function ChatContainer({ sessionId, routeSessionId, initialThreadId, init
       pendingContinuationContext.current = undefined;
       sendMessage(content, model, attachments, undefined, undefined, queueModePreference, activeThreadId ?? undefined, continuation);
     },
-    [sendMessage, queueModePreference, isDispatchBusy, activeThreadId]
+    [sendMessage, queueModePreference, isDispatchBusy, activeThreadId, pendingFollowup, queueReplace, queuePromote]
   );
 
   const handleAbort = useCallback(() => {
@@ -247,36 +242,20 @@ export function ChatContainer({ sessionId, routeSessionId, initialThreadId, init
     [executeCommand]
   );
 
-  const steerLatestQueuedPrompt = useCallback(() => {
-    if (!isConnected || stagedQueuedPrompts.length === 0) return;
-    const latest = stagedQueuedPrompts[stagedQueuedPrompts.length - 1];
-    setStagedQueuedPrompts((prev) => prev.slice(0, -1));
-    sendMessage(
-      latest.content,
-      latest.model,
-      latest.attachments,
-      undefined,
-      undefined,
-      'steer',
-    );
-  }, [isConnected, stagedQueuedPrompts, sendMessage]);
+  // Promote pending followup (dispatch immediately as steer)
+  const handlePromotePending = useCallback(() => {
+    if (!pendingFollowup) return;
+    queuePromote();
+  }, [pendingFollowup, queuePromote]);
 
-  useEffect(() => {
-    if (!isConnected) return;
-    if (isDispatchBusy) return;
-    if (stagedQueuedPrompts.length === 0) return;
-
-    const nextPrompt = stagedQueuedPrompts[0];
-    setStagedQueuedPrompts((prev) => prev.slice(1));
-    sendMessage(
-      nextPrompt.content,
-      nextPrompt.model,
-      nextPrompt.attachments,
-      undefined,
-      undefined,
-      'followup',
-    );
-  }, [isConnected, isDispatchBusy, stagedQueuedPrompts, sendMessage]);
+  // Edit pending followup — withdraw and populate text box
+  const [editingWithdrawnContent, setEditingWithdrawnContent] = useState<string | null>(null);
+  const handleEditPending = useCallback(() => {
+    if (!pendingFollowup) return;
+    // Save content before withdrawing so we can populate the text box
+    setEditingWithdrawnContent(pendingFollowup.content);
+    queueWithdraw();
+  }, [pendingFollowup, queueWithdraw]);
 
   // Share dialog state
   const [shareOpen, setShareOpen] = useState(false);
@@ -516,55 +495,42 @@ export function ChatContainer({ sessionId, routeSessionId, initialThreadId, init
               onDismiss={dismissIntegrationAuth}
             />
           )}
-          {stagedQueuedPrompts.length > 0 && (
+          {pendingFollowup && (
             <div className="border-t border-neutral-100 bg-surface-0 px-3 py-2 dark:border-neutral-800/50 dark:bg-surface-0">
               <div className="mb-1 flex items-center justify-between">
                 <span className="font-mono text-[10px] text-amber-700 dark:text-amber-300">
-                  {stagedQueuedPrompts.length} queued locally - Enter again to steer latest
+                  1 queued — Enter to dispatch now
                 </span>
                 <div className="flex items-center gap-1.5">
                   <button
                     type="button"
-                    onClick={steerLatestQueuedPrompt}
+                    onClick={handleEditPending}
                     className="rounded px-1.5 py-0.5 font-mono text-[10px] text-amber-700 transition-colors hover:bg-amber-100 dark:text-amber-300 dark:hover:bg-amber-900/30"
                   >
-                    steer latest
+                    edit
                   </button>
                   <button
                     type="button"
-                    onClick={() => setStagedQueuedPrompts([])}
+                    onClick={() => queueWithdraw()}
                     className="rounded px-1.5 py-0.5 font-mono text-[10px] text-neutral-500 transition-colors hover:bg-neutral-100 hover:text-neutral-700 dark:text-neutral-400 dark:hover:bg-neutral-800 dark:hover:text-neutral-200"
                   >
-                    clear
+                    cancel
                   </button>
                 </div>
               </div>
-              <div className="space-y-1">
-                {stagedQueuedPrompts.slice(-3).map((queued) => (
-                  <div
-                    key={queued.id}
-                    className="rounded-md border border-amber-200 bg-amber-50/70 px-2 py-1 font-mono text-[11px] text-amber-900 dark:border-amber-800/50 dark:bg-amber-900/20 dark:text-amber-100"
-                  >
-                    <div className="truncate">
-                      {queued.content || `[${queued.attachments?.length ?? 0} attachment(s)]`}
-                    </div>
-                  </div>
-                ))}
-                {stagedQueuedPrompts.length > 3 && (
-                  <div className="font-mono text-[10px] text-neutral-400 dark:text-neutral-500">
-                    +{stagedQueuedPrompts.length - 3} more queued
-                  </div>
-                )}
+              <div className="rounded-md border border-amber-200 bg-amber-50/70 px-2 py-1 font-mono text-[11px] text-amber-900 dark:border-amber-800/50 dark:bg-amber-900/20 dark:text-amber-100">
+                <div className="truncate">
+                  {pendingFollowup.content || '[attachment]'}
+                </div>
               </div>
             </div>
           )}
           <ChatInput
             onSend={handleSendMessage}
-            onSteerQueued={steerLatestQueuedPrompt}
-            hasQueuedDraft={stagedQueuedPrompts.length > 0}
+            onPromotePending={handlePromotePending}
+            hasPendingFollowup={!!pendingFollowup}
             disabled={isDisabled}
             sendDisabled={false}
-
             placeholder={
               isDisabled
                 ? 'Session is not available'
@@ -582,6 +548,8 @@ export function ChatContainer({ sessionId, routeSessionId, initialThreadId, init
             onOpenActions={() => setMobileActionsOpen(true)}
             onFocusChange={setComposerFocused}
             onCommand={handleCommand}
+            externalValue={editingWithdrawnContent}
+            onExternalValueConsumed={() => setEditingWithdrawnContent(null)}
           />
           {isMobile && (
             mobileActionsOpen ? (
