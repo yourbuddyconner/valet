@@ -454,6 +454,7 @@ export async function dispatchOrchestratorPrompt(
       authorEmail: params.authorEmail,
       authorId: params.userId,
       replyTo: params.replyTo,
+      queueMode: 'steer',
     }),
   }));
 

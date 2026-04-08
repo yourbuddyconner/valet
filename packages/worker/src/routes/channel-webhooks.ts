@@ -270,7 +270,7 @@ channelWebhooksRouter.post('/:channelType/webhook/:userId', async (c) => {
           body: JSON.stringify({
             content: message.text,
             attachments: attachments.length > 0 ? attachments : undefined,
-            queueMode: binding.queueMode,
+            queueMode: binding.queueMode || 'steer',
             channelType,
             channelId: message.channelId,
             threadId: orchestratorThreadId,
