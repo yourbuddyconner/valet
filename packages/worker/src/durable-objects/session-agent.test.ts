@@ -922,4 +922,27 @@ describe('SessionAgentDO', () => {
     expect((queueState as any).data.pending.content).toBe('queue state test');
     expect((queueState as any).data.pending.threadId).toBe('thread-qs');
   });
+
+  it('handleAbort does not clear queued prompts', async () => {
+    const runnerSocket = { send: vi.fn() };
+    const { agent } = await createTestAgent({ sockets: [runnerSocket] });
+
+    (agent as any).promptQueue.enqueue({
+      id: 'pending-1',
+      content: 'pending work',
+      status: 'queued',
+      channelType: 'web',
+      channelId: 'default',
+      channelKey: 'web:default',
+    });
+
+    (agent as any).promptQueue.runnerBusy = true;
+
+    await (agent as any).handleAbort('web', 'default');
+
+    expect((agent as any).promptQueue.length).toBe(1);
+    expect(runnerSocket.send).toHaveBeenCalledWith(
+      expect.stringContaining('"type":"abort"')
+    );
+  });
 });

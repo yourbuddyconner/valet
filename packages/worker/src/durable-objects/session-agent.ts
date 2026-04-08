@@ -1693,13 +1693,8 @@ export class SessionAgentDO {
 
   private async handleAbort(channelType?: string, channelId?: string) {
     if (channelType && channelId) {
-      // Channel-scoped abort — only clear this channel's queued prompts
-      const channelKey = this.channelKeyFrom(channelType, channelId);
-      this.promptQueue.clearQueued(channelKey);
       this.runnerLink.send({ type: 'abort', channelType, channelId });
     } else {
-      // Global abort — clear all queued prompts
-      this.promptQueue.clearQueued();
       this.runnerLink.send({ type: 'abort' });
     }
 
