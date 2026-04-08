@@ -218,7 +218,7 @@ export class MessageStore {
   }): number {
     const seq = this.bumpSeq();
     this.sql.exec(
-      `INSERT INTO messages (id, seq, role, content, parts, author_id, author_email, author_name, author_avatar_url, channel_type, channel_id, opencode_session_id, message_format, thread_id)
+      `INSERT OR IGNORE INTO messages (id, seq, role, content, parts, author_id, author_email, author_name, author_avatar_url, channel_type, channel_id, opencode_session_id, message_format, thread_id)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       params.id,
       seq,

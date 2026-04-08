@@ -22,6 +22,8 @@ interface QueueRow {
   context_prefix: string | null;
   reply_channel_type: string | null;
   reply_channel_id: string | null;
+  child_session_id: string | null;
+  child_status: string | null;
   created_at: number;
 }
 
@@ -116,6 +118,8 @@ function createMockSql(): SqlStorage & {
           context_prefix: (params[14] as string) || null,
           reply_channel_type: (params[15] as string) || null,
           reply_channel_id: (params[16] as string) || null,
+          child_session_id: (params[17] as string) || null,
+          child_status: (params[18] as string) || null,
           created_at: insertCounter,
         };
         queue.set(row.id, row);
@@ -130,6 +134,14 @@ function createMockSql(): SqlStorage & {
           rows = rows.filter((row) => row.status === 'processing');
         } else if (q.includes("status = 'completed'")) {
           rows = rows.filter((row) => row.status === 'completed');
+        }
+
+        if (q.includes("queue_type = 'prompt'")) {
+          rows = rows.filter((row) => row.queue_type === 'prompt');
+        }
+
+        if (q.includes('child_session_id IS NULL')) {
+          rows = rows.filter((row) => row.child_session_id === null);
         }
 
         if (q.includes('COUNT(*)')) {
@@ -185,6 +197,8 @@ function createMockSql(): SqlStorage & {
           for (const [id, row] of queue.entries()) {
             if (row.status === 'queued') queue.delete(id);
           }
+        } else if (q.includes('WHERE id = ?')) {
+          queue.delete(String(params[0]));
         } else {
           queue.clear();
         }
@@ -731,5 +745,73 @@ describe('SessionAgentDO', () => {
     expect(getMessages).toHaveBeenCalledWith(expect.objectContaining({
       afterCreatedAt: 1775476800,
     }))
+  });
+
+  it('withdrawQueued removes and returns the single queued user prompt', async () => {
+    const { agent } = await createTestAgent();
+
+    (agent as any).promptQueue.enqueue({
+      id: 'withdraw-test',
+      content: 'pending message',
+      status: 'queued',
+      channelType: 'web',
+      channelId: 'default',
+      channelKey: 'web:default',
+      threadId: 'thread-1',
+      authorId: 'user-1',
+      authorEmail: 'user@test.com',
+      authorName: 'Test User',
+      authorAvatarUrl: 'https://example.com/avatar.png',
+    });
+
+    expect((agent as any).promptQueue.length).toBe(1);
+
+    const withdrawn = (agent as any).promptQueue.withdrawQueued();
+    expect(withdrawn).toBeTruthy();
+    expect(withdrawn.id).toBe('withdraw-test');
+    expect(withdrawn.content).toBe('pending message');
+    expect(withdrawn.threadId).toBe('thread-1');
+    expect(withdrawn.authorAvatarUrl).toBe('https://example.com/avatar.png');
+    expect((agent as any).promptQueue.length).toBe(0);
+  });
+
+  it('withdrawQueued returns null when no queued user prompt exists', async () => {
+    const { agent } = await createTestAgent();
+    const withdrawn = (agent as any).promptQueue.withdrawQueued();
+    expect(withdrawn).toBeNull();
+  });
+
+  it('withdrawQueued does not remove child session events', async () => {
+    const { agent } = await createTestAgent();
+
+    (agent as any).promptQueue.enqueue({
+      id: 'child-event',
+      content: 'child status update',
+      status: 'queued',
+      childSessionId: 'child-1',
+      childStatus: 'terminated',
+    });
+
+    const withdrawn = (agent as any).promptQueue.withdrawQueued();
+    expect(withdrawn).toBeNull();
+    expect((agent as any).promptQueue.length).toBe(1);
+  });
+
+  it('peekQueued reads without removing', async () => {
+    const { agent } = await createTestAgent();
+
+    (agent as any).promptQueue.enqueue({
+      id: 'peek-test',
+      content: 'peek content',
+      status: 'queued',
+      channelType: 'web',
+      channelId: 'default',
+      channelKey: 'web:default',
+    });
+
+    const peeked = (agent as any).promptQueue.peekQueued();
+    expect(peeked).toBeTruthy();
+    expect(peeked.id).toBe('peek-test');
+    expect((agent as any).promptQueue.length).toBe(1); // still there
   });
 });

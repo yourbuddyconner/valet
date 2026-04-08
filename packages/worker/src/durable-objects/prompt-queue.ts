@@ -268,6 +268,25 @@ export class PromptQueue {
     this.sql.exec('DELETE FROM prompt_queue');
   }
 
+  private static readonly USER_PROMPT_QUERY =
+    "SELECT id, content, attachments, model, author_id, author_email, author_name, author_avatar_url, channel_type, channel_id, channel_key, queue_type, workflow_execution_id, workflow_payload, thread_id, continuation_context, context_prefix, reply_channel_type, reply_channel_id, child_session_id, child_status FROM prompt_queue WHERE status = 'queued' AND queue_type = 'prompt' AND child_session_id IS NULL ORDER BY created_at ASC LIMIT 1";
+
+  /** Read the single queued user-prompt entry without removing it. Returns null if none. */
+  peekQueued(): QueueEntry | null {
+    const rows = this.sql.exec(PromptQueue.USER_PROMPT_QUERY).toArray();
+    if (rows.length === 0) return null;
+    return this.rowToEntry(rows[0]);
+  }
+
+  /** Remove and return the single queued user-prompt entry (not child events, not workflows). Returns null if none. */
+  withdrawQueued(): QueueEntry | null {
+    const rows = this.sql.exec(PromptQueue.USER_PROMPT_QUERY).toArray();
+    if (rows.length === 0) return null;
+    const row = rows[0];
+    this.sql.exec('DELETE FROM prompt_queue WHERE id = ?', row.id as string);
+    return this.rowToEntry(row);
+  }
+
   // ─── Queries ───────────────────────────────────────────────────────────────
 
   /** Number of queued (not processing/completed) entries. */
