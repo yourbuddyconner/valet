@@ -2379,6 +2379,17 @@ export class SessionAgentDO {
             this.runnerLink.ready = true;
             console.log('[SessionAgentDO] Runner is now ready (first idle after connect)');
 
+            // Revert any processing entries that survived DO eviction.
+            // The disconnectRevertTimer is an in-memory setTimeout that is lost
+            // when the Cloudflare isolate is hibernated/evicted. If it didn't fire,
+            // processing entries and runnerBusy are stale from the previous lifecycle.
+            const stuckProcessing = this.promptQueue.processingCount;
+            if (stuckProcessing > 0) {
+              console.log(`[SessionAgentDO] Runner ready: reverting ${stuckProcessing} stuck processing entries from previous lifecycle`);
+              this.promptQueue.revertProcessingToQueued();
+              this.promptQueue.runnerBusy = false;
+            }
+
             // Emit runner_idle — full time from sandbox spawn/restore to agent ready
             const wakeStart = this.sessionState.sandboxWakeStartedAt;
             if (wakeStart > 0) {

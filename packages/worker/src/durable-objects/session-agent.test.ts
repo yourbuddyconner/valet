@@ -1363,4 +1363,48 @@ describe('SessionAgentDO', () => {
     const queueState = broadcasts.find((b) => b.type === 'queue.state');
     expect(queueState?.data).toEqual({ pending: null });
   });
+
+  it('reverts stuck processing entries when runner becomes ready after hibernation', async () => {
+    const runnerSocket = { send: vi.fn() };
+    const { agent } = await createTestAgent({ sockets: [runnerSocket] });
+
+    // Simulate state after DO eviction: processing entry stuck, runnerBusy=true
+    (agent as any).promptQueue.enqueue({
+      id: 'stuck-processing',
+      content: 'was processing when DO evicted',
+      status: 'processing',
+      channelType: 'web',
+      channelId: 'default',
+      channelKey: 'web:default',
+    });
+    (agent as any).promptQueue.runnerBusy = true;
+
+    // Also queue a new user message (arrived while sandbox was waking)
+    (agent as any).promptQueue.enqueue({
+      id: 'new-queued',
+      content: 'new message while waking',
+      status: 'queued',
+      channelType: 'web',
+      channelId: 'default',
+      channelKey: 'web:default',
+    });
+
+    // Simulate runner becoming ready (wasInitializing path)
+    // Set runnerReady to false first so wasInitializing is true
+    (agent as any).runnerLink.ready = false;
+
+    // Trigger the agentStatus idle handler
+    await (agent as any).runnerHandlers['agentStatus']({
+      type: 'agentStatus',
+      status: 'idle',
+    });
+
+    // The stuck processing entry should have been reverted and dispatched
+    // runnerBusy should now reflect the dispatched state
+    // At minimum, sendNextQueuedPrompt should have been called
+    const promptSent = runnerSocket.send.mock.calls.some(
+      (call: unknown[]) => JSON.parse(call[0] as string).type === 'prompt'
+    );
+    expect(promptSent).toBe(true);
+  });
 });
