@@ -214,7 +214,7 @@ adminGitHubRouter.delete('/oauth', async (c) => {
   }
   await deleteServiceConfig(c.get('db'), 'github');
   // Clean up manifest nonce
-  await setServiceConfig(c.get('db'), c.env.ENCRYPTION_KEY, 'github_manifest_nonce', {}, { jti: '', exp: 0 }, '');
+  await deleteServiceConfig(c.get('db'), 'github_manifest_nonce').catch(() => {});
   return c.json({ success: true });
 });
 
