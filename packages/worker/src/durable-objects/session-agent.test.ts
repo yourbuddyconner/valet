@@ -945,4 +945,60 @@ describe('SessionAgentDO', () => {
       expect.stringContaining('"type":"abort"')
     );
   });
+
+  it('sendNextQueuedPrompt writes user message to message store at dispatch time', async () => {
+    const runnerSocket = { send: vi.fn() };
+    const { agent, broadcasts } = await createTestAgent({ sockets: [runnerSocket] });
+
+    const writeMessageSpy = vi.spyOn((agent as any).messageStore, 'writeMessage');
+
+    // Enqueue a prompt (simulating deferred write — no message in store yet)
+    (agent as any).promptQueue.enqueue({
+      id: 'deferred-msg',
+      content: 'deferred content',
+      status: 'queued',
+      channelType: 'thread',
+      channelId: 'thread-abc',
+      channelKey: 'thread:thread-abc',
+      threadId: 'thread-abc',
+      authorId: 'user-1',
+      authorEmail: 'u@test.com',
+      authorName: 'Test User',
+      authorAvatarUrl: 'https://example.com/avatar.png',
+    });
+
+    // Before dispatch: message should NOT have been written
+    expect(writeMessageSpy).not.toHaveBeenCalled();
+
+    // Dispatch
+    const dispatched = await (agent as any).sendNextQueuedPrompt();
+    expect(dispatched).toBe(true);
+
+    // After dispatch: message SHOULD have been written
+    expect(writeMessageSpy).toHaveBeenCalledOnce();
+    expect(writeMessageSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: 'deferred-msg',
+        role: 'user',
+        content: 'deferred content',
+        author: expect.objectContaining({
+          id: 'user-1',
+          email: 'u@test.com',
+          name: 'Test User',
+          avatarUrl: 'https://example.com/avatar.png',
+        }),
+      }),
+    );
+
+    // User message should have been broadcast to clients
+    const userMsgBroadcast = broadcasts.find(
+      (b) => b.type === 'message' && (b.data as any)?.id === 'deferred-msg' && (b.data as any)?.role === 'user'
+    );
+    expect(userMsgBroadcast).toBeTruthy();
+    expect((userMsgBroadcast?.data as any).authorAvatarUrl).toBe('https://example.com/avatar.png');
+
+    // queue.state should have been broadcast with pending: null
+    const queueState = broadcasts.find((b) => b.type === 'queue.state');
+    expect(queueState?.data).toMatchObject({ pending: null });
+  });
 });
