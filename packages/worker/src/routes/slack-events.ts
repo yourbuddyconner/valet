@@ -325,7 +325,7 @@ slackEventsRouter.post('/slack/events', async (c) => {
           body: JSON.stringify({
             content: message.text,
             attachments: attachments.length > 0 ? attachments : undefined,
-            queueMode: binding.queueMode,
+            queueMode: binding.queueMode || 'steer',
             channelType: 'slack',
             channelId: dispatchChannelId,
             threadId: orchestratorThreadId,

@@ -459,6 +459,15 @@ export class SessionAgentDO {
           console.warn(`[SessionAgentDO] /prompt HTTP: rejected file types: ${rejectedTypes.join(', ')}`);
         }
         console.log(`[SessionAgentDO] /prompt HTTP: content="${content.slice(0, 60)}" channelType=${body.channelType || 'none'} channelId=${body.channelId || 'none'} queueMode=${body.queueMode || 'default'} authorName=${body.authorName || 'none'} authorId=${body.authorId || 'none'}`);
+
+        // Handle interrupt-only (no content) — e.g., /stop command
+        if (body.interrupt && !content && attachments.length === 0) {
+          if (this.promptQueue.runnerBusy) {
+            await this.handleAbort();
+          }
+          return Response.json({ success: true, aborted: true });
+        }
+
         if (!content && attachments.length === 0) {
           return new Response(JSON.stringify({ error: 'Missing content or attachments' }), { status: 400 });
         }
@@ -467,7 +476,7 @@ export class SessionAgentDO {
         const effectiveMode = body.interrupt ? 'steer' : (body.queueMode || this.promptQueue.queueMode || 'followup');
         console.log(`[SessionAgentDO] /prompt HTTP: effectiveMode=${effectiveMode} runnerBusy=${this.promptQueue.runnerBusy} runnerConnected=${this.runnerLink.isConnected}`);
 
-        const author = (body.authorId || body.authorEmail) ? {
+        const author = (body.authorId || body.authorEmail || body.authorName) ? {
           id: body.authorId || '',
           email: body.authorEmail || '',
           name: body.authorName,
@@ -1392,6 +1401,12 @@ export class SessionAgentDO {
       case 'queue.promote': {
         const entry = this.promptQueue.withdrawQueued();
         if (!entry) break; // no-op if nothing queued
+
+        // Broadcast withdrawal so the pending card clears immediately
+        this.broadcastToClients({
+          type: 'queue.state',
+          data: { pending: null },
+        });
 
         if (this.promptQueue.runnerBusy) {
           await this.handleAbort();
