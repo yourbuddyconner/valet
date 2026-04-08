@@ -143,6 +143,7 @@ adminGitHubRouter.post('/app/manifest', async (c) => {
     default_permissions: {
       contents: 'read',
       metadata: 'read',
+      pull_requests: 'read',
     },
     default_events: ['push', 'pull_request'],
   };
