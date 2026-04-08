@@ -141,9 +141,10 @@ adminGitHubRouter.post('/app/manifest', async (c) => {
     setup_url: `${workerUrl}/repo-providers/github/install/callback`,
     public: false,
     default_permissions: {
-      contents: 'read',
+      contents: 'write',
       metadata: 'read',
-      pull_requests: 'read',
+      pull_requests: 'write',
+      issues: 'write',
     },
     default_events: ['push', 'pull_request'],
   };
