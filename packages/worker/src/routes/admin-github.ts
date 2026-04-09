@@ -15,6 +15,7 @@ import { signJWT, verifyJWT } from '../lib/jwt.js';
 import { getDb } from '../lib/drizzle.js';
 import { getServiceMetadata } from '../lib/db/service-configs.js';
 import * as db from '../lib/db.js';
+import { deleteOrgIntegrationByService } from '../lib/db/integrations.js';
 
 interface ManifestJWTPayload {
   sub: string;
@@ -214,6 +215,8 @@ adminGitHubRouter.delete('/oauth', async (c) => {
   if (orgSettings?.id) {
     await credentialDb.deleteCredential(c.get('db'), 'org', orgSettings.id, 'github', 'app_install');
   }
+  // Remove org integration record so listTools stops showing GitHub tools
+  await deleteOrgIntegrationByService(c.get('db'), 'github').catch(() => {});
   await deleteServiceConfig(c.get('db'), 'github');
   // Clean up manifest nonce
   await deleteServiceConfig(c.get('db'), 'github_manifest_nonce').catch(() => {});

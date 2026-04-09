@@ -175,7 +175,6 @@ export type DOToRunnerMessage =
   | { type: 'mem-patch-result'; requestId: string; result?: unknown; error?: string }
   | { type: 'mem-rm-result'; requestId: string; deleted?: number; error?: string }
   | { type: 'mem-search-result'; requestId: string; results?: unknown[]; error?: string }
-  | { type: 'list-repos-result'; requestId: string; repos?: unknown[]; error?: string }
   | { type: 'list-personas-result'; requestId: string; personas?: unknown[]; error?: string }
   | { type: 'list-channels-result'; requestId: string; channels?: unknown[]; error?: string }
   | { type: 'get-session-status-result'; requestId: string; sessionStatus?: unknown; error?: string }
@@ -439,7 +438,6 @@ export type RunnerToDOMessage =
       path?: string;
       limit?: number;
     }
-  | { type: 'list-repos'; requestId: string; source?: string }
   | { type: 'list-personas'; requestId: string }
   | { type: 'list-channels'; requestId: string }
   | { type: 'get-session-status'; requestId: string; targetSessionId: string }

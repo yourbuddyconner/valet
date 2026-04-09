@@ -6,6 +6,7 @@ import { storeCredential } from '../services/credentials.js';
 import { getDb } from '../lib/drizzle.js';
 import * as credentialDb from '../lib/db/credentials.js';
 import * as db from '../lib/db.js';
+import { ensureIntegration, deleteOrgIntegrationByService } from '../lib/db/integrations.js';
 import { getGitHubConfig } from '../services/github-config.js';
 import { updateServiceMetadata, getServiceMetadata } from '../lib/db/service-configs.js';
 import { mintGitHubAppJWT } from '../services/github-app-jwt.js';
@@ -267,6 +268,33 @@ repoProviderCallbackRouter.get('/:provider/install/callback', async (c) => {
     }
 
     await updateServiceMetadata(appDb, 'github', metaUpdate);
+
+    // Create org-scoped integration record so listTools discovers GitHub tools
+    try {
+      await ensureIntegration(appDb, userId, 'github', 'org');
+    } catch (err) {
+      console.warn('[GitHub Install] Failed to create org integration record:', err);
+    }
+  }
+
+  if (setupAction === 'update') {
+    // Permissions changed — redirect to settings, the UI will show the updated state
+    return c.redirect(`${frontendUrl}/settings/admin?github_updated=true`);
+  }
+
+  if (setupAction === 'delete') {
+    // Clean up org integration record and credentials
+    try {
+      await deleteOrgIntegrationByService(appDb, 'github');
+    } catch (err) {
+      console.warn('[GitHub Uninstall] Failed to delete org integration:', err);
+    }
+    try {
+      await credentialDb.deleteCredential(appDb, 'org', ownerId, 'github', 'app_install');
+    } catch (err) {
+      console.warn('[GitHub Uninstall] Failed to delete org credential:', err);
+    }
+    return c.redirect(`${frontendUrl}/settings/admin?github_uninstalled=true`);
   }
 
   return c.redirect(`${frontendUrl}/settings/admin?installed=true`);

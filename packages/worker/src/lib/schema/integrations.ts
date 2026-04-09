@@ -14,7 +14,7 @@ export const integrations = sqliteTable('integrations', {
   createdAt: text().default(sql`(datetime('now'))`),
   updatedAt: text().default(sql`(datetime('now'))`),
 }, (table) => [
-  uniqueIndex('idx_integrations_user_service').on(table.userId, table.service),
+  uniqueIndex('idx_integrations_user_service').on(table.userId, table.service, table.scope),
   index('idx_integrations_user').on(table.userId),
   index('idx_integrations_service').on(table.service),
 ]);

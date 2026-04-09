@@ -1,7 +1,7 @@
 import type { Env } from '../env.js';
 import type { AppDb } from '../lib/drizzle.js';
 import { getDb } from '../lib/drizzle.js';
-import { updateSessionStatus, updateSessionMetrics, addActiveSeconds, updateSessionGitState, upsertSessionFileChanged, updateSessionTitle, getSession, getSessionGitState, getChildSessions, listUserChannelBindings, listOrgRepositories, getUserById, getUsersByIds, createMailboxMessage, getOrgSettings, isNotificationWebEnabled, batchInsertAnalyticsEvents, batchUpsertMessages, updateUserDiscoveredModels, setCatalogCache, updateThread, incrementThreadMessageCount, getThreadOriginChannel } from '../lib/db.js';
+import { updateSessionStatus, updateSessionMetrics, addActiveSeconds, updateSessionGitState, upsertSessionFileChanged, updateSessionTitle, getSession, getSessionGitState, getChildSessions, listUserChannelBindings, getUserById, getUsersByIds, createMailboxMessage, getOrgSettings, isNotificationWebEnabled, batchInsertAnalyticsEvents, batchUpsertMessages, updateUserDiscoveredModels, setCatalogCache, updateThread, incrementThreadMessageCount, getThreadOriginChannel } from '../lib/db.js';
 import { getCredential, type CredentialResult } from '../services/credentials.js';
 import { memRead, memWrite, memPatch, memRm, memSearch } from '../services/session-memory.js';
 import { getSlackBotToken } from '../services/slack.js';
@@ -2916,16 +2916,6 @@ export class SessionAgentDO {
           this.runnerLink.send({ type: 'mem-search-result', requestId: msg.requestId!, ...result } as any);
         } catch (err) {
           this.runnerLink.send({ type: 'mem-search-result', requestId: msg.requestId!, error: err instanceof Error ? err.message : String(err) } as any);
-        }
-      },
-
-      'list-repos': async (msg) => {
-        try {
-          const repos = await listOrgRepositories(this.env.DB);
-          this.runnerLink.send({ type: 'list-repos-result', requestId: msg.requestId!, repos } as any);
-        } catch (err) {
-          console.error('[SessionAgentDO] Failed to list repos:', err);
-          this.runnerLink.send({ type: 'list-repos-result', requestId: msg.requestId!, error: err instanceof Error ? err.message : String(err) } as any);
         }
       },
 

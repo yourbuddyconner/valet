@@ -1122,14 +1122,6 @@ export class AgentClient {
           }
           break;
 
-        case "list-repos-result":
-          if (msg.error) {
-            this.rejectPendingRequest(msg.requestId, msg.error);
-          } else {
-            this.resolvePendingRequest(msg.requestId, { repos: msg.repos ?? [] });
-          }
-          break;
-
         case "list-personas-result":
           if (msg.error) {
             this.rejectPendingRequest(msg.requestId, msg.error);

@@ -111,6 +111,7 @@ export async function ensureIntegration(
   db: AppDb,
   userId: string,
   service: string,
+  scope: 'user' | 'org' = 'user',
 ): Promise<void> {
   await db.insert(integrations).values({
     id: crypto.randomUUID(),
@@ -118,9 +119,9 @@ export async function ensureIntegration(
     service,
     config: { entities: [] } as unknown as Integration['config'],
     status: 'active',
-    scope: 'user',
+    scope,
   }).onConflictDoUpdate({
-    target: [integrations.userId, integrations.service],
+    target: [integrations.userId, integrations.service, integrations.scope],
     set: {
       status: 'active',
       errorMessage: null,
