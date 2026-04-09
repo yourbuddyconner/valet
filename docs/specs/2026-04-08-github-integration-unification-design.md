@@ -26,9 +26,13 @@ Three issues prevent the GitHub integration from working after a GitHub App is i
 
 When the GitHub App install callback completes (in `repo-providers.ts`), create an org-scoped integration record in D1 for the `github` service. This is the record that `listTools` queries to discover available integrations.
 
-The record should be created alongside the `app_install` credential that's already stored. If the record already exists (e.g., from a previous installation), update it.
+**Unique index constraint:** The `integrations` table has a unique index on `(userId, service)`. Org-scoped records use a synthetic `userId` of `'org:default'` to avoid colliding with any real user's personal GitHub integration. The `getOrgIntegrations` query already filters by `scope = 'org'`, so the synthetic userId is only used for insert/update — it never appears in query results returned to users.
 
-When the admin deletes the GitHub config (DELETE `/api/admin/github/oauth`), delete the org-scoped integration record.
+The record should be created alongside the `app_install` credential that's already stored. Use `INSERT ... ON CONFLICT DO UPDATE` to handle re-installation.
+
+When the admin deletes the GitHub config (DELETE `/api/admin/github/oauth`), delete the org-scoped integration record (where `userId = 'org:default'` and `service = 'github'`).
+
+**GitHub App uninstall:** If the GitHub App is uninstalled from GitHub's side (the install callback receives `setup_action=delete`), the org integration record should also be deleted. Without this cleanup, `listTools` would show GitHub tools that fail on every credential resolution. The install callback handler in `repo-providers.ts` should check for `setup_action` and handle deletion.
 
 **Effect:** Any user in the org who calls `list_tools` will see GitHub tools, because `listTools` finds the org integration record, resolves the org `app_install` credential, mints an installation token, and returns the tool list.
 
@@ -36,8 +40,8 @@ When the admin deletes the GitHub config (DELETE `/api/admin/github/oauth`), del
 
 **Delete:**
 - The `list-repos` WebSocket message handler in `session-agent.ts` that calls `listOrgRepositories`
-- The `list-repos-result` handler in the Runner's `agent-client.ts`
-- Any runner-side code that sends `list-repos` messages (e.g., `requestListRepos` method)
+- The `list-repos-result` case handler in the Runner's `agent-client.ts`
+- Any runner-side code that sends `list-repos` type WebSocket messages
 
 **Keep:**
 - The `org_repositories` D1 table — internal infrastructure for future pre-baked sandbox images
@@ -54,20 +58,23 @@ Register a custom `CredentialResolver` for the `github` service in the `Integrat
 
 ```
 resolveGitHubCredential(service, env, userId, scope, options):
-  1. If scope is explicitly 'org':
-     → look up org app_install credential
-     → mint installation token via mintGitHubInstallationToken
-     → return token
-
-  2. If scope is explicitly 'user':
+  1. If scope is explicitly 'user':
      → look up user oauth2 credential
      → return token (with refresh if expired)
 
-  3. If scope is not specified (default):
-     → try user oauth2 first (personal repos take priority)
+  2. If scope is explicitly 'org':
+     → look up org app_install credential (ownerType='org', ownerId='default')
+     → mint installation token via mintGitHubInstallationToken
+     → return token with credentialType='app_install'
+
+  3. If scope is 'org' but no explicit override was requested
+     (i.e., scope came from the integration record, not from action params):
+     → try user oauth2 first (personal repos take priority for actions)
      → if not found, try org app_install
      → if neither found, return not_found error
 ```
+
+**Scope vs. fallback behavior:** `listTools` determines scope from the integration record. For an org-scoped GitHub integration, it passes `scope: 'org'` to the resolver. The custom resolver treats this as "org is available" but still tries the user's personal OAuth first for the best UX — actions like `list_repos` with no `source` param work with whichever credential exists. When `resolveScope` explicitly returns `'org'` or `'user'` (based on action params like `source`), the resolver uses that credential exclusively with no fallback.
 
 The resolver is registered during `IntegrationRegistry.init()` alongside the existing Slack resolver.
 
@@ -93,13 +100,9 @@ params: z.object({
 - `source: 'personal'` → resolve credential with `scope: 'user'` → call `/user/repos`
 - No source → resolve credential with default scope (tries user OAuth first, falls back to org app install). Call the appropriate endpoint based on which credential was returned (check `credentialType` on the result).
 
-The `source` parameter is passed to the credential resolver via the action context. This requires threading a `scope` override from the action params through `executeAction` to `resolveCredentials`. The simplest way: the GitHub plugin's `executeAction` reads `source` from params and sets `scope` before credential resolution.
+The `source` parameter needs to influence which credential is resolved. Today, credential resolution happens in `session-tools.ts` (`executeAction`, ~line 481) before calling the plugin's `executeAction`. The plugin can't influence which credential is fetched.
 
-**Challenge:** Today, credential resolution happens in `session-tools.ts` before calling the plugin's `executeAction`. The plugin can't influence which credential is fetched. Two options:
-
-**Option A:** The plugin's credential resolver reads action params from a thread-local or context object. This is invasive.
-
-**Option B (recommended):** Add an optional `resolveScope` method to the `ActionSource` interface that the plugin can implement. `session-tools.ts` calls `actionSource.resolveScope(actionId, params)` before credential resolution to determine the scope. Default returns the integration's `isOrgScoped` flag. The GitHub plugin overrides it to read `source` from params.
+**Solution:** Add an optional `resolveScope` method to the `ActionSource` interface. `session-tools.ts` calls it in `executeAction` (after `resolveActionPolicy`, before credential resolution at ~line 481) to override the default scope:
 
 ```typescript
 interface ActionSource {
@@ -110,14 +113,25 @@ interface ActionSource {
 }
 ```
 
+In `executeAction` (~line 481 of `session-tools.ts`):
+```typescript
+// Allow plugin to override scope based on action params
+const pluginScope = actionSource.resolveScope?.(actionId, params);
+const scope = pluginScope ?? (isOrgScoped ? 'org' as const : 'user' as const);
+```
+
+The GitHub plugin implements `resolveScope` to read `source` from `list_repos` params. For all other actions, it returns `undefined` (use the default). The custom credential resolver then uses the scope to decide which credential to fetch — and when the scope comes from `resolveScope` (not the default), it uses that credential exclusively without fallback.
+
+The action reads `ctx.credentials._credential_type` (already set by `session-tools.ts` at line 499) to determine which GitHub API endpoint to call (`/installation/repositories` for `app_install`, `/user/repos` for `oauth2`).
+
 ### 5. Session Spawn with Arbitrary Repo
 
-The session spawn request accepts an optional `repo` parameter:
+The session spawn request accepts an optional `repo` parameter. Note: `CreateSessionParams` already has a `repoUrl` field in `sessions.ts`. The new `repo` param is a shorthand (`owner/repo`) that gets normalized to `repoUrl` (`https://github.com/owner/repo`) during session creation. If both are present, `repo` takes precedence. Existing `repoUrl` callers continue to work unchanged.
 
 ```typescript
 interface SessionSpawnRequest {
   // ... existing fields ...
-  repo?: string; // e.g., "owner/repo" or "https://github.com/owner/repo"
+  repo?: string; // e.g., "owner/repo" — normalized to repoUrl during creation
 }
 ```
 
@@ -148,7 +162,7 @@ Response: { token: string, type: string, expiresAt?: string } | { error: string 
 4. DO returns `{ type: 'resolve-credential-result', requestId, token, type, expiresAt }` or error
 5. Runner returns the token to the caller
 
-**Security:** The endpoint is only accessible from inside the sandbox (localhost:9000, behind the auth gateway). The session's `userId` is used for credential resolution — the sandbox cannot request credentials for other users.
+**Security:** The endpoint is on the Runner's internal API (same as `/api/tools` and `/api/tools/call`). Inside the sandbox, OpenCode tools and the boot script access the Runner via `localhost:9000` through the auth gateway, which validates the sandbox JWT. The boot script and git credential helper must pass the sandbox JWT in the `Authorization` header (the JWT is available in the `SANDBOX_TOKEN` env var, set at spawn time). The session's `userId` is used for credential resolution — the sandbox cannot request credentials for other users.
 
 **Git credential helper integration:** The sandbox boot script can configure git to use this endpoint:
 
@@ -156,6 +170,7 @@ Response: { token: string, type: string, expiresAt?: string } | { error: string 
 git config --global credential.helper '!f() {
   TOKEN=$(curl -s http://localhost:9000/api/credentials/resolve \
     -H "Content-Type: application/json" \
+    -H "Authorization: Bearer $SANDBOX_TOKEN" \
     -d "{\"service\": \"github\"}" | jq -r .token)
   echo "username=x-access-token"
   echo "password=$TOKEN"
