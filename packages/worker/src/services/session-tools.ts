@@ -46,9 +46,9 @@ export interface ListToolsResult {
 }
 
 export interface CredentialCache {
-  get(ownerType: string, ownerId: string, service: string): CredentialResult | null;
-  set(ownerType: string, ownerId: string, service: string, result: CredentialResult): void;
-  invalidate(ownerType: string, ownerId: string, service: string): void;
+  get(ownerType: string, ownerId: string, service: string, credentialType?: string): CredentialResult | null;
+  set(ownerType: string, ownerId: string, service: string, result: CredentialResult, credentialType?: string): void;
+  invalidate(ownerType: string, ownerId: string, service: string, credentialType?: string): void;
 }
 
 export interface ListToolsOpts {

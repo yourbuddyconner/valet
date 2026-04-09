@@ -5322,9 +5322,9 @@ export class SessionAgentDO {
   /** Adapter exposing the DO's credential cache as a CredentialCache interface. */
   private get credentialCacheAdapter(): CredentialCache {
     return {
-      get: (ownerType, ownerId, service) => this.getCachedCredential(ownerType, ownerId, service),
-      set: (ownerType, ownerId, service, result) => this.setCachedCredential(ownerType, ownerId, service, result),
-      invalidate: (ownerType, ownerId, service) => this.invalidateCachedCredential(ownerType, ownerId, service),
+      get: (ownerType, ownerId, service, credentialType?) => this.getCachedCredential(ownerType, ownerId, service, credentialType),
+      set: (ownerType, ownerId, service, result, credentialType?) => this.setCachedCredential(ownerType, ownerId, service, result, credentialType),
+      invalidate: (ownerType, ownerId, service, credentialType?) => this.invalidateCachedCredential(ownerType, ownerId, service, credentialType),
     };
   }
 
