@@ -1,7 +1,7 @@
 import type { Env } from '../env.js';
 import type { AppDb } from '../lib/drizzle.js';
 import type { CredentialResult } from '../services/credentials.js';
-import { integrationRegistry } from '../integrations/registry.js';
+import { integrationRegistry, type CredentialSourceInfo } from '../integrations/registry.js';
 import { getUserIntegrations, getOrgIntegrations } from '../lib/db/integrations.js';
 import { invokeAction, markExecuted, markFailed } from '../services/actions.js';
 import { getDisabledActionsIndex, isActionDisabled } from '../lib/db/disabled-actions.js';
@@ -317,7 +317,7 @@ export async function resolveActionPolicy(
 ): Promise<PolicyResult & {
   service: string;
   actionId: string;
-  isOrgScoped: boolean;
+  credentialSources: CredentialSourceInfo[];
   actionSource: ReturnType<typeof integrationRegistry.getActions>;
   disabledPluginServicesCache: { services: Set<string>; expiresAt: number } | null;
 }> {
@@ -346,34 +346,28 @@ export async function resolveActionPolicy(
     throw new Error(`Action "${toolId}" is disabled by your organization.`);
   }
 
-  // Verify user or org has this integration active
+  // Collect all active credential sources for this service
   const userIntegrations = await getUserIntegrations(appDb, userId);
-  let activeIntegration = userIntegrations.find(
-    (i) => i.service === service && i.status === 'active',
-  );
+  const orgIntegrations = await getOrgIntegrations(appDb);
+  const credentialSources: CredentialSourceInfo[] = [];
+  const seenIds = new Set<string>();
 
-  // Fall back to org-scoped integrations
-  let isOrgScoped = false;
-  if (!activeIntegration) {
-    const orgIntegrations = await getOrgIntegrations(appDb);
-    const orgMatch = orgIntegrations.find(
-      (i) => i.service === service && i.status === 'active',
-    );
-    if (orgMatch) {
-      activeIntegration = { ...orgMatch, userId: '', scope: 'org' as const, updatedAt: orgMatch.createdAt } as any;
-      isOrgScoped = true;
-    }
+  for (const i of [...userIntegrations, ...orgIntegrations]) {
+    if (i.service !== service || i.status !== 'active' || seenIds.has(i.id)) continue;
+    seenIds.add(i.id);
+    const scope = ('scope' in i ? i.scope : 'user') as 'user' | 'org';
+    credentialSources.push({ scope, integrationId: i.id, userId: i.userId });
   }
 
   // Fall back to auto-enabled plugins (no auth required)
-  if (!activeIntegration) {
+  if (credentialSources.length === 0) {
     const autoServices = await getAutoEnabledServices(envDB);
     if (autoServices.includes(service)) {
-      activeIntegration = { id: `auto:${service}`, service, status: 'active' } as any;
+      credentialSources.push({ scope: 'user', integrationId: `auto:${service}`, userId });
     }
   }
 
-  if (!activeIntegration) {
+  if (credentialSources.length === 0) {
     throw new Error(`Integration "${service}" is not active. Configure it in Settings > Integrations.`);
   }
 
@@ -395,14 +389,13 @@ export async function resolveActionPolicy(
     const fallbackProvider = integrationRegistry.getProvider(service);
     let listCtx: { credentials: { access_token: string } } | undefined;
     if (fallbackProvider?.authType !== 'none') {
-      let listCredResult = opts.credentialCache.get('user', userId, service)
-        || await integrationRegistry.resolveCredentials(service, env, userId, isOrgScoped ? 'org' : 'user');
+      const listCredResult = await integrationRegistry.resolveCredentials(service, env, userId, {
+        credentialSources,
+        forceRefresh: false,
+      });
       if (listCredResult.ok) {
-        opts.credentialCache.set('user', userId, service, listCredResult);
+        listCtx = { credentials: { access_token: listCredResult.credential.accessToken } };
       }
-      listCtx = listCredResult.ok
-        ? { credentials: { access_token: listCredResult.credential.accessToken } }
-        : undefined;
     }
     const actionDef = (await actionSource.listActions(listCtx)).find(a => a.id === actionId);
     riskLevel = actionDef?.riskLevel || 'medium';
@@ -424,7 +417,7 @@ export async function resolveActionPolicy(
     riskLevel,
     service,
     actionId,
-    isOrgScoped,
+    credentialSources,
     actionSource,
     disabledPluginServicesCache,
   };
