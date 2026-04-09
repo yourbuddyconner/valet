@@ -140,7 +140,6 @@ export async function listTools(
 ): Promise<ListToolsResult> {
   const { service: filterService, query, credentialCache } = opts ?? {} as ListToolsOpts;
 
-  // Fetch integrations, auto-enabled services, disabled-actions index, and disabled plugins in parallel
   const [userIntegrations, orgIntegrations, autoServices, { disabledActions: disabledActionSet, disabledServices: disabledServiceSet }, disabledPluginServices] =
     await Promise.all([
       getUserIntegrations(appDb, userId),
@@ -150,121 +149,116 @@ export async function listTools(
       getDisabledPluginServices(envDB),
     ]);
 
-  const allIntegrations = [
-    ...userIntegrations.filter((i) => i.status === 'active'),
-    ...orgIntegrations.filter((i) => i.status === 'active'),
-  ];
+  // Group all active integrations by service, deduplicate by ID
+  const serviceSourceMap = new Map<string, Array<{ id: string; scope: 'user' | 'org'; userId: string }>>();
+  const seenIds = new Set<string>();
 
-  console.log(`[session-tools] list-tools: userId=${userId}, service=${filterService ?? 'all'}, active integrations: [${allIntegrations.map((i) => `${i.service}(${i.status})`).join(', ')}]`);
+  for (const i of [...userIntegrations, ...orgIntegrations]) {
+    if (i.status !== 'active' || seenIds.has(i.id)) continue;
+    seenIds.add(i.id);
+    const scope = ('scope' in i ? i.scope : 'user') as 'user' | 'org';
+    const sources = serviceSourceMap.get(i.service) || [];
+    sources.push({ id: i.id, scope, userId: i.userId });
+    serviceSourceMap.set(i.service, sources);
+  }
 
-  // Deduplicate by service (user-scoped takes precedence)
-  const seen = new Set<string>();
-  const dedupedIntegrations = allIntegrations.filter((i) => {
-    if (seen.has(i.service)) return false;
-    seen.add(i.service);
-    return true;
-  });
-
-  // Inject synthetic integrations for plugins that don't require auth
+  // Inject auto-enabled services
   for (const svc of autoServices) {
-    if (!seen.has(svc)) {
-      dedupedIntegrations.push({ id: `auto:${svc}`, service: svc, status: 'active' } as any);
-      seen.add(svc);
+    if (!serviceSourceMap.has(svc)) {
+      serviceSourceMap.set(svc, [{ id: `auto:${svc}`, scope: 'user' as const, userId }]);
     }
   }
+
+  console.log(`[session-tools] list-tools: userId=${userId}, service=${filterService ?? 'all'}, services with sources: [${[...serviceSourceMap.keys()].join(', ')}]`);
 
   const tools: ToolDescriptor[] = [];
   const warnings: ToolWarning[] = [];
   const mcpCacheEntries: McpCacheEntry[] = [];
   const discoveredRiskLevels = new Map<string, string>();
 
-  for (const integration of dedupedIntegrations) {
-    // If filtering by service, skip non-matching integrations
-    if (filterService && integration.service !== filterService) continue;
+  for (const [service, sources] of serviceSourceMap) {
+    if (filterService && service !== filterService) continue;
+    if (disabledServiceSet.has(service)) continue;
+    if (disabledPluginServices.has(service)) continue;
 
-    // Skip entirely disabled services (via disabled_actions table or plugin status)
-    if (disabledServiceSet.has(integration.service)) continue;
-    if (disabledPluginServices.has(integration.service)) continue;
+    const actionSource = integrationRegistry.getActions(service);
+    if (!actionSource) continue;
 
-    const actionSource = integrationRegistry.getActions(integration.service);
-    if (!actionSource) {
-      console.warn(`[session-tools] list-tools: no action source for ${integration.service}`);
-      continue;
-    }
+    const provider = integrationRegistry.getProvider(service);
 
-    // Resolve credentials for this integration to pass to listActions (needed by MCP-backed sources)
-    // No-auth services (e.g. DeepWiki) skip credential lookup entirely.
-    const provider = integrationRegistry.getProvider(integration.service);
+    // MCP-backed sources need credentials for listing (they return different tools per user).
+    // Static sources (no mcpServerUrl) skip credential resolution during listing.
     let credCtx: { credentials: { access_token: string } } | undefined;
-    const isOrgScopedIntegration = 'scope' in integration && integration.scope === 'org';
-    if (provider?.authType === 'none') {
-      // No credentials needed — pass undefined context
-      console.log(`[session-tools] list-tools: ${integration.service} is no-auth, skipping credential lookup`);
-    } else {
-      const credentialUserId = (isOrgScopedIntegration && 'userId' in integration)
-        ? (integration as { userId: string }).userId
-        : userId;
-      const scope = isOrgScopedIntegration ? 'org' as const : 'user' as const;
+    const isMcpSource = !!provider?.mcpServerUrl;
+    if (isMcpSource && provider?.authType !== 'none') {
+      const firstSource = sources[0];
+      const credentialSources = sources.map((s) => ({ scope: s.scope, integrationId: s.id, userId: s.userId }));
 
       // Check credential cache first
-      let credResult = credentialCache?.get('user', credentialUserId, integration.service) ?? null;
+      let credResult = credentialCache?.get('user', userId, service) ?? null;
       if (!credResult) {
-        credResult = await integrationRegistry.resolveCredentials(integration.service, env, credentialUserId, scope);
-        // If the initial credential fetch fails with a refreshable reason, try force-refresh
-        if (!credResult.ok && (credResult.error.reason === 'expired' || credResult.error.reason === 'refresh_failed')) {
-          console.log(`[session-tools] list-tools: ${integration.service} credential ${credResult.error.reason}, attempting force-refresh`);
-          credResult = await integrationRegistry.resolveCredentials(integration.service, env, credentialUserId, scope, { forceRefresh: true });
-        }
-        // Only cache successful results — failure states (not_found, revoked) are
-        // transient and should be re-checked so newly connected integrations work immediately.
+        credResult = await integrationRegistry.resolveCredentials(service, env, userId, {
+          credentialSources,
+          forceRefresh: false,
+        });
         if (credResult.ok) {
-          credentialCache?.set('user', credentialUserId, integration.service, credResult);
+          credentialCache?.set('user', userId, service, credResult);
         }
       }
 
       if (!credResult.ok) {
-        const displayName = provider?.displayName || integration.service;
-        console.warn(`[session-tools] list-tools: credential failure for ${integration.service}: ${credResult.error.reason} — ${credResult.error.message}`);
+        // Try force-refresh for expired/refreshable credentials
+        if (credResult.error.reason === 'expired' || credResult.error.reason === 'refresh_failed') {
+          credResult = await integrationRegistry.resolveCredentials(service, env, userId, {
+            credentialSources,
+            forceRefresh: true,
+          });
+          if (credResult.ok) {
+            credentialCache?.set('user', userId, service, credResult);
+          }
+        }
+      }
+
+      if (!credResult.ok) {
+        const displayName = provider?.displayName || service;
         warnings.push({
-          service: integration.service,
+          service,
           displayName,
           reason: credResult.error.reason,
           message: credResult.error.message,
-          integrationId: integration.id,
+          integrationId: firstSource.id,
         });
         continue;
-      } else {
-        console.log(`[session-tools] list-tools: credentials OK for ${integration.service} (type=${credResult.credential.credentialType}, refreshed=${credResult.credential.refreshed}, hasToken=${!!credResult.credential.accessToken})`);
-        credCtx = { credentials: { access_token: credResult.credential.accessToken } };
       }
+
+      credCtx = { credentials: { access_token: credResult.credential.accessToken } };
     }
 
     let actions = await actionSource.listActions(credCtx);
 
-    // If no actions returned and we have credentials, the token may be silently expired
-    // (MCP listTools returns [] on auth failure). Try force-refreshing the credential.
-    if (actions.length === 0 && credCtx && provider?.authType !== 'none') {
-      const credentialUserId = ('scope' in integration && integration.scope === 'org' && 'userId' in integration)
-        ? (integration as { userId: string }).userId
-        : userId;
-      credentialCache?.invalidate('user', credentialUserId, integration.service);
-      const refreshed = await integrationRegistry.resolveCredentials(integration.service, env, credentialUserId, isOrgScopedIntegration ? 'org' : 'user', { forceRefresh: true });
+    // MCP sources may return [] when tokens are silently expired — force-refresh and retry
+    if (actions.length === 0 && isMcpSource && credCtx && provider?.authType !== 'none') {
+      const credentialSources = sources.map((s) => ({ scope: s.scope, integrationId: s.id, userId: s.userId }));
+      credentialCache?.invalidate('user', userId, service);
+      const refreshed = await integrationRegistry.resolveCredentials(service, env, userId, {
+        credentialSources,
+        forceRefresh: true,
+      });
       if (refreshed.ok && refreshed.credential.refreshed) {
-        console.log(`[session-tools] list-tools: ${integration.service} returned 0 actions, retrying with force-refreshed token`);
-        credentialCache?.set('user', credentialUserId, integration.service, refreshed);
+        credentialCache?.set('user', userId, service, refreshed);
         credCtx = { credentials: { access_token: refreshed.credential.accessToken } };
         actions = await actionSource.listActions(credCtx);
       }
     }
 
-    console.log(`[session-tools] list-tools: ${integration.service} returned ${actions.length} actions`);
+    console.log(`[session-tools] list-tools: ${service} returned ${actions.length} actions`);
 
     // Cache ALL discovered tools for the catalog/policy UI, before any filtering
     for (const action of actions) {
-      const compositeId = `${integration.service}:${action.id}`;
+      const compositeId = `${service}:${action.id}`;
       discoveredRiskLevels.set(compositeId, action.riskLevel);
       mcpCacheEntries.push({
-        service: integration.service,
+        service,
         actionId: action.id,
         name: action.name,
         description: action.description,
@@ -273,17 +267,13 @@ export async function listTools(
     }
 
     for (const action of actions) {
-      // If query provided, filter by case-insensitive word match — every word in the
-      // query must appear in at least one of name, description, or service.
       if (query) {
         const words = query.toLowerCase().split(/\s+/).filter(Boolean);
-        const haystack = `${action.name} ${action.description} ${integration.service}`.toLowerCase();
+        const haystack = `${action.name} ${action.description} ${service}`.toLowerCase();
         if (!words.every((w) => haystack.includes(w))) continue;
       }
 
-      const compositeId = `${integration.service}:${action.id}`;
-
-      // Skip individually disabled actions
+      const compositeId = `${service}:${action.id}`;
       if (disabledActionSet.has(compositeId)) continue;
 
       tools.push({
@@ -296,7 +286,6 @@ export async function listTools(
     }
   }
 
-  // Fire-and-forget: persist discovered tools to D1 cache for the catalog endpoint.
   if (mcpCacheEntries.length > 0) {
     upsertMcpToolCache(appDb, mcpCacheEntries).catch((err) => {
       console.warn('[session-tools] mcp tool cache upsert failed:', err instanceof Error ? err.message : String(err));
