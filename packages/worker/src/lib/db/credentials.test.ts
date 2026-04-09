@@ -440,7 +440,7 @@ describe('resolveRepoCredential', () => {
     expect(result).toBeNull();
   });
 
-  it('OAuth token wins regardless of repoOwner', async () => {
+  it('App install wins when repoOwner is in accessibleOwners', async () => {
     db.insert(credentials).values({
       id: 'cred-oauth',
       ownerType: 'user',
@@ -470,8 +470,9 @@ describe('resolveRepoCredential', () => {
 
     const result = await resolveRepoCredential(db as any, 'github', 'my-org', 'org-1', 'user-1');
 
-    expect(result!.credentialType).toBe('oauth2');
-    expect(result!.credential.id).toBe('cred-oauth');
+    // App install preferred for org-owned repos (avoids org OAuth restrictions)
+    expect(result!.credentialType).toBe('app_install');
+    expect(result!.credential.id).toBe('cred-org-app');
   });
 
   it('falls back to old behavior when repoOwner is undefined', async () => {

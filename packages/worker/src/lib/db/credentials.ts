@@ -172,9 +172,17 @@ export async function hasCredential(
 }
 
 /**
- * Resolve a repo-level credential, preferring:
- * 1. user-level oauth2 (personal GitHub OAuth — commits as user)
- * 2. org-level app_install (single installation model)
+ * Resolve a repo-level credential.
+ *
+ * For org-owned repos (repoOwner in accessibleOwners): prefer App install token
+ * because orgs often have OAuth App access restrictions that block personal tokens.
+ *
+ * For personal repos or unknown owners: prefer user OAuth (commits as user).
+ *
+ * Precedence:
+ * 1. If repoOwner is covered by the App install → use App install
+ * 2. Otherwise → user OAuth
+ * 3. Fallback → App install (if available and no repoOwner restriction)
  */
 export async function resolveRepoCredential(
   db: AppDb,
@@ -183,33 +191,32 @@ export async function resolveRepoCredential(
   orgId: string | undefined,
   userId: string,
 ): Promise<{ credential: CredentialRow; credentialType: 'oauth2' | 'app_install' } | null> {
-  // 1. User OAuth token — always wins (commits as user)
   const userOAuth = await getCredentialRow(db, 'user', userId, provider, 'oauth2');
-  if (userOAuth) return { credential: userOAuth, credentialType: 'oauth2' };
+  const orgInstall = orgId ? await getCredentialRow(db, 'org', orgId, provider, 'app_install') : null;
 
-  // 2. Org-level App installation (single installation model)
-  if (orgId) {
-    const orgInstall = await getCredentialRow(db, 'org', orgId, provider, 'app_install');
-    if (orgInstall) {
-      // If repoOwner is provided, verify the installation covers it
-      if (repoOwner) {
-        const meta = await getServiceMetadata<GitHubServiceMetadata>(db, 'github');
-        // If accessibleOwners hasn't been populated yet (e.g., install callback
-        // API call failed), allow the credential as a fallback rather than
-        // blocking all repo access until manual refresh
-        if (!meta?.accessibleOwners) {
-          return { credential: orgInstall, credentialType: 'app_install' };
-        }
-        if (meta.accessibleOwners.includes(repoOwner)) {
-          return { credential: orgInstall, credentialType: 'app_install' };
-        }
-        // Installation doesn't cover this owner
-        return null;
-      }
-      // No repoOwner specified — return org install
+  // If we have an org install and a repo owner, check if the install covers it
+  if (orgInstall && repoOwner) {
+    const meta = await getServiceMetadata<GitHubServiceMetadata>(db, 'github');
+    const owners = meta?.accessibleOwners;
+
+    if (!owners) {
+      // accessibleOwners not populated — prefer App install as safe fallback
       return { credential: orgInstall, credentialType: 'app_install' };
     }
+
+    if (owners.includes(repoOwner)) {
+      // Org App covers this owner — use it (avoids org OAuth restrictions)
+      return { credential: orgInstall, credentialType: 'app_install' };
+    }
+
+    // Owner not covered by App — fall through to user OAuth
   }
+
+  // User OAuth for personal repos or owners not covered by the App
+  if (userOAuth) return { credential: userOAuth, credentialType: 'oauth2' };
+
+  // App install when no repoOwner specified (can't verify coverage)
+  if (orgInstall && !repoOwner) return { credential: orgInstall, credentialType: 'app_install' };
 
   return null;
 }
