@@ -236,6 +236,33 @@ export async function assembleRepoEnv(
     };
   }
 
+  // 5b. Validate the token actually has access to the repo before launching a sandbox
+  if (repoOwner && opts.repoUrl) {
+    const repoMatch = opts.repoUrl.match(/github\.com[/:]([^/]+)\/([^/.]+)/);
+    if (repoMatch) {
+      const [, owner, repo] = repoMatch;
+      try {
+        const checkRes = await fetch(`https://api.github.com/repos/${owner}/${repo}`, {
+          headers: {
+            Authorization: `Bearer ${freshToken.accessToken}`,
+            Accept: 'application/vnd.github+json',
+            'User-Agent': 'valet-app',
+          },
+        });
+        if (checkRes.status === 404 || checkRes.status === 403) {
+          const credLabel = resolved.credentialType === 'app_install' ? 'org GitHub App' : 'personal OAuth';
+          return {
+            envVars,
+            gitConfig,
+            error: `The ${credLabel} token does not have access to ${owner}/${repo} (HTTP ${checkRes.status}). Check repo permissions or re-authorize.`,
+          };
+        }
+      } catch {
+        // Network error — don't block session creation, let the clone attempt handle it
+      }
+    }
+  }
+
   // 6. Get git user info from users table
   const userRow = await db.getUserById(appDb, userId);
   const gitUser = {
