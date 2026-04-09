@@ -504,8 +504,10 @@ export async function executeAction(
   let actionResult = await actionSource.execute(actionId, params, { credentials, userId, callerIdentity, analytics: actionAnalytics });
 
   // Auth failure retry — multi-credential fallthrough then force-refresh
+  // Note: 403 is excluded — GitHub 403s are permission problems (missing App permissions),
+  // not credential problems. Retrying with a different token won't help.
   const isAuthError = !actionResult.success && actionResult.error &&
-    /\b(401|403|unauthorized|invalid.credentials|token.*expired|token.*revoked)\b/i.test(actionResult.error);
+    /\b(401|unauthorized|invalid.credentials|token.*expired|token.*revoked)\b/i.test(actionResult.error);
   const explicitSource = params?.source as string | undefined;
 
   if (provider?.authType !== 'none' && provider?.authType !== 'bot_token' && isAuthError) {
