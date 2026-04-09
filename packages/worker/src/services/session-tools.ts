@@ -494,6 +494,10 @@ export async function executeAction(
     credentials = credResult.credential.credentialType === 'bot_token'
       ? { bot_token: token } as Record<string, string>
       : { access_token: token };
+    // Pass credential type so actions can branch on app_install vs oauth2
+    if (credResult.credential.credentialType) {
+      credentials._credential_type = credResult.credential.credentialType;
+    }
 
     // For Slack: inject the session owner's Slack user ID so dm_owner works
     if (service === 'slack') {

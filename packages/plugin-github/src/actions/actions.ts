@@ -349,6 +349,35 @@ const allActions: ActionDefinition[] = [
   readRepoFile,
 ];
 
+// ─── Permission hints for 403 errors ─────────────────────────────────────────
+
+const PERMISSION_HINTS: Record<string, string> = {
+  'github.list_workflow_runs': 'actions:read',
+  'github.create_issue': 'issues:write',
+  'github.update_issue': 'issues:write',
+  'github.create_comment': 'issues:write',
+  'github.create_pull_request': 'pull_requests:write',
+  'github.update_pull_request': 'pull_requests:write',
+  'github.merge_pull_request': 'pull_requests:write + contents:write',
+  'github.create_branch': 'contents:write',
+  'github.delete_branch': 'contents:write',
+  'github.create_release': 'contents:write',
+  'github.inspect_pull_request': 'pull_requests:read (+ checks:read for check runs)',
+  'github.fork_repository': 'contents:write',
+};
+
+function handleGitHubError(res: Response, actionId: string, operation: string): ActionResult | null {
+  if (res.ok) return null;
+  if (res.status === 403) {
+    const hint = PERMISSION_HINTS[actionId];
+    const permMsg = hint
+      ? ` This action requires the "${hint}" permission on the GitHub App. Ask an admin to update the App's permissions in Settings > GitHub.`
+      : '';
+    return { success: false, error: `${operation}: GitHub returned 403 Forbidden.${permMsg}` };
+  }
+  return { success: false, error: `${operation}: GitHub returned ${res.status} ${res.statusText}` };
+}
+
 // ─── Action Execution ────────────────────────────────────────────────────────
 
 function getToken(ctx: ActionContext): string {
@@ -380,9 +409,15 @@ async function executeAction(
         if (p.sort) qs.set('sort', p.sort);
         if (p.perPage) qs.set('per_page', String(p.perPage));
         if (p.page) qs.set('page', String(p.page));
-        const res = await githubFetch(`/user/repos?${qs}`, token);
-        if (!res.ok) return { success: false, error: `Failed: ${res.status}` };
-        return { success: true, data: await res.json() };
+        // App installation tokens use /installation/repositories, user tokens use /user/repos
+        const isAppToken = ctx.credentials._credential_type === 'app_install';
+        const endpoint = isAppToken ? `/installation/repositories?${qs}` : `/user/repos?${qs}`;
+        const res = await githubFetch(endpoint, token);
+        const err = handleGitHubError(res, actionId, 'List repos');
+        if (err) return err;
+        const data = await res.json() as any;
+        // /installation/repositories wraps repos in { repositories: [...] }
+        return { success: true, data: isAppToken ? data.repositories : data };
       }
 
       case 'github.get_issue': {
@@ -398,7 +433,8 @@ async function executeAction(
           method: 'POST',
           body: JSON.stringify({ title, body }),
         });
-        if (!res.ok) return { success: false, error: `Failed: ${res.status}` };
+        const ciErr = handleGitHubError(res, actionId, 'Create issue');
+        if (ciErr) return ciErr;
         return { success: true, data: await res.json() };
       }
 
@@ -607,7 +643,8 @@ async function executeAction(
           token,
           { method: 'POST', body: JSON.stringify(body) },
         );
-        if (!res.ok) return { success: false, error: `GitHub API error (${res.status}): ${await res.text()}` };
+        const cprErr = handleGitHubError(res, actionId, 'Create pull request');
+        if (cprErr) return cprErr;
         const pr = await res.json() as Record<string, unknown>;
         return { success: true, data: { number: pr.number, url: pr.html_url, title: pr.title, state: pr.state, draft: pr.draft } };
       }
@@ -623,7 +660,8 @@ async function executeAction(
           token,
           { method: 'PUT', body: JSON.stringify(body) },
         );
-        if (!res.ok) return { success: false, error: `GitHub API error (${res.status}): ${await res.text()}` };
+        const mprErr = handleGitHubError(res, actionId, 'Merge pull request');
+        if (mprErr) return mprErr;
         const data = await res.json() as Record<string, unknown>;
         return { success: true, data: { merged: data.merged, message: data.message, sha: data.sha } };
       }
@@ -667,7 +705,8 @@ async function executeAction(
           token,
           { method: 'POST', body: JSON.stringify({ ref: `refs/heads/${p.branch}`, sha }) },
         );
-        if (!res.ok) return { success: false, error: `GitHub API error (${res.status}): ${await res.text()}` };
+        const cbErr = handleGitHubError(res, actionId, 'Create branch');
+        if (cbErr) return cbErr;
         return { success: true, data: { branch: p.branch, sha } };
       }
 
@@ -678,7 +717,8 @@ async function executeAction(
           token,
           { method: 'DELETE' },
         );
-        if (!res.ok) return { success: false, error: `GitHub API error (${res.status}): ${await res.text()}` };
+        const dbErr = handleGitHubError(res, actionId, 'Delete branch');
+        if (dbErr) return dbErr;
         return { success: true, data: { deleted: p.branch } };
       }
 
@@ -769,12 +809,16 @@ async function executeAction(
           token,
           { method: 'POST', body: JSON.stringify(body) },
         );
-        if (!res.ok) return { success: false, error: `GitHub API error (${res.status}): ${await res.text()}` };
+        const crErr = handleGitHubError(res, actionId, 'Create release');
+        if (crErr) return crErr;
         const release = await res.json() as Record<string, unknown>;
         return { success: true, data: { id: release.id, tag: release.tag_name, url: release.html_url, draft: release.draft, prerelease: release.prerelease } };
       }
 
       case 'github.fork_repository': {
+        if (ctx.credentials._credential_type === 'app_install') {
+          return { success: false, error: 'Forking repositories requires a personal GitHub OAuth token. GitHub App installation tokens cannot fork repositories. Ask the user to connect their personal GitHub account in Settings > Integrations.' };
+        }
         const p = forkRepository.params.parse(params);
         const body: Record<string, unknown> = {};
         if (p.organization) body.organization = p.organization;
@@ -784,7 +828,8 @@ async function executeAction(
           token,
           { method: 'POST', body: JSON.stringify(body) },
         );
-        if (!res.ok) return { success: false, error: `GitHub API error (${res.status}): ${await res.text()}` };
+        const err = handleGitHubError(res, actionId, 'Fork repository');
+        if (err) return err;
         const fork = await res.json() as Record<string, unknown>;
         return { success: true, data: { full_name: fork.full_name, url: fork.html_url, clone_url: fork.clone_url } };
       }
@@ -797,7 +842,8 @@ async function executeAction(
         if (p.event) qs.set('event', p.event);
         qs.set('per_page', String(Math.min(Math.max(p.limit ?? 30, 1), 100)));
         const res = await githubFetch(`/repos/${p.owner}/${p.repo}/actions/runs?${qs}`, token);
-        if (!res.ok) return { success: false, error: `GitHub API error (${res.status}): ${await res.text()}` };
+        const runErr = handleGitHubError(res, actionId, 'List workflow runs');
+        if (runErr) return runErr;
         const data = await res.json() as { total_count?: number; workflow_runs?: Array<Record<string, unknown>> };
         return {
           success: true,

@@ -36,3 +36,32 @@ export async function mintGitHubAppJWT(appId: string, privateKeyPem: string): Pr
 
   return `${header}.${payload}.${sig}`;
 }
+
+/**
+ * Mint a short-lived installation access token for a GitHub App installation.
+ * Uses the App JWT to call POST /app/installations/{id}/access_tokens.
+ */
+export async function mintGitHubInstallationToken(
+  installationId: string,
+  appId: string,
+  privateKeyPem: string,
+): Promise<{ token: string; expiresAt: string }> {
+  const jwt = await mintGitHubAppJWT(appId, privateKeyPem);
+  const res = await fetch(
+    `https://api.github.com/app/installations/${installationId}/access_tokens`,
+    {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${jwt}`,
+        Accept: 'application/vnd.github+json',
+        'User-Agent': 'Valet-App',
+      },
+    },
+  );
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`GitHub API returned ${res.status}: ${body}`);
+  }
+  const data = (await res.json()) as { token: string; expires_at: string };
+  return { token: data.token, expiresAt: data.expires_at };
+}

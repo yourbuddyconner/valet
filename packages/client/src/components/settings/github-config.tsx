@@ -159,6 +159,8 @@ const DEFAULT_PERMISSIONS: Record<string, string> = {
   metadata: 'read',
   pull_requests: 'write',
   issues: 'write',
+  actions: 'read',
+  checks: 'read',
 };
 
 const DEFAULT_EVENTS = ['push', 'pull_request'];

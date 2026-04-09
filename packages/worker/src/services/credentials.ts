@@ -321,6 +321,37 @@ export async function getCredential(
   }
 
   const accessToken = extractAccessToken(data);
+  if (!accessToken && row.credentialType === 'app_install') {
+    // GitHub App install credentials store { installation_id, app_id, private_key }
+    // We need to mint a short-lived installation token via the GitHub API
+    const installationId = data.installation_id as string;
+    const appId = data.app_id as string;
+    const privateKey = data.private_key as string;
+    if (!installationId || !appId || !privateKey) {
+      return {
+        ok: false,
+        error: { service: provider, reason: 'not_found', message: `GitHub App install credential missing required fields (installation_id, app_id, private_key)` },
+      };
+    }
+    try {
+      const { mintGitHubInstallationToken } = await import('./github-app-jwt.js');
+      const { token } = await mintGitHubInstallationToken(installationId, appId, privateKey);
+      return {
+        ok: true,
+        credential: {
+          accessToken: token,
+          expiresAt: undefined,
+          credentialType: 'app_install' as CredentialType,
+          refreshed: false,
+        },
+      };
+    } catch (err) {
+      return {
+        ok: false,
+        error: { service: provider, reason: 'refresh_failed', message: `Failed to mint GitHub App installation token: ${err instanceof Error ? err.message : String(err)}` },
+      };
+    }
+  }
   if (!accessToken) {
     return {
       ok: false,
