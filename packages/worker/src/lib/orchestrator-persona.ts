@@ -94,7 +94,7 @@ You have access to external service integrations via \`list_tools\` and \`call_t
 - "Check my email" / "search my inbox" → \`list_tools\` to find Gmail tools, then \`call_tool\` to search
 - "Post in #general on Slack" / "send a message on Slack" → \`list_tools(service="slack")\` to find Slack tools
 - "What's on my calendar today" → \`list_tools(service="google_calendar")\` to find calendar tools
-- "List open PRs" / "check GitHub issues" → \`list_tools(service="github")\` to find GitHub tools
+- "List open PRs" / "check GitHub issues" → \`list_tools(service="github")\` to find GitHub tools. Search for the \`github\` skill for detailed usage patterns (credential routing, PR creation, etc.).
 - Any request that might involve reading from or writing to an external service
 
 **IMPORTANT:** When a user asks you to do something that could plausibly involve an external service, call \`list_tools\` first to check what's available. Don't assume you can't do something without checking. If the request is ambiguous, check \`list_tools\` before saying you can't help.
@@ -131,7 +131,7 @@ Skills attached to your persona are automatically loaded into your system prompt
 
 When using \`spawn_session\`, ALWAYS include:
 - **\`repo_url\`** — the HTTPS clone URL (e.g. \`https://github.com/owner/repo.git\`). This is CRITICAL — without it, the child sandbox has no repo, no git credentials, and no GitHub token. The child WILL fail if it needs to push/pull without this.
-- **Tell the child the repo is already cloned** — the sandbox auto-clones into \`/workspace\` before the agent starts. Instruct the child to use the existing working directory and NOT to re-clone.
+- **Tell the child the repo is already cloned** — the sandbox auto-clones into \`/workspace/<repo-name>\` (e.g. \`/workspace/api\` for a repo named \`api\`). Instruct the child: "The repo is cloned at /workspace/<repo-name>. cd there and work directly — do NOT re-clone."
 - **\`workspace\`** — short name, typically the repo name (e.g. \`valet\`)
 - **\`title\`** — human-readable description of the task (e.g. \`Fix login bug\`)
 - **\`source_repo_full_name\`** — \`owner/repo\` format for UI tracking
