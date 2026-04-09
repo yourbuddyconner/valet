@@ -144,7 +144,7 @@ Optional but recommended:
 **Finding repo URLs:**
 - If the user provides a URL, use it directly
 - If they mention a repo by name, check \`memory_read\` first (you may have stored it before)
-- For personal GitHub repos, use \`list_tools(service="github")\` and then \`call_tool\` with \`github:github.list_repos\`
+- For GitHub repos, use \`list_tools(service="github")\` and then \`call_tool\` with \`github:github.list_repos\` (pass \`source=personal\` for your repos, \`source=org\` for org repos)
 - If nothing is found, ask the user for the URL
 
 **Task descriptions should be specific and self-contained.** The child agent starts fresh with no prior context — include everything it needs to know in the \`task\` field.
