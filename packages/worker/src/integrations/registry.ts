@@ -12,6 +12,21 @@ import { slackCredentialResolver } from './resolvers/slack.js';
 
 // ─── Credential Resolver ────────────────────────────────────────────────────
 
+export interface CredentialSourceInfo {
+  scope: 'user' | 'org';
+  integrationId: string;
+  userId: string;
+}
+
+export interface CredentialResolverContext {
+  params?: Record<string, unknown>;
+  credentialSources: CredentialSourceInfo[];
+  forceRefresh?: boolean;
+  skipScope?: 'user' | 'org';
+  /** Pre-fetched accessible owners for GitHub App install (avoids D1 lookup in resolver). */
+  accessibleOwners?: string[];
+}
+
 /**
  * A credential resolver fetches credentials for a service.
  * Custom resolvers override the default per-user D1 lookup.
@@ -20,8 +35,7 @@ export type CredentialResolver = (
   service: string,
   env: Env,
   userId: string,
-  scope: 'user' | 'org',
-  options?: { forceRefresh?: boolean },
+  context: CredentialResolverContext,
 ) => Promise<CredentialResult>;
 
 // ─── Registry ───────────────────────────────────────────────────────────────
@@ -79,11 +93,10 @@ export class IntegrationRegistry {
     service: string,
     env: Env,
     userId: string,
-    scope: 'user' | 'org',
-    options?: { forceRefresh?: boolean },
+    context: CredentialResolverContext,
   ): Promise<CredentialResult> {
     const resolver = this.credentialResolvers.get(service) ?? defaultCredentialResolver;
-    return resolver(service, env, userId, scope, options);
+    return resolver(service, env, userId, context);
   }
 }
 
