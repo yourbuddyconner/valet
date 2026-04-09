@@ -56,15 +56,15 @@ adminGitHubRouter.get('/', async (c) => {
   }
 
   const hasApp = !!svc.config.appId;
-  // viaApp indicates credentials are managed by the manifest-created App.
-  // If OAuth creds were manually set before app creation, they are overwritten
-  // during manifest flow, so this flag is always accurate post-manifest.
+  // Check if the OAuth credentials are the classic (separate) ones or the App's
+  const hasClassicOAuth = !!svc.config.oauthClientId && svc.config.oauthClientId !== svc.config.appOauthClientId;
   return c.json({
     source: 'database',
     oauth: {
       configured: true,
       clientId: svc.config.oauthClientId,
-      viaApp: hasApp,
+      viaApp: hasApp && !hasClassicOAuth,
+      hasClassicOAuth,
     },
     app: hasApp
       ? {
@@ -197,6 +197,8 @@ adminGitHubRouter.put('/oauth', async (c) => {
       appPrivateKey: existing.config.appPrivateKey,
       appSlug: existing.config.appSlug,
       appWebhookSecret: existing.config.appWebhookSecret,
+      appOauthClientId: existing.config.appOauthClientId,
+      appOauthClientSecret: existing.config.appOauthClientSecret,
     }),
   };
 
@@ -414,10 +416,17 @@ githubAppSetupCallbackRouter.get('/app/setup', async (c) => {
     owner: { login: string; type: string };
   };
 
-  // Store everything in org_service_configs
+  // Store App credentials separately — don't overwrite classic OAuth if configured
+  const existing = await getServiceConfig<GitHubServiceConfig, GitHubServiceMetadata>(
+    appDb, c.env.ENCRYPTION_KEY, 'github',
+  ).catch(() => null);
+
   const config: GitHubServiceConfig = {
-    oauthClientId: appData.client_id,
-    oauthClientSecret: appData.client_secret,
+    // Preserve existing classic OAuth credentials; fall back to App OAuth for first-time setup
+    oauthClientId: existing?.config.oauthClientId || appData.client_id,
+    oauthClientSecret: existing?.config.oauthClientSecret || appData.client_secret,
+    appOauthClientId: appData.client_id,
+    appOauthClientSecret: appData.client_secret,
     appId: String(appData.id),
     appPrivateKey: appData.pem,
     appSlug: appData.slug,

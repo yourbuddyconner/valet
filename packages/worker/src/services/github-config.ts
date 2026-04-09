@@ -3,8 +3,12 @@ import type { Env } from '../env.js';
 import { getServiceConfig, getServiceMetadata } from '../lib/db/service-configs.js';
 
 export interface GitHubServiceConfig {
+  /** Classic OAuth App credentials (set via PUT /api/admin/github/oauth). */
   oauthClientId: string;
   oauthClientSecret: string;
+  /** GitHub App's auto-generated OAuth credentials (set by manifest callback). */
+  appOauthClientId?: string;
+  appOauthClientSecret?: string;
   appId?: string;
   appPrivateKey?: string;
   appSlug?: string;
@@ -22,8 +26,12 @@ export interface GitHubServiceMetadata {
 }
 
 export interface GitHubConfig {
+  /** OAuth credentials for personal auth (classic OAuth App preferred, App OAuth as fallback). */
   oauthClientId: string;
   oauthClientSecret: string;
+  /** GitHub App's auto-generated OAuth credentials (from manifest). */
+  appOauthClientId?: string;
+  appOauthClientSecret?: string;
   appId?: string;
   appPrivateKey?: string;
   appSlug?: string;
@@ -43,9 +51,14 @@ export async function getGitHubConfig(env: Env, db: AppDb): Promise<GitHubConfig
     );
 
     if (svc) {
+      // Prefer classic OAuth credentials; fall back to App OAuth if no classic creds configured
+      const oauthClientId = svc.config.oauthClientId || svc.config.appOauthClientId || '';
+      const oauthClientSecret = svc.config.oauthClientSecret || svc.config.appOauthClientSecret || '';
       return {
-        oauthClientId: svc.config.oauthClientId,
-        oauthClientSecret: svc.config.oauthClientSecret,
+        oauthClientId,
+        oauthClientSecret,
+        appOauthClientId: svc.config.appOauthClientId,
+        appOauthClientSecret: svc.config.appOauthClientSecret,
         appId: svc.config.appId,
         appPrivateKey: svc.config.appPrivateKey,
         appSlug: svc.config.appSlug,
