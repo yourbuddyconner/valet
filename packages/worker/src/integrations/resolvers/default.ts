@@ -3,22 +3,33 @@ import type { CredentialResolver } from '../registry.js';
 
 /**
  * Default credential resolver — looks up credentials from D1.
- * For user scope: looks up per-user credentials (ownerType='user', ownerId=userId).
- * For org scope: looks up org-level credentials (ownerType='org', ownerId='default').
- * Used for all services that don't register a custom resolver.
+ * Picks the first available source (user-scoped preferred), respecting skipScope.
  */
 export const defaultCredentialResolver: CredentialResolver = (
   service,
   env,
   userId,
-  scope,
-  options,
+  context,
 ) => {
-  const ownerType = scope === 'org' ? 'org' : 'user';
-  const ownerId = scope === 'org' ? 'default' : userId;
-  // For org-scoped GitHub, use 'app_install' credential type (not the default 'oauth2')
-  const effectiveOptions = scope === 'org' && service === 'github'
-    ? { ...options, credentialType: 'app_install' }
-    : options;
+  const { credentialSources, forceRefresh, skipScope } = context;
+
+  // Pick the first available source, respecting skipScope and preferring user-scoped
+  const source = credentialSources
+    .filter((s) => !skipScope || s.scope !== skipScope)
+    .sort((a, b) => (a.scope === 'user' ? 0 : 1) - (b.scope === 'user' ? 0 : 1))
+    .at(0);
+
+  if (!source) {
+    return Promise.resolve({
+      ok: false as const,
+      error: { service, reason: 'not_found' as const, message: `No credentials for ${service}` },
+    });
+  }
+
+  const ownerType = source.scope === 'org' ? 'org' : 'user';
+  const ownerId = source.scope === 'org' ? 'default' : userId;
+  const effectiveOptions = source.scope === 'org' && service === 'github'
+    ? { forceRefresh, credentialType: 'app_install' }
+    : { forceRefresh };
   return getCredential(env, ownerType, ownerId, service, effectiveOptions);
 };

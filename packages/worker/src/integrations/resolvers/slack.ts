@@ -3,22 +3,18 @@ import type { CredentialResolver } from '../registry.js';
 
 /**
  * Slack credential resolver.
- * Org-scoped: uses the org-level bot token from org_slack_installs.
- * User-scoped: falls back to per-user credentials (standard OAuth).
+ * Always uses the org-level bot token from org_slack_installs.
  */
 export const slackCredentialResolver: CredentialResolver = async (
   service,
   env,
-  userId,
-  scope,
-  options,
+  _userId,
+  _context,
 ) => {
-  // Always try org-level bot token first — Slack uses a single org-wide bot token
-  // regardless of whether the integration row is user-scoped or org-scoped
   const botToken = await getSlackBotToken(env);
   if (botToken) {
     return {
-      ok: true,
+      ok: true as const,
       credential: {
         accessToken: botToken,
         credentialType: 'bot_token',
@@ -28,10 +24,10 @@ export const slackCredentialResolver: CredentialResolver = async (
   }
 
   return {
-    ok: false,
+    ok: false as const,
     error: {
       service,
-      reason: 'not_found',
+      reason: 'not_found' as const,
       message: 'No Slack bot token found. Install Slack in Settings.',
     },
   };
