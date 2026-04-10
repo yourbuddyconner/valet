@@ -4,7 +4,7 @@
 
 **Goal:** Replace the classic OAuth App + GitHub App dual-credential system with a unified GitHub App model that supports multiple installations (org + personal), uses the App's built-in OAuth for user access tokens, adopts Octokit as the SDK, and injects user attribution when acting via bot tokens.
 
-**Architecture:** Single GitHub App per Valet instance. User access tokens (via the App's OAuth client) are primary; installation access tokens mint on-demand via Octokit with KV-backed caching and serve as the anonymous-access fallback with attribution injection. A new `github_installations` table tracks all installations. A new `/auth/github/*` router intercepts GitHub-specific auth flows before the generic identity dispatcher. All raw GitHub fetch code is replaced with Octokit.
+**Architecture:** Single GitHub App per Valet instance. User access tokens (via the App's OAuth client) are primary; installation access tokens mint on-demand via Octokit (no external cache — fresh mint per resolver call, relying on Octokit's within-instance caching) and serve as the anonymous-access fallback with attribution injection. A new `github_installations` table tracks all installations. A new `/auth/github/*` router intercepts GitHub-specific auth flows before the generic identity dispatcher. All raw GitHub fetch code is replaced with Octokit.
 
 **Tech Stack:** Cloudflare Workers + Hono + Drizzle (D1), Octokit (`octokit`, `@octokit/auth-app`, `@octokit/oauth-app`, `@octokit/webhooks`, `@octokit/plugin-throttling`), TypeScript, vitest
 
@@ -45,13 +45,13 @@ All code in this plan that constructs or consumes `CredentialResult` must use th
 
 | Path | Responsibility |
 |---|---|
-| `packages/worker/src/services/github-app.ts` | Octokit `App` factory, KV-cached installation token minting, OAuth helper wrappers |
+| `packages/worker/src/services/github-app.ts` | Octokit `App` factory, installation token minting, OAuth helper wrappers |
 | `packages/worker/src/services/github-installations.ts` | CRUD + discovery/reconciliation logic for `github_installations` |
 | `packages/worker/src/routes/github-auth.ts` | GitHub-specific login/link router (mounted before `oauthRouter`) |
 | `packages/worker/src/lib/schema/github-installations.ts` | Drizzle schema |
 | `packages/worker/src/lib/db/github-installations.ts` | Query helpers (upsert, findByLogin, findByUser, reconcile) |
 | `packages/worker/migrations/0006_create_github_installations.sql` | DDL for the new table |
-| `packages/worker/src/services/github-app.test.ts` | Tests for token minting and KV cache |
+| `packages/worker/src/services/github-app.test.ts` | Tests for token minting |
 | `packages/worker/src/integrations/resolvers/github.test.ts` | Tests for the new resolver chain |
 | `packages/worker/src/services/github-installations.test.ts` | Tests for discovery/reconciliation |
 | `packages/worker/src/routes/github-auth.test.ts` | Tests for login/link dispatch |
@@ -81,8 +81,7 @@ All code in this plan that constructs or consumes `CredentialResult` must use th
 | `packages/plugin-github/src/repo-shared.ts` | Remove `mintInstallationToken` (moved to worker) |
 | `packages/plugin-github/skills/github.md` | Rewrite to reflect unified model, no `source` param, attribution behavior |
 | `packages/sdk/src/integrations/index.ts` (or equivalent) | Add optional `attribution?: { name, email }` to `ActionContext` |
-| `packages/worker/src/env.ts` | Remove `GITHUB_CLIENT_ID`/`GITHUB_CLIENT_SECRET`; add `GITHUB_TOKEN_CACHE` KV binding |
-| `packages/worker/wrangler.toml` | Add KV namespace binding |
+| `packages/worker/src/env.ts` | Remove `GITHUB_CLIENT_ID`/`GITHUB_CLIENT_SECRET` |
 | `packages/worker/package.json` | Add `octokit`, `@octokit/plugin-throttling` |
 | `packages/plugin-github/package.json` | Add `octokit` |
 | `packages/client/src/api/admin-github.ts` | Drop classic OAuth endpoints; add installations list + toggle mutations |
@@ -149,6 +148,8 @@ Create `packages/worker/migrations/0006_create_github_installations.sql`:
 -- Tracks GitHub App installations (both org and personal).
 -- github_installation_id and account_id stored as TEXT to avoid JS number
 -- precision issues — Octokit returns them as JS numbers, we cast at the boundary.
+-- cached_token_encrypted / cached_token_expires_at: short-TTL cache of the
+-- installation access token to avoid re-minting on every resolver call.
 CREATE TABLE github_installations (
   id TEXT PRIMARY KEY,
   github_installation_id TEXT NOT NULL UNIQUE,
@@ -159,6 +160,8 @@ CREATE TABLE github_installations (
   status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'suspended', 'removed')),
   repository_selection TEXT NOT NULL CHECK(repository_selection IN ('all', 'selected')),
   permissions TEXT, -- JSON
+  cached_token_encrypted TEXT,      -- encrypted installation access token (PBKDF2 via ENCRYPTION_KEY)
+  cached_token_expires_at TEXT,     -- ISO timestamp
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -189,6 +192,8 @@ export const githubInstallations = sqliteTable(
     status: text('status', { enum: ['active', 'suspended', 'removed'] }).notNull().default('active'),
     repositorySelection: text('repository_selection', { enum: ['all', 'selected'] }).notNull(),
     permissions: text('permissions'),
+    cachedTokenEncrypted: text('cached_token_encrypted'),
+    cachedTokenExpiresAt: text('cached_token_expires_at'),
     createdAt: text('created_at').notNull().default(`(datetime('now'))`),
     updatedAt: text('updated_at').notNull().default(`(datetime('now'))`),
   },
@@ -550,54 +555,35 @@ git commit -m "feat(db): add github_installations query helpers"
 
 ---
 
-### Task 4: Create `services/github-app.ts` — Octokit App factory + KV-cached token minting
+### Task 4: Create `services/github-app.ts` — Octokit App factory + D1-cached installation tokens
 
 **Files:**
 - Create: `packages/worker/src/services/github-app.ts`
 - Create: `packages/worker/src/services/github-app.test.ts`
-- Modify: `packages/worker/src/env.ts` (add `GITHUB_TOKEN_CACHE` KV binding)
-- Modify: `packages/worker/wrangler.toml` (add KV namespace)
 
-- [ ] **Step 1: Create KV namespace for installation token cache**
+**Note on caching**: installation access tokens expire in 1 hour and cost ~200ms to mint (JWT sign + HTTP POST to GitHub). We cache them in D1 on the `github_installations` row itself — two extra columns (`cached_token_encrypted`, `cached_token_expires_at`). The resolver already SELECTs the installation row to look it up by `account_login`, so cache hits are free (same SELECT). Cache misses add one UPDATE (at most once per hour per installation).
 
-Add to `packages/worker/wrangler.toml` (under the `[[kv_namespaces]]` section or create it):
+Tokens are encrypted at rest using the same PBKDF2 helper as `credentials.ts` (`encryptStringPBKDF2` / `decryptStringPBKDF2` from `lib/crypto.ts`). The cached token is not a long-lived credential — it's a ~1-hour memo of a recent mint — but we still encrypt because it grants GitHub API access.
 
-```toml
-[[kv_namespaces]]
-binding = "GITHUB_TOKEN_CACHE"
-id = "placeholder-local-id" # wrangler will auto-populate for local dev
-```
-
-For production, the namespace must be created via `wrangler kv:namespace create GITHUB_TOKEN_CACHE` and the real ID pasted here. Leave the placeholder for local development; note this for the deployment task (Task 24).
-
-- [ ] **Step 2: Add KV binding to env type**
-
-Modify `packages/worker/src/env.ts`. Add to the `Env` interface (keep existing bindings):
-
-```typescript
-export interface Env {
-  // ... existing bindings ...
-  GITHUB_TOKEN_CACHE: KVNamespace;
-}
-```
-
-- [ ] **Step 3: Write failing tests for `github-app.ts`**
+- [ ] **Step 1: Write failing tests for `github-app.ts`**
 
 Create `packages/worker/src/services/github-app.test.ts`:
 
 ```typescript
-import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { createGitHubApp, getInstallationOctokit, clearInstallationTokenCache } from './github-app.js';
+import { describe, it, expect, vi } from 'vitest';
+import { createGitHubApp, mintInstallationToken } from './github-app.js';
 
-// Mock Octokit's App class — only what we use
 vi.mock('octokit', () => ({
   App: vi.fn().mockImplementation((opts) => ({
     appId: opts.appId,
-    octokit: { /* authenticated as App */ },
-    getInstallationOctokit: vi.fn(async (id: number) => ({
-      __installationId: id,
-      request: vi.fn(),
-    })),
+    octokit: {
+      request: vi.fn(async () => ({
+        data: {
+          token: 'ghs_test',
+          expires_at: new Date(Date.now() + 3600_000).toISOString(),
+        },
+      })),
+    },
     oauth: {
       getWebFlowAuthorizationUrl: vi.fn(() => ({ url: 'https://github.com/login/oauth/authorize?...' })),
       createToken: vi.fn(),
@@ -610,6 +596,7 @@ vi.mock('octokit', () => ({
       onAny: vi.fn(),
     },
   })),
+  Octokit: vi.fn().mockImplementation((opts) => ({ __auth: opts?.auth })),
 }));
 
 describe('createGitHubApp', () => {
@@ -625,79 +612,118 @@ describe('createGitHubApp', () => {
   });
 });
 
-describe('getInstallationOctokit with KV cache', () => {
-  let mockKv: KVNamespace;
-  let mockApp: any;
+describe('mintInstallationToken', () => {
+  it('mints a fresh installation token via POST /app/installations/{id}/access_tokens', async () => {
+    const app = createGitHubApp({
+      appId: '12345',
+      privateKey: 'test-key',
+      oauthClientId: 'client-id',
+      oauthClientSecret: 'client-secret',
+      webhookSecret: 'webhook-secret',
+    });
 
-  beforeEach(() => {
-    // Simple in-memory KV mock
-    const store = new Map<string, string>();
-    mockKv = {
-      get: vi.fn(async (key: string) => store.get(key) ?? null),
-      put: vi.fn(async (key: string, value: string) => { store.set(key, value); }),
-      delete: vi.fn(async (key: string) => { store.delete(key); }),
-    } as unknown as KVNamespace;
-
-    mockApp = {
-      getInstallationOctokit: vi.fn(async (id: number) => ({
-        __installationId: id,
-      })),
-      octokit: {
-        request: vi.fn(async () => ({
-          data: { token: 'ghs_test', expires_at: new Date(Date.now() + 3600_000).toISOString() },
-        })),
-      },
-    };
-  });
-
-  it('returns Octokit instance from Octokit App', async () => {
-    const octokit = await getInstallationOctokit(mockApp, '12345', mockKv);
-    expect(octokit).toBeDefined();
-    expect(mockApp.getInstallationOctokit).toHaveBeenCalledWith(12345);
-  });
-
-  it('caches tokens in KV with TTL', async () => {
-    await getInstallationOctokit(mockApp, '12345', mockKv);
-    expect(mockKv.put).toHaveBeenCalledWith(
-      expect.stringContaining('12345'),
-      expect.any(String),
-      expect.objectContaining({ expirationTtl: expect.any(Number) }),
+    const result = await mintInstallationToken(app, '98765');
+    expect(result.token).toBe('ghs_test');
+    expect(result.expiresAt).toBeGreaterThan(Date.now());
+    expect(app.octokit.request).toHaveBeenCalledWith(
+      'POST /app/installations/{installation_id}/access_tokens',
+      { installation_id: 98765 },
     );
   });
 
-  it('uses KV cache on subsequent calls', async () => {
-    // Pre-populate cache
-    await mockKv.put(
-      'gh_install_token:12345',
-      JSON.stringify({ token: 'ghs_cached', expiresAt: Date.now() + 3_000_000 }),
-    );
-    const octokit = await getInstallationOctokit(mockApp, '12345', mockKv);
-    // With cached token, we should still return an Octokit instance but mintFresh should NOT be called
-    expect(octokit).toBeDefined();
-  });
-
-  it('re-mints when cached token is near expiry', async () => {
-    await mockKv.put(
-      'gh_install_token:12345',
-      JSON.stringify({ token: 'ghs_stale', expiresAt: Date.now() + 60_000 /* 1 min — too close */ }),
-    );
-    await getInstallationOctokit(mockApp, '12345', mockKv);
-    expect(mockApp.getInstallationOctokit).toHaveBeenCalled();
+  it('throws on invalid installation id', async () => {
+    const app = createGitHubApp({
+      appId: '12345',
+      privateKey: 'test-key',
+      oauthClientId: 'client-id',
+      oauthClientSecret: 'client-secret',
+      webhookSecret: 'webhook-secret',
+    });
+    await expect(mintInstallationToken(app, 'not-a-number')).rejects.toThrow(/Invalid installation ID/);
   });
 });
 
-describe('clearInstallationTokenCache', () => {
-  it('deletes the cached token for an installation', async () => {
-    const mockKv = {
-      delete: vi.fn(async () => undefined),
-    } as unknown as KVNamespace;
-    await clearInstallationTokenCache(mockKv, '12345');
-    expect(mockKv.delete).toHaveBeenCalledWith('gh_install_token:12345');
+describe('getOrMintInstallationToken (D1-backed cache)', () => {
+  let db: AppDb;
+  let app: App;
+  const ENCRYPTION_KEY = 'test-encryption-key';
+
+  beforeEach(async () => {
+    db = await createTestDb();
+    app = createGitHubApp({
+      appId: '12345',
+      privateKey: 'test-key',
+      oauthClientId: 'client-id',
+      oauthClientSecret: 'client-secret',
+      webhookSecret: 'webhook-secret',
+    });
+  });
+
+  it('mints fresh when no cache exists and writes back to D1', async () => {
+    // Seed installation row with no cached token
+    const row = await upsertGithubInstallation(db, {
+      githubInstallationId: '98765',
+      accountLogin: 'acme',
+      accountId: '5000',
+      accountType: 'Organization',
+      repositorySelection: 'all',
+    });
+
+    const result = await getOrMintInstallationToken(app, db, ENCRYPTION_KEY, row);
+    expect(result.token).toBe('ghs_test');
+    expect(app.octokit.request).toHaveBeenCalledOnce();
+
+    // Verify cache was written
+    const updated = await getGithubInstallationByLogin(db, 'acme');
+    expect(updated?.cachedTokenEncrypted).toBeTruthy();
+    expect(updated?.cachedTokenExpiresAt).toBeTruthy();
+  });
+
+  it('returns cached token without minting when cache is fresh', async () => {
+    const row = await upsertGithubInstallation(db, {
+      githubInstallationId: '98765',
+      accountLogin: 'acme',
+      accountId: '5000',
+      accountType: 'Organization',
+      repositorySelection: 'all',
+    });
+    // Pre-populate cache manually
+    const encrypted = await encryptStringPBKDF2('ghs_cached', ENCRYPTION_KEY);
+    await db.update(githubInstallations).set({
+      cachedTokenEncrypted: encrypted,
+      cachedTokenExpiresAt: new Date(Date.now() + 3000_000).toISOString(), // 50 min out
+    }).where(eq(githubInstallations.id, row.id));
+
+    // Fetch the updated row
+    const cachedRow = await getGithubInstallationByLogin(db, 'acme');
+    const result = await getOrMintInstallationToken(app, db, ENCRYPTION_KEY, cachedRow!);
+    expect(result.token).toBe('ghs_cached');
+    expect(app.octokit.request).not.toHaveBeenCalled();
+  });
+
+  it('re-mints when cached token is near expiry (within 5-min safety margin)', async () => {
+    const row = await upsertGithubInstallation(db, {
+      githubInstallationId: '98765',
+      accountLogin: 'acme',
+      accountId: '5000',
+      accountType: 'Organization',
+      repositorySelection: 'all',
+    });
+    const encrypted = await encryptStringPBKDF2('ghs_stale', ENCRYPTION_KEY);
+    await db.update(githubInstallations).set({
+      cachedTokenEncrypted: encrypted,
+      cachedTokenExpiresAt: new Date(Date.now() + 2 * 60 * 1000).toISOString(), // 2 min out, under margin
+    }).where(eq(githubInstallations.id, row.id));
+
+    const cachedRow = await getGithubInstallationByLogin(db, 'acme');
+    const result = await getOrMintInstallationToken(app, db, ENCRYPTION_KEY, cachedRow!);
+    expect(result.token).toBe('ghs_test'); // fresh mint from mock, not 'ghs_stale'
+    expect(app.octokit.request).toHaveBeenCalled();
   });
 });
 ```
 
-- [ ] **Step 4: Run tests to verify they fail**
+- [ ] **Step 2: Run tests to verify they fail**
 
 ```bash
 cd packages/worker && pnpm vitest run src/services/github-app.test.ts
@@ -705,20 +731,16 @@ cd packages/worker && pnpm vitest run src/services/github-app.test.ts
 
 Expected: FAIL (module not found).
 
-- [ ] **Step 5: Implement `github-app.ts`**
+- [ ] **Step 3: Implement `github-app.ts`**
 
 Create `packages/worker/src/services/github-app.ts`:
 
 ```typescript
 import { App } from 'octokit';
-import type { Octokit } from 'octokit';
 import type { Env } from '../env.js';
 import type { AppDb } from '../lib/drizzle.js';
 import { getServiceConfig } from '../lib/db/service-configs.js';
 import type { GitHubServiceConfig } from './github-config.js';
-
-const TOKEN_CACHE_PREFIX = 'gh_install_token:';
-const TOKEN_CACHE_SAFETY_MARGIN_MS = 5 * 60 * 1000; // 5 minutes before expiry, re-mint
 
 export interface CreateGitHubAppInput {
   appId: string;
@@ -762,80 +784,94 @@ export async function loadGitHubApp(env: Env, db: AppDb): Promise<App | null> {
   });
 }
 
-interface CachedToken {
+export interface InstallationTokenResult {
   token: string;
-  expiresAt: number;
+  expiresAt: number; // ms since epoch
 }
 
 /**
- * Get an Octokit instance authenticated as a specific installation.
- * Tokens are cached in KV with a 5-minute safety margin before expiry.
+ * Mint a fresh installation access token by calling
+ * POST /app/installations/{installation_id}/access_tokens.
+ *
+ * Raw mint — no caching. Use `getOrMintInstallationToken` if you want the
+ * D1-backed cache path, which is usually what callers want.
  */
-export async function getInstallationOctokit(
+export async function mintInstallationToken(
   app: App,
   githubInstallationId: string,
-  kv: KVNamespace,
-): Promise<Octokit> {
-  const cacheKey = `${TOKEN_CACHE_PREFIX}${githubInstallationId}`;
-
-  // Try cache first
-  const cached = await kv.get(cacheKey);
-  if (cached) {
-    try {
-      const parsed: CachedToken = JSON.parse(cached);
-      const safeUntil = parsed.expiresAt - TOKEN_CACHE_SAFETY_MARGIN_MS;
-      if (Date.now() < safeUntil) {
-        // Cached token is still fresh — build an Octokit with it manually
-        const { Octokit } = await import('octokit');
-        return new Octokit({ auth: parsed.token });
-      }
-    } catch {
-      // Corrupt cache entry, fall through to fresh mint
-    }
-  }
-
-  // Fresh mint via Octokit's App class
+): Promise<InstallationTokenResult> {
   const installationId = Number(githubInstallationId);
   if (!Number.isFinite(installationId)) {
     throw new Error(`Invalid installation ID: ${githubInstallationId}`);
   }
-  const octokit = await app.getInstallationOctokit(installationId);
-
-  // Extract the token from Octokit's auth for caching.
-  // Octokit's auth-app generates tokens via POST /app/installations/{id}/access_tokens.
-  // We can also call that endpoint ourselves to get the token + expiry explicitly.
-  const tokenResponse = await app.octokit.request(
+  const response = await app.octokit.request(
     'POST /app/installations/{installation_id}/access_tokens',
     { installation_id: installationId },
   );
-  const freshToken = tokenResponse.data.token;
-  const expiresAt = new Date(tokenResponse.data.expires_at).getTime();
-
-  // Write to cache with TTL matching real token expiry (minus small buffer)
-  const ttlSeconds = Math.max(0, Math.floor((expiresAt - Date.now()) / 1000) - 60);
-  if (ttlSeconds > 0) {
-    await kv.put(
-      cacheKey,
-      JSON.stringify({ token: freshToken, expiresAt } satisfies CachedToken),
-      { expirationTtl: ttlSeconds },
-    );
-  }
-
-  return octokit;
+  return {
+    token: response.data.token,
+    expiresAt: new Date(response.data.expires_at).getTime(),
+  };
 }
 
+const CACHE_SAFETY_MARGIN_MS = 5 * 60 * 1000; // 5 minutes
+
 /**
- * Clear a cached installation token. Used when a token is detected as invalid.
+ * Get an installation token from the D1 cache on `github_installations` if still
+ * valid (expires > now + 5min buffer), else mint fresh and write back to the row.
+ *
+ * The caller passes the already-loaded `installation` row (from
+ * `getGithubInstallationByLogin` etc.) — we don't re-SELECT it here. Cache-hit
+ * path is free; cache-miss path is mint + encrypt + one UPDATE (at most once
+ * per hour per installation).
  */
-export async function clearInstallationTokenCache(
-  kv: KVNamespace,
-  githubInstallationId: string,
-): Promise<void> {
-  await kv.delete(`${TOKEN_CACHE_PREFIX}${githubInstallationId}`);
+export async function getOrMintInstallationToken(
+  app: App,
+  db: AppDb,
+  encryptionKey: string,
+  installation: { id: string; githubInstallationId: string; cachedTokenEncrypted: string | null; cachedTokenExpiresAt: string | null },
+): Promise<InstallationTokenResult> {
+  // Cache hit path
+  if (installation.cachedTokenEncrypted && installation.cachedTokenExpiresAt) {
+    const expiresAt = new Date(installation.cachedTokenExpiresAt).getTime();
+    const safeUntil = expiresAt - CACHE_SAFETY_MARGIN_MS;
+    if (Date.now() < safeUntil) {
+      try {
+        const token = await decryptStringPBKDF2(installation.cachedTokenEncrypted, encryptionKey);
+        return { token, expiresAt };
+      } catch {
+        // Corrupt / unreadable cache — fall through to fresh mint
+      }
+    }
+  }
+
+  // Fresh mint
+  const result = await mintInstallationToken(app, installation.githubInstallationId);
+
+  // Encrypt + write back to D1
+  const encrypted = await encryptStringPBKDF2(result.token, encryptionKey);
+  await db
+    .update(githubInstallations)
+    .set({
+      cachedTokenEncrypted: encrypted,
+      cachedTokenExpiresAt: new Date(result.expiresAt).toISOString(),
+      updatedAt: new Date().toISOString(),
+    })
+    .where(eq(githubInstallations.id, installation.id));
+
+  return result;
 }
 ```
 
-- [ ] **Step 6: Run tests to verify they pass**
+Add the necessary imports at the top of `github-app.ts`:
+
+```typescript
+import { eq } from 'drizzle-orm';
+import { encryptStringPBKDF2, decryptStringPBKDF2 } from '../lib/crypto.js';
+import { githubInstallations } from '../lib/schema/github-installations.js';
+```
+
+- [ ] **Step 4: Run tests to verify they pass**
 
 ```bash
 cd packages/worker && pnpm vitest run src/services/github-app.test.ts
@@ -843,7 +879,7 @@ cd packages/worker && pnpm vitest run src/services/github-app.test.ts
 
 Expected: all pass.
 
-- [ ] **Step 7: Typecheck the worker**
+- [ ] **Step 5: Typecheck the worker**
 
 ```bash
 cd packages/worker && pnpm typecheck
@@ -854,14 +890,12 @@ Expected: passes. If Octokit has `workerd` compatibility issues, this is where w
 - Verify `@octokit/auth-app` version pulled uses `universal-github-app-jwt` (check `pnpm why universal-github-app-jwt`)
 - If blocked: document the specific error in the commit message and consult the spec's "Cloudflare Worker runtime compatibility" section for the fallback plan
 
-- [ ] **Step 8: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
 git add packages/worker/src/services/github-app.ts \
-        packages/worker/src/services/github-app.test.ts \
-        packages/worker/src/env.ts \
-        packages/worker/wrangler.toml
-git commit -m "feat(github): add Octokit App factory with KV-cached installation tokens"
+        packages/worker/src/services/github-app.test.ts
+git commit -m "feat(github): add Octokit App factory + installation token minting"
 ```
 
 ---
@@ -1522,12 +1556,7 @@ describe('githubCredentialResolver', () => {
     mockDb = await createTestDb();
     mockEnv = {
       DB: {} as any,
-      ENCRYPTION_KEY: 'test-key',
-      GITHUB_TOKEN_CACHE: {
-        get: vi.fn(async () => null),
-        put: vi.fn(),
-        delete: vi.fn(),
-      },
+      ENCRYPTION_KEY: 'test-encryption-key',
     };
   });
 
@@ -1567,10 +1596,9 @@ describe('githubCredentialResolver', () => {
     // Seed allowAnonymousGitHubAccess = true in metadata (use setServiceConfig helper)
     // Seed user with name + email (use seedUser helper)
 
-    const { loadGitHubApp, getInstallationOctokit } = await import('../../services/github-app.js');
+    const { loadGitHubApp, getOrMintInstallationToken } = await import('../../services/github-app.js');
     (loadGitHubApp as any).mockResolvedValue({ /* mock app */ });
-    (getInstallationOctokit as any).mockResolvedValue({
-      octokit: { /* mock */ },
+    (getOrMintInstallationToken as any).mockResolvedValue({
       token: 'ghs_install_token',
       expiresAt: Date.now() + 3600_000,
     });
@@ -1646,77 +1674,7 @@ cd packages/worker && pnpm vitest run src/integrations/resolvers/github.test.ts
 
 Expected: FAIL.
 
-- [ ] **Step 3: Update `getInstallationOctokit` to also return the token**
-
-Before writing the resolver, go back to `packages/worker/src/services/github-app.ts` (from Task 4) and change the signature to return both the Octokit instance and the token string:
-
-```typescript
-export interface InstallationAuth {
-  octokit: Octokit;
-  token: string;
-  expiresAt: number;
-}
-
-export async function getInstallationOctokit(
-  app: App,
-  githubInstallationId: string,
-  kv: KVNamespace,
-): Promise<InstallationAuth> {
-  const cacheKey = `${TOKEN_CACHE_PREFIX}${githubInstallationId}`;
-
-  // Try cache first
-  const cached = await kv.get(cacheKey);
-  if (cached) {
-    try {
-      const parsed: CachedToken = JSON.parse(cached);
-      const safeUntil = parsed.expiresAt - TOKEN_CACHE_SAFETY_MARGIN_MS;
-      if (Date.now() < safeUntil) {
-        const { Octokit } = await import('octokit');
-        return {
-          octokit: new Octokit({ auth: parsed.token }),
-          token: parsed.token,
-          expiresAt: parsed.expiresAt,
-        };
-      }
-    } catch {
-      // Corrupt cache entry, fall through
-    }
-  }
-
-  // Fresh mint
-  const installationId = Number(githubInstallationId);
-  if (!Number.isFinite(installationId)) {
-    throw new Error(`Invalid installation ID: ${githubInstallationId}`);
-  }
-  const tokenResponse = await app.octokit.request(
-    'POST /app/installations/{installation_id}/access_tokens',
-    { installation_id: installationId },
-  );
-  const freshToken = tokenResponse.data.token;
-  const expiresAt = new Date(tokenResponse.data.expires_at).getTime();
-
-  // Cache with TTL
-  const ttlSeconds = Math.max(0, Math.floor((expiresAt - Date.now()) / 1000) - 60);
-  if (ttlSeconds > 0) {
-    await kv.put(
-      cacheKey,
-      JSON.stringify({ token: freshToken, expiresAt } satisfies CachedToken),
-      { expirationTtl: ttlSeconds },
-    );
-  }
-
-  const { Octokit } = await import('octokit');
-  return {
-    octokit: new Octokit({ auth: freshToken }),
-    token: freshToken,
-    expiresAt,
-  };
-}
-```
-
-Update the Task 4 tests to match the new return shape (`result.octokit`, `result.token`). Re-run the Task 4 tests to verify.
-
-- [ ] **Step 4: Rewrite the resolver**
+- [ ] **Step 3: Rewrite the resolver**
 
 Replace the contents of `packages/worker/src/integrations/resolvers/github.ts`:
 
@@ -1730,7 +1688,7 @@ import {
   getGithubInstallationByLogin,
   listGithubInstallationsByAccountType,
 } from '../../lib/db/github-installations.js';
-import { loadGitHubApp, getInstallationOctokit } from '../../services/github-app.js';
+import { loadGitHubApp, getOrMintInstallationToken } from '../../services/github-app.js';
 import type { CredentialResolver } from '../registry.js';
 import type { CredentialResult } from '../../services/credentials.js';
 import type { GitHubServiceMetadata } from '../../services/github-config.js';
@@ -1819,10 +1777,10 @@ export const githubCredentialResolver: CredentialResolver = async (
     }
   }
 
-  // Mint installation token via the updated helper (returns token string directly)
+  // Get a cached or freshly-minted installation token (D1-backed cache)
   try {
-    const { token } = await getInstallationOctokit(
-      app, installation.githubInstallationId, env.GITHUB_TOKEN_CACHE,
+    const { token, expiresAt } = await getOrMintInstallationToken(
+      app, db, env.ENCRYPTION_KEY, installation,
     );
 
     // Fetch attribution for the Valet user
@@ -1833,6 +1791,7 @@ export const githubCredentialResolver: CredentialResolver = async (
       ok: true,
       credential: {
         accessToken: token,
+        expiresAt: new Date(expiresAt),
         credentialType: 'app_install',
         refreshed: false,
         attribution: user ? { name: user.name ?? 'Unknown', email: user.email } : undefined,
@@ -2208,10 +2167,11 @@ const { count } = await refreshAllInstallations(app, db);
 return c.json({ refreshed: true, installationCount: count });
 ```
 
-Rate-limit to 1 per minute per worker instance. Store a timestamp in KV or an in-memory Map:
+Rate-limit to 1 per minute. In a Cloudflare Worker, module-level `let` is not guaranteed to persist across requests (new isolates may be spawned), so this is best-effort. For a single-tenant admin action at small scale that's acceptable — the worst case is an admin getting 2 refreshes through in a single minute instead of 1.
 
 ```typescript
-// Simple in-memory rate limit (acceptable for a single-tenant admin action)
+// Best-effort in-memory rate limit. Not a strict guarantee across isolates,
+// but adequate for a single-tenant admin action.
 const REFRESH_RATE_LIMIT_MS = 60_000;
 let lastRefreshAt = 0;
 
@@ -3233,10 +3193,10 @@ Rename logically to `githubUserRepoProvider`. `mintToken` becomes a no-op (user 
 
 `repo-app.ts` runs in the **worker** (verified at `packages/worker/src/lib/env-assembly.ts` line ~230, which imports and calls `mintToken`). So `mintToken` can delegate directly to the new `services/github-app.ts`.
 
-Rewrite `mintToken`:
+Rewrite `mintToken` to delegate to the worker's `mintInstallationToken` helper:
 
 ```typescript
-import { loadGitHubApp, getInstallationOctokit } from '../../worker/src/services/github-app.js';
+import { loadGitHubApp, mintInstallationToken } from '../../worker/src/services/github-app.js';
 // NOTE: cross-package import — adjust path based on pnpm workspace layout.
 // If a direct import isn't clean, inject the App factory as a parameter
 // to `mintToken` from env-assembly.ts instead.
@@ -3245,20 +3205,16 @@ async mintToken(credential) {
   if (!credential.installationId) {
     throw new Error('Cannot mint token without installationId');
   }
-  // Delegate to the worker's unified helper. The caller must provide env + KV.
-  // Adjust the signature of mintToken if needed to accept these.
   const app = credential._app; // or load via env
   if (!app) throw new Error('GitHub App not available for token minting');
-  const { token, expiresAt } = await getInstallationOctokit(
-    app, credential.installationId, credential._kv,
-  );
+  const { token, expiresAt } = await mintInstallationToken(app, credential.installationId);
   return { accessToken: token, expiresAt: new Date(expiresAt) };
 }
 ```
 
-**Cleaner alternative**: change the `RepoProvider.mintToken` signature in `@valet/sdk/repos` to accept an `{ env, kv, app }` context object. Then `env-assembly.ts` passes these in. This avoids cross-package imports.
+**Cleaner alternative**: change the `RepoProvider.mintToken` signature in `@valet/sdk/repos` to accept an `{ env, app }` context object. Then `env-assembly.ts` passes the `App` instance in. This avoids cross-package imports and awkward `credential._app` injection.
 
-Choose the cleaner alternative if the `RepoProvider` contract can be updated without breaking other repo providers; otherwise, fall back to injection via `credential` fields (marked as `_app`, `_kv`).
+Choose the cleaner alternative if the `RepoProvider` contract can be updated without breaking other repo providers; otherwise, fall back to injection via a `credential._app` field.
 
 - [ ] **Step 3: Clean up `repo-shared.ts`**
 
@@ -3593,16 +3549,7 @@ git status
 
 Expected: clean. All changes committed.
 
-- [ ] **Step 2: Create KV namespace in production**
-
-```bash
-cd packages/worker
-wrangler kv:namespace create GITHUB_TOKEN_CACHE
-```
-
-Copy the ID into `wrangler.toml` (replacing the local placeholder).
-
-- [ ] **Step 3: Wipe existing GitHub state in production D1**
+- [ ] **Step 2: Wipe existing GitHub state in production D1**
 
 Since we're not writing a migration, drop the existing GitHub state directly. From the project root, run:
 
@@ -3632,7 +3579,7 @@ wrangler d1 execute $D1_DATABASE_NAME --remote \
 
 The `github_installations` table is new (added by migration 0006) and starts empty — no action needed.
 
-- [ ] **Step 4: Apply migrations to production**
+- [ ] **Step 3: Apply migrations to production**
 
 ```bash
 make deploy-migrate
@@ -3640,13 +3587,13 @@ make deploy-migrate
 
 This applies migration 0006 (create `github_installations`). All other schema is unchanged.
 
-- [ ] **Step 5: Deploy worker + client**
+- [ ] **Step 4: Deploy worker + client**
 
 ```bash
 make deploy
 ```
 
-- [ ] **Step 6: Re-setup the GitHub App (admin)**
+- [ ] **Step 5: Re-setup the GitHub App (admin)**
 
 Log into the deployed frontend as an admin:
 1. Navigate to Settings → Integrations → GitHub
@@ -3654,16 +3601,9 @@ Log into the deployed frontend as an admin:
 3. Click "Refresh installations" → verify installations appear
 4. (If desired) install the App on additional GitHub orgs via the GitHub UI → click "Refresh installations" again to pick them up
 
-- [ ] **Step 7: Smoke test production**
+- [ ] **Step 6: Smoke test production**
 
 Same steps as Task 27 but against production URLs.
-
-- [ ] **Step 8: Commit the wrangler.toml KV ID update**
-
-```bash
-git add packages/worker/wrangler.toml
-git commit -m "chore(deploy): add production GITHUB_TOKEN_CACHE KV namespace ID"
-```
 
 ---
 

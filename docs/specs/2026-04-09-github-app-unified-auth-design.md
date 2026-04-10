@@ -227,11 +227,18 @@ Workers run in `workerd` (V8 isolate) with `nodejs_compat` flag. Not all npm pac
 
 #### Installation token caching
 
-Octokit's `@octokit/auth-app` caches installation tokens in an in-memory LRU of up to 15,000 entries. In a Cloudflare Worker, **in-memory caches do not survive between requests** reliably — each invocation may get a fresh isolate. Relying on the in-memory cache alone means every request that needs an installation token mints a new one, which is wasteful and risks rate-limiting on the JWT → token endpoint.
+Octokit's `@octokit/auth-app` caches installation tokens in an in-memory LRU of up to 15,000 entries. In a Cloudflare Worker, **in-memory caches do not survive between requests** reliably — each invocation may get a fresh isolate. Relying on the in-memory cache alone means every request that needs an installation token mints a new one, wasting ~200ms per call.
 
-**Caching strategy**: store minted installation tokens in Cloudflare KV (or a new D1 table) keyed by `installation_id`, with a TTL of 55 minutes (tokens expire after 60 minutes; use a safety margin). The credential resolver checks the cache before calling `app.getInstallationOctokit(id)`. If the KV binding isn't available, fall back to in-memory caching per-request (still correct, just less efficient).
+**Caching strategy**: store the minted installation token directly on the `github_installations` row in D1. Two columns are added to the table:
 
-A cleaner alternative: use `createAppAuth({ cache })` to inject a custom cache implementation backed by KV. Octokit supports this via the `cache` option.
+- `cached_token_encrypted TEXT` — installation access token encrypted via PBKDF2 using `ENCRYPTION_KEY` (same helper as `credentials.ts`)
+- `cached_token_expires_at TEXT` — ISO timestamp
+
+The resolver already SELECTs the installation row by `account_login` to find it — including the cached token fields in that same SELECT makes cache hits free. Cache miss = one extra UPDATE per mint, at most once per hour per installation.
+
+A `getOrMintInstallationToken(app, db, encryptionKey, installationRow)` helper wraps the cache-check and fresh-mint logic. It checks the cache (with a 5-minute safety margin before expiry), mints fresh if the cache is missing or near-expiry, and writes the encrypted token back to D1.
+
+**Why not KV**: we're already in D1, installations are a small table (one row per installation, writes are infrequent — at most hourly per installation), the cache state lives naturally alongside the installation metadata, and we avoid adding a new binding. If the project later needs higher-frequency caching across many installations, migrating to KV is a targeted follow-up.
 
 **Dependencies to add**:
 
@@ -339,7 +346,7 @@ The resolution chain, given a Valet user `U` and an optional repository owner `O
 
 3. Repository owner O is known and matches an active installation in github_installations
    (join: account_login = O, status = 'active')?
-   MATCH FOUND → mint installation token via app.getInstallationOctokit(installation_id) (KV-cached),
+   MATCH FOUND → mint installation token via getOrMintInstallationToken (D1-cached on the installation row),
                  return token + attribution metadata (user's name + email)
    NOT FOUND OR REPO CONTEXT ABSENT → continue
 
@@ -401,7 +408,7 @@ This is a non-breaking additive change. Other plugins ignore the new field.
 
 **Plugin-internal Octokit usage**: the GitHub plugin constructs its own `Octokit` instance from `ctx.credentials.access_token`. It does not import the App-level `Octokit` or receive pre-built instances from the worker. The plugin's `package.json` adds `octokit` as a direct dependency.
 
-**CredentialCache simplifications**: The cache tracks one entry per user for GitHub (`user:{userId}:github:oauth2`). The `credentialType` dimension added by the multi-credential routing design is reverted. **Scope check**: the `credentialType` dimension was added solely to disambiguate GitHub `oauth2` vs `app_install`; no other resolver (slack, google, default) relies on it. Reverting is safe. If another service later needs multiple credential types per user, re-add the dimension at that time. Installation tokens are cached externally via KV (see [Installation token caching](#installation-token-caching)), not in `CredentialCache`.
+**CredentialCache simplifications**: The cache tracks one entry per user for GitHub (`user:{userId}:github:oauth2`). The `credentialType` dimension added by the multi-credential routing design is reverted. **Scope check**: the `credentialType` dimension was added solely to disambiguate GitHub `oauth2` vs `app_install`; no other resolver (slack, google, default) relies on it. Reverting is safe. If another service later needs multiple credential types per user, re-add the dimension at that time. Installation tokens are cached on the `github_installations` row in D1 (see [Installation token caching](#installation-token-caching)), not in `CredentialCache`.
 
 **What gets removed**:
 
@@ -506,7 +513,7 @@ Admin settings page at `/settings/integrations/github`:
   - Toggle: `Allow personal installations`
   - Toggle: `Allow anonymous GitHub access`
 
-**Refresh rate limit**: the "Refresh installations" admin action is rate-limited to 1 call per minute per worker instance (tracked in KV or in-memory). Simple guard, short decision.
+**Refresh rate limit**: the "Refresh installations" admin action is rate-limited to 1 call per minute (best-effort, module-level timestamp). Simple guard, short decision.
 
 **Installations section**
 
@@ -561,7 +568,7 @@ The table schema is unchanged — `encrypted_config` is a single TEXT blob conta
 
 | File | Change |
 |------|--------|
-| `packages/worker/src/services/github-app.ts` | **NEW** — Octokit `App` instance factory, config loading, installation token minting with KV cache, OAuth helpers (getAuthorizeUrl, exchangeCode, refreshToken, revokeToken) |
+| `packages/worker/src/services/github-app.ts` | **NEW** — Octokit `App` instance factory, config loading, installation token minting with D1-backed cache on `github_installations`, OAuth helpers (getAuthorizeUrl, exchangeCode, refreshToken, revokeToken) |
 | `packages/worker/src/services/github-installations.ts` | **NEW** — CRUD, installation discovery, reconciliation |
 | `packages/worker/src/services/github-config.ts` | Update `GitHubServiceConfig` / `GitHubConfig` to drop `oauthClientId` / `oauthClientSecret` classic fields; make App OAuth credentials required |
 | `packages/worker/src/routes/admin-github.ts` | Rewrite: remove classic OAuth endpoints (`PUT /oauth`, `DELETE /oauth-credentials`), update App setup flow, add installations list endpoint, add toggles, remove single-installation enforcement in refresh, remove `storeCredential(app_install)` write |
@@ -595,8 +602,7 @@ The table schema is unchanged — `encrypted_config` is a single TEXT blob conta
 | `packages/client/src/components/settings/github-config.tsx` | Rewrite: drop OAuth panel, add installations list with sections, add toggles |
 | `packages/client/src/components/settings/github-integration-card.tsx` | Update (or new): user-facing integrations card |
 | `package.json` (worker, plugin-github) | Add `octokit` dependency; add `@octokit/plugin-throttling` |
-| `packages/worker/wrangler.toml` | Add KV namespace binding for installation token cache (e.g., `GITHUB_TOKEN_CACHE`) |
-| `packages/worker/src/env.ts` | Add KV binding type; remove `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET` requirements |
+| `packages/worker/src/env.ts` | Remove `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET` requirements |
 
 ### Migration
 
@@ -604,18 +610,17 @@ The table schema is unchanged — `encrypted_config` is a single TEXT blob conta
 
 **Deployment steps**:
 
-1. Add KV namespace for installation token cache (`wrangler kv:namespace create GITHUB_TOKEN_CACHE`) and copy the ID into `wrangler.toml`
-2. Wipe existing GitHub state in production D1 via `wrangler d1 execute`:
+1. Wipe existing GitHub state in production D1 via `wrangler d1 execute`:
    - `DELETE FROM org_service_configs WHERE service = 'github';`
    - `DELETE FROM credentials WHERE provider = 'github';`
    - `DELETE FROM user_identity_links WHERE provider = 'github';`
    - `UPDATE users SET github_id = NULL, github_username = NULL;`
    - `DELETE FROM integrations WHERE service = 'github';`
-3. Apply migration for the new `github_installations` table
-4. Deploy worker + client
-5. Admin logs in, goes to Settings → Integrations → GitHub, and runs "Create GitHub App" (the manifest flow) to recreate the App under the new unified-auth configuration
-6. Admin clicks "Refresh installations" to populate `github_installations` (if the App has existing installations on GitHub that weren't removed, they'll reappear; otherwise admin installs fresh on the target org(s))
-7. Users reconnect via the integrations page on next use
+2. Apply migration for the new `github_installations` table (includes `cached_token_encrypted` and `cached_token_expires_at` columns)
+3. Deploy worker + client
+4. Admin logs in, goes to Settings → Integrations → GitHub, and runs "Create GitHub App" (the manifest flow) to recreate the App under the new unified-auth configuration
+5. Admin clicks "Refresh installations" to populate `github_installations` (if the App has existing installations on GitHub that weren't removed, they'll reappear; otherwise admin installs fresh on the target org(s))
+6. Users reconnect via the integrations page on next use
 
 **In-flight sessions**: any sessions holding old GitHub tokens will find them invalid as soon as they try an API call (the tokens are still valid against GitHub's side, but the resolver will return "GitHub not connected" because the credential rows are gone). Users see the error and reconnect. There's a brief window where some users get friction; this is acceptable for the project's scale.
 
@@ -633,7 +638,7 @@ The table schema is unchanged — `encrypted_config` is a single TEXT blob conta
 
 - **App is uninstalled from an org**: `installation.deleted` webhook fires. We mark the row `status='removed'`. Future credential resolution for repos owned by that org fails (no matching installation). User tokens for users who had access via that org lose access to those repos (verified by the token itself on API call — GitHub returns 404/403).
 
-- **App's private key is rotated**: admin regenerates the key on GitHub, pastes it into an admin form (or re-runs the manifest flow — the old App is kept). Octokit instances recreated from the new key work immediately. KV-cached installation tokens are still valid for their remaining TTL.
+- **App's private key is rotated**: admin regenerates the key on GitHub, pastes it into an admin form (or re-runs the manifest flow — the old App is kept). Octokit instances recreated from the new key work immediately. Any cached installation tokens on `github_installations` rows remain valid for their remaining TTL.
 
 - **User authorizes the App but never installs it**: they have a valid user token that can only access repos in installations they already had access to. To access private repos not covered by any installation, they install the App on their personal account.
 
@@ -651,7 +656,7 @@ The table schema is unchanged — `encrypted_config` is a single TEXT blob conta
 
 - **Octokit package incompatible with Workers at implementation time**: fall back to the existing hand-rolled JWT signer (`services/github-app-jwt.ts`) via Octokit's `createJwt` callback. See [Cloudflare Worker runtime compatibility](#cloudflare-worker-runtime-compatibility).
 
-- **KV binding unavailable for token cache**: fall back to in-memory per-request caching. Installation tokens are minted more frequently but correctness is preserved.
+- **Cached token decryption fails**: if `decryptStringPBKDF2` throws on the cached token (e.g., `ENCRYPTION_KEY` was rotated, or the column is corrupt), fall through to fresh mint and overwrite the bad cache on write-back. No user-visible error.
 
 - **In-flight session's stored token fails on next refresh**: credential row is deleted, user sees "GitHub connection expired, please reconnect" on next GitHub action. Documented as expected behavior; no user-facing migration notice.
 
@@ -669,11 +674,11 @@ The table schema is unchanged — `encrypted_config` is a single TEXT blob conta
 
 - **Attribution cannot be forged by the user (agent)**: the `attribution` object is set by the credential resolver from the authenticated Valet user's profile, not from agent input. The agent cannot inject arbitrary attribution.
 
-- **Installation tokens are short-lived**: 1hr lifetime, cached in KV with 55-minute TTL (safety margin). No long-lived installation tokens anywhere.
+- **Installation tokens are short-lived**: 1hr lifetime, cached on the `github_installations` row with a 5-minute safety margin before re-minting. No long-lived installation tokens anywhere.
 
 - **Duplicate GitHub account linking**: explicitly checked at link time (see edge cases); the unique index on `users.github_id` is the last line of defense.
 
-- **KV cache isolation**: the token cache key includes `installation_id`. No cross-installation leakage. Only the resolver reads/writes the cache.
+- **Cache isolation**: cached tokens live on the `github_installations` row itself (one per installation). No cross-installation leakage. Tokens are encrypted at rest with `ENCRYPTION_KEY` (PBKDF2), matching the encryption used for stored credentials.
 
 ## Open questions
 
