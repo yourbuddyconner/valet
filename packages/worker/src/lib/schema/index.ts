@@ -24,3 +24,4 @@ export * from './threads.js';
 export * from './channel-threads.js';
 export * from './mcp-tool-cache.js';
 export * from './service-configs.js';
+export * from './github-installations.js';
