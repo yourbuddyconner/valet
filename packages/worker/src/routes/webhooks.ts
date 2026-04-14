@@ -1,9 +1,9 @@
 import { Hono } from 'hono';
 import type { Env, Variables } from '../env.js';
-import { integrationRegistry } from '../integrations/registry.js';
 import * as webhookService from '../services/webhooks.js';
 import { getDb } from '../lib/drizzle.js';
-import { getGitHubConfig } from '../services/github-config.js';
+import { loadGitHubApp } from '../services/github-app.js';
+import { handleInstallationWebhook } from '../services/github-installations.js';
 
 export const webhooksRouter = new Hono<{ Bindings: Env; Variables: Variables }>();
 
@@ -62,7 +62,8 @@ webhooksRouter.all('/*', async (c, next) => {
  */
 webhooksRouter.post('/github', async (c) => {
   const event = c.req.header('X-GitHub-Event');
-  const deliveryId = c.req.header('X-GitHub-Delivery');
+  const deliveryId = c.req.header('X-GitHub-Delivery') ?? crypto.randomUUID();
+  const signature = c.req.header('X-Hub-Signature-256') ?? '';
 
   if (!event) {
     return c.json({ error: 'Missing event header' }, 400);
@@ -70,43 +71,59 @@ webhooksRouter.post('/github', async (c) => {
 
   const rawBody = await c.req.raw.clone().text();
 
-  // Verify webhook signature via trigger source
-  const ghConfig = await getGitHubConfig(c.env, getDb(c.env.DB));
-  const webhookSecret = ghConfig?.appWebhookSecret;
-  if (webhookSecret) {
-    const triggers = integrationRegistry.getTriggers('github');
-    if (triggers) {
-      const rawHeaders: Record<string, string> = {};
-      const sigHeader = c.req.header('X-Hub-Signature-256');
-      if (sigHeader) rawHeaders['x-hub-signature-256'] = sigHeader;
-
-      const isValid = await triggers.verifySignature(rawHeaders, rawBody, webhookSecret);
-      if (!isValid) {
-        return c.json({ error: 'Invalid signature' }, 401);
-      }
+  // Verify webhook signature via Octokit App
+  const app = await loadGitHubApp(c.env, getDb(c.env.DB));
+  if (app) {
+    try {
+      await app.webhooks.verifyAndReceive({
+        id: deliveryId,
+        name: event as any,
+        signature,
+        payload: rawBody,
+      });
+    } catch {
+      return c.json({ error: 'Invalid signature' }, 401);
     }
   }
 
   const payload = JSON.parse(rawBody);
 
-  console.log(`GitHub webhook: ${event} (${deliveryId})`);
+  console.log(`[github webhook] ${event}.${payload.action ?? ''} (${deliveryId})`);
 
+  // Installation lifecycle events — sync to github_installations table
+  if (event === 'installation' && ['created', 'deleted', 'suspend', 'unsuspend'].includes(payload.action)) {
+    try {
+      await handleInstallationWebhook(getDb(c.env.DB), payload);
+    } catch (error) {
+      console.error('[github webhook] installation handler error:', error);
+    }
+  }
+
+  // Pull request events — session state management
   if (event === 'pull_request') {
     try {
       await webhookService.handlePullRequestWebhook(c.env, payload);
     } catch (error) {
-      console.error('PR webhook handler error:', error);
+      console.error('[github webhook] pull_request handler error:', error);
     }
   }
 
+  // Push events — session state management
   if (event === 'push') {
     try {
       await webhookService.handlePushWebhook(c.env, payload);
     } catch (error) {
-      console.error('Push webhook handler error:', error);
+      console.error('[github webhook] push handler error:', error);
     }
   }
 
+  // TODO: route unhandled events to org orchestrator for automation rules
+  const handled = new Set(['installation', 'pull_request', 'push']);
+  if (!handled.has(event)) {
+    console.log(`[github webhook] unhandled event: ${event}.${payload.action ?? ''}`);
+  }
+
+  // Always return 200 — failing to ACK causes GitHub to retry and amplify errors
   return c.json({ received: true, event, deliveryId });
 });
 

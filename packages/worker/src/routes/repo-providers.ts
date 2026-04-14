@@ -6,10 +6,7 @@ import { storeCredential } from '../services/credentials.js';
 import { getDb } from '../lib/drizzle.js';
 import * as credentialDb from '../lib/db/credentials.js';
 import * as db from '../lib/db.js';
-import { ensureIntegration, deleteOrgIntegrationByService } from '../lib/db/integrations.js';
 import { getGitHubConfig } from '../services/github-config.js';
-import { updateServiceMetadata, getServiceMetadata } from '../lib/db/service-configs.js';
-import { mintGitHubAppJWT } from '../services/github-app-jwt.js';
 import { adminMiddleware } from '../middleware/admin.js';
 
 export const repoProviderRouter = new Hono<{ Bindings: Env; Variables: Variables }>();
@@ -45,7 +42,7 @@ repoProviderRouter.get('/github-oauth/link', async (c) => {
   const redirectUri = `${frontendUrl.replace(/\/$/, '')}/auth/github/repo-callback`;
 
   const params = new URLSearchParams({
-    client_id: ghConfig.oauthClientId,
+    client_id: ghConfig.appOauthClientId,
     redirect_uri: redirectUri,
     scope: 'repo',
     state,
@@ -144,8 +141,8 @@ repoProviderCallbackRouter.get('/github-oauth/callback', async (c) => {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
     body: JSON.stringify({
-      client_id: ghConfig.oauthClientId,
-      client_secret: ghConfig.oauthClientSecret,
+      client_id: ghConfig.appOauthClientId,
+      client_secret: ghConfig.appOauthClientSecret,
       code,
     }),
   });
@@ -163,139 +160,4 @@ repoProviderCallbackRouter.get('/github-oauth/callback', async (c) => {
   });
 
   return c.redirect(`${frontendUrl}/settings/admin?linked=true`);
-});
-
-// GitHub App installation callback (no auth middleware)
-repoProviderCallbackRouter.get('/:provider/install/callback', async (c) => {
-  const providerId = c.req.param('provider');
-  const installationId = c.req.query('installation_id');
-  const setupAction = c.req.query('setup_action');
-  const stateParam = c.req.query('state');
-  const frontendUrl = c.env.FRONTEND_URL || 'http://localhost:5173';
-
-  // Only GitHub App installations are supported — reject other provider IDs
-  // to prevent storing GitHub App credentials under arbitrary provider names
-  if (providerId !== 'github') {
-    return c.redirect(`${frontendUrl}/settings/admin?error=unsupported_provider`);
-  }
-
-  if (!installationId || !stateParam) {
-    return c.redirect(`${frontendUrl}/settings/admin?error=missing_params`);
-  }
-
-  // Verify signed state JWT — this is how we identify the user without session auth
-  const payload = await verifyJWT(stateParam, c.env.ENCRYPTION_KEY);
-  if (!payload || !payload.sub) {
-    return c.redirect(`${frontendUrl}/settings/admin?error=invalid_state`);
-  }
-  const userId = payload.sub as string;
-
-  const orgId = (payload as any).orgId;
-  if (!orgId) {
-    return c.redirect(`${frontendUrl}/settings/admin?error=missing_org`);
-  }
-  const ownerType = 'org' as const;
-  const ownerId = orgId;
-
-  // Validate required GitHub App config before storing
-  const appDb = getDb(c.env.DB);
-  const ghConfig = await getGitHubConfig(c.env, appDb);
-  if (!ghConfig?.appId || !ghConfig?.appPrivateKey) {
-    return c.redirect(`${frontendUrl}/settings/admin?error=app_not_configured`);
-  }
-
-  // Store the installation credential and refresh metadata (accessible owners)
-  // Note: credential and metadata writes are not transactional. If the worker
-  // crashes between storeCredential and updateServiceMetadata, the refresh
-  // button will reconcile the state.
-  if (setupAction === 'install') {
-    await storeCredential(c.env, ownerType, ownerId, providerId, {
-      installation_id: installationId,
-      app_id: ghConfig.appId,
-      private_key: ghConfig.appPrivateKey,
-    }, {
-      credentialType: 'app_install',
-      metadata: { installationId },
-    });
-
-    // Mint an app JWT and fetch accessible owners so sandbox credential
-    // resolution works immediately without a manual refresh
-    const existingMeta = await getServiceMetadata<Record<string, unknown>>(appDb, 'github').catch(() => ({})) || {};
-
-    // Always record the installation ID so the UI shows installed state
-    const metaUpdate: Record<string, unknown> = {
-      ...existingMeta,
-      appInstallationId: installationId,
-    };
-
-    // Try to populate accessible owners so sandbox credential resolution
-    // works immediately. On failure, only write the installation ID —
-    // don't write empty accessibleOwners since that would cause
-    // resolveRepoCredential to reject all repos until manual refresh.
-    try {
-      const appJwt = await mintGitHubAppJWT(ghConfig.appId, ghConfig.appPrivateKey);
-      const tokenRes = await fetch(`https://api.github.com/app/installations/${installationId}/access_tokens`, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${appJwt}`,
-          Accept: 'application/vnd.github+json',
-          'X-GitHub-Api-Version': '2022-11-28',
-          'User-Agent': 'valet-app',
-        },
-      });
-      if (tokenRes.ok) {
-        const tokenData = await tokenRes.json() as { token: string };
-        const reposRes = await fetch('https://api.github.com/installation/repositories?per_page=100', {
-          headers: {
-            Authorization: `Bearer ${tokenData.token}`,
-            Accept: 'application/vnd.github+json',
-            'X-GitHub-Api-Version': '2022-11-28',
-          'User-Agent': 'valet-app',
-          },
-        });
-        if (reposRes.ok) {
-          const reposData = await reposRes.json() as {
-            total_count: number;
-            repositories: Array<{ owner: { login: string } }>;
-          };
-          metaUpdate.accessibleOwners = [...new Set(reposData.repositories.map((r) => r.owner.login))];
-          metaUpdate.accessibleOwnersRefreshedAt = new Date().toISOString();
-          metaUpdate.repositoryCount = reposData.total_count;
-        }
-      }
-    } catch {
-      // Non-fatal — admin can hit Refresh later to populate accessible owners
-    }
-
-    await updateServiceMetadata(appDb, 'github', metaUpdate);
-
-    // Create org-scoped integration record so listTools discovers GitHub tools
-    try {
-      await ensureIntegration(appDb, userId, 'github', 'org');
-    } catch (err) {
-      console.warn('[GitHub Install] Failed to create org integration record:', err);
-    }
-  }
-
-  if (setupAction === 'update') {
-    // Permissions changed — redirect to settings, the UI will show the updated state
-    return c.redirect(`${frontendUrl}/settings/admin?github_updated=true`);
-  }
-
-  if (setupAction === 'delete') {
-    // Clean up org integration record and credentials
-    try {
-      await deleteOrgIntegrationByService(appDb, 'github');
-    } catch (err) {
-      console.warn('[GitHub Uninstall] Failed to delete org integration:', err);
-    }
-    try {
-      await credentialDb.deleteCredential(appDb, 'org', ownerId, 'github', 'app_install');
-    } catch (err) {
-      console.warn('[GitHub Uninstall] Failed to delete org credential:', err);
-    }
-    return c.redirect(`${frontendUrl}/settings/admin?github_uninstalled=true`);
-  }
-
-  return c.redirect(`${frontendUrl}/settings/admin?installed=true`);
 });
