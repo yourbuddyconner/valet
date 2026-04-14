@@ -2,8 +2,7 @@ import { getCredential } from '../../services/credentials.js';
 import type { CredentialResolver } from '../registry.js';
 
 /**
- * Default credential resolver — looks up credentials from D1.
- * Picks the first available source (user-scoped preferred), respecting skipScope.
+ * Default credential resolver — looks up user-scoped credentials from D1.
  */
 export const defaultCredentialResolver: CredentialResolver = (
   service,
@@ -11,22 +10,5 @@ export const defaultCredentialResolver: CredentialResolver = (
   userId,
   context,
 ) => {
-  const { credentialSources, forceRefresh, skipScope } = context;
-
-  // Pick the first available source, respecting skipScope and preferring user-scoped
-  const source = credentialSources
-    .filter((s) => !skipScope || s.scope !== skipScope)
-    .sort((a, b) => (a.scope === 'user' ? 0 : 1) - (b.scope === 'user' ? 0 : 1))
-    .at(0);
-
-  if (!source) {
-    return Promise.resolve({
-      ok: false as const,
-      error: { service, reason: 'not_found' as const, message: `No credentials for ${service}` },
-    });
-  }
-
-  const ownerType = source.scope === 'org' ? 'org' : 'user';
-  const ownerId = source.scope === 'org' ? 'default' : userId;
-  return getCredential(env, ownerType, ownerId, service, { forceRefresh });
+  return getCredential(env, 'user', userId, service, { forceRefresh: context.forceRefresh });
 };
