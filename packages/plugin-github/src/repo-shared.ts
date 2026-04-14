@@ -8,73 +8,7 @@ import { githubFetch } from './actions/api.js';
 
 export const GITHUB_URL_PATTERNS: RegExp[] = [/github\.com/];
 
-// ─── Internal Helpers ────────────────────────────────────────────────────────
-
-function pemToArrayBuffer(pem: string): ArrayBuffer {
-  const b64 = pem.replace(/-----[A-Z ]+-----/g, '').replace(/\s/g, '');
-  const binary = atob(b64);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-  return bytes.buffer;
-}
-
-/** Base64url encode. Only safe for small buffers (<~10KB) due to spread operator. */
-function base64url(data: ArrayBuffer | Uint8Array | string): string {
-  let b64: string;
-  if (typeof data === 'string') {
-    b64 = btoa(data);
-  } else {
-    const bytes = data instanceof Uint8Array ? data : new Uint8Array(data);
-    b64 = btoa(String.fromCharCode(...bytes));
-  }
-  return b64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-}
-
 // ─── Exported Utilities ──────────────────────────────────────────────────────
-
-export async function mintInstallationToken(
-  installationId: string,
-  appId: string,
-  privateKey: string,
-): Promise<{ token: string; expiresAt: string }> {
-  const now = Math.floor(Date.now() / 1000);
-  const header = base64url(JSON.stringify({ alg: 'RS256', typ: 'JWT' }));
-  const payload = base64url(JSON.stringify({ iat: now - 60, exp: now + 600, iss: appId }));
-
-  const key = await crypto.subtle.importKey(
-    'pkcs8',
-    pemToArrayBuffer(privateKey),
-    { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' },
-    false,
-    ['sign'],
-  );
-
-  const signature = await crypto.subtle.sign(
-    'RSASSA-PKCS1-v1_5',
-    key,
-    new TextEncoder().encode(`${header}.${payload}`),
-  );
-  const jwt = `${header}.${payload}.${base64url(signature)}`;
-
-  const res = await fetch(
-    `https://api.github.com/app/installations/${installationId}/access_tokens`,
-    {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${jwt}`,
-        Accept: 'application/vnd.github+json',
-        'User-Agent': 'Valet',
-      },
-    },
-  );
-
-  if (!res.ok) {
-    throw new Error(`Failed to mint installation token: ${res.status}`);
-  }
-
-  const data = (await res.json()) as { token: string; expires_at: string };
-  return { token: data.token, expiresAt: data.expires_at };
-}
 
 export function mapGitHubRepo(r: any) {
   return {

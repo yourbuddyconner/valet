@@ -1,6 +1,6 @@
 import type { RepoProvider, RepoCredential } from '@valet/sdk/repos';
 import { githubFetch } from './actions/api.js';
-import { GITHUB_URL_PATTERNS, mapGitHubRepo, mintInstallationToken, validateGitHubRepo } from './repo-shared.js';
+import { GITHUB_URL_PATTERNS, mapGitHubRepo, validateGitHubRepo } from './repo-shared.js';
 
 export const githubAppRepoProvider: RepoProvider = {
   id: 'github-app',
@@ -46,6 +46,8 @@ export const githubAppRepoProvider: RepoProvider = {
   validateRepo: validateGitHubRepo,
 
   async assembleSessionEnv(credential, opts) {
+    const gitName = credential.metadata?.attribution_name ?? opts.gitUser.name;
+    const gitEmail = credential.metadata?.attribution_email ?? opts.gitUser.email;
     return {
       envVars: {
         REPO_URL: opts.repoUrl,
@@ -53,22 +55,16 @@ export const githubAppRepoProvider: RepoProvider = {
         ...(opts.ref ? { REPO_REF: opts.ref } : {}),
       },
       gitConfig: {
-        'user.name': 'valet[bot]',
-        'user.email': 'valet[bot]@users.noreply.github.com',
+        'user.name': gitName,
+        'user.email': gitEmail,
       },
     };
   },
 
-  async mintToken(credential) {
-    if (!credential.installationId) {
-      throw new Error('Cannot mint token without installationId');
-    }
-    const appId = credential.metadata?.appId || credential.metadata?.app_id;
-    const privateKey = credential.metadata?.privateKey || credential.metadata?.private_key;
-    if (!appId || !privateKey) {
-      throw new Error('GitHub App credentials (appId, privateKey) not found in credential');
-    }
-    const result = await mintInstallationToken(credential.installationId, appId, privateKey);
-    return { accessToken: result.token, expiresAt: result.expiresAt };
+  async mintToken() {
+    // Under the unified App model, installation tokens are minted on-demand by
+    // the worker's credential resolver and passed in via credential.accessToken.
+    // This method should not be called directly.
+    throw new Error('Installation tokens are minted on-demand by the credential resolver');
   },
 };

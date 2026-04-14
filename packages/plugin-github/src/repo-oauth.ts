@@ -2,8 +2,8 @@ import type { RepoProvider, RepoCredential } from '@valet/sdk/repos';
 import { githubFetch } from './actions/api.js';
 import { GITHUB_URL_PATTERNS, mapGitHubRepo, validateGitHubRepo } from './repo-shared.js';
 
-export const githubOAuthRepoProvider: RepoProvider = {
-  id: 'github-oauth',
+export const githubUserRepoProvider: RepoProvider = {
+  id: 'github-user',
   displayName: 'GitHub (Personal)',
   icon: 'github',
   supportsOrgLevel: false,
@@ -44,6 +44,8 @@ export const githubOAuthRepoProvider: RepoProvider = {
   validateRepo: validateGitHubRepo,
 
   async assembleSessionEnv(credential, opts) {
+    const gitName = credential.metadata?.attribution_name ?? opts.gitUser.name;
+    const gitEmail = credential.metadata?.attribution_email ?? opts.gitUser.email;
     return {
       envVars: {
         REPO_URL: opts.repoUrl,
@@ -51,16 +53,13 @@ export const githubOAuthRepoProvider: RepoProvider = {
         ...(opts.ref ? { REPO_REF: opts.ref } : {}),
       },
       gitConfig: {
-        'user.name': opts.gitUser.name,
-        'user.email': opts.gitUser.email,
+        'user.name': gitName,
+        'user.email': gitEmail,
       },
     };
   },
 
-  async mintToken(credential) {
-    if (!credential.accessToken) {
-      throw new Error('OAuth credential has no access token');
-    }
-    return { accessToken: credential.accessToken, expiresAt: credential.expiresAt };
+  async mintToken() {
+    throw new Error('User tokens are refreshed by the credential service, not minted by the repo provider');
   },
 };
