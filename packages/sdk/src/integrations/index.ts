@@ -44,6 +44,8 @@ export interface ActionContext {
   callerIdentity?: CallerIdentity;
   /** Analytics emitter for plugin-specific events. Optional so existing plugins don't break. */
   analytics?: Analytics;
+  /** Present when the credential is a bot token being used on behalf of a user. */
+  attribution?: { name: string; email: string };
 }
 
 /** Result of executing an action. */
