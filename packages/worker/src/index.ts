@@ -48,7 +48,7 @@ import { skillsRouter } from './routes/skills.js';
 import { orgDefaultSkillsRouter } from './routes/org-default-skills.js';
 import { avatarsRouter } from './routes/avatars.js';
 import { repoProviderRouter, repoProviderCallbackRouter } from './routes/repo-providers.js';
-import { githubMeRouter, githubMeCallbackRouter } from './routes/github-me.js';
+import { githubMeRouter } from './routes/github-me.js';
 import { githubAuthRouter } from './routes/github-auth.js';
 import {
   enqueueWorkflowApprovalNotificationIfMissing,
@@ -140,9 +140,6 @@ app.route('/webhooks', webhooksRouter);
 // Unified GitHub auth router (login + link via GitHub App OAuth)
 // Must be mounted before both the legacy callback router and the generic /auth router
 app.route('/auth/github', githubAuthRouter);
-
-// GitHub identity linking callback (legacy — still handles in-flight link flows)
-app.route('/auth/github', githubMeCallbackRouter);
 
 // OAuth routes (no auth required — handles login flow)
 app.route('/auth', oauthRouter);

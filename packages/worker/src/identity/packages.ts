@@ -2,7 +2,6 @@
 
 import type { IdentityProvider } from '@valet/sdk/identity';
 import { emailIdentityProvider as id0 } from '@valet/plugin-email-auth/identity';
-import { githubIdentityProvider as id1 } from '@valet/plugin-github/identity';
-import { googleIdentityProvider as id2 } from '@valet/plugin-google-auth/identity';
+import { googleIdentityProvider as id1 } from '@valet/plugin-google-auth/identity';
 
-export const installedIdentityProviders: IdentityProvider[] = [id0, id1, id2];
+export const installedIdentityProviders: IdentityProvider[] = [id0, id1];

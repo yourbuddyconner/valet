@@ -7,7 +7,6 @@
   "types": "./dist/index.d.ts",
   "exports": {
     "./actions": "./src/actions/index.ts",
-    "./identity": "./src/identity.ts",
     "./repo": "./src/repo.ts"
   },
   "scripts": {
