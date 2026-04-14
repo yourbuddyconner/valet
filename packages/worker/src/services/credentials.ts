@@ -17,6 +17,8 @@ export interface ResolvedCredential {
   scopes?: string[];
   credentialType: CredentialType;
   refreshed: boolean;
+  /** Present when this credential is a bot token being used on behalf of a user. */
+  attribution?: { name: string; email: string };
 }
 
 export interface CredentialResolutionError {

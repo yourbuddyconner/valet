@@ -13,19 +13,9 @@ import { githubCredentialResolver } from './resolvers/github.js';
 
 // ─── Credential Resolver ────────────────────────────────────────────────────
 
-export interface CredentialSourceInfo {
-  scope: 'user' | 'org';
-  integrationId: string;
-  userId: string;
-}
-
 export interface CredentialResolverContext {
   params?: Record<string, unknown>;
-  credentialSources: CredentialSourceInfo[];
   forceRefresh?: boolean;
-  skipScope?: 'user' | 'org';
-  /** Pre-fetched accessible owners for GitHub App install (avoids D1 lookup in resolver). */
-  accessibleOwners?: string[];
 }
 
 /**
