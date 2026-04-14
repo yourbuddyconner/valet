@@ -6,8 +6,9 @@ export const githubProvider: IntegrationProvider = {
   displayName: 'GitHub',
   authType: 'oauth2',
   supportedEntities: ['repositories', 'issues', 'pull_requests', 'commits'],
-  oauthScopes: ['repo', 'read:user', 'read:org', 'user:email'],
-  oauthEnvKeys: { clientId: 'GITHUB_CLIENT_ID', clientSecret: 'GITHUB_CLIENT_SECRET' },
+  // OAuth is handled by the GitHub App's built-in OAuth client (via github-auth.ts),
+  // not by env-var-based provider OAuth. These fields are empty/unused.
+  oauthScopes: [],
 
   validateCredentials(credentials: IntegrationCredentials): boolean {
     return !!(credentials.access_token || credentials.token);
