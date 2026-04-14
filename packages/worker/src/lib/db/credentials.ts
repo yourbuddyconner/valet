@@ -1,8 +1,6 @@
 import type { AppDb } from '../drizzle.js';
 import { eq, and, sql } from 'drizzle-orm';
 import { credentials } from '../schema/index.js';
-import { getServiceMetadata } from './service-configs.js';
-import type { GitHubServiceMetadata } from '../../services/github-config.js';
 
 export interface CredentialRow {
   id: string;
@@ -174,49 +172,21 @@ export async function hasCredential(
 /**
  * Resolve a repo-level credential.
  *
- * For org-owned repos (repoOwner in accessibleOwners): prefer App install token
- * because orgs often have OAuth App access restrictions that block personal tokens.
+ * Under the unified GitHub App model, user OAuth tokens are always preferred.
+ * Installation (bot) tokens are minted on-demand by the resolver, not stored
+ * in the credentials table. This function only handles stored user tokens.
  *
- * For personal repos or unknown owners: prefer user OAuth (commits as user).
- *
- * Precedence:
- * 1. If repoOwner is covered by the App install → use App install
- * 2. Otherwise → user OAuth
- * 3. Fallback → App install (if available and no repoOwner restriction)
+ * TODO(github-app-unified): This function will be reworked when repo providers
+ * are fully updated (Task 21). For now, return user OAuth if available.
  */
 export async function resolveRepoCredential(
   db: AppDb,
   provider: string,
-  repoOwner: string | undefined,
-  orgId: string | undefined,
+  _repoOwner: string | undefined,
+  _orgId: string | undefined,
   userId: string,
 ): Promise<{ credential: CredentialRow; credentialType: 'oauth2' | 'app_install' } | null> {
   const userOAuth = await getCredentialRow(db, 'user', userId, provider, 'oauth2');
-  const orgInstall = orgId ? await getCredentialRow(db, 'org', orgId, provider, 'app_install') : null;
-
-  // If we have an org install and a repo owner, check if the install covers it
-  if (orgInstall && repoOwner) {
-    const meta = await getServiceMetadata<GitHubServiceMetadata>(db, 'github');
-    const owners = meta?.accessibleOwners;
-
-    if (!owners) {
-      // accessibleOwners not populated — prefer App install as safe fallback
-      return { credential: orgInstall, credentialType: 'app_install' };
-    }
-
-    if (owners.includes(repoOwner)) {
-      // Org App covers this owner — use it (avoids org OAuth restrictions)
-      return { credential: orgInstall, credentialType: 'app_install' };
-    }
-
-    // Owner not covered by App — fall through to user OAuth
-  }
-
-  // User OAuth for personal repos or owners not covered by the App
   if (userOAuth) return { credential: userOAuth, credentialType: 'oauth2' };
-
-  // App install when no repoOwner specified (can't verify coverage)
-  if (orgInstall && !repoOwner) return { credential: orgInstall, credentialType: 'app_install' };
-
   return null;
 }
