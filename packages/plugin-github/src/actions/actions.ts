@@ -1,6 +1,31 @@
 import { z } from 'zod';
 import type { ActionDefinition, ActionSource, ActionContext, ActionResult } from '@valet/sdk';
-import { githubFetch } from './api.js';
+import { Octokit } from 'octokit';
+
+// ─── Octokit + Attribution Helpers ──────────────────────────────────────────
+
+function getOctokit(ctx: ActionContext): Octokit {
+  const token = ctx.credentials.access_token || ctx.credentials.token;
+  if (!token) throw new Error('Missing access token');
+  return new Octokit({ auth: token });
+}
+
+/** Bot-token discriminator: attribution present = bot token. */
+function isBotToken(ctx: ActionContext): boolean {
+  return !!ctx.attribution;
+}
+
+/** Suffix for PR/issue bodies when acting under a bot token. */
+function attributionSuffix(ctx: ActionContext): string {
+  if (!ctx.attribution) return '';
+  return `\n\n---\n> Created on behalf of ${ctx.attribution.name} <${ctx.attribution.email}>`;
+}
+
+/** Trailer for commit messages when acting under a bot token. */
+function attributionCommitTrailer(ctx: ActionContext): string {
+  if (!ctx.attribution) return '';
+  return `\n\nCo-Authored-By: ${ctx.attribution.name} <${ctx.attribution.email}>`;
+}
 
 // ─── Action Definitions ──────────────────────────────────────────────────────
 
@@ -12,20 +37,18 @@ const getRepository: ActionDefinition = {
   params: z.object({
     owner: z.string().describe('Repository owner'),
     repo: z.string().describe('Repository name'),
-    source: z.enum(['personal', 'org']).optional().describe('Credential source: personal OAuth or org GitHub App. Auto-resolved if omitted.'),
   }),
 };
 
 const listRepos: ActionDefinition = {
   id: 'github.list_repos',
   name: 'List Repositories',
-  description: 'List repositories. Use source=personal for your repos, source=org for org-accessible repos. Defaults to org if available.',
+  description: 'List repositories accessible to the authenticated credential.',
   riskLevel: 'low',
   params: z.object({
     sort: z.enum(['created', 'updated', 'pushed', 'full_name']).optional().describe('Sort field'),
     perPage: z.number().int().min(1).max(100).optional().describe('Results per page'),
     page: z.number().int().min(1).optional().describe('Page number'),
-    source: z.enum(['personal', 'org']).optional().describe('Credential source: personal OAuth or org GitHub App. Auto-resolved if omitted.'),
   }),
 };
 
@@ -38,7 +61,6 @@ const getIssue: ActionDefinition = {
     owner: z.string(),
     repo: z.string(),
     issueNumber: z.number().int(),
-    source: z.enum(['personal', 'org']).optional().describe('Credential source: personal OAuth or org GitHub App. Auto-resolved if omitted.'),
   }),
 };
 
@@ -52,7 +74,6 @@ const createIssue: ActionDefinition = {
     repo: z.string(),
     title: z.string(),
     body: z.string().optional(),
-    source: z.enum(['personal', 'org']).optional().describe('Credential source: personal OAuth or org GitHub App. Auto-resolved if omitted.'),
   }),
 };
 
@@ -65,7 +86,6 @@ const getPullRequest: ActionDefinition = {
     owner: z.string(),
     repo: z.string(),
     pullNumber: z.number().int(),
-    source: z.enum(['personal', 'org']).optional().describe('Credential source: personal OAuth or org GitHub App. Auto-resolved if omitted.'),
   }),
 };
 
@@ -79,7 +99,6 @@ const createComment: ActionDefinition = {
     repo: z.string(),
     issueNumber: z.number().int(),
     body: z.string(),
-    source: z.enum(['personal', 'org']).optional().describe('Credential source: personal OAuth or org GitHub App. Auto-resolved if omitted.'),
   }),
 };
 
@@ -93,7 +112,6 @@ const listPullRequests: ActionDefinition = {
     repo: z.string().describe('Repository name'),
     state: z.enum(['open', 'closed', 'all']).optional().describe('PR state filter (default: open)'),
     limit: z.number().int().min(1).max(100).optional().describe('Max results (default: 30, max 100)'),
-    source: z.enum(['personal', 'org']).optional().describe('Credential source: personal OAuth or org GitHub App. Auto-resolved if omitted.'),
   }),
 };
 
@@ -108,7 +126,6 @@ const inspectPullRequest: ActionDefinition = {
     pullNumber: z.number().int().describe('Pull request number'),
     filesLimit: z.number().int().min(1).max(300).optional().describe('Max files to return (default: 100)'),
     commentsLimit: z.number().int().min(1).max(300).optional().describe('Max review comments (default: 100)'),
-    source: z.enum(['personal', 'org']).optional().describe('Credential source: personal OAuth or org GitHub App. Auto-resolved if omitted.'),
   }),
 };
 
@@ -125,7 +142,6 @@ const updatePullRequest: ActionDefinition = {
     body: z.string().optional().describe('New body (markdown)'),
     state: z.enum(['open', 'closed']).optional().describe('Set PR state'),
     labels: z.array(z.string()).optional().describe('Labels to set (replaces existing)'),
-    source: z.enum(['personal', 'org']).optional().describe('Credential source: personal OAuth or org GitHub App. Auto-resolved if omitted.'),
   }),
 };
 
@@ -141,7 +157,6 @@ const createRepository: ActionDefinition = {
     autoInit: z.boolean().optional().describe('Initialize with a README (default: false)'),
     gitignoreTemplate: z.string().optional().describe('Gitignore template (e.g. "Node", "Python")'),
     licenseTemplate: z.string().optional().describe('License keyword (e.g. "mit", "apache-2.0")'),
-    source: z.enum(['personal', 'org']).optional().describe('Credential source: personal OAuth or org GitHub App. Auto-resolved if omitted.'),
   }),
 };
 
@@ -159,7 +174,6 @@ const listIssues: ActionDefinition = {
     sort: z.enum(['created', 'updated', 'comments']).optional().describe('Sort field'),
     direction: z.enum(['asc', 'desc']).optional().describe('Sort direction'),
     limit: z.number().int().min(1).max(100).optional().describe('Max results (default: 30)'),
-    source: z.enum(['personal', 'org']).optional().describe('Credential source: personal OAuth or org GitHub App. Auto-resolved if omitted.'),
   }),
 };
 
@@ -177,7 +191,6 @@ const updateIssue: ActionDefinition = {
     state: z.enum(['open', 'closed']).optional().describe('Set issue state'),
     labels: z.array(z.string()).optional().describe('Labels to set (replaces existing)'),
     assignees: z.array(z.string()).optional().describe('Assignee usernames (replaces existing)'),
-    source: z.enum(['personal', 'org']).optional().describe('Credential source: personal OAuth or org GitHub App. Auto-resolved if omitted.'),
   }),
 };
 
@@ -194,7 +207,6 @@ const createPullRequest: ActionDefinition = {
     base: z.string().describe('Branch to merge into'),
     body: z.string().optional().describe('PR description (markdown)'),
     draft: z.boolean().optional().describe('Create as draft PR'),
-    source: z.enum(['personal', 'org']).optional().describe('Credential source: personal OAuth or org GitHub App. Auto-resolved if omitted.'),
   }),
 };
 
@@ -210,7 +222,6 @@ const mergePullRequest: ActionDefinition = {
     mergeMethod: z.enum(['merge', 'squash', 'rebase']).optional().describe('Merge method (default: merge)'),
     commitTitle: z.string().optional().describe('Custom merge commit title'),
     commitMessage: z.string().optional().describe('Custom merge commit message'),
-    source: z.enum(['personal', 'org']).optional().describe('Credential source: personal OAuth or org GitHub App. Auto-resolved if omitted.'),
   }),
 };
 
@@ -224,7 +235,6 @@ const createBranch: ActionDefinition = {
     repo: z.string().describe('Repository name'),
     branch: z.string().describe('New branch name'),
     fromRef: z.string().optional().describe('Source ref — branch, tag, or SHA (default: repo default branch)'),
-    source: z.enum(['personal', 'org']).optional().describe('Credential source: personal OAuth or org GitHub App. Auto-resolved if omitted.'),
   }),
 };
 
@@ -237,7 +247,6 @@ const deleteBranch: ActionDefinition = {
     owner: z.string().describe('Repository owner'),
     repo: z.string().describe('Repository name'),
     branch: z.string().describe('Branch name to delete'),
-    source: z.enum(['personal', 'org']).optional().describe('Credential source: personal OAuth or org GitHub App. Auto-resolved if omitted.'),
   }),
 };
 
@@ -253,7 +262,6 @@ const listCommits: ActionDefinition = {
     path: z.string().optional().describe('Only commits containing this file path'),
     author: z.string().optional().describe('GitHub username or email to filter by'),
     limit: z.number().int().min(1).max(100).optional().describe('Max results (default: 30)'),
-    source: z.enum(['personal', 'org']).optional().describe('Credential source: personal OAuth or org GitHub App. Auto-resolved if omitted.'),
   }),
 };
 
@@ -265,7 +273,6 @@ const searchCode: ActionDefinition = {
   params: z.object({
     q: z.string().describe('Search query (supports GitHub code search qualifiers like "repo:", "language:", "path:")'),
     limit: z.number().int().min(1).max(100).optional().describe('Max results (default: 30)'),
-    source: z.enum(['personal', 'org']).optional().describe('Credential source: personal OAuth or org GitHub App. Auto-resolved if omitted.'),
   }),
 };
 
@@ -279,7 +286,6 @@ const searchIssues: ActionDefinition = {
     sort: z.enum(['created', 'updated', 'comments']).optional().describe('Sort field'),
     order: z.enum(['asc', 'desc']).optional().describe('Sort order'),
     limit: z.number().int().min(1).max(100).optional().describe('Max results (default: 30)'),
-    source: z.enum(['personal', 'org']).optional().describe('Credential source: personal OAuth or org GitHub App. Auto-resolved if omitted.'),
   }),
 };
 
@@ -298,7 +304,6 @@ const createRelease: ActionDefinition = {
     draft: z.boolean().optional().describe('Create as draft release'),
     prerelease: z.boolean().optional().describe('Mark as pre-release'),
     generateReleaseNotes: z.boolean().optional().describe('Auto-generate release notes'),
-    source: z.enum(['personal', 'org']).optional().describe('Credential source: personal OAuth or org GitHub App. Auto-resolved if omitted.'),
   }),
 };
 
@@ -312,7 +317,6 @@ const forkRepository: ActionDefinition = {
     repo: z.string().describe('Repository name'),
     organization: z.string().optional().describe('Organization to fork to (default: authenticated user)'),
     name: z.string().optional().describe('Custom name for the fork'),
-    source: z.enum(['personal', 'org']).optional().describe('Credential source: personal OAuth or org GitHub App. Auto-resolved if omitted.'),
   }),
 };
 
@@ -328,7 +332,6 @@ const listWorkflowRuns: ActionDefinition = {
     status: z.enum(['completed', 'action_required', 'cancelled', 'failure', 'neutral', 'skipped', 'stale', 'success', 'timed_out', 'in_progress', 'queued', 'requested', 'waiting', 'pending']).optional().describe('Filter by status'),
     event: z.string().optional().describe('Filter by event type (e.g. "push", "pull_request")'),
     limit: z.number().int().min(1).max(100).optional().describe('Max results (default: 30)'),
-    source: z.enum(['personal', 'org']).optional().describe('Credential source: personal OAuth or org GitHub App. Auto-resolved if omitted.'),
   }),
 };
 
@@ -342,7 +345,6 @@ const readRepoFile: ActionDefinition = {
     repo: z.string().describe('Repository name'),
     path: z.string().describe('File path in the repository'),
     ref: z.string().optional().describe('Git ref (branch, tag, or commit SHA)'),
-    source: z.enum(['personal', 'org']).optional().describe('Credential source: personal OAuth or org GitHub App. Auto-resolved if omitted.'),
   }),
 };
 
@@ -389,121 +391,134 @@ const PERMISSION_HINTS: Record<string, string> = {
   'github.fork_repository': 'contents:write',
 };
 
-function handleGitHubError(res: Response, actionId: string, operation: string): ActionResult | null {
-  if (res.ok) return null;
-  if (res.status === 403) {
+function handleOctokitError(err: any, actionId: string, operation: string): ActionResult {
+  const status = err.status ?? 'unknown';
+  if (status === 403) {
     const hint = PERMISSION_HINTS[actionId];
     const permMsg = hint
       ? ` This action requires the "${hint}" permission on the GitHub App. Ask an admin to update the App's permissions in Settings > GitHub.`
       : '';
     return { success: false, error: `${operation}: GitHub returned 403 Forbidden.${permMsg}` };
   }
-  return { success: false, error: `${operation}: GitHub returned ${res.status} ${res.statusText}` };
+  return { success: false, error: `${operation}: ${status} ${err.message}` };
 }
 
 // ─── Action Execution ────────────────────────────────────────────────────────
-
-function getToken(ctx: ActionContext): string {
-  return ctx.credentials.access_token || ctx.credentials.token || '';
-}
 
 async function executeAction(
   actionId: string,
   params: unknown,
   ctx: ActionContext,
 ): Promise<ActionResult> {
-  const token = getToken(ctx);
-  if (!token) {
-    return { success: false, error: 'Missing access token' };
-  }
+  const octokit = getOctokit(ctx);
 
   try {
     switch (actionId) {
       case 'github.get_repository': {
         const { owner, repo } = getRepository.params.parse(params);
-        const res = await githubFetch(`/repos/${owner}/${repo}`, token);
-        if (!res.ok) return { success: false, error: `Failed: ${res.status}` };
-        return { success: true, data: await res.json() };
+        try {
+          const { data } = await octokit.request('GET /repos/{owner}/{repo}', { owner, repo });
+          return { success: true, data };
+        } catch (err: any) {
+          return handleOctokitError(err, actionId, 'Get repository');
+        }
       }
 
       case 'github.list_repos': {
         const p = listRepos.params.parse(params);
-        const qs = new URLSearchParams();
-        if (p.sort) qs.set('sort', p.sort);
-        if (p.perPage) qs.set('per_page', String(p.perPage));
-        if (p.page) qs.set('page', String(p.page));
-        // App installation tokens use /installation/repositories, user tokens use /user/repos
-        const isAppToken = ctx.credentials._credential_type === 'app_install';
-        const endpoint = isAppToken ? `/installation/repositories?${qs}` : `/user/repos?${qs}`;
-        const res = await githubFetch(endpoint, token);
-        const err = handleGitHubError(res, actionId, 'List repos');
-        if (err) return err;
-        const data = await res.json() as any;
-        // /installation/repositories wraps repos in { repositories: [...] }
-        return { success: true, data: isAppToken ? data.repositories : data };
+        try {
+          if (isBotToken(ctx)) {
+            const { data } = await octokit.request('GET /installation/repositories', {
+              sort: p.sort, per_page: p.perPage, page: p.page,
+            });
+            return { success: true, data: data.repositories };
+          }
+          const { data } = await octokit.request('GET /user/repos', {
+            sort: p.sort, per_page: p.perPage, page: p.page,
+          });
+          return { success: true, data };
+        } catch (err: any) {
+          return handleOctokitError(err, actionId, 'List repos');
+        }
       }
 
       case 'github.get_issue': {
         const { owner, repo, issueNumber } = getIssue.params.parse(params);
-        const res = await githubFetch(`/repos/${owner}/${repo}/issues/${issueNumber}`, token);
-        if (!res.ok) return { success: false, error: `Failed: ${res.status}` };
-        return { success: true, data: await res.json() };
+        try {
+          const { data } = await octokit.request('GET /repos/{owner}/{repo}/issues/{issue_number}', {
+            owner, repo, issue_number: issueNumber,
+          });
+          return { success: true, data };
+        } catch (err: any) {
+          return handleOctokitError(err, actionId, 'Get issue');
+        }
       }
 
       case 'github.create_issue': {
-        const { owner, repo, title, body } = createIssue.params.parse(params);
-        const res = await githubFetch(`/repos/${owner}/${repo}/issues`, token, {
-          method: 'POST',
-          body: JSON.stringify({ title, body }),
-        });
-        const ciErr = handleGitHubError(res, actionId, 'Create issue');
-        if (ciErr) return ciErr;
-        return { success: true, data: await res.json() };
+        const p = createIssue.params.parse(params);
+        const finalBody = (p.body ?? '') + attributionSuffix(ctx);
+        try {
+          const { data } = await octokit.request('POST /repos/{owner}/{repo}/issues', {
+            owner: p.owner, repo: p.repo, title: p.title,
+            body: finalBody || undefined,
+          });
+          return { success: true, data };
+        } catch (err: any) {
+          return handleOctokitError(err, actionId, 'Create issue');
+        }
       }
 
       case 'github.get_pull_request': {
         const { owner, repo, pullNumber } = getPullRequest.params.parse(params);
-        const res = await githubFetch(`/repos/${owner}/${repo}/pulls/${pullNumber}`, token);
-        if (!res.ok) return { success: false, error: `Failed: ${res.status}` };
-        return { success: true, data: await res.json() };
+        try {
+          const { data } = await octokit.request('GET /repos/{owner}/{repo}/pulls/{pull_number}', {
+            owner, repo, pull_number: pullNumber,
+          });
+          return { success: true, data };
+        } catch (err: any) {
+          return handleOctokitError(err, actionId, 'Get pull request');
+        }
       }
 
       case 'github.create_comment': {
         const { owner, repo, issueNumber, body } = createComment.params.parse(params);
-        const res = await githubFetch(
-          `/repos/${owner}/${repo}/issues/${issueNumber}/comments`,
-          token,
-          { method: 'POST', body: JSON.stringify({ body }) },
-        );
-        if (!res.ok) return { success: false, error: `Failed: ${res.status}` };
-        return { success: true, data: await res.json() };
+        try {
+          const { data } = await octokit.request('POST /repos/{owner}/{repo}/issues/{issue_number}/comments', {
+            owner, repo, issue_number: issueNumber, body,
+          });
+          return { success: true, data };
+        } catch (err: any) {
+          return handleOctokitError(err, actionId, 'Create comment');
+        }
       }
 
       case 'github.list_pull_requests': {
         const p = listPullRequests.params.parse(params);
         const state = p.state || 'open';
         const limit = Math.min(Math.max(p.limit ?? 30, 1), 100);
-        const res = await githubFetch(
-          `/repos/${p.owner}/${p.repo}/pulls?state=${encodeURIComponent(state)}&sort=updated&direction=desc&per_page=${limit}`,
-          token,
-        );
-        if (!res.ok) return { success: false, error: `GitHub API error (${res.status}): ${await res.text()}` };
-        const pulls = (await res.json()) as Array<Record<string, unknown>>;
-        return {
-          success: true,
-          data: pulls.map((pr) => ({
-            number: pr.number,
-            title: pr.title,
-            state: pr.state,
-            user: (pr.user as Record<string, unknown>)?.login,
-            url: pr.html_url,
-            draft: pr.draft,
-            created_at: pr.created_at,
-            updated_at: pr.updated_at,
-            head: (pr.head as Record<string, unknown>)?.ref,
-            base: (pr.base as Record<string, unknown>)?.ref,
-          })),
-        };
+        try {
+          const { data: pulls } = await octokit.request('GET /repos/{owner}/{repo}/pulls', {
+            owner: p.owner, repo: p.repo, state, sort: 'updated',
+            direction: 'desc', per_page: limit,
+          });
+          return {
+            success: true,
+            data: pulls.map((pr) => ({
+              number: pr.number,
+              title: pr.title,
+              state: pr.state,
+              user: pr.user?.login,
+              url: pr.html_url,
+              draft: pr.draft,
+              created_at: pr.created_at,
+              updated_at: pr.updated_at,
+              head: pr.head?.ref,
+              base: pr.base?.ref,
+            })),
+          };
+        } catch (err: any) {
+          return handleOctokitError(err, actionId, 'List pull requests');
+        }
       }
 
       case 'github.inspect_pull_request': {
@@ -511,423 +526,457 @@ async function executeAction(
         const filesLimit = Math.min(Math.max(p.filesLimit ?? 100, 1), 300);
         const commentsLimit = Math.min(Math.max(p.commentsLimit ?? 100, 1), 300);
 
-        // Fetch PR, files, reviews, comments, and checks in parallel
-        const [prRes, filesRes, reviewsRes, commentsRes] = await Promise.all([
-          githubFetch(`/repos/${p.owner}/${p.repo}/pulls/${p.pullNumber}`, token),
-          githubFetch(`/repos/${p.owner}/${p.repo}/pulls/${p.pullNumber}/files?per_page=${filesLimit}`, token),
-          githubFetch(`/repos/${p.owner}/${p.repo}/pulls/${p.pullNumber}/reviews`, token),
-          githubFetch(`/repos/${p.owner}/${p.repo}/pulls/${p.pullNumber}/comments?per_page=${commentsLimit}`, token),
-        ]);
+        try {
+          // Fetch PR, files, reviews, comments in parallel
+          const [prResp, filesResp, reviewsResp, commentsResp] = await Promise.all([
+            octokit.request('GET /repos/{owner}/{repo}/pulls/{pull_number}', {
+              owner: p.owner, repo: p.repo, pull_number: p.pullNumber,
+            }),
+            octokit.request('GET /repos/{owner}/{repo}/pulls/{pull_number}/files', {
+              owner: p.owner, repo: p.repo, pull_number: p.pullNumber, per_page: filesLimit,
+            }).catch(() => ({ data: [] as any[] })),
+            octokit.request('GET /repos/{owner}/{repo}/pulls/{pull_number}/reviews', {
+              owner: p.owner, repo: p.repo, pull_number: p.pullNumber,
+            }).catch(() => ({ data: [] as any[] })),
+            octokit.request('GET /repos/{owner}/{repo}/pulls/{pull_number}/comments', {
+              owner: p.owner, repo: p.repo, pull_number: p.pullNumber, per_page: commentsLimit,
+            }).catch(() => ({ data: [] as any[] })),
+          ]);
 
-        if (!prRes.ok) return { success: false, error: `GitHub API error (${prRes.status}): ${await prRes.text()}` };
+          const pr = prResp.data;
+          const files = filesResp.data;
+          const reviews = reviewsResp.data;
+          const comments = commentsResp.data;
 
-        const pr = await prRes.json() as Record<string, unknown>;
-        const files = filesRes.ok ? (await filesRes.json() as Array<Record<string, unknown>>) : [];
-        const reviews = reviewsRes.ok ? (await reviewsRes.json() as Array<Record<string, unknown>>) : [];
-        const comments = commentsRes.ok ? (await commentsRes.json() as Array<Record<string, unknown>>) : [];
-
-        // Get check runs for the head SHA
-        const headSha = ((pr.head as Record<string, unknown>)?.sha as string) || '';
-        let checks: Array<Record<string, unknown>> = [];
-        if (headSha) {
-          const checksRes = await githubFetch(`/repos/${p.owner}/${p.repo}/commits/${headSha}/check-runs`, token);
-          if (checksRes.ok) {
-            const checksData = await checksRes.json() as { check_runs?: Array<Record<string, unknown>> };
-            checks = checksData.check_runs ?? [];
+          // Get check runs for the head SHA
+          const headSha = pr.head?.sha || '';
+          let checks: any[] = [];
+          if (headSha) {
+            try {
+              const checksResp = await octokit.request('GET /repos/{owner}/{repo}/commits/{ref}/check-runs', {
+                owner: p.owner, repo: p.repo, ref: headSha,
+              });
+              checks = checksResp.data.check_runs ?? [];
+            } catch {
+              // silently skip if check runs fail
+            }
           }
-        }
 
-        return {
-          success: true,
-          data: {
-            number: pr.number,
-            title: pr.title,
-            state: pr.state,
-            merged: pr.merged,
-            draft: pr.draft,
-            user: (pr.user as Record<string, unknown>)?.login,
-            url: pr.html_url,
-            head: { ref: (pr.head as Record<string, unknown>)?.ref, sha: headSha },
-            base: { ref: (pr.base as Record<string, unknown>)?.ref },
-            body: pr.body,
-            additions: pr.additions,
-            deletions: pr.deletions,
-            changed_files: pr.changed_files,
-            files: files.map((f) => ({
-              filename: f.filename,
-              status: f.status,
-              additions: f.additions,
-              deletions: f.deletions,
-            })),
-            reviews: reviews.filter((r) => r.state !== 'DISMISSED').map((r) => ({
-              user: (r.user as Record<string, unknown>)?.login,
-              state: r.state,
-              body: r.body,
-            })),
-            comments: comments.map((c) => ({
-              user: (c.user as Record<string, unknown>)?.login,
-              path: c.path,
-              line: c.line ?? c.original_line,
-              body: c.body,
-            })),
-            checks: checks.map((c) => ({
-              name: c.name,
-              status: c.status,
-              conclusion: c.conclusion,
-            })),
-          },
-        };
+          return {
+            success: true,
+            data: {
+              number: pr.number,
+              title: pr.title,
+              state: pr.state,
+              merged: pr.merged,
+              draft: pr.draft,
+              user: pr.user?.login,
+              url: pr.html_url,
+              head: { ref: pr.head?.ref, sha: headSha },
+              base: { ref: pr.base?.ref },
+              body: pr.body,
+              additions: pr.additions,
+              deletions: pr.deletions,
+              changed_files: pr.changed_files,
+              files: files.map((f: any) => ({
+                filename: f.filename,
+                status: f.status,
+                additions: f.additions,
+                deletions: f.deletions,
+              })),
+              reviews: reviews.filter((r: any) => r.state !== 'DISMISSED').map((r: any) => ({
+                user: r.user?.login,
+                state: r.state,
+                body: r.body,
+              })),
+              comments: comments.map((c: any) => ({
+                user: c.user?.login,
+                path: c.path,
+                line: c.line ?? c.original_line,
+                body: c.body,
+              })),
+              checks: checks.map((c: any) => ({
+                name: c.name,
+                status: c.status,
+                conclusion: c.conclusion,
+              })),
+            },
+          };
+        } catch (err: any) {
+          return handleOctokitError(err, actionId, 'Inspect pull request');
+        }
       }
 
       case 'github.update_pull_request': {
         const p = updatePullRequest.params.parse(params);
-        const body: Record<string, unknown> = {};
-        if (p.title !== undefined) body.title = p.title;
-        if (p.body !== undefined) body.body = p.body;
-        if (p.state !== undefined) body.state = p.state;
-        const res = await githubFetch(
-          `/repos/${p.owner}/${p.repo}/pulls/${p.pullNumber}`,
-          token,
-          { method: 'PATCH', body: JSON.stringify(body) },
-        );
-        if (!res.ok) return { success: false, error: `GitHub API error (${res.status}): ${await res.text()}` };
-        const prData = await res.json() as Record<string, unknown>;
+        const updateBody: Record<string, unknown> = {};
+        if (p.title !== undefined) updateBody.title = p.title;
+        if (p.body !== undefined) updateBody.body = p.body + attributionSuffix(ctx);
+        if (p.state !== undefined) updateBody.state = p.state;
 
-        // Set labels separately if provided
-        if (p.labels) {
-          await githubFetch(
-            `/repos/${p.owner}/${p.repo}/issues/${p.pullNumber}/labels`,
-            token,
-            { method: 'PUT', body: JSON.stringify({ labels: p.labels }) },
-          );
+        try {
+          const { data: prData } = await octokit.request('PATCH /repos/{owner}/{repo}/pulls/{pull_number}', {
+            owner: p.owner, repo: p.repo, pull_number: p.pullNumber,
+            ...updateBody,
+          });
+
+          // Set labels separately if provided
+          if (p.labels) {
+            await octokit.request('PUT /repos/{owner}/{repo}/issues/{issue_number}/labels', {
+              owner: p.owner, repo: p.repo, issue_number: p.pullNumber,
+              labels: p.labels,
+            });
+          }
+
+          return { success: true, data: { number: prData.number, url: prData.html_url, title: prData.title, state: prData.state } };
+        } catch (err: any) {
+          return handleOctokitError(err, actionId, 'Update pull request');
         }
-
-        return { success: true, data: { number: prData.number, url: prData.html_url, title: prData.title, state: prData.state } };
       }
 
       case 'github.list_issues': {
         const p = listIssues.params.parse(params);
         const limit = Math.min(Math.max(p.limit ?? 30, 1), 100);
-        const qs = new URLSearchParams();
-        if (p.state) qs.set('state', p.state);
-        if (p.labels) qs.set('labels', p.labels);
-        if (p.assignee) qs.set('assignee', p.assignee);
-        if (p.sort) qs.set('sort', p.sort);
-        if (p.direction) qs.set('direction', p.direction);
-        // Fetch max page size since GitHub's issues endpoint includes PRs which we filter out
-        qs.set('per_page', '100');
-        const res = await githubFetch(`/repos/${p.owner}/${p.repo}/issues?${qs}`, token);
-        if (!res.ok) return { success: false, error: `GitHub API error (${res.status}): ${await res.text()}` };
-        const issues = (await res.json()) as Array<Record<string, unknown>>;
-        return {
-          success: true,
-          data: issues
-            .filter((i) => !i.pull_request) // exclude PRs from issue list
-            .slice(0, limit)
-            .map((i) => ({
-              number: i.number,
-              title: i.title,
-              state: i.state,
-              user: (i.user as Record<string, unknown>)?.login,
-              url: i.html_url,
-              labels: (i.labels as Array<Record<string, unknown>>)?.map((l) => l.name),
-              assignees: (i.assignees as Array<Record<string, unknown>>)?.map((a) => a.login),
-              created_at: i.created_at,
-              updated_at: i.updated_at,
-            })),
-        };
+
+        try {
+          const { data: issues } = await octokit.request('GET /repos/{owner}/{repo}/issues', {
+            owner: p.owner, repo: p.repo,
+            state: p.state as 'open' | 'closed' | 'all' | undefined,
+            labels: p.labels, assignee: p.assignee,
+            sort: p.sort, direction: p.direction,
+            // Fetch max page size since GitHub's issues endpoint includes PRs which we filter out
+            per_page: 100,
+          });
+          return {
+            success: true,
+            data: issues
+              .filter((i) => !i.pull_request) // exclude PRs from issue list
+              .slice(0, limit)
+              .map((i) => ({
+                number: i.number,
+                title: i.title,
+                state: i.state,
+                user: i.user?.login,
+                url: i.html_url,
+                labels: (i.labels as Array<any>)?.map((l: any) => typeof l === 'string' ? l : l.name),
+                assignees: i.assignees?.map((a) => a.login),
+                created_at: i.created_at,
+                updated_at: i.updated_at,
+              })),
+          };
+        } catch (err: any) {
+          return handleOctokitError(err, actionId, 'List issues');
+        }
       }
 
       case 'github.update_issue': {
         const p = updateIssue.params.parse(params);
-        const body: Record<string, unknown> = {};
-        if (p.title !== undefined) body.title = p.title;
-        if (p.body !== undefined) body.body = p.body;
-        if (p.state !== undefined) body.state = p.state;
-        if (p.labels !== undefined) body.labels = p.labels;
-        if (p.assignees !== undefined) body.assignees = p.assignees;
-        const res = await githubFetch(
-          `/repos/${p.owner}/${p.repo}/issues/${p.issueNumber}`,
-          token,
-          { method: 'PATCH', body: JSON.stringify(body) },
-        );
-        if (!res.ok) return { success: false, error: `GitHub API error (${res.status}): ${await res.text()}` };
-        const issue = await res.json() as Record<string, unknown>;
-        return { success: true, data: { number: issue.number, url: issue.html_url, title: issue.title, state: issue.state } };
+        const updateBody: Record<string, unknown> = {};
+        if (p.title !== undefined) updateBody.title = p.title;
+        if (p.body !== undefined) updateBody.body = p.body + attributionSuffix(ctx);
+        if (p.state !== undefined) updateBody.state = p.state;
+        if (p.labels !== undefined) updateBody.labels = p.labels;
+        if (p.assignees !== undefined) updateBody.assignees = p.assignees;
+
+        try {
+          const { data: issue } = await octokit.request('PATCH /repos/{owner}/{repo}/issues/{issue_number}', {
+            owner: p.owner, repo: p.repo, issue_number: p.issueNumber,
+            ...updateBody,
+          });
+          return { success: true, data: { number: issue.number, url: issue.html_url, title: issue.title, state: issue.state } };
+        } catch (err: any) {
+          return handleOctokitError(err, actionId, 'Update issue');
+        }
       }
 
       case 'github.create_pull_request': {
         const p = createPullRequest.params.parse(params);
-        const body: Record<string, unknown> = { title: p.title, head: p.head, base: p.base };
-        if (p.body !== undefined) body.body = p.body;
-        if (p.draft !== undefined) body.draft = p.draft;
-        const res = await githubFetch(
-          `/repos/${p.owner}/${p.repo}/pulls`,
-          token,
-          { method: 'POST', body: JSON.stringify(body) },
-        );
-        const cprErr = handleGitHubError(res, actionId, 'Create pull request');
-        if (cprErr) return cprErr;
-        const pr = await res.json() as Record<string, unknown>;
-        return { success: true, data: { number: pr.number, url: pr.html_url, title: pr.title, state: pr.state, draft: pr.draft } };
+        const finalBody = (p.body ?? '') + attributionSuffix(ctx);
+        try {
+          const { data: pr } = await octokit.request('POST /repos/{owner}/{repo}/pulls', {
+            owner: p.owner, repo: p.repo,
+            title: p.title, head: p.head, base: p.base,
+            body: finalBody || undefined,
+            draft: p.draft,
+          });
+          return { success: true, data: { number: pr.number, url: pr.html_url, title: pr.title, state: pr.state, draft: pr.draft } };
+        } catch (err: any) {
+          return handleOctokitError(err, actionId, 'Create pull request');
+        }
       }
 
       case 'github.merge_pull_request': {
         const p = mergePullRequest.params.parse(params);
-        const body: Record<string, unknown> = {};
-        if (p.mergeMethod) body.merge_method = p.mergeMethod;
-        if (p.commitTitle) body.commit_title = p.commitTitle;
-        if (p.commitMessage) body.commit_message = p.commitMessage;
-        const res = await githubFetch(
-          `/repos/${p.owner}/${p.repo}/pulls/${p.pullNumber}/merge`,
-          token,
-          { method: 'PUT', body: JSON.stringify(body) },
-        );
-        const mprErr = handleGitHubError(res, actionId, 'Merge pull request');
-        if (mprErr) return mprErr;
-        const data = await res.json() as Record<string, unknown>;
-        return { success: true, data: { merged: data.merged, message: data.message, sha: data.sha } };
+        const commitMessage = p.commitMessage
+          ? p.commitMessage + attributionCommitTrailer(ctx)
+          : undefined;
+        try {
+          const { data } = await octokit.request('PUT /repos/{owner}/{repo}/pulls/{pull_number}/merge', {
+            owner: p.owner, repo: p.repo, pull_number: p.pullNumber,
+            merge_method: p.mergeMethod,
+            commit_title: p.commitTitle,
+            commit_message: commitMessage,
+          });
+          return { success: true, data: { merged: data.merged, message: data.message, sha: data.sha } };
+        } catch (err: any) {
+          return handleOctokitError(err, actionId, 'Merge pull request');
+        }
       }
 
       case 'github.create_branch': {
         const p = createBranch.params.parse(params);
         let sha: string | undefined;
 
-        if (p.fromRef) {
-          // Try as branch name
-          const branchRes = await githubFetch(`/repos/${p.owner}/${p.repo}/git/ref/heads/${p.fromRef}`, token);
-          if (branchRes.ok) {
-            sha = ((await branchRes.json()) as { object?: { sha?: string } }).object?.sha;
-          } else {
-            // Try as tag
-            const tagRes = await githubFetch(`/repos/${p.owner}/${p.repo}/git/ref/tags/${p.fromRef}`, token);
-            if (tagRes.ok) {
-              sha = ((await tagRes.json()) as { object?: { sha?: string } }).object?.sha;
-            } else {
-              // Try as raw commit SHA
-              const commitRes = await githubFetch(`/repos/${p.owner}/${p.repo}/git/commits/${p.fromRef}`, token);
-              if (commitRes.ok) {
-                sha = p.fromRef;
+        try {
+          if (p.fromRef) {
+            // Try as branch name
+            try {
+              const { data } = await octokit.request('GET /repos/{owner}/{repo}/git/ref/{ref}', {
+                owner: p.owner, repo: p.repo, ref: `heads/${p.fromRef}`,
+              });
+              sha = data.object?.sha;
+            } catch {
+              // Try as tag
+              try {
+                const { data } = await octokit.request('GET /repos/{owner}/{repo}/git/ref/{ref}', {
+                  owner: p.owner, repo: p.repo, ref: `tags/${p.fromRef}`,
+                });
+                sha = data.object?.sha;
+              } catch {
+                // Try as raw commit SHA
+                try {
+                  await octokit.request('GET /repos/{owner}/{repo}/git/commits/{commit_sha}', {
+                    owner: p.owner, repo: p.repo, commit_sha: p.fromRef,
+                  });
+                  sha = p.fromRef;
+                } catch {
+                  // none matched
+                }
               }
             }
+            if (!sha) return { success: false, error: `Could not resolve ref "${p.fromRef}"` };
+          } else {
+            // Discover repo default branch
+            const { data: repoData } = await octokit.request('GET /repos/{owner}/{repo}', {
+              owner: p.owner, repo: p.repo,
+            });
+            const defaultBranch = repoData.default_branch || 'main';
+            const { data: refData } = await octokit.request('GET /repos/{owner}/{repo}/git/ref/{ref}', {
+              owner: p.owner, repo: p.repo, ref: `heads/${defaultBranch}`,
+            });
+            sha = refData.object?.sha;
           }
-          if (!sha) return { success: false, error: `Could not resolve ref "${p.fromRef}"` };
-        } else {
-          // Discover repo default branch
-          const repoRes = await githubFetch(`/repos/${p.owner}/${p.repo}`, token);
-          if (!repoRes.ok) return { success: false, error: `Could not fetch repository: ${repoRes.status}` };
-          const repoData = await repoRes.json() as { default_branch?: string };
-          const defaultBranch = repoData.default_branch || 'main';
-          const refRes = await githubFetch(`/repos/${p.owner}/${p.repo}/git/ref/heads/${defaultBranch}`, token);
-          if (!refRes.ok) return { success: false, error: `Could not resolve default branch "${defaultBranch}"` };
-          sha = ((await refRes.json()) as { object?: { sha?: string } }).object?.sha;
+          if (!sha) return { success: false, error: 'Could not resolve source SHA' };
+
+          await octokit.request('POST /repos/{owner}/{repo}/git/refs', {
+            owner: p.owner, repo: p.repo,
+            ref: `refs/heads/${p.branch}`, sha,
+          });
+          return { success: true, data: { branch: p.branch, sha } };
+        } catch (err: any) {
+          return handleOctokitError(err, actionId, 'Create branch');
         }
-        if (!sha) return { success: false, error: 'Could not resolve source SHA' };
-        const res = await githubFetch(
-          `/repos/${p.owner}/${p.repo}/git/refs`,
-          token,
-          { method: 'POST', body: JSON.stringify({ ref: `refs/heads/${p.branch}`, sha }) },
-        );
-        const cbErr = handleGitHubError(res, actionId, 'Create branch');
-        if (cbErr) return cbErr;
-        return { success: true, data: { branch: p.branch, sha } };
       }
 
       case 'github.delete_branch': {
         const p = deleteBranch.params.parse(params);
-        const res = await githubFetch(
-          `/repos/${p.owner}/${p.repo}/git/refs/heads/${p.branch}`,
-          token,
-          { method: 'DELETE' },
-        );
-        const dbErr = handleGitHubError(res, actionId, 'Delete branch');
-        if (dbErr) return dbErr;
-        return { success: true, data: { deleted: p.branch } };
+        try {
+          await octokit.request('DELETE /repos/{owner}/{repo}/git/refs/{ref}', {
+            owner: p.owner, repo: p.repo, ref: `heads/${p.branch}`,
+          });
+          return { success: true, data: { deleted: p.branch } };
+        } catch (err: any) {
+          return handleOctokitError(err, actionId, 'Delete branch');
+        }
       }
 
       case 'github.list_commits': {
         const p = listCommits.params.parse(params);
-        const qs = new URLSearchParams();
-        if (p.sha) qs.set('sha', p.sha);
-        if (p.path) qs.set('path', p.path);
-        if (p.author) qs.set('author', p.author);
-        qs.set('per_page', String(Math.min(Math.max(p.limit ?? 30, 1), 100)));
-        const res = await githubFetch(`/repos/${p.owner}/${p.repo}/commits?${qs}`, token);
-        if (!res.ok) return { success: false, error: `GitHub API error (${res.status}): ${await res.text()}` };
-        const commits = (await res.json()) as Array<Record<string, unknown>>;
-        return {
-          success: true,
-          data: commits.map((c) => ({
-            sha: c.sha,
-            message: ((c.commit as Record<string, unknown>)?.message as string)?.split('\n')[0],
-            author: ((c.commit as Record<string, unknown>)?.author as Record<string, unknown>)?.name,
-            date: ((c.commit as Record<string, unknown>)?.author as Record<string, unknown>)?.date,
-            url: c.html_url,
-          })),
-        };
+        const perPage = Math.min(Math.max(p.limit ?? 30, 1), 100);
+        try {
+          const { data: commits } = await octokit.request('GET /repos/{owner}/{repo}/commits', {
+            owner: p.owner, repo: p.repo,
+            sha: p.sha, path: p.path, author: p.author, per_page: perPage,
+          });
+          return {
+            success: true,
+            data: commits.map((c) => ({
+              sha: c.sha,
+              message: c.commit?.message?.split('\n')[0],
+              author: c.commit?.author?.name,
+              date: c.commit?.author?.date,
+              url: c.html_url,
+            })),
+          };
+        } catch (err: any) {
+          return handleOctokitError(err, actionId, 'List commits');
+        }
       }
 
       case 'github.search_code': {
         const p = searchCode.params.parse(params);
         const limit = Math.min(Math.max(p.limit ?? 30, 1), 100);
-        const res = await githubFetch(
-          `/search/code?q=${encodeURIComponent(p.q)}&per_page=${limit}`,
-          token,
-        );
-        if (!res.ok) return { success: false, error: `GitHub API error (${res.status}): ${await res.text()}` };
-        const data = await res.json() as { total_count?: number; items?: Array<Record<string, unknown>> };
-        return {
-          success: true,
-          data: {
-            total_count: data.total_count,
-            items: (data.items ?? []).map((item) => ({
-              name: item.name,
-              path: item.path,
-              repo: (item.repository as Record<string, unknown>)?.full_name,
-              url: item.html_url,
-            })),
-          },
-        };
+        try {
+          const { data } = await octokit.request('GET /search/code', {
+            q: p.q, per_page: limit,
+          });
+          return {
+            success: true,
+            data: {
+              total_count: data.total_count,
+              items: data.items.map((item) => ({
+                name: item.name,
+                path: item.path,
+                repo: item.repository?.full_name,
+                url: item.html_url,
+              })),
+            },
+          };
+        } catch (err: any) {
+          return handleOctokitError(err, actionId, 'Search code');
+        }
       }
 
       case 'github.search_issues': {
         const p = searchIssues.params.parse(params);
         const limit = Math.min(Math.max(p.limit ?? 30, 1), 100);
-        const qs = new URLSearchParams({ q: p.q, per_page: String(limit) });
-        if (p.sort) qs.set('sort', p.sort);
-        if (p.order) qs.set('order', p.order);
-        const res = await githubFetch(`/search/issues?${qs}`, token);
-        if (!res.ok) return { success: false, error: `GitHub API error (${res.status}): ${await res.text()}` };
-        const data = await res.json() as { total_count?: number; items?: Array<Record<string, unknown>> };
-        return {
-          success: true,
-          data: {
-            total_count: data.total_count,
-            items: (data.items ?? []).map((item) => ({
-              number: item.number,
-              title: item.title,
-              state: item.state,
-              user: (item.user as Record<string, unknown>)?.login,
-              url: item.html_url,
-              is_pr: !!item.pull_request,
-              labels: (item.labels as Array<Record<string, unknown>>)?.map((l) => l.name),
-              created_at: item.created_at,
-              updated_at: item.updated_at,
-            })),
-          },
-        };
+        try {
+          const { data } = await octokit.request('GET /search/issues', {
+            q: p.q, per_page: limit, sort: p.sort, order: p.order,
+          });
+          return {
+            success: true,
+            data: {
+              total_count: data.total_count,
+              items: data.items.map((item) => ({
+                number: item.number,
+                title: item.title,
+                state: item.state,
+                user: item.user?.login,
+                url: item.html_url,
+                is_pr: !!item.pull_request,
+                labels: (item.labels as Array<any>)?.map((l: any) => typeof l === 'string' ? l : l.name),
+                created_at: item.created_at,
+                updated_at: item.updated_at,
+              })),
+            },
+          };
+        } catch (err: any) {
+          return handleOctokitError(err, actionId, 'Search issues');
+        }
       }
 
       case 'github.create_release': {
         const p = createRelease.params.parse(params);
-        const body: Record<string, unknown> = { tag_name: p.tagName };
-        if (p.name !== undefined) body.name = p.name;
-        if (p.body !== undefined) body.body = p.body;
-        if (p.targetCommitish !== undefined) body.target_commitish = p.targetCommitish;
-        if (p.draft !== undefined) body.draft = p.draft;
-        if (p.prerelease !== undefined) body.prerelease = p.prerelease;
-        if (p.generateReleaseNotes !== undefined) body.generate_release_notes = p.generateReleaseNotes;
-        const res = await githubFetch(
-          `/repos/${p.owner}/${p.repo}/releases`,
-          token,
-          { method: 'POST', body: JSON.stringify(body) },
-        );
-        const crErr = handleGitHubError(res, actionId, 'Create release');
-        if (crErr) return crErr;
-        const release = await res.json() as Record<string, unknown>;
-        return { success: true, data: { id: release.id, tag: release.tag_name, url: release.html_url, draft: release.draft, prerelease: release.prerelease } };
+        try {
+          const { data: release } = await octokit.request('POST /repos/{owner}/{repo}/releases', {
+            owner: p.owner, repo: p.repo,
+            tag_name: p.tagName,
+            name: p.name,
+            body: p.body,
+            target_commitish: p.targetCommitish,
+            draft: p.draft,
+            prerelease: p.prerelease,
+            generate_release_notes: p.generateReleaseNotes,
+          });
+          return { success: true, data: { id: release.id, tag: release.tag_name, url: release.html_url, draft: release.draft, prerelease: release.prerelease } };
+        } catch (err: any) {
+          return handleOctokitError(err, actionId, 'Create release');
+        }
       }
 
       case 'github.fork_repository': {
-        if (ctx.credentials._credential_type === 'app_install') {
+        if (isBotToken(ctx)) {
           return { success: false, error: 'Forking repositories requires a personal GitHub OAuth token. GitHub App installation tokens cannot fork repositories. Ask the user to connect their personal GitHub account in Settings > Integrations.' };
         }
         const p = forkRepository.params.parse(params);
-        const body: Record<string, unknown> = {};
-        if (p.organization) body.organization = p.organization;
-        if (p.name) body.name = p.name;
-        const res = await githubFetch(
-          `/repos/${p.owner}/${p.repo}/forks`,
-          token,
-          { method: 'POST', body: JSON.stringify(body) },
-        );
-        const err = handleGitHubError(res, actionId, 'Fork repository');
-        if (err) return err;
-        const fork = await res.json() as Record<string, unknown>;
-        return { success: true, data: { full_name: fork.full_name, url: fork.html_url, clone_url: fork.clone_url } };
+        try {
+          const { data: fork } = await octokit.request('POST /repos/{owner}/{repo}/forks', {
+            owner: p.owner, repo: p.repo,
+            organization: p.organization,
+            name: p.name,
+          });
+          return { success: true, data: { full_name: fork.full_name, url: fork.html_url, clone_url: fork.clone_url } };
+        } catch (err: any) {
+          return handleOctokitError(err, actionId, 'Fork repository');
+        }
       }
 
       case 'github.list_workflow_runs': {
         const p = listWorkflowRuns.params.parse(params);
-        const qs = new URLSearchParams();
-        if (p.branch) qs.set('branch', p.branch);
-        if (p.status) qs.set('status', p.status);
-        if (p.event) qs.set('event', p.event);
-        qs.set('per_page', String(Math.min(Math.max(p.limit ?? 30, 1), 100)));
-        const res = await githubFetch(`/repos/${p.owner}/${p.repo}/actions/runs?${qs}`, token);
-        const runErr = handleGitHubError(res, actionId, 'List workflow runs');
-        if (runErr) return runErr;
-        const data = await res.json() as { total_count?: number; workflow_runs?: Array<Record<string, unknown>> };
-        return {
-          success: true,
-          data: {
-            total_count: data.total_count,
-            runs: (data.workflow_runs ?? []).map((r) => ({
-              id: r.id,
-              name: r.name,
-              status: r.status,
-              conclusion: r.conclusion,
-              branch: (r.head_branch as string),
-              event: r.event,
-              url: r.html_url,
-              created_at: r.created_at,
-            })),
-          },
-        };
+        const perPage = Math.min(Math.max(p.limit ?? 30, 1), 100);
+        try {
+          const { data } = await octokit.request('GET /repos/{owner}/{repo}/actions/runs', {
+            owner: p.owner, repo: p.repo,
+            branch: p.branch, status: p.status, event: p.event, per_page: perPage,
+          });
+          return {
+            success: true,
+            data: {
+              total_count: data.total_count,
+              runs: data.workflow_runs.map((r) => ({
+                id: r.id,
+                name: r.name,
+                status: r.status,
+                conclusion: r.conclusion,
+                branch: r.head_branch,
+                event: r.event,
+                url: r.html_url,
+                created_at: r.created_at,
+              })),
+            },
+          };
+        } catch (err: any) {
+          return handleOctokitError(err, actionId, 'List workflow runs');
+        }
       }
 
       case 'github.create_repository': {
         const p = createRepository.params.parse(params);
-        const body: Record<string, unknown> = { name: p.name };
-        if (p.description !== undefined) body.description = p.description;
-        if (p.private !== undefined) body.private = p.private;
-        if (p.autoInit !== undefined) body.auto_init = p.autoInit;
-        if (p.gitignoreTemplate !== undefined) body.gitignore_template = p.gitignoreTemplate;
-        if (p.licenseTemplate !== undefined) body.license_template = p.licenseTemplate;
-        const res = await githubFetch('/user/repos', token, {
-          method: 'POST',
-          body: JSON.stringify(body),
-        });
-        if (!res.ok) return { success: false, error: `GitHub API error (${res.status}): ${await res.text()}` };
-        const repo = await res.json() as Record<string, unknown>;
-        return { success: true, data: { full_name: repo.full_name, url: repo.html_url, clone_url: repo.clone_url, private: repo.private } };
+        try {
+          const { data: repo } = await octokit.request('POST /user/repos', {
+            name: p.name,
+            description: p.description,
+            private: p.private,
+            auto_init: p.autoInit,
+            gitignore_template: p.gitignoreTemplate,
+            license_template: p.licenseTemplate,
+          });
+          return { success: true, data: { full_name: repo.full_name, url: repo.html_url, clone_url: repo.clone_url, private: repo.private } };
+        } catch (err: any) {
+          return handleOctokitError(err, actionId, 'Create repository');
+        }
       }
 
       case 'github.read_repo_file': {
         const p = readRepoFile.params.parse(params);
-        const qs = p.ref ? `?ref=${encodeURIComponent(p.ref)}` : '';
-        const res = await githubFetch(`/repos/${p.owner}/${p.repo}/contents/${p.path}${qs}`, token);
-        if (!res.ok) return { success: false, error: `GitHub API error (${res.status}): ${await res.text()}` };
-        const data = await res.json() as Record<string, unknown>;
-
-        if (data.type !== 'file') {
-          return { success: false, error: `Path is a ${data.type}, not a file` };
-        }
-
-        const content = data.encoding === 'base64'
-          ? atob(data.content as string)
-          : (data.content as string);
-
-        return {
-          success: true,
-          data: {
-            path: data.path,
-            repo: `${p.owner}/${p.repo}`,
+        try {
+          const { data } = await octokit.request('GET /repos/{owner}/{repo}/contents/{path}', {
+            owner: p.owner, repo: p.repo, path: p.path,
             ref: p.ref,
-            size: data.size,
-            content,
-          },
-        };
+          });
+
+          if (Array.isArray(data) || data.type !== 'file') {
+            return { success: false, error: `Path is a ${Array.isArray(data) ? 'directory' : (data as any).type}, not a file` };
+          }
+
+          const content = data.encoding === 'base64'
+            ? atob(data.content as string)
+            : (data.content as string);
+
+          return {
+            success: true,
+            data: {
+              path: data.path,
+              repo: `${p.owner}/${p.repo}`,
+              ref: p.ref,
+              size: data.size,
+              content,
+            },
+          };
+        } catch (err: any) {
+          return handleOctokitError(err, actionId, 'Read repo file');
+        }
       }
 
       default:

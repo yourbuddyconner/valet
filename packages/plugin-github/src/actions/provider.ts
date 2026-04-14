@@ -1,5 +1,5 @@
 import type { IntegrationProvider, IntegrationCredentials, OAuthConfig } from '@valet/sdk';
-import { githubFetch } from './api.js';
+import { Octokit } from 'octokit';
 
 export const githubProvider: IntegrationProvider = {
   service: 'github',
@@ -16,8 +16,9 @@ export const githubProvider: IntegrationProvider = {
   async testConnection(credentials: IntegrationCredentials): Promise<boolean> {
     try {
       const token = credentials.access_token || credentials.token || '';
-      const res = await githubFetch('/user', token);
-      return res.ok;
+      const octokit = new Octokit({ auth: token });
+      await octokit.request('GET /user');
+      return true;
     } catch {
       return false;
     }

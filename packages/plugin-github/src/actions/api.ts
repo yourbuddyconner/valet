@@ -1,6 +1,9 @@
 const GITHUB_API = 'https://api.github.com';
 
-/** Stateless authenticated fetch against the GitHub API. */
+/**
+ * Stateless authenticated fetch against the GitHub API.
+ * @deprecated Use Octokit instead. Kept temporarily for repo provider files until Task 21.
+ */
 export async function githubFetch(
   path: string,
   token: string,
