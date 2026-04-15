@@ -3882,7 +3882,10 @@ export class SessionAgentDO {
       });
     }
 
-    await this.notifyParentEvent(`Child session event: ${sessionId} completed (reason: ${reason}).`, { wake: true, childStatus: reason === 'error' ? 'error' : 'terminated' });
+    // Parent-initiated stops (cascade or explicit terminate_session tool) don't need to wake
+    // the parent — it already knows. Only wake for autonomous completions, errors, etc.
+    const parentInitiated = reason === 'parent_stopped' || reason === 'terminated_by_parent';
+    await this.notifyParentEvent(`Child session event: ${sessionId} completed (reason: ${reason}).`, { wake: !parentInitiated, childStatus: reason === 'error' ? 'error' : 'terminated' });
 
     return Response.json({
       success: true,

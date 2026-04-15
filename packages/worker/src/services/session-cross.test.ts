@@ -23,7 +23,7 @@ vi.mock('./credentials.js', () => ({
   getCredential: getCredentialMock,
 }));
 
-import { forwardMessages, getSessionMessages } from './session-cross.js';
+import { forwardMessages, getSessionMessages, terminateChild } from './session-cross.js';
 
 describe('session-cross message access', () => {
   beforeEach(() => {
@@ -132,5 +132,32 @@ describe('session-cross message access', () => {
       sessionTitle: 'Child Session',
       sourceSessionId: 'child-1',
     });
+  });
+});
+
+describe('terminateChild', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    getSessionMock.mockResolvedValue({
+      id: 'child-1',
+      userId: 'user-1',
+      parentSessionId: 'orch-1',
+    });
+  });
+
+  it('sends reason terminated_by_parent to the child DO', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ success: true })));
+    const env = {
+      SESSIONS: {
+        idFromName: vi.fn(() => 'do-id'),
+        get: vi.fn(() => ({ fetch: fetchMock })),
+      },
+    } as any;
+
+    await terminateChild({} as any, env, 'orch-1', 'user-1', 'child-1');
+
+    const call = fetchMock.mock.calls[0][0] as Request;
+    const body = await call.json() as { reason: string };
+    expect(body.reason).toBe('terminated_by_parent');
   });
 });
