@@ -242,7 +242,7 @@ export class AgentClient {
     });
   }
 
-  sendQuestion(messageId: string, questionId: string, text: string, options?: string[]): void {
+  sendQuestion(messageId: string | undefined, questionId: string, text: string, options?: string[]): void {
     this.send({ type: "question", messageId, questionId, text, options });
   }
 

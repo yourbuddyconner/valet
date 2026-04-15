@@ -326,7 +326,7 @@ export type RunnerToDOMessage =
       channelId?: string;
       opencodeSessionId?: string;
     }
-  | { type: 'question'; messageId: string; questionId: string; text: string; options?: string[] }
+  | { type: 'question'; messageId?: string; questionId: string; text: string; options?: string[] }
   | { type: 'screenshot'; messageId?: string; data: string; description: string }
   | { type: 'error'; messageId: string; error: string }
   | { type: 'complete'; messageId?: string }

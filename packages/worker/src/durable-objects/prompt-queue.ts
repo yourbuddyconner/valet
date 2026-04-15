@@ -358,8 +358,10 @@ export class PromptQueue {
    *  case 'web'/'thread' — those are valid emit targets under the explicit-routing
    *  contract. */
   getProcessingChannelTarget(): { channelType: string | null; channelId: string | null } | null {
+    // ORDER BY created_at DESC guarantees deterministic selection when hibernation
+    // recovery or failover leaves multiple 'processing' rows transiently co-existing.
     const rows = this.sql
-      .exec("SELECT channel_type, channel_id, reply_channel_type, reply_channel_id FROM prompt_queue WHERE status = 'processing' LIMIT 1")
+      .exec("SELECT channel_type, channel_id, reply_channel_type, reply_channel_id FROM prompt_queue WHERE status = 'processing' ORDER BY created_at DESC LIMIT 1")
       .toArray();
     if (rows.length === 0) return null;
     const channelType = (rows[0].reply_channel_type as string) || (rows[0].channel_type as string) || null;
