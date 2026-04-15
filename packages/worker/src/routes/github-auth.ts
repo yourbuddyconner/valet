@@ -111,7 +111,6 @@ githubAuthRouter.get('/callback', async (c) => {
 
   if ((payload as any).purpose === 'github-link') {
     const userId = payload.sub as string;
-    const requestedScopes = (payload as any).sid as string;
 
     // Upsert identity link — remove any existing link for this GitHub account
     await db.deleteIdentityLinkByExternalId(appDb, 'github', githubId);
@@ -138,7 +137,6 @@ githubAuthRouter.get('/callback', async (c) => {
     }
     await storeCredential(c.env, 'user', userId, 'github', credentialData, {
       credentialType: 'oauth2',
-      scopes: requestedScopes,
       expiresAt: authentication.expiresAt,
     });
 
@@ -204,8 +202,9 @@ githubAuthRouter.get('/callback', async (c) => {
   // Look up user by email to get the userId
   const user = await db.findUserByEmail(appDb, email);
   if (user) {
-    // Store credential (finalizeIdentityLogin already stores one, but we ensure
-    // the refresh token is captured from the GitHub App OAuth response)
+    // finalizeIdentityLogin stores a basic credential from the identity result,
+    // but may not include the refresh token. We overwrite with the full token pair
+    // (including refreshToken and expiresAt) to ensure token refresh works.
     const credentialData: Record<string, string> = { access_token: authentication.token };
     if (authentication.refreshToken) {
       credentialData.refresh_token = authentication.refreshToken;

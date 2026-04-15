@@ -106,7 +106,10 @@ export async function listGithubInstallationsByAccountType(
   accountType: 'Organization' | 'User',
   opts?: ListInstallationsOpts,
 ): Promise<GithubInstallation[]> {
-  const conditions = [eq(githubInstallations.accountType, accountType)];
+  const conditions = [
+    eq(githubInstallations.accountType, accountType),
+    eq(githubInstallations.status, 'active'),
+  ];
 
   if (opts?.orphanedOnly) {
     conditions.push(isNull(githubInstallations.linkedUserId));

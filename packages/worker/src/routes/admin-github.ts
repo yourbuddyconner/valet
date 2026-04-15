@@ -18,6 +18,9 @@ import { getDb } from '../lib/drizzle.js';
 import * as db from '../lib/db.js';
 import { getServiceMetadata } from '../lib/db/service-configs.js';
 import { githubInstallations } from '../lib/schema/github-installations.js';
+import { userIdentityLinks } from '../lib/schema/channels.js';
+import { users } from '../lib/schema/users.js';
+import { eq, isNotNull } from 'drizzle-orm';
 
 interface ManifestJWTPayload {
   sub: string;
@@ -160,7 +163,6 @@ adminGitHubRouter.post('/app/manifest', async (c) => {
       `${workerUrl}/auth/github/callback`,
       `${frontendUrl}/auth/github/repo-callback`,
     ],
-    setup_url: `${workerUrl}/repo-providers/github/install/callback`,
     request_oauth_on_install: false,
     public: true,
     default_permissions: permissions,
@@ -224,6 +226,10 @@ adminGitHubRouter.delete('/', async (c) => {
 
   // Clean up manifest nonce
   await deleteServiceConfig(appDb, 'github_manifest_nonce').catch(() => {});
+
+  // Clear GitHub identity links and user GitHub fields
+  await appDb.delete(userIdentityLinks).where(eq(userIdentityLinks.provider, 'github'));
+  await appDb.update(users).set({ githubId: null, githubUsername: null }).where(isNotNull(users.githubId));
 
   return c.json({ success: true });
 });

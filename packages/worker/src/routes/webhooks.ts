@@ -73,17 +73,13 @@ webhooksRouter.post('/github', async (c) => {
 
   // Verify webhook signature via Octokit App
   const app = await loadGitHubApp(c.env, getDb(c.env.DB));
-  if (app) {
-    try {
-      await app.webhooks.verifyAndReceive({
-        id: deliveryId,
-        name: event as any,
-        signature,
-        payload: rawBody,
-      });
-    } catch {
-      return c.json({ error: 'Invalid signature' }, 401);
-    }
+  if (!app) {
+    return c.json({ error: 'GitHub App not configured' }, 503);
+  }
+
+  const isValid = await app.webhooks.verify(rawBody, signature);
+  if (!isValid) {
+    return c.json({ error: 'Invalid signature' }, 401);
   }
 
   const payload = JSON.parse(rawBody);

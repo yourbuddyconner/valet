@@ -5633,9 +5633,10 @@ export class SessionAgentDO {
       if ('credentialSources' in context || 'isOrgScoped' in context) {
         // Approval was created before the unified-auth migration; context is stale.
         // Credentials are now resolved fresh at execution time.
-        // Notify the user and skip this approval.
         console.warn(`[session-agent] Stale approval context (pre-unified-auth), skipping`);
-        // TODO: send a message to the user explaining the action must be re-run
+        if (requestId) {
+          this.runnerLink.send({ type: 'call-tool-result', requestId, error: 'This action approval expired during a system update. Please retry the action.' } as any);
+        }
         return;
       }
 

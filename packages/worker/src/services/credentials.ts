@@ -142,6 +142,7 @@ async function refreshGitHubToken(
     };
   }
 
+  // Dynamic import to avoid circular dependency: credentials.ts → github-app.ts → credentials.ts
   const { loadGitHubApp } = await import('./github-app.js');
   const db = getDb(env.DB);
   const app = await loadGitHubApp(env, db);

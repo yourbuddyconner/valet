@@ -44,7 +44,6 @@ repoProviderRouter.get('/github-oauth/link', async (c) => {
   const params = new URLSearchParams({
     client_id: ghConfig.appOauthClientId,
     redirect_uri: redirectUri,
-    scope: 'repo',
     state,
   });
 
@@ -137,6 +136,7 @@ repoProviderCallbackRouter.get('/github-oauth/callback', async (c) => {
     return c.redirect(`${frontendUrl}/settings/admin?error=github_not_configured`);
   }
 
+  // TODO(github-app-unified): Convert to Octokit app.oauth.createToken({ code }) for consistency
   const tokenRes = await fetch('https://github.com/login/oauth/access_token', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Accept: 'application/json' },

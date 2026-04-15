@@ -1,6 +1,7 @@
 import { eq } from 'drizzle-orm';
 import { getCredential } from '../../services/credentials.js';
 import { getDb } from '../../lib/drizzle.js';
+import type { AppDb } from '../../lib/drizzle.js';
 import { getServiceMetadata } from '../../lib/db/service-configs.js';
 import {
   getGithubInstallationByLogin,
@@ -8,6 +9,7 @@ import {
 } from '../../lib/db/github-installations.js';
 import { loadGitHubApp, getOrMintInstallationToken } from '../../services/github-app.js';
 import { users } from '../../lib/schema/users.js';
+import type { Env } from '../../env.js';
 import type { CredentialResolver } from '../registry.js';
 import type { GitHubServiceMetadata } from '../../services/github-config.js';
 import type { GithubInstallation } from '../../lib/schema/github-installations.js';
@@ -97,12 +99,12 @@ export const githubCredentialResolver: CredentialResolver = async (
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 async function mintBotCredential(
-  env: { DB: unknown; ENCRYPTION_KEY: string },
-  db: ReturnType<typeof getDb>,
+  env: Env,
+  db: AppDb,
   userId: string,
   installation: GithubInstallation,
 ) {
-  const app = await loadGitHubApp(env as any, db as any);
+  const app = await loadGitHubApp(env, db);
   if (!app) {
     return {
       ok: false as const,
@@ -116,7 +118,7 @@ async function mintBotCredential(
 
   const { token, expiresAt } = await getOrMintInstallationToken(
     app,
-    db as any,
+    db,
     env.ENCRYPTION_KEY,
     {
       id: installation.id,
