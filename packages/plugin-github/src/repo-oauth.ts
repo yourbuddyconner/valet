@@ -59,7 +59,12 @@ export const githubUserRepoProvider: RepoProvider = {
     };
   },
 
-  async mintToken() {
-    throw new Error('User tokens are refreshed by the credential service, not minted by the repo provider');
+  async mintToken(credential) {
+    // User OAuth tokens are already valid — just pass through.
+    // Refresh is handled by the credential service, not here.
+    if (!credential.accessToken) {
+      throw new Error('No access token available');
+    }
+    return { accessToken: credential.accessToken, expiresAt: credential.expiresAt };
   },
 };

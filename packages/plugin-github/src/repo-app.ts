@@ -61,10 +61,12 @@ export const githubAppRepoProvider: RepoProvider = {
     };
   },
 
-  async mintToken() {
-    // Under the unified App model, installation tokens are minted on-demand by
-    // the worker's credential resolver and passed in via credential.accessToken.
-    // This method should not be called directly.
-    throw new Error('Installation tokens are minted on-demand by the credential resolver');
+  async mintToken(credential) {
+    // Under the unified App model, installation tokens are minted on-demand
+    // by env-assembly and passed in via credential.accessToken.
+    if (!credential.accessToken) {
+      throw new Error('No access token available — installation token should be pre-minted');
+    }
+    return { accessToken: credential.accessToken, expiresAt: credential.expiresAt };
   },
 };
