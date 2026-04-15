@@ -396,9 +396,6 @@ export class ChannelSession {
   // in this runner process. We re-sync it before first prompt dispatch.
   adoptedPersistedSession = false;
 
-  // Orchestrator thread ID passed from DO (may differ from channel-derived threadId)
-  promptThreadId: string | undefined = undefined;
-
   // Track current prompt so we can route events back to the DO
   activeMessageId: string | null = null;
   streamedContent = "";
@@ -902,9 +899,9 @@ export class PromptHandler {
     }
     const channelType = channel.channelKey.slice(0, idx);
     const channelId = channel.channelKey.slice(idx + 1);
-    // For thread channels (key = "thread:<threadId>"), extract threadId.
-    // Otherwise, use the orchestrator threadId passed from the DO prompt.
-    const threadId = channelType === "thread" ? channelId : channel.promptThreadId;
+    // Thread channels carry their thread ID in the channel key. Other channels
+    // do not carry a thread ID — never fall back to a separate mutable field.
+    const threadId = channelType === "thread" ? channelId : undefined;
     return { channelType, channelId, threadId };
   }
 
@@ -1372,8 +1369,10 @@ export class PromptHandler {
 
     // Resolve per-channel session
     this.currentPromptChannel = channel;
-    // Store the orchestrator threadId so it flows through to message.create
-    channel.promptThreadId = threadId ?? undefined;
+    // NOTE: `threadId` parameter is no longer consumed here. Thread routing now
+    // flows through the `thread:<id>` channelKey resolved upstream in the DO.
+    // The parameter remains in the signature for caller compatibility.
+    void threadId;
     // Store original channel info for [via ...] attribution prefix
     this.pendingReplyChannelType = replyChannelType;
     this.pendingReplyChannelId = replyChannelId;

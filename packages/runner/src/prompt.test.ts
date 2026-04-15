@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentClient } from "./agent-client.js";
-import { PromptHandler } from "./prompt.js";
+import { ChannelSession, PromptHandler } from "./prompt.js";
 
 type FetchCall = {
   url: string;
@@ -517,5 +517,35 @@ describe("PromptHandler SSE event routing", () => {
     expect(warnSpy).toHaveBeenCalledWith(
       expect.stringMatching(/Dropping SSE event \(no session ID\)/)
     );
+  });
+});
+
+describe("PromptHandler.extractChannelContext", () => {
+  it("returns undefined threadId for non-thread channels", () => {
+    const agentClient = createAgentClientMock();
+    const handler = createHandler(agentClient);
+    const channel = new ChannelSession("web:default");
+
+    const ctx = (handler as any).extractChannelContext(channel);
+
+    expect(ctx).toEqual({
+      channelType: "web",
+      channelId: "default",
+      threadId: undefined,
+    });
+  });
+
+  it("returns threadId for thread channels", () => {
+    const agentClient = createAgentClientMock();
+    const handler = createHandler(agentClient);
+    const channel = new ChannelSession("thread:abc-123");
+
+    const ctx = (handler as any).extractChannelContext(channel);
+
+    expect(ctx).toEqual({
+      channelType: "thread",
+      channelId: "abc-123",
+      threadId: "abc-123",
+    });
   });
 });
