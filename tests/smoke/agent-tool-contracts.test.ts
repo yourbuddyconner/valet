@@ -10,6 +10,7 @@
 import { describe, it, expect } from 'vitest';
 import { SmokeClient } from './client.js';
 import { dispatchAndWait, assertSmokeTestResult, type SmokeTestResult } from './agent.js';
+import { ToolCallTrace } from './tool-trace.js';
 
 const client = new SmokeClient();
 
@@ -65,6 +66,7 @@ For any failed check, set pass=false and put the literal tool output in detail. 
 
 describe('agent: tool contracts', () => {
   let result: SmokeTestResult;
+  let trace: ToolCallTrace;
 
   it('dispatches prompt and receives JSON response', async () => {
     const response = await dispatchAndWait(client, PROMPT, { timeoutMs: 180_000 });
@@ -76,6 +78,8 @@ describe('agent: tool contracts', () => {
     result = response.json;
     expect(result.smoke_test).toBe('tool_contracts');
 
+    trace = new ToolCallTrace(response.messages);
+    console.log(`Tool calls observed: ${trace.calls.map((c) => c.toolName).join(', ') || '(none)'}`);
     console.log(`\nAgent smoke test summary: ${result.summary.passed}/${result.summary.total} passed`);
   });
 
@@ -121,5 +125,53 @@ describe('agent: tool contracts', () => {
 
   it('no failures in summary', () => {
     expect(result?.summary?.failed).toBe(0);
+  });
+
+  // ─── Tool-trace assertions (independent of agent self-report) ────────────
+  // These assert the LITERAL tool result strings — the agent can't rationalize
+  // around them. The "round trip" assertion in particular is the canonical
+  // mem_rm regression test: write→rm→read must yield Written, Deleted, missing.
+
+  it('trace: mem_rm called with nonexistent path returns "Not found:" (not "Deleted")', () => {
+    // The first mem_rm in the prompt targets a path that was never written.
+    // We expect at least one "Not found:" result and no "Deleted:" for that path.
+    trace
+      .expectCalled('mem_rm')
+      .expectResultMatches('mem_rm', /^Not found:/);
+  });
+
+  it('trace: mem_round_trip — at least one mem_rm result reports "Deleted:"', () => {
+    // The round-trip step writes contract-roundtrip.md then deletes it.
+    // The mem_rm for that path MUST report "Deleted:" — this is the literal
+    // bug the smoke test caught (was always reporting "Not found").
+    trace.expectResultMatches('mem_rm', /^Deleted: /);
+  });
+
+  it('trace: mem_read on missing file returns "File not found"', () => {
+    trace.expectResultMatches('mem_read', /^File not found/);
+  });
+
+  it('trace: list_tools service filter — github filter only returns github tools', () => {
+    const calls = trace.filter('list_tools');
+    // Find the call where args.service === 'github' and assert no leakage in result.
+    const githubCall = calls.find(
+      (c) => c.args && typeof c.args === 'object' && (c.args as Record<string, unknown>).service === 'github',
+    );
+    expect(githubCall).toBeDefined();
+    if (githubCall && typeof githubCall.result === 'string') {
+      // Crude but effective: every line starting with a tool id should start with 'github:'.
+      const nonGithubLeaks = githubCall.result
+        .split('\n')
+        .filter((line) => /^[a-z_]+:[a-z_.]+/.test(line.trim()) && !line.includes('github:'));
+      expect(nonGithubLeaks).toEqual([]);
+    }
+  });
+
+  it('trace: get_my_persona was called at least twice (determinism check needs ≥2 calls)', () => {
+    trace.expectCalled('get_my_persona', { atLeast: 2 });
+  });
+
+  it('trace: no orphaned non-terminal tool calls', () => {
+    trace.expectAllTerminal();
   });
 });

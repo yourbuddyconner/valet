@@ -8,6 +8,7 @@
 import { describe, it, expect } from 'vitest';
 import { SmokeClient } from './client.js';
 import { dispatchAndWait, assertSmokeTestResult, type SmokeTestResult } from './agent.js';
+import { ToolCallTrace } from './tool-trace.js';
 
 const client = new SmokeClient();
 
@@ -50,6 +51,7 @@ For any failed check, set pass=false AND put the literal tool output in detail. 
 
 describe('agent: child session lifecycle', () => {
   let result: SmokeTestResult;
+  let trace: ToolCallTrace;
 
   it('dispatches prompt and receives JSON response', async () => {
     // Child session spawn + wait can take a while
@@ -62,6 +64,8 @@ describe('agent: child session lifecycle', () => {
     result = response.json;
     expect(result.smoke_test).toBe('sessions');
 
+    trace = new ToolCallTrace(response.messages);
+    console.log(`Tool calls observed: ${trace.calls.map((c) => c.toolName).join(', ') || '(none)'}`);
     console.log(`\nAgent smoke test summary: ${result.summary.passed}/${result.summary.total} passed`);
   });
 
@@ -95,5 +99,37 @@ describe('agent: child session lifecycle', () => {
 
   it('no failures in summary', () => {
     expect(result?.summary?.failed).toBe(0);
+  });
+
+  // ─── Tool-trace assertions (independent of agent self-report) ────────────
+  // These verify the LITERAL tool calls and results, bypassing any
+  // rationalization in the agent's JSON output.
+
+  it('trace: spawn_session was called', () => {
+    trace.expectCalled('spawn_session');
+  });
+
+  it('trace: wait_for_event was called', () => {
+    trace.expectCalled('wait_for_event');
+  });
+
+  it('trace: terminate_session was called', () => {
+    trace.expectCalled('terminate_session');
+  });
+
+  it('trace: tools were called in spawn → wait → terminate order', () => {
+    trace.expectOrder('spawn_session', 'wait_for_event', 'terminate_session');
+  });
+
+  it('trace: spawn_session result reports a child session id', () => {
+    trace.expectResultMatches('spawn_session', /Child session spawned:\s*[a-f0-9-]{36}/);
+  });
+
+  it('trace: no tool calls left in non-terminal status (caught wait_for_event suppression bug)', () => {
+    trace.expectAllTerminal();
+  });
+
+  it('trace: no tool calls ended in error status', () => {
+    trace.expectNoErrors();
   });
 });

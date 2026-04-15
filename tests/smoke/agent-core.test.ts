@@ -9,6 +9,7 @@
 import { describe, it, expect } from 'vitest';
 import { SmokeClient } from './client.js';
 import { dispatchAndWait, assertSmokeTestResult, type SmokeTestResult } from './agent.js';
+import { ToolCallTrace } from './tool-trace.js';
 
 const client = new SmokeClient();
 
@@ -53,6 +54,7 @@ For any failed check, set pass=false AND put the literal tool output in detail. 
 
 describe('agent: core capabilities', () => {
   let result: SmokeTestResult;
+  let trace: ToolCallTrace;
 
   it('dispatches prompt and receives JSON response', async () => {
     const response = await dispatchAndWait(client, PROMPT, { timeoutMs: 120_000 });
@@ -64,6 +66,8 @@ describe('agent: core capabilities', () => {
     result = response.json;
     expect(result.smoke_test).toBe('core');
 
+    trace = new ToolCallTrace(response.messages);
+    console.log(`Tool calls observed: ${trace.calls.map((c) => c.toolName).join(', ') || '(none)'}`);
     console.log(`\nAgent smoke test summary: ${result.summary.passed}/${result.summary.total} passed`);
   });
 
@@ -113,5 +117,57 @@ describe('agent: core capabilities', () => {
 
   it('no failures in summary', () => {
     expect(result?.summary?.failed).toBe(0);
+  });
+
+  // ─── Tool-trace assertions (independent of agent self-report) ────────────
+  // Asserts the LITERAL tool calls and result strings, not the agent's
+  // interpretation. Catches the mem_rm class of bugs where the tool reports
+  // failure but the agent rationalizes it as success (or vice versa).
+
+  it('trace: mem_write was called and reported "Written"', () => {
+    trace.expectCalled('mem_write').expectResultMatches('mem_write', /Written/);
+  });
+
+  it('trace: mem_read returned the written content', () => {
+    trace.expectCalled('mem_read').expectResultMatches('mem_read', /hello smoke test/);
+  });
+
+  it('trace: mem_rm reported "Deleted" (not "Not found" — caught a real bug)', () => {
+    trace
+      .expectCalled('mem_rm')
+      .expectResultMatches('mem_rm', /^Deleted: /)
+      .expectResultDoesNotMatch('mem_rm', /^Not found:/);
+  });
+
+  it('trace: task_create was called', () => {
+    trace.expectCalled('task_create');
+  });
+
+  it('trace: task_update was called after task_create', () => {
+    trace.expectCalled('task_update').expectOrder('task_create', 'task_update');
+  });
+
+  it('trace: list_tools was called', () => {
+    trace.expectCalled('list_tools');
+  });
+
+  it('trace: get_my_persona was called', () => {
+    trace.expectCalled('get_my_persona');
+  });
+
+  it('trace: search_skills was called', () => {
+    trace.expectCalled('search_skills');
+  });
+
+  it('trace: list_channels was called', () => {
+    trace.expectCalled('list_channels');
+  });
+
+  it('trace: mailbox_check was called', () => {
+    trace.expectCalled('mailbox_check');
+  });
+
+  it('trace: no orphaned non-terminal tool calls', () => {
+    trace.expectAllTerminal();
   });
 });
