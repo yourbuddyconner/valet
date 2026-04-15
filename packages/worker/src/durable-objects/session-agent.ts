@@ -16,6 +16,7 @@ import { getActivePluginArtifacts, getPluginSettings } from '../lib/db/plugins.j
 import { getPersonaSkills, getOrgDefaultSkills, getPersonaToolWhitelist } from '../lib/db.js';
 import type { ChannelTarget, ChannelContext, InteractivePrompt, InteractiveAction, InteractivePromptRef, InteractiveResolution } from '@valet/sdk';
 import { MessageStore } from './message-store.js';
+import { getChannelForMessage } from './channel-resolver.js';
 import { ChannelRouter } from './channel-router.js';
 import { PromptQueue } from './prompt-queue.js';
 import { RunnerLink, type RunnerToDOMessage, type DOToRunnerMessage, type PromptAttachment, type RunnerMessageHandlers, type WorkflowExecutionDispatchPayload, type DOMessageOf } from './runner-link.js';
@@ -306,6 +307,19 @@ export class SessionAgentDO {
       this.channelRouter.recoverActiveChannel(recovered.channelType, recovered.channelId);
     }
     return recovered;
+  }
+
+  /**
+   * Resolve channel for a specific prompt by messageId. Reads from prompt_queue
+   * via channel-resolver — the explicit, deterministic source. Returns null if
+   * the row is missing or lacks channel context. Callers MUST handle null by
+   * dropping the emission with dropEmission(...) — never fall back to mutable state.
+   *
+   * Use this in preference to the legacy `activeChannel` getter (which reads from
+   * a mutable cursor and is being removed in a later task).
+   */
+  private getChannelForMessage(messageId: string): { channelType: string; channelId: string } | null {
+    return getChannelForMessage(this.promptQueue, messageId);
   }
 
   private sameChannelTarget(
