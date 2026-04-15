@@ -351,6 +351,18 @@ export class PromptQueue {
     return rows[0].model ? String(rows[0].model) : null;
   }
 
+  /** Get channel context for a specific prompt by messageId (the prompt_queue id). */
+  getRowById(messageId: string): { channelType: string | null; channelId: string | null } | undefined {
+    const rows = this.sql
+      .exec("SELECT channel_type, channel_id FROM prompt_queue WHERE id = ? LIMIT 1", messageId)
+      .toArray();
+    if (rows.length === 0) return undefined;
+    return {
+      channelType: (rows[0].channel_type as string) || null,
+      channelId: (rows[0].channel_id as string) || null,
+    };
+  }
+
   /**
    * Get external channel context from the processing entry.
    * Used for hibernation recovery of active external-channel state.
