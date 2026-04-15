@@ -400,7 +400,7 @@ export async function terminateChild(
   const resp = await childDO.fetch(new Request('http://do/stop', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ reason: 'parent_stopped' }),
+    body: JSON.stringify({ reason: 'terminated_by_parent' }),
   }));
 
   if (!resp.ok) {
