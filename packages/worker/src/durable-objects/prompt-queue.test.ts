@@ -429,6 +429,51 @@ describe('PromptQueue', () => {
     });
   });
 
+  describe('getProcessingChannelTarget', () => {
+    it('returns channel target for the processing row', () => {
+      pq.enqueue({
+        id: 'p1', content: 'a', status: 'processing',
+        channelType: 'telegram', channelId: '12345',
+      });
+      expect(pq.getProcessingChannelTarget()).toEqual({
+        channelType: 'telegram', channelId: '12345',
+      });
+    });
+
+    it('prefers reply_channel_* over channel_* on processing row', () => {
+      pq.enqueue({
+        id: 'p1', content: 'a', status: 'processing',
+        channelType: 'thread', channelId: 'th1',
+        replyChannelType: 'slack', replyChannelId: 'C123:ts',
+      });
+      expect(pq.getProcessingChannelTarget()).toEqual({
+        channelType: 'slack', channelId: 'C123:ts',
+      });
+    });
+
+    it('returns null when no row is processing (empty queue)', () => {
+      expect(pq.getProcessingChannelTarget()).toBeNull();
+    });
+
+    it('returns null when only queued rows exist', () => {
+      pq.enqueue({
+        id: 'p1', content: 'a', status: 'queued',
+        channelType: 'telegram', channelId: '12345',
+      });
+      expect(pq.getProcessingChannelTarget()).toBeNull();
+    });
+
+    it('does not special-case web/thread (valid emit targets)', () => {
+      pq.enqueue({
+        id: 'p-web', content: 'a', status: 'processing',
+        channelType: 'web', channelId: 'session-1',
+      });
+      expect(pq.getProcessingChannelTarget()).toEqual({
+        channelType: 'web', channelId: 'session-1',
+      });
+    });
+  });
+
   describe('getProcessingChannelContext', () => {
     it('prefers reply channel over channel', () => {
       pq.enqueue({

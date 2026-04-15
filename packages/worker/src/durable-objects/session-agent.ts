@@ -5529,8 +5529,13 @@ export class SessionAgentDO {
           invocationId: invocationId,
           summary,
         };
-        const approvalCh = this.activeChannel;
-        if (approvalCh) {
+        // Resolve channel from the processing prompt — deterministic queue state,
+        // not a mutable cursor. If no prompt is processing (shouldn't happen inside
+        // handleCallTool, which is triggered by agent tool invocations during a turn),
+        // leave channel context unset; the approval will still be visible in the web
+        // UI via broadcastToClients.
+        const approvalCh = this.promptQueue.getProcessingChannelTarget();
+        if (approvalCh?.channelType && approvalCh?.channelId) {
           approvalContext.channelType = approvalCh.channelType;
           approvalContext.channelId = approvalCh.channelId;
         }
@@ -5866,14 +5871,15 @@ export class SessionAgentDO {
         targets.push(originTarget);
       }
 
-      // 2. Caller target: the currently active channel (may differ from origin
-      //    if a different Slack thread is subscribed to the same orchestrator thread)
-      const callerTarget = this.activeChannel;
-      if (callerTarget && callerTarget.channelType !== 'web') {
-        const key = `${callerTarget.channelType}:${callerTarget.channelId}`;
+      // 2. Caller target: the currently-processing prompt's channel (may differ from
+      //    origin if a different Slack thread is subscribed to the same orchestrator
+      //    thread). Read from the processing queue row, not a mutable cursor.
+      const callerCh = this.promptQueue.getProcessingChannelTarget();
+      if (callerCh?.channelType && callerCh?.channelId && callerCh.channelType !== 'web') {
+        const key = `${callerCh.channelType}:${callerCh.channelId}`;
         if (!seen.has(key)) {
           seen.add(key);
-          targets.push(callerTarget);
+          targets.push({ channelType: callerCh.channelType, channelId: callerCh.channelId });
         }
       }
 
