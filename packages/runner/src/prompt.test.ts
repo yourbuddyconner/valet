@@ -435,7 +435,7 @@ describe("PromptHandler idle suppression", () => {
     channel.activeMessageId = "msg-1";
     (handler as any).activeChannel = channel;
 
-    (handler as any).handleSessionStatus({ status: { type: "idle" } });
+    (handler as any).handleSessionStatus({ status: { type: "idle" } }, channel);
 
     expect(agentClient.sendAgentStatus).not.toHaveBeenCalled();
   });
@@ -449,9 +449,9 @@ describe("PromptHandler idle suppression", () => {
     channel.activeMessageId = null;
     (handler as any).activeChannel = channel;
 
-    (handler as any).handleSessionStatus({ status: { type: "idle" } });
+    (handler as any).handleSessionStatus({ status: { type: "idle" } }, channel);
 
-    expect(agentClient.sendAgentStatus).toHaveBeenCalledWith("idle");
+    expect(agentClient.sendAgentStatus).toHaveBeenCalledWith("idle", undefined, undefined);
   });
 });
 
@@ -478,6 +478,44 @@ describe("PromptHandler reconnect readiness", () => {
       properties: { sessionID: channel.opencodeSessionId ?? "oc-thread-slack" },
     });
 
-    expect(agentClient.sendAgentStatus).toHaveBeenCalledWith("idle");
+    expect(agentClient.sendAgentStatus).toHaveBeenCalledWith("idle", undefined, undefined);
+  });
+});
+
+describe("PromptHandler SSE event routing", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("drops SSE event when sessionID is not in ocSessionToChannel", () => {
+    const agentClient = createAgentClientMock();
+    const handler = createHandler(agentClient);
+
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    (handler as any).handleEvent({
+      type: "message.updated",
+      properties: { sessionID: "unknown-session-id" },
+    });
+
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringMatching(/Dropping SSE event \(unmapped session\)/)
+    );
+  });
+
+  it("drops SSE event with no sessionID", () => {
+    const agentClient = createAgentClientMock();
+    const handler = createHandler(agentClient);
+
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    (handler as any).handleEvent({
+      type: "message.updated",
+      properties: {},
+    });
+
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringMatching(/Dropping SSE event \(no session ID\)/)
+    );
   });
 });
