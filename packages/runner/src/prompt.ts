@@ -555,71 +555,89 @@ export class PromptHandler {
   private channels = new Map<string, ChannelSession>();
   private ocSessionToChannel = new Map<string, ChannelSession>(); // reverse lookup for SSE routing
 
-  // Active channel — set when a prompt arrives, used by methods that haven't been
-  // updated to accept a channel parameter yet (backward compat bridge)
-  private activeChannel: ChannelSession | null = null;
+  /**
+   * The channel for the currently-dispatching prompt. Set by `handlePrompt`
+   * at prompt entry; cleared/restored at prompt exit. NEVER written by SSE
+   * event handlers — Task 12 plumbs `channel: ChannelSession` through
+   * `consumeEventStream` and its dispatch table explicitly, so SSE events
+   * never need to mutate this field (which would risk cross-prompt cursor
+   * clobbering).
+   *
+   * Backs the delegating per-prompt accessors below (activeMessageId,
+   * streamedContent, etc.) used by sync-flow helpers called from
+   * `handlePrompt` (finalizeSyncResponse, attemptModelFailover,
+   * ensureTurnCreated, etc.) that haven't been refactored to take an
+   * explicit `channel` parameter. Also backs `getActiveMessageId()` used
+   * by `bin.ts` gateway callbacks (screenshot / image uploads) which have
+   * no channel context at their call site.
+   *
+   * Renamed from `activeChannel` in Task 13 to make the scoping contract
+   * explicit.
+   */
+  private currentPromptChannel: ChannelSession | null = null;
 
-  // Legacy single-session compat — points to activeChannel's OC session ID
+  // Legacy single-session compat — points to currentPromptChannel's OC session ID
   // Used by ephemeral sessions, reviews, etc. that don't need per-channel routing
   private get sessionId(): string | null {
-    return this.activeChannel?.opencodeSessionId ?? null;
+    return this.currentPromptChannel?.opencodeSessionId ?? null;
   }
   private set sessionId(val: string | null) {
-    if (this.activeChannel) {
-      this.activeChannel.opencodeSessionId = val;
+    if (this.currentPromptChannel) {
+      this.currentPromptChannel.opencodeSessionId = val;
     }
   }
 
-  // Delegate per-prompt fields to activeChannel for backward compat
-  private get activeMessageId(): string | null { return this.activeChannel?.activeMessageId ?? null; }
-  private set activeMessageId(val: string | null) { if (this.activeChannel) this.activeChannel.activeMessageId = val; }
-  private get streamedContent(): string { return this.activeChannel?.streamedContent ?? ""; }
-  private set streamedContent(val: string) { if (this.activeChannel) this.activeChannel.streamedContent = val; }
-  private get hasActivity(): boolean { return this.activeChannel?.hasActivity ?? false; }
-  private set hasActivity(val: boolean) { if (this.activeChannel) this.activeChannel.hasActivity = val; }
-  private get lastChunkTime(): number { return this.activeChannel?.lastChunkTime ?? 0; }
-  private set lastChunkTime(val: number) { if (this.activeChannel) this.activeChannel.lastChunkTime = val; }
-  private get toolStates(): Map<string, { status: ToolStatus; toolName: string }> { return this.activeChannel?.toolStates ?? new Map(); }
-  private get textPartSnapshots(): Map<string, string> { return this.activeChannel?.textPartSnapshots ?? new Map(); }
-  private get messageTextSnapshots(): Map<string, string> { return this.activeChannel?.messageTextSnapshots ?? new Map(); }
-  private get messageRoles(): Map<string, string> { return this.activeChannel?.messageRoles ?? new Map(); }
-  private get activeAssistantMessageIds(): Set<string> { return this.activeChannel?.activeAssistantMessageIds ?? new Set(); }
-  private get latestAssistantTextSnapshot(): string { return this.activeChannel?.latestAssistantTextSnapshot ?? ""; }
-  private set latestAssistantTextSnapshot(val: string) { if (this.activeChannel) this.activeChannel.latestAssistantTextSnapshot = val; }
-  private get recentEventTrace(): string[] { return this.activeChannel?.recentEventTrace ?? []; }
-  private set recentEventTrace(val: string[]) { if (this.activeChannel) this.activeChannel.recentEventTrace = val; }
-  private get lastError(): string | null { return this.activeChannel?.lastError ?? null; }
-  private set lastError(val: string | null) { if (this.activeChannel) this.activeChannel.lastError = val; }
-  private get hadToolSinceLastText(): boolean { return this.activeChannel?.hadToolSinceLastText ?? false; }
-  private set hadToolSinceLastText(val: boolean) { if (this.activeChannel) this.activeChannel.hadToolSinceLastText = val; }
-  private get idleNotified(): boolean { return this.activeChannel?.idleNotified ?? false; }
-  private set idleNotified(val: boolean) { if (this.activeChannel) this.activeChannel.idleNotified = val; }
-  private get doToOcMessageId(): Map<string, string> { return this.activeChannel?.doToOcMessageId ?? new Map(); }
-  private get ocToDOMessageId(): Map<string, string> { return this.activeChannel?.ocToDOMessageId ?? new Map(); }
-  private get currentModelPreferences(): string[] | undefined { return this.activeChannel?.currentModelPreferences; }
-  private set currentModelPreferences(val: string[] | undefined) { if (this.activeChannel) this.activeChannel.currentModelPreferences = val; }
-  private get currentModelIndex(): number { return this.activeChannel?.currentModelIndex ?? 0; }
-  private set currentModelIndex(val: number) { if (this.activeChannel) this.activeChannel.currentModelIndex = val; }
-  private get pendingRetryContent(): string | null { return this.activeChannel?.pendingRetryContent ?? null; }
-  private set pendingRetryContent(val: string | null) { if (this.activeChannel) this.activeChannel.pendingRetryContent = val; }
-  private get pendingRetryAttachments(): PromptAttachment[] { return this.activeChannel?.pendingRetryAttachments ?? []; }
-  private set pendingRetryAttachments(val: PromptAttachment[]) { if (this.activeChannel) this.activeChannel.pendingRetryAttachments = val; }
-  private get pendingRetryAuthor(): PromptAuthor | undefined { return this.activeChannel?.pendingRetryAuthor; }
-  private set pendingRetryAuthor(val: PromptAuthor | undefined) { if (this.activeChannel) this.activeChannel.pendingRetryAuthor = val; }
-  private get waitForEventForced(): boolean { return this.activeChannel?.waitForEventForced ?? false; }
-  private set waitForEventForced(val: boolean) { if (this.activeChannel) this.activeChannel.waitForEventForced = val; }
-  private get failoverInProgress(): boolean { return this.activeChannel?.failoverInProgress ?? false; }
-  private set failoverInProgress(val: boolean) { if (this.activeChannel) this.activeChannel.failoverInProgress = val; }
-  private get retryPending(): boolean { return this.activeChannel?.retryPending ?? false; }
-  private set retryPending(val: boolean) { if (this.activeChannel) this.activeChannel.retryPending = val; }
-  private get finalizeInFlight(): boolean { return this.activeChannel?.finalizeInFlight ?? false; }
-  private set finalizeInFlight(val: boolean) { if (this.activeChannel) this.activeChannel.finalizeInFlight = val; }
-  private get awaitingAssistantForAttempt(): boolean { return this.activeChannel?.awaitingAssistantForAttempt ?? false; }
-  private set awaitingAssistantForAttempt(val: boolean) { if (this.activeChannel) this.activeChannel.awaitingAssistantForAttempt = val; }
-  private get turnCreated(): boolean { return this.activeChannel?.turnCreated ?? false; }
-  private set turnCreated(val: boolean) { if (this.activeChannel) this.activeChannel.turnCreated = val; }
-  private get turnId(): string | null { return this.activeChannel?.turnId ?? null; }
-  private set turnId(val: string | null) { if (this.activeChannel) this.activeChannel.turnId = val; }
+  // Delegate per-prompt fields to currentPromptChannel. Safe because the backing
+  // field is managed only by handlePrompt and consumeEventStream (see JSDoc above).
+  private get activeMessageId(): string | null { return this.currentPromptChannel?.activeMessageId ?? null; }
+  private set activeMessageId(val: string | null) { if (this.currentPromptChannel) this.currentPromptChannel.activeMessageId = val; }
+  private get streamedContent(): string { return this.currentPromptChannel?.streamedContent ?? ""; }
+  private set streamedContent(val: string) { if (this.currentPromptChannel) this.currentPromptChannel.streamedContent = val; }
+  private get hasActivity(): boolean { return this.currentPromptChannel?.hasActivity ?? false; }
+  private set hasActivity(val: boolean) { if (this.currentPromptChannel) this.currentPromptChannel.hasActivity = val; }
+  private get lastChunkTime(): number { return this.currentPromptChannel?.lastChunkTime ?? 0; }
+  private set lastChunkTime(val: number) { if (this.currentPromptChannel) this.currentPromptChannel.lastChunkTime = val; }
+  private get toolStates(): Map<string, { status: ToolStatus; toolName: string }> { return this.currentPromptChannel?.toolStates ?? new Map(); }
+  private get textPartSnapshots(): Map<string, string> { return this.currentPromptChannel?.textPartSnapshots ?? new Map(); }
+  private get messageTextSnapshots(): Map<string, string> { return this.currentPromptChannel?.messageTextSnapshots ?? new Map(); }
+  private get messageRoles(): Map<string, string> { return this.currentPromptChannel?.messageRoles ?? new Map(); }
+  private get activeAssistantMessageIds(): Set<string> { return this.currentPromptChannel?.activeAssistantMessageIds ?? new Set(); }
+  private get latestAssistantTextSnapshot(): string { return this.currentPromptChannel?.latestAssistantTextSnapshot ?? ""; }
+  private set latestAssistantTextSnapshot(val: string) { if (this.currentPromptChannel) this.currentPromptChannel.latestAssistantTextSnapshot = val; }
+  private get recentEventTrace(): string[] { return this.currentPromptChannel?.recentEventTrace ?? []; }
+  private set recentEventTrace(val: string[]) { if (this.currentPromptChannel) this.currentPromptChannel.recentEventTrace = val; }
+  private get lastError(): string | null { return this.currentPromptChannel?.lastError ?? null; }
+  private set lastError(val: string | null) { if (this.currentPromptChannel) this.currentPromptChannel.lastError = val; }
+  private get hadToolSinceLastText(): boolean { return this.currentPromptChannel?.hadToolSinceLastText ?? false; }
+  private set hadToolSinceLastText(val: boolean) { if (this.currentPromptChannel) this.currentPromptChannel.hadToolSinceLastText = val; }
+  private get idleNotified(): boolean { return this.currentPromptChannel?.idleNotified ?? false; }
+  private set idleNotified(val: boolean) { if (this.currentPromptChannel) this.currentPromptChannel.idleNotified = val; }
+  private get doToOcMessageId(): Map<string, string> { return this.currentPromptChannel?.doToOcMessageId ?? new Map(); }
+  private get ocToDOMessageId(): Map<string, string> { return this.currentPromptChannel?.ocToDOMessageId ?? new Map(); }
+  private get currentModelPreferences(): string[] | undefined { return this.currentPromptChannel?.currentModelPreferences; }
+  private set currentModelPreferences(val: string[] | undefined) { if (this.currentPromptChannel) this.currentPromptChannel.currentModelPreferences = val; }
+  private get currentModelIndex(): number { return this.currentPromptChannel?.currentModelIndex ?? 0; }
+  private set currentModelIndex(val: number) { if (this.currentPromptChannel) this.currentPromptChannel.currentModelIndex = val; }
+  private get pendingRetryContent(): string | null { return this.currentPromptChannel?.pendingRetryContent ?? null; }
+  private set pendingRetryContent(val: string | null) { if (this.currentPromptChannel) this.currentPromptChannel.pendingRetryContent = val; }
+  private get pendingRetryAttachments(): PromptAttachment[] { return this.currentPromptChannel?.pendingRetryAttachments ?? []; }
+  private set pendingRetryAttachments(val: PromptAttachment[]) { if (this.currentPromptChannel) this.currentPromptChannel.pendingRetryAttachments = val; }
+  private get pendingRetryAuthor(): PromptAuthor | undefined { return this.currentPromptChannel?.pendingRetryAuthor; }
+  private set pendingRetryAuthor(val: PromptAuthor | undefined) { if (this.currentPromptChannel) this.currentPromptChannel.pendingRetryAuthor = val; }
+  private get waitForEventForced(): boolean { return this.currentPromptChannel?.waitForEventForced ?? false; }
+  private set waitForEventForced(val: boolean) { if (this.currentPromptChannel) this.currentPromptChannel.waitForEventForced = val; }
+  private get failoverInProgress(): boolean { return this.currentPromptChannel?.failoverInProgress ?? false; }
+  private set failoverInProgress(val: boolean) { if (this.currentPromptChannel) this.currentPromptChannel.failoverInProgress = val; }
+  private get retryPending(): boolean { return this.currentPromptChannel?.retryPending ?? false; }
+  private set retryPending(val: boolean) { if (this.currentPromptChannel) this.currentPromptChannel.retryPending = val; }
+  private get finalizeInFlight(): boolean { return this.currentPromptChannel?.finalizeInFlight ?? false; }
+  private set finalizeInFlight(val: boolean) { if (this.currentPromptChannel) this.currentPromptChannel.finalizeInFlight = val; }
+  private get awaitingAssistantForAttempt(): boolean { return this.currentPromptChannel?.awaitingAssistantForAttempt ?? false; }
+  private set awaitingAssistantForAttempt(val: boolean) { if (this.currentPromptChannel) this.currentPromptChannel.awaitingAssistantForAttempt = val; }
+  private get turnCreated(): boolean { return this.currentPromptChannel?.turnCreated ?? false; }
+  private set turnCreated(val: boolean) { if (this.currentPromptChannel) this.currentPromptChannel.turnCreated = val; }
+  private get turnId(): string | null { return this.currentPromptChannel?.turnId ?? null; }
+  private set turnId(val: string | null) { if (this.currentPromptChannel) this.currentPromptChannel.turnId = val; }
 
   // Ephemeral session tracking — resolved when the session becomes idle via SSE
   private idleWaiters = new Map<string, () => void>();
@@ -694,12 +712,16 @@ export class PromptHandler {
     return this.eventStreamActive;
   }
 
-  /** TEMPORARY: exposes the active prompt's messageId for emit paths (screenshot, etc.)
-   *  that need to attribute outbound messages to the in-flight prompt's channel.
-   *  Task 12 will plumb messageId through SSE handlers explicitly; Task 13 deletes
-   *  this getter alongside activeChannel. */
+  /**
+   * Exposes the active prompt's messageId for emit paths (screenshot, image
+   * uploads, etc.) that need to attribute outbound messages to the in-flight
+   * prompt's channel. Reads from `currentPromptChannel` which is set by
+   * `handlePrompt` while dispatching a prompt, and temporarily by
+   * `consumeEventStream` while routing SSE events. Returns undefined between
+   * prompts or from gateway callers without any channel context.
+   */
   getActiveMessageId(): string | undefined {
-    return this.activeChannel?.activeMessageId ?? undefined;
+    return this.currentPromptChannel?.activeMessageId ?? undefined;
   }
 
   /** Get or create a ChannelSession for the given channel. */
@@ -1134,7 +1156,7 @@ export class PromptHandler {
           ? step.awaitTimeoutMs
           : 120_000;
     const awaitTimeoutMs = Math.max(1_000, Math.min(awaitTimeoutRaw, 900_000));
-    const previousChannel = this.activeChannel;
+    const previousChannel = this.currentPromptChannel;
     const modelChain = this.buildModelFailoverChain(
       this.workflowExecutionModel,
       this.workflowExecutionModelPreferences,
@@ -1145,7 +1167,7 @@ export class PromptHandler {
       const workflowChannelType = "workflow";
       const workflowChannelId = context.executionId;
       const channel = this.getOrCreateChannel(workflowChannelType, workflowChannelId);
-      this.activeChannel = channel;
+      this.currentPromptChannel = channel;
       await this.ensureChannelOpenCodeSession(channel);
 
       this.agentClient.sendWorkflowChatMessage("user", content, {
@@ -1298,7 +1320,7 @@ export class PromptHandler {
         },
       };
     } finally {
-      this.activeChannel = previousChannel;
+      this.currentPromptChannel = previousChannel;
     }
   }
 
@@ -1349,7 +1371,7 @@ export class PromptHandler {
     }
 
     // Resolve per-channel session
-    this.activeChannel = channel;
+    this.currentPromptChannel = channel;
     // Store the orchestrator threadId so it flows through to message.create
     channel.promptThreadId = threadId ?? undefined;
     // Store original channel info for [via ...] attribution prefix
@@ -1689,7 +1711,7 @@ export class PromptHandler {
     // Emit llm_response timing with token counts for throughput analysis
     if (this.lastPromptSentAt > 0) {
       const durationMs = Date.now() - this.lastPromptSentAt;
-      const usageChannel = this.activeChannel;
+      const usageChannel = this.currentPromptChannel;
       let inputTokens = 0;
       let outputTokens = 0;
       if (usageChannel) {
@@ -1714,7 +1736,7 @@ export class PromptHandler {
     this.agentClient.sendAgentStatus("idle", undefined, messageId ?? undefined);
 
     // Emit usage report for this turn
-    const usageChannel = this.activeChannel;
+    const usageChannel = this.currentPromptChannel;
     if (usageChannel && usageChannel.usageEntries.size > 0 && usageChannel.turnId) {
       const entries = Array.from(usageChannel.usageEntries.entries()).map(
         ([ocMessageId, data]) => ({
@@ -1729,7 +1751,7 @@ export class PromptHandler {
     }
 
     // Check for pre-compaction memory flush after each turn
-    const flushChannel = this.activeChannel;
+    const flushChannel = this.currentPromptChannel;
     if (flushChannel && !flushChannel.memoryFlushInProgress) {
       flushChannel.turnCount++;
       this.checkAndTriggerMemoryFlush(flushChannel).catch(err =>
@@ -1774,7 +1796,7 @@ export class PromptHandler {
     this.pendingRetryAuthor = undefined;
     this.retryPending = false;
     this.finalizeInFlight = false;
-    if (this.activeChannel) this.activeChannel.syncPromptInFlight = false;
+    if (this.currentPromptChannel) this.currentPromptChannel.syncPromptInFlight = false;
     console.log(`[PromptHandler] Response finalized`);
   }
 
@@ -1805,13 +1827,13 @@ export class PromptHandler {
     }
 
     // Reset stream state for retry (keep activeMessageId)
-    if (this.activeChannel) this.activeChannel.resetForRetry();
+    if (this.currentPromptChannel) this.currentPromptChannel.resetForRetry();
 
     // Retry with next model
     try {
       this.agentClient.sendAgentStatus("thinking", undefined, this.activeMessageId ?? undefined);
       this.awaitingAssistantForAttempt = true;
-      const activeChannel = this.activeChannel;
+      const activeChannel = this.currentPromptChannel;
       if (!activeChannel) throw new Error("No active channel for failover retry");
       const channelContext = this.extractChannelContext(activeChannel);
       await this.sendPromptToChannelWithRecovery(activeChannel, this.pendingRetryContent!, {
@@ -2314,7 +2336,7 @@ export class PromptHandler {
     // with the user/prompt message ID (activeMessageId).
     const turnId = crypto.randomUUID();
     this.turnId = turnId;
-    const channel = this.activeChannel;
+    const channel = this.currentPromptChannel;
     const channelContext = channel ? this.extractChannelContext(channel) : {};
     this.agentClient.sendTurnCreate(turnId, {
       channelType: channelContext.channelType,
@@ -3833,7 +3855,7 @@ export class PromptHandler {
       return;
     }
     // Don't finalize from SSE events while a sync prompt is in flight
-    if (this.activeChannel?.syncPromptInFlight) {
+    if (this.currentPromptChannel?.syncPromptInFlight) {
       console.log(`[PromptHandler] Skipping SSE-side finalization — sync prompt in flight`);
       return;
     }
@@ -3969,7 +3991,7 @@ export class PromptHandler {
       this.agentClient.sendAgentStatus("idle", undefined, messageId ?? undefined);
 
       // Emit usage report for this turn
-      const usageChannel = this.activeChannel;
+      const usageChannel = this.currentPromptChannel;
       if (usageChannel && usageChannel.usageEntries.size > 0 && usageChannel.turnId) {
         const entries = Array.from(usageChannel.usageEntries.entries()).map(
           ([ocMessageId, data]) => ({
@@ -3984,7 +4006,7 @@ export class PromptHandler {
       }
 
       // Check for pre-compaction memory flush after each turn
-      const flushChannel = this.activeChannel;
+      const flushChannel = this.currentPromptChannel;
       if (flushChannel && !flushChannel.memoryFlushInProgress) {
         flushChannel.turnCount++;
         // Schedule async — don't block finalization
@@ -4007,7 +4029,7 @@ export class PromptHandler {
   private resetResponseTimeout(): void {
     this.clearResponseTimeout();
     // Also reset the sync prompt inactivity timeout — the model is actively working
-    this.activeChannel?.resetSyncTimeout?.();
+    this.currentPromptChannel?.resetSyncTimeout?.();
     // Set a timeout to finalize the response if no completion event is received
     this.responseTimeoutId = setTimeout(() => {
       if (this.activeMessageId && this.hasActivity) {

@@ -433,7 +433,7 @@ describe("PromptHandler idle suppression", () => {
     const channel = (handler as any).getOrCreateChannel("thread", "ch-1");
     channel.syncPromptInFlight = true;
     channel.activeMessageId = "msg-1";
-    (handler as any).activeChannel = channel;
+    (handler as any).currentPromptChannel = channel;
 
     (handler as any).handleSessionStatus({ status: { type: "idle" } }, channel);
 
@@ -447,7 +447,7 @@ describe("PromptHandler idle suppression", () => {
     const channel = (handler as any).getOrCreateChannel("thread", "ch-1");
     channel.syncPromptInFlight = false;
     channel.activeMessageId = null;
-    (handler as any).activeChannel = channel;
+    (handler as any).currentPromptChannel = channel;
 
     (handler as any).handleSessionStatus({ status: { type: "idle" } }, channel);
 
@@ -465,7 +465,7 @@ describe("PromptHandler reconnect readiness", () => {
     const handler = createHandler(agentClient);
 
     const channel = (handler as any).getOrCreateChannel("thread", "thread-slack");
-    (handler as any).activeChannel = channel;
+    (handler as any).currentPromptChannel = channel;
     channel.opencodeSessionId = "oc-thread-slack";
     (handler as any).ocSessionToChannel.set("oc-thread-slack", channel);
     channel.idleNotified = true;
