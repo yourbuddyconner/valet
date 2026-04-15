@@ -171,7 +171,57 @@ export async function assembleRepoEnv(
   const credentialProvider = stripProviderSuffix(providers[0].id);
   const repoUrlMatch = opts.repoUrl.match(/github\.com[/:]([^/]+)\//);
   const repoOwner = repoUrlMatch?.[1];
-  const resolved = await credentialDb.resolveRepoCredential(appDb, credentialProvider, repoOwner, orgId, userId);
+  let resolved = await credentialDb.resolveRepoCredential(appDb, credentialProvider, repoOwner, orgId, userId);
+
+  // If no user OAuth credential, try to mint an installation token for the repo owner.
+  // Under the unified GitHub App model, installation tokens are minted on-demand
+  // from the github_installations table rather than stored as app_install credentials.
+  if (!resolved && credentialProvider === 'github' && repoOwner) {
+    try {
+      const { loadGitHubApp, mintInstallationToken } = await import('../services/github-app.js');
+      const { getGithubInstallationByLogin } = await import('./db/github-installations.js');
+      const installation = await getGithubInstallationByLogin(appDb, repoOwner);
+      if (installation) {
+        const app = await loadGitHubApp(env, appDb);
+        if (app) {
+          const { token, expiresAt } = await mintInstallationToken(app, installation.githubInstallationId);
+          // Short-circuit: we have a fresh token, skip the normal credential flow
+          // and go directly to assembling env vars.
+          const userRow = await db.getUserById(appDb, userId);
+          const gitUser = {
+            name: userRow?.gitName || userRow?.name || 'Valet User',
+            email: userRow?.gitEmail || userRow?.email || '',
+          };
+
+          const selectedProvider = repoProviderRegistry.get(`${credentialProvider}-app`);
+          if (selectedProvider) {
+            const repoCredential: RepoCredential = {
+              type: 'installation',
+              installationId: installation.githubInstallationId,
+              accessToken: token,
+              metadata: {},
+            };
+            const sessionEnv = await selectedProvider.assembleSessionEnv(repoCredential, {
+              repoUrl: opts.repoUrl!,
+              branch: opts.branch,
+              ref: opts.ref,
+              gitUser,
+            });
+            return {
+              envVars: { ...envVars, ...sessionEnv.envVars },
+              gitConfig: { ...gitConfig, ...sessionEnv.gitConfig },
+              token,
+              expiresAt: new Date(expiresAt).toISOString(),
+            };
+          }
+        }
+      }
+    } catch (err) {
+      console.warn('[env-assembly] Installation token fallback failed:', err);
+      // Fall through to the error below
+    }
+  }
+
   if (!resolved) {
     return {
       envVars,
