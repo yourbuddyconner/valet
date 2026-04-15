@@ -1407,4 +1407,61 @@ describe('SessionAgentDO', () => {
     );
     expect(promptSent).toBe(true);
   });
+
+  it('drops error emission when prompt_queue has no row for messageId', async () => {
+    const { agent, broadcasts } = await createTestAgent();
+    const writeMessageSpy = vi.spyOn((agent as any).messageStore, 'writeMessage');
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    await (agent as any).runnerHandlers.error({
+      type: 'error',
+      messageId: 'nonexistent',
+      error: 'boom',
+    });
+
+    expect(warnSpy).toHaveBeenCalledWith(
+      '[ChannelRouting] dropped emission',
+      expect.objectContaining({ reason: 'no_prompt_row', messageId: 'nonexistent', error: 'boom' }),
+    );
+    expect(writeMessageSpy).not.toHaveBeenCalled();
+    expect(broadcasts.find((m) => m.type === 'error')).toBeUndefined();
+    expect((agent as any).notifyEventBus).not.toHaveBeenCalled();
+    expect((agent as any).enqueueOwnerNotification).not.toHaveBeenCalled();
+    expect((agent as any).emitEvent).not.toHaveBeenCalled();
+  });
+
+  it('attributes error to channel from prompt_queue lookup', async () => {
+    const { agent, broadcasts } = await createTestAgent();
+    (agent as any).promptQueue.enqueue({
+      id: 'msg-1',
+      content: 'hi',
+      status: 'processing',
+      channelType: 'thread',
+      channelId: 'thread-abc',
+    });
+    const writeMessageSpy = vi.spyOn((agent as any).messageStore, 'writeMessage');
+
+    await (agent as any).runnerHandlers.error({
+      type: 'error',
+      messageId: 'msg-1',
+      error: 'oops',
+    });
+
+    expect(writeMessageSpy).toHaveBeenCalledTimes(1);
+    expect(writeMessageSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        role: 'system',
+        content: expect.stringContaining('oops'),
+        channelType: 'thread',
+        channelId: 'thread-abc',
+      }),
+    );
+    const errBroadcast = broadcasts.find((m) => m.type === 'error');
+    expect(errBroadcast).toMatchObject({
+      type: 'error',
+      error: 'oops',
+      channelType: 'thread',
+      channelId: 'thread-abc',
+    });
+  });
 });

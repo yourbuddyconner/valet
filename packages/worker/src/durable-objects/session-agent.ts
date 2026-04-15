@@ -16,7 +16,7 @@ import { getActivePluginArtifacts, getPluginSettings } from '../lib/db/plugins.j
 import { getPersonaSkills, getOrgDefaultSkills, getPersonaToolWhitelist } from '../lib/db.js';
 import type { ChannelTarget, ChannelContext, InteractivePrompt, InteractiveAction, InteractivePromptRef, InteractiveResolution } from '@valet/sdk';
 import { MessageStore } from './message-store.js';
-import { getChannelForMessage } from './channel-resolver.js';
+import { getChannelForMessage, dropEmission } from './channel-resolver.js';
 import { ChannelRouter } from './channel-router.js';
 import { PromptQueue } from './prompt-queue.js';
 import { RunnerLink, type RunnerToDOMessage, type DOToRunnerMessage, type PromptAttachment, type RunnerMessageHandlers, type WorkflowExecutionDispatchPayload, type DOMessageOf } from './runner-link.js';
@@ -2230,24 +2230,35 @@ export class SessionAgentDO {
       },
 
       'error': async (msg) => {
-        // Store error and broadcast
+        // Resolve channel explicitly from the originating prompt — never fall back
+        // to a mutable "active" cursor. If the prompt_queue row is missing or lacks
+        // channel context, drop the emission with a structured warning.
+        if (!msg.messageId) {
+          dropEmission('no_message_id', { eventType: 'error', error: msg.error });
+          return;
+        }
+        const errCh = this.getChannelForMessage(msg.messageId);
+        if (!errCh) {
+          dropEmission('no_prompt_row', { eventType: 'error', messageId: msg.messageId, error: msg.error });
+          return;
+        }
         // Always generate a new ID — msg.messageId is the prompt's user message ID,
         // which already exists in the messages table (PRIMARY KEY conflict).
         const errId = crypto.randomUUID();
-        const errCh = this.activeChannel;
         const errorText = msg.error || 'Unknown error';
         this.messageStore.writeMessage({
           id: errId,
           role: 'system',
           content: `Error: ${errorText}`,
-          channelType: errCh?.channelType,
-          channelId: errCh?.channelId,
+          channelType: errCh.channelType,
+          channelId: errCh.channelId,
         });
         this.broadcastToClients({
           type: 'error',
           messageId: errId,
           error: msg.error,
-          ...(errCh ? { channelType: errCh.channelType, channelId: errCh.channelId } : {}),
+          channelType: errCh.channelType,
+          channelId: errCh.channelId,
         });
         this.emitEvent('turn_error', {
           errorCode: 'agent_error',
