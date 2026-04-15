@@ -293,30 +293,11 @@ export class SessionAgentDO {
     }
   }
 
-  /** Returns the channel metadata for the currently active prompt, if any. */
-  private get activeChannel(): { channelType: string; channelId: string } | null {
-    const current = this.channelRouter.activeChannel;
-    if (current) return current;
-    // Hibernation recovery: check prompt_queue for processing row with channel metadata.
-    // Keep this orchestration logic inside the DO rather than extracting extra
-    // production seams just for tests; cover the lifecycle with a black-box DO
-    // harness instead of widening the runtime surface area.
-    const recovered = this.promptQueue.getProcessingChannelContext();
-    if (recovered) {
-      console.log(`[SessionAgentDO] Recovered activeChannel from prompt_queue: ${recovered.channelType}:${recovered.channelId}`);
-      this.channelRouter.recoverActiveChannel(recovered.channelType, recovered.channelId);
-    }
-    return recovered;
-  }
-
   /**
    * Resolve channel for a specific prompt by messageId. Reads from prompt_queue
    * via channel-resolver — the explicit, deterministic source. Returns null if
    * the row is missing or lacks channel context. Callers MUST handle null by
    * dropping the emission with dropEmission(...) — never fall back to mutable state.
-   *
-   * Use this in preference to the legacy `activeChannel` getter (which reads from
-   * a mutable cursor and is being removed in a later task).
    */
   private getChannelForMessage(messageId: string): { channelType: string; channelId: string } | null {
     return getChannelForMessage(this.promptQueue, messageId);
@@ -1769,17 +1750,13 @@ export class SessionAgentDO {
     this.rescheduleIdleAlarm();
     console.log('[SessionAgentDO] handlePrompt: dispatching to runner (DO_CODE_VERSION=v2-pipeline-2)');
 
-    // Active channel is scoped to the current prompt cycle only.
-    this.channelRouter.clearActiveChannel();
     if (effectiveReplyTo) {
-      this.channelRouter.setActiveChannel(effectiveReplyTo);
       this.insertChannelFollowup(effectiveReplyTo.channelType, effectiveReplyTo.channelId, content);
     } else if (threadId) {
       // Web UI steering of a thread — recover the thread's origin channel so
       // downstream code knows where to route follow-up channel actions.
       const origin = await getThreadOriginChannel(this.env.DB, threadId);
       if (origin && origin.channelType !== 'web' && origin.channelType !== 'thread') {
-        this.channelRouter.setActiveChannel({ channelType: origin.channelType, channelId: origin.channelId });
         this.insertChannelFollowup(origin.channelType, origin.channelId, content);
       }
     }
@@ -1824,7 +1801,6 @@ export class SessionAgentDO {
         this.promptQueue.idleQueuedSince = Date.now();
         this.rescheduleIdleAlarm();
       }
-      this.channelRouter.clearActiveChannel();
       this.emitAuditEvent('prompt.dispatch_failed', `Dispatch failed, reverted to queue: ${messageId}`);
     }
   }
@@ -3646,8 +3622,6 @@ export class SessionAgentDO {
         return;
       }
 
-      this.channelRouter.clearActiveChannel();
-
       // Runner is now idle — flush messages synchronously so they survive hibernation
       await this.flushMessagesToD1();
 
@@ -4396,7 +4370,6 @@ export class SessionAgentDO {
       const queuedExecutionId = (prompt.workflowExecutionId || '').trim();
       const queuedPayload = parseQueuedWorkflowPayload(prompt.workflowPayload)!;
 
-      this.channelRouter.clearActiveChannel();
       this.promptQueue.stampDispatched();
       this.promptQueue.idleQueuedSince = 0;
       this.sessionState.lastParentIdleNotice = undefined;
@@ -4443,20 +4416,16 @@ export class SessionAgentDO {
       this.promptQueue.currentPromptAuthorId = authorId;
     }
 
-    // Active channel is scoped to the current prompt cycle only.
     const queueChannelType = prompt.channelType || undefined;
     const queueChannelId = prompt.channelId || undefined;
     const queueThreadId = prompt.threadId || undefined;
     const queueReplyChannelType = prompt.replyChannelType || undefined;
     const queueReplyChannelId = prompt.replyChannelId || undefined;
-    this.channelRouter.clearActiveChannel();
     if (queueReplyChannelType && queueReplyChannelId) {
-      this.channelRouter.setActiveChannel({ channelType: queueReplyChannelType, channelId: queueReplyChannelId });
       this.insertChannelFollowup(queueReplyChannelType, queueReplyChannelId, prompt.content);
     } else if (queueThreadId) {
       const origin = await getThreadOriginChannel(this.env.DB, queueThreadId);
       if (origin && origin.channelType !== 'web' && origin.channelType !== 'thread') {
-        this.channelRouter.setActiveChannel({ channelType: origin.channelType, channelId: origin.channelId });
         this.insertChannelFollowup(origin.channelType, origin.channelId, prompt.content);
       }
     }
@@ -4507,7 +4476,6 @@ export class SessionAgentDO {
     });
     if (!queueDispatched) {
       this.promptQueue.revertProcessingToQueued(prompt.id);
-      this.channelRouter.clearActiveChannel();
       this.emitAuditEvent('prompt.dispatch_failed', `Queue dispatch failed, reverted: ${prompt.id.slice(0, 8)}`);
       return false;
     }
@@ -5863,7 +5831,7 @@ export class SessionAgentDO {
       const seen = new Set<string>();
 
       // 1. Origin target: the channel stored in the approval context at creation time
-      //    (set from activeChannel when the approval was created)
+      //    (captured from the originating prompt when the approval was created)
       const originTarget = this.getPromptOriginTarget(prompt.context);
       if (originTarget && originTarget.channelType !== 'web') {
         const key = `${originTarget.channelType}:${originTarget.channelId}`;

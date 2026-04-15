@@ -351,7 +351,6 @@ describe('SessionAgentDO', () => {
     const { agent, sql, waitUntil, broadcasts } = await createTestAgent();
     const sendChannelInteractivePrompts = (agent as any).sendChannelInteractivePrompts as ReturnType<typeof vi.fn>;
 
-    (agent as any).channelRouter.setActiveChannel({ channelType: 'slack', channelId: 'C123' });
     (agent as any).promptQueue.enqueue({
       id: 'slack-turn',
       content: 'from slack',
@@ -385,7 +384,7 @@ describe('SessionAgentDO', () => {
 
     const promptMessage = broadcasts.find((message) => message.type === 'interactive_prompt');
     expect(promptMessage).toBeTruthy();
-    // Channel is attributed from the prompt_queue row, not the stale Slack cursor.
+    // Channel is attributed from the prompt_queue row for the current prompt.
     expect(promptMessage).toMatchObject({ channelType: 'web', channelId: 'default' });
     expect(promptMessage?.prompt).toMatchObject({
       id: 'q-web',

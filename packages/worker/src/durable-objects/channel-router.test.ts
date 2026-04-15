@@ -45,34 +45,6 @@ describe('ChannelRouter', () => {
     router = new ChannelRouter(deps);
   });
 
-  describe('activeChannel', () => {
-    it('returns null initially', () => {
-      expect(router.activeChannel).toBeNull();
-    });
-
-    it('returns channel after setActiveChannel', () => {
-      router.setActiveChannel({ channelType: 'slack', channelId: 'C123' });
-      expect(router.activeChannel).toEqual({ channelType: 'slack', channelId: 'C123' });
-    });
-
-    it('atomically replaces previous value', () => {
-      router.setActiveChannel({ channelType: 'slack', channelId: 'C123' });
-      router.setActiveChannel({ channelType: 'telegram', channelId: 'T456' });
-      expect(router.activeChannel).toEqual({ channelType: 'telegram', channelId: 'T456' });
-    });
-
-    it('returns null after clearActiveChannel', () => {
-      router.setActiveChannel({ channelType: 'slack', channelId: 'C123' });
-      router.clearActiveChannel();
-      expect(router.activeChannel).toBeNull();
-    });
-
-    it('recovers from hibernation', () => {
-      router.recoverActiveChannel('slack', 'C123');
-      expect(router.activeChannel).toEqual({ channelType: 'slack', channelId: 'C123' });
-    });
-  });
-
   describe('sendReply', () => {
     it('resolves transport, token, persona and sends', async () => {
       const result = await router.sendReply({
