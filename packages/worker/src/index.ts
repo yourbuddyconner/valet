@@ -1107,8 +1107,8 @@ async function archiveTerminatedSessions(env: Env): Promise<void> {
 /**
  * Auto-restart orchestrator sessions that have been in a terminal state for >2 minutes.
  * The 2-minute threshold prevents racing with the refresh dialog's terminate→create flow.
- * Safe against duplicates: restartOrchestratorSession will fail with a 409-equivalent
- * if another restart already succeeded (the DB query excludes users with healthy sessions).
+ * restartOrchestratorSession stops any existing non-terminal session before creating
+ * a new one, and re-checks D1 after the stop to guard against concurrent restarts.
  */
 async function autoRestartDeadOrchestrators(env: Env): Promise<void> {
   const deadOrchestrators = await getTerminatedOrchestratorSessions(env.DB, 2);

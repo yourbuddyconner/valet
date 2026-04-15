@@ -2703,6 +2703,7 @@ export class SessionAgentDO {
             msg.targetSessionId!,
             msg.content!,
             msg.interrupt,
+            this.sessionState.sessionId,
           );
           if (result.error) {
             this.runnerLink.send({ type: 'session-message-result', requestId, error: result.error });

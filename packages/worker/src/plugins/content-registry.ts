@@ -284,7 +284,7 @@ timeout 10 agent-browser --headed wait --text "Welcome"     # Wait for specific 
     artifacts: [
       { type: "skill", filename: "github.md", content: `---
 name: github
-description: How to use GitHub integration tools — list repos, create PRs, manage issues, read files. Covers credential routing (personal vs org), available actions, and common patterns.
+description: How to use GitHub integration tools — list repos, create PRs, manage issues, read files. Covers token model, available actions, attribution behavior, and common patterns.
 ---
 
 # GitHub Integration Tools
@@ -298,27 +298,30 @@ list_tools service=github    # Discover available GitHub actions
 call_tool github:github.<action_id> params={...} summary="..."
 \`\`\`
 
-## Credential Routing
+## Token Model
 
-GitHub tools support two credential sources:
+GitHub actions use a single token resolved automatically:
 
-- **\`source=personal\`** — your personal OAuth token. Access to your own repos (public + private).
-- **\`source=org\`** — org GitHub App install token. Access to repos in organizations where the App is installed.
+- **User token (primary)** — personal OAuth token linked on the integrations page. Access to the user's own repos (public + private).
+- **Bot token (fallback)** — org GitHub App installation token. Access to repos in organizations where the App is installed. Used when the user has no personal token or the action targets an org repo covered by the App.
 
-Every GitHub action accepts an optional \`source\` parameter. If omitted, the system auto-resolves:
-1. If the action has an \`owner\` param matching an org the App covers, uses org credential
-2. Otherwise: org credential preferred, personal fallback
-3. On auth failure, automatically retries with the other credential
+The system resolves the best available token for each request. You do not pass a \`source\` parameter — credential routing is handled automatically based on the \`owner\` of the target repo.
 
-**When to specify \`source\` explicitly:**
-- \`list_repos source=personal\` — list your personal repos
-- \`list_repos source=org\` — list org-accessible repos
-- For repo-specific actions (get_repository, create_pull_request, etc.), auto-resolution usually works — just pass \`owner\` and \`repo\`
+**Anonymous access:** If configured by an admin, unauthenticated access to public repos may be available.
+
+## Attribution
+
+When acting under a bot token (App install), actions automatically add attribution so the user's identity is visible:
+
+- **Commits** — \`Co-Authored-By: <name> <email>\` trailer appended to commit message
+- **PR and issue bodies** — a suffix noting the action was performed on behalf of the user
+
+Users connect their personal GitHub account at **Settings → Integrations → GitHub**.
 
 ## Available Actions
 
 ### Repository
-- \`github.list_repos\` — list repositories (use \`source\` to choose personal vs org)
+- \`github.list_repos\` — list repositories accessible via the resolved token
 - \`github.get_repository\` — get repo details by owner/name
 - \`github.create_repository\` — create a new repository
 - \`github.fork_repository\` — fork a repository
@@ -371,11 +374,7 @@ call_tool github:github.create_pull_request \\
 
 ### List all repos you have access to
 \`\`\`
-# Personal repos
-call_tool github:github.list_repos source=personal summary="List personal repos"
-
-# Org repos (via GitHub App)
-call_tool github:github.list_repos source=org summary="List org repos"
+call_tool github:github.list_repos summary="List accessible repos"
 \`\`\`
 
 ### Read a file without cloning
@@ -391,6 +390,7 @@ call_tool github:github.read_repo_file \\
 - Use git CLI for local operations (checkout, add, commit, push, pull).
 - Use \`report_git_state\` after checking out branches or making commits.
 - The \`summary\` parameter on \`call_tool\` is required for medium/high risk actions (like creating PRs). Make it descriptive.
+- If a GitHub action fails with an auth error, the user may need to connect their account at Settings → Integrations → GitHub.
 `, sortOrder: 0 },
     ],
   },

@@ -9,6 +9,41 @@ import { generateRunnerToken, assembleProviderEnv, assembleCredentialEnv } from 
 import { ensureTodayJournal } from '../lib/db/memory-files.js';
 import { loadMemorySnapshot, formatMemorySnapshot } from '../lib/memory-snapshot.js';
 
+// ─── Helpers ────────────────────────────────────────────────────────────────
+
+/**
+ * Stop an existing orchestrator session's DO and mark it terminated in D1.
+ * Best-effort: if the DO is already dead or unreachable, we log and continue.
+ * This prevents orphaned sandboxes from running in parallel with the new session.
+ */
+async function stopOldOrchestratorSession(
+  env: Env,
+  appDb: AppDb,
+  oldSessionId: string,
+): Promise<void> {
+  // 1. Send /stop to the old DO so it tears down the sandbox + runner WebSocket
+  try {
+    const doId = env.SESSIONS.idFromName(oldSessionId);
+    const oldDO = env.SESSIONS.get(doId);
+    await oldDO.fetch(new Request('http://do/stop', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reason: 'orchestrator_restart' }),
+    }));
+    console.log(`[restartOrchestrator] Stopped old DO: ${oldSessionId}`);
+  } catch (err) {
+    console.warn(`[restartOrchestrator] Failed to stop old DO ${oldSessionId}, proceeding:`, err);
+  }
+
+  // 2. Explicitly mark terminated in D1 — the DO's handleStop flushes asynchronously,
+  //    so D1 may still show 'running'. Without this, duplicate detection fails.
+  try {
+    await db.updateSessionStatus(appDb, oldSessionId, 'terminated');
+  } catch (err) {
+    console.warn(`[restartOrchestrator] Failed to mark old session ${oldSessionId} terminated in D1:`, err);
+  }
+}
+
 // ─── Constants ──────────────────────────────────────────────────────────────
 
 const TERMINAL_STATUSES = new Set(['terminated', 'archived', 'error']);
@@ -24,6 +59,24 @@ export async function restartOrchestratorSession(
   requestUrl?: string
 ): Promise<{ sessionId: string }> {
   const appDb = getDb(env.DB);
+
+  // ── Stop the old orchestrator session (if any) before creating a new one ──
+  // Without this, the old DO + sandbox + Runner keep running in parallel,
+  // causing duplicate steering messages to child sessions.
+  const oldSession = await db.getOrchestratorSession(env.DB, userId);
+  if (oldSession && !TERMINAL_STATUSES.has(oldSession.status)) {
+    console.log(`[restartOrchestrator] Stopping old session ${oldSession.id} (status=${oldSession.status}) before restart`);
+    await stopOldOrchestratorSession(env, appDb, oldSession.id);
+  }
+
+  // ── Duplicate guard: re-check after stop to prevent TOCTOU races ──
+  // If another concurrent restart already created a healthy session while we were
+  // stopping the old one, bail out to avoid spawning a second parallel sandbox.
+  const recheckSession = await db.getOrchestratorSession(env.DB, userId);
+  if (recheckSession && !TERMINAL_STATUSES.has(recheckSession.status) && recheckSession.id !== oldSession?.id) {
+    console.log(`[restartOrchestrator] Another restart already created session ${recheckSession.id}, skipping`);
+    return { sessionId: recheckSession.id };
+  }
 
   // Backfill: create persona for orchestrators that predate persona support
   if (!identity.personaId) {

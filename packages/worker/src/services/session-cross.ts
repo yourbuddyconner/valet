@@ -8,6 +8,7 @@ import {
   getUserById,
   getSessionChannelBindings,
   listUserChannelBindings,
+  getOrchestratorSession,
 } from '../lib/db.js';
 import { getChildSessions } from '../lib/db/sessions.js';
 import { getCredential } from './credentials.js';
@@ -259,11 +260,23 @@ export async function sendSessionMessage(
   targetSessionId: string,
   content: string,
   interrupt?: boolean,
+  callerSessionId?: string,
 ): Promise<SendSessionMessageResult> {
   // Verify target session belongs to the same user
   const targetSession = await getSession(appDb, targetSessionId);
   if (!targetSession || targetSession.userId !== userId) {
     return { error: 'Session not found or access denied' };
+  }
+
+  // Defense-in-depth: if the caller is an orchestrator session, verify it's the
+  // *current* orchestrator — not an orphaned one from a previous restart. This
+  // prevents stale sandboxes from sending duplicate steering messages.
+  if (callerSessionId?.startsWith('orchestrator:')) {
+    const currentOrch = await getOrchestratorSession(env.DB, userId);
+    if (currentOrch && currentOrch.id !== callerSessionId) {
+      console.warn(`[sendSessionMessage] Rejecting message from stale orchestrator ${callerSessionId} (current: ${currentOrch.id})`);
+      return { error: 'Stale orchestrator session — message rejected' };
+    }
   }
 
   // Forward prompt to target DO

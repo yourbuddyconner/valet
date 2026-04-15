@@ -14,7 +14,6 @@ import {
   listCustomProviders,
   deleteCustomProvider,
   getOrchestratorIdentity,
-  updateSessionStatus,
 } from '../lib/db.js';
 import { getDb } from '../lib/drizzle.js';
 import * as adminService from '../services/admin.js';
@@ -426,31 +425,8 @@ adminRouter.post('/orchestrators/:sessionId/refresh', async (c) => {
     return c.json({ error: 'User not found' }, 404);
   }
 
-  // Stop the current session DO (best-effort — may already be stopped/errored)
-  try {
-    const doId = c.env.SESSIONS.idFromName(sessionId);
-    const sessionDO = c.env.SESSIONS.get(doId);
-    await sessionDO.fetch(new Request('http://do/stop', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ reason: 'admin_refresh' }),
-    }));
-  } catch (err) {
-    console.warn(`[admin] Failed to stop orchestrator ${sessionId}, proceeding with restart:`, err);
-  }
-
-  // Explicitly mark old session as terminated in D1. The DO's handleStop updates
-  // D1 asynchronously (fire-and-forget), so it may not have flushed yet. Without
-  // this, the old session stays "running" in D1 and appears as a duplicate in the
-  // admin list, and channel binding migration in restartOrchestratorSession may
-  // also see stale state.
-  try {
-    await updateSessionStatus(appDb, sessionId, 'terminated');
-  } catch (err) {
-    console.warn(`[admin] Failed to mark old session ${sessionId} as terminated in D1:`, err);
-  }
-
-  // Restart with a new session ID (rotates DO, migrates channels, fresh sandbox)
+  // restartOrchestratorSession now stops the old DO + marks D1 terminated before
+  // creating the new session, so no explicit stop/terminate needed here.
   const result = await restartOrchestratorSession(
     c.env,
     session.user_id,
