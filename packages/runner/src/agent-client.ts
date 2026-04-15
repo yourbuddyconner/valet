@@ -242,12 +242,12 @@ export class AgentClient {
     });
   }
 
-  sendQuestion(questionId: string, text: string, options?: string[]): void {
-    this.send({ type: "question", questionId, text, options });
+  sendQuestion(messageId: string | undefined, questionId: string, text: string, options?: string[]): void {
+    this.send({ type: "question", messageId, questionId, text, options });
   }
 
-  sendScreenshot(data: string, description: string): void {
-    this.send({ type: "screenshot", data, description });
+  sendScreenshot(messageId: string | undefined, data: string, description: string): void {
+    this.send({ type: "screenshot", messageId, data, description });
   }
 
   sendError(messageId: string, error: string): void {
@@ -258,8 +258,8 @@ export class AgentClient {
     this.send({ type: "complete", ...(messageId ? { messageId } : {}) });
   }
 
-  sendAgentStatus(status: AgentStatus, detail?: string): void {
-    this.send({ type: "agentStatus", status, detail });
+  sendAgentStatus(status: AgentStatus, detail?: string, messageId?: string): void {
+    this.send({ type: "agentStatus", messageId, status, detail });
   }
 
   sendGitState(params: { branch?: string; baseBranch?: string; commitCount?: number }): void {

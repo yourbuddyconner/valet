@@ -396,9 +396,6 @@ export class ChannelSession {
   // in this runner process. We re-sync it before first prompt dispatch.
   adoptedPersistedSession = false;
 
-  // Orchestrator thread ID passed from DO (may differ from channel-derived threadId)
-  promptThreadId: string | undefined = undefined;
-
   // Track current prompt so we can route events back to the DO
   activeMessageId: string | null = null;
   streamedContent = "";
@@ -555,71 +552,89 @@ export class PromptHandler {
   private channels = new Map<string, ChannelSession>();
   private ocSessionToChannel = new Map<string, ChannelSession>(); // reverse lookup for SSE routing
 
-  // Active channel — set when a prompt arrives, used by methods that haven't been
-  // updated to accept a channel parameter yet (backward compat bridge)
-  private activeChannel: ChannelSession | null = null;
+  /**
+   * The channel for the currently-dispatching prompt. Set by `handlePrompt`
+   * at prompt entry; cleared/restored at prompt exit. NEVER written by SSE
+   * event handlers — Task 12 plumbs `channel: ChannelSession` through
+   * `consumeEventStream` and its dispatch table explicitly, so SSE events
+   * never need to mutate this field (which would risk cross-prompt cursor
+   * clobbering).
+   *
+   * Backs the delegating per-prompt accessors below (activeMessageId,
+   * streamedContent, etc.) used by sync-flow helpers called from
+   * `handlePrompt` (finalizeSyncResponse, attemptModelFailover,
+   * ensureTurnCreated, etc.) that haven't been refactored to take an
+   * explicit `channel` parameter. Also backs `getActiveMessageId()` used
+   * by `bin.ts` gateway callbacks (screenshot / image uploads) which have
+   * no channel context at their call site.
+   *
+   * Renamed from `activeChannel` in Task 13 to make the scoping contract
+   * explicit.
+   */
+  private currentPromptChannel: ChannelSession | null = null;
 
-  // Legacy single-session compat — points to activeChannel's OC session ID
+  // Legacy single-session compat — points to currentPromptChannel's OC session ID
   // Used by ephemeral sessions, reviews, etc. that don't need per-channel routing
   private get sessionId(): string | null {
-    return this.activeChannel?.opencodeSessionId ?? null;
+    return this.currentPromptChannel?.opencodeSessionId ?? null;
   }
   private set sessionId(val: string | null) {
-    if (this.activeChannel) {
-      this.activeChannel.opencodeSessionId = val;
+    if (this.currentPromptChannel) {
+      this.currentPromptChannel.opencodeSessionId = val;
     }
   }
 
-  // Delegate per-prompt fields to activeChannel for backward compat
-  private get activeMessageId(): string | null { return this.activeChannel?.activeMessageId ?? null; }
-  private set activeMessageId(val: string | null) { if (this.activeChannel) this.activeChannel.activeMessageId = val; }
-  private get streamedContent(): string { return this.activeChannel?.streamedContent ?? ""; }
-  private set streamedContent(val: string) { if (this.activeChannel) this.activeChannel.streamedContent = val; }
-  private get hasActivity(): boolean { return this.activeChannel?.hasActivity ?? false; }
-  private set hasActivity(val: boolean) { if (this.activeChannel) this.activeChannel.hasActivity = val; }
-  private get lastChunkTime(): number { return this.activeChannel?.lastChunkTime ?? 0; }
-  private set lastChunkTime(val: number) { if (this.activeChannel) this.activeChannel.lastChunkTime = val; }
-  private get toolStates(): Map<string, { status: ToolStatus; toolName: string }> { return this.activeChannel?.toolStates ?? new Map(); }
-  private get textPartSnapshots(): Map<string, string> { return this.activeChannel?.textPartSnapshots ?? new Map(); }
-  private get messageTextSnapshots(): Map<string, string> { return this.activeChannel?.messageTextSnapshots ?? new Map(); }
-  private get messageRoles(): Map<string, string> { return this.activeChannel?.messageRoles ?? new Map(); }
-  private get activeAssistantMessageIds(): Set<string> { return this.activeChannel?.activeAssistantMessageIds ?? new Set(); }
-  private get latestAssistantTextSnapshot(): string { return this.activeChannel?.latestAssistantTextSnapshot ?? ""; }
-  private set latestAssistantTextSnapshot(val: string) { if (this.activeChannel) this.activeChannel.latestAssistantTextSnapshot = val; }
-  private get recentEventTrace(): string[] { return this.activeChannel?.recentEventTrace ?? []; }
-  private set recentEventTrace(val: string[]) { if (this.activeChannel) this.activeChannel.recentEventTrace = val; }
-  private get lastError(): string | null { return this.activeChannel?.lastError ?? null; }
-  private set lastError(val: string | null) { if (this.activeChannel) this.activeChannel.lastError = val; }
-  private get hadToolSinceLastText(): boolean { return this.activeChannel?.hadToolSinceLastText ?? false; }
-  private set hadToolSinceLastText(val: boolean) { if (this.activeChannel) this.activeChannel.hadToolSinceLastText = val; }
-  private get idleNotified(): boolean { return this.activeChannel?.idleNotified ?? false; }
-  private set idleNotified(val: boolean) { if (this.activeChannel) this.activeChannel.idleNotified = val; }
-  private get doToOcMessageId(): Map<string, string> { return this.activeChannel?.doToOcMessageId ?? new Map(); }
-  private get ocToDOMessageId(): Map<string, string> { return this.activeChannel?.ocToDOMessageId ?? new Map(); }
-  private get currentModelPreferences(): string[] | undefined { return this.activeChannel?.currentModelPreferences; }
-  private set currentModelPreferences(val: string[] | undefined) { if (this.activeChannel) this.activeChannel.currentModelPreferences = val; }
-  private get currentModelIndex(): number { return this.activeChannel?.currentModelIndex ?? 0; }
-  private set currentModelIndex(val: number) { if (this.activeChannel) this.activeChannel.currentModelIndex = val; }
-  private get pendingRetryContent(): string | null { return this.activeChannel?.pendingRetryContent ?? null; }
-  private set pendingRetryContent(val: string | null) { if (this.activeChannel) this.activeChannel.pendingRetryContent = val; }
-  private get pendingRetryAttachments(): PromptAttachment[] { return this.activeChannel?.pendingRetryAttachments ?? []; }
-  private set pendingRetryAttachments(val: PromptAttachment[]) { if (this.activeChannel) this.activeChannel.pendingRetryAttachments = val; }
-  private get pendingRetryAuthor(): PromptAuthor | undefined { return this.activeChannel?.pendingRetryAuthor; }
-  private set pendingRetryAuthor(val: PromptAuthor | undefined) { if (this.activeChannel) this.activeChannel.pendingRetryAuthor = val; }
-  private get waitForEventForced(): boolean { return this.activeChannel?.waitForEventForced ?? false; }
-  private set waitForEventForced(val: boolean) { if (this.activeChannel) this.activeChannel.waitForEventForced = val; }
-  private get failoverInProgress(): boolean { return this.activeChannel?.failoverInProgress ?? false; }
-  private set failoverInProgress(val: boolean) { if (this.activeChannel) this.activeChannel.failoverInProgress = val; }
-  private get retryPending(): boolean { return this.activeChannel?.retryPending ?? false; }
-  private set retryPending(val: boolean) { if (this.activeChannel) this.activeChannel.retryPending = val; }
-  private get finalizeInFlight(): boolean { return this.activeChannel?.finalizeInFlight ?? false; }
-  private set finalizeInFlight(val: boolean) { if (this.activeChannel) this.activeChannel.finalizeInFlight = val; }
-  private get awaitingAssistantForAttempt(): boolean { return this.activeChannel?.awaitingAssistantForAttempt ?? false; }
-  private set awaitingAssistantForAttempt(val: boolean) { if (this.activeChannel) this.activeChannel.awaitingAssistantForAttempt = val; }
-  private get turnCreated(): boolean { return this.activeChannel?.turnCreated ?? false; }
-  private set turnCreated(val: boolean) { if (this.activeChannel) this.activeChannel.turnCreated = val; }
-  private get turnId(): string | null { return this.activeChannel?.turnId ?? null; }
-  private set turnId(val: string | null) { if (this.activeChannel) this.activeChannel.turnId = val; }
+  // Delegate per-prompt fields to currentPromptChannel. Safe because the backing
+  // field is managed only by handlePrompt and consumeEventStream (see JSDoc above).
+  private get activeMessageId(): string | null { return this.currentPromptChannel?.activeMessageId ?? null; }
+  private set activeMessageId(val: string | null) { if (this.currentPromptChannel) this.currentPromptChannel.activeMessageId = val; }
+  private get streamedContent(): string { return this.currentPromptChannel?.streamedContent ?? ""; }
+  private set streamedContent(val: string) { if (this.currentPromptChannel) this.currentPromptChannel.streamedContent = val; }
+  private get hasActivity(): boolean { return this.currentPromptChannel?.hasActivity ?? false; }
+  private set hasActivity(val: boolean) { if (this.currentPromptChannel) this.currentPromptChannel.hasActivity = val; }
+  private get lastChunkTime(): number { return this.currentPromptChannel?.lastChunkTime ?? 0; }
+  private set lastChunkTime(val: number) { if (this.currentPromptChannel) this.currentPromptChannel.lastChunkTime = val; }
+  private get toolStates(): Map<string, { status: ToolStatus; toolName: string }> { return this.currentPromptChannel?.toolStates ?? new Map(); }
+  private get textPartSnapshots(): Map<string, string> { return this.currentPromptChannel?.textPartSnapshots ?? new Map(); }
+  private get messageTextSnapshots(): Map<string, string> { return this.currentPromptChannel?.messageTextSnapshots ?? new Map(); }
+  private get messageRoles(): Map<string, string> { return this.currentPromptChannel?.messageRoles ?? new Map(); }
+  private get activeAssistantMessageIds(): Set<string> { return this.currentPromptChannel?.activeAssistantMessageIds ?? new Set(); }
+  private get latestAssistantTextSnapshot(): string { return this.currentPromptChannel?.latestAssistantTextSnapshot ?? ""; }
+  private set latestAssistantTextSnapshot(val: string) { if (this.currentPromptChannel) this.currentPromptChannel.latestAssistantTextSnapshot = val; }
+  private get recentEventTrace(): string[] { return this.currentPromptChannel?.recentEventTrace ?? []; }
+  private set recentEventTrace(val: string[]) { if (this.currentPromptChannel) this.currentPromptChannel.recentEventTrace = val; }
+  private get lastError(): string | null { return this.currentPromptChannel?.lastError ?? null; }
+  private set lastError(val: string | null) { if (this.currentPromptChannel) this.currentPromptChannel.lastError = val; }
+  private get hadToolSinceLastText(): boolean { return this.currentPromptChannel?.hadToolSinceLastText ?? false; }
+  private set hadToolSinceLastText(val: boolean) { if (this.currentPromptChannel) this.currentPromptChannel.hadToolSinceLastText = val; }
+  private get idleNotified(): boolean { return this.currentPromptChannel?.idleNotified ?? false; }
+  private set idleNotified(val: boolean) { if (this.currentPromptChannel) this.currentPromptChannel.idleNotified = val; }
+  private get doToOcMessageId(): Map<string, string> { return this.currentPromptChannel?.doToOcMessageId ?? new Map(); }
+  private get ocToDOMessageId(): Map<string, string> { return this.currentPromptChannel?.ocToDOMessageId ?? new Map(); }
+  private get currentModelPreferences(): string[] | undefined { return this.currentPromptChannel?.currentModelPreferences; }
+  private set currentModelPreferences(val: string[] | undefined) { if (this.currentPromptChannel) this.currentPromptChannel.currentModelPreferences = val; }
+  private get currentModelIndex(): number { return this.currentPromptChannel?.currentModelIndex ?? 0; }
+  private set currentModelIndex(val: number) { if (this.currentPromptChannel) this.currentPromptChannel.currentModelIndex = val; }
+  private get pendingRetryContent(): string | null { return this.currentPromptChannel?.pendingRetryContent ?? null; }
+  private set pendingRetryContent(val: string | null) { if (this.currentPromptChannel) this.currentPromptChannel.pendingRetryContent = val; }
+  private get pendingRetryAttachments(): PromptAttachment[] { return this.currentPromptChannel?.pendingRetryAttachments ?? []; }
+  private set pendingRetryAttachments(val: PromptAttachment[]) { if (this.currentPromptChannel) this.currentPromptChannel.pendingRetryAttachments = val; }
+  private get pendingRetryAuthor(): PromptAuthor | undefined { return this.currentPromptChannel?.pendingRetryAuthor; }
+  private set pendingRetryAuthor(val: PromptAuthor | undefined) { if (this.currentPromptChannel) this.currentPromptChannel.pendingRetryAuthor = val; }
+  private get waitForEventForced(): boolean { return this.currentPromptChannel?.waitForEventForced ?? false; }
+  private set waitForEventForced(val: boolean) { if (this.currentPromptChannel) this.currentPromptChannel.waitForEventForced = val; }
+  private get failoverInProgress(): boolean { return this.currentPromptChannel?.failoverInProgress ?? false; }
+  private set failoverInProgress(val: boolean) { if (this.currentPromptChannel) this.currentPromptChannel.failoverInProgress = val; }
+  private get retryPending(): boolean { return this.currentPromptChannel?.retryPending ?? false; }
+  private set retryPending(val: boolean) { if (this.currentPromptChannel) this.currentPromptChannel.retryPending = val; }
+  private get finalizeInFlight(): boolean { return this.currentPromptChannel?.finalizeInFlight ?? false; }
+  private set finalizeInFlight(val: boolean) { if (this.currentPromptChannel) this.currentPromptChannel.finalizeInFlight = val; }
+  private get awaitingAssistantForAttempt(): boolean { return this.currentPromptChannel?.awaitingAssistantForAttempt ?? false; }
+  private set awaitingAssistantForAttempt(val: boolean) { if (this.currentPromptChannel) this.currentPromptChannel.awaitingAssistantForAttempt = val; }
+  private get turnCreated(): boolean { return this.currentPromptChannel?.turnCreated ?? false; }
+  private set turnCreated(val: boolean) { if (this.currentPromptChannel) this.currentPromptChannel.turnCreated = val; }
+  private get turnId(): string | null { return this.currentPromptChannel?.turnId ?? null; }
+  private set turnId(val: string | null) { if (this.currentPromptChannel) this.currentPromptChannel.turnId = val; }
 
   // Ephemeral session tracking — resolved when the session becomes idle via SSE
   private idleWaiters = new Map<string, () => void>();
@@ -692,6 +707,18 @@ export class PromptHandler {
   /** Whether the OpenCode SSE event stream is connected. */
   isOpenCodeConnected(): boolean {
     return this.eventStreamActive;
+  }
+
+  /**
+   * Exposes the active prompt's messageId for emit paths (screenshot, image
+   * uploads, etc.) that need to attribute outbound messages to the in-flight
+   * prompt's channel. Reads from `currentPromptChannel` which is set by
+   * `handlePrompt` while dispatching a prompt, and temporarily by
+   * `consumeEventStream` while routing SSE events. Returns undefined between
+   * prompts or from gateway callers without any channel context.
+   */
+  getActiveMessageId(): string | undefined {
+    return this.currentPromptChannel?.activeMessageId ?? undefined;
   }
 
   /** Get or create a ChannelSession for the given channel. */
@@ -872,9 +899,9 @@ export class PromptHandler {
     }
     const channelType = channel.channelKey.slice(0, idx);
     const channelId = channel.channelKey.slice(idx + 1);
-    // For thread channels (key = "thread:<threadId>"), extract threadId.
-    // Otherwise, use the orchestrator threadId passed from the DO prompt.
-    const threadId = channelType === "thread" ? channelId : channel.promptThreadId;
+    // Thread channels carry their thread ID in the channel key. Other channels
+    // do not carry a thread ID — never fall back to a separate mutable field.
+    const threadId = channelType === "thread" ? channelId : undefined;
     return { channelType, channelId, threadId };
   }
 
@@ -892,7 +919,7 @@ export class PromptHandler {
   ): Promise<void> {
     const executionId = request.executionId;
     const emitChatError = options?.emitChatError !== false;
-    this.agentClient.sendAgentStatus("thinking");
+    this.agentClient.sendAgentStatus("thinking", undefined, messageId);
 
     const fail = async (error: string) => {
       this.agentClient.sendWorkflowExecutionResult(executionId, {
@@ -907,7 +934,7 @@ export class PromptHandler {
       if (emitChatError) {
         this.agentClient.sendError(messageId, error);
       }
-      this.agentClient.sendAgentStatus("idle");
+      this.agentClient.sendAgentStatus("idle", undefined, messageId);
       this.agentClient.sendComplete();
     };
 
@@ -977,7 +1004,7 @@ export class PromptHandler {
         requiresApproval: envelope.requiresApproval,
         error: envelope.error,
       });
-      this.agentClient.sendAgentStatus("idle");
+      this.agentClient.sendAgentStatus("idle", undefined, messageId);
       this.agentClient.sendComplete();
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -1126,7 +1153,7 @@ export class PromptHandler {
           ? step.awaitTimeoutMs
           : 120_000;
     const awaitTimeoutMs = Math.max(1_000, Math.min(awaitTimeoutRaw, 900_000));
-    const previousChannel = this.activeChannel;
+    const previousChannel = this.currentPromptChannel;
     const modelChain = this.buildModelFailoverChain(
       this.workflowExecutionModel,
       this.workflowExecutionModelPreferences,
@@ -1137,7 +1164,7 @@ export class PromptHandler {
       const workflowChannelType = "workflow";
       const workflowChannelId = context.executionId;
       const channel = this.getOrCreateChannel(workflowChannelType, workflowChannelId);
-      this.activeChannel = channel;
+      this.currentPromptChannel = channel;
       await this.ensureChannelOpenCodeSession(channel);
 
       this.agentClient.sendWorkflowChatMessage("user", content, {
@@ -1290,7 +1317,7 @@ export class PromptHandler {
         },
       };
     } finally {
-      this.activeChannel = previousChannel;
+      this.currentPromptChannel = previousChannel;
     }
   }
 
@@ -1341,9 +1368,11 @@ export class PromptHandler {
     }
 
     // Resolve per-channel session
-    this.activeChannel = channel;
-    // Store the orchestrator threadId so it flows through to message.create
-    channel.promptThreadId = threadId ?? undefined;
+    this.currentPromptChannel = channel;
+    // NOTE: `threadId` parameter is no longer consumed here. Thread routing now
+    // flows through the `thread:<id>` channelKey resolved upstream in the DO.
+    // The parameter remains in the signature for caller compatibility.
+    void threadId;
     // Store original channel info for [via ...] attribution prefix
     this.pendingReplyChannelType = replyChannelType;
     this.pendingReplyChannelId = replyChannelId;
@@ -1461,7 +1490,7 @@ export class PromptHandler {
       this.currentModelIndex = 0;
 
       // Notify client that agent is thinking
-      this.agentClient.sendAgentStatus("thinking");
+      this.agentClient.sendAgentStatus("thinking", undefined, messageId);
       this.awaitingAssistantForAttempt = true;
       this.lastPromptSentAt = Date.now();
 
@@ -1497,7 +1526,7 @@ export class PromptHandler {
           }
           channel.resetForRetry();
           channel.syncPromptInFlight = true; // Re-set after resetForRetry clears it
-          this.agentClient.sendAgentStatus("thinking");
+          this.agentClient.sendAgentStatus("thinking", undefined, messageId);
           this.awaitingAssistantForAttempt = true;
         }
 
@@ -1604,7 +1633,7 @@ export class PromptHandler {
       console.error("[PromptHandler] Error processing prompt:", errorMsg);
       this.agentClient.sendError(messageId, errorMsg);
       this.agentClient.sendComplete(this.activeMessageId ?? undefined);
-      this.agentClient.sendAgentStatus("idle");
+      this.agentClient.sendAgentStatus("idle", undefined, messageId);
     }
   }
 
@@ -1681,7 +1710,7 @@ export class PromptHandler {
     // Emit llm_response timing with token counts for throughput analysis
     if (this.lastPromptSentAt > 0) {
       const durationMs = Date.now() - this.lastPromptSentAt;
-      const usageChannel = this.activeChannel;
+      const usageChannel = this.currentPromptChannel;
       let inputTokens = 0;
       let outputTokens = 0;
       if (usageChannel) {
@@ -1703,10 +1732,10 @@ export class PromptHandler {
     }
 
     this.agentClient.sendComplete(this.activeMessageId ?? undefined);
-    this.agentClient.sendAgentStatus("idle");
+    this.agentClient.sendAgentStatus("idle", undefined, messageId ?? undefined);
 
     // Emit usage report for this turn
-    const usageChannel = this.activeChannel;
+    const usageChannel = this.currentPromptChannel;
     if (usageChannel && usageChannel.usageEntries.size > 0 && usageChannel.turnId) {
       const entries = Array.from(usageChannel.usageEntries.entries()).map(
         ([ocMessageId, data]) => ({
@@ -1721,7 +1750,7 @@ export class PromptHandler {
     }
 
     // Check for pre-compaction memory flush after each turn
-    const flushChannel = this.activeChannel;
+    const flushChannel = this.currentPromptChannel;
     if (flushChannel && !flushChannel.memoryFlushInProgress) {
       flushChannel.turnCount++;
       this.checkAndTriggerMemoryFlush(flushChannel).catch(err =>
@@ -1766,7 +1795,7 @@ export class PromptHandler {
     this.pendingRetryAuthor = undefined;
     this.retryPending = false;
     this.finalizeInFlight = false;
-    if (this.activeChannel) this.activeChannel.syncPromptInFlight = false;
+    if (this.currentPromptChannel) this.currentPromptChannel.syncPromptInFlight = false;
     console.log(`[PromptHandler] Response finalized`);
   }
 
@@ -1797,13 +1826,13 @@ export class PromptHandler {
     }
 
     // Reset stream state for retry (keep activeMessageId)
-    if (this.activeChannel) this.activeChannel.resetForRetry();
+    if (this.currentPromptChannel) this.currentPromptChannel.resetForRetry();
 
     // Retry with next model
     try {
-      this.agentClient.sendAgentStatus("thinking");
+      this.agentClient.sendAgentStatus("thinking", undefined, this.activeMessageId ?? undefined);
       this.awaitingAssistantForAttempt = true;
-      const activeChannel = this.activeChannel;
+      const activeChannel = this.currentPromptChannel;
       if (!activeChannel) throw new Error("No active channel for failover retry");
       const channelContext = this.extractChannelContext(activeChannel);
       await this.sendPromptToChannelWithRecovery(activeChannel, this.pendingRetryContent!, {
@@ -1929,7 +1958,7 @@ export class PromptHandler {
     }
   }
 
-  private handleQuestionAsked(properties: Record<string, unknown>): void {
+  private handleQuestionAsked(properties: Record<string, unknown>, channel: ChannelSession): void {
     const requestID = typeof properties.id === "string" ? properties.id : "";
     const questionsRaw = Array.isArray(properties.questions) ? properties.questions : [];
     const parsedQuestions = questionsRaw
@@ -1949,7 +1978,12 @@ export class PromptHandler {
     parsedQuestions.forEach((question, index) => {
       const promptID = parsedQuestions.length === 1 ? requestID : `${requestID}:${index}`;
       this.promptToQuestion.set(promptID, { requestID, index });
-      this.agentClient.sendQuestion(promptID, question.text, question.options);
+      const messageId = channel.activeMessageId;
+      if (!messageId) {
+        console.warn(`[PromptHandler] question.asked but no active messageId — dropping (requestID=${requestID})`);
+        return;
+      }
+      this.agentClient.sendQuestion(messageId, promptID, question.text, question.options);
     });
   }
 
@@ -1999,7 +2033,8 @@ export class PromptHandler {
       // 'aborted' signal that triggers handlePromptComplete().
       console.log(`[PromptHandler] Abort: no active channels to abort, sending aborted ack`);
       this.agentClient.sendAborted();
-      this.agentClient.sendAgentStatus("idle");
+      // TEMPORARY: Task 12 plumbs channel-bound messageId through SSE handlers
+      this.agentClient.sendAgentStatus("idle", undefined, this.getActiveMessageId());
       return;
     }
 
@@ -2015,7 +2050,8 @@ export class PromptHandler {
 
     // Tell DO first so clients get immediate feedback
     this.agentClient.sendAborted();
-    this.agentClient.sendAgentStatus("idle");
+    // TEMPORARY: Task 12 plumbs channel-bound messageId through SSE handlers
+    this.agentClient.sendAgentStatus("idle", undefined, this.getActiveMessageId());
 
     // Then tell OpenCode to stop generating for each channel (may be slow)
     for (const ch of targetChannels) {
@@ -2299,7 +2335,7 @@ export class PromptHandler {
     // with the user/prompt message ID (activeMessageId).
     const turnId = crypto.randomUUID();
     this.turnId = turnId;
-    const channel = this.activeChannel;
+    const channel = this.currentPromptChannel;
     const channelContext = channel ? this.extractChannelContext(channel) : {};
     this.agentClient.sendTurnCreate(turnId, {
       channelType: channelContext.channelType,
@@ -3257,41 +3293,27 @@ export class PromptHandler {
       if (eventSessionId !== this.sessionId) return;
     }
 
-    // Route to the correct channel session via OC session ID
-    let eventChannel: ChannelSession | undefined;
-    if (eventSessionId) {
-      eventChannel = this.ocSessionToChannel.get(eventSessionId);
-      if (!eventChannel) {
-        // Not one of our channel sessions — skip unless it's the legacy single session
-        // (backward compat for channels created before per-channel routing)
-        if (this.activeChannel?.opencodeSessionId === eventSessionId) {
-          eventChannel = this.activeChannel;
-        } else {
-          this.sseDroppedEventCount++;
-          if (this.sseDroppedEventCount <= 20 || this.verboseSseDebug) {
-            console.warn(
-              `[PromptHandler] Dropping SSE event (unmapped session): type=${event.type} session=${eventSessionId} knownSessions=${this.ocSessionToChannel.size}`
-            );
-          }
-          return;
-        }
+    // Route to the correct channel session via OC session ID. Explicit lookup only —
+    // no fallback to a mutable "active" cursor. Drop events without a usable session.
+    if (!eventSessionId) {
+      this.sseDroppedEventCount++;
+      if (this.sseDroppedEventCount <= 20 || this.verboseSseDebug) {
+        console.warn(
+          `[PromptHandler] Dropping SSE event (no session ID): type=${event.type}`
+        );
       }
-    } else {
-      // No session ID in event — use the active channel
-      eventChannel = this.activeChannel ?? undefined;
-      if (!eventChannel) {
-        this.sseDroppedEventCount++;
-        if (this.sseDroppedEventCount <= 20 || this.verboseSseDebug) {
-          console.warn(
-            `[PromptHandler] Dropping SSE event (no active channel): type=${event.type}`
-          );
-        }
-      }
+      return;
     }
-
-    // Set activeChannel for the duration of event processing so delegate accessors work
-    const prevChannel = this.activeChannel;
-    if (eventChannel) this.activeChannel = eventChannel;
+    const eventChannel = this.ocSessionToChannel.get(eventSessionId);
+    if (!eventChannel) {
+      this.sseDroppedEventCount++;
+      if (this.sseDroppedEventCount <= 20 || this.verboseSseDebug) {
+        console.warn(
+          `[PromptHandler] Dropping SSE event (unmapped session): type=${event.type} session=${eventSessionId} knownSessions=${this.ocSessionToChannel.size}`
+        );
+      }
+      return;
+    }
 
     const tracePart = props.part as Record<string, unknown> | undefined;
     const traceInfo = (props.info ?? props) as Record<string, unknown>;
@@ -3302,44 +3324,46 @@ export class PromptHandler {
     const traceRole = traceInfo?.role as string | undefined;
     const traceDelta = typeof props.delta === "string" ? props.delta.length : 0;
     const traceType = tracePart?.type ? String(tracePart.type) : undefined;
-    this.appendEventTrace(`${event.type}${traceType ? `:${traceType}` : ""}${traceRole ? ` role=${traceRole}` : ""}${traceMsgId ? ` msg=${traceMsgId}` : ""}${traceDelta ? ` d=${traceDelta}` : ""}`);
+    eventChannel.recentEventTrace.push(`${event.type}${traceType ? `:${traceType}` : ""}${traceRole ? ` role=${traceRole}` : ""}${traceMsgId ? ` msg=${traceMsgId}` : ""}${traceDelta ? ` d=${traceDelta}` : ""}`);
+    if (eventChannel.recentEventTrace.length > 40) {
+      eventChannel.recentEventTrace.shift();
+    }
 
-    try {
     switch (event.type) {
       case "message.part.updated": {
-        this.handlePartUpdated(props);
+        this.handlePartUpdated(props, eventChannel);
         break;
       }
 
       case "message.updated": {
-        this.handleMessageUpdated(props);
+        this.handleMessageUpdated(props, eventChannel);
         break;
       }
 
       case "session.status": {
-        this.handleSessionStatus(props);
+        this.handleSessionStatus(props, eventChannel);
         break;
       }
 
       case "session.idle": {
-        console.log(`[PromptHandler] session.idle (channel: ${eventChannel?.channelKey ?? 'unknown'}, activeMessageId: ${this.activeMessageId ? 'yes' : 'no'})`);
+        console.log(`[PromptHandler] session.idle (channel: ${eventChannel.channelKey}, activeMessageId: ${eventChannel.activeMessageId ? 'yes' : 'no'})`);
         // With sync prompts, finalization happens via HTTP response.
         // session.idle is still used for idle status notification and ephemeral sessions.
 
         // Ephemeral session waiters
-        if (eventSessionId && this.idleWaiters.has(eventSessionId)) {
+        if (this.idleWaiters.has(eventSessionId)) {
           const resolve = this.idleWaiters.get(eventSessionId);
           resolve?.();
           this.idleWaiters.delete(eventSessionId);
         }
 
-        if (!this.idleNotified) {
+        if (!eventChannel.idleNotified) {
           // Don't broadcast misleading idle while a sync prompt is in flight —
           // the agent is not actually idle, OpenCode is between tool rounds.
-          if (!this.activeChannel?.syncPromptInFlight) {
-            this.agentClient.sendAgentStatus("idle");
+          if (!eventChannel.syncPromptInFlight) {
+            this.agentClient.sendAgentStatus("idle", undefined, eventChannel.activeMessageId ?? undefined);
           }
-          this.idleNotified = true;
+          eventChannel.idleNotified = true;
         }
         break;
       }
@@ -3362,7 +3386,7 @@ export class PromptHandler {
       }
 
       case "question.asked": {
-        this.handleQuestionAsked(props);
+        this.handleQuestionAsked(props, eventChannel);
         break;
       }
 
@@ -3381,39 +3405,33 @@ export class PromptHandler {
         console.error(`[PromptHandler] session.error: ${errorMsg}`);
         console.error(`[PromptHandler] session.error raw:`, JSON.stringify(props));
         // Record error — sync prompt response is authoritative for handling it
-        this.lastError = errorMsg;
-        this.hasActivity = true;
+        eventChannel.lastError = errorMsg;
+        eventChannel.hasActivity = true;
         break;
       }
 
       case "session.compacted": {
-        if (eventChannel) {
-          console.log(`[PromptHandler] Session compacted for ${eventChannel.channelKey}`);
-          eventChannel.cumulativeInputTokens = 0;
-          eventChannel.cumulativeOutputTokens = 0;
-          eventChannel.countedTokenMessageIds.clear();
-          eventChannel.lastFlushTurnCount = eventChannel.turnCount;
-        }
+        console.log(`[PromptHandler] Session compacted for ${eventChannel.channelKey}`);
+        eventChannel.cumulativeInputTokens = 0;
+        eventChannel.cumulativeOutputTokens = 0;
+        eventChannel.countedTokenMessageIds.clear();
+        eventChannel.lastFlushTurnCount = eventChannel.turnCount;
         break;
       }
 
       case "session.updated": {
         // Forward title/summary updates for thread channels to the DO.
         // OpenCode wraps session fields inside a nested `info` object.
-        const updatedSessionId = (props.id ?? props.sessionID ?? props.sessionId) as string | undefined;
-        if (updatedSessionId) {
-          const updatedChannel = this.ocSessionToChannel.get(updatedSessionId);
-          if (updatedChannel && updatedChannel.channelKey.startsWith("thread:")) {
-            const threadId = updatedChannel.channelKey.slice(7);
-            const info = props.info as Record<string, unknown> | undefined;
-            const summary = info?.summary as Record<string, unknown> | undefined;
-            this.agentClient.sendThreadUpdated(threadId, {
-              title: typeof info?.title === "string" ? info.title : undefined,
-              summaryAdditions: typeof summary?.additions === "number" ? summary.additions : undefined,
-              summaryDeletions: typeof summary?.deletions === "number" ? summary.deletions : undefined,
-              summaryFiles: typeof summary?.files === "number" ? summary.files : undefined,
-            });
-          }
+        if (eventChannel.channelKey.startsWith("thread:")) {
+          const threadId = eventChannel.channelKey.slice(7);
+          const info = props.info as Record<string, unknown> | undefined;
+          const summary = info?.summary as Record<string, unknown> | undefined;
+          this.agentClient.sendThreadUpdated(threadId, {
+            title: typeof info?.title === "string" ? info.title : undefined,
+            summaryAdditions: typeof summary?.additions === "number" ? summary.additions : undefined,
+            summaryDeletions: typeof summary?.deletions === "number" ? summary.deletions : undefined,
+            summaryFiles: typeof summary?.files === "number" ? summary.files : undefined,
+          });
         }
         break;
       }
@@ -3440,18 +3458,14 @@ export class PromptHandler {
         console.log(`[PromptHandler] Unhandled event: ${event.type}`);
         break;
     }
-    } finally {
-      // Restore the previous active channel
-      this.activeChannel = prevChannel;
-    }
   }
 
-  private handlePartUpdated(props: Record<string, unknown>): void {
-    if (!this.activeMessageId) return;
+  private handlePartUpdated(props: Record<string, unknown>, channel: ChannelSession): void {
+    if (!channel.activeMessageId) return;
 
     // After wait_for_event completes, suppress stale SSE events from the
     // remainder of the OpenCode turn.
-    if (this.waitForEventForced) return;
+    if (channel.waitForEventForced) return;
 
     // The part can be a tool part or a text part
     const part = props.part as Record<string, unknown> | undefined;
@@ -3463,7 +3477,7 @@ export class PromptHandler {
       props.messageID ??
       props.messageId;
     const partMessageId = messageIdRaw ? String(messageIdRaw) : undefined;
-    const partRole = partMessageId ? this.messageRoles.get(partMessageId) : undefined;
+    const partRole = partMessageId ? channel.messageRoles.get(partMessageId) : undefined;
     const partType = String(part.type ?? "");
 
     // Guard rail: ignore non-assistant parts once role is known.
@@ -3472,8 +3486,8 @@ export class PromptHandler {
     }
 
     // If this text part belongs to a known assistant message from a prior turn, ignore it.
-    if (partType === "text" && partMessageId && this.activeAssistantMessageIds.size > 0) {
-      if (!this.activeAssistantMessageIds.has(partMessageId) && partRole !== undefined) {
+    if (partType === "text" && partMessageId && channel.activeAssistantMessageIds.size > 0) {
+      if (!channel.activeAssistantMessageIds.has(partMessageId) && partRole !== undefined) {
         return;
       }
     }
@@ -3483,7 +3497,7 @@ export class PromptHandler {
     if (partType === "text") {
       const partIdRaw = part.id ?? part.messageID ?? "text";
       const partId = String(partIdRaw);
-      const messageSnapshotKey = partMessageId ?? this.activeMessageId ?? "active";
+      const messageSnapshotKey = partMessageId ?? channel.activeMessageId ?? "active";
       const partText = typeof part.text === "string"
         ? part.text
         : typeof part.content === "string"
@@ -3497,9 +3511,9 @@ export class PromptHandler {
       // Using snapshots first keeps us aligned with OpenCode's replace-by-part-id model.
       let chunk = "";
       if (typeof partText === "string") {
-        const prevByPart = this.textPartSnapshots.get(partId) ?? "";
-        const prevByMessage = this.messageTextSnapshots.get(messageSnapshotKey) ?? "";
-        const prevGlobal = this.streamedContent;
+        const prevByPart = channel.textPartSnapshots.get(partId) ?? "";
+        const prevByMessage = channel.messageTextSnapshots.get(messageSnapshotKey) ?? "";
+        const prevGlobal = channel.streamedContent;
         const candidates = [prevByPart, prevByMessage, prevGlobal].filter(Boolean);
         const prefixMatch = candidates
           .filter((candidate) => partText.startsWith(candidate))
@@ -3513,7 +3527,7 @@ export class PromptHandler {
         ) {
           // Duplicate or out-of-order stale snapshot.
           chunk = "";
-        } else if (this.streamedContent.endsWith(partText)) {
+        } else if (channel.streamedContent.endsWith(partText)) {
           // Exact replay of the same full snapshot.
           chunk = "";
         } else {
@@ -3521,57 +3535,57 @@ export class PromptHandler {
           // Emit only the non-overlapping suffix so replayed snapshots don't duplicate text.
           chunk = this.computeNonOverlappingSuffix(prevGlobal, partText);
         }
-        this.textPartSnapshots.set(partId, partText);
-        this.messageTextSnapshots.set(messageSnapshotKey, partText);
+        channel.textPartSnapshots.set(partId, partText);
+        channel.messageTextSnapshots.set(messageSnapshotKey, partText);
       } else if (delta) {
         // Snapshot missing: fall back to delta mode.
         chunk = delta;
       }
 
       if (chunk) {
-        if (this.streamedContent === "") {
-          this.agentClient.sendAgentStatus("streaming");
+        if (channel.streamedContent === "") {
+          this.agentClient.sendAgentStatus("streaming", undefined, channel.activeMessageId ?? undefined);
         }
-        this.hasActivity = true;
+        channel.hasActivity = true;
         // Text resuming after tool calls — streamedContent was already committed
         // before the tool started, so just reset the flag and keep accumulating.
-        if (this.hadToolSinceLastText) {
-          this.hadToolSinceLastText = false;
+        if (channel.hadToolSinceLastText) {
+          channel.hadToolSinceLastText = false;
         }
-        this.streamedContent += chunk;
-        this.lastChunkTime = Date.now();
+        channel.streamedContent += chunk;
+        channel.lastChunkTime = Date.now();
         this.ensureTurnCreated();
-        console.log(`[PromptHandler] text-delta: ${chunk.length} chars (total: ${this.streamedContent.length})`);
+        console.log(`[PromptHandler] text-delta: ${chunk.length} chars (total: ${channel.streamedContent.length})`);
         this.agentClient.sendTextDelta(this.turnId!, chunk);
         this.resetResponseTimeout();
       }
     } else if (partType === "tool") {
-      this.handleToolPart(part as unknown as ToolPart);
+      this.handleToolPart(part as unknown as ToolPart, channel);
     } else if (partType === "step-start") {
       // Agent starting a new step (e.g., tool execution phase)
-      this.hasActivity = true;
-      this.lastChunkTime = Date.now();
+      channel.hasActivity = true;
+      channel.lastChunkTime = Date.now();
       this.resetResponseTimeout();
     } else if (partType === "step-finish") {
       // Agent finished a step
-      this.hasActivity = true;
-      this.lastChunkTime = Date.now();
+      channel.hasActivity = true;
+      channel.lastChunkTime = Date.now();
       this.resetResponseTimeout();
     } else if (partType === "reasoning") {
       // Reasoning/thinking — track activity but don't send to client
-      this.hasActivity = true;
-      this.lastChunkTime = Date.now();
+      channel.hasActivity = true;
+      channel.lastChunkTime = Date.now();
       this.resetResponseTimeout();
     } else if (partType) {
       // Unknown part type — log and track
       console.log(`[PromptHandler] Unknown part type: "${partType}" keys=${Object.keys(part).join(",")}`);
-      this.hasActivity = true;
-      this.lastChunkTime = Date.now();
+      channel.hasActivity = true;
+      channel.lastChunkTime = Date.now();
       this.resetResponseTimeout();
     }
   }
 
-  private handleToolPart(part: ToolPart): void {
+  private handleToolPart(part: ToolPart, channel: ChannelSession): void {
     const toolName = part.tool || "unknown";
     const state = part.state;
     if (!state) {
@@ -3580,7 +3594,7 @@ export class PromptHandler {
     }
 
     const callID = part.id || part.callID || toolName;
-    const prev = this.toolStates.get(callID);
+    const prev = channel.toolStates.get(callID);
     const prevStatus = prev?.status;
     const currentStatus = state.status;
 
@@ -3594,28 +3608,28 @@ export class PromptHandler {
     }
 
     console.log(`[PromptHandler] Tool "${toolName}" [${callID}] ${prevStatus ?? "new"} → ${currentStatus}`);
-    this.toolStates.set(callID, { status: currentStatus, toolName });
+    channel.toolStates.set(callID, { status: currentStatus, toolName });
 
-    this.hasActivity = true;
-    this.hadToolSinceLastText = true;
-    this.lastChunkTime = Date.now();
+    channel.hasActivity = true;
+    channel.hadToolSinceLastText = true;
+    channel.lastChunkTime = Date.now();
     this.resetResponseTimeout();
 
     // When a NEW tool appears and we have accumulated text, commit the text
     // as a stored assistant message so it persists across page reloads.
     // The client merges consecutive assistant text messages back together.
-    if (!prevStatus && this.streamedContent.trim() && this.activeMessageId) {
-      this.streamedContent = "";
+    if (!prevStatus && channel.streamedContent.trim() && channel.activeMessageId) {
+      channel.streamedContent = "";
     }
 
     // Send tool call on every state transition with callID + status
     if (currentStatus === "pending" || currentStatus === "running") {
       if (toolName === "question") {
         // Question tools wait on user input; keep UI interactive instead of "thinking".
-        this.agentClient.sendAgentStatus("idle");
-        this.idleNotified = true;
+        this.agentClient.sendAgentStatus("idle", undefined, channel.activeMessageId ?? undefined);
+        channel.idleNotified = true;
       } else {
-        this.agentClient.sendAgentStatus("tool_calling", toolName);
+        this.agentClient.sendAgentStatus("tool_calling", toolName, channel.activeMessageId ?? undefined);
       }
       this.ensureTurnCreated();
       this.agentClient.sendToolUpdate(this.turnId!, callID, toolName, currentStatus, state.input ?? undefined);
@@ -3629,7 +3643,7 @@ export class PromptHandler {
       // The tool returns immediately so OpenCode will naturally stop after this.
       if (toolName === "wait_for_event") {
         console.log(`[PromptHandler] wait_for_event completed — finalizing turn and registering subscription`);
-        this.waitForEventForced = true;
+        channel.waitForEventForced = true;
 
         // Parse subscription args from the tool input
         const input = state.input as Record<string, unknown> | undefined;
@@ -3641,14 +3655,14 @@ export class PromptHandler {
         });
 
         this.finalizeResponse(true);
-        this.agentClient.sendComplete(this.activeMessageId ?? undefined);
-        this.agentClient.sendAgentStatus("idle");
-        this.idleNotified = true;
+        this.agentClient.sendComplete(channel.activeMessageId ?? undefined);
+        this.agentClient.sendAgentStatus("idle", undefined, channel.activeMessageId ?? undefined);
+        channel.idleNotified = true;
       }
 
     } else if (currentStatus === "error") {
       // Suppress stale errors from wait_for_event — the turn was already finalized.
-      if (toolName === "wait_for_event" && this.waitForEventForced) {
+      if (toolName === "wait_for_event" && channel.waitForEventForced) {
         console.log(`[PromptHandler] Suppressing stale wait_for_event error`);
         return;
       }
@@ -3657,32 +3671,32 @@ export class PromptHandler {
     }
   }
 
-  private handleMessageUpdated(props: Record<string, unknown>): void {
+  private handleMessageUpdated(props: Record<string, unknown>, channel: ChannelSession): void {
     // After wait_for_event completes, suppress stale SSE events.
-    if (this.waitForEventForced) return;
+    if (channel.waitForEventForced) return;
 
     // OpenCode wraps the message in an "info" property: { info: { role, ... } }
     const info = (props.info ?? props) as Record<string, unknown>;
     const role = info.role as string | undefined;
     const assistantError = role === "assistant" ? this.extractAssistantErrorFromMessageInfo(info) : null;
 
-    console.log(`[PromptHandler] message.updated: role=${role} (active: ${this.activeMessageId ? 'yes' : 'no'}, content: ${this.streamedContent.length} chars, activity: ${this.hasActivity})`);
+    console.log(`[PromptHandler] message.updated: role=${role} (active: ${channel.activeMessageId ? 'yes' : 'no'}, content: ${channel.streamedContent.length} chars, activity: ${channel.hasActivity})`);
 
     // Capture OpenCode message ID mapping for revert support
     const ocMessageId = info.id as string | undefined;
     if (ocMessageId && role) {
-      this.messageRoles.set(ocMessageId, role);
+      channel.messageRoles.set(ocMessageId, role);
     }
     if (ocMessageId && role === "assistant") {
-      this.activeAssistantMessageIds.add(ocMessageId);
-      this.awaitingAssistantForAttempt = false;
+      channel.activeAssistantMessageIds.add(ocMessageId);
+      channel.awaitingAssistantForAttempt = false;
       this.clearFirstResponseTimeout();
     }
-    if (ocMessageId && this.activeMessageId && role === "assistant") {
-      if (!this.doToOcMessageId.has(this.activeMessageId)) {
-        this.doToOcMessageId.set(this.activeMessageId, ocMessageId);
-        this.ocToDOMessageId.set(ocMessageId, this.activeMessageId);
-        console.log(`[PromptHandler] Mapped DO message ${this.activeMessageId} → OC message ${ocMessageId}`);
+    if (ocMessageId && channel.activeMessageId && role === "assistant") {
+      if (!channel.doToOcMessageId.has(channel.activeMessageId)) {
+        channel.doToOcMessageId.set(channel.activeMessageId, ocMessageId);
+        channel.ocToDOMessageId.set(ocMessageId, channel.activeMessageId);
+        console.log(`[PromptHandler] Mapped DO message ${channel.activeMessageId} → OC message ${ocMessageId}`);
       }
     }
 
@@ -3691,51 +3705,54 @@ export class PromptHandler {
     // a tool call and one after). Finalizing on the first message's completion
     // drops all subsequent tool events (like browser_screenshot).
     // Instead, rely solely on session.idle / session.status: idle to finalize.
-    if (role === "assistant" && this.activeMessageId) {
+    if (role === "assistant" && channel.activeMessageId) {
       const snapshotText = this.extractAssistantTextFromMessageInfo(info);
       if (snapshotText) {
-        this.latestAssistantTextSnapshot = snapshotText;
+        channel.latestAssistantTextSnapshot = snapshotText;
       }
       if (assistantError) {
-        this.lastError = assistantError;
-        this.appendEventTrace(`assistant.error:${assistantError.slice(0, 120)}`);
+        channel.lastError = assistantError;
+        channel.recentEventTrace.push(`assistant.error:${assistantError.slice(0, 120)}`);
+        if (channel.recentEventTrace.length > 40) {
+          channel.recentEventTrace.shift();
+        }
       }
-      this.hasActivity = true;
-      this.lastChunkTime = Date.now();
+      channel.hasActivity = true;
+      channel.lastChunkTime = Date.now();
       this.resetResponseTimeout();
     }
 
     // Track last-used model for context limit lookups (before currentModelPreferences is cleared)
-    if (role === "assistant" && this.activeChannel) {
+    if (role === "assistant") {
       // Try model info from message.updated properties first
       const modelId = info.modelID as string | undefined;
       const providerId = info.providerID as string | undefined;
       if (modelId && providerId) {
-        this.activeChannel.lastUsedModel = `${providerId}/${modelId}`;
-      } else if (this.activeChannel.currentModelPreferences?.[this.activeChannel.currentModelIndex]) {
-        this.activeChannel.lastUsedModel = this.activeChannel.currentModelPreferences[this.activeChannel.currentModelIndex];
+        channel.lastUsedModel = `${providerId}/${modelId}`;
+      } else if (channel.currentModelPreferences?.[channel.currentModelIndex]) {
+        channel.lastUsedModel = channel.currentModelPreferences[channel.currentModelIndex];
       }
     }
 
     // Accumulate token counts for pre-compaction detection (dedup by message ID)
-    if (role === "assistant" && this.activeChannel && ocMessageId) {
-      if (!this.activeChannel.countedTokenMessageIds.has(ocMessageId)) {
+    if (role === "assistant" && ocMessageId) {
+      if (!channel.countedTokenMessageIds.has(ocMessageId)) {
         const tokenObj = info.tokens as Record<string, unknown> | undefined;
         if (tokenObj) {
           const input = typeof tokenObj.input === "number" ? tokenObj.input : 0;
           const output = typeof tokenObj.output === "number" ? tokenObj.output : 0;
           if (input > 0 || output > 0) {
-            this.activeChannel.countedTokenMessageIds.add(ocMessageId);
-            this.activeChannel.cumulativeInputTokens += input;
-            this.activeChannel.cumulativeOutputTokens += output;
+            channel.countedTokenMessageIds.add(ocMessageId);
+            channel.cumulativeInputTokens += input;
+            channel.cumulativeOutputTokens += output;
 
             // Track per-message usage for cost reporting
             const modelId = info.modelID as string | undefined;
             const providerId = info.providerID as string | undefined;
             const usageModel = modelId && providerId
               ? `${providerId}/${modelId}`
-              : this.activeChannel.lastUsedModel ?? "unknown";
-            this.activeChannel.usageEntries.set(ocMessageId, {
+              : channel.lastUsedModel ?? "unknown";
+            channel.usageEntries.set(ocMessageId, {
               model: usageModel,
               inputTokens: input,
               outputTokens: output,
@@ -3746,9 +3763,9 @@ export class PromptHandler {
     }
   }
 
-  private handleSessionStatus(props: Record<string, unknown>): void {
+  private handleSessionStatus(props: Record<string, unknown>, channel: ChannelSession): void {
     // After wait_for_event completes, suppress stale SSE events.
-    if (this.waitForEventForced) return;
+    if (channel.waitForEventForced) return;
 
     // SessionStatus is an object: { type: "idle" | "busy" | "retry" }
     const rawStatus = props.status;
@@ -3760,35 +3777,35 @@ export class PromptHandler {
       statusType = (rawStatus as SessionStatus).type;
     }
 
-    console.log(`[PromptHandler] session.status: "${statusType}" (active: ${this.activeMessageId ? 'yes' : 'no'}, content: ${this.streamedContent.length} chars, activity: ${this.hasActivity})`);
+    console.log(`[PromptHandler] session.status: "${statusType}" (active: ${channel.activeMessageId ? 'yes' : 'no'}, content: ${channel.streamedContent.length} chars, activity: ${channel.hasActivity})`);
 
     if (statusType === "idle") {
-      if (this.activeMessageId && !this.retryPending && this.awaitingAssistantForAttempt) {
+      if (channel.activeMessageId && !channel.retryPending && channel.awaitingAssistantForAttempt) {
         // Model silently failed — OpenCode idle without assistant message.
         // Clear flag and finalize to trigger model failover.
         console.log(`[PromptHandler] session.status=idle: model produced no assistant message — clearing awaitingAssistant, finalizing for failover`);
-        this.awaitingAssistantForAttempt = false;
+        channel.awaitingAssistantForAttempt = false;
         this.clearFirstResponseTimeout();
         this.finalizeResponse();
-      } else if (this.activeMessageId && !this.retryPending) {
+      } else if (channel.activeMessageId && !channel.retryPending) {
         console.log(`[PromptHandler] Session idle, finalizing response`);
         this.finalizeResponse();
-      } else if (this.retryPending) {
+      } else if (channel.retryPending) {
         console.log(
-          `[PromptHandler] session.status=idle ignored (retryPending=${this.retryPending})`
+          `[PromptHandler] session.status=idle ignored (retryPending=${channel.retryPending})`
         );
       }
-      if (!this.idleNotified) {
-        if (!this.activeChannel?.syncPromptInFlight) {
-          this.agentClient.sendAgentStatus("idle");
+      if (!channel.idleNotified) {
+        if (!channel.syncPromptInFlight) {
+          this.agentClient.sendAgentStatus("idle", undefined, channel.activeMessageId ?? undefined);
         }
-        this.idleNotified = true;
+        channel.idleNotified = true;
       }
     } else if (statusType === "busy") {
-      if (this.retryPending) {
-        this.retryPending = false;
+      if (channel.retryPending) {
+        channel.retryPending = false;
       }
-      this.idleNotified = false;
+      channel.idleNotified = false;
     }
   }
 
@@ -3837,7 +3854,7 @@ export class PromptHandler {
       return;
     }
     // Don't finalize from SSE events while a sync prompt is in flight
-    if (this.activeChannel?.syncPromptInFlight) {
+    if (this.currentPromptChannel?.syncPromptInFlight) {
       console.log(`[PromptHandler] Skipping SSE-side finalization — sync prompt in flight`);
       return;
     }
@@ -3970,10 +3987,10 @@ export class PromptHandler {
       this.agentClient.sendComplete(this.activeMessageId ?? undefined);
 
       // Notify client that agent is idle
-      this.agentClient.sendAgentStatus("idle");
+      this.agentClient.sendAgentStatus("idle", undefined, messageId ?? undefined);
 
       // Emit usage report for this turn
-      const usageChannel = this.activeChannel;
+      const usageChannel = this.currentPromptChannel;
       if (usageChannel && usageChannel.usageEntries.size > 0 && usageChannel.turnId) {
         const entries = Array.from(usageChannel.usageEntries.entries()).map(
           ([ocMessageId, data]) => ({
@@ -3988,7 +4005,7 @@ export class PromptHandler {
       }
 
       // Check for pre-compaction memory flush after each turn
-      const flushChannel = this.activeChannel;
+      const flushChannel = this.currentPromptChannel;
       if (flushChannel && !flushChannel.memoryFlushInProgress) {
         flushChannel.turnCount++;
         // Schedule async — don't block finalization
@@ -4011,7 +4028,7 @@ export class PromptHandler {
   private resetResponseTimeout(): void {
     this.clearResponseTimeout();
     // Also reset the sync prompt inactivity timeout — the model is actively working
-    this.activeChannel?.resetSyncTimeout?.();
+    this.currentPromptChannel?.resetSyncTimeout?.();
     // Set a timeout to finalize the response if no completion event is received
     this.responseTimeoutId = setTimeout(() => {
       if (this.activeMessageId && this.hasActivity) {
@@ -4067,7 +4084,7 @@ export class PromptHandler {
       if (messageId) {
         this.agentClient.sendError(messageId, "The model did not respond. Try again or switch to a different model.");
         this.agentClient.sendComplete(messageId);
-        this.agentClient.sendAgentStatus("idle");
+        this.agentClient.sendAgentStatus("idle", undefined, messageId);
         // Reset prompt state
         this.activeMessageId = null;
         this.streamedContent = "";

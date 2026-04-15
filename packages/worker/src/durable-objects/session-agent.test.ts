@@ -351,7 +351,6 @@ describe('SessionAgentDO', () => {
     const { agent, sql, waitUntil, broadcasts } = await createTestAgent();
     const sendChannelInteractivePrompts = (agent as any).sendChannelInteractivePrompts as ReturnType<typeof vi.fn>;
 
-    (agent as any).channelRouter.setActiveChannel({ channelType: 'slack', channelId: 'C123' });
     (agent as any).promptQueue.enqueue({
       id: 'slack-turn',
       content: 'from slack',
@@ -377,6 +376,7 @@ describe('SessionAgentDO', () => {
 
     await (agent as any).runnerHandlers.question({
       type: 'question',
+      messageId: 'web-turn',
       questionId: 'q-web',
       text: 'Need a decision',
       options: ['Yes', 'No'],
@@ -384,26 +384,34 @@ describe('SessionAgentDO', () => {
 
     const promptMessage = broadcasts.find((message) => message.type === 'interactive_prompt');
     expect(promptMessage).toBeTruthy();
-    expect(promptMessage).not.toHaveProperty('channelType');
-    expect(promptMessage).not.toHaveProperty('channelId');
+    // Channel is attributed from the prompt_queue row for the current prompt.
+    expect(promptMessage).toMatchObject({ channelType: 'web', channelId: 'default' });
     expect(promptMessage?.prompt).toMatchObject({
       id: 'q-web',
       type: 'question',
-      context: { options: ['Yes', 'No'] },
+      context: { options: ['Yes', 'No'], channelType: 'web', channelId: 'default' },
     });
 
     expect(sendChannelInteractivePrompts).toHaveBeenCalledOnce();
     expect(sendChannelInteractivePrompts).toHaveBeenCalledWith(
       'q-web',
       expect.objectContaining({
-        context: { options: ['Yes', 'No'] },
+        context: expect.objectContaining({
+          options: ['Yes', 'No'],
+          channelType: 'web',
+          channelId: 'default',
+        }),
       }),
     );
     expect(waitUntil).toHaveBeenCalledOnce();
 
     const storedPrompt = sql.interactivePrompts.get('q-web');
     expect(storedPrompt).toBeTruthy();
-    expect(JSON.parse(storedPrompt!.context)).toEqual({ options: ['Yes', 'No'] });
+    expect(JSON.parse(storedPrompt!.context)).toEqual({
+      options: ['Yes', 'No'],
+      channelType: 'web',
+      channelId: 'default',
+    });
   });
 
   it('re-arms the alarm when idle hibernation is the only pending deadline', async () => {
@@ -474,7 +482,7 @@ describe('SessionAgentDO', () => {
     expect(initMessage.data).not.toHaveProperty('auditLog');
   });
 
-  it('tags assistant messages with the thread from the processing prompt queue entry', async () => {
+  it('tags assistant messages with the thread from the Runner-provided message.create envelope', async () => {
     const runnerSocket = { send: vi.fn() };
     const { agent, broadcasts } = await createTestAgent({ sockets: [runnerSocket] });
 
@@ -488,10 +496,11 @@ describe('SessionAgentDO', () => {
       'thread-direct',
     );
 
-    // Thread ID comes from the processing queue entry, not sessionState
+    // Runner derives threadId from extractChannelContext and sends it explicitly
     await (agent as any).runnerHandlers['message.create']({
       type: 'message.create',
       turnId: 'turn-direct',
+      threadId: 'thread-direct',
     });
 
     const created = broadcasts.find((message) => {
@@ -627,10 +636,11 @@ describe('SessionAgentDO', () => {
     const dispatched = await (agent as any).sendNextQueuedPrompt();
     expect(dispatched).toBe(true);
 
-    // Thread ID resolved from the processing queue entry
+    // Runner echoes threadId back on message.create envelope
     await (agent as any).runnerHandlers['message.create']({
       type: 'message.create',
       turnId: 'turn-queued',
+      threadId: 'thread-queued',
     });
 
     const created = broadcasts.find((message) => {
@@ -645,7 +655,7 @@ describe('SessionAgentDO', () => {
 
   it('preserves threadId through tool updates and finalize once the turn is created', async () => {
     const { agent, broadcasts } = await createTestAgent();
-    // Simulate a processing entry with a thread_id so message.create can resolve it
+    // Runner provides threadId explicitly on message.create; no queue fallback.
     (agent as any).promptQueue.enqueue({
       id: 'prompt-parts',
       content: 'threaded work',
@@ -659,6 +669,7 @@ describe('SessionAgentDO', () => {
     await (agent as any).runnerHandlers['message.create']({
       type: 'message.create',
       turnId: 'turn-parts',
+      threadId: 'thread-parts',
     });
     await (agent as any).runnerHandlers['message.part.tool-update']({
       type: 'message.part.tool-update',
@@ -1406,5 +1417,238 @@ describe('SessionAgentDO', () => {
       (call: unknown[]) => JSON.parse(call[0] as string).type === 'prompt'
     );
     expect(promptSent).toBe(true);
+  });
+
+  it('drops error emission when prompt_queue has no row for messageId', async () => {
+    const { agent, broadcasts } = await createTestAgent();
+    const writeMessageSpy = vi.spyOn((agent as any).messageStore, 'writeMessage');
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    await (agent as any).runnerHandlers.error({
+      type: 'error',
+      messageId: 'nonexistent',
+      error: 'boom',
+    });
+
+    expect(warnSpy).toHaveBeenCalledWith(
+      '[ChannelRouting] dropped emission',
+      expect.objectContaining({ reason: 'no_prompt_row', messageId: 'nonexistent', error: 'boom' }),
+    );
+    expect(writeMessageSpy).not.toHaveBeenCalled();
+    expect(broadcasts.find((m) => m.type === 'error')).toBeUndefined();
+    expect((agent as any).notifyEventBus).not.toHaveBeenCalled();
+    expect((agent as any).enqueueOwnerNotification).not.toHaveBeenCalled();
+    expect((agent as any).emitEvent).not.toHaveBeenCalled();
+  });
+
+  it('attributes error to channel from prompt_queue lookup', async () => {
+    const { agent, broadcasts } = await createTestAgent();
+    (agent as any).promptQueue.enqueue({
+      id: 'msg-1',
+      content: 'hi',
+      status: 'processing',
+      channelType: 'thread',
+      channelId: 'thread-abc',
+    });
+    const writeMessageSpy = vi.spyOn((agent as any).messageStore, 'writeMessage');
+
+    await (agent as any).runnerHandlers.error({
+      type: 'error',
+      messageId: 'msg-1',
+      error: 'oops',
+    });
+
+    expect(writeMessageSpy).toHaveBeenCalledTimes(1);
+    expect(writeMessageSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        role: 'system',
+        content: expect.stringContaining('oops'),
+        channelType: 'thread',
+        channelId: 'thread-abc',
+      }),
+    );
+    const errBroadcast = broadcasts.find((m) => m.type === 'error');
+    expect(errBroadcast).toMatchObject({
+      type: 'error',
+      error: 'oops',
+      channelType: 'thread',
+      channelId: 'thread-abc',
+    });
+  });
+
+  it('drops question emission when prompt_queue has no row for messageId', async () => {
+    const { agent, sql, broadcasts } = await createTestAgent();
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    await (agent as any).runnerHandlers.question({
+      type: 'question',
+      messageId: 'nonexistent',
+      questionId: 'q-1',
+      text: 'pick?',
+    });
+
+    expect(warnSpy).toHaveBeenCalledWith(
+      '[ChannelRouting] dropped emission',
+      expect.objectContaining({ reason: 'no_prompt_row', messageId: 'nonexistent', questionId: 'q-1' }),
+    );
+    expect(sql.interactivePrompts.size).toBe(0);
+    expect(broadcasts.find((m) => m.type === 'interactive_prompt')).toBeUndefined();
+    expect((agent as any).notifyEventBus).not.toHaveBeenCalled();
+    expect((agent as any).sendChannelInteractivePrompts).not.toHaveBeenCalled();
+  });
+
+  it('attributes question to channel from prompt_queue lookup', async () => {
+    const { agent, sql, broadcasts } = await createTestAgent();
+    (agent as any).promptQueue.enqueue({
+      id: 'msg-1',
+      content: 'hi',
+      status: 'processing',
+      channelType: 'slack',
+      channelId: 'C123',
+    });
+
+    await (agent as any).runnerHandlers.question({
+      type: 'question',
+      messageId: 'msg-1',
+      questionId: 'q-1',
+      text: 'pick?',
+      options: ['a', 'b'],
+    });
+
+    expect(sql.interactivePrompts.size).toBe(1);
+    const storedPrompt = sql.interactivePrompts.get('q-1');
+    expect(storedPrompt).toBeTruthy();
+    const storedContext = JSON.parse(storedPrompt!.context);
+    expect(storedContext).toMatchObject({ channelType: 'slack', channelId: 'C123' });
+
+    const promptBroadcast = broadcasts.find((m) => m.type === 'interactive_prompt');
+    expect(promptBroadcast).toMatchObject({
+      type: 'interactive_prompt',
+      channelType: 'slack',
+      channelId: 'C123',
+    });
+  });
+
+  it('drops screenshot emission when prompt_queue has no row for messageId', async () => {
+    const { agent, broadcasts } = await createTestAgent();
+    const writeMessageSpy = vi.spyOn((agent as any).messageStore, 'writeMessage');
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    await (agent as any).runnerHandlers.screenshot({
+      type: 'screenshot',
+      messageId: 'nonexistent',
+      data: 'base64data',
+      description: 'A screenshot',
+    });
+
+    expect(warnSpy).toHaveBeenCalledWith(
+      '[ChannelRouting] dropped emission',
+      expect.objectContaining({ reason: 'no_prompt_row', eventType: 'screenshot', messageId: 'nonexistent' }),
+    );
+    expect(writeMessageSpy).not.toHaveBeenCalled();
+    expect(broadcasts.find((m) => m.type === 'message')).toBeUndefined();
+  });
+
+  it('attributes screenshot to channel from prompt_queue lookup', async () => {
+    const { agent, broadcasts } = await createTestAgent();
+    (agent as any).promptQueue.enqueue({
+      id: 'msg-1',
+      content: 'hi',
+      status: 'processing',
+      channelType: 'slack',
+      channelId: 'C123',
+    });
+    const writeMessageSpy = vi.spyOn((agent as any).messageStore, 'writeMessage');
+
+    await (agent as any).runnerHandlers.screenshot({
+      type: 'screenshot',
+      messageId: 'msg-1',
+      data: 'base64data',
+      description: 'A screenshot',
+    });
+
+    expect(writeMessageSpy).toHaveBeenCalledTimes(1);
+    expect(writeMessageSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        role: 'system',
+        content: 'A screenshot',
+        parts: expect.stringContaining('screenshot'),
+        channelType: 'slack',
+        channelId: 'C123',
+      }),
+    );
+
+    const ssBroadcast = broadcasts.find((m) => m.type === 'message');
+    expect(ssBroadcast).toMatchObject({
+      type: 'message',
+      data: expect.objectContaining({
+        role: 'system',
+        content: 'A screenshot',
+        channelType: 'slack',
+        channelId: 'C123',
+      }),
+    });
+  });
+
+  it('broadcasts agentStatus without channel attribution when messageId is absent', async () => {
+    const { agent, broadcasts } = await createTestAgent();
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    await (agent as any).runnerHandlers.agentStatus({
+      type: 'agentStatus',
+      status: 'idle',
+    });
+
+    const statusBroadcasts = broadcasts.filter((m) => m.type === 'agentStatus');
+    expect(statusBroadcasts).toHaveLength(1);
+    expect(statusBroadcasts[0]).toMatchObject({ type: 'agentStatus', status: 'idle' });
+    expect(statusBroadcasts[0]).not.toHaveProperty('channelType');
+    expect(statusBroadcasts[0]).not.toHaveProperty('channelId');
+    expect(warnSpy).not.toHaveBeenCalledWith(
+      '[ChannelRouting] dropped emission',
+      expect.anything(),
+    );
+  });
+
+  it('attributes agentStatus to channel when messageId resolves', async () => {
+    const { agent, broadcasts } = await createTestAgent();
+    (agent as any).promptQueue.enqueue({
+      id: 'msg-1',
+      content: 'hi',
+      status: 'processing',
+      channelType: 'slack',
+      channelId: 'C1',
+    });
+
+    await (agent as any).runnerHandlers.agentStatus({
+      type: 'agentStatus',
+      messageId: 'msg-1',
+      status: 'thinking',
+    });
+
+    const statusBroadcast = broadcasts.find((m) => m.type === 'agentStatus');
+    expect(statusBroadcast).toMatchObject({
+      type: 'agentStatus',
+      status: 'thinking',
+      channelType: 'slack',
+      channelId: 'C1',
+    });
+  });
+
+  it('drops agentStatus when messageId is provided but prompt_queue has no row', async () => {
+    const { agent, broadcasts } = await createTestAgent();
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    await (agent as any).runnerHandlers.agentStatus({
+      type: 'agentStatus',
+      messageId: 'nonexistent',
+      status: 'thinking',
+    });
+
+    expect(warnSpy).toHaveBeenCalledWith(
+      '[ChannelRouting] dropped emission',
+      expect.objectContaining({ reason: 'no_prompt_row', eventType: 'agentStatus', messageId: 'nonexistent' }),
+    );
+    expect(broadcasts.filter((m) => m.type === 'agentStatus')).toHaveLength(0);
   });
 });

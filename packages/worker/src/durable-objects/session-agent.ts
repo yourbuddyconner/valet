@@ -16,6 +16,7 @@ import { getActivePluginArtifacts, getPluginSettings } from '../lib/db/plugins.j
 import { getPersonaSkills, getOrgDefaultSkills, getPersonaToolWhitelist } from '../lib/db.js';
 import type { ChannelTarget, ChannelContext, InteractivePrompt, InteractiveAction, InteractivePromptRef, InteractiveResolution } from '@valet/sdk';
 import { MessageStore } from './message-store.js';
+import { getChannelForMessage, dropEmission } from './channel-resolver.js';
 import { ChannelRouter } from './channel-router.js';
 import { PromptQueue } from './prompt-queue.js';
 import { RunnerLink, type RunnerToDOMessage, type DOToRunnerMessage, type PromptAttachment, type RunnerMessageHandlers, type WorkflowExecutionDispatchPayload, type DOMessageOf } from './runner-link.js';
@@ -292,20 +293,14 @@ export class SessionAgentDO {
     }
   }
 
-  /** Returns the channel metadata for the currently active prompt, if any. */
-  private get activeChannel(): { channelType: string; channelId: string } | null {
-    const current = this.channelRouter.activeChannel;
-    if (current) return current;
-    // Hibernation recovery: check prompt_queue for processing row with channel metadata.
-    // Keep this orchestration logic inside the DO rather than extracting extra
-    // production seams just for tests; cover the lifecycle with a black-box DO
-    // harness instead of widening the runtime surface area.
-    const recovered = this.promptQueue.getProcessingChannelContext();
-    if (recovered) {
-      console.log(`[SessionAgentDO] Recovered activeChannel from prompt_queue: ${recovered.channelType}:${recovered.channelId}`);
-      this.channelRouter.recoverActiveChannel(recovered.channelType, recovered.channelId);
-    }
-    return recovered;
+  /**
+   * Resolve channel for a specific prompt by messageId. Reads from prompt_queue
+   * via channel-resolver — the explicit, deterministic source. Returns null if
+   * the row is missing or lacks channel context. Callers MUST handle null by
+   * dropping the emission with dropEmission(...) — never fall back to mutable state.
+   */
+  private getChannelForMessage(messageId: string): { channelType: string; channelId: string } | null {
+    return getChannelForMessage(this.promptQueue, messageId);
   }
 
   private sameChannelTarget(
@@ -1755,17 +1750,13 @@ export class SessionAgentDO {
     this.rescheduleIdleAlarm();
     console.log('[SessionAgentDO] handlePrompt: dispatching to runner (DO_CODE_VERSION=v2-pipeline-2)');
 
-    // Active channel is scoped to the current prompt cycle only.
-    this.channelRouter.clearActiveChannel();
     if (effectiveReplyTo) {
-      this.channelRouter.setActiveChannel(effectiveReplyTo);
       this.insertChannelFollowup(effectiveReplyTo.channelType, effectiveReplyTo.channelId, content);
     } else if (threadId) {
       // Web UI steering of a thread — recover the thread's origin channel so
       // downstream code knows where to route follow-up channel actions.
       const origin = await getThreadOriginChannel(this.env.DB, threadId);
       if (origin && origin.channelType !== 'web' && origin.channelType !== 'thread') {
-        this.channelRouter.setActiveChannel({ channelType: origin.channelType, channelId: origin.channelId });
         this.insertChannelFollowup(origin.channelType, origin.channelId, content);
       }
     }
@@ -1810,7 +1801,6 @@ export class SessionAgentDO {
         this.promptQueue.idleQueuedSince = Date.now();
         this.rescheduleIdleAlarm();
       }
-      this.channelRouter.clearActiveChannel();
       this.emitAuditEvent('prompt.dispatch_failed', `Dispatch failed, reverted to queue: ${messageId}`);
     }
   }
@@ -2086,9 +2076,20 @@ export class SessionAgentDO {
       },
 
       'question': async (msg) => {
+        // Resolve channel explicitly from the originating prompt — never fall back
+        // to a mutable "active" cursor. If the prompt_queue row is missing or lacks
+        // channel context, drop the emission with a structured warning.
+        if (!msg.messageId) {
+          dropEmission('no_message_id', { eventType: 'question', questionId: msg.questionId });
+          return;
+        }
+        const questionCh = this.getChannelForMessage(msg.messageId);
+        if (!questionCh) {
+          dropEmission('no_prompt_row', { eventType: 'question', messageId: msg.messageId, questionId: msg.questionId });
+          return;
+        }
         // Store question as interactive prompt and broadcast to all clients
         const qId = msg.questionId || crypto.randomUUID();
-        const questionCh = this.activeChannel;
         const QUESTION_TIMEOUT_SECS = 5 * 60; // 5 minutes
         const expiresAt = Math.floor(Date.now() / 1000) + QUESTION_TIMEOUT_SECS;
         const sessionId = this.sessionState.sessionId;
@@ -2098,10 +2099,8 @@ export class SessionAgentDO {
           : [];
 
         const context: Record<string, unknown> = msg.options ? { options: msg.options } : {};
-        if (questionCh) {
-          context.channelType = questionCh.channelType;
-          context.channelId = questionCh.channelId;
-        }
+        context.channelType = questionCh.channelType;
+        context.channelId = questionCh.channelId;
 
         this.ctx.storage.sql.exec(
           `INSERT INTO interactive_prompts (id, type, request_id, title, actions, context, status, expires_at)
@@ -2127,7 +2126,8 @@ export class SessionAgentDO {
         this.broadcastToClients({
           type: 'interactive_prompt',
           prompt,
-          ...(questionCh ? { channelType: questionCh.channelType, channelId: questionCh.channelId } : {}),
+          channelType: questionCh.channelType,
+          channelId: questionCh.channelId,
         });
 
         // Schedule an alarm to expire the question if unanswered
@@ -2165,16 +2165,27 @@ export class SessionAgentDO {
       },
 
       'screenshot': (msg) => {
+        // Resolve channel explicitly from the originating prompt — never fall back
+        // to a mutable "active" cursor. If the prompt_queue row is missing or lacks
+        // channel context, drop the emission with a structured warning.
+        if (!msg.messageId) {
+          dropEmission('no_message_id', { eventType: 'screenshot' });
+          return;
+        }
+        const ssCh = this.getChannelForMessage(msg.messageId);
+        if (!ssCh) {
+          dropEmission('no_prompt_row', { eventType: 'screenshot', messageId: msg.messageId });
+          return;
+        }
         // Store screenshot reference and broadcast
         const ssId = crypto.randomUUID();
-        const ssCh = this.activeChannel;
         this.messageStore.writeMessage({
           id: ssId,
           role: 'system',
           content: msg.description || 'Screenshot',
           parts: JSON.stringify({ type: 'screenshot', data: msg.data }),
-          channelType: ssCh?.channelType,
-          channelId: ssCh?.channelId,
+          channelType: ssCh.channelType,
+          channelId: ssCh.channelId,
         });
         this.broadcastToClients({
           type: 'message',
@@ -2184,7 +2195,8 @@ export class SessionAgentDO {
             content: msg.description || 'Screenshot',
             parts: { type: 'screenshot', data: msg.data },
             createdAt: Math.floor(Date.now() / 1000),
-            ...(ssCh ? { channelType: ssCh.channelType, channelId: ssCh.channelId } : {}),
+            channelType: ssCh.channelType,
+            channelId: ssCh.channelId,
           },
         });
       },
@@ -2216,24 +2228,35 @@ export class SessionAgentDO {
       },
 
       'error': async (msg) => {
-        // Store error and broadcast
+        // Resolve channel explicitly from the originating prompt — never fall back
+        // to a mutable "active" cursor. If the prompt_queue row is missing or lacks
+        // channel context, drop the emission with a structured warning.
+        if (!msg.messageId) {
+          dropEmission('no_message_id', { eventType: 'error', error: msg.error });
+          return;
+        }
+        const errCh = this.getChannelForMessage(msg.messageId);
+        if (!errCh) {
+          dropEmission('no_prompt_row', { eventType: 'error', messageId: msg.messageId, error: msg.error });
+          return;
+        }
         // Always generate a new ID — msg.messageId is the prompt's user message ID,
         // which already exists in the messages table (PRIMARY KEY conflict).
         const errId = crypto.randomUUID();
-        const errCh = this.activeChannel;
         const errorText = msg.error || 'Unknown error';
         this.messageStore.writeMessage({
           id: errId,
           role: 'system',
           content: `Error: ${errorText}`,
-          channelType: errCh?.channelType,
-          channelId: errCh?.channelId,
+          channelType: errCh.channelType,
+          channelId: errCh.channelId,
         });
         this.broadcastToClients({
           type: 'error',
           messageId: errId,
           error: msg.error,
-          ...(errCh ? { channelType: errCh.channelType, channelId: errCh.channelId } : {}),
+          channelType: errCh.channelType,
+          channelId: errCh.channelId,
         });
         this.emitEvent('turn_error', {
           errorCode: 'agent_error',
@@ -2264,11 +2287,11 @@ export class SessionAgentDO {
       // ─── V2 Parts-Based Message Protocol ──────────────────────────────
       'message.create': (msg) => {
         const turnId = msg.turnId!;
-        // Resolve threadId: prefer Runner-provided value, fall back to the currently-processing prompt's threadId
-        let resolvedThreadId = msg.threadId || undefined;
-        if (!resolvedThreadId) {
-          resolvedThreadId = this.promptQueue.getProcessingThreadId() || undefined;
-        }
+        // threadId comes directly from the Runner via the message.create envelope —
+        // no fallback. The Runner derives it from extractChannelContext(channel).threadId
+        // for thread-channel prompts; non-thread channels (web/slack/telegram) don't
+        // have a threadId, which is correct.
+        const resolvedThreadId = msg.threadId || undefined;
         console.log(`[SessionAgentDO] V2 message.create: turnId=${turnId} threadId=${resolvedThreadId || 'none'}`);
         this.messageStore.createTurn(turnId, {
           channelType: msg.channelType || undefined,
@@ -2371,8 +2394,18 @@ export class SessionAgentDO {
       },
 
       'agentStatus': async (msg) => {
-        // Forward agent status to all clients for real-time activity indication
-        const statusCh = this.activeChannel;
+        // Forward agent status to all clients for real-time activity indication.
+        // If messageId is present, resolve the prompt's channel for per-thread filtering.
+        // If messageId is absent (startup/reconnect idle signals), broadcast without
+        // channel attribution — this is legitimate session-wide status, not a drop.
+        let statusCh: { channelType: string; channelId: string } | null = null;
+        if (msg.messageId) {
+          statusCh = this.getChannelForMessage(msg.messageId);
+          if (!statusCh) {
+            dropEmission('no_prompt_row', { eventType: 'agentStatus', messageId: msg.messageId, status: msg.status });
+            return;
+          }
+        }
         this.broadcastToClients({
           type: 'agentStatus',
           status: msg.status,
@@ -3552,9 +3585,14 @@ export class SessionAgentDO {
       if (promptStart > 0) {
         // Read model from the processing prompt_queue entry before it's marked completed
         const turnModel = this.promptQueue.getProcessingModel() || undefined;
+        // Resolve channel from the specific prompt's messageId; no fallback to
+        // mutable state. If messageId is absent or the row is gone (e.g. queue
+        // was already pruned), emit without channel attribution rather than
+        // attributing to an arbitrary channel.
+        const completedCh = messageId ? this.getChannelForMessage(messageId) : null;
         this.emitEvent('turn_complete', {
           durationMs: Date.now() - promptStart,
-          channel: this.activeChannel?.channelType || undefined,
+          channel: completedCh?.channelType || undefined,
           model: turnModel,
           queueMode: this.promptQueue.queueMode || undefined,
         });
@@ -3583,8 +3621,6 @@ export class SessionAgentDO {
         await this.flushMessagesToD1();
         return;
       }
-
-      this.channelRouter.clearActiveChannel();
 
       // Runner is now idle — flush messages synchronously so they survive hibernation
       await this.flushMessagesToD1();
@@ -4334,7 +4370,6 @@ export class SessionAgentDO {
       const queuedExecutionId = (prompt.workflowExecutionId || '').trim();
       const queuedPayload = parseQueuedWorkflowPayload(prompt.workflowPayload)!;
 
-      this.channelRouter.clearActiveChannel();
       this.promptQueue.stampDispatched();
       this.promptQueue.idleQueuedSince = 0;
       this.sessionState.lastParentIdleNotice = undefined;
@@ -4381,20 +4416,16 @@ export class SessionAgentDO {
       this.promptQueue.currentPromptAuthorId = authorId;
     }
 
-    // Active channel is scoped to the current prompt cycle only.
     const queueChannelType = prompt.channelType || undefined;
     const queueChannelId = prompt.channelId || undefined;
     const queueThreadId = prompt.threadId || undefined;
     const queueReplyChannelType = prompt.replyChannelType || undefined;
     const queueReplyChannelId = prompt.replyChannelId || undefined;
-    this.channelRouter.clearActiveChannel();
     if (queueReplyChannelType && queueReplyChannelId) {
-      this.channelRouter.setActiveChannel({ channelType: queueReplyChannelType, channelId: queueReplyChannelId });
       this.insertChannelFollowup(queueReplyChannelType, queueReplyChannelId, prompt.content);
     } else if (queueThreadId) {
       const origin = await getThreadOriginChannel(this.env.DB, queueThreadId);
       if (origin && origin.channelType !== 'web' && origin.channelType !== 'thread') {
-        this.channelRouter.setActiveChannel({ channelType: origin.channelType, channelId: origin.channelId });
         this.insertChannelFollowup(origin.channelType, origin.channelId, prompt.content);
       }
     }
@@ -4445,7 +4476,6 @@ export class SessionAgentDO {
     });
     if (!queueDispatched) {
       this.promptQueue.revertProcessingToQueued(prompt.id);
-      this.channelRouter.clearActiveChannel();
       this.emitAuditEvent('prompt.dispatch_failed', `Queue dispatch failed, reverted: ${prompt.id.slice(0, 8)}`);
       return false;
     }
@@ -5467,8 +5497,13 @@ export class SessionAgentDO {
           invocationId: invocationId,
           summary,
         };
-        const approvalCh = this.activeChannel;
-        if (approvalCh) {
+        // Resolve channel from the processing prompt — deterministic queue state,
+        // not a mutable cursor. If no prompt is processing (shouldn't happen inside
+        // handleCallTool, which is triggered by agent tool invocations during a turn),
+        // leave channel context unset; the approval will still be visible in the web
+        // UI via broadcastToClients.
+        const approvalCh = this.promptQueue.getProcessingChannelTarget();
+        if (approvalCh?.channelType && approvalCh?.channelId) {
           approvalContext.channelType = approvalCh.channelType;
           approvalContext.channelId = approvalCh.channelId;
         }
@@ -5796,7 +5831,7 @@ export class SessionAgentDO {
       const seen = new Set<string>();
 
       // 1. Origin target: the channel stored in the approval context at creation time
-      //    (set from activeChannel when the approval was created)
+      //    (captured from the originating prompt when the approval was created)
       const originTarget = this.getPromptOriginTarget(prompt.context);
       if (originTarget && originTarget.channelType !== 'web') {
         const key = `${originTarget.channelType}:${originTarget.channelId}`;
@@ -5804,14 +5839,15 @@ export class SessionAgentDO {
         targets.push(originTarget);
       }
 
-      // 2. Caller target: the currently active channel (may differ from origin
-      //    if a different Slack thread is subscribed to the same orchestrator thread)
-      const callerTarget = this.activeChannel;
-      if (callerTarget && callerTarget.channelType !== 'web') {
-        const key = `${callerTarget.channelType}:${callerTarget.channelId}`;
+      // 2. Caller target: the currently-processing prompt's channel (may differ from
+      //    origin if a different Slack thread is subscribed to the same orchestrator
+      //    thread). Read from the processing queue row, not a mutable cursor.
+      const callerCh = this.promptQueue.getProcessingChannelTarget();
+      if (callerCh?.channelType && callerCh?.channelId && callerCh.channelType !== 'web') {
+        const key = `${callerCh.channelType}:${callerCh.channelId}`;
         if (!seen.has(key)) {
           seen.add(key);
-          targets.push(callerTarget);
+          targets.push({ channelType: callerCh.channelType, channelId: callerCh.channelId });
         }
       }
 

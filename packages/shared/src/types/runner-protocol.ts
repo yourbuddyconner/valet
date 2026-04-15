@@ -326,11 +326,11 @@ export type RunnerToDOMessage =
       channelId?: string;
       opencodeSessionId?: string;
     }
-  | { type: 'question'; questionId: string; text: string; options?: string[] }
-  | { type: 'screenshot'; data: string; description: string }
+  | { type: 'question'; messageId?: string; questionId: string; text: string; options?: string[] }
+  | { type: 'screenshot'; messageId?: string; data: string; description: string }
   | { type: 'error'; messageId: string; error: string }
   | { type: 'complete'; messageId?: string }
-  | { type: 'agentStatus'; status: AgentStatus; detail?: string }
+  | { type: 'agentStatus'; messageId?: string; status: AgentStatus; detail?: string }
   | {
       type: 'create-pr';
       requestId: string;

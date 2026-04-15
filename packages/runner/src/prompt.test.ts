@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentClient } from "./agent-client.js";
-import { PromptHandler } from "./prompt.js";
+import { ChannelSession, PromptHandler } from "./prompt.js";
 
 type FetchCall = {
   url: string;
@@ -433,9 +433,9 @@ describe("PromptHandler idle suppression", () => {
     const channel = (handler as any).getOrCreateChannel("thread", "ch-1");
     channel.syncPromptInFlight = true;
     channel.activeMessageId = "msg-1";
-    (handler as any).activeChannel = channel;
+    (handler as any).currentPromptChannel = channel;
 
-    (handler as any).handleSessionStatus({ status: { type: "idle" } });
+    (handler as any).handleSessionStatus({ status: { type: "idle" } }, channel);
 
     expect(agentClient.sendAgentStatus).not.toHaveBeenCalled();
   });
@@ -447,11 +447,11 @@ describe("PromptHandler idle suppression", () => {
     const channel = (handler as any).getOrCreateChannel("thread", "ch-1");
     channel.syncPromptInFlight = false;
     channel.activeMessageId = null;
-    (handler as any).activeChannel = channel;
+    (handler as any).currentPromptChannel = channel;
 
-    (handler as any).handleSessionStatus({ status: { type: "idle" } });
+    (handler as any).handleSessionStatus({ status: { type: "idle" } }, channel);
 
-    expect(agentClient.sendAgentStatus).toHaveBeenCalledWith("idle");
+    expect(agentClient.sendAgentStatus).toHaveBeenCalledWith("idle", undefined, undefined);
   });
 });
 
@@ -465,7 +465,7 @@ describe("PromptHandler reconnect readiness", () => {
     const handler = createHandler(agentClient);
 
     const channel = (handler as any).getOrCreateChannel("thread", "thread-slack");
-    (handler as any).activeChannel = channel;
+    (handler as any).currentPromptChannel = channel;
     channel.opencodeSessionId = "oc-thread-slack";
     (handler as any).ocSessionToChannel.set("oc-thread-slack", channel);
     channel.idleNotified = true;
@@ -478,6 +478,74 @@ describe("PromptHandler reconnect readiness", () => {
       properties: { sessionID: channel.opencodeSessionId ?? "oc-thread-slack" },
     });
 
-    expect(agentClient.sendAgentStatus).toHaveBeenCalledWith("idle");
+    expect(agentClient.sendAgentStatus).toHaveBeenCalledWith("idle", undefined, undefined);
+  });
+});
+
+describe("PromptHandler SSE event routing", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("drops SSE event when sessionID is not in ocSessionToChannel", () => {
+    const agentClient = createAgentClientMock();
+    const handler = createHandler(agentClient);
+
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    (handler as any).handleEvent({
+      type: "message.updated",
+      properties: { sessionID: "unknown-session-id" },
+    });
+
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringMatching(/Dropping SSE event \(unmapped session\)/)
+    );
+  });
+
+  it("drops SSE event with no sessionID", () => {
+    const agentClient = createAgentClientMock();
+    const handler = createHandler(agentClient);
+
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    (handler as any).handleEvent({
+      type: "message.updated",
+      properties: {},
+    });
+
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringMatching(/Dropping SSE event \(no session ID\)/)
+    );
+  });
+});
+
+describe("PromptHandler.extractChannelContext", () => {
+  it("returns undefined threadId for non-thread channels", () => {
+    const agentClient = createAgentClientMock();
+    const handler = createHandler(agentClient);
+    const channel = new ChannelSession("web:default");
+
+    const ctx = (handler as any).extractChannelContext(channel);
+
+    expect(ctx).toEqual({
+      channelType: "web",
+      channelId: "default",
+      threadId: undefined,
+    });
+  });
+
+  it("returns threadId for thread channels", () => {
+    const agentClient = createAgentClientMock();
+    const handler = createHandler(agentClient);
+    const channel = new ChannelSession("thread:abc-123");
+
+    const ctx = (handler as any).extractChannelContext(channel);
+
+    expect(ctx).toEqual({
+      channelType: "thread",
+      channelId: "abc-123",
+      threadId: "abc-123",
+    });
   });
 });

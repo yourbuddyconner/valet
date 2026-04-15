@@ -185,10 +185,21 @@ async function main() {
     agentClient.sendRunnerHealth('opencode_fatal', { message: 'OpenCode entered fatal state after too many crashes' });
   });
 
+  // Forward-declared so the `onImage` closure below can read the active messageId
+  // from PromptHandler at screenshot time. Assigned a few lines down.
+  // TEMPORARY: Task 12 will plumb messageId through SSE handlers explicitly,
+  // making this cross-reference unnecessary.
+  let promptHandler: PromptHandler;
+
   // Start auth gateway with callbacks
   startGateway(gatewayPort, {
     onImage: (data, description) => {
-      agentClient.sendScreenshot(data, description);
+      const messageId = promptHandler?.getActiveMessageId();
+      if (!messageId) {
+        console.warn('[Runner] screenshot dropped — no active prompt messageId');
+        return;
+      }
+      agentClient.sendScreenshot(messageId, data, description);
     },
     onSpawnChild: async (params) => {
       const result = await agentClient.requestSpawnChild(params);
@@ -358,7 +369,7 @@ async function main() {
       return await agentClient.requestIdentityApi(action, payload);
     },
   });
-  const promptHandler = new PromptHandler(opencodeUrl!, agentClient, sessionId!);
+  promptHandler = new PromptHandler(opencodeUrl!, agentClient, sessionId!);
 
   agentClient.onReconnect(() => {
     if (!promptHandler.isOpenCodeConnected()) {

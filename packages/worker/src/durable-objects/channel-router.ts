@@ -58,25 +58,7 @@ export interface UpdateInteractivePromptOpts {
 }
 
 export class ChannelRouter {
-  private _activeChannel: { channelType: string; channelId: string } | null = null;
-
   constructor(private readonly deps: ChannelRouterDeps) {}
-
-  setActiveChannel(channel: { channelType: string; channelId: string }): void {
-    this._activeChannel = { ...channel };
-  }
-
-  clearActiveChannel(): void {
-    this._activeChannel = null;
-  }
-
-  get activeChannel(): { channelType: string; channelId: string } | null {
-    return this._activeChannel ? { ...this._activeChannel } : null;
-  }
-
-  recoverActiveChannel(channelType: string, channelId: string): void {
-    this._activeChannel = { channelType, channelId };
-  }
 
   async sendReply(opts: SendReplyOpts): Promise<SendReplyResult> {
     const { userId, channelType, channelId, followUp } = opts;
