@@ -1574,7 +1574,12 @@ export class PromptHandler {
           // Extract text and error from the sync response
           const info = result?.info as Record<string, unknown> | undefined;
           const responseText = info ? this.extractAssistantTextFromMessageInfo(info) : null;
-          const responseError = info ? this.extractAssistantErrorFromMessageInfo(info) : null;
+          let responseError = info ? this.extractAssistantErrorFromMessageInfo(info) : null;
+          // Suppress abort errors from a wait_for_event yield-abort.
+          if (responseError && channel.abortedForYield && /aborted/i.test(responseError)) {
+            console.log(`[PromptHandler] Suppressing post-yield responseError: ${responseError}`);
+            responseError = null;
+          }
           const errorMsg = responseError || this.lastError;
 
           console.log(
@@ -1612,6 +1617,14 @@ export class PromptHandler {
             lastModelError = "Model did not respond (sync prompt timed out)";
             console.log(`[PromptHandler] Sync prompt timed out for ${messageId} — trying next model`);
             continue;
+          }
+          // Suppress abort exceptions from a wait_for_event yield-abort —
+          // OpenCode rejects the in-flight sync prompt fetch when the session
+          // is aborted, but it's the expected outcome of yielding.
+          if (channel.abortedForYield && /aborted/i.test(errMsg)) {
+            console.log(`[PromptHandler] Suppressing post-yield sync exception: ${errMsg}`);
+            await this.finalizeSyncResponse(channel, null, null);
+            return;
           }
           if (isRetriableProviderError(errMsg)) {
             lastModelError = errMsg;
@@ -1677,6 +1690,14 @@ export class PromptHandler {
     // Clear any pending timeouts
     this.clearResponseTimeout();
     this.clearFirstResponseTimeout();
+
+    // Suppress abort errors that follow a wait_for_event yield-abort. The sync
+    // prompt HTTP call returns the abort as an error response, but it's the
+    // expected outcome of yielding — not a real failure to surface.
+    if (error && channel.abortedForYield && /aborted/i.test(error)) {
+      console.log(`[PromptHandler] Suppressing post-yield finalize error: ${error}`);
+      error = null;
+    }
 
     const messageId = channel.activeMessageId;
     // Also consider streamed content from SSE events that arrived during the sync call
