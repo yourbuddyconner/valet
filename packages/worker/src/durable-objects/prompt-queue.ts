@@ -208,6 +208,29 @@ export class PromptQueue {
   }
 
   /**
+   * Dequeue the oldest queued child-event entry (has child_session_id).
+   * Used when a wait subscription is active so child events are dispatched
+   * before user messages, preventing the wait from being pre-empted.
+   */
+  dequeueNextChild(): QueueEntry | null {
+    const rows = this.sql
+      .exec(
+        "SELECT id, content, attachments, model, author_id, author_email, author_name, author_avatar_url, channel_type, channel_id, channel_key, queue_type, workflow_execution_id, workflow_payload, thread_id, continuation_context, context_prefix, reply_channel_type, reply_channel_id, child_session_id, child_status, priority FROM prompt_queue WHERE status = 'queued' AND child_session_id IS NOT NULL ORDER BY priority DESC, created_at ASC LIMIT 1",
+      )
+      .toArray();
+
+    if (rows.length === 0) return null;
+
+    const row = rows[0];
+    this.sql.exec(
+      "UPDATE prompt_queue SET status = 'processing' WHERE id = ?",
+      row.id as string,
+    );
+
+    return this.rowToEntry(row);
+  }
+
+  /**
    * Mark all processing entries as completed, then prune completed entries.
    * Returns the number of entries that were processing.
    */

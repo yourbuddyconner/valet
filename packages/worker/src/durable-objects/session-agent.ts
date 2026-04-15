@@ -1618,9 +1618,17 @@ export class SessionAgentDO {
       `[SessionAgentDO] handlePrompt: channel=${channelKey} runnerConnected=${runnerConnected} runnerReady=${runnerReady} runnerBusy=${runnerBusy} status=${status} sandboxId=${sandboxId || 'none'} queued=${queuedCount}`
     );
 
-    if (!runnerConnected || !runnerReady || runnerBusy) {
+    // Queue when runner isn't ready, OR when a wait_for_event subscription is active.
+    // Without the wait check, user messages dispatch directly (clearing the subscription)
+    // and pre-empt the child event the agent is waiting for — causing hallucinated
+    // responses followed by a confused second turn when the child event arrives late.
+    const waitActive = !!this.sessionState.waitSubscription;
+    if (!runnerConnected || !runnerReady || runnerBusy || waitActive) {
       // ─── Enqueue path: defer message write to dispatch time ──────────
-      const reason = runnerBusy ? 'runner busy' : (!runnerConnected ? 'no runner connected' : 'runner not ready');
+      const reason = waitActive ? 'waiting for child event'
+        : runnerBusy ? 'runner busy'
+        : !runnerConnected ? 'no runner connected'
+        : 'runner not ready';
       console.log(`[SessionAgentDO] handlePrompt: QUEUING (${reason}) channel=${channelKey} messageId=${messageId}`);
 
       // Single-slot enforcement: withdraw existing pending user prompt
@@ -4193,8 +4201,13 @@ export class SessionAgentDO {
       return false;
     }
 
-    // Dequeue loop: skip filtered child events and malformed entries without recursion.
-    let prompt = this.promptQueue.dequeueNext();
+    // When a wait subscription is active, only dequeue child events — hold user
+    // messages in the queue until the wait resolves. This prevents user messages
+    // from being dispatched before the child event the agent is waiting for.
+    const hasWaitSub = !!this.sessionState.waitSubscription;
+    let prompt = hasWaitSub
+      ? this.promptQueue.dequeueNextChild()
+      : this.promptQueue.dequeueNext();
     while (prompt) {
       console.log(`[SessionAgentDO] sendNextQueuedPrompt: found queued item id=${prompt.id} channelType=${prompt.channelType || 'none'} channelId=${prompt.channelId || 'none'} queueType=${prompt.queueType || 'prompt'}`);
 
@@ -4237,7 +4250,9 @@ export class SessionAgentDO {
 
       if (shouldSkip) {
         this.promptQueue.dropEntry(prompt.id);
-        prompt = this.promptQueue.dequeueNext();
+        prompt = hasWaitSub
+          ? this.promptQueue.dequeueNextChild()
+          : this.promptQueue.dequeueNext();
         continue;
       }
 
