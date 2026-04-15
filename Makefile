@@ -11,6 +11,7 @@
         docker-build docker-up docker-down docker-logs \
         test test-unit test-integration test-e2e \
         test-workflow test-triggers test-webhooks test-schedule \
+        smoke-test smoke-test-prod smoke-test-api smoke-test-agent \
         lint typecheck \
         logs logs-worker logs-opencode logs-cloudflare logs-worker-prod \
         health health-worker health-opencode \
@@ -242,6 +243,18 @@ test-e2e: wait-for-services ## Run end-to-end tests
 	@make test-workflow
 	@make test-triggers
 	@make test-webhooks
+
+smoke-test: ## Run API smoke tests (direct API + agent-dispatched)
+	@WORKER_URL=$(WORKER_URL) API_TOKEN=$(API_TOKEN) pnpm vitest run --config tests/smoke/vitest.config.ts
+
+smoke-test-prod: ## Run API smoke tests against production
+	@WORKER_URL=$(WORKER_PROD_URL) API_TOKEN=$(API_TOKEN) pnpm vitest run --config tests/smoke/vitest.config.ts
+
+smoke-test-api: ## Run only direct API smoke tests (no agent dispatch, fast)
+	@WORKER_URL=$(WORKER_URL) API_TOKEN=$(API_TOKEN) pnpm vitest run --config tests/smoke/vitest.config.ts api.test.ts
+
+smoke-test-agent: ## Run only agent-dispatched smoke tests (slower, needs running orchestrator)
+	@WORKER_URL=$(WORKER_URL) API_TOKEN=$(API_TOKEN) pnpm vitest run --config tests/smoke/vitest.config.ts agent-
 
 # ==========================================
 # Workflow E2E Tests
