@@ -3609,9 +3609,14 @@ export class SessionAgentDO {
       if (promptStart > 0) {
         // Read model from the processing prompt_queue entry before it's marked completed
         const turnModel = this.promptQueue.getProcessingModel() || undefined;
+        // Resolve channel from the specific prompt's messageId; no fallback to
+        // mutable state. If messageId is absent or the row is gone (e.g. queue
+        // was already pruned), emit without channel attribution rather than
+        // attributing to an arbitrary channel.
+        const completedCh = messageId ? this.getChannelForMessage(messageId) : null;
         this.emitEvent('turn_complete', {
           durationMs: Date.now() - promptStart,
-          channel: this.activeChannel?.channelType || undefined,
+          channel: completedCh?.channelType || undefined,
           model: turnModel,
           queueMode: this.promptQueue.queueMode || undefined,
         });
