@@ -382,7 +382,7 @@ describe('MessageStore', () => {
 
       // Find the INSERT call
       const insertCalls = sql.calls.filter((c) =>
-        c.query.includes('INSERT INTO messages') && c.params.length > 0,
+        c.query.includes('INSERT') && c.query.includes('INTO messages') && c.params.length > 0,
       );
       expect(insertCalls.length).toBe(1);
       const call = insertCalls[0];
@@ -415,7 +415,7 @@ describe('MessageStore', () => {
       });
 
       const insertCalls = sql.calls.filter((c) =>
-        c.query.includes('INSERT INTO messages') && c.params.length > 0,
+        c.query.includes('INSERT') && c.query.includes('INTO messages') && c.params.length > 0,
       );
       const call = insertCalls[0];
       expect(call.params[4]).toBeNull();  // parts

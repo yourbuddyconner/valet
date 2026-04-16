@@ -56,11 +56,13 @@ function createMockSql(): SqlStorage & {
   state: Map<string, string>;
   interactivePrompts: Map<string, InteractivePromptRow>;
   messages: Map<string, Record<string, unknown>>;
+  channelState: Map<string, { busy: number; opencode_session_id: string | null }>;
 } {
   const queue = new Map<string, QueueRow>();
   const state = new Map<string, string>();
   const interactivePrompts = new Map<string, InteractivePromptRow>();
   const messages = new Map<string, Record<string, unknown>>();
+  const channelState = new Map<string, { busy: number; opencode_session_id: string | null }>();
   insertCounter = 0;
 
   return {
@@ -68,11 +70,31 @@ function createMockSql(): SqlStorage & {
     state,
     interactivePrompts,
     messages,
+    channelState,
     exec(query: string, ...params: unknown[]) {
       const q = query.trim();
 
       if (q.startsWith('CREATE') || q.startsWith('ALTER TABLE')) {
         return cursor([]);
+      }
+
+      if (q.startsWith('INSERT INTO channel_state')) {
+        const channelKey = String(params[0]);
+        const opencodeSessionId = params[1] === undefined || params[1] === null
+          ? null
+          : String(params[1]);
+        const existing = channelState.get(channelKey);
+        channelState.set(channelKey, {
+          busy: existing?.busy ?? 0,
+          opencode_session_id: opencodeSessionId,
+        });
+        return cursor([]);
+      }
+
+      if (q.startsWith('SELECT') && q.includes('FROM channel_state')) {
+        const channelKey = String(params[0]);
+        const row = channelState.get(channelKey);
+        return row === undefined ? cursor([]) : cursor([row]);
       }
       if (q.startsWith("UPDATE prompt_queue SET queue_type = 'prompt'")) {
         return cursor([]);
@@ -249,6 +271,7 @@ function createMockSql(): SqlStorage & {
     state: Map<string, string>;
     interactivePrompts: Map<string, InteractivePromptRow>;
     messages: Map<string, Record<string, unknown>>;
+    channelState: Map<string, { busy: number; opencode_session_id: string | null }>;
   };
 }
 
