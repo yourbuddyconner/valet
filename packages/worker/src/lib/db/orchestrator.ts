@@ -140,6 +140,17 @@ export async function getOrchestratorSession(db: D1Database, userId: string): Pr
   return null;
 }
 
+export async function getCurrentOrchestratorSession(db: D1Database, userId: string): Promise<AgentSession | null> {
+  const activeRow = await db.prepare(
+    `SELECT * FROM sessions
+     WHERE user_id = ? AND is_orchestrator = 1
+       AND status NOT IN ('terminated', 'archived', 'error')
+     ORDER BY created_at DESC LIMIT 1`
+  ).bind(userId).first();
+  if (activeRow) return mapSessionRow(activeRow);
+  return null;
+}
+
 // Raw SQL: NOT EXISTS subquery + JOIN
 /**
  * Find orchestrator sessions stuck in terminal state for longer than `minAgeMinutes`.

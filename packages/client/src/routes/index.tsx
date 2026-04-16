@@ -146,7 +146,7 @@ function OrchestratorBanner() {
       </div>
       <Link
         to="/sessions/$sessionId"
-        params={{ sessionId: data.sessionId }}
+        params={{ sessionId: 'orchestrator' }}
         className="rounded-md bg-neutral-900 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-neutral-800 dark:bg-neutral-100 dark:text-neutral-900 dark:hover:bg-neutral-200"
       >
         Talk to {data.identity.name}

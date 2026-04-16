@@ -100,7 +100,7 @@ function SetupForm() {
         customInstructions: customInstructions || undefined,
       },
       {
-        onSuccess: async (data) => {
+        onSuccess: async () => {
           if (avatarFile) {
             try {
               await uploadAvatar.mutateAsync(avatarFile);
@@ -110,7 +110,7 @@ function SetupForm() {
           }
           navigate({
             to: '/sessions/$sessionId',
-            params: { sessionId: data.sessionId },
+            params: { sessionId: 'orchestrator' },
           });
         },
       }
@@ -620,4 +620,3 @@ function OrchestratorSkeleton() {
     </div>
   );
 }
-

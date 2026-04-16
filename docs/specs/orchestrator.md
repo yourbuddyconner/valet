@@ -219,6 +219,16 @@ ORDER BY created_at DESC LIMIT 1
 
 Returns the most recent non-terminal orchestrator session. Supports ID rotation by always picking the newest.
 
+### Canonical Web Chat Route
+
+The authenticated user's own web UI canonicalizes orchestrator chat at `/sessions/orchestrator`.
+
+- This route is a stable alias for "the current orchestrator" for the authenticated user only.
+- The browser URL must remain `/sessions/orchestrator` and must not be rewritten to the rotated session ID.
+- Worker session/thread routes resolve the alias to the latest non-terminal orchestrator session before access checks, DO routing, and thread/history lookups.
+- Rotated IDs such as `orchestrator:{userId}:{uuid}` remain internal implementation details used for D1 rows, Durable Objects, and historical references.
+- Admin and cross-user views may continue to use concrete rotated session IDs where a specific persisted orchestrator session is being inspected.
+
 ### Concurrency Bypass
 
 Sessions spawned by the orchestrator (with `parentSessionId` starting with `orchestrator:`) **skip the user's active session concurrency limit**. The orchestrator needs to freely spawn children.

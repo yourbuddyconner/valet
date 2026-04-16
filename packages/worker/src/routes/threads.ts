@@ -30,6 +30,16 @@ function isOrchestratorSession(session: AgentSession): boolean {
   return !!session.isOrchestrator || session.purpose === 'orchestrator';
 }
 
+async function resolveRequestedSessionId(dbConn: D1Database, userId: string, requestedId: string): Promise<string> {
+  if (requestedId !== 'orchestrator') return requestedId;
+
+  const session = await db.getCurrentOrchestratorSession(dbConn, userId);
+  if (!session) {
+    throw new NotFoundError('Session', requestedId);
+  }
+  return session.id;
+}
+
 /**
  * For orchestrator sessions, verify that a thread from a different (rotated)
  * orchestrator session is still owned by the same user. Throws NotFoundError
@@ -63,15 +73,16 @@ threadsRouter.get('/:sessionId/threads', async (c) => {
   const user = c.get('user');
   const { sessionId } = c.req.param();
   const { cursor, limit, status, page, pageSize } = c.req.query();
+  const resolvedSessionId = await resolveRequestedSessionId(c.env.DB, user.id, sessionId);
 
-  const session = await db.assertSessionAccess(c.get('db'), sessionId, user.id, 'viewer');
+  const session = await db.assertSessionAccess(c.get('db'), resolvedSessionId, user.id, 'viewer');
 
   const parsedLimit = pageSize ? parseInt(pageSize, 10) : limit ? parseInt(limit, 10) : 20;
   const safeLimit = Number.isNaN(parsedLimit) ? 20 : Math.min(Math.max(parsedLimit, 1), 100);
   const parsedPage = page ? parseInt(page, 10) : undefined;
   const safePage = parsedPage && !Number.isNaN(parsedPage) ? Math.max(parsedPage, 1) : undefined;
 
-  const result = await db.listThreads(c.env.DB, sessionId, {
+  const result = await db.listThreads(c.env.DB, resolvedSessionId, {
     cursor,
     limit: safeLimit,
     ...(safePage ? { page: safePage, pageSize: safeLimit } : {}),
@@ -89,11 +100,12 @@ threadsRouter.get('/:sessionId/threads', async (c) => {
 threadsRouter.post('/:sessionId/threads', async (c) => {
   const user = c.get('user');
   const { sessionId } = c.req.param();
+  const resolvedSessionId = await resolveRequestedSessionId(c.env.DB, user.id, sessionId);
 
-  await db.assertSessionAccess(c.get('db'), sessionId, user.id, 'collaborator');
+  await db.assertSessionAccess(c.get('db'), resolvedSessionId, user.id, 'collaborator');
 
   const id = crypto.randomUUID();
-  const thread = await db.createThread(c.env.DB, { id, sessionId });
+  const thread = await db.createThread(c.env.DB, { id, sessionId: resolvedSessionId });
 
   return c.json(thread, 201);
 });
@@ -106,15 +118,16 @@ threadsRouter.post('/:sessionId/threads', async (c) => {
 threadsRouter.get('/:sessionId/threads/active', async (c) => {
   const user = c.get('user');
   const { sessionId } = c.req.param();
+  const resolvedSessionId = await resolveRequestedSessionId(c.env.DB, user.id, sessionId);
 
-  await db.assertSessionAccess(c.get('db'), sessionId, user.id, 'viewer');
+  await db.assertSessionAccess(c.get('db'), resolvedSessionId, user.id, 'viewer');
 
-  let thread = await db.getActiveThread(c.env.DB, sessionId);
+  let thread = await db.getActiveThread(c.env.DB, resolvedSessionId);
 
   if (!thread) {
     // Auto-create a thread if none exists
     const id = crypto.randomUUID();
-    thread = await db.createThread(c.env.DB, { id, sessionId });
+    thread = await db.createThread(c.env.DB, { id, sessionId: resolvedSessionId });
   }
 
   return c.json({ thread });
@@ -130,8 +143,9 @@ threadsRouter.get('/:sessionId/threads/active', async (c) => {
 threadsRouter.get('/:sessionId/threads/:threadId', async (c) => {
   const user = c.get('user');
   const { sessionId, threadId } = c.req.param();
+  const resolvedSessionId = await resolveRequestedSessionId(c.env.DB, user.id, sessionId);
 
-  const session = await db.assertSessionAccess(c.get('db'), sessionId, user.id, 'viewer');
+  const session = await db.assertSessionAccess(c.get('db'), resolvedSessionId, user.id, 'viewer');
 
   const thread = await db.getThread(c.env.DB, threadId);
   if (!thread) {
@@ -155,8 +169,9 @@ threadsRouter.get('/:sessionId/threads/:threadId', async (c) => {
 threadsRouter.post('/:sessionId/threads/:threadId/continue', async (c) => {
   const user = c.get('user');
   const { sessionId, threadId } = c.req.param();
+  const resolvedSessionId = await resolveRequestedSessionId(c.env.DB, user.id, sessionId);
 
-  const session = await db.assertSessionAccess(c.get('db'), sessionId, user.id, 'collaborator');
+  const session = await db.assertSessionAccess(c.get('db'), resolvedSessionId, user.id, 'collaborator');
 
   const thread = await db.getThread(c.env.DB, threadId);
   if (!thread) {
@@ -195,8 +210,9 @@ threadsRouter.post('/:sessionId/threads/:threadId/continue', async (c) => {
 threadsRouter.patch('/:sessionId/threads/:threadId', async (c) => {
   const user = c.get('user');
   const { sessionId, threadId } = c.req.param();
+  const resolvedSessionId = await resolveRequestedSessionId(c.env.DB, user.id, sessionId);
 
-  const session = await db.assertSessionAccess(c.get('db'), sessionId, user.id, 'collaborator');
+  const session = await db.assertSessionAccess(c.get('db'), resolvedSessionId, user.id, 'collaborator');
 
   const thread = await db.getThread(c.env.DB, threadId);
   if (!thread) {

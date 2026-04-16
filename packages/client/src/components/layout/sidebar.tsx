@@ -32,10 +32,10 @@ export function Sidebar() {
 
   // Build nav items with dynamic orchestrator chat link
   const navItems: NavItem[] = staticNavItems.flatMap((item) => {
-    if (item.href === '/orchestrator' && orchInfo?.sessionId && orchInfo?.identity) {
+    if (item.href === '/orchestrator' && orchInfo?.identity) {
       return [
         item,
-        { href: `/sessions/${orchInfo.sessionId}`, label: 'Chat', icon: ChatIcon, indent: true },
+        { href: '/sessions/orchestrator', label: 'Chat', icon: ChatIcon, indent: true },
       ];
     }
     return [item];

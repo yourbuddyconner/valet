@@ -1,9 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { Hono } from 'hono';
 import type { D1Database } from '@cloudflare/workers-types';
+import type { Env, Variables } from '../env.js';
+import { errorHandler } from '../middleware/error-handler.js';
 
 const {
   assertSessionAccessMock,
+  getCurrentOrchestratorSessionMock,
   getThreadMock,
   getThreadMessagesMock,
   listThreadsMock,
@@ -11,6 +14,7 @@ const {
   updateThreadStatusMock,
 } = vi.hoisted(() => ({
   assertSessionAccessMock: vi.fn(),
+  getCurrentOrchestratorSessionMock: vi.fn(),
   getThreadMock: vi.fn(),
   getThreadMessagesMock: vi.fn(),
   listThreadsMock: vi.fn(),
@@ -20,6 +24,7 @@ const {
 
 vi.mock('../lib/db.js', () => ({
   assertSessionAccess: assertSessionAccessMock,
+  getCurrentOrchestratorSession: getCurrentOrchestratorSessionMock,
   getThread: getThreadMock,
   getThreadMessages: getThreadMessagesMock,
   listThreads: listThreadsMock,
@@ -30,10 +35,12 @@ vi.mock('../lib/db.js', () => ({
 import { threadsRouter } from './threads.js';
 
 function buildApp() {
-  const app = new Hono();
+  const app = new Hono<{ Bindings: Env; Variables: Variables }>();
+  app.onError(errorHandler);
   app.use('*', async (c, next) => {
     (c as any).set('user', { id: 'user-1', email: 'user@example.com', role: 'user' } as any);
     (c as any).set('db', {} as any);
+    (c as any).set('requestId', 'req-test');
     await next();
   });
   app.route('/', threadsRouter);
@@ -43,11 +50,62 @@ function buildApp() {
 describe('threadsRouter POST /:sessionId/threads/:threadId/continue', () => {
   beforeEach(() => {
     vi.resetAllMocks();
+    getCurrentOrchestratorSessionMock.mockResolvedValue(null);
     getThreadMessagesMock.mockResolvedValue([]);
     listThreadsMock.mockResolvedValue({ threads: [], hasMore: false });
   });
 
+  it('resolves the orchestrator alias to the current orchestrator session when listing threads', async () => {
+    getCurrentOrchestratorSessionMock.mockResolvedValue({
+      id: 'orchestrator:user-1:new',
+      userId: 'user-1',
+      purpose: 'orchestrator',
+      isOrchestrator: true,
+    });
+
+    assertSessionAccessMock.mockResolvedValue({
+      id: 'orchestrator:user-1:new',
+      userId: 'user-1',
+      purpose: 'orchestrator',
+      isOrchestrator: true,
+    });
+
+    const app = buildApp();
+    const res = await app.fetch(
+      new Request('http://localhost/orchestrator/threads'),
+      { DB: {} } as any
+    );
+
+    expect(res.status).toBe(200);
+    expect(getCurrentOrchestratorSessionMock).toHaveBeenCalledWith({}, 'user-1');
+    expect(assertSessionAccessMock).toHaveBeenCalledWith({}, 'orchestrator:user-1:new', 'user-1', 'viewer');
+    expect(listThreadsMock).toHaveBeenCalledWith({}, 'orchestrator:user-1:new', {
+      limit: 20,
+      userId: 'user-1',
+    });
+  });
+
+  it('returns 404 when the orchestrator alias cannot be resolved', async () => {
+    const app = buildApp();
+    const res = await app.fetch(
+      new Request('http://localhost/orchestrator/threads'),
+      { DB: {} } as any
+    );
+
+    expect(res.status).toBe(404);
+    expect(await res.json()).toMatchObject({
+      error: "Session with id 'orchestrator' not found",
+    });
+  });
+
   it('returns numbered thread-history pagination metadata when page params are provided', async () => {
+    getCurrentOrchestratorSessionMock.mockResolvedValue({
+      id: 'orchestrator:user-1:new',
+      userId: 'user-1',
+      purpose: 'orchestrator',
+      isOrchestrator: true,
+    });
+
     assertSessionAccessMock.mockResolvedValue({
       id: 'orchestrator:user-1:new',
       userId: 'user-1',
@@ -78,7 +136,7 @@ describe('threadsRouter POST /:sessionId/threads/:threadId/continue', () => {
 
     const app = buildApp();
     const res = await app.fetch(
-      new Request('http://localhost/orchestrator:user-1:new/threads?page=2&pageSize=30'),
+      new Request('http://localhost/orchestrator/threads?page=2&pageSize=30'),
       { DB: {} } as any
     );
 
@@ -119,6 +177,13 @@ describe('threadsRouter POST /:sessionId/threads/:threadId/continue', () => {
       opencodeSessionId: 'persisted-thread',
     };
 
+    getCurrentOrchestratorSessionMock.mockResolvedValue({
+      id: 'orchestrator:user-1:new',
+      userId: 'user-1',
+      purpose: 'orchestrator',
+      isOrchestrator: true,
+    });
+
     assertSessionAccessMock
       .mockResolvedValueOnce({
         id: 'orchestrator:user-1:new',
@@ -155,7 +220,7 @@ describe('threadsRouter POST /:sessionId/threads/:threadId/continue', () => {
 
     const app = buildApp();
     const res = await app.fetch(
-      new Request('http://localhost/orchestrator:user-1:new/threads/thread-detail'),
+      new Request('http://localhost/orchestrator/threads/thread-detail'),
       { DB: {} } as any
     );
 
@@ -192,6 +257,13 @@ describe('threadsRouter POST /:sessionId/threads/:threadId/continue', () => {
       opencodeSessionId: 'persisted-thread-1',
     };
 
+    getCurrentOrchestratorSessionMock.mockResolvedValue({
+      id: 'orchestrator:user-1:new',
+      userId: 'user-1',
+      purpose: 'orchestrator',
+      isOrchestrator: true,
+    });
+
     assertSessionAccessMock
       .mockResolvedValueOnce({
         id: 'orchestrator:user-1:new',
@@ -210,7 +282,7 @@ describe('threadsRouter POST /:sessionId/threads/:threadId/continue', () => {
 
     const app = buildApp();
     const res = await app.fetch(
-      new Request('http://localhost/orchestrator:user-1:new/threads/thread-1/continue', {
+      new Request('http://localhost/orchestrator/threads/thread-1/continue', {
         method: 'POST',
       }),
       { DB: {} } as any
@@ -237,6 +309,13 @@ describe('threadsRouter POST /:sessionId/threads/:threadId/continue', () => {
       status: 'active',
     };
 
+    getCurrentOrchestratorSessionMock.mockResolvedValue({
+      id: 'orchestrator:user-1:new',
+      userId: 'user-1',
+      purpose: 'orchestrator',
+      isOrchestrator: true,
+    });
+
     assertSessionAccessMock
       .mockResolvedValueOnce({
         id: 'orchestrator:user-1:new',
@@ -257,7 +336,7 @@ describe('threadsRouter POST /:sessionId/threads/:threadId/continue', () => {
 
     const app = buildApp();
     const res = await app.fetch(
-      new Request('http://localhost/orchestrator:user-1:new/threads/thread-2/continue', {
+      new Request('http://localhost/orchestrator/threads/thread-2/continue', {
         method: 'POST',
       }),
       { DB: {} } as any
@@ -279,6 +358,13 @@ describe('threadsRouter POST /:sessionId/threads/:threadId/continue', () => {
       status: 'active',
       opencodeSessionId: undefined,
     };
+
+    getCurrentOrchestratorSessionMock.mockResolvedValue({
+      id: 'orchestrator:user-1:new',
+      userId: 'user-1',
+      purpose: 'orchestrator',
+      isOrchestrator: true,
+    });
 
     assertSessionAccessMock
       .mockResolvedValueOnce({
@@ -311,7 +397,7 @@ describe('threadsRouter POST /:sessionId/threads/:threadId/continue', () => {
 
     const app = buildApp();
     const res = await app.fetch(
-      new Request('http://localhost/orchestrator:user-1:new/threads/thread-3/continue', {
+      new Request('http://localhost/orchestrator/threads/thread-3/continue', {
         method: 'POST',
       }),
       { DB: dbMock } as any
