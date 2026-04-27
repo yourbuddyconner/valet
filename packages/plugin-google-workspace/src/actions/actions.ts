@@ -45,9 +45,11 @@ async function executeAction(
   const token = ctx.credentials.access_token || '';
   const category = classifyAction(actionId);
 
-  // Fail-closed: unclassified actions are denied when the guard is active
+  // Fail-closed: unclassified actions are denied when the guard is active.
+  // Surface the actual action ID — this is a caller bug (e.g. hallucinated tool
+  // name), not a label check, so the error should be diagnosable.
   if (category === 'unknown') {
-    return { success: false, error: 'File not found or access denied' };
+    return { success: false, error: `Unknown action: ${actionId}` };
   }
 
   const p = (params && typeof params === 'object' ? params : {}) as Record<string, unknown>;

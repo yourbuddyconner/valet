@@ -77,13 +77,21 @@ export async function configureIntegration(
   // Ensure user exists
   await db.getOrCreateUser(appDb, { id: userId, email: userEmail });
 
-  // Compute expiresAt from expires_in if present (passed through from MCP OAuth token exchange)
+  // Compute expiresAt from credential data.
+  // MCP OAuth passes expires_in (seconds); traditional OAuth providers (e.g. Google
+  // Workspace) pass expires_at (ISO string) from their exchangeOAuthCode.
   let expiresAt: string | undefined;
   const expiresInRaw = params.credentials.expires_in;
   if (expiresInRaw) {
     const expiresInSec = parseInt(expiresInRaw, 10);
     if (!Number.isNaN(expiresInSec) && expiresInSec > 0) {
       expiresAt = new Date(Date.now() + expiresInSec * 1000).toISOString();
+    }
+  } else if (params.credentials.expires_at) {
+    // Traditional OAuth providers return an ISO timestamp directly
+    const parsed = Date.parse(params.credentials.expires_at);
+    if (!Number.isNaN(parsed)) {
+      expiresAt = new Date(parsed).toISOString();
     }
   }
 
