@@ -1219,8 +1219,10 @@ function popFormatting(
 // --- Finalization -- apply all deferred formatting requests ---
 
 function finalizeFormatting(context: ConversionContext): void {
-  // Style reset pass: clear inherited fontSize/weightedFontFamily so
-  // named styles (HEADING_1, NORMAL_TEXT, etc.) control the appearance.
+  // Style reset pass: clear inherited styles so named styles (HEADING_1,
+  // NORMAL_TEXT, etc.) control the appearance and so inline formatting
+  // (link color, code foreground/background) doesn't bleed past its
+  // intended range into the rest of the paragraph.
 
   // Reset for heading paragraphs
   for (const paraRange of context.paragraphRanges) {
@@ -1233,8 +1235,11 @@ function finalizeFormatting(context: ConversionContext): void {
     context.formatRequests.push({
       updateTextStyle: {
         range,
-        textStyle: {},
-        fields: 'fontSize,weightedFontFamily',
+        textStyle: {
+          foregroundColor: {},
+          backgroundColor: {},
+        },
+        fields: 'fontSize,weightedFontFamily,foregroundColor,backgroundColor,link',
       },
     });
   }
@@ -1250,8 +1255,11 @@ function finalizeFormatting(context: ConversionContext): void {
     context.formatRequests.push({
       updateTextStyle: {
         range,
-        textStyle: {},
-        fields: 'fontSize,weightedFontFamily',
+        textStyle: {
+          foregroundColor: {},
+          backgroundColor: {},
+        },
+        fields: 'fontSize,weightedFontFamily,foregroundColor,backgroundColor,link',
       },
     });
   }

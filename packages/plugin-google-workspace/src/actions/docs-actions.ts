@@ -1,5 +1,5 @@
 /**
- * Google Docs actions — 25 total (read/write, content insertion, tabs,
+ * Google Docs actions — 26 total (read/write, content insertion, tabs,
  * formatting, comments).
  *
  * Ported from the reference MCP server tools. Uses raw fetch() via
@@ -478,6 +478,24 @@ const allActions: ActionDefinition[] = [
       commentId: z.string().describe('Comment ID to resolve'),
     }),
   },
+  {
+    id: 'docs.find_text_index',
+    name: 'Find Text Index',
+    description:
+      'Find the character index of a text string in a document. Returns { startIndex, endIndex } for use with insert_text, modify_text, delete_range, and other index-based tools. Much lighter than reading the full document with format=json.',
+    riskLevel: 'low',
+    params: z.object({
+      documentId: z.string().describe('Document ID or full Google Docs URL'),
+      textToFind: z.string().min(1).describe('The text to search for in the document'),
+      matchInstance: z
+        .number()
+        .int()
+        .min(1)
+        .optional()
+        .describe('Which occurrence to match (default: 1, i.e. first match)'),
+      tabId: z.string().optional(),
+    }),
+  },
 ];
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -620,7 +638,29 @@ async function executeAction(
 
         // JSON format
         if (p.format === 'json') {
-          const jsonContent = JSON.stringify(contentSource, null, 2);
+          // Strip top-level metadata and empty objects to reduce output size.
+          // documentStyle, namedStyles, revisionId, suggestedNamedStylesChanges,
+          // etc. add significant bulk but aren't useful for editing operations.
+          const slimSource = { ...contentSource as Record<string, unknown> };
+          delete slimSource.documentStyle;
+          delete slimSource.namedStyles;
+          delete slimSource.revisionId;
+          delete slimSource.documentId;
+          delete slimSource.suggestedDocumentStyleChanges;
+          delete slimSource.suggestedNamedStylesChanges;
+          // Keep inlineObjects and positionedObjects -- paragraph elements
+          // reference these by ID for inline/anchored images.
+          delete slimSource.headers;
+          delete slimSource.footers;
+          delete slimSource.footnotes;
+
+          const jsonContent = JSON.stringify(slimSource, (_key, value) => {
+            // Prune empty objects (e.g. textStyle: {}, paragraphStyle: {})
+            if (value && typeof value === 'object' && !Array.isArray(value)) {
+              if (Object.keys(value).length === 0) return undefined;
+            }
+            return value;
+          }, 2);
           if (p.maxLength && jsonContent.length > p.maxLength) {
             return {
               success: true,
@@ -1144,7 +1184,7 @@ async function executeAction(
                       backgroundColor: {},
                     },
                     fields:
-                      'underline,bold,italic,strikethrough,foregroundColor,backgroundColor',
+                      'underline,bold,italic,strikethrough,foregroundColor,backgroundColor,link,weightedFontFamily,fontSize',
                   },
                 },
               ];
@@ -1625,7 +1665,15 @@ async function executeAction(
         }
 
         if (requests.length === 0) {
-          return { success: true, data: { message: 'No valid text styling options were provided.' } };
+          const validKeys = ['bold', 'italic', 'underline', 'strikethrough', 'fontSize', 'fontFamily', 'foregroundColor', 'backgroundColor', 'linkUrl'];
+          const rawStyle = (params as Record<string, unknown>)?.style;
+          const unrecognized = rawStyle && typeof rawStyle === 'object'
+            ? Object.keys(rawStyle).filter((k) => !validKeys.includes(k))
+            : [];
+          const hint = unrecognized.length > 0
+            ? ` Unrecognized properties: ${unrecognized.join(', ')}. Valid style properties: ${validKeys.join(', ')}.`
+            : ` Valid style properties: ${validKeys.join(', ')}.`;
+          return { success: true, data: { message: `No valid text styling options were provided.${hint}` } };
         }
 
         const batchResult = await executeBatchUpdate(docId, token, requests);
@@ -2046,6 +2094,37 @@ async function executeAction(
         return {
           success: true,
           data: { message: `Comment ${p.commentId} has been marked as resolved.` },
+        };
+      }
+
+      // ── docs.find_text_index ─────────────────────────────────────
+      case 'docs.find_text_index': {
+        const p = allActions.find((a) => a.id === actionId)!.params.parse(params) as {
+          documentId: string;
+          textToFind: string;
+          matchInstance?: number;
+          tabId?: string;
+        };
+        const docId = normalizeDocumentId(p.documentId);
+        const instance = p.matchInstance ?? 1;
+
+        const range = await findTextRange(token, docId, p.textToFind, instance, p.tabId);
+        if (!range) {
+          return {
+            success: false,
+            error: `Could not find instance ${instance} of text "${p.textToFind}"${p.tabId ? ` in tab ${p.tabId}` : ''}.`,
+          };
+        }
+
+        return {
+          success: true,
+          data: {
+            startIndex: range.startIndex,
+            endIndex: range.endIndex,
+            text: p.textToFind,
+            instance,
+            message: `Found "${p.textToFind}" (instance ${instance}) at character range [${range.startIndex}, ${range.endIndex}).`,
+          },
         };
       }
 
