@@ -1180,7 +1180,11 @@ async function executeAction(
                       bold: false,
                       italic: false,
                       strikethrough: false,
-                      foregroundColor: {},
+                      // Explicit black — an empty foregroundColor ({}) means
+                      // "no direct formatting" which the Docs renderer treats
+                      // as "continue the previous run's color," causing
+                      // inserted text to inherit stale colors from the old doc.
+                      foregroundColor: { color: { rgbColor: { red: 0, green: 0, blue: 0 } } },
                       backgroundColor: {},
                     },
                     fields:

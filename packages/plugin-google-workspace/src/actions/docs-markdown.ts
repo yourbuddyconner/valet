@@ -497,6 +497,12 @@ const CODE_FONT_FAMILY = 'Roboto Mono';
 const CODE_TEXT_HEX = '#188038';
 const CODE_BACKGROUND_HEX = '#F1F3F4';
 
+// Explicit black foregroundColor for style resets.  An empty OptionalColor
+// ({}) means "no direct formatting" which the Docs rendering engine treats as
+// "continue the previous run's color."  Using explicit black ensures every
+// character has its own color run, preventing code-green / link-blue bleed.
+const DEFAULT_FG_COLOR = { color: { rgbColor: { red: 0, green: 0, blue: 0 } } };
+
 // Code block (table-based) visual constants
 const CODE_BLOCK_BG_RGB = { red: 0.937, green: 0.945, blue: 0.953 }; // #EFF1F3
 const CODE_BLOCK_BORDER_RGB = { red: 0.855, green: 0.863, blue: 0.878 }; // #DADCE0
@@ -1097,6 +1103,23 @@ function handleTableClose(
         },
       });
 
+      // Reset foregroundColor for the entire cell text so inline code/link
+      // colors don't bleed to the end of the cell (same fix as paragraphs).
+      if (cell.textRanges.length > 0) {
+        const cellRange: Record<string, unknown> = {
+          startIndex: adjustedIndex,
+          endIndex: adjustedIndex + cell.text.length,
+        };
+        if (context.tabId) cellRange.tabId = context.tabId;
+        context.formatRequests.push({
+          updateTextStyle: {
+            range: cellRange,
+            textStyle: { foregroundColor: DEFAULT_FG_COLOR, backgroundColor: {} },
+            fields: 'fontSize,weightedFontFamily,foregroundColor,backgroundColor,link',
+          },
+        });
+      }
+
       // Apply inline formatting from within the cell
       for (const range of cell.textRanges) {
         const absStart = adjustedIndex + range.startIndex;
@@ -1224,19 +1247,19 @@ function finalizeFormatting(context: ConversionContext): void {
   // (link color, code foreground/background) doesn't bleed past its
   // intended range into the rest of the paragraph.
 
-  // Reset for heading paragraphs
-  for (const paraRange of context.paragraphRanges) {
-    const range: Record<string, unknown> = {
-      startIndex: paraRange.startIndex,
-      endIndex: paraRange.endIndex,
-    };
+  // Build a style-reset request for a given range.  Uses explicit black
+  // foregroundColor (DEFAULT_FG_COLOR) instead of an empty OptionalColor so
+  // that the Docs rendering engine sees an actual color run and stops
+  // propagating code-green or link-blue into adjacent unstyled text.
+  function pushStyleReset(startIndex: number, endIndex: number): void {
+    const range: Record<string, unknown> = { startIndex, endIndex };
     if (context.tabId) range.tabId = context.tabId;
 
     context.formatRequests.push({
       updateTextStyle: {
         range,
         textStyle: {
-          foregroundColor: {},
+          foregroundColor: DEFAULT_FG_COLOR,
           backgroundColor: {},
         },
         fields: 'fontSize,weightedFontFamily,foregroundColor,backgroundColor,link',
@@ -1244,24 +1267,22 @@ function finalizeFormatting(context: ConversionContext): void {
     });
   }
 
+  // Reset for heading paragraphs
+  for (const paraRange of context.paragraphRanges) {
+    pushStyleReset(paraRange.startIndex, paraRange.endIndex);
+  }
+
   // Reset for normal paragraphs
   for (const normalRange of context.normalParagraphRanges) {
-    const range: Record<string, unknown> = {
-      startIndex: normalRange.startIndex,
-      endIndex: normalRange.endIndex,
-    };
-    if (context.tabId) range.tabId = context.tabId;
+    pushStyleReset(normalRange.startIndex, normalRange.endIndex);
+  }
 
-    context.formatRequests.push({
-      updateTextStyle: {
-        range,
-        textStyle: {
-          foregroundColor: {},
-          backgroundColor: {},
-        },
-        fields: 'fontSize,weightedFontFamily,foregroundColor,backgroundColor,link',
-      },
-    });
+  // Reset for list item paragraphs — list items are excluded from both
+  // paragraphRanges and normalParagraphRanges, so without this pass inline
+  // code/link styling bleeds to the end of the line in list items.
+  for (const listItem of context.pendingListItems) {
+    if (listItem.endIndex === undefined || listItem.endIndex <= listItem.startIndex) continue;
+    pushStyleReset(listItem.startIndex, listItem.endIndex);
   }
 
   // Character-level formatting (bold, italic, strikethrough, code, links)
