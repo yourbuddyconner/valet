@@ -88,11 +88,33 @@ function truncatePath(path: string, maxLen = 60): string {
   return result;
 }
 
-const SUPPORTED_DROP_TYPES = new Set(['application/pdf']);
+/** MIME types accepted for non-image file uploads. */
+const SUPPORTED_DROP_TYPES = new Set([
+  'application/pdf',
+  'application/json', 'application/xml', 'application/x-yaml',
+  'application/toml', 'application/sql', 'application/graphql',
+]);
+
+/** File extensions recognized as text-readable uploads. */
+const TEXT_FILE_EXTENSIONS = new Set([
+  'txt', 'md', 'csv', 'log', 'env', 'cfg', 'ini', 'conf',
+  'json', 'xml', 'yaml', 'yml', 'toml', 'sql', 'graphql', 'gql',
+  'html', 'htm', 'css', 'scss', 'less', 'svg',
+  'js', 'mjs', 'cjs', 'jsx', 'ts', 'tsx',
+  'py', 'pyi', 'go', 'rs', 'c', 'cpp', 'h', 'hpp', 'cs',
+  'java', 'kt', 'scala', 'clj', 'groovy',
+  'rb', 'php', 'swift', 'r', 'lua', 'pl',
+  'ex', 'exs', 'hs', 'ml', 'nim', 'zig', 'v', 'dart',
+  'sh', 'bash', 'zsh', 'fish', 'ps1',
+  'tf', 'hcl',
+]);
 
 function isSupportedFile(file: File): boolean {
-  return isImageFile(file) || SUPPORTED_DROP_TYPES.has(file.type)
-    || file.name.toLowerCase().endsWith('.pdf');
+  if (isImageFile(file)) return true;
+  if (file.type.startsWith('text/')) return true;
+  if (SUPPORTED_DROP_TYPES.has(file.type)) return true;
+  const ext = file.name.split('.').pop()?.toLowerCase();
+  return ext ? TEXT_FILE_EXTENSIONS.has(ext) : false;
 }
 
 function hasSupportedFileInDataTransfer(dataTransfer: DataTransfer | null): boolean {
@@ -741,7 +763,7 @@ export function ChatInput({
       <input
         ref={fileInputRef}
         type="file"
-        accept="image/*"
+        accept="image/*,.pdf,.txt,.md,.csv,.json,.yaml,.yml,.toml,.xml,.sql,.js,.mjs,.cjs,.jsx,.ts,.tsx,.py,.pyi,.go,.rs,.c,.cpp,.h,.hpp,.cs,.java,.kt,.scala,.clj,.rb,.php,.swift,.r,.lua,.pl,.ex,.exs,.hs,.ml,.nim,.zig,.v,.dart,.sh,.bash,.zsh,.fish,.ps1,.tf,.hcl,.graphql,.gql,.log,.env,.cfg,.ini,.conf,.html,.htm,.css,.scss,.less,.svg,.groovy"
         multiple
         onChange={handleImageSelect}
         className="hidden"
@@ -749,7 +771,7 @@ export function ChatInput({
       {isDragOver && (
         <div className="pointer-events-none absolute inset-2 z-20 flex items-center justify-center rounded-xl border-2 border-dashed border-accent/50 bg-accent/8">
           <span className="rounded-full bg-surface-0/90 px-3 py-1 font-mono text-[11px] font-medium text-accent shadow-sm dark:bg-surface-2/90">
-            Drop image to attach
+            Drop file to attach
           </span>
         </div>
       )}
@@ -960,10 +982,10 @@ export function ChatInput({
               type="button"
               onClick={() => fileInputRef.current?.click()}
               className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-neutral-400 transition-colors hover:bg-surface-2 hover:text-neutral-600 dark:text-neutral-500 dark:hover:bg-surface-3 dark:hover:text-neutral-300"
-              title="Attach images"
-              aria-label="Attach images"
+              title="Attach files"
+              aria-label="Attach files"
             >
-              <ImageIcon className="h-4 w-4" />
+              <PaperclipIcon className="h-4 w-4" />
             </button>
             {isRecording ? (
               <div className="flex items-center gap-1">
@@ -1057,8 +1079,8 @@ export function ChatInput({
                 : hasPendingFollowup
                   ? 'queued — enter to dispatch now · shift+enter for new line'
                 : isAgentActive
-                  ? 'esc to stop · shift+enter for new line · @ files · / commands · drag images · mic'
-                  : 'enter to send · shift+enter for new line · @ files · / commands · drag images · mic'}
+                  ? 'esc to stop · shift+enter for new line · @ files · / commands · drag files · mic'
+                  : 'enter to send · shift+enter for new line · @ files · / commands · drag files · mic'}
         </p>
       )}
     </form>
@@ -1085,7 +1107,7 @@ function PlusIcon({ className }: { className?: string }) {
   );
 }
 
-function ImageIcon({ className }: { className?: string }) {
+function PaperclipIcon({ className }: { className?: string }) {
   return (
     <svg
       xmlns="http://www.w3.org/2000/svg"
@@ -1099,9 +1121,7 @@ function ImageIcon({ className }: { className?: string }) {
       strokeLinejoin="round"
       className={className}
     >
-      <rect x="3" y="3" width="18" height="18" rx="2" />
-      <circle cx="9" cy="9" r="1.5" />
-      <path d="m21 15-3.8-3.8a1.5 1.5 0 0 0-2.1 0L7 19" />
+      <path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48" />
     </svg>
   );
 }
