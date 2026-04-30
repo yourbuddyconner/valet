@@ -124,7 +124,7 @@ function hasSupportedFileInDataTransfer(dataTransfer: DataTransfer | null): bool
   }
   if (dataTransfer.items && dataTransfer.items.length > 0) {
     return Array.from(dataTransfer.items).some(
-      (item) => item.kind === 'file' && (item.type.startsWith('image/') || item.type === '' || SUPPORTED_DROP_TYPES.has(item.type))
+      (item) => item.kind === 'file' && (item.type.startsWith('image/') || item.type.startsWith('text/') || item.type === '' || SUPPORTED_DROP_TYPES.has(item.type))
     );
   }
   return false;

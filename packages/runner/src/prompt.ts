@@ -1502,16 +1502,19 @@ export class PromptHandler {
       // Extract text from text file attachments before sending to OpenCode
       const hasTextFile = effectiveAttachments.some(a => isTextMime(a.mime));
       if (hasTextFile) {
+        let textExtracted = false;
         try {
           const { extractions, remaining } = this.extractTextFiles(effectiveAttachments);
           effectiveAttachments = remaining;
           if (extractions.length > 0) {
+            textExtracted = true;
             const textBlock = extractions
               .map(e => {
+                const safeName = (e.filename || 'file').replace(/[\[\]\n\r]/g, '_');
                 const sizeNote = e.truncated
                   ? ` (truncated to 500KB of ${(e.originalSize! / 1024).toFixed(0)}KB)`
                   : '';
-                return `[Contents of ${e.filename || 'file'}${sizeNote}]\n${e.text}`;
+                return `[Contents of ${safeName}${sizeNote}]\n${e.text}`;
               })
               .join('\n\n');
             effectiveContent = effectiveContent
@@ -1523,6 +1526,9 @@ export class PromptHandler {
         }
         // Strip any remaining text files — OpenCode can't process raw text attachments
         effectiveAttachments = effectiveAttachments.filter(a => !isTextMime(a.mime));
+        if (!textExtracted && !effectiveContent?.trim()) {
+          effectiveContent = '[The user sent a text file but extraction failed. Please ask them to paste the content instead.]';
+        }
       }
 
       // Store failover state (use post-transcription values so model failover doesn't re-transcribe)
