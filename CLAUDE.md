@@ -341,6 +341,20 @@ Auto-discovered by `make generate-registries` which scans `packages/plugin-*/` a
 - Sandbox lifecycle: `backend/sandboxes.py`
 - Image definition: `backend/images/base.py`
 
+### Type Safety
+
+This codebase has accumulated `any`, `unknown`, and type assertions (`as`) as shortcuts to silence the compiler. These hide real bugs and make refactoring dangerous. Follow these rules:
+
+1. **No `any`.** Use the real type. If the shape is truly dynamic, use `Record<string, unknown>` and narrow with runtime checks. If a function is generic, use a type parameter. `any` disables the type checker for everything it touches.
+
+2. **No `as unknown as T` double-casts.** This is always wrong — it means the types disagree and you're lying to the compiler instead of fixing the disagreement. In tests, provide the required fields for the interface instead of double-casting a partial object.
+
+3. **Minimize `as` assertions.** An `as` means "I know better than the compiler." Usually you don't. If a function returns `string | undefined` and you write `as string`, you've hidden a potential bug. Prefer narrowing (`if`, `??`, type guards) over assertions. Legitimate uses: narrowing a discriminated union after a check, or bridging a third-party lib with bad types — add a comment explaining why.
+
+4. **No `@ts-ignore` or `@ts-expect-error`.** Fix the type error. If it's a third-party type bug, add a minimal `as` with a comment linking to the upstream issue.
+
+5. **Fix what you touch.** When editing a file that has `any`, unnecessary assertions, or double-casts, clean them up as part of your change. You don't need to fix the whole codebase — just leave every file you touch better than you found it.
+
 ### Git Conventions
 
 - Commit code upon completion of each bean.
