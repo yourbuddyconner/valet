@@ -2999,6 +2999,17 @@ export class PromptHandler {
         const base64Data = attachment.url.slice(commaIdx + 1);
         const buffer = Buffer.from(base64Data, 'base64');
         let text = buffer.toString('utf-8');
+
+        // Reject files with excessive replacement characters (likely binary, not text)
+        const sampleLen = Math.min(text.length, 4096);
+        const sample = text.slice(0, sampleLen);
+        const replacementCount = (sample.match(/\uFFFD/g) || []).length;
+        if (replacementCount > sampleLen * 0.05) {
+          console.warn(`[PromptHandler] Skipping likely binary file (${replacementCount} replacement chars in first ${sampleLen}): ${attachment.filename || 'file'}`);
+          remaining.push(attachment);
+          continue;
+        }
+
         const originalSize = text.length;
         let truncated = false;
 

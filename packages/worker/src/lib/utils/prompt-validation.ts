@@ -249,7 +249,7 @@ export function attachmentPartsForMessage(attachments: PromptAttachment[]): Arra
         mimeType: attachment.mime,
         ...(attachment.filename ? { filename: attachment.filename } : {}),
       });
-    } else if (attachment.mime.startsWith('text/') || SUPPORTED_MIME_EXACT.has(attachment.mime)) {
+    } else if (attachment.mime.startsWith('text/') || (SUPPORTED_MIME_EXACT.has(attachment.mime) && attachment.mime !== 'application/pdf')) {
       parts.push({
         type: 'file',
         data,
