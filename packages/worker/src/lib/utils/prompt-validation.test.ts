@@ -91,6 +91,17 @@ describe('sanitizePromptAttachments', () => {
     expect(rejectedTypes).toHaveLength(0);
   });
 
+  it('resolves misidentified MIME via filename extension (e.g. .ts as video/mp2t)', () => {
+    const { attachments, rejectedTypes } = sanitizePromptAttachments([
+      fakeAttachment('video/mp2t', 'component.ts'),
+      fakeAttachment('video/mp2t', 'app.tsx'),
+    ]);
+    expect(attachments).toHaveLength(2);
+    expect(attachments[0].mime).toBe('text/x-typescript');
+    expect(attachments[1].mime).toBe('text/x-typescript');
+    expect(rejectedTypes).toHaveLength(0);
+  });
+
   describe('existing types still work', () => {
     it('accepts images', () => {
       const { attachments } = sanitizePromptAttachments([fakeAttachment('image/png', 'photo.png')]);

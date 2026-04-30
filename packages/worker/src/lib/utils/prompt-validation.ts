@@ -186,11 +186,12 @@ export function sanitizePromptAttachments(input: unknown): SanitizeResult {
       }
     }
 
-    // For octet-stream or empty MIME, try to resolve from filename extension
-    if ((mime === 'application/octet-stream' || mime === '') && typeof record.filename === 'string') {
+    // When the declared MIME isn't in the supported set, try resolving from filename
+    // extension. Browsers frequently misidentify code files (e.g. .ts → video/mp2t).
+    if (!isSupportedMime(mime) && typeof record.filename === 'string') {
       const resolved = resolveTextMimeFromFilename(record.filename);
       if (resolved) {
-        console.log(`[prompt-validation] MIME resolved from extension: filename=${record.filename} mime=${resolved}`);
+        console.log(`[prompt-validation] MIME resolved from extension: declared=${mime} filename=${record.filename} resolved=${resolved}`);
         mime = resolved;
         mimeWasCorrected = true;
       }

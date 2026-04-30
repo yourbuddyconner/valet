@@ -107,6 +107,7 @@ const TEXT_FILE_EXTENSIONS = new Set([
   'ex', 'exs', 'hs', 'ml', 'nim', 'zig', 'v', 'dart',
   'sh', 'bash', 'zsh', 'fish', 'ps1',
   'tf', 'hcl',
+  'dockerfile', 'makefile', 'cmake',
 ]);
 
 function isSupportedFile(file: File): boolean {
