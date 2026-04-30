@@ -6,12 +6,20 @@ export const MAX_PROMPT_ATTACHMENT_URL_LENGTH = 90_000_000;
 export const MAX_TOTAL_ATTACHMENT_BYTES = 90_000_000;
 
 /** MIME type prefixes that are accepted for prompt attachments. */
-const SUPPORTED_MIME_PREFIXES = ['image/', 'audio/'] as const;
+const SUPPORTED_MIME_PREFIXES = ['image/', 'audio/', 'text/'] as const;
 /** Specific non-prefix MIME types that are accepted. */
-const SUPPORTED_MIME_EXACT = new Set(['application/pdf']);
+const SUPPORTED_MIME_EXACT = new Set([
+  'application/pdf',
+  'application/json',
+  'application/xml',
+  'application/x-yaml',
+  'application/toml',
+  'application/sql',
+  'application/graphql',
+]);
 
 /** Human-readable list of supported file types for error messages. */
-export const SUPPORTED_FILE_TYPES_DESCRIPTION = 'images, audio, and PDFs';
+export const SUPPORTED_FILE_TYPES_DESCRIPTION = 'images, audio, PDFs, and text files';
 
 // ─── Magic number → MIME detection ──────────────────────────────────────────
 
@@ -37,6 +45,49 @@ const MAGIC_SIGNATURES: MagicSignature[] = [
   { offset: 0, bytes: [0x4F, 0x67, 0x67, 0x53], mime: 'audio/ogg' }, // OggS
   { offset: 0, bytes: [0x66, 0x4C, 0x61, 0x43], mime: 'audio/flac' }, // fLaC
 ];
+
+// ─── Extension → MIME resolution for octet-stream / unknown types ──────────
+
+const TEXT_FILE_EXTENSIONS: Record<string, string> = {
+  txt: 'text/plain', md: 'text/markdown', csv: 'text/csv',
+  log: 'text/plain', env: 'text/plain', cfg: 'text/plain',
+  ini: 'text/plain', conf: 'text/plain',
+  json: 'application/json', xml: 'application/xml',
+  yaml: 'application/x-yaml', yml: 'application/x-yaml',
+  toml: 'application/toml', sql: 'application/sql',
+  graphql: 'application/graphql', gql: 'application/graphql',
+  html: 'text/html', htm: 'text/html', css: 'text/css',
+  scss: 'text/x-scss', less: 'text/x-less', svg: 'text/xml',
+  js: 'text/javascript', mjs: 'text/javascript', cjs: 'text/javascript',
+  jsx: 'text/javascript', ts: 'text/x-typescript', tsx: 'text/x-typescript',
+  py: 'text/x-python', pyi: 'text/x-python',
+  go: 'text/x-go', rs: 'text/x-rust', c: 'text/x-c', cpp: 'text/x-c++',
+  h: 'text/x-c', hpp: 'text/x-c++', cs: 'text/x-csharp',
+  java: 'text/x-java', kt: 'text/x-kotlin', scala: 'text/x-scala',
+  clj: 'text/x-clojure', groovy: 'text/x-groovy',
+  rb: 'text/x-ruby', php: 'text/x-php', swift: 'text/x-swift',
+  r: 'text/x-r', lua: 'text/x-lua', pl: 'text/x-perl',
+  ex: 'text/x-elixir', exs: 'text/x-elixir',
+  hs: 'text/x-haskell', ml: 'text/x-ocaml',
+  nim: 'text/x-nim', zig: 'text/x-zig', v: 'text/x-vlang',
+  dart: 'text/x-dart',
+  sh: 'text/x-sh', bash: 'text/x-sh', zsh: 'text/x-sh',
+  fish: 'text/x-sh', ps1: 'text/x-powershell',
+  tf: 'text/x-terraform', hcl: 'text/x-terraform',
+  dockerfile: 'text/x-dockerfile',
+  makefile: 'text/x-makefile', cmake: 'text/x-cmake',
+};
+
+function resolveTextMimeFromFilename(filename: string | undefined): string | null {
+  if (!filename) return null;
+  const dot = filename.lastIndexOf('.');
+  if (dot === -1) {
+    const lower = filename.toLowerCase();
+    return TEXT_FILE_EXTENSIONS[lower] ?? null;
+  }
+  const ext = filename.slice(dot + 1).toLowerCase();
+  return TEXT_FILE_EXTENSIONS[ext] ?? null;
+}
 
 /**
  * Detect MIME type from the first few bytes of file content.
@@ -135,6 +186,16 @@ export function sanitizePromptAttachments(input: unknown): SanitizeResult {
       }
     }
 
+    // For octet-stream or empty MIME, try to resolve from filename extension
+    if ((mime === 'application/octet-stream' || mime === '') && typeof record.filename === 'string') {
+      const resolved = resolveTextMimeFromFilename(record.filename);
+      if (resolved) {
+        console.log(`[prompt-validation] MIME resolved from extension: filename=${record.filename} mime=${resolved}`);
+        mime = resolved;
+        mimeWasCorrected = true;
+      }
+    }
+
     if (!isSupportedMime(mime)) {
       const ext = typeof record.filename === 'string'
         ? record.filename.split('.').pop() || mime
@@ -182,6 +243,13 @@ export function attachmentPartsForMessage(attachments: PromptAttachment[]): Arra
       });
     } else if (attachment.mime === 'application/pdf') {
       // PDFs are passed through as file attachments — text extraction happens in the Runner
+      parts.push({
+        type: 'file',
+        data,
+        mimeType: attachment.mime,
+        ...(attachment.filename ? { filename: attachment.filename } : {}),
+      });
+    } else if (attachment.mime.startsWith('text/') || SUPPORTED_MIME_EXACT.has(attachment.mime)) {
       parts.push({
         type: 'file',
         data,
