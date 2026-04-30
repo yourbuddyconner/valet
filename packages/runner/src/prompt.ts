@@ -1458,7 +1458,7 @@ export class PromptHandler {
               `<attached-file name="voice-note-${i + 1}" type="audio/transcription">\n${t}\n</attached-file>`
             ).join('\n\n');
             effectiveContent = effectiveContent
-              ? `${transcriptBlock}\n\n${effectiveContent}`
+              ? `${effectiveContent}\n\n${transcriptBlock}`
               : transcriptBlock;
             // Send transcript back to DO so UI can display it alongside audio player
             this.agentClient.sendAudioTranscript(messageId, transcriptText);
@@ -1488,7 +1488,7 @@ export class PromptHandler {
               .map(e => `<attached-file name="${(e.filename || 'document.pdf').replace(/"/g, '_')}" type="application/pdf">\n${e.text}\n</attached-file>`)
               .join('\n\n');
             effectiveContent = effectiveContent
-              ? `${pdfBlock}\n\n${effectiveContent}`
+              ? `${effectiveContent}\n\n${pdfBlock}`
               : pdfBlock;
           }
         } catch (err) {
@@ -1520,7 +1520,7 @@ export class PromptHandler {
               })
               .join('\n\n');
             effectiveContent = effectiveContent
-              ? `${textBlock}\n\n${effectiveContent}`
+              ? `${effectiveContent}\n\n${textBlock}`
               : textBlock;
           }
         } catch (err) {

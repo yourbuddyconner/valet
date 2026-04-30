@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { SessionAgentDO, buildForwardedParts } from './session-agent.js';
+import { SessionAgentDO, buildForwardedParts, resolveSlackChannelId } from './session-agent.js';
 
 interface QueueRow {
   id: string;
@@ -1655,6 +1655,38 @@ describe('SessionAgentDO', () => {
       status: 'thinking',
       channelType: 'slack',
       channelId: 'C1',
+    });
+  });
+
+  // ─── resolveSlackChannelId ───────────────────────────────────────────────────
+
+  describe('resolveSlackChannelId', () => {
+    it('restores composite channelId when agent sends bare Slack channelId', () => {
+      expect(resolveSlackChannelId('slack', 'D123', 'D123:1234567890.123456'))
+        .toBe('D123:1234567890.123456');
+    });
+
+    it('passes through bare Slack channelId when no stored context exists', () => {
+      expect(resolveSlackChannelId('slack', 'D123', undefined)).toBe('D123');
+    });
+
+    it('passes through bare Slack channelId when stored context has no thread_ts', () => {
+      expect(resolveSlackChannelId('slack', 'D123', 'D123')).toBe('D123');
+    });
+
+    it('does not override when stored context is for a different channel', () => {
+      expect(resolveSlackChannelId('slack', 'D123', 'C999:9999999999.999999'))
+        .toBe('D123');
+    });
+
+    it('passes through composite channelId that already includes thread_ts', () => {
+      expect(resolveSlackChannelId('slack', 'D123:1234567890.123456', 'D123:1234567890.123456'))
+        .toBe('D123:1234567890.123456');
+    });
+
+    it('does not apply to non-Slack channel types', () => {
+      expect(resolveSlackChannelId('telegram', '12345', '12345:9999'))
+        .toBe('12345');
     });
   });
 

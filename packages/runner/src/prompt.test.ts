@@ -599,7 +599,7 @@ describe("PromptHandler text file extraction", () => {
       "ch-text",
     );
 
-    // The sync prompt should have text file content prepended and no file parts
+    // The sync prompt should have text file content appended after the message and no file parts
     const syncCall = fetchCalls.find(
       (c) => c.url === "http://opencode.test/session/text-session/message" && c.method === "POST",
     );
