@@ -606,9 +606,10 @@ describe("PromptHandler text file extraction", () => {
     expect(syncCall).toBeDefined();
     const body = syncCall!.body as any;
     expect(body.parts).toEqual([
-      { type: "text", text: expect.stringContaining("[Contents of notes.txt]") },
+      { type: "text", text: expect.stringContaining('<attached-file name="notes.txt"') },
     ]);
     expect(body.parts[0].text).toContain(textContent);
+    expect(body.parts[0].text).toContain("</attached-file>");
     expect(body.parts[0].text).toContain("please review this file");
     // No file attachments should remain
     const fileParts = body.parts.filter((p: any) => p.type === "file");
@@ -658,7 +659,7 @@ describe("PromptHandler text file extraction", () => {
     );
     expect(syncCall).toBeDefined();
     const body = syncCall!.body as any;
-    expect(body.parts[0].text).toContain("[Contents of config.json]");
+    expect(body.parts[0].text).toContain('<attached-file name="config.json" type="application/json">');
     expect(body.parts[0].text).toContain(jsonContent);
     const fileParts = body.parts.filter((p: any) => p.type === "file");
     expect(fileParts).toHaveLength(0);
@@ -718,7 +719,7 @@ describe("PromptHandler text file extraction", () => {
     // Text content should be in the text part (file parts come first in buildPromptBody)
     const textPart = body.parts.find((p: any) => p.type === "text");
     expect(textPart).toBeDefined();
-    expect(textPart.text).toContain("[Contents of code.txt]");
+    expect(textPart.text).toContain('<attached-file name="code.txt" type="text/plain">');
     expect(textPart.text).toContain(textContent);
   });
 });

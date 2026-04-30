@@ -1454,7 +1454,9 @@ export class PromptHandler {
           if (transcriptions.length > 0) {
             transcribed = true;
             const transcriptText = transcriptions.join('\n\n');
-            const transcriptBlock = transcriptions.map(t => `[Transcribed voice note]\n${t}`).join('\n\n');
+            const transcriptBlock = transcriptions.map((t, i) =>
+              `<attached-file name="voice-note-${i + 1}" type="audio/transcription">\n${t}\n</attached-file>`
+            ).join('\n\n');
             effectiveContent = effectiveContent
               ? `${transcriptBlock}\n\n${effectiveContent}`
               : transcriptBlock;
@@ -1483,7 +1485,7 @@ export class PromptHandler {
           if (extractions.length > 0) {
             pdfExtracted = true;
             const pdfBlock = extractions
-              .map(e => `[Extracted text from ${e.filename || 'PDF'}]\n${e.text}`)
+              .map(e => `<attached-file name="${(e.filename || 'document.pdf').replace(/"/g, '_')}" type="application/pdf">\n${e.text}\n</attached-file>`)
               .join('\n\n');
             effectiveContent = effectiveContent
               ? `${pdfBlock}\n\n${effectiveContent}`
@@ -1510,11 +1512,11 @@ export class PromptHandler {
             textExtracted = true;
             const textBlock = extractions
               .map(e => {
-                const safeName = (e.filename || 'file').replace(/[\[\]\n\r]/g, '_');
+                const safeName = (e.filename || 'file').replace(/["\n\r]/g, '_');
                 const sizeNote = e.truncated
-                  ? ` (truncated to 500KB of ${(e.originalSize! / 1024).toFixed(0)}KB)`
+                  ? ` truncated="500KB of ${(e.originalSize! / 1024).toFixed(0)}KB"`
                   : '';
-                return `[Contents of ${safeName}${sizeNote}]\n${e.text}`;
+                return `<attached-file name="${safeName}" type="${e.mime || 'text/plain'}"${sizeNote}>\n${e.text}\n</attached-file>`;
               })
               .join('\n\n');
             effectiveContent = effectiveContent
@@ -2979,8 +2981,8 @@ export class PromptHandler {
    */
   private extractTextFiles(
     attachments: PromptAttachment[],
-  ): { extractions: Array<{ text: string; filename?: string; truncated?: boolean; originalSize?: number }>; remaining: PromptAttachment[] } {
-    const extractions: Array<{ text: string; filename?: string; truncated?: boolean; originalSize?: number }> = [];
+  ): { extractions: Array<{ text: string; filename?: string; mime?: string; truncated?: boolean; originalSize?: number }>; remaining: PromptAttachment[] } {
+    const extractions: Array<{ text: string; filename?: string; mime?: string; truncated?: boolean; originalSize?: number }> = [];
     const remaining: PromptAttachment[] = [];
 
     for (const attachment of attachments) {
@@ -3020,7 +3022,7 @@ export class PromptHandler {
 
         text = text.trim();
         if (text) {
-          extractions.push({ text, filename: attachment.filename, truncated, originalSize });
+          extractions.push({ text, filename: attachment.filename, mime: attachment.mime, truncated, originalSize });
           console.log(`[PromptHandler] Extracted text file (${attachment.filename || 'file'}): ${text.length} chars${truncated ? ` (truncated from ${originalSize})` : ''}`);
         } else {
           console.warn(`[PromptHandler] Text file empty: ${attachment.filename || 'file'}`);
