@@ -549,3 +549,176 @@ describe("PromptHandler.extractChannelContext", () => {
     });
   });
 });
+
+describe("PromptHandler text file extraction", () => {
+  let fetchCalls: FetchCall[];
+
+  beforeEach(() => {
+    fetchCalls = [];
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("extracts text file content and prepends it to the prompt", async () => {
+    const agentClient = createAgentClientMock();
+    const handler = createHandler(agentClient);
+
+    const textContent = "Hello, this is a text file.\nLine two.";
+    const base64 = Buffer.from(textContent).toString("base64");
+    const dataUrl = `data:text/plain;base64,${base64}`;
+
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      const body = typeof init?.body === "string" ? JSON.parse(init.body) : undefined;
+      fetchCalls.push({ url, method, body });
+
+      if (url === "http://opencode.test/session" && method === "POST") {
+        return jsonResponse({ id: "text-session" });
+      }
+
+      if (url === "http://opencode.test/session/text-session/message" && method === "POST") {
+        return jsonResponse({ info: { role: "assistant", content: "ok" }, parts: [] });
+      }
+
+      throw new Error(`Unexpected fetch: ${method} ${url}`);
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    await handler.handlePrompt(
+      "msg-text-1",
+      "please review this file",
+      undefined,
+      undefined,
+      undefined,
+      [{ type: "file", mime: "text/plain", url: dataUrl, filename: "notes.txt" }],
+      "thread",
+      "ch-text",
+    );
+
+    // The sync prompt should have text file content prepended and no file parts
+    const syncCall = fetchCalls.find(
+      (c) => c.url === "http://opencode.test/session/text-session/message" && c.method === "POST",
+    );
+    expect(syncCall).toBeDefined();
+    const body = syncCall!.body as any;
+    expect(body.parts).toEqual([
+      { type: "text", text: expect.stringContaining("[Contents of notes.txt]") },
+    ]);
+    expect(body.parts[0].text).toContain(textContent);
+    expect(body.parts[0].text).toContain("please review this file");
+    // No file attachments should remain
+    const fileParts = body.parts.filter((p: any) => p.type === "file");
+    expect(fileParts).toHaveLength(0);
+  });
+
+  it("extracts application/json files as text", async () => {
+    const agentClient = createAgentClientMock();
+    const handler = createHandler(agentClient);
+
+    const jsonContent = JSON.stringify({ key: "value", nested: { a: 1 } });
+    const base64 = Buffer.from(jsonContent).toString("base64");
+    const dataUrl = `data:application/json;base64,${base64}`;
+
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      const body = typeof init?.body === "string" ? JSON.parse(init.body) : undefined;
+      fetchCalls.push({ url, method, body });
+
+      if (url === "http://opencode.test/session" && method === "POST") {
+        return jsonResponse({ id: "json-session" });
+      }
+
+      if (url === "http://opencode.test/session/json-session/message" && method === "POST") {
+        return jsonResponse({ info: { role: "assistant", content: "ok" }, parts: [] });
+      }
+
+      throw new Error(`Unexpected fetch: ${method} ${url}`);
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    await handler.handlePrompt(
+      "msg-json-1",
+      "analyze this config",
+      undefined,
+      undefined,
+      undefined,
+      [{ type: "file", mime: "application/json", url: dataUrl, filename: "config.json" }],
+      "thread",
+      "ch-json",
+    );
+
+    const syncCall = fetchCalls.find(
+      (c) => c.url === "http://opencode.test/session/json-session/message" && c.method === "POST",
+    );
+    expect(syncCall).toBeDefined();
+    const body = syncCall!.body as any;
+    expect(body.parts[0].text).toContain("[Contents of config.json]");
+    expect(body.parts[0].text).toContain(jsonContent);
+    const fileParts = body.parts.filter((p: any) => p.type === "file");
+    expect(fileParts).toHaveLength(0);
+  });
+
+  it("preserves image attachments while extracting text files", async () => {
+    const agentClient = createAgentClientMock();
+    const handler = createHandler(agentClient);
+
+    const textContent = "some code here";
+    const base64 = Buffer.from(textContent).toString("base64");
+    const textDataUrl = `data:text/plain;base64,${base64}`;
+    const imageDataUrl = "data:image/png;base64,iVBORw0KGgo=";
+
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      const body = typeof init?.body === "string" ? JSON.parse(init.body) : undefined;
+      fetchCalls.push({ url, method, body });
+
+      if (url === "http://opencode.test/session" && method === "POST") {
+        return jsonResponse({ id: "mixed-session" });
+      }
+
+      if (url === "http://opencode.test/session/mixed-session/message" && method === "POST") {
+        return jsonResponse({ info: { role: "assistant", content: "ok" }, parts: [] });
+      }
+
+      throw new Error(`Unexpected fetch: ${method} ${url}`);
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    await handler.handlePrompt(
+      "msg-mixed-1",
+      "check both files",
+      undefined,
+      undefined,
+      undefined,
+      [
+        { type: "file", mime: "text/plain", url: textDataUrl, filename: "code.txt" },
+        { type: "file", mime: "image/png", url: imageDataUrl, filename: "screenshot.png" },
+      ],
+      "thread",
+      "ch-mixed",
+    );
+
+    const syncCall = fetchCalls.find(
+      (c) => c.url === "http://opencode.test/session/mixed-session/message" && c.method === "POST",
+    );
+    expect(syncCall).toBeDefined();
+    const body = syncCall!.body as any;
+    // Image attachment should still be present as a file part
+    const fileParts = body.parts.filter((p: any) => p.type === "file");
+    expect(fileParts).toHaveLength(1);
+    expect(fileParts[0].mime).toBe("image/png");
+    // Text content should be in the text part (file parts come first in buildPromptBody)
+    const textPart = body.parts.find((p: any) => p.type === "text");
+    expect(textPart).toBeDefined();
+    expect(textPart.text).toContain("[Contents of code.txt]");
+    expect(textPart.text).toContain(textContent);
+  });
+});

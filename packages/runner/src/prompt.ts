@@ -195,6 +195,20 @@ function openCodeErrorToMessage(raw: unknown): string | null {
   return fallback && fallback !== "{}" ? fallback : null;
 }
 
+/** Max characters to inject from a single text file into the prompt. */
+const MAX_TEXT_FILE_CHARS = 512_000; // 500KB
+
+/** Known application/* MIME types that are actually text. */
+const TEXT_APPLICATION_MIMES = new Set([
+  'application/json', 'application/xml', 'application/x-yaml',
+  'application/toml', 'application/sql', 'application/graphql',
+]);
+
+/** Check if a MIME type represents a text-readable file (not image, audio, or PDF). */
+function isTextMime(mime: string): boolean {
+  return mime.startsWith('text/') || TEXT_APPLICATION_MIMES.has(mime);
+}
+
 // Emergency fallback timeout — only fires if no idle/completion event arrives
 const EMERGENCY_TIMEOUT_MS = 60_000;
 
@@ -1483,6 +1497,32 @@ export class PromptHandler {
         if (!pdfExtracted && !effectiveContent?.trim()) {
           effectiveContent = '[The user sent a PDF but text extraction failed. Please ask them to share the content as text instead.]';
         }
+      }
+
+      // Extract text from text file attachments before sending to OpenCode
+      const hasTextFile = effectiveAttachments.some(a => isTextMime(a.mime));
+      if (hasTextFile) {
+        try {
+          const { extractions, remaining } = this.extractTextFiles(effectiveAttachments);
+          effectiveAttachments = remaining;
+          if (extractions.length > 0) {
+            const textBlock = extractions
+              .map(e => {
+                const sizeNote = e.truncated
+                  ? ` (truncated to 500KB of ${(e.originalSize! / 1024).toFixed(0)}KB)`
+                  : '';
+                return `[Contents of ${e.filename || 'file'}${sizeNote}]\n${e.text}`;
+              })
+              .join('\n\n');
+            effectiveContent = effectiveContent
+              ? `${textBlock}\n\n${effectiveContent}`
+              : textBlock;
+          }
+        } catch (err) {
+          console.error('[PromptHandler] Failed to extract text files:', err);
+        }
+        // Strip any remaining text files — OpenCode can't process raw text attachments
+        effectiveAttachments = effectiveAttachments.filter(a => !isTextMime(a.mime));
       }
 
       // Store failover state (use post-transcription values so model failover doesn't re-transcribe)
@@ -2919,6 +2959,58 @@ export class PromptHandler {
         }
       } catch (err) {
         console.error('[PromptHandler] PDF text extraction error:', err);
+        remaining.push(attachment);
+      }
+    }
+
+    return { extractions, remaining };
+  }
+
+  /**
+   * Extract text content from text file attachments.
+   * Decodes base64 data URLs, reads as UTF-8, truncates at MAX_TEXT_FILE_CHARS.
+   * Returns extracted text and remaining non-text attachments.
+   */
+  private extractTextFiles(
+    attachments: PromptAttachment[],
+  ): { extractions: Array<{ text: string; filename?: string; truncated?: boolean; originalSize?: number }>; remaining: PromptAttachment[] } {
+    const extractions: Array<{ text: string; filename?: string; truncated?: boolean; originalSize?: number }> = [];
+    const remaining: PromptAttachment[] = [];
+
+    for (const attachment of attachments) {
+      if (!isTextMime(attachment.mime)) {
+        remaining.push(attachment);
+        continue;
+      }
+
+      try {
+        const commaIdx = attachment.url.indexOf(',');
+        if (commaIdx === -1) {
+          console.error('[PromptHandler] Text attachment has invalid data URL');
+          remaining.push(attachment);
+          continue;
+        }
+        const base64Data = attachment.url.slice(commaIdx + 1);
+        const buffer = Buffer.from(base64Data, 'base64');
+        let text = buffer.toString('utf-8');
+        const originalSize = text.length;
+        let truncated = false;
+
+        if (text.length > MAX_TEXT_FILE_CHARS) {
+          text = text.slice(0, MAX_TEXT_FILE_CHARS);
+          truncated = true;
+        }
+
+        text = text.trim();
+        if (text) {
+          extractions.push({ text, filename: attachment.filename, truncated, originalSize });
+          console.log(`[PromptHandler] Extracted text file (${attachment.filename || 'file'}): ${text.length} chars${truncated ? ` (truncated from ${originalSize})` : ''}`);
+        } else {
+          console.warn(`[PromptHandler] Text file empty: ${attachment.filename || 'file'}`);
+          remaining.push(attachment);
+        }
+      } catch (err) {
+        console.error('[PromptHandler] Text file extraction error:', err);
         remaining.push(attachment);
       }
     }
