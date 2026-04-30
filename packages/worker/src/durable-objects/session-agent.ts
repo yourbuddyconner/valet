@@ -5341,10 +5341,27 @@ export class SessionAgentDO {
         return;
       }
 
+      // Defensive fallback: restore thread_ts for Slack replies when the agent
+      // sends a bare channel ID (e.g. "D123") but the originating prompt had a
+      // composite channelId with thread context (e.g. "D123:1234567890.123456").
+      // Without this, the Slack post fires without thread_ts and starts a new thread.
+      let effectiveChannelId = channelId;
+      if (channelType === 'slack' && !channelId.includes(':')) {
+        const processing = this.promptQueue.getProcessingChannelContext();
+        const storedReplyId = processing?.channelId;
+        if (storedReplyId && storedReplyId.includes(':')) {
+          const [baseChannel] = storedReplyId.split(':');
+          if (baseChannel === channelId) {
+            effectiveChannelId = storedReplyId;
+            console.log(`[SessionAgentDO] handleChannelReply: restored thread_ts from prompt context (${channelId} -> ${storedReplyId})`);
+          }
+        }
+      }
+
       const result = await this.channelRouter.sendReply({
         userId,
         channelType,
-        channelId,
+        channelId: effectiveChannelId,
         message,
         fileBase64,
         fileMimeType,

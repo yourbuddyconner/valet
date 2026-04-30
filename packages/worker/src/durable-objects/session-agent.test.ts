@@ -1658,6 +1658,137 @@ describe('SessionAgentDO', () => {
     });
   });
 
+  // ─── Slack thread_ts fallback in handleChannelReply ─────────────────────────
+
+  it('restores thread_ts when agent sends bare Slack channelId but prompt has composite', async () => {
+    const { agent } = await createTestAgent();
+    const sendReplySpy = vi.fn().mockResolvedValue({ success: true });
+    (agent as any).channelRouter.sendReply = sendReplySpy;
+
+    // Enqueue a prompt that came from a Slack thread (composite channelId)
+    (agent as any).promptQueue.enqueue({
+      id: 'slack-thread-prompt',
+      content: 'hello from thread',
+      status: 'processing',
+      channelType: 'slack',
+      channelId: 'D123',
+      channelKey: 'slack:D123',
+      replyChannelType: 'slack',
+      replyChannelId: 'D123:1234567890.123456',
+    });
+
+    // Agent sends bare channelId (missing thread_ts)
+    await (agent as any).handleChannelReply('req-1', 'slack', 'D123', 'hi there');
+
+    expect(sendReplySpy).toHaveBeenCalledOnce();
+    expect(sendReplySpy.mock.calls[0][0].channelId).toBe('D123:1234567890.123456');
+  });
+
+  it('passes through bare Slack channelId when no matching stored context exists', async () => {
+    const { agent } = await createTestAgent();
+    const sendReplySpy = vi.fn().mockResolvedValue({ success: true });
+    (agent as any).channelRouter.sendReply = sendReplySpy;
+
+    // No prompt in the queue (getProcessingChannelContext returns null)
+    await (agent as any).handleChannelReply('req-2', 'slack', 'D123', 'hi there');
+
+    expect(sendReplySpy).toHaveBeenCalledOnce();
+    expect(sendReplySpy.mock.calls[0][0].channelId).toBe('D123');
+  });
+
+  it('does not override bare Slack channelId when stored context is for a different channel', async () => {
+    const { agent } = await createTestAgent();
+    const sendReplySpy = vi.fn().mockResolvedValue({ success: true });
+    (agent as any).channelRouter.sendReply = sendReplySpy;
+
+    // Stored context has a composite channelId for a DIFFERENT base channel
+    (agent as any).promptQueue.enqueue({
+      id: 'slack-other-prompt',
+      content: 'from another channel',
+      status: 'processing',
+      channelType: 'slack',
+      channelId: 'C999',
+      channelKey: 'slack:C999',
+      replyChannelType: 'slack',
+      replyChannelId: 'C999:9999999999.999999',
+    });
+
+    // Agent targets D123, but stored context is for C999 — should NOT override
+    await (agent as any).handleChannelReply('req-3', 'slack', 'D123', 'hi there');
+
+    expect(sendReplySpy).toHaveBeenCalledOnce();
+    expect(sendReplySpy.mock.calls[0][0].channelId).toBe('D123');
+  });
+
+  it('does not modify composite Slack channelId that already includes thread_ts', async () => {
+    const { agent } = await createTestAgent();
+    const sendReplySpy = vi.fn().mockResolvedValue({ success: true });
+    (agent as any).channelRouter.sendReply = sendReplySpy;
+
+    (agent as any).promptQueue.enqueue({
+      id: 'slack-thread-prompt-2',
+      content: 'from thread',
+      status: 'processing',
+      channelType: 'slack',
+      channelId: 'D123',
+      channelKey: 'slack:D123',
+      replyChannelType: 'slack',
+      replyChannelId: 'D123:1234567890.123456',
+    });
+
+    // Agent already sends composite channelId — should pass through unchanged
+    await (agent as any).handleChannelReply('req-4', 'slack', 'D123:1234567890.123456', 'hi there');
+
+    expect(sendReplySpy).toHaveBeenCalledOnce();
+    expect(sendReplySpy.mock.calls[0][0].channelId).toBe('D123:1234567890.123456');
+  });
+
+  it('does not apply Slack thread_ts fallback for Telegram channelIds', async () => {
+    const { agent } = await createTestAgent();
+    const sendReplySpy = vi.fn().mockResolvedValue({ success: true });
+    (agent as any).channelRouter.sendReply = sendReplySpy;
+
+    (agent as any).promptQueue.enqueue({
+      id: 'tg-prompt',
+      content: 'from telegram',
+      status: 'processing',
+      channelType: 'telegram',
+      channelId: '12345',
+      channelKey: 'telegram:12345',
+      replyChannelType: 'telegram',
+      replyChannelId: '12345',
+    });
+
+    await (agent as any).handleChannelReply('req-5', 'telegram', '12345', 'hi there');
+
+    expect(sendReplySpy).toHaveBeenCalledOnce();
+    expect(sendReplySpy.mock.calls[0][0].channelId).toBe('12345');
+  });
+
+  it('logs when thread_ts fallback fires', async () => {
+    const { agent } = await createTestAgent();
+    const sendReplySpy = vi.fn().mockResolvedValue({ success: true });
+    (agent as any).channelRouter.sendReply = sendReplySpy;
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    (agent as any).promptQueue.enqueue({
+      id: 'slack-thread-prompt-3',
+      content: 'from thread',
+      status: 'processing',
+      channelType: 'slack',
+      channelId: 'D123',
+      channelKey: 'slack:D123',
+      replyChannelType: 'slack',
+      replyChannelId: 'D123:1234567890.123456',
+    });
+
+    await (agent as any).handleChannelReply('req-6', 'slack', 'D123', 'hi there');
+
+    expect(logSpy).toHaveBeenCalledWith(
+      expect.stringContaining('restored thread_ts from prompt context'),
+    );
+  });
+
   it('drops agentStatus when messageId is provided but prompt_queue has no row', async () => {
     const { agent, broadcasts } = await createTestAgent();
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
