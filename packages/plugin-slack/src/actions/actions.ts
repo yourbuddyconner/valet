@@ -2,7 +2,7 @@ import { z } from 'zod';
 import type { ActionDefinition, ActionSource, ActionContext, ActionResult } from '@valet/sdk';
 import { slackFetch, slackGet } from './api.js';
 import { checkPrivateChannelAccess } from './channel-access.js';
-import { buildSectionBlocks, SLACK_TEXT_LIMIT } from '../message-chunking.js';
+import { buildContentBlocks, SLACK_TEXT_LIMIT } from '../message-chunking.js';
 
 /** Build a descriptive error from a Slack API response. */
 async function slackError(res: Response, data?: { ok: boolean; error?: string }): Promise<ActionResult> {
@@ -154,8 +154,8 @@ function slimMessage(msg: Record<string, unknown>): Record<string, unknown> {
   };
 }
 
-/** Helper to open a DM and send a message. Long texts are packed into section blocks
- *  so they stay in a single API call (avoids 1 msg/sec rate limit). */
+/** Helper to open a DM and send a message. Long texts use markdown blocks
+ *  (which render tables natively) to stay in a single API call. */
 async function openAndSendDM(
   token: string,
   userId: string,
@@ -171,9 +171,11 @@ async function openAndSendDM(
   if (callerIdentity?.name) body.username = callerIdentity.name;
   if (callerIdentity?.avatar) body.icon_url = callerIdentity.avatar;
 
-  // For long messages, use section blocks so Slack doesn't split into separate threads
+  // For long messages, use blocks so Slack doesn't split into separate threads.
+  // Prefers markdown blocks (native table/formatting support), falls back to
+  // section blocks for very long messages (> 12K).
   if (text.length > SLACK_TEXT_LIMIT) {
-    body.blocks = buildSectionBlocks(text);
+    body.blocks = buildContentBlocks(text, text);
     body.text = text.slice(0, SLACK_TEXT_LIMIT); // notification fallback
   }
 

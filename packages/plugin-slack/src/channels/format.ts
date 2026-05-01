@@ -1,6 +1,11 @@
 /**
  * Convert standard Markdown to Slack's mrkdwn format.
  * Handles: fenced code blocks, inline code, bold, italic, links, blockquotes.
+ *
+ * Note: tables are NOT converted here — they are handled natively by Slack's
+ * `markdown` block type. This function is only used for the `text` field
+ * (notification fallback) and as a fallback for section blocks when messages
+ * exceed the markdown block cumulative limit.
  */
 export function markdownToSlackMrkdwn(text: string): string {
   // Extract fenced code blocks first to protect them from formatting transforms

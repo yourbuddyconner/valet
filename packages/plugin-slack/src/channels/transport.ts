@@ -11,7 +11,7 @@ import type {
   InteractiveResolution,
 } from '@valet/sdk';
 import { markdownToSlackMrkdwn } from './format.js';
-import { buildSectionBlocks, SLACK_TEXT_LIMIT, SLACK_MAX_BLOCKS } from '../message-chunking.js';
+import { buildContentBlocks, SLACK_TEXT_LIMIT, SLACK_MAX_BLOCKS } from '../message-chunking.js';
 
 // ─── Slack API Helpers ──────────────────────────────────────────────────────
 
@@ -486,6 +486,8 @@ export class SlackTransport implements ChannelTransport {
       return { success: true };
     }
 
+    // For short messages without blocks, use Slack mrkdwn formatting.
+    // For blocks path, markdown blocks accept raw markdown natively.
     const formatted = this.formatMarkdown(text);
 
     const body: Record<string, unknown> = {
@@ -511,15 +513,16 @@ export class SlackTransport implements ChannelTransport {
       body.icon_url = personaAvatar;
     }
 
-    // For long messages, pack into section blocks so Slack doesn't split them
-    // into separate bot threads (stays within a single API call, no rate-limit cost).
-    const needsBlocks = formatted.length > SLACK_TEXT_LIMIT;
+    // For long messages, use blocks so Slack doesn't split them into separate
+    // bot threads. Prefers markdown blocks (native table/formatting support),
+    // falls back to section blocks for very long messages (> 12K).
+    const needsBlocks = text.length > SLACK_TEXT_LIMIT;
     const hasAttribution = slackUserId && !target.channelId.startsWith('D');
 
     if (needsBlocks || hasAttribution) {
       // Reserve a slot for the attribution context block if needed
       const blockBudget = hasAttribution ? SLACK_MAX_BLOCKS - 1 : SLACK_MAX_BLOCKS;
-      const blocks: Record<string, unknown>[] = buildSectionBlocks(formatted, blockBudget);
+      const blocks: Record<string, unknown>[] = buildContentBlocks(text, formatted, blockBudget);
       if (hasAttribution) {
         blocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: `↳ <@${slackUserId}>` }] });
       }

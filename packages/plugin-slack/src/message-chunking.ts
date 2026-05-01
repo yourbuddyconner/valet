@@ -1,13 +1,20 @@
 /**
  * Slack limits: chat.postMessage text field ≤ 4000 chars, section block text
- * ≤ 3000 chars, max 50 blocks per message. For long messages we pack content
- * into multiple section blocks inside a single API call (no extra rate-limit
- * cost) instead of sending multiple messages (which violates the 1 msg/sec/
- * channel rate limit and risks silent message loss).
+ * ≤ 3000 chars, markdown block ≤ 12000 chars cumulative, max 50 blocks per
+ * message. For long messages we use blocks inside a single API call (no extra
+ * rate-limit cost) instead of sending multiple messages (which violates the
+ * 1 msg/sec/channel rate limit and risks silent message loss).
+ *
+ * Preferred block type is `markdown` — it renders standard markdown natively
+ * (tables, headers, code blocks, etc.) without needing mrkdwn conversion.
+ * Falls back to `section` blocks for messages exceeding the markdown limit.
  */
 
 /** Max characters in the `text` field of chat.postMessage before we switch to blocks. */
 export const SLACK_TEXT_LIMIT = 4000;
+
+/** Cumulative character limit across all markdown blocks in a single payload. */
+export const SLACK_MARKDOWN_LIMIT = 12000;
 
 /** Max characters in a single section block's text element. */
 export const SLACK_BLOCK_TEXT_LIMIT = 3000;
@@ -50,17 +57,27 @@ export function splitText(text: string, maxLen: number): string[] {
 }
 
 /**
- * Build section blocks from text, splitting at SLACK_BLOCK_TEXT_LIMIT boundaries.
- * @param maxBlocks Cap the number of blocks returned (default: SLACK_MAX_BLOCKS).
- *   Pass a lower value when the caller needs to append extra blocks (e.g. attribution).
+ * Build content blocks for a message. Prefers a single `markdown` block (which
+ * renders tables, headers, code blocks natively). Falls back to `section` blocks
+ * with mrkdwn for messages exceeding the markdown cumulative limit.
+ *
+ * @param text Raw markdown text (NOT pre-converted to Slack mrkdwn).
+ * @param mrkdwnText Slack mrkdwn-formatted text, used only for section block fallback.
+ * @param maxBlocks Cap the number of blocks returned.
  */
-export function buildSectionBlocks(
+export function buildContentBlocks(
   text: string,
+  mrkdwnText: string,
   maxBlocks: number = SLACK_MAX_BLOCKS,
-): { type: string; text: { type: string; text: string } }[] {
-  const chunks = splitText(text, SLACK_BLOCK_TEXT_LIMIT);
+): Record<string, unknown>[] {
+  if (text.length <= SLACK_MARKDOWN_LIMIT) {
+    return [{ type: 'markdown', text }];
+  }
+
+  // Fallback: split mrkdwn-formatted text into section blocks
+  const chunks = splitText(mrkdwnText, SLACK_BLOCK_TEXT_LIMIT);
   return chunks.slice(0, maxBlocks).map((chunk) => ({
-    type: 'section' as const,
-    text: { type: 'mrkdwn' as const, text: chunk },
+    type: 'section',
+    text: { type: 'mrkdwn', text: chunk },
   }));
 }
