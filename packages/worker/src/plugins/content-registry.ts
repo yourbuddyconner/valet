@@ -759,7 +759,7 @@ description: How to use Google Docs tools effectively — reading documents with
 
 # Google Docs
 
-You have full read/write access to Google Docs through the Google Workspace integration. The 25 available tools support surgical index-based editing, full markdown rewrites, formatting, tab management, and comments.
+You have full read/write access to Google Docs through the Google Workspace integration. The 26 available tools support surgical index-based editing, full markdown rewrites, formatting, tab management, and comments.
 
 Documents are created via \`drive.create_document\` (not a docs action). All tools that accept \`documentId\` accept either a bare document ID or a full Google Docs URL.
 
@@ -768,19 +768,20 @@ Documents are created via \`drive.create_document\` (not a docs action). All too
 ### List / Search
 
 - **\`docs.list_tabs\`** — List all tabs in a document (tab IDs, titles, nesting).
+- **\`docs.find_text_index\`** — Find the character index of a text string. Returns \`{ startIndex, endIndex }\` for use with index-based tools. Much lighter than \`format=json\`.
 
 ### Read / Get
 
-- **\`docs.read_document\`** — Read document content. Use \`format=markdown\` for human-readable output or \`format=json\` to get the raw document structure with character indices required for surgical edits.
+- **\`docs.read_document\`** — Read document content. Use \`format=markdown\` for human-readable output, \`format=text\` for plain text, or \`format=json\` for raw document structure (large output — prefer \`find_text_index\` when you only need a position).
 - **\`docs.list_comments\`** — List all comments on a document (open or resolved).
 - **\`docs.get_comment\`** — Get a single comment by ID, including all replies.
 
 ### Write / Modify
 
-**Text edits (index-based — requires \`format=json\` read first):**
+**Text edits (use \`textToFind\` targets or \`find_text_index\` to get positions):**
 - **\`docs.insert_text\`** — Insert text at a specific character index.
 - **\`docs.append_text\`** — Append plain text at the end of a document (or tab).
-- **\`docs.modify_text\`** — Replace text within a start–end index range.
+- **\`docs.modify_text\`** — Replace text within a range or by text search. Supports \`textToFind\` target and optional \`style\`.
 - **\`docs.delete_range\`** — Delete content between a start–end index range.
 
 **Bulk text changes:**
@@ -802,7 +803,7 @@ Documents are created via \`drive.create_document\` (not a docs action). All too
 - **\`docs.rename_tab\`** — Rename an existing tab by tab ID.
 
 **Formatting:**
-- **\`docs.apply_text_style\`** — Apply character-level style (bold, italic, underline, font, color, etc.) to a text range.
+- **\`docs.apply_text_style\`** — Apply character-level style (bold, italic, underline, font, color, linkUrl, etc.) to text identified by range or text search.
 - **\`docs.apply_paragraph_style\`** — Apply paragraph-level style (heading level, alignment, spacing, etc.) to a range.
 - **\`docs.update_section_style\`** — Update section layout properties (margins, columns, etc.).
 
@@ -814,24 +815,44 @@ Documents are created via \`drive.create_document\` (not a docs action). All too
 
 ## Core Workflows
 
-### Read Then Surgically Edit
+### Edit by Text Search (preferred)
 
-Use this when you need to make precise changes without disturbing surrounding content.
+Most edits don't need character indices. Use \`textToFind\` targets on \`modify_text\` and \`apply_text_style\` to identify what to change:
+
+\`\`\`
+# Replace text by searching for it
+docs.modify_text({ documentId: "...", target: { textToFind: "old text" }, text: "new text" })
+
+# Apply formatting by searching for text
+docs.apply_text_style({ documentId: "...", target: { textToFind: "important" }, style: { bold: true } })
+\`\`\`
+
+### Insert at a Position
+
+When you need to insert at a specific location (not replace existing text), use \`find_text_index\` to get the position without downloading the full document structure:
+
+\`\`\`
+1. docs.find_text_index({ documentId: "...", textToFind: "insert after this" })
+   → Returns { startIndex: 42, endIndex: 60 }
+
+2. docs.insert_text({ documentId: "...", index: 60, text: "new content" })
+\`\`\`
+
+### Surgical Index-Based Editing
+
+Use this as a last resort when text search is ambiguous (e.g., the document has duplicate paragraphs). Read with \`format=json\` to get the full document structure with character indices:
 
 \`\`\`
 1. docs.read_document({ documentId: "...", format: "json" })
-   → Returns raw document structure with character indices
+   → Returns document structure with startIndex/endIndex on every element
 
-2. Locate the text or range you want to modify in the JSON
-   → Note the startIndex and endIndex values
-
-3. Apply targeted edits:
-   - docs.modify_text({ documentId: "...", startIndex: 42, endIndex: 67, text: "replacement" })
+2. Locate the range in the JSON, then apply edits:
+   - docs.modify_text({ documentId: "...", target: { startIndex: 42, endIndex: 67 }, text: "replacement" })
    - docs.delete_range({ documentId: "...", startIndex: 42, endIndex: 67 })
    - docs.insert_text({ documentId: "...", index: 42, text: "new content" })
 \`\`\`
 
-Important: Read with \`format=json\` before any index-based edit. Character indices shift after every mutation, so plan all edits from a single read snapshot and apply them in reverse order (highest index first) to avoid offset drift.
+Important: Character indices shift after every mutation. Plan all edits from a single read snapshot and apply them in reverse order (highest index first) to avoid offset drift.
 
 ### Find and Replace
 
@@ -900,12 +921,37 @@ docs.reply_to_comment({ documentId: "...", commentId: "...", content: "Fixed in 
 docs.resolve_comment({ documentId: "...", commentId: "..." })
 \`\`\`
 
+### Hyperlinks
+
+To make existing text into a clickable link (no index lookup needed):
+
+\`\`\`
+docs.apply_text_style({
+  documentId: "...",
+  target: { textToFind: "click here" },
+  style: { linkUrl: "https://example.com" }
+})
+\`\`\`
+
+To replace text and make the replacement a link in one call:
+
+\`\`\`
+docs.modify_text({
+  documentId: "...",
+  target: { textToFind: "placeholder" },
+  text: "linked text",
+  style: { linkUrl: "https://example.com" }
+})
+\`\`\`
+
+The style property name is \`linkUrl\` (not \`link\`). This applies to both \`apply_text_style\` and \`modify_text\`.
+
 ## Drive Labels Guard Awareness
 
 When the Drive Labels Guard is active (configured per organization), all docs tools that operate on a specific document are subject to label enforcement. The guard classifies each action:
 
 - **\`docs.list_tabs\`** — list/search (label filter applied to results)
-- **\`docs.read_document\`, \`docs.list_comments\`, \`docs.get_comment\`** — read/get (document must carry a required label)
+- **\`docs.read_document\`, \`docs.find_text_index\`, \`docs.list_comments\`, \`docs.get_comment\`** — read/get (document must carry a required label)
 - All write/modify tools — require the document to carry a required label before the edit proceeds
 
 If a document does not carry the required label, the tool returns \`"File not found or access denied"\` regardless of actual permissions. This is intentional — it is indistinguishable from a 404 to prevent information leakage.
@@ -914,9 +960,10 @@ Documents are created via \`drive.create_document\`, which is classified as a cr
 
 ## Tips
 
+- **Prefer text search over indices**: Use \`textToFind\` targets on \`modify_text\` and \`apply_text_style\` whenever possible. Use \`find_text_index\` when you need a position for insertion. Only fall back to \`format=json\` when text search is ambiguous.
 - **Index order for multi-edit**: When applying multiple index-based edits from a single read, work from highest index to lowest. Each insertion or deletion shifts indices for everything that follows.
-- **Find-and-replace over indices for placeholders**: If the document uses \`{{PLACEHOLDER}}\` style tokens, \`find_and_replace\` is simpler and doesn't require a JSON read.
-- **Markdown for new content, JSON for surgery**: Use \`append_markdown\` / \`replace_document_with_markdown\` when generating fresh content. Use \`format=json\` reads + \`modify_text\` / \`delete_range\` when editing existing content at known positions.
+- **Find-and-replace for placeholders**: If the document uses \`{{PLACEHOLDER}}\` style tokens, \`find_and_replace\` is simpler and doesn't require indices.
+- **Markdown for new content**: Use \`append_markdown\` / \`replace_document_with_markdown\` when generating fresh content.
 - **Tab awareness**: Operations that don't specify a \`tabId\` apply to the first (default) tab. Always call \`list_tabs\` first on documents where you don't know the tab structure.
 - **Formatting after content**: Apply \`apply_text_style\` and \`apply_paragraph_style\` after inserting content, targeting the known index range of the newly inserted text.
 `, sortOrder: 0 },
