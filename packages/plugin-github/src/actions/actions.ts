@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import type { ActionDefinition, ActionSource, ActionContext, ActionResult } from '@valet/sdk';
 import { Octokit } from 'octokit';
+import { parseJobLog } from './parse-job-log.js';
 
 // ─── Octokit + Attribution Helpers ──────────────────────────────────────────
 
@@ -347,6 +348,22 @@ const getWorkflowRun: ActionDefinition = {
   }),
 };
 
+const getJobLogs: ActionDefinition = {
+  id: 'github.get_job_logs',
+  name: 'Get Job Logs',
+  description: 'Get log output from a specific workflow job. Parses logs into steps, filters to failed steps by default, strips noise, and truncates. Use after get_workflow_run to read failure details.',
+  riskLevel: 'low',
+  params: z.object({
+    owner: z.string().describe('Repository owner'),
+    repo: z.string().describe('Repository name'),
+    job_id: z.number().int().describe('Job ID (from get_workflow_run response)'),
+    failed_only: z.boolean().optional().default(true).describe('Only return failed step output (default: true)'),
+    step_name: z.string().optional().describe('Filter to a specific step by name (partial match)'),
+    tail_lines: z.number().int().min(10).max(5000).optional().default(500).describe('Max lines per step, tail-biased (default: 500)'),
+    include_timestamps: z.boolean().optional().default(false).describe('Include ISO timestamp prefixes (default: false)'),
+  }),
+};
+
 const readRepoFile: ActionDefinition = {
   id: 'github.read_repo_file',
   name: 'Read Repository File',
@@ -384,6 +401,7 @@ const allActions: ActionDefinition[] = [
   createRelease,
   listWorkflowRuns,
   getWorkflowRun,
+  getJobLogs,
   readRepoFile,
 ];
 
@@ -392,6 +410,7 @@ const allActions: ActionDefinition[] = [
 const PERMISSION_HINTS: Record<string, string> = {
   'github.list_workflow_runs': 'actions:read',
   'github.get_workflow_run': 'actions:read + checks:read',
+  'github.get_job_logs': 'actions:read',
   'github.create_issue': 'issues:write',
   'github.update_issue': 'issues:write',
   'github.create_comment': 'issues:write',
@@ -1033,6 +1052,53 @@ async function executeAction(
           };
         } catch (err: any) {
           return handleOctokitError(err, actionId, 'Get workflow run');
+        }
+      }
+
+      case 'github.get_job_logs': {
+        const p = getJobLogs.params.parse(params);
+        try {
+          // Fetch job metadata (for step names + conclusions) and logs in parallel
+          const [jobResp, logsResp] = await Promise.all([
+            octokit.request('GET /repos/{owner}/{repo}/actions/jobs/{job_id}', {
+              owner: p.owner, repo: p.repo, job_id: p.job_id,
+            }),
+            octokit.request('GET /repos/{owner}/{repo}/actions/jobs/{job_id}/logs', {
+              owner: p.owner, repo: p.repo, job_id: p.job_id,
+              headers: { accept: 'application/vnd.github.v3.raw' },
+            }),
+          ]);
+
+          const job = jobResp.data;
+          const rawLog = typeof logsResp.data === 'string'
+            ? logsResp.data
+            : new TextDecoder().decode(logsResp.data as ArrayBuffer);
+
+          const stepsMeta = (job.steps ?? []).map((s) => ({
+            name: s.name,
+            conclusion: s.conclusion ?? null,
+          }));
+
+          const parsed = parseJobLog(rawLog, stepsMeta, {
+            failedOnly: p.failed_only,
+            stepName: p.step_name,
+            tailLines: p.tail_lines,
+            includeTimestamps: p.include_timestamps,
+          });
+
+          return {
+            success: true,
+            data: {
+              job_id: job.id,
+              job_name: job.name,
+              steps: parsed,
+            },
+          };
+        } catch (err: any) {
+          if (err.status === 410) {
+            return { success: false, error: 'Logs have expired. GitHub retains logs for 90 days by default.' };
+          }
+          return handleOctokitError(err, actionId, 'Get job logs');
         }
       }
 
