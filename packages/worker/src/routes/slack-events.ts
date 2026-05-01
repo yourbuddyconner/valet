@@ -223,10 +223,11 @@ slackEventsRouter.post('/slack/events', async (c) => {
 
   // Build scope key and look up channel binding (DMs only — public channels use multi-orchestrator routing)
   let binding: Awaited<ReturnType<typeof db.getChannelBindingByScopeKey>> = null;
+  let bindingScopeKey: string | undefined;
   if (isDm) {
     const parts = transport.scopeKeyParts(message, userId);
-    const scopeKey = channelScopeKey(userId, parts.channelType, parts.channelId);
-    binding = await db.getChannelBindingByScopeKey(c.get('db'), scopeKey);
+    bindingScopeKey = channelScopeKey(userId, parts.channelType, parts.channelId);
+    binding = await db.getChannelBindingByScopeKey(c.get('db'), bindingScopeKey);
 
     // Evict stale bindings that point to terminated/archived/error sessions
     if (binding) {
@@ -317,7 +318,6 @@ slackEventsRouter.post('/slack/events', async (c) => {
     const doId = c.env.SESSIONS.idFromName(binding.sessionId);
     const sessionDO = c.env.SESSIONS.get(doId);
     try {
-
       const resp = await sessionDO.fetch(
         new Request('http://do/prompt', {
           method: 'POST',
@@ -346,8 +346,21 @@ slackEventsRouter.post('/slack/events', async (c) => {
         }
         return c.json({ ok: true });
       }
+      if (resp.status === 409) {
+        // 409 = session terminated/archived — the DO confirmed it did NOT process
+        // the message. Evict the stale binding and fall through to orchestrator.
+        console.warn(`[Slack] Bound session returned 409 (terminated), evicting binding and falling through to orchestrator`);
+        await db.deleteChannelBinding(c.get('db'), binding.id);
+      } else {
+        // Other non-200: the DO received the request and may still be processing it.
+        // Return early to prevent duplicate delivery to the orchestrator.
+        console.warn(`[Slack] Bound session returned ${resp.status}, not falling through to orchestrator to prevent duplicate delivery`);
+        return c.json({ ok: true });
+      }
     } catch (err) {
-      console.error(`[Slack] Failed to route to session ${binding.sessionId}:`, err);
+      // DO is unreachable — evict the stale binding and fall through to orchestrator
+      console.error(`[Slack] Bound session ${binding.sessionId} unreachable, evicting binding:`, err);
+      await db.deleteChannelBinding(c.get('db'), binding.id);
     }
   } else if (isDm) {
     console.log(`[Slack] No binding for DM, falling through to orchestrator`);
@@ -457,6 +470,7 @@ slackEventsRouter.post('/slack/events', async (c) => {
     authorName: message.senderName,
     attachments: attachments.length > 0 ? attachments : undefined,
     replyTo: { channelType: 'slack', channelId: dispatchChannelId },
+    scopeKey: bindingScopeKey,
   });
 
   if (result.dispatched) {

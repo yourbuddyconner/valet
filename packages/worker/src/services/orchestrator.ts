@@ -435,6 +435,9 @@ export async function dispatchOrchestratorPrompt(
     attachments?: Array<{ type: string; mime: string; url: string; filename?: string }>;
     /** Explicit reply target. If present, the DO auto-replies to this channel on turn complete. */
     replyTo?: { channelType: string; channelId: string };
+    /** Pre-computed scope key from the channel transport. Passed through to ensureChannelBinding
+     *  so the binding's scope key matches the lookup path in the inbound event handler. */
+    scopeKey?: string;
   }
 ): Promise<OrchestratorPromptDispatchResult> {
   const content = params.content.trim();
@@ -475,8 +478,9 @@ export async function dispatchOrchestratorPrompt(
 
   // Ensure a D1 channel binding exists for non-web channels so that downstream code
   // (interactive prompts, list-channels, auto-replies) can discover the channel.
-  // Uses the dispatch-format channelId (e.g. "D123:thread_ts") and ON CONFLICT IGNORE.
-  if (params.channelType && params.channelId && params.channelType !== 'web') {
+  // Requires a pre-computed scopeKey from the caller (via transport.scopeKeyParts +
+  // channelScopeKey) to guarantee the binding matches the inbound lookup path.
+  if (params.channelType && params.channelId && params.channelType !== 'web' && params.scopeKey) {
     try {
       const appDb = getDb(env.DB);
       await db.ensureChannelBinding(appDb, {
@@ -485,6 +489,7 @@ export async function dispatchOrchestratorPrompt(
         channelId: params.channelId,
         userId: params.userId,
         orgId: 'default',
+        scopeKey: params.scopeKey,
       });
     } catch (err) {
       // Best-effort — don't block message dispatch

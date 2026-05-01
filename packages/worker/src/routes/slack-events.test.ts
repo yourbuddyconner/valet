@@ -11,6 +11,7 @@ const {
   checkPrivateChannelAccessMock,
   dispatchOrchestratorPromptMock,
   getChannelBindingByScopeKeyMock,
+  deleteChannelBindingMock,
   getOrchestratorSessionMock,
   getOrCreateChannelThreadMock,
   getChannelThreadMappingMock,
@@ -28,6 +29,7 @@ const {
   checkPrivateChannelAccessMock: vi.fn(),
   dispatchOrchestratorPromptMock: vi.fn(),
   getChannelBindingByScopeKeyMock: vi.fn(),
+  deleteChannelBindingMock: vi.fn(),
   getOrchestratorSessionMock: vi.fn(),
   getOrCreateChannelThreadMock: vi.fn(),
   getChannelThreadMappingMock: vi.fn(),
@@ -43,7 +45,7 @@ vi.mock('../lib/db.js', () => ({
   getInvocation: getInvocationMock,
   getSession: getSessionMock,
   getChannelBindingByScopeKey: getChannelBindingByScopeKeyMock,
-  deleteChannelBinding: vi.fn(),
+  deleteChannelBinding: deleteChannelBindingMock,
   getOrchestratorSession: getOrchestratorSessionMock,
   getOrCreateChannelThread: getOrCreateChannelThreadMock,
   getChannelThreadMapping: getChannelThreadMappingMock,
@@ -421,5 +423,161 @@ describe('personal orchestrator Slack surface policy', () => {
     expect(resolveUserByExternalIdMock).toHaveBeenCalledOnce();
     expect(dispatchOrchestratorPromptMock).toHaveBeenCalledOnce();
     expect(sendMessageMock).not.toHaveBeenCalled();
+  });
+
+  it('passes scopeKey from scopeKeyParts to dispatchOrchestratorPrompt', async () => {
+    parseInboundMock.mockResolvedValue({
+      channelType: 'slack',
+      channelId: 'D123',
+      senderId: 'UDM',
+      senderName: 'DM User',
+      text: 'hello',
+      attachments: [],
+      messageId: '1234567890.123456',
+      metadata: {
+        teamId: 'T456',
+        slackEventType: 'message',
+        slackChannelType: 'im',
+      },
+    });
+    scopeKeyPartsMock.mockReturnValue({ channelType: 'slack', channelId: 'T456:D123' });
+    getChannelBindingByScopeKeyMock.mockResolvedValue(null);
+    getOrchestratorSessionMock.mockResolvedValue({ id: 'orchestrator:user-1' });
+    getOrCreateChannelThreadMock.mockResolvedValue('thread-uuid');
+    getChannelThreadMappingMock.mockResolvedValue(null);
+    dispatchOrchestratorPromptMock.mockResolvedValue({ dispatched: true });
+
+    const app = buildApp();
+    await app.fetch(
+      new Request('http://localhost/slack/events', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'x-slack-signature': 'v0=test',
+          'x-slack-request-timestamp': String(Math.floor(Date.now() / 1000)),
+        },
+        body: JSON.stringify({
+          type: 'event_callback',
+          team_id: 'T456',
+          event: { type: 'message', user: 'UDM', text: 'hello', channel: 'D123', channel_type: 'im', ts: '1234567890.123456' },
+        }),
+      }),
+      { DB: {}, ENCRYPTION_KEY: 'k', SLACK_SIGNING_SECRET: 's' } as any,
+      { waitUntil: vi.fn() } as any,
+    );
+
+    expect(dispatchOrchestratorPromptMock).toHaveBeenCalledOnce();
+    expect(dispatchOrchestratorPromptMock.mock.calls[0][1]).toMatchObject({
+      scopeKey: 'user:user-1:slack:T456:D123',
+    });
+  });
+});
+
+describe('bound-session dispatch failure handling', () => {
+  const sessionFetchMock = vi.fn();
+
+  function buildDmRequest() {
+    return new Request('http://localhost/slack/events', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-slack-signature': 'v0=test',
+        'x-slack-request-timestamp': String(Math.floor(Date.now() / 1000)),
+      },
+      body: JSON.stringify({
+        type: 'event_callback',
+        team_id: 'T123',
+        event: { type: 'message', user: 'UDM', text: 'hello', channel: 'D123', channel_type: 'im', ts: '1234567890.123456' },
+      }),
+    });
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    getOrgSlackInstallMock.mockResolvedValue({
+      signingSecret: 'secret', botToken: 'token', teamId: 'T123',
+      botUserId: 'B123', teamName: null, appId: null, configuredBy: 'user-1',
+    });
+    verifySlackSignatureMock.mockReturnValue(true);
+    resolveUserByExternalIdMock.mockResolvedValue('user-1');
+    parseInboundMock.mockResolvedValue({
+      channelType: 'slack', channelId: 'D123', senderId: 'UDM', senderName: 'DM User',
+      text: 'hello', attachments: [], messageId: '1234567890.123456',
+      metadata: { teamId: 'T123', slackEventType: 'message', slackChannelType: 'im' },
+    });
+    scopeKeyPartsMock.mockReturnValue({ channelType: 'slack', channelId: 'T123:D123' });
+    getChannelBindingByScopeKeyMock.mockResolvedValue({
+      id: 'binding-1', sessionId: 'child-session-1', channelType: 'slack',
+      channelId: 'D123:1234567890.123456', scopeKey: 'user:user-1:slack:T123:D123',
+      userId: 'user-1', orgId: 'default', queueMode: 'steer', collectDebounceMs: 3000,
+      createdAt: new Date().toISOString(),
+    });
+    getSessionMock.mockResolvedValue({ id: 'child-session-1', status: 'running' });
+    getOrchestratorSessionMock.mockResolvedValue({ id: 'orchestrator:user-1' });
+    getOrCreateChannelThreadMock.mockResolvedValue('thread-uuid');
+    getChannelThreadMappingMock.mockResolvedValue(null);
+    sessionFetchMock.mockReset();
+  });
+
+  function buildEnvWithSession() {
+    return {
+      DB: {},
+      ENCRYPTION_KEY: 'k',
+      SLACK_SIGNING_SECRET: 's',
+      SESSIONS: {
+        idFromName: vi.fn((name: string) => `do:${name}`),
+        get: vi.fn(() => ({ fetch: sessionFetchMock })),
+      },
+    } as any;
+  }
+
+  it('does NOT dispatch to orchestrator when bound session returns non-200 (non-409)', async () => {
+    sessionFetchMock.mockResolvedValue(new Response('internal error', { status: 500 }));
+
+    const app = buildApp();
+    const res = await app.fetch(
+      buildDmRequest(),
+      buildEnvWithSession(),
+      { waitUntil: vi.fn() } as any,
+    );
+
+    expect(res.status).toBe(200);
+    expect(sessionFetchMock).toHaveBeenCalledOnce();
+    expect(dispatchOrchestratorPromptMock).not.toHaveBeenCalled();
+    expect(deleteChannelBindingMock).not.toHaveBeenCalled();
+  });
+
+  it('evicts binding and dispatches to orchestrator on 409 (session terminated)', async () => {
+    sessionFetchMock.mockResolvedValue(new Response('terminated', { status: 409 }));
+    dispatchOrchestratorPromptMock.mockResolvedValue({ dispatched: true });
+
+    const app = buildApp();
+    const res = await app.fetch(
+      buildDmRequest(),
+      buildEnvWithSession(),
+      { waitUntil: vi.fn() } as any,
+    );
+
+    expect(res.status).toBe(200);
+    expect(sessionFetchMock).toHaveBeenCalledOnce();
+    expect(deleteChannelBindingMock).toHaveBeenCalledWith({}, 'binding-1');
+    expect(dispatchOrchestratorPromptMock).toHaveBeenCalledOnce();
+  });
+
+  it('evicts binding and dispatches to orchestrator when bound session is unreachable', async () => {
+    sessionFetchMock.mockRejectedValue(new Error('DO unreachable'));
+    dispatchOrchestratorPromptMock.mockResolvedValue({ dispatched: true });
+
+    const app = buildApp();
+    const res = await app.fetch(
+      buildDmRequest(),
+      buildEnvWithSession(),
+      { waitUntil: vi.fn() } as any,
+    );
+
+    expect(res.status).toBe(200);
+    expect(sessionFetchMock).toHaveBeenCalledOnce();
+    expect(deleteChannelBindingMock).toHaveBeenCalledWith({}, 'binding-1');
+    expect(dispatchOrchestratorPromptMock).toHaveBeenCalledOnce();
   });
 });

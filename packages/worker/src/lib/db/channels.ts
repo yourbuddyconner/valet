@@ -179,9 +179,12 @@ export async function ensureChannelBinding(
     channelId: string;
     userId: string;
     orgId: string;
+    /** Scope key computed via the channel transport's scopeKeyParts + channelScopeKey.
+     *  Must match the format used by the inbound event handler's binding lookup. */
+    scopeKey: string;
   },
 ): Promise<void> {
-  const scopeKey = `user:${data.userId}:${data.channelType}:${data.channelId}`;
+  const scopeKey = data.scopeKey;
   await db.insert(channelBindings).values({
     id: crypto.randomUUID(),
     sessionId: data.sessionId,

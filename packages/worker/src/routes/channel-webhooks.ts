@@ -333,6 +333,7 @@ channelWebhooksRouter.post('/:channelType/webhook/:userId', async (c) => {
     authorName: message.senderName,
     attachments: attachments.length > 0 ? attachments : undefined,
     replyTo: { channelType, channelId: message.channelId },
+    scopeKey,
   });
 
   if (!result.dispatched) {
