@@ -484,14 +484,15 @@ const PERMISSION_HINTS: Record<string, string> = {
 
 function handleOctokitError(err: any, actionId: string, operation: string): ActionResult {
   const status = err.status ?? 'unknown';
+  const ghMessage = err.message || '';
   if (status === 403) {
     const hint = PERMISSION_HINTS[actionId];
     const permMsg = hint
-      ? ` This action requires the "${hint}" permission on the GitHub App. Ask an admin to update the App's permissions in Settings > GitHub.`
+      ? ` This action likely requires the "${hint}" permission on the GitHub App.`
       : '';
-    return { success: false, error: `${operation}: GitHub returned 403 Forbidden.${permMsg}` };
+    return { success: false, error: `${operation}: GitHub returned 403 Forbidden. ${ghMessage}${permMsg}` };
   }
-  return { success: false, error: `${operation}: ${status} ${err.message}` };
+  return { success: false, error: `${operation}: ${status} ${ghMessage}` };
 }
 
 // ─── Action Execution ────────────────────────────────────────────────────────
