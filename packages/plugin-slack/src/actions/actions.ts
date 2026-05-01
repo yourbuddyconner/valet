@@ -67,23 +67,27 @@ const listChannels: ActionDefinition = {
 const readHistory: ActionDefinition = {
   id: 'slack.read_history',
   name: 'Read History',
-  description: 'Read recent messages from a Slack channel the bot has joined. Use list_channels to get channel IDs. Each message ts can be used as thread_ts for replies.',
+  description: 'Read recent messages from a Slack channel the bot has joined. Use list_channels to get channel IDs. Each message ts can be used as thread_ts for replies. Use oldest/latest to narrow to a time window.',
   riskLevel: 'low',
   params: z.object({
     channel: z.string().describe('Channel ID (C...)'),
     limit: z.number().int().min(1).max(200).optional().describe('Max messages per page (default 100, max 200)'),
     cursor: z.string().optional().describe('Pagination cursor from a previous response\'s next_cursor'),
+    oldest: z.string().optional().describe('Only messages after this Unix ts (e.g. "1774000000.000000"). Inclusive.'),
+    latest: z.string().optional().describe('Only messages before this Unix ts. Inclusive. Defaults to now.'),
   }),
 };
 
 const readThread: ActionDefinition = {
   id: 'slack.read_thread',
   name: 'Read Thread',
-  description: 'Read all replies in a Slack thread. Bot must be a member of the channel.',
+  description: 'Read replies in a Slack thread. Bot must be a member of the channel.',
   riskLevel: 'low',
   params: z.object({
     channel: z.string().describe('Channel ID (C...)'),
     thread_ts: z.string().describe('Timestamp of the parent message'),
+    limit: z.number().int().min(1).max(200).optional().describe('Max replies per page (default 100, max 200)'),
+    cursor: z.string().optional().describe('Pagination cursor from a previous response\'s next_cursor'),
   }),
 };
 
@@ -132,12 +136,18 @@ function slimChannel(ch: Record<string, unknown>): Record<string, unknown> {
 }
 
 function slimMessage(msg: Record<string, unknown>): Record<string, unknown> {
+  const reply_count = typeof msg.reply_count === 'number' ? msg.reply_count : undefined;
   return {
     user: msg.user,
     text: msg.text,
     ts: msg.ts,
+    // thread_ts present + different from ts = this is a reply surfaced into the channel
     thread_ts: msg.thread_ts || undefined,
-    reply_count: msg.reply_count || undefined,
+    // reply_count > 0 = this message is a thread parent with replies (worth reading via read_thread)
+    reply_count,
+    reply_users_count: reply_count !== undefined
+      ? (typeof msg.reply_users_count === 'number' ? msg.reply_users_count : undefined)
+      : undefined,
   };
 }
 
@@ -270,6 +280,9 @@ async function executeAction(
           limit: p.limit || 100,
         };
         if (p.cursor) query.cursor = p.cursor;
+        if (p.oldest) query.oldest = p.oldest;
+        if (p.latest) query.latest = p.latest;
+        if (p.oldest || p.latest) query.inclusive = true;
         const res = await slackGet('conversations.history', token, query);
         if (!res.ok) return slackError(res);
         const data = (await res.json()) as { ok: boolean; error?: string; messages?: unknown[]; has_more?: boolean; response_metadata?: { next_cursor?: string } };
@@ -277,24 +290,28 @@ async function executeAction(
 
         const messages = (data.messages || []).map((m) => slimMessage(m as Record<string, unknown>));
         const next_cursor = data.response_metadata?.next_cursor || undefined;
-        return { success: true, data: { messages, has_more: data.has_more, ...(next_cursor ? { next_cursor } : {}) } };
+        // Put pagination metadata first — large message arrays may be truncated by tool output limits
+        return { success: true, data: { has_more: data.has_more, next_cursor, total: messages.length, messages } };
       }
 
       case 'slack.read_thread': {
         const p = readThread.params.parse(params);
         const denied = await guardPrivateChannel(token, p.channel, ctx);
         if (denied) return denied;
-        const res = await slackGet('conversations.replies', token, {
+        const query: Record<string, unknown> = {
           channel: p.channel,
           ts: p.thread_ts,
-          limit: 100,
-        });
+          limit: p.limit || 100,
+        };
+        if (p.cursor) query.cursor = p.cursor;
+        const res = await slackGet('conversations.replies', token, query);
         if (!res.ok) return slackError(res);
-        const data = (await res.json()) as { ok: boolean; error?: string; messages?: unknown[]; has_more?: boolean };
+        const data = (await res.json()) as { ok: boolean; error?: string; messages?: unknown[]; has_more?: boolean; response_metadata?: { next_cursor?: string } };
         if (!data.ok) return slackError(res, data);
 
         const messages = (data.messages || []).map((m) => slimMessage(m as Record<string, unknown>));
-        return { success: true, data: { messages, has_more: data.has_more } };
+        const next_cursor = data.response_metadata?.next_cursor || undefined;
+        return { success: true, data: { has_more: data.has_more, next_cursor, total: messages.length, messages } };
       }
 
       case 'slack.list_users': {
