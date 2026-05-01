@@ -34,9 +34,15 @@ const ERROR_MARKER = '##[error]';
 /**
  * Parse raw GitHub Actions job log into structured steps.
  *
+ * GitHub's log format uses ##[group]/##[endgroup] markers to delineate
+ * sections. IMPORTANT: the group names in the log (e.g. "Run npm run lint")
+ * do NOT match the step names from the jobs API (e.g. "Lint"). We determine
+ * failure by checking for ##[error] markers within a section, not by matching
+ * against API step metadata.
+ *
  * Processing pipeline:
- * 1. Split into steps by ##[group]/##[endgroup] markers
- * 2. Match steps to metadata (names + conclusions) from the jobs API
+ * 1. Split into sections by ##[group]/##[endgroup] markers
+ * 2. Classify each section: contains ##[error] → failure, otherwise success
  * 3. Filter by failedOnly / stepName
  * 4. Strip ANSI codes
  * 5. Strip timestamps (unless includeTimestamps)
@@ -44,13 +50,13 @@ const ERROR_MARKER = '##[error]';
  */
 export function parseJobLog(
   rawLog: string,
-  steps: StepMeta[],
+  _steps: StepMeta[],
   options: ParseJobLogOptions,
 ): ParsedStep[] {
   const sections = splitIntoSections(rawLog);
-  const matched = matchSectionsToSteps(sections, steps);
+  const classified = classifySections(sections);
 
-  let filtered = matched;
+  let filtered = classified;
   if (options.failedOnly) {
     filtered = filtered.filter((s) => s.conclusion === 'failure');
   }
@@ -140,18 +146,21 @@ function splitIntoSections(rawLog: string): RawSection[] {
   return sections;
 }
 
-function matchSectionsToSteps(
+/**
+ * Classify sections by presence of ##[error] markers rather than trying to
+ * match log group names to API step names (which use different naming).
+ */
+function classifySections(
   sections: RawSection[],
-  steps: StepMeta[],
 ): Array<{ name: string; conclusion: string; lines: string[] }> {
   return sections.map((section) => {
-    // Try to match section name to a step from the API metadata
-    const match = steps.find(
-      (s) => s.name.toLowerCase() === section.name.toLowerCase(),
-    );
+    const hasError = section.lines.some((line) => {
+      const stripped = line.replace(TIMESTAMP_RE, '');
+      return stripped.includes(ERROR_MARKER);
+    });
     return {
       name: section.name,
-      conclusion: match?.conclusion ?? 'unknown',
+      conclusion: hasError ? 'failure' : 'success',
       lines: section.lines,
     };
   });

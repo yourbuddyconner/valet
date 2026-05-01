@@ -18,18 +18,18 @@ function makeLogs(steps: Array<{ name: string; lines: string[] }>): string {
     .join('\n');
 }
 
+// Steps metadata is no longer used for matching (log group names don't match
+// API step names), but we still pass it per the function signature.
+const unusedSteps = [{ name: 'unused', conclusion: 'success' }];
+
 describe('parseJobLog', () => {
   it('parses steps from group markers', () => {
     const raw = makeLogs([
       { name: 'Run checkout', lines: ['Cloning repo...', 'Done.'] },
       { name: 'Run tests', lines: ['PASS test_a', 'PASS test_b'] },
     ]);
-    const steps = [
-      { name: 'Run checkout', conclusion: 'success' },
-      { name: 'Run tests', conclusion: 'success' },
-    ];
 
-    const result = parseJobLog(raw, steps, defaults);
+    const result = parseJobLog(raw, unusedSteps, defaults);
 
     expect(result).toHaveLength(2);
     expect(result[0].name).toBe('Run checkout');
@@ -38,17 +38,25 @@ describe('parseJobLog', () => {
     expect(result[1].name).toBe('Run tests');
   });
 
-  it('filters to failed steps when failedOnly=true', () => {
+  it('classifies sections with ##[error] as failure', () => {
     const raw = makeLogs([
       { name: 'Run checkout', lines: ['OK'] },
-      { name: 'Run build', lines: ['error: something broke'] },
+      { name: 'Run build', lines: ['compiling...', '##[error]Build failed!'] },
     ]);
-    const steps = [
-      { name: 'Run checkout', conclusion: 'success' },
-      { name: 'Run build', conclusion: 'failure' },
-    ];
 
-    const result = parseJobLog(raw, steps, { ...defaults, failedOnly: true });
+    const result = parseJobLog(raw, unusedSteps, defaults);
+
+    expect(result[0].conclusion).toBe('success');
+    expect(result[1].conclusion).toBe('failure');
+  });
+
+  it('filters to failed sections when failedOnly=true', () => {
+    const raw = makeLogs([
+      { name: 'Run checkout', lines: ['OK'] },
+      { name: 'Run build', lines: ['error output', '##[error]Process completed with exit code 1.'] },
+    ]);
+
+    const result = parseJobLog(raw, unusedSteps, { ...defaults, failedOnly: true });
 
     expect(result).toHaveLength(1);
     expect(result[0].name).toBe('Run build');
@@ -60,12 +68,8 @@ describe('parseJobLog', () => {
       { name: 'Run checkout', lines: ['OK'] },
       { name: 'Run cargo build', lines: ['compiling...'] },
     ]);
-    const steps = [
-      { name: 'Run checkout', conclusion: 'success' },
-      { name: 'Run cargo build', conclusion: 'success' },
-    ];
 
-    const result = parseJobLog(raw, steps, { ...defaults, stepName: 'cargo' });
+    const result = parseJobLog(raw, unusedSteps, { ...defaults, stepName: 'cargo' });
 
     expect(result).toHaveLength(1);
     expect(result[0].name).toBe('Run cargo build');
@@ -73,9 +77,8 @@ describe('parseJobLog', () => {
 
   it('strips timestamps by default', () => {
     const raw = '2024-01-15T10:30:00.0000000Z ##[group]Step\n2024-01-15T10:30:01.0000000Z hello world\n2024-01-15T10:30:02.0000000Z ##[endgroup]';
-    const steps = [{ name: 'Step', conclusion: 'success' }];
 
-    const result = parseJobLog(raw, steps, defaults);
+    const result = parseJobLog(raw, unusedSteps, defaults);
 
     expect(result[0].log).toBe('hello world');
     expect(result[0].log).not.toContain('2024-01-15');
@@ -83,9 +86,8 @@ describe('parseJobLog', () => {
 
   it('preserves timestamps when includeTimestamps=true', () => {
     const raw = '2024-01-15T10:30:00.0000000Z ##[group]Step\n2024-01-15T10:30:01.0000000Z hello world\n2024-01-15T10:30:02.0000000Z ##[endgroup]';
-    const steps = [{ name: 'Step', conclusion: 'success' }];
 
-    const result = parseJobLog(raw, steps, { ...defaults, includeTimestamps: true });
+    const result = parseJobLog(raw, unusedSteps, { ...defaults, includeTimestamps: true });
 
     expect(result[0].log).toContain('2024-01-15');
   });
@@ -94,25 +96,20 @@ describe('parseJobLog', () => {
     const logLines = Array.from({ length: 100 }, (_, i) => `line ${i}`);
     logLines[5] = '##[error]Root cause error here';
     const raw = makeLogs([{ name: 'Build', lines: logLines }]);
-    const steps = [{ name: 'Build', conclusion: 'failure' }];
 
-    const result = parseJobLog(raw, steps, { ...defaults, tailLines: 10 });
+    const result = parseJobLog(raw, unusedSteps, { ...defaults, tailLines: 10 });
 
     expect(result[0].truncated).toBe(true);
     expect(result[0].total_lines).toBe(100);
-    // ##[error] line from the head should be preserved
     expect(result[0].log).toContain('Root cause error here');
-    // Last line should be the tail
     expect(result[0].log).toContain('line 99');
-    // Truncation marker should be present
     expect(result[0].log).toContain('[truncated');
   });
 
   it('strips ANSI escape codes', () => {
     const raw = '2024-01-15T10:30:00.0000000Z ##[group]Step\n2024-01-15T10:30:01.0000000Z \x1b[31merror\x1b[0m: bad thing\n2024-01-15T10:30:02.0000000Z ##[endgroup]';
-    const steps = [{ name: 'Step', conclusion: 'failure' }];
 
-    const result = parseJobLog(raw, steps, defaults);
+    const result = parseJobLog(raw, unusedSteps, defaults);
 
     expect(result[0].log).toBe('error: bad thing');
     expect(result[0].log).not.toContain('\x1b');
@@ -120,45 +117,38 @@ describe('parseJobLog', () => {
 
   it('handles logs without group markers as a single unnamed step', () => {
     const raw = '2024-01-15T10:30:01.0000000Z just some output\n2024-01-15T10:30:02.0000000Z more output';
-    const steps = [{ name: 'Run tests', conclusion: 'failure' }];
 
-    const result = parseJobLog(raw, steps, defaults);
+    const result = parseJobLog(raw, unusedSteps, defaults);
 
     expect(result.length).toBeGreaterThanOrEqual(1);
     expect(result[0].log).toContain('just some output');
   });
 
-  it('returns empty array when failedOnly=true and no steps failed', () => {
+  it('returns empty array when failedOnly=true and no sections have errors', () => {
     const raw = makeLogs([{ name: 'Step', lines: ['OK'] }]);
-    const steps = [{ name: 'Step', conclusion: 'success' }];
 
-    const result = parseJobLog(raw, steps, { ...defaults, failedOnly: true });
+    const result = parseJobLog(raw, unusedSteps, { ...defaults, failedOnly: true });
 
     expect(result).toHaveLength(0);
   });
 
   it('does not truncate when under tailLines limit', () => {
     const raw = makeLogs([{ name: 'Step', lines: ['line 1', 'line 2', 'line 3'] }]);
-    const steps = [{ name: 'Step', conclusion: 'success' }];
 
-    const result = parseJobLog(raw, steps, { ...defaults, tailLines: 500 });
+    const result = parseJobLog(raw, unusedSteps, { ...defaults, tailLines: 500 });
 
     expect(result[0].truncated).toBe(false);
     expect(result[0].total_lines).toBe(3);
   });
 
   it('clamps truncation counter to zero when most head lines are errors', () => {
-    // 20 lines, 15 are ##[error], tailLines=10 → 10 head lines dropped, but 15 errors
-    // to re-surface (only 10 are in the head though, so headErrors=10)
-    // formula: max(0, 20 - 10 - 10) = 0
     const logLines = Array.from({ length: 20 }, (_, i) => `##[error]error at line ${i}`);
     const raw = makeLogs([{ name: 'Build', lines: logLines }]);
-    const steps = [{ name: 'Build', conclusion: 'failure' }];
 
-    const result = parseJobLog(raw, steps, { ...defaults, tailLines: 10 });
+    const result = parseJobLog(raw, unusedSteps, { ...defaults, tailLines: 10 });
 
     expect(result[0].truncated).toBe(true);
-    expect(result[0].log).not.toContain('-');  // no negative number in truncation marker
+    expect(result[0].log).not.toContain('-');
     expect(result[0].log).toContain('[truncated 0 lines]');
   });
 
@@ -166,13 +156,37 @@ describe('parseJobLog', () => {
     const raw = makeLogs([
       { name: 'Run build', lines: ['output: ##[group]not a real step', 'more output'] },
     ]);
-    const steps = [{ name: 'Run build', conclusion: 'success' }];
 
-    const result = parseJobLog(raw, steps, defaults);
+    const result = parseJobLog(raw, unusedSteps, defaults);
 
-    // Should be one step, not two
     expect(result).toHaveLength(1);
     expect(result[0].name).toBe('Run build');
     expect(result[0].log).toContain('##[group]not a real step');
+  });
+
+  it('works with real GitHub log format where group names differ from API step names', () => {
+    // Simulates real GitHub logs: group names are "Run npm run lint-all",
+    // not "Lint" as the API would call it.
+    const raw = makeLogs([
+      { name: 'Run actions/checkout@abc123', lines: ['Cloning...', 'Done.'] },
+      { name: 'Run npm run typecheck-all', lines: ['Checking types...', 'OK'] },
+      { name: 'Run npm run lint-all', lines: [
+        'Running ESLint...',
+        '##[error]  24:13  error  Expected { after \'if\' condition  curly',
+        '##[error]Process completed with exit code 1.',
+      ]},
+    ]);
+    const apiSteps = [
+      { name: 'Checkout sources', conclusion: 'success' },
+      { name: 'Typecheck', conclusion: 'success' },
+      { name: 'Lint', conclusion: 'failure' },
+    ];
+
+    const result = parseJobLog(raw, apiSteps, { ...defaults, failedOnly: true });
+
+    expect(result).toHaveLength(1);
+    expect(result[0].name).toBe('Run npm run lint-all');
+    expect(result[0].conclusion).toBe('failure');
+    expect(result[0].log).toContain('Expected { after');
   });
 });
