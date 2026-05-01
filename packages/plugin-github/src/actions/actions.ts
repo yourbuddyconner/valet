@@ -1273,12 +1273,15 @@ async function executeAction(
           });
 
           if (Array.isArray(data) || data.type !== 'file') {
-            return { success: false, error: `Path is a ${Array.isArray(data) ? 'directory' : (data as any).type}, not a file` };
+            const kind = Array.isArray(data) ? 'directory' : data.type;
+            return { success: false, error: `Path is a ${kind}, not a file` };
           }
 
+          const raw = data.content ?? '';
+          // GitHub wraps base64 with newlines every 60 chars — strip before decoding
           const content = data.encoding === 'base64'
-            ? atob(data.content as string)
-            : (data.content as string);
+            ? new TextDecoder().decode(Uint8Array.from(atob(raw.replace(/\n/g, '')), (c) => c.charCodeAt(0)))
+            : raw;
 
           return {
             success: true,
