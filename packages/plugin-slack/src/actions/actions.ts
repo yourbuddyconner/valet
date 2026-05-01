@@ -2,6 +2,7 @@ import { z } from 'zod';
 import type { ActionDefinition, ActionSource, ActionContext, ActionResult } from '@valet/sdk';
 import { slackFetch, slackGet } from './api.js';
 import { checkPrivateChannelAccess } from './channel-access.js';
+import { buildSectionBlocks, SLACK_TEXT_LIMIT } from '../message-chunking.js';
 
 /** Build a descriptive error from a Slack API response. */
 async function slackError(res: Response, data?: { ok: boolean; error?: string }): Promise<ActionResult> {
@@ -153,7 +154,8 @@ function slimMessage(msg: Record<string, unknown>): Record<string, unknown> {
   };
 }
 
-/** Helper to open a DM and send a message. */
+/** Helper to open a DM and send a message. Long texts are packed into section blocks
+ *  so they stay in a single API call (avoids 1 msg/sec rate limit). */
 async function openAndSendDM(
   token: string,
   userId: string,
@@ -168,6 +170,12 @@ async function openAndSendDM(
   const body: Record<string, unknown> = { channel: openData.channel.id, text };
   if (callerIdentity?.name) body.username = callerIdentity.name;
   if (callerIdentity?.avatar) body.icon_url = callerIdentity.avatar;
+
+  // For long messages, use section blocks so Slack doesn't split into separate threads
+  if (text.length > SLACK_TEXT_LIMIT) {
+    body.blocks = buildSectionBlocks(text);
+    body.text = text.slice(0, SLACK_TEXT_LIMIT); // notification fallback
+  }
 
   const res = await slackFetch('chat.postMessage', token, body);
   if (!res.ok) return slackError(res);

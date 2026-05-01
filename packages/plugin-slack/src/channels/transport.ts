@@ -11,6 +11,7 @@ import type {
   InteractiveResolution,
 } from '@valet/sdk';
 import { markdownToSlackMrkdwn } from './format.js';
+import { buildSectionBlocks, SLACK_TEXT_LIMIT, SLACK_MAX_BLOCKS } from '../message-chunking.js';
 
 // ─── Slack API Helpers ──────────────────────────────────────────────────────
 
@@ -510,12 +511,22 @@ export class SlackTransport implements ChannelTransport {
       body.icon_url = personaAvatar;
     }
 
-    // Add user attribution context block for non-DM channels
-    if (slackUserId && !target.channelId.startsWith('D')) {
-      body.blocks = [
-        { type: 'section', text: { type: 'mrkdwn', text: formatted } },
-        { type: 'context', elements: [{ type: 'mrkdwn', text: `↳ <@${slackUserId}>` }] },
-      ];
+    // For long messages, pack into section blocks so Slack doesn't split them
+    // into separate bot threads (stays within a single API call, no rate-limit cost).
+    const needsBlocks = formatted.length > SLACK_TEXT_LIMIT;
+    const hasAttribution = slackUserId && !target.channelId.startsWith('D');
+
+    if (needsBlocks || hasAttribution) {
+      // Reserve a slot for the attribution context block if needed
+      const blockBudget = hasAttribution ? SLACK_MAX_BLOCKS - 1 : SLACK_MAX_BLOCKS;
+      const blocks: Record<string, unknown>[] = buildSectionBlocks(formatted, blockBudget);
+      if (hasAttribution) {
+        blocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: `↳ <@${slackUserId}>` }] });
+      }
+      body.blocks = blocks;
+      if (needsBlocks) {
+        body.text = formatted.slice(0, SLACK_TEXT_LIMIT); // notification fallback
+      }
     }
 
     const result = await slackApiCall('chat.postMessage', body, ctx.token);
