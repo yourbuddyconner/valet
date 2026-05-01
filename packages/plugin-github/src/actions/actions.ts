@@ -1042,8 +1042,8 @@ async function executeAction(
             path: string;
             start_line: number;
             end_line: number;
-            annotation_level: string | null;
-            message: string | null;
+            annotation_level: string;
+            message: string;
             title: string | null;
           }> = [];
           if (run.head_sha) {
@@ -1062,8 +1062,8 @@ async function executeAction(
                         path: a.path,
                         start_line: a.start_line,
                         end_line: a.end_line ?? a.start_line,
-                        annotation_level: a.annotation_level,
-                        message: a.message,
+                        annotation_level: a.annotation_level ?? 'notice',
+                        message: a.message ?? '',
                         title: a.title ?? null,
                       });
                     }
@@ -1130,7 +1130,9 @@ async function executeAction(
           const job = jobResp.data;
           const rawLog = typeof logsResp.data === 'string'
             ? logsResp.data
-            : new TextDecoder().decode(logsResp.data as ArrayBuffer);
+            : logsResp.data instanceof ArrayBuffer
+              ? new TextDecoder().decode(logsResp.data)
+              : String(logsResp.data);
 
           const stepsMeta = (job.steps ?? []).map((s) => ({
             name: s.name,
