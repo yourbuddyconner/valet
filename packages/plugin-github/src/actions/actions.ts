@@ -335,6 +335,18 @@ const listWorkflowRuns: ActionDefinition = {
   }),
 };
 
+const getWorkflowRun: ActionDefinition = {
+  id: 'github.get_workflow_run',
+  name: 'Get Workflow Run',
+  description: 'Get details of a workflow run including jobs, steps, and check annotations. Use this to triage failures before fetching logs.',
+  riskLevel: 'low',
+  params: z.object({
+    owner: z.string().describe('Repository owner'),
+    repo: z.string().describe('Repository name'),
+    run_id: z.number().int().describe('Workflow run ID'),
+  }),
+};
+
 const readRepoFile: ActionDefinition = {
   id: 'github.read_repo_file',
   name: 'Read Repository File',
@@ -371,6 +383,7 @@ const allActions: ActionDefinition[] = [
   searchIssues,
   createRelease,
   listWorkflowRuns,
+  getWorkflowRun,
   readRepoFile,
 ];
 
@@ -378,6 +391,7 @@ const allActions: ActionDefinition[] = [
 
 const PERMISSION_HINTS: Record<string, string> = {
   'github.list_workflow_runs': 'actions:read',
+  'github.get_workflow_run': 'actions:read + checks:read',
   'github.create_issue': 'issues:write',
   'github.update_issue': 'issues:write',
   'github.create_comment': 'issues:write',
@@ -928,6 +942,97 @@ async function executeAction(
           };
         } catch (err: any) {
           return handleOctokitError(err, actionId, 'List workflow runs');
+        }
+      }
+
+      case 'github.get_workflow_run': {
+        const p = getWorkflowRun.params.parse(params);
+        try {
+          const [runResp, jobsResp] = await Promise.all([
+            octokit.request('GET /repos/{owner}/{repo}/actions/runs/{run_id}', {
+              owner: p.owner, repo: p.repo, run_id: p.run_id,
+            }),
+            octokit.request('GET /repos/{owner}/{repo}/actions/runs/{run_id}/jobs', {
+              owner: p.owner, repo: p.repo, run_id: p.run_id, per_page: 100,
+            }),
+          ]);
+
+          const run = runResp.data;
+          const jobs = jobsResp.data.jobs;
+
+          // Fetch check-run annotations for the head SHA
+          let annotations: Array<{
+            path: string;
+            start_line: number;
+            end_line: number;
+            annotation_level: string | null;
+            message: string | null;
+            title: string | null;
+          }> = [];
+          if (run.head_sha) {
+            try {
+              const checksResp = await octokit.request('GET /repos/{owner}/{repo}/commits/{ref}/check-runs', {
+                owner: p.owner, repo: p.repo, ref: run.head_sha, per_page: 100,
+              });
+              for (const cr of checksResp.data.check_runs) {
+                if (cr.output?.annotations_count && cr.output.annotations_count > 0) {
+                  try {
+                    const annResp = await octokit.request('GET /repos/{owner}/{repo}/check-runs/{check_run_id}/annotations', {
+                      owner: p.owner, repo: p.repo, check_run_id: cr.id,
+                    });
+                    for (const a of annResp.data) {
+                      annotations.push({
+                        path: a.path,
+                        start_line: a.start_line,
+                        end_line: a.end_line ?? a.start_line,
+                        annotation_level: a.annotation_level,
+                        message: a.message,
+                        title: a.title ?? null,
+                      });
+                    }
+                  } catch {
+                    // skip if annotations endpoint fails
+                  }
+                }
+              }
+            } catch {
+              // skip if check-runs endpoint fails (e.g. missing checks:read permission)
+            }
+          }
+
+          return {
+            success: true,
+            data: {
+              id: run.id,
+              name: run.name,
+              status: run.status,
+              conclusion: run.conclusion,
+              event: run.event,
+              branch: run.head_branch,
+              commit_sha: run.head_sha,
+              url: run.html_url,
+              created_at: run.created_at,
+              updated_at: run.updated_at,
+              run_attempt: run.run_attempt,
+              jobs: jobs.map((j) => ({
+                id: j.id,
+                name: j.name,
+                status: j.status,
+                conclusion: j.conclusion,
+                started_at: j.started_at,
+                completed_at: j.completed_at,
+                steps: (j.steps ?? []).map((s) => ({
+                  name: s.name,
+                  status: s.status,
+                  conclusion: s.conclusion,
+                  number: s.number,
+                })),
+              })),
+              annotations,
+            },
+          };
+        } catch (err: any) {
+          return handleOctokitError(err, actionId, 'Get workflow run');
         }
       }
 
