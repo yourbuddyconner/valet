@@ -1137,16 +1137,40 @@ async function executeAction(
       case 'github.get_job_logs': {
         const p = getJobLogs.params.parse(params);
         try {
-          // Fetch job metadata (for step names + conclusions) and logs in parallel
-          const [jobResp, logsResp] = await Promise.all([
-            octokit.request('GET /repos/{owner}/{repo}/actions/jobs/{job_id}', {
+          // Fetch job metadata first (this uses the standard API)
+          const jobResp = await octokit.request('GET /repos/{owner}/{repo}/actions/jobs/{job_id}', {
+            owner: p.owner, repo: p.repo, job_id: p.job_id,
+          });
+
+          // Fetch logs separately — this endpoint returns a 302 redirect to a
+          // download URL, which Octokit follows via the Fetch API.
+          let logsResp;
+          try {
+            logsResp = await octokit.request('GET /repos/{owner}/{repo}/actions/jobs/{job_id}/logs', {
               owner: p.owner, repo: p.repo, job_id: p.job_id,
-            }),
-            octokit.request('GET /repos/{owner}/{repo}/actions/jobs/{job_id}/logs', {
-              owner: p.owner, repo: p.repo, job_id: p.job_id,
-              headers: { accept: 'application/vnd.github.v3.raw' },
-            }),
-          ]);
+            });
+          } catch (logsErr: any) {
+            const details = [
+              `status=${logsErr.status ?? 'unknown'}`,
+              `message=${logsErr.message ?? 'none'}`,
+              logsErr.response?.url ? `url=${logsErr.response.url}` : null,
+              logsErr.response?.data ? `data=${typeof logsErr.response.data === 'string' ? logsErr.response.data.slice(0, 200) : JSON.stringify(logsErr.response.data).slice(0, 200)}` : null,
+            ].filter(Boolean).join(', ');
+            console.error('[get_job_logs] logs fetch failed:', {
+              status: logsErr.status,
+              message: logsErr.message,
+              url: logsErr.response?.url,
+              headers: logsErr.response?.headers,
+              data: logsErr.response?.data,
+              owner: p.owner,
+              repo: p.repo,
+              job_id: p.job_id,
+            });
+            if (logsErr.status === 410) {
+              return { success: false, error: 'Logs have expired. GitHub retains logs for 90 days by default.' };
+            }
+            return { success: false, error: `Get job logs failed: ${details}` };
+          }
 
           const job = jobResp.data;
           const rawLog = typeof logsResp.data === 'string'
@@ -1176,9 +1200,6 @@ async function executeAction(
             },
           };
         } catch (err: any) {
-          if (err.status === 410) {
-            return { success: false, error: 'Logs have expired. GitHub retains logs for 90 days by default.' };
-          }
           return handleOctokitError(err, actionId, 'Get job logs');
         }
       }
