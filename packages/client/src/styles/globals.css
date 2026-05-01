@@ -145,7 +145,7 @@
 
   /* Code blocks inside user bubbles — invert for light-on-dark / dark-on-light context */
   .user-bubble .group\/code {
-    @apply border-white/15 dark:border-neutral-200;
+    @apply border-white/15 !bg-white/5 dark:border-neutral-200 dark:!bg-neutral-50;
   }
   .user-bubble .group\/code > div:first-child {
     @apply bg-white/10 dark:bg-neutral-100;
@@ -203,23 +203,24 @@
     @apply text-neutral-400 dark:text-neutral-500;
   }
 
-  /* Shiki dual-theme support */
+  /* Shiki dual-theme support — fallback colors match github-light / github-dark defaults
+     so text stays legible even when Shiki doesn't emit per-token CSS variables (e.g. plaintext) */
   .shiki-wrapper .shiki,
   .shiki-wrapper .shiki span {
-    color: var(--shiki-light) !important;
+    color: var(--shiki-light, #24292e) !important;
     background-color: transparent !important;
   }
 
   .dark .shiki-wrapper .shiki,
   .dark .shiki-wrapper .shiki span {
-    color: var(--shiki-dark) !important;
+    color: var(--shiki-dark, #e1e4e8) !important;
     background-color: transparent !important;
   }
 
   /* User bubble has inverted colors (light bg in dark mode) — use light shiki theme */
   .dark .user-bubble .shiki-wrapper .shiki,
   .dark .user-bubble .shiki-wrapper .shiki span {
-    color: var(--shiki-light) !important;
+    color: var(--shiki-light, #24292e) !important;
   }
 
   /* Mobile session-info sheet readability/tap sizing */

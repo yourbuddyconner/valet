@@ -37,7 +37,7 @@ export const CodeBlock = memo(function CodeBlock({ language, children }: CodeBlo
   }, [ready, children, language, highlightCode, html]);
 
   return (
-    <div className="group/code overflow-hidden rounded-md border border-neutral-200 dark:border-neutral-700">
+    <div className="group/code overflow-hidden rounded-md border border-neutral-200 bg-white dark:border-neutral-700 dark:bg-neutral-900">
       <div className="flex items-center justify-between bg-neutral-100 px-3 py-1 dark:bg-neutral-800">
         <span className="font-mono text-[10px] font-medium uppercase tracking-wide text-neutral-500 dark:text-neutral-400">
           {language || 'text'}

@@ -1,6 +1,7 @@
 import { memo, useMemo, createContext, useContext, type ComponentProps } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import remarkGemoji from 'remark-gemoji';
 import rehypeSanitize, { defaultSchema } from 'rehype-sanitize';
 import type { Components } from 'react-markdown';
 import { CodeBlock } from './code-block';
@@ -22,7 +23,7 @@ const sanitizeSchema = {
   },
 };
 
-const remarkPlugins = [remarkGfm];
+const remarkPlugins = [remarkGfm, remarkGemoji];
 const rehypePlugins = [[rehypeSanitize, sanitizeSchema]] as ComponentProps<typeof ReactMarkdown>['rehypePlugins'];
 
 function MermaidOrPlaceholder({ code }: { code: string }) {
