@@ -75,6 +75,8 @@ const readHistory: ActionDefinition = {
     cursor: z.string().optional().describe('Pagination cursor from a previous response\'s next_cursor'),
     oldest: z.string().optional().describe('Only messages after this Unix ts (e.g. "1774000000.000000"). Inclusive.'),
     latest: z.string().optional().describe('Only messages before this Unix ts. Inclusive. Defaults to now.'),
+    filter: z.string().optional().describe('Case-insensitive keyword filter applied client-side. Only messages whose text contains this substring are returned. Pagination still advances through all messages — use has_more/next_cursor to continue.'),
+    threads_only: z.boolean().optional().describe('When true, only return messages that have thread replies (reply_count > 0). Useful for finding discussions in noisy alert channels.'),
   }),
 };
 
@@ -288,10 +290,19 @@ async function executeAction(
         const data = (await res.json()) as { ok: boolean; error?: string; messages?: unknown[]; has_more?: boolean; response_metadata?: { next_cursor?: string } };
         if (!data.ok) return slackError(res, data);
 
-        const messages = (data.messages || []).map((m) => slimMessage(m as Record<string, unknown>));
+        let messages = (data.messages || []).map((m) => slimMessage(m as Record<string, unknown>));
+        const fetched = messages.length;
+        if (p.filter) {
+          const kw = p.filter.toLowerCase();
+          messages = messages.filter((m) => typeof m.text === 'string' && m.text.toLowerCase().includes(kw));
+        }
+        if (p.threads_only) {
+          messages = messages.filter((m) => typeof m.reply_count === 'number' && m.reply_count > 0);
+        }
         const next_cursor = data.response_metadata?.next_cursor || undefined;
+        const filtered = p.filter || p.threads_only;
         // Put pagination metadata first — large message arrays may be truncated by tool output limits
-        return { success: true, data: { has_more: data.has_more, next_cursor, total: messages.length, messages } };
+        return { success: true, data: { has_more: data.has_more, next_cursor, ...(filtered ? { fetched } : {}), total: messages.length, messages } };
       }
 
       case 'slack.read_thread': {
