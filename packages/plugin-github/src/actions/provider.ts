@@ -26,10 +26,12 @@ export const githubProvider: IntegrationProvider = {
   },
 
   getOAuthUrl(oauth: OAuthConfig, redirectUri: string, state: string): string {
+    // No `scope` param — the client_id belongs to a GitHub App, so GitHub
+    // ignores OAuth scopes entirely. The user-to-server token inherits the
+    // app's configured permissions, intersected with the user's access.
     const params = new URLSearchParams({
       client_id: oauth.clientId,
       redirect_uri: redirectUri,
-      scope: 'repo read:user read:org user:email',
       state,
     });
     return `https://github.com/login/oauth/authorize?${params}`;
