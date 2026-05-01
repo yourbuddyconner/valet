@@ -14,7 +14,7 @@ export interface ParseJobLogOptions {
   includeTimestamps: boolean;
 }
 
-interface StepMeta {
+export interface StepMeta {
   name: string;
   conclusion: string | null;
 }
