@@ -389,6 +389,31 @@ const cancelWorkflowRun: ActionDefinition = {
   }),
 };
 
+const listWorkflows: ActionDefinition = {
+  id: 'github.list_workflows',
+  name: 'List Workflows',
+  description: 'List workflow definitions in a repository. Returns workflow names, file paths, and states.',
+  riskLevel: 'low',
+  params: z.object({
+    owner: z.string().describe('Repository owner'),
+    repo: z.string().describe('Repository name'),
+  }),
+};
+
+const triggerWorkflow: ActionDefinition = {
+  id: 'github.trigger_workflow',
+  name: 'Trigger Workflow',
+  description: 'Manually trigger a workflow via workflow_dispatch event. The workflow must have a workflow_dispatch trigger configured.',
+  riskLevel: 'medium',
+  params: z.object({
+    owner: z.string().describe('Repository owner'),
+    repo: z.string().describe('Repository name'),
+    workflow_id: z.union([z.string(), z.number().int()]).describe('Workflow filename (e.g. "ci.yml") or numeric ID'),
+    ref: z.string().describe('Branch or tag to run the workflow on'),
+    inputs: z.record(z.string()).optional().describe('Workflow dispatch input values (key-value pairs)'),
+  }),
+};
+
 const readRepoFile: ActionDefinition = {
   id: 'github.read_repo_file',
   name: 'Read Repository File',
@@ -429,6 +454,8 @@ const allActions: ActionDefinition[] = [
   getJobLogs,
   rerunWorkflow,
   cancelWorkflowRun,
+  listWorkflows,
+  triggerWorkflow,
   readRepoFile,
 ];
 
@@ -440,6 +467,8 @@ const PERMISSION_HINTS: Record<string, string> = {
   'github.get_job_logs': 'actions:read',
   'github.rerun_workflow': 'actions:write',
   'github.cancel_workflow_run': 'actions:write',
+  'github.list_workflows': 'actions:read',
+  'github.trigger_workflow': 'actions:write',
   'github.create_issue': 'issues:write',
   'github.update_issue': 'issues:write',
   'github.create_comment': 'issues:write',
@@ -1167,6 +1196,52 @@ async function executeAction(
           };
         } catch (err: any) {
           return handleOctokitError(err, actionId, 'Cancel workflow run');
+        }
+      }
+
+      case 'github.list_workflows': {
+        const p = listWorkflows.params.parse(params);
+        try {
+          const { data } = await octokit.request('GET /repos/{owner}/{repo}/actions/workflows', {
+            owner: p.owner, repo: p.repo,
+          });
+          return {
+            success: true,
+            data: {
+              total_count: data.total_count,
+              workflows: data.workflows.map((w) => ({
+                id: w.id,
+                name: w.name,
+                path: w.path,
+                state: w.state,
+              })),
+            },
+          };
+        } catch (err: any) {
+          return handleOctokitError(err, actionId, 'List workflows');
+        }
+      }
+
+      case 'github.trigger_workflow': {
+        const p = triggerWorkflow.params.parse(params);
+        try {
+          await octokit.request('POST /repos/{owner}/{repo}/actions/workflows/{workflow_id}/dispatches', {
+            owner: p.owner, repo: p.repo,
+            workflow_id: p.workflow_id,
+            ref: p.ref,
+            inputs: p.inputs,
+          });
+          return {
+            success: true,
+            data: {
+              message: `Workflow dispatch accepted for ${p.workflow_id} on ${p.ref}. Use list_workflow_runs to find the new run.`,
+            },
+          };
+        } catch (err: any) {
+          if (err.status === 422) {
+            return { success: false, error: 'Workflow dispatch failed. Make sure the workflow has a workflow_dispatch trigger and the inputs match the expected schema.' };
+          }
+          return handleOctokitError(err, actionId, 'Trigger workflow');
         }
       }
 
