@@ -364,6 +364,31 @@ const getJobLogs: ActionDefinition = {
   }),
 };
 
+const rerunWorkflow: ActionDefinition = {
+  id: 'github.rerun_workflow',
+  name: 'Rerun Workflow',
+  description: 'Re-run a workflow run. Can re-run all jobs or only failed jobs.',
+  riskLevel: 'medium',
+  params: z.object({
+    owner: z.string().describe('Repository owner'),
+    repo: z.string().describe('Repository name'),
+    run_id: z.number().int().describe('Workflow run ID to re-run'),
+    failed_only: z.boolean().optional().default(false).describe('Only re-run failed jobs (default: false)'),
+  }),
+};
+
+const cancelWorkflowRun: ActionDefinition = {
+  id: 'github.cancel_workflow_run',
+  name: 'Cancel Workflow Run',
+  description: 'Cancel an in-progress workflow run.',
+  riskLevel: 'medium',
+  params: z.object({
+    owner: z.string().describe('Repository owner'),
+    repo: z.string().describe('Repository name'),
+    run_id: z.number().int().describe('Workflow run ID to cancel'),
+  }),
+};
+
 const readRepoFile: ActionDefinition = {
   id: 'github.read_repo_file',
   name: 'Read Repository File',
@@ -402,6 +427,8 @@ const allActions: ActionDefinition[] = [
   listWorkflowRuns,
   getWorkflowRun,
   getJobLogs,
+  rerunWorkflow,
+  cancelWorkflowRun,
   readRepoFile,
 ];
 
@@ -411,6 +438,8 @@ const PERMISSION_HINTS: Record<string, string> = {
   'github.list_workflow_runs': 'actions:read',
   'github.get_workflow_run': 'actions:read + checks:read',
   'github.get_job_logs': 'actions:read',
+  'github.rerun_workflow': 'actions:write',
+  'github.cancel_workflow_run': 'actions:write',
   'github.create_issue': 'issues:write',
   'github.update_issue': 'issues:write',
   'github.create_comment': 'issues:write',
@@ -1099,6 +1128,45 @@ async function executeAction(
             return { success: false, error: 'Logs have expired. GitHub retains logs for 90 days by default.' };
           }
           return handleOctokitError(err, actionId, 'Get job logs');
+        }
+      }
+
+      case 'github.rerun_workflow': {
+        const p = rerunWorkflow.params.parse(params);
+        try {
+          const endpoint = p.failed_only
+            ? 'POST /repos/{owner}/{repo}/actions/runs/{run_id}/rerun-failed-jobs'
+            : 'POST /repos/{owner}/{repo}/actions/runs/{run_id}/rerun';
+          await octokit.request(endpoint, {
+            owner: p.owner, repo: p.repo, run_id: p.run_id,
+          });
+          const url = `https://github.com/${p.owner}/${p.repo}/actions/runs/${p.run_id}`;
+          return {
+            success: true,
+            data: {
+              message: p.failed_only
+                ? `Re-running failed jobs for run ${p.run_id}`
+                : `Re-running all jobs for run ${p.run_id}`,
+              url,
+            },
+          };
+        } catch (err: any) {
+          return handleOctokitError(err, actionId, 'Rerun workflow');
+        }
+      }
+
+      case 'github.cancel_workflow_run': {
+        const p = cancelWorkflowRun.params.parse(params);
+        try {
+          await octokit.request('POST /repos/{owner}/{repo}/actions/runs/{run_id}/cancel', {
+            owner: p.owner, repo: p.repo, run_id: p.run_id,
+          });
+          return {
+            success: true,
+            data: { message: `Cancelled workflow run ${p.run_id}` },
+          };
+        } catch (err: any) {
+          return handleOctokitError(err, actionId, 'Cancel workflow run');
         }
       }
 
