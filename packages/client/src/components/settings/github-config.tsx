@@ -155,7 +155,7 @@ const DEFAULT_PERMISSIONS: Record<string, string> = {
   metadata: 'read',
   pull_requests: 'write',
   issues: 'write',
-  actions: 'read',
+  actions: 'write',
   checks: 'read',
 };
 

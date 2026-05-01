@@ -140,7 +140,7 @@ adminGitHubRouter.post('/app/manifest', async (c) => {
     metadata: 'read',
     pull_requests: 'write',
     issues: 'write',
-    actions: 'read',
+    actions: 'write',
     checks: 'read',
   };
   const defaultEvents = ['push', 'pull_request'];
