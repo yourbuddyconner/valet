@@ -1143,18 +1143,29 @@ async function executeAction(
           });
 
           // The logs endpoint returns a 302 redirect to an Azure Blob Storage
-          // pre-signed URL. We must NOT let Octokit follow the redirect because
-          // Cloudflare Workers' Fetch forwards the Authorization header to the
-          // cross-origin blob URL, which Azure rejects with 403. Instead, we
-          // get the redirect URL and fetch it ourselves without auth headers.
-          const redirectResp = await octokit.request('GET /repos/{owner}/{repo}/actions/jobs/{job_id}/logs', {
-            owner: p.owner, repo: p.repo, job_id: p.job_id,
-            request: { redirect: 'manual' },
+          // pre-signed URL. We bypass Octokit for this request because
+          // Cloudflare Workers' Fetch forwards the Authorization header on
+          // cross-origin redirects, which Azure rejects with 403. We use raw
+          // fetch with redirect:'manual' to get the Location header, then
+          // fetch the blob URL without any auth headers.
+          const token = ctx.credentials.access_token || ctx.credentials.token;
+          const logsApiUrl = `https://api.github.com/repos/${p.owner}/${p.repo}/actions/jobs/${p.job_id}/logs`;
+          const redirectResp = await fetch(logsApiUrl, {
+            headers: {
+              Authorization: `token ${token}`,
+              Accept: 'application/vnd.github+json',
+              'User-Agent': 'valet-github-plugin',
+            },
+            redirect: 'manual',
           });
 
-          const logsUrl = redirectResp.headers.location;
+          const logsUrl = redirectResp.headers.get('location');
           if (!logsUrl) {
-            return { success: false, error: 'GitHub did not return a redirect URL for log download.' };
+            const body = await redirectResp.text().catch(() => '');
+            return {
+              success: false,
+              error: `Expected 302 redirect for log download, got ${redirectResp.status}. ${body}`.trim(),
+            };
           }
 
           const logsResponse = await fetch(logsUrl);
