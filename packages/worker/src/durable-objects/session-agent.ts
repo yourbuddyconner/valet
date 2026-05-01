@@ -1649,15 +1649,13 @@ export class SessionAgentDO {
       `[SessionAgentDO] handlePrompt: channel=${channelKey} runnerConnected=${runnerConnected} runnerReady=${runnerReady} runnerBusy=${runnerBusy} status=${status} sandboxId=${sandboxId || 'none'} queued=${queuedCount}`
     );
 
-    // Queue when runner isn't ready, OR when a wait_for_event subscription is active.
-    // Without the wait check, user messages dispatch directly (clearing the subscription)
-    // and pre-empt the child event the agent is waiting for — causing hallucinated
-    // responses followed by a confused second turn when the child event arrives late.
-    const waitActive = !!this.sessionState.waitSubscription;
-    if (!runnerConnected || !runnerReady || runnerBusy || waitActive) {
+    // Queue when runner isn't ready. User messages are NOT blocked by an active
+    // wait_for_event subscription — the user explicitly sending a message should
+    // override the agent's yield. The direct dispatch path clears waitSubscription,
+    // and child events arriving later are dispatched normally via handleSystemMessage.
+    if (!runnerConnected || !runnerReady || runnerBusy) {
       // ─── Enqueue path: defer message write to dispatch time ──────────
-      const reason = waitActive ? 'waiting for child event'
-        : runnerBusy ? 'runner busy'
+      const reason = runnerBusy ? 'runner busy'
         : !runnerConnected ? 'no runner connected'
         : 'runner not ready';
       console.log(`[SessionAgentDO] handlePrompt: QUEUING (${reason}) channel=${channelKey} messageId=${messageId}`);
