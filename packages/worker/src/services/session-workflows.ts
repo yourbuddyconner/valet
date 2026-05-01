@@ -695,6 +695,7 @@ export async function handleTriggerAction(
       const dispatch = await dispatchOrchestratorPrompt(env, {
         userId,
         content: prompt,
+        forceNewThread: true,
       });
       const now = new Date().toISOString();
       if (dispatch.dispatched) {

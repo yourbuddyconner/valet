@@ -205,6 +205,7 @@ export async function runTrigger(
     const dispatch = await dispatchOrchestratorPrompt(env, {
       userId,
       content: `[Today is ${scheduledDate}]\n\n${prompt}`,
+      forceNewThread: true,
     });
 
     if (dispatch.dispatched) {

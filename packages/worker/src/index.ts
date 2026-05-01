@@ -1010,6 +1010,7 @@ async function dispatchScheduledWorkflows(event: ScheduledController, env: Env):
       content: `[Today is ${scheduledDate}]\n\n${prompt}`,
       authorName: 'Scheduled Task',
       authorEmail: 'scheduled-task@valet.local',
+      forceNewThread: true,
     });
 
     if (!dispatch.dispatched) {

@@ -1,3 +1,4 @@
+import type { SessionThread } from '@valet/shared';
 import type { Env } from '../env.js';
 import * as db from '../lib/db.js';
 import type { AppDb } from '../lib/drizzle.js';
@@ -432,6 +433,8 @@ export async function dispatchOrchestratorPrompt(
     channelType?: string;
     channelId?: string;
     threadId?: string;
+    /** Always create a new thread instead of reusing the active one (e.g. for scheduled triggers). */
+    forceNewThread?: boolean;
     attachments?: Array<{ type: string; mime: string; url: string; filename?: string }>;
     /** Explicit reply target. If present, the DO auto-replies to this channel on turn complete. */
     replyTo?: { channelType: string; channelId: string };
@@ -440,7 +443,12 @@ export async function dispatchOrchestratorPrompt(
     scopeKey?: string;
   }
 ): Promise<OrchestratorPromptDispatchResult> {
-  const content = params.content.trim();
+  // When forcing a new thread, prepend a memory instruction so the agent knows
+  // it has no prior conversation context and should lean on its memory system.
+  let content = params.content.trim();
+  if (params.forceNewThread && content) {
+    content = `[This is a scheduled task running in a fresh thread — you have no prior conversation context. Use mem_search and mem_read to recall any relevant context before proceeding, and mem_write to persist important findings or decisions.]\n\n${content}`;
+  }
   if (!content && (!params.attachments || params.attachments.length === 0)) {
     return { dispatched: false, sessionId: `orchestrator:${params.userId}`, reason: 'empty_prompt' };
   }
@@ -464,13 +472,16 @@ export async function dispatchOrchestratorPrompt(
   // messages by active thread, so messages without a threadId are invisible.
   if (!params.threadId) {
     try {
-      let thread = await db.getActiveThread(env.DB, sessionId);
+      let thread: SessionThread | null = null;
+      if (!params.forceNewThread) {
+        thread = await db.getActiveThread(env.DB, sessionId);
+      }
       if (!thread) {
         const id = crypto.randomUUID();
         thread = await db.createThread(env.DB, { id, sessionId });
       }
       params.threadId = thread.id;
-      console.log(`[OrchestratorDispatch] Auto-resolved threadId=${thread.id} for session=${sessionId}`);
+      console.log(`[OrchestratorDispatch] Auto-resolved threadId=${thread.id} for session=${sessionId} forceNew=${!!params.forceNewThread}`);
     } catch (err) {
       console.warn(`[OrchestratorDispatch] Failed to resolve thread:`, err);
     }
