@@ -1142,42 +1142,31 @@ async function executeAction(
             owner: p.owner, repo: p.repo, job_id: p.job_id,
           });
 
-          // Fetch logs separately — this endpoint returns a 302 redirect to a
-          // download URL, which Octokit follows via the Fetch API.
-          let logsResp;
-          try {
-            logsResp = await octokit.request('GET /repos/{owner}/{repo}/actions/jobs/{job_id}/logs', {
-              owner: p.owner, repo: p.repo, job_id: p.job_id,
-            });
-          } catch (logsErr: any) {
-            const details = [
-              `status=${logsErr.status ?? 'unknown'}`,
-              `message=${logsErr.message ?? 'none'}`,
-              logsErr.response?.url ? `url=${logsErr.response.url}` : null,
-              logsErr.response?.data ? `data=${typeof logsErr.response.data === 'string' ? logsErr.response.data.slice(0, 200) : JSON.stringify(logsErr.response.data).slice(0, 200)}` : null,
-            ].filter(Boolean).join(', ');
-            console.error('[get_job_logs] logs fetch failed:', {
-              status: logsErr.status,
-              message: logsErr.message,
-              url: logsErr.response?.url,
-              headers: logsErr.response?.headers,
-              data: logsErr.response?.data,
-              owner: p.owner,
-              repo: p.repo,
-              job_id: p.job_id,
-            });
-            if (logsErr.status === 410) {
+          // The logs endpoint returns a 302 redirect to an Azure Blob Storage
+          // pre-signed URL. We must NOT let Octokit follow the redirect because
+          // Cloudflare Workers' Fetch forwards the Authorization header to the
+          // cross-origin blob URL, which Azure rejects with 403. Instead, we
+          // get the redirect URL and fetch it ourselves without auth headers.
+          const redirectResp = await octokit.request('GET /repos/{owner}/{repo}/actions/jobs/{job_id}/logs', {
+            owner: p.owner, repo: p.repo, job_id: p.job_id,
+            request: { redirect: 'manual' },
+          });
+
+          const logsUrl = redirectResp.headers.location;
+          if (!logsUrl) {
+            return { success: false, error: 'GitHub did not return a redirect URL for log download.' };
+          }
+
+          const logsResponse = await fetch(logsUrl);
+          if (!logsResponse.ok) {
+            if (logsResponse.status === 410) {
               return { success: false, error: 'Logs have expired. GitHub retains logs for 90 days by default.' };
             }
-            return { success: false, error: `Get job logs failed: ${details}` };
+            return { success: false, error: `Log download failed: ${logsResponse.status} ${logsResponse.statusText}` };
           }
 
           const job = jobResp.data;
-          const rawLog = typeof logsResp.data === 'string'
-            ? logsResp.data
-            : logsResp.data instanceof ArrayBuffer
-              ? new TextDecoder().decode(logsResp.data)
-              : String(logsResp.data);
+          const rawLog = await logsResponse.text();
 
           const stepsMeta = (job.steps ?? []).map((s) => ({
             name: s.name,
