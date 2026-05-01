@@ -146,4 +146,33 @@ describe('parseJobLog', () => {
     expect(result[0].truncated).toBe(false);
     expect(result[0].total_lines).toBe(3);
   });
+
+  it('clamps truncation counter to zero when most head lines are errors', () => {
+    // 20 lines, 15 are ##[error], tailLines=10 → 10 head lines dropped, but 15 errors
+    // to re-surface (only 10 are in the head though, so headErrors=10)
+    // formula: max(0, 20 - 10 - 10) = 0
+    const logLines = Array.from({ length: 20 }, (_, i) => `##[error]error at line ${i}`);
+    const raw = makeLogs([{ name: 'Build', lines: logLines }]);
+    const steps = [{ name: 'Build', conclusion: 'failure' }];
+
+    const result = parseJobLog(raw, steps, { ...defaults, tailLines: 10 });
+
+    expect(result[0].truncated).toBe(true);
+    expect(result[0].log).not.toContain('-');  // no negative number in truncation marker
+    expect(result[0].log).toContain('[truncated 0 lines]');
+  });
+
+  it('does not treat ##[group] mid-line as a step boundary', () => {
+    const raw = makeLogs([
+      { name: 'Run build', lines: ['output: ##[group]not a real step', 'more output'] },
+    ]);
+    const steps = [{ name: 'Run build', conclusion: 'success' }];
+
+    const result = parseJobLog(raw, steps, defaults);
+
+    // Should be one step, not two
+    expect(result).toHaveLength(1);
+    expect(result[0].name).toBe('Run build');
+    expect(result[0].log).toContain('##[group]not a real step');
+  });
 });

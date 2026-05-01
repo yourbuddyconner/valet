@@ -27,7 +27,7 @@ const TIMESTAMP_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+Z /;
 const ANSI_RE = /\x1b\[[0-9;]*m/g;
 
 // GitHub step markers
-const GROUP_START_RE = /##\[group\](.*)/;
+const GROUP_START_RE = /^##\[group\](.*)/;
 const GROUP_END = '##[endgroup]';
 const ERROR_MARKER = '##[error]';
 
@@ -82,7 +82,7 @@ export function parseJobLog(
       truncated = true;
       lines = [
         ...headErrors,
-        `[truncated ${totalLines - options.tailLines - headErrors.length} lines]`,
+        `[truncated ${Math.max(0, totalLines - options.tailLines - headErrors.length)} lines]`,
         ...tail,
       ];
     }
