@@ -1077,6 +1077,23 @@ async function executeAction(
             }
           }
 
+          // Deduplicate annotations by message and separate by severity.
+          // On monorepos with matrix builds, identical warnings (e.g. Node.js
+          // deprecation) repeat dozens of times and drown out actual errors.
+          const seen = new Set<string>();
+          const errorAnnotations: typeof annotations = [];
+          const warningAnnotations: typeof annotations = [];
+          for (const a of annotations) {
+            const key = `${a.annotation_level}:${a.path}:${a.start_line}:${a.message}`;
+            if (seen.has(key)) continue;
+            seen.add(key);
+            if (a.annotation_level === 'failure' || a.annotation_level === 'error') {
+              errorAnnotations.push(a);
+            } else {
+              warningAnnotations.push(a);
+            }
+          }
+
           return {
             success: true,
             data: {
@@ -1105,7 +1122,10 @@ async function executeAction(
                   number: s.number,
                 })),
               })),
-              annotations,
+              annotations: errorAnnotations,
+              warnings: warningAnnotations.length > 0
+                ? `${warningAnnotations.length} warning-level annotations omitted (use get_job_logs for details)`
+                : undefined,
             },
           };
         } catch (err: any) {
@@ -1205,7 +1225,7 @@ async function executeAction(
         const p = listWorkflows.params.parse(params);
         try {
           const { data } = await octokit.request('GET /repos/{owner}/{repo}/actions/workflows', {
-            owner: p.owner, repo: p.repo,
+            owner: p.owner, repo: p.repo, per_page: 100,
           });
           return {
             success: true,
