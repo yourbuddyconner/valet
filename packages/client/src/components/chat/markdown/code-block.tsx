@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo, memo } from 'react';
+import { useState, useCallback, useRef, useEffect, memo } from 'react';
 import { useShiki } from './use-shiki';
 
 interface CodeBlockProps {
@@ -8,11 +8,33 @@ interface CodeBlockProps {
 
 export const CodeBlock = memo(function CodeBlock({ language, children }: CodeBlockProps) {
   const { ready, highlightCode } = useShiki();
+  const [html, setHtml] = useState<string | null>(null);
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const prevCodeRef = useRef<string>('');
 
-  const html = useMemo(
-    () => (ready ? highlightCode(children, language) : null),
-    [ready, children, language, highlightCode]
-  );
+  useEffect(() => {
+    if (!ready) return;
+
+    // Debounce during streaming — if content changes rapidly, wait 150ms
+    const changed = children !== prevCodeRef.current;
+    prevCodeRef.current = children;
+
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+
+    if (changed && html !== null) {
+      // Already have a previous render — debounce updates
+      debounceRef.current = setTimeout(() => {
+        setHtml(highlightCode(children, language));
+      }, 150);
+    } else {
+      // First render — highlight immediately
+      setHtml(highlightCode(children, language));
+    }
+
+    return () => {
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+    };
+  }, [ready, children, language, highlightCode, html]);
 
   return (
     <div className="group/code overflow-hidden rounded-md border border-neutral-200 bg-white dark:border-neutral-700 dark:bg-neutral-900">
