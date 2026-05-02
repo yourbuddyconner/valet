@@ -593,7 +593,7 @@ export interface TriggerRunParams {
 }
 
 export interface GatewayCallbacks {
-  onImage?: (data: string, description: string) => void;
+  onImage?: (data: string, mimeType: string, description: string) => void;
   onSpawnChild?: (params: SpawnChildParams) => Promise<{ childSessionId: string }>;
   onTerminateChild?: (childSessionId: string) => Promise<{ success: boolean }>;
   onSelfTerminate?: () => void;
@@ -699,7 +699,7 @@ export function startGateway(port: number, callbacks: GatewayCallbacks): void {
         return c.json({ error: "Missing 'data' field" }, 400);
       }
 
-      callbacks.onImage(body.data, body.description || "Image");
+      callbacks.onImage(body.data, body.mimeType || "image/png", body.description || "Image");
       return c.json({ ok: true });
     } catch (err) {
       console.error("[Gateway] Image upload error:", err);

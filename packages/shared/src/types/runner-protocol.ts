@@ -327,6 +327,7 @@ export type RunnerToDOMessage =
       opencodeSessionId?: string;
     }
   | { type: 'question'; messageId?: string; questionId: string; text: string; options?: string[] }
+  | { type: 'image'; messageId?: string; data: string; mimeType: string; description: string }
   | { type: 'screenshot'; messageId?: string; data: string; description: string }
   | { type: 'error'; messageId: string; error: string }
   | { type: 'complete'; messageId?: string }

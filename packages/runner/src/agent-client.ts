@@ -275,8 +275,8 @@ export class AgentClient {
     this.send({ type: "question", messageId, questionId, text, options });
   }
 
-  sendScreenshot(messageId: string | undefined, data: string, description: string): void {
-    this.send({ type: "screenshot", messageId, data, description });
+  sendImage(messageId: string | undefined, data: string, mimeType: string, description: string): void {
+    this.send({ type: "image", messageId, data, mimeType, description });
   }
 
   sendError(messageId: string, error: string): void {

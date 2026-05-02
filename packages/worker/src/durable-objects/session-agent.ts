@@ -2044,7 +2044,7 @@ export class SessionAgentDO {
   }
 
   private buildRunnerHandlers(): RunnerMessageHandlers {
-    return {
+    const handlers: RunnerMessageHandlers = {
       'usage-report': (msg) => {
         const entries = msg.entries;
         if (Array.isArray(entries)) {
@@ -2198,41 +2198,47 @@ export class SessionAgentDO {
         }
       },
 
-      'screenshot': (msg) => {
+      'image': (msg) => {
         // Resolve channel explicitly from the originating prompt — never fall back
         // to a mutable "active" cursor. If the prompt_queue row is missing or lacks
         // channel context, drop the emission with a structured warning.
         if (!msg.messageId) {
-          dropEmission('no_message_id', { eventType: 'screenshot' });
+          dropEmission('no_message_id', { eventType: 'image' });
           return;
         }
-        const ssCh = this.getChannelForMessage(msg.messageId);
-        if (!ssCh) {
-          dropEmission('no_prompt_row', { eventType: 'screenshot', messageId: msg.messageId });
+        const imgCh = this.getChannelForMessage(msg.messageId);
+        if (!imgCh) {
+          dropEmission('no_prompt_row', { eventType: 'image', messageId: msg.messageId });
           return;
         }
-        // Store screenshot reference and broadcast
-        const ssId = crypto.randomUUID();
+        // Store image reference and broadcast
+        const imgId = crypto.randomUUID();
+        const mimeType = ('mimeType' in msg && msg.mimeType) ? msg.mimeType : 'image/png';
         this.messageStore.writeMessage({
-          id: ssId,
+          id: imgId,
           role: 'system',
-          content: msg.description || 'Screenshot',
-          parts: JSON.stringify({ type: 'screenshot', data: msg.data }),
-          channelType: ssCh.channelType,
-          channelId: ssCh.channelId,
+          content: msg.description || 'Image',
+          parts: JSON.stringify({ type: 'image', data: msg.data, mimeType }),
+          channelType: imgCh.channelType,
+          channelId: imgCh.channelId,
         });
         this.broadcastToClients({
           type: 'message',
           data: {
-            id: ssId,
+            id: imgId,
             role: 'system',
-            content: msg.description || 'Screenshot',
-            parts: { type: 'screenshot', data: msg.data },
+            content: msg.description || 'Image',
+            parts: { type: 'image', data: msg.data, mimeType },
             createdAt: Math.floor(Date.now() / 1000),
-            channelType: ssCh.channelType,
-            channelId: ssCh.channelId,
+            channelType: imgCh.channelType,
+            channelId: imgCh.channelId,
           },
         });
+      },
+
+      'screenshot': (msg) => {
+        // Backward-compat shim: delegate to 'image' handler
+        handlers['image']!({ ...msg, type: 'image' as const, mimeType: 'image/png' });
       },
 
       'audio-transcript': (msg) => {
@@ -3519,6 +3525,7 @@ export class SessionAgentDO {
         this.runnerLink.send({ type: 'pong' });
       },
     };
+    return handlers;
   }
 
 

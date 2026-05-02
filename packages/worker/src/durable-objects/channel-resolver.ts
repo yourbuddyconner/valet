@@ -1,7 +1,7 @@
 /**
  * channel-resolver — deterministic channel lookup for outbound emissions.
  *
- * Every outbound emission (error, question, screenshot, status, approval, etc.)
+ * Every outbound emission (error, question, image, status, approval, etc.)
  * must carry the messageId of the prompt it belongs to. This helper resolves
  * the channel attribution from the prompt_queue row for that messageId.
  *

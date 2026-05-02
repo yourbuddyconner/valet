@@ -584,7 +584,7 @@ export class PromptHandler {
    * `handlePrompt` (finalizeSyncResponse, attemptModelFailover,
    * ensureTurnCreated, etc.) that haven't been refactored to take an
    * explicit `channel` parameter. Also backs `getActiveMessageId()` used
-   * by `bin.ts` gateway callbacks (screenshot / image uploads) which have
+   * by `bin.ts` gateway callbacks (image uploads) which have
    * no channel context at their call site.
    *
    * Renamed from `activeChannel` in Task 13 to make the scoping contract
@@ -729,8 +729,8 @@ export class PromptHandler {
   }
 
   /**
-   * Exposes the active prompt's messageId for emit paths (screenshot, image
-   * uploads, etc.) that need to attribute outbound messages to the in-flight
+   * Exposes the active prompt's messageId for emit paths (image uploads,
+   * etc.) that need to attribute outbound messages to the in-flight
    * prompt's channel. Reads from `currentPromptChannel` which is set by
    * `handlePrompt` while dispatching a prompt, and temporarily by
    * `consumeEventStream` while routing SSE events. Returns undefined between

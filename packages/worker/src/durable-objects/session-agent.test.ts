@@ -1552,27 +1552,28 @@ describe('SessionAgentDO', () => {
     });
   });
 
-  it('drops screenshot emission when prompt_queue has no row for messageId', async () => {
+  it('drops image emission when prompt_queue has no row for messageId', async () => {
     const { agent, broadcasts } = await createTestAgent();
     const writeMessageSpy = vi.spyOn((agent as any).messageStore, 'writeMessage');
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
-    await (agent as any).runnerHandlers.screenshot({
-      type: 'screenshot',
+    await (agent as any).runnerHandlers.image({
+      type: 'image',
       messageId: 'nonexistent',
       data: 'base64data',
-      description: 'A screenshot',
+      mimeType: 'image/png',
+      description: 'An image',
     });
 
     expect(warnSpy).toHaveBeenCalledWith(
       '[ChannelRouting] dropped emission',
-      expect.objectContaining({ reason: 'no_prompt_row', eventType: 'screenshot', messageId: 'nonexistent' }),
+      expect.objectContaining({ reason: 'no_prompt_row', eventType: 'image', messageId: 'nonexistent' }),
     );
     expect(writeMessageSpy).not.toHaveBeenCalled();
     expect(broadcasts.find((m) => m.type === 'message')).toBeUndefined();
   });
 
-  it('attributes screenshot to channel from prompt_queue lookup', async () => {
+  it('attributes image to channel from prompt_queue lookup', async () => {
     const { agent, broadcasts } = await createTestAgent();
     (agent as any).promptQueue.enqueue({
       id: 'msg-1',
@@ -1583,9 +1584,51 @@ describe('SessionAgentDO', () => {
     });
     const writeMessageSpy = vi.spyOn((agent as any).messageStore, 'writeMessage');
 
+    await (agent as any).runnerHandlers.image({
+      type: 'image',
+      messageId: 'msg-1',
+      data: 'base64data',
+      mimeType: 'image/png',
+      description: 'An image',
+    });
+
+    expect(writeMessageSpy).toHaveBeenCalledTimes(1);
+    expect(writeMessageSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        role: 'system',
+        content: 'An image',
+        parts: expect.stringContaining('image'),
+        channelType: 'slack',
+        channelId: 'C123',
+      }),
+    );
+
+    const imgBroadcast = broadcasts.find((m) => m.type === 'message');
+    expect(imgBroadcast).toMatchObject({
+      type: 'message',
+      data: expect.objectContaining({
+        role: 'system',
+        content: 'An image',
+        channelType: 'slack',
+        channelId: 'C123',
+      }),
+    });
+  });
+
+  it('screenshot handler delegates to image handler for backward compat', async () => {
+    const { agent, broadcasts } = await createTestAgent();
+    (agent as any).promptQueue.enqueue({
+      id: 'msg-2',
+      content: 'hi',
+      status: 'processing',
+      channelType: 'slack',
+      channelId: 'C456',
+    });
+    const writeMessageSpy = vi.spyOn((agent as any).messageStore, 'writeMessage');
+
     await (agent as any).runnerHandlers.screenshot({
       type: 'screenshot',
-      messageId: 'msg-1',
+      messageId: 'msg-2',
       data: 'base64data',
       description: 'A screenshot',
     });
@@ -1595,22 +1638,11 @@ describe('SessionAgentDO', () => {
       expect.objectContaining({
         role: 'system',
         content: 'A screenshot',
-        parts: expect.stringContaining('screenshot'),
+        parts: expect.stringContaining('image'),
         channelType: 'slack',
-        channelId: 'C123',
+        channelId: 'C456',
       }),
     );
-
-    const ssBroadcast = broadcasts.find((m) => m.type === 'message');
-    expect(ssBroadcast).toMatchObject({
-      type: 'message',
-      data: expect.objectContaining({
-        role: 'system',
-        content: 'A screenshot',
-        channelType: 'slack',
-        channelId: 'C123',
-      }),
-    });
   });
 
   it('broadcasts agentStatus without channel attribution when messageId is absent', async () => {
