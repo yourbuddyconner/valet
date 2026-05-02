@@ -251,19 +251,39 @@ function slimChannel(ch: Record<string, unknown>): Record<string, unknown> {
 
 function slimMessage(msg: Record<string, unknown>): Record<string, unknown> {
   const reply_count = typeof msg.reply_count === 'number' ? msg.reply_count : undefined;
+
+  // Extract file metadata (skip deleted/tombstone files)
+  const rawFiles = Array.isArray(msg.files) ? (msg.files as Record<string, unknown>[]) : [];
+  const files = rawFiles
+    .filter((f) => f.mode !== 'tombstone')
+    .map((f) => ({
+      name: f.name,
+      mimetype: f.mimetype,
+      size: f.size,
+      url: f.url_private,
+      filetype: f.filetype,
+    }));
+
+  // Extract reaction summary (names + counts only — get_reactions has full user lists)
+  const rawReactions = Array.isArray(msg.reactions) ? (msg.reactions as Record<string, unknown>[]) : [];
+  const reactions = rawReactions.map((r) => ({
+    name: r.name,
+    count: r.count,
+  }));
+
   return {
     user: msg.user,
-    // bot_id present (without user) = message posted by a bot/integration
     bot_id: msg.bot_id || undefined,
+    subtype: msg.subtype || undefined,
     text: msg.text,
     ts: msg.ts,
-    // thread_ts present + different from ts = this is a reply surfaced into the channel
     thread_ts: msg.thread_ts || undefined,
-    // reply_count > 0 = this message is a thread parent with replies (worth reading via read_thread)
     reply_count,
     reply_users_count: reply_count !== undefined
       ? (typeof msg.reply_users_count === 'number' ? msg.reply_users_count : undefined)
       : undefined,
+    files: files.length > 0 ? files : undefined,
+    reactions: reactions.length > 0 ? reactions : undefined,
   };
 }
 
