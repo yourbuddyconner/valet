@@ -112,6 +112,117 @@ const allActions: ActionDefinition[] = [
   listUsers,
 ];
 
+// ─── Slack Entity Resolution ────────────────────────────────────────────────
+
+const SLACK_USER_MENTION_RE = /<@([UW][A-Z0-9]+)(?:\|[^>]*)?>/g;
+const SLACK_CHANNEL_MENTION_RE = /<#([C][A-Z0-9]+)(?:\|([^>]*))?>/g;
+
+/** Module-level caches — survive across requests within a worker isolate. */
+const userCache = new Map<string, string>();
+const channelCache = new Map<string, string>();
+const botCache = new Map<string, string>();
+
+function formatUserDisplay(uid: string, user: Record<string, unknown>): string {
+  const profile = (user.profile || {}) as Record<string, unknown>;
+  const handle = ((profile.display_name as string) || (user.name as string) || uid);
+  const realName = ((profile.real_name as string) || (user.real_name as string) || '');
+  if (realName && realName !== handle) {
+    return `@${handle} <${realName}> (${uid})`;
+  }
+  return `@${handle} (${uid})`;
+}
+
+/** Resolve all Slack entity references in messages — users, channels, bots.
+ *  Adds `user_display` / `bot_display` fields and resolves mentions in text. Raw IDs are preserved. */
+async function resolveAndEnrichMessages(token: string, messages: Record<string, unknown>[]): Promise<Record<string, unknown>[]> {
+  // Collect IDs to resolve
+  const userIds = new Set<string>();
+  const channelIds = new Set<string>();
+  const botIds = new Set<string>();
+
+  for (const msg of messages) {
+    if (typeof msg.user === 'string' && /^[UW]/.test(msg.user)) userIds.add(msg.user);
+    if (typeof msg.bot_id === 'string') botIds.add(msg.bot_id as string);
+    if (typeof msg.text === 'string') {
+      for (const m of msg.text.matchAll(SLACK_USER_MENTION_RE)) userIds.add(m[1]);
+      for (const m of msg.text.matchAll(SLACK_CHANNEL_MENTION_RE)) {
+        // If the label is already present (e.g. <#C123|general>), cache it directly
+        if (m[2]) {
+          channelCache.set(m[1], `#${m[2]}`);
+        } else {
+          channelIds.add(m[1]);
+        }
+      }
+    }
+  }
+
+  // Fetch uncached entities in parallel
+  const fetches: Promise<void>[] = [];
+
+  for (const uid of userIds) {
+    if (userCache.has(uid)) continue;
+    fetches.push(
+      slackGet('users.info', token, { user: uid }).then(async (res) => {
+        if (!res.ok) return;
+        const data = (await res.json()) as { ok: boolean; user?: Record<string, unknown> };
+        if (data.ok && data.user) userCache.set(uid, formatUserDisplay(uid, data.user));
+      }).catch(() => {}),
+    );
+  }
+
+  for (const cid of channelIds) {
+    if (channelCache.has(cid)) continue;
+    fetches.push(
+      slackGet('conversations.info', token, { channel: cid }).then(async (res) => {
+        if (!res.ok) return;
+        const data = (await res.json()) as { ok: boolean; channel?: Record<string, unknown> };
+        if (data.ok && data.channel) channelCache.set(cid, `#${data.channel.name} (${cid})`);
+      }).catch(() => {}),
+    );
+  }
+
+  for (const bid of botIds) {
+    if (botCache.has(bid)) continue;
+    fetches.push(
+      slackGet('bots.info', token, { bot: bid }).then(async (res) => {
+        if (!res.ok) return;
+        const data = (await res.json()) as { ok: boolean; bot?: Record<string, unknown> };
+        if (data.ok && data.bot) botCache.set(bid, (data.bot.name as string) || bid);
+      }).catch(() => {}),
+    );
+  }
+
+  if (fetches.length > 0) await Promise.all(fetches);
+
+  // Enrich messages from caches
+  return messages.map((msg) => {
+    const enriched = { ...msg };
+
+    if (typeof msg.user === 'string') {
+      const display = userCache.get(msg.user);
+      if (display) enriched.user_display = display;
+    }
+
+    if (typeof msg.bot_id === 'string') {
+      const name = botCache.get(msg.bot_id as string);
+      if (name) enriched.bot_display = name;
+    }
+
+    if (typeof msg.text === 'string') {
+      let text = msg.text as string;
+      text = text.replace(SLACK_USER_MENTION_RE, (_match, uid: string) => {
+        return userCache.get(uid) || `@${uid}`;
+      });
+      text = text.replace(SLACK_CHANNEL_MENTION_RE, (_match, cid: string, label?: string) => {
+        return channelCache.get(cid) || (label ? `#${label}` : `#${cid}`);
+      });
+      enriched.text = text;
+    }
+
+    return enriched;
+  });
+}
+
 // ─── Response Helpers ─────────────────────────────────────────────────────────
 
 function slimUser(u: Record<string, unknown>): Record<string, unknown> {
@@ -142,6 +253,8 @@ function slimMessage(msg: Record<string, unknown>): Record<string, unknown> {
   const reply_count = typeof msg.reply_count === 'number' ? msg.reply_count : undefined;
   return {
     user: msg.user,
+    // bot_id present (without user) = message posted by a bot/integration
+    bot_id: msg.bot_id || undefined,
     text: msg.text,
     ts: msg.ts,
     // thread_ts present + different from ts = this is a reply surfaced into the channel
@@ -309,6 +422,9 @@ async function executeAction(
         if (p.threads_only) {
           messages = messages.filter((m) => typeof m.reply_count === 'number' && m.reply_count > 0);
         }
+
+        messages = await resolveAndEnrichMessages(token, messages);
+
         const next_cursor = data.response_metadata?.next_cursor || undefined;
         const filtered = p.filter || p.threads_only;
         // Put pagination metadata first — large message arrays may be truncated by tool output limits
@@ -330,7 +446,11 @@ async function executeAction(
         const data = (await res.json()) as { ok: boolean; error?: string; messages?: unknown[]; has_more?: boolean; response_metadata?: { next_cursor?: string } };
         if (!data.ok) return slackError(res, data);
 
-        const messages = (data.messages || []).map((m) => slimMessage(m as Record<string, unknown>));
+        const messages = await resolveAndEnrichMessages(
+          token,
+          (data.messages || []).map((m) => slimMessage(m as Record<string, unknown>)),
+        );
+
         const next_cursor = data.response_metadata?.next_cursor || undefined;
         return { success: true, data: { has_more: data.has_more, next_cursor, total: messages.length, messages } };
       }
