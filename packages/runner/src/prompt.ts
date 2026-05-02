@@ -3779,7 +3779,7 @@ export class PromptHandler {
       if (toolResult && typeof toolResult === 'object' && !Array.isArray(toolResult)) {
         const result = toolResult as Record<string, unknown>;
         if (Array.isArray(result.images) && result.images.length > 0) {
-          const messageId = this.getActiveMessageId();
+          const messageId = channel.activeMessageId ?? undefined;
           for (const img of result.images as Array<{ data: string; mimeType: string; description: string }>) {
             if (img.data && img.mimeType) {
               this.agentClient.sendImage(messageId, img.data, img.mimeType, img.description || 'Image');
