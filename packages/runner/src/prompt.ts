@@ -3775,6 +3775,25 @@ export class PromptHandler {
       const toolResult = state.output ?? null;
       console.log(`[PromptHandler] Tool "${toolName}" completed (output: ${typeof toolResult === "string" ? toolResult.length + " chars" : "null"})`);
 
+      // Extract images from action results and route to agent vision context
+      if (toolResult && typeof toolResult === 'object' && !Array.isArray(toolResult)) {
+        const result = toolResult as Record<string, unknown>;
+        if (Array.isArray(result.images) && result.images.length > 0) {
+          const messageId = this.getActiveMessageId();
+          for (const img of result.images as Array<{ data: string; mimeType: string; description: string }>) {
+            if (img.data && img.mimeType) {
+              this.agentClient.sendImage(messageId, img.data, img.mimeType, img.description || 'Image');
+            }
+          }
+          // Strip base64 data from the tool result so it doesn't bloat the text output
+          result.images = (result.images as Array<Record<string, unknown>>).map((img) => ({
+            description: img.description,
+            mimeType: img.mimeType,
+            sent_to_vision: true,
+          }));
+        }
+      }
+
       this.agentClient.sendToolUpdate(channel.turnId!, callID, toolName, "completed", state.input ?? undefined, toolResult ?? undefined);
 
       // wait_for_event: yield. Register the subscription with the DO and call
