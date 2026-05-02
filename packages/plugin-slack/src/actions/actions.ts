@@ -138,7 +138,7 @@ const getChannelInfo: ActionDefinition = {
 const getReactions: ActionDefinition = {
   id: 'slack.get_reactions',
   name: 'Get Reactions',
-  description: 'Get reactions on a specific message with the list of who reacted. Use when you need to know who agreed/acknowledged, not just the count from read_history.',
+  description: 'Get reactions on a specific message with who reacted. Note: Slack may not return all reactors — count is always accurate but the users list can be truncated on popular messages.',
   riskLevel: 'low',
   params: z.object({
     channel: z.string().describe('Channel ID (C...)'),
@@ -309,13 +309,18 @@ function slimMessage(msg: Record<string, unknown>): Record<string, unknown> {
   const rawFiles = Array.isArray(msg.files) ? (msg.files as Record<string, unknown>[]) : [];
   const files = rawFiles
     .filter((f) => f.mode !== 'tombstone')
-    .map((f) => ({
-      name: f.name,
-      mimetype: f.mimetype,
-      size: f.size,
-      url: f.url_private,
-      filetype: f.filetype,
-    }));
+    .map((f) => {
+      const entry: Record<string, unknown> = {
+        name: f.name,
+        mimetype: f.mimetype || undefined,
+        size: f.size,
+        url: f.url_private,
+        filetype: f.filetype,
+      };
+      // External files (Google Docs, etc.) have non-Slack URLs that can't be fetched via fetch_file
+      if (f.is_external) entry.is_external = true;
+      return entry;
+    });
 
   // Extract reaction summary (names + counts only — get_reactions has full user lists)
   const rawReactions = Array.isArray(msg.reactions) ? (msg.reactions as Record<string, unknown>[]) : [];
@@ -560,7 +565,7 @@ async function executeAction(
           return { success: false, error: 'Invalid URL' };
         }
         if (!parsedUrl.hostname.endsWith('.slack.com')) {
-          return { success: false, error: 'URL must be a files.slack.com URL from the files array in message data' };
+          return { success: false, error: 'This is an external file (e.g. Google Docs). Open the URL directly — it cannot be fetched through Slack. Only files hosted on Slack (files.slack.com) can be downloaded.' };
         }
 
         const res = await fetch(p.url, {
@@ -643,7 +648,7 @@ async function executeAction(
           .filter((item) => item.type === 'file' && item.file)
           .map((item) => {
             const f = item.file as Record<string, unknown>;
-            return { type: 'file', name: f.name, mimetype: f.mimetype, size: f.size, url: f.url_private };
+            return { type: 'file', name: f.name, mimetype: f.mimetype || undefined, size: f.size, url: f.url_private };
           });
 
         return { success: true, data: { total: pins.length + fileItems.length, pins, ...(fileItems.length > 0 ? { files: fileItems } : {}) } };
@@ -654,12 +659,26 @@ async function executeAction(
         const denied = await guardPrivateChannel(token, p.channel, ctx);
         if (denied) return denied;
 
-        const res = await slackGet('conversations.info', token, { channel: p.channel });
+        const res = await slackGet('conversations.info', token, { channel: p.channel, include_num_members: true });
         if (!res.ok) return slackError(res);
         const data = (await res.json()) as { ok: boolean; error?: string; channel?: Record<string, unknown> };
         if (!data.ok) return slackError(res, data);
         const ch = data.channel;
         if (!ch) return { success: false, error: 'Channel not found' };
+
+        // DMs and group DMs don't have topic/purpose/creator
+        if (ch.is_im || ch.is_mpim) {
+          return {
+            success: true,
+            data: {
+              id: ch.id,
+              is_im: ch.is_im || false,
+              is_mpim: ch.is_mpim || false,
+              num_members: ch.num_members,
+              created: ch.created,
+            },
+          };
+        }
 
         const topic = (ch.topic || {}) as Record<string, unknown>;
         const purpose = (ch.purpose || {}) as Record<string, unknown>;

@@ -5694,37 +5694,9 @@ export class SessionAgentDO {
       });
     }
 
-    // Send action images to agent vision context before the tool result
-    if (result.images?.length) {
-      const imgCh = this.promptQueue.getProcessingChannelTarget();
-      for (const img of result.images) {
-        const imgId = crypto.randomUUID();
-        const channelType = imgCh?.channelType || 'web';
-        const channelId = imgCh?.channelId || '';
-        this.messageStore.writeMessage({
-          id: imgId,
-          role: 'system',
-          content: img.description || 'Image',
-          parts: JSON.stringify({ type: 'image', data: img.data, mimeType: img.mimeType }),
-          channelType,
-          channelId,
-        });
-        this.broadcastToClients({
-          type: 'message',
-          data: {
-            id: imgId,
-            role: 'system',
-            content: img.description || 'Image',
-            parts: { type: 'image', data: img.data, mimeType: img.mimeType },
-            createdAt: Math.floor(Date.now() / 1000),
-            channelType,
-            channelId,
-          },
-        });
-      }
-    }
-
-    // Send result to runner
+    // Send result to runner — include images so the gateway can route them
+    // through /api/image to reach the agent's vision context. Storage/broadcast
+    // happens when the image arrives back via the 'image' WebSocket handler.
     if (!result.success) {
       this.runnerLink.send({ type: 'call-tool-result', requestId, error: result.error || 'Action failed' } as any);
     } else {
