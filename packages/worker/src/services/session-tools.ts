@@ -69,6 +69,8 @@ export interface ExecuteActionResult {
   success: boolean;
   data?: unknown;
   error?: string;
+  /** Images to inject into the agent's vision context */
+  images?: Array<{ data: string; mimeType: string; description: string }>;
   /** Analytics events emitted by the action plugin */
   analyticsEvents: Array<{ eventType: string; durationMs?: number; properties?: Record<string, unknown> }>;
   durationMs: number;
@@ -519,6 +521,7 @@ export async function executeAction(
     success: actionResult.success,
     data: actionResult.success ? actionResult.data : undefined,
     error: actionResult.success ? undefined : (actionResult.error || 'Action failed'),
+    images: actionResult.images,
     analyticsEvents: collectedEvents,
     durationMs,
   };

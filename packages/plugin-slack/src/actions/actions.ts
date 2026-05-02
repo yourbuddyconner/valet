@@ -570,7 +570,8 @@ async function executeAction(
           return { success: false, error: `Failed to fetch file: ${res.status} ${res.statusText}` };
         }
 
-        const contentType = res.headers.get('content-type') || 'application/octet-stream';
+        const rawContentType = res.headers.get('content-type') || 'application/octet-stream';
+        const contentType = rawContentType.split(';')[0].trim();
         const MAX_IMAGE_SIZE = 10 * 1024 * 1024;
         const MAX_TEXT_SIZE = 1 * 1024 * 1024;
 
