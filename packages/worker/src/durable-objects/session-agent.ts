@@ -5694,13 +5694,41 @@ export class SessionAgentDO {
       });
     }
 
-    // Send result to runner — include images so the gateway can route them
-    // through /api/image to reach the agent's vision context. Storage/broadcast
-    // happens when the image arrives back via the 'image' WebSocket handler.
+    // Broadcast action images directly as session messages so they appear
+    // inline in the chat UI. Resolve channel from the processing prompt.
+    if (result.success && Array.isArray(result.images) && result.images.length > 0) {
+      const imgCh = this.promptQueue.getProcessingChannelTarget();
+      for (const img of result.images) {
+        if (!img.data || !img.mimeType) continue;
+        const imgId = crypto.randomUUID();
+        this.messageStore.writeMessage({
+          id: imgId,
+          role: 'system',
+          content: img.description || 'Image',
+          parts: JSON.stringify({ type: 'image', data: img.data, mimeType: img.mimeType }),
+          ...(imgCh?.channelType ? { channelType: imgCh.channelType } : {}),
+          ...(imgCh?.channelId ? { channelId: imgCh.channelId } : {}),
+        });
+        this.broadcastToClients({
+          type: 'message',
+          data: {
+            id: imgId,
+            role: 'system',
+            content: img.description || 'Image',
+            parts: { type: 'image', data: img.data, mimeType: img.mimeType },
+            createdAt: Math.floor(Date.now() / 1000),
+            ...(imgCh?.channelType ? { channelType: imgCh.channelType } : {}),
+            ...(imgCh?.channelId ? { channelId: imgCh.channelId } : {}),
+          },
+        });
+      }
+    }
+
+    // Send result to runner (metadata only — images are broadcast above)
     if (!result.success) {
       this.runnerLink.send({ type: 'call-tool-result', requestId, error: result.error || 'Action failed' } as any);
     } else {
-      this.runnerLink.send({ type: 'call-tool-result', requestId, result: result.data, images: result.images } as any);
+      this.runnerLink.send({ type: 'call-tool-result', requestId, result: result.data } as any);
     }
   }
 

@@ -1656,18 +1656,7 @@ export function startGateway(port: number, callbacks: GatewayCallbacks): void {
       if (!body.toolId) {
         return c.json({ error: "Missing required field: toolId" }, 400);
       }
-      const result = await callbacks.onCallTool(body.toolId, body.params || {}, body.summary) as Record<string, unknown>;
-
-      // Route action images through the /api/image path so they reach the agent's vision context
-      if (Array.isArray(result.images) && callbacks.onImage) {
-        for (const img of result.images as Array<{ data: string; mimeType: string; description: string }>) {
-          if (img.data && img.mimeType) {
-            callbacks.onImage(img.data, img.mimeType, img.description || 'Image');
-          }
-        }
-        delete result.images;
-      }
-
+      const result = await callbacks.onCallTool(body.toolId, body.params || {}, body.summary);
       return c.json(result);
     } catch (err) {
       console.error("[Gateway] Call tool error:", err);
