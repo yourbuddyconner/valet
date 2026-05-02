@@ -236,7 +236,7 @@ export type DOToRunnerMessage =
         message: string;
       }>;
     }
-  | { type: 'call-tool-result'; requestId: string; result?: unknown; error?: string }
+  | { type: 'call-tool-result'; requestId: string; result?: unknown; error?: string; images?: Array<{ data: string; mimeType: string; description: string }> }
   | {
       type: 'skill-api-result';
       requestId: string;

@@ -794,7 +794,7 @@ export class AgentClient {
     });
   }
 
-  requestCallTool(toolId: string, params: Record<string, unknown>, summary?: string): Promise<{ result: unknown }> {
+  requestCallTool(toolId: string, params: Record<string, unknown>, summary?: string): Promise<{ result: unknown; images?: Array<{ data: string; mimeType: string; description: string }> }> {
     const requestId = crypto.randomUUID();
     return this.createPendingRequest(requestId, TOOL_OP_TIMEOUT_MS, () => {
       this.send({ type: "call-tool", requestId, toolId, params, summary });
@@ -1329,7 +1329,7 @@ export class AgentClient {
           if (msg.error) {
             this.rejectPendingRequest(msg.requestId, msg.error);
           } else {
-            this.resolvePendingRequest(msg.requestId, { result: msg.result, images: (msg as Record<string, unknown>).images });
+            this.resolvePendingRequest(msg.requestId, { result: msg.result, images: msg.images });
           }
           break;
 

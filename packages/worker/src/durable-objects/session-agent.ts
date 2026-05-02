@@ -5733,11 +5733,16 @@ export class SessionAgentDO {
       }
     }
 
-    // Send result to runner (metadata only — images are broadcast above)
+    // Send result to runner — include images so the agent can post them
+    // out-of-band via /api/image for vision context.
     if (!result.success) {
       this.runnerLink.send({ type: 'call-tool-result', requestId, error: result.error || 'Action failed' } as any);
     } else {
-      this.runnerLink.send({ type: 'call-tool-result', requestId, result: result.data } as any);
+      const msg: Record<string, unknown> = { type: 'call-tool-result', requestId, result: result.data };
+      if (Array.isArray(result.images) && result.images.length > 0) {
+        msg.images = result.images;
+      }
+      this.runnerLink.send(msg as any);
     }
   }
 

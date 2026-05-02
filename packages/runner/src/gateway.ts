@@ -658,7 +658,7 @@ export interface GatewayCallbacks {
   onChannelReply?: (channelType: string, channelId: string, message: string, imageBase64?: string, imageMimeType?: string, followUp?: boolean, fileBase64?: string, fileMimeType?: string, fileName?: string) => Promise<{ success: boolean }>;
   // Tool Discovery & Invocation
   onListTools?: (service?: string, query?: string) => Promise<{ tools: unknown[]; warnings?: Array<{ service: string; displayName: string; reason: string; message: string }> }>;
-  onCallTool?: (toolId: string, params: Record<string, unknown>, summary?: string) => Promise<{ result: unknown }>;
+  onCallTool?: (toolId: string, params: Record<string, unknown>, summary?: string) => Promise<{ result: unknown; images?: Array<{ data: string; mimeType: string; description: string }> }>;
   // Skill API
   onSkillApi?: (action: string, payload?: Record<string, unknown>) => Promise<{ data?: unknown; error?: string; statusCode?: number }>;
   // Persona API

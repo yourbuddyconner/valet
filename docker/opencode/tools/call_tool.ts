@@ -45,16 +45,43 @@ export default tool({
         return `Tool call failed: ${errText}`
       }
 
-      const data = (await res.json()) as { result?: unknown; error?: string }
+      const data = (await res.json()) as { result?: unknown; error?: string; images?: Array<{ data: string; mimeType: string; description: string }> }
       if (data.error) {
         return `Tool error: ${data.error}`
       }
 
-      if (data.result === undefined || data.result === null) {
-        return "Tool executed successfully (no data returned)."
+      const text = data.result === undefined || data.result === null
+        ? "Tool executed successfully (no data returned)."
+        : formatOutput(data.result)
+
+      // Return images as attachments so OpenCode includes them as vision
+      // content blocks the LLM can see. Also post to /api/image for web UI.
+      if (Array.isArray(data.images) && data.images.length > 0) {
+        const attachments: Array<{ type: "file"; mime: string; url: string }> = []
+        for (const img of data.images) {
+          if (!img.data || !img.mimeType) continue
+          attachments.push({
+            type: "file",
+            mime: img.mimeType,
+            url: `data:${img.mimeType};base64,${img.data}`,
+          })
+          // Also send to web UI chat
+          fetch("http://localhost:9000/api/image", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              data: img.data,
+              description: img.description || "Image",
+              mimeType: img.mimeType,
+            }),
+          }).catch(() => {})
+        }
+        if (attachments.length > 0) {
+          return { output: text, attachments }
+        }
       }
 
-      return formatOutput(data.result)
+      return text
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
       return `Failed to call tool: ${msg}`
