@@ -108,7 +108,7 @@ const listUsers: ActionDefinition = {
 const fetchFile: ActionDefinition = {
   id: 'slack.fetch_file',
   name: 'Fetch File',
-  description: 'Download a file from Slack. For images, the content is returned visually so you can see it. For text files, the content is returned as text. Use the url from the files array in message data.',
+  description: 'Download a file from Slack. For images, the content is returned visually so you can see it. For text files, the content is returned as text. Use the url from the files array in message data. IMPORTANT: Call this tool one at a time, not in parallel — each image fetch interrupts the session to deliver the image to your vision.',
   riskLevel: 'low',
   params: z.object({
     url: z.string().describe('Slack file URL (from the files array in message data)'),
