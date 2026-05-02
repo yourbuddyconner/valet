@@ -125,6 +125,16 @@ const getPins: ActionDefinition = {
   }),
 };
 
+const getChannelInfo: ActionDefinition = {
+  id: 'slack.get_channel_info',
+  name: 'Get Channel Info',
+  description: 'Get detailed information about a channel: topic, purpose, member count, creation date, creator. Useful when reading a channel for the first time — save the context to memory so you do not re-fetch.',
+  riskLevel: 'low',
+  params: z.object({
+    channel: z.string().describe('Channel ID (C...)'),
+  }),
+};
+
 const allActions: ActionDefinition[] = [
   dmOwner,
   dmUser,
@@ -135,6 +145,7 @@ const allActions: ActionDefinition[] = [
   listUsers,
   fetchFile,
   getPins,
+  getChannelInfo,
 ];
 
 const NOISE_SUBTYPES = new Set([
@@ -605,6 +616,54 @@ async function executeAction(
         );
 
         return { success: true, data: { total: pins.length, pins } };
+      }
+
+      case 'slack.get_channel_info': {
+        const p = getChannelInfo.params.parse(params);
+        const denied = await guardPrivateChannel(token, p.channel, ctx);
+        if (denied) return denied;
+
+        const res = await slackGet('conversations.info', token, { channel: p.channel });
+        if (!res.ok) return slackError(res);
+        const data = (await res.json()) as { ok: boolean; error?: string; channel?: Record<string, unknown> };
+        if (!data.ok) return slackError(res, data);
+        const ch = data.channel;
+        if (!ch) return { success: false, error: 'Channel not found' };
+
+        const topic = (ch.topic || {}) as Record<string, unknown>;
+        const purpose = (ch.purpose || {}) as Record<string, unknown>;
+
+        // Resolve creator through user cache
+        let creatorDisplay: string | undefined;
+        if (typeof ch.creator === 'string') {
+          if (!userCache.has(ch.creator as string)) {
+            try {
+              const userRes = await slackGet('users.info', token, { user: ch.creator });
+              if (userRes.ok) {
+                const userData = (await userRes.json()) as { ok: boolean; user?: Record<string, unknown> };
+                if (userData.ok && userData.user) {
+                  userCache.set(ch.creator as string, formatUserDisplay(ch.creator as string, userData.user));
+                }
+              }
+            } catch { /* leave unresolved */ }
+          }
+          creatorDisplay = userCache.get(ch.creator as string) || (ch.creator as string);
+        }
+
+        return {
+          success: true,
+          data: {
+            id: ch.id,
+            name: ch.name,
+            is_private: ch.is_private || false,
+            is_archived: ch.is_archived || false,
+            topic: topic.value || undefined,
+            purpose: purpose.value || undefined,
+            num_members: ch.num_members,
+            created: ch.created,
+            creator: creatorDisplay,
+          },
+        };
       }
 
       default:
