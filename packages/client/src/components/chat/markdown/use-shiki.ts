@@ -56,7 +56,12 @@ export function useShiki() {
 
   useEffect(() => {
     if (!ready) {
-      getHighlighter().then(() => setReady(true));
+      getHighlighter()
+        .then(() => setReady(true))
+        .catch(() => {
+          // Shiki failed to load — reset so we can retry
+          highlighterPromise = null;
+        });
     }
   }, [ready]);
 
