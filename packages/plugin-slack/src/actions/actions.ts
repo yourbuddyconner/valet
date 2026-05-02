@@ -135,6 +135,17 @@ const getChannelInfo: ActionDefinition = {
   }),
 };
 
+const getReactions: ActionDefinition = {
+  id: 'slack.get_reactions',
+  name: 'Get Reactions',
+  description: 'Get reactions on a specific message with the list of who reacted. Use when you need to know who agreed/acknowledged, not just the count from read_history.',
+  riskLevel: 'low',
+  params: z.object({
+    channel: z.string().describe('Channel ID (C...)'),
+    timestamp: z.string().describe('Message timestamp'),
+  }),
+};
+
 const allActions: ActionDefinition[] = [
   dmOwner,
   dmUser,
@@ -146,6 +157,7 @@ const allActions: ActionDefinition[] = [
   fetchFile,
   getPins,
   getChannelInfo,
+  getReactions,
 ];
 
 const NOISE_SUBTYPES = new Set([
@@ -664,6 +676,61 @@ async function executeAction(
             creator: creatorDisplay,
           },
         };
+      }
+
+      case 'slack.get_reactions': {
+        const p = getReactions.params.parse(params);
+        const denied = await guardPrivateChannel(token, p.channel, ctx);
+        if (denied) return denied;
+
+        const res = await slackGet('reactions.get', token, {
+          channel: p.channel,
+          timestamp: p.timestamp,
+          full: true,
+        });
+        if (!res.ok) return slackError(res);
+        const data = (await res.json()) as { ok: boolean; error?: string; message?: Record<string, unknown> };
+        if (!data.ok) return slackError(res, data);
+        const msg = data.message;
+        if (!msg) return { success: false, error: 'Message not found' };
+
+        const rawReactions = Array.isArray(msg.reactions) ? (msg.reactions as Record<string, unknown>[]) : [];
+        if (rawReactions.length === 0) {
+          return { success: true, data: { reactions: [] } };
+        }
+
+        // Collect all user IDs across all reactions for batch resolution
+        const allUserIds = new Set<string>();
+        for (const r of rawReactions) {
+          if (Array.isArray(r.users)) {
+            for (const uid of r.users as string[]) allUserIds.add(uid);
+          }
+        }
+
+        // Resolve uncached users
+        const uncached = [...allUserIds].filter((uid) => !userCache.has(uid));
+        if (uncached.length > 0) {
+          await Promise.all(
+            uncached.map(async (uid) => {
+              try {
+                const userRes = await slackGet('users.info', token, { user: uid });
+                if (!userRes.ok) return;
+                const userData = (await userRes.json()) as { ok: boolean; user?: Record<string, unknown> };
+                if (userData.ok && userData.user) userCache.set(uid, formatUserDisplay(uid, userData.user));
+              } catch { /* leave unresolved */ }
+            }),
+          );
+        }
+
+        const reactions = rawReactions.map((r) => ({
+          name: r.name,
+          count: r.count,
+          users: (Array.isArray(r.users) ? (r.users as string[]) : []).map(
+            (uid) => userCache.get(uid) || uid,
+          ),
+        }));
+
+        return { success: true, data: { reactions } };
       }
 
       default:
