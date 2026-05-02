@@ -625,16 +625,28 @@ async function executeAction(
         const data = (await res.json()) as { ok: boolean; error?: string; items?: unknown[] };
         if (!data.ok) return slackError(res, data);
 
-        const rawMessages = (data.items || [])
-          .map((item) => (item as Record<string, unknown>).message as Record<string, unknown> | undefined)
-          .filter((msg): msg is Record<string, unknown> => msg !== undefined);
+        const items = (data.items || []).map((item) => item as Record<string, unknown>);
+
+        // pins.list returns items with type "message", "file", or "file_comment"
+        // Only message-type pins have a .message object we can slim/enrich
+        const messageItems = items
+          .filter((item) => item.type === 'message' && item.message)
+          .map((item) => item.message as Record<string, unknown>);
 
         const pins = await resolveAndEnrichMessages(
           token,
-          rawMessages.map((m) => slimMessage(m)),
+          messageItems.map((m) => slimMessage(m)),
         );
 
-        return { success: true, data: { total: pins.length, pins } };
+        // Surface pinned files separately (name + metadata only)
+        const fileItems = items
+          .filter((item) => item.type === 'file' && item.file)
+          .map((item) => {
+            const f = item.file as Record<string, unknown>;
+            return { type: 'file', name: f.name, mimetype: f.mimetype, size: f.size, url: f.url_private };
+          });
+
+        return { success: true, data: { total: pins.length + fileItems.length, pins, ...(fileItems.length > 0 ? { files: fileItems } : {}) } };
       }
 
       case 'slack.get_channel_info': {
