@@ -1329,7 +1329,7 @@ export class AgentClient {
           if (msg.error) {
             this.rejectPendingRequest(msg.requestId, msg.error);
           } else {
-            this.resolvePendingRequest(msg.requestId, { result: msg.result });
+            this.resolvePendingRequest(msg.requestId, { result: msg.result, images: (msg as Record<string, unknown>).images });
           }
           break;
 

@@ -5728,7 +5728,7 @@ export class SessionAgentDO {
     if (!result.success) {
       this.runnerLink.send({ type: 'call-tool-result', requestId, error: result.error || 'Action failed' } as any);
     } else {
-      this.runnerLink.send({ type: 'call-tool-result', requestId, result: result.data } as any);
+      this.runnerLink.send({ type: 'call-tool-result', requestId, result: result.data, images: result.images } as any);
     }
   }
 

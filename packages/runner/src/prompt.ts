@@ -3775,7 +3775,10 @@ export class PromptHandler {
       const toolResult = state.output ?? null;
       console.log(`[PromptHandler] Tool "${toolName}" completed (output: ${typeof toolResult === "string" ? toolResult.length + " chars" : "null"})`);
 
-      // Extract images from action results and route to agent vision context
+      // Extract images from tool results that return structured objects with an images array.
+      // For actions via call_tool, images are routed through the gateway's /api/image path instead
+      // (see gateway.ts /api/tools/call handler). This handles the case where a sandbox tool
+      // returns structured output with images directly.
       if (toolResult && typeof toolResult === 'object' && !Array.isArray(toolResult)) {
         const result = toolResult as Record<string, unknown>;
         if (Array.isArray(result.images) && result.images.length > 0) {
