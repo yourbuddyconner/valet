@@ -571,15 +571,22 @@ async function executeAction(
         }
 
         const contentType = res.headers.get('content-type') || 'application/octet-stream';
-        const contentLength = parseInt(res.headers.get('content-length') || '0', 10);
+        const MAX_IMAGE_SIZE = 10 * 1024 * 1024;
+        const MAX_TEXT_SIZE = 1 * 1024 * 1024;
 
         // Image files — return via the images pipeline so the agent can see them
         if (contentType.startsWith('image/')) {
-          if (contentLength > 10 * 1024 * 1024) {
-            return { success: false, error: `Image too large (${Math.round(contentLength / 1024 / 1024)}MB). Max 10MB.` };
-          }
           const buf = await res.arrayBuffer();
-          const base64 = btoa(String.fromCharCode(...new Uint8Array(buf)));
+          if (buf.byteLength > MAX_IMAGE_SIZE) {
+            return { success: false, error: `Image too large (${Math.round(buf.byteLength / 1024 / 1024)}MB). Max 10MB.` };
+          }
+          // Safe base64 encoding that doesn't hit V8's argument limit
+          const bytes = new Uint8Array(buf);
+          let binary = '';
+          for (let i = 0; i < bytes.length; i++) {
+            binary += String.fromCharCode(bytes[i]);
+          }
+          const base64 = btoa(binary);
           const filename = parsedUrl.pathname.split('/').pop() || 'image';
           return {
             success: true,
@@ -590,10 +597,10 @@ async function executeAction(
 
         // Text files — return content directly
         if (contentType.startsWith('text/') || contentType === 'application/json' || contentType === 'application/xml') {
-          if (contentLength > 1 * 1024 * 1024) {
-            return { success: false, error: `File too large for text extraction (${Math.round(contentLength / 1024)}KB). Max 1MB.` };
-          }
           const text = await res.text();
+          if (text.length > MAX_TEXT_SIZE) {
+            return { success: false, error: `File too large for text extraction (${Math.round(text.length / 1024)}KB). Max 1MB.` };
+          }
           return { success: true, data: { content: text, mimetype: contentType } };
         }
 
@@ -602,7 +609,6 @@ async function executeAction(
           success: true,
           data: {
             mimetype: contentType,
-            size: contentLength,
             note: 'File type is not viewable. Only images and text files can be fetched.',
           },
         };
