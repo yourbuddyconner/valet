@@ -78,6 +78,9 @@ const readHistory: ActionDefinition = {
     latest: z.string().optional().describe('Only messages before this Unix ts. Inclusive. Defaults to now.'),
     filter: z.string().optional().describe('Case-insensitive keyword filter applied client-side. Only messages whose text contains this substring are returned. Pagination still advances through all messages — use has_more/next_cursor to continue.'),
     threads_only: z.boolean().optional().describe('When true, only return messages that have thread replies (reply_count > 0). Useful for finding discussions in noisy alert channels.'),
+    include_subtypes: z.boolean().optional().describe(
+      'When true, include system messages (joins, topic changes, etc.). Default false — only human/bot conversation.'
+    ),
   }),
 };
 
@@ -111,6 +114,11 @@ const allActions: ActionDefinition[] = [
   readThread,
   listUsers,
 ];
+
+const NOISE_SUBTYPES = new Set([
+  'channel_join', 'channel_leave', 'channel_topic', 'channel_purpose',
+  'channel_name', 'bot_add', 'bot_remove', 'channel_archive', 'channel_unarchive',
+]);
 
 // ─── Slack Entity Resolution ────────────────────────────────────────────────
 
@@ -441,6 +449,12 @@ async function executeAction(
         }
         if (p.threads_only) {
           messages = messages.filter((m) => typeof m.reply_count === 'number' && m.reply_count > 0);
+        }
+        if (!p.include_subtypes) {
+          messages = messages.filter((m) => {
+            const subtype = m.subtype as string | undefined;
+            return !subtype || !NOISE_SUBTYPES.has(subtype);
+          });
         }
 
         messages = await resolveAndEnrichMessages(token, messages);
