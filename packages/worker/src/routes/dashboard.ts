@@ -66,7 +66,7 @@ dashboardRouter.get('/stats', async (c) => {
     db.getOrgSessionAggregate(c.env.DB, periodStartStr),
     db.getUserSessionAggregate(c.env.DB, user.id, periodStartStr),
     db.getPrevPeriodAggregate(c.env.DB, prevPeriodStartStr, periodStartStr),
-    db.getSessionActivityByDay(c.env.DB, periodStartStr, Math.max(1, Math.ceil(periodHours / 24))),
+    db.getSessionActivityByDay(c.env.DB, periodStartStr),
     db.getTopReposBySessionCount(c.env.DB, periodStartStr, 8),
     db.getRecentUserSessions(c.env.DB, user.id, 10),
     db.getActiveUserSessions(c.env.DB, user.id),

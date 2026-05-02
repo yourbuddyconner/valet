@@ -135,13 +135,12 @@ export async function getPrevPeriodAggregate(
 
 export async function getSessionActivityByDay(
   db: D1Database,
-  periodStart: string,
-  periodDays: number
+  periodStart: string
 ): Promise<ActivityRow[]> {
   const result = await db
     .prepare(`
       WITH RECURSIVE dates(date) AS (
-        SELECT date(?, '-' || ? || ' days')
+        SELECT date(?)
         UNION ALL
         SELECT date(date, '+1 day') FROM dates WHERE date < date('now')
       ),
@@ -175,7 +174,7 @@ export async function getSessionActivityByDay(
       LEFT JOIN message_counts mc ON mc.day = d.date
       ORDER BY d.date
     `)
-    .bind(periodStart, periodDays, periodStart, periodStart)
+    .bind(periodStart, periodStart, periodStart)
     .all();
 
   return (result.results ?? []).map((r: Record<string, unknown>) => ({
