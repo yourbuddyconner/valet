@@ -577,14 +577,23 @@ async function executeAction(
 
         const rawContentType = res.headers.get('content-type') || 'application/octet-stream';
         const contentType = rawContentType.split(';')[0].trim();
-        const MAX_IMAGE_SIZE = 10 * 1024 * 1024;
+        // Images up to 1MB get broadcast to the chat UI; larger ones return metadata only
+        const MAX_IMAGE_DISPLAY = 1 * 1024 * 1024;
+        const MAX_IMAGE_FETCH = 10 * 1024 * 1024;
         const MAX_TEXT_SIZE = 1 * 1024 * 1024;
 
-        // Image files — return via the images pipeline so the agent can see them
+        // Image files — return via the images pipeline so the user can see them in the chat UI
         if (contentType.startsWith('image/')) {
           const buf = await res.arrayBuffer();
-          if (buf.byteLength > MAX_IMAGE_SIZE) {
+          const filename = parsedUrl.pathname.split('/').pop() || 'image';
+          if (buf.byteLength > MAX_IMAGE_FETCH) {
             return { success: false, error: `Image too large (${Math.round(buf.byteLength / 1024 / 1024)}MB). Max 10MB.` };
+          }
+          if (buf.byteLength > MAX_IMAGE_DISPLAY) {
+            return {
+              success: true,
+              data: { filename, mimetype: contentType, size: buf.byteLength, note: 'Image too large to display inline in chat.' },
+            };
           }
           // Safe base64 encoding that doesn't hit V8's argument limit
           const bytes = new Uint8Array(buf);
@@ -593,7 +602,6 @@ async function executeAction(
             binary += String.fromCharCode(bytes[i]);
           }
           const base64 = btoa(binary);
-          const filename = parsedUrl.pathname.split('/').pop() || 'image';
           return {
             success: true,
             data: { filename, mimetype: contentType, size: buf.byteLength },

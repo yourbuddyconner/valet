@@ -5694,31 +5694,40 @@ export class SessionAgentDO {
       });
     }
 
-    // Broadcast action images directly as session messages so they appear
-    // inline in the chat UI. Resolve channel from the processing prompt.
+    // Broadcast action images directly to connected clients (in-memory, no
+    // SQLite persistence — base64 payloads can exceed D1 row limits). The
+    // message store gets a lightweight placeholder so history shows something.
     if (result.success && Array.isArray(result.images) && result.images.length > 0) {
       const imgCh = this.promptQueue.getProcessingChannelTarget();
       for (const img of result.images) {
         if (!img.data || !img.mimeType) continue;
         const imgId = crypto.randomUUID();
+        const description = img.description || 'Image';
+        const channelFields = {
+          ...(imgCh?.channelType ? { channelType: imgCh.channelType } : {}),
+          ...(imgCh?.channelId ? { channelId: imgCh.channelId } : {}),
+        };
+
+        // Persist a lightweight placeholder (no base64) so chat history
+        // records that an image was shown, without bloating D1.
         this.messageStore.writeMessage({
           id: imgId,
           role: 'system',
-          content: img.description || 'Image',
-          parts: JSON.stringify({ type: 'image', data: img.data, mimeType: img.mimeType }),
-          ...(imgCh?.channelType ? { channelType: imgCh.channelType } : {}),
-          ...(imgCh?.channelId ? { channelId: imgCh.channelId } : {}),
+          content: description,
+          parts: JSON.stringify({ type: 'image_ref', mimeType: img.mimeType, description }),
+          ...channelFields,
         });
+
+        // Broadcast the full image data in-memory to connected clients
         this.broadcastToClients({
           type: 'message',
           data: {
             id: imgId,
             role: 'system',
-            content: img.description || 'Image',
+            content: description,
             parts: { type: 'image', data: img.data, mimeType: img.mimeType },
             createdAt: Math.floor(Date.now() / 1000),
-            ...(imgCh?.channelType ? { channelType: imgCh.channelType } : {}),
-            ...(imgCh?.channelId ? { channelId: imgCh.channelId } : {}),
+            ...channelFields,
           },
         });
       }
