@@ -55,6 +55,8 @@ export interface ActionResult<T = unknown> {
   success: boolean;
   data?: T;
   error?: string;
+  /** Images to inject into the agent's vision context via the image protocol. */
+  images?: Array<{ data: string; mimeType: string; description: string }>;
 }
 
 /** Context passed to listActions for credential-dependent sources (e.g. MCP). */
