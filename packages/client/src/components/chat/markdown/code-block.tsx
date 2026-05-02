@@ -46,11 +46,11 @@ export const CodeBlock = memo(function CodeBlock({ language, children }: CodeBlo
       </div>
       {html ? (
         <div
-          className="shiki-wrapper overflow-x-auto p-3 [&_pre]:!m-0 [&_pre]:!bg-transparent [&_pre]:!p-0 [&_code]:font-mono [&_code]:text-[12px] [&_code]:leading-relaxed"
+          className="shiki-wrapper p-3 text-neutral-800 dark:text-neutral-200 [&_pre]:!m-0 [&_pre]:!bg-transparent [&_pre]:!p-0 [&_pre]:!whitespace-pre-wrap [&_pre]:!break-words [&_code]:font-mono [&_code]:text-[12px] [&_code]:leading-relaxed"
           dangerouslySetInnerHTML={{ __html: html }}
         />
       ) : (
-        <pre className="overflow-x-auto p-3">
+        <pre className="whitespace-pre-wrap break-words p-3">
           <code className="font-mono text-[12px] leading-relaxed text-neutral-800 dark:text-neutral-200">
             {children}
           </code>

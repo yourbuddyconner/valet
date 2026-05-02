@@ -153,9 +153,15 @@
   .user-bubble .group\/code > div:first-child span {
     @apply text-white/60 dark:text-neutral-500;
   }
-  /* Fallback (non-highlighted) code text inside user bubble */
-  .user-bubble .group\/code pre code {
-    @apply text-white/90 dark:text-neutral-800;
+  /* Code text inside user bubble — override Shiki inline styles since the
+     bubble inverts light/dark and Shiki renders for the page-level theme */
+  .user-bubble .group\/code pre code,
+  .user-bubble .shiki-wrapper .shiki span {
+    color: rgba(255, 255, 255, 0.9) !important;
+  }
+  .dark .user-bubble .group\/code pre code,
+  .dark .user-bubble .shiki-wrapper .shiki span {
+    color: rgb(38 38 38) !important;
   }
 
   /* Inline code inside user bubbles */
@@ -203,24 +209,11 @@
     @apply text-neutral-400 dark:text-neutral-500;
   }
 
-  /* Shiki dual-theme support — fallback colors match github-light / github-dark defaults
-     so text stays legible even when Shiki doesn't emit per-token CSS variables (e.g. plaintext) */
-  .shiki-wrapper .shiki,
-  .shiki-wrapper .shiki span {
-    color: var(--shiki-light, #24292e) !important;
+  /* Shiki renders with a single theme (light or dark) based on the current
+     mode, so inline color values are already correct. Just strip the theme
+     background from <pre> so the container background shows through. */
+  .shiki-wrapper .shiki {
     background-color: transparent !important;
-  }
-
-  .dark .shiki-wrapper .shiki,
-  .dark .shiki-wrapper .shiki span {
-    color: var(--shiki-dark, #e1e4e8) !important;
-    background-color: transparent !important;
-  }
-
-  /* User bubble has inverted colors (light bg in dark mode) — use light shiki theme */
-  .dark .user-bubble .shiki-wrapper .shiki,
-  .dark .user-bubble .shiki-wrapper .shiki span {
-    color: var(--shiki-light, #24292e) !important;
   }
 
   /* Mobile session-info sheet readability/tap sizing */
