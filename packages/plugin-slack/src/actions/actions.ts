@@ -115,6 +115,16 @@ const fetchFile: ActionDefinition = {
   }),
 };
 
+const getPins: ActionDefinition = {
+  id: 'slack.get_pins',
+  name: 'Get Pins',
+  description: 'Get pinned messages in a channel. Returns messages in the same format as read_history. Useful for understanding what a channel considers important.',
+  riskLevel: 'low',
+  params: z.object({
+    channel: z.string().describe('Channel ID (C...)'),
+  }),
+};
+
 const allActions: ActionDefinition[] = [
   dmOwner,
   dmUser,
@@ -124,6 +134,7 @@ const allActions: ActionDefinition[] = [
   readThread,
   listUsers,
   fetchFile,
+  getPins,
 ];
 
 const NOISE_SUBTYPES = new Set([
@@ -572,6 +583,28 @@ async function executeAction(
             note: 'File type is not viewable. Only images and text files can be fetched.',
           },
         };
+      }
+
+      case 'slack.get_pins': {
+        const p = getPins.params.parse(params);
+        const denied = await guardPrivateChannel(token, p.channel, ctx);
+        if (denied) return denied;
+
+        const res = await slackGet('pins.list', token, { channel: p.channel });
+        if (!res.ok) return slackError(res);
+        const data = (await res.json()) as { ok: boolean; error?: string; items?: unknown[] };
+        if (!data.ok) return slackError(res, data);
+
+        const rawMessages = (data.items || [])
+          .map((item) => (item as Record<string, unknown>).message as Record<string, unknown> | undefined)
+          .filter((msg): msg is Record<string, unknown> => msg !== undefined);
+
+        const pins = await resolveAndEnrichMessages(
+          token,
+          rawMessages.map((m) => slimMessage(m)),
+        );
+
+        return { success: true, data: { total: pins.length, pins } };
       }
 
       default:
