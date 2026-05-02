@@ -450,6 +450,10 @@ export class ChannelSession {
    *  Used to suppress the "operation was aborted" assistant error that follows
    *  the abort — it's the expected outcome of yielding, not a real failure. */
   abortedForYield = false;
+  /** Set when call_tool returned images and we aborted to re-send with vision. */
+  abortedForVision = false;
+  /** Image attachments to include when re-sending after a vision abort. */
+  pendingVisionAttachments: PromptAttachment[] = [];
   failoverInProgress = false;
   syncPromptInFlight = false;
   retryPending = false;
@@ -494,6 +498,8 @@ export class ChannelSession {
     this.recentEventTrace = [];
     this.waitForEventForced = false;
     this.abortedForYield = false;
+    this.abortedForVision = false;
+    this.pendingVisionAttachments = [];
     this.syncPromptInFlight = false;
     this.awaitingAssistantForAttempt = false;
     this.turnCreated = false;
@@ -738,6 +744,24 @@ export class PromptHandler {
    */
   getActiveMessageId(): string | undefined {
     return this.currentPromptChannel?.activeMessageId ?? undefined;
+  }
+
+  /**
+   * Store images returned by an action so the current turn can be aborted
+   * and re-sent with the images as vision attachments.
+   */
+  setPendingVisionImages(images: Array<{ data: string; mimeType: string; description: string }>): void {
+    const ch = this.currentPromptChannel;
+    if (!ch) {
+      console.warn('[PromptHandler] setPendingVisionImages: no active channel — images dropped');
+      return;
+    }
+    ch.pendingVisionAttachments = images.map((img) => ({
+      type: 'file' as const,
+      mime: img.mimeType,
+      url: `data:${img.mimeType};base64,${img.data}`,
+      filename: img.description,
+    }));
   }
 
   /** Get or create a ChannelSession for the given channel. */
@@ -1628,6 +1652,23 @@ export class PromptHandler {
             console.log(`[PromptHandler] Suppressing post-yield responseError: ${responseError}`);
             responseError = null;
           }
+          // Vision abort: re-send the prompt with images attached.
+          if (responseError && channel.abortedForVision && /aborted/i.test(responseError)) {
+            console.log(`[PromptHandler] Vision abort response — re-sending with ${channel.pendingVisionAttachments.length} image(s)`);
+            const visionAttachments = channel.pendingVisionAttachments;
+            channel.pendingVisionAttachments = [];
+            channel.abortedForVision = false;
+            channel.resetPromptState();
+            await this.sendPromptAsync(
+              channel.opencodeSessionId!,
+              'The requested image(s) are attached. Describe what you see and continue with your task.',
+              undefined,
+              visionAttachments,
+            );
+            // Don't finalize — the SSE stream from the re-sent prompt will
+            // drive further events and finalization via the normal idle path.
+            return;
+          }
           const errorMsg = responseError || this.lastError;
 
           console.log(
@@ -1672,6 +1713,21 @@ export class PromptHandler {
           if (channel.abortedForYield && /aborted/i.test(errMsg)) {
             console.log(`[PromptHandler] Suppressing post-yield sync exception: ${errMsg}`);
             await this.finalizeSyncResponse(channel, null, null);
+            return;
+          }
+          // Vision abort: re-send with images.
+          if (channel.abortedForVision && /aborted/i.test(errMsg)) {
+            console.log(`[PromptHandler] Vision abort exception — re-sending with ${channel.pendingVisionAttachments.length} image(s)`);
+            const visionAttachments = channel.pendingVisionAttachments;
+            channel.pendingVisionAttachments = [];
+            channel.abortedForVision = false;
+            channel.resetPromptState();
+            await this.sendPromptAsync(
+              channel.opencodeSessionId!,
+              'The requested image(s) are attached. Describe what you see and continue with your task.',
+              undefined,
+              visionAttachments,
+            );
             return;
           }
           if (isRetriableProviderError(errMsg)) {
@@ -1742,8 +1798,8 @@ export class PromptHandler {
     // Suppress abort errors that follow a wait_for_event yield-abort. The sync
     // prompt HTTP call returns the abort as an error response, but it's the
     // expected outcome of yielding — not a real failure to surface.
-    if (error && channel.abortedForYield && /aborted/i.test(error)) {
-      console.log(`[PromptHandler] Suppressing post-yield finalize error: ${error}`);
+    if (error && (channel.abortedForYield || channel.abortedForVision) && /aborted/i.test(error)) {
+      console.log(`[PromptHandler] Suppressing post-abort finalize error: ${error}`);
       error = null;
     }
 
@@ -3540,8 +3596,8 @@ export class PromptHandler {
         const rawError = props.error ?? props.message ?? props.description;
         const errorMsg = openCodeErrorToMessage(rawError) ?? "Unknown agent error";
         // Suppress abort errors from a yield (wait_for_event) — expected, not a failure.
-        if (eventChannel.abortedForYield && /aborted/i.test(errorMsg)) {
-          console.log(`[PromptHandler] Suppressing post-yield session.error: ${errorMsg}`);
+        if ((eventChannel.abortedForYield || eventChannel.abortedForVision) && /aborted/i.test(errorMsg)) {
+          console.log(`[PromptHandler] Suppressing post-abort session.error: ${errorMsg}`);
           break;
         }
         console.error(`[PromptHandler] session.error: ${errorMsg}`);
@@ -3821,6 +3877,29 @@ export class PromptHandler {
         }
       }
 
+      // Vision abort: if call_tool returned images (stored by bin.ts
+      // onCallTool callback), abort the current turn so we can re-send
+      // the prompt with images as file attachments. On resume, the LLM
+      // sees the images and can describe them.
+      if (toolName === "call_tool" && channel.pendingVisionAttachments.length > 0) {
+        console.log(`[PromptHandler] call_tool returned ${channel.pendingVisionAttachments.length} image(s) — aborting for vision re-send`);
+        // Send images to DO for web UI display
+        const messageId = channel.activeMessageId ?? undefined;
+        for (const att of channel.pendingVisionAttachments) {
+          // Extract base64 from data URL for the DO image broadcast
+          const commaIdx = att.url.indexOf(',');
+          if (commaIdx !== -1) {
+            this.agentClient.sendImage(messageId, att.url.slice(commaIdx + 1), att.mime, att.filename || 'Image');
+          }
+        }
+        const ocSessionId = channel.opencodeSessionId;
+        if (ocSessionId) {
+          channel.abortedForVision = true;
+          fetch(`${this.opencodeUrl}/session/${ocSessionId}/abort`, { method: "POST" })
+            .catch((err) => console.warn(`[PromptHandler] vision abort failed:`, err));
+        }
+      }
+
     } else if (currentStatus === "error") {
       console.log(`[PromptHandler] Tool "${toolName}" error: ${state.error}`);
       this.agentClient.sendToolUpdate(channel.turnId!, callID, toolName, "error", state.input ?? undefined, undefined, state.error ?? undefined);
@@ -3867,8 +3946,8 @@ export class PromptHandler {
         // Suppress the "operation was aborted" error that follows a yield-abort
         // from wait_for_event — the abort is the expected outcome of yielding,
         // not a real failure to surface to the user.
-        if (channel.abortedForYield && /aborted/i.test(assistantError)) {
-          console.log(`[PromptHandler] Suppressing post-yield abort error: ${assistantError}`);
+        if ((channel.abortedForYield || channel.abortedForVision) && /aborted/i.test(assistantError)) {
+          console.log(`[PromptHandler] Suppressing post-abort error: ${assistantError}`);
         } else {
           channel.lastError = assistantError;
           channel.recentEventTrace.push(`assistant.error:${assistantError.slice(0, 120)}`);

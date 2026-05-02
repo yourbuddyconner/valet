@@ -355,7 +355,13 @@ async function main() {
           throw new Error(`Tool "${toolId}" is not available for this persona`);
         }
       }
-      return await agentClient.requestCallTool(toolId, params, summary);
+      const callResult = await agentClient.requestCallTool(toolId, params, summary);
+      // If the action returned images, hand them to the PromptHandler so it
+      // can abort the current turn and re-send with vision attachments.
+      if (callResult.images?.length) {
+        promptHandler?.setPendingVisionImages(callResult.images);
+      }
+      return { result: callResult.result };
     },
     // Skill API
     onSkillApi: async (action, payload) => {
