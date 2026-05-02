@@ -105,6 +105,16 @@ const listUsers: ActionDefinition = {
   params: z.object({}),
 };
 
+const fetchFile: ActionDefinition = {
+  id: 'slack.fetch_file',
+  name: 'Fetch File',
+  description: 'Download a file from Slack. For images, the content is returned visually so you can see it. For text files, the content is returned as text. Use the url from the files array in message data.',
+  riskLevel: 'low',
+  params: z.object({
+    url: z.string().describe('Slack file URL (from the files array in message data)'),
+  }),
+};
+
 const allActions: ActionDefinition[] = [
   dmOwner,
   dmUser,
@@ -113,6 +123,7 @@ const allActions: ActionDefinition[] = [
   readHistory,
   readThread,
   listUsers,
+  fetchFile,
 ];
 
 const NOISE_SUBTYPES = new Set([
@@ -502,6 +513,65 @@ async function executeAction(
           .map(slimUser);
 
         return { success: true, data: { members } };
+      }
+
+      case 'slack.fetch_file': {
+        const p = fetchFile.params.parse(params);
+
+        // Only allow files.slack.com URLs
+        let parsedUrl: URL;
+        try {
+          parsedUrl = new URL(p.url);
+        } catch {
+          return { success: false, error: 'Invalid URL' };
+        }
+        if (!parsedUrl.hostname.endsWith('.slack.com')) {
+          return { success: false, error: 'URL must be a files.slack.com URL from the files array in message data' };
+        }
+
+        const res = await fetch(p.url, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (!res.ok) {
+          return { success: false, error: `Failed to fetch file: ${res.status} ${res.statusText}` };
+        }
+
+        const contentType = res.headers.get('content-type') || 'application/octet-stream';
+        const contentLength = parseInt(res.headers.get('content-length') || '0', 10);
+
+        // Image files — return via the images pipeline so the agent can see them
+        if (contentType.startsWith('image/')) {
+          if (contentLength > 10 * 1024 * 1024) {
+            return { success: false, error: `Image too large (${Math.round(contentLength / 1024 / 1024)}MB). Max 10MB.` };
+          }
+          const buf = await res.arrayBuffer();
+          const base64 = btoa(String.fromCharCode(...new Uint8Array(buf)));
+          const filename = parsedUrl.pathname.split('/').pop() || 'image';
+          return {
+            success: true,
+            data: { filename, mimetype: contentType, size: buf.byteLength },
+            images: [{ data: base64, mimeType: contentType, description: filename }],
+          };
+        }
+
+        // Text files — return content directly
+        if (contentType.startsWith('text/') || contentType === 'application/json' || contentType === 'application/xml') {
+          if (contentLength > 1 * 1024 * 1024) {
+            return { success: false, error: `File too large for text extraction (${Math.round(contentLength / 1024)}KB). Max 1MB.` };
+          }
+          const text = await res.text();
+          return { success: true, data: { content: text, mimetype: contentType } };
+        }
+
+        // Other file types — return metadata only
+        return {
+          success: true,
+          data: {
+            mimetype: contentType,
+            size: contentLength,
+            note: 'File type is not viewable. Only images and text files can be fetched.',
+          },
+        };
       }
 
       default:
