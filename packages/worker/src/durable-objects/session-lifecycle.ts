@@ -244,6 +244,13 @@ export class SessionLifecycle {
    * Automatically includes the idle timeout deadline if configured.
    * Pass additional deadlines from subsystems (prompt expiry, followups, etc.).
    */
+  /**
+   * Minimum re-check interval when a deadline is already past.
+   * Prevents tight alarm loops from expired-but-unactionable deadlines
+   * (e.g., watchdog deadline expired while runner is still connected).
+   */
+  private static readonly MIN_PAST_DEADLINE_DELAY_MS = 30_000;
+
   scheduleAlarm(externalDeadlines: (number | null)[]): void {
     let earliest = Infinity;
 
@@ -263,6 +270,14 @@ export class SessionLifecycle {
     }
 
     if (earliest < Infinity) {
+      // If the earliest deadline is already past, clamp to a minimum delay.
+      // This prevents tight alarm loops when a deadline has expired but its
+      // handler's preconditions aren't met (e.g., stuck-processing watchdog
+      // fires after 5 min but runner is still connected — nothing to do).
+      const now = Date.now();
+      if (earliest <= now) {
+        earliest = now + SessionLifecycle.MIN_PAST_DEADLINE_DELAY_MS;
+      }
       this.ctx.storage.setAlarm(earliest);
     }
   }

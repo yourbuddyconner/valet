@@ -38,3 +38,39 @@ describe('SessionLifecycle.snapshotSandbox', () => {
     );
   });
 });
+
+describe('SessionLifecycle.scheduleAlarm', () => {
+  it('clamps past deadlines to at least 30s in the future', () => {
+    const setAlarm = vi.fn();
+    const state = {
+      idleTimeoutMs: 0,
+      lastUserActivityAt: 0,
+    } as any;
+    const ctx = { storage: { setAlarm } } as unknown as DurableObjectState;
+    const lifecycle = new SessionLifecycle(state, ctx);
+
+    const pastDeadline = Date.now() - 60_000; // 1 minute ago
+    lifecycle.scheduleAlarm([pastDeadline]);
+
+    expect(setAlarm).toHaveBeenCalledTimes(1);
+    const scheduledTime = setAlarm.mock.calls[0][0] as number;
+    // Should be at least 29s in the future (allowing 1s for test execution)
+    expect(scheduledTime).toBeGreaterThan(Date.now() + 29_000);
+    expect(scheduledTime).toBeLessThanOrEqual(Date.now() + 31_000);
+  });
+
+  it('does not clamp future deadlines', () => {
+    const setAlarm = vi.fn();
+    const state = {
+      idleTimeoutMs: 0,
+      lastUserActivityAt: 0,
+    } as any;
+    const ctx = { storage: { setAlarm } } as unknown as DurableObjectState;
+    const lifecycle = new SessionLifecycle(state, ctx);
+
+    const futureDeadline = Date.now() + 120_000; // 2 minutes from now
+    lifecycle.scheduleAlarm([futureDeadline]);
+
+    expect(setAlarm).toHaveBeenCalledWith(futureDeadline);
+  });
+});

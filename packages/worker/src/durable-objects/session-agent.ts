@@ -4972,9 +4972,15 @@ export class SessionAgentDO {
       .toArray();
     const followupMs = (nextFollowup[0]?.next as number) || null;
 
-    // Stuck-processing watchdog
+    // Stuck-processing watchdog — wake up 5 min after dispatch to check.
+    // Skip past deadlines when the runner is connected: the prompt is actively
+    // being processed and the health monitor would skip anyway.
     const dispatchMs = this.promptQueue.lastPromptDispatchedAt;
-    const watchdog = dispatchMs > 0 ? dispatchMs + 5 * 60 * 1000 : null;
+    const watchdogRaw = dispatchMs > 0 ? dispatchMs + 5 * 60 * 1000 : null;
+    const now = Date.now();
+    const watchdog = watchdogRaw && !(watchdogRaw <= now && this.runnerLink.isConnected)
+      ? watchdogRaw
+      : null;
 
     // Error safety-net
     const safetyNet = this.promptQueue.errorSafetyNetAt || null;
@@ -4987,9 +4993,13 @@ export class SessionAgentDO {
       ? this.runnerDisconnectedAt + SessionAgentDO.RUNNER_GRACE_PERIOD_MS
       : null;
 
-    // Idle-queue-stuck watchdog (items queued with runnerBusy=false)
+    // Idle-queue-stuck watchdog (items queued with runnerBusy=false).
+    // Skip when runner is disconnected — can't drain, and runner reconnection
+    // will reschedule alarms with fresh deadlines.
     const idleQueued = this.promptQueue.idleQueuedSince;
-    const idleQueueDeadline = idleQueued > 0 ? idleQueued + 60 * 1000 : null;
+    const idleQueueDeadline = idleQueued > 0 && this.runnerLink.isConnected
+      ? idleQueued + 60 * 1000
+      : null;
 
     // Ready timeout (runner connected but never became ready).
     // Only schedule if the deadline is still in the future — once past,
