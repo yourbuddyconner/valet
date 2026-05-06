@@ -165,6 +165,7 @@ describe("decision gates: pending -> expired", () => {
           type: "approval",
           title: "expire me",
           expiresAt: Date.now() + 30, // expires 30ms from now
+          resumeKey: "expire-me-1",
         });
         return { text: "should not reach" };
       },

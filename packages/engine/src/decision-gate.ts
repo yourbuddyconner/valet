@@ -130,16 +130,29 @@ export function isDecisionGateExpired(err: unknown): err is DecisionGateExpiredE
   return err instanceof DecisionGateExpiredError;
 }
 
-export function fromRequest(
-  req: DecisionGateRequest,
-  sessionId: string,
-  threadId: string,
-): DecisionGate {
+export interface GateContext {
+  sessionId: string;
+  threadId: string;
+  queueItemId: string;
+  resumeKey: string;
+}
+
+export function deterministicGateId(ctx: GateContext): string {
+  return `gate:${ctx.sessionId}:${ctx.threadId}:${ctx.queueItemId}:${ctx.resumeKey}`;
+}
+
+export function fromRequest(req: DecisionGateRequest, gateCtx: GateContext): DecisionGate {
+  if (!req.resumeKey) {
+    throw new Error(
+      "DecisionGateRequest.resumeKey is required for restart-safe gates. " +
+        "Tools must supply a stable key per suspension point.",
+    );
+  }
   const now = Date.now();
   return {
-    id: req.resumeKey ?? `gate-${now}-${Math.random().toString(36).slice(2, 9)}`,
-    sessionId,
-    threadId,
+    id: deterministicGateId(gateCtx),
+    sessionId: gateCtx.sessionId,
+    threadId: gateCtx.threadId,
     type: req.type,
     title: req.title,
     body: req.body,

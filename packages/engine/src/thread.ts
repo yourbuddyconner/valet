@@ -386,7 +386,12 @@ export class Thread {
       signal,
       decisionGateId: this.toolCtxOverlay.gateId,
       requestDecision: async (req: DecisionGateRequest): Promise<DecisionResolution> => {
-        const gate = fromRequest(req, session.id, this.id);
+        const gate = fromRequest(req, {
+          sessionId: session.id,
+          threadId: this.id,
+          queueItemId: this.activeItem?.id ?? "",
+          resumeKey: req.resumeKey ?? "",
+        });
         await session.providers.store.saveDecisionGate(session.id, this.id, gate);
         const gateEntry: SessionEntry = {
           id: uid("e"),
