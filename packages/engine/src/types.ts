@@ -137,6 +137,8 @@ export type MessagePart =
       args?: unknown;
       result?: unknown;
       error?: string;
+      /** Set by the pruner. When true, `result` has been replaced with a placeholder; the original output is no longer available. */
+      elided?: boolean;
     }
   | { type: "attachment"; attachment: ToolAttachment }
   | { type: "error"; message: string; code?: string };
@@ -196,6 +198,8 @@ export interface ToolDef<TParams extends TSchema = TSchema> {
   parameters: TParams;
   riskLevel?: RiskLevel;
   requiresApproval?: boolean | ((args: Static<TParams>, ctx: ToolContext) => Promise<boolean> | boolean);
+  /** When true, this tool's outputs are exempt from pruning during compaction. */
+  protectedFromPruning?: boolean;
   execute: (args: Static<TParams>, ctx: ToolContext) => Promise<ToolResult>;
 }
 
@@ -585,7 +589,32 @@ export interface CreateSessionOptions {
   /** Collect-mode buffering window in ms (default 5000). */
   collectWindowMs?: number;
   systemPrompt?: string;
+  /** Compaction tuning. See CompactionConfig defaults. */
+  compaction?: CompactionConfig;
   metadata?: Record<string, unknown>;
+}
+
+export interface CompactionConfig {
+  /** Master switch. Default: true. */
+  enabled?: boolean;
+  /** Subtract from contextWindow when computing usable space. Default: min(20_000, model.maxOutputTokens). */
+  reserveTokens?: number;
+  /** Last N turns are never compacted. Default: 2. */
+  tailTurns?: number;
+  /** Floor for tail token budget. Default: 2_000. */
+  minPreserveRecentTokens?: number;
+  /** Ceiling for tail token budget. Default: 8_000. */
+  maxPreserveRecentTokens?: number;
+  /** Recent tool-output bytes never pruned. Default: 40_000 (estimated tokens). */
+  pruneProtectTokens?: number;
+  /** Pruning only commits if it'd save at least this many tokens. Default: 20_000. */
+  pruneMinimumTokens?: number;
+  /** Tool outputs longer than this get truncated when fed to the summarizer. Default: 2_000 chars. */
+  toolOutputMaxChars?: number;
+  /** Optional separate model for the summarization call. Default: session model. */
+  summarizerModel?: Model<any>;
+  /** Tool names whose outputs are exempt from pruning. Merged with ToolDef.protectedFromPruning. Defaults: ['skill', 'thread_read']. */
+  protectedTools?: string[];
 }
 
 /**
