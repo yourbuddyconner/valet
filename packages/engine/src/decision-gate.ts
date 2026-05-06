@@ -141,6 +141,24 @@ export function deterministicGateId(ctx: GateContext): string {
   return `gate:${ctx.sessionId}:${ctx.threadId}:${ctx.queueItemId}:${ctx.resumeKey}`;
 }
 
+/**
+ * Returns whether the engine should short-circuit `requestDecision` and
+ * return a stored resolution from a replayed tool execution.
+ *
+ * Pure function — kept testable in isolation from Thread/Agent timing.
+ */
+export function shouldShortCircuit(args: {
+  ctx: GateContext;
+  suspendedDecision: { gateId: string; resolution?: DecisionResolution } | undefined;
+}): { match: true; resolution: DecisionResolution } | { match: false } {
+  const { ctx, suspendedDecision } = args;
+  if (!suspendedDecision) return { match: false };
+  const expectedId = deterministicGateId(ctx);
+  if (suspendedDecision.gateId !== expectedId) return { match: false };
+  if (!suspendedDecision.resolution) return { match: false };
+  return { match: true, resolution: suspendedDecision.resolution };
+}
+
 export function fromRequest(req: DecisionGateRequest, gateCtx: GateContext): DecisionGate {
   if (!req.resumeKey) {
     throw new Error(

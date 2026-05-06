@@ -3,7 +3,7 @@ import type { AgentEvent, AgentMessage, AgentTool } from "@mariozechner/pi-agent
 import type { Message } from "@mariozechner/pi-ai";
 import type { Session } from "./session.js";
 import { toAgentTool } from "./tool-bridge.js";
-import { fromRequest, GateManager, deterministicGateId } from "./decision-gate.js";
+import { fromRequest, GateManager, shouldShortCircuit } from "./decision-gate.js";
 import type {
   DecisionGate,
   DecisionGateRequest,
@@ -422,16 +422,13 @@ export class Thread {
         };
         // Restart-safe replay: if running with a suspendedDecision and the
         // gate ID matches, return the stored resolution without re-persisting.
-        if (this.suspendedDecisionForReplay) {
-          const expectedId = deterministicGateId(gateCtx);
-          if (
-            this.suspendedDecisionForReplay.gateId === expectedId &&
-            this.suspendedDecisionForReplay.resolution
-          ) {
-            const resolution = this.suspendedDecisionForReplay.resolution;
-            this.suspendedDecisionForReplay = undefined; // one-shot
-            return resolution;
-          }
+        const sc = shouldShortCircuit({
+          ctx: gateCtx,
+          suspendedDecision: this.suspendedDecisionForReplay,
+        });
+        if (sc.match) {
+          this.suspendedDecisionForReplay = undefined; // one-shot
+          return sc.resolution;
         }
         const gate = fromRequest(req, gateCtx);
         await session.providers.store.saveDecisionGate(session.id, this.id, gate);
