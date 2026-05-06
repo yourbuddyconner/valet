@@ -98,6 +98,46 @@ export function runSessionStoreContract(name: string, ctx: StoreContractContext)
       expect(loaded[1]).toMatchObject({ id: "e-2", type: "message", role: "assistant" });
     });
 
+    it("updateEntry replaces an existing entry in place", async () => {
+      await store.saveSession(newSession());
+      await store.saveThread("sess-1", newThread("sess-1"));
+      await store.appendEntries("sess-1", "th-1", [
+        msg("e-1", "user", "original", 10),
+      ]);
+      const updated: MessageEntry = {
+        id: "e-1",
+        sessionId: "sess-1",
+        threadId: "th-1",
+        parentId: null,
+        type: "message",
+        role: "user",
+        content: "rewritten",
+        createdAt: 10,
+      };
+      await store.updateEntry("sess-1", "th-1", updated);
+      const loaded = await store.getEntries("sess-1", "th-1");
+      expect(loaded).toHaveLength(1);
+      expect(loaded[0]).toMatchObject({ id: "e-1", content: "rewritten" });
+    });
+
+    it("updateEntry throws NotFoundError when no matching entry exists", async () => {
+      await store.saveSession(newSession());
+      await store.saveThread("sess-1", newThread("sess-1"));
+      const ghost: MessageEntry = {
+        id: "ghost",
+        sessionId: "sess-1",
+        threadId: "th-1",
+        parentId: null,
+        type: "message",
+        role: "user",
+        content: "x",
+        createdAt: 1,
+      };
+      await expect(store.updateEntry("sess-1", "th-1", ghost)).rejects.toThrow(
+        /not found/,
+      );
+    });
+
     it("appendEntries persists decision_gate entries", async () => {
       await store.saveSession(newSession());
       await store.saveThread("sess-1", newThread("sess-1"));

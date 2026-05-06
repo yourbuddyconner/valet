@@ -10,6 +10,7 @@ import {
   engineDecisionGateRefs,
   engineSuspendedTurns,
 } from "../schema/sqlite.js";
+import { NotFoundError } from "../errors.js";
 import type {
   DecisionGate,
   DecisionGateEntry,
@@ -101,6 +102,30 @@ export class SqliteSessionStore implements SessionStore {
         .set({ activeLeafEntryId: lastId, updatedAt: Date.now() })
         .where(eq(engineThreads.id, threadId))
         .run();
+    }
+  }
+
+  async updateEntry(
+    sessionId: string,
+    threadId: string,
+    entry: SessionEntry,
+  ): Promise<void> {
+    const row = entryToRow(entry);
+    // Drizzle's update().set().where() returns an info object on better-sqlite3
+    // with a `changes` count we can check.
+    const result = this.db
+      .update(engineEntries)
+      .set(row)
+      .where(
+        and(
+          eq(engineEntries.sessionId, sessionId),
+          eq(engineEntries.threadId, threadId),
+          eq(engineEntries.id, entry.id),
+        ),
+      )
+      .run();
+    if ((result as { changes?: number }).changes === 0) {
+      throw new NotFoundError("entry", { sessionId, threadId, id: entry.id });
     }
   }
 

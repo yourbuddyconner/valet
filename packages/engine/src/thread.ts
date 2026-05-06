@@ -48,6 +48,8 @@ interface PendingResolver {
 }
 
 const DEFAULT_COLLECT_WINDOW_MS = 5000;
+const AUTO_CONTINUE_PROMPT =
+  "Continue if you have next steps, or stop and ask for clarification if you are unsure how to proceed.";
 
 let nextId = 1;
 function uid(prefix: string): string {
@@ -90,6 +92,14 @@ export class Thread {
     | undefined;
   /** True while a reactive (overflow) compaction is rerunning the failed turn. */
   private overflowRetryInProgress = false;
+  /**
+   * Set after compactThread runs; cleared by the next runItem before
+   * checking shouldCompactProactive. Prevents recursive compaction loops
+   * where each compaction's auto-continue immediately re-triggers
+   * compaction (e.g. when the summary itself plus the system prompt
+   * still exceeds usable on a small-context model).
+   */
+  private skipNextProactiveCheck = false;
 
   constructor(session: Session, data: ThreadData) {
     this.session = session;
@@ -486,7 +496,9 @@ export class Thread {
     this.currentAssistantParts = [];
     this.currentToolCalls.clear();
 
-    // Persist user message entry
+    // Persist user message entry. QueueItem.metadata flows through onto the
+    // entry so synthetic flags like compaction_continue survive into the DAG
+    // for client UIs and for later restoration.
     const userEntry: MessageEntry = {
       id: uid("e"),
       sessionId: this.session.id,
@@ -497,6 +509,7 @@ export class Thread {
       content: text,
       author: item.author,
       channel: item.channel,
+      metadata: item.metadata,
       createdAt: Date.now(),
     };
     await this.session.providers.store.appendEntries(this.session.id, this.id, [userEntry]);
@@ -560,6 +573,10 @@ export class Thread {
   }
 
   private shouldCompactProactive(): boolean {
+    if (this.skipNextProactiveCheck) {
+      this.skipNextProactiveCheck = false;
+      return false;
+    }
     const cfg = this.session.options.compaction;
     if (cfg?.enabled === false) return false;
     const usage = this.lastAssistantUsage;
@@ -594,22 +611,10 @@ export class Thread {
     if (prunePlan.willCommit) {
       const mutable = entries.map((e) => structuredClone(e)) as SessionEntry[];
       applyPrune(mutable, prunePlan);
-      // Persist the elision back to the store. We rewrite the affected
-      // entries by re-appending — InMemorySessionStore tolerates duplicate
-      // ids, but for SqliteSessionStore we need a dedicated update path.
-      // V1: emit an "entries_updated" intent and let the store apply it.
-      // For now, we clear and re-append the specific changed rows via the
-      // store's appendEntries on a fresh copy. This is correct for the
-      // in-memory store; the sqlite store's appendEntries inserts and will
-      // throw on duplicate id, so we explicitly check.
+      // Persist each elided entry back to the store via updateEntry.
       for (const entry of mutable) {
         if (!prunePlan.toElide.has(entry.id)) continue;
-        // Stamp updated entries via the store-specific path. The simplest
-        // cross-store approach is to overwrite an entry by id — neither
-        // store currently exposes that, so for V1 we accept that pruning
-        // applies to the in-memory agent state only and persists on the
-        // next compaction's full rewrite. Document this and move on.
-        void entry;
+        await store.updateEntry(session.id, this.id, entry);
       }
       // Apply to the live agent transcript:
       this.applyElisionsToAgentMessages(prunePlan);
@@ -671,14 +676,24 @@ export class Thread {
     await session.emit({ type: "compaction_end", threadId: this.id });
 
     // Step 6: auto-continue (proactive only). Inject a synthetic user
-    // message via pi-agent-core's followUp queue so the agent resumes
-    // work on the next turn boundary.
-    if (opts.mode === "proactive") {
-      // No automatic continue here — the engine yields back to the queue
-      // and the next user prompt drives the agent. The synthetic
-      // "Continue if you have next steps" pattern is opt-in via
-      // future config; not needed for V1.
+    // message tagged with metadata.compaction_continue so client UIs can
+    // hide it. Pushed onto the thread's queue so the agent picks it up on
+    // the next tickQueue cycle (which runs after runItem returns).
+    if (opts.mode === "proactive" && cfg?.autoContinue !== false) {
+      const followUp: QueueItem = {
+        id: uid("q"),
+        threadId: this.id,
+        content: AUTO_CONTINUE_PROMPT,
+        metadata: { compaction_continue: true, synthetic: true },
+        createdAt: Date.now(),
+      };
+      this.pending.unshift(followUp);
+      void this.persistQueueState();
     }
+
+    // Cool-down: skip the next proactive check so the auto-continue turn
+    // doesn't immediately re-trigger compaction on a small-context model.
+    this.skipNextProactiveCheck = true;
   }
 
   private applyElisionsToAgentMessages(plan: PruneResult): void {

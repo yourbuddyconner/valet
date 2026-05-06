@@ -1,3 +1,4 @@
+import { NotFoundError } from "../errors.js";
 import type {
   DecisionGate,
   DecisionGateEntry,
@@ -70,6 +71,20 @@ export class InMemorySessionStore implements SessionStore {
       t.activeLeafEntryId = entries[entries.length - 1].id;
       t.updatedAt = Date.now();
     }
+  }
+
+  async updateEntry(
+    sessionId: string,
+    threadId: string,
+    entry: SessionEntry,
+  ): Promise<void> {
+    const r = this.row(sessionId);
+    const list = r.entriesByThread.get(threadId) ?? [];
+    const idx = list.findIndex((e) => e.id === entry.id);
+    if (idx < 0) {
+      throw new NotFoundError("entry", { sessionId, threadId, id: entry.id });
+    }
+    list[idx] = entry;
   }
 
   async saveQueueState(sessionId: string, threadId: string, queue: QueueState): Promise<void> {

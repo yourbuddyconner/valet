@@ -502,6 +502,13 @@ export interface SessionStore {
   saveSession(session: SessionData): Promise<void>;
   saveThread(sessionId: string, thread: ThreadData): Promise<void>;
   appendEntries(sessionId: string, threadId: string, entries: SessionEntry[]): Promise<void>;
+  /**
+   * Replace an existing entry in place. Required for pruning during
+   * compaction to persist tool-result elision; also useful for any
+   * other in-place mutation. Throws NotFoundError if no entry with the
+   * given id exists in (sessionId, threadId).
+   */
+  updateEntry(sessionId: string, threadId: string, entry: SessionEntry): Promise<void>;
   saveQueueState(sessionId: string, threadId: string, queue: QueueState): Promise<void>;
   saveDecisionGate(sessionId: string, threadId: string, gate: DecisionGate): Promise<void>;
   saveDecisionGateRef(
@@ -615,6 +622,14 @@ export interface CompactionConfig {
   summarizerModel?: Model<any>;
   /** Tool names whose outputs are exempt from pruning. Merged with ToolDef.protectedFromPruning. Defaults: ['skill', 'thread_read']. */
   protectedTools?: string[];
+  /**
+   * After a proactive compaction, inject a synthetic user message
+   * ("Continue if you have next steps...") so the agent resumes the task.
+   * Tagged with metadata.compaction_continue so client UIs can hide it.
+   * Default: true. Reactive (overflow) compactions never auto-continue —
+   * they retry the original turn that triggered the overflow.
+   */
+  autoContinue?: boolean;
 }
 
 /**

@@ -1,4 +1,5 @@
 export * from "./types.js";
+export { NotFoundError } from "./errors.js";
 export { Engine } from "./engine.js";
 export { Session } from "./session.js";
 export { Thread } from "./thread.js";

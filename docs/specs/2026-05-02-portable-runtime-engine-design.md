@@ -941,6 +941,7 @@ The synthetic message is tagged with `metadata: { compaction_continue: true }` s
 | `cfg.toolOutputMaxChars` | `2_000` | when feeding head to summarizer |
 | `cfg.summarizerModel` | `sessionModel` | dedicated summarizer is cheaper |
 | `cfg.protectedTools` | `['skill', 'thread_read']` | per-tool opt-out from pruning; `ToolDef.protectedFromPruning` adds to this set |
+| `cfg.autoContinue` | `true` | inject the auto-continue prompt after proactive compaction |
 
 ### Per-Thread Prompt Queue
 

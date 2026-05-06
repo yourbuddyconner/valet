@@ -207,3 +207,271 @@ describe("compaction: rehydrate replaces covered entries with the summary", () =
     }
   });
 });
+
+describe("compaction: auto-continue", () => {
+  it("after proactive compaction, runs an auto-continue turn tagged with compaction_continue", async () => {
+    const faux = registerFauxProvider({
+      provider: "compact-autocontinue",
+      models: [{ id: "tiny", name: "tiny", contextWindow: 50, maxTokens: 5 }],
+    });
+    faux.setResponses([
+      // Third user prompt → assistant response (triggers proactive compaction).
+      fauxAssistantMessage("third response"),
+      // Summarizer one-shot.
+      fauxAssistantMessage(
+        "## Goal\n- t\n\n## Constraints & Preferences\n- (none)\n\n## Progress\n### Done\n- (none)\n\n### In Progress\n- (none)\n\n### Blocked\n- (none)\n\n## Key Decisions\n- (none)\n\n## Next Steps\n- (none)\n\n## Critical Context\n- (none)\n\n## Relevant Files\n- (none)",
+      ),
+      // Auto-continue turn → assistant response.
+      fauxAssistantMessage("continued from where I left off"),
+    ]);
+    const { engine, store, events } = makeEngine();
+    const session = await engine.createSession({
+      userId: "u",
+      orgId: "o",
+      workspace: "/",
+      sandbox: {},
+      model: faux.getModel("tiny")!,
+      compaction: { tailTurns: 1 },
+    });
+    const thread = session.thread();
+    await store.appendEntries(session.id, thread.id, [
+      {
+        id: "u-1",
+        sessionId: session.id,
+        threadId: thread.id,
+        parentId: null,
+        type: "message",
+        role: "user",
+        content: "first prompt",
+        createdAt: 1,
+      },
+      {
+        id: "a-1",
+        sessionId: session.id,
+        threadId: thread.id,
+        parentId: "u-1",
+        type: "message",
+        role: "assistant",
+        content: "first response",
+        createdAt: 2,
+      },
+    ]);
+
+    const receipt = await session.prompt("third prompt");
+    // Wait for two turn_ends after the prompt: the original third turn,
+    // then the auto-continue turn.
+    await waitFor(
+      () =>
+        events.filter(
+          (e) => e.event.type === "turn_end" && e.event.threadId === receipt.threadId,
+        ).length >= 2,
+    );
+
+    const entries = await store.getEntries(session.id, thread.id);
+    const userEntries = entries.filter(
+      (e) => e.type === "message" && e.role === "user",
+    );
+    // The auto-continue user message should be present and tagged.
+    const autoContinue = userEntries.find(
+      (e) => e.type === "message" && e.metadata?.compaction_continue === true,
+    );
+    expect(autoContinue).toBeDefined();
+    if (autoContinue?.type === "message") {
+      expect(autoContinue.content).toContain("Continue if you have next steps");
+    }
+    // And the assistant's continuation response should follow it.
+    const lastAssistant = entries
+      .filter((e) => e.type === "message" && e.role === "assistant")
+      .at(-1);
+    expect(lastAssistant?.type === "message" && lastAssistant.content).toBe(
+      "continued from where I left off",
+    );
+
+    faux.unregister();
+  });
+
+  it("autoContinue: false suppresses the synthetic follow-up", async () => {
+    const faux = registerFauxProvider({
+      provider: "compact-autocontinue-off",
+      models: [{ id: "tiny", name: "tiny", contextWindow: 50, maxTokens: 5 }],
+    });
+    faux.setResponses([
+      fauxAssistantMessage("third response"),
+      fauxAssistantMessage(
+        "## Goal\n- t\n\n## Constraints & Preferences\n- (none)\n\n## Progress\n### Done\n- (none)\n\n### In Progress\n- (none)\n\n### Blocked\n- (none)\n\n## Key Decisions\n- (none)\n\n## Next Steps\n- (none)\n\n## Critical Context\n- (none)\n\n## Relevant Files\n- (none)",
+      ),
+    ]);
+    const { engine, store, events } = makeEngine();
+    const session = await engine.createSession({
+      userId: "u",
+      orgId: "o",
+      workspace: "/",
+      sandbox: {},
+      model: faux.getModel("tiny")!,
+      compaction: { tailTurns: 1, autoContinue: false },
+    });
+    const thread = session.thread();
+    await store.appendEntries(session.id, thread.id, [
+      {
+        id: "u-1",
+        sessionId: session.id,
+        threadId: thread.id,
+        parentId: null,
+        type: "message",
+        role: "user",
+        content: "first prompt",
+        createdAt: 1,
+      },
+      {
+        id: "a-1",
+        sessionId: session.id,
+        threadId: thread.id,
+        parentId: "u-1",
+        type: "message",
+        role: "assistant",
+        content: "first response",
+        createdAt: 2,
+      },
+    ]);
+
+    const receipt = await session.prompt("third prompt");
+    await waitFor(
+      () =>
+        events.some(
+          (e) =>
+            e.event.type === "compaction_end" && e.event.threadId === receipt.threadId,
+        ),
+    );
+    // Wait a bit longer to make sure no follow-up turn fires.
+    await new Promise((r) => setTimeout(r, 100));
+
+    const entries = await store.getEntries(session.id, thread.id);
+    const synthetic = entries.find(
+      (e) => e.type === "message" && e.metadata?.compaction_continue === true,
+    );
+    expect(synthetic).toBeUndefined();
+
+    faux.unregister();
+  });
+});
+
+describe("compaction: pruning persists via updateEntry", () => {
+  it("pruned tool_call results are marked elided in the DAG, not just the live transcript", async () => {
+    const faux = registerFauxProvider({
+      provider: "compact-prune-persist",
+      models: [{ id: "tiny", name: "tiny", contextWindow: 50, maxTokens: 5 }],
+    });
+    faux.setResponses([
+      fauxAssistantMessage("trigger response"),
+      fauxAssistantMessage(
+        "## Goal\n- t\n\n## Constraints & Preferences\n- (none)\n\n## Progress\n### Done\n- (none)\n\n### In Progress\n- (none)\n\n### Blocked\n- (none)\n\n## Key Decisions\n- (none)\n\n## Next Steps\n- (none)\n\n## Critical Context\n- (none)\n\n## Relevant Files\n- (none)",
+      ),
+    ]);
+    const { engine, store, events } = makeEngine();
+    const session = await engine.createSession({
+      userId: "u",
+      orgId: "o",
+      workspace: "/",
+      sandbox: {},
+      model: faux.getModel("tiny")!,
+      compaction: {
+        tailTurns: 1,
+        // Tiny token thresholds so a moderately-sized fixture triggers pruning
+        // even though we're working with chars, not real tokens.
+        pruneProtectTokens: 200,
+        pruneMinimumTokens: 200,
+      },
+    });
+    const thread = session.thread();
+
+    // Pre-populate the DAG with two prior turns whose assistant messages
+    // contain large bash tool outputs (~3000 chars each ≈ 750 token estimate).
+    const bigOutput = "x".repeat(3_000);
+    await store.appendEntries(session.id, thread.id, [
+      {
+        id: "u-1",
+        sessionId: session.id,
+        threadId: thread.id,
+        parentId: null,
+        type: "message",
+        role: "user",
+        content: "first prompt",
+        createdAt: 1,
+      },
+      {
+        id: "a-1",
+        sessionId: session.id,
+        threadId: thread.id,
+        parentId: "u-1",
+        type: "message",
+        role: "assistant",
+        content: "",
+        parts: [
+          {
+            type: "tool_call",
+            callId: "tc-1",
+            toolName: "bash",
+            status: "completed",
+            args: { command: "ls /large-dir" },
+            result: bigOutput,
+          },
+        ],
+        createdAt: 2,
+      },
+      {
+        id: "u-2",
+        sessionId: session.id,
+        threadId: thread.id,
+        parentId: "a-1",
+        type: "message",
+        role: "user",
+        content: "second prompt",
+        createdAt: 3,
+      },
+      {
+        id: "a-2",
+        sessionId: session.id,
+        threadId: thread.id,
+        parentId: "u-2",
+        type: "message",
+        role: "assistant",
+        content: "",
+        parts: [
+          {
+            type: "tool_call",
+            callId: "tc-2",
+            toolName: "bash",
+            status: "completed",
+            args: { command: "cat /large-file" },
+            result: bigOutput,
+          },
+        ],
+        createdAt: 4,
+      },
+    ]);
+
+    const receipt = await session.prompt("third prompt");
+    await waitFor(
+      () =>
+        events.some(
+          (e) =>
+            e.event.type === "compaction_end" && e.event.threadId === receipt.threadId,
+        ),
+    );
+
+    // Re-load entries from the store and verify a-1's tool_call.result is elided.
+    const entries = await store.getEntries(session.id, thread.id);
+    const a1 = entries.find((e) => e.id === "a-1");
+    expect(a1?.type).toBe("message");
+    if (a1?.type === "message") {
+      const tc = a1.parts?.[0];
+      expect(tc?.type).toBe("tool_call");
+      if (tc?.type === "tool_call") {
+        expect(tc.elided).toBe(true);
+        expect(tc.result).toEqual({ elided: true, reason: "pruned" });
+      }
+    }
+
+    faux.unregister();
+  });
+});
