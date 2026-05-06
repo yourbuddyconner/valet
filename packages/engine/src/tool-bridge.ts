@@ -6,10 +6,18 @@ import type { ToolDef, ToolContext, ToolResult, ToolAttachment } from "./types.j
  * Adapt one engine ToolDef to a pi-agent-core AgentTool, capturing the engine
  * ToolContext via closure. The bridge also normalizes our ToolResult into the
  * pi AgentToolResult shape (TextContent | ImageContent[]).
+ *
+ * `buildContext` receives the toolCallId, toolName, and validated args so the
+ * engine can persist them in SuspendedTurnState if the tool opens a gate.
  */
 export function toAgentTool<TParams extends import("typebox").TSchema>(
   def: ToolDef<TParams>,
-  buildContext: (signal: AbortSignal, toolCallId: string) => ToolContext,
+  buildContext: (args: {
+    signal: AbortSignal;
+    toolCallId: string;
+    toolName: string;
+    toolArgs: Record<string, unknown>;
+  }) => ToolContext,
 ): AgentTool<TParams> {
   return {
     name: def.name,
@@ -17,7 +25,12 @@ export function toAgentTool<TParams extends import("typebox").TSchema>(
     description: def.description,
     parameters: def.parameters,
     execute: async (toolCallId, params, signal) => {
-      const ctx = buildContext(signal ?? new AbortController().signal, toolCallId);
+      const ctx = buildContext({
+        signal: signal ?? new AbortController().signal,
+        toolCallId,
+        toolName: def.name,
+        toolArgs: params as Record<string, unknown>,
+      });
       const result = await def.execute(params as never, ctx);
       return toAgentToolResult(result);
     },

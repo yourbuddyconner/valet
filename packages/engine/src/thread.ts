@@ -382,11 +382,19 @@ export class Thread {
   private buildTools(): AgentTool[] {
     const all: ToolDef[] = [...this.session.builtinTools, ...(this.session.options.tools ?? [])];
     return all.map((def) =>
-      toAgentTool(def, (signal, toolCallId) => this.buildToolContext(signal, toolCallId)),
+      toAgentTool(def, ({ signal, toolCallId, toolName, toolArgs }) =>
+        this.buildToolContext({ signal, toolCallId, toolName, toolArgs }),
+      ),
     );
   }
 
-  private buildToolContext(signal: AbortSignal, toolCallId: string): ToolContext {
+  private buildToolContext(args: {
+    signal: AbortSignal;
+    toolCallId: string;
+    toolName: string;
+    toolArgs: Record<string, unknown>;
+  }): ToolContext {
+    const { signal, toolCallId, toolName, toolArgs } = args;
     const session = this.session;
     return {
       userId: session.options.userId,
@@ -438,7 +446,8 @@ export class Thread {
         };
         await session.providers.store.appendEntries(session.id, this.id, [gateEntry]);
 
-        // checkpoint the suspended turn
+        // checkpoint the suspended turn — use real toolName + toolArgs so
+        // restoreSession can replay this exact tool call.
         await session.providers.store.saveSuspendedTurn(session.id, this.id, {
           sessionId: session.id,
           threadId: this.id,
@@ -446,8 +455,8 @@ export class Thread {
           gateId: gate.id,
           model: session.options.model.id,
           toolCallId,
-          toolName: req.title,
-          toolArgs: {},
+          toolName,
+          toolArgs,
           resumeKey: req.resumeKey ?? gate.id,
           attempt: 1,
           createdAt: Date.now(),
