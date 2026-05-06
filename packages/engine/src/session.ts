@@ -250,8 +250,9 @@ export class Session {
     const credStore = this.providers.credentials;
     const session = this;
     return {
-      async get(service: string) {
+      async get(service?: string) {
         if (!credStore) return null;
+        if (!service) return null; // session-level provider has no default service
         const stored = await credStore.get(owner, service);
         if (!stored) return null;
         return {

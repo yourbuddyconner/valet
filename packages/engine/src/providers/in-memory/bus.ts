@@ -1,4 +1,4 @@
-import type { BusEvent, EventBus, EventFilter, Unsubscribe } from "../types.js";
+import type { BusEvent, EventBus, EventFilter, Unsubscribe } from "../../types.js";
 
 interface Subscription {
   filter: EventFilter;

@@ -2,7 +2,7 @@ import type {
   CredentialOwner,
   CredentialStore,
   StoredCredential,
-} from "../types.js";
+} from "../../types.js";
 
 function key(owner: CredentialOwner, service: string): string {
   return `${owner.type}:${owner.id}:${service}`;

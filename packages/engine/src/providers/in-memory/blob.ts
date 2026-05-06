@@ -1,4 +1,4 @@
-import type { BlobStore } from "../types.js";
+import type { BlobStore } from "../../types.js";
 
 export class InMemoryBlobStore implements BlobStore {
   private blobs = new Map<string, { data: Uint8Array; contentType?: string }>();

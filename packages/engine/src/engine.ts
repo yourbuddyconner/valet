@@ -1,4 +1,4 @@
-import { VirtualSandboxProvider } from "./providers/virtual-sandbox.js";
+import { VirtualSandboxProvider } from "./providers/sandbox/virtual.js";
 import { Session } from "./session.js";
 import type {
   CreateSessionOptions,

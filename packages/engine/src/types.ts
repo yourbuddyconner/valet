@@ -254,7 +254,13 @@ export interface Credential {
 }
 
 export interface CredentialProvider {
-  get(service: string): Promise<Credential | null>;
+  /**
+   * Fetch a stored credential. The `service` arg is optional so plugin
+   * actions can call `.get()` to use their own default scope (set up by
+   * the plugin catalog when it builds PluginActionContext); first-class
+   * tools should always pass it explicitly.
+   */
+  get(service?: string): Promise<Credential | null>;
   request(service: string, reason: string): Promise<Credential>;
 }
 

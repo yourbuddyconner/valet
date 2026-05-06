@@ -10,25 +10,29 @@ export {
 export { Engine } from "./engine.js";
 export { Session } from "./session.js";
 export { Thread } from "./thread.js";
-export { InMemorySessionStore } from "./providers/in-memory-store.js";
-export { InMemoryEventBus } from "./providers/in-memory-bus.js";
-export { InMemoryBlobStore } from "./providers/in-memory-blob.js";
-export { InMemoryCredentialStore } from "./providers/in-memory-credentials.js";
-export { SqliteSessionStore } from "./providers/sqlite-store.js";
-export { VirtualSandbox, VirtualSandboxProvider } from "./providers/virtual-sandbox.js";
-export { LocalSandbox, LocalSandboxProvider } from "./providers/local-sandbox.js";
+export {
+  InMemoryBlobStore,
+  InMemoryEventBus,
+  InMemoryCredentialStore,
+  InMemorySessionStore,
+} from "./providers/in-memory/index.js";
+export { SqliteSessionStore } from "./providers/sqlite/index.js";
+export {
+  VirtualSandbox,
+  VirtualSandboxProvider,
+  LocalSandbox,
+  LocalSandboxProvider,
+} from "./providers/sandbox/index.js";
 export { builtinTools, readTool, writeTool, editTool, bashTool, threadReadTool } from "./builtin-tools/index.js";
 export {
-  actionBridgeTools,
-  type ActionBridgeOptions,
-  type ActionSourceConfig,
+  pluginCatalogTools,
+  type ActionPlugin,
   type ApprovalMode,
-  type BridgeActionContext,
-  type BridgeActionDefinition,
-  type BridgeActionListContext,
-  type BridgeActionResult,
-  type BridgeActionSource,
-} from "./action-bridge.js";
+  type PluginAction,
+  type PluginActionContext,
+  type PluginActionResult,
+  type PluginCatalogOptions,
+} from "./plugin-catalog.js";
 export {
   GateManager,
   DecisionGateWithdrawnError,

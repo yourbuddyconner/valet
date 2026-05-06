@@ -9,8 +9,8 @@ import {
   engineDecisionGates,
   engineDecisionGateRefs,
   engineSuspendedTurns,
-} from "../schema/sqlite.js";
-import { NotFoundError } from "../errors.js";
+} from "../../schema/sqlite.js";
+import { NotFoundError } from "../../errors.js";
 import type {
   DecisionGate,
   DecisionGateEntry,
@@ -24,8 +24,8 @@ import type {
   SessionStore,
   SuspendedTurnState,
   ThreadData,
-} from "../types.js";
-import { entryToRow, jsonOrNull, parseJson, rowToEntry, type EntryRow } from "./sqlite-store-helpers.js";
+} from "../../types.js";
+import { entryToRow, jsonOrNull, parseJson, rowToEntry, type EntryRow } from "./helpers.js";
 
 export class SqliteSessionStore implements SessionStore {
   constructor(private readonly db: BetterSQLite3Database) {}

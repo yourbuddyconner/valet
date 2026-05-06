@@ -5,7 +5,7 @@ import type {
   MessageEntry,
   BranchSummaryEntry,
   SessionEntry,
-} from "../types.js";
+} from "../../types.js";
 
 export function jsonOrNull<T>(value: T | undefined | null): string | null {
   return value === undefined || value === null ? null : JSON.stringify(value);

@@ -39,9 +39,9 @@ import { stdin, stdout } from "node:process";
 import { resolve } from "node:path";
 import { readFile } from "node:fs/promises";
 import { getModel } from "@mariozechner/pi-ai";
-import { githubActions } from "@valet/plugin-github/actions";
+import { githubPlugin } from "@valet/plugin-github/actions";
 import {
-  actionBridgeTools,
+  pluginCatalogTools,
   Engine,
   InMemoryCredentialStore,
   InMemoryEventBus,
@@ -49,7 +49,7 @@ import {
   LocalSandboxProvider,
   loadRoleFromMarkdown,
   VirtualSandboxProvider,
-  type ActionSourceConfig,
+  type ActionPlugin,
   type BusEvent,
   type RoleSpec,
   type SandboxProvider,
@@ -83,13 +83,11 @@ function fail(message: string, code = 1): never {
   process.exit(code);
 }
 
-async function loadPluginTools(): Promise<ToolDef[]> {
-  const sources: ActionSourceConfig[] = [];
-  if (process.env.GITHUB_TOKEN) {
-    sources.push({ service: "github", actions: githubActions });
-  }
-  if (sources.length === 0) return [];
-  return actionBridgeTools({ sources });
+function loadPluginTools(): ToolDef[] {
+  const plugins: ActionPlugin[] = [];
+  if (process.env.GITHUB_TOKEN) plugins.push(githubPlugin);
+  if (plugins.length === 0) return [];
+  return pluginCatalogTools({ plugins });
 }
 
 async function buildSession(): Promise<{
@@ -152,7 +150,7 @@ async function buildSession(): Promise<{
       accessToken: process.env.GITHUB_TOKEN,
     });
   }
-  const pluginTools = await loadPluginTools();
+  const pluginTools = loadPluginTools();
   if (pluginTools.length > 0) {
     tools.push(...pluginTools);
     stdout.write(

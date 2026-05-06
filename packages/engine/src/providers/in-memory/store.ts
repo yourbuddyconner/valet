@@ -1,4 +1,4 @@
-import { NotFoundError } from "../errors.js";
+import { NotFoundError } from "../../errors.js";
 import type {
   DecisionGate,
   DecisionGateEntry,
@@ -12,7 +12,7 @@ import type {
   SessionStore,
   SuspendedTurnState,
   ThreadData,
-} from "../types.js";
+} from "../../types.js";
 
 interface SessionRow {
   data: SessionData;

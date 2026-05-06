@@ -1,130 +1,125 @@
 import { describe, it, expect } from "vitest";
-import { z } from "zod";
+import { Type } from "typebox";
 import { fauxAssistantMessage, fauxToolCall, registerFauxProvider } from "@mariozechner/pi-ai";
 import {
-  actionBridgeTools,
+  pluginCatalogTools,
   Engine,
   InMemoryCredentialStore,
   InMemoryEventBus,
   InMemorySessionStore,
   VirtualSandboxProvider,
-  type BridgeActionContext,
-  type BridgeActionDefinition,
-  type BridgeActionResult,
-  type BridgeActionSource,
+  type ActionPlugin,
   type BusEvent,
+  type PluginAction,
+  type PluginActionContext,
+  type PluginActionResult,
 } from "../src/index.js";
 
-function makeMockSource(): {
-  source: BridgeActionSource;
-  calls: Array<{ id: string; params: unknown; ctx: BridgeActionContext }>;
+function makeMockPlugin(): {
+  plugin: ActionPlugin;
+  calls: Array<{ id: string; args: unknown; ctx: PluginActionContext }>;
 } {
-  const calls: Array<{ id: string; params: unknown; ctx: BridgeActionContext }> = [];
+  const calls: Array<{ id: string; args: unknown; ctx: PluginActionContext }> = [];
 
-  const definitions: BridgeActionDefinition[] = [
-    {
-      id: "github.get_issue",
-      name: "Get Issue",
-      description: "Read an issue.",
-      riskLevel: "low",
-      params: z.object({
-        owner: z.string(),
-        repo: z.string(),
-        issueNumber: z.number().int(),
-      }),
-    },
-    {
-      id: "github.create_issue",
-      name: "Create Issue",
-      description: "Create a new issue.",
-      riskLevel: "medium",
-      params: z.object({
-        owner: z.string(),
-        repo: z.string(),
-        title: z.string(),
-        body: z.string().optional(),
-      }),
-    },
-    {
-      id: "github.delete_repo",
-      name: "Delete Repo",
-      description: "Permanently delete a repo.",
-      riskLevel: "critical",
-      params: z.object({ owner: z.string(), repo: z.string() }),
-    },
-  ];
-
-  const source: BridgeActionSource = {
-    listActions: () => definitions,
-    execute: async (id, params, ctx): Promise<BridgeActionResult> => {
-      calls.push({ id, params, ctx });
-      if (id === "github.get_issue") {
-        return { success: true, data: { number: 42, title: "Test issue" } };
-      }
-      if (id === "github.create_issue") {
-        return { success: true, data: { number: 99, html_url: "https://x" } };
-      }
-      if (id === "github.delete_repo") {
-        return { success: true, data: { deleted: true } };
-      }
-      return { success: false, error: "unknown action" };
+  const getIssue: PluginAction = {
+    id: "github.get_issue",
+    name: "Get Issue",
+    description: "Read an issue.",
+    riskLevel: "low",
+    parameters: Type.Object({
+      owner: Type.String(),
+      repo: Type.String(),
+      issueNumber: Type.Integer(),
+    }),
+    execute: async (args, ctx): Promise<PluginActionResult> => {
+      calls.push({ id: getIssue.id, args, ctx });
+      return { success: true, data: { number: 42, title: "Test issue" } };
     },
   };
 
-  return { source, calls };
+  const createIssue: PluginAction = {
+    id: "github.create_issue",
+    name: "Create Issue",
+    description: "Create a new issue.",
+    riskLevel: "medium",
+    parameters: Type.Object({
+      owner: Type.String(),
+      repo: Type.String(),
+      title: Type.String(),
+      body: Type.Optional(Type.String()),
+    }),
+    execute: async (args, ctx) => {
+      calls.push({ id: createIssue.id, args, ctx });
+      return { success: true, data: { number: 99, html_url: "https://x" } };
+    },
+  };
+
+  const deleteRepo: PluginAction = {
+    id: "github.delete_repo",
+    name: "Delete Repo",
+    description: "Permanently delete a repo.",
+    riskLevel: "critical",
+    parameters: Type.Object({ owner: Type.String(), repo: Type.String() }),
+    execute: async (args, ctx) => {
+      calls.push({ id: deleteRepo.id, args, ctx });
+      return { success: true, data: { deleted: true } };
+    },
+  };
+
+  const plugin: ActionPlugin = {
+    service: "github",
+    actions: [getIssue, createIssue, deleteRepo],
+  };
+  return { plugin, calls };
 }
 
-describe("actionBridgeTools: registration", () => {
-  it("returns exactly two engine-visible tools regardless of source count", async () => {
-    const { source } = makeMockSource();
-    const tools = await actionBridgeTools({
-      sources: [{ service: "github", actions: source }],
-    });
+function makeEngine() {
+  const store = new InMemorySessionStore();
+  const bus = new InMemoryEventBus();
+  const credentials = new InMemoryCredentialStore();
+  const sandboxProvider = new VirtualSandboxProvider();
+  const events: BusEvent[] = [];
+  bus.subscribe({}, (e) => events.push(e));
+  const engine = new Engine({ providers: { store, bus, credentials, sandboxProvider } });
+  return { engine, events, credentials };
+}
+
+async function waitForIdle(events: BusEvent[], threadId: string, timeoutMs = 2000): Promise<void> {
+  const start = Date.now();
+  while (
+    !events.some(
+      (e) => e.event.type === "status" && e.event.threadId === threadId && e.event.status === "idle",
+    )
+  ) {
+    if (Date.now() - start > timeoutMs) throw new Error("timeout waiting for idle");
+    await new Promise((r) => setTimeout(r, 5));
+  }
+}
+
+describe("pluginCatalogTools: registration", () => {
+  it("returns exactly two engine-visible tools regardless of plugin count", () => {
+    const { plugin } = makeMockPlugin();
+    const tools = pluginCatalogTools({ plugins: [plugin] });
     expect(tools.map((t) => t.name).sort()).toEqual(["call_tool", "list_tools"]);
   });
 
-  it("two sources still produce just list_tools + call_tool", async () => {
-    const a = makeMockSource();
-    const b = makeMockSource();
-    const tools = await actionBridgeTools({
-      sources: [
-        { service: "github", actions: a.source },
-        { service: "gmail", actions: b.source },
+  it("two plugins still produce just list_tools + call_tool", () => {
+    const a = makeMockPlugin();
+    const b = makeMockPlugin();
+    const tools = pluginCatalogTools({
+      plugins: [
+        { ...a.plugin, service: "github" },
+        { ...b.plugin, service: "gmail" },
       ],
     });
     expect(tools.map((t) => t.name).sort()).toEqual(["call_tool", "list_tools"]);
   });
 });
 
-describe("actionBridgeTools: list_tools", () => {
-  function makeEngine() {
-    const store = new InMemorySessionStore();
-    const bus = new InMemoryEventBus();
-    const credentials = new InMemoryCredentialStore();
-    const sandboxProvider = new VirtualSandboxProvider();
-    const events: BusEvent[] = [];
-    bus.subscribe({}, (e) => events.push(e));
-    const engine = new Engine({ providers: { store, bus, credentials, sandboxProvider } });
-    return { engine, events, credentials };
-  }
-
-  async function waitForIdle(events: BusEvent[], threadId: string, timeoutMs = 2000): Promise<void> {
-    const start = Date.now();
-    while (
-      !events.some(
-        (e) => e.event.type === "status" && e.event.threadId === threadId && e.event.status === "idle",
-      )
-    ) {
-      if (Date.now() - start > timeoutMs) throw new Error("timeout waiting for idle");
-      await new Promise((r) => setTimeout(r, 5));
-    }
-  }
-
-  it("returns the catalog with converted JSON Schema params", async () => {
-    const { source } = makeMockSource();
-    const tools = await actionBridgeTools({
-      sources: [{ service: "github", actions: source }],
-    });
+describe("pluginCatalogTools: list_tools", () => {
+  it("returns the catalog with TypeBox parameters preserved as JSON Schema", async () => {
+    const { plugin } = makeMockPlugin();
+    const tools = pluginCatalogTools({ plugins: [plugin] });
 
     const faux = registerFauxProvider({ provider: "list1" });
     faux.setResponses([
@@ -149,7 +144,11 @@ describe("actionBridgeTools: list_tools", () => {
     const toolEnd = events.find((e) => e.event.type === "tool_end");
     if (!toolEnd || toolEnd.event.type !== "tool_end") throw new Error("no tool_end");
     const payload = JSON.parse(toolEnd.event.result) as {
-      tools: Array<{ tool_id: string; riskLevel: string; params: { type: string; properties: Record<string, { type: string }> } }>;
+      tools: Array<{
+        tool_id: string;
+        riskLevel: string;
+        params: { type: string; properties: Record<string, { type: string }> };
+      }>;
       total: number;
     };
     expect(payload.total).toBe(3);
@@ -167,10 +166,8 @@ describe("actionBridgeTools: list_tools", () => {
   });
 
   it("filters by service and substring query", async () => {
-    const { source } = makeMockSource();
-    const tools = await actionBridgeTools({
-      sources: [{ service: "github", actions: source }],
-    });
+    const { plugin } = makeMockPlugin();
+    const tools = pluginCatalogTools({ plugins: [plugin] });
 
     const faux = registerFauxProvider({ provider: "list2" });
     faux.setResponses([
@@ -203,10 +200,8 @@ describe("actionBridgeTools: list_tools", () => {
   });
 
   it("emits a warning when a service has no credential", async () => {
-    const { source } = makeMockSource();
-    const tools = await actionBridgeTools({
-      sources: [{ service: "github", actions: source }],
-    });
+    const { plugin } = makeMockPlugin();
+    const tools = pluginCatalogTools({ plugins: [plugin] });
 
     const faux = registerFauxProvider({ provider: "list3" });
     faux.setResponses([
@@ -217,7 +212,6 @@ describe("actionBridgeTools: list_tools", () => {
     ]);
 
     const { engine, events } = makeEngine();
-    // No credentials saved → list_tools should report a warning for github.
     const session = await engine.createSession({
       userId: "u",
       orgId: "o",
@@ -240,35 +234,10 @@ describe("actionBridgeTools: list_tools", () => {
   });
 });
 
-describe("actionBridgeTools: call_tool", () => {
-  function makeEngine() {
-    const store = new InMemorySessionStore();
-    const bus = new InMemoryEventBus();
-    const credentials = new InMemoryCredentialStore();
-    const sandboxProvider = new VirtualSandboxProvider();
-    const events: BusEvent[] = [];
-    bus.subscribe({}, (e) => events.push(e));
-    const engine = new Engine({ providers: { store, bus, credentials, sandboxProvider } });
-    return { engine, events, credentials };
-  }
-
-  async function waitForIdle(events: BusEvent[], threadId: string, timeoutMs = 2000): Promise<void> {
-    const start = Date.now();
-    while (
-      !events.some(
-        (e) => e.event.type === "status" && e.event.threadId === threadId && e.event.status === "idle",
-      )
-    ) {
-      if (Date.now() - start > timeoutMs) throw new Error("timeout waiting for idle");
-      await new Promise((r) => setTimeout(r, 5));
-    }
-  }
-
-  it("dispatches by tool_id and returns rendered data with credentials applied", async () => {
-    const { source, calls } = makeMockSource();
-    const tools = await actionBridgeTools({
-      sources: [{ service: "github", actions: source }],
-    });
+describe("pluginCatalogTools: call_tool", () => {
+  it("dispatches by tool_id and returns rendered data with credentials available", async () => {
+    const { plugin, calls } = makeMockPlugin();
+    const tools = pluginCatalogTools({ plugins: [plugin] });
 
     const faux = registerFauxProvider({ provider: "call1" });
     faux.setResponses([
@@ -307,8 +276,14 @@ describe("actionBridgeTools: call_tool", () => {
 
     expect(calls).toHaveLength(1);
     expect(calls[0].id).toBe("github.get_issue");
-    expect(calls[0].params).toEqual({ owner: "o", repo: "r", issueNumber: 42 });
-    expect(calls[0].ctx.credentials.access_token).toBe("ghp_secret");
+    expect(calls[0].args).toEqual({ owner: "o", repo: "r", issueNumber: 42 });
+    expect(calls[0].ctx.actionId).toBe("github.get_issue");
+    expect(calls[0].ctx.service).toBe("github");
+    expect(calls[0].ctx.summary).toBe("fetch issue 42");
+
+    // Plugin called credentials.get() with no arg → defaults to "github"
+    const cred = await calls[0].ctx.credentials.get();
+    expect(cred?.accessToken).toBe("ghp_secret");
 
     const toolEnd = events.find((e) => e.event.type === "tool_end");
     if (!toolEnd || toolEnd.event.type !== "tool_end") throw new Error("no tool_end");
@@ -319,10 +294,8 @@ describe("actionBridgeTools: call_tool", () => {
   });
 
   it("unknown tool_id → tool result text reports it without dispatching", async () => {
-    const { source, calls } = makeMockSource();
-    const tools = await actionBridgeTools({
-      sources: [{ service: "github", actions: source }],
-    });
+    const { plugin, calls } = makeMockPlugin();
+    const tools = pluginCatalogTools({ plugins: [plugin] });
 
     const faux = registerFauxProvider({ provider: "call2" });
     faux.setResponses([
@@ -360,22 +333,21 @@ describe("actionBridgeTools: call_tool", () => {
     faux.unregister();
   });
 
-  it("ActionResult.success=false → tool result surfaces the error text", async () => {
-    const failing: BridgeActionSource = {
-      listActions: () => [
+  it("PluginActionResult.success=false → tool result surfaces the error text", async () => {
+    const failing: ActionPlugin = {
+      service: "test",
+      actions: [
         {
           id: "test.fail",
           name: "Fail",
           description: "always fails",
           riskLevel: "low",
-          params: z.object({}),
+          parameters: Type.Object({}),
+          execute: async () => ({ success: false, error: "boom 500" }),
         },
       ],
-      execute: async () => ({ success: false, error: "boom 500" }),
     };
-    const tools = await actionBridgeTools({
-      sources: [{ service: "test", actions: failing }],
-    });
+    const tools = pluginCatalogTools({ plugins: [failing] });
 
     const faux = registerFauxProvider({ provider: "call3" });
     faux.setResponses([
@@ -413,10 +385,8 @@ describe("actionBridgeTools: call_tool", () => {
   });
 
   it("critical-risk action opens an approval gate; deny short-circuits to denial text", async () => {
-    const { source, calls } = makeMockSource();
-    const tools = await actionBridgeTools({
-      sources: [{ service: "github", actions: source }],
-    });
+    const { plugin, calls } = makeMockPlugin();
+    const tools = pluginCatalogTools({ plugins: [plugin] });
 
     const faux = registerFauxProvider({ provider: "call4" });
     faux.setResponses([
@@ -448,17 +418,11 @@ describe("actionBridgeTools: call_tool", () => {
     });
     void session.prompt("delete the repo");
 
-    // Wait for the gate, then deny it.
-    await new Promise<void>((resolve, reject) => {
-      const t = setTimeout(() => reject(new Error("gate timeout")), 2000);
-      const unsub = bus2Sub(events, () => {
-        if (events.some((e) => e.event.type === "decision_gate")) {
-          clearTimeout(t);
-          unsub();
-          resolve();
-        }
-      });
-    });
+    const start = Date.now();
+    while (!events.some((e) => e.event.type === "decision_gate")) {
+      if (Date.now() - start > 2000) throw new Error("gate timeout");
+      await new Promise((r) => setTimeout(r, 5));
+    }
     const gate = events.find((e) => e.event.type === "decision_gate");
     if (!gate || gate.event.type !== "decision_gate") throw new Error("no gate");
     await session.resolveDecision(gate.event.gate.id, {
@@ -467,7 +431,15 @@ describe("actionBridgeTools: call_tool", () => {
       resolvedAt: Date.now(),
     });
 
-    await waitForIdle(events, gate.threadId ?? "");
+    const start2 = Date.now();
+    while (
+      !events.some(
+        (e) => e.event.type === "tool_end" && e.event.tool === "call_tool",
+      )
+    ) {
+      if (Date.now() - start2 > 2000) throw new Error("tool_end timeout");
+      await new Promise((r) => setTimeout(r, 5));
+    }
     expect(calls).toHaveLength(0);
     const toolEnd = events.find((e) => e.event.type === "tool_end");
     expect(
@@ -477,13 +449,3 @@ describe("actionBridgeTools: call_tool", () => {
     faux.unregister();
   });
 });
-
-// Polling helper: subscribe-once + poll the events array. The bus is the one
-// passed by makeEngine; events array shadows our subscription.
-function bus2Sub(_events: BusEvent[], _cb: () => void): () => void {
-  // Subscribers in InMemoryEventBus fire synchronously on publish, so the
-  // simplest approach is: don't subscribe a second time; just poll.
-  // We expose this helper to keep test bodies tidy.
-  const interval = setInterval(_cb, 5);
-  return () => clearInterval(interval);
-}

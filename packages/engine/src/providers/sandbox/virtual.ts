@@ -1,4 +1,4 @@
-import type { ExecOpts, ExecResult, Sandbox, SandboxCreateOpts, SandboxProvider, SandboxStatus } from "../types.js";
+import type { ExecOpts, ExecResult, Sandbox, SandboxCreateOpts, SandboxProvider, SandboxStatus } from "../../types.js";
 
 interface FsEntry {
   type: "file" | "dir";
