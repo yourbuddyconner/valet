@@ -16,6 +16,7 @@
   "files": [],
   "references": [
     { "path": "./packages/shared" },
+    { "path": "./packages/engine" },
     { "path": "./packages/sdk" },
     { "path": "./packages/plugin-github" },
     { "path": "./packages/plugin-slack" },
