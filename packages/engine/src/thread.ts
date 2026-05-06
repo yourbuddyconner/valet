@@ -808,11 +808,24 @@ export class Thread {
       case "turn_end": {
         const stopReason =
           event.message.role === "assistant" ? event.message.stopReason : undefined;
-        await this.session.emit({
-          type: "turn_end",
-          threadId: this.id,
-          reason: stopReason === "aborted" ? "abort" : "end_turn",
-        });
+        const errorMessage =
+          event.message.role === "assistant" ? event.message.errorMessage : undefined;
+        if (errorMessage) {
+          await this.session.emit({
+            type: "error",
+            threadId: this.id,
+            code: stopReason ?? "agent_error",
+            error: errorMessage,
+            recoverable: stopReason !== "error",
+          });
+        }
+        const reason: "end_turn" | "error" | "abort" =
+          stopReason === "aborted"
+            ? "abort"
+            : stopReason === "error"
+            ? "error"
+            : "end_turn";
+        await this.session.emit({ type: "turn_end", threadId: this.id, reason });
         await this.session.emit({ type: "status", threadId: this.id, status: "idle" });
         break;
       }

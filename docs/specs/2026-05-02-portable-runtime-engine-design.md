@@ -752,7 +752,9 @@ Approval-gated tools follow the same suspension model. A tool can return or thro
 
 #### Plugin Action Bridge
 
-V1 may continue using existing plugin action packages through an adapter:
+V1 keeps using existing plugin action packages through an adapter, but the bridge does NOT register one LLM-visible tool per action. With dozens of plugins each exporting dozens of actions, direct registration would (a) blow past LLM tool-catalog size budgets, (b) collide with provider tool-name regexes (Anthropic requires `^[a-zA-Z0-9_-]{1,128}$`, so dotted ids like `github.create_issue` are rejected), and (c) force every session to pay the prompt cost of every action even when only a few are relevant.
+
+Instead, plugin actions are surfaced through two engine-built-in indirection tools — `list_tools` and `call_tool` — that expose a searchable catalog the agent consults on demand.
 
 ```typescript
 interface ActionSource {
@@ -761,7 +763,7 @@ interface ActionSource {
 }
 
 interface ActionDefinition {
-  id: string;
+  id: string;            // fully-qualified, e.g. "github.create_issue"
   name: string;
   description: string;
   riskLevel: RiskLevel;
@@ -786,26 +788,49 @@ interface ActionResult {
   images?: Array<{ data: string; mimeType: string; description: string }>;
 }
 
-interface ActionSourceToolBridgeOptions {
-  service: string;
+interface ActionSourceConfig {
+  service: string;            // routing key + default credential service
   actions: ActionSource;
-  credentialService?: string;
+  credentialService?: string; // override service for credential lookup
   defaultApprovalMode?: 'allow' | 'require_approval' | 'deny';
 }
 
-function actionSourceToTools(opts: ActionSourceToolBridgeOptions): Promise<ToolDef[]>;
+interface ActionBridgeOptions {
+  sources: ActionSourceConfig[];
+}
+
+/**
+ * Returns exactly two ToolDefs: `list_tools` and `call_tool`. Internally the
+ * bridge holds a catalog assembled from every ActionSource passed in.
+ */
+function actionBridgeTools(opts: ActionBridgeOptions): Promise<ToolDef[]>;
 ```
+
+`list_tools` accepts:
+
+- `service?: string` — filter by service name.
+- `query?: string` — match against action name, id, and description (case-insensitive substring).
+- `limit?: number` — cap results (default 50, max 200).
+
+It returns a structured payload: `{ service, id, name, description, riskLevel, params }` per action, plus per-service auth/availability warnings when credentials are missing or expired.
+
+`call_tool` accepts:
+
+- `tool_id: string` — the fully-qualified action id (e.g. `github.create_issue`).
+- `params: object` — the action arguments, validated against the action's parameter schema before dispatch.
+- `summary: string` — one-line human-readable description used in approval gates and audit logs.
 
 Bridge behavior:
 
-- Each `ActionDefinition` becomes one `ToolDef` named `${service}.${action.id}`.
-- Zod parameters are converted to TypeBox/JSON Schema at registration time.
-- `riskLevel` is copied onto the `ToolDef`.
-- Current action policy is evaluated before execution. Denied actions return a tool error. Approval-required actions create a `DecisionGate` of type `approval`.
-- Credentials are resolved through `CredentialProvider` and passed to the action as the current `ActionContext.credentials`.
-- Existing action analytics are forwarded to the engine observability sink.
-- Existing action images are converted to `ToolAttachment` objects and handled by the engine attachment pipeline.
-- The bridge is a migration layer, not a permanent engine dependency. New plugins should export `ToolDef[]` directly.
+- Action ids stay unchanged inside the catalog and as `tool_id` arguments. Provider tool-name regexes never apply because action ids ride as string args, not tool names.
+- Zod parameters are converted to TypeBox/JSON Schema at registration time and exposed verbatim through `list_tools`.
+- `call_tool` validates `params` against the action's schema. Validation errors return a structured tool error, not an exception.
+- `riskLevel` is reported in `list_tools` and consulted in `call_tool` to decide whether to open a `DecisionGate` (`high`/`critical` default to `require_approval` unless the per-source `defaultApprovalMode` overrides). The action's `summary` arg is the gate body.
+- Credentials are resolved through `CredentialProvider` per call, scoped to the action's `credentialService`. Missing credentials surface as a structured "auth required" tool error and as a warning in subsequent `list_tools` responses.
+- Action analytics events are forwarded to the engine observability sink.
+- Action images are converted to `ToolAttachment` objects and handled by the engine attachment pipeline.
+
+The bridge is a migration layer, not a permanent engine dependency. New plugins may either (a) keep emitting `ActionSource`s and let the bridge expose them, or (b) export `ToolDef[]` directly when they want to be registered as first-class engine tools (e.g. coding-loop primitives where the per-call indirection is unwanted overhead). Engine adapters compose both paths in the same session.
 
 #### ToolResult
 

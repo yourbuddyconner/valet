@@ -14,6 +14,8 @@
  *   VALET_SANDBOX      virtual | local (default virtual)
  *   VALET_WORKSPACE    workspace dir for local sandbox (default cwd)
  *   VALET_SYSTEM_PROMPT  override the system prompt
+ *   GITHUB_TOKEN       when set, registers @valet/plugin-github actions via
+ *                      the actionSourceToTools bridge (read/write GitHub)
  *
  * Usage:
  *
@@ -30,15 +32,20 @@ import { createInterface } from "node:readline/promises";
 import { stdin, stdout } from "node:process";
 import { resolve } from "node:path";
 import { getModel } from "@mariozechner/pi-ai";
+import { githubActions } from "@valet/plugin-github/actions";
 import {
+  actionBridgeTools,
   Engine,
+  InMemoryCredentialStore,
   InMemoryEventBus,
   InMemorySessionStore,
   LocalSandboxProvider,
   VirtualSandboxProvider,
+  type ActionSourceConfig,
   type BusEvent,
   type SandboxProvider,
   type Session,
+  type ToolDef,
 } from "../src/index.js";
 
 const MODEL_ID = process.env.VALET_MODEL ?? "claude-haiku-4-5";
@@ -67,6 +74,15 @@ function fail(message: string, code = 1): never {
   process.exit(code);
 }
 
+async function loadPluginTools(): Promise<ToolDef[]> {
+  const sources: ActionSourceConfig[] = [];
+  if (process.env.GITHUB_TOKEN) {
+    sources.push({ service: "github", actions: githubActions });
+  }
+  if (sources.length === 0) return [];
+  return actionBridgeTools({ sources });
+}
+
 async function buildSession(): Promise<{ session: Session; bus: InMemoryEventBus }> {
   if (!process.env.ANTHROPIC_API_KEY) {
     fail(
@@ -84,20 +100,45 @@ async function buildSession(): Promise<{ session: Session; bus: InMemoryEventBus
 
   const store = new InMemorySessionStore();
   const bus = new InMemoryEventBus();
+  const credentials = new InMemoryCredentialStore();
   const sandboxProvider: SandboxProvider =
     SANDBOX_KIND === "local"
       ? new LocalSandboxProvider()
       : new VirtualSandboxProvider();
-  const engine = new Engine({ providers: { store, bus, sandboxProvider } });
+  const engine = new Engine({
+    providers: { store, bus, credentials, sandboxProvider },
+  });
+
+  const userId = "repl-user";
+  const tools: ToolDef[] = [];
+
+  // Plugin sources: when their respective env tokens are set, save the
+  // credential and add the source to the bridge. The bridge then exposes
+  // a single (list_tools, call_tool) pair regardless of how many sources
+  // are wired in.
+  if (process.env.GITHUB_TOKEN) {
+    await credentials.save({ type: "user", id: userId }, "github", {
+      type: "oauth2",
+      accessToken: process.env.GITHUB_TOKEN,
+    });
+  }
+  const pluginTools = await loadPluginTools();
+  if (pluginTools.length > 0) {
+    tools.push(...pluginTools);
+    stdout.write(
+      `\x1b[90m[plugins] ${pluginTools.length} bridge tools (list_tools + call_tool)\x1b[0m\n`,
+    );
+  }
 
   const workspace = SANDBOX_KIND === "local" ? resolve(WORKSPACE) : WORKSPACE;
   const session = await engine.createSession({
-    userId: "repl-user",
+    userId,
     orgId: "repl-org",
     workspace,
     sandbox: { workspace },
     model,
     systemPrompt: SYSTEM_PROMPT,
+    tools,
   });
 
   return { session, bus };
@@ -136,7 +177,9 @@ function subscribePrinter(bus: InMemoryEventBus): void {
         stdout.write(`\n\x1b[31m[error] ${ev.code}: ${ev.error}\x1b[0m\n`);
         break;
       default:
-        // ignore queue_state, message_start, status, etc. — too noisy for a REPL
+        if (process.env.VALET_DEBUG === "1") {
+          stdout.write(`\x1b[90m[debug] ${ev.type}\x1b[0m\n`);
+        }
         break;
     }
   });

@@ -11,6 +11,17 @@ export { VirtualSandbox, VirtualSandboxProvider } from "./providers/virtual-sand
 export { LocalSandbox, LocalSandboxProvider } from "./providers/local-sandbox.js";
 export { builtinTools, readTool, writeTool, editTool, bashTool, threadReadTool } from "./builtin-tools/index.js";
 export {
+  actionBridgeTools,
+  type ActionBridgeOptions,
+  type ActionSourceConfig,
+  type ApprovalMode,
+  type BridgeActionContext,
+  type BridgeActionDefinition,
+  type BridgeActionListContext,
+  type BridgeActionResult,
+  type BridgeActionSource,
+} from "./action-bridge.js";
+export {
   GateManager,
   DecisionGateWithdrawnError,
   DecisionGateExpiredError,
