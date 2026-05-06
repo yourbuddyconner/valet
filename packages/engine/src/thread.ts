@@ -3,7 +3,7 @@ import type { AgentEvent, AgentMessage, AgentTool } from "@mariozechner/pi-agent
 import type { Message } from "@mariozechner/pi-ai";
 import type { Session } from "./session.js";
 import { toAgentTool } from "./tool-bridge.js";
-import { fromRequest, GateManager } from "./decision-gate.js";
+import { fromRequest, GateManager, deterministicGateId } from "./decision-gate.js";
 import type {
   DecisionGate,
   DecisionGateRequest,
@@ -66,6 +66,9 @@ export class Thread {
   private currentAssistantParts: MessagePart[] = [];
   private currentToolCalls = new Map<string, MessagePart>();
   private toolCtxOverlay: { gateId?: string } = {};
+  private suspendedDecisionForReplay:
+    | { gateId: string; resolution?: DecisionResolution }
+    | undefined;
 
   constructor(session: Session, data: ThreadData) {
     this.session = session;
@@ -201,6 +204,17 @@ export class Thread {
       void this.persistQueueState();
       void this.tickQueue();
     }
+  }
+
+  /**
+   * Used by Engine.restoreSession to seed replay state before re-running a
+   * blocked tool. When the tool calls requestDecision with a matching
+   * resumeKey, the engine returns the stored resolution immediately.
+   */
+  setReplayContext(
+    ctx: { gateId: string; resolution?: DecisionResolution } | undefined,
+  ): void {
+    this.suspendedDecisionForReplay = ctx;
   }
 
   setMode(mode: QueueMode): void {
@@ -385,13 +399,33 @@ export class Thread {
       sandbox: session.sandbox,
       signal,
       decisionGateId: this.toolCtxOverlay.gateId,
+      suspendedDecision: this.suspendedDecisionForReplay,
       requestDecision: async (req: DecisionGateRequest): Promise<DecisionResolution> => {
-        const gate = fromRequest(req, {
+        if (!req.resumeKey) {
+          throw new Error(
+            "DecisionGateRequest.resumeKey is required for restart-safe gates.",
+          );
+        }
+        const gateCtx = {
           sessionId: session.id,
           threadId: this.id,
           queueItemId: this.activeItem?.id ?? "",
-          resumeKey: req.resumeKey ?? "",
-        });
+          resumeKey: req.resumeKey,
+        };
+        // Restart-safe replay: if running with a suspendedDecision and the
+        // gate ID matches, return the stored resolution without re-persisting.
+        if (this.suspendedDecisionForReplay) {
+          const expectedId = deterministicGateId(gateCtx);
+          if (
+            this.suspendedDecisionForReplay.gateId === expectedId &&
+            this.suspendedDecisionForReplay.resolution
+          ) {
+            const resolution = this.suspendedDecisionForReplay.resolution;
+            this.suspendedDecisionForReplay = undefined; // one-shot
+            return resolution;
+          }
+        }
+        const gate = fromRequest(req, gateCtx);
         await session.providers.store.saveDecisionGate(session.id, this.id, gate);
         const gateEntry: SessionEntry = {
           id: uid("e"),
