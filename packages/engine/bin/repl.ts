@@ -16,6 +16,9 @@
  *   VALET_SYSTEM_PROMPT  override the system prompt
  *   GITHUB_TOKEN       when set, registers @valet/plugin-github actions via
  *                      the actionSourceToTools bridge (read/write GitHub)
+ *   VALET_CONTEXT_WINDOW  override the model's local contextWindow (forces
+ *                         compaction at a smaller budget for dogfooding)
+ *   VALET_MAX_TOKENS   override the model's local maxTokens
  *
  * Usage:
  *
@@ -91,12 +94,29 @@ async function buildSession(): Promise<{ session: Session; bus: InMemoryEventBus
   }
   // pi-ai's `getModel` is typed against MODELS at compile time; we cast the
   // env-supplied id at the boundary because it's user input.
-  const model = getModel("anthropic", MODEL_ID as "claude-haiku-4-5");
-  if (!model) {
+  const baseModel = getModel("anthropic", MODEL_ID as "claude-haiku-4-5");
+  if (!baseModel) {
     fail(
       `unknown anthropic model "${MODEL_ID}". Check VALET_MODEL or pi-ai's MODELS table.`,
     );
   }
+  // VALET_CONTEXT_WINDOW + VALET_MAX_TOKENS let us force compaction at low
+  // budgets for dogfooding — the engine uses these to compute `usable`,
+  // while Anthropic's API still accepts the real (much larger) context.
+  const overrideCtx = process.env.VALET_CONTEXT_WINDOW
+    ? parseInt(process.env.VALET_CONTEXT_WINDOW, 10)
+    : undefined;
+  const overrideMax = process.env.VALET_MAX_TOKENS
+    ? parseInt(process.env.VALET_MAX_TOKENS, 10)
+    : undefined;
+  const model =
+    overrideCtx || overrideMax
+      ? {
+          ...baseModel,
+          contextWindow: overrideCtx ?? baseModel.contextWindow,
+          maxTokens: overrideMax ?? baseModel.maxTokens,
+        }
+      : baseModel;
 
   const store = new InMemorySessionStore();
   const bus = new InMemoryEventBus();
@@ -169,6 +189,12 @@ function subscribePrinter(bus: InMemoryEventBus): void {
         break;
       case "decision_gate_resolved":
         stdout.write(`\x1b[33m[gate] resolved=${ev.resolution.actionId}\x1b[0m\n`);
+        break;
+      case "compaction_start":
+        stdout.write(`\n\x1b[35m[compaction] started…\x1b[0m\n`);
+        break;
+      case "compaction_end":
+        stdout.write(`\x1b[35m[compaction] done\x1b[0m\n`);
         break;
       case "turn_end":
         stdout.write(`\n\x1b[90m[turn ended: ${ev.reason}]\x1b[0m\n`);
