@@ -853,23 +853,94 @@ type ToolAttachment =
 
 ### Compaction
 
-Token-aware context compression. When a thread's context approaches the model's context window limit, the engine summarizes older messages and inserts a CompactionEntry into the DAG, keeping recent messages intact.
+Token-aware context compression with two complementary techniques. When a thread approaches the model's context window, the engine **prunes** stale tool outputs cheaply (no LLM) and, if more space is needed, **compacts** older messages into a structured summary (one LLM call). The DAG is preserved verbatim — pruning marks tool-output strings as elided, compaction inserts a `CompactionEntry`. Both transformations apply only when assembling the LLM-visible context; the engine's history record never loses anything.
 
-**Trigger conditions:**
-- Threshold mode: `contextTokens > (contextWindow - reserveTokens)`. Compact before the next prompt.
-- Overflow mode: LLM returned an error due to context overflow. Compact and retry.
+This design is informed by OpenCode's compaction module (which itself iterates on prior tools like Aider's repo-summarization). Where this spec and that implementation differ, this spec is authoritative for Valet V1.
 
-**Algorithm:**
-1. Calculate cut point: keep most recent N tokens (`keepRecentTokens`, default 20k). Work backward to find a valid cut point (user or assistant message boundary, never split mid-turn).
-2. Serialize messages before the cut point into a structured text representation.
-3. Send to LLM with a summarization prompt. Output is structured markdown (goal, progress, key decisions, next steps, critical context).
-4. Track file operations: extract paths from read/write/edit tool calls, distinguish read-only vs. modified files.
-5. Insert CompactionEntry into the DAG. Future context reconstruction includes the summary plus recent messages.
+#### Triggers
 
-**Configuration:**
-- `reserveTokens`: default 16384 (safety buffer)
-- `keepRecentTokens`: default 20000 (minimum recent context to preserve)
-- `enabled`: default true (can be disabled per-thread)
+- **Proactive (auto)** — after each turn, if `tokens.total >= usable(model, cfg)` where
+  ```
+  usable = contextWindow − reserved
+  reserved = cfg.reserveTokens ?? min(20_000, model.maxOutputTokens)
+  ```
+  the engine queues a compaction pass to run before the next user turn would otherwise execute. Token usage comes from pi-ai's per-call `Usage`; we do not estimate independently in this path.
+- **Reactive (overflow)** — if a turn's assistant message returns `stopReason === 'error'` and pi-ai's `isContextOverflow(message)` matches the error, the engine compacts and retries the same turn. Reactive compaction strips media attachments from history before summarizing (some overflow is media-bytes, not token-count, so dropping images can be enough on its own).
+
+#### Tail preservation
+
+Compaction never touches the most recent turns. A "turn" is the segment from one user message up to (but not including) the next user message, including the assistant's tool calls and tool results.
+
+- Default keep: the last `cfg.tailTurns ?? 2` turns.
+- Tail token budget: `clamp(usable * 0.25, cfg.minPreserveRecentTokens ?? 2_000, cfg.maxPreserveRecentTokens ?? 8_000)`.
+- If the last `tailTurns` turns exceed the budget, the engine walks them oldest → newest and drops whole turns from the head of that window until the rest fits. If a single turn alone exceeds the budget, the engine splits it at the first message boundary that fits, summarizing the prefix into the compaction and keeping the suffix in the tail.
+
+#### Pruning (cheap path, no LLM)
+
+Walk messages newest → oldest. Track cumulative tool-output token estimate. Once the cumulative count exceeds `cfg.pruneProtectTokens ?? 40_000`, mark every older `tool_call`-result text as `elided`. Skip protected tools (the engine ships with `skill` and `thread_read` protected by default; per-tool opt-in via `ToolDef.protectedFromPruning`).
+
+The DAG entry is updated in place — `MessagePart` of type `tool_call` keeps `callId`, `toolName`, `args`, and `status`, but its `result` field is replaced with a placeholder `{ elided: true, reason: 'pruned' }`. LLM-context assembly skips elided results. Pruning only commits if it'd save at least `cfg.pruneMinimumTokens ?? 20_000` tokens; otherwise it's a no-op.
+
+Pruning runs before compaction on the proactive path. Often pruning alone is enough.
+
+#### Compaction (LLM path)
+
+When pruning isn't enough (or after `cfg.pruneMinimumTokens` worth of tool output has already been elided), the engine summarizes the messages before the tail.
+
+1. Compute the cut point per the tail-preservation rules above.
+2. Assemble the head: the messages before the cut, with tool outputs truncated to `cfg.toolOutputMaxChars ?? 2_000` chars and image content stripped.
+3. If the thread already has a `CompactionEntry`, load its `summary` as `previousSummary`. The new summarization is iterative — the prompt asks the summarizer to *update* the prior summary with new facts rather than write a fresh one.
+4. Call a summarizer model (`cfg.summarizerModel ?? sessionModel`; typically a smaller cheaper model like Haiku) with a structured-markdown prompt:
+   ```
+   ## Goal · ## Constraints & Preferences
+   ## Progress (Done / In Progress / Blocked) · ## Key Decisions
+   ## Next Steps · ## Critical Context · ## Relevant Files
+   ```
+   This template is required, not advisory. The summary text is the source of truth for the LLM's view of pre-cut history; using a structured form prevents the summary from drifting into prose that crowds out specific facts (paths, error strings, identifiers).
+5. Persist a `CompactionEntry` in the DAG with:
+   - `summary`: the markdown produced by step 4.
+   - `coveredEntryIds`: every entry id from the DAG head that this summary represents.
+   - `tokenCountBefore` / `tokenCountAfter`: token counts of the head before and the summary after, for observability.
+   - `fileContext`: extracted paths from `read`/`write`/`edit` tool calls in the head, classified `read` vs `modified` (helps the agent re-orient on resume).
+6. Emit `compaction_start` then `compaction_end` events with the entry id.
+
+The `CompactionEntry` is positioned at the cut point in the DAG; `parentId` links it to the last covered entry. Subsequent `MessageEntry`s parent to the `CompactionEntry`. Branching/replay still works: walking from leaf via `parentId` produces a valid history, with the summary standing in for everything older.
+
+#### Applying compaction to LLM context
+
+The engine's `convertToLlm` pipeline (the function fed to pi-agent-core's `Agent` to translate persisted DAG entries into LLM messages) does the rewrite at request time:
+
+1. Load DAG entries for the thread.
+2. Find the most recent `CompactionEntry`. If none, pass entries through unchanged.
+3. Drop every entry whose id is in the active compaction's `coveredEntryIds`.
+4. Replace them with a single user message containing the summary text, framed as `<previous-context>{summary}</previous-context>`.
+5. Apply pruning's elision: any kept entry's tool-call parts whose `result.elided === true` get a placeholder `[output elided to save context]` in the LLM-visible content.
+6. Yield the resulting `Message[]` to the agent loop.
+
+This is also the rehydration path on `restoreSession` — there is no separate "rebuild context after compaction" code path.
+
+#### Auto-continue after compaction
+
+After a successful proactive compaction (i.e., one we ran on our own initiative, not in response to the user's prompt), if the thread is mid-task the engine injects a synthetic user message before yielding back to the next queue item:
+
+> "Continue if you have next steps, or stop and ask for clarification if you are unsure how to proceed."
+
+The synthetic message is tagged with `metadata: { compaction_continue: true }` so client UIs can render it differently or hide it. Reactive (overflow) compactions don't auto-continue — they just retry the original turn that triggered the overflow.
+
+#### Configuration
+
+| Key | Default | Notes |
+|---|---|---|
+| `cfg.compactionEnabled` | `true` | per-thread switch |
+| `cfg.reserveTokens` | `min(20_000, maxOutput)` | head-room subtracted from contextWindow |
+| `cfg.tailTurns` | `2` | last N turns never touched |
+| `cfg.minPreserveRecentTokens` | `2_000` | floor on tail token budget |
+| `cfg.maxPreserveRecentTokens` | `8_000` | ceiling on tail token budget |
+| `cfg.pruneProtectTokens` | `40_000` | recent tool-output bytes never pruned |
+| `cfg.pruneMinimumTokens` | `20_000` | only commit prune if it saves ≥ this much |
+| `cfg.toolOutputMaxChars` | `2_000` | when feeding head to summarizer |
+| `cfg.summarizerModel` | `sessionModel` | dedicated summarizer is cheaper |
+| `cfg.protectedTools` | `['skill', 'thread_read']` | per-tool opt-out from pruning; `ToolDef.protectedFromPruning` adds to this set |
 
 ### Per-Thread Prompt Queue
 
