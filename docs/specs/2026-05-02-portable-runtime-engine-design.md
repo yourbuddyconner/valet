@@ -249,10 +249,19 @@ The engine is a library. Platform adapters host it and expose HTTP/WebSocket ent
 ```typescript
 interface Engine {
   createSession(opts: CreateSessionOptions): Promise<SessionHandle>;
-  restoreSession(sessionId: string): Promise<SessionHandle>;
+  restoreSession(opts: RestoreSessionOptions): Promise<SessionHandle>;
   getSession(sessionId: string): Promise<SessionHandle | null>;
   deleteSession(sessionId: string): Promise<void>;
   onEvent(listener: (event: BusEvent) => void): Unsubscribe;
+}
+
+interface RestoreSessionOptions {
+  sessionId: string;
+  // Same shape as CreateSessionOptions minus `id` — the caller re-supplies
+  // tools, sandbox, model, system prompt, etc. The engine does not maintain
+  // a registry of session-creation options across restarts; the host (DO,
+  // pod, CLI) is responsible for reconstructing them from its own config.
+  options: Omit<CreateSessionOptions, 'id'>;
 }
 
 interface CreateSessionOptions {
@@ -469,6 +478,14 @@ interface BranchSummaryEntry extends BaseEntry {
 
 The active conversation path is reconstructed by following `parentId` pointers from the leaf back to the root. Compaction inserts a summary without rewriting history.
 
+**LLM-faithful entry persistence (rehydration contract):** the engine must persist enough information in `MessageEntry.parts` to reconstruct LLM-compatible content blocks on restore. Specifically:
+
+- An assistant entry that issued tool calls MUST persist one `MessagePart` of type `tool_call` per call, with `callId`, `toolName`, and `args`. Without this, a restored transcript would show the assistant's text but lose the tool calls, producing a malformed `[user, assistant(text), toolResult]` sequence that LLM providers reject.
+- A tool-result entry (role `tool`) MUST persist `callId` so the LLM provider can match it to the assistant's tool call.
+- Thinking content, if recorded at all, persists with provider-specific signatures intact when available, so cross-provider handoff and replay produce valid context.
+
+`MessageEntry.content` is the human-readable text rendering; `MessageEntry.parts` is the structured source of truth used during rehydration.
+
 **Suspension history rules:** Decision-gated turns are represented in the DAG by a first-class `DecisionGateEntry`, not by synthetic system messages. The entry is created when the gate is opened and then updated in place as it moves through `pending`, `resolved`, `expired`, or `withdrawn` states. This keeps the history model explicit and replayable: gates are decision artifacts, not conversation utterances.
 
 **V1 branching stance:** The storage model remains DAG-based so future replay and alternate branches are possible without schema redesign, but V1 does not require exposing full user-facing branch/replay controls in the API. V1 must preserve enough metadata for later branching support without forcing branching UX to ship in the first implementation batch.
@@ -683,8 +700,14 @@ interface ToolContext {
   sandbox: Sandbox;
 
   // Structured runtime interactions
-  requestDecision: (gate: DecisionGate) => Promise<DecisionResolution>;
+  requestDecision: (req: DecisionGateRequest) => Promise<DecisionResolution>;
   emitArtifact?: (artifact: ToolArtifact) => Promise<void>;
+  /**
+   * Set by the engine ONLY on a replayed tool execution after restart.
+   * When `gateId` matches the deterministic ID derived from this call's
+   * `req.resumeKey`, the engine returns the stored `resolution` immediately
+   * instead of opening a new gate. Tools never set this themselves.
+   */
   suspendedDecision?: SuspendedDecisionContext;
 
   // Abort
@@ -720,6 +743,12 @@ When a tool calls `credentials.request()` for a credential that doesn't exist, t
 Approval-gated tools follow the same suspension model. A tool can return or throw a structured `approval_required` signal, which the engine converts into a `DecisionGate`, persists, emits, and resumes on resolution.
 
 **Restart-safe tool suspension contract:** The engine does not rely on preserving an in-memory JavaScript continuation across restarts. Tools that call `requestDecision(...)` must therefore be re-entrant up to their decision points. On first execution, `requestDecision(...)` persists the gate and suspends the turn. On resumed execution, the engine re-runs the tool from the start with `suspendedDecision` populated for the matching gate ID, and the same `requestDecision(...)` call returns the stored resolution instead of creating a new gate.
+
+**What "re-entrant up to the decision point" means in practice:** any work the tool does *before* `requestDecision(...)` will run twice — once on the original execution (lost when the engine restarts), once on replay. Side effects in that prefix must be idempotent or read-only. Work *after* `requestDecision(...)` returns runs once on replay only. Tools that need to do non-idempotent work before a gate should split into two tools (one to do the work and persist a result, another to gate-and-act on it) or move the work to after the gate.
+
+**How the engine populates `ctx.suspendedDecision`:** on `restoreSession`, for every thread whose persisted queue status is `blocked_on_decision_gate`, the engine loads the corresponding `DecisionGate` and `SuspendedTurnState`. If the gate is still `pending`, the engine re-arms its in-memory wait so a future `resolveDecision(...)` call delivers the resolution. If the gate is already `resolved` (the user resolved it while the engine was down) or becomes resolved later, the engine invokes the persisted tool by name with the persisted args, sets `ctx.suspendedDecision = { gateId, resolution }` for that one execution, and feeds the returned `ToolResult` back into the agent loop as if the original turn had completed — then calls the agent's continuation to produce the next assistant turn.
+
+**Replay event guarantees:** the replayed tool execution does not need to emit the same per-call `tool_start` / `tool_end` event pair as the original turn (the original pair was already emitted before the engine went down). The engine MUST emit the post-replay `text_delta` / `message_end` / `turn_end` events for the continuation turn so that connected clients see the agent finish the work. Adapters re-deliver pending gates on client (re)connection through the `init` event payload.
 
 #### Plugin Action Bridge
 
@@ -861,9 +890,9 @@ When a thread enters `blocked_on_decision_gate`, the engine persists a `Suspende
 - session ID / thread ID / active queue item ID
 - current model
 - active leaf message ID
-- pending gate ID
-- pending tool call ID, tool name, and original tool args
-- any deterministic resume context needed for `requestDecision(...)` to short-circuit on replay
+- pending gate ID (derived from `gate:${sessionId}:${threadId}:${queueItemId}:${resumeKey}`)
+- pending tool call ID, tool name, and original tool args (used to invoke the tool by name during replay)
+- the `resumeKey` the tool supplied (used to recompute the gate ID on replay and confirm a match)
 
 On restore, the engine reloads the blocked thread, reloads the decision gate, and waits for either resolution, expiry, or cancellation. Once resolved, the engine reconstructs the turn from the checkpoint and re-drives execution.
 
@@ -984,6 +1013,27 @@ The engine must treat missing channel delivery as non-fatal. A gate that cannot 
 The `DecisionGateEntry.id` should be the canonical DAG entry ID for the gate, while `DecisionGate.id` is the stable runtime identity used by transports, queue state, and suspended-turn checkpoints. In V1 these may be the same value for simplicity.
 
 **Deterministic gate identity:** A gate created from a tool execution must use a stable ID for that suspension point within the active turn. This is what allows the engine to re-run the tool after restart and have `requestDecision(...)` match the existing persisted gate instead of creating a duplicate.
+
+The V1 derivation is:
+
+```
+gateId = `gate:${sessionId}:${threadId}:${queueItemId}:${resumeKey}`
+```
+
+`resumeKey` is **required** on `DecisionGateRequest` (not optional). Tool authors choose a key that uniquely identifies the suspension point given the tool's inputs — typically a function of the tool's args (e.g. `"github.create_pr:owner/repo:head→base"`). Two `requestDecision(...)` calls in the same active queue item with the same `resumeKey` open the same gate. Two calls with different `resumeKey`s open different gates. A replayed tool execution that reaches the same `requestDecision(...)` call site with the same args produces the same `resumeKey` and therefore the same `gateId`, which is how the short-circuit works.
+
+```typescript
+interface DecisionGateRequest {
+  type: 'approval' | 'question' | 'credential_request';
+  title: string;
+  body?: string;
+  actions?: DecisionAction[];
+  expiresAt?: number;
+  context?: Record<string, unknown>;
+  origin?: { channelType?: string; channelId?: string; messageId?: string };
+  resumeKey: string; // REQUIRED for restart-safe gates
+}
+```
 
 **Resolution paths:**
 
@@ -1698,8 +1748,8 @@ Every adapter must provide:
 - Engine instance lookup by session ID.
 - Session affinity so prompts, decision resolutions, and aborts for one session reach the same active engine instance.
 - Event subscription and client delivery over WebSocket and/or SSE.
-- Startup restoration of queued, running, and blocked threads from `SessionStore`.
-- Idle eviction/hibernation that calls `store.flush()` and leaves enough persisted state to resume.
+- Startup restoration of queued, running, and blocked threads from `SessionStore` via `engine.restoreSession({ sessionId, options })`. The adapter is responsible for reconstructing `options` (tools, sandbox handle, model, system prompt, role/skill sources) from its own configuration — the engine itself does not persist creation options.
+- Idle eviction/hibernation that calls `store.flush()` and leaves enough persisted state to resume. Specifically: any thread with status `running` or `blocked_on_decision_gate`, plus its active queue item and (for blocked threads) its `SuspendedTurnState`, must be readable on wake.
 - Fatal error handling that marks the session `error`, publishes a client `error` event, and prevents silent queue accumulation.
 
 Cloudflare V1 uses one `SessionHostDO` per session ID. Kubernetes may use a process-local `SessionPool`, but must provide equivalent session affinity and restore behavior.
