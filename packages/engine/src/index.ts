@@ -8,6 +8,7 @@ export { InMemoryBlobStore } from "./providers/in-memory-blob.js";
 export { InMemoryCredentialStore } from "./providers/in-memory-credentials.js";
 export { SqliteSessionStore } from "./providers/sqlite-store.js";
 export { VirtualSandbox, VirtualSandboxProvider } from "./providers/virtual-sandbox.js";
+export { LocalSandbox, LocalSandboxProvider } from "./providers/local-sandbox.js";
 export { builtinTools, readTool, writeTool, editTool, bashTool, threadReadTool } from "./builtin-tools/index.js";
 export {
   GateManager,

@@ -3,39 +3,64 @@
  * End-to-end smoke REPL for @valet/engine.
  *
  * Wires up:
- *   - InMemorySessionStore + InMemoryEventBus + VirtualSandbox (no containers)
+ *   - InMemorySessionStore + InMemoryEventBus
+ *   - VirtualSandbox (default) or LocalSandbox (real host filesystem + shell)
  *   - The engine's built-in tools (read/write/edit/bash/thread_read)
  *   - A real Anthropic model via pi-ai (defaults to claude-haiku-4-5)
  *
+ * Env:
+ *   ANTHROPIC_API_KEY  required
+ *   VALET_MODEL        pi-ai anthropic model id (default claude-haiku-4-5)
+ *   VALET_SANDBOX      virtual | local (default virtual)
+ *   VALET_WORKSPACE    workspace dir for local sandbox (default cwd)
+ *   VALET_SYSTEM_PROMPT  override the system prompt
+ *
  * Usage:
  *
- *   # single prompt, exits when the agent emits end_turn:
- *   ANTHROPIC_API_KEY=... pnpm --filter @valet/engine exec tsx bin/repl.ts "say hi"
+ *   # in-memory sandbox, single prompt:
+ *   pnpm --filter @valet/engine repl "say hi"
  *
- *   # interactive multi-turn (one prompt per stdin line, ctrl-D / 'exit' to quit):
- *   ANTHROPIC_API_KEY=... pnpm --filter @valet/engine exec tsx bin/repl.ts
+ *   # local sandbox pointed at the current repo, interactive:
+ *   VALET_SANDBOX=local pnpm --filter @valet/engine repl
  *
- *   # pick a different model:
- *   VALET_MODEL=claude-sonnet-4-6 ANTHROPIC_API_KEY=... pnpm ... bin/repl.ts
+ *   # local sandbox pointed at an explicit dir:
+ *   VALET_SANDBOX=local VALET_WORKSPACE=/path/to/repo pnpm --filter @valet/engine repl "list the top-level files"
  */
 import { createInterface } from "node:readline/promises";
 import { stdin, stdout } from "node:process";
+import { resolve } from "node:path";
 import { getModel } from "@mariozechner/pi-ai";
 import {
   Engine,
   InMemoryEventBus,
   InMemorySessionStore,
+  LocalSandboxProvider,
   VirtualSandboxProvider,
   type BusEvent,
+  type SandboxProvider,
   type Session,
 } from "../src/index.js";
 
 const MODEL_ID = process.env.VALET_MODEL ?? "claude-haiku-4-5";
+const SANDBOX_KIND = (process.env.VALET_SANDBOX ?? "virtual").toLowerCase();
+const WORKSPACE =
+  process.env.VALET_WORKSPACE ??
+  (SANDBOX_KIND === "local" ? process.cwd() : "/");
+
+const SYSTEM_PROMPT_VIRTUAL =
+  "You are a helpful coding assistant running inside an in-memory virtual sandbox. " +
+  "You have built-in tools: read, write, edit, bash, thread_read. " +
+  "The sandbox starts empty at /. Be concise.";
+
+const SYSTEM_PROMPT_LOCAL =
+  `You are a helpful coding assistant running on a local developer machine. ` +
+  `Your workspace is ${WORKSPACE}. Relative paths resolve there. ` +
+  `You have built-in tools: read, write, edit, bash, thread_read. ` +
+  `Be concise. Confirm with the user before making destructive changes.`;
+
 const SYSTEM_PROMPT =
   process.env.VALET_SYSTEM_PROMPT ??
-  "You are a helpful coding assistant running inside an in-memory virtual sandbox. " +
-    "You have built-in tools: read, write, edit, bash, thread_read. " +
-    "The sandbox starts empty at /. Be concise.";
+  (SANDBOX_KIND === "local" ? SYSTEM_PROMPT_LOCAL : SYSTEM_PROMPT_VIRTUAL);
 
 function fail(message: string, code = 1): never {
   process.stderr.write(`error: ${message}\n`);
@@ -59,14 +84,18 @@ async function buildSession(): Promise<{ session: Session; bus: InMemoryEventBus
 
   const store = new InMemorySessionStore();
   const bus = new InMemoryEventBus();
-  const sandboxProvider = new VirtualSandboxProvider();
+  const sandboxProvider: SandboxProvider =
+    SANDBOX_KIND === "local"
+      ? new LocalSandboxProvider()
+      : new VirtualSandboxProvider();
   const engine = new Engine({ providers: { store, bus, sandboxProvider } });
 
+  const workspace = SANDBOX_KIND === "local" ? resolve(WORKSPACE) : WORKSPACE;
   const session = await engine.createSession({
     userId: "repl-user",
     orgId: "repl-org",
-    workspace: "/",
-    sandbox: {},
+    workspace,
+    sandbox: { workspace },
     model,
     systemPrompt: SYSTEM_PROMPT,
   });
@@ -145,7 +174,9 @@ async function runInteractive(): Promise<void> {
   subscribePrinter(bus);
   const rl = createInterface({ input: stdin, output: stdout });
   stdout.write(
-    `\nvalet engine repl — model=${MODEL_ID}; type a prompt, 'exit' to quit.\n`,
+    `\nvalet engine repl — model=${MODEL_ID} sandbox=${SANDBOX_KIND}` +
+      (SANDBOX_KIND === "local" ? ` workspace=${WORKSPACE}` : "") +
+      `\ntype a prompt, 'exit' to quit.\n`,
   );
   while (true) {
     const line = (await rl.question("\n> ")).trim();
