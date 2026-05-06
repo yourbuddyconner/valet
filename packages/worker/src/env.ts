@@ -40,6 +40,11 @@ export interface Env {
   // Optional Worker name fallback (used when FRONTEND_URL is a Pages domain).
   WORKER_NAME?: string;
 
+  // OpenTelemetry OTLP/HTTP export. Tracing is disabled when endpoint is unset.
+  OTEL_EXPORTER_OTLP_ENDPOINT?: string;
+  OTEL_EXPORTER_OTLP_HEADERS?: string;
+  OTEL_CAPTURE_CONTENT?: string;
+
   // Slack integration
   SLACK_SIGNING_SECRET?: string;
   SLACK_BOT_TOKEN?: string;

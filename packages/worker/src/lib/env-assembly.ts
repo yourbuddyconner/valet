@@ -18,6 +18,24 @@ export function generateRunnerToken(): string {
 }
 
 /**
+ * Assemble tracing env vars for sandbox processes. TRACEPARENT is supplied by
+ * the SessionAgent DO at spawn/restore time because it owns lifecycle spans.
+ */
+export function assembleTracingEnv(env: Env): Record<string, string> {
+  const envVars: Record<string, string> = {};
+  if (env.OTEL_EXPORTER_OTLP_ENDPOINT) {
+    envVars.OTEL_EXPORTER_OTLP_ENDPOINT = env.OTEL_EXPORTER_OTLP_ENDPOINT;
+  }
+  if (env.OTEL_EXPORTER_OTLP_HEADERS) {
+    envVars.OTEL_EXPORTER_OTLP_HEADERS = env.OTEL_EXPORTER_OTLP_HEADERS;
+  }
+  if (env.OTEL_CAPTURE_CONTENT) {
+    envVars.OTEL_CAPTURE_CONTENT = env.OTEL_CAPTURE_CONTENT;
+  }
+  return envVars;
+}
+
+/**
  * Assemble LLM provider API keys from org DB keys, falling back to env vars.
  */
 export async function assembleProviderEnv(

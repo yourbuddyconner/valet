@@ -15,6 +15,7 @@ import { AgentClient } from "./agent-client.js";
 import { PromptHandler } from "./prompt.js";
 import { startGateway, cleanupAllCloudflared } from "./gateway.js";
 import { OpenCodeManager, type OpenCodeConfig } from "./opencode-manager.js";
+import { flushTracing, initTracing, parentFromTraceparent, startSpan, traceparentFromSpan } from "./tracing.js";
 
 function mergeOpenCodeConfig(
   current: OpenCodeConfig,
@@ -147,6 +148,16 @@ function buildInitialConfig(): OpenCodeConfig {
 // ─── Main ────────────────────────────────────────────────────────────────
 
 async function main() {
+  process.env.SESSION_ID = sessionId!;
+  initTracing(sessionId!);
+  const bootstrapSpan = startSpan("valet.runner.bootstrap", {
+    parent: parentFromTraceparent(process.env.TRACEPARENT),
+    attributes: {
+      "valet.session.id": sessionId,
+      "valet.runner.version": "0.1.0",
+    },
+  });
+  process.env.TRACEPARENT = traceparentFromSpan(bootstrapSpan);
   console.log(`[Runner] Starting for session ${sessionId}`);
   console.log(`[Runner] DO URL: ${doUrl}`);
 
@@ -390,9 +401,9 @@ async function main() {
   });
 
   // Register handlers
-  agentClient.onPrompt(async (messageId, content, model, author, modelPreferences, attachments, channelType, channelId, opencodeSessionId, continuationContext, threadId, replyChannelType, replyChannelId) => {
+  agentClient.onPrompt(async (messageId, content, model, author, modelPreferences, attachments, channelType, channelId, opencodeSessionId, continuationContext, threadId, replyChannelType, replyChannelId, traceparent) => {
     console.log(`[Runner] Received prompt: ${messageId}${model ? ` (model: ${model})` : ''}${author?.authorName ? ` (by: ${author.authorName})` : ''}${modelPreferences?.length ? ` (prefs: ${modelPreferences.length} models)` : ''}${attachments?.length ? ` (attachments: ${attachments.length})` : ''}${channelType ? ` (channel: ${channelType})` : ''}${replyChannelType ? ` (replyChannel: ${replyChannelType})` : ''}${continuationContext ? ' (with continuation context)' : ''}`);
-    await promptHandler.handlePrompt(messageId, content, model, author, modelPreferences, attachments, channelType, channelId, opencodeSessionId, continuationContext, threadId, replyChannelType, replyChannelId);
+    await promptHandler.handlePrompt(messageId, content, model, author, modelPreferences, attachments, channelType, channelId, opencodeSessionId, continuationContext, threadId, replyChannelType, replyChannelId, traceparent);
   });
 
   agentClient.onAnswer(async (questionId, answer) => {
@@ -441,9 +452,9 @@ async function main() {
     await promptHandler.handleNewSession(channelType, channelId, requestId);
   });
 
-  agentClient.onWorkflowExecute(async (executionId, payload, model, modelPreferences) => {
+  agentClient.onWorkflowExecute(async (executionId, payload, model, modelPreferences, traceparent) => {
     console.log(`[Runner] Received workflow execution dispatch: ${executionId} (${payload.kind})`);
-    await promptHandler.handleWorkflowExecutionDispatch(executionId, payload, model, modelPreferences);
+    await promptHandler.handleWorkflowExecutionDispatch(executionId, payload, model, modelPreferences, traceparent);
   });
 
   agentClient.onTunnelDelete(async (name, actor) => {
@@ -540,6 +551,8 @@ async function main() {
     cleanupAllCloudflared();
     await openCodeManager.shutdown();
     agentClient.disconnect();
+    bootstrapSpan.end();
+    await flushTracing();
     process.exit(0);
   };
 
@@ -618,6 +631,7 @@ async function main() {
   clearTimeout(bootTimeoutHandle!);
   if (bootResult === "timeout") {
     console.warn("[Runner] Timed out waiting for boot prerequisites (repo clone / plugin content) — proceeding");
+    bootstrapSpan.setAttribute("valet.runner.boot_timeout", true);
   } else {
     console.log("[Runner] Boot prerequisites complete (repo clone + plugin content)");
   }
@@ -625,6 +639,8 @@ async function main() {
   // Signal readiness — this triggers the DO to drain any queued prompts.
   agentClient.sendAgentStatus("idle");
   console.log("[Runner] Ready — sent initial agentStatus: idle to DO");
+  bootstrapSpan.end();
+  await flushTracing();
 
   // Discover models in background — not needed for prompt handling
   promptHandler.fetchAvailableModels().then((models) => {

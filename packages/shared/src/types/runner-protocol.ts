@@ -118,6 +118,8 @@ export type DOToRunnerMessage =
       authorName?: string;
       gitName?: string;
       gitEmail?: string;
+      /** W3C traceparent for correlating this runner turn with worker dispatch. */
+      traceparent?: string;
     }
   | { type: 'answer'; questionId: string; answer: string | boolean }
   | { type: 'stop' }
@@ -223,6 +225,8 @@ export type DOToRunnerMessage =
       model?: string;
       modelPreferences?: string[];
       payload: WorkflowExecutionDispatchPayload;
+      /** W3C traceparent for correlating this workflow dispatch with worker spans. */
+      traceparent?: string;
     }
   | {
       type: 'list-tools-result';
@@ -271,6 +275,8 @@ export type DOToRunnerMessage =
       repoUrl?: string;
       branch?: string;
       ref?: string;
+      /** W3C traceparent for runner bootstrap/repo setup correlation. */
+      traceparent?: string;
     }
   | { type: 'repo-token-refreshed'; token: string; expiresAt?: string; requestId?: string }
   | {

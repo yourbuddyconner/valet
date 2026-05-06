@@ -27,6 +27,7 @@ import {
   type WorkflowStepExecutionContext,
   type WorkflowStepExecutionResult,
 } from "./workflow-engine.js";
+import { flushTracing, parentFromTraceparent, startSpan, traceparentFromSpan } from "./tracing.js";
 
 // OpenCode ToolState status values
 type ToolStatus = "pending" | "running" | "completed" | "error";
@@ -635,6 +636,7 @@ export class PromptHandler {
    * explicit.
    */
   private currentPromptChannel: ChannelSession | null = null;
+  private currentPromptTraceparent: string | undefined;
 
   // Legacy single-session compat — points to currentPromptChannel's OC session ID
   // Used by ephemeral sessions, reviews, etc. that don't need per-channel routing
@@ -1101,16 +1103,35 @@ export class PromptHandler {
     payload: WorkflowExecutionDispatchPayload,
     model?: string,
     modelPreferences?: string[],
+    traceparent?: string,
   ): Promise<void> {
+    const span = startSpan("valet.workflow.execute", {
+      parent: parentFromTraceparent(traceparent),
+      attributes: {
+        "valet.session.id": this.runnerSessionId || undefined,
+        "valet.workflow.execution_id": executionId,
+        "valet.workflow.kind": payload.kind,
+      },
+    });
+    this.currentPromptTraceparent = traceparentFromSpan(span);
     const request: WorkflowExecutionDispatchPayload = {
       ...payload,
       executionId: payload.executionId || executionId,
     };
-    await this.handleWorkflowExecutionPrompt(`workflow:${executionId}`, request, {
-      emitChatError: false,
-      model,
-      modelPreferences,
-    });
+    try {
+      await this.handleWorkflowExecutionPrompt(`workflow:${executionId}`, request, {
+        emitChatError: false,
+        model,
+        modelPreferences,
+      });
+    } catch (err) {
+      span.recordException(err);
+      throw err;
+    } finally {
+      span.end();
+      await flushTracing();
+      this.currentPromptTraceparent = undefined;
+    }
   }
 
   private async executeWorkflowToolStep(
@@ -1435,8 +1456,19 @@ export class PromptHandler {
     });
   }
 
-  async handlePrompt(messageId: string, content: string, model?: string, author?: { authorId?: string; gitName?: string; gitEmail?: string; authorName?: string; authorEmail?: string }, modelPreferences?: string[], attachments?: PromptAttachment[], channelType?: string, channelId?: string, opencodeSessionId?: string, continuationContext?: string, threadId?: string, replyChannelType?: string, replyChannelId?: string): Promise<void> {
+  async handlePrompt(messageId: string, content: string, model?: string, author?: { authorId?: string; gitName?: string; gitEmail?: string; authorName?: string; authorEmail?: string }, modelPreferences?: string[], attachments?: PromptAttachment[], channelType?: string, channelId?: string, opencodeSessionId?: string, continuationContext?: string, threadId?: string, replyChannelType?: string, replyChannelId?: string, traceparent?: string): Promise<void> {
     console.log(`[PromptHandler] Handling prompt ${messageId}: "${content.slice(0, 80)}"${model ? ` (model: ${model})` : ''}${author?.authorName ? ` (by: ${author.authorName})` : ''}${modelPreferences?.length ? ` (prefs: ${modelPreferences.length})` : ''}${attachments?.length ? ` (attachments: ${attachments.length})` : ''}${channelType ? ` (channel: ${channelType})` : ''}${continuationContext ? ' (with continuation context)' : ''}`);
+    const turnSpan = startSpan("valet.turn", {
+      parent: parentFromTraceparent(traceparent),
+      attributes: {
+        "valet.session.id": this.runnerSessionId || undefined,
+        "valet.message.id": messageId,
+        "valet.channel.type": channelType,
+        "valet.channel.id": channelId,
+      },
+    });
+    this.currentPromptTraceparent = traceparentFromSpan(turnSpan);
+    process.env.TRACEPARENT = this.currentPromptTraceparent;
 
     // Dedup: if this exact messageId is already being processed by a sync prompt, skip it.
     // This handles the case where the DO re-dispatches after a transient disconnect
@@ -1445,6 +1477,10 @@ export class PromptHandler {
     if (channel.activeMessageId === messageId && channel.syncPromptInFlight) {
       console.log(`[PromptHandler] Ignoring duplicate prompt ${messageId} — sync prompt already in flight`);
       this.agentClient.sendComplete(messageId);
+      turnSpan.setAttribute("valet.turn.skipped", "duplicate_in_flight");
+      turnSpan.end();
+      await flushTracing();
+      this.currentPromptTraceparent = undefined;
       return;
     }
 
@@ -1818,10 +1854,15 @@ export class PromptHandler {
       await this.finalizeSyncResponse(channel, null, exhaustedError);
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : String(err);
+      turnSpan.recordException(err);
       console.error("[PromptHandler] Error processing prompt:", errorMsg);
       this.agentClient.sendError(messageId, errorMsg);
       this.agentClient.sendComplete(this.activeMessageId ?? undefined);
       this.agentClient.sendAgentStatus("idle", undefined, messageId);
+    } finally {
+      turnSpan.end();
+      await flushTracing();
+      this.currentPromptTraceparent = undefined;
     }
   }
 
@@ -3232,7 +3273,10 @@ export class PromptHandler {
 
     const res = await fetch(url, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        ...(this.currentPromptTraceparent ? { Traceparent: this.currentPromptTraceparent } : {}),
+      },
       body: JSON.stringify(body),
       // @ts-expect-error Bun-specific option — disable default fetch timeout
       timeout: false,
@@ -3265,7 +3309,10 @@ export class PromptHandler {
 
     const res = await fetch(url, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        ...(this.currentPromptTraceparent ? { Traceparent: this.currentPromptTraceparent } : {}),
+      },
       body: JSON.stringify(body),
       signal,
       // @ts-expect-error Bun-specific option — disable default fetch timeout
@@ -3956,6 +4003,16 @@ export class PromptHandler {
     } else if (currentStatus === "completed") {
       const toolResult = state.output ?? null;
       console.log(`[PromptHandler] Tool "${toolName}" completed (output: ${typeof toolResult === "string" ? toolResult.length + " chars" : "null"})`);
+      const toolSpan = startSpan("valet.tool", {
+        parent: parentFromTraceparent(this.currentPromptTraceparent),
+        attributes: {
+          "valet.session.id": this.runnerSessionId || undefined,
+          "valet.message.id": channel.activeMessageId || undefined,
+          "valet.tool.name": toolName,
+          "valet.tool.status": currentStatus,
+        },
+      });
+      toolSpan.end();
 
       // Extract images from tool results that return structured objects with an images array.
       // For actions via call_tool, images are routed through the gateway's /api/image path instead
@@ -4028,6 +4085,17 @@ export class PromptHandler {
 
     } else if (currentStatus === "error") {
       console.log(`[PromptHandler] Tool "${toolName}" error: ${state.error}`);
+      const toolSpan = startSpan("valet.tool", {
+        parent: parentFromTraceparent(this.currentPromptTraceparent),
+        attributes: {
+          "valet.session.id": this.runnerSessionId || undefined,
+          "valet.message.id": channel.activeMessageId || undefined,
+          "valet.tool.name": toolName,
+          "valet.tool.status": currentStatus,
+          "valet.tool.error": state.error,
+        },
+      });
+      toolSpan.end();
       this.agentClient.sendToolUpdate(channel.turnId!, callID, toolName, "error", state.input ?? undefined, undefined, state.error ?? undefined);
     }
   }
@@ -4122,6 +4190,18 @@ export class PromptHandler {
               inputTokens: input,
               outputTokens: output,
             });
+            const llmSpan = startSpan("valet.llm", {
+              parent: parentFromTraceparent(this.currentPromptTraceparent),
+              attributes: {
+                "valet.session.id": this.runnerSessionId || undefined,
+                "valet.message.id": channel.activeMessageId || undefined,
+                "gen_ai.system": providerId,
+                "gen_ai.request.model": usageModel,
+                "gen_ai.usage.input_tokens": input,
+                "gen_ai.usage.output_tokens": output,
+              },
+            });
+            llmSpan.end();
           }
         }
       }

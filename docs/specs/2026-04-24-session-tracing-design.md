@@ -10,6 +10,22 @@
 
 ---
 
+## Implementation Notes — 2026-05-06
+
+TKAI-2 starts with a dependency-free OTLP/HTTP JSON tracer shared by the Worker and Runner. Tracing remains a no-op unless `OTEL_EXPORTER_OTLP_ENDPOINT` is configured, while W3C `traceparent` propagation is still generated so partial deploys remain backward-compatible.
+
+Implemented coverage:
+
+- Worker session lifecycle spans for spawn, restore, hibernate, and terminate.
+- Worker prompt/workflow dispatch spans with `valet.queue.wait_ms`, `valet.queue.reason`, and protocol `traceparent` injection.
+- Runner bootstrap, repo setup, prompt turn, workflow execution, tool, and LLM usage spans.
+- Sandbox env propagation for `TRACEPARENT`, `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_HEADERS`, and `OTEL_CAPTURE_CONTENT`.
+- Persisted lifecycle trace linkage in SessionAgent DO state via `lifecycleTraceId` and `lifecycleSpanId`.
+
+The OpenCode plugin phase remains future work; the first implementation captures tool and LLM usage from the Runner's existing SSE processing.
+
+---
+
 ## Goal
 
 Add OpenTelemetry-native tracing across all three layers of the Valet stack (Worker DO, Runner, OpenCode) so that every agent session's lifecycle — from sandbox provisioning through LLM calls to teardown — is visible as correlated traces in Grafana Tempo.

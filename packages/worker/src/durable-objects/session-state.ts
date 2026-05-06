@@ -125,6 +125,22 @@ export class SessionState {
     this.set('snapshotImageId', id || '');
   }
 
+  get lifecycleTraceId(): string | undefined {
+    return this.get('lifecycleTraceId') || undefined;
+  }
+
+  set lifecycleTraceId(id: string | undefined) {
+    this.set('lifecycleTraceId', id || '');
+  }
+
+  get lifecycleSpanId(): string | undefined {
+    return this.get('lifecycleSpanId') || undefined;
+  }
+
+  set lifecycleSpanId(id: string | undefined) {
+    this.set('lifecycleSpanId', id || '');
+  }
+
   // ─── Backend URLs ─────────────────────────────────────────────────
 
   get backendUrl(): string | undefined {
@@ -420,6 +436,8 @@ export class SessionState {
     this.runningStartedAt = 0;
     this.sandboxWakeStartedAt = 0;
     this.sandboxStartedAt = 0;
+    this.lifecycleTraceId = undefined;
+    this.lifecycleSpanId = undefined;
     this.initialPrompt = undefined;
     this.initialModel = undefined;
     this.parentThreadId = undefined;

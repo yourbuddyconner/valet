@@ -6,7 +6,7 @@ import { getDb } from '../lib/drizzle.js';
 import { buildDoWebSocketUrl } from '../lib/do-ws-url.js';
 import { buildOrchestratorPersonaFiles } from '../lib/orchestrator-persona.js';
 import { findPersonaByName, upsertPersonaByName, upsertPersonaFile } from '../lib/db/personas.js';
-import { generateRunnerToken, assembleProviderEnv, assembleCredentialEnv } from '../lib/env-assembly.js';
+import { generateRunnerToken, assembleProviderEnv, assembleCredentialEnv, assembleTracingEnv } from '../lib/env-assembly.js';
 import { ensureTodayJournal } from '../lib/db/memory-files.js';
 import { loadMemorySnapshot, formatMemorySnapshot } from '../lib/memory-snapshot.js';
 import { deriveSandboxJwtSecret } from '../lib/jwt.js';
@@ -132,6 +132,7 @@ export async function restartOrchestratorSession(
     IS_ORCHESTRATOR: 'true',
     ...providerVars,
     ...credentialVars,
+    ...assembleTracingEnv(env),
   };
 
   const doWsUrl = buildDoWebSocketUrl({

@@ -21,6 +21,7 @@ import type {
 import { gitCredentials } from "./git-credentials.js";
 import { setupGitConfig, cloneRepo } from "./git-setup.js";
 import { APPROVAL_TIMEOUT_MS } from "./timeouts.js";
+import { flushTracing, parentFromTraceparent, startSpan } from "./tracing.js";
 
 export interface PromptAuthor {
   authorId?: string;
@@ -53,7 +54,7 @@ export class AgentClient {
   private pendingTokenRefresh: { requestId: string; resolve: (result: { accessToken: string; expiresAt?: string }) => void } | null = null;
   private reconnectCallback?: () => void;
 
-  private promptHandler: ((messageId: string, content: string, model?: string, author?: PromptAuthor, modelPreferences?: string[], attachments?: PromptAttachment[], channelType?: string, channelId?: string, opencodeSessionId?: string, continuationContext?: string, threadId?: string, replyChannelType?: string, replyChannelId?: string) => void | Promise<void>) | null = null;
+  private promptHandler: ((messageId: string, content: string, model?: string, author?: PromptAuthor, modelPreferences?: string[], attachments?: PromptAttachment[], channelType?: string, channelId?: string, opencodeSessionId?: string, continuationContext?: string, threadId?: string, replyChannelType?: string, replyChannelId?: string, traceparent?: string) => void | Promise<void>) | null = null;
   private answerHandler: ((questionId: string, answer: string | boolean) => void | Promise<void>) | null = null;
   private stopHandler: (() => void) | null = null;
   private abortHandler: ((channelType?: string, channelId?: string) => void | Promise<void>) | null = null;
@@ -69,7 +70,7 @@ export class AgentClient {
     resumeToken?: string;
     decision?: "approve" | "deny";
     payload: Record<string, unknown>;
-  }, model?: string, modelPreferences?: string[]) => void | Promise<void>) | null = null;
+  }, model?: string, modelPreferences?: string[], traceparent?: string) => void | Promise<void>) | null = null;
   private newSessionHandler: ((channelType: string, channelId: string, requestId: string) => void | Promise<void>) | null = null;
   private initHandler: (() => void | Promise<void>) | null = null;
   private openCodeConfigHandler: ((config: { tools?: Record<string, boolean>; providerKeys?: Record<string, string>; instructions?: string[]; isOrchestrator?: boolean; customProviders?: Array<{ providerId: string; displayName: string; baseUrl: string; apiKey?: string; models: Array<{ id: string; name?: string; contextLimit?: number; outputLimit?: number }> }> }) => void | Promise<void>) | null = null;
@@ -893,7 +894,7 @@ export class AgentClient {
 
   // ─── Inbound Handlers (DO → Runner) ─────────────────────────────────
 
-  onPrompt(handler: (messageId: string, content: string, model?: string, author?: PromptAuthor, modelPreferences?: string[], attachments?: PromptAttachment[], channelType?: string, channelId?: string, opencodeSessionId?: string, continuationContext?: string, threadId?: string, replyChannelType?: string, replyChannelId?: string) => void | Promise<void>): void {
+  onPrompt(handler: (messageId: string, content: string, model?: string, author?: PromptAuthor, modelPreferences?: string[], attachments?: PromptAttachment[], channelType?: string, channelId?: string, opencodeSessionId?: string, continuationContext?: string, threadId?: string, replyChannelType?: string, replyChannelId?: string, traceparent?: string) => void | Promise<void>): void {
     this.promptHandler = handler;
   }
 
@@ -940,7 +941,7 @@ export class AgentClient {
     resumeToken?: string;
     decision?: "approve" | "deny";
     payload: Record<string, unknown>;
-  }, model?: string, modelPreferences?: string[]) => void | Promise<void>): void {
+  }, model?: string, modelPreferences?: string[], traceparent?: string) => void | Promise<void>): void {
     this.workflowExecuteHandler = handler;
   }
 
@@ -1011,7 +1012,7 @@ export class AgentClient {
           const author: PromptAuthor | undefined = (msg.authorId || msg.gitName || msg.gitEmail || msg.authorName || msg.authorEmail)
             ? { authorId: msg.authorId, gitName: msg.gitName, gitEmail: msg.gitEmail, authorName: msg.authorName, authorEmail: msg.authorEmail }
             : undefined;
-          await this.promptHandler?.(msg.messageId, msg.content, msg.model, author, msg.modelPreferences, msg.attachments, msg.channelType, msg.channelId, msg.opencodeSessionId, msg.continuationContext, msg.threadId, msg.replyChannelType, msg.replyChannelId);
+          await this.promptHandler?.(msg.messageId, msg.content, msg.model, author, msg.modelPreferences, msg.attachments, msg.channelType, msg.channelId, msg.opencodeSessionId, msg.continuationContext, msg.threadId, msg.replyChannelType, msg.replyChannelId, msg.traceparent);
           break;
         }
         case "answer":
@@ -1363,15 +1364,27 @@ export class AgentClient {
             Array.isArray(msg.modelPreferences)
               ? msg.modelPreferences.filter((entry): entry is string => typeof entry === "string" && !!entry.trim())
               : undefined,
+            msg.traceparent,
           );
           break;
         case "repo-config": {
-          const { token, expiresAt, gitConfig, repoUrl, branch, ref } = msg;
+          const { token, expiresAt, gitConfig, repoUrl, branch, ref, traceparent } = msg;
+          const repoSpan = startSpan("valet.runner.git_setup", {
+            parent: parentFromTraceparent(traceparent),
+            attributes: {
+              "valet.git.repo_url": repoUrl,
+              "valet.git.branch": branch,
+              "valet.git.ref": ref,
+            },
+          });
 
           // No token means the DO couldn't assemble credentials — resolve
           // repoReady so the runner doesn't burn the full timeout waiting.
           if (!token) {
             console.warn("[AgentClient] repo-config received with no token — skipping clone");
+            repoSpan.setAttribute("valet.git.skipped", true);
+            repoSpan.end();
+            await flushTracing();
             this._resolveRepoReady();
             break;
           }
@@ -1406,9 +1419,16 @@ export class AgentClient {
             // Clone repo if URL provided
             if (repoUrl) {
               const result = await cloneRepo({ repoUrl, branch, ref });
+              repoSpan.setAttribute("valet.git.success", result.success);
+              if (result.error) repoSpan.setAttribute("valet.git.error", result.error.slice(0, 300));
               this.send({ type: "repo:clone-complete", ...result });
             }
+          } catch (err) {
+            repoSpan.recordException(err);
+            throw err;
           } finally {
+            repoSpan.end();
+            await flushTracing();
             this._resolveRepoReady();
           }
           break;
