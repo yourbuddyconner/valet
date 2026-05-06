@@ -19,6 +19,9 @@
  *   VALET_CONTEXT_WINDOW  override the model's local contextWindow (forces
  *                         compaction at a smaller budget for dogfooding)
  *   VALET_MAX_TOKENS   override the model's local maxTokens
+ *   VALET_ROLE_FILE    path to a markdown role artifact (frontmatter:
+ *                      name, description, optional model)
+ *   VALET_ROLE_DEFAULT when "1", every prompt automatically uses the loaded role
  *
  * Usage:
  *
@@ -34,6 +37,7 @@
 import { createInterface } from "node:readline/promises";
 import { stdin, stdout } from "node:process";
 import { resolve } from "node:path";
+import { readFile } from "node:fs/promises";
 import { getModel } from "@mariozechner/pi-ai";
 import { githubActions } from "@valet/plugin-github/actions";
 import {
@@ -43,9 +47,11 @@ import {
   InMemoryEventBus,
   InMemorySessionStore,
   LocalSandboxProvider,
+  loadRoleFromMarkdown,
   VirtualSandboxProvider,
   type ActionSourceConfig,
   type BusEvent,
+  type RoleSpec,
   type SandboxProvider,
   type Session,
   type ToolDef,
@@ -86,7 +92,11 @@ async function loadPluginTools(): Promise<ToolDef[]> {
   return actionBridgeTools({ sources });
 }
 
-async function buildSession(): Promise<{ session: Session; bus: InMemoryEventBus }> {
+async function buildSession(): Promise<{
+  session: Session;
+  bus: InMemoryEventBus;
+  defaultRoleName?: string;
+}> {
   if (!process.env.ANTHROPIC_API_KEY) {
     fail(
       "ANTHROPIC_API_KEY is not set. Export it in your shell before running this REPL.",
@@ -150,6 +160,22 @@ async function buildSession(): Promise<{ session: Session; bus: InMemoryEventBus
     );
   }
 
+  // Optional: load a single role from VALET_ROLE_FILE. The role's name is
+  // available for use via the `:role <name>` REPL meta-command (or
+  // PromptOptions.role programmatically). When VALET_ROLE_DEFAULT=1 every
+  // prompt automatically applies the role.
+  const roles: RoleSpec[] = [];
+  let defaultRoleName: string | undefined;
+  if (process.env.VALET_ROLE_FILE) {
+    const content = await readFile(process.env.VALET_ROLE_FILE, "utf8");
+    const role = loadRoleFromMarkdown(content, "session");
+    roles.push(role);
+    if (process.env.VALET_ROLE_DEFAULT === "1") defaultRoleName = role.name;
+    stdout.write(
+      `\x1b[90m[role] loaded ${role.name}${defaultRoleName ? " (default)" : ""}\x1b[0m\n`,
+    );
+  }
+
   const workspace = SANDBOX_KIND === "local" ? resolve(WORKSPACE) : WORKSPACE;
   const session = await engine.createSession({
     userId,
@@ -159,9 +185,10 @@ async function buildSession(): Promise<{ session: Session; bus: InMemoryEventBus
     model,
     systemPrompt: SYSTEM_PROMPT,
     tools,
+    roles,
   });
 
-  return { session, bus };
+  return { session, bus, defaultRoleName };
 }
 
 function subscribePrinter(bus: InMemoryEventBus): void {
@@ -232,26 +259,27 @@ async function waitForIdle(bus: InMemoryEventBus, threadId: string): Promise<voi
 }
 
 async function runOneShot(prompt: string): Promise<void> {
-  const { session, bus } = await buildSession();
+  const { session, bus, defaultRoleName } = await buildSession();
   subscribePrinter(bus);
-  const receipt = await session.prompt(prompt);
+  const receipt = await session.prompt(prompt, { role: defaultRoleName });
   await waitForIdle(bus, receipt.threadId);
 }
 
 async function runInteractive(): Promise<void> {
-  const { session, bus } = await buildSession();
+  const { session, bus, defaultRoleName } = await buildSession();
   subscribePrinter(bus);
   const rl = createInterface({ input: stdin, output: stdout });
   stdout.write(
     `\nvalet engine repl — model=${MODEL_ID} sandbox=${SANDBOX_KIND}` +
       (SANDBOX_KIND === "local" ? ` workspace=${WORKSPACE}` : "") +
+      (defaultRoleName ? ` role=${defaultRoleName}` : "") +
       `\ntype a prompt, 'exit' to quit.\n`,
   );
   while (true) {
     const line = (await rl.question("\n> ")).trim();
-    if (line === "" ) continue;
+    if (line === "") continue;
     if (line === "exit" || line === "quit") break;
-    const receipt = await session.prompt(line);
+    const receipt = await session.prompt(line, { role: defaultRoleName });
     await waitForIdle(bus, receipt.threadId);
   }
   rl.close();

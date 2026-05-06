@@ -1,5 +1,12 @@
 export * from "./types.js";
 export { NotFoundError } from "./errors.js";
+export {
+  parseMarkdownArtifact,
+  renderTemplate,
+  loadRoleFromMarkdown,
+  loadSkillFromMarkdown,
+  type ParsedArtifact,
+} from "./roles-skills/index.js";
 export { Engine } from "./engine.js";
 export { Session } from "./session.js";
 export { Thread } from "./thread.js";

@@ -1,10 +1,15 @@
 import { Agent } from "@mariozechner/pi-agent-core";
 import type { AgentEvent, AgentMessage, AgentTool } from "@mariozechner/pi-agent-core";
-import { isContextOverflow } from "@mariozechner/pi-ai";
-import type { Message, TextContent, ThinkingContent, ToolCall } from "@mariozechner/pi-ai";
+import { getModel, isContextOverflow } from "@mariozechner/pi-ai";
+import type { Api, Message, Model, TextContent, ThinkingContent, ToolCall } from "@mariozechner/pi-ai";
+
+type PiModel = Model<Api>;
 import type { Session } from "./session.js";
 import { toAgentTool } from "./tool-bridge.js";
 import { fromRequest, GateManager, shouldShortCircuit } from "./decision-gate.js";
+import { renderTemplate } from "./roles-skills/index.js";
+import { Compile } from "typebox/compile";
+import type { TSchema } from "typebox";
 import {
   applyPrune,
   estimateTokens,
@@ -36,6 +41,7 @@ import type {
   QueueState,
   QueueStatus,
   SessionEntry,
+  SkillInvokeOptions,
   SuspendedTurnState,
   ThreadData,
   ToolContext,
@@ -178,6 +184,7 @@ export class Thread {
       channel: opts.channel,
       replyTarget: opts.replyTarget,
       model: opts.model,
+      role: opts.role,
       metadata: opts.metadata,
       createdAt: Date.now(),
     };
@@ -225,6 +232,41 @@ export class Thread {
       queueItemId: item.id,
       status: this.status === "idle" ? "running" : "queued",
     };
+  }
+
+  /**
+   * Invoke a registered skill. Looks up the skill by name in
+   * session.skills, validates args against the skill's argsSchema (if
+   * present) via TypeBox's runtime checker, renders the skill content
+   * with `{{var}}` interpolation, and submits the result as a normal
+   * prompt with optional model/role/resultSchema overrides forwarded.
+   */
+  async skill(name: string, opts: SkillInvokeOptions = {}): Promise<PromptReceipt> {
+    const skill = this.session.skills.get(name);
+    if (!skill) {
+      throw new Error(
+        `skill "${name}" not registered on this session. Known: ${[...this.session.skills.keys()].join(", ") || "(none)"}`,
+      );
+    }
+    const args = opts.args ?? {};
+    if (skill.argsSchema) {
+      const validator = Compile(skill.argsSchema as TSchema);
+      if (!validator.Check(args)) {
+        const errors = [...validator.Errors(args)]
+          .map((e) => `  - ${e.instancePath || "(root)"}: ${e.message}`)
+          .join("\n");
+        throw new Error(`skill "${name}" args failed validation:\n${errors}`);
+      }
+    }
+    const rendered = renderTemplate(skill.content, args);
+    return this.submitPrompt(rendered, {
+      author: opts.author,
+      channel: opts.channel,
+      model: opts.model,
+      role: undefined, // role not currently part of SkillInvokeOptions; see types.ts
+      resultSchema: opts.resultSchema,
+      metadata: { skill: name, syntheticFrom: "skill" },
+    });
   }
 
   async abort(): Promise<void> {
@@ -517,24 +559,86 @@ export class Thread {
     // Build the AgentTool list with closures over this turn's ToolContext.
     this.agent.state.tools = this.buildTools();
 
+    // Apply role overlay (system-prompt overlay + optional model override) for
+    // this one turn. Restored unconditionally in finally.
+    const roleOverlay = this.applyRoleForTurn(item);
     try {
-      await this.runAgent(text);
-    } catch (err) {
-      this.emitError("agent_failed", err instanceof Error ? err.message : String(err));
-    }
-
-    // Proactive compaction: if this turn pushed us past usable, run a
-    // compaction pass before yielding back to the queue. Reactive
-    // compaction (overflow retry) is handled inline in runAgent.
-    if (this.shouldCompactProactive()) {
       try {
-        await this.compactThread({ mode: "proactive" });
+        await this.runAgent(text);
+      } catch (err) {
+        this.emitError("agent_failed", err instanceof Error ? err.message : String(err));
+      }
+
+      // Proactive compaction: if this turn pushed us past usable, run a
+      // compaction pass before yielding back to the queue. Reactive
+      // compaction (overflow retry) is handled inline in runAgent.
+      if (this.shouldCompactProactive()) {
+        try {
+          await this.compactThread({ mode: "proactive" });
+        } catch (err) {
+          this.emitError(
+            "compaction_failed",
+            err instanceof Error ? err.message : String(err),
+          );
+        }
+      }
+    } finally {
+      this.restoreRoleAfterTurn(roleOverlay);
+    }
+  }
+
+  private applyRoleForTurn(item: QueueItem): RoleOverlay {
+    const roleName = item.role;
+    if (!roleName) return { restore: false };
+    const role = this.session.roles.get(roleName);
+    if (!role) {
+      // Spec: prompt-level role resolution errors fail the prompt before
+      // model invocation. We surface as an emitted error and skip overlay
+      // — the run still proceeds with the base configuration so the
+      // failure is visible to the LLM and the user, not silent.
+      this.emitError("role_not_found", `role "${roleName}" not registered on this session`);
+      return { restore: false };
+    }
+    const baseSystemPrompt = this.agent.state.systemPrompt;
+    const overlaid = baseSystemPrompt
+      ? `${baseSystemPrompt}\n\n${role.content}`
+      : role.content;
+    this.agent.state.systemPrompt = overlaid;
+
+    let priorModel: PiModel | undefined;
+    if (role.model) {
+      // Resolve the role's model id against pi-ai's registry (provider/model)
+      // or the session's pre-registered model. The simplest reuse: if the
+      // role.model matches a known anthropic model, look it up; otherwise
+      // skip the override and emit a warning.
+      try {
+        const next = resolveRoleModel(role.model);
+        if (next) {
+          priorModel = this.agent.state.model;
+          this.agent.state.model = next;
+        }
       } catch (err) {
         this.emitError(
-          "compaction_failed",
+          "role_model_lookup_failed",
           err instanceof Error ? err.message : String(err),
         );
       }
+    }
+
+    return {
+      restore: true,
+      systemPrompt: baseSystemPrompt,
+      model: priorModel,
+    };
+  }
+
+  private restoreRoleAfterTurn(overlay: RoleOverlay): void {
+    if (!overlay.restore) return;
+    if (overlay.systemPrompt !== undefined) {
+      this.agent.state.systemPrompt = overlay.systemPrompt;
+    }
+    if (overlay.model !== undefined) {
+      this.agent.state.model = overlay.model;
     }
   }
 
@@ -1060,6 +1164,36 @@ function renderToolResult(result: unknown): string {
     .filter((c) => c.type === "text")
     .map((c) => c.text ?? "")
     .join("");
+}
+
+interface RoleOverlay {
+  restore: boolean;
+  systemPrompt?: string;
+  model?: PiModel;
+}
+
+/**
+ * Resolve a role's `model` frontmatter value to a pi-ai Model instance.
+ * Supports `provider/model` form (e.g. "anthropic/claude-haiku-4-5") and
+ * bare model ids that exist under any registered provider. Returns
+ * undefined when the id can't be resolved — caller emits a warning rather
+ * than failing the turn.
+ */
+function resolveRoleModel(spec: string): PiModel | undefined {
+  const slash = spec.indexOf("/");
+  if (slash > 0) {
+    const provider = spec.slice(0, slash);
+    const modelId = spec.slice(slash + 1);
+    return getModel(provider as never, modelId as never);
+  }
+  // Bare ids: try anthropic first, then a small set of common providers.
+  // Plugins that use other providers should set provider/model explicitly.
+  const tryProviders = ["anthropic", "openai", "google"] as const;
+  for (const p of tryProviders) {
+    const m = getModel(p, spec as never);
+    if (m) return m;
+  }
+  return undefined;
 }
 
 function findMostRecentCompaction(

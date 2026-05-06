@@ -14,9 +14,11 @@ import type {
   PromptReceipt,
   ProviderBundle,
   QueueMode,
+  RoleSpec,
   Sandbox,
   SessionData,
   SessionEntry,
+  SkillSource,
   ThreadData,
   ToolDef,
 } from "./types.js";
@@ -32,6 +34,9 @@ export class Session {
   readonly options: CreateSessionOptions;
   readonly sandbox: Sandbox;
   readonly builtinTools: ToolDef[] = builtinTools;
+  /** Indexed copies of options.roles / options.skills for fast lookup. */
+  readonly roles = new Map<string, RoleSpec>();
+  readonly skills = new Map<string, SkillSource>();
   private threads = new Map<string, Thread>();
   private threadsByKey = new Map<string, Thread>();
   private destroyed = false;
@@ -41,6 +46,8 @@ export class Session {
     this.options = options;
     this.providers = providers;
     this.sandbox = sandbox;
+    for (const role of options.roles ?? []) this.roles.set(role.name, role);
+    for (const skill of options.skills ?? []) this.skills.set(skill.name, skill);
   }
 
   /**

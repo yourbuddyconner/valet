@@ -79,6 +79,8 @@ export interface QueueItem {
   channel?: ChannelTarget;
   replyTarget?: ChannelTarget;
   model?: string;
+  /** Role name to apply for this one prompt (system-prompt overlay + optional model override). */
+  role?: string;
   metadata?: Record<string, unknown>;
   createdAt: number;
 }
