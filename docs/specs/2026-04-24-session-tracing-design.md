@@ -19,6 +19,7 @@ Implemented coverage:
 - Worker session lifecycle spans for spawn, restore, hibernate, and terminate.
 - Worker prompt/workflow dispatch spans with `valet.queue.wait_ms`, `valet.queue.reason`, and protocol `traceparent` injection.
 - Runner bootstrap, repo setup, prompt turn, workflow execution, tool, and LLM usage spans.
+- Runner LLM/tool spans follow OpenLIT's OpenTelemetry GenAI conventions where the Runner has data: `chat <model>` client spans include `gen_ai.operation.name`, legacy `gen_ai.system`, OTel `gen_ai.provider.name`, model, stream, output type, and token usage attributes; tool spans use `execute_tool <tool>` with `gen_ai.tool.*` attributes.
 - Sandbox env propagation for `TRACEPARENT`, `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_HEADERS`, and `OTEL_CAPTURE_CONTENT`.
 - Persisted lifecycle trace linkage in SessionAgent DO state via `lifecycleTraceId` and `lifecycleSpanId`.
 

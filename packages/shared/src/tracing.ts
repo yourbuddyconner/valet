@@ -9,7 +9,17 @@ export interface SpanLink {
   attributes?: SpanAttributes;
 }
 
-export type SpanAttributeValue = string | number | boolean | undefined | null;
+export const SpanKind = {
+  INTERNAL: 1,
+  SERVER: 2,
+  CLIENT: 3,
+  PRODUCER: 4,
+  CONSUMER: 5,
+} as const;
+
+export type SpanKindValue = (typeof SpanKind)[keyof typeof SpanKind];
+type SpanAttributeScalar = string | number | boolean;
+export type SpanAttributeValue = SpanAttributeScalar | readonly SpanAttributeScalar[] | undefined | null;
 export type SpanAttributes = Record<string, SpanAttributeValue>;
 
 export interface StartSpanOptions {
@@ -17,6 +27,7 @@ export interface StartSpanOptions {
   links?: SpanLink[];
   attributes?: SpanAttributes;
   startTimeMs?: number;
+  kind?: SpanKindValue;
 }
 
 export interface TracerOptions {
@@ -36,6 +47,7 @@ interface FinishedSpan {
   endTimeUnixNano: string;
   attributes: SpanAttributes;
   links: SpanLink[];
+  kind: SpanKindValue;
   status?: { code: number; message?: string };
 }
 
@@ -74,6 +86,7 @@ export class SimpleSpan {
   private readonly startTimeMs: number;
   private readonly attributes: SpanAttributes;
   private readonly links: SpanLink[];
+  private readonly kind: SpanKindValue;
   private ended = false;
   private status: { code: number; message?: string } | undefined;
 
@@ -84,6 +97,7 @@ export class SimpleSpan {
     this.startTimeMs = options.startTimeMs || Date.now();
     this.attributes = { ...(options.attributes || {}) };
     this.links = options.links || [];
+    this.kind = options.kind || SpanKind.INTERNAL;
     this.context = createTraceContext(options.parent);
   }
 
@@ -102,6 +116,10 @@ export class SimpleSpan {
     this.status = { code: 2, message };
   }
 
+  setStatus(code: number, message?: string): void {
+    this.status = { code, message };
+  }
+
   end(endTimeMs = Date.now()): void {
     if (this.ended) return;
     this.ended = true;
@@ -114,6 +132,7 @@ export class SimpleSpan {
       endTimeUnixNano: msToUnixNano(endTimeMs),
       attributes: this.attributes,
       links: this.links,
+      kind: this.kind,
       status: this.status,
     });
   }
@@ -232,7 +251,7 @@ function buildOtlpJson(serviceName: string, resourceAttributes: SpanAttributes, 
               spanId: span.spanId,
               ...(span.parentSpanId ? { parentSpanId: span.parentSpanId } : {}),
               name: span.name,
-              kind: 1,
+              kind: span.kind,
               startTimeUnixNano: span.startTimeUnixNano,
               endTimeUnixNano: span.endTimeUnixNano,
               attributes: attributesToOtlp(span.attributes),
@@ -260,7 +279,14 @@ function attributesToOtlp(attributes: SpanAttributes) {
     .map(([key, value]) => ({ key, value: attributeValueToOtlp(value!) }));
 }
 
-function attributeValueToOtlp(value: string | number | boolean) {
+function attributeValueToOtlp(value: SpanAttributeScalar | readonly SpanAttributeScalar[]): Record<string, unknown> {
+  if (Array.isArray(value)) {
+    return {
+      arrayValue: {
+        values: value.map(attributeValueToOtlp),
+      },
+    };
+  }
   if (typeof value === 'boolean') return { boolValue: value };
   if (typeof value === 'number') {
     return Number.isInteger(value) ? { intValue: String(value) } : { doubleValue: value };

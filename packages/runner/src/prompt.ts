@@ -27,10 +27,52 @@ import {
   type WorkflowStepExecutionContext,
   type WorkflowStepExecutionResult,
 } from "./workflow-engine.js";
-import { flushTracing, parentFromTraceparent, startSpan, traceparentFromSpan } from "./tracing.js";
+import { flushTracing, parentFromTraceparent, SpanKind, startSpan, traceparentFromSpan } from "./tracing.js";
 
 // OpenCode ToolState status values
 type ToolStatus = "pending" | "running" | "completed" | "error";
+
+const GEN_AI_PROVIDER_OPENCODE = "opencode";
+const GEN_AI_OPERATION_CHAT = "chat";
+const GEN_AI_OPERATION_EXECUTE_TOOL = "execute_tool";
+const GEN_AI_OUTPUT_TYPE_TEXT = "text";
+
+function captureOtelContent(): boolean {
+  const value = process.env.OTEL_CAPTURE_CONTENT?.trim().toLowerCase();
+  return value === "1" || value === "true" || value === "yes";
+}
+
+function truncateTelemetryContent(value: string, maxLength = 8000): string {
+  return value.length > maxLength ? `${value.slice(0, maxLength)}...[truncated]` : value;
+}
+
+function stringifyTelemetryContent(value: unknown): string | undefined {
+  if (value == null) return undefined;
+  try {
+    return truncateTelemetryContent(typeof value === "string" ? value : JSON.stringify(value));
+  } catch {
+    return truncateTelemetryContent(String(value));
+  }
+}
+
+function normalizeGenAIProvider(providerId: string | undefined): string {
+  if (!providerId?.trim()) return GEN_AI_PROVIDER_OPENCODE;
+  const provider = providerId.trim().toLowerCase().replace(/_/g, "-");
+  if (provider === "azure-openai" || provider === "azure") return "azure.ai.openai";
+  if (provider === "amazon-bedrock" || provider === "bedrock") return "aws.bedrock";
+  if (provider === "google" || provider === "google-ai" || provider === "gemini") return "gcp.gemini";
+  if (provider === "vertex" || provider === "vertex-ai") return "vertex_ai";
+  if (provider === "mistral") return "mistral_ai";
+  return provider;
+}
+
+function buildGenAIMessage(role: string, content: string): string {
+  return JSON.stringify([{ role, content: truncateTelemetryContent(content) }]);
+}
+
+function toolTypeForName(toolName: string): string {
+  return toolName.startsWith("mcp__") ? "extension" : "function";
+}
 
 interface ToolState {
   status: ToolStatus;
@@ -450,6 +492,8 @@ export class ChannelSession {
   activeAssistantMessageIds = new Set<string>();
   // Latest full assistant text snapshot observed via message.updated
   latestAssistantTextSnapshot = "";
+  // Current user prompt, retained only long enough to optionally attach to GenAI spans.
+  activePromptContent = "";
   // Compact event trace for debugging empty-response classification
   recentEventTrace: string[] = [];
   lastError: string | null = null;
@@ -522,6 +566,7 @@ export class ChannelSession {
     this.messageRoles.clear();
     this.activeAssistantMessageIds.clear();
     this.latestAssistantTextSnapshot = "";
+    this.activePromptContent = "";
     this.recentEventTrace = [];
     this.waitForEventForced = false;
     this.abortedForYield = false;
@@ -580,6 +625,7 @@ export class ChannelSession {
     this.messageRoles.clear();
     this.activeAssistantMessageIds.clear();
     this.latestAssistantTextSnapshot = "";
+    this.activePromptContent = "";
     this.recentEventTrace = [];
     this.syncPromptInFlight = false;
     this.awaitingAssistantForAttempt = false;
@@ -1632,6 +1678,7 @@ export class PromptHandler {
       }
 
       // Store failover state (use post-transcription values so model failover doesn't re-transcribe)
+      channel.activePromptContent = effectiveContent;
       this.currentModelPreferences = failoverChain.length > 0 ? failoverChain : undefined;
       this.pendingRetryContent = effectiveContent;
       this.pendingRetryAttachments = effectiveAttachments;
@@ -4003,13 +4050,26 @@ export class PromptHandler {
     } else if (currentStatus === "completed") {
       const toolResult = state.output ?? null;
       console.log(`[PromptHandler] Tool "${toolName}" completed (output: ${typeof toolResult === "string" ? toolResult.length + " chars" : "null"})`);
-      const toolSpan = startSpan("valet.tool", {
+      const toolSpan = startSpan(`${GEN_AI_OPERATION_EXECUTE_TOOL} ${toolName}`, {
         parent: parentFromTraceparent(this.currentPromptTraceparent),
         attributes: {
           "valet.session.id": this.runnerSessionId || undefined,
           "valet.message.id": channel.activeMessageId || undefined,
+          "gen_ai.system": GEN_AI_PROVIDER_OPENCODE,
+          "gen_ai.provider.name": GEN_AI_PROVIDER_OPENCODE,
+          "gen_ai.operation.name": GEN_AI_OPERATION_EXECUTE_TOOL,
+          "gen_ai.tool.name": toolName,
+          "gen_ai.tool.call.id": callID,
+          "gen_ai.tool.call.type": toolTypeForName(toolName),
+          "gen_ai.tool.type": toolTypeForName(toolName),
           "valet.tool.name": toolName,
           "valet.tool.status": currentStatus,
+          ...(captureOtelContent()
+            ? {
+                "gen_ai.tool.call.arguments": stringifyTelemetryContent(state.input),
+                "gen_ai.tool.call.result": stringifyTelemetryContent(toolResult),
+              }
+            : {}),
         },
       });
       toolSpan.end();
@@ -4085,16 +4145,30 @@ export class PromptHandler {
 
     } else if (currentStatus === "error") {
       console.log(`[PromptHandler] Tool "${toolName}" error: ${state.error}`);
-      const toolSpan = startSpan("valet.tool", {
+      const toolSpan = startSpan(`${GEN_AI_OPERATION_EXECUTE_TOOL} ${toolName}`, {
         parent: parentFromTraceparent(this.currentPromptTraceparent),
         attributes: {
           "valet.session.id": this.runnerSessionId || undefined,
           "valet.message.id": channel.activeMessageId || undefined,
+          "gen_ai.system": GEN_AI_PROVIDER_OPENCODE,
+          "gen_ai.provider.name": GEN_AI_PROVIDER_OPENCODE,
+          "gen_ai.operation.name": GEN_AI_OPERATION_EXECUTE_TOOL,
+          "gen_ai.tool.name": toolName,
+          "gen_ai.tool.call.id": callID,
+          "gen_ai.tool.call.type": toolTypeForName(toolName),
+          "gen_ai.tool.type": toolTypeForName(toolName),
+          "error.type": "ToolExecutionError",
           "valet.tool.name": toolName,
           "valet.tool.status": currentStatus,
           "valet.tool.error": state.error,
+          ...(captureOtelContent()
+            ? {
+                "gen_ai.tool.call.arguments": stringifyTelemetryContent(state.input),
+              }
+            : {}),
         },
       });
+      toolSpan.recordException(state.error || "tool execution failed");
       toolSpan.end();
       this.agentClient.sendToolUpdate(channel.turnId!, callID, toolName, "error", state.input ?? undefined, undefined, state.error ?? undefined);
     }
@@ -4190,15 +4264,36 @@ export class PromptHandler {
               inputTokens: input,
               outputTokens: output,
             });
-            const llmSpan = startSpan("valet.llm", {
+            const provider = normalizeGenAIProvider(providerId);
+            const requestModel = modelId || usageModel;
+            const llmSpan = startSpan(`${GEN_AI_OPERATION_CHAT} ${requestModel}`, {
               parent: parentFromTraceparent(this.currentPromptTraceparent),
+              kind: SpanKind.CLIENT,
               attributes: {
                 "valet.session.id": this.runnerSessionId || undefined,
                 "valet.message.id": channel.activeMessageId || undefined,
-                "gen_ai.system": providerId,
-                "gen_ai.request.model": usageModel,
+                "valet.llm.provider_id": providerId,
+                "valet.llm.model_id": modelId,
+                "gen_ai.system": provider,
+                "gen_ai.provider.name": provider,
+                "gen_ai.operation.name": GEN_AI_OPERATION_CHAT,
+                "gen_ai.request.model": requestModel,
+                "gen_ai.response.model": requestModel,
+                "gen_ai.request.is_stream": true,
+                "gen_ai.output.type": GEN_AI_OUTPUT_TYPE_TEXT,
                 "gen_ai.usage.input_tokens": input,
                 "gen_ai.usage.output_tokens": output,
+                "gen_ai.usage.total_tokens": input + output,
+                ...(captureOtelContent()
+                  ? {
+                      "gen_ai.input.messages": channel.activePromptContent
+                        ? buildGenAIMessage("user", channel.activePromptContent)
+                        : undefined,
+                      "gen_ai.output.messages": channel.latestAssistantTextSnapshot
+                        ? buildGenAIMessage("assistant", channel.latestAssistantTextSnapshot)
+                        : undefined,
+                    }
+                  : {}),
               },
             });
             llmSpan.end();

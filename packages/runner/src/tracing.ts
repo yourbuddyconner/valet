@@ -1,9 +1,11 @@
 import {
   SimpleTracer,
+  SpanKind,
   formatTraceparent,
   parseTraceparent,
   type SimpleSpan,
   type SpanAttributes,
+  type SpanKindValue,
   type TraceContext,
 } from "@valet/shared";
 
@@ -25,7 +27,7 @@ export function initTracing(currentSessionId: string): SimpleTracer {
 
 export function startSpan(
   name: string,
-  options: { parent?: TraceContext | null; attributes?: SpanAttributes } = {},
+  options: { parent?: TraceContext | null; attributes?: SpanAttributes; kind?: SpanKindValue } = {},
 ): SimpleSpan {
   if (!tracer) initTracing(sessionId || process.env.SESSION_ID || "unknown");
   return tracer!.startSpan(name, options);
@@ -42,3 +44,5 @@ export function parentFromTraceparent(traceparent: string | undefined): TraceCon
 export function traceparentFromSpan(span: SimpleSpan): string {
   return formatTraceparent(span.context);
 }
+
+export { SpanKind };
