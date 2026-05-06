@@ -9,27 +9,29 @@
     ".": {
       "types": "./src/index.ts",
       "import": "./src/index.ts"
+    },
+    "./test-helpers": {
+      "types": "./src/test-helpers/index.ts",
+      "import": "./src/test-helpers/index.ts"
     }
   },
   "scripts": {
     "build": "tsc",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "db:generate": "drizzle-kit generate",
     "repl": "tsx bin/repl.ts"
   },
   "dependencies": {
     "@mariozechner/pi-agent-core": "0.73.0",
     "@mariozechner/pi-ai": "0.73.0",
-    "drizzle-orm": "^0.45.1",
     "typebox": "^1.1.24"
   },
   "devDependencies": {
-    "@types/better-sqlite3": "^7.6.8",
     "@types/node": "^20.0.0",
     "@valet/plugin-github": "workspace:*",
-    "better-sqlite3": "^11.0.0",
-    "drizzle-kit": "^0.31.9",
+    "@valet/sandbox-docker": "workspace:*",
+    "@valet/sandbox-local": "workspace:*",
+    "@valet/store-sqlite": "workspace:*",
     "tsx": "^4.0.0",
     "typescript": "^5.3.3",
     "vitest": "^4.0.18"

@@ -11,8 +11,8 @@
  * Env:
  *   ANTHROPIC_API_KEY  required
  *   VALET_MODEL        pi-ai anthropic model id (default claude-haiku-4-5)
- *   VALET_SANDBOX      virtual | local (default virtual)
- *   VALET_WORKSPACE    workspace dir for local sandbox (default cwd)
+ *   VALET_SANDBOX      virtual | local | docker (default virtual)
+ *   VALET_WORKSPACE    workspace dir for local/docker sandbox (default cwd)
  *   VALET_SYSTEM_PROMPT  override the system prompt
  *   GITHUB_TOKEN       when set, registers @valet/plugin-github actions via
  *                      the actionSourceToTools bridge (read/write GitHub)
@@ -40,13 +40,14 @@ import { resolve } from "node:path";
 import { readFile } from "node:fs/promises";
 import { getModel } from "@mariozechner/pi-ai";
 import { githubPlugin } from "@valet/plugin-github/actions";
+import { DockerSandboxProvider } from "@valet/sandbox-docker";
+import { LocalSandboxProvider } from "@valet/sandbox-local";
 import {
   pluginCatalogTools,
   Engine,
   InMemoryCredentialStore,
   InMemoryEventBus,
   InMemorySessionStore,
-  LocalSandboxProvider,
   loadRoleFromMarkdown,
   VirtualSandboxProvider,
   type ActionPlugin,
@@ -61,7 +62,7 @@ const MODEL_ID = process.env.VALET_MODEL ?? "claude-haiku-4-5";
 const SANDBOX_KIND = (process.env.VALET_SANDBOX ?? "virtual").toLowerCase();
 const WORKSPACE =
   process.env.VALET_WORKSPACE ??
-  (SANDBOX_KIND === "local" ? process.cwd() : "/");
+  (SANDBOX_KIND === "local" || SANDBOX_KIND === "docker" ? process.cwd() : "/");
 
 const SYSTEM_PROMPT_VIRTUAL =
   "You are a helpful coding assistant running inside an in-memory virtual sandbox. " +
@@ -74,9 +75,20 @@ const SYSTEM_PROMPT_LOCAL =
   `You have built-in tools: read, write, edit, bash, thread_read. ` +
   `Be concise. Confirm with the user before making destructive changes.`;
 
+const SYSTEM_PROMPT_DOCKER =
+  `You are a helpful coding assistant running inside a Docker sandbox. ` +
+  `Your workspace is /workspace (the only mounted directory). ` +
+  `All read/write/edit/bash tools operate against /workspace — use absolute ` +
+  `paths under /workspace or relative paths (which resolve there). ` +
+  `You have built-in tools: read, write, edit, bash, thread_read. Be concise.`;
+
 const SYSTEM_PROMPT =
   process.env.VALET_SYSTEM_PROMPT ??
-  (SANDBOX_KIND === "local" ? SYSTEM_PROMPT_LOCAL : SYSTEM_PROMPT_VIRTUAL);
+  (SANDBOX_KIND === "local"
+    ? SYSTEM_PROMPT_LOCAL
+    : SANDBOX_KIND === "docker"
+      ? SYSTEM_PROMPT_DOCKER
+      : SYSTEM_PROMPT_VIRTUAL);
 
 function fail(message: string, code = 1): never {
   process.stderr.write(`error: ${message}\n`);
@@ -132,7 +144,9 @@ async function buildSession(): Promise<{
   const sandboxProvider: SandboxProvider =
     SANDBOX_KIND === "local"
       ? new LocalSandboxProvider()
-      : new VirtualSandboxProvider();
+      : SANDBOX_KIND === "docker"
+        ? new DockerSandboxProvider()
+        : new VirtualSandboxProvider();
   const engine = new Engine({
     providers: { store, bus, credentials, sandboxProvider },
   });
@@ -174,7 +188,10 @@ async function buildSession(): Promise<{
     );
   }
 
-  const workspace = SANDBOX_KIND === "local" ? resolve(WORKSPACE) : WORKSPACE;
+  const workspace =
+    SANDBOX_KIND === "local" || SANDBOX_KIND === "docker"
+      ? resolve(WORKSPACE)
+      : WORKSPACE;
   const session = await engine.createSession({
     userId,
     orgId: "repl-org",
@@ -259,28 +276,55 @@ async function waitForIdle(bus: InMemoryEventBus, threadId: string): Promise<voi
 async function runOneShot(prompt: string): Promise<void> {
   const { session, bus, defaultRoleName } = await buildSession();
   subscribePrinter(bus);
-  const receipt = await session.prompt(prompt, { role: defaultRoleName });
-  await waitForIdle(bus, receipt.threadId);
+  installShutdownHook(session);
+  try {
+    const receipt = await session.prompt(prompt, { role: defaultRoleName });
+    await waitForIdle(bus, receipt.threadId);
+  } finally {
+    await session.destroy();
+  }
 }
 
 async function runInteractive(): Promise<void> {
   const { session, bus, defaultRoleName } = await buildSession();
   subscribePrinter(bus);
+  installShutdownHook(session);
   const rl = createInterface({ input: stdin, output: stdout });
   stdout.write(
     `\nvalet engine repl — model=${MODEL_ID} sandbox=${SANDBOX_KIND}` +
-      (SANDBOX_KIND === "local" ? ` workspace=${WORKSPACE}` : "") +
+      (SANDBOX_KIND === "local" || SANDBOX_KIND === "docker"
+        ? ` workspace=${WORKSPACE}`
+        : "") +
       (defaultRoleName ? ` role=${defaultRoleName}` : "") +
       `\ntype a prompt, 'exit' to quit.\n`,
   );
-  while (true) {
-    const line = (await rl.question("\n> ")).trim();
-    if (line === "") continue;
-    if (line === "exit" || line === "quit") break;
-    const receipt = await session.prompt(line, { role: defaultRoleName });
-    await waitForIdle(bus, receipt.threadId);
+  try {
+    while (true) {
+      const line = (await rl.question("\n> ")).trim();
+      if (line === "") continue;
+      if (line === "exit" || line === "quit") break;
+      const receipt = await session.prompt(line, { role: defaultRoleName });
+      await waitForIdle(bus, receipt.threadId);
+    }
+  } finally {
+    rl.close();
+    await session.destroy();
   }
-  rl.close();
+}
+
+// Catch Ctrl-C so we don't leave a Docker container running. `session.destroy`
+// is idempotent — if the regular finally block already ran, this is a no-op.
+function installShutdownHook(session: Session): void {
+  const handler = async (signal: NodeJS.Signals): Promise<void> => {
+    stdout.write(`\n\x1b[90m[shutdown] ${signal} — destroying session…\x1b[0m\n`);
+    try {
+      await session.destroy();
+    } finally {
+      process.exit(130);
+    }
+  };
+  process.once("SIGINT", handler);
+  process.once("SIGTERM", handler);
 }
 
 const args = process.argv.slice(2);

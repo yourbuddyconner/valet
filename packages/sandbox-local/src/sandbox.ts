@@ -8,7 +8,7 @@ import type {
   SandboxCreateOpts,
   SandboxProvider,
   SandboxStatus,
-} from "../../types.js";
+} from "@valet/engine";
 
 /**
  * LocalSandbox is for development and testing. It runs FS ops via

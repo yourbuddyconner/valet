@@ -9,8 +9,8 @@ import {
   engineDecisionGates,
   engineDecisionGateRefs,
   engineSuspendedTurns,
-} from "../../schema/sqlite.js";
-import { NotFoundError } from "../../errors.js";
+} from "./schema.js";
+import { NotFoundError } from "@valet/engine";
 import type {
   DecisionGate,
   DecisionGateEntry,
@@ -24,7 +24,7 @@ import type {
   SessionStore,
   SuspendedTurnState,
   ThreadData,
-} from "../../types.js";
+} from "@valet/engine";
 import { entryToRow, jsonOrNull, parseJson, rowToEntry, type EntryRow } from "./helpers.js";
 
 export class SqliteSessionStore implements SessionStore {

@@ -17,6 +17,9 @@
   "references": [
     { "path": "./packages/shared" },
     { "path": "./packages/engine" },
+    { "path": "./packages/store-sqlite" },
+    { "path": "./packages/sandbox-local" },
+    { "path": "./packages/sandbox-docker" },
     { "path": "./packages/sdk" },
     { "path": "./packages/plugin-github" },
     { "path": "./packages/plugin-slack" },

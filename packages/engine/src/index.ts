@@ -16,13 +16,10 @@ export {
   InMemoryCredentialStore,
   InMemorySessionStore,
 } from "./providers/in-memory/index.js";
-export { SqliteSessionStore } from "./providers/sqlite/index.js";
-export {
-  VirtualSandbox,
-  VirtualSandboxProvider,
-  LocalSandbox,
-  LocalSandboxProvider,
-} from "./providers/sandbox/index.js";
+export { VirtualSandbox, VirtualSandboxProvider } from "./providers/sandbox/virtual.js";
+// SqliteSessionStore lives in @valet/store-sqlite.
+// LocalSandbox / LocalSandboxProvider live in @valet/sandbox-local.
+// DockerSandbox / DockerSandboxProvider live in @valet/sandbox-docker.
 export { builtinTools, readTool, writeTool, editTool, bashTool, threadReadTool } from "./builtin-tools/index.js";
 export {
   pluginCatalogTools,

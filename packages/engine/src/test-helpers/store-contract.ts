@@ -8,7 +8,7 @@ import type {
   SessionStore,
   SuspendedTurnState,
   ThreadData,
-} from "../src/index.js";
+} from "../index.js";
 
 export interface StoreContractContext {
   factory: () => SessionStore | Promise<SessionStore>;
