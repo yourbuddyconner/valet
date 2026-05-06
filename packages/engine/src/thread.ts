@@ -92,6 +92,10 @@ export class Thread {
   resolveDecision(gateId: string, resolution: DecisionResolution): boolean {
     const ok = this.gates.resolve(gateId, resolution);
     if (ok) {
+      // Persist the resolved status + DAG entry update. Both the live and
+      // replay code paths short-circuit before the requestDecision
+      // continuation; doing it here means the store is consistent for both.
+      void this.persistGateResolution(gateId, resolution);
       void this.session.emit({
         type: "decision_gate_resolved",
         threadId: this.id,
@@ -100,6 +104,26 @@ export class Thread {
       });
     }
     return ok;
+  }
+
+  private async persistGateResolution(
+    gateId: string,
+    resolution: DecisionResolution,
+  ): Promise<void> {
+    const store = this.session.providers.store;
+    const existing = await store.getDecisionGate(this.session.id, gateId);
+    if (!existing) return;
+    const resolved: DecisionGate = {
+      ...existing,
+      status: "resolved",
+      updatedAt: Date.now(),
+    };
+    await store.saveDecisionGate(this.session.id, this.id, resolved);
+    await store.updateDecisionGateEntry(this.session.id, this.id, gateId, {
+      gate: resolved,
+      resolution,
+      resolvedAt: new Date(resolution.resolvedAt).toISOString(),
+    });
   }
 
   withdrawDecision(gateId: string, reason: DecisionWithdrawReason): boolean {
@@ -238,6 +262,19 @@ export class Thread {
       return;
     }
     this.setReplayContext({ gateId: suspended.gateId, resolution });
+    // The deterministic gate ID is derived from
+    // (sessionId, threadId, queueItemId, resumeKey). During replay, the
+    // tool's requestDecision call recomputes this from the active queue
+    // item — so we must mirror the original queueItemId here, otherwise
+    // the short-circuit won't match and the tool will try to open a
+    // brand-new gate.
+    const priorActive = this.activeItem;
+    this.activeItem = {
+      id: suspended.queueItemId,
+      threadId: this.id,
+      content: "",
+      createdAt: suspended.createdAt,
+    };
     const fakeAbort = new AbortController();
     let toolResult;
     try {
@@ -247,12 +284,14 @@ export class Thread {
         fakeAbort.signal,
       );
     } catch (err) {
+      this.activeItem = priorActive;
       this.emitError(
         "replay_tool_failed",
         err instanceof Error ? err.message : String(err),
       );
       return;
     }
+    this.activeItem = priorActive;
     this.agent.state.messages = [
       ...this.agent.state.messages,
       {

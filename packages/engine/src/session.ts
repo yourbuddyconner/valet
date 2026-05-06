@@ -61,10 +61,12 @@ export class Session {
       const entries = await providers.store.getEntries(data.id, td.id);
       thread.rehydrateTranscript(entries);
     }
-    // Kick off blocked-thread resumption (fire-and-forget; replay completes
-    // asynchronously when the gate is resolved or already resolved).
+    // Await each thread's resume step so callers can rely on pending gates
+    // being re-armed before they call resolveDecision. The actual replay
+    // (or wait for resolution) inside resumeBlockedThreadIfReady is still
+    // asynchronous — only the arming is awaited here.
     for (const td of threadDatas) {
-      void session.resumeBlockedThreadIfReady(td.id);
+      await session.resumeBlockedThreadIfReady(td.id);
     }
     return session;
   }
