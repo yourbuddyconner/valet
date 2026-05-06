@@ -879,7 +879,7 @@ Compaction never touches the most recent turns. A "turn" is the segment from one
 
 Walk messages newest → oldest. Track cumulative tool-output token estimate. Once the cumulative count exceeds `cfg.pruneProtectTokens ?? 40_000`, mark every older `tool_call`-result text as `elided`. Skip protected tools (the engine ships with `skill` and `thread_read` protected by default; per-tool opt-in via `ToolDef.protectedFromPruning`).
 
-The DAG entry is updated in place — `MessagePart` of type `tool_call` keeps `callId`, `toolName`, `args`, and `status`, but its `result` field is replaced with a placeholder `{ elided: true, reason: 'pruned' }`. LLM-context assembly skips elided results. Pruning only commits if it'd save at least `cfg.pruneMinimumTokens ?? 20_000` tokens; otherwise it's a no-op.
+The DAG entry is updated in place via `SessionStore.updateEntry` — `MessagePart` of type `tool_call` keeps `callId`, `toolName`, `args`, and `status`, but its `result` field is replaced with a placeholder `{ elided: true, reason: 'pruned' }` and `elided: true` is set on the part. LLM-context assembly skips elided results. The persistence is atomic per entry, not per part: the entire `MessageEntry` row is rewritten with the same id. Pruning only commits if it'd save at least `cfg.pruneMinimumTokens ?? 20_000` tokens; otherwise it's a no-op.
 
 Pruning runs before compaction on the proactive path. Often pruning alone is enough.
 
@@ -1369,6 +1369,13 @@ interface SessionStore {
   saveSession(session: SessionData): Promise<void>;
   saveThread(sessionId: string, thread: ThreadData): Promise<void>;
   appendEntries(sessionId: string, threadId: string, entries: SessionEntry[]): Promise<void>;
+  /**
+   * Replace an existing entry in place. Required so pruning during
+   * compaction can persist tool-result elision; also useful for any
+   * other in-place mutation (gate refs, attachment updates).
+   * Throws NotFoundError if no entry with this id exists in (sessionId, threadId).
+   */
+  updateEntry(sessionId: string, threadId: string, entry: SessionEntry): Promise<void>;
   saveQueueState(sessionId: string, threadId: string, queue: QueueState): Promise<void>;
   saveDecisionGate(sessionId: string, threadId: string, gate: DecisionGate): Promise<void>;
   saveDecisionGateRef(sessionId: string, threadId: string, gateId: string, ref: { channelType: string; ref: DecisionGateRef }): Promise<void>;
