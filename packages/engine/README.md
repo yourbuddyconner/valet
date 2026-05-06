@@ -10,8 +10,9 @@ has zero platform dependencies.
 
 ## What works in this prototype
 
-- Engine public API: `createSession`, `getSession`, `deleteSession`, `Session.prompt`,
-  `Session.thread()`, `Session.resolveDecision`, `Session.withdrawDecision`,
+- Engine public API: `createSession`, `restoreSession({ sessionId, options })`,
+  `getSession`, `deleteSession`, `Session.prompt`, `Session.thread()`,
+  `Session.resolveDecision`, `Session.withdrawDecision`,
   `Session.abort/pause/resume`.
 - Per-thread state: each thread gets its own `pi-agent-core` `Agent`
   instance with its own queue and DAG history.
@@ -22,11 +23,28 @@ has zero platform dependencies.
   engine emits `decision_gate`, and the turn resumes when the user calls
   `session.resolveDecision()`. Pending gates withdraw on `steer` or
   `abort` and expire after `expiresAt`.
+- **Restart-safe re-entrant decision gates.** Gate IDs are deterministic:
+  `gate:{sessionId}:{threadId}:{queueItemId}:{resumeKey}`. Tools must
+  supply a stable `resumeKey`. On `restoreSession`, the engine re-arms
+  pending gates and replays the suspended tool with `ctx.suspendedDecision`
+  populated; `requestDecision` short-circuits and returns the stored
+  resolution instead of opening a new gate. Validated by an end-to-end
+  test that opens a gate, throws away the engine, builds a new one on the
+  same store, calls `restoreSession`, then `resolveDecision`, and verifies
+  the agent's continuation message is persisted.
 - Multi-thread: threads run concurrently, share the sandbox, and have
   isolated histories. Aborting one thread doesn't affect siblings.
 - Built-in `thread_read` tool: a thread can read recent messages from a
   sibling, parent, or child thread.
 - Built-in tools: `read`, `write`, `edit`, `bash`, `thread_read`.
+- **Persistent SessionStore.** `SqliteSessionStore` (Drizzle SQLite schema,
+  migrations, in-process via `better-sqlite3`) implements the same
+  `SessionStore` interface as `InMemorySessionStore`. Both pass an
+  identical 10-test contract suite. Schema mirrors the V1 spec's required
+  tables: `engine_sessions`, `engine_threads`, `engine_entries`,
+  `engine_queue_state`, `engine_decision_gates`,
+  `engine_decision_gate_refs`, `engine_suspended_turns`, plus stubbed
+  `engine_queue_items` for future per-item visibility.
 - In-memory providers: `InMemorySessionStore`, `InMemoryEventBus`,
   `InMemoryBlobStore`, `InMemoryCredentialStore`, `VirtualSandbox` /
   `VirtualSandboxProvider` (in-memory FS + a small whitelist of safe shell
@@ -34,13 +52,16 @@ has zero platform dependencies.
 
 ## What's deferred (post-prototype)
 
-- **Restart-safe re-entrant decision gates.** Today `requestDecision`
-  returns a Promise that resolves when the user resolves the gate. That's
-  correct for an in-process engine but doesn't survive process restarts.
-  The persisted `SuspendedTurnState` record is written, but
-  `Engine.restoreSession` is a stub. Once we have a persistent store, we
-  re-prompt on restart and short-circuit `requestDecision` using
-  `ctx.suspendedDecision` (already plumbed through `ToolContext`).
+- **D1 wiring.** `SqliteSessionStore` uses `better-sqlite3`. The Cloudflare
+  adapter will reuse the same Drizzle queries through `drizzle-orm/d1`.
+- **Postgres dialect mirror.** The K8s adapter contract requires a
+  pg-core schema mirror. Same logical schema, different column helpers;
+  doable in one task once the K8s adapter is on deck.
+- **Per-queue-item rows.** Today the active and pending queue items are
+  persisted via the JSON-encoded `engine_queue_state.pending` column.
+  `engine_queue_items` exists as a schema stub; populating it gives the
+  adapter visibility into individual items but isn't a correctness
+  requirement.
 - **Compaction.** Token-aware context compression is not implemented.
   `CompactionEntry` is in the DAG schema; the algorithm itself is a
   follow-up.
@@ -52,8 +73,6 @@ has zero platform dependencies.
   `ToolDef[]` directly.
 - **Structured results.** Schema-validated output extraction with
   `---RESULT_START---` delimiters is not implemented.
-- **Engine restoration.** `Engine.restoreSession()` throws; full
-  rehydration of running queues + suspended turns is a follow-up.
 
 ## Spec-vs-reality deltas (notes from the pi-ai/pi-agent-core spike)
 
@@ -85,4 +104,6 @@ pnpm --filter @valet/engine test
 ```
 
 Covers: happy path (3), decision gates (4), queue modes (4),
-multi-thread + thread_read (3) — 14 tests total, all in <2s.
+multi-thread + thread_read (3), short-circuit predicate unit tests (6),
+SessionStore contract suite × 2 backends (20), full restart cycle (1) —
+41 tests total.
