@@ -22,6 +22,7 @@ import type {
   QueueState,
   QueueStatus,
   SessionEntry,
+  SuspendedTurnState,
   ThreadData,
   ToolContext,
   ToolDef,
@@ -215,6 +216,89 @@ export class Thread {
     ctx: { gateId: string; resolution?: DecisionResolution } | undefined,
   ): void {
     this.suspendedDecisionForReplay = ctx;
+  }
+
+  /**
+   * Re-run a suspended tool with seeded suspendedDecision, push its result
+   * onto the agent transcript, then continue the agent loop. Called by
+   * Session.resumeBlockedThreadIfReady when the gate has been resolved.
+   */
+  async replayBlocked(args: {
+    suspended: SuspendedTurnState;
+    resolution: DecisionResolution;
+  }): Promise<void> {
+    const { suspended, resolution } = args;
+    const tools = this.buildTools();
+    const tool = tools.find((t) => t.name === suspended.toolName);
+    if (!tool) {
+      this.emitError(
+        "replay_tool_missing",
+        `cannot replay: tool ${suspended.toolName} not registered`,
+      );
+      return;
+    }
+    this.setReplayContext({ gateId: suspended.gateId, resolution });
+    const fakeAbort = new AbortController();
+    let toolResult;
+    try {
+      toolResult = await tool.execute(
+        suspended.toolCallId,
+        suspended.toolArgs,
+        fakeAbort.signal,
+      );
+    } catch (err) {
+      this.emitError(
+        "replay_tool_failed",
+        err instanceof Error ? err.message : String(err),
+      );
+      return;
+    }
+    this.agent.state.messages = [
+      ...this.agent.state.messages,
+      {
+        role: "toolResult",
+        toolCallId: suspended.toolCallId,
+        toolName: suspended.toolName,
+        content: toolResult.content,
+        details: toolResult.details,
+        isError: false,
+        timestamp: Date.now(),
+      },
+    ];
+    await this.session.providers.store.clearSuspendedTurn(this.session.id, this.id);
+    this.setStatus("running");
+    try {
+      await this.agent.continue();
+      await this.agent.waitForIdle();
+    } catch (err) {
+      this.emitError(
+        "replay_continue_failed",
+        err instanceof Error ? err.message : String(err),
+      );
+    }
+    if (this.readStatus() === "running") this.setStatus("idle");
+  }
+
+  /**
+   * Re-arm the GateManager for a still-pending gate after restart, so a
+   * future resolveDecision triggers replay.
+   */
+  armPendingGateForRestart(gate: DecisionGate, suspended: SuspendedTurnState): void {
+    this.blockedGateId = gate.id;
+    this.setStatus("blocked_on_decision_gate");
+    this.gates
+      .register(gate, () => {
+        // expiry handler: replay never runs for an expired gate
+      })
+      .then((resolution) => {
+        void this.replayBlocked({ suspended, resolution });
+      })
+      .catch((err) => {
+        this.emitError(
+          "replay_after_pending_gate_failed",
+          err instanceof Error ? err.message : String(err),
+        );
+      });
   }
 
   /**

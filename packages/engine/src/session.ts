@@ -61,7 +61,45 @@ export class Session {
       const entries = await providers.store.getEntries(data.id, td.id);
       thread.rehydrateTranscript(entries);
     }
+    // Kick off blocked-thread resumption (fire-and-forget; replay completes
+    // asynchronously when the gate is resolved or already resolved).
+    for (const td of threadDatas) {
+      void session.resumeBlockedThreadIfReady(td.id);
+    }
     return session;
+  }
+
+  /**
+   * For a thread that was blocked on a decision gate when persisted, either
+   * re-arm a wait for the still-pending gate (so resolveDecision triggers
+   * replay) or — if the gate was already resolved while the engine was down —
+   * trigger replay immediately.
+   */
+  async resumeBlockedThreadIfReady(threadId: string): Promise<void> {
+    const thread = this.threads.get(threadId);
+    if (!thread) return;
+    const suspended = await this.providers.store.getSuspendedTurn(this.id, threadId);
+    if (!suspended) return;
+    const gate = await this.providers.store.getDecisionGate(this.id, suspended.gateId);
+    if (!gate) {
+      await this.providers.store.clearSuspendedTurn(this.id, threadId);
+      return;
+    }
+    if (gate.status === "resolved") {
+      const entries = await this.providers.store.getEntries(this.id, threadId);
+      const entry = entries.find(
+        (e) => e.type === "decision_gate" && e.gate.id === gate.id,
+      );
+      const resolution =
+        entry && entry.type === "decision_gate" ? entry.resolution : undefined;
+      if (!resolution) {
+        throw new Error(`gate ${gate.id} resolved but no resolution stored`);
+      }
+      void thread.replayBlocked({ suspended, resolution });
+    } else if (gate.status === "pending") {
+      thread.armPendingGateForRestart(gate, suspended);
+    }
+    // expired/withdrawn: nothing to do; the run already terminated.
   }
 
   private attachThread(thread: Thread): void {
