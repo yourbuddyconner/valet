@@ -588,6 +588,16 @@ export interface CreateSessionOptions {
   metadata?: Record<string, unknown>;
 }
 
+/**
+ * Options accepted by Engine.restoreSession. The host re-supplies tools,
+ * sandbox, model, etc. — the engine does not maintain a registry of session
+ * creation options across restarts.
+ */
+export interface RestoreSessionOptions {
+  sessionId: string;
+  options: Omit<CreateSessionOptions, "id">;
+}
+
 export interface ProviderBundle {
   store: SessionStore;
   bus: EventBus;

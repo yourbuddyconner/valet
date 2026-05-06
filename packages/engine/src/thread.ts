@@ -1,6 +1,6 @@
 import { Agent } from "@mariozechner/pi-agent-core";
 import type { AgentEvent, AgentMessage, AgentTool } from "@mariozechner/pi-agent-core";
-import type { Message } from "@mariozechner/pi-ai";
+import type { Message, TextContent, ThinkingContent, ToolCall } from "@mariozechner/pi-ai";
 import type { Session } from "./session.js";
 import { toAgentTool } from "./tool-bridge.js";
 import { fromRequest, GateManager, shouldShortCircuit } from "./decision-gate.js";
@@ -215,6 +215,70 @@ export class Thread {
     ctx: { gateId: string; resolution?: DecisionResolution } | undefined,
   ): void {
     this.suspendedDecisionForReplay = ctx;
+  }
+
+  /**
+   * Reconstruct the agent transcript from persisted DAG entries.
+   *
+   * Critical: assistant entries that issued tool calls have those calls in
+   * `entry.parts` as `tool_call` parts. We MUST rebuild the AssistantMessage's
+   * content[] with both text and ToolCall blocks, otherwise pushing a
+   * subsequent toolResult (during replay) produces a malformed
+   * [user, assistant(text-only), toolResult] sequence that LLM providers
+   * reject. tool/system roles are dropped here — `replayBlocked` re-derives
+   * the toolResult message before continuing.
+   */
+  rehydrateTranscript(entries: SessionEntry[]): void {
+    const agentMessages: AgentMessage[] = [];
+    for (const e of entries) {
+      if (e.type !== "message") continue;
+      if (e.role === "user") {
+        agentMessages.push({
+          role: "user",
+          content: [{ type: "text", text: e.content }],
+          timestamp: e.createdAt,
+        });
+        continue;
+      }
+      if (e.role === "assistant") {
+        const blocks: Array<TextContent | ThinkingContent | ToolCall> = [];
+        const parts = e.parts ?? [];
+        const hadStructuredParts = parts.length > 0;
+        for (const p of parts) {
+          if (p.type === "text") blocks.push({ type: "text", text: p.text });
+          else if (p.type === "thinking") blocks.push({ type: "thinking", thinking: p.text });
+          else if (p.type === "tool_call") {
+            blocks.push({
+              type: "toolCall",
+              id: p.callId,
+              name: p.toolName,
+              arguments: (p.args as Record<string, unknown>) ?? {},
+            });
+          }
+        }
+        if (!hadStructuredParts && e.content) {
+          blocks.push({ type: "text", text: e.content });
+        }
+        agentMessages.push({
+          role: "assistant",
+          content: blocks,
+          api: this.session.options.model.api,
+          provider: this.session.options.model.provider,
+          model: e.model ?? this.session.options.model.id,
+          usage: {
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 0,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+          },
+          stopReason: "stop",
+          timestamp: e.createdAt,
+        });
+      }
+    }
+    this.agent.state.messages = agentMessages;
   }
 
   setMode(mode: QueueMode): void {

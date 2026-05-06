@@ -43,6 +43,32 @@ export class Session {
     this.sandbox = sandbox;
   }
 
+  /**
+   * Rebuild a Session from persisted state. Called by Engine.restoreSession.
+   * The caller re-supplies tools/sandbox/model in options.
+   */
+  static async rehydrate(
+    data: SessionData,
+    options: CreateSessionOptions,
+    providers: ProviderBundle,
+    sandbox: Sandbox,
+  ): Promise<Session> {
+    const session = new Session(data.id, options, providers, sandbox);
+    const threadDatas = await providers.store.listThreads(data.id);
+    for (const td of threadDatas) {
+      const thread = new Thread(session, td);
+      session.attachThread(thread);
+      const entries = await providers.store.getEntries(data.id, td.id);
+      thread.rehydrateTranscript(entries);
+    }
+    return session;
+  }
+
+  private attachThread(thread: Thread): void {
+    this.threads.set(thread.id, thread);
+    this.threadsByKey.set(thread.key, thread);
+  }
+
   async ensureDefaultThread(): Promise<Thread> {
     return this.thread("web:default");
   }

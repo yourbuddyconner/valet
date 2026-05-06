@@ -3,6 +3,7 @@ import { Session } from "./session.js";
 import type {
   CreateSessionOptions,
   EngineOptions,
+  RestoreSessionOptions,
   Sandbox,
   SandboxCreateOpts,
 } from "./types.js";
@@ -32,14 +33,20 @@ export class Engine {
     return session;
   }
 
-  async restoreSession(sessionId: string): Promise<Session> {
-    const existing = this.sessions.get(sessionId);
-    if (existing) return existing;
-    const data = await this.opts.providers.store.getSession(sessionId);
-    if (!data) throw new Error(`session not found: ${sessionId}`);
-    // V1 prototype: full restoration of pending queue items / suspended turns
-    // is a follow-up. Here we only rehydrate the session shell.
-    throw new Error("restoreSession: not implemented in prototype yet");
+  async restoreSession(args: RestoreSessionOptions): Promise<Session> {
+    const cached = this.sessions.get(args.sessionId);
+    if (cached) return cached;
+    const data = await this.opts.providers.store.getSession(args.sessionId);
+    if (!data) throw new Error(`session not found: ${args.sessionId}`);
+    const sandbox = await this.materializeSandbox(args.options.sandbox);
+    const session = await Session.rehydrate(
+      data,
+      { ...args.options, id: args.sessionId },
+      this.opts.providers,
+      sandbox,
+    );
+    this.sessions.set(args.sessionId, session);
+    return session;
   }
 
   getSession(sessionId: string): Session | null {
