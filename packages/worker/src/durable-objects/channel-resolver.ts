@@ -21,23 +21,29 @@ export type DropReason =
   | 'unmapped_session'
   | 'no_message_id'
   | 'no_prompt_row'
+  | 'row_without_channel'
   | 'no_session_id';
+
+export type ChannelLookupResult =
+  | { found: true; target: ChannelTarget }
+  | { found: false; reason: 'no_prompt_row' | 'row_without_channel' };
 
 /**
  * Resolve the channel target for an outbound emission by looking up the
  * prompt_queue row for the given messageId via `promptQueue.getChannelTargetById`.
  *
- * Returns null if the row is missing or lacks both channelType and channelId.
- * Callers MUST handle null explicitly — do NOT fall back to mutable state.
+ * Returns a discriminated result so callers can distinguish "row missing"
+ * (prompt already completed / never existed) from "row exists but has no
+ * channel" (e.g. system prompts on orchestrator sessions).
  */
 export function getChannelForMessage(
   promptQueue: PromptQueue,
   messageId: string,
-): ChannelTarget | null {
+): ChannelLookupResult {
   const row = promptQueue.getChannelTargetById(messageId);
-  if (!row) return null;
-  if (!row.channelType || !row.channelId) return null;
-  return { channelType: row.channelType, channelId: row.channelId };
+  if (!row) return { found: false, reason: 'no_prompt_row' };
+  if (!row.channelType || !row.channelId) return { found: false, reason: 'row_without_channel' };
+  return { found: true, target: { channelType: row.channelType, channelId: row.channelId } };
 }
 
 /** Log a structured warning when an emission is dropped due to missing routing. */

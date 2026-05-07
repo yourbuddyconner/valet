@@ -315,11 +315,11 @@ export class SessionAgentDO {
 
   /**
    * Resolve channel for a specific prompt by messageId. Reads from prompt_queue
-   * via channel-resolver — the explicit, deterministic source. Returns null if
-   * the row is missing or lacks channel context. Callers MUST handle null by
-   * dropping the emission with dropEmission(...) — never fall back to mutable state.
+   * via channel-resolver — the explicit, deterministic source. Returns a
+   * discriminated result so callers can distinguish "row missing" from "row
+   * exists but lacks channel context".
    */
-  private getChannelForMessage(messageId: string): { channelType: string; channelId: string } | null {
+  private getChannelForMessage(messageId: string) {
     return getChannelForMessage(this.promptQueue, messageId);
   }
 
@@ -2117,11 +2117,12 @@ export class SessionAgentDO {
           dropEmission('no_message_id', { eventType: 'question', questionId: msg.questionId });
           return;
         }
-        const questionCh = this.getChannelForMessage(msg.messageId);
-        if (!questionCh) {
-          dropEmission('no_prompt_row', { eventType: 'question', messageId: msg.messageId, questionId: msg.questionId });
+        const questionLookup = this.getChannelForMessage(msg.messageId);
+        if (!questionLookup.found) {
+          dropEmission(questionLookup.reason, { eventType: 'question', messageId: msg.messageId, questionId: msg.questionId });
           return;
         }
+        const questionCh = questionLookup.target;
         // Store question as interactive prompt and broadcast to all clients
         const qId = msg.questionId || crypto.randomUUID();
         const QUESTION_TIMEOUT_SECS = 5 * 60; // 5 minutes
@@ -2206,11 +2207,12 @@ export class SessionAgentDO {
           dropEmission('no_message_id', { eventType: 'image' });
           return;
         }
-        const imgCh = this.getChannelForMessage(msg.messageId);
-        if (!imgCh) {
-          dropEmission('no_prompt_row', { eventType: 'image', messageId: msg.messageId });
+        const imgLookup = this.getChannelForMessage(msg.messageId);
+        if (!imgLookup.found) {
+          dropEmission(imgLookup.reason, { eventType: 'image', messageId: msg.messageId });
           return;
         }
+        const imgCh = imgLookup.target;
         // Store image reference and broadcast
         const imgId = crypto.randomUUID();
         const mimeType = ('mimeType' in msg && msg.mimeType) ? msg.mimeType : 'image/png';
@@ -2275,11 +2277,12 @@ export class SessionAgentDO {
           dropEmission('no_message_id', { eventType: 'error', error: msg.error });
           return;
         }
-        const errCh = this.getChannelForMessage(msg.messageId);
-        if (!errCh) {
-          dropEmission('no_prompt_row', { eventType: 'error', messageId: msg.messageId, error: msg.error });
+        const errLookup = this.getChannelForMessage(msg.messageId);
+        if (!errLookup.found) {
+          dropEmission(errLookup.reason, { eventType: 'error', messageId: msg.messageId, error: msg.error });
           return;
         }
+        const errCh = errLookup.target;
         // Always generate a new ID — msg.messageId is the prompt's user message ID,
         // which already exists in the messages table (PRIMARY KEY conflict).
         const errId = crypto.randomUUID();
@@ -2440,11 +2443,12 @@ export class SessionAgentDO {
         // channel attribution — this is legitimate session-wide status, not a drop.
         let statusCh: { channelType: string; channelId: string } | null = null;
         if (msg.messageId) {
-          statusCh = this.getChannelForMessage(msg.messageId);
-          if (!statusCh) {
-            dropEmission('no_prompt_row', { eventType: 'agentStatus', messageId: msg.messageId, status: msg.status });
+          const statusLookup = this.getChannelForMessage(msg.messageId);
+          if (!statusLookup.found) {
+            dropEmission(statusLookup.reason, { eventType: 'agentStatus', messageId: msg.messageId, status: msg.status });
             return;
           }
+          statusCh = statusLookup.target;
         }
         this.broadcastToClients({
           type: 'agentStatus',
@@ -3633,7 +3637,8 @@ export class SessionAgentDO {
         // mutable state. If messageId is absent or the row is gone (e.g. queue
         // was already pruned), emit without channel attribution rather than
         // attributing to an arbitrary channel.
-        const completedCh = messageId ? this.getChannelForMessage(messageId) : null;
+        const completedLookup = messageId ? this.getChannelForMessage(messageId) : null;
+        const completedCh = completedLookup?.found ? completedLookup.target : null;
         this.emitEvent('turn_complete', {
           durationMs: Date.now() - promptStart,
           channel: completedCh?.channelType || undefined,

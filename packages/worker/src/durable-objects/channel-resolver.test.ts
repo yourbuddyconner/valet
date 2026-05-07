@@ -18,7 +18,7 @@ function makePromptQueueMockFromMap(
 }
 
 describe('getChannelForMessage', () => {
-  it('returns the channel from the prompt_queue row when both fields present', () => {
+  it('returns found with channel target when both fields present', () => {
     const { queue } = makePromptQueueMock({
       channelType: 'slack',
       channelId: 'C123',
@@ -26,18 +26,18 @@ describe('getChannelForMessage', () => {
 
     const result = getChannelForMessage(queue, 'msg-1');
 
-    expect(result).toEqual({ channelType: 'slack', channelId: 'C123' });
+    expect(result).toEqual({ found: true, target: { channelType: 'slack', channelId: 'C123' } });
   });
 
-  it('returns null when the row is missing', () => {
+  it('returns not found with no_prompt_row when the row is missing', () => {
     const { queue } = makePromptQueueMock(undefined);
 
     const result = getChannelForMessage(queue, 'msg-missing');
 
-    expect(result).toBeNull();
+    expect(result).toEqual({ found: false, reason: 'no_prompt_row' });
   });
 
-  it('returns null when row is present but channelType is missing', () => {
+  it('returns not found with row_without_channel when channelType is missing', () => {
     const { queue } = makePromptQueueMock({
       channelType: null,
       channelId: 'C123',
@@ -45,10 +45,10 @@ describe('getChannelForMessage', () => {
 
     const result = getChannelForMessage(queue, 'msg-no-type');
 
-    expect(result).toBeNull();
+    expect(result).toEqual({ found: false, reason: 'row_without_channel' });
   });
 
-  it('returns null when row is present but channelId is missing', () => {
+  it('returns not found with row_without_channel when channelId is missing', () => {
     const { queue } = makePromptQueueMock({
       channelType: 'slack',
       channelId: null,
@@ -56,7 +56,7 @@ describe('getChannelForMessage', () => {
 
     const result = getChannelForMessage(queue, 'msg-no-id');
 
-    expect(result).toBeNull();
+    expect(result).toEqual({ found: false, reason: 'row_without_channel' });
   });
 
   it('calls getChannelTargetById with the exact messageId passed in', () => {
@@ -76,7 +76,7 @@ describe('getChannelForMessage', () => {
       'msg-1': { channelType: 'slack-thread-reply-target', channelId: 'C-thread-id' },
     });
     const result = getChannelForMessage(promptQueue, 'msg-1');
-    expect(result).toEqual({ channelType: 'slack-thread-reply-target', channelId: 'C-thread-id' });
+    expect(result).toEqual({ found: true, target: { channelType: 'slack-thread-reply-target', channelId: 'C-thread-id' } });
   });
 });
 
@@ -101,6 +101,18 @@ describe('dropEmission', () => {
       reason: 'no_prompt_row',
       messageId: 'abc',
       sessionId: 'sess-1',
+    });
+  });
+
+  it('logs row_without_channel as the reason when applicable', () => {
+    dropEmission('row_without_channel', { messageId: 'xyz', eventType: 'agentStatus' });
+
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    const [, payload] = warnSpy.mock.calls[0];
+    expect(payload).toMatchObject({
+      reason: 'row_without_channel',
+      messageId: 'xyz',
+      eventType: 'agentStatus',
     });
   });
 });
