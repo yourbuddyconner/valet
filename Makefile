@@ -25,15 +25,24 @@
 
 # Configuration
 # =============
-# Source deployment config if it exists (copy .env.deploy.example to .env.deploy)
--include .env.deploy
+# Per-environment config: .env.deploy.dev, .env.deploy.prod, etc.
+# Usage: ENVIRONMENT=dev make deploy
+#
+# For local dev targets (dev-worker, dev-client, etc.) ENVIRONMENT is not required.
+# For deploy/bootstrap/destroy targets, ENVIRONMENT must be set.
 
-# Project name — all resource names derive from this (set in .env.deploy)
+ifdef ENVIRONMENT
+-include .env.deploy.$(ENVIRONMENT)
+endif
+
+# Project name — all resource names derive from this (set in .env.deploy.<env>)
 PROJECT_NAME ?= valet
 CF_WORKER_NAME ?= $(PROJECT_NAME)
 PAGES_PROJECT_NAME ?= $(PROJECT_NAME)-client
 D1_DATABASE_NAME ?= $(PROJECT_NAME)-db
 R2_BUCKET_NAME ?= $(PROJECT_NAME)-storage
+
+MODAL_APP_NAME ?= $(PROJECT_NAME)-backend
 
 WORKER_URL ?= http://localhost:8787
 WORKER_PROD_URL ?= https://$(CF_WORKER_NAME).workers.dev
@@ -564,16 +573,16 @@ e2e-ci: ## E2E tests for CI (includes cleanup)
 # that already exist. After bootstrap, update .env.deploy with the D1
 # database ID printed below, then run `make deploy`.
 
-bootstrap: bootstrap-d1 bootstrap-r2 bootstrap-pages ## Create all remote Cloudflare resources
+bootstrap: _require-env bootstrap-d1 bootstrap-r2 bootstrap-pages ## Create all remote Cloudflare resources (ENVIRONMENT=dev|prod)
 	@echo ""
 	@echo "$(GREEN)========================================$(NC)"
-	@echo "$(GREEN)Bootstrap complete!$(NC)"
+	@echo "$(GREEN)Bootstrap complete! [$(ENVIRONMENT)]$(NC)"
 	@echo "$(GREEN)========================================$(NC)"
 	@echo ""
 	@echo "Next steps:"
-	@echo "  1. Copy the D1 database ID above into .env.deploy as D1_DATABASE_ID"
-	@echo "  2. Run $(YELLOW)make bootstrap-secrets$(NC) to set worker secrets"
-	@echo "  3. Run $(YELLOW)make deploy$(NC) to deploy everything"
+	@echo "  1. Copy the D1 database ID above into .env.deploy.$(ENVIRONMENT) as D1_DATABASE_ID"
+	@echo "  2. Run $(YELLOW)ENVIRONMENT=$(ENVIRONMENT) make bootstrap-secrets$(NC) to set worker secrets"
+	@echo "  3. Run $(YELLOW)ENVIRONMENT=$(ENVIRONMENT) make deploy$(NC) to deploy everything"
 
 bootstrap-d1: ## Create D1 database
 	@echo "$(GREEN)Creating D1 database '$(D1_DATABASE_NAME)'...$(NC)"
@@ -593,7 +602,7 @@ bootstrap-pages: ## Create Cloudflare Pages project
 		&& echo "$(YELLOW)Pages project already exists$(NC)" \
 		|| echo "$(GREEN)✓ Pages project created$(NC)"
 
-bootstrap-secrets: ## Set required worker secrets (interactive)
+bootstrap-secrets: _require-env ## Set required worker secrets (ENVIRONMENT=dev|prod)
 	@echo "$(GREEN)Setting secrets for worker '$(CF_WORKER_NAME)'...$(NC)"
 	@echo ""
 	@echo "Required secrets:"
@@ -630,9 +639,18 @@ VERSION ?= $(shell git rev-parse --short HEAD 2>/dev/null || date +%Y%m%d%H%M%S)
 generate-registries: ## Generate auto-discovered plugin registry files
 	@cd packages/worker && bun scripts/generate-plugin-registry.ts
 
-release: ## Full idempotent release: install, build, push image, deploy all
+# Guard: require ENVIRONMENT for deploy/bootstrap/destroy targets
+_require-env:
+ifndef ENVIRONMENT
+	$(error ENVIRONMENT is required. Usage: ENVIRONMENT=dev make <target>)
+endif
+ifeq (,$(wildcard .env.deploy.$(ENVIRONMENT)))
+	$(error Config file .env.deploy.$(ENVIRONMENT) not found. Copy .env.deploy.example to .env.deploy.$(ENVIRONMENT))
+endif
+
+release: _require-env ## Full idempotent release: install, build, push image, deploy all
 	@echo "$(GREEN)========================================$(NC)"
-	@echo "$(GREEN)Starting Release (version: $(VERSION))$(NC)"
+	@echo "$(GREEN)Starting Release [$(ENVIRONMENT)] (version: $(VERSION))$(NC)"
 	@echo "$(GREEN)========================================$(NC)"
 	@echo ""
 	@echo "Step 1/4: Installing dependencies..."
@@ -646,29 +664,29 @@ release: ## Full idempotent release: install, build, push image, deploy all
 	@make image-push VERSION=$(VERSION)
 	@echo ""
 	@echo "Step 4/4: Deploying (worker + migrations + modal + client)..."
-	@./scripts/deploy.sh all
+	@ENVIRONMENT=$(ENVIRONMENT) ./scripts/deploy.sh all
 	@echo ""
 	@echo "$(GREEN)========================================$(NC)"
-	@echo "$(GREEN)Release complete! (version: $(VERSION))$(NC)"
+	@echo "$(GREEN)Release complete! [$(ENVIRONMENT)] (version: $(VERSION))$(NC)"
 	@echo "$(GREEN)========================================$(NC)"
 	@echo ""
 	@echo "$(YELLOW)OpenCode Image:$(NC) $(GHCR_REPO):$(VERSION)"
 	@echo "$(YELLOW)Set OPENCODE_IMAGE in Cloudflare to this value.$(NC)"
 
-deploy: ## Deploy everything — auto-creates resources, discovers URLs
-	@./scripts/deploy.sh all
+deploy: _require-env ## Deploy everything (ENVIRONMENT=dev|prod)
+	@ENVIRONMENT=$(ENVIRONMENT) ./scripts/deploy.sh all
 
-deploy-worker: ## Deploy Cloudflare Worker (auto-discovers config)
-	@./scripts/deploy.sh worker
+deploy-worker: _require-env ## Deploy Cloudflare Worker (ENVIRONMENT=dev|prod)
+	@ENVIRONMENT=$(ENVIRONMENT) ./scripts/deploy.sh worker
 
-deploy-migrate: ## Apply D1 migrations to production
-	@./scripts/deploy.sh migrate
+deploy-migrate: _require-env ## Apply D1 migrations (ENVIRONMENT=dev|prod)
+	@ENVIRONMENT=$(ENVIRONMENT) ./scripts/deploy.sh migrate
 
-deploy-modal: ## Deploy Modal backend (includes runner)
-	@./scripts/deploy.sh modal
+deploy-modal: _require-env ## Deploy Modal backend (ENVIRONMENT=dev|prod)
+	@ENVIRONMENT=$(ENVIRONMENT) ./scripts/deploy.sh modal
 
-deploy-client: ## Build and deploy client to Cloudflare Pages
-	@./scripts/deploy.sh client
+deploy-client: _require-env ## Build and deploy client (ENVIRONMENT=dev|prod)
+	@ENVIRONMENT=$(ENVIRONMENT) ./scripts/deploy.sh client
 
 dev-client: ## Start client dev server
 	@echo "$(GREEN)Starting client on http://localhost:5173...$(NC)"
@@ -710,17 +728,14 @@ image-push: image-build ## Build and push OpenCode image to GHCR
 # ==========================================
 # Teardown / Destroy
 # ==========================================
-# These targets destroy PRODUCTION resources. Use with care.
+# These targets destroy remote resources. Use with care.
 # Resource names default to the current config (CF_WORKER_NAME, etc.)
 # but can be overridden, e.g.:
-#   make destroy CF_WORKER_NAME=old-name PAGES_PROJECT_NAME=old-pages ...
+#   ENVIRONMENT=dev make destroy CF_WORKER_NAME=old-name ...
 
-# Modal app name
-MODAL_APP_NAME ?= $(PROJECT_NAME)-backend
-
-destroy: ## Destroy all remote resources (Worker, D1, R2, Pages, Modal) — DESTRUCTIVE
+destroy: _require-env ## Destroy all remote resources (ENVIRONMENT=dev|prod) — DESTRUCTIVE
 	@echo "$(RED)========================================$(NC)"
-	@echo "$(RED)  DESTROYING PRODUCTION RESOURCES$(NC)"
+	@echo "$(RED)  DESTROYING $(ENVIRONMENT) RESOURCES$(NC)"
 	@echo "$(RED)========================================$(NC)"
 	@echo ""
 	@echo "  Worker:  $(CF_WORKER_NAME)"

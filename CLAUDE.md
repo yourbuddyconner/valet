@@ -131,10 +131,11 @@ make generate-registries # Regenerate action/channel plugin registries
 # Logs
 make logs-cloudflare     # Tail deployed Cloudflare Worker logs
 
-# Deploy
-make deploy              # Deploy worker + modal + client (includes migrations)
-make deploy-migrate      # Apply D1 migrations to production only
-make release             # Full idempotent release: install, build, push image, deploy
+# Deploy (requires ENVIRONMENT=dev|prod)
+ENVIRONMENT=dev make deploy              # Deploy worker + modal + client (includes migrations)
+ENVIRONMENT=prod make deploy-worker      # Deploy just the worker to prod
+ENVIRONMENT=prod make deploy-migrate     # Apply D1 migrations to prod
+ENVIRONMENT=prod make release            # Full idempotent release to prod
 ```
 
 ### Applying D1 Migrations to Production
@@ -142,7 +143,7 @@ make release             # Full idempotent release: install, build, push image, 
 `make deploy` includes the migration step, but if you need to apply migrations separately:
 
 ```bash
-make deploy-migrate
+ENVIRONMENT=prod make deploy-migrate
 ```
 
 All deploy targets (`deploy-worker`, `deploy-migrate`, `deploy-modal`, `deploy-client`) are thin wrappers around `scripts/deploy.sh` which auto-discovers config (D1 ID, Modal workspace URL, worker URL) from CLI tools when values aren't set in `.env.deploy`.
