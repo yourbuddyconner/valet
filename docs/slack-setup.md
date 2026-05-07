@@ -11,13 +11,13 @@ Valet uses an org-level Slack integration. One admin installs the app for the en
 1. Go to [api.slack.com/apps](https://api.slack.com/apps) and click **Create New App**.
 2. Choose **From a manifest**.
 3. Select your workspace.
-4. Paste the manifest from `packages/worker/slack-app-manifest.json`, replacing `YOUR_WORKER_URL` with your deployed worker URL (e.g. `https://valet.conner-7e8.workers.dev`):
+4. Paste the manifest from `packages/plugin-slack/slack-app-manifest.json`, replacing `YOUR_WORKER_URL` with your deployed worker URL (e.g. `https://valet.conner-7e8.workers.dev`):
 
 ```json
 {
   "display_information": {
     "name": "Valet",
-    "description": "AI coding agent — send prompts, get results",
+    "description": "AI coworker — send prompts, get results",
     "background_color": "#1a1a2e"
   },
   "features": {

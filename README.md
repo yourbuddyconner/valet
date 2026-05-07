@@ -2,7 +2,7 @@
 
 **Self-hosted background coding agents with full dev environments.**
 
-Give your AI coding agent its own sandbox — complete with VS Code, a browser, and a terminal — and let it work in the background while you do something else. Watch it think, intervene when needed, or check back when it's done.
+Give your AI coworker its own sandbox — complete with VS Code, a browser, and a terminal — and let it work in the background while you do something else. Watch it think, intervene when needed, or check back when it's done.
 
 <p align="center">
   <img src="docs/valet.png" alt="Valet session" />
