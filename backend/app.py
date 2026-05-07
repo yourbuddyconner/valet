@@ -10,6 +10,10 @@ from config import WHISPER_MODELS_MOUNT, WHISPER_MODELS_VOLUME
 
 app = modal.App(os.environ.get("MODAL_APP_NAME", "valet-backend"))
 
+# Label prefix isolates endpoint subdomains per environment within a workspace.
+# Set via MODAL_LABEL_PREFIX env var (e.g. "prod-", "dev-"). Default: no prefix.
+_label_prefix = os.environ.get("MODAL_LABEL_PREFIX", "")
+
 # Image for the web functions — includes our backend Python modules
 # Also mount runner package and docker files so sandbox image builds can reference them
 fn_image = (
@@ -28,7 +32,7 @@ session_manager = SessionManager(app)
 
 
 @app.function(image=fn_image, timeout=1800)
-@modal.fastapi_endpoint(method="POST", label="create-session")
+@modal.fastapi_endpoint(method="POST", label=f"{_label_prefix}create-session")
 async def create_session(request: dict) -> dict:
     """Create a new session and spawn a sandbox.
 
@@ -71,7 +75,7 @@ async def create_session(request: dict) -> dict:
 
 
 @app.function(image=fn_image)
-@modal.fastapi_endpoint(method="POST", label="terminate-session")
+@modal.fastapi_endpoint(method="POST", label=f"{_label_prefix}terminate-session")
 async def terminate_session(request: dict) -> dict:
     """Terminate a session's sandbox.
 
@@ -87,7 +91,7 @@ async def terminate_session(request: dict) -> dict:
 
 
 @app.function(image=fn_image)
-@modal.fastapi_endpoint(method="POST", label="hibernate-session")
+@modal.fastapi_endpoint(method="POST", label=f"{_label_prefix}hibernate-session")
 async def hibernate_session(request: dict) -> dict:
     """Hibernate a session by snapshotting the sandbox filesystem and terminating it.
 
@@ -116,7 +120,7 @@ async def hibernate_session(request: dict) -> dict:
 
 
 @app.function(image=fn_image, timeout=1800)
-@modal.fastapi_endpoint(method="POST", label="restore-session")
+@modal.fastapi_endpoint(method="POST", label=f"{_label_prefix}restore-session")
 async def restore_session(request: dict) -> dict:
     """Restore a session from a filesystem snapshot.
 
@@ -160,7 +164,7 @@ async def restore_session(request: dict) -> dict:
 
 
 @app.function(image=fn_image)
-@modal.fastapi_endpoint(method="POST", label="session-status")
+@modal.fastapi_endpoint(method="POST", label=f"{_label_prefix}session-status")
 async def session_status(request: dict) -> dict:
     """Get status of a session's sandbox.
 
@@ -176,7 +180,7 @@ async def session_status(request: dict) -> dict:
 
 
 @app.function(image=fn_image)
-@modal.fastapi_endpoint(method="POST", label="delete-workspace")
+@modal.fastapi_endpoint(method="POST", label=f"{_label_prefix}delete-workspace")
 async def delete_workspace(request: dict) -> dict:
     """Delete a session's persisted workspace volume.
 

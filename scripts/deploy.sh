@@ -34,6 +34,7 @@ PAGES_PROJECT_NAME="${PAGES_PROJECT_NAME:-${PROJECT_NAME}-client}"
 D1_DATABASE_NAME="${D1_DATABASE_NAME:-${PROJECT_NAME}-db}"
 R2_BUCKET_NAME="${R2_BUCKET_NAME:-${PROJECT_NAME}-storage}"
 MODAL_APP_NAME="${MODAL_APP_NAME:-${PROJECT_NAME}-backend}"
+MODAL_LABEL_PREFIX="${MODAL_LABEL_PREFIX:-${ENVIRONMENT}-}"
 ALLOWED_EMAILS="${ALLOWED_EMAILS:-}"
 MODAL_DEPLOY_CMD="${MODAL_DEPLOY_CMD:-uv run --project backend modal deploy}"
 
@@ -94,7 +95,7 @@ discover_modal_url() {
                 return
             fi
         fi
-        MODAL_BACKEND_URL="https://${MODAL_WS}--{label}.modal.run"
+        MODAL_BACKEND_URL="https://${MODAL_WS}--${MODAL_LABEL_PREFIX}{label}.modal.run"
         echo -e "${GREEN}✓ Modal (workspace: ${MODAL_WS})${NC}"
     else
         echo -e "${GREEN}✓ Modal URL: ${MODAL_BACKEND_URL}${NC}"
@@ -167,8 +168,8 @@ cmd_migrate() {
 }
 
 cmd_modal() {
-    echo -e "${GREEN}Deploying Modal backend (${MODAL_APP_NAME})...${NC}"
-    MODAL_APP_NAME="$MODAL_APP_NAME" $MODAL_DEPLOY_CMD backend/app.py
+    echo -e "${GREEN}Deploying Modal backend (${MODAL_APP_NAME}, labels: ${MODAL_LABEL_PREFIX}*)...${NC}"
+    MODAL_APP_NAME="$MODAL_APP_NAME" MODAL_LABEL_PREFIX="$MODAL_LABEL_PREFIX" $MODAL_DEPLOY_CMD backend/app.py
     echo -e "${GREEN}✓ Modal backend deployed (${MODAL_APP_NAME})${NC}"
 }
 
@@ -254,8 +255,8 @@ cmd_all() {
 
     # --- Step 6: Deploy Modal backend ---
     echo ""
-    echo "Step 6/7: Deploying Modal backend (${MODAL_APP_NAME})..."
-    MODAL_APP_NAME="$MODAL_APP_NAME" $MODAL_DEPLOY_CMD backend/app.py
+    echo "Step 6/7: Deploying Modal backend (${MODAL_APP_NAME}, labels: ${MODAL_LABEL_PREFIX}*)..."
+    MODAL_APP_NAME="$MODAL_APP_NAME" MODAL_LABEL_PREFIX="$MODAL_LABEL_PREFIX" $MODAL_DEPLOY_CMD backend/app.py
     echo -e "${GREEN}✓ Modal backend deployed (${MODAL_APP_NAME})${NC}"
 
     # --- Step 7: Build and deploy client ---
