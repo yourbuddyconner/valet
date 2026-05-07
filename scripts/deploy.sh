@@ -94,11 +94,11 @@ generate_wrangler_config() {
         -e "s|\${R2_BUCKET_NAME}|${R2_BUCKET_NAME}|g" \
         -e "s|\${ALLOWED_EMAILS}|${ALLOWED_EMAILS}|g" \
         -e "s|\${MODAL_BACKEND_URL}|${MODAL_BACKEND_URL}|g" \
-        packages/worker/wrangler.toml > packages/worker/wrangler.deploy.toml
+        packages/api/wrangler.toml > packages/api/wrangler.deploy.toml
 }
 
 cleanup_wrangler_config() {
-    rm -f packages/worker/wrangler.deploy.toml
+    rm -f packages/api/wrangler.deploy.toml
 }
 trap cleanup_wrangler_config EXIT
 
@@ -121,11 +121,11 @@ cmd_worker() {
     echo ""
 
     # Generate registries
-    (cd packages/worker && bun scripts/generate-plugin-registry.ts)
+    (cd packages/api && bun scripts/generate-plugin-registry.ts)
 
     # Generate config and deploy
     generate_wrangler_config
-    DEPLOY_OUT=$(cd packages/worker && wrangler deploy -c wrangler.deploy.toml 2>&1) || {
+    DEPLOY_OUT=$(cd packages/api && wrangler deploy -c wrangler.deploy.toml 2>&1) || {
         echo -e "${RED}Worker deploy failed:${NC}"
         echo "$DEPLOY_OUT"
         exit 1
@@ -148,7 +148,7 @@ cmd_migrate() {
     echo ""
 
     generate_wrangler_config
-    (cd packages/worker && wrangler d1 migrations apply "$D1_DATABASE_NAME" --remote -c wrangler.deploy.toml)
+    (cd packages/api && wrangler d1 migrations apply "$D1_DATABASE_NAME" --remote -c wrangler.deploy.toml)
     echo -e "${GREEN}✓ Migrations applied${NC}"
 }
 
@@ -210,16 +210,16 @@ cmd_all() {
     # --- Step 3: Build packages ---
     echo ""
     echo "Step 3/7: Building packages..."
-    pnpm --filter '@valet/*' --filter '!@valet/worker' --filter '!@valet/client' run build
+    pnpm --filter '@valet/*' --filter '!@valet/api' --filter '!@valet/client' run build
     echo -e "${GREEN}✓ Packages built${NC}"
 
     # --- Step 4: Deploy Worker ---
     echo ""
     echo "Step 4/7: Deploying Worker..."
-    (cd packages/worker && bun scripts/generate-plugin-registry.ts)
+    (cd packages/api && bun scripts/generate-plugin-registry.ts)
     generate_wrangler_config
 
-    DEPLOY_OUT=$(cd packages/worker && wrangler deploy -c wrangler.deploy.toml 2>&1) || {
+    DEPLOY_OUT=$(cd packages/api && wrangler deploy -c wrangler.deploy.toml 2>&1) || {
         echo -e "${RED}Worker deploy failed:${NC}"
         echo "$DEPLOY_OUT"
         exit 1
@@ -235,7 +235,7 @@ cmd_all() {
     # --- Step 5: Run D1 migrations ---
     echo ""
     echo "Step 5/7: Running migrations..."
-    (cd packages/worker && wrangler d1 migrations apply "$D1_DATABASE_NAME" --remote -c wrangler.deploy.toml)
+    (cd packages/api && wrangler d1 migrations apply "$D1_DATABASE_NAME" --remote -c wrangler.deploy.toml)
     echo -e "${GREEN}✓ Migrations applied${NC}"
 
     # --- Step 6: Deploy Modal backend ---

@@ -5,10 +5,10 @@
     "packages/*"
   ],
   "scripts": {
-    "dev": "pnpm --filter @valet/worker dev",
-    "build": "pnpm --filter @valet/worker build",
-    "deploy": "pnpm --filter @valet/worker deploy",
-    "db:migrate": "pnpm --filter @valet/worker db:migrate",
+    "dev": "pnpm --filter @valet/api dev",
+    "build": "pnpm --filter @valet/api build",
+    "deploy": "pnpm --filter @valet/api deploy",
+    "db:migrate": "pnpm --filter @valet/api db:migrate",
     "typecheck": "tsc --build",
     "test": "vitest run",
     "test:watch": "vitest",

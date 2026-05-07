@@ -15,6 +15,106 @@ importers:
         specifier: ^4.0.18
         version: 4.0.18(@types/node@25.0.9)(jiti@1.21.7)(tsx@4.21.0)
 
+  packages/api:
+    dependencies:
+      '@cf-wasm/resvg':
+        specifier: ^0.3.3
+        version: 0.3.3
+      '@cf-wasm/satori':
+        specifier: ^0.3.3
+        version: 0.3.3
+      '@hono/zod-validator':
+        specifier: ^0.2.1
+        version: 0.2.2(hono@4.11.4)(zod@3.25.76)
+      '@valet/plugin-cloudflare':
+        specifier: workspace:*
+        version: link:../plugin-cloudflare
+      '@valet/plugin-deepwiki':
+        specifier: workspace:*
+        version: link:../plugin-deepwiki
+      '@valet/plugin-email-auth':
+        specifier: workspace:*
+        version: link:../plugin-email-auth
+      '@valet/plugin-figma':
+        specifier: workspace:*
+        version: link:../plugin-figma
+      '@valet/plugin-github':
+        specifier: workspace:*
+        version: link:../plugin-github
+      '@valet/plugin-gmail':
+        specifier: workspace:*
+        version: link:../plugin-gmail
+      '@valet/plugin-google-auth':
+        specifier: workspace:*
+        version: link:../plugin-google-auth
+      '@valet/plugin-google-calendar':
+        specifier: workspace:*
+        version: link:../plugin-google-calendar
+      '@valet/plugin-google-workspace':
+        specifier: workspace:*
+        version: link:../plugin-google-workspace
+      '@valet/plugin-linear':
+        specifier: workspace:*
+        version: link:../plugin-linear
+      '@valet/plugin-notion':
+        specifier: workspace:*
+        version: link:../plugin-notion
+      '@valet/plugin-sentry':
+        specifier: workspace:*
+        version: link:../plugin-sentry
+      '@valet/plugin-slack':
+        specifier: workspace:*
+        version: link:../plugin-slack
+      '@valet/plugin-stripe':
+        specifier: workspace:*
+        version: link:../plugin-stripe
+      '@valet/plugin-telegram':
+        specifier: workspace:*
+        version: link:../plugin-telegram
+      '@valet/plugin-typefully':
+        specifier: workspace:*
+        version: link:../plugin-typefully
+      '@valet/sdk':
+        specifier: workspace:*
+        version: link:../sdk
+      '@valet/shared':
+        specifier: workspace:*
+        version: link:../shared
+      drizzle-orm:
+        specifier: ^0.45.1
+        version: 0.45.1(@cloudflare/workers-types@4.20260118.0)(@types/better-sqlite3@7.6.13)(better-sqlite3@11.10.0)(bun-types@1.3.12)
+      hono:
+        specifier: ^4.3.0
+        version: 4.11.4
+      octokit:
+        specifier: ^5.0.5
+        version: 5.0.5
+      zod:
+        specifier: ^3.22.4
+        version: 3.25.76
+    devDependencies:
+      '@cloudflare/workers-types':
+        specifier: ^4.20240117.0
+        version: 4.20260118.0
+      '@types/better-sqlite3':
+        specifier: ^7.6.8
+        version: 7.6.13
+      better-sqlite3:
+        specifier: ^11.0.0
+        version: 11.10.0
+      drizzle-kit:
+        specifier: ^0.31.9
+        version: 0.31.9
+      typescript:
+        specifier: ^5.3.3
+        version: 5.9.3
+      vitest:
+        specifier: ^4.0.18
+        version: 4.0.18(@types/node@25.0.9)(jiti@1.21.7)(tsx@4.21.0)
+      wrangler:
+        specifier: ^3.28.0
+        version: 3.114.17(@cloudflare/workers-types@4.20260118.0)
+
   packages/client:
     dependencies:
       '@pierre/diffs':
@@ -574,106 +674,6 @@ importers:
       vitest:
         specifier: ^4.0.18
         version: 4.0.18(@types/node@20.19.39)(jiti@1.21.7)(tsx@4.21.0)
-
-  packages/worker:
-    dependencies:
-      '@cf-wasm/resvg':
-        specifier: ^0.3.3
-        version: 0.3.3
-      '@cf-wasm/satori':
-        specifier: ^0.3.3
-        version: 0.3.3
-      '@hono/zod-validator':
-        specifier: ^0.2.1
-        version: 0.2.2(hono@4.11.4)(zod@3.25.76)
-      '@valet/plugin-cloudflare':
-        specifier: workspace:*
-        version: link:../plugin-cloudflare
-      '@valet/plugin-deepwiki':
-        specifier: workspace:*
-        version: link:../plugin-deepwiki
-      '@valet/plugin-email-auth':
-        specifier: workspace:*
-        version: link:../plugin-email-auth
-      '@valet/plugin-figma':
-        specifier: workspace:*
-        version: link:../plugin-figma
-      '@valet/plugin-github':
-        specifier: workspace:*
-        version: link:../plugin-github
-      '@valet/plugin-gmail':
-        specifier: workspace:*
-        version: link:../plugin-gmail
-      '@valet/plugin-google-auth':
-        specifier: workspace:*
-        version: link:../plugin-google-auth
-      '@valet/plugin-google-calendar':
-        specifier: workspace:*
-        version: link:../plugin-google-calendar
-      '@valet/plugin-google-workspace':
-        specifier: workspace:*
-        version: link:../plugin-google-workspace
-      '@valet/plugin-linear':
-        specifier: workspace:*
-        version: link:../plugin-linear
-      '@valet/plugin-notion':
-        specifier: workspace:*
-        version: link:../plugin-notion
-      '@valet/plugin-sentry':
-        specifier: workspace:*
-        version: link:../plugin-sentry
-      '@valet/plugin-slack':
-        specifier: workspace:*
-        version: link:../plugin-slack
-      '@valet/plugin-stripe':
-        specifier: workspace:*
-        version: link:../plugin-stripe
-      '@valet/plugin-telegram':
-        specifier: workspace:*
-        version: link:../plugin-telegram
-      '@valet/plugin-typefully':
-        specifier: workspace:*
-        version: link:../plugin-typefully
-      '@valet/sdk':
-        specifier: workspace:*
-        version: link:../sdk
-      '@valet/shared':
-        specifier: workspace:*
-        version: link:../shared
-      drizzle-orm:
-        specifier: ^0.45.1
-        version: 0.45.1(@cloudflare/workers-types@4.20260118.0)(@types/better-sqlite3@7.6.13)(better-sqlite3@11.10.0)(bun-types@1.3.12)
-      hono:
-        specifier: ^4.3.0
-        version: 4.11.4
-      octokit:
-        specifier: ^5.0.5
-        version: 5.0.5
-      zod:
-        specifier: ^3.22.4
-        version: 3.25.76
-    devDependencies:
-      '@cloudflare/workers-types':
-        specifier: ^4.20240117.0
-        version: 4.20260118.0
-      '@types/better-sqlite3':
-        specifier: ^7.6.8
-        version: 7.6.13
-      better-sqlite3:
-        specifier: ^11.0.0
-        version: 11.10.0
-      drizzle-kit:
-        specifier: ^0.31.9
-        version: 0.31.9
-      typescript:
-        specifier: ^5.3.3
-        version: 5.9.3
-      vitest:
-        specifier: ^4.0.18
-        version: 4.0.18(@types/node@25.0.9)(jiti@1.21.7)(tsx@4.21.0)
-      wrangler:
-        specifier: ^3.28.0
-        version: 3.114.17(@cloudflare/workers-types@4.20260118.0)
 
 packages:
 
