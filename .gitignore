@@ -17,6 +17,8 @@ wrangler.deploy.toml
 .env.local
 .env.*.local
 .env.deploy
+.env.deploy.*
+!.env.deploy.example
 .dev.vars
 
 # Client production env (generated from .env.deploy at build time)

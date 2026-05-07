@@ -8,18 +8,32 @@ NC='\033[0m'
 
 # ─── Config ──────────────────────────────────────────────────────────────────
 
-# Source deploy config if it exists
-if [ -f .env.deploy ]; then
-    set -a; source .env.deploy; set +a
+# Require ENVIRONMENT to select which config file to source
+: "${ENVIRONMENT:?Set ENVIRONMENT (dev|prod). Usage: ENVIRONMENT=prod $0 [command]}"
+
+DEPLOY_CONFIG=".env.deploy.${ENVIRONMENT}"
+if [ ! -f "$DEPLOY_CONFIG" ]; then
+    # Migration hint for old .env.deploy users
+    if [ -f .env.deploy ]; then
+        echo -e "${RED}Found .env.deploy but ENVIRONMENT=${ENVIRONMENT} requires ${DEPLOY_CONFIG}${NC}"
+        echo "Rename .env.deploy to .env.deploy.dev (or .env.deploy.prod) to migrate."
+    else
+        echo -e "${RED}Config file not found: ${DEPLOY_CONFIG}${NC}"
+        echo "Copy .env.deploy.example to ${DEPLOY_CONFIG} and set PROJECT_NAME."
+    fi
+    exit 1
 fi
 
-: "${PROJECT_NAME:?Set PROJECT_NAME in .env.deploy (e.g. valet-yourname)}"
+set -a; source "$DEPLOY_CONFIG"; set +a
 
-# Derived names (all overridable via .env.deploy)
+: "${PROJECT_NAME:?Set PROJECT_NAME in ${DEPLOY_CONFIG} (e.g. valet-prod)}"
+
+# Derived names (all overridable via config file)
 CF_WORKER_NAME="${CF_WORKER_NAME:-$PROJECT_NAME}"
 PAGES_PROJECT_NAME="${PAGES_PROJECT_NAME:-${PROJECT_NAME}-client}"
 D1_DATABASE_NAME="${D1_DATABASE_NAME:-${PROJECT_NAME}-db}"
 R2_BUCKET_NAME="${R2_BUCKET_NAME:-${PROJECT_NAME}-storage}"
+MODAL_APP_NAME="${MODAL_APP_NAME:-${PROJECT_NAME}-backend}"
 ALLOWED_EMAILS="${ALLOWED_EMAILS:-}"
 MODAL_DEPLOY_CMD="${MODAL_DEPLOY_CMD:-uv run --project backend modal deploy}"
 
@@ -153,9 +167,9 @@ cmd_migrate() {
 }
 
 cmd_modal() {
-    echo -e "${GREEN}Deploying Modal backend...${NC}"
-    $MODAL_DEPLOY_CMD backend/app.py
-    echo -e "${GREEN}✓ Modal backend deployed${NC}"
+    echo -e "${GREEN}Deploying Modal backend (${MODAL_APP_NAME})...${NC}"
+    MODAL_APP_NAME="$MODAL_APP_NAME" $MODAL_DEPLOY_CMD backend/app.py
+    echo -e "${GREEN}✓ Modal backend deployed (${MODAL_APP_NAME})${NC}"
 }
 
 cmd_client() {
@@ -187,7 +201,7 @@ cmd_client() {
 
 cmd_all() {
     echo -e "${GREEN}========================================${NC}"
-    echo -e "${GREEN}Deploying ${PROJECT_NAME}${NC}"
+    echo -e "${GREEN}Deploying ${PROJECT_NAME} (${ENVIRONMENT})${NC}"
     echo -e "${GREEN}========================================${NC}"
     echo ""
 
@@ -240,9 +254,9 @@ cmd_all() {
 
     # --- Step 6: Deploy Modal backend ---
     echo ""
-    echo "Step 6/7: Deploying Modal backend..."
-    $MODAL_DEPLOY_CMD backend/app.py
-    echo -e "${GREEN}✓ Modal backend deployed${NC}"
+    echo "Step 6/7: Deploying Modal backend (${MODAL_APP_NAME})..."
+    MODAL_APP_NAME="$MODAL_APP_NAME" $MODAL_DEPLOY_CMD backend/app.py
+    echo -e "${GREEN}✓ Modal backend deployed (${MODAL_APP_NAME})${NC}"
 
     # --- Step 7: Build and deploy client ---
     echo ""
@@ -264,7 +278,11 @@ cmd_all() {
     echo "  wrangler secret put ENCRYPTION_KEY --name ${CF_WORKER_NAME}"
     echo "  wrangler secret put GITHUB_CLIENT_ID --name ${CF_WORKER_NAME}"
     echo "  wrangler secret put GITHUB_CLIENT_SECRET --name ${CF_WORKER_NAME}"
+    echo "  wrangler secret put GOOGLE_CLIENT_ID --name ${CF_WORKER_NAME}"
+    echo "  wrangler secret put GOOGLE_CLIENT_SECRET --name ${CF_WORKER_NAME}"
     echo "  wrangler secret put FRONTEND_URL --name ${CF_WORKER_NAME}"
+    echo ""
+    echo -e "${YELLOW}Or run: ENVIRONMENT=${ENVIRONMENT} make bootstrap-secrets${NC}"
 }
 
 # ─── Dispatch ────────────────────────────────────────────────────────────────
