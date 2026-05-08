@@ -401,9 +401,10 @@ async function main() {
   });
 
   // Register handlers
-  agentClient.onPrompt(async (messageId, content, model, author, modelPreferences, attachments, channelType, channelId, opencodeSessionId, continuationContext, threadId, replyChannelType, replyChannelId, traceparent) => {
+  agentClient.onPrompt(async (dispatch) => {
+    const { messageId, model, author, modelPreferences, attachments, channelType, replyChannelType, continuationContext } = dispatch;
     console.log(`[Runner] Received prompt: ${messageId}${model ? ` (model: ${model})` : ''}${author?.authorName ? ` (by: ${author.authorName})` : ''}${modelPreferences?.length ? ` (prefs: ${modelPreferences.length} models)` : ''}${attachments?.length ? ` (attachments: ${attachments.length})` : ''}${channelType ? ` (channel: ${channelType})` : ''}${replyChannelType ? ` (replyChannel: ${replyChannelType})` : ''}${continuationContext ? ' (with continuation context)' : ''}`);
-    await promptHandler.handlePrompt(messageId, content, model, author, modelPreferences, attachments, channelType, channelId, opencodeSessionId, continuationContext, threadId, replyChannelType, replyChannelId, traceparent);
+    await promptHandler.handlePrompt(dispatch);
   });
 
   agentClient.onAnswer(async (questionId, answer) => {

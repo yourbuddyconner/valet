@@ -17,7 +17,7 @@
  */
 
 import { createTwoFilesPatch } from "diff";
-import { AgentClient, type PromptAuthor } from "./agent-client.js";
+import { AgentClient, type PromptAuthor, type PromptDispatch } from "./agent-client.js";
 import type { AvailableModels, DiffFile, PromptAttachment, ReviewFileSummary, ReviewResultData } from "./types.js";
 import { compileWorkflowDefinition, type NormalizedWorkflowStep } from "./workflow-compiler.js";
 import {
@@ -1502,7 +1502,23 @@ export class PromptHandler {
     });
   }
 
-  async handlePrompt(messageId: string, content: string, model?: string, author?: { authorId?: string; gitName?: string; gitEmail?: string; authorName?: string; authorEmail?: string }, modelPreferences?: string[], attachments?: PromptAttachment[], channelType?: string, channelId?: string, opencodeSessionId?: string, continuationContext?: string, threadId?: string, replyChannelType?: string, replyChannelId?: string, traceparent?: string): Promise<void> {
+  async handlePrompt(dispatch: PromptDispatch): Promise<void> {
+    const {
+      messageId,
+      content,
+      model,
+      author,
+      modelPreferences,
+      attachments,
+      channelType,
+      channelId,
+      opencodeSessionId,
+      continuationContext,
+      threadId,
+      replyChannelType,
+      replyChannelId,
+      traceparent,
+    } = dispatch;
     console.log(`[PromptHandler] Handling prompt ${messageId}: "${content.slice(0, 80)}"${model ? ` (model: ${model})` : ''}${author?.authorName ? ` (by: ${author.authorName})` : ''}${modelPreferences?.length ? ` (prefs: ${modelPreferences.length})` : ''}${attachments?.length ? ` (attachments: ${attachments.length})` : ''}${channelType ? ` (channel: ${channelType})` : ''}${continuationContext ? ' (with continuation context)' : ''}`);
     const turnSpan = startSpan("valet.turn", {
       parent: parentFromTraceparent(traceparent),

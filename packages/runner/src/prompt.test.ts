@@ -98,19 +98,15 @@ describe("PromptHandler thread resume", () => {
 
     vi.stubGlobal("fetch", fetchMock);
 
-    await handler.handlePrompt(
-      "message-1",
-      "actual user prompt",
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      "thread",
-      "thread-1",
-      "persisted-thread",
-      "saved continuation context",
-      "thread-1",
-    );
+    await handler.handlePrompt({
+      messageId: "message-1",
+      content: "actual user prompt",
+      channelType: "thread",
+      channelId: "thread-1",
+      opencodeSessionId: "persisted-thread",
+      continuationContext: "saved continuation context",
+      threadId: "thread-1",
+    });
 
     expect(fetchCalls.map((call) => `${call.method} ${call.url}`)).toEqual([
       "GET http://opencode.test/session/persisted-thread",
@@ -158,19 +154,15 @@ describe("PromptHandler thread resume", () => {
 
     vi.stubGlobal("fetch", fetchMock);
 
-    await handler.handlePrompt(
-      "message-2",
-      "resume this task",
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      "thread",
-      "thread-2",
-      "persisted-missing",
-      "restored conversation summary",
-      "thread-2",
-    );
+    await handler.handlePrompt({
+      messageId: "message-2",
+      content: "resume this task",
+      channelType: "thread",
+      channelId: "thread-2",
+      opencodeSessionId: "persisted-missing",
+      continuationContext: "restored conversation summary",
+      threadId: "thread-2",
+    });
 
     expect(fetchCalls.map((call) => `${call.method} ${call.url}`)).toEqual([
       "GET http://opencode.test/session/persisted-missing",
@@ -234,19 +226,15 @@ describe("PromptHandler thread resume", () => {
 
     vi.stubGlobal("fetch", fetchMock);
 
-    await handler.handlePrompt(
-      "message-3",
-      "continue the work",
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      "thread",
-      "thread-3",
-      "persisted-transient",
-      "resume summary from before restart",
-      "thread-3",
-    );
+    await handler.handlePrompt({
+      messageId: "message-3",
+      content: "continue the work",
+      channelType: "thread",
+      channelId: "thread-3",
+      opencodeSessionId: "persisted-transient",
+      continuationContext: "resume summary from before restart",
+      threadId: "thread-3",
+    });
 
     const callNames = fetchCalls.map((call) => `${call.method} ${call.url}`);
     expect(callNames).toContain("GET http://opencode.test/session/persisted-transient");
@@ -300,19 +288,14 @@ describe("PromptHandler thread resume", () => {
 
     vi.stubGlobal("fetch", fetchMock);
 
-    await handler.handlePrompt(
-      "message-4",
-      "start from here",
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      "thread",
-      "thread-4",
-      undefined,
-      "old summary that should be injected for legacy resume",
-      "thread-4",
-    );
+    await handler.handlePrompt({
+      messageId: "message-4",
+      content: "start from here",
+      channelType: "thread",
+      channelId: "thread-4",
+      continuationContext: "old summary that should be injected for legacy resume",
+      threadId: "thread-4",
+    });
 
     expect(fetchCalls.map((call) => `${call.method} ${call.url}`)).toEqual([
       "POST http://opencode.test/session",
@@ -370,16 +353,12 @@ describe("PromptHandler dedup guard", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     // Fire first prompt but don't await — it will hang on the sync fetch
-    const firstPromise = handler.handlePrompt(
-      "msg-1",
-      "first prompt",
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      "thread",
-      "ch-dedup",
-    );
+    const firstPromise = handler.handlePrompt({
+      messageId: "msg-1",
+      content: "first prompt",
+      channelType: "thread",
+      channelId: "ch-dedup",
+    });
 
     // Wait until syncPromptInFlight is set (first prompt has reached the fetch)
     await new Promise<void>((resolve) => {
@@ -395,16 +374,12 @@ describe("PromptHandler dedup guard", () => {
     });
 
     // Send duplicate — same messageId, same channel
-    await handler.handlePrompt(
-      "msg-1",
-      "first prompt",
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      "thread",
-      "ch-dedup",
-    );
+    await handler.handlePrompt({
+      messageId: "msg-1",
+      content: "first prompt",
+      channelType: "thread",
+      channelId: "ch-dedup",
+    });
 
     // Duplicate path must send sendComplete to unblock the DO
     expect(agentClient.sendComplete).toHaveBeenCalledWith("msg-1");
@@ -700,16 +675,13 @@ describe("PromptHandler text file extraction", () => {
 
     vi.stubGlobal("fetch", fetchMock);
 
-    await handler.handlePrompt(
-      "msg-text-1",
-      "please review this file",
-      undefined,
-      undefined,
-      undefined,
-      [{ type: "file", mime: "text/plain", url: dataUrl, filename: "notes.txt" }],
-      "thread",
-      "ch-text",
-    );
+    await handler.handlePrompt({
+      messageId: "msg-text-1",
+      content: "please review this file",
+      attachments: [{ type: "file", mime: "text/plain", url: dataUrl, filename: "notes.txt" }],
+      channelType: "thread",
+      channelId: "ch-text",
+    });
 
     // The sync prompt should have text file content appended after the message and no file parts
     const syncCall = fetchCalls.find(
@@ -755,16 +727,13 @@ describe("PromptHandler text file extraction", () => {
 
     vi.stubGlobal("fetch", fetchMock);
 
-    await handler.handlePrompt(
-      "msg-json-1",
-      "analyze this config",
-      undefined,
-      undefined,
-      undefined,
-      [{ type: "file", mime: "application/json", url: dataUrl, filename: "config.json" }],
-      "thread",
-      "ch-json",
-    );
+    await handler.handlePrompt({
+      messageId: "msg-json-1",
+      content: "analyze this config",
+      attachments: [{ type: "file", mime: "application/json", url: dataUrl, filename: "config.json" }],
+      channelType: "thread",
+      channelId: "ch-json",
+    });
 
     const syncCall = fetchCalls.find(
       (c) => c.url === "http://opencode.test/session/json-session/message" && c.method === "POST",
@@ -805,19 +774,16 @@ describe("PromptHandler text file extraction", () => {
 
     vi.stubGlobal("fetch", fetchMock);
 
-    await handler.handlePrompt(
-      "msg-mixed-1",
-      "check both files",
-      undefined,
-      undefined,
-      undefined,
-      [
+    await handler.handlePrompt({
+      messageId: "msg-mixed-1",
+      content: "check both files",
+      attachments: [
         { type: "file", mime: "text/plain", url: textDataUrl, filename: "code.txt" },
         { type: "file", mime: "image/png", url: imageDataUrl, filename: "screenshot.png" },
       ],
-      "thread",
-      "ch-mixed",
-    );
+      channelType: "thread",
+      channelId: "ch-mixed",
+    });
 
     const syncCall = fetchCalls.find(
       (c) => c.url === "http://opencode.test/session/mixed-session/message" && c.method === "POST",

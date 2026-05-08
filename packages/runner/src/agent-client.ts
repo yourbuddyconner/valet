@@ -31,6 +31,31 @@ export interface PromptAuthor {
   authorEmail?: string;
 }
 
+/**
+ * Payload delivered to the Runner when the DO dispatches a prompt.
+ * Bundled into a single object instead of a positional argument list because
+ * the wire shape keeps growing (model prefs, attachments, channel routing,
+ * traceparent…) and per-arg signatures are no longer reviewable.
+ */
+export interface PromptDispatch {
+  messageId: string;
+  content: string;
+  model?: string;
+  author?: PromptAuthor;
+  modelPreferences?: string[];
+  attachments?: PromptAttachment[];
+  channelType?: string;
+  channelId?: string;
+  opencodeSessionId?: string;
+  continuationContext?: string;
+  threadId?: string;
+  replyChannelType?: string;
+  replyChannelId?: string;
+  traceparent?: string;
+}
+
+export type PromptHandlerFn = (dispatch: PromptDispatch) => void | Promise<void>;
+
 const MAX_RECONNECT_DELAY_MS = 30_000;
 const INITIAL_RECONNECT_DELAY_MS = 1_000;
 const PING_INTERVAL_MS = 30_000;
@@ -54,7 +79,7 @@ export class AgentClient {
   private pendingTokenRefresh: { requestId: string; resolve: (result: { accessToken: string; expiresAt?: string }) => void } | null = null;
   private reconnectCallback?: () => void;
 
-  private promptHandler: ((messageId: string, content: string, model?: string, author?: PromptAuthor, modelPreferences?: string[], attachments?: PromptAttachment[], channelType?: string, channelId?: string, opencodeSessionId?: string, continuationContext?: string, threadId?: string, replyChannelType?: string, replyChannelId?: string, traceparent?: string) => void | Promise<void>) | null = null;
+  private promptHandler: PromptHandlerFn | null = null;
   private answerHandler: ((questionId: string, answer: string | boolean) => void | Promise<void>) | null = null;
   private stopHandler: (() => void) | null = null;
   private abortHandler: ((channelType?: string, channelId?: string) => void | Promise<void>) | null = null;
@@ -894,7 +919,7 @@ export class AgentClient {
 
   // ─── Inbound Handlers (DO → Runner) ─────────────────────────────────
 
-  onPrompt(handler: (messageId: string, content: string, model?: string, author?: PromptAuthor, modelPreferences?: string[], attachments?: PromptAttachment[], channelType?: string, channelId?: string, opencodeSessionId?: string, continuationContext?: string, threadId?: string, replyChannelType?: string, replyChannelId?: string, traceparent?: string) => void | Promise<void>): void {
+  onPrompt(handler: PromptHandlerFn): void {
     this.promptHandler = handler;
   }
 
@@ -1012,7 +1037,22 @@ export class AgentClient {
           const author: PromptAuthor | undefined = (msg.authorId || msg.gitName || msg.gitEmail || msg.authorName || msg.authorEmail)
             ? { authorId: msg.authorId, gitName: msg.gitName, gitEmail: msg.gitEmail, authorName: msg.authorName, authorEmail: msg.authorEmail }
             : undefined;
-          await this.promptHandler?.(msg.messageId, msg.content, msg.model, author, msg.modelPreferences, msg.attachments, msg.channelType, msg.channelId, msg.opencodeSessionId, msg.continuationContext, msg.threadId, msg.replyChannelType, msg.replyChannelId, msg.traceparent);
+          await this.promptHandler?.({
+            messageId: msg.messageId,
+            content: msg.content,
+            model: msg.model,
+            author,
+            modelPreferences: msg.modelPreferences,
+            attachments: msg.attachments,
+            channelType: msg.channelType,
+            channelId: msg.channelId,
+            opencodeSessionId: msg.opencodeSessionId,
+            continuationContext: msg.continuationContext,
+            threadId: msg.threadId,
+            replyChannelType: msg.replyChannelType,
+            replyChannelId: msg.replyChannelId,
+            traceparent: msg.traceparent,
+          });
           break;
         }
         case "answer":
