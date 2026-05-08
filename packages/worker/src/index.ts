@@ -47,7 +47,7 @@ import { pluginsRouter } from './routes/plugins.js';
 import { skillsRouter } from './routes/skills.js';
 import { orgDefaultSkillsRouter } from './routes/org-default-skills.js';
 import { avatarsRouter } from './routes/avatars.js';
-import { repoProviderRouter, repoProviderCallbackRouter } from './routes/repo-providers.js';
+import { repoProviderRouter } from './routes/repo-providers.js';
 import { githubMeRouter } from './routes/github-me.js';
 import { githubAuthRouter } from './routes/github-auth.js';
 import {
@@ -167,9 +167,6 @@ app.route('/avatars', avatarsRouter);
 // Channel webhooks (unauthenticated — platforms send updates here)
 app.route('/channels', channelWebhooksRouter);
 app.route('/channels', slackEventsRouter);
-
-// Repo provider callbacks (unauthenticated — GitHub redirects here after app install)
-app.route('/repo-providers', repoProviderCallbackRouter);
 
 // GitHub App manifest callback (unauthenticated — GitHub redirects here after app creation)
 app.route('/github', githubAppSetupCallbackRouter);

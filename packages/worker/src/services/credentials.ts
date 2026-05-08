@@ -343,6 +343,25 @@ async function attemptRefresh(
 
 // ─── Public API ─────────────────────────────────────────────────────────────
 
+/**
+ * Resolve a credential with automatic token refresh.
+ *
+ * This is the canonical way to get a usable token for any provider. It:
+ *   1. Loads the encrypted credential row from D1
+ *   2. Decrypts it
+ *   3. Checks expiry (60-second buffer before actual expiration)
+ *   4. Auto-refreshes if expiring (provider-specific: GitHub App OAuth,
+ *      Google OAuth, MCP PKCE, or generic provider refresh)
+ *   5. Persists the refreshed token back to D1
+ *
+ * For GitHub specifically: the stored 'oauth2' credential is a user-to-server
+ * token from our GitHub App (NOT a classic OAuth App). These expire after 8h
+ * and are refreshed via app.oauth.refreshToken().
+ *
+ * Callers that need a raw token for sandbox/git operations (e.g. assembleRepoEnv)
+ * MUST use this function rather than reading credentials directly from the DB,
+ * to ensure expired tokens are refreshed before use.
+ */
 export async function getCredential(
   env: Env,
   ownerType: string,

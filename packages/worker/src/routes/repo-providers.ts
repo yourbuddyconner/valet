@@ -1,12 +1,11 @@
 import { Hono } from 'hono';
 import type { Env, Variables } from '../env.js';
-import { signJWT, verifyJWT } from '../lib/jwt.js';
+import { signJWT } from '../lib/jwt.js';
 import { repoProviderRegistry } from '../repos/registry.js';
-import { storeCredential } from '../services/credentials.js';
 import { getDb } from '../lib/drizzle.js';
-import * as credentialDb from '../lib/db/credentials.js';
 import * as db from '../lib/db.js';
 import { getGitHubConfig } from '../services/github-config.js';
+import { listAllActiveInstallations } from '../lib/db/github-installations.js';
 import { adminMiddleware } from '../middleware/admin.js';
 
 export const repoProviderRouter = new Hono<{ Bindings: Env; Variables: Variables }>();
@@ -23,32 +22,11 @@ repoProviderRouter.get('/', async (c) => {
   })));
 });
 
-// Initiate GitHub OAuth repo-link flow (separate from identity login)
-repoProviderRouter.get('/github-oauth/link', async (c) => {
-  const user = c.get('user');
-
-  const ghConfig = await getGitHubConfig(c.env, c.get('db'));
-  if (!ghConfig) {
-    return c.json({ error: 'GitHub OAuth not configured' }, 500);
-  }
-
-  const now = Math.floor(Date.now() / 1000);
-  const state = await signJWT(
-    { sub: user.id, purpose: 'repo-link', iat: now, exp: now + 10 * 60 } as any,
-    c.env.ENCRYPTION_KEY,
-  );
-
-  const frontendUrl = c.env.FRONTEND_URL || 'http://localhost:5173';
-  const redirectUri = `${frontendUrl.replace(/\/$/, '')}/auth/github/repo-callback`;
-
-  const params = new URLSearchParams({
-    client_id: ghConfig.appOauthClientId,
-    redirect_uri: redirectUri,
-    state,
-  });
-
-  return c.json({ url: `https://github.com/login/oauth/authorize?${params}` });
-});
+// GitHub OAuth repo-link flow was removed (TKAI-56) — it was dead code.
+// The redirect_uri pointed to a non-existent client route and the callback
+// never stored refresh_token or expiresAt. All GitHub linking now goes
+// through github-auth.ts (/auth/github/callback) which uses the GitHub App's
+// app.oauth.createToken() and properly stores the full token pair.
 
 // Get GitHub App installation URL (org-level only, admin required)
 repoProviderRouter.get('/:provider/install', adminMiddleware, async (c) => {
@@ -87,77 +65,26 @@ repoProviderRouter.get('/:provider/install', adminMiddleware, async (c) => {
   return c.json({ url: installUrl });
 });
 
-// List installations for a repo provider
+// List installations for a repo provider.
+// Uses the github_installations table (unified App model), not the old
+// app_install credentials in the credentials table.
 repoProviderRouter.get('/:provider/installations', async (c) => {
   const providerId = c.req.param('provider');
-  const appDb = getDb(c.env.DB);
 
-  const orgSettings = await db.getOrgSettings(appDb);
-  const orgInstalls = orgSettings?.id
-    ? (await credentialDb.listCredentialsByOwner(appDb, 'org', orgSettings.id))
-        .filter(cred => cred.provider === providerId && cred.credentialType === 'app_install')
-    : [];
+  if (providerId !== 'github') {
+    return c.json({ installations: [] });
+  }
+
+  const appDb = getDb(c.env.DB);
+  const installations = await listAllActiveInstallations(appDb);
 
   return c.json({
-    installations: orgInstalls.map(i => ({
-      level: 'org',
-      provider: i.provider,
+    installations: installations.map(i => ({
+      level: i.accountType === 'Organization' ? 'org' : 'personal',
+      provider: providerId,
+      accountLogin: i.accountLogin,
+      accountType: i.accountType,
       createdAt: i.createdAt,
     })),
   });
-});
-
-/**
- * GitHub App installation callback — mounted outside /api/* (no auth middleware).
- * User identity is derived from the signed state JWT, not session auth.
- */
-export const repoProviderCallbackRouter = new Hono<{ Bindings: Env; Variables: Variables }>();
-
-// GitHub OAuth repo-link callback (no auth middleware)
-repoProviderCallbackRouter.get('/github-oauth/callback', async (c) => {
-  const code = c.req.query('code');
-  const stateParam = c.req.query('state');
-  const frontendUrl = c.env.FRONTEND_URL || 'http://localhost:5173';
-
-  if (!code || !stateParam) {
-    return c.redirect(`${frontendUrl}/settings/admin?error=missing_params`);
-  }
-
-  const payload = await verifyJWT(stateParam, c.env.ENCRYPTION_KEY);
-  if (!payload || !payload.sub || (payload as any).purpose !== 'repo-link') {
-    return c.redirect(`${frontendUrl}/settings/admin?error=invalid_state`);
-  }
-  const userId = payload.sub as string;
-
-  // Exchange code for token
-  const appDb = getDb(c.env.DB);
-  const ghConfig = await getGitHubConfig(c.env, appDb);
-  if (!ghConfig) {
-    return c.redirect(`${frontendUrl}/settings/admin?error=github_not_configured`);
-  }
-
-  // TODO(github-app-unified): Convert to Octokit app.oauth.createToken({ code }) for consistency
-  const tokenRes = await fetch('https://github.com/login/oauth/access_token', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-    body: JSON.stringify({
-      client_id: ghConfig.appOauthClientId,
-      client_secret: ghConfig.appOauthClientSecret,
-      code,
-    }),
-  });
-
-  const tokenData = (await tokenRes.json()) as { access_token?: string; error?: string };
-  if (!tokenData.access_token) {
-    return c.redirect(`${frontendUrl}/settings/admin?error=token_exchange_failed`);
-  }
-
-  // Store as user-level oauth2 credential for the 'github' provider
-  await storeCredential(c.env, 'user', userId, 'github', {
-    access_token: tokenData.access_token,
-  }, {
-    credentialType: 'oauth2',
-  });
-
-  return c.redirect(`${frontendUrl}/settings/admin?linked=true`);
 });

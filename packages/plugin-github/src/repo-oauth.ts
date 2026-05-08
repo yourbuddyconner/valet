@@ -1,3 +1,15 @@
+/**
+ * GitHub "user" repo provider — handles repos accessed via a user's personal
+ * OAuth token from the GitHub App's user-to-server OAuth flow.
+ *
+ * Despite the filename "repo-oauth.ts", this is NOT a classic OAuth App.
+ * The token is issued by our GitHub App when a user authorizes it. These
+ * tokens expire after 8 hours and are refreshed by the credential service
+ * (see services/credentials.ts → refreshGitHubToken).
+ *
+ * The provider's mintToken() is a passthrough — it assumes the caller
+ * (assembleRepoEnv) has already ensured the token is fresh via getCredential().
+ */
 import type { RepoProvider, RepoCredential } from '@valet/sdk/repos';
 import { githubFetch } from './actions/api.js';
 import { GITHUB_URL_PATTERNS, mapGitHubRepo, validateGitHubRepo } from './repo-shared.js';

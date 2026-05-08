@@ -6197,6 +6197,9 @@ export class SessionAgentDO {
     }
   }
 
+  // Refresh the repo token when the runner's GitCredentialManager detects expiry.
+  // Delegates to assembleRepoEnv(), which uses getCredential() to auto-refresh
+  // the user's GitHub App OAuth token before returning it (TKAI-56).
   private async handleRepoTokenRefresh(requestId?: string): Promise<void> {
     const sessionId = this.sessionState.sessionId;
     if (!sessionId) return;

@@ -1,12 +1,10 @@
 import type { Env } from '../env.js';
 import type { RepoCredential } from '@valet/sdk/repos';
 import * as db from './db.js';
-import * as credentialDb from './db/credentials.js';
 import type { AppDb } from './drizzle.js';
-import { decryptString, decryptStringPBKDF2 } from './crypto.js';
+import { decryptString } from './crypto.js';
 import { getCredential } from '../services/credentials.js';
 import { repoProviderRegistry, stripProviderSuffix } from '../repos/registry.js';
-import { getGitHubConfig } from '../services/github-config.js';
 
 /**
  * Generate a 256-bit hex token for runner authentication.
@@ -144,6 +142,23 @@ export async function assembleBuiltInProviderModelConfigs(
 /**
  * Assemble repo env vars (token + repo/branch config) for a session,
  * using the repo provider registry to resolve the correct provider.
+ *
+ * ## GitHub App Auth Model
+ *
+ * All GitHub credentials flow through a single GitHub App — there is no
+ * separate classic OAuth App. Two token types exist, both from the same App:
+ *
+ * 1. **User-to-server OAuth tokens** (credentialType: 'oauth2') — obtained
+ *    when a user links their GitHub account via the App's OAuth web flow.
+ *    Expire after 8 hours; automatically refreshed by getCredential().
+ *    This is the primary path for authenticated users.
+ *
+ * 2. **Installation tokens** — minted on-demand from App installations
+ *    registered to an org/user. 1-hour expiry, never stored in the
+ *    credentials table. Used as a fallback when no user OAuth exists.
+ *
+ * The 'oauth2' credential type name refers to the App's user-to-server
+ * OAuth exchange mechanism, NOT a separate (classic) OAuth App.
  */
 export async function assembleRepoEnv(
   appDb: AppDb,
@@ -165,18 +180,152 @@ export async function assembleRepoEnv(
     return { envVars, gitConfig, error: `No repo provider found for URL: ${opts.repoUrl}` };
   }
 
-  // 2. Resolve the credential (user-first priority)
-  // Credentials are stored under a shared provider name (e.g. 'github'),
-  // not per-provider IDs like 'github-oauth' / 'github-app'.
   const credentialProvider = stripProviderSuffix(providers[0].id);
   const repoUrlMatch = opts.repoUrl.match(/github\.com[/:]([^/]+)\//);
   const repoOwner = repoUrlMatch?.[1];
-  let resolved = await credentialDb.resolveRepoCredential(appDb, credentialProvider, repoOwner, orgId, userId);
 
-  // If no user OAuth credential, try to mint an installation token for the repo owner.
-  // Under the unified GitHub App model, installation tokens are minted on-demand
-  // from the github_installations table rather than stored as app_install credentials.
-  if (!resolved && credentialProvider === 'github' && repoOwner) {
+  // 2. Try user OAuth credential with auto-refresh.
+  //
+  // getCredential() handles the full lifecycle:
+  //   - Decrypts the stored credential
+  //   - Checks expiry (60-second buffer before actual expiration)
+  //   - Automatically refreshes via the GitHub App's OAuth refresh endpoint
+  //   - Persists the refreshed token back to D1
+  //
+  // Previously this path used a raw DB lookup (resolveRepoCredential) +
+  // manual decryptStringPBKDF2, which skipped the refresh logic entirely.
+  // That caused 403 push errors when the stored token was >8h old (TKAI-56).
+  const credResult = await getCredential(env, 'user', userId, credentialProvider);
+
+  if (credResult.ok) {
+    // Track the resolved credential — may be updated by force-refresh below.
+    let resolved = credResult.credential;
+
+    const selectedProvider = repoProviderRegistry.get(`${credentialProvider}-user`);
+    if (!selectedProvider) {
+      return { envVars, gitConfig, error: `Repo provider '${credentialProvider}-user' not registered` };
+    }
+
+    // Validate repo access AND push permissions before launching a sandbox.
+    // A 200 from GET /repos/{owner}/{repo} only proves read access — we must
+    // also check the permissions.push field in the response body to verify
+    // the token can actually push commits.
+    if (repoOwner && opts.repoUrl) {
+      const repoMatch = opts.repoUrl.match(/github\.com[/:]([^/]+)\/([^/.]+)/);
+      if (repoMatch) {
+        const [, owner, repo] = repoMatch;
+        try {
+          let checkRes = await fetch(`https://api.github.com/repos/${owner}/${repo}`, {
+            headers: {
+              Authorization: `Bearer ${resolved.accessToken}`,
+              Accept: 'application/vnd.github+json',
+              'User-Agent': 'valet-app',
+            },
+          });
+          // 401 = expired/invalid token. This can happen if getCredential()
+          // returned a stale token without expiresAt (legacy credentials stored
+          // before TKAI-56 fix). Attempt a force refresh before giving up.
+          if (checkRes.status === 401) {
+            const retryResult = await getCredential(env, 'user', userId, credentialProvider, { forceRefresh: true });
+            if (retryResult.ok) {
+              // Re-validate with the refreshed token
+              const retryRes = await fetch(`https://api.github.com/repos/${owner}/${repo}`, {
+                headers: {
+                  Authorization: `Bearer ${retryResult.credential.accessToken}`,
+                  Accept: 'application/vnd.github+json',
+                  'User-Agent': 'valet-app',
+                },
+              });
+              if (retryRes.ok) {
+                // Force refresh succeeded — use the fresh credential.
+                resolved = retryResult.credential;
+                checkRes = retryRes;
+              } else {
+                return {
+                  envVars,
+                  gitConfig,
+                  error: `Your GitHub token has expired and could not be refreshed. Please re-link your GitHub account.`,
+                };
+              }
+            } else {
+              return {
+                envVars,
+                gitConfig,
+                error: `Your GitHub token has expired and could not be refreshed. Please re-link your GitHub account.`,
+              };
+            }
+          }
+          // 403 = token valid but lacks access to this resource.
+          // 404 = repo doesn't exist or token can't see it (GitHub hides private repos).
+          if (checkRes.status === 403 || checkRes.status === 404) {
+            return {
+              envVars,
+              gitConfig,
+              error: `Your GitHub token does not have access to ${owner}/${repo} (HTTP ${checkRes.status}). Re-authorize or check repo permissions.`,
+            };
+          }
+          if (checkRes.ok) {
+            const repoData = (await checkRes.json()) as { permissions?: { push?: boolean } };
+            if (repoData.permissions && !repoData.permissions.push) {
+              return {
+                envVars,
+                gitConfig,
+                error: `Your GitHub token has read-only access to ${owner}/${repo}. Push permission is required — check repo or org permissions.`,
+              };
+            }
+          }
+        } catch {
+          // Network error — don't block session creation, let the clone attempt handle it
+        }
+      }
+    }
+
+    const userRow = await db.getUserById(appDb, userId);
+    const gitUser = {
+      name: userRow?.gitName || userRow?.name || 'Valet User',
+      email: userRow?.gitEmail || userRow?.email || '',
+    };
+
+    // Guard against malformed expiresAt from D1 — an invalid Date would
+    // throw on toISOString().
+    const expiresAtIso = resolved.expiresAt instanceof Date && !isNaN(resolved.expiresAt.getTime())
+      ? resolved.expiresAt.toISOString()
+      : undefined;
+
+    const repoCredential: RepoCredential = {
+      type: 'token',
+      accessToken: resolved.accessToken,
+      expiresAt: expiresAtIso,
+      metadata: {},
+    };
+
+    const sessionEnv = await selectedProvider.assembleSessionEnv(repoCredential, {
+      repoUrl: opts.repoUrl,
+      branch: opts.branch,
+      ref: opts.ref,
+      gitUser,
+    });
+
+    sessionEnv.envVars.REPO_PROVIDER_ID = selectedProvider.id;
+
+    return {
+      envVars: sessionEnv.envVars,
+      gitConfig: sessionEnv.gitConfig,
+      token: resolved.accessToken,
+      expiresAt: expiresAtIso,
+    };
+  }
+
+  // User credential not found or broken. If the credential exists but
+  // refresh failed, surface the error — don't silently fall through.
+  if (credResult.error.reason !== 'not_found') {
+    return { envVars, gitConfig, error: credResult.error.message };
+  }
+
+  // 3. No user OAuth credential — try installation token fallback.
+  // Org-level GitHub App installations can mint short-lived (1-hour) tokens
+  // scoped to the installation's configured permissions.
+  if (credentialProvider === 'github' && repoOwner) {
     try {
       const { loadGitHubApp, mintInstallationToken } = await import('../services/github-app.js');
       const { getGithubInstallationByLogin } = await import('./db/github-installations.js');
@@ -185,8 +334,6 @@ export async function assembleRepoEnv(
         const app = await loadGitHubApp(env, appDb);
         if (app) {
           const { token, expiresAt } = await mintInstallationToken(app, installation.githubInstallationId);
-          // Short-circuit: we have a fresh token, skip the normal credential flow
-          // and go directly to assembling env vars.
           const userRow = await db.getUserById(appDb, userId);
           const gitUser = {
             name: userRow?.gitName || userRow?.name || 'Valet User',
@@ -218,130 +365,12 @@ export async function assembleRepoEnv(
       }
     } catch (err) {
       console.warn('[env-assembly] Installation token fallback failed:', err);
-      // Fall through to the error below
     }
   }
-
-  if (!resolved) {
-    return {
-      envVars,
-      gitConfig,
-      error: `No ${credentialProvider} credentials found. Link your account or ask an org admin to install the app.`,
-    };
-  }
-
-  // 3. Pick the right provider based on credential type
-  const providerId = resolved.credentialType === 'oauth2'
-    ? `${credentialProvider}-user`
-    : `${credentialProvider}-app`;
-  const selectedProvider = repoProviderRegistry.get(providerId);
-  if (!selectedProvider) {
-    return { envVars, gitConfig, error: `Repo provider '${providerId}' not registered` };
-  }
-
-  const credRow = resolved.credential;
-
-  // 4. Decrypt credential data and build RepoCredential
-  let credData: Record<string, unknown>;
-  try {
-    const json = await decryptStringPBKDF2(credRow.encryptedData, env.ENCRYPTION_KEY);
-    credData = JSON.parse(json);
-  } catch {
-    return {
-      envVars,
-      gitConfig,
-      error: `Failed to decrypt ${credentialProvider} credentials`,
-    };
-  }
-
-  const metadata: Record<string, string> = credRow.metadata ? JSON.parse(credRow.metadata) : {};
-  for (const [k, v] of Object.entries(credData)) {
-    if (typeof v === 'string') metadata[k] = v;
-  }
-
-  // For App installations, supplement appId/privateKey from service config
-  if (resolved.credentialType === 'app_install' && !metadata.appId && !metadata.app_id) {
-    const ghConfig = await getGitHubConfig(env, appDb);
-    if (ghConfig?.appId) metadata.appId = ghConfig.appId;
-    if (ghConfig?.appPrivateKey) metadata.privateKey = ghConfig.appPrivateKey;
-  }
-
-  const repoCredential: RepoCredential = {
-    type: credRow.credentialType === 'app_install' ? 'installation' : 'token',
-    installationId: metadata.installationId || metadata.installation_id,
-    accessToken: (credData.access_token || credData.token) as string | undefined,
-    expiresAt: credRow.expiresAt ?? undefined,
-    metadata,
-  };
-
-  // 5. Mint a fresh token
-  let freshToken: { accessToken: string; expiresAt?: string };
-  try {
-    freshToken = await selectedProvider.mintToken(repoCredential);
-  } catch (err) {
-    return {
-      envVars,
-      gitConfig,
-      error: `Failed to mint ${credentialProvider} token: ${err instanceof Error ? err.message : String(err)}`,
-    };
-  }
-
-  // 5b. Validate the token actually has access to the repo before launching a sandbox
-  if (repoOwner && opts.repoUrl) {
-    const repoMatch = opts.repoUrl.match(/github\.com[/:]([^/]+)\/([^/.]+)/);
-    if (repoMatch) {
-      const [, owner, repo] = repoMatch;
-      try {
-        const checkRes = await fetch(`https://api.github.com/repos/${owner}/${repo}`, {
-          headers: {
-            Authorization: `Bearer ${freshToken.accessToken}`,
-            Accept: 'application/vnd.github+json',
-            'User-Agent': 'valet-app',
-          },
-        });
-        if (checkRes.status === 404 || checkRes.status === 403) {
-          const credLabel = resolved.credentialType === 'app_install' ? 'org GitHub App' : 'personal OAuth';
-          return {
-            envVars,
-            gitConfig,
-            error: `The ${credLabel} token does not have access to ${owner}/${repo} (HTTP ${checkRes.status}). Check repo permissions or re-authorize.`,
-          };
-        }
-      } catch {
-        // Network error — don't block session creation, let the clone attempt handle it
-      }
-    }
-  }
-
-  // 6. Get git user info from users table
-  const userRow = await db.getUserById(appDb, userId);
-  const gitUser = {
-    name: userRow?.gitName || userRow?.name || 'Valet User',
-    email: userRow?.gitEmail || userRow?.email || '',
-  };
-
-  // 7. Build a credential with the fresh token for assembleSessionEnv
-  const freshCredential: RepoCredential = {
-    ...repoCredential,
-    accessToken: freshToken.accessToken,
-    expiresAt: freshToken.expiresAt,
-  };
-
-  // 8. Call provider.assembleSessionEnv()
-  // Note: App provider ignores gitUser and uses valet[bot] identity
-  const sessionEnv = await selectedProvider.assembleSessionEnv(freshCredential, {
-    repoUrl: opts.repoUrl,
-    branch: opts.branch,
-    ref: opts.ref,
-    gitUser,
-  });
-
-  sessionEnv.envVars.REPO_PROVIDER_ID = selectedProvider.id;
 
   return {
-    envVars: sessionEnv.envVars,
-    gitConfig: sessionEnv.gitConfig,
-    token: freshToken.accessToken,
-    expiresAt: freshToken.expiresAt,
+    envVars,
+    gitConfig,
+    error: `No ${credentialProvider} credentials found. Link your account or ask an org admin to install the app.`,
   };
 }

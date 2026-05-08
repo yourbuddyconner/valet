@@ -1,3 +1,12 @@
+/**
+ * GitHub "app" repo provider — handles repos accessed via GitHub App
+ * installation tokens (server-to-server, scoped to the org installation).
+ *
+ * Installation tokens are minted on-demand by assembleRepoEnv() when no
+ * user OAuth credential exists. They have 1-hour expiry and are NOT stored
+ * in the credentials table. The token is passed in pre-minted via
+ * credential.accessToken, so mintToken() here is also a passthrough.
+ */
 import type { RepoProvider, RepoCredential } from '@valet/sdk/repos';
 import { githubFetch } from './actions/api.js';
 import { GITHUB_URL_PATTERNS, mapGitHubRepo, validateGitHubRepo } from './repo-shared.js';

@@ -170,14 +170,15 @@ export async function hasCredential(
 }
 
 /**
- * Resolve a repo-level credential.
+ * Resolve a repo-level credential row from the DB.
  *
- * Under the unified GitHub App model, user OAuth tokens are always preferred.
- * Installation (bot) tokens are minted on-demand by the resolver, not stored
- * in the credentials table. This function only handles stored user tokens.
+ * Under the unified GitHub App model, only user OAuth tokens (credentialType:
+ * 'oauth2') are stored here. Installation tokens are minted on-demand by
+ * assembleRepoEnv() and never persisted to this table.
  *
- * TODO(github-app-unified): This function will be reworked when repo providers
- * are fully updated (Task 21). For now, return user OAuth if available.
+ * NOTE: This returns the raw encrypted row. For token resolution with
+ * automatic refresh, callers should use getCredential() from
+ * services/credentials.ts instead (see TKAI-56).
  */
 export async function resolveRepoCredential(
   db: AppDb,
@@ -185,7 +186,7 @@ export async function resolveRepoCredential(
   _repoOwner: string | undefined,
   _orgId: string | undefined,
   userId: string,
-): Promise<{ credential: CredentialRow; credentialType: 'oauth2' | 'app_install' } | null> {
+): Promise<{ credential: CredentialRow; credentialType: 'oauth2' } | null> {
   const userOAuth = await getCredentialRow(db, 'user', userId, provider, 'oauth2');
   if (userOAuth) return { credential: userOAuth, credentialType: 'oauth2' };
   return null;

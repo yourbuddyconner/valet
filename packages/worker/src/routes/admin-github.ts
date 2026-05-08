@@ -161,7 +161,6 @@ adminGitHubRouter.post('/app/manifest', async (c) => {
     redirect_url: `${workerUrl}/github/app/setup`,
     callback_urls: [
       `${workerUrl}/auth/github/callback`,
-      `${frontendUrl}/auth/github/repo-callback`,
     ],
     request_oauth_on_install: false,
     public: true,
