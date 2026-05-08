@@ -405,6 +405,12 @@ export class SessionAgentDO {
         serviceName: 'valet-worker',
         endpoint: this.env.OTEL_EXPORTER_OTLP_ENDPOINT,
         headers: this.env.OTEL_EXPORTER_OTLP_HEADERS,
+        // Auto-flush in batches so high-volume span sites (prompt dispatch,
+        // child events) don't fire one OTLP POST per span. Boundary flushes
+        // (hibernate/terminate/error finally blocks) still call flushTracing()
+        // explicitly to drain the buffer before the DO goes idle.
+        maxQueuedSpans: 50,
+        scheduleFlush: (promise) => this.ctx.waitUntil(promise),
       });
 
       this.initialized = true;
@@ -2100,7 +2106,6 @@ export class SessionAgentDO {
     });
     dispatchSpan.setAttribute('valet.dispatch.sent', dispatched);
     dispatchSpan.end();
-    this.flushTracing();
     if (!dispatched) {
       // Runner disappeared between the check and send — revert to queued for recovery
       this.promptQueue.revertProcessingToQueued(messageId);
@@ -2834,7 +2839,6 @@ export class SessionAgentDO {
                 traceparent: formatTraceparent(dispatchSpan.context),
               });
               dispatchSpan.end();
-              this.flushTracing();
               this.promptQueue.stampDispatched();
               console.log(`[SessionAgentDO] agentStatus idle: dispatched initial prompt ${messageId}`);
             }
@@ -4616,7 +4620,6 @@ export class SessionAgentDO {
           });
           dispatchSpan.setAttribute('valet.dispatch.sent', sysDispatched);
           dispatchSpan.end();
-          this.flushTracing();
           if (!sysDispatched) {
             this.promptQueue.revertProcessingToQueued(messageId);
             this.promptQueue.runnerBusy = false;
@@ -4706,7 +4709,6 @@ export class SessionAgentDO {
     });
     dispatchSpan.setAttribute('valet.dispatch.sent', directWfDispatched);
     dispatchSpan.end();
-    this.flushTracing();
     if (!directWfDispatched) {
       this.promptQueue.runnerBusy = false;
       return queueWorkflowDispatch('runner_send_failed');
@@ -4882,7 +4884,6 @@ export class SessionAgentDO {
       });
       dispatchSpan.setAttribute('valet.dispatch.sent', wfDispatched);
       dispatchSpan.end();
-      this.flushTracing();
       if (!wfDispatched) {
         this.promptQueue.revertProcessingToQueued(prompt.id);
         this.promptQueue.runnerBusy = false;
@@ -4974,7 +4975,6 @@ export class SessionAgentDO {
     });
     dispatchSpan.setAttribute('valet.dispatch.sent', queueDispatched);
     dispatchSpan.end();
-    this.flushTracing();
     if (!queueDispatched) {
       this.promptQueue.revertProcessingToQueued(prompt.id);
       this.emitAuditEvent('prompt.dispatch_failed', `Queue dispatch failed, reverted: ${prompt.id.slice(0, 8)}`);
