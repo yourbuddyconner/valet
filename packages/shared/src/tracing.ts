@@ -36,6 +36,18 @@ export interface TracerOptions {
   headers?: string;
   resourceAttributes?: SpanAttributes;
   fetchFn?: typeof fetch;
+  /**
+   * Auto-flush once the buffered span count reaches this threshold.
+   * Set to 0 or undefined to disable auto-flush (callers must invoke flush() manually).
+   */
+  maxQueuedSpans?: number;
+  /**
+   * Hook invoked with the auto-flush promise so the host can keep the
+   * Promise alive (e.g. via `ctx.waitUntil` in a Cloudflare Worker DO).
+   * If omitted, auto-flush errors are logged and the promise is otherwise
+   * fire-and-forget.
+   */
+  scheduleFlush?: (flush: Promise<void>) => void;
 }
 
 interface FinishedSpan {
@@ -144,6 +156,8 @@ export class SimpleTracer {
   private readonly serviceName: string;
   private readonly resourceAttributes: SpanAttributes;
   private readonly fetchFn: typeof fetch;
+  private readonly maxQueuedSpans: number;
+  private readonly scheduleFlush?: (flush: Promise<void>) => void;
   private readonly spans: FinishedSpan[] = [];
 
   constructor(options: TracerOptions) {
@@ -152,6 +166,8 @@ export class SimpleTracer {
     this.serviceName = options.serviceName;
     this.resourceAttributes = options.resourceAttributes || {};
     this.fetchFn = options.fetchFn || fetch;
+    this.maxQueuedSpans = options.maxQueuedSpans ?? 0;
+    this.scheduleFlush = options.scheduleFlush;
   }
 
   get enabled(): boolean {
@@ -178,6 +194,14 @@ export class SimpleTracer {
   record(span: FinishedSpan): void {
     if (!this.enabled) return;
     this.spans.push(span);
+    if (this.maxQueuedSpans > 0 && this.spans.length >= this.maxQueuedSpans) {
+      const flushPromise = this.flush();
+      if (this.scheduleFlush) {
+        this.scheduleFlush(flushPromise);
+      } else {
+        flushPromise.catch((err) => console.warn('[Tracing] Auto-flush failed:', err));
+      }
+    }
   }
 
   async flush(): Promise<void> {
@@ -209,7 +233,9 @@ function randomHex(byteLength: number): string {
 }
 
 function msToUnixNano(ms: number): string {
-  return `${Math.floor(ms) * 1_000_000}`;
+  // Epoch nanoseconds exceed Number.MAX_SAFE_INTEGER, so multiply with BigInt
+  // to avoid silent precision loss in span timestamps.
+  return (BigInt(Math.floor(ms)) * 1_000_000n).toString();
 }
 
 function normalizeEndpoint(endpoint: string | undefined): string | undefined {
