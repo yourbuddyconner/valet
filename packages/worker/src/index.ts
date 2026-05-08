@@ -119,13 +119,15 @@ app.use(
 // Error handling
 app.onError(errorHandler);
 
-// Sync plugin registry to D1 on cold start (best-effort — don't block requests on failure)
+// Sync plugin registry to D1 on cold start. Runs in the background via
+// ctx.waitUntil so requests never block on it — the registry is idempotent
+// and slightly stale content for one request is acceptable.
 app.use('*', async (c, next) => {
-  try {
-    await syncPluginsOnce(c.env.DB);
-  } catch (err) {
-    console.error('[plugin-sync] Sync failed, continuing:', err);
-  }
+  c.executionCtx.waitUntil(
+    syncPluginsOnce(c.env.DB).catch((err) => {
+      console.error('[plugin-sync] Sync failed, continuing:', err);
+    }),
+  );
   return next();
 });
 
