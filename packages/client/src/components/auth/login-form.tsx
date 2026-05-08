@@ -163,10 +163,11 @@ export function LoginForm() {
   const workerUrl = getWorkerBaseUrl();
   const error = new URLSearchParams(window.location.search).get('error');
 
-  const { data: providers, isLoading } = useQuery({
+  const { data: providers, isLoading, isError, refetch, isFetching } = useQuery({
     queryKey: authKeys.providers,
     queryFn: fetchAuthProviders,
     staleTime: 60_000,
+    retry: 3,
   });
 
   const redirectProviders = providers?.filter(p => p.protocol !== 'credentials') ?? [];
@@ -209,6 +210,20 @@ export function LoginForm() {
 
         {isLoading ? (
           <LoadingSkeleton />
+        ) : isError ? (
+          <div className="space-y-2 text-center">
+            <p className="text-sm text-red-600">
+              Couldn't load sign-in options. Please try again.
+            </p>
+            <Button
+              variant="outline"
+              className="w-full"
+              onClick={() => { refetch(); }}
+              disabled={isFetching}
+            >
+              {isFetching ? 'Retrying...' : 'Retry'}
+            </Button>
+          </div>
         ) : (
           <>
             {redirectProviders.map((provider, idx) => (
