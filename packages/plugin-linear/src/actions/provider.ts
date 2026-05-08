@@ -5,7 +5,7 @@ export const linearProvider: IntegrationProvider = {
   displayName: 'Linear',
   authType: 'oauth2',
   supportedEntities: ['issues', 'projects', 'teams', 'comments'],
-  oauthScopes: ['read', 'write'],
+  oauthScopes: ['write'],
   mcpServerUrl: 'https://mcp.linear.app',
 
   validateCredentials(credentials: IntegrationCredentials): boolean {
