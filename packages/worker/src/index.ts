@@ -119,12 +119,23 @@ app.use(
 // Error handling
 app.onError(errorHandler);
 
-// Sync plugin registry to D1 on cold start (best-effort — don't block requests on failure)
+// Sync plugin registry to D1 on cold start. Runs in the background via
+// ctx.waitUntil so requests never block on it — the registry is idempotent
+// and slightly stale content for one request is acceptable.
+//
+// Skip entirely for public latency-critical paths so cold isolates serving
+// the login screen / health checks / OAuth redirects don't even spin up
+// the work alongside them.
+const PLUGIN_SYNC_SKIP_PREFIXES = ['/auth', '/health'];
 app.use('*', async (c, next) => {
-  try {
-    await syncPluginsOnce(c.env.DB);
-  } catch (err) {
-    console.error('[plugin-sync] Sync failed, continuing:', err);
+  const path = c.req.path;
+  const skip = PLUGIN_SYNC_SKIP_PREFIXES.some((p) => path === p || path.startsWith(`${p}/`));
+  if (!skip) {
+    c.executionCtx.waitUntil(
+      syncPluginsOnce(c.env.DB).catch((err) => {
+        console.error('[plugin-sync] Sync failed, continuing:', err);
+      }),
+    );
   }
   return next();
 });
