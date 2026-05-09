@@ -6,11 +6,5 @@
     "types": ["node"],
     "lib": ["ES2022"]
   },
-  "include": ["src/**/*", "test/**/*"],
-  "references": [
-    { "path": "../shared" },
-    { "path": "../engine" },
-    { "path": "../store-sqlite" },
-    { "path": "../sandbox-docker" }
-  ]
+  "include": ["src/**/*", "test/**/*"]
 }
