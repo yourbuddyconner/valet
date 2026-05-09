@@ -1,0 +1,38 @@
+{
+  "name": "@valet/api",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "main": "./src/main.ts",
+  "scripts": {
+    "dev": "tsx watch src/main.ts",
+    "start": "tsx src/main.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "db:generate": "drizzle-kit generate"
+  },
+  "dependencies": {
+    "@hono/node-server": "^1.13.0",
+    "@hono/node-ws": "^1.0.0",
+    "@mariozechner/pi-ai": "0.73.0",
+    "@mariozechner/pi-agent-core": "0.73.0",
+    "@valet/engine": "workspace:*",
+    "@valet/sandbox-docker": "workspace:*",
+    "@valet/shared": "workspace:*",
+    "@valet/store-sqlite": "workspace:*",
+    "drizzle-orm": "^0.45.1",
+    "hono": "^4.3.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.8",
+    "@types/node": "^20.0.0",
+    "better-sqlite3": "^11.0.0",
+    "drizzle-kit": "^0.31.9",
+    "tsx": "^4.0.0",
+    "typescript": "^5.3.3",
+    "vitest": "^4.0.18"
+  },
+  "peerDependencies": {
+    "better-sqlite3": "^11.0.0"
+  }
+}
