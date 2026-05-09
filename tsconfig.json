@@ -37,6 +37,6 @@
     { "path": "./packages/plugin-email-auth" },
     { "path": "./packages/plugin-google-auth" },
     { "path": "./packages/plugin-telegram" },
-    { "path": "./packages/api" }
+    { "path": "./packages/worker" }
   ]
 }

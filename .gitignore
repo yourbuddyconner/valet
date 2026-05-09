@@ -42,11 +42,8 @@ Thumbs.db
 npm-debug.log*
 
 # Auto-generated plugin registries
-packages/api/src/integrations/packages.ts
-packages/api/src/channels/packages.ts
-packages/api/src/identity/packages.ts
-packages/api/src/repos/packages.ts
-packages/api/src/plugins/content-registry.ts
+packages/worker/src/integrations/packages.ts
+packages/worker/src/channels/packages.ts
 
 # TypeScript
 *.tsbuildinfo

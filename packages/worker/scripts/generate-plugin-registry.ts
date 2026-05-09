@@ -7,7 +7,7 @@
  *   - src/channels/packages.ts
  *   - src/plugins/content-registry.ts
  *
- * Run: bun packages/api/scripts/generate-plugin-registry.ts
+ * Run: bun packages/worker/scripts/generate-plugin-registry.ts
  */
 
 import { readFileSync, writeFileSync, existsSync, readdirSync, mkdirSync } from 'node:fs';
@@ -126,18 +126,8 @@ for (const dir of pluginDirs) {
     const pkg = JSON.parse(readFileSync(pkgJsonPath, 'utf-8'));
     const pkgName = pkg.name as string;
 
-    const actionsIndex = resolve(pluginPath, 'src', 'actions', 'index.ts');
-    if (existsSync(actionsIndex)) {
-      // The legacy worker IntegrationRegistry consumes a `default IntegrationPackage`
-      // export. Plugins migrated to the engine-native ActionPlugin shape (e.g.
-      // plugin-github after the engine refactor) drop the default export. Skip
-      // those — the engine consumes them directly via its plugin catalog.
-      const actionsContent = readFileSync(actionsIndex, 'utf-8');
-      // Matches both `export default x` and `export { x as default }`.
-      if (/^export\s+default\s/m.test(actionsContent) ||
-          /\bas\s+default\b/.test(actionsContent)) {
-        actionPlugins.push({ name: dir, pkgName });
-      }
+    if (existsSync(resolve(pluginPath, 'src', 'actions', 'index.ts'))) {
+      actionPlugins.push({ name: dir, pkgName });
     }
     if (existsSync(resolve(pluginPath, 'src', 'channels', 'index.ts'))) {
       channelPlugins.push({ name: dir, pkgName });

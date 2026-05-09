@@ -26,7 +26,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
 
       - name: Generate plugin registries
-        run: cd packages/api && bun scripts/generate-plugin-registry.ts
+        run: cd packages/worker && bun scripts/generate-plugin-registry.ts
 
       - name: Typecheck
         run: pnpm typecheck

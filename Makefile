@@ -6,22 +6,22 @@
 # and workflow execution.
 
 .PHONY: help install setup clean \
-        dev dev-api dev-opencode dev-client dev-all \
+        dev dev-worker dev-opencode dev-client dev-all \
         db-setup db-migrate db-seed db-reset \
         docker-build docker-up docker-down docker-logs \
         test test-unit test-integration test-e2e \
         test-workflow test-triggers test-webhooks test-schedule \
         smoke-test smoke-test-prod smoke-test-api smoke-test-agent \
         lint typecheck \
-        logs logs-api logs-opencode logs-cloudflare logs-api-prod \
-        health health-api health-opencode \
+        logs logs-worker logs-opencode logs-cloudflare logs-worker-prod \
+        health health-worker health-opencode \
         workflow-create workflow-list workflow-run workflow-delete \
         trigger-create trigger-list trigger-run \
         bootstrap bootstrap-d1 bootstrap-r2 bootstrap-pages bootstrap-secrets \
-        release deploy deploy-api deploy-modal deploy-migrate deploy-client generate-registries \
+        release deploy deploy-worker deploy-modal deploy-migrate deploy-client generate-registries \
         secrets-set secrets-list \
         image-build image-push \
-        destroy destroy-api destroy-d1 destroy-r2 destroy-pages destroy-modal
+        destroy destroy-worker destroy-d1 destroy-r2 destroy-pages destroy-modal
 
 # Configuration
 # =============
@@ -83,8 +83,8 @@ setup: install db-setup ## Full setup: install deps, setup database
 
 clean: docker-down ## Clean up: stop containers, remove build artifacts
 	@echo "$(YELLOW)Cleaning up...$(NC)"
-	rm -rf packages/api/dist
-	rm -rf packages/api/.wrangler/state
+	rm -rf packages/worker/dist
+	rm -rf packages/worker/.wrangler/state
 	rm -rf packages/client/dist
 	@echo "$(GREEN)Clean complete!$(NC)"
 
@@ -94,11 +94,11 @@ clean: docker-down ## Clean up: stop containers, remove build artifacts
 
 dev: ## Start all services in development mode (parallel)
 	@echo "$(GREEN)Starting all services...$(NC)"
-	@make -j2 dev-api dev-opencode
+	@make -j2 dev-worker dev-opencode
 
-dev-api: ## Start the Cloudflare Worker in dev mode
+dev-worker: ## Start the Cloudflare Worker in dev mode
 	@echo "$(GREEN)Starting Worker on $(WORKER_URL)...$(NC)"
-	cd packages/api && $(PNPM) run dev
+	cd packages/worker && $(PNPM) run dev
 
 dev-opencode: docker-up ## Start OpenCode container
 	@echo "$(GREEN)OpenCode container started on $(OPENCODE_URL)$(NC)"
@@ -112,20 +112,20 @@ db-setup: db-migrate db-seed ## Setup database: migrate and seed
 
 db-migrate: ## Run D1 database migrations
 	@echo "$(GREEN)Running database migrations...$(NC)"
-	cd packages/api && $(PNPM) run db:migrate
+	cd packages/worker && $(PNPM) run db:migrate
 
 db-seed: ## Seed database with test data
 	@echo "$(GREEN)Seeding database...$(NC)"
-	cd packages/api && $(PNPM) run db:seed || echo "$(YELLOW)Seed script not found, skipping...$(NC)"
+	cd packages/worker && $(PNPM) run db:seed || echo "$(YELLOW)Seed script not found, skipping...$(NC)"
 
 db-reset: ## Reset database (drop and recreate)
 	@echo "$(YELLOW)Resetting database...$(NC)"
-	rm -rf packages/api/.wrangler/state/v3/d1
+	rm -rf packages/worker/.wrangler/state/v3/d1
 	@make db-migrate
 	@echo "$(GREEN)Database reset complete!$(NC)"
 
 db-shell: ## Open D1 database shell
-	cd packages/api && wrangler d1 execute $(D1_DATABASE_NAME) --local --command "SELECT 1"
+	cd packages/worker && wrangler d1 execute $(D1_DATABASE_NAME) --local --command "SELECT 1"
 
 # ==========================================
 # Docker Operations
@@ -155,9 +155,9 @@ docker-restart: docker-down docker-up ## Restart Docker containers
 # Health Checks
 # ==========================================
 
-health: health-api health-opencode ## Check health of all services
+health: health-worker health-opencode ## Check health of all services
 
-health-api: ## Check Worker health
+health-worker: ## Check Worker health
 	@echo "Checking Worker health..."
 	@curl -sf $(WORKER_URL)/health > /dev/null 2>&1 \
 		&& echo "$(GREEN)✓ Worker is healthy$(NC)" \
@@ -193,11 +193,11 @@ wait-for-services: ## Wait for all services to be ready
 # ==========================================
 
 logs: ## Show all logs (worker + opencode)
-	@make -j2 logs-api logs-opencode
+	@make -j2 logs-worker logs-opencode
 
-logs-api: ## Show Worker logs
+logs-worker: ## Show Worker logs
 	@echo "$(GREEN)Worker logs:$(NC)"
-	cd packages/api && wrangler tail 2>/dev/null || echo "Use 'make dev-api' to see logs"
+	cd packages/worker && wrangler tail 2>/dev/null || echo "Use 'make dev-worker' to see logs"
 
 logs-cloudflare: ## Tail deployed Cloudflare Worker logs (optional: CF_ENV=prod TAIL_SEARCH=text TAIL_SAMPLING_RATE=1)
 	@echo "$(GREEN)Cloudflare Worker logs (remote tail):$(NC)"
@@ -207,7 +207,7 @@ logs-cloudflare: ## Tail deployed Cloudflare Worker logs (optional: CF_ENV=prod 
 		$(if $(TAIL_SEARCH),--search "$(TAIL_SEARCH)",) \
 		$(if $(TAIL_SAMPLING_RATE),--sampling-rate $(TAIL_SAMPLING_RATE),)
 
-logs-api-prod: logs-cloudflare ## Alias for logs-cloudflare
+logs-worker-prod: logs-cloudflare ## Alias for logs-cloudflare
 
 logs-opencode: ## Show OpenCode container logs
 	$(DOCKER_COMPOSE) logs -f opencode
@@ -628,7 +628,7 @@ bootstrap-secrets: ## Set required worker secrets (interactive)
 VERSION ?= $(shell git rev-parse --short HEAD 2>/dev/null || date +%Y%m%d%H%M%S)
 
 generate-registries: ## Generate auto-discovered plugin registry files
-	@cd packages/api && bun scripts/generate-plugin-registry.ts
+	@cd packages/worker && bun scripts/generate-plugin-registry.ts
 
 release: ## Full idempotent release: install, build, push image, deploy all
 	@echo "$(GREEN)========================================$(NC)"
@@ -658,7 +658,7 @@ release: ## Full idempotent release: install, build, push image, deploy all
 deploy: ## Deploy everything — auto-creates resources, discovers URLs
 	@./scripts/deploy.sh all
 
-deploy-api: ## Deploy Cloudflare Worker (auto-discovers config)
+deploy-worker: ## Deploy Cloudflare Worker (auto-discovers config)
 	@./scripts/deploy.sh worker
 
 deploy-migrate: ## Apply D1 migrations to production
@@ -676,7 +676,7 @@ dev-client: ## Start client dev server
 
 dev-all: ## Start all services (worker + client + docker)
 	@echo "$(GREEN)Starting all services...$(NC)"
-	@make -j3 dev-api dev-client dev-opencode
+	@make -j3 dev-worker dev-client dev-opencode
 
 # ==========================================
 # Secrets Management
@@ -685,12 +685,12 @@ dev-all: ## Start all services (worker + client + docker)
 secrets-set: ## Set required secrets for Worker
 	@echo "$(GREEN)Setting Worker secrets...$(NC)"
 	@echo "Enter ENCRYPTION_KEY:"
-	@cd packages/api && wrangler secret put ENCRYPTION_KEY
+	@cd packages/worker && wrangler secret put ENCRYPTION_KEY
 	@echo "$(GREEN)✓ Secrets configured$(NC)"
 
 secrets-list: ## List configured secrets
 	@echo "$(GREEN)Configured secrets:$(NC)"
-	cd packages/api && wrangler secret list
+	cd packages/worker && wrangler secret list
 
 # ==========================================
 # OpenCode Image (for Modal Sandboxes)
@@ -732,7 +732,7 @@ destroy: ## Destroy all remote resources (Worker, D1, R2, Pages, Modal) — DEST
 	@echo "$(YELLOW)Press Ctrl+C within 5 seconds to abort...$(NC)"
 	@sleep 5
 	@echo ""
-	@make destroy-api
+	@make destroy-worker
 	@make destroy-pages
 	@make destroy-d1
 	@make destroy-r2
@@ -742,7 +742,7 @@ destroy: ## Destroy all remote resources (Worker, D1, R2, Pages, Modal) — DEST
 	@echo "$(GREEN)All resources destroyed.$(NC)"
 	@echo "$(GREEN)========================================$(NC)"
 
-destroy-api: ## Delete the Cloudflare Worker
+destroy-worker: ## Delete the Cloudflare Worker
 	@echo "$(YELLOW)Deleting Worker '$(CF_WORKER_NAME)'...$(NC)"
 	wrangler delete --name $(CF_WORKER_NAME) --force || echo "$(YELLOW)Worker not found or already deleted$(NC)"
 	@echo "$(GREEN)✓ Worker deleted$(NC)"
