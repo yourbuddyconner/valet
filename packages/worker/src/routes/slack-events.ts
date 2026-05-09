@@ -632,6 +632,37 @@ slackEventsRouter.post('/slack/interactive', async (c) => {
     return slackError('Only the session owner can respond to this prompt.');
   }
 
+  // Strip the buttons immediately so the user sees their click landed and can't
+  // re-click while the DO processes the resolution. We do this via response_url
+  // (no token lookup needed) and await it so it lands before the DO's later
+  // chat.update with the final "Approved/Denied by ..." state.
+  const responseUrl = payload.response_url as string | undefined;
+  const originalMessage = payload.message as Record<string, unknown> | undefined;
+  if (responseUrl && originalMessage) {
+    const originalBlocks = (originalMessage.blocks as Array<Record<string, unknown>> | undefined) ?? [];
+    const preservedBlocks = originalBlocks.filter((b) => b.type !== 'actions');
+    const processingBlocks = [
+      ...preservedBlocks,
+      { type: 'context', elements: [{ type: 'mrkdwn', text: '⏳ Processing…' }] },
+    ];
+    try {
+      const resp = await fetch(responseUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          replace_original: true,
+          text: (originalMessage.text as string) || 'Processing…',
+          blocks: processingBlocks,
+        }),
+      });
+      if (!resp.ok) {
+        console.warn(`[Slack Interactive] response_url update failed: status=${resp.status}`);
+      }
+    } catch (err) {
+      console.warn('[Slack Interactive] response_url update threw:', err);
+    }
+  }
+
   // Respond to Slack immediately (3-second deadline)
   // Process resolution asynchronously — the DO validates prompt existence and ownership
   c.executionCtx.waitUntil((async () => {
