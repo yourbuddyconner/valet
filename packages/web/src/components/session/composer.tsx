@@ -2,11 +2,12 @@ import { useState, type KeyboardEvent } from "react";
 import { Send } from "lucide-react";
 import { Button, Textarea } from "~/components/primitives";
 import { useSendPrompt } from "~/api/queries";
-import type { AgentStatus } from "~/stores/stream";
+import { useStreamStore, type AgentStatus } from "~/stores/stream";
 
 export function Composer({ sessionId, agentStatus }: { sessionId: string; agentStatus: AgentStatus }) {
   const [text, setText] = useState("");
   const send = useSendPrompt(sessionId);
+  const addUserMessage = useStreamStore((s) => s.addUserMessage);
 
   // Disable submit while engine is mid-turn — prompts queue server-side, but
   // the UX is clearer if we wait for idle.
@@ -16,10 +17,17 @@ export function Composer({ sessionId, agentStatus }: { sessionId: string; agentS
     const t = text.trim();
     if (!t || busy) return;
     setText("");
+    // Optimistic local add — the engine doesn't emit a wire event for the
+    // user's own message, so without this the prompt would only appear after
+    // the next WS init (page reload). The next init replaces this row with
+    // the server's persisted copy.
+    addUserMessage(sessionId, t);
     try {
       await send.mutateAsync(t);
     } catch (err) {
-      // Restore the draft on failure so the user can retry.
+      // Restore the draft on failure so the user can retry. The optimistic
+      // message stays visible — they can see what they sent + retry; on the
+      // next reload it'll be reconciled against server truth.
       setText(t);
       console.error("send failed:", err);
     }

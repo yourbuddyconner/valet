@@ -39,6 +39,16 @@ export interface StreamStore {
   // ── actions ────────────────────────────────────────────────────────────
   setConnection(sessionId: string, conn: ConnectionStatus): void;
   ingest(sessionId: string, ev: WireEvent): void;
+  /**
+   * Optimistically append a user-authored message to the local view. Engine
+   * doesn't emit a wire event when a user prompt is enqueued — the user
+   * message only becomes visible to the client on the next WS init frame
+   * (page reload). This action gives the user instant feedback; the next
+   * init frame replaces it with the server's persisted copy.
+   *
+   * Returns the synthetic message id so callers can correlate.
+   */
+  addUserMessage(sessionId: string, text: string): string;
   reset(sessionId: string): void;
   remove(sessionId: string): void;
 }
@@ -76,14 +86,17 @@ function reduce(slice: SessionStreamState, ev: WireEvent, sessionId: string): Se
     }
 
     case "message_start": {
-      // Begin a new message row. Engine emits this for assistant + system roles.
+      // Begin a new message row. The wire's role is the full MessageRole
+      // union (user/assistant/tool/system); we forward verbatim. Earlier
+      // versions collapsed to assistant which broke any future user-role
+      // synthesized events.
       const exists = slice.messages.some((m) => m.id === ev.messageId);
       if (exists) return next;
       const newMsg: Message = {
         id: ev.messageId,
         sessionId,
         threadId: ev.threadId,
-        role: ev.role === "system" ? "system" : "assistant",
+        role: ev.role,
         content: "",
         parts: [],
         createdAt: ev.ts,
@@ -232,6 +245,32 @@ export const useStreamStore = create<StreamStore>((set) => ({
       if (updated === slice) return state;
       return { bySession: { ...state.bySession, [sessionId]: updated } };
     }),
+
+  addUserMessage: (sessionId, text) => {
+    // Synthetic id; the next WS init replaces this row with the server's
+    // persisted message (different id, same content). A short collision
+    // window with content-based dedupe is acceptable for v1.
+    const id = `user-opt-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    set((state) => {
+      const slice = ensure(state, sessionId);
+      const message: Message = {
+        id,
+        sessionId,
+        threadId: null,
+        role: "user",
+        content: text,
+        parts: [{ kind: "text", text }],
+        createdAt: Date.now(),
+      };
+      return {
+        bySession: {
+          ...state.bySession,
+          [sessionId]: { ...slice, messages: [...slice.messages, message] },
+        },
+      };
+    });
+    return id;
+  },
 
   reset: (sessionId) =>
     set((state) => ({ bySession: { ...state.bySession, [sessionId]: { ...EMPTY } } })),
