@@ -64,3 +64,14 @@ async function shutdown(signal: NodeJS.Signals) {
 
 process.on("SIGINT", () => void shutdown("SIGINT"));
 process.on("SIGTERM", () => void shutdown("SIGTERM"));
+
+// Last-resort guards. A single bad request must not take down the server
+// and break every other live session. Real fixes belong in the route or WS
+// handler that's swallowing the error; these are belt-and-braces so the dev
+// experience doesn't get whiplashed when one slips through.
+process.on("unhandledRejection", (reason) => {
+  console.error("unhandledRejection:", reason);
+});
+process.on("uncaughtException", (err) => {
+  console.error("uncaughtException:", err);
+});

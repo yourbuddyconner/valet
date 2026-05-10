@@ -1,5 +1,7 @@
 import { Hono } from "hono";
 import { and, count, desc, eq } from "drizzle-orm";
+import { mkdir, stat } from "node:fs/promises";
+import { isAbsolute } from "node:path";
 import type { AppEnv } from "../env.js";
 import { agentSessions, messages as messagesTable } from "../schema/index.js";
 import type {
@@ -61,6 +63,27 @@ sessionsRouter.post("/", async (c) => {
   }
   if (!body.workspace || typeof body.workspace !== "string") {
     return c.json({ error: "workspace is required" }, 400);
+  }
+  if (!isAbsolute(body.workspace)) {
+    return c.json({ error: "workspace must be an absolute path" }, 400);
+  }
+
+  // Auto-create the workspace dir if it doesn't exist; reject if the path
+  // exists but is a file (Docker bind-mount needs a directory).
+  try {
+    const st = await stat(body.workspace);
+    if (!st.isDirectory()) {
+      return c.json({ error: `workspace exists but is not a directory: ${body.workspace}` }, 400);
+    }
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+      return c.json({ error: `cannot access workspace: ${(err as Error).message}` }, 400);
+    }
+    try {
+      await mkdir(body.workspace, { recursive: true });
+    } catch (mkErr) {
+      return c.json({ error: `cannot create workspace: ${(mkErr as Error).message}` }, 400);
+    }
   }
 
   const now = Date.now();

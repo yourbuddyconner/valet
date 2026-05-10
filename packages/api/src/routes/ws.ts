@@ -53,76 +53,98 @@ export function registerWsRoutes(
 
       return {
         async onOpen(_evt, ws) {
-          // Verify session ownership before subscribing.
-          const row = await providers.db
-            .select()
-            .from(agentSessions)
-            .where(and(eq(agentSessions.id, sessionId), eq(agentSessions.userId, userId)))
-            .get();
-          if (!row) {
-            ws.close(4040, "session not found");
-            return;
-          }
+          // Wrap the whole handshake in try/catch — any throw here would
+          // become an unhandled rejection and crash the entire server
+          // process, killing every other live session. We instead emit an
+          // error frame and close the socket gracefully.
+          try {
+            // Verify session ownership before subscribing.
+            const row = await providers.db
+              .select()
+              .from(agentSessions)
+              .where(and(eq(agentSessions.id, sessionId), eq(agentSessions.userId, userId)))
+              .get();
+            if (!row) {
+              ws.close(4040, "session not found");
+              return;
+            }
 
-          // Materialize the engine session + default thread now so the bus
-          // has the right shape and the client can immediately render history
-          // when it loads. The init frame includes the recent message log.
-          const engineSession = await providers.engineHost.sessionFor(sessionId, {
-            userId: row.userId,
-            orgId: row.orgId,
-            workspace: row.workspace,
-          });
-          const defaultThread = await engineSession.ensureDefaultThread();
-          const entries: SessionEntry[] = await defaultThread.readEntries({ limit: 200 });
-
-          send(ws, {
-            type: "init",
-            session: {
-              id: row.id,
+            // Materialize the engine session + default thread now so the bus
+            // has the right shape and the client can immediately render history
+            // when it loads. The init frame includes the recent message log.
+            const engineSession = await providers.engineHost.sessionFor(sessionId, {
+              userId: row.userId,
+              orgId: row.orgId,
               workspace: row.workspace,
-              status: row.status as "active" | "archived" | "deleted",
-              title: row.title ?? undefined,
-              createdAt: row.createdAt,
-              updatedAt: row.updatedAt,
-              messageCount: entries.filter((e) => e.type === "message").length,
-            },
-            messages: entries
-              .filter((e: SessionEntry): e is Extract<SessionEntry, { type: "message" }> => e.type === "message")
-              .map((e) => {
-                const created =
-                  typeof e.createdAt === "number" ? e.createdAt : Date.parse(e.createdAt as unknown as string);
-                return {
-                  id: e.id,
-                  sessionId,
-                  threadId: defaultThread.id,
-                  role: e.role,
-                  content: e.content,
-                  parts: [], // keep init slim; client refetches via REST if needed
-                  createdAt: Number.isFinite(created) ? created : Date.now(),
-                };
-              }),
-          });
+            });
+            const defaultThread = await engineSession.ensureDefaultThread();
+            const entries: SessionEntry[] = await defaultThread.readEntries({ limit: 200 });
 
-          // Subscribe to the engine event bus for this session.
-          unsubscribe = providers.eventBus.subscribe({ sessionId }, (busEvent: BusEvent) => {
-            // Track active message id for delta tagging.
-            if (busEvent.event.type === "message_start") {
-              activeMessageByThread.set(busEvent.event.threadId, busEvent.event.messageId);
-            }
-            const drafts = busEventToWire(busEvent);
-            for (const draft of drafts) {
-              if (draft.type === "text_delta" && !draft.messageId) {
-                const filled = activeMessageByThread.get(draft.threadId);
-                if (filled) draft.messageId = filled;
+            send(ws, {
+              type: "init",
+              session: {
+                id: row.id,
+                workspace: row.workspace,
+                status: row.status as "active" | "archived" | "deleted",
+                title: row.title ?? undefined,
+                createdAt: row.createdAt,
+                updatedAt: row.updatedAt,
+                messageCount: entries.filter((e) => e.type === "message").length,
+              },
+              messages: entries
+                .filter((e: SessionEntry): e is Extract<SessionEntry, { type: "message" }> => e.type === "message")
+                .map((e) => {
+                  const created =
+                    typeof e.createdAt === "number" ? e.createdAt : Date.parse(e.createdAt as unknown as string);
+                  return {
+                    id: e.id,
+                    sessionId,
+                    threadId: defaultThread.id,
+                    role: e.role,
+                    content: e.content,
+                    parts: [], // keep init slim; client refetches via REST if needed
+                    createdAt: Number.isFinite(created) ? created : Date.now(),
+                  };
+                }),
+            });
+
+            // Subscribe to the engine event bus for this session.
+            unsubscribe = providers.eventBus.subscribe({ sessionId }, (busEvent: BusEvent) => {
+              // Track active message id for delta tagging.
+              if (busEvent.event.type === "message_start") {
+                activeMessageByThread.set(busEvent.event.threadId, busEvent.event.messageId);
               }
-              send(ws, draft);
-            }
-          });
+              const drafts = busEventToWire(busEvent);
+              for (const draft of drafts) {
+                if (draft.type === "text_delta" && !draft.messageId) {
+                  const filled = activeMessageByThread.get(draft.threadId);
+                  if (filled) draft.messageId = filled;
+                }
+                send(ws, draft);
+              }
+            });
 
-          // Periodic keepalive.
-          pingTimer = setInterval(() => {
-            send(ws, { type: "ping" });
-          }, PING_INTERVAL_MS);
+            // Periodic keepalive.
+            pingTimer = setInterval(() => {
+              send(ws, { type: "ping" });
+            }, PING_INTERVAL_MS);
+          } catch (err) {
+            // Engine setup failed (e.g. workspace doesn't exist, Docker
+            // unreachable). Surface as a wire error and close — never
+            // throw past the handler, or it crashes the whole process.
+            console.error("ws onOpen failed:", err);
+            try {
+              send(ws, {
+                type: "error",
+                code: "ws_open_failed",
+                message: (err as Error).message ?? "failed to open session stream",
+                recoverable: false,
+              });
+            } catch {}
+            try {
+              ws.close(1011, "internal error");
+            } catch {}
+          }
         },
 
         onMessage(evt) {

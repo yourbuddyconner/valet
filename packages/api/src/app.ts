@@ -56,6 +56,19 @@ export function createApp(providers: Providers): CreatedApp {
   const { upgradeWebSocket, injectWebSocket } = createNodeWebSocket({ app });
   registerWsRoutes(app, upgradeWebSocket);
 
+  // Final fallback for anything thrown out of a route handler. Without this,
+  // Hono returns a generic 500 with the HTML error page; we want JSON.
+  app.onError((err, c) => {
+    console.error(`route error ${c.req.method} ${c.req.path}:`, err);
+    return c.json(
+      {
+        error: err.message ?? "internal error",
+        code: (err as NodeJS.ErrnoException).code,
+      },
+      500,
+    );
+  });
+
   return { app, injectWebSocket };
 }
 
