@@ -1,57 +1,23 @@
 import type { BusEvent, MessagePart as EngineMessagePart } from "@valet/engine";
-import type { MessagePart as UiMessagePart } from "@valet/shared";
+import type { MessagePart as WireMessagePart, WireEvent } from "../wire/types.js";
 
 /**
- * Wire shapes the existing client (`packages/client/src/hooks/use-chat.ts`)
- * speaks. We only emit the subset the agent loop needs; UIs ignore unknowns.
+ * Translate engine MessagePart → wire MessagePart.
+ *
+ * Engine has more variants than the wire (thinking, attachment, error). The
+ * agent-loop UI only renders text and tool_call; the rest are dropped.
  */
-export type ClientWsMessage =
-  | { type: "init"; session: ClientInitSession; data?: Record<string, unknown> }
-  | { type: "message"; data: ClientMessageRow }
-  | { type: "message.updated"; data: ClientMessageRow }
-  | { type: "chunk"; content: string; messageId?: string }
-  | {
-      type: "agentStatus";
-      status: "idle" | "thinking" | "tool_calling" | "streaming" | "error";
-      detail?: string;
-    }
-  | { type: "error"; messageId: string; error?: string; content?: string }
-  | { type: "messages.removed"; messageIds: string[] };
-
-export interface ClientInitSession {
-  id: string;
-  status: "active" | "archived" | "deleted";
-  workspace: string;
-  title?: string;
-  messages?: ClientMessageRow[];
-}
-
-export interface ClientMessageRow {
-  id: string;
-  role: "user" | "assistant" | "system" | "tool";
-  content: string;
-  parts?: UiMessagePart[];
-  threadId?: string;
-  createdAt: number;
-}
-
-/**
- * Translate the engine's MessagePart vocabulary to the UI's. The engine emits
- * `tool_call` (snake_case); the UI expects `tool-call` (kebab-case). The
- * status enums differ slightly. `thinking` and `attachment` parts are dropped
- * — the UI doesn't render them today.
- */
-export function engineToUiParts(parts?: EngineMessagePart[]): UiMessagePart[] {
+export function engineToWireParts(parts?: EngineMessagePart[]): WireMessagePart[] {
   if (!parts) return [];
-  const out: UiMessagePart[] = [];
+  const out: WireMessagePart[] = [];
   for (const p of parts) {
     switch (p.type) {
       case "text":
-        out.push({ type: "text", text: p.text });
+        out.push({ kind: "text", text: p.text });
         break;
       case "tool_call":
         out.push({
-          type: "tool-call",
+          kind: "tool_call",
           callId: p.callId,
           toolName: p.toolName,
           status: p.status,
@@ -60,12 +26,10 @@ export function engineToUiParts(parts?: EngineMessagePart[]): UiMessagePart[] {
           error: p.error,
         });
         break;
-      case "error":
-        out.push({ type: "error", message: p.message });
-        break;
+      // thinking, attachment, error parts: dropped on the wire (UI ignores).
       case "thinking":
       case "attachment":
-        // Not rendered by the UI today; drop silently.
+      case "error":
         break;
     }
   }
@@ -73,72 +37,126 @@ export function engineToUiParts(parts?: EngineMessagePart[]): UiMessagePart[] {
 }
 
 /**
- * Map a single engine BusEvent to a client WS message. Returns null for
- * events the UI doesn't consume so callers can skip the send.
+ * Map an engine BusEvent to zero or more wire events.
+ *
+ * The bridge is mechanical: each engine event type either translates 1:1, is
+ * dropped, or produces a small ordered fan-out of wire events. Sequence
+ * numbers and timestamps are added by the WebSocket dispatcher (`emitter()`)
+ * — this function returns `Omit<WireEvent, "seq" | "ts">[]` so the dispatcher
+ * stays the source of truth for ordering.
  */
-export function busEventToClient(ev: BusEvent): ClientWsMessage | null {
+/**
+ * Distributive `Omit` so the discriminated union survives the narrowing.
+ * Plain `Omit<WireEvent, ...>` collapses to a single intersection type;
+ * `WireEvent extends infer T ? ...` distributes per variant.
+ */
+export type WireEventDraft = WireEvent extends infer T
+  ? T extends WireEvent
+    ? Omit<T, "seq" | "ts">
+    : never
+  : never;
+
+export function busEventToWire(ev: BusEvent): WireEventDraft[] {
   const e = ev.event;
   switch (e.type) {
+    case "message_start":
+      return [
+        {
+          type: "message_start",
+          threadId: e.threadId,
+          messageId: e.messageId,
+          role: e.role === "system" ? "system" : "assistant",
+        },
+      ];
+
     case "text_delta":
-      // Streamed token: client appends optimistically, then reconciles when
-      // the corresponding `message_update` lands.
-      return { type: "chunk", content: e.text };
+      // Wire delta carries messageId so the client can target the right row.
+      // Engine's text_delta doesn't ship messageId; the client correlates by
+      // the most recent message_start. We forward the delta verbatim and let
+      // the consumer track the active messageId for that thread.
+      return [
+        {
+          type: "text_delta",
+          threadId: e.threadId,
+          messageId: "", // filled in by dispatcher's per-thread state
+          delta: e.text,
+        },
+      ];
 
     case "message_update":
-      return {
-        type: "message.updated",
-        data: {
-          id: e.messageId,
-          role: "assistant",
-          content: e.content ?? "",
-          parts: engineToUiParts(e.parts),
+      return [
+        {
+          type: "message_update",
           threadId: e.threadId,
-          createdAt: ev.timestamp,
+          messageId: e.messageId,
+          parts: engineToWireParts(e.parts),
+          content: e.content,
         },
-      };
+      ];
+
+    case "message_end":
+      return [
+        {
+          type: "message_end",
+          threadId: e.threadId,
+          messageId: e.messageId,
+          reason: e.reason,
+        },
+      ];
 
     case "tool_start":
-      return { type: "agentStatus", status: "tool_calling", detail: e.tool };
+      return [
+        {
+          type: "tool_start",
+          threadId: e.threadId,
+          toolName: e.tool,
+          args: e.args,
+        },
+      ];
 
     case "tool_end":
-      // Status returns to streaming/idle; the next message_update carries
-      // the tool result. We just nudge the badge back.
-      return { type: "agentStatus", status: "streaming" };
+      return [
+        {
+          type: "tool_end",
+          threadId: e.threadId,
+          toolName: e.tool,
+          result: e.result,
+          isError: e.isError,
+        },
+      ];
 
     case "status":
-      // engine status ⊃ UI status. Map the agent-loop subset.
-      switch (e.status) {
-        case "idle":
-        case "queued":
-          return { type: "agentStatus", status: "idle" };
-        case "thinking":
-          return { type: "agentStatus", status: "thinking" };
-        case "tool_calling":
-          return { type: "agentStatus", status: "tool_calling" };
-        case "streaming":
-          return { type: "agentStatus", status: "streaming" };
-        case "error":
-          return { type: "agentStatus", status: "error" };
-        case "blocked_on_decision_gate":
-          // No matching UI status; surface as idle. (Decision gates are out
-          // of scope for v1; the `interactive_prompt` family of events would
-          // carry them otherwise.)
-          return { type: "agentStatus", status: "idle" };
-      }
-      return null;
+      return [
+        {
+          type: "status",
+          threadId: e.threadId,
+          status: e.status,
+        },
+      ];
 
     case "turn_end":
-      return { type: "agentStatus", status: "idle" };
+      return [
+        {
+          type: "turn_end",
+          threadId: e.threadId,
+          reason: e.reason,
+        },
+      ];
 
     case "error":
-      return {
-        type: "error",
-        messageId: ev.threadId ?? "",
-        error: e.error,
-      };
+      return [
+        {
+          type: "error",
+          threadId: e.threadId,
+          code: e.code,
+          message: e.error,
+          recoverable: e.recoverable,
+        },
+      ];
 
-    case "message_start":
-    case "message_end":
+    // Out of agent-loop v1 scope — silently dropped. Adding any of these to
+    // the wire is a future plan: decision gates, compaction events,
+    // child-task events, model switches, queue state, thread lifecycle.
     case "thread_start":
     case "queue_state":
     case "compaction_start":
@@ -150,8 +168,6 @@ export function busEventToClient(ev: BusEvent): ClientWsMessage | null {
     case "decision_gate_expired":
     case "decision_gate_withdrawn":
     case "model_switched":
-      // Out-of-scope event types — silently drop. The UI handles missing
-      // events gracefully.
-      return null;
+      return [];
   }
 }

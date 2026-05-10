@@ -4,6 +4,16 @@
   "private": true,
   "type": "module",
   "main": "./src/main.ts",
+  "exports": {
+    ".": {
+      "types": "./src/main.ts",
+      "import": "./src/main.ts"
+    },
+    "./wire": {
+      "types": "./src/wire/types.ts",
+      "import": "./src/wire/types.ts"
+    }
+  },
   "scripts": {
     "dev": "tsx watch src/main.ts",
     "start": "tsx src/main.ts",

@@ -1,13 +1,15 @@
-# Greenfield Server + Web Implementation Plan
+# Greenfield API + Web Implementation Plan
 
-> **Supersedes:** `docs/plans/2026-05-06-worker-to-api-engine-integration.md`. The conversion-in-place approach for the existing worker was abandoned. The legacy code carries too much that we don't want to bring forward (raw-D1 helpers, c.env-coupled services, DO-mediated everything, accumulated Tailwind/Zustand patterns in the client). Greenfield buys us a clean wire protocol, intentional primitives, engine-native semantics — at the cost of giving up incremental dogfood against the existing UI.
+> **Supersedes:** `docs/plans/2026-05-06-worker-to-api-engine-integration.md` and `docs/plans/2026-05-08-node-first-api.md`. The first plan tried to convert the existing worker in place; abandoned because the legacy carries too much we don't want to bring forward (raw-D1 helpers, c.env-coupled services, DO-mediated everything). The second plan greenfielded the API at `packages/api` but kept the existing client and bridged engine events to its WS shape; superseded because we're now also greenfielding the client (`packages/web`) so we can design a clean wire shape end-to-end and own the primitive layer in the UI.
+
+> **Existing scaffold to inherit:** the prior plan already shipped `packages/api` scaffolding, schema (orgs/users/sessions/threads/messages), Drizzle migrations, `FsBlobStore`, `EngineHost`, `buildNodeProviders`, `providersMiddleware`, and a stub `authMiddleware`. The wire bridge in `packages/api/src/engine/bridge.ts` targets the legacy client and gets *replaced* in this plan (we're greenfielding the client, so we design our own clean wire shape).
 
 **Goal:** End-to-end agent dogfood in a browser. Open a session, type a prompt, see the engine drive Anthropic, run `bash` inside a Docker sandbox, and stream results back. Two new packages, agent-loop-only scope.
 
 **Architecture:**
-- `packages/server` — Node-first API. Hono + `@hono/node-server` + `@hono/node-ws`. Engine + Docker sandbox + sqlite providers wired at boot. ~10 routes, stub auth, no Durable Objects, no CF coupling.
+- `packages/api` — Node-first API. Hono + `@hono/node-server` + `@hono/node-ws`. Engine + Docker sandbox + sqlite providers wired at boot. ~10 routes, stub auth, no Durable Objects, no CF coupling. Schema, providers, EngineHost already scaffolded; this plan adds wire types, routes, main entry, and replaces the legacy-client bridge with a clean one.
 - `packages/web` — Vite + React + Tailwind + Radix primitives + TanStack Router/Query. Agent-loop screens only. Intentional primitive layer (own components over Radix, *not* shadcn).
-- `packages/api` (legacy worker, post-rename) and `packages/client` stay frozen. Production CF deploy keeps using them, untouched, until a future cutover plan.
+- `packages/worker` (legacy CF worker) and `packages/client` stay frozen. Production CF deploy keeps using them, untouched, until a future cutover plan.
 - `@valet/engine`, `@valet/store-sqlite`, `@valet/sandbox-docker`, `@valet/sandbox-local`, plugin packages — shared & portable. No changes.
 
 **Tech stack:**
@@ -31,7 +33,7 @@ Web:
 **Wire protocol:**
 - REST for queries/mutations (JSON, simple shapes)
 - WebSocket for engine event stream (per-session subscription)
-- Wire types defined in `packages/server/src/wire/types.ts`. The web package imports from `@valet/server/wire` directly via the workspace.
+- Wire types defined in `packages/api/src/wire/types.ts`. The web package imports from `@valet/api/wire` directly via the workspace.
 
 **Out of scope:**
 - Real OAuth (GitHub/Google/Slack) — stub auth returns a single hardcoded local user.
@@ -48,7 +50,7 @@ Web:
 ## File structure
 
 ```
-packages/server/
+packages/api/
 ├── package.json
 ├── tsconfig.json
 ├── vitest.config.ts
@@ -117,7 +119,7 @@ The server comes first because it can be dogfooded standalone (curl + wscat). On
 
 ### Server tasks (#75–#80)
 
-**S1: Scaffold `packages/server`** — package.json with deps, tsconfig, vitest config, root tsconfig reference, vitest workspace entry. Hello-world route boots; pnpm install resolves clean.
+**S1: Scaffold `packages/api`** — package.json with deps, tsconfig, vitest config, root tsconfig reference, vitest workspace entry. Hello-world route boots; pnpm install resolves clean.
 
 **S2: Providers + EngineHost** — `buildProviders()` wires `SqliteSessionStore` (over better-sqlite3 with applied migrations), `DockerSandboxProvider`, `InMemoryEventBus`, `InMemoryCredentialStore`. `EngineHost` class caches one `Engine` per sessionId, restores from store on demand, destroys on session delete. SIGINT/SIGTERM hook destroys all live sandboxes (lesson from REPL).
 
@@ -131,7 +133,7 @@ The server comes first because it can be dogfooded standalone (curl + wscat). On
 
 ### Web tasks (#81–#88)
 
-**W1: Scaffold `packages/web`** — Vite + React 19 + Tailwind 3 + TanStack Router (file-based) + TanStack Query. Tailwind config with token CSS vars. Imports types from `@valet/server`. `pnpm dev` boots a hello-world page.
+**W1: Scaffold `packages/web`** — Vite + React 19 + Tailwind 3 + TanStack Router (file-based) + TanStack Query. Tailwind config with token CSS vars. Imports types from `@valet/api`. `pnpm dev` boots a hello-world page.
 
 **W2: Primitive layer + design tokens** — Tailwind theme: color scale (neutral, accent, danger, success), spacing scale, radius scale, font stack (sans, mono), font sizes. Build primitives over Radix: `Button`, `Input`, `Textarea`, `Label`, `Dialog`, `DropdownMenu`, `Select`, `Tooltip`, `Card`, `Avatar`, `Badge`, `Spinner`, `Separator`, `ScrollArea`. Each primitive has its own variant/size API; Radix is an implementation detail.
 
@@ -182,7 +184,7 @@ If a gate fails, fix here. Don't push past.
 
 6. **Anthropic API key.** Required at boot. Read from `ANTHROPIC_API_KEY` env var. Server fails fast with a clear message if missing.
 
-7. **Wire types as a workspace export.** `packages/server/package.json` should export a `./wire` subpath: `{ "exports": { "./wire": "./src/wire/types.ts" } }`. Web does `import type { ... } from '@valet/server/wire'`. No build step needed — Vite resolves source TS via Vite's TS support; the server consumes its own types directly.
+7. **Wire types as a workspace export.** `packages/api/package.json` should export a `./wire` subpath: `{ "exports": { "./wire": "./src/wire/types.ts" } }`. Web does `import type { ... } from '@valet/api/wire'`. No build step needed — Vite resolves source TS via Vite's TS support; the server consumes its own types directly.
 
 8. **Tailwind v3 over v4.** v4 just landed. Two greenfield projects + bleeding-edge Tailwind = too many moving parts. Pin v3.4.x. Migrate later when both projects are stable.
 
@@ -194,7 +196,7 @@ If a gate fails, fix here. Don't push past.
 
 ## Done criteria
 
-- [ ] `packages/server` boots, serves the agent-loop routes against a local sqlite + Docker.
+- [ ] `packages/api` boots, serves the agent-loop routes against a local sqlite + Docker.
 - [ ] Server passes the curl + wscat dogfood end-to-end (S6).
 - [ ] `packages/web` boots, renders the agent loop with intentional primitives.
 - [ ] Browser dogfood passes (W8): file written by Docker, content streamed back, container cleaned up.
