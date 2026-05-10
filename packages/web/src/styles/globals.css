@@ -1,0 +1,35 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    color-scheme: light;
+    --bg: theme(colors.neutral.50);
+    --fg: theme(colors.neutral.900);
+    --border: theme(colors.neutral.200);
+    --muted: theme(colors.neutral.500);
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      color-scheme: dark;
+      --bg: theme(colors.neutral.950);
+      --fg: theme(colors.neutral.50);
+      --border: theme(colors.neutral.800);
+      --muted: theme(colors.neutral.400);
+    }
+  }
+
+  html, body, #root {
+    height: 100%;
+  }
+
+  body {
+    @apply bg-[--bg] text-[--fg] font-sans antialiased;
+  }
+
+  *, *::before, *::after {
+    @apply border-[--border];
+  }
+}

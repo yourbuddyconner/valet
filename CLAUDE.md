@@ -11,10 +11,17 @@ Valet is a hosted background coding agent platform. Users interact with an AI co
 ```
 valet/
 ├── packages/
-│   ├── client/              # React SPA (Vite + TanStack Router + Query + Zustand)
-│   ├── worker/              # Cloudflare Worker (Hono + D1 + R2 + Durable Objects)
+│   ├── api/                 # Greenfield Node-first API (Hono + node-server + node-ws)
+│   │                        #   wired to @valet/engine + sandbox-docker + store-sqlite
+│   ├── web/                 # Greenfield client (Vite + React 19 + Tailwind 3 + Radix)
+│   ├── client/              # LEGACY React SPA — kept for prod CF deploy, frozen
+│   ├── worker/              # LEGACY Cloudflare Worker — kept for prod CF deploy, frozen
+│   ├── engine/              # @valet/engine — portable agent loop (pi-agent-core)
+│   ├── store-sqlite/        # SessionStore impl over better-sqlite3
+│   ├── sandbox-docker/      # Sandbox provider over Docker (long-running container, bind mount)
+│   ├── sandbox-local/       # Sandbox provider over the host fs/process
 │   ├── shared/              # Shared TypeScript types & errors
-│   ├── runner/              # Bun/TS runner for inside sandboxes
+│   ├── runner/              # Bun/TS runner for inside legacy sandboxes
 │   ├── sdk/                 # Integration & channel SDK contracts, MCP client, UI components
 │   ├── plugin-github/       # GitHub integration (actions: PRs, issues, webhooks)
 │   ├── plugin-slack/        # Slack (actions + channel adapter)
@@ -49,8 +56,12 @@ valet/
 
 | Layer | Tech | Key Files |
 |-------|------|-----------|
-| Frontend | React 19, Vite 6, TanStack Router/Query, Zustand, Tailwind, Radix UI | `packages/client/src/` |
-| Worker | Cloudflare Workers, Hono 4, D1 (SQLite via Drizzle ORM), R2, Durable Objects | `packages/worker/src/` |
+| **API (new)** | Hono 4, @hono/node-server, @hono/node-ws, Drizzle (better-sqlite3), pi-ai | `packages/api/src/` |
+| **Web (new)** | Vite 6, React 19, TanStack Router/Query, Tailwind 3, Radix UI, Zustand | `packages/web/src/` |
+| Frontend (legacy) | React 19, Vite 6, TanStack Router/Query, Zustand, Tailwind, Radix UI | `packages/client/src/` |
+| Worker (legacy) | Cloudflare Workers, Hono 4, D1 (SQLite via Drizzle ORM), R2, Durable Objects | `packages/worker/src/` |
+| Engine | @mariozechner/pi-agent-core, TypeBox plugin schemas | `packages/engine/src/` |
+| Sandbox-docker | dockerode, long-running container, bind-mounted workspace | `packages/sandbox-docker/src/` |
 | Shared | TypeScript types, error classes, scope keys | `packages/shared/src/` |
 | SDK | Integration contracts, channel contracts, MCP client/OAuth, UI components | `packages/sdk/src/` |
 | Runner | Bun, TypeScript, `@opencode-ai/sdk`, Hono gateway | `packages/runner/src/` |
@@ -101,13 +112,21 @@ These are decided and locked in. Do not revisit:
 # Install dependencies
 pnpm install
 
-# Run locally (3 terminals or use Makefile)
+# Greenfield agent-loop stack (Node API + new web client)
+make dev-local          # @valet/api on :8788 + @valet/web on :5173
+                        # Requires ANTHROPIC_API_KEY + Docker daemon.
+                        # Open http://localhost:5173
+
+# Legacy stack (Cloudflare Worker + old client)
 make dev-worker         # Cloudflare Worker on :8787
 make dev-opencode       # OpenCode container on :4096
-cd packages/client && pnpm dev  # Frontend on :5173
+cd packages/client && pnpm dev  # Legacy frontend on :5173 (conflicts with web!)
 
-# Or all at once:
+# Or all at once (legacy):
 make dev-all
+
+# Dogfood the new API end-to-end (real Anthropic + Docker round-trip)
+make dogfood-api
 
 # Database
 make db-migrate         # Run D1 migrations locally
