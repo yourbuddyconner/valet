@@ -249,6 +249,22 @@ export interface ToolContext {
   signal: AbortSignal;
   threadRead: (key: string, opts?: MessageQuery) => Promise<SessionEntry[]>;
   /**
+   * List all sibling threads in this session (including the caller's own
+   * thread). Useful for orchestrator-style agents that want to discover
+   * which keys exist before calling `threadRead`.
+   */
+  listThreads: () => Promise<
+    Array<{
+      id: string;
+      key: string;
+      status: ThreadStatus;
+      model?: string;
+      summary?: string;
+      createdAt: number;
+      updatedAt: number;
+    }>
+  >;
+  /**
    * Switch the active model for *this thread*. Resolves the id, persists,
    * emits `model_switched`. Takes effect on the next turn — the in-flight
    * tool call finishes against the old model. Throws on unresolvable ids.

@@ -99,6 +99,28 @@ export const threadReadTool = defineTool({
   },
 });
 
+export const listThreadsTool = defineTool({
+  name: "list_threads",
+  description:
+    "List sibling threads in this session, including paused ones. Use this " +
+    "to discover thread keys before calling `thread_read`. Returns key, " +
+    "status, model override (if any), and a short summary when available.",
+  parameters: Type.Object({}),
+  execute: async (_args, ctx) => {
+    const threads = await ctx.listThreads();
+    if (threads.length === 0) return { text: "(no threads)" };
+    const lines: string[] = [`# threads (${threads.length})`];
+    for (const t of threads) {
+      const isSelf = t.id === ctx.threadId ? " (this thread)" : "";
+      const model = t.model ? ` [model:${t.model}]` : "";
+      const updated = new Date(t.updatedAt).toISOString();
+      lines.push(`- \`${t.key}\` — ${t.status}${model}${isSelf} (updated ${updated})`);
+      if (t.summary) lines.push(`    ${t.summary}`);
+    }
+    return { text: lines.join("\n") };
+  },
+});
+
 export const switchModelTool = defineTool({
   name: "switch_model",
   description:
@@ -138,5 +160,6 @@ export const builtinTools: ToolDef[] = [
   editTool,
   bashTool,
   threadReadTool,
+  listThreadsTool,
   switchModelTool,
 ];

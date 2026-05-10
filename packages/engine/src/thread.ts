@@ -1054,6 +1054,20 @@ export class Thread {
         if (!sibling) return [];
         return sibling.readEntries(opts);
       },
+      listThreads: async () => {
+        // Pull from the store so paused/archived threads not currently
+        // hydrated in memory still surface.
+        const datas = await session.providers.store.listThreads(session.id);
+        return datas.map((d) => ({
+          id: d.id,
+          key: d.key,
+          status: d.status,
+          model: d.model,
+          summary: d.summary,
+          createdAt: d.createdAt,
+          updatedAt: d.updatedAt,
+        }));
+      },
       setModel: async ({ model }) => {
         // Intentionally thread-scoped only — see ToolContext.setModel docs.
         // The session default is a user-facing setting; agents shouldn't
