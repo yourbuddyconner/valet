@@ -154,9 +154,23 @@ export function busEventToWire(ev: BusEvent): WireEventDraft[] {
         },
       ];
 
+    case "model_switched":
+      return [
+        {
+          type: "model_switched",
+          // Engine may emit threadId as an empty string for session-scope
+          // switches; normalize to undefined so the client can detect
+          // "session vs thread scope" cleanly.
+          threadId: e.threadId || undefined,
+          fromModel: e.fromModel,
+          toModel: e.toModel,
+          reason: e.reason,
+        },
+      ];
+
     // Out of agent-loop v1 scope — silently dropped. Adding any of these to
     // the wire is a future plan: decision gates, compaction events,
-    // child-task events, model switches, queue state, thread lifecycle.
+    // child-task events, queue state, thread lifecycle.
     case "thread_start":
     case "queue_state":
     case "compaction_start":
@@ -167,7 +181,6 @@ export function busEventToWire(ev: BusEvent): WireEventDraft[] {
     case "decision_gate_resolved":
     case "decision_gate_expired":
     case "decision_gate_withdrawn":
-    case "model_switched":
       return [];
   }
 }

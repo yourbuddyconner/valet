@@ -61,9 +61,57 @@ describe("busEventToWire", () => {
     expect(out).toEqual([{ type: "turn_end", threadId: "t1", reason: "end_turn" }]);
   });
 
-  it("drops out-of-scope event types (decision_gate, compaction, model_switched, ...)", () => {
+  it("drops out-of-scope event types (decision_gate, compaction, ...)", () => {
     expect(busEventToWire(ev({ type: "thread_start", threadId: "t1" }))).toEqual([]);
     expect(busEventToWire(ev({ type: "compaction_start", threadId: "t1" }))).toEqual([]);
-    expect(busEventToWire(ev({ type: "model_switched", threadId: "t1", fromModel: "a", toModel: "b", reason: "x" }))).toEqual([]);
+  });
+
+  it("forwards model_switched (thread scope) with threadId preserved", () => {
+    const out = busEventToWire(
+      ev({
+        type: "model_switched",
+        threadId: "t1",
+        fromModel: "claude-haiku-4-5",
+        toModel: "claude-opus-4-7",
+        reason: "tool:switch_model",
+      }),
+    );
+    expect(out).toEqual([
+      {
+        type: "model_switched",
+        threadId: "t1",
+        fromModel: "claude-haiku-4-5",
+        toModel: "claude-opus-4-7",
+        reason: "tool:switch_model",
+      },
+    ]);
+  });
+
+  it("forwards model_switched (session scope) with threadId normalized to undefined", () => {
+    // Session.setModel emits with an empty threadId to signal session
+    // scope; the bridge normalizes it so clients can distinguish from a
+    // thread-level switch by checking threadId presence.
+    const out = busEventToWire({
+      sessionId: "s1",
+      threadId: undefined,
+      userId: "u1",
+      timestamp: 100,
+      event: {
+        type: "model_switched",
+        threadId: "" as unknown as string,
+        fromModel: "claude-haiku-4-5",
+        toModel: "claude-opus-4-7",
+        reason: "set_via_api",
+      },
+    });
+    expect(out).toEqual([
+      {
+        type: "model_switched",
+        threadId: undefined,
+        fromModel: "claude-haiku-4-5",
+        toModel: "claude-opus-4-7",
+        reason: "set_via_api",
+      },
+    ]);
   });
 });

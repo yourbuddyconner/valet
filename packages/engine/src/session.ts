@@ -1,4 +1,4 @@
-import { Thread } from "./thread.js";
+import { Thread, resolveModelId as resolveSessionModel } from "./thread.js";
 import { builtinTools } from "./builtin-tools/index.js";
 import type {
   CreateSessionOptions,
@@ -228,9 +228,41 @@ export class Session {
       purpose: this.options.purpose ?? "interactive",
       status: "running",
       sandboxId: this.sandbox.id,
+      model: this.options.model.id,
       createdAt: Date.now(),
       updatedAt: Date.now(),
     };
+  }
+
+  /**
+   * Set this session's default model. Threads without their own override
+   * pick this up on their next turn. Persists via `store.saveSession` and
+   * emits `model_switched` (threadId omitted to indicate session scope).
+   *
+   * Pass a model id like "claude-opus-4-7" or "anthropic/claude-haiku-4-5".
+   * Throws if the id can't be resolved.
+   */
+  async setModel(
+    modelId: string,
+    reason: string = "set_via_api",
+  ): Promise<{ fromModel: string; toModel: string }> {
+    const before = this.options.model.id;
+    const next = resolveSessionModel(modelId);
+    if (!next) throw new Error(`unknown model id: ${modelId}`);
+    this.options.model = next;
+    await this.providers.store.saveSession(await this.toData());
+    if (before !== next.id) {
+      await this.emit({
+        type: "model_switched",
+        // session scope — no threadId. Bridge / wire types treat the
+        // missing threadId as "session-level switch".
+        threadId: undefined as unknown as string,
+        fromModel: before,
+        toModel: next.id,
+        reason,
+      });
+    }
+    return { fromModel: before, toModel: next.id };
   }
 
   async emit(event: EngineEvent): Promise<void> {

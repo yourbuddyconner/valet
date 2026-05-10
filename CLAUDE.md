@@ -52,6 +52,15 @@ That's almost certainly a shape mismatch, *not* a persistence-failure. The data 
 - **Optimistic UI messages must carry the active `threadId`.** Tagging them `null` and fall-back-matching in the filter caused user bubbles to leak across threads.
 - **Tool renderers (`packages/web/src/components/session/tool-renderers/`) are a registry**. The fallback handles unknown plugin tools. Adding a hand-tuned renderer for a new tool means dropping a `ToolRenderer` into that directory and listing it before the fallback in `index.ts`. The shell, status semantics, scanner animation, and category color are inherited from `ToolShell`.
 
+### Pre-1.0: edit migrations in place, don't add new ones
+
+We are NOT in production. There is no real data to preserve. When you change an engine or app schema:
+
+- **Edit `packages/store-sqlite/migrations/sqlite/0000_lonely_lizard.sql`** (and the corresponding `packages/api/migrations/00*.sql` for app-side tables) directly to add the new columns. Update the matching Drizzle table in `packages/store-sqlite/src/schema.ts` or `packages/api/src/schema/index.ts` so codegen agrees.
+- **Do NOT add `0001_…sql`, `0002_…sql`, etc.** Each one becomes a separate `ALTER TABLE` migration that we'll have to maintain forever. Until the first release, the right move is one clean `0000` that reflects the current schema.
+- After editing, blow away the local sqlite file (`rm ~/.valet/app.db`) and let it recreate on the next boot. There is a one-time backfill in `applyAppMigrations` / `applyEngineMigrations` that marks 0000 as already applied if the schema tables exist — that backfill is for upgrading dev DBs across the *initial* tracker introduction, not for accumulating real migrations.
+- Once we ship 1.0 and have user data on disk, this rule flips: every schema change becomes a new numbered migration, no edits to past ones.
+
 ---
 
 ## What This Project Is

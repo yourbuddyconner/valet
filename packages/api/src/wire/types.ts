@@ -45,6 +45,8 @@ export interface SessionSummary {
 
 export interface SessionDetail extends SessionSummary {
   messageCount: number;
+  /** Session-default model id. Threads inherit when they have no override. */
+  model?: string;
 }
 
 export interface CreateSessionRequest {
@@ -68,6 +70,8 @@ export interface ThreadSummary {
   sessionId: string;
   title?: string;
   createdAt: number;
+  /** Thread-level model override. Falls back to the session default when undefined. */
+  model?: string;
 }
 
 export interface ListThreadsResponse {
@@ -80,6 +84,26 @@ export interface CreateThreadRequest {
 }
 
 export type CreateThreadResponse = ThreadSummary;
+
+/**
+ * Patch a thread's settings. Currently only `model` is mutable; pass
+ * `null` to clear the override and fall back to the session default.
+ */
+export interface PatchThreadRequest {
+  model?: string | null;
+}
+
+export type PatchThreadResponse = ThreadSummary;
+
+/**
+ * Patch a session's settings. Currently only `model` is mutable; this is
+ * the session default that threads inherit when they have no override.
+ */
+export interface PatchSessionRequest {
+  model?: string;
+}
+
+export type PatchSessionResponse = SessionDetail;
 
 // ── REST: messages ────────────────────────────────────────────────────────
 
@@ -207,6 +231,16 @@ export type WireEvent =
       code: string;
       message: string;
       recoverable: boolean;
+    }
+  | {
+      seq: number;
+      ts: number;
+      type: "model_switched";
+      /** Present when scope === thread; absent for session-level switches. */
+      threadId?: string;
+      fromModel: string;
+      toModel: string;
+      reason: string;
     }
   | { seq: number; ts: number; type: "ping" };
 

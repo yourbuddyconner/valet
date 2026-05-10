@@ -70,8 +70,9 @@ function threadToSummary(
   createdAt: number,
   sessionId: string,
   title?: string,
+  model?: string,
 ): ThreadSummary {
-  return { id: threadId, sessionId, title, createdAt };
+  return { id: threadId, sessionId, title, createdAt, model };
 }
 
 async function loadEngineSession(
@@ -96,10 +97,53 @@ messagesRouter.get("/:id/threads", async (c) => {
   await engineSession.ensureDefaultThread();
   const threads = engineSession.listThreads();
   const summaries = threads.map((t) =>
-    threadToSummary(t.id, t.toThreadData().createdAt, session.id),
+    threadToSummary(
+      t.id,
+      t.toThreadData().createdAt,
+      session.id,
+      undefined,
+      t.modelId(),
+    ),
   );
   const body: ListThreadsResponse = { threads: summaries };
   return c.json(body);
+});
+
+messagesRouter.patch("/:id/threads/:threadId", async (c) => {
+  const result = await loadEngineSession(c);
+  if ("error" in result) return result.error;
+  const { session, engineSession } = result;
+
+  const threadId = c.req.param("threadId");
+  const thread = engineSession.threadById(threadId);
+  if (!thread) return c.json({ error: "thread not found" }, 404);
+
+  let body: { model?: string | null };
+  try {
+    body = (await c.req.json()) as { model?: string | null };
+  } catch {
+    return c.json({ error: "invalid JSON body" }, 400);
+  }
+  if (body.model === undefined) {
+    return c.json({ error: "model is required (use null to clear)" }, 400);
+  }
+
+  try {
+    await thread.setModel(
+      typeof body.model === "string" ? body.model : null,
+    );
+  } catch (err) {
+    return c.json({ error: (err as Error).message }, 400);
+  }
+
+  const summary = threadToSummary(
+    thread.id,
+    thread.toThreadData().createdAt,
+    session.id,
+    undefined,
+    thread.modelId(),
+  );
+  return c.json(summary);
 });
 
 messagesRouter.post("/:id/threads", async (c) => {
@@ -125,6 +169,7 @@ messagesRouter.post("/:id/threads", async (c) => {
     thread.toThreadData().createdAt,
     session.id,
     body.title,
+    thread.modelId(),
   );
   return c.json(summary, 201);
 });

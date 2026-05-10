@@ -95,6 +95,7 @@ CREATE TABLE `engine_sessions` (
 	`sandbox_id` text,
 	`snapshot_id` text,
 	`parent_session_id` text,
+	`model` text,
 	`metadata` text,
 	`created_at` integer NOT NULL,
 	`updated_at` integer NOT NULL

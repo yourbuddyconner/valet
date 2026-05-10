@@ -12,6 +12,9 @@ export const engineSessions = sqliteTable(
     sandboxId: text("sandbox_id"),
     snapshotId: text("snapshot_id"),
     parentSessionId: text("parent_session_id"),
+    /** Persisted session-default model id (e.g. "claude-haiku-4-5"). Null
+     *  means "use the host's global default". Mutated via Session.setModel. */
+    model: text("model"),
     metadata: text("metadata"),
     createdAt: integer("created_at").notNull(),
     updatedAt: integer("updated_at").notNull(),

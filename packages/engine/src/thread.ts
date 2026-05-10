@@ -113,13 +113,27 @@ export class Thread {
    * still exceeds usable on a small-context model).
    */
   private skipNextProactiveCheck = false;
+  /**
+   * Per-thread model override (id string, e.g. "claude-opus-4-7"). When set,
+   * overlays the session-default at turn start and is restored after.
+   * Persisted via toThreadData → store.saveThread.
+   */
+  private modelOverride?: string;
+  private readonly threadCreatedAt: number;
 
   constructor(session: Session, data: ThreadData) {
     this.session = session;
     this.id = data.id;
     this.key = data.key;
     this.mode = data.queueMode;
+    this.modelOverride = data.model;
+    this.threadCreatedAt = data.createdAt || Date.now();
     this.agent = this.buildAgent();
+  }
+
+  /** Currently configured model id for this thread (or undefined to use session default). */
+  modelId(): string | undefined {
+    return this.modelOverride;
   }
 
   // ── public API ──────────────────────────────────────────────────
@@ -446,11 +460,61 @@ export class Thread {
       status: this.status === "paused" ? "paused" : "active",
       activeLeafEntryId: undefined,
       queueMode: this.mode,
-      model: undefined,
+      model: this.modelOverride,
       summary: undefined,
-      createdAt: 0,
+      createdAt: this.threadCreatedAt,
       updatedAt: Date.now(),
     };
+  }
+
+  /**
+   * Set or clear this thread's model override. New value takes effect on
+   * the *next* LLM call (in-flight turns finish on their existing model).
+   * Pass `null` to clear and fall back to the session default.
+   *
+   * Persists via `store.saveThread` and emits a `model_switched` engine
+   * event so the wire / UI can react.
+   */
+  async setModel(
+    modelId: string | null,
+    reason: string = "set_via_api",
+  ): Promise<{ fromModel: string; toModel: string }> {
+    const sessionDefault = this.session.options.model.id;
+    const before = this.modelOverride ?? sessionDefault;
+    if (modelId === null) {
+      this.modelOverride = undefined;
+    } else {
+      // Resolve before assigning so an unknown id is rejected and the
+      // thread keeps its previous setting.
+      const resolved = resolveModelId(modelId);
+      if (!resolved) {
+        throw new Error(`unknown model id: ${modelId}`);
+      }
+      this.modelOverride = modelId;
+    }
+    await this.session.providers.store.saveThread(this.session.id, this.toThreadData());
+    const after = this.modelOverride ?? sessionDefault;
+    if (before !== after) {
+      await this.session.emit({
+        type: "model_switched",
+        threadId: this.id,
+        fromModel: before,
+        toModel: after,
+        reason,
+      });
+    }
+    return { fromModel: before, toModel: after };
+  }
+
+  /** Layered resolution: thread override → session default. Returns the
+   *  live pi-ai Model to use for the next LLM call. */
+  resolveTurnModel(): PiModel {
+    if (this.modelOverride) {
+      const m = resolveModelId(this.modelOverride);
+      if (m) return m;
+      // Stored override no longer resolvable; fall back to session default.
+    }
+    return this.session.options.model;
   }
 
   async readEntries(opts?: MessageQuery): Promise<SessionEntry[]> {
@@ -566,6 +630,16 @@ export class Thread {
     // Build the AgentTool list with closures over this turn's ToolContext.
     this.agent.state.tools = this.buildTools();
 
+    // Layered model resolution: thread override → session default.
+    // applied BEFORE role overlay so a role's model frontmatter still wins
+    // for that one turn. Captured here so we restore the right baseline,
+    // not whatever the role overlaid.
+    const baselineModel = this.agent.state.model;
+    const turnModel = this.resolveTurnModel();
+    if (turnModel !== baselineModel) {
+      this.agent.state.model = turnModel;
+    }
+
     // Apply role overlay (system-prompt overlay + optional model override) for
     // this one turn. Restored unconditionally in finally.
     const roleOverlay = this.applyRoleForTurn(item);
@@ -591,6 +665,10 @@ export class Thread {
       }
     } finally {
       this.restoreRoleAfterTurn(roleOverlay);
+      // Restore the agent's baseline model so the next turn picks up any
+      // mutation we made via setModel. We compute the override fresh on
+      // each turn anyway, but keeping state tidy avoids surprises.
+      this.agent.state.model = baselineModel;
     }
   }
 
@@ -976,6 +1054,14 @@ export class Thread {
         if (!sibling) return [];
         return sibling.readEntries(opts);
       },
+      setModel: async ({ model, scope = "thread" }) => {
+        if (scope === "session") {
+          const r = await session.setModel(model, `tool:${toolName}`);
+          return { ...r, scope: "session" as const };
+        }
+        const r = await this.setModel(model, `tool:${toolName}`);
+        return { ...r, scope: "thread" as const };
+      },
     };
   }
 
@@ -1207,21 +1293,22 @@ interface RoleOverlay {
 }
 
 /**
- * Resolve a role's `model` frontmatter value to a pi-ai Model instance.
- * Supports `provider/model` form (e.g. "anthropic/claude-haiku-4-5") and
- * bare model ids that exist under any registered provider. Returns
- * undefined when the id can't be resolved — caller emits a warning rather
- * than failing the turn.
+ * Resolve a model id (or `provider/model`) to a pi-ai Model instance.
+ *
+ * - `provider/model` form (e.g. "anthropic/claude-haiku-4-5") — used as-is.
+ * - Bare ids — tried under a small set of common providers (anthropic
+ *   first since the engine is anthropic-default).
+ *
+ * Returns undefined when nothing matches. Callers that need to fail hard
+ * (e.g. user-driven setModel) should throw on undefined.
  */
-function resolveRoleModel(spec: string): PiModel | undefined {
+export function resolveModelId(spec: string): PiModel | undefined {
   const slash = spec.indexOf("/");
   if (slash > 0) {
     const provider = spec.slice(0, slash);
     const modelId = spec.slice(slash + 1);
     return getModel(provider as never, modelId as never);
   }
-  // Bare ids: try anthropic first, then a small set of common providers.
-  // Plugins that use other providers should set provider/model explicitly.
   const tryProviders = ["anthropic", "openai", "google"] as const;
   for (const p of tryProviders) {
     const m = getModel(p, spec as never);
@@ -1229,6 +1316,9 @@ function resolveRoleModel(spec: string): PiModel | undefined {
   }
   return undefined;
 }
+
+// Back-compat alias used by applyRoleForTurn in this file.
+const resolveRoleModel = resolveModelId;
 
 function findMostRecentCompaction(
   entries: readonly SessionEntry[],

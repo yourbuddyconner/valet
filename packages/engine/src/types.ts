@@ -38,6 +38,13 @@ export interface SessionData {
   sandboxId?: string;
   snapshotId?: string;
   parentSessionId?: string;
+  /**
+   * Persisted session-default model id (e.g. "claude-haiku-4-5" or
+   * "anthropic/claude-opus-4-7"). Layered resolution at turn time:
+   * `thread.model ?? session.model ?? hostDefault`. Mutated by
+   * `Session.setModel`; resolved to a live `Model<any>` on each turn.
+   */
+  model?: string;
   metadata?: Record<string, unknown>;
   createdAt: number;
   updatedAt: number;
@@ -241,6 +248,18 @@ export interface ToolContext {
   suspendedDecision?: { gateId: string; resolution?: DecisionResolution };
   signal: AbortSignal;
   threadRead: (key: string, opts?: MessageQuery) => Promise<SessionEntry[]>;
+  /**
+   * Switch the active model for this thread (default) or the whole session.
+   * Resolves the id, updates state, persists, and emits `model_switched`.
+   * The new model takes effect on the *next* LLM call within the agent
+   * loop — the in-flight tool call finishes against the old model. Throws
+   * if the id can't be resolved.
+   */
+  setModel: (args: { model: string; scope?: "thread" | "session" }) => Promise<{
+    fromModel: string;
+    toModel: string;
+    scope: "thread" | "session";
+  }>;
 }
 
 // ── Credentials ────────────────────────────────────────────────────

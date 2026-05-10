@@ -134,9 +134,72 @@ sessionsRouter.get("/:id", async (c) => {
     .where(eq(messagesTable.sessionId, id))
     .all();
 
+  // Surface the engine's session-default model. This is best-effort: if
+  // the engine session hasn't been materialized yet we just omit the
+  // field rather than spinning up a sandbox to read it.
+  const { engineHost } = c.var.providers;
+  let model: string | undefined;
+  if (engineHost.isLive(id)) {
+    const engineSession = await engineHost.sessionFor(id, {
+      userId: row.userId,
+      orgId: row.orgId,
+      workspace: row.workspace,
+    });
+    model = engineSession.options.model.id;
+  }
+
   const detail: GetSessionResponse = {
     ...rowToSummary(row),
     messageCount: Number(n ?? 0),
+    model,
+  };
+  return c.json(detail);
+});
+
+// ── Patch (currently only `model`) ────────────────────────────────────────
+
+sessionsRouter.patch("/:id", async (c) => {
+  const { db, engineHost } = c.var.providers;
+  const id = c.req.param("id");
+  const userId = c.var.user.id;
+
+  const row = await db
+    .select()
+    .from(agentSessions)
+    .where(and(eq(agentSessions.id, id), eq(agentSessions.userId, userId)))
+    .get();
+  if (!row) return c.json({ error: "session not found" }, 404);
+
+  let body: { model?: string };
+  try {
+    body = (await c.req.json()) as { model?: string };
+  } catch {
+    return c.json({ error: "invalid JSON body" }, 400);
+  }
+  if (!body.model || typeof body.model !== "string") {
+    return c.json({ error: "model is required" }, 400);
+  }
+
+  const engineSession = await engineHost.sessionFor(id, {
+    userId: row.userId,
+    orgId: row.orgId,
+    workspace: row.workspace,
+  });
+  try {
+    await engineSession.setModel(body.model);
+  } catch (err) {
+    return c.json({ error: (err as Error).message }, 400);
+  }
+
+  const [{ n }] = await db
+    .select({ n: count() })
+    .from(messagesTable)
+    .where(eq(messagesTable.sessionId, id))
+    .all();
+  const detail: GetSessionResponse = {
+    ...rowToSummary(row),
+    messageCount: Number(n ?? 0),
+    model: engineSession.options.model.id,
   };
   return c.json(detail);
 });
