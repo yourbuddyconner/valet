@@ -24,7 +24,8 @@
     "lucide-react": "^0.460.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
-    "tailwind-merge": "^2.5.4"
+    "tailwind-merge": "^2.5.4",
+    "zustand": "^5.0.0"
   },
   "devDependencies": {
     "@tanstack/router-plugin": "^1.151.0",
