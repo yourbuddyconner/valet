@@ -1,21 +1,24 @@
 /**
- * Messages routes — the agent loop entry points.
+ * Messages + threads routes — the agent loop entry points.
  *
- * v1 scope: each session has a single implicit thread (the engine's
- * `web:default`). Multi-thread is a future enhancement; the wire shape
- * already carries `threadId` so adding more threads later doesn't break the
- * client.
+ * Each session has a default engine thread (`web:default`); the user can
+ * create additional threads via POST /threads. Subsequent calls to
+ * /messages can target any thread by id (defaults to the default thread
+ * when omitted, so single-thread clients keep working).
  *
- *   GET  /api/sessions/:id/messages  → list messages on the default thread
- *   POST /api/sessions/:id/messages  → send prompt; engine streams via WS
- *   GET  /api/sessions/:id/threads   → returns the default thread (single-row)
+ *   GET  /api/sessions/:id/threads   → all threads for the session
+ *   POST /api/sessions/:id/threads   → create a new engine thread
+ *   GET  /api/sessions/:id/messages  → list messages (?threadId=…)
+ *   POST /api/sessions/:id/messages  → send prompt (body.threadId optional)
  */
 import { Hono, type Context } from "hono";
 import { and, eq } from "drizzle-orm";
-import type { SessionEntry } from "@valet/engine";
+import type { SessionEntry, Session as EngineSession } from "@valet/engine";
 import type { AppEnv } from "../env.js";
 import { agentSessions } from "../schema/index.js";
 import type {
+  CreateThreadRequest,
+  CreateThreadResponse,
   ListMessagesResponse,
   ListThreadsResponse,
   Message,
@@ -62,42 +65,95 @@ function entryToMessage(e: SessionEntry, sessionId: string, threadId: string): M
 
 // ── Threads ───────────────────────────────────────────────────────────────
 
-messagesRouter.get("/:id/threads", async (c) => {
-  const session = await loadOwnedSession(c);
-  if (!session) return c.json({ error: "session not found" }, 404);
+function threadToSummary(
+  threadId: string,
+  createdAt: number,
+  sessionId: string,
+  title?: string,
+): ThreadSummary {
+  return { id: threadId, sessionId, title, createdAt };
+}
 
-  // Materialize the engine's default thread so we can return its real id.
+async function loadEngineSession(
+  c: Context<AppEnv>,
+): Promise<{ session: typeof agentSessions.$inferSelect; engineSession: EngineSession } | { error: Response }> {
+  const session = await loadOwnedSession(c);
+  if (!session) return { error: c.json({ error: "session not found" }, 404) };
   const { engineHost } = c.var.providers;
   const engineSession = await engineHost.sessionFor(session.id, {
     userId: session.userId,
     orgId: session.orgId,
     workspace: session.workspace,
   });
-  const thread = await engineSession.ensureDefaultThread();
+  return { session, engineSession };
+}
 
-  const summary: ThreadSummary = {
-    id: thread.id,
-    sessionId: session.id,
-    title: undefined,
-    createdAt: session.createdAt,
-  };
-  const body: ListThreadsResponse = { threads: [summary] };
+messagesRouter.get("/:id/threads", async (c) => {
+  const result = await loadEngineSession(c);
+  if ("error" in result) return result.error;
+  const { session, engineSession } = result;
+
+  await engineSession.ensureDefaultThread();
+  const threads = engineSession.listThreads();
+  const summaries = threads.map((t) =>
+    threadToSummary(t.id, t.toThreadData().createdAt, session.id),
+  );
+  const body: ListThreadsResponse = { threads: summaries };
   return c.json(body);
 });
+
+messagesRouter.post("/:id/threads", async (c) => {
+  const result = await loadEngineSession(c);
+  if ("error" in result) return result.error;
+  const { session, engineSession } = result;
+
+  let body: CreateThreadRequest = {};
+  try {
+    const text = await c.req.text();
+    body = text ? (JSON.parse(text) as CreateThreadRequest) : {};
+  } catch {
+    return c.json({ error: "invalid JSON body" }, 400);
+  }
+
+  // Engine identifies threads by `key`; we generate a fresh one so each
+  // POST creates a new thread (calling thread() with an existing key
+  // returns the cached one).
+  const key = `web:${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  const thread = engineSession.thread(key);
+  const summary: CreateThreadResponse = threadToSummary(
+    thread.id,
+    thread.toThreadData().createdAt,
+    session.id,
+    body.title,
+  );
+  return c.json(summary, 201);
+});
+
+/**
+ * Resolve the target thread from a `?threadId=` query param or body field.
+ * Returns either the matching engine Thread, or the session's default thread
+ * when no id was supplied. Returns null if a specific id was given but no
+ * thread matches — caller should 404.
+ */
+function resolveThread(
+  engineSession: EngineSession,
+  threadId: string | undefined,
+) {
+  if (!threadId) return engineSession.thread();
+  return engineSession.threadById(threadId);
+}
 
 // ── Messages: list ────────────────────────────────────────────────────────
 
 messagesRouter.get("/:id/messages", async (c) => {
-  const session = await loadOwnedSession(c);
-  if (!session) return c.json({ error: "session not found" }, 404);
+  const result = await loadEngineSession(c);
+  if ("error" in result) return result.error;
+  const { session, engineSession } = result;
 
-  const { engineHost } = c.var.providers;
-  const engineSession = await engineHost.sessionFor(session.id, {
-    userId: session.userId,
-    orgId: session.orgId,
-    workspace: session.workspace,
-  });
-  const thread = await engineSession.ensureDefaultThread();
+  await engineSession.ensureDefaultThread();
+  const requested = c.req.query("threadId") || undefined;
+  const thread = resolveThread(engineSession, requested);
+  if (!thread) return c.json({ error: "thread not found" }, 404);
 
   const limit = Number.parseInt(c.req.query("limit") ?? "100", 10);
   const cursor = c.req.query("cursor") ?? undefined;
@@ -118,8 +174,10 @@ messagesRouter.get("/:id/messages", async (c) => {
 // ── Messages: send prompt ─────────────────────────────────────────────────
 
 messagesRouter.post("/:id/messages", async (c) => {
-  const session = await loadOwnedSession(c);
-  if (!session) return c.json({ error: "session not found" }, 404);
+  const result = await loadEngineSession(c);
+  if ("error" in result) return result.error;
+  const { session, engineSession } = result;
+  const { db } = c.var.providers;
 
   let body: SendPromptRequest;
   try {
@@ -131,15 +189,11 @@ messagesRouter.post("/:id/messages", async (c) => {
     return c.json({ error: "text is required" }, 400);
   }
 
-  const { engineHost, db } = c.var.providers;
-  const engineSession = await engineHost.sessionFor(session.id, {
-    userId: session.userId,
-    orgId: session.orgId,
-    workspace: session.workspace,
-  });
-  const thread = engineSession.thread(); // default thread
+  await engineSession.ensureDefaultThread();
+  const thread = resolveThread(engineSession, body.threadId);
+  if (!thread) return c.json({ error: "thread not found" }, 404);
 
-  const receipt = await engineSession.prompt(body.text);
+  const receipt = await thread.submitPrompt(body.text, {});
 
   // Touch the session row so list ordering reflects recency.
   await db

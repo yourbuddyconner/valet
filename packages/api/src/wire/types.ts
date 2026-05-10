@@ -74,6 +74,11 @@ export interface ListThreadsResponse {
   threads: ThreadSummary[];
 }
 
+export interface CreateThreadRequest {
+  /** Optional title — not currently persisted by the engine; reserved. */
+  title?: string;
+}
+
 export type CreateThreadResponse = ThreadSummary;
 
 // ── REST: messages ────────────────────────────────────────────────────────
@@ -116,6 +121,8 @@ export interface ListMessagesResponse {
 
 export interface SendPromptRequest {
   text: string;
+  /** Target thread id. If omitted, server uses the session's default thread. */
+  threadId?: string;
 }
 
 export interface SendPromptResponse {

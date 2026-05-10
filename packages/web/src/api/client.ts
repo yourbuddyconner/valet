@@ -9,6 +9,8 @@
 import type {
   CreateSessionRequest,
   CreateSessionResponse,
+  CreateThreadRequest,
+  CreateThreadResponse,
   GetSessionResponse,
   ListMessagesResponse,
   ListSessionsResponse,
@@ -59,10 +61,16 @@ export const api = {
   // threads + messages (session-scoped)
   listThreads: (sessionId: string) =>
     request<ListThreadsResponse>("GET", `/sessions/${sessionId}/threads`),
-  listMessages: (sessionId: string, opts?: { limit?: number; cursor?: string }) => {
+  createThread: (sessionId: string, body: CreateThreadRequest = {}) =>
+    request<CreateThreadResponse>("POST", `/sessions/${sessionId}/threads`, body),
+  listMessages: (
+    sessionId: string,
+    opts?: { limit?: number; cursor?: string; threadId?: string },
+  ) => {
     const qs = new URLSearchParams();
     if (opts?.limit) qs.set("limit", String(opts.limit));
     if (opts?.cursor) qs.set("cursor", opts.cursor);
+    if (opts?.threadId) qs.set("threadId", opts.threadId);
     const tail = qs.toString() ? `?${qs}` : "";
     return request<ListMessagesResponse>("GET", `/sessions/${sessionId}/messages${tail}`);
   },

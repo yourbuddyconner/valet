@@ -4,7 +4,16 @@ import { Button, Textarea } from "~/components/primitives";
 import { useSendPrompt } from "~/api/queries";
 import { useStreamStore, type AgentStatus } from "~/stores/stream";
 
-export function Composer({ sessionId, agentStatus }: { sessionId: string; agentStatus: AgentStatus }) {
+export function Composer({
+  sessionId,
+  threadId,
+  agentStatus,
+}: {
+  sessionId: string;
+  /** Active thread; if undefined, server uses the session's default. */
+  threadId?: string;
+  agentStatus: AgentStatus;
+}) {
   const [text, setText] = useState("");
   const send = useSendPrompt(sessionId);
   const addUserMessage = useStreamStore((s) => s.addUserMessage);
@@ -23,7 +32,7 @@ export function Composer({ sessionId, agentStatus }: { sessionId: string; agentS
     // the server's persisted copy.
     addUserMessage(sessionId, t);
     try {
-      await send.mutateAsync(t);
+      await send.mutateAsync({ text: t, threadId });
     } catch (err) {
       // Restore the draft on failure so the user can retry. The optimistic
       // message stays visible — they can see what they sent + retry; on the

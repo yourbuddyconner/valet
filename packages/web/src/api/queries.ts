@@ -13,6 +13,8 @@ import {
 import type {
   CreateSessionRequest,
   CreateSessionResponse,
+  CreateThreadRequest,
+  CreateThreadResponse,
   GetSessionResponse,
   ListMessagesResponse,
   ListSessionsResponse,
@@ -28,7 +30,10 @@ export const qk = {
   sessions: () => ["sessions"] as const,
   session: (id: string) => ["sessions", id] as const,
   threads: (id: string) => ["sessions", id, "threads"] as const,
-  messages: (id: string) => ["sessions", id, "messages"] as const,
+  messages: (id: string, threadId?: string) =>
+    threadId
+      ? (["sessions", id, "messages", threadId] as const)
+      : (["sessions", id, "messages"] as const),
 };
 
 // ── Reads ────────────────────────────────────────────────────────────────
@@ -63,10 +68,14 @@ export function useThreads(id: string, opts?: UseQueryOptions<ListThreadsRespons
   });
 }
 
-export function useMessages(id: string, opts?: UseQueryOptions<ListMessagesResponse>) {
+export function useMessages(
+  id: string,
+  threadId?: string,
+  opts?: UseQueryOptions<ListMessagesResponse>,
+) {
   return useQuery<ListMessagesResponse>({
-    queryKey: qk.messages(id),
-    queryFn: () => api.listMessages(id, { limit: 200 }),
+    queryKey: qk.messages(id, threadId),
+    queryFn: () => api.listMessages(id, { limit: 200, threadId }),
     enabled: !!id,
     ...opts,
   });
@@ -94,9 +103,24 @@ export function useDeleteSession() {
   });
 }
 
+export function useCreateThread(sessionId: string) {
+  const qc = useQueryClient();
+  return useMutation<CreateThreadResponse, Error, CreateThreadRequest | void>({
+    mutationFn: (body) => api.createThread(sessionId, body ?? {}),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: qk.threads(sessionId) });
+    },
+  });
+}
+
 export function useSendPrompt(sessionId: string) {
-  return useMutation<{ messageId: string; threadId: string }, Error, string>({
-    mutationFn: (text) => api.sendPrompt(sessionId, { text }),
+  return useMutation<
+    { messageId: string; threadId: string },
+    Error,
+    { text: string; threadId?: string }
+  >({
+    mutationFn: ({ text, threadId }) =>
+      api.sendPrompt(sessionId, { text, threadId }),
     // Invalidations not needed — live updates flow through the WS store.
   });
 }
