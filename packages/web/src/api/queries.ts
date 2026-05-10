@@ -16,12 +16,14 @@ import type {
   CreateThreadRequest,
   CreateThreadResponse,
   GetSessionResponse,
+  ListDecisionsResponse,
   ListMessagesResponse,
   ListSessionsResponse,
   ListThreadsResponse,
   MeResponse,
   PatchSessionResponse,
   PatchThreadResponse,
+  ResolveDecisionRequest,
 } from "@valet/api/wire";
 import { api } from "./client";
 
@@ -36,6 +38,7 @@ export const qk = {
     threadId
       ? (["sessions", id, "messages", threadId] as const)
       : (["sessions", id, "messages"] as const),
+  decisions: (id: string) => ["sessions", id, "decisions"] as const,
 };
 
 // ── Reads ────────────────────────────────────────────────────────────────
@@ -144,6 +147,37 @@ export function useSetThreadModel(sessionId: string) {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: qk.threads(sessionId) });
     },
+  });
+}
+
+export function useDecisions(
+  sessionId: string,
+  opts?: UseQueryOptions<ListDecisionsResponse>,
+) {
+  return useQuery<ListDecisionsResponse>({
+    queryKey: qk.decisions(sessionId),
+    queryFn: () => api.listDecisions(sessionId),
+    enabled: !!sessionId,
+    ...opts,
+  });
+}
+
+export function useResolveDecision(sessionId: string) {
+  return useMutation<
+    { ok: true },
+    Error,
+    { gateId: string; body: ResolveDecisionRequest }
+  >({
+    mutationFn: ({ gateId, body }) => api.resolveDecision(sessionId, gateId, body),
+    // The bus → wire path emits decision_gate_resolved which the stream
+    // store consumes; no query invalidation needed.
+  });
+}
+
+export function useWithdrawDecision(sessionId: string) {
+  return useMutation<{ ok: true }, Error, { gateId: string }>({
+    mutationFn: ({ gateId }) =>
+      api.withdrawDecision(sessionId, gateId, { reason: "cancel" }),
   });
 }
 

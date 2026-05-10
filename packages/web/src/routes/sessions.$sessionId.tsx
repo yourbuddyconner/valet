@@ -1,9 +1,19 @@
 import { useEffect } from "react";
 import { createFileRoute } from "@tanstack/react-router";
-import { useMessages, useSession, useThreads } from "~/api/queries";
+import {
+  useDecisions,
+  useMessages,
+  useSession,
+  useThreads,
+} from "~/api/queries";
 import { useSessionWebSocket } from "~/api/ws";
-import { useSessionStream, useStreamStore } from "~/stores/stream";
+import {
+  useSessionStream,
+  useStreamStore,
+  usePendingGateForThread,
+} from "~/stores/stream";
 import { Composer } from "~/components/session/composer";
+import { DecisionGateCard } from "~/components/session/decision-gate-card";
 import { MessageList } from "~/components/session/message-list";
 import { SessionHeader } from "~/components/session/session-header";
 import { Spinner } from "~/components/primitives";
@@ -45,6 +55,18 @@ function SessionPage() {
     setThreadMessages(sessionId, activeThreadId, messagesQ.data.messages);
   }, [sessionId, activeThreadId, messagesQ.data, setThreadMessages]);
 
+  // Bootstrap pending decision gates from REST so the card shows
+  // immediately on page load if a gate was raised before the WS opened.
+  // Subsequent gates arrive via the wire and update the store directly.
+  const decisionsQ = useDecisions(sessionId);
+  const setPendingGates = useStreamStore((s) => s.setPendingGates);
+  useEffect(() => {
+    if (!decisionsQ.data) return;
+    setPendingGates(sessionId, decisionsQ.data.gates);
+  }, [sessionId, decisionsQ.data, setPendingGates]);
+
+  const pendingGate = usePendingGateForThread(sessionId, activeThreadId);
+
   if (session.isLoading) {
     return (
       <div className="flex-1 grid place-items-center text-sm text-[--muted]">
@@ -70,6 +92,7 @@ function SessionPage() {
           <span className="font-medium">{stream.error.code}:</span> {stream.error.message}
         </div>
       )}
+      {pendingGate && <DecisionGateCard sessionId={sessionId} gate={pendingGate} />}
       <Composer sessionId={sessionId} threadId={activeThreadId} agentStatus={stream.agentStatus} />
     </div>
   );

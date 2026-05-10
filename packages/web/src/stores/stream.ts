@@ -8,7 +8,7 @@
  * granularity for free.
  */
 import { create } from "zustand";
-import type { Message, MessagePart, WireEvent } from "@valet/api/wire";
+import type { DecisionGate, Message, MessagePart, WireEvent } from "@valet/api/wire";
 
 export type ConnectionStatus = "idle" | "connecting" | "open" | "closed" | "error";
 
@@ -30,6 +30,12 @@ export interface SessionStreamState {
   agentStatus: AgentStatus;
   /** Live message list. Server `init` seeds it; wire events mutate it. */
   messages: Message[];
+  /**
+   * Pending decision gates, keyed by gate id. Each gate carries its
+   * `threadId`; the UI selector filters to the active thread so a gate
+   * raised on thread A is not visible while the user views thread B.
+   */
+  pendingGates: Record<string, DecisionGate>;
   /** Last error message from the wire (if any). Cleared on successful turn_end. */
   error?: { code: string; message: string };
 }
@@ -65,6 +71,11 @@ export interface StreamStore {
     threadId: string,
     messages: Message[],
   ): void;
+  /**
+   * Seed pending gates from REST (the bootstrap path on session detail
+   * mount). Replaces the current pending-gates map for the session.
+   */
+  setPendingGates(sessionId: string, gates: DecisionGate[]): void;
   reset(sessionId: string): void;
   remove(sessionId: string): void;
 }
@@ -74,6 +85,7 @@ const EMPTY: SessionStreamState = {
   lastSeq: 0,
   agentStatus: "idle",
   messages: [],
+  pendingGates: {},
 };
 
 function ensure(state: StreamStore, sessionId: string): SessionStreamState {
@@ -98,6 +110,11 @@ function reduce(slice: SessionStreamState, ev: WireEvent, sessionId: string): Se
       // Init no longer carries messages — REST drives history per-thread.
       // We only clear transient state (status / error) so the UI doesn't
       // show stale signals after a reconnect.
+      //
+      // Pending gates are *not* cleared: the WS reconnect dance shouldn't
+      // make an awaiting-approval card flicker out of view. The bootstrap
+      // GET /decisions seeds them on first load; subsequent gates arrive
+      // on the wire.
       next.error = undefined;
       next.agentStatus = "idle";
       return next;
@@ -219,6 +236,26 @@ function reduce(slice: SessionStreamState, ev: WireEvent, sessionId: string): Se
       return next;
     }
 
+    case "decision_gate": {
+      // The engine raised a gate. Stash it so the UI can render an
+      // approval/question/credential card scoped to the originating
+      // thread.
+      next.pendingGates = { ...slice.pendingGates, [ev.gate.id]: ev.gate };
+      return next;
+    }
+
+    case "decision_gate_resolved":
+    case "decision_gate_expired":
+    case "decision_gate_withdrawn": {
+      // Whichever way a gate leaves the pending state, drop it from
+      // local state. The engine will emit a status change back to
+      // running/idle on its own.
+      if (!slice.pendingGates[ev.gateId]) return next;
+      const { [ev.gateId]: _, ...rest } = slice.pendingGates;
+      next.pendingGates = rest;
+      return next;
+    }
+
     case "ping": {
       return next;
     }
@@ -327,6 +364,19 @@ export const useStreamStore = create<StreamStore>((set) => ({
       };
     }),
 
+  setPendingGates: (sessionId, gates) =>
+    set((state) => {
+      const slice = ensure(state, sessionId);
+      const next: Record<string, DecisionGate> = {};
+      for (const g of gates) next[g.id] = g;
+      return {
+        bySession: {
+          ...state.bySession,
+          [sessionId]: { ...slice, pendingGates: next },
+        },
+      };
+    }),
+
   reset: (sessionId) =>
     set((state) => ({ bySession: { ...state.bySession, [sessionId]: { ...EMPTY } } })),
 
@@ -342,4 +392,24 @@ export const useStreamStore = create<StreamStore>((set) => ({
 
 export function useSessionStream(sessionId: string): SessionStreamState {
   return useStreamStore((s) => s.bySession[sessionId] ?? EMPTY);
+}
+
+/**
+ * The first pending gate that belongs to this thread, or undefined. Threads
+ * can only block on one gate at a time (the engine suspends the turn until
+ * the gate resolves), so returning the first match is sufficient.
+ */
+export function usePendingGateForThread(
+  sessionId: string,
+  threadId: string | undefined,
+): DecisionGate | undefined {
+  return useStreamStore((s) => {
+    if (!threadId) return undefined;
+    const gates = s.bySession[sessionId]?.pendingGates;
+    if (!gates) return undefined;
+    for (const g of Object.values(gates)) {
+      if (g.threadId === threadId) return g;
+    }
+    return undefined;
+  });
 }

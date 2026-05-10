@@ -36,6 +36,14 @@ function summarizeForLog(ev: WireEvent): string {
       return `${ev.code}: ${ev.message}`;
     case "model_switched":
       return `${ev.fromModel} → ${ev.toModel}${ev.threadId ? ` (thread)` : ` (session)`}`;
+    case "decision_gate":
+      return `${ev.gate.type} "${ev.gate.title}" (${ev.gate.id})`;
+    case "decision_gate_resolved":
+      return `${ev.gateId} → ${ev.resolution.actionId ?? "value"}`;
+    case "decision_gate_expired":
+      return `${ev.gateId} expired`;
+    case "decision_gate_withdrawn":
+      return `${ev.gateId} withdrawn (${ev.reason})`;
     default:
       return "";
   }

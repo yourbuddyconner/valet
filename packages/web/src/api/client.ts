@@ -12,6 +12,7 @@ import type {
   CreateThreadRequest,
   CreateThreadResponse,
   GetSessionResponse,
+  ListDecisionsResponse,
   ListMessagesResponse,
   ListSessionsResponse,
   ListThreadsResponse,
@@ -20,8 +21,10 @@ import type {
   PatchSessionResponse,
   PatchThreadRequest,
   PatchThreadResponse,
+  ResolveDecisionRequest,
   SendPromptRequest,
   SendPromptResponse,
+  WithdrawDecisionRequest,
 } from "@valet/api/wire";
 
 const BASE = "/api"; // Vite proxies /api → server; same in production.
@@ -88,6 +91,30 @@ export const api = {
   },
   sendPrompt: (sessionId: string, body: SendPromptRequest) =>
     request<SendPromptResponse>("POST", `/sessions/${sessionId}/messages`, body),
+
+  // decision gates
+  listDecisions: (sessionId: string) =>
+    request<ListDecisionsResponse>("GET", `/sessions/${sessionId}/decisions`),
+  resolveDecision: (
+    sessionId: string,
+    gateId: string,
+    body: ResolveDecisionRequest,
+  ) =>
+    request<{ ok: true }>(
+      "POST",
+      `/sessions/${sessionId}/decisions/${gateId}/resolve`,
+      body,
+    ),
+  withdrawDecision: (
+    sessionId: string,
+    gateId: string,
+    body: WithdrawDecisionRequest = {},
+  ) =>
+    request<{ ok: true }>(
+      "POST",
+      `/sessions/${sessionId}/decisions/${gateId}/withdraw`,
+      body,
+    ),
 };
 
 export { ApiError };
