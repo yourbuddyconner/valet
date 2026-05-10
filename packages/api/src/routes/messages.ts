@@ -19,16 +19,19 @@ import { agentSessions } from "../schema/index.js";
 import type {
   CreateThreadRequest,
   CreateThreadResponse,
+  ListDecisionsResponse,
   ListMessagesResponse,
   ListThreadsResponse,
   Message,
   MessagePart,
   MessageRole,
+  ResolveDecisionRequest,
   SendPromptRequest,
   SendPromptResponse,
   ThreadSummary,
+  WithdrawDecisionRequest,
 } from "../wire/types.js";
-import { engineToWireParts } from "../engine/bridge.js";
+import { engineGateToWire, engineToWireParts } from "../engine/bridge.js";
 
 export const messagesRouter = new Hono<AppEnv>();
 
@@ -252,4 +255,85 @@ messagesRouter.post("/:id/messages", async (c) => {
     threadId: thread.id,
   };
   return c.json(resp, 202);
+});
+
+// ── Decision gates ────────────────────────────────────────────────────────
+//
+// A gate is created by a tool calling `ctx.requestDecision(...)`. The engine
+// emits `decision_gate` on the bus (forwarded to the WS by the bridge) and
+// suspends the thread on `blocked_on_decision_gate` status. The user resolves
+// or withdraws via these endpoints, which routes to `Session.resolveDecision`
+// / `Session.withdrawDecision` — which finds the thread that owns the gate
+// and unblocks it.
+
+messagesRouter.get("/:id/decisions", async (c) => {
+  const result = await loadEngineSession(c);
+  if ("error" in result) return result.error;
+  const { engineSession } = result;
+
+  const pending = await engineSession.pendingDecisionGates();
+  const body: ListDecisionsResponse = { gates: pending.map(engineGateToWire) };
+  return c.json(body);
+});
+
+messagesRouter.post("/:id/decisions/:gateId/resolve", async (c) => {
+  const result = await loadEngineSession(c);
+  if ("error" in result) return result.error;
+  const { engineSession } = result;
+  const gateId = c.req.param("gateId");
+
+  let body: ResolveDecisionRequest;
+  try {
+    body = (await c.req.json()) as ResolveDecisionRequest;
+  } catch {
+    return c.json({ error: "invalid JSON body" }, 400);
+  }
+  if (body.actionId === undefined && body.value === undefined) {
+    return c.json({ error: "actionId or value is required" }, 400);
+  }
+
+  // Confirm the gate is actually pending in this session before resolving.
+  // Without this check, a stale gateId from the client would silently no-op.
+  const pending = await engineSession.pendingDecisionGates();
+  const gate = pending.find((g) => g.id === gateId);
+  if (!gate) return c.json({ error: "gate not pending" }, 404);
+
+  await engineSession.resolveDecision(gateId, {
+    actionId: body.actionId,
+    value: body.value,
+    resolvedBy: c.var.user.id,
+    resolvedAt: Date.now(),
+    source: { channelType: "web" },
+  });
+  return c.json({ ok: true });
+});
+
+messagesRouter.post("/:id/decisions/:gateId/withdraw", async (c) => {
+  const result = await loadEngineSession(c);
+  if ("error" in result) return result.error;
+  const { engineSession } = result;
+  const gateId = c.req.param("gateId");
+
+  let body: WithdrawDecisionRequest = {};
+  try {
+    const text = await c.req.text();
+    body = text ? (JSON.parse(text) as WithdrawDecisionRequest) : {};
+  } catch {
+    return c.json({ error: "invalid JSON body" }, 400);
+  }
+
+  // The user-initiated path should always be `cancel`. `steer` and `abort`
+  // are engine-internal reasons; reject them so we don't end up with
+  // misleading audit records.
+  const reason = body.reason ?? "cancel";
+  if (reason !== "cancel") {
+    return c.json({ error: "only reason='cancel' is allowed from clients" }, 400);
+  }
+
+  const pending = await engineSession.pendingDecisionGates();
+  const gate = pending.find((g) => g.id === gateId);
+  if (!gate) return c.json({ error: "gate not pending" }, 404);
+
+  await engineSession.withdrawDecision(gateId, reason);
+  return c.json({ ok: true });
 });
