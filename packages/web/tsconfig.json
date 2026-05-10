@@ -2,6 +2,10 @@
   "extends": "../../tsconfig.json",
   "compilerOptions": {
     "rootDir": ".",
+    "baseUrl": ".",
+    "paths": {
+      "~/*": ["src/*"]
+    },
     "jsx": "react-jsx",
     "moduleResolution": "bundler",
     "types": ["node", "vite/client"],
