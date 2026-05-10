@@ -19,7 +19,8 @@
     "start": "tsx src/main.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "db:generate": "drizzle-kit generate"
+    "db:generate": "drizzle-kit generate",
+    "dogfood": "tsx scripts/dogfood.ts"
   },
   "dependencies": {
     "@hono/node-server": "^1.13.0",

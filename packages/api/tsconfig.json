@@ -6,5 +6,5 @@
     "types": ["node"],
     "lib": ["ES2022"]
   },
-  "include": ["src/**/*", "test/**/*"]
+  "include": ["src/**/*", "test/**/*", "scripts/**/*"]
 }
