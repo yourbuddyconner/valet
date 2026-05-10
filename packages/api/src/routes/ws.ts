@@ -18,7 +18,7 @@ import type { UpgradeWebSocket } from "hono/ws";
 import { and, eq } from "drizzle-orm";
 import type { AppEnv } from "../env.js";
 import { agentSessions } from "../schema/index.js";
-import { busEventToWire, type WireEventDraft } from "../engine/bridge.js";
+import { busEventToWire, engineToWireParts, type WireEventDraft } from "../engine/bridge.js";
 import type { ClientFrame, WireEvent } from "../wire/types.js";
 import type { BusEvent, SessionEntry } from "@valet/engine";
 
@@ -102,7 +102,11 @@ export function registerWsRoutes(
                     threadId: defaultThread.id,
                     role: e.role,
                     content: e.content,
-                    parts: [], // keep init slim; client refetches via REST if needed
+                    // Carry parts (text + tool_call) so the rendered chat
+                    // survives a page reload. The previous "send empty parts,
+                    // client refetches via REST" plan was wrong — REST data
+                    // never lands in the stream store.
+                    parts: engineToWireParts(e.parts),
                     createdAt: Number.isFinite(created) ? created : Date.now(),
                   };
                 }),

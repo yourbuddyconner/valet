@@ -12,6 +12,33 @@ import { useStreamStore } from "~/stores/stream";
 const MAX_RETRY_MS = 8_000;
 const INITIAL_RETRY_MS = 500;
 
+function summarizeForLog(ev: WireEvent): string {
+  switch (ev.type) {
+    case "init":
+      return `(${ev.messages.length} messages)`;
+    case "text_delta":
+      return JSON.stringify(ev.delta).slice(0, 80);
+    case "tool_start":
+      return `${ev.toolName} ${JSON.stringify(ev.args ?? {}).slice(0, 80)}`;
+    case "tool_end":
+      return `${ev.toolName} isError=${ev.isError}`;
+    case "message_start":
+      return `${ev.role} ${ev.messageId} thread=${ev.threadId}`;
+    case "message_end":
+      return `${ev.messageId} ${ev.reason}`;
+    case "message_update":
+      return `${ev.messageId} parts=${ev.parts.length}`;
+    case "status":
+      return ev.status;
+    case "turn_end":
+      return ev.reason;
+    case "error":
+      return `${ev.code}: ${ev.message}`;
+    default:
+      return "";
+  }
+}
+
 function wsUrl(sessionId: string): string {
   // Vite proxy upgrades /api → server, including WS (`ws: true`).
   // In production, the same /api path is served by the API directly.
@@ -46,6 +73,10 @@ export function useSessionWebSocket(sessionId: string) {
         try {
           const data = typeof ev.data === "string" ? ev.data : ev.data.toString();
           const wire = JSON.parse(data) as WireEvent;
+          if (import.meta.env.DEV) {
+            const summary = summarizeForLog(wire);
+            console.debug(`[ws] seq=${wire.seq} ${wire.type} ${summary}`);
+          }
           ingest(sessionId, wire);
         } catch (err) {
           console.error("ws parse failed:", err);

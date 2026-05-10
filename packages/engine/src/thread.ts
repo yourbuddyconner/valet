@@ -88,6 +88,13 @@ export class Thread {
   private currentAssistantMessageId: string | undefined;
   private currentAssistantParts: MessagePart[] = [];
   private currentToolCalls = new Map<string, MessagePart>();
+  /**
+   * The persisted assistant entry for the current turn. Held so we can
+   * `updateEntry` after each tool completes — without this, tool_call parts
+   * stay frozen at status="running" in the store and reload shows them
+   * stuck mid-execution.
+   */
+  private currentAssistantEntry: MessageEntry | undefined;
   private toolCtxOverlay: { gateId?: string } = {};
   private suspendedDecisionForReplay:
     | { gateId: string; resolution?: DecisionResolution }
@@ -983,6 +990,7 @@ export class Thread {
           this.currentAssistantMessageId = uid("e");
           this.currentAssistantParts = [];
           this.currentToolCalls.clear();
+          this.currentAssistantEntry = undefined;
           await this.session.emit({
             type: "message_start",
             threadId: this.id,
@@ -1034,6 +1042,10 @@ export class Thread {
             createdAt: Date.now(),
           };
           await this.session.providers.store.appendEntries(this.session.id, this.id, [entry]);
+          // Hold a reference so tool_execution_end can re-persist as each
+          // tool completes (`parts` is shared by reference; mutating a
+          // tool_call's status flows through to this entry's parts array).
+          this.currentAssistantEntry = entry;
           await this.session.emit({
             type: "message_end",
             threadId: this.id,
@@ -1063,6 +1075,16 @@ export class Thread {
         if (part && part.type === "tool_call") {
           part.status = event.isError ? "error" : "completed";
           part.result = event.result;
+        }
+        // Re-persist the entry now that this tool's status/result has been
+        // mutated. Without this, sqlite still has status="running" + no
+        // result; on reload the chat shows tool cards stuck mid-execution.
+        if (this.currentAssistantEntry) {
+          await this.session.providers.store.updateEntry(
+            this.session.id,
+            this.id,
+            this.currentAssistantEntry,
+          );
         }
         const resultText = renderToolResult(event.result);
         await this.session.emit({
