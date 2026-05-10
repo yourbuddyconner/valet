@@ -14,6 +14,7 @@ import { providersMiddleware } from "./middleware/providers.js";
 import { authMiddleware } from "./middleware/auth.js";
 import { authRouter } from "./routes/auth.js";
 import { sessionsRouter } from "./routes/sessions.js";
+import { messagesRouter } from "./routes/messages.js";
 
 export function createApp(providers: Providers) {
   const app = new Hono<AppEnv>();
@@ -38,6 +39,8 @@ export function createApp(providers: Providers) {
 
   app.route("/api/auth", authRouter);
   app.route("/api/sessions", sessionsRouter);
+  // Messages + threads share /api/sessions/:id/* — mounted under same prefix.
+  app.route("/api/sessions", messagesRouter);
 
   return app;
 }
