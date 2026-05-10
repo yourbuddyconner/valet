@@ -10,7 +10,12 @@ export function Composer({
   agentStatus,
 }: {
   sessionId: string;
-  /** Active thread; if undefined, server uses the session's default. */
+  /**
+   * Active thread id. Required for sending — when undefined (threads still
+   * loading), the composer is disabled. Without this, optimistic user
+   * messages would have no thread tag and bleed into other threads' views
+   * after a thread switch.
+   */
   threadId?: string;
   agentStatus: AgentStatus;
 }) {
@@ -18,19 +23,22 @@ export function Composer({
   const send = useSendPrompt(sessionId);
   const addUserMessage = useStreamStore((s) => s.addUserMessage);
 
-  // Disable submit while engine is mid-turn — prompts queue server-side, but
-  // the UX is clearer if we wait for idle.
+  // Disable submit while engine is mid-turn or while we don't yet know the
+  // active thread id. Prompts queue server-side, but the UX is clearer if
+  // we wait for idle, and we MUST know the thread id to correctly tag the
+  // optimistic message.
   const busy = send.isPending || (agentStatus !== "idle" && agentStatus !== "error");
+  const canSend = !busy && !!threadId && text.trim().length > 0;
 
   async function submit() {
     const t = text.trim();
-    if (!t || busy) return;
+    if (!t || busy || !threadId) return;
     setText("");
     // Optimistic local add — the engine doesn't emit a wire event for the
     // user's own message, so without this the prompt would only appear after
     // the next WS init (page reload). The next init replaces this row with
     // the server's persisted copy.
-    addUserMessage(sessionId, t);
+    addUserMessage(sessionId, t, threadId);
     try {
       await send.mutateAsync({ text: t, threadId });
     } catch (err) {
@@ -65,12 +73,16 @@ export function Composer({
           value={text}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={onKeyDown}
-          placeholder="Send a message — Enter to send, Shift+Enter for a new line"
+          placeholder={
+            threadId
+              ? "Send a message — Enter to send, Shift+Enter for a new line"
+              : "Loading thread…"
+          }
           rows={2}
           className="flex-1"
-          disabled={send.isPending}
+          disabled={send.isPending || !threadId}
         />
-        <Button type="submit" disabled={!text.trim() || busy} size="lg">
+        <Button type="submit" disabled={!canSend} size="lg">
           <Send className="h-4 w-4" />
           <span>Send</span>
         </Button>

@@ -46,9 +46,13 @@ export interface StreamStore {
    * (page reload). This action gives the user instant feedback; the next
    * init frame replaces it with the server's persisted copy.
    *
+   * `threadId` is required so the message is correctly scoped: when the
+   * user later switches threads, MessageList's strict thread-id filter will
+   * correctly hide it from other threads' views.
+   *
    * Returns the synthetic message id so callers can correlate.
    */
-  addUserMessage(sessionId: string, text: string): string;
+  addUserMessage(sessionId: string, text: string, threadId: string): string;
   reset(sessionId: string): void;
   remove(sessionId: string): void;
 }
@@ -246,7 +250,7 @@ export const useStreamStore = create<StreamStore>((set) => ({
       return { bySession: { ...state.bySession, [sessionId]: updated } };
     }),
 
-  addUserMessage: (sessionId, text) => {
+  addUserMessage: (sessionId, text, threadId) => {
     // Synthetic id; the next WS init replaces this row with the server's
     // persisted message (different id, same content). A short collision
     // window with content-based dedupe is acceptable for v1.
@@ -256,7 +260,7 @@ export const useStreamStore = create<StreamStore>((set) => ({
       const message: Message = {
         id,
         sessionId,
-        threadId: null,
+        threadId,
         role: "user",
         content: text,
         parts: [{ kind: "text", text }],

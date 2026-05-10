@@ -7,14 +7,18 @@ import { MessageItem } from "./message-item";
  * unless the user has scrolled up — in which case we leave them alone so
  * they can read history.
  *
- * `threadId` filters the visible messages to a single thread. When undefined
- * (no thread known yet), every message is shown.
+ * `threadId` strictly scopes the visible messages to a single thread:
+ * a message shows up iff its `threadId` field equals the active id.
+ * When `threadId` is undefined (threads query still loading), nothing is
+ * filtered — but the Composer is also disabled in that state so no new
+ * messages can be added with a missing thread tag.
  *
- * Note: optimistic user messages have `threadId: null` because the client
- * doesn't yet know the resolved thread id at submit time. We render those
- * regardless of thread filter so the user sees their text immediately;
- * the next WS init replaces them with the server's persisted copy carrying
- * the right thread id.
+ * Earlier versions accepted `m.threadId === null` as a fallback for
+ * optimistic user messages with no thread tag. That caused user messages
+ * sent in one thread to appear in every other thread's view after a
+ * switch. The Composer now requires `threadId` before submitting, so
+ * optimistic messages always carry the right tag and we can filter
+ * strictly here.
  */
 export function MessageList({
   messages,
@@ -28,9 +32,7 @@ export function MessageList({
 
   const visible = useMemo(() => {
     if (!threadId) return messages;
-    return messages.filter(
-      (m) => m.threadId === null || m.threadId === threadId,
-    );
+    return messages.filter((m) => m.threadId === threadId);
   }, [messages, threadId]);
 
   useEffect(() => {
