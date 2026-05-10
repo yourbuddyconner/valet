@@ -34,11 +34,13 @@ export function Composer({ sessionId, agentStatus }: { sessionId: string; agentS
   }
 
   function onKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
-    // Cmd/Ctrl+Enter to submit; plain Enter inserts newline.
-    if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
-      e.preventDefault();
-      void submit();
-    }
+    // Enter submits; Shift+Enter inserts a newline. Skip while an IME
+    // composition is active so Enter confirms the composition instead of
+    // sending a half-finished message.
+    if (e.key !== "Enter") return;
+    if (e.shiftKey || e.nativeEvent.isComposing) return;
+    e.preventDefault();
+    void submit();
   }
 
   return (
@@ -54,7 +56,7 @@ export function Composer({ sessionId, agentStatus }: { sessionId: string; agentS
           value={text}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={onKeyDown}
-          placeholder="Send a message — ⌘/Ctrl+Enter to submit"
+          placeholder="Send a message — Enter to send, Shift+Enter for a new line"
           rows={2}
           className="flex-1"
           disabled={send.isPending}

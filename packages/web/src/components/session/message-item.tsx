@@ -2,6 +2,7 @@ import { Bot, User as UserIcon, Wrench, AlertTriangle, CheckCircle2 } from "luci
 import type { Message, MessagePart } from "@valet/api/wire";
 import { Avatar, AvatarFallback } from "~/components/primitives/avatar";
 import { Badge } from "~/components/primitives/badge";
+import { Markdown } from "~/components/markdown";
 import { cn } from "~/lib/cn";
 
 export function MessageItem({ message }: { message: Message }) {
@@ -41,9 +42,7 @@ function PartView({ part }: { part: MessagePart }) {
 
 function TextBlock({ text }: { text: string }) {
   if (!text) return null;
-  return (
-    <div className="text-sm whitespace-pre-wrap leading-relaxed text-[--fg]/95">{text}</div>
-  );
+  return <Markdown>{text}</Markdown>;
 }
 
 function ToolCallBlock({ part }: { part: Extract<MessagePart, { kind: "tool_call" }> }) {
