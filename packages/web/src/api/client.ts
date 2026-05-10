@@ -16,6 +16,10 @@ import type {
   ListSessionsResponse,
   ListThreadsResponse,
   MeResponse,
+  PatchSessionRequest,
+  PatchSessionResponse,
+  PatchThreadRequest,
+  PatchThreadResponse,
   SendPromptRequest,
   SendPromptResponse,
 } from "@valet/api/wire";
@@ -57,12 +61,20 @@ export const api = {
   createSession: (body: CreateSessionRequest) =>
     request<CreateSessionResponse>("POST", "/sessions", body),
   deleteSession: (id: string) => request<{ ok: true }>("DELETE", `/sessions/${id}`),
+  patchSession: (id: string, body: PatchSessionRequest) =>
+    request<PatchSessionResponse>("PATCH", `/sessions/${id}`, body),
 
   // threads + messages (session-scoped)
   listThreads: (sessionId: string) =>
     request<ListThreadsResponse>("GET", `/sessions/${sessionId}/threads`),
   createThread: (sessionId: string, body: CreateThreadRequest = {}) =>
     request<CreateThreadResponse>("POST", `/sessions/${sessionId}/threads`, body),
+  patchThread: (sessionId: string, threadId: string, body: PatchThreadRequest) =>
+    request<PatchThreadResponse>(
+      "PATCH",
+      `/sessions/${sessionId}/threads/${threadId}`,
+      body,
+    ),
   listMessages: (
     sessionId: string,
     opts?: { limit?: number; cursor?: string; threadId?: string },

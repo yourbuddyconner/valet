@@ -6,8 +6,14 @@ import {
 } from "@tanstack/react-router";
 import { MessageSquare, Plus } from "lucide-react";
 import type { ThreadSummary } from "@valet/api/wire";
-import { useCreateThread, useThreads } from "~/api/queries";
+import {
+  useCreateThread,
+  useSetThreadModel,
+  useThreads,
+} from "~/api/queries";
 import { Button, ScrollArea, Separator, Spinner } from "~/components/primitives";
+import { ModelPicker } from "./model-picker";
+import { modelLabel } from "~/lib/models";
 import { cn } from "~/lib/cn";
 
 /**
@@ -116,26 +122,64 @@ function ThreadItem({
   active: boolean;
 }) {
   const label = thread.title ?? (index === 0 ? "Default thread" : `Thread ${index + 1}`);
+  const setModel = useSetThreadModel(sessionId);
+  const subtitle = thread.model
+    ? modelLabel(thread.model)
+    : "inherits session model";
+
   return (
-    <Link
-      to="/sessions/$sessionId"
-      params={{ sessionId }}
-      // Only the default thread (index 0) renders without ?thread= so the URL
-      // stays clean. Explicit threads carry their id.
-      search={index === 0 ? {} : { thread: thread.id }}
+    <div
       className={cn(
-        "block w-full text-left rounded px-3 py-2 text-sm transition-colors",
+        "rounded transition-colors",
         active
-          ? "bg-neutral-200 dark:bg-neutral-800 text-[--fg]"
-          : "hover:bg-neutral-100 dark:hover:bg-neutral-900 text-[--fg]/90",
+          ? "bg-neutral-200 dark:bg-neutral-800"
+          : "hover:bg-neutral-100 dark:hover:bg-neutral-900",
       )}
     >
-      <div className="flex items-start gap-2 min-w-0">
-        <MessageSquare className="h-3.5 w-3.5 mt-0.5 text-[--muted] shrink-0" />
-        <div className="min-w-0 flex-1">
-          <div className="font-medium truncate">{label}</div>
+      <Link
+        to="/sessions/$sessionId"
+        params={{ sessionId }}
+        // Only the default thread (index 0) renders without ?thread= so the URL
+        // stays clean. Explicit threads carry their id.
+        search={index === 0 ? {} : { thread: thread.id }}
+        className="block w-full text-left px-3 pt-2 pb-1 text-sm"
+      >
+        <div className="flex items-start gap-2 min-w-0">
+          <MessageSquare className="h-3.5 w-3.5 mt-0.5 text-[--muted] shrink-0" />
+          <div className="min-w-0 flex-1">
+            <div className="font-medium truncate text-[--fg]">{label}</div>
+            <div
+              className={cn(
+                "text-[10px] truncate",
+                thread.model
+                  ? "text-violet-700 dark:text-violet-400"
+                  : "text-[--muted]/70",
+              )}
+            >
+              {subtitle}
+            </div>
+          </div>
         </div>
-      </div>
-    </Link>
+      </Link>
+      {/* Inline model picker — only visible when this is the active thread,
+          to keep the sidebar dense for the rest. */}
+      {active && (
+        <div className="px-2 pb-1.5">
+          <ModelPicker
+            variant="row"
+            currentId={thread.model}
+            isOverride={!!thread.model}
+            disabled={setModel.isPending}
+            inheritLabel="Use session default"
+            onSelect={(id) =>
+              setModel.mutate({ threadId: thread.id, model: id })
+            }
+            onClear={() =>
+              setModel.mutate({ threadId: thread.id, model: null })
+            }
+          />
+        </div>
+      )}
+    </div>
   );
 }

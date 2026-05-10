@@ -211,6 +211,14 @@ function reduce(slice: SessionStreamState, ev: WireEvent, sessionId: string): Se
       return next;
     }
 
+    case "model_switched": {
+      // No store mutation needed — the threads/session queries get
+      // invalidated via the mutation hooks that triggered the change.
+      // This case exists so the WS hook's logger has something to print
+      // and so the exhaustiveness check passes.
+      return next;
+    }
+
     case "ping": {
       return next;
     }

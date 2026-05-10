@@ -34,6 +34,8 @@ function summarizeForLog(ev: WireEvent): string {
       return ev.reason;
     case "error":
       return `${ev.code}: ${ev.message}`;
+    case "model_switched":
+      return `${ev.fromModel} → ${ev.toModel}${ev.threadId ? ` (thread)` : ` (session)`}`;
     default:
       return "";
   }

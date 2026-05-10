@@ -20,6 +20,8 @@ import type {
   ListSessionsResponse,
   ListThreadsResponse,
   MeResponse,
+  PatchSessionResponse,
+  PatchThreadResponse,
 } from "@valet/api/wire";
 import { api } from "./client";
 
@@ -113,6 +115,32 @@ export function useCreateThread(sessionId: string) {
   const qc = useQueryClient();
   return useMutation<CreateThreadResponse, Error, CreateThreadRequest | void>({
     mutationFn: (body) => api.createThread(sessionId, body ?? {}),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: qk.threads(sessionId) });
+    },
+  });
+}
+
+export function useSetSessionModel(sessionId: string) {
+  const qc = useQueryClient();
+  return useMutation<PatchSessionResponse, Error, string>({
+    mutationFn: (model) => api.patchSession(sessionId, { model }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: qk.session(sessionId) });
+      qc.invalidateQueries({ queryKey: qk.sessions() });
+    },
+  });
+}
+
+export function useSetThreadModel(sessionId: string) {
+  const qc = useQueryClient();
+  return useMutation<
+    PatchThreadResponse,
+    Error,
+    { threadId: string; model: string | null }
+  >({
+    mutationFn: ({ threadId, model }) =>
+      api.patchThread(sessionId, threadId, { model }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: qk.threads(sessionId) });
     },

@@ -2,8 +2,9 @@ import { useNavigate } from "@tanstack/react-router";
 import { Trash2 } from "lucide-react";
 import type { SessionDetail } from "@valet/api/wire";
 import { Badge, Button, Spinner, Tooltip } from "~/components/primitives";
-import { useDeleteSession } from "~/api/queries";
+import { useDeleteSession, useSetSessionModel } from "~/api/queries";
 import type { AgentStatus, ConnectionStatus } from "~/stores/stream";
+import { ModelPicker } from "./model-picker";
 import { cn } from "~/lib/cn";
 
 export function SessionHeader({
@@ -17,6 +18,7 @@ export function SessionHeader({
 }) {
   const navigate = useNavigate();
   const del = useDeleteSession();
+  const setModel = useSetSessionModel(session.id);
 
   async function destroy() {
     if (!confirm(`Delete session and tear down its sandbox?`)) return;
@@ -37,6 +39,15 @@ export function SessionHeader({
         <div className="text-xs text-[--muted] font-mono truncate">{session.workspace}</div>
       </div>
       <div className="ml-auto flex items-center gap-2">
+        <Tooltip content="Session-default model. Threads inherit unless overridden.">
+          <span>
+            <ModelPicker
+              currentId={session.model}
+              onSelect={(id) => setModel.mutate(id)}
+              disabled={setModel.isPending}
+            />
+          </span>
+        </Tooltip>
         <ConnectionBadge conn={conn} />
         <AgentStatusBadge status={agentStatus} />
         <Tooltip content="Delete session">
