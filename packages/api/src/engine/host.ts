@@ -49,6 +49,15 @@ const SYSTEM_PROMPT =
  */
 export class EngineHost {
   private cache = new Map<string, CacheEntry>();
+  /**
+   * Single-flight gate for `sessionFor`. Two concurrent requests for the
+   * same fresh session id used to each create their own Engine + Session
+   * and each call `ensureDefaultThread`, which persisted two distinct
+   * `web:default` thread rows into the store. Subsequent rehydrations
+   * loaded both, breaking thread identity (DB had duplicates with the
+   * same key). De-duping in-flight calls collapses the race.
+   */
+  private inflight = new Map<string, Promise<Session>>();
 
   constructor(private readonly opts: EngineHostOpts) {}
 
@@ -60,7 +69,17 @@ export class EngineHost {
   async sessionFor(sessionId: string, meta: SessionMeta): Promise<Session> {
     const cached = this.cache.get(sessionId);
     if (cached) return cached.session;
+    const pending = this.inflight.get(sessionId);
+    if (pending) return pending;
 
+    const promise = this.buildSession(sessionId, meta).finally(() => {
+      this.inflight.delete(sessionId);
+    });
+    this.inflight.set(sessionId, promise);
+    return promise;
+  }
+
+  private async buildSession(sessionId: string, meta: SessionMeta): Promise<Session> {
     const model = this.resolveModel();
 
     const engine = new Engine({

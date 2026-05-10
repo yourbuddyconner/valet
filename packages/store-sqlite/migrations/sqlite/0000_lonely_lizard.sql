@@ -135,4 +135,4 @@ CREATE TABLE `engine_threads` (
 );
 --> statement-breakpoint
 CREATE INDEX `engine_threads_session` ON `engine_threads` (`session_id`);--> statement-breakpoint
-CREATE INDEX `engine_threads_session_key` ON `engine_threads` (`session_id`,`key`);
+CREATE UNIQUE INDEX `engine_threads_session_key` ON `engine_threads` (`session_id`,`key`);

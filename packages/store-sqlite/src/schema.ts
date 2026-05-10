@@ -1,4 +1,11 @@
-import { sqliteTable, text, integer, index, primaryKey } from "drizzle-orm/sqlite-core";
+import {
+  sqliteTable,
+  text,
+  integer,
+  index,
+  primaryKey,
+  uniqueIndex,
+} from "drizzle-orm/sqlite-core";
 
 export const engineSessions = sqliteTable(
   "engine_sessions",
@@ -42,7 +49,7 @@ export const engineThreads = sqliteTable(
   },
   (t) => [
     index("engine_threads_session").on(t.sessionId),
-    index("engine_threads_session_key").on(t.sessionId, t.key),
+    uniqueIndex("engine_threads_session_key").on(t.sessionId, t.key),
   ],
 );
 
