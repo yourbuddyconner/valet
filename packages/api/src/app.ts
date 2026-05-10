@@ -8,6 +8,7 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { logger } from "hono/logger";
+import { createNodeWebSocket } from "@hono/node-ws";
 import type { AppEnv } from "./env.js";
 import type { Providers } from "./providers/types.js";
 import { providersMiddleware } from "./middleware/providers.js";
@@ -15,8 +16,15 @@ import { authMiddleware } from "./middleware/auth.js";
 import { authRouter } from "./routes/auth.js";
 import { sessionsRouter } from "./routes/sessions.js";
 import { messagesRouter } from "./routes/messages.js";
+import { registerWsRoutes } from "./routes/ws.js";
 
-export function createApp(providers: Providers) {
+export interface CreatedApp {
+  app: Hono<AppEnv>;
+  /** Call after `serve()` to attach the WS upgrade handler to the http server. */
+  injectWebSocket: ReturnType<typeof createNodeWebSocket>["injectWebSocket"];
+}
+
+export function createApp(providers: Providers): CreatedApp {
   const app = new Hono<AppEnv>();
 
   app.use("*", logger());
@@ -42,7 +50,13 @@ export function createApp(providers: Providers) {
   // Messages + threads share /api/sessions/:id/* — mounted under same prefix.
   app.route("/api/sessions", messagesRouter);
 
-  return app;
+  // WebSocket — must be registered against the same Hono instance that
+  // node-ws was constructed with. main.ts calls injectWebSocket(server)
+  // after serve().
+  const { upgradeWebSocket, injectWebSocket } = createNodeWebSocket({ app });
+  registerWsRoutes(app, upgradeWebSocket);
+
+  return { app, injectWebSocket };
 }
 
-export type App = ReturnType<typeof createApp>;
+export type App = ReturnType<typeof createApp>["app"];

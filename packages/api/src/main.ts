@@ -33,7 +33,7 @@ const providers = await buildNodeProviders({
   anthropicApiKey,
 });
 
-const app = createApp(providers);
+const { app, injectWebSocket } = createApp(providers);
 
 const server = serve({ fetch: app.fetch, port }, (info) => {
   console.log(`@valet/api listening on http://localhost:${info.port}`);
@@ -44,6 +44,9 @@ const server = serve({ fetch: app.fetch, port }, (info) => {
     `  auth:     ${process.env.VALET_LOCAL_AUTH === "1" ? "stub (VALET_LOCAL_AUTH=1)" : "DISABLED — set VALET_LOCAL_AUTH=1 for /api/* access"}`,
   );
 });
+
+// Attach the WS upgrade handler to the running http server.
+injectWebSocket(server);
 
 // ── Graceful shutdown — destroy live sandboxes so containers don't leak.
 
