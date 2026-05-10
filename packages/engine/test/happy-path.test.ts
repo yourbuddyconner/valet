@@ -104,8 +104,18 @@ describe("engine: single-thread happy path", () => {
     if (toolCallPart?.type !== "tool_call") throw new Error("unreachable");
     expect(toolCallPart.toolName).toBe("write");
     expect(toolCallPart.status).toBe("completed");
-    expect(toolCallPart.result).toBeDefined();
     expect(toolCallPart.args).toEqual({ path: "/tmp/note.txt", content: "ok" });
+    // Regression guard: it's not enough that `result` is *defined* — readers
+    // (UI tool renderers, thread_read formatting, exports) must be able to
+    // pull a printable string out of it. Earlier the engine stored
+    // pi-agent-core's `{ content: [...] }` shape verbatim while the wire
+    // expected `{ text }`, so tool cards rendered as "(empty output)" on
+    // reload. We now persist `result.text` alongside the structured fields.
+    expect(toolCallPart.result).toBeDefined();
+    const resultObj = toolCallPart.result as { text?: unknown };
+    expect(typeof resultObj.text).toBe("string");
+    expect((resultObj.text as string).length).toBeGreaterThan(0);
+    expect(resultObj.text).toContain("/tmp/note.txt");
 
     faux.unregister();
   });

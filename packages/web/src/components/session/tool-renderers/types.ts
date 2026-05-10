@@ -55,12 +55,41 @@ export function matches(renderer: ToolRenderer, toolName: string): boolean {
   return m(toolName);
 }
 
-/** Extract `{ text }` from a tool result, or stringify whatever was returned. */
+/**
+ * Extract a printable string from whatever shape the engine persisted as a
+ * tool result. We handle three shapes because the persistence layer has
+ * shifted under us before:
+ *
+ *   1. `string` — defensive; some plugins might return raw strings.
+ *   2. `{ text: string, …rest }` — the engine's own ToolResult shape and
+ *      the new normalized form (we now persist both `text` and the raw
+ *      structured fields side-by-side).
+ *   3. `{ content: [{ type: "text", text }, …] }` — pi-agent-core's
+ *      AgentToolResult shape. Older entries written before the engine
+ *      normalized on persist will still have this on disk.
+ *
+ * Returns "" if no readable text is present (UI renders an "empty output"
+ * affordance from there).
+ */
 export function resultText(result: unknown): string {
   if (typeof result === "string") return result;
-  if (result && typeof result === "object" && "text" in result) {
-    const t = (result as { text: unknown }).text;
-    if (typeof t === "string") return t;
+  if (!result || typeof result !== "object") return "";
+  const r = result as Record<string, unknown>;
+  if (typeof r.text === "string") return r.text;
+  // pi-agent-core / Anthropic content-block shape.
+  if (Array.isArray(r.content)) {
+    let out = "";
+    for (const block of r.content) {
+      if (
+        block &&
+        typeof block === "object" &&
+        (block as { type?: unknown }).type === "text"
+      ) {
+        const t = (block as { text?: unknown }).text;
+        if (typeof t === "string") out += t;
+      }
+    }
+    return out;
   }
   return "";
 }

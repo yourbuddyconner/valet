@@ -2,6 +2,58 @@
 
 NOTE: Do NOT add "Co-Authored-by" trailers mentioning AI models (e.g., Opus, Claude) in commit messages PRs, or comments.
 
+## Working on this codebase
+
+Read this section first. Everything below it is project context; this section is rules learned the hard way.
+
+### Tool-call persistence is fragile — verify the round trip
+
+We've broken tool-call rendering on reload three times in a row. Each break looked different on the surface but had the same root cause: the persisted state in `engine_entries` and the rendered state in the UI were out of sync. The class of bug is **persistence shape drift between (a) what the engine writes, (b) what the wire layer ships, and (c) what the frontend renders**.
+
+When you touch any of these, verify the *full* round trip ends-to-end, not just one hop:
+
+1. **Engine writes the entry**: `Thread.handleAgentEvent` in `packages/engine/src/thread.ts` is the canonical persistence path. `message_end` calls `appendEntries`; `tool_execution_end` mutates `part.status`/`part.result` and calls `updateEntry`. If a tool ever changes a part *after* `message_end`, that mutation must be re-persisted, or the DB row stays stuck on the pre-mutation state.
+2. **Wire bridge ships the entry**: `packages/api/src/engine/bridge.ts` `engineToWireParts` maps `MessagePart` to the wire shape. The wire `tool_call` part carries `args`, `result`, `status`, `error`, `callId`. **Treat `result` as `unknown`** on both ends — engine stores whatever the tool / pi-agent-core emits, which is *not* always the same shape as the engine's own `ToolResult` (`{ text, attachments? }`).
+3. **REST `/messages` reads the entry**: `packages/api/src/routes/messages.ts` `entryToMessage` uses `engineToWireParts`. WS `init` no longer carries messages — REST is authoritative for thread history. If REST drops `parts`, the UI will look fine live and break on reload.
+4. **Frontend extracts displayable text**: `packages/web/src/components/session/tool-renderers/types.ts` `resultText` must handle every shape the engine might persist:
+   - `{ text: string }` — engine's own `ToolResult` shape
+   - `{ content: [{ type: "text", text: string }, …] }` — pi-agent-core's `AgentToolResult` shape (what gets persisted today via `tool_execution_end`)
+   - bare `string` — defensive
+
+### When you change tool plumbing, run these tests
+
+These exist specifically to catch persistence-shape regressions. Run them before claiming the work is done:
+
+```bash
+# Engine-level: persisted entry has tool_call with status="completed" + actual result content
+pnpm --filter @valet/engine test -- happy-path
+
+# Store-contract: tool_call parts round-trip + updateEntry transitions running→completed
+pnpm --filter @valet/engine test -- in-memory-store
+pnpm --filter @valet/store-sqlite test
+
+# API integration: real Anthropic + Docker, then GET /messages must include readable result
+ANTHROPIC_API_KEY=sk-ant-... pnpm --filter @valet/api test -- src/integration
+```
+
+If you change the result shape engine-side, **add an assertion that `result.text` (or whatever the canonical access pattern is) contains the actual output** — `expect(result).toBeDefined()` is *not* sufficient. The bug we keep shipping has `result` defined but its text is unreachable.
+
+### When tool calls render as "(empty output)" or "(empty file)"
+
+That's almost certainly a shape mismatch, *not* a persistence-failure. The data is in `engine_entries`; the frontend can't dig it out. Inspect:
+
+- `sqlite3 ~/.valet/app.db "select parts from engine_entries where role='assistant' order by id desc limit 1;"` — see the actual stored shape
+- Compare against what `resultText` extracts in `packages/web/src/components/session/tool-renderers/types.ts`
+
+### Other persistence-adjacent gotchas
+
+- **`updateEntry` is mandatory after any post-`message_end` mutation** (tool completion, decision-gate resolution, compaction). The store contract suite has a regression test for the running→completed transition; if you touch the engine's persistence path, run that suite.
+- **The wire `init` event is metadata-only.** Don't add `messages` back to it. Thread history loads via `GET /api/sessions/:id/messages?threadId=…`. Adding messages to init re-introduces the bug where reconnecting on a non-default thread wipes that thread's state.
+- **Optimistic UI messages must carry the active `threadId`.** Tagging them `null` and fall-back-matching in the filter caused user bubbles to leak across threads.
+- **Tool renderers (`packages/web/src/components/session/tool-renderers/`) are a registry**. The fallback handles unknown plugin tools. Adding a hand-tuned renderer for a new tool means dropping a `ToolRenderer` into that directory and listing it before the fallback in `index.ts`. The shell, status semantics, scanner animation, and category color are inherited from `ToolShell`.
+
+---
+
 ## What This Project Is
 
 Valet is a hosted background coding agent platform. Users interact with an AI coding agent through a web UI, Slack, or Telegram. Each session runs in an isolated Modal sandbox with a full dev environment (VS Code, browser via VNC, terminal, and an OpenCode agent with 73 custom tools). A per-user orchestrator ("Jarvis") manages sessions, routes messages across channels, and maintains long-term memory. The architecture is modeled after Ramp's Inspect system.

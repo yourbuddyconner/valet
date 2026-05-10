@@ -1072,9 +1072,22 @@ export class Thread {
         break;
       case "tool_execution_end": {
         const part = this.currentToolCalls.get(event.toolCallId);
+        const resultText = renderToolResult(event.result);
         if (part && part.type === "tool_call") {
           part.status = event.isError ? "error" : "completed";
-          part.result = event.result;
+          // Persist the *flattened* text alongside the raw structured
+          // result. pi-agent-core emits AgentToolResult-shaped objects
+          // (`{ content: [{ type: "text", text }] }`) and consumers that
+          // try to read a tool result later (UI renderers, thread_read
+          // formatting, exports) shouldn't need to know about that shape.
+          // Storing both means any reader can pull `result.text` and Just
+          // Get something readable; clients that want the raw blocks can
+          // still inspect `result.content`.
+          const structured =
+            event.result && typeof event.result === "object"
+              ? (event.result as Record<string, unknown>)
+              : {};
+          part.result = { ...structured, text: resultText };
         }
         // Re-persist the entry now that this tool's status/result has been
         // mutated. Without this, sqlite still has status="running" + no
@@ -1086,7 +1099,6 @@ export class Thread {
             this.currentAssistantEntry,
           );
         }
-        const resultText = renderToolResult(event.result);
         await this.session.emit({
           type: "tool_end",
           threadId: this.id,

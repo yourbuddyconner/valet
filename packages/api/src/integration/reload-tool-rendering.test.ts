@@ -97,7 +97,15 @@ describeIfKey("api integration: tool_call rendering survives reload", () => {
           (p) => p.kind === "tool_call" && p.status === "completed",
         );
         if (completedToolCall?.kind !== "tool_call") throw new Error("unreachable");
+        // It's not enough that `result` is defined — readers must be able
+        // to extract printable text. Earlier we shipped a regression where
+        // result was the raw pi-agent-core block shape and the UI rendered
+        // "(empty output)" for every completed tool. Assert both layers:
+        // the structured result, AND a readable text field on it.
         expect(completedToolCall.result).toBeDefined();
+        const resultObj = completedToolCall.result as { text?: unknown };
+        expect(typeof resultObj.text).toBe("string");
+        expect((resultObj.text as string).length).toBeGreaterThan(0);
       } finally {
         rmSync(workspaceRoot, { recursive: true, force: true });
         await api.cleanup();
