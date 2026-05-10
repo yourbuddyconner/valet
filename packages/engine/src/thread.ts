@@ -1054,13 +1054,11 @@ export class Thread {
         if (!sibling) return [];
         return sibling.readEntries(opts);
       },
-      setModel: async ({ model, scope = "thread" }) => {
-        if (scope === "session") {
-          const r = await session.setModel(model, `tool:${toolName}`);
-          return { ...r, scope: "session" as const };
-        }
-        const r = await this.setModel(model, `tool:${toolName}`);
-        return { ...r, scope: "thread" as const };
+      setModel: async ({ model }) => {
+        // Intentionally thread-scoped only — see ToolContext.setModel docs.
+        // The session default is a user-facing setting; agents shouldn't
+        // change it unilaterally.
+        return this.setModel(model, `tool:${toolName}`);
       },
     };
   }

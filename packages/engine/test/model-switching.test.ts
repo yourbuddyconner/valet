@@ -152,7 +152,7 @@ describe("engine: model switching", () => {
     expect(persisted?.model).toBe(OPUS);
   });
 
-  it("switch_model tool dispatches to ctx.setModel with the requested scope", async () => {
+  it("switch_model tool dispatches to ctx.setModel (thread-only)", async () => {
     // Unit-test the tool directly with a stub ToolContext. Driving a full
     // agent loop here is awkward because pi-ai's faux registration
     // doesn't intercept `getModel` lookups, so the second LLM call after
@@ -162,38 +162,21 @@ describe("engine: model switching", () => {
     // from session.builtinTools, which we asserted contains
     // switchModelTool above.
 
-    const calls: Array<{ model: string; scope: "thread" | "session" }> = [];
+    const calls: Array<{ model: string }> = [];
     const stubCtx = {
-      setModel: async ({
-        model,
-        scope = "thread" as const,
-      }: {
-        model: string;
-        scope?: "thread" | "session";
-      }) => {
-        calls.push({ model, scope });
-        return {
-          fromModel: HAIKU,
-          toModel: model,
-          scope: scope as "thread" | "session",
-        };
+      setModel: async ({ model }: { model: string }) => {
+        calls.push({ model });
+        return { fromModel: HAIKU, toModel: model };
       },
     } as unknown as Parameters<typeof switchModelTool.execute>[1];
 
-    // Default scope = thread.
     const r1 = await switchModelTool.execute(
       { model: OPUS } as never,
       stubCtx,
     );
-    expect(calls[0]).toEqual({ model: OPUS, scope: "thread" });
+    expect(calls[0]).toEqual({ model: OPUS });
     expect((r1 as { text: string }).text).toContain(OPUS);
-
-    // Explicit session scope.
-    await switchModelTool.execute(
-      { model: HAIKU, scope: "session" } as never,
-      stubCtx,
-    );
-    expect(calls[1]).toEqual({ model: HAIKU, scope: "session" });
+    expect((r1 as { text: string }).text).toContain("thread");
 
     // Errors surface as a readable result rather than throwing.
     const failingCtx = {
@@ -201,11 +184,11 @@ describe("engine: model switching", () => {
         throw new Error("unknown model id: bogus");
       },
     } as unknown as Parameters<typeof switchModelTool.execute>[1];
-    const r3 = await switchModelTool.execute(
+    const r2 = await switchModelTool.execute(
       { model: "bogus" } as never,
       failingCtx,
     );
-    expect((r3 as { text: string }).text).toContain("switch_model failed");
+    expect((r2 as { text: string }).text).toContain("switch_model failed");
   });
 
   it("switch_model is registered in builtinTools", () => {

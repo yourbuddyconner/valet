@@ -102,34 +102,25 @@ export const threadReadTool = defineTool({
 export const switchModelTool = defineTool({
   name: "switch_model",
   description:
-    "Switch the active model used for subsequent LLM calls. Default scope " +
-    "is the current thread (per-thread override); pass scope='session' to " +
-    "change the session default for any thread that doesn't have its own " +
-    "override. Useful when a turn needs a stronger reasoning model or a " +
-    "faster/cheaper one. The change takes effect on the *next* LLM call " +
-    "in the agent loop — the in-flight tool call finishes against the " +
-    "old model.",
+    "Switch the model used for subsequent LLM calls in *this thread*. " +
+    "Useful when a turn needs a stronger reasoning model or a faster/cheaper " +
+    "one. The change takes effect on the next LLM call — the in-flight tool " +
+    "call finishes against the old model. Scope is always thread-local; " +
+    "changing the session default is a user-facing setting and not exposed " +
+    "to the agent.",
   parameters: Type.Object({
     model: Type.String({
       description:
         "Target model id, e.g. 'claude-haiku-4-5' or 'anthropic/claude-opus-4-7'.",
     }),
-    scope: Type.Optional(
-      Type.Union([Type.Literal("thread"), Type.Literal("session")], {
-        description: "'thread' (default) or 'session'.",
-      }),
-    ),
   }),
   execute: async (args, ctx) => {
     try {
-      const { fromModel, toModel, scope } = await ctx.setModel({
-        model: args.model,
-        scope: args.scope,
-      });
+      const { fromModel, toModel } = await ctx.setModel({ model: args.model });
       if (fromModel === toModel) {
-        return { text: `model unchanged (${toModel}) at scope=${scope}` };
+        return { text: `model unchanged (${toModel})` };
       }
-      return { text: `switched ${scope} model: ${fromModel} → ${toModel}` };
+      return { text: `switched thread model: ${fromModel} → ${toModel}` };
     } catch (err) {
       return {
         text:

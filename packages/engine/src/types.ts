@@ -249,16 +249,19 @@ export interface ToolContext {
   signal: AbortSignal;
   threadRead: (key: string, opts?: MessageQuery) => Promise<SessionEntry[]>;
   /**
-   * Switch the active model for this thread (default) or the whole session.
-   * Resolves the id, updates state, persists, and emits `model_switched`.
-   * The new model takes effect on the *next* LLM call within the agent
-   * loop — the in-flight tool call finishes against the old model. Throws
-   * if the id can't be resolved.
+   * Switch the active model for *this thread*. Resolves the id, persists,
+   * emits `model_switched`. Takes effect on the next turn — the in-flight
+   * tool call finishes against the old model. Throws on unresolvable ids.
+   *
+   * Intentionally thread-scoped only. Changing the session default is a
+   * user-facing setting (it affects every future thread the user opens),
+   * not something an agent should reach for unilaterally; that path lives
+   * on the API server (`PATCH /api/sessions/:id`) and is reachable only
+   * from the UI.
    */
-  setModel: (args: { model: string; scope?: "thread" | "session" }) => Promise<{
+  setModel: (args: { model: string }) => Promise<{
     fromModel: string;
     toModel: string;
-    scope: "thread" | "session";
   }>;
 }
 
