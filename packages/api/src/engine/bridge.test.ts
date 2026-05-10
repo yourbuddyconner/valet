@@ -61,9 +61,104 @@ describe("busEventToWire", () => {
     expect(out).toEqual([{ type: "turn_end", threadId: "t1", reason: "end_turn" }]);
   });
 
-  it("drops out-of-scope event types (decision_gate, compaction, ...)", () => {
+  it("drops out-of-scope event types (compaction, thread_start, ...)", () => {
     expect(busEventToWire(ev({ type: "thread_start", threadId: "t1" }))).toEqual([]);
     expect(busEventToWire(ev({ type: "compaction_start", threadId: "t1" }))).toEqual([]);
+  });
+
+  it("forwards decision_gate with engine→wire shape projection", () => {
+    const out = busEventToWire(
+      ev({
+        type: "decision_gate",
+        threadId: "t1",
+        gate: {
+          id: "g1",
+          sessionId: "s1",
+          threadId: "t1",
+          type: "approval",
+          title: "Run rm -rf?",
+          body: "About to delete /workspace/build",
+          actions: [
+            { id: "allow", label: "Allow", style: "primary" },
+            { id: "deny", label: "Deny", style: "danger" },
+          ],
+          status: "pending",
+          createdAt: 100,
+          updatedAt: 100,
+          // engine-only fields the wire drops
+          context: { foo: "bar" },
+          origin: { channelType: "web" },
+        },
+      }),
+    );
+    expect(out).toHaveLength(1);
+    const wire = out[0] as Extract<(typeof out)[number], { type: "decision_gate" }>;
+    expect(wire.threadId).toBe("t1");
+    expect(wire.gate.id).toBe("g1");
+    expect(wire.gate.actions).toHaveLength(2);
+    expect(wire.gate.title).toBe("Run rm -rf?");
+    // engine-only fields are not in the wire shape
+    const wireKeys = Object.keys(wire.gate);
+    expect(wireKeys).not.toContain("context");
+    expect(wireKeys).not.toContain("origin");
+    expect(wireKeys).not.toContain("refs");
+  });
+
+  it("forwards decision_gate_resolved with resolution body", () => {
+    const out = busEventToWire(
+      ev({
+        type: "decision_gate_resolved",
+        threadId: "t1",
+        gateId: "g1",
+        resolution: {
+          actionId: "allow",
+          resolvedBy: "u1",
+          resolvedAt: 200,
+          source: { channelType: "web" }, // dropped
+        },
+      }),
+    );
+    expect(out).toEqual([
+      {
+        type: "decision_gate_resolved",
+        threadId: "t1",
+        gateId: "g1",
+        resolution: {
+          actionId: "allow",
+          value: undefined,
+          resolvedBy: "u1",
+          resolvedAt: 200,
+        },
+      },
+    ]);
+  });
+
+  it("forwards decision_gate_expired", () => {
+    const out = busEventToWire(
+      ev({ type: "decision_gate_expired", threadId: "t1", gateId: "g1" }),
+    );
+    expect(out).toEqual([
+      { type: "decision_gate_expired", threadId: "t1", gateId: "g1" },
+    ]);
+  });
+
+  it("forwards decision_gate_withdrawn with reason", () => {
+    const out = busEventToWire(
+      ev({
+        type: "decision_gate_withdrawn",
+        threadId: "t1",
+        gateId: "g1",
+        reason: "cancel",
+      }),
+    );
+    expect(out).toEqual([
+      {
+        type: "decision_gate_withdrawn",
+        threadId: "t1",
+        gateId: "g1",
+        reason: "cancel",
+      },
+    ]);
   });
 
   it("forwards model_switched (thread scope) with threadId preserved", () => {

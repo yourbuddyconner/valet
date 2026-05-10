@@ -1,5 +1,45 @@
-import type { BusEvent, MessagePart as EngineMessagePart } from "@valet/engine";
-import type { MessagePart as WireMessagePart, WireEvent } from "../wire/types.js";
+import type {
+  BusEvent,
+  DecisionGate as EngineDecisionGate,
+  DecisionResolution as EngineDecisionResolution,
+  MessagePart as EngineMessagePart,
+} from "@valet/engine";
+import type {
+  DecisionGate as WireDecisionGate,
+  DecisionResolution as WireDecisionResolution,
+  MessagePart as WireMessagePart,
+  WireEvent,
+} from "../wire/types.js";
+
+/**
+ * Project an engine DecisionGate to its wire shape. Drops engine-only fields
+ * (origin/refs/context) — the UI doesn't render those today, and surfacing
+ * them now would commit us to a contract before we know what we want.
+ */
+export function engineGateToWire(g: EngineDecisionGate): WireDecisionGate {
+  return {
+    id: g.id,
+    sessionId: g.sessionId,
+    threadId: g.threadId,
+    type: g.type,
+    title: g.title,
+    body: g.body,
+    actions: g.actions,
+    expiresAt: g.expiresAt,
+    status: g.status,
+    createdAt: g.createdAt,
+    updatedAt: g.updatedAt,
+  };
+}
+
+export function engineResolutionToWire(r: EngineDecisionResolution): WireDecisionResolution {
+  return {
+    actionId: r.actionId,
+    value: r.value,
+    resolvedBy: r.resolvedBy,
+    resolvedAt: r.resolvedAt,
+  };
+}
 
 /**
  * Translate engine MessagePart → wire MessagePart.
@@ -168,19 +208,52 @@ export function busEventToWire(ev: BusEvent): WireEventDraft[] {
         },
       ];
 
-    // Out of agent-loop v1 scope — silently dropped. Adding any of these to
-    // the wire is a future plan: decision gates, compaction events,
-    // child-task events, queue state, thread lifecycle.
+    case "decision_gate":
+      return [
+        {
+          type: "decision_gate",
+          threadId: e.threadId,
+          gate: engineGateToWire(e.gate),
+        },
+      ];
+
+    case "decision_gate_resolved":
+      return [
+        {
+          type: "decision_gate_resolved",
+          threadId: e.threadId,
+          gateId: e.gateId,
+          resolution: engineResolutionToWire(e.resolution),
+        },
+      ];
+
+    case "decision_gate_expired":
+      return [
+        {
+          type: "decision_gate_expired",
+          threadId: e.threadId,
+          gateId: e.gateId,
+        },
+      ];
+
+    case "decision_gate_withdrawn":
+      return [
+        {
+          type: "decision_gate_withdrawn",
+          threadId: e.threadId,
+          gateId: e.gateId,
+          reason: e.reason,
+        },
+      ];
+
+    // Out of agent-loop v1 scope — silently dropped. Future plans:
+    // compaction events, child-task events, queue state, thread lifecycle.
     case "thread_start":
     case "queue_state":
     case "compaction_start":
     case "compaction_end":
     case "task_start":
     case "task_end":
-    case "decision_gate":
-    case "decision_gate_resolved":
-    case "decision_gate_expired":
-    case "decision_gate_withdrawn":
       return [];
   }
 }

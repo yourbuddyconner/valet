@@ -155,6 +155,60 @@ export interface SendPromptResponse {
   threadId: string;
 }
 
+// ── REST: decision gates ──────────────────────────────────────────────────
+
+export type DecisionGateType = "approval" | "question" | "credential_request";
+export type DecisionGateStatus = "pending" | "resolved" | "expired" | "withdrawn";
+export type DecisionWithdrawReason = "steer" | "abort" | "cancel";
+
+export interface DecisionAction {
+  id: string;
+  label: string;
+  style?: "primary" | "danger";
+}
+
+export interface DecisionGate {
+  id: string;
+  sessionId: string;
+  threadId: string;
+  type: DecisionGateType;
+  title: string;
+  body?: string;
+  actions: DecisionAction[];
+  expiresAt?: number;
+  status: DecisionGateStatus;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface DecisionResolution {
+  actionId?: string;
+  value?: string;
+  resolvedBy: string;
+  resolvedAt: number;
+}
+
+export interface ListDecisionsResponse {
+  gates: DecisionGate[];
+}
+
+/**
+ * Resolve a pending gate. For `approval` and `credential_request` gates the
+ * client sends `actionId` matching one of `gate.actions`. For `question`
+ * gates the client sends `value` (free-form text).
+ */
+export interface ResolveDecisionRequest {
+  actionId?: string;
+  value?: string;
+}
+
+export interface WithdrawDecisionRequest {
+  /** Why the gate is being cancelled. The agent's withdraw paths (`steer` /
+   *  `abort`) live in the engine; user-initiated cancellation always sends
+   *  `cancel`. */
+  reason?: DecisionWithdrawReason;
+}
+
 // ── WebSocket events ──────────────────────────────────────────────────────
 
 /**
@@ -241,6 +295,24 @@ export type WireEvent =
       fromModel: string;
       toModel: string;
       reason: string;
+    }
+  | { seq: number; ts: number; type: "decision_gate"; threadId: string; gate: DecisionGate }
+  | {
+      seq: number;
+      ts: number;
+      type: "decision_gate_resolved";
+      threadId: string;
+      gateId: string;
+      resolution: DecisionResolution;
+    }
+  | { seq: number; ts: number; type: "decision_gate_expired"; threadId: string; gateId: string }
+  | {
+      seq: number;
+      ts: number;
+      type: "decision_gate_withdrawn";
+      threadId: string;
+      gateId: string;
+      reason: DecisionWithdrawReason;
     }
   | { seq: number; ts: number; type: "ping" };
 
