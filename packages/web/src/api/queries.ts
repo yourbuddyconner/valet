@@ -77,6 +77,12 @@ export function useMessages(
     queryKey: qk.messages(id, threadId),
     queryFn: () => api.listMessages(id, { limit: 200, threadId }),
     enabled: !!id,
+    // Background refetches (window focus, network reconnect) would call
+    // setThreadMessages and risk wiping in-flight optimistic / live state.
+    // Initial load + thread-switch refetches still happen because each
+    // (sessionId, threadId) pair is its own queryKey.
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
     ...opts,
   });
 }

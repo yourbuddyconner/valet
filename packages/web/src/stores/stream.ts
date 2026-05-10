@@ -41,18 +41,30 @@ export interface StreamStore {
   ingest(sessionId: string, ev: WireEvent): void;
   /**
    * Optimistically append a user-authored message to the local view. Engine
-   * doesn't emit a wire event when a user prompt is enqueued — the user
-   * message only becomes visible to the client on the next WS init frame
-   * (page reload). This action gives the user instant feedback; the next
-   * init frame replaces it with the server's persisted copy.
+   * doesn't emit a wire event when a user prompt is enqueued — without this
+   * the prompt would only appear after the next REST refetch. Returns the
+   * synthetic message id so callers can correlate.
    *
-   * `threadId` is required so the message is correctly scoped: when the
-   * user later switches threads, MessageList's strict thread-id filter will
-   * correctly hide it from other threads' views.
-   *
-   * Returns the synthetic message id so callers can correlate.
+   * `threadId` is required so the message is correctly scoped: switching
+   * threads then back must not show this message in the wrong thread.
    */
   addUserMessage(sessionId: string, text: string, threadId: string): string;
+  /**
+   * Replace the messages for a single thread with a fresh REST snapshot.
+   * Other threads' messages stay put. Optimistic messages for the same
+   * thread are kept *unless* the new snapshot already contains a user
+   * message with matching content — in which case we drop the optimistic
+   * one to avoid a brief duplicate while the page renders.
+   *
+   * This is the entry point for thread history loading after a thread
+   * switch (or initial route mount). WS init no longer carries messages;
+   * REST is the authoritative source.
+   */
+  setThreadMessages(
+    sessionId: string,
+    threadId: string,
+    messages: Message[],
+  ): void;
   reset(sessionId: string): void;
   remove(sessionId: string): void;
 }
@@ -83,7 +95,9 @@ function reduce(slice: SessionStreamState, ev: WireEvent, sessionId: string): Se
 
   switch (ev.type) {
     case "init": {
-      next.messages = ev.messages;
+      // Init no longer carries messages — REST drives history per-thread.
+      // We only clear transient state (status / error) so the UI doesn't
+      // show stale signals after a reconnect.
       next.error = undefined;
       next.agentStatus = "idle";
       return next;
@@ -275,6 +289,35 @@ export const useStreamStore = create<StreamStore>((set) => ({
     });
     return id;
   },
+
+  setThreadMessages: (sessionId, threadId, freshMessages) =>
+    set((state) => {
+      const slice = ensure(state, sessionId);
+      // Keep messages from other threads untouched.
+      const others = slice.messages.filter((m) => m.threadId !== threadId);
+      // Optimistic user messages we placed locally — preserve any whose
+      // content isn't already in the REST snapshot. Once the server has
+      // persisted the prompt, the snapshot will include it (with a server
+      // id), and we drop the optimistic copy to prevent a duplicate row.
+      const restUserContents = new Set(
+        freshMessages.filter((m) => m.role === "user").map((m) => m.content),
+      );
+      const optimisticPending = slice.messages.filter(
+        (m) =>
+          m.threadId === threadId &&
+          m.id.startsWith("user-opt-") &&
+          !restUserContents.has(m.content),
+      );
+      return {
+        bySession: {
+          ...state.bySession,
+          [sessionId]: {
+            ...slice,
+            messages: [...others, ...freshMessages, ...optimisticPending],
+          },
+        },
+      };
+    }),
 
   reset: (sessionId) =>
     set((state) => ({ bySession: { ...state.bySession, [sessionId]: { ...EMPTY } } })),

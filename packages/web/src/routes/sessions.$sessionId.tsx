@@ -1,7 +1,8 @@
+import { useEffect } from "react";
 import { createFileRoute } from "@tanstack/react-router";
-import { useSession, useThreads } from "~/api/queries";
+import { useMessages, useSession, useThreads } from "~/api/queries";
 import { useSessionWebSocket } from "~/api/ws";
-import { useSessionStream } from "~/stores/stream";
+import { useSessionStream, useStreamStore } from "~/stores/stream";
 import { Composer } from "~/components/session/composer";
 import { MessageList } from "~/components/session/message-list";
 import { SessionHeader } from "~/components/session/session-header";
@@ -32,6 +33,17 @@ function SessionPage() {
   // We only know the default's real id once the threads query resolves.
   const activeThreadId =
     searchThread ?? threads.data?.threads[0]?.id ?? undefined;
+
+  // Load this thread's persisted messages from REST and pipe into the
+  // stream store. Each (sessionId, threadId) is its own query key, so
+  // switching threads triggers a fresh fetch. Background refetches are
+  // disabled so this never wipes live state mid-session.
+  const messagesQ = useMessages(sessionId, activeThreadId);
+  const setThreadMessages = useStreamStore((s) => s.setThreadMessages);
+  useEffect(() => {
+    if (!activeThreadId || !messagesQ.data) return;
+    setThreadMessages(sessionId, activeThreadId, messagesQ.data.messages);
+  }, [sessionId, activeThreadId, messagesQ.data, setThreadMessages]);
 
   if (session.isLoading) {
     return (

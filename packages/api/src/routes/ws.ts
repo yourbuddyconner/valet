@@ -18,9 +18,9 @@ import type { UpgradeWebSocket } from "hono/ws";
 import { and, eq } from "drizzle-orm";
 import type { AppEnv } from "../env.js";
 import { agentSessions } from "../schema/index.js";
-import { busEventToWire, engineToWireParts, type WireEventDraft } from "../engine/bridge.js";
+import { busEventToWire, type WireEventDraft } from "../engine/bridge.js";
 import type { ClientFrame, WireEvent } from "../wire/types.js";
-import type { BusEvent, SessionEntry } from "@valet/engine";
+import type { BusEvent } from "@valet/engine";
 
 const PING_INTERVAL_MS = 30_000;
 
@@ -69,16 +69,18 @@ export function registerWsRoutes(
               return;
             }
 
-            // Materialize the engine session + default thread now so the bus
-            // has the right shape and the client can immediately render history
-            // when it loads. The init frame includes the recent message log.
+            // Materialize the engine session so the bus is set up + the
+            // default thread exists (so the client can immediately POST
+            // /threads or /messages without race against the engine).
+            // We DO NOT read the persisted entries here — the client loads
+            // history per-thread via REST so reconnects don't wipe the
+            // currently-visible thread when it isn't the default.
             const engineSession = await providers.engineHost.sessionFor(sessionId, {
               userId: row.userId,
               orgId: row.orgId,
               workspace: row.workspace,
             });
-            const defaultThread = await engineSession.ensureDefaultThread();
-            const entries: SessionEntry[] = await defaultThread.readEntries({ limit: 200 });
+            await engineSession.ensureDefaultThread();
 
             send(ws, {
               type: "init",
@@ -89,27 +91,10 @@ export function registerWsRoutes(
                 title: row.title ?? undefined,
                 createdAt: row.createdAt,
                 updatedAt: row.updatedAt,
-                messageCount: entries.filter((e) => e.type === "message").length,
+                // Reserved field; populating accurately requires a count
+                // query and the UI doesn't currently render this number.
+                messageCount: 0,
               },
-              messages: entries
-                .filter((e: SessionEntry): e is Extract<SessionEntry, { type: "message" }> => e.type === "message")
-                .map((e) => {
-                  const created =
-                    typeof e.createdAt === "number" ? e.createdAt : Date.parse(e.createdAt as unknown as string);
-                  return {
-                    id: e.id,
-                    sessionId,
-                    threadId: defaultThread.id,
-                    role: e.role,
-                    content: e.content,
-                    // Carry parts (text + tool_call) so the rendered chat
-                    // survives a page reload. The previous "send empty parts,
-                    // client refetches via REST" plan was wrong — REST data
-                    // never lands in the stream store.
-                    parts: engineToWireParts(e.parts),
-                    createdAt: Number.isFinite(created) ? created : Date.now(),
-                  };
-                }),
             });
 
             // Subscribe to the engine event bus for this session.

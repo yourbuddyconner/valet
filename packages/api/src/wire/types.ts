@@ -142,7 +142,11 @@ export interface SendPromptResponse {
  * dropped by the bridge.
  */
 export type WireEvent =
-  | { seq: number; ts: number; type: "init"; session: SessionDetail; messages: Message[] }
+  // `init` carries only session metadata. The client fetches messages via
+  // GET /messages?threadId=… (REST is the authoritative source for thread
+  // history). Earlier versions sent the default thread's messages here, but
+  // that wiped non-default-thread state on every WS reconnect.
+  | { seq: number; ts: number; type: "init"; session: SessionDetail }
   | { seq: number; ts: number; type: "message_start"; threadId: string; messageId: string; role: MessageRole }
   | { seq: number; ts: number; type: "text_delta"; threadId: string; messageId: string; delta: string }
   | {

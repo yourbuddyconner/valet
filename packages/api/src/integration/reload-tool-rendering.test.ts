@@ -1,13 +1,16 @@
 /**
- * Integration test: tool_call rendering survives a WebSocket reload.
+ * Integration test: tool_call rendering survives a "reload".
  *
  * Boots a real `createApp(providers)` against an in-memory sqlite + virtual
- * sandbox, runs a real Anthropic-backed turn that calls a tool, then opens a
- * FRESH WebSocket connection (simulating a page reload) and asserts the
- * init frame contains the completed tool_call.
+ * sandbox, runs a real Anthropic-backed turn that calls a tool, then
+ * REST-fetches messages (this is the path the client takes after a reload
+ * now that WS init is metadata-only). Asserts the persisted state contains
+ * a completed tool_call.
  *
  * Regression guard for two compounding bugs we shipped a fix for:
- *   1. The init frame stripped `parts: []` from every persisted message.
+ *   1. The persisted entries' `parts` weren't surfacing in the rendered
+ *      message list (originally because WS init stripped parts, now
+ *      because GET /messages must include them).
  *   2. The engine persisted tool_call parts at message_end with
  *      `status: "running"` and never re-persisted on tool completion.
  *
@@ -22,14 +25,17 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { bootTestApi } from "./_setup.js";
-import { captureInitFrame, driveTurn } from "./_test-utils.js";
-import type { CreateSessionResponse } from "../wire/types.js";
+import { driveTurn } from "./_test-utils.js";
+import type {
+  CreateSessionResponse,
+  ListMessagesResponse,
+} from "../wire/types.js";
 
 const describeIfKey = process.env.ANTHROPIC_API_KEY ? describe : describe.skip;
 
-describeIfKey("api integration: tool_call rendering survives WS reload", () => {
+describeIfKey("api integration: tool_call rendering survives reload", () => {
   it(
-    "init frame after reconnect includes completed tool_call parts",
+    "GET /messages after a turn returns persisted messages with completed tool_calls",
     async () => {
       const api = await bootTestApi();
       const workspaceRoot = mkdtempSync(join(tmpdir(), "valet-reload-ws-"));
@@ -52,17 +58,20 @@ describeIfKey("api integration: tool_call rendering survives WS reload", () => {
             "Use the write tool to write the exact text 'hello world' to /workspace/note.txt. After the tool succeeds, just reply 'done'.",
         });
 
-        // 3. Reload — open a fresh WS and capture the init frame.
-        const initFrame = await captureInitFrame({ wsUrl: api.wsUrl, sessionId });
+        // 3. "Reload" — fetch messages from REST, the same way the client
+        //    does on initial mount + thread switch now that WS init is
+        //    metadata-only.
+        const msgRes = await fetch(
+          `${api.baseUrl}/api/sessions/${sessionId}/messages`,
+        );
+        expect(msgRes.status).toBe(200);
+        const { messages } = (await msgRes.json()) as ListMessagesResponse;
 
-        // 4. Assert: the init frame's persisted messages include at least one
-        //    assistant message whose parts have a completed tool_call. This
-        //    fails if either bug regresses: init stripping parts (no parts
-        //    visible) or engine forgetting to re-persist (tool_call stays
-        //    status="running" with no result).
-        expect(initFrame.type).toBe("init");
-        if (initFrame.type !== "init") throw new Error("unreachable");
-        const assistantWithCompletedTool = initFrame.messages.find(
+        // 4. Assert: persisted state includes at least one assistant message
+        //    whose parts contain a completed tool_call. This fails if
+        //    either bug regresses: GET /messages dropping parts, or the
+        //    engine forgetting to re-persist tool completion.
+        const assistantWithCompletedTool = messages.find(
           (m) =>
             m.role === "assistant" &&
             m.parts.some(
@@ -71,11 +80,13 @@ describeIfKey("api integration: tool_call rendering survives WS reload", () => {
         );
         expect(
           assistantWithCompletedTool,
-          `init frame had ${initFrame.messages.length} messages but none ` +
+          `GET /messages returned ${messages.length} messages but none ` +
             `with a completed tool_call. Messages: ${JSON.stringify(
-              initFrame.messages.map((m) => ({
+              messages.map((m) => ({
                 role: m.role,
-                partKinds: m.parts.map((p) => `${p.kind}${p.kind === "tool_call" ? `(${p.status})` : ""}`),
+                partKinds: m.parts.map(
+                  (p) => `${p.kind}${p.kind === "tool_call" ? `(${p.status})` : ""}`,
+                ),
               })),
               null,
               2,
@@ -92,7 +103,6 @@ describeIfKey("api integration: tool_call rendering survives WS reload", () => {
         await api.cleanup();
       }
     },
-    // Real Anthropic call needs more than the package's 10s default.
     60_000,
   );
 });

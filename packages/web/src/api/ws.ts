@@ -15,7 +15,7 @@ const INITIAL_RETRY_MS = 500;
 function summarizeForLog(ev: WireEvent): string {
   switch (ev.type) {
     case "init":
-      return `(${ev.messages.length} messages)`;
+      return `session=${ev.session.id}`;
     case "text_delta":
       return JSON.stringify(ev.delta).slice(0, 80);
     case "tool_start":
