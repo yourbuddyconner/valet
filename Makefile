@@ -103,6 +103,27 @@ dev-worker: ## Start the Cloudflare Worker in dev mode
 dev-opencode: docker-up ## Start OpenCode container
 	@echo "$(GREEN)OpenCode container started on $(OPENCODE_URL)$(NC)"
 
+# ── Greenfield Node API + web (agent-loop only) ──
+# Independent of the legacy Cloudflare Worker. Runs the new @valet/api +
+# @valet/web together. Requires ANTHROPIC_API_KEY in your environment.
+
+dev-api-node: ## Start the new Node API (@valet/api) on :8788
+	@echo "$(GREEN)Starting @valet/api on :8788$(NC)"
+	@if [ -z "$$ANTHROPIC_API_KEY" ]; then echo "$(RED)ANTHROPIC_API_KEY is required$(NC)"; exit 1; fi
+	cd packages/api && VALET_LOCAL_AUTH=1 PORT=8788 $(PNPM) run dev
+
+dev-web: ## Start the new web client (@valet/web) on :5173
+	@echo "$(GREEN)Starting @valet/web on :5173 (proxy → :8788)$(NC)"
+	cd packages/web && $(PNPM) run dev
+
+dev-local: ## Start API + web together (greenfield agent-loop stack)
+	@echo "$(GREEN)Starting greenfield API + web. Open http://localhost:5173$(NC)"
+	@make -j2 dev-api-node dev-web
+
+dogfood-api: ## Run the api end-to-end script (real Anthropic + Docker)
+	@if [ -z "$$ANTHROPIC_API_KEY" ]; then echo "$(RED)ANTHROPIC_API_KEY is required$(NC)"; exit 1; fi
+	$(PNPM) --filter @valet/api dogfood
+
 # ==========================================
 # Database Operations
 # ==========================================
