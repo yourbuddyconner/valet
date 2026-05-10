@@ -120,6 +120,105 @@ export function runSessionStoreContract(name: string, ctx: StoreContractContext)
       expect(loaded[0]).toMatchObject({ id: "e-1", content: "rewritten" });
     });
 
+    it("round-trips tool_call parts with full fidelity (args, status, result)", async () => {
+      // Regression guard: tool_call parts must survive serialization with
+      // their nested args + result intact. A bug in a store impl that
+      // dropped or coerced these fields would manifest as tool cards going
+      // missing on reload.
+      await store.saveSession(newSession());
+      await store.saveThread("sess-1", newThread("sess-1"));
+      const entry: MessageEntry = {
+        id: "e-1",
+        sessionId: "sess-1",
+        threadId: "th-1",
+        parentId: null,
+        type: "message",
+        role: "assistant",
+        content: "running write",
+        parts: [
+          { type: "text", text: "running write" },
+          {
+            type: "tool_call",
+            callId: "tc1",
+            toolName: "write",
+            status: "running",
+            args: { path: "/tmp/x.txt", content: "ok" },
+          },
+        ],
+        createdAt: 10,
+      };
+      await store.appendEntries("sess-1", "th-1", [entry]);
+      const loaded = await store.getEntries("sess-1", "th-1");
+      expect(loaded).toHaveLength(1);
+      const reloaded = loaded[0];
+      expect(reloaded.type).toBe("message");
+      if (reloaded.type !== "message") throw new Error("unreachable");
+      expect(reloaded.parts).toHaveLength(2);
+      const tcPart = reloaded.parts?.[1];
+      expect(tcPart).toMatchObject({
+        type: "tool_call",
+        callId: "tc1",
+        toolName: "write",
+        status: "running",
+        args: { path: "/tmp/x.txt", content: "ok" },
+      });
+    });
+
+    it("updateEntry transitions a tool_call from running → completed (with result)", async () => {
+      // The bug we're guarding: engine persists at message_end with
+      // status="running", then tool_execution_end mutates the in-memory
+      // part — without an updateEntry call, the store stays stale.
+      await store.saveSession(newSession());
+      await store.saveThread("sess-1", newThread("sess-1"));
+      const before: MessageEntry = {
+        id: "e-1",
+        sessionId: "sess-1",
+        threadId: "th-1",
+        parentId: null,
+        type: "message",
+        role: "assistant",
+        content: "",
+        parts: [
+          {
+            type: "tool_call",
+            callId: "tc1",
+            toolName: "bash",
+            status: "running",
+            args: { command: "echo hi" },
+          },
+        ],
+        createdAt: 10,
+      };
+      await store.appendEntries("sess-1", "th-1", [before]);
+
+      // Mirror what the engine does: mutate the part, persist via updateEntry.
+      const after: MessageEntry = {
+        ...before,
+        parts: [
+          {
+            type: "tool_call",
+            callId: "tc1",
+            toolName: "bash",
+            status: "completed",
+            args: { command: "echo hi" },
+            result: { text: "hi\n" },
+          },
+        ],
+      };
+      await store.updateEntry("sess-1", "th-1", after);
+
+      const loaded = await store.getEntries("sess-1", "th-1");
+      expect(loaded).toHaveLength(1);
+      const reloaded = loaded[0];
+      if (reloaded.type !== "message") throw new Error("unreachable");
+      const tc = reloaded.parts?.[0];
+      expect(tc).toMatchObject({
+        type: "tool_call",
+        status: "completed",
+        result: { text: "hi\n" },
+      });
+    });
+
     it("updateEntry throws NotFoundError when no matching entry exists", async () => {
       await store.saveSession(newSession());
       await store.saveThread("sess-1", newThread("sess-1"));

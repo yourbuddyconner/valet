@@ -89,6 +89,24 @@ describe("engine: single-thread happy path", () => {
     const tools = events.map((e) => e.event).filter((e) => e.type === "tool_start" || e.type === "tool_end");
     expect(tools.map((t) => t.type)).toEqual(["tool_start", "tool_end"]);
 
+    // The persisted assistant entry has the tool_call part with COMPLETED
+    // status + the result. Regression guard: an earlier bug persisted the
+    // entry at message_end with status='running' and never re-persisted
+    // after tool_execution_end, so reload showed cards stuck mid-execution.
+    const entries = await session.readEntries("web:default");
+    const assistant = entries.find(
+      (e) => e.type === "message" && e.role === "assistant",
+    );
+    expect(assistant).toBeDefined();
+    if (assistant?.type !== "message") throw new Error("unreachable");
+    const toolCallPart = assistant.parts?.find((p) => p.type === "tool_call");
+    expect(toolCallPart).toBeDefined();
+    if (toolCallPart?.type !== "tool_call") throw new Error("unreachable");
+    expect(toolCallPart.toolName).toBe("write");
+    expect(toolCallPart.status).toBe("completed");
+    expect(toolCallPart.result).toBeDefined();
+    expect(toolCallPart.args).toEqual({ path: "/tmp/note.txt", content: "ok" });
+
     faux.unregister();
   });
 
