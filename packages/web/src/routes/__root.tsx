@@ -3,7 +3,8 @@ import { useState } from "react";
 import type { QueryClient } from "@tanstack/react-query";
 import { TooltipProvider } from "~/components/primitives/tooltip";
 import { AppShell } from "~/components/layout/app-shell";
-import { Sidebar } from "~/components/layout/sidebar";
+import { TopNav } from "~/components/layout/top-nav";
+import { ThreadList } from "~/components/session/thread-list";
 import { NewSessionDialog } from "~/components/new-session-dialog";
 
 interface RouterContext {
@@ -18,7 +19,10 @@ function RootLayout() {
   const [newOpen, setNewOpen] = useState(false);
   return (
     <TooltipProvider>
-      <AppShell sidebar={<Sidebar onNewSession={() => setNewOpen(true)} />}>
+      <AppShell
+        topNav={<TopNav onNewSession={() => setNewOpen(true)} />}
+        sidebar={<ThreadList />}
+      >
         <Outlet />
       </AppShell>
       <NewSessionDialog open={newOpen} onOpenChange={setNewOpen} />

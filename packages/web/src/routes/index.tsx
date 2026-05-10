@@ -14,8 +14,8 @@ function Empty() {
         </div>
         <h1 className="text-lg font-semibold tracking-tight">Start a session</h1>
         <p className="text-sm text-[--muted]">
-          Click <span className="font-medium text-[--fg]">New</span> in the sidebar to spin up an agent
-          with a Docker workspace. The agent runs <span className="font-mono text-xs">bash</span>,
+          Click <span className="font-medium text-[--fg]">+ New session</span> in the top nav to spin
+          up an agent with a Docker workspace. The agent runs <span className="font-mono text-xs">bash</span>,
           reads, writes, and edits files inside the sandbox.
         </p>
       </div>
