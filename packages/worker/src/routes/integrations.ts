@@ -267,16 +267,16 @@ integrationsRouter.get('/google_workspace/labels', async (c) => {
   const env = c.env;
 
   const credResult = await integrationRegistry.resolveCredentials(
-    'google_workspace', env, user.id, {}
+    'google_workspace', env, user.id, { forceRefresh: false }
   );
 
   if (!credResult.ok) {
     return c.json({ available: false, reason: 'Google Workspace integration not connected' });
   }
 
-  const token = credResult.credential.accessToken;
+  let token = credResult.credential.accessToken;
 
-  try {
+  async function fetchLabels(accessToken: string) {
     const allLabels: Array<{ id: string; name: string; labelType: string; properties?: { title: string } }> = [];
     let pageToken: string | undefined;
 
@@ -286,22 +286,17 @@ integrationsRouter.get('/google_workspace/labels', async (c) => {
 
       const res = await fetch(
         `https://drivelabels.googleapis.com/v2/labels?${params}`,
-        { headers: { Authorization: `Bearer ${token}` } },
+        { headers: { Authorization: `Bearer ${accessToken}` } },
       );
 
       if (!res.ok) {
-        // If the first page fails, report unavailable with the actual error for diagnosis.
         if (allLabels.length === 0) {
           let detail = `${res.status}`;
           try {
             const errBody = (await res.json()) as { error?: { message?: string; status?: string } };
             if (errBody.error?.message) detail = errBody.error.message;
           } catch { /* ignore parse failure */ }
-          console.error(`Drive Labels API error: ${res.status} — ${detail}`);
-          return c.json({
-            available: false,
-            reason: `Drive Labels API error: ${detail}`,
-          });
+          return { ok: false as const, status: res.status, detail };
         }
         break;
       }
@@ -315,7 +310,29 @@ integrationsRouter.get('/google_workspace/labels', async (c) => {
       pageToken = data.nextPageToken;
     } while (pageToken);
 
-    const labels = allLabels.map((l) => ({
+    return { ok: true as const, labels: allLabels };
+  }
+
+  try {
+    let result = await fetchLabels(token);
+
+    // On auth error, force-refresh the token and retry once
+    if (!result.ok && result.status === 401) {
+      const refreshed = await integrationRegistry.resolveCredentials(
+        'google_workspace', env, user.id, { forceRefresh: true }
+      );
+      if (refreshed.ok) {
+        token = refreshed.credential.accessToken;
+        result = await fetchLabels(token);
+      }
+    }
+
+    if (!result.ok) {
+      console.error(`Drive Labels API error: ${result.status} — ${result.detail}`);
+      return c.json({ available: false, reason: `Drive Labels API error: ${result.detail}` });
+    }
+
+    const labels = result.labels.map((l) => ({
       id: l.id,
       name: l.properties?.title ?? l.name ?? l.id,
       type: l.labelType ?? 'UNKNOWN',
