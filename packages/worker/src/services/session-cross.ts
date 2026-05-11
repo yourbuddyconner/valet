@@ -135,6 +135,7 @@ export async function spawnChild(
     workspace: params.workspace,
     title: params.title || params.workspace,
     parentSessionId,
+    parentThreadId,
     personaId: params.personaId,
   });
 

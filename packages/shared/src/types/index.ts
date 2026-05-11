@@ -157,6 +157,7 @@ export interface AgentSession {
   purpose?: SessionPurpose;
   title?: string;
   parentSessionId?: string;
+  parentThreadId?: string;
   containerId?: string;
   sandboxId?: string;
   tunnelUrls?: Record<string, string>;
