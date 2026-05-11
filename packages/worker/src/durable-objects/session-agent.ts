@@ -3645,6 +3645,14 @@ export class SessionAgentDO {
   }
 
   private async handlePromptComplete(messageId?: string) {
+    // Read channel target BEFORE markCompletedById deletes the row — needed
+    // to resolve channel followups so stale reminders don't fire after the
+    // prompt has already been handled. Hoisted above try so the catch block
+    // can still resolve followups if an error occurs mid-completion.
+    const followupChannel = messageId
+      ? this.promptQueue.getChannelTargetById(messageId)
+      : this.promptQueue.getProcessingChannelContext();
+
     try {
       this.promptQueue.clearDispatchTimers();
 
@@ -3680,6 +3688,9 @@ export class SessionAgentDO {
         console.log(`[SessionAgentDO] handlePromptComplete: messageId=${messageId} already completed, skipping`);
         return;
       }
+
+      // Resolve channel followups so the alarm doesn't inject stale reminders.
+      await this.resolveFollowupsForCompletedPrompt(followupChannel);
 
       const queuedAfterPrune = this.promptQueue.length;
       console.log(`[SessionAgentDO] handlePromptComplete: marked ${processingCount} processing→completed, queuedRemaining=${queuedAfterPrune}`);
@@ -3720,6 +3731,10 @@ export class SessionAgentDO {
         type: 'status',
         data: { runnerBusy: false },
       });
+
+      // Best-effort: resolve followups even on error so stale reminders don't
+      // compound the problem.
+      try { await this.resolveFollowupsForCompletedPrompt(followupChannel); } catch { /* ignore */ }
     }
   }
 
@@ -3955,6 +3970,7 @@ export class SessionAgentDO {
     this.sessionState.snapshotImageId = undefined;
     this.promptQueue.runnerBusy = false;
     this.promptQueue.clearAll();
+    this.ctx.storage.sql.exec('DELETE FROM channel_followups');
 
     // Sync status to D1
     if (sessionId) {
@@ -4846,6 +4862,10 @@ export class SessionAgentDO {
       await this.notifyParentEvent(`Child session event: ${sessionId} hibernated.`, { wake: true, childStatus: 'hibernated' });
 
       this.promptQueue.revertProcessingToQueued();
+
+      // Resolve all pending followups — sandbox is gone so reminders can't be
+      // acted on until the session wakes, and by then the context is stale.
+      this.ctx.storage.sql.exec("UPDATE channel_followups SET status = 'resolved' WHERE status = 'pending'");
 
       // Auto-wake if prompts arrived during snapshot window
       const queuedDuringHibernate = this.promptQueue.length;
@@ -6105,6 +6125,28 @@ export class SessionAgentDO {
       "UPDATE channel_followups SET status = 'resolved' WHERE status = 'pending' AND channel_type = ? AND channel_id = ?",
       channelType, channelId
     );
+  }
+
+  /**
+   * Resolve channel followups for a completed prompt. Handles the thread-origin
+   * case where a web UI message targets a Slack-originated thread — the followup
+   * was inserted keyed to the origin channel, not the thread itself.
+   */
+  private async resolveFollowupsForCompletedPrompt(
+    channel: { channelType: string | null; channelId: string | null; threadId?: string | null } | null | undefined,
+  ): Promise<void> {
+    if (!channel) return;
+    let { channelType: chType, channelId: chId } = channel;
+    if (chType === 'thread' && channel.threadId) {
+      const origin = await getThreadOriginChannel(this.env.DB, channel.threadId);
+      if (origin && origin.channelType !== 'web' && origin.channelType !== 'thread') {
+        chType = origin.channelType;
+        chId = origin.channelId;
+      }
+    }
+    if (chType && chId && chType !== 'web' && chType !== 'thread') {
+      this.resolveChannelFollowups(chType, chId);
+    }
   }
 
   /**
