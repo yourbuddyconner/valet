@@ -19,6 +19,7 @@ export const sessions = sqliteTable('sessions', {
   activeSeconds: integer().notNull().default(0),
   title: text(),
   parentSessionId: text(),
+  parentThreadId: text(),
   personaId: text(),
   isOrchestrator: integer({ mode: 'boolean' }).notNull().default(false),
   purpose: text().notNull().default('interactive'),

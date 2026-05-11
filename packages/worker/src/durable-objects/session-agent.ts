@@ -415,6 +415,7 @@ export class SessionAgentDO {
       driveLabelsGuardEnabled: settings.driveLabelsGuardEnabled,
       driveRequiredLabelIds: settings.driveRequiredLabelIds,
       driveLabelsFailMode: settings.driveLabelsFailMode,
+      driveCorpora: settings.driveCorpora,
     };
     this.guardConfigExpiresAt = now + 60_000;
     return this.guardConfigCache;
@@ -1591,6 +1592,9 @@ export class SessionAgentDO {
 
     if (threadId) {
       const inMemoryThreadSessionId = this.getChannelOcSessionId(channelKey);
+      // handlePrompt needs both OC session hydration AND continuation context,
+      // so we call hydrateThreadResumeContext directly (single D1 query) rather
+      // than using ensureThreadOcSessionHydrated which only handles OC sessions.
       if (!inMemoryThreadSessionId || !continuationContext) {
         const hydrated = await this.hydrateThreadResumeContext(threadId);
         if (!inMemoryThreadSessionId && hydrated.opencodeSessionId) {
@@ -2734,13 +2738,15 @@ export class SessionAgentDO {
         }
 
         try {
+          const resolvedParentThreadId = this.promptQueue.getProcessingThreadId() || undefined;
+          console.log(`[SessionAgentDO] spawn-child: parentSession=${this.sessionState.sessionId} parentThreadId=${resolvedParentThreadId || 'NONE'} task="${msg.task?.slice(0, 60)}"`);
           const result = await spawnChild(
             this.appDb,
             this.env,
             {
               parentSessionId: this.sessionState.sessionId,
               userId: this.sessionState.userId,
-              parentThreadId: this.promptQueue.getProcessingThreadId() || undefined,
+              parentThreadId: resolvedParentThreadId,
               spawnRequest: spawnRequest as Record<string, unknown> & { doWsUrl: string; envVars: Record<string, string> },
               backendUrl,
               terminateUrl: this.sessionState.terminateUrl,
@@ -3623,6 +3629,20 @@ export class SessionAgentDO {
     };
   }
 
+  /**
+   * Ensure the channel_state table has the OpenCode session ID for a thread channel.
+   * Checks the in-memory cache first; if missing, hydrates from D1's session_threads table.
+   * Called from handleSystemMessage and sendNextQueuedPrompt. (handlePrompt calls
+   * hydrateThreadResumeContext directly since it also needs continuation context.)
+   */
+  private async ensureThreadOcSessionHydrated(threadId: string, channelKey: string): Promise<void> {
+    const existing = this.getChannelOcSessionId(channelKey);
+    if (existing) return;
+    const hydrated = await this.hydrateThreadResumeContext(threadId);
+    if (hydrated.opencodeSessionId) {
+      this.setChannelOcSessionId(channelKey, hydrated.opencodeSessionId);
+    }
+  }
 
   private async handlePromptComplete(messageId?: string) {
     try {
@@ -4064,7 +4084,17 @@ export class SessionAgentDO {
       const parentSessionId = session?.parentSessionId;
       if (!parentSessionId) return;
       const childTitle = session?.title || session?.workspace || `Child ${sessionId.slice(0, 8)}`;
-      const parentThreadId = this.sessionState.parentThreadId;
+      // Prefer DO state, fall back to D1 — the DO value can be lost if the
+      // child session is re-initialized (e.g., orchestrator restart clears
+      // the prompt queue before the spawn-child message arrives).
+      const doThreadId = this.sessionState.parentThreadId;
+      const d1ThreadId = session?.parentThreadId;
+      const parentThreadId = doThreadId || d1ThreadId;
+      if (!doThreadId && d1ThreadId) {
+        console.warn(`[SessionAgentDO] notifyParentEvent: DO state missing parentThreadId, falling back to D1 — child=${sessionId} parent=${parentSessionId} threadId=${d1ThreadId} status=${options?.childStatus}`);
+      } else {
+        console.log(`[SessionAgentDO] notifyParentEvent: child=${sessionId} parent=${parentSessionId} parentThreadId=${parentThreadId || 'NONE'} status=${options?.childStatus}`);
+      }
       const parentDoId = this.env.SESSIONS.idFromName(parentSessionId);
       const parentDO = this.env.SESSIONS.get(parentDoId);
       await parentDO.fetch(new Request('http://do/system-message', {
@@ -4088,6 +4118,9 @@ export class SessionAgentDO {
   }
 
   private async handleSystemMessage(content: string, parts?: Record<string, unknown>, wake?: boolean, threadId?: string) {
+    if (parts?.childSessionId) {
+      console.log(`[SessionAgentDO] handleSystemMessage: childEvent childSession=${parts.childSessionId} childStatus=${parts.childStatus} threadId=${threadId || 'NONE'} wake=${wake}`);
+    }
     const messageId = crypto.randomUUID();
     const serializedParts = parts ? JSON.stringify(parts) : null;
 
@@ -4180,6 +4213,9 @@ export class SessionAgentDO {
           const ownerDetails = ownerId ? await this.getUserDetails(ownerId) : undefined;
           const sysModelPrefs = await this.resolveModelPreferences(ownerDetails);
           const sysChannelKey = this.channelKeyFrom(sysChannelType, sysChannelId);
+          if (threadId) {
+            await this.ensureThreadOcSessionHydrated(threadId, sysChannelKey);
+          }
           const sysOcSessionId = this.getChannelOcSessionId(sysChannelKey);
           const sysDispatched = this.runnerLink.send({
             type: 'prompt',
@@ -4493,15 +4529,8 @@ export class SessionAgentDO {
     const queueModelPrefs = await this.resolveModelPreferences(queueOwnerDetails);
     const queueChannelKey = this.channelKeyFrom(queueChannelType, queueChannelId);
 
-    // Hydrate thread resume context for deferred prompts (mirrors handlePrompt's hydration)
     if (queueThreadId) {
-      const inMemoryOcSessionId = this.getChannelOcSessionId(queueChannelKey);
-      if (!inMemoryOcSessionId) {
-        const hydrated = await this.hydrateThreadResumeContext(queueThreadId);
-        if (hydrated.opencodeSessionId) {
-          this.setChannelOcSessionId(queueChannelKey, hydrated.opencodeSessionId);
-        }
-      }
+      await this.ensureThreadOcSessionHydrated(queueThreadId, queueChannelKey);
     }
 
     const queueOcSessionId = this.getChannelOcSessionId(queueChannelKey);

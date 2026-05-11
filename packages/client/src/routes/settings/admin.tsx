@@ -101,7 +101,7 @@ function AdminSettingsPage() {
         <InvitesSection />
         <UsersSection currentUserId={user.id} />
         <DefaultSkillsSection />
-        <DriveLabelsGuardSection />
+        <GoogleDriveSection />
         <ActionPoliciesSection />
         <PluginsSection />
       </div>
@@ -2612,7 +2612,7 @@ function LoginProvidersSection() {
 
 // --- Drive Labels Guard ---
 
-function DriveLabelsGuardSection() {
+function GoogleDriveSection() {
   const { data: settings } = useOrgSettings();
   const updateSettings = useUpdateOrgSettings();
   const { data: labelsData, isLoading: labelsLoading } = useDriveLabels();
@@ -2620,6 +2620,7 @@ function DriveLabelsGuardSection() {
   const [enabled, setEnabled] = React.useState(false);
   const [selectedIds, setSelectedIds] = React.useState<string[]>([]);
   const [failMode, setFailMode] = React.useState<'deny' | 'allow'>('deny');
+  const [driveCorpora, setDriveCorpora] = React.useState<'user' | 'domain' | 'allDrives'>('user');
   const [saved, setSaved] = React.useState(false);
 
   React.useEffect(() => {
@@ -2627,6 +2628,7 @@ function DriveLabelsGuardSection() {
     setEnabled(settings.driveLabelsGuardEnabled ?? false);
     setSelectedIds(settings.driveRequiredLabelIds ?? []);
     setFailMode(settings.driveLabelsFailMode ?? 'deny');
+    setDriveCorpora(settings.driveCorpora ?? 'user');
   }, [settings]);
 
   const labelsAvailable = labelsData?.available === true;
@@ -2644,6 +2646,7 @@ function DriveLabelsGuardSection() {
         driveLabelsGuardEnabled: enabled,
         driveRequiredLabelIds: selectedIds,
         driveLabelsFailMode: failMode,
+        driveCorpora,
       },
       {
         onSuccess: () => {
@@ -2655,88 +2658,116 @@ function DriveLabelsGuardSection() {
   }
 
   return (
-    <Section title="Drive Labels Guard">
-      <p className="text-sm text-neutral-500 dark:text-neutral-400 mb-4">
-        Require files shared with the agent to have specific Google Drive labels before actions are allowed.
-      </p>
-
-      {!labelsLoading && !labelsAvailable && (
-        <div className="mb-4 flex items-center gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 dark:border-amber-800 dark:bg-amber-900/30">
-          <span className="text-xs text-amber-700 dark:text-amber-300">
-            {labelsData?.reason ?? 'Connect a Google Workspace integration to configure Drive Labels.'}
-          </span>
+    <Section title="Google Drive">
+      <div className="space-y-6">
+        <div>
+          <label htmlFor="drive-corpora" className="text-sm font-medium text-neutral-700 dark:text-neutral-300">
+            File discovery scope
+          </label>
+          <p className="text-sm text-neutral-500 dark:text-neutral-400 mb-2">
+            Controls which files Drive search and list actions can see.
+          </p>
+          <select
+            id="drive-corpora"
+            value={driveCorpora}
+            onChange={(e) => setDriveCorpora(e.target.value as 'user' | 'domain' | 'allDrives')}
+            className={selectClass}
+          >
+            <option value="user">User — only files owned by or shared with the user</option>
+            <option value="domain">Domain — all files shared with the organization</option>
+            <option value="allDrives">All Drives — user files plus all accessible shared drives</option>
+          </select>
         </div>
-      )}
 
-      <div className="space-y-4">
-        <label className="flex items-center gap-3 text-sm">
-          <input
-            type="checkbox"
-            checked={enabled}
-            onChange={(e) => setEnabled(e.target.checked)}
-            disabled={!labelsAvailable}
-            className="h-4 w-4 rounded border-neutral-300 text-neutral-900 focus:ring-neutral-500 dark:border-neutral-600 dark:bg-neutral-800 disabled:opacity-50"
-          />
-          <span className="font-medium text-neutral-700 dark:text-neutral-300">
-            Enable Drive Labels guard
-          </span>
-        </label>
+        <hr className="border-neutral-200 dark:border-neutral-700" />
 
-        {enabled && labelsAvailable && (
-          <>
-            <div>
-              <p className="text-sm font-medium text-neutral-700 dark:text-neutral-300 mb-2">
-                Required labels{' '}
-                <span className="font-normal text-neutral-400">(files must have at least one)</span>
-              </p>
-              {labelsLoading ? (
-                <p className="text-sm text-neutral-400">Loading labels...</p>
-              ) : labelsList.length === 0 ? (
-                <p className="text-sm text-neutral-400">No labels found in your Drive account.</p>
-              ) : (
-                <div className="space-y-1 max-h-48 overflow-y-auto rounded-md border border-neutral-200 bg-neutral-50 p-2 dark:border-neutral-700 dark:bg-neutral-900">
-                  {labelsList.map((label) => (
-                    <label key={label.id} className="flex items-center gap-2 text-sm cursor-pointer px-1 py-0.5 rounded hover:bg-neutral-100 dark:hover:bg-neutral-800">
-                      <input
-                        type="checkbox"
-                        checked={selectedIds.includes(label.id)}
-                        onChange={() => toggleLabel(label.id)}
-                        className="h-4 w-4 rounded border-neutral-300 text-neutral-900 focus:ring-neutral-500 dark:border-neutral-600 dark:bg-neutral-800"
-                      />
-                      <span className="text-neutral-700 dark:text-neutral-300">{label.name}</span>
-                      <span className="text-xs text-neutral-400">{label.type}</span>
-                    </label>
-                  ))}
+        <div>
+          <p className="text-sm font-medium text-neutral-700 dark:text-neutral-300 mb-1">
+            Labels guard
+          </p>
+          <p className="text-sm text-neutral-500 dark:text-neutral-400 mb-3">
+            Require files shared with the agent to have specific Google Drive labels before actions are allowed.
+          </p>
+
+          {!labelsLoading && !labelsAvailable && (
+            <div className="mb-4 flex items-center gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 dark:border-amber-800 dark:bg-amber-900/30">
+              <span className="text-xs text-amber-700 dark:text-amber-300">
+                {labelsData?.reason ?? 'Connect a Google Workspace integration to configure Drive Labels.'}
+              </span>
+            </div>
+          )}
+
+          <div className="space-y-4">
+            <label className="flex items-center gap-3 text-sm">
+              <input
+                type="checkbox"
+                checked={enabled}
+                onChange={(e) => setEnabled(e.target.checked)}
+                disabled={!labelsAvailable}
+                className="h-4 w-4 rounded border-neutral-300 text-neutral-900 focus:ring-neutral-500 dark:border-neutral-600 dark:bg-neutral-800 disabled:opacity-50"
+              />
+              <span className="font-medium text-neutral-700 dark:text-neutral-300">
+                Enable Drive Labels guard
+              </span>
+            </label>
+
+            {enabled && labelsAvailable && (
+              <>
+                <div>
+                  <p className="text-sm font-medium text-neutral-700 dark:text-neutral-300 mb-2">
+                    Required labels{' '}
+                    <span className="font-normal text-neutral-400">(files must have at least one)</span>
+                  </p>
+                  {labelsLoading ? (
+                    <p className="text-sm text-neutral-400">Loading labels...</p>
+                  ) : labelsList.length === 0 ? (
+                    <p className="text-sm text-neutral-400">No labels found in your Drive account.</p>
+                  ) : (
+                    <div className="space-y-1 max-h-48 overflow-y-auto rounded-md border border-neutral-200 bg-neutral-50 p-2 dark:border-neutral-700 dark:bg-neutral-900">
+                      {labelsList.map((label) => (
+                        <label key={label.id} className="flex items-center gap-2 text-sm cursor-pointer px-1 py-0.5 rounded hover:bg-neutral-100 dark:hover:bg-neutral-800">
+                          <input
+                            type="checkbox"
+                            checked={selectedIds.includes(label.id)}
+                            onChange={() => toggleLabel(label.id)}
+                            className="h-4 w-4 rounded border-neutral-300 text-neutral-900 focus:ring-neutral-500 dark:border-neutral-600 dark:bg-neutral-800"
+                          />
+                          <span className="text-neutral-700 dark:text-neutral-300">{label.name}</span>
+                          <span className="text-xs text-neutral-400">{label.type}</span>
+                        </label>
+                      ))}
+                    </div>
+                  )}
                 </div>
-              )}
-            </div>
 
-            <div>
-              <label htmlFor="drive-fail-mode" className="text-sm font-medium text-neutral-700 dark:text-neutral-300">
-                Fail mode
-              </label>
-              <select
-                id="drive-fail-mode"
-                value={failMode}
-                onChange={(e) => setFailMode(e.target.value as 'deny' | 'allow')}
-                className={selectClass}
-              >
-                <option value="deny">Deny — block the action if labels are missing</option>
-                <option value="allow">Allow — log a warning but proceed anyway</option>
-              </select>
-              {failMode === 'allow' && (
-                <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">
-                  Warning: allow mode will not block actions on unlabeled files.
-                </p>
-              )}
-            </div>
-          </>
-        )}
+                <div>
+                  <label htmlFor="drive-fail-mode" className="text-sm font-medium text-neutral-700 dark:text-neutral-300">
+                    Fail mode
+                  </label>
+                  <select
+                    id="drive-fail-mode"
+                    value={failMode}
+                    onChange={(e) => setFailMode(e.target.value as 'deny' | 'allow')}
+                    className={selectClass}
+                  >
+                    <option value="deny">Deny — block the action if labels are missing</option>
+                    <option value="allow">Allow — log a warning but proceed anyway</option>
+                  </select>
+                  {failMode === 'allow' && (
+                    <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">
+                      Warning: allow mode will not block actions on unlabeled files.
+                    </p>
+                  )}
+                </div>
+              </>
+            )}
+          </div>
+        </div>
 
         <div className="flex items-center gap-3">
           <Button
             onClick={handleSave}
-            disabled={!labelsAvailable || updateSettings.isPending}
+            disabled={updateSettings.isPending}
           >
             {updateSettings.isPending ? 'Saving...' : 'Save'}
           </Button>

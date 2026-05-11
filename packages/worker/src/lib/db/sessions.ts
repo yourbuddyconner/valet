@@ -67,6 +67,7 @@ function rowToSession(row: typeof sessions.$inferSelect & { personaName?: string
     status: row.status as AgentSession['status'],
     title: row.title || undefined,
     parentSessionId: row.parentSessionId || undefined,
+    parentThreadId: row.parentThreadId || undefined,
     containerId: row.containerId || undefined,
     metadata: row.metadata || undefined,
     errorMessage: row.errorMessage || undefined,
@@ -124,7 +125,7 @@ function rowToShareLink(row: typeof sessionShareLinks.$inferSelect): SessionShar
 
 export async function createSession(
   db: AppDb,
-  data: { id: string; userId: string; workspace: string; title?: string; parentSessionId?: string; containerId?: string; metadata?: Record<string, unknown>; personaId?: string; isOrchestrator?: boolean; purpose?: SessionPurpose }
+  data: { id: string; userId: string; workspace: string; title?: string; parentSessionId?: string; parentThreadId?: string; containerId?: string; metadata?: Record<string, unknown>; personaId?: string; isOrchestrator?: boolean; purpose?: SessionPurpose }
 ): Promise<AgentSession> {
   const purpose = data.purpose || (data.isOrchestrator ? 'orchestrator' : 'interactive');
 
@@ -137,6 +138,7 @@ export async function createSession(
     metadata: data.metadata || null,
     title: data.title || null,
     parentSessionId: data.parentSessionId || null,
+    parentThreadId: data.parentThreadId || null,
     personaId: data.personaId || null,
     isOrchestrator: data.isOrchestrator ?? false,
     purpose,
@@ -149,6 +151,7 @@ export async function createSession(
     status: 'initializing',
     title: data.title,
     parentSessionId: data.parentSessionId,
+    parentThreadId: data.parentThreadId,
     containerId: data.containerId,
     metadata: data.metadata,
     personaId: data.personaId,
@@ -248,6 +251,7 @@ export async function getUserSessions(
       status: row.status,
       title: row.title || undefined,
       parentSessionId: row.parent_session_id || undefined,
+      parentThreadId: row.parent_thread_id || undefined,
       containerId: row.container_id || undefined,
       metadata: row.metadata ? JSON.parse(row.metadata) : undefined,
       errorMessage: row.error_message || undefined,

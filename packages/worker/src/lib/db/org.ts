@@ -20,6 +20,7 @@ function rowToOrgSettings(row: typeof orgSettings.$inferSelect): OrgSettings {
     driveLabelsGuardEnabled: Boolean(row.driveLabelsGuardEnabled),
     driveRequiredLabelIds: JSON.parse(row.driveRequiredLabelIds || '[]') as string[],
     driveLabelsFailMode: (row.driveLabelsFailMode || 'deny') as 'deny' | 'allow',
+    driveCorpora: (row.driveCorpora || 'user') as OrgSettings['driveCorpora'],
     createdAt: toDate(row.createdAt),
     updatedAt: toDate(row.updatedAt),
   };
@@ -72,6 +73,7 @@ export async function getOrgSettings(db: AppDb): Promise<OrgSettings> {
       driveLabelsGuardEnabled: false,
       driveRequiredLabelIds: [],
       driveLabelsFailMode: 'deny' as const,
+      driveCorpora: 'user' as const,
       createdAt: new Date(),
       updatedAt: new Date(),
     };
@@ -81,7 +83,7 @@ export async function getOrgSettings(db: AppDb): Promise<OrgSettings> {
 
 export async function updateOrgSettings(
   db: AppDb,
-  updates: Partial<Pick<OrgSettings, 'name' | 'allowedEmailDomain' | 'allowedEmails' | 'domainGatingEnabled' | 'emailAllowlistEnabled' | 'modelPreferences' | 'enabledLoginProviders' | 'driveLabelsGuardEnabled' | 'driveRequiredLabelIds' | 'driveLabelsFailMode'>>
+  updates: Partial<Pick<OrgSettings, 'name' | 'allowedEmailDomain' | 'allowedEmails' | 'domainGatingEnabled' | 'emailAllowlistEnabled' | 'modelPreferences' | 'enabledLoginProviders' | 'driveLabelsGuardEnabled' | 'driveRequiredLabelIds' | 'driveLabelsFailMode' | 'driveCorpora'>>
 ): Promise<OrgSettings> {
   const setValues: Record<string, unknown> = {};
 
@@ -95,6 +97,7 @@ export async function updateOrgSettings(
   if (updates.driveLabelsGuardEnabled !== undefined) setValues.driveLabelsGuardEnabled = updates.driveLabelsGuardEnabled ? 1 : 0;
   if (updates.driveRequiredLabelIds !== undefined) setValues.driveRequiredLabelIds = JSON.stringify(updates.driveRequiredLabelIds);
   if (updates.driveLabelsFailMode !== undefined) setValues.driveLabelsFailMode = updates.driveLabelsFailMode;
+  if (updates.driveCorpora !== undefined) setValues.driveCorpora = updates.driveCorpora;
 
   if (Object.keys(setValues).length > 0) {
     setValues.updatedAt = sql`datetime('now')`;

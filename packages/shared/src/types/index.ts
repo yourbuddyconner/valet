@@ -157,6 +157,7 @@ export interface AgentSession {
   purpose?: SessionPurpose;
   title?: string;
   parentSessionId?: string;
+  parentThreadId?: string;
   containerId?: string;
   sandboxId?: string;
   tunnelUrls?: Record<string, string>;
@@ -309,6 +310,7 @@ export interface OrgSettings {
   driveLabelsGuardEnabled: boolean;
   driveRequiredLabelIds: string[];
   driveLabelsFailMode: 'deny' | 'allow';
+  driveCorpora: 'user' | 'domain' | 'allDrives';
   createdAt: Date;
   updatedAt: Date;
 }
