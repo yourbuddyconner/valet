@@ -415,6 +415,7 @@ export class SessionAgentDO {
       driveLabelsGuardEnabled: settings.driveLabelsGuardEnabled,
       driveRequiredLabelIds: settings.driveRequiredLabelIds,
       driveLabelsFailMode: settings.driveLabelsFailMode,
+      driveCorpora: settings.driveCorpora,
     };
     this.guardConfigExpiresAt = now + 60_000;
     return this.guardConfigCache;

@@ -101,6 +101,14 @@ function getLabelFilter(params: unknown): string | undefined {
   return (params as Record<string, unknown> | null)?.__labelFilter as string | undefined;
 }
 
+const VALID_CORPORA = new Set(['user', 'domain', 'allDrives']);
+
+/** Return the org-configured corpora value, falling back to `'user'`. */
+function resolveCorpora(ctx: ActionContext): string {
+  const value = ctx.guardConfig?.driveCorpora;
+  return typeof value === 'string' && VALID_CORPORA.has(value) ? value : 'user';
+}
+
 /**
  * Compose a user query with an optional label filter clause.
  * Uses parenthesization to prevent Drive API operator precedence bugs.
@@ -392,6 +400,7 @@ async function executeAction(
           : 'modifiedTime desc';
 
         const qs = new URLSearchParams({
+          corpora: resolveCorpora(ctx),
           fields: `nextPageToken,files(${LIST_FILE_FIELDS})`,
           pageSize: String(p.maxResults || 20),
           supportsAllDrives: 'true',
@@ -450,6 +459,7 @@ async function executeAction(
           : 'modifiedTime desc';
 
         const qs = new URLSearchParams({
+          corpora: resolveCorpora(ctx),
           q: finalQuery,
           fields: `nextPageToken,files(${LIST_FILE_FIELDS})`,
           pageSize: String(p.maxResults || 10),
@@ -500,6 +510,7 @@ async function executeAction(
         const orderByParam = p.orderBy || 'modifiedTime';
 
         const qs = new URLSearchParams({
+          corpora: resolveCorpora(ctx),
           q: finalQuery,
           fields: `nextPageToken,files(id,name,modifiedTime,createdTime,webViewLink,owners(displayName,emailAddress))`,
           pageSize: String(p.maxResults || 20),
@@ -551,6 +562,7 @@ async function executeAction(
         const finalQuery = composeQuery(queryParts.join(' and '), labelFilter);
 
         const qs = new URLSearchParams({
+          corpora: resolveCorpora(ctx),
           q: finalQuery,
           fields: `nextPageToken,files(id,name,modifiedTime,createdTime,webViewLink,owners(displayName))`,
           pageSize: String(p.maxResults || 10),
@@ -587,6 +599,7 @@ async function executeAction(
         const finalQuery = composeQuery(queryParts.join(' and '), labelFilter);
 
         const qs = new URLSearchParams({
+          corpora: resolveCorpora(ctx),
           q: finalQuery,
           fields: 'nextPageToken,files(id,name,mimeType,size,modifiedTime,webViewLink,owners(displayName))',
           pageSize: String(p.maxResults || 50),
@@ -654,6 +667,7 @@ async function executeAction(
 
         // Count children
         const childQs = new URLSearchParams({
+          corpora: resolveCorpora(ctx),
           q: `'${escapeDriveQuery(folderId)}' in parents and trashed=false`,
           fields: 'files(id)',
           pageSize: '100',
@@ -960,3 +974,4 @@ async function executeAction(
 
 export const driveActionDefs: ActionDefinition[] = allActions;
 export { executeAction as executeDriveAction };
+export { resolveCorpora };

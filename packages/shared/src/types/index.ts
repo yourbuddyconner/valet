@@ -310,6 +310,7 @@ export interface OrgSettings {
   driveLabelsGuardEnabled: boolean;
   driveRequiredLabelIds: string[];
   driveLabelsFailMode: 'deny' | 'allow';
+  driveCorpora: 'user' | 'domain' | 'allDrives';
   createdAt: Date;
   updatedAt: Date;
 }

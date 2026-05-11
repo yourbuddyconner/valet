@@ -48,6 +48,7 @@ adminRouter.put('/', async (c) => {
     driveLabelsGuardEnabled?: boolean;
     driveRequiredLabelIds?: string[];
     driveLabelsFailMode?: 'deny' | 'allow';
+    driveCorpora?: 'user' | 'domain' | 'allDrives';
   }>();
 
   if (body.modelPreferences !== undefined) {
@@ -83,6 +84,10 @@ adminRouter.put('/', async (c) => {
 
   if (body.driveLabelsFailMode !== undefined && !['deny', 'allow'].includes(body.driveLabelsFailMode)) {
     throw new ValidationError('driveLabelsFailMode must be "deny" or "allow"');
+  }
+
+  if (body.driveCorpora !== undefined && !['user', 'domain', 'allDrives'].includes(body.driveCorpora)) {
+    throw new ValidationError('driveCorpora must be "user", "domain", or "allDrives"');
   }
 
   const settings = await updateOrgSettings(c.get('db'), body);
