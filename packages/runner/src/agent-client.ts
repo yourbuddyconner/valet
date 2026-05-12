@@ -207,7 +207,11 @@ export class AgentClient {
         // exit the process so this stale sandbox stops consuming resources.
         if (event.code === 1002 || (event.code === 1006 && !socketOpened)) {
           this.consecutiveUpgradeFailures++;
-          if (this.consecutiveUpgradeFailures >= MAX_CONSECUTIVE_UPGRADE_FAILURES) {
+          // Only hard-exit on consecutive upgrade failures if we previously had a
+          // working connection.  During initial connect, bin.ts owns the retry loop
+          // (30 attempts, exponential backoff) and the exit decision — killing the
+          // process here short-circuits that loop after just 5 failures.
+          if (this.consecutiveUpgradeFailures >= MAX_CONSECUTIVE_UPGRADE_FAILURES && this.hasEverConnected) {
             console.log(`[AgentClient] ${this.consecutiveUpgradeFailures} consecutive upgrade failures — token likely rotated, exiting`);
             // Best-effort send before exit — WS is down so this buffers and likely won't deliver,
             // but if a reconnect sneaks in before exit it will flush.
@@ -223,7 +227,12 @@ export class AgentClient {
           // Don't scheduleReconnect here — the caller (bin.ts or reconnect handler) owns the retry.
           return;
         }
-        if (!this.closing) {
+        // Only auto-reconnect for connections that were previously open and
+        // then dropped.  If the socket never opened (upgrade failure), the
+        // caller already owns the retry — scheduling a parallel reconnect
+        // here creates a second retry loop that races with the caller's and
+        // burns through the consecutiveUpgradeFailures budget prematurely.
+        if (!this.closing && socketOpened) {
           this.scheduleReconnect();
         }
       });
