@@ -137,7 +137,27 @@ export interface ListChildSessionsResponse {
 }
 
 // Session types
-export type SessionStatus = 'initializing' | 'running' | 'idle' | 'hibernating' | 'hibernated' | 'restoring' | 'terminated' | 'archived' | 'error';
+export type SessionStatus =
+  | 'initializing'
+  | 'running'
+  | 'idle'
+  | 'waiting_runner'
+  | 'recovering'
+  | 'backoff'
+  | 'hibernating'
+  | 'hibernated'
+  | 'restoring'
+  | 'terminated'
+  | 'archived'
+  | 'error';
+
+/** Session statuses that indicate the session is no longer active. */
+export const TERMINAL_SESSION_STATUSES: ReadonlySet<SessionStatus> = new Set([
+  'terminated',
+  'archived',
+  'error',
+]);
+
 export type SessionPurpose = 'interactive' | 'orchestrator' | 'workflow';
 
 // Lightweight participant info for list views
