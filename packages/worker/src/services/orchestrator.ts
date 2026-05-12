@@ -422,7 +422,10 @@ export async function dispatchOrchestratorPrompt(
     return { dispatched: false, sessionId, reason: 'backoff', retryAfterMs: body.retryAfterMs };
   }
   if (ensureRes.status === 500) {
-    // DO has no spawn config — needs initial setup via restartOrchestratorSession
+    // DO has no spawn config (fresh/evicted). Initialize via restartOrchestratorSession.
+    // This path is not fully serialized — concurrent messages may both trigger initialization.
+    // The DO's /start handler and runner token rotation ensure only one sandbox wins;
+    // the losing spawn will idle-terminate. Acceptable during the migration window.
     try {
       await restartOrchestratorSession(env, params.userId, '', identity);
     } catch (err) {

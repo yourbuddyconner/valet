@@ -270,9 +270,6 @@ export class SessionAgentDO {
   private sessionState!: SessionState;
   private lifecycle!: SessionLifecycle;
 
-  /** Timestamp when the runner disconnected. Null if connected or never connected.
-   *  After 60s without reconnection, the session is terminated. */
-  private runnerDisconnectedAt: number | null = null;
   private static readonly RUNNER_GRACE_PERIOD_MS = 60_000;
 
   private readonly healthMonitor = new SessionHealthMonitor();
@@ -829,7 +826,7 @@ export class SessionAgentDO {
     console.log('[SessionAgentDO] Runner connected');
 
     // Clear grace period — runner reconnected in time
-    this.runnerDisconnectedAt = null;
+    this.sessionState.runnerDisconnectedAt = null;
 
     // Emit runner_connect timing — measure time from sandbox start to runner WebSocket
     const runningStart = this.sessionState.runningStartedAt;
@@ -931,7 +928,7 @@ export class SessionAgentDO {
       this.runnerLink.onDisconnect();
 
       // Start grace period — if runner doesn't reconnect within 60s, terminate
-      this.runnerDisconnectedAt = Date.now();
+      this.sessionState.runnerDisconnectedAt = Date.now();
       this.lifecycle.scheduleAlarm(this.collectAlarmDeadlines());
 
       const queueLength = this.promptQueue.length;
@@ -1009,7 +1006,7 @@ export class SessionAgentDO {
       idleQueuedSince: this.promptQueue.idleQueuedSince,
       errorSafetyNetAt: this.promptQueue.errorSafetyNetAt,
       sessionStatus: this.sessionState.status,
-      runnerDisconnectedAt: this.runnerDisconnectedAt,
+      runnerDisconnectedAt: this.sessionState.runnerDisconnectedAt,
       runnerConnectedAt: this.runnerLink.connectedAt,
     };
   }
@@ -1031,7 +1028,8 @@ export class SessionAgentDO {
     if (status === 'backoff') {
       const backoffUntil = this.sessionState.backoffUntil;
       if (backoffUntil > 0 && now >= backoffUntil) {
-        console.log('[SessionAgentDO] Backoff timer expired — retrying recovery');
+        console.log('[SessionAgentDO] Backoff cooldown elapsed — retrying recovery');
+        this.sessionState.resetRecoveryState();
         await this.performRecovery('backoff_retry');
       }
       // Whether we retried or the timer hasn't expired yet, re-arm and return.
@@ -1041,9 +1039,9 @@ export class SessionAgentDO {
     }
 
     // ─── Runner Grace Period Check ──────────────────────────────────
-    if (this.runnerDisconnectedAt && now - this.runnerDisconnectedAt >= SessionAgentDO.RUNNER_GRACE_PERIOD_MS) {
+    if (this.sessionState.runnerDisconnectedAt && now - this.sessionState.runnerDisconnectedAt >= SessionAgentDO.RUNNER_GRACE_PERIOD_MS) {
       console.log(`[SessionAgentDO] Runner did not reconnect within ${SessionAgentDO.RUNNER_GRACE_PERIOD_MS / 1000}s — attempting recovery`);
-      this.runnerDisconnectedAt = null;
+      this.sessionState.runnerDisconnectedAt = null;
       await this.performRecovery('sandbox_lost');
       // performRecovery transitions to initializing (spawning new sandbox) or
       // terminal state (circuit breaker tripped). Re-arm if still alive.
@@ -1281,7 +1279,7 @@ export class SessionAgentDO {
       && this.sessionState.idleTimeoutMs > 0
       && this.sessionState.lastUserActivityAt > 0;
     const hasConnections = this.runnerLink.isConnected || this.getClientSockets().length > 0;
-    const hasPendingGrace = this.runnerDisconnectedAt !== null;
+    const hasPendingGrace = this.sessionState.runnerDisconnectedAt !== null;
 
     if (hasWork || hasIdleDeadline || hasConnections || hasPendingGrace) {
       this.lifecycle.scheduleAlarm(deadlines);
@@ -2490,6 +2488,16 @@ export class SessionAgentDO {
           if (wasInitializing) {
             this.runnerLink.ready = true;
             console.log('[SessionAgentDO] Runner is now ready (first idle after connect)');
+
+            // Transition waiting_runner → running now that the Runner is connected and healthy
+            if (this.sessionState.status === 'waiting_runner') {
+              this.sessionState.status = 'running';
+              const sid = this.sessionState.sessionId;
+              updateSessionStatus(this.appDb, sid, 'running', this.sessionState.sandboxId).catch((e) =>
+                console.error('[SessionAgentDO] Failed to sync running status to D1:', e),
+              );
+              this.broadcastToClients({ type: 'status', data: { status: 'running', sandboxRunning: true } });
+            }
 
             // Runner is healthy — reset recovery counters so the circuit breaker
             // starts fresh for any future sandbox loss.
@@ -3855,24 +3863,39 @@ export class SessionAgentDO {
     try {
       this.sessionState.sandboxWakeStartedAt = Date.now();
 
+      // Capture generation before the (potentially slow) spawn call so we can
+      // detect if a newer recovery/refresh started while we were waiting.
+      const expectedGeneration = this.sessionState.sandboxGeneration;
+
       const result = await this.lifecycle.spawnSandbox(backendUrl, spawnRequest);
+
+      // Guard against stale spawn — a newer recovery/refresh may have started
+      // while this spawn was in flight. Discard the result to avoid overwriting
+      // the newer state. The orphaned sandbox will idle-terminate on its own.
+      if (this.sessionState.sandboxGeneration !== expectedGeneration) {
+        console.warn(
+          `[SessionAgentDO] Stale spawn result discarded — generation ${expectedGeneration} vs current ${this.sessionState.sandboxGeneration}; sandbox ${result.sandboxId} will idle-terminate`,
+        );
+        return;
+      }
 
       this.emitEvent('sandbox_wake', { durationMs: result.durationMs });
 
-      // Store sandbox info
+      // Store sandbox info — transition to waiting_runner until Runner connects
+      // and signals readiness via agentStatus: idle.
       this.sessionState.sandboxId = result.sandboxId;
       this.sessionState.tunnelUrls = result.tunnelUrls;
-      this.sessionState.status = 'running';
+      this.sessionState.status = 'waiting_runner';
       this.lifecycle.markRunningStarted();
 
-      updateSessionStatus(this.appDb, sessionId!, 'running', result.sandboxId).catch((err) =>
+      updateSessionStatus(this.appDb, sessionId!, 'waiting_runner', result.sandboxId).catch((err) =>
         console.error('[SessionAgentDO] Failed to sync status to D1:', err),
       );
 
       this.broadcastToClients({
         type: 'status',
         data: {
-          status: 'running',
+          status: 'waiting_runner',
           sandboxRunning: true,
           tunnelUrls: result.tunnelUrls,
         },
@@ -4863,7 +4886,8 @@ export class SessionAgentDO {
         const now = Date.now();
         const backoffUntil = this.sessionState.backoffUntil;
         if (backoffUntil > 0 && now >= backoffUntil) {
-          // Cooldown elapsed — retry
+          // Cooldown elapsed — reset circuit breaker before retrying
+          this.sessionState.resetRecoveryState();
           await this.performRecovery('ensure_running_after_backoff');
           return Response.json({ status: 'recovering' }, { status: 202 });
         }
@@ -5253,26 +5277,27 @@ export class SessionAgentDO {
         properties: { snapshot_id: snapshotId },
       });
 
-      // State writes from result
+      // State writes from result — transition to waiting_runner until Runner reconnects
+      // and signals readiness via agentStatus: idle.
       this.sessionState.sandboxId = result.sandboxId;
       this.sessionState.tunnelUrls = result.tunnelUrls;
       this.sessionState.snapshotImageId = undefined;
-      this.sessionState.status = 'running';
+      this.sessionState.status = 'waiting_runner';
       this.lifecycle.markRunningStarted();
       this.lifecycle.touchActivity();
 
       this.rescheduleIdleAlarm();
 
       if (sessionId) {
-        updateSessionStatus(this.appDb, sessionId, 'running', result.sandboxId).catch((e) =>
-          console.error('[SessionAgentDO] Failed to sync running status to D1:', e),
+        updateSessionStatus(this.appDb, sessionId, 'waiting_runner', result.sandboxId).catch((e) =>
+          console.error('[SessionAgentDO] Failed to sync waiting_runner status to D1:', e),
         );
       }
 
       this.broadcastToClients({
         type: 'status',
         data: {
-          status: 'running',
+          status: 'waiting_runner',
           sandboxRunning: true,
           tunnelUrls: result.tunnelUrls,
         },
@@ -5337,8 +5362,8 @@ export class SessionAgentDO {
     const parentIdle = this.sessionState.parentIdleNotifyAt || null;
 
     // Runner disconnect grace period
-    const gracePeriod = this.runnerDisconnectedAt
-      ? this.runnerDisconnectedAt + SessionAgentDO.RUNNER_GRACE_PERIOD_MS
+    const gracePeriod = this.sessionState.runnerDisconnectedAt
+      ? this.sessionState.runnerDisconnectedAt + SessionAgentDO.RUNNER_GRACE_PERIOD_MS
       : null;
 
     // Idle-queue-stuck watchdog (items queued with runnerBusy=false).

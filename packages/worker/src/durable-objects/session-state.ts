@@ -367,6 +367,18 @@ export class SessionState {
     this.lastFailureReason = undefined;
   }
 
+  // ─── Runner Disconnect Tracking ─────────────────────────────────
+  // Persisted so that DO isolate eviction doesn't lose the timestamp.
+
+  get runnerDisconnectedAt(): number | null {
+    const raw = this.get('runnerDisconnectedAt');
+    return raw ? parseInt(raw, 10) : null;
+  }
+
+  set runnerDisconnectedAt(val: number | null) {
+    this.set('runnerDisconnectedAt', val ? String(val) : '');
+  }
+
   // ─── Wait Subscription ──────────────────────────────────────────
 
   get waitSubscription(): { reason?: string; sessionIds?: string[]; notifyOn?: string; statuses?: string[] } | null {
