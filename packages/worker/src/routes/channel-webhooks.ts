@@ -339,9 +339,16 @@ channelWebhooksRouter.post('/:channelType/webhook/:userId', async (c) => {
   if (!result.dispatched) {
     const ctx: ChannelContext = { token: botToken, userId };
     const target: ChannelTarget = { channelType, channelId: message.channelId };
-    await transport.sendMessage(target, {
-      markdown: 'Your orchestrator is not running. Start it from the Valet dashboard.',
-    }, ctx);
+    let msg: string;
+    if (result.reason === 'orchestrator_not_configured') {
+      msg = 'Your orchestrator is not configured. Set it up from the Valet dashboard.';
+    } else if (result.reason === 'backoff') {
+      const retryMin = Math.ceil((result.retryAfterMs || 60000) / 60000);
+      msg = `Your orchestrator is temporarily unavailable. Retrying in ~${retryMin} min.`;
+    } else {
+      msg = `Failed to reach your orchestrator (${result.reason ?? 'unknown'}). Try again in a moment.`;
+    }
+    await transport.sendMessage(target, { markdown: msg }, ctx);
   }
 
   return c.json({ ok: true });
@@ -358,13 +365,14 @@ export async function handleChannelCommand(
   userId: string,
 ): Promise<void> {
   const command = message.command!;
+  const sessionId = `orchestrator:${userId}`;
 
-  // Resolve orchestrator session ID
-  const orchSession = await db.getOrchestratorSession(env.DB, userId);
+  // Check if user has an orchestrator configured
+  const identity = await db.getOrchestratorIdentity(getDb(env.DB), userId);
+  const NOT_CONFIGURED_MSG = 'Your orchestrator is not configured. Set it up from the Valet dashboard.';
 
   switch (command) {
     case 'start': {
-      // Capture owner's Telegram user ID on first /start
       if (message.senderId && target.channelType === 'telegram') {
         try {
           await db.updateTelegramOwner(getDb(env.DB), userId, message.senderId);
@@ -372,9 +380,26 @@ export async function handleChannelCommand(
           console.error(`[Channel:${target.channelType}] Failed to capture owner:`, err);
         }
       }
-      await transport.sendMessage(target, {
-        markdown: 'Connected to Valet! Send me a message and it will be routed to your orchestrator.',
-      }, ctx);
+      if (!identity) {
+        await transport.sendMessage(target, { markdown: NOT_CONFIGURED_MSG }, ctx);
+        break;
+      }
+      try {
+        const doId = env.SESSIONS.idFromName(sessionId);
+        const sessionDO = env.SESSIONS.get(doId);
+        const res = await sessionDO.fetch(new Request('http://do/ensure-running', { method: 'POST' }));
+        if (res.status === 200) {
+          await transport.sendMessage(target, { markdown: 'Connected to Valet! Your orchestrator is running.' }, ctx);
+        } else if (res.status === 503) {
+          const body = await res.json() as { retryAfterMs?: number };
+          const retryMin = Math.ceil((body.retryAfterMs || 60000) / 60000);
+          await transport.sendMessage(target, { markdown: `Your orchestrator is in backoff. Retrying in ~${retryMin} min.` }, ctx);
+        } else {
+          await transport.sendMessage(target, { markdown: 'Connected to Valet! Starting your orchestrator...' }, ctx);
+        }
+      } catch {
+        await transport.sendMessage(target, { markdown: 'Failed to reach your orchestrator. Try again in a moment.' }, ctx);
+      }
       break;
     }
 
@@ -386,36 +411,37 @@ export async function handleChannelCommand(
     }
 
     case 'status': {
-      if (!orchSession || ['terminated', 'archived', 'error'].includes(orchSession.status)) {
-        await transport.sendMessage(target, { markdown: 'Your orchestrator is not running. Start it from the Valet dashboard.' }, ctx);
-        return;
+      if (!identity) {
+        await transport.sendMessage(target, { markdown: NOT_CONFIGURED_MSG }, ctx);
+        break;
       }
       try {
-        const doId = env.SESSIONS.idFromName(orchSession.id);
+        const doId = env.SESSIONS.idFromName(sessionId);
         const sessionDO = env.SESSIONS.get(doId);
         const resp = await sessionDO.fetch(new Request('http://do/status'));
         if (!resp.ok) {
           await transport.sendMessage(target, { markdown: 'Could not get orchestrator status.' }, ctx);
-          return;
+          break;
         }
         const status = (await resp.json()) as Record<string, unknown>;
         let text = `*Orchestrator Status*\nStatus: ${status.status || 'unknown'}`;
         if (status.runnerConnected) text += '\nRunner: connected';
         if (status.promptsQueued) text += `\nQueued prompts: ${status.promptsQueued}`;
+        if (status.sandboxId) text += `\nSandbox: \`${status.sandboxId}\``;
         await transport.sendMessage(target, { markdown: text }, ctx);
       } catch {
-        await transport.sendMessage(target, { markdown: 'Orchestrator is not running.' }, ctx);
+        await transport.sendMessage(target, { markdown: 'Could not reach orchestrator.' }, ctx);
       }
       break;
     }
 
     case 'stop': {
-      if (!orchSession || ['terminated', 'archived', 'error'].includes(orchSession.status)) {
-        await transport.sendMessage(target, { markdown: 'Your orchestrator is not running.' }, ctx);
-        return;
+      if (!identity) {
+        await transport.sendMessage(target, { markdown: NOT_CONFIGURED_MSG }, ctx);
+        break;
       }
       try {
-        const doId = env.SESSIONS.idFromName(orchSession.id);
+        const doId = env.SESSIONS.idFromName(sessionId);
         const sessionDO = env.SESSIONS.get(doId);
         await sessionDO.fetch(new Request('http://do/prompt', {
           method: 'POST',
@@ -431,50 +457,49 @@ export async function handleChannelCommand(
     }
 
     case 'clear': {
-      if (!orchSession || ['terminated', 'archived', 'error'].includes(orchSession.status)) {
-        await transport.sendMessage(target, { markdown: 'Your orchestrator is not running.' }, ctx);
-        return;
+      if (!identity) {
+        await transport.sendMessage(target, { markdown: NOT_CONFIGURED_MSG }, ctx);
+        break;
       }
       try {
-        const doId = env.SESSIONS.idFromName(orchSession.id);
+        const doId = env.SESSIONS.idFromName(sessionId);
         const sessionDO = env.SESSIONS.get(doId);
         await sessionDO.fetch(new Request('http://do/clear-queue', { method: 'POST' }));
         await transport.sendMessage(target, { markdown: 'Prompt queue cleared.' }, ctx);
       } catch {
-        await transport.sendMessage(target, { markdown: 'Could not clear queue — orchestrator may not be running.' }, ctx);
+        await transport.sendMessage(target, { markdown: 'Could not clear queue.' }, ctx);
       }
       break;
     }
 
     case 'refresh': {
-      if (!orchSession || ['terminated', 'archived', 'error'].includes(orchSession.status)) {
-        await transport.sendMessage(target, { markdown: 'Your orchestrator is not running.' }, ctx);
-        return;
+      if (!identity) {
+        await transport.sendMessage(target, { markdown: NOT_CONFIGURED_MSG }, ctx);
+        break;
       }
       try {
-        const doId = env.SESSIONS.idFromName(orchSession.id);
+        const doId = env.SESSIONS.idFromName(sessionId);
         const sessionDO = env.SESSIONS.get(doId);
-        await sessionDO.fetch(new Request('http://do/stop', { method: 'POST' }));
-        await sessionDO.fetch(new Request('http://do/start', { method: 'POST' }));
-        await transport.sendMessage(target, { markdown: 'Orchestrator session refreshed.' }, ctx);
+        await sessionDO.fetch(new Request('http://do/refresh', { method: 'POST' }));
+        await transport.sendMessage(target, { markdown: 'Restarting your orchestrator...' }, ctx);
       } catch {
-        await transport.sendMessage(target, { markdown: 'Could not refresh — orchestrator may not be running.' }, ctx);
+        await transport.sendMessage(target, { markdown: 'Could not refresh — try again in a moment.' }, ctx);
       }
       break;
     }
 
     case 'sessions': {
-      if (!orchSession || ['terminated', 'archived', 'error'].includes(orchSession.status)) {
-        await transport.sendMessage(target, { markdown: 'Your orchestrator is not running.' }, ctx);
-        return;
+      if (!identity) {
+        await transport.sendMessage(target, { markdown: NOT_CONFIGURED_MSG }, ctx);
+        break;
       }
       try {
-        const doId = env.SESSIONS.idFromName(orchSession.id);
+        const doId = env.SESSIONS.idFromName(sessionId);
         const sessionDO = env.SESSIONS.get(doId);
         const resp = await sessionDO.fetch(new Request('http://do/children'));
         if (!resp.ok) {
           await transport.sendMessage(target, { markdown: 'Could not list sessions.' }, ctx);
-          return;
+          break;
         }
         const data = (await resp.json()) as {
           children?: Array<{ id: string; title?: string; status: string; workspace?: string }>;
@@ -482,7 +507,7 @@ export async function handleChannelCommand(
         const list = data.children || [];
         if (list.length === 0) {
           await transport.sendMessage(target, { markdown: 'No child sessions.' }, ctx);
-          return;
+          break;
         }
         const lines = list.map(
           (child) => `• ${child.title || child.workspace || child.id.slice(0, 8)} — ${child.status}`,
@@ -491,9 +516,7 @@ export async function handleChannelCommand(
           markdown: `Child sessions (${list.length}):\n${lines.join('\n')}`,
         }, ctx);
       } catch {
-        await transport.sendMessage(target, {
-          markdown: 'Could not list sessions — orchestrator may not be running.',
-        }, ctx);
+        await transport.sendMessage(target, { markdown: 'Could not list sessions.' }, ctx);
       }
       break;
     }

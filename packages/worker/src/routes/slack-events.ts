@@ -491,9 +491,16 @@ slackEventsRouter.post('/slack/events', async (c) => {
       channelId: message.channelId,
       threadId,
     };
-    await transport.sendMessage(target, {
-      markdown: 'Your orchestrator is not running. Start it from the Valet dashboard.',
-    }, ctx);
+    let msg: string;
+    if (result.reason === 'orchestrator_not_configured') {
+      msg = 'Your orchestrator is not configured. Set it up from the Valet dashboard.';
+    } else if (result.reason === 'backoff') {
+      const retryMin = Math.ceil((result.retryAfterMs || 60000) / 60000);
+      msg = `Your orchestrator is temporarily unavailable. Retrying in ~${retryMin} min.`;
+    } else {
+      msg = `Failed to reach your orchestrator (${result.reason ?? 'unknown'}). Try again in a moment.`;
+    }
+    await transport.sendMessage(target, { markdown: msg }, ctx);
   }
 
   return c.json({ ok: true });
