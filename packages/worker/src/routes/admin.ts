@@ -17,7 +17,6 @@ import {
 } from '../lib/db.js';
 import { getDb } from '../lib/drizzle.js';
 import * as adminService from '../services/admin.js';
-import { restartOrchestratorSession } from '../services/orchestrator.js';
 
 function safeJsonParse(value: unknown): unknown {
   if (typeof value !== 'string') return undefined;
@@ -420,13 +419,13 @@ adminRouter.get('/orchestrators', async (c) => {
 });
 
 adminRouter.post('/orchestrators/:sessionId/refresh', async (c) => {
-  const { sessionId } = c.req.param();
+  const { sessionId: routeSessionId } = c.req.param();
   const appDb = getDb(c.env.DB);
 
   // Look up the session to get the user ID
   const session = await c.env.DB.prepare(
     `SELECT user_id, is_orchestrator FROM sessions WHERE id = ?`
-  ).bind(sessionId).first<{ user_id: string; is_orchestrator: number }>();
+  ).bind(routeSessionId).first<{ user_id: string; is_orchestrator: number }>();
 
   if (!session || !session.is_orchestrator) {
     return c.json({ error: 'Orchestrator session not found' }, 404);
@@ -438,32 +437,18 @@ adminRouter.post('/orchestrators/:sessionId/refresh', async (c) => {
     return c.json({ error: 'Orchestrator identity not found' }, 404);
   }
 
-  // Look up user email
-  const user = await c.env.DB.prepare(
-    `SELECT email FROM users WHERE id = ?`
-  ).bind(session.user_id).first<{ email: string }>();
+  // Call /refresh on the stable DO — it handles stop + restart internally.
+  const sessionId = `orchestrator:${session.user_id}`;
+  const doId = c.env.SESSIONS.idFromName(sessionId);
+  const sessionDO = c.env.SESSIONS.get(doId);
+  const res = await sessionDO.fetch(new Request('http://do/refresh', { method: 'POST' }));
 
-  if (!user) {
-    return c.json({ error: 'User not found' }, 404);
+  if (!res.ok) {
+    const errText = (await res.text().catch(() => '')).slice(0, 200);
+    return c.json({ error: `Refresh failed: ${errText}` }, 502);
   }
 
-  // restartOrchestratorSession now stops the old DO + marks D1 terminated before
-  // creating the new session, so no explicit stop/terminate needed here.
-  const result = await restartOrchestratorSession(
-    c.env,
-    session.user_id,
-    user.email,
-    {
-      id: identity.id,
-      name: identity.name,
-      handle: identity.handle,
-      customInstructions: identity.customInstructions ?? null,
-      personaId: identity.personaId ?? null,
-    },
-    c.req.url,
-  );
-
-  return c.json({ ok: true, newSessionId: result.sessionId });
+  return c.json({ ok: true, newSessionId: sessionId });
 });
 
 // --- Action Invocation Log ---

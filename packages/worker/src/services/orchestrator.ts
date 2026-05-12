@@ -1,4 +1,4 @@
-import type { SessionThread } from '@valet/shared';
+import { type SessionThread, TERMINAL_SESSION_STATUSES } from '@valet/shared';
 import type { Env } from '../env.js';
 import * as db from '../lib/db.js';
 import type { AppDb } from '../lib/drizzle.js';
@@ -46,11 +46,6 @@ async function stopOldOrchestratorSession(
   }
 }
 
-// ─── Constants ──────────────────────────────────────────────────────────────
-
-const TERMINAL_STATUSES = new Set(['terminated', 'archived', 'error']);
-const ORCHESTRATOR_UNAVAILABLE_STATUSES = new Set(['terminated', 'archived', 'error']);
-
 // ─── Restart Orchestrator Session ───────────────────────────────────────────
 
 export async function restartOrchestratorSession(
@@ -66,7 +61,7 @@ export async function restartOrchestratorSession(
   // Without this, the old DO + sandbox + Runner keep running in parallel,
   // causing duplicate steering messages to child sessions.
   const oldSession = await db.getOrchestratorSession(env.DB, userId);
-  if (oldSession && !TERMINAL_STATUSES.has(oldSession.status)) {
+  if (oldSession && !TERMINAL_SESSION_STATUSES.has(oldSession.status)) {
     console.log(`[restartOrchestrator] Stopping old session ${oldSession.id} (status=${oldSession.status}) before restart`);
     await stopOldOrchestratorSession(env, appDb, oldSession.id);
   }
@@ -75,7 +70,7 @@ export async function restartOrchestratorSession(
   // If another concurrent restart already created a healthy session while we were
   // stopping the old one, bail out to avoid spawning a second parallel sandbox.
   const recheckSession = await db.getOrchestratorSession(env.DB, userId);
-  if (recheckSession && !TERMINAL_STATUSES.has(recheckSession.status) && recheckSession.id !== oldSession?.id) {
+  if (recheckSession && !TERMINAL_SESSION_STATUSES.has(recheckSession.status) && recheckSession.id !== oldSession?.id) {
     console.log(`[restartOrchestrator] Another restart already created session ${recheckSession.id}, skipping`);
     return { sessionId: recheckSession.id };
   }
@@ -248,7 +243,7 @@ export async function onboardOrchestrator(
   let identity = await db.getOrchestratorIdentity(appDb, userId);
   const existingSession = await db.getOrchestratorSession(env.DB, userId);
 
-  if (identity && existingSession && !TERMINAL_STATUSES.has(existingSession.status)) {
+  if (identity && existingSession && !TERMINAL_SESSION_STATUSES.has(existingSession.status)) {
     return { ok: false, reason: 'already_exists' };
   }
 
@@ -326,7 +321,7 @@ export async function getOrchestratorInfo(env: Env, userId: string): Promise<Orc
   const identity = await db.getOrchestratorIdentity(database, userId);
   const session = await db.getOrchestratorSession(env.DB, userId);
   const sessionId = session?.id ?? `orchestrator:${userId}`;
-  const needsRestart = !!identity && (!session || TERMINAL_STATUSES.has(session.status));
+  const needsRestart = !!identity && (!session || TERMINAL_SESSION_STATUSES.has(session.status));
 
   return {
     sessionId,

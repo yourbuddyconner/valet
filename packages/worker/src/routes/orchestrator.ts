@@ -5,9 +5,6 @@ import type { Env, Variables } from '../env.js';
 import * as db from '../lib/db.js';
 import * as orchestratorService from '../services/orchestrator.js';
 
-// Re-export for backward compatibility (used by index.ts cron handler)
-export { restartOrchestratorSession } from '../services/orchestrator.js';
-
 const createIdentityLinkSchema = z.object({
   provider: z.string().min(1).max(50),
   externalId: z.string().min(1).max(255),
