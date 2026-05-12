@@ -380,6 +380,7 @@ type OrchestratorPromptDispatchResult = {
   dispatched: boolean;
   sessionId: string;
   reason?: string;
+  retryAfterMs?: number;
 };
 
 export async function dispatchOrchestratorPrompt(
@@ -414,20 +415,37 @@ export async function dispatchOrchestratorPrompt(
     return { dispatched: false, sessionId: `orchestrator:${params.userId}`, reason: 'empty_prompt' };
   }
 
-  // Resolve the current orchestrator session (supports rotated IDs)
-  console.log(`[OrchestratorDispatch] Looking up orchestrator for userId=${params.userId} channelType=${params.channelType} channelId=${params.channelId}`);
-  const session = await db.getOrchestratorSession(env.DB, params.userId);
-  if (!session || session.purpose !== 'orchestrator') {
-    console.log(`[OrchestratorDispatch] No orchestrator found for userId=${params.userId} session=${session?.id || 'null'} purpose=${session?.purpose || 'null'}`);
+  // Check if orchestrator identity exists
+  const appDb = getDb(env.DB);
+  const identity = await db.getOrchestratorIdentity(appDb, params.userId);
+  if (!identity) {
+    console.log(`[OrchestratorDispatch] No orchestrator identity for userId=${params.userId}`);
     return { dispatched: false, sessionId: `orchestrator:${params.userId}`, reason: 'orchestrator_not_configured' };
   }
-  const sessionId = session.id;
-  if (ORCHESTRATOR_UNAVAILABLE_STATUSES.has(session.status)) {
-    console.log(`[OrchestratorDispatch] Orchestrator unavailable: session=${sessionId} status=${session.status}`);
-    return { dispatched: false, sessionId, reason: `orchestrator_unavailable:${session.status}` };
+
+  const sessionId = `orchestrator:${params.userId}`;
+
+  // Ensure the DO is running (wakes from hibernation, triggers recovery, etc.)
+  const doId = env.SESSIONS.idFromName(sessionId);
+  const sessionDO = env.SESSIONS.get(doId);
+
+  const ensureRes = await sessionDO.fetch(new Request('http://do/ensure-running', { method: 'POST' }));
+  if (ensureRes.status === 503) {
+    const body = await ensureRes.json() as { status: string; retryAfterMs?: number };
+    console.log(`[OrchestratorDispatch] DO in backoff: session=${sessionId} retryAfterMs=${body.retryAfterMs}`);
+    return { dispatched: false, sessionId, reason: 'backoff', retryAfterMs: body.retryAfterMs };
+  }
+  if (ensureRes.status === 500) {
+    // DO has no spawn config — needs initial setup via restartOrchestratorSession
+    try {
+      await restartOrchestratorSession(env, params.userId, '', identity);
+    } catch (err) {
+      console.error(`[OrchestratorDispatch] Failed to initialize DO:`, err);
+      return { dispatched: false, sessionId, reason: 'initialization_failed' };
+    }
   }
 
-  console.log(`[OrchestratorDispatch] Dispatching to session=${sessionId} status=${session.status}`);
+  console.log(`[OrchestratorDispatch] Dispatching to session=${sessionId}`);
 
   // Ensure a threadId is set for orchestrator sessions. The frontend filters
   // messages by active thread, so messages without a threadId are invisible.
@@ -454,7 +472,6 @@ export async function dispatchOrchestratorPrompt(
   // channelScopeKey) to guarantee the binding matches the inbound lookup path.
   if (params.channelType && params.channelId && params.channelType !== 'web' && params.scopeKey) {
     try {
-      const appDb = getDb(env.DB);
       await db.ensureChannelBinding(appDb, {
         sessionId,
         channelType: params.channelType as any,
@@ -469,8 +486,6 @@ export async function dispatchOrchestratorPrompt(
     }
   }
 
-  const doId = env.SESSIONS.idFromName(sessionId);
-  const sessionDO = env.SESSIONS.get(doId);
   const doRes = await sessionDO.fetch(new Request('http://do/prompt', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
