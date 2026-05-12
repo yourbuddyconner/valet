@@ -463,6 +463,10 @@ export class SessionAgentDO {
         return this.handleGarbageCollect();
       case '/webhook-update':
         return this.handleWebhookUpdate(request);
+      case '/ensure-running':
+        return this.handleEnsureRunning();
+      case '/refresh':
+        return this.handleRefresh();
       case '/models': {
         const models = this.sessionState.availableModels || [];
         return Response.json({ models });
@@ -4817,6 +4821,90 @@ export class SessionAgentDO {
     }
 
     return Response.json({ status, message: 'Cannot wake from current status' });
+  }
+
+  private async handleEnsureRunning(): Promise<Response> {
+    const status = this.sessionState.status;
+
+    switch (status) {
+      case 'running':
+        return Response.json({ status: 'running' }, { status: 200 });
+
+      case 'initializing':
+      case 'waiting_runner':
+      case 'restoring':
+      case 'recovering':
+        return Response.json({ status }, { status: 202 });
+
+      case 'backoff': {
+        const now = Date.now();
+        const backoffUntil = this.sessionState.backoffUntil;
+        if (backoffUntil > 0 && now >= backoffUntil) {
+          // Cooldown elapsed — retry
+          await this.performRecovery('ensure_running_after_backoff');
+          return Response.json({ status: 'recovering' }, { status: 202 });
+        }
+        const retryAfterMs = Math.max(0, backoffUntil - now);
+        return Response.json({ status: 'backoff', retryAfterMs }, { status: 503 });
+      }
+
+      case 'hibernated':
+        this.ctx.waitUntil(this.performWake());
+        return Response.json({ status: 'restoring' }, { status: 202 });
+
+      case 'terminated':
+      case 'error': {
+        // Dead state — attempt recovery/spawn
+        if (!this.sessionState.spawnRequest || !this.sessionState.backendUrl) {
+          return Response.json(
+            { status: 'error', error: 'Missing spawn configuration — session needs re-initialization via /start' },
+            { status: 500 },
+          );
+        }
+        await this.performRecovery('ensure_running');
+        return Response.json({ status: 'recovering' }, { status: 202 });
+      }
+
+      default:
+        return Response.json({ status }, { status: 200 });
+    }
+  }
+
+  private async handleRefresh(): Promise<Response> {
+    const sessionId = this.sessionState.sessionId;
+    console.log(`[SessionAgentDO] Refresh requested for ${sessionId}`);
+
+    // Terminate existing sandbox (if any)
+    const currentStatus = this.sessionState.status;
+    if (currentStatus === 'running' || currentStatus === 'waiting_runner' || currentStatus === 'initializing') {
+      this.runnerLink.send({ type: 'stop' });
+      const runnerSockets = this.ctx.getWebSockets('runner');
+      for (const ws of runnerSockets) {
+        try { ws.close(1000, 'Session refreshing'); } catch { /* ignore */ }
+      }
+      await this.lifecycle.terminateSandbox();
+    }
+
+    // Clear state for fresh start
+    this.sessionState.sandboxId = undefined;
+    this.sessionState.tunnelUrls = null;
+    this.sessionState.tunnels = [];
+    this.sessionState.snapshotImageId = undefined;
+    this.promptQueue.runnerBusy = false;
+    this.runnerLink.ready = false;
+
+    // Check we have spawn config
+    if (!this.sessionState.spawnRequest || !this.sessionState.backendUrl) {
+      return Response.json(
+        { status: 'error', error: 'Missing spawn configuration — session needs re-initialization via /start' },
+        { status: 500 },
+      );
+    }
+
+    // Spawn fresh via recovery path (handles token rotation, generation increment)
+    await this.performRecovery('refresh');
+
+    return Response.json({ status: 'recovering' }, { status: 202 });
   }
 
   /**
