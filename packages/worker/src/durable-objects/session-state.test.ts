@@ -301,6 +301,46 @@ describe('SessionState', () => {
     });
   });
 
+  // ─── Recovery State ───────────────────────────────────────────────
+
+  describe('recovery state', () => {
+    it('defaults to zero/undefined when not set', () => {
+      expect(ss.recoveryAttemptCount).toBe(0);
+      expect(ss.lastRecoveryAt).toBe(0);
+      expect(ss.backoffUntil).toBe(0);
+      expect(ss.lastFailureReason).toBeUndefined();
+      expect(ss.sandboxGeneration).toBe(0);
+    });
+
+    it('persists recovery state through getState/setState', () => {
+      ss.recoveryAttemptCount = 3;
+      ss.lastRecoveryAt = 1000;
+      ss.backoffUntil = 2000;
+      ss.lastFailureReason = 'sandbox_lost';
+      ss.sandboxGeneration = 5;
+
+      expect(ss.recoveryAttemptCount).toBe(3);
+      expect(ss.lastRecoveryAt).toBe(1000);
+      expect(ss.backoffUntil).toBe(2000);
+      expect(ss.lastFailureReason).toBe('sandbox_lost');
+      expect(ss.sandboxGeneration).toBe(5);
+    });
+
+    it('resetRecoveryState clears all counters', () => {
+      ss.recoveryAttemptCount = 3;
+      ss.lastRecoveryAt = 1000;
+      ss.backoffUntil = 2000;
+      ss.lastFailureReason = 'sandbox_lost';
+
+      ss.resetRecoveryState();
+
+      expect(ss.recoveryAttemptCount).toBe(0);
+      expect(ss.lastRecoveryAt).toBe(0);
+      expect(ss.backoffUntil).toBe(0);
+      expect(ss.lastFailureReason).toBeUndefined();
+    });
+  });
+
   // ─── Bulk Initialization ──────────────────────────────────────────
 
   describe('initialize', () => {

@@ -317,6 +317,56 @@ export class SessionState {
     this.set('parentIdleNotifyAt', ts ? String(ts) : '');
   }
 
+  // ─── Recovery State ──────────────────────────────────────────────
+
+  get recoveryAttemptCount(): number {
+    return parseInt(this.get('recoveryAttemptCount') || '0', 10);
+  }
+
+  set recoveryAttemptCount(val: number) {
+    this.set('recoveryAttemptCount', String(val));
+  }
+
+  get lastRecoveryAt(): number {
+    return parseInt(this.get('lastRecoveryAt') || '0', 10);
+  }
+
+  set lastRecoveryAt(val: number) {
+    this.set('lastRecoveryAt', String(val));
+  }
+
+  get backoffUntil(): number {
+    return parseInt(this.get('backoffUntil') || '0', 10);
+  }
+
+  set backoffUntil(val: number) {
+    this.set('backoffUntil', String(val));
+  }
+
+  get lastFailureReason(): string | undefined {
+    return this.get('lastFailureReason') || undefined;
+  }
+
+  set lastFailureReason(val: string | undefined) {
+    this.set('lastFailureReason', val || '');
+  }
+
+  get sandboxGeneration(): number {
+    return parseInt(this.get('sandboxGeneration') || '0', 10);
+  }
+
+  set sandboxGeneration(val: number) {
+    this.set('sandboxGeneration', String(val));
+  }
+
+  /** Reset recovery counters after reaching healthy running state. */
+  resetRecoveryState(): void {
+    this.recoveryAttemptCount = 0;
+    this.lastRecoveryAt = 0;
+    this.backoffUntil = 0;
+    this.lastFailureReason = undefined;
+  }
+
   // ─── Wait Subscription ──────────────────────────────────────────
 
   get waitSubscription(): { reason?: string; sessionIds?: string[]; notifyOn?: string; statuses?: string[] } | null {
