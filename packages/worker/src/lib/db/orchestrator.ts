@@ -128,16 +128,12 @@ export async function updateOrchestratorIdentity(
 
 // ─── Orchestrator Session Helpers ───────────────────────────────────────────
 
-// Raw SQL: uses mapSession for snake_case row mapping
+// Raw SQL: direct stable ID lookup
 export async function getOrchestratorSession(db: D1Database, userId: string): Promise<AgentSession | null> {
-  // Look up the most recent orchestrator session by flag, not by fixed ID.
-  // This supports session ID rotation on refresh (new DO instance = fresh code).
-  // Returns the most recent session regardless of status so callers can inspect it.
-  const row = await db.prepare(
-    `SELECT * FROM sessions WHERE user_id = ? AND is_orchestrator = 1 ORDER BY created_at DESC LIMIT 1`
-  ).bind(userId).first();
-  if (row) return mapSessionRow(row);
-  return null;
+  const result = await db.prepare(
+    `SELECT * FROM sessions WHERE id = ? LIMIT 1`
+  ).bind(`orchestrator:${userId}`).first();
+  return result ? mapSessionRow(result) : null;
 }
 
 export async function getCurrentOrchestratorSession(db: D1Database, userId: string): Promise<AgentSession | null> {

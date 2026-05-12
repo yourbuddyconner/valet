@@ -162,6 +162,56 @@ export async function createSession(
   };
 }
 
+/**
+ * Upsert an orchestrator session row using INSERT OR IGNORE + UPDATE semantics.
+ * With stable session IDs (orchestrator:{userId}), the row may already exist when
+ * the orchestrator is restarted. INSERT OR IGNORE skips duplicate key errors and
+ * the subsequent UPDATE resets the status and last_active_at for the new lifecycle.
+ */
+export async function upsertOrchestratorSession(
+  db: AppDb,
+  data: { id: string; userId: string; workspace: string; title?: string; personaId?: string; isOrchestrator?: boolean; purpose?: SessionPurpose }
+): Promise<AgentSession> {
+  const purpose = data.purpose || 'orchestrator';
+
+  // INSERT OR IGNORE: creates the row on first onboarding, is a no-op on restart
+  await db.insert(sessions).values({
+    id: data.id,
+    userId: data.userId,
+    workspace: data.workspace,
+    status: 'initializing',
+    title: data.title || null,
+    personaId: data.personaId || null,
+    isOrchestrator: data.isOrchestrator ?? true,
+    purpose,
+  }).onConflictDoNothing({ target: sessions.id });
+
+  // UPDATE: reset status and last_active_at for the new lifecycle (covers restart case)
+  await db
+    .update(sessions)
+    .set({
+      status: 'initializing',
+      title: data.title || null,
+      personaId: data.personaId || null,
+      lastActiveAt: sql`datetime('now')`,
+      errorMessage: null,
+    })
+    .where(eq(sessions.id, data.id));
+
+  return {
+    id: data.id,
+    userId: data.userId,
+    workspace: data.workspace,
+    status: 'initializing',
+    title: data.title,
+    personaId: data.personaId,
+    isOrchestrator: data.isOrchestrator ?? true,
+    purpose,
+    createdAt: new Date(),
+    lastActiveAt: new Date(),
+  };
+}
+
 export async function getSession(db: AppDb, id: string): Promise<AgentSession | null> {
   const row = await db
     .select()

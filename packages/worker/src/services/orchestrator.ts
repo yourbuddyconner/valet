@@ -122,10 +122,10 @@ export async function restartOrchestratorSession(
     });
   }
 
-  const sessionId = `orchestrator:${userId}:${crypto.randomUUID()}`;
+  const sessionId = `orchestrator:${userId}`;
   const runnerToken = generateRunnerToken();
 
-  await db.createSession(appDb, {
+  await db.upsertOrchestratorSession(appDb, {
     id: sessionId,
     userId,
     workspace: 'orchestrator',
@@ -134,45 +134,6 @@ export async function restartOrchestratorSession(
     purpose: 'orchestrator',
     personaId: identity.personaId ?? undefined,
   });
-
-  // Migrate channel bindings from ALL previous orchestrator sessions to the new one.
-  // This covers both terminal sessions and sessions whose D1 status hasn't caught up
-  // with the DO's actual state (status flush lag). Must run AFTER createSession so
-  // the FK constraint on session_id is satisfied.
-  try {
-    await env.DB.prepare(
-      `UPDATE channel_bindings SET session_id = ?
-       WHERE user_id = ? AND session_id != ? AND session_id IN (
-         SELECT id FROM sessions WHERE user_id = ? AND is_orchestrator = 1
-       )`
-    ).bind(sessionId, userId, sessionId, userId).run();
-  } catch (err) {
-    console.warn('[restartOrchestrator] Failed to migrate bindings:', err);
-  }
-
-  // Migrate channel thread mappings from previous orchestrator sessions
-  try {
-    await env.DB.prepare(
-      `UPDATE channel_thread_mappings SET session_id = ?
-       WHERE user_id = ? AND session_id != ? AND session_id IN (
-         SELECT id FROM sessions WHERE user_id = ? AND is_orchestrator = 1
-       )`
-    ).bind(sessionId, userId, sessionId, userId).run();
-  } catch (err) {
-    console.warn('[restartOrchestrator] Failed to migrate thread mappings:', err);
-  }
-
-  // Migrate session_threads owned by previous orchestrator sessions
-  try {
-    await env.DB.prepare(
-      `UPDATE session_threads SET session_id = ?
-       WHERE session_id != ? AND session_id IN (
-         SELECT id FROM sessions WHERE user_id = ? AND is_orchestrator = 1
-       )`
-    ).bind(sessionId, sessionId, userId).run();
-  } catch (err) {
-    console.warn('[restartOrchestrator] Failed to migrate session threads:', err);
-  }
 
   // Build env vars (LLM keys + orchestrator flag)
   const providerVars = await assembleProviderEnv(appDb, env);
