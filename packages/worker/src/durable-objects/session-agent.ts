@@ -4099,6 +4099,10 @@ export class SessionAgentDO {
       connectedClients: clientCount,
       connectedUsers,
       runningStartedAt: runningStartedAt || null,
+      recoveryAttemptCount: this.sessionState.recoveryAttemptCount,
+      backoffUntil: this.sessionState.backoffUntil > 0 ? this.sessionState.backoffUntil : null,
+      lastFailureReason: this.sessionState.lastFailureReason || null,
+      sandboxGeneration: this.sessionState.sandboxGeneration,
     });
   }
 

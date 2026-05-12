@@ -40,7 +40,8 @@ export function deriveRuntimeStates(args: {
     if (lifecycle === 'hibernating') return 'hibernating';
     if (lifecycle === 'hibernated') return 'hibernated';
     if (lifecycle === 'restoring') return 'restoring';
-    if (lifecycle === 'initializing') return 'starting';
+    if (lifecycle === 'initializing' || lifecycle === 'waiting_runner') return 'starting';
+    if (lifecycle === 'recovering' || lifecycle === 'backoff') return 'error';
     if (hasSandbox) return 'running';
     if (hasQueue) return 'restoring';
     return 'stopped';
@@ -50,7 +51,8 @@ export function deriveRuntimeStates(args: {
     if (lifecycle === 'error') return 'error';
     if (lifecycle === 'terminated' || lifecycle === 'archived') return 'stopped';
     if (lifecycle === 'hibernating' || lifecycle === 'hibernated') return 'sleeping';
-    if (lifecycle === 'initializing' || lifecycle === 'restoring') {
+    if (lifecycle === 'recovering' || lifecycle === 'backoff') return 'error';
+    if (lifecycle === 'initializing' || lifecycle === 'waiting_runner' || lifecycle === 'restoring') {
       return hasQueue ? 'queued' : 'starting';
     }
     if (hasQueue && !args.runnerConnected) return 'queued';
