@@ -262,8 +262,31 @@ export class SlackTransport implements ChannelTransport {
 
     const channel = event.channel as string | undefined;
     const user = event.user as string | undefined;
-    const rawText = (event.text as string) || '';
+    let rawText = (event.text as string) || '';
     const mentionMap = routing.mentionMap as Record<string, string> | undefined;
+
+    // Extract forwarded message content from Slack message unfurls
+    const slackAttachments = event.attachments as Array<Record<string, unknown>> | undefined;
+    if (slackAttachments && slackAttachments.length > 0) {
+      const unfurlParts: string[] = [];
+      for (const att of slackAttachments) {
+        if (!att.is_msg_unfurl) continue;
+        const unfurlText = (att.text as string) || (att.fallback as string) || '';
+        if (!unfurlText) continue;
+        const author = att.author_name as string | undefined;
+        if (author) {
+          unfurlParts.push(`[Forwarded message from ${author}]:\n${unfurlText}`);
+        } else {
+          unfurlParts.push(`[Forwarded message]:\n${unfurlText}`);
+        }
+      }
+      if (unfurlParts.length > 0) {
+        rawText = rawText
+          ? `${rawText}\n\n${unfurlParts.join('\n\n')}`
+          : unfurlParts.join('\n\n');
+      }
+    }
+
     const text = cleanSlackText(rawText, mentionMap);
     const ts = event.ts as string | undefined;
     const threadTs = event.thread_ts as string | undefined;

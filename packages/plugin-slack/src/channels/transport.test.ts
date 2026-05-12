@@ -419,7 +419,7 @@ describe('SlackTransport', () => {
       expect(result!.attachments[0].url).toBe('https://files.slack.com/files-pri/T123-F456/photo.png');
     });
 
-    it('skips files larger than 10MB during download', async () => {
+    it('skips files larger than size limit during download', async () => {
       const body = JSON.stringify({
         type: 'event_callback',
         team_id: 'T123',
@@ -435,7 +435,7 @@ describe('SlackTransport', () => {
               url_private: 'https://files.slack.com/files-pri/T123-F456/huge.zip',
               mimetype: 'application/zip',
               name: 'huge.zip',
-              size: 11 * 1024 * 1024,
+              size: 26 * 1024 * 1024, // exceeds 25MB non-image limit
               filetype: 'zip',
             },
           ],
@@ -623,6 +623,140 @@ describe('SlackTransport', () => {
       const result = await transport.parseInbound({}, body, { userId: 'u1' });
       expect(result!.command).toBe('help');
       expect(result!.text).toBe('');
+    });
+
+    // ─── Forwarded messages (is_msg_unfurl) ──────────────────────────
+
+    it('extracts forwarded message content from attachments with is_msg_unfurl', async () => {
+      const body = JSON.stringify({
+        type: 'event_callback',
+        team_id: 'T123',
+        event: {
+          type: 'message',
+          channel: 'C456',
+          user: 'U789',
+          text: '',
+          ts: '1234567890.123456',
+          attachments: [
+            {
+              is_msg_unfurl: true,
+              author_name: 'Alice',
+              text: 'the original message content',
+              fallback: 'fallback text',
+            },
+          ],
+        },
+      });
+
+      const result = await transport.parseInbound({}, body, { userId: 'u1' });
+      expect(result).not.toBeNull();
+      expect(result!.text).toBe('[Forwarded message from Alice]:\nthe original message content');
+    });
+
+    it('preserves user comment alongside forwarded message', async () => {
+      const body = JSON.stringify({
+        type: 'event_callback',
+        team_id: 'T123',
+        event: {
+          type: 'message',
+          channel: 'C456',
+          user: 'U789',
+          text: 'check this out',
+          ts: '1234567890.123456',
+          attachments: [
+            {
+              is_msg_unfurl: true,
+              author_name: 'Bob',
+              text: 'forwarded content here',
+            },
+          ],
+        },
+      });
+
+      const result = await transport.parseInbound({}, body, { userId: 'u1' });
+      expect(result).not.toBeNull();
+      expect(result!.text).toBe('check this out\n\n[Forwarded message from Bob]:\nforwarded content here');
+    });
+
+    it('uses fallback text when forwarded message has no text', async () => {
+      const body = JSON.stringify({
+        type: 'event_callback',
+        team_id: 'T123',
+        event: {
+          type: 'message',
+          channel: 'C456',
+          user: 'U789',
+          text: '',
+          ts: '1234567890.123456',
+          attachments: [
+            {
+              is_msg_unfurl: true,
+              text: '',
+              fallback: 'fallback content from forwarded message',
+            },
+          ],
+        },
+      });
+
+      const result = await transport.parseInbound({}, body, { userId: 'u1' });
+      expect(result).not.toBeNull();
+      expect(result!.text).toBe('[Forwarded message]:\nfallback content from forwarded message');
+    });
+
+    it('handles multiple forwarded messages', async () => {
+      const body = JSON.stringify({
+        type: 'event_callback',
+        team_id: 'T123',
+        event: {
+          type: 'message',
+          channel: 'C456',
+          user: 'U789',
+          text: '',
+          ts: '1234567890.123456',
+          attachments: [
+            {
+              is_msg_unfurl: true,
+              author_name: 'Alice',
+              text: 'first message',
+            },
+            {
+              is_msg_unfurl: true,
+              author_name: 'Bob',
+              text: 'second message',
+            },
+          ],
+        },
+      });
+
+      const result = await transport.parseInbound({}, body, { userId: 'u1' });
+      expect(result).not.toBeNull();
+      expect(result!.text).toContain('[Forwarded message from Alice]:\nfirst message');
+      expect(result!.text).toContain('[Forwarded message from Bob]:\nsecond message');
+    });
+
+    it('ignores non-unfurl attachments', async () => {
+      const body = JSON.stringify({
+        type: 'event_callback',
+        team_id: 'T123',
+        event: {
+          type: 'message',
+          channel: 'C456',
+          user: 'U789',
+          text: 'just a link',
+          ts: '1234567890.123456',
+          attachments: [
+            {
+              title: 'Some URL preview',
+              text: 'URL description',
+              // no is_msg_unfurl
+            },
+          ],
+        },
+      });
+
+      const result = await transport.parseInbound({}, body, { userId: 'u1' });
+      expect(result).not.toBeNull();
+      expect(result!.text).toBe('just a link');
     });
 
     it('returns null for events without user or channel', async () => {
