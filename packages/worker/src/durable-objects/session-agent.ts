@@ -1022,12 +1022,31 @@ export class SessionAgentDO {
     const now = Date.now();
     const nowSecs = Math.floor(now / 1000);
 
+    // ─── Backoff Timer Check ────────────────────────────────────────
+    // If we're in backoff and the timer has expired, attempt recovery again.
+    if (status === 'backoff') {
+      const backoffUntil = this.sessionState.backoffUntil;
+      if (backoffUntil > 0 && now >= backoffUntil) {
+        console.log('[SessionAgentDO] Backoff timer expired — retrying recovery');
+        await this.performRecovery('backoff_retry');
+      }
+      // Whether we retried or the timer hasn't expired yet, re-arm and return.
+      // performRecovery transitions to initializing (success) or backoff/terminated (failure).
+      this.rescheduleIdleAlarm();
+      return;
+    }
+
     // ─── Runner Grace Period Check ──────────────────────────────────
     if (this.runnerDisconnectedAt && now - this.runnerDisconnectedAt >= SessionAgentDO.RUNNER_GRACE_PERIOD_MS) {
-      console.log(`[SessionAgentDO] Runner did not reconnect within ${SessionAgentDO.RUNNER_GRACE_PERIOD_MS / 1000}s — terminating session`);
+      console.log(`[SessionAgentDO] Runner did not reconnect within ${SessionAgentDO.RUNNER_GRACE_PERIOD_MS / 1000}s — attempting recovery`);
       this.runnerDisconnectedAt = null;
-      await this.handleStop('sandbox_lost');
-      return; // handleStop transitions to terminal, no re-arm needed
+      await this.performRecovery('sandbox_lost');
+      // performRecovery transitions to initializing (spawning new sandbox) or
+      // terminal state (circuit breaker tripped). Re-arm if still alive.
+      if (!['terminated', 'error'].includes(this.sessionState.status)) {
+        this.rescheduleIdleAlarm();
+      }
+      return;
     }
 
     // ─── Collect Mode Flush Check (Phase D) ──────────────────────────
@@ -2467,6 +2486,10 @@ export class SessionAgentDO {
           if (wasInitializing) {
             this.runnerLink.ready = true;
             console.log('[SessionAgentDO] Runner is now ready (first idle after connect)');
+
+            // Runner is healthy — reset recovery counters so the circuit breaker
+            // starts fresh for any future sandbox loss.
+            this.sessionState.resetRecoveryState();
 
             // Revert any processing entries that survived DO eviction.
             // The disconnectRevertTimer is an in-memory setTimeout that is lost
@@ -4796,6 +4819,160 @@ export class SessionAgentDO {
     return Response.json({ status, message: 'Cannot wake from current status' });
   }
 
+  /**
+   * Attempt to recover from a sandbox loss by respawning the sandbox.
+   * Called when the runner grace period expires instead of immediately terminating.
+   *
+   * Flow:
+   * 1. Transition to 'recovering' → broadcast + D1 sync
+   * 2. Revert any in-flight prompt back to queued
+   * 3. Rotate the runner token and increment sandbox generation
+   * 4. Circuit breaker: if >3 attempts in 10 minutes, backoff (orchestrators) or terminate (regular)
+   * 5. Otherwise: transition to 'initializing' and respawn the sandbox
+   */
+  private async performRecovery(reason: string): Promise<void> {
+    const sessionId = this.sessionState.sessionId;
+    const now = Date.now();
+
+    console.log(`[SessionAgentDO] performRecovery(${reason}) for session ${sessionId}`);
+
+    // ─── 1. Transition to recovering ────────────────────────────────
+    this.sessionState.status = 'recovering';
+    this.broadcastToClients({
+      type: 'status',
+      data: { status: 'recovering' },
+    });
+    if (sessionId) {
+      updateSessionStatus(this.appDb, sessionId, 'recovering').catch((e) =>
+        console.error('[SessionAgentDO] Failed to sync recovering status to D1:', e),
+      );
+    }
+
+    // ─── 2. Revert in-flight prompts back to queued ─────────────────
+    const stuckProcessing = this.promptQueue.processingCount;
+    if (stuckProcessing > 0) {
+      console.log(`[SessionAgentDO] Recovery: reverting ${stuckProcessing} processing entries to queued`);
+      this.promptQueue.revertProcessingToQueued();
+    }
+    this.promptQueue.runnerBusy = false;
+    this.promptQueue.clearDispatchTimers();
+
+    // ─── 3. Rotate runner token and increment generation ────────────
+    this.runnerLink.token = crypto.randomUUID();
+    this.runnerLink.generation = this.runnerLink.generation + 1;
+    this.runnerLink.ready = false;
+
+    // ─── 4. Update recovery counters ────────────────────────────────
+    this.sessionState.recoveryAttemptCount = this.sessionState.recoveryAttemptCount + 1;
+    this.sessionState.lastRecoveryAt = now;
+    this.sessionState.lastFailureReason = reason;
+
+    const attemptCount = this.sessionState.recoveryAttemptCount;
+    console.log(`[SessionAgentDO] Recovery attempt #${attemptCount} for session ${sessionId} (reason: ${reason})`);
+
+    this.emitEvent('sandbox_recovery', {
+      summary: `Recovery attempt #${attemptCount}: ${reason}`,
+      properties: { attempt: attemptCount, reason },
+    });
+
+    // ─── 5. Circuit breaker check ───────────────────────────────────
+    // Trip if more than 3 consecutive recovery attempts without success.
+    // The counter is reset to 0 when the runner signals readiness (resetRecoveryState),
+    // so reaching >3 means repeated rapid failures without any healthy interval.
+    const CIRCUIT_BREAKER_MAX_ATTEMPTS = 3;
+
+    if (attemptCount > CIRCUIT_BREAKER_MAX_ATTEMPTS) {
+      const isOrchestrator = sessionId?.startsWith('orchestrator:') ?? false;
+
+      if (isOrchestrator) {
+        // Orchestrators get exponential backoff: 1min, 5min, 15min cap
+        const backoffTiers = [60_000, 300_000, 900_000]; // 1m, 5m, 15m
+        const tierIndex = Math.min(attemptCount - CIRCUIT_BREAKER_MAX_ATTEMPTS - 1, backoffTiers.length - 1);
+        const backoffMs = backoffTiers[tierIndex];
+        const backoffUntil = now + backoffMs;
+
+        console.log(`[SessionAgentDO] Circuit breaker tripped for orchestrator ${sessionId} — backoff ${backoffMs / 1000}s (attempt #${attemptCount})`);
+
+        this.sessionState.status = 'backoff';
+        this.sessionState.backoffUntil = backoffUntil;
+
+        if (sessionId) {
+          updateSessionStatus(this.appDb, sessionId, 'backoff').catch((e) =>
+            console.error('[SessionAgentDO] Failed to sync backoff status to D1:', e),
+          );
+        }
+
+        const msgId = crypto.randomUUID();
+        this.messageStore.writeMessage({
+          id: msgId,
+          role: 'system',
+          content: `Sandbox recovery failed after ${attemptCount} attempts. Backing off for ${Math.round(backoffMs / 1000)}s before retrying.`,
+        });
+        this.broadcastToClients({
+          type: 'status',
+          data: { status: 'backoff' },
+        });
+        this.broadcastToClients({
+          type: 'message',
+          data: {
+            id: msgId,
+            role: 'system',
+            content: `Sandbox recovery failed after ${attemptCount} attempts. Backing off for ${Math.round(backoffMs / 1000)}s before retrying.`,
+            createdAt: Math.floor(now / 1000),
+          },
+        });
+
+        this.emitAuditEvent('session.backoff', `Circuit breaker tripped — backoff ${backoffMs / 1000}s`);
+        // Alarm will be rescheduled by the caller with backoffDeadline from collectAlarmDeadlines
+        return;
+      } else {
+        // Regular sessions terminate after exhausting recovery attempts
+        console.log(`[SessionAgentDO] Circuit breaker tripped for session ${sessionId} — terminating (recovery exhausted)`);
+        this.emitAuditEvent('session.recovery_exhausted', `Recovery exhausted after ${attemptCount} attempts`);
+        await this.handleStop('recovery_exhausted');
+        return;
+      }
+    }
+
+    // ─── 6. Respawn sandbox ─────────────────────────────────────────
+    const backendUrl = this.sessionState.backendUrl;
+    const spawnRequest = this.sessionState.spawnRequest;
+
+    if (!backendUrl || !spawnRequest) {
+      console.error(`[SessionAgentDO] Cannot recover session ${sessionId}: missing backendUrl or spawnRequest`);
+      this.sessionState.status = 'error';
+      if (sessionId) {
+        updateSessionStatus(this.appDb, sessionId, 'error', undefined, 'Cannot recover: missing spawn configuration').catch((e) =>
+          console.error('[SessionAgentDO] Failed to sync error status to D1:', e),
+        );
+      }
+      this.broadcastToClients({ type: 'status', data: { status: 'error' } });
+      this.broadcastToClients({ type: 'error', error: 'Cannot recover: missing spawn configuration' });
+      return;
+    }
+
+    // Update the stored spawnRequest with the new runner token so the respawned
+    // sandbox connects with the rotated credentials.
+    const updatedSpawnRequest = { ...spawnRequest, runnerToken: this.runnerLink.token };
+    this.sessionState.spawnRequest = updatedSpawnRequest;
+
+    this.sessionState.status = 'initializing';
+    this.broadcastToClients({
+      type: 'status',
+      data: { status: 'initializing' },
+    });
+    if (sessionId) {
+      updateSessionStatus(this.appDb, sessionId, 'initializing').catch((e) =>
+        console.error('[SessionAgentDO] Failed to sync initializing status to D1:', e),
+      );
+    }
+
+    this.emitAuditEvent('session.recovering', `Respawning sandbox (attempt #${attemptCount})`);
+
+    // Spawn in background — same pattern as handleStart
+    this.ctx.waitUntil(this.spawnSandbox(backendUrl, updatedSpawnRequest));
+  }
+
   private async performHibernate(): Promise<void> {
     const sessionId = this.sessionState.sessionId;
 
@@ -5064,7 +5241,13 @@ export class SessionAgentDO {
       : null;
     const readyDeadline = readyRaw && readyRaw > Date.now() ? readyRaw : null;
 
-    return [promptExpiry, followupMs, watchdog, safetyNet, parentIdle, gracePeriod, idleQueueDeadline, readyDeadline];
+    // Backoff timer — wake when the backoff period expires to retry recovery
+    const backoffUntil = this.sessionState.backoffUntil;
+    const backoffDeadline = backoffUntil > 0 && this.sessionState.status === 'backoff'
+      ? backoffUntil
+      : null;
+
+    return [promptExpiry, followupMs, watchdog, safetyNet, parentIdle, gracePeriod, idleQueueDeadline, readyDeadline, backoffDeadline];
   }
 
   private rescheduleIdleAlarm(): void {
