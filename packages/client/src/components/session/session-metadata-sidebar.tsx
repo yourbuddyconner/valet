@@ -108,6 +108,12 @@ export function SessionMetadataSidebar({ sessionId, connectedUsers, selectedMode
       case 'initializing':
       case 'hibernating':
       case 'restoring':
+      case 'waiting_runner':
+      case 'recovering':
+        return 'initializing';
+      case 'backoff':
+        return 'error';
+      default:
         return 'initializing';
     }
   })();
