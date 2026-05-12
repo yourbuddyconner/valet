@@ -94,9 +94,10 @@ interface MarkdownContentProps {
 }
 
 /**
- * Intercept native copy to strip inline colors (Shiki spans, dark-mode grays)
- * so pasting into Gmail/Docs produces clean black-on-white text while
- * preserving structural formatting (bold, lists, links, code blocks).
+ * Intercept native copy to strip inline colors and backgrounds (Shiki spans,
+ * dark-mode grays, Tailwind computed styles) so pasting into Gmail/Docs
+ * produces clean black-on-white text while preserving structural formatting
+ * (bold, lists, links, code blocks).
  */
 function handleCopy(e: React.ClipboardEvent<HTMLDivElement>) {
   const selection = window.getSelection();
@@ -107,18 +108,25 @@ function handleCopy(e: React.ClipboardEvent<HTMLDivElement>) {
   const wrapper = document.createElement('div');
   wrapper.appendChild(fragment);
 
-  // Strip inline color/background-color from all elements (Shiki spans, etc.)
-  wrapper.querySelectorAll('[style]').forEach((el) => {
+  // Strip color/background from ALL elements — covers both explicit inline
+  // styles (Shiki spans) and browser-serialized computed styles (Tailwind bg-*).
+  wrapper.querySelectorAll('*').forEach((el) => {
     const htmlEl = el as HTMLElement;
     htmlEl.style.removeProperty('color');
     htmlEl.style.removeProperty('background-color');
-    if (!htmlEl.style.cssText.trim()) {
+    htmlEl.style.removeProperty('background');
+    // Clean up empty style attributes
+    if (htmlEl.hasAttribute('style') && !htmlEl.style.cssText.trim()) {
       htmlEl.removeAttribute('style');
     }
+    // Strip class attributes — they carry no meaning outside our app
+    // and some email clients may resolve them unexpectedly
+    htmlEl.removeAttribute('class');
   });
 
-  // Force black text at the root so dark-mode computed colors don't leak
+  // Force clean defaults at the root
   wrapper.style.color = '#000000';
+  wrapper.style.background = 'transparent';
 
   e.clipboardData.setData('text/html', wrapper.outerHTML);
   e.clipboardData.setData('text/plain', selection.toString());
