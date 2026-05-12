@@ -1123,7 +1123,7 @@ async function reconcileOrchestrators(env: Env): Promise<void> {
     FROM sessions s
     JOIN orchestrator_identities oi ON oi.user_id = s.user_id
     WHERE s.id = 'orchestrator:' || s.user_id
-      AND s.status IN ('initializing', 'recovering', 'waiting_runner')
+      AND s.status IN ('initializing', 'recovering', 'waiting_runner', 'backoff')
       AND s.last_active_at < datetime('now', '-5 minutes')
   `).all();
 

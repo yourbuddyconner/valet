@@ -3883,6 +3883,15 @@ export class SessionAgentDO {
     } catch (err) {
       console.error(`[SessionAgentDO] Failed to spawn sandbox for session ${sessionId}:`, err);
       const errorText = `Failed to create sandbox: ${err instanceof Error ? err.message : String(err)}`;
+
+      // If this spawn was triggered by recovery, let the circuit breaker decide
+      if (this.sessionState.status === 'initializing' && this.sessionState.recoveryAttemptCount > 0) {
+        console.log(`[SessionAgentDO] Recovery spawn failed for ${sessionId}: ${errorText}`);
+        await this.performRecovery(`spawn_failed: ${errorText}`);
+        return;
+      }
+
+      // First-time spawn failure (from handleStart) — hard error
       this.sessionState.status = 'error';
       if (sessionId) {
         updateSessionStatus(this.appDb, sessionId, 'error', undefined, errorText).catch((e) =>
@@ -4834,7 +4843,17 @@ export class SessionAgentDO {
       case 'running':
         return Response.json({ status: 'running' }, { status: 200 });
 
-      case 'initializing':
+      case 'initializing': {
+        // Distinguish: actively spawning vs brand-new DO with no config
+        if (!this.sessionState.spawnRequest || !this.sessionState.backendUrl) {
+          return Response.json(
+            { status: 'error', error: 'Missing spawn configuration — session needs re-initialization via /start' },
+            { status: 500 },
+          );
+        }
+        return Response.json({ status }, { status: 202 });
+      }
+
       case 'waiting_runner':
       case 'restoring':
       case 'recovering':
@@ -4851,6 +4870,9 @@ export class SessionAgentDO {
         const retryAfterMs = Math.max(0, backoffUntil - now);
         return Response.json({ status: 'backoff', retryAfterMs }, { status: 503 });
       }
+
+      case 'hibernating':
+        return Response.json({ status: 'hibernating' }, { status: 202 });
 
       case 'hibernated':
         this.ctx.waitUntil(this.performWake());
