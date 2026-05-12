@@ -268,6 +268,13 @@ export function SessionMetadataSidebar({ sessionId, connectedUsers, selectedMode
                 Sandbox: {sandboxStatusLabel}
               </span>
             </div>
+            {sandboxId && (
+              <div className="flex items-center gap-1.5">
+                <span className="font-mono text-[10px] text-neutral-500 dark:text-neutral-400">
+                  Sandbox ID: <span className="select-all">{sandboxId}</span>
+                </span>
+              </div>
+            )}
           </div>
         </SidebarSection>
 
