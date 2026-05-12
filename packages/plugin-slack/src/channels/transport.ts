@@ -267,17 +267,30 @@ export class SlackTransport implements ChannelTransport {
 
     // Extract forwarded message content from Slack message unfurls
     const slackAttachments = event.attachments as Array<Record<string, unknown>> | undefined;
+    const unfurlFiles: InboundMessage['attachments'] = [];
     if (slackAttachments && slackAttachments.length > 0) {
       const unfurlParts: string[] = [];
       for (const att of slackAttachments) {
         if (!att.is_msg_unfurl) continue;
         const unfurlText = (att.text as string) || (att.fallback as string) || '';
-        if (!unfurlText) continue;
         const author = att.author_name as string | undefined;
-        if (author) {
-          unfurlParts.push(`[Forwarded message from ${author}]:\n${unfurlText}`);
-        } else {
-          unfurlParts.push(`[Forwarded message]:\n${unfurlText}`);
+        const prefix = author ? `[Forwarded message from ${author}]` : '[Forwarded message]';
+
+        if (unfurlText) {
+          unfurlParts.push(`${prefix}:\n${unfurlText}`);
+        }
+
+        // Extract image/file from the unfurl (forwarded file-share messages)
+        const imageUrl = (att.image_url || att.thumb_url) as string | undefined;
+        if (imageUrl) {
+          unfurlFiles.push({
+            type: 'image',
+            url: imageUrl,
+            mimeType: 'image/unknown',
+          });
+          if (!unfurlText) {
+            unfurlParts.push(`${prefix}: [image]`);
+          }
         }
       }
       if (unfurlParts.length > 0) {
@@ -354,6 +367,9 @@ export class SlackTransport implements ChannelTransport {
         });
       }
     }
+
+    // Include any files extracted from forwarded message unfurls
+    attachments.push(...unfurlFiles);
 
     // Check for slash command pattern
     const commandMatch = text.match(/^\/(\w+)(?:\s+(.*))?$/s);

@@ -734,6 +734,91 @@ describe('SlackTransport', () => {
       expect(result!.text).toContain('[Forwarded message from Bob]:\nsecond message');
     });
 
+    it('extracts image from forwarded file-share message', async () => {
+      const body = JSON.stringify({
+        type: 'event_callback',
+        team_id: 'T123',
+        event: {
+          type: 'message',
+          channel: 'C456',
+          user: 'U789',
+          text: '',
+          ts: '1234567890.123456',
+          attachments: [
+            {
+              is_msg_unfurl: true,
+              author_name: 'Alice',
+              text: '',
+              image_url: 'https://files.slack.com/files-pri/T123-F456/photo.png',
+            },
+          ],
+        },
+      });
+
+      const result = await transport.parseInbound({}, body, { userId: 'u1' });
+      expect(result).not.toBeNull();
+      expect(result!.text).toBe('[Forwarded message from Alice]: [image]');
+      expect(result!.attachments).toHaveLength(1);
+      expect(result!.attachments[0].type).toBe('image');
+      expect(result!.attachments[0].url).toBe('https://files.slack.com/files-pri/T123-F456/photo.png');
+    });
+
+    it('extracts both text and image from forwarded message', async () => {
+      const body = JSON.stringify({
+        type: 'event_callback',
+        team_id: 'T123',
+        event: {
+          type: 'message',
+          channel: 'C456',
+          user: 'U789',
+          text: '',
+          ts: '1234567890.123456',
+          attachments: [
+            {
+              is_msg_unfurl: true,
+              author_name: 'Bob',
+              text: 'check out this screenshot',
+              image_url: 'https://files.slack.com/files-pri/T123-F456/screenshot.png',
+            },
+          ],
+        },
+      });
+
+      const result = await transport.parseInbound({}, body, { userId: 'u1' });
+      expect(result).not.toBeNull();
+      expect(result!.text).toBe('[Forwarded message from Bob]:\ncheck out this screenshot');
+      expect(result!.attachments).toHaveLength(1);
+      expect(result!.attachments[0].type).toBe('image');
+      expect(result!.attachments[0].url).toBe('https://files.slack.com/files-pri/T123-F456/screenshot.png');
+    });
+
+    it('prefers image_url over thumb_url in forwarded messages', async () => {
+      const body = JSON.stringify({
+        type: 'event_callback',
+        team_id: 'T123',
+        event: {
+          type: 'message',
+          channel: 'C456',
+          user: 'U789',
+          text: '',
+          ts: '1234567890.123456',
+          attachments: [
+            {
+              is_msg_unfurl: true,
+              author_name: 'Carol',
+              text: '',
+              image_url: 'https://files.slack.com/full.png',
+              thumb_url: 'https://files.slack.com/thumb.png',
+            },
+          ],
+        },
+      });
+
+      const result = await transport.parseInbound({}, body, { userId: 'u1' });
+      expect(result!.attachments).toHaveLength(1);
+      expect(result!.attachments[0].url).toBe('https://files.slack.com/full.png');
+    });
+
     it('ignores non-unfurl attachments', async () => {
       const body = JSON.stringify({
         type: 'event_callback',
