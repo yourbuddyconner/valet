@@ -66,15 +66,6 @@ export async function restartOrchestratorSession(
     await stopOldOrchestratorSession(env, appDb, oldSession.id);
   }
 
-  // ── Duplicate guard: re-check after stop to prevent TOCTOU races ──
-  // If another concurrent restart already created a healthy session while we were
-  // stopping the old one, bail out to avoid spawning a second parallel sandbox.
-  const recheckSession = await db.getOrchestratorSession(env.DB, userId);
-  if (recheckSession && !TERMINAL_SESSION_STATUSES.has(recheckSession.status) && recheckSession.id !== oldSession?.id) {
-    console.log(`[restartOrchestrator] Another restart already created session ${recheckSession.id}, skipping`);
-    return { sessionId: recheckSession.id };
-  }
-
   // Backfill: create persona for orchestrators that predate persona support
   if (!identity.personaId) {
     const personaId = crypto.randomUUID();

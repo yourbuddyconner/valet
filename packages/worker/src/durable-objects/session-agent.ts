@@ -4905,6 +4905,9 @@ export class SessionAgentDO {
       );
     }
 
+    // Explicit refresh — reset circuit breaker so the user can force a restart
+    this.sessionState.resetRecoveryState();
+
     // Spawn fresh via recovery path (handles token rotation, generation increment)
     await this.performRecovery('refresh');
 
@@ -4951,7 +4954,7 @@ export class SessionAgentDO {
 
     // ─── 3. Rotate runner token and increment generation ────────────
     this.runnerLink.token = crypto.randomUUID();
-    this.runnerLink.generation = this.runnerLink.generation + 1;
+    this.sessionState.sandboxGeneration = this.sessionState.sandboxGeneration + 1;
     this.runnerLink.ready = false;
 
     // ─── 4. Update recovery counters ────────────────────────────────

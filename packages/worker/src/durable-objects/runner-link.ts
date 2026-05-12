@@ -129,16 +129,6 @@ export class RunnerLink {
     this.deps.setState('runnerConnectedAt', ms ? String(ms) : '');
   }
 
-  /** Sandbox generation — incremented on each spawn/restore, used to reject stale connections. */
-  get generation(): number {
-    const val = this.deps.getState('sandboxGeneration');
-    return val ? parseInt(val, 10) : 0;
-  }
-
-  set generation(val: number) {
-    this.deps.setState('sandboxGeneration', String(val));
-  }
-
   // ─── Send ───────────────────────────────────────────────────────────
 
   /**

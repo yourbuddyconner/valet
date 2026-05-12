@@ -32,6 +32,7 @@ WHERE NOT EXISTS (
 UPDATE channel_bindings
 SET session_id = 'orchestrator:' || user_id
 WHERE session_id != 'orchestrator:' || user_id
+  AND user_id IS NOT NULL
   AND session_id IN (
     SELECT id FROM sessions WHERE is_orchestrator = 1
   );
@@ -40,6 +41,7 @@ WHERE session_id != 'orchestrator:' || user_id
 UPDATE channel_thread_mappings
 SET session_id = 'orchestrator:' || user_id
 WHERE session_id != 'orchestrator:' || user_id
+  AND user_id IS NOT NULL
   AND session_id IN (
     SELECT id FROM sessions WHERE is_orchestrator = 1
   );
