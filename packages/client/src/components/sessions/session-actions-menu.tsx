@@ -24,7 +24,7 @@ interface SessionActionsMenuProps {
   align?: 'start' | 'center' | 'end';
 }
 
-const ACTIVE_STATUSES: SessionStatus[] = ['running', 'idle', 'initializing', 'hibernated', 'restoring', 'hibernating'];
+const ACTIVE_STATUSES: SessionStatus[] = ['running', 'idle', 'initializing', 'waiting_runner', 'recovering', 'backoff', 'hibernated', 'restoring', 'hibernating'];
 const REFRESHABLE_STATUSES: SessionStatus[] = [...ACTIVE_STATUSES, 'error'];
 const HIBERNATABLE_STATUSES: SessionStatus[] = ['running'];
 const DELETABLE_STATUSES: SessionStatus[] = ['terminated', 'archived', 'error'];

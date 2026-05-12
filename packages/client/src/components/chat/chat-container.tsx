@@ -618,11 +618,11 @@ function SessionStatusBadge({ status, errorMessage }: { status: string; errorMes
 
 function SessionStatusIndicator({ sessionStatus, connectionStatus }: { sessionStatus: string; connectionStatus: string }) {
   // Determine color and animation based on session state
-  const isTransitioning = sessionStatus === 'hibernating' || sessionStatus === 'restoring' || sessionStatus === 'initializing' || sessionStatus === 'connecting';
+  const isTransitioning = sessionStatus === 'hibernating' || sessionStatus === 'restoring' || sessionStatus === 'initializing' || sessionStatus === 'connecting' || sessionStatus === 'waiting_runner' || sessionStatus === 'recovering';
   const isRunning = sessionStatus === 'running' || sessionStatus === 'idle';
   const isSleeping = sessionStatus === 'hibernated';
   const isTerminated = sessionStatus === 'terminated' || sessionStatus === 'archived';
-  const isError = sessionStatus === 'error' || connectionStatus === 'error';
+  const isError = sessionStatus === 'error' || sessionStatus === 'backoff' || connectionStatus === 'error';
   const isDisconnected = connectionStatus === 'disconnected' || connectionStatus === 'connecting';
 
   let color = 'bg-neutral-300 dark:bg-neutral-600';

@@ -188,7 +188,7 @@ export function useDeleteSession() {
 
 export function useSessionToken(sessionId: string) {
   const { data: session } = useSession(sessionId);
-  const isStarting = !session || session.status === 'initializing';
+  const isStarting = !session || session.status === 'initializing' || session.status === 'waiting_runner' || session.status === 'recovering';
 
   return useQuery({
     queryKey: [...sessionKeys.detail(sessionId), 'token'] as const,

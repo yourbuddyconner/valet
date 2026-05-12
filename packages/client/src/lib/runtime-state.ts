@@ -31,6 +31,9 @@ export type JointRuntimeState =
 
 const LIFECYCLE_VALUES: SessionLifecycleStatus[] = [
   'initializing',
+  'waiting_runner',
+  'recovering',
+  'backoff',
   'running',
   'idle',
   'hibernating',
@@ -121,7 +124,8 @@ export function deriveRuntimeStates(args: DeriveRuntimeStatesArgs): {
     if (lifecycleStatus === 'hibernating') return 'hibernating';
     if (lifecycleStatus === 'hibernated') return 'hibernated';
     if (lifecycleStatus === 'restoring') return 'restoring';
-    if (lifecycleStatus === 'initializing') return 'starting';
+    if (lifecycleStatus === 'initializing' || lifecycleStatus === 'waiting_runner') return 'starting';
+    if (lifecycleStatus === 'recovering' || lifecycleStatus === 'backoff') return 'error';
     if (hasSandbox) return 'running';
     if (hasQueue) return 'restoring';
     return 'stopped';
@@ -131,7 +135,8 @@ export function deriveRuntimeStates(args: DeriveRuntimeStatesArgs): {
     if (lifecycleStatus === 'error') return 'error';
     if (lifecycleStatus === 'terminated' || lifecycleStatus === 'archived') return 'stopped';
     if (lifecycleStatus === 'hibernating' || lifecycleStatus === 'hibernated') return 'sleeping';
-    if (lifecycleStatus === 'initializing' || lifecycleStatus === 'restoring') {
+    if (lifecycleStatus === 'recovering' || lifecycleStatus === 'backoff') return 'error';
+    if (lifecycleStatus === 'initializing' || lifecycleStatus === 'waiting_runner' || lifecycleStatus === 'restoring') {
       return hasQueue ? 'queued' : 'starting';
     }
     if (runnerConnected && runnerBusy) return 'busy';
