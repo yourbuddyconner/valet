@@ -93,12 +93,47 @@ interface MarkdownContentProps {
   isStreaming?: boolean;
 }
 
+/**
+ * Intercept native copy to strip inline colors (Shiki spans, dark-mode grays)
+ * so pasting into Gmail/Docs produces clean black-on-white text while
+ * preserving structural formatting (bold, lists, links, code blocks).
+ */
+function handleCopy(e: React.ClipboardEvent<HTMLDivElement>) {
+  const selection = window.getSelection();
+  if (!selection || selection.isCollapsed) return;
+
+  const range = selection.getRangeAt(0);
+  const fragment = range.cloneContents();
+  const wrapper = document.createElement('div');
+  wrapper.appendChild(fragment);
+
+  // Strip inline color/background-color from all elements (Shiki spans, etc.)
+  wrapper.querySelectorAll('[style]').forEach((el) => {
+    const htmlEl = el as HTMLElement;
+    htmlEl.style.removeProperty('color');
+    htmlEl.style.removeProperty('background-color');
+    if (!htmlEl.style.cssText.trim()) {
+      htmlEl.removeAttribute('style');
+    }
+  });
+
+  // Force black text at the root so dark-mode computed colors don't leak
+  wrapper.style.color = '#000000';
+
+  e.clipboardData.setData('text/html', wrapper.outerHTML);
+  e.clipboardData.setData('text/plain', selection.toString());
+  e.preventDefault();
+}
+
 export const MarkdownContent = memo(function MarkdownContent({ content, isStreaming = false }: MarkdownContentProps) {
   // Memoize to avoid recreating the markdown tree on parent re-renders
   const element = useMemo(
     () => (
       <StreamingContext.Provider value={isStreaming}>
-        <div className="markdown-body mt-1 max-w-full overflow-hidden text-[13px] leading-relaxed text-neutral-700 dark:text-neutral-300">
+        <div
+          className="markdown-body mt-1 max-w-full overflow-hidden text-[13px] leading-relaxed text-neutral-700 dark:text-neutral-300"
+          onCopy={handleCopy}
+        >
           <ReactMarkdown
             remarkPlugins={remarkPlugins}
             rehypePlugins={rehypePlugins}
