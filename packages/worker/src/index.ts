@@ -52,7 +52,6 @@ import { githubMeRouter } from './routes/github-me.js';
 import { githubAuthRouter } from './routes/github-auth.js';
 import {
   enqueueWorkflowApprovalNotificationIfMissing,
-  getTerminatedOrchestratorSessions,
   markWorkflowApprovalNotificationsRead,
   updateSessionGitState,
   getTimedOutApprovals,
@@ -76,7 +75,6 @@ import {
   enqueueWorkflowExecution,
   sha256Hex,
 } from './lib/workflow-runtime.js';
-import { restartOrchestratorSession } from './services/orchestrator.js';
 import { syncPluginsOnce } from './services/plugin-sync.js';
 
 // Durable Object exports
@@ -277,11 +275,11 @@ const scheduled: ExportedHandlerScheduledHandler<Env> = async (event, env, ctx) 
     }
   }
 
-  // Auto-restart dead orchestrators (runs every tick, only acts on sessions dead >2 min)
+  // Reconcile orchestrator state (replaces autoRestartDeadOrchestrators)
   try {
-    await autoRestartDeadOrchestrators(env);
+    await reconcileOrchestrators(env);
   } catch (error) {
-    console.error('Orchestrator auto-restart error:', error);
+    console.error('[OrchestratorReconcile] Reconciliation error:', error);
   }
 
   // Proactively refresh OAuth credentials expiring within 15 minutes (runs every 5 min)
@@ -1114,44 +1112,47 @@ async function archiveTerminatedSessions(env: Env): Promise<void> {
 }
 
 /**
- * Auto-restart orchestrator sessions that have been in a terminal state for >2 minutes.
- * The 2-minute threshold prevents racing with the refresh dialog's terminate→create flow.
- * restartOrchestratorSession stops any existing non-terminal session before creating
- * a new one, and re-checks D1 after the stop to guard against concurrent restarts.
+ * Reconcile orchestrator state: find sessions stuck in transient states and ping their
+ * DOs to resume, and log orphaned identities that have no session row.
+ * This is a safety net — primary recovery is DO-internal and on-demand via ensureRunning.
  */
-async function autoRestartDeadOrchestrators(env: Env): Promise<void> {
-  const deadOrchestrators = await getTerminatedOrchestratorSessions(env.DB, 2);
-  if (deadOrchestrators.length === 0) return;
+async function reconcileOrchestrators(env: Env): Promise<void> {
+  // Find orchestrator sessions stuck in transient states for too long
+  const stuckSessions = await env.DB.prepare(`
+    SELECT s.id, s.user_id, s.status, s.last_active_at
+    FROM sessions s
+    JOIN orchestrator_identities oi ON oi.user_id = s.user_id
+    WHERE s.id = 'orchestrator:' || s.user_id
+      AND s.status IN ('initializing', 'recovering', 'waiting_runner')
+      AND s.last_active_at < datetime('now', '-5 minutes')
+  `).all();
 
-  console.log(`Auto-restarting ${deadOrchestrators.length} dead orchestrator(s)`);
-
-  const results = await Promise.allSettled(
-    deadOrchestrators.map(async (orch) => {
+  if (stuckSessions.results && stuckSessions.results.length > 0) {
+    for (const row of stuckSessions.results) {
+      console.error(`[OrchestratorReconcile] Session ${row.id} stuck in ${row.status} since ${row.last_active_at}`);
       try {
-        const result = await restartOrchestratorSession(
-          env,
-          orch.userId,
-          '', // email not needed for restart
-          {
-            id: orch.identityId,
-            name: orch.name,
-            handle: orch.handle,
-            customInstructions: orch.customInstructions,
-          }
-        );
-        console.log(`Auto-restarted orchestrator for user ${orch.userId}: ${result.sessionId}`);
-        return result;
+        const doId = env.SESSIONS.idFromName(row.id as string);
+        const sessionDO = env.SESSIONS.get(doId);
+        await sessionDO.fetch(new Request('http://do/ensure-running', { method: 'POST' }));
       } catch (err) {
-        console.error(`Failed to auto-restart orchestrator for user ${orch.userId}:`, err);
-        throw err;
+        console.error(`[OrchestratorReconcile] Failed to ping ensureRunning for ${row.id}:`, err);
       }
-    })
-  );
+    }
+  }
 
-  const succeeded = results.filter((r) => r.status === 'fulfilled').length;
-  const failed = results.filter((r) => r.status === 'rejected').length;
-  if (failed > 0) {
-    console.warn(`Auto-restart: ${succeeded} succeeded, ${failed} failed`);
+  // Find orchestrators with identities but no session row (shouldn't happen post-migration)
+  const orphanedIdentities = await env.DB.prepare(`
+    SELECT oi.user_id, oi.name
+    FROM orchestrator_identities oi
+    WHERE NOT EXISTS (
+      SELECT 1 FROM sessions s WHERE s.id = 'orchestrator:' || oi.user_id
+    )
+  `).all();
+
+  if (orphanedIdentities.results && orphanedIdentities.results.length > 0) {
+    for (const row of orphanedIdentities.results) {
+      console.error(`[OrchestratorReconcile] Orchestrator identity for user ${row.user_id} (${row.name}) has no session row`);
+    }
   }
 }
 
