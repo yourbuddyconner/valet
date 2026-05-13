@@ -22,6 +22,7 @@
     { "path": "./packages/plugin-gmail" },
     { "path": "./packages/plugin-google-calendar" },
     { "path": "./packages/plugin-google-workspace" },
+    { "path": "./packages/plugin-granola" },
     { "path": "./packages/plugin-linear" },
     { "path": "./packages/plugin-typefully" },
     { "path": "./packages/plugin-notion" },
