@@ -148,7 +148,9 @@ const listFiles: ActionDefinition = {
   id: 'drive.list_files',
   name: 'List Files',
   description:
-    'Lists files across Google Drive with optional filtering by type, folder, and ownership. ' +
+    'Lists files in Google Drive with optional filtering by type, folder, and ownership. ' +
+    'By default searches the user\'s personal Drive (corpora: "user"). Set corpora to "domain" for org-wide files, ' +
+    '"drive" for a specific shared drive, or "allDrives" to search everywhere. ' +
     'Use mimeType shortcuts: "document", "spreadsheet", "presentation", "folder", "form", "pdf", "zip" ' +
     'or pass any full MIME type string.',
   riskLevel: 'low',
@@ -163,7 +165,7 @@ const listFiles: ActionDefinition = {
     ownedByMe: z.boolean().optional().describe('Only return files owned by the authenticated user'),
     sharedWithMe: z.boolean().optional().describe('Only return files shared with the authenticated user'),
     modifiedAfter: z.string().optional().describe('Only return files modified after this date (ISO 8601)'),
-    corpora: z.enum(['user', 'domain', 'drive', 'allDrives']).optional().describe('Which corpus to search. "user" for personal files (default), "domain" for organization-wide, "drive" for a specific shared drive, "allDrives" for everything.'),
+    corpora: z.enum(['user', 'domain', 'drive', 'allDrives']).optional().describe('Which Drive corpus to search. "user" (default): files in My Drive (owned + shared with me). "domain": files shared to the Google Workspace org. "drive": a specific shared drive (requires driveId). "allDrives": My Drive + all shared drives (may return incomplete results on large workspaces).'),
   }),
 };
 
@@ -172,6 +174,7 @@ const searchFiles: ActionDefinition = {
   name: 'Search Files',
   description:
     'Searches across all file types in Google Drive by name or content. ' +
+    'By default searches the user\'s personal Drive (corpora: "user"). Set corpora to "domain", "drive", or "allDrives" to widen scope. ' +
     'Supports filtering by MIME type, scoping to a folder subtree, and pagination.',
   riskLevel: 'low',
   params: z.object({
@@ -184,14 +187,16 @@ const searchFiles: ActionDefinition = {
     maxResults: z.number().int().min(1).max(100).optional(),
     modifiedAfter: z.string().optional().describe('Only return files modified after this date (ISO 8601)'),
     pageToken: z.string().optional(),
-    corpora: z.enum(['user', 'domain', 'drive', 'allDrives']).optional().describe('Which corpus to search. "user" for personal files (default), "domain" for organization-wide, "drive" for a specific shared drive, "allDrives" for everything.'),
+    corpora: z.enum(['user', 'domain', 'drive', 'allDrives']).optional().describe('Which Drive corpus to search. "user" (default): files in My Drive (owned + shared with me). "domain": files shared to the Google Workspace org. "drive": a specific shared drive (requires driveId). "allDrives": My Drive + all shared drives (may return incomplete results on large workspaces).'),
   }),
 };
 
 const listDocuments: ActionDefinition = {
   id: 'drive.list_documents',
   name: 'List Google Docs',
-  description: 'Lists Google Documents in your Drive, optionally filtered by name or content.',
+  description:
+    'Lists Google Documents, optionally filtered by name or content. ' +
+    'By default searches the user\'s personal Drive (corpora: "user"). Set corpora to "domain", "drive", or "allDrives" to widen scope.',
   riskLevel: 'low',
   params: z.object({
     query: z.string().optional().describe('Search query to filter documents by name or content'),
@@ -199,14 +204,16 @@ const listDocuments: ActionDefinition = {
     pageToken: z.string().optional(),
     orderBy: z.enum(['name', 'modifiedTime', 'createdTime']).optional(),
     modifiedAfter: z.string().optional().describe('Only return documents modified after this date (ISO 8601)'),
-    corpora: z.enum(['user', 'domain', 'drive', 'allDrives']).optional().describe('Which corpus to search. "user" for personal files (default), "domain" for organization-wide, "drive" for a specific shared drive, "allDrives" for everything.'),
+    corpora: z.enum(['user', 'domain', 'drive', 'allDrives']).optional().describe('Which Drive corpus to search. "user" (default): files in My Drive (owned + shared with me). "domain": files shared to the Google Workspace org. "drive": a specific shared drive (requires driveId). "allDrives": My Drive + all shared drives (may return incomplete results on large workspaces).'),
   }),
 };
 
 const searchDocuments: ActionDefinition = {
   id: 'drive.search_documents',
   name: 'Search Google Docs',
-  description: 'Searches for Google Documents by name, content, or both.',
+  description:
+    'Searches for Google Documents by name, content, or both. ' +
+    'By default searches the user\'s personal Drive (corpora: "user"). Set corpora to "domain", "drive", or "allDrives" to widen scope.',
   riskLevel: 'low',
   params: z.object({
     query: z.string().describe('Search term to find in document names or content'),
@@ -214,20 +221,22 @@ const searchDocuments: ActionDefinition = {
     maxResults: z.number().int().min(1).max(100).optional(),
     pageToken: z.string().optional(),
     modifiedAfter: z.string().optional().describe('Only return documents modified after this date (ISO 8601)'),
-    corpora: z.enum(['user', 'domain', 'drive', 'allDrives']).optional().describe('Which corpus to search. "user" for personal files (default), "domain" for organization-wide, "drive" for a specific shared drive, "allDrives" for everything.'),
+    corpora: z.enum(['user', 'domain', 'drive', 'allDrives']).optional().describe('Which Drive corpus to search. "user" (default): files in My Drive (owned + shared with me). "domain": files shared to the Google Workspace org. "drive": a specific shared drive (requires driveId). "allDrives": My Drive + all shared drives (may return incomplete results on large workspaces).'),
   }),
 };
 
 const listFolderContents: ActionDefinition = {
   id: 'drive.list_folder_contents',
   name: 'List Folder Contents',
-  description: 'Lists files and subfolders within a Drive folder. Use folderId="root" for the top-level.',
+  description:
+    'Lists files and subfolders within a Drive folder. Use folderId="root" for the top-level. ' +
+    'By default searches the user\'s personal Drive (corpora: "user"). Set corpora to "domain", "drive", or "allDrives" to widen scope.',
   riskLevel: 'low',
   params: z.object({
     folderId: z.string().describe('Folder ID (use "root" for the root Drive folder)'),
     maxResults: z.number().int().min(1).max(100).optional(),
     pageToken: z.string().optional(),
-    corpora: z.enum(['user', 'domain', 'drive', 'allDrives']).optional().describe('Which corpus to search. "user" for personal files (default), "domain" for organization-wide, "drive" for a specific shared drive, "allDrives" for everything.'),
+    corpora: z.enum(['user', 'domain', 'drive', 'allDrives']).optional().describe('Which Drive corpus to search. "user" (default): files in My Drive (owned + shared with me). "domain": files shared to the Google Workspace org. "drive": a specific shared drive (requires driveId). "allDrives": My Drive + all shared drives (may return incomplete results on large workspaces).'),
   }),
 };
 
