@@ -33,6 +33,7 @@
     "@valet/plugin-linear": "workspace:*",
     "@valet/plugin-notion": "workspace:*",
     "@valet/plugin-sentry": "workspace:*",
+    "@valet/plugin-socket": "workspace:*",
     "@valet/plugin-slack": "workspace:*",
     "@valet/plugin-stripe": "workspace:*",
     "@valet/plugin-telegram": "workspace:*",

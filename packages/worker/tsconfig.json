@@ -23,6 +23,7 @@
     { "path": "../plugin-typefully" },
     { "path": "../plugin-notion" },
     { "path": "../plugin-sentry" },
+    { "path": "../plugin-socket" },
     { "path": "../plugin-slack" },
     { "path": "../plugin-stripe" },
     { "path": "../plugin-telegram" }
