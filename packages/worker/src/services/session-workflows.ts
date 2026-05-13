@@ -3,7 +3,7 @@ import type { AppDb } from '../lib/drizzle.js';
 import type { Env } from '../env.js';
 import type { RunnerMessageOf } from '@valet/shared';
 import { listWorkflows, upsertWorkflow, getWorkflowByIdOrSlug, getWorkflowOwnerCheck, deleteWorkflowTriggers, deleteWorkflowById, updateWorkflow, getWorkflowById } from '../lib/db/workflows.js';
-import { listTriggers, getTrigger, deleteTrigger, createTrigger, getTriggerForRun, updateTriggerLastRun, findScheduleTriggerByNameAndWorkflow, findScheduleTriggersByWorkflow, findScheduleTriggersByName, updateTriggerFull } from '../lib/db/triggers.js';
+import { listTriggers, getTrigger, deleteTrigger, getTriggerForRun, updateTriggerLastRun, updateTriggerFull, upsertTriggerByName } from '../lib/db/triggers.js';
 import { getExecution, getExecutionWithWorkflowName, getExecutionForAuth, getExecutionSteps, getExecutionOwnerAndStatus, checkIdempotencyKey, createExecution, completeExecutionFull, upsertExecutionStep, listExecutions, buildWorkflowStepOrderMap, rankStepOrderIndex } from '../lib/db/executions.js';
 import { checkWorkflowConcurrency, createWorkflowSession, dispatchOrchestratorPrompt, enqueueWorkflowExecution, sha256Hex } from '../lib/workflow-runtime.js';
 import { validateWorkflowDefinition } from '../lib/workflow-definition.js';
@@ -505,45 +505,28 @@ export async function handleTriggerAction(
     return { data: { success: true } };
   }
 
-  if (action === 'create' || action === 'update') {
-    const triggerId = typeof payload?.triggerId === 'string' ? payload.triggerId.trim() : '';
-    const isUpdate = action === 'update';
-    const hasWorkflowIdPayload = Object.prototype.hasOwnProperty.call(payload || {}, 'workflowId');
-    let fallbackToUpdate = false;
-
-    let existing = isUpdate
-      ? await getTrigger(envDB, userId, triggerId) as Record<string, unknown> | null
-      : null;
-
-    if (isUpdate && !existing) {
-      return { error: `Trigger not found: ${triggerId}` };
-    }
-
+  if (action === 'sync' || action === 'create') {
+    // Idempotent upsert by (userId, name). "create" is an alias for "sync"
+    // for backward compatibility with tool versions already in sandboxes.
     const rawConfig = payload?.config && typeof payload.config === 'object' && !Array.isArray(payload.config)
       ? payload.config as Record<string, unknown>
-      : existing?.config
-        ? (parseJsonOrNull(existing.config) as Record<string, unknown> | null)
-        : null;
+      : null;
     if (!rawConfig || typeof rawConfig.type !== 'string') {
       return { error: 'config with type is required' };
     }
 
-    const nextNameRaw = typeof payload?.name === 'string' ? payload.name : (typeof existing?.name === 'string' ? existing.name : '');
-    const nextName = (nextNameRaw || '').trim();
+    const nextName = (typeof payload?.name === 'string' ? payload.name : '').trim();
     if (!nextName) {
       return { error: 'name is required' };
     }
 
-    const workflowIdPayload = Object.prototype.hasOwnProperty.call(payload || {}, 'workflowId')
-      ? payload?.workflowId
-      : existing?.workflow_id;
     let workflowId: string | null = null;
-    if (typeof workflowIdPayload === 'string' && workflowIdPayload.trim()) {
-      workflowId = await resolveWorkflowIdForUser(db, userId, workflowIdPayload);
+    if (typeof payload?.workflowId === 'string' && payload.workflowId.trim()) {
+      workflowId = await resolveWorkflowIdForUser(db, userId, payload.workflowId);
       if (!workflowId) {
-        return { error: `Workflow not found: ${workflowIdPayload}` };
+        return { error: `Workflow not found: ${payload.workflowId}` };
       }
-    } else if (workflowIdPayload === null) {
+    } else if (payload?.workflowId === null) {
       workflowId = null;
     }
 
@@ -555,40 +538,104 @@ export async function handleTriggerAction(
       }
     }
 
-    // Fallback upsert path for schedule triggers when a create call omits triggerId.
-    // This prevents accidental duplicate schedules from repeated "update" attempts.
-    if (!isUpdate && rawConfig.type === 'schedule') {
-      if (hasWorkflowIdPayload) {
-        const sameName = await findScheduleTriggerByNameAndWorkflow(envDB, userId, workflowId, nextName);
+    if (requiresWorkflowForTriggerConfig(rawConfig) && !workflowId) {
+      return { error: 'workflowId is required for this trigger type' };
+    }
 
-        if (sameName) {
-          existing = sameName;
-          fallbackToUpdate = true;
-        } else {
-          const workflowMatches = await findScheduleTriggersByWorkflow(envDB, userId, workflowId, 2);
-          const candidates = workflowMatches.results || [];
-          if (candidates.length === 1) {
-            existing = candidates[0];
-            fallbackToUpdate = true;
-          }
-        }
-      } else {
-        const sameName = await findScheduleTriggersByName(envDB, userId, nextName, 2);
-        const candidates = sameName.results || [];
-        if (candidates.length === 1) {
-          existing = candidates[0];
-          fallbackToUpdate = true;
-          workflowId = typeof existing.workflow_id === 'string' && existing.workflow_id.trim()
-            ? existing.workflow_id
-            : null;
+    const nextEnabled = typeof payload?.enabled === 'boolean' ? payload.enabled : true;
+
+    const variableMapping = payload?.variableMapping && typeof payload.variableMapping === 'object' && !Array.isArray(payload.variableMapping)
+      ? payload.variableMapping as Record<string, unknown>
+      : undefined;
+
+    if (variableMapping) {
+      for (const [key, value] of Object.entries(variableMapping)) {
+        if (typeof value !== 'string') {
+          return { error: `variableMapping.${key} must be a string` };
         }
       }
     }
 
-    if (fallbackToUpdate && !hasWorkflowIdPayload) {
-      workflowId = typeof existing?.workflow_id === 'string' && existing.workflow_id.trim()
+    const now = new Date().toISOString();
+    const { triggerId: targetTriggerId } = await upsertTriggerByName(db, envDB, userId, {
+      name: nextName,
+      type: String(rawConfig.type),
+      config: JSON.stringify(rawConfig),
+      enabled: nextEnabled,
+      workflowId,
+      variableMapping: variableMapping ? JSON.stringify(variableMapping) : null,
+      now,
+    });
+
+    const row = await getTrigger(envDB, userId, targetTriggerId) as Record<string, unknown> | null;
+
+    return {
+      data: {
+        trigger: row
+          ? {
+              id: row.id,
+              workflowId: row.workflow_id,
+              workflowName: row.workflow_name,
+              name: row.name,
+              enabled: Boolean(row.enabled),
+              type: row.type,
+              config: parseJsonOrNull(row.config) || {},
+              variableMapping: parseJsonOrNull(row.variable_mapping) || null,
+              lastRunAt: row.last_run_at,
+              createdAt: row.created_at,
+              updatedAt: row.updated_at,
+            }
+          : null,
+        success: true,
+      },
+    };
+  }
+
+  if (action === 'update') {
+    const triggerId = typeof payload?.triggerId === 'string' ? payload.triggerId.trim() : '';
+    if (!triggerId) {
+      return { error: 'triggerId is required for update' };
+    }
+
+    const existing = await getTrigger(envDB, userId, triggerId) as Record<string, unknown> | null;
+    if (!existing) {
+      return { error: `Trigger not found: ${triggerId}` };
+    }
+
+    const rawConfig = payload?.config && typeof payload.config === 'object' && !Array.isArray(payload.config)
+      ? payload.config as Record<string, unknown>
+      : (parseJsonOrNull(existing.config) as Record<string, unknown> | null);
+    if (!rawConfig || typeof rawConfig.type !== 'string') {
+      return { error: 'config with type is required' };
+    }
+
+    const nextName = (typeof payload?.name === 'string' ? payload.name : (typeof existing.name === 'string' ? existing.name : '')).trim();
+    if (!nextName) {
+      return { error: 'name is required' };
+    }
+
+    let workflowId: string | null = null;
+    if (Object.prototype.hasOwnProperty.call(payload || {}, 'workflowId')) {
+      if (typeof payload?.workflowId === 'string' && payload.workflowId.trim()) {
+        workflowId = await resolveWorkflowIdForUser(db, userId, payload.workflowId);
+        if (!workflowId) {
+          return { error: `Workflow not found: ${payload.workflowId}` };
+        }
+      } else if (payload?.workflowId === null) {
+        workflowId = null;
+      }
+    } else {
+      workflowId = typeof existing.workflow_id === 'string' && existing.workflow_id.trim()
         ? existing.workflow_id
         : null;
+    }
+
+    const target = scheduleTargetFromConfig(rawConfig);
+    if (rawConfig.type === 'schedule' && target === 'orchestrator') {
+      const prompt = typeof rawConfig.prompt === 'string' ? rawConfig.prompt.trim() : '';
+      if (!prompt) {
+        return { error: 'schedule prompt is required when target=orchestrator' };
+      }
     }
 
     if (requiresWorkflowForTriggerConfig(rawConfig) && !workflowId) {
@@ -597,13 +644,11 @@ export async function handleTriggerAction(
 
     const nextEnabled = typeof payload?.enabled === 'boolean'
       ? payload.enabled
-      : existing
-        ? Boolean(existing.enabled)
-        : true;
+      : Boolean(existing.enabled);
 
     const variableMapping = payload?.variableMapping && typeof payload.variableMapping === 'object' && !Array.isArray(payload.variableMapping)
       ? payload.variableMapping as Record<string, unknown>
-      : existing?.variable_mapping
+      : existing.variable_mapping
         ? (parseJsonOrNull(existing.variable_mapping) as Record<string, unknown> | null)
         : undefined;
 
@@ -616,35 +661,17 @@ export async function handleTriggerAction(
     }
 
     const now = new Date().toISOString();
-    const shouldUpdate = isUpdate || fallbackToUpdate;
-    const targetTriggerId = shouldUpdate
-      ? (typeof existing?.id === 'string' ? existing.id : triggerId)
-      : crypto.randomUUID();
-    if (shouldUpdate) {
-      await updateTriggerFull(db, targetTriggerId, userId, {
-        workflowId,
-        name: nextName,
-        enabled: nextEnabled,
-        type: String(rawConfig.type),
-        config: JSON.stringify(rawConfig),
-        variableMapping: variableMapping ? JSON.stringify(variableMapping) : null,
-        now,
-      });
-    } else {
-      await createTrigger(db, {
-        id: targetTriggerId,
-        userId,
-        workflowId,
-        name: nextName,
-        enabled: nextEnabled,
-        type: String(rawConfig.type),
-        config: JSON.stringify(rawConfig),
-        variableMapping: variableMapping ? JSON.stringify(variableMapping) : null,
-        now,
-      });
-    }
+    await updateTriggerFull(db, triggerId, userId, {
+      workflowId,
+      name: nextName,
+      enabled: nextEnabled,
+      type: String(rawConfig.type),
+      config: JSON.stringify(rawConfig),
+      variableMapping: variableMapping ? JSON.stringify(variableMapping) : null,
+      now,
+    });
 
-    const row = await getTrigger(envDB, userId, targetTriggerId) as Record<string, unknown> | null;
+    const row = await getTrigger(envDB, userId, triggerId) as Record<string, unknown> | null;
 
     return {
       data: {
