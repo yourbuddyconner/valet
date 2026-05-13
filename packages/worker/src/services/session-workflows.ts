@@ -508,6 +508,8 @@ export async function handleTriggerAction(
   if (action === 'sync' || action === 'create') {
     // Idempotent upsert by (userId, name). "create" is an alias for "sync"
     // for backward compatibility with tool versions already in sandboxes.
+    // Sync is full-state: the agent always sends all fields. workflowId defaults
+    // to null if not provided (no inheritance from existing row).
     const rawConfig = payload?.config && typeof payload.config === 'object' && !Array.isArray(payload.config)
       ? payload.config as Record<string, unknown>
       : null;

@@ -38,6 +38,8 @@ export const triggers = sqliteTable('triggers', {
   index('idx_triggers_workflow').on(table.workflowId),
   index('idx_triggers_type').on(table.type),
   index('idx_triggers_enabled').on(table.enabled),
+  // Note: SQL migration 0011 creates this with COLLATE NOCASE for case-insensitive matching.
+  // Drizzle ORM does not support collation modifiers on index columns.
   uniqueIndex('idx_triggers_user_name').on(table.userId, table.name),
 ]);
 
