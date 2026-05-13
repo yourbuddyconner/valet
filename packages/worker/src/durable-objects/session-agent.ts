@@ -1287,11 +1287,118 @@ export class SessionAgentDO {
     // else: nothing to do — let Cloudflare evict this DO from memory
   }
 
+  // ─── Slash Commands (from web UI) ─────────────────────────────────────
+
+  /**
+   * Handle slash commands sent as regular messages from the web UI.
+   * Returns true if the command was handled, false to fall through to normal prompt dispatch.
+   */
+  private async handleSlashCommand(ws: WebSocket, command: string, threadId?: string): Promise<boolean> {
+    const sessionId = this.sessionState.sessionId;
+
+    const reply = (content: string) => {
+      const msgId = crypto.randomUUID();
+      this.messageStore.writeMessage({ id: msgId, role: 'system', content, threadId });
+      this.broadcastToClients({ type: 'message', data: { id: msgId, role: 'system', content, threadId } });
+    };
+
+    switch (command) {
+      case 'status': {
+        const status = this.sessionState.status;
+        const runnerConnected = this.runnerLink.isConnected;
+        const queuedPrompts = this.promptQueue.length;
+        const sandboxId = this.sessionState.sandboxId;
+        let text = `**Session Status**\nStatus: **${status}**`;
+        if (runnerConnected) text += '\nRunner: connected';
+        if (queuedPrompts) text += `\nQueued prompts: ${queuedPrompts}`;
+        if (sandboxId) text += `\nSandbox: \`${sandboxId}\``;
+
+        // Include child sessions
+        try {
+          const result = await getChildSessions(this.env.DB, sessionId!);
+          if (result.children.length > 0) {
+            text += `\n\n**Child Sessions (${result.children.length}):**`;
+            for (const child of result.children) {
+              text += `\n- ${child.title || child.workspace || child.id.slice(0, 8)} — **${child.status}**`;
+            }
+          }
+        } catch { /* best effort */ }
+
+        reply(text);
+        return true;
+      }
+
+      case 'sessions': {
+        try {
+          const result = await getChildSessions(this.env.DB, sessionId!);
+          const list = result.children;
+          if (list.length === 0) {
+            reply('No child sessions.');
+          } else {
+            const lines = list.map((c) =>
+              `- ${c.title || c.workspace || c.id.slice(0, 8)} — **${c.status}**`
+            );
+            reply(`**Child Sessions (${list.length}):**\n${lines.join('\n')}`);
+          }
+        } catch {
+          reply('Could not list child sessions.');
+        }
+        return true;
+      }
+
+      case 'clear': {
+        this.promptQueue.clearAll();
+        reply('Prompt queue cleared.');
+        return true;
+      }
+
+      case 'stop': {
+        // Interrupt current agent turn + clear queue
+        this.runnerLink.send({ type: 'abort' });
+        this.promptQueue.clearAll();
+        reply('Stopped current work and cleared queue.');
+        return true;
+      }
+
+      case 'refresh': {
+        reply('Restarting sandbox...');
+        await this.handleRefresh();
+        return true;
+      }
+
+      case 'help': {
+        const commands = [
+          '**/status** — Show session status, sandbox ID, and child sessions',
+          '**/sessions** — List child sessions with status',
+          '**/stop** — Stop current work and clear queue',
+          '**/clear** — Clear the prompt queue',
+          '**/refresh** — Restart the sandbox',
+          '**/model** — Change the model',
+          '**/diff** — Show git diff',
+          '**/review** — Request code review',
+        ];
+        reply(`**Available Commands**\n${commands.join('\n')}`);
+        return true;
+      }
+
+      default:
+        return false; // Not a recognized command — fall through to normal prompt
+    }
+  }
+
   // ─── Client Message Handling ───────────────────────────────────────────
 
   private async handleClientMessage(ws: WebSocket, msg: ClientMessage) {
     switch (msg.type) {
       case 'prompt': {
+        // ─── Slash command interception ───
+        // Handle /command messages locally instead of dispatching to the agent.
+        const slashMatch = msg.content?.match(/^\/(\w+)$/);
+        if (slashMatch && !msg.attachments?.length) {
+          const handled = await this.handleSlashCommand(ws, slashMatch[1], msg.threadId);
+          if (handled) return;
+        }
+
         const { attachments, rejectedTypes } = sanitizePromptAttachments(msg.attachments);
         if (rejectedTypes.length > 0) {
           console.warn(`[SessionAgentDO] Client prompt: rejected file types: ${rejectedTypes.join(', ')}`);

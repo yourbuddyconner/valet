@@ -335,20 +335,15 @@ export function ChatInput({
         setCommandDismissed(true);
         setModelCommandDismissed(false);
         textareaRef.current?.focus();
-      } else if (command.name === 'help') {
-        // Show help inline as a local command
-        onCommand?.('help');
-        setValue('');
-        setCommandDismissed(false);
-        textareaRef.current?.focus();
       } else {
-        onCommand?.(command.name);
+        // Send as regular message — server handles slash commands
+        onSend(`/${command.name}`);
         setValue('');
         setCommandDismissed(false);
         textareaRef.current?.focus();
       }
     },
-    [onCommand, textareaRef]
+    [onSend, textareaRef]
   );
 
   const selectFile = useCallback(
