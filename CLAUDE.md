@@ -274,6 +274,7 @@ You can also `curl` the deployed API directly for testing routes.
 
 ### Frontend (React)
 
+- **Always run `cd packages/client && pnpm build` before committing frontend changes.** The production build uses `tsc --noEmit` with stricter settings than `pnpm typecheck` (e.g., `noUnusedLocals`). A passing typecheck does not guarantee a passing build.
 - File-based routing via TanStack Router: `packages/client/src/routes/`
 - API layer in `packages/client/src/api/` — one file per resource with query key factories
 - API client at `packages/client/src/api/client.ts` — centralized fetch with auth header injection
