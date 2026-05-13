@@ -282,6 +282,10 @@ export class SessionAgentDO {
   private guardConfigCache: Record<string, unknown> | null = null;
   private guardConfigExpiresAt = 0;
 
+  /** Short-lived Slack action_token from the most recent assistant event.
+   *  Required by assistant.search.context API. Ephemeral — not persisted. */
+  private lastSlackActionToken: string | null = null;
+
   private channelRouter = new ChannelRouter({
     resolveToken: async (channelType, userId) => {
       if (channelType === 'slack') {
@@ -485,12 +489,17 @@ export class SessionAgentDO {
         }
 
         // HTTP-based prompt submission (alternative to WebSocket)
-        const body = await request.json() as { content?: string; contextPrefix?: string; model?: string; attachments?: PromptAttachment[]; interrupt?: boolean; queueMode?: string; channelType?: string; channelId?: string; threadId?: string; authorName?: string; authorEmail?: string; authorId?: string; authorAvatarUrl?: string; replyTo?: { channelType: string; channelId: string } };
+        const body = await request.json() as { content?: string; contextPrefix?: string; model?: string; attachments?: PromptAttachment[]; interrupt?: boolean; queueMode?: string; channelType?: string; channelId?: string; threadId?: string; authorName?: string; authorEmail?: string; authorId?: string; authorAvatarUrl?: string; replyTo?: { channelType: string; channelId: string }; slackActionToken?: string };
         const content = body.content ?? '';
         const { attachments, rejectedTypes } = sanitizePromptAttachments(body.attachments);
         if (rejectedTypes.length > 0) {
           console.warn(`[SessionAgentDO] /prompt HTTP: rejected file types: ${rejectedTypes.join(', ')}`);
         }
+        // Store short-lived Slack action_token for assistant.search.context API
+        if (body.slackActionToken) {
+          this.lastSlackActionToken = body.slackActionToken;
+        }
+
         console.log(`[SessionAgentDO] /prompt HTTP: content="${content.slice(0, 60)}" channelType=${body.channelType || 'none'} channelId=${body.channelId || 'none'} queueMode=${body.queueMode || 'default'} authorName=${body.authorName || 'none'} authorId=${body.authorId || 'none'}`);
 
         // Handle interrupt-only (no content) — e.g., /stop command
@@ -6065,7 +6074,7 @@ export class SessionAgentDO {
     const result = await executeActionSvc(
       this.appDb, this.env, userId, toolId, service, actionId, params,
       actionSource, invocationId,
-      { credentialCache: this.credentialCacheAdapter, spawnEnvVars, guardConfig },
+      { credentialCache: this.credentialCacheAdapter, spawnEnvVars, guardConfig, slackActionToken: this.lastSlackActionToken ?? undefined },
     );
 
     // Emit tool_exec timing event

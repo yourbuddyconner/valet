@@ -36,6 +36,9 @@
         "im:read",
         "im:write",
         "reactions:write",
+        "search:read.files",
+        "search:read.public",
+        "search:read.users",
         "users:read",
         "users:read.email"
       ]

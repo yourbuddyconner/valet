@@ -416,6 +416,8 @@ export interface ExecuteActionOpts {
   spawnEnvVars?: Record<string, string>;
   /** Org-level guard configuration, threaded from the DO to action plugins. */
   guardConfig?: Record<string, unknown>;
+  /** Short-lived Slack action_token from assistant events, required by assistant.search.context API. */
+  slackActionToken?: string;
 }
 
 /**
@@ -464,6 +466,7 @@ export async function executeAction(
       const identityLinks = await getUserIdentityLinks(appDb, userId);
       const slackLink = identityLinks.find((l) => l.provider === 'slack');
       if (slackLink) credentials.owner_slack_user_id = slackLink.externalId;
+      if (opts.slackActionToken) credentials.slack_action_token = opts.slackActionToken;
     }
   }
 
@@ -500,8 +503,9 @@ export async function executeAction(
     if (refreshed.ok) {
       const refreshedCredentials = buildCredentials(refreshed);
       attribution = refreshed.credential.attribution;
-      if (service === 'slack' && credentials.owner_slack_user_id) {
-        refreshedCredentials.owner_slack_user_id = credentials.owner_slack_user_id;
+      if (service === 'slack') {
+        if (credentials.owner_slack_user_id) refreshedCredentials.owner_slack_user_id = credentials.owner_slack_user_id;
+        if (credentials.slack_action_token) refreshedCredentials.slack_action_token = credentials.slack_action_token;
       }
       actionResult = await actionSource.execute(actionId, params, {
         credentials: refreshedCredentials, userId, attribution, callerIdentity, analytics: actionAnalytics, guardConfig: opts.guardConfig,

@@ -103,6 +103,12 @@ slackEventsRouter.post('/slack/events', async (c) => {
   const event = payload.event as Record<string, unknown> | undefined;
   const eventType = event?.type as string | undefined;
 
+  // Extract action_token for assistant.search.context API (short-lived, per-interaction).
+  // The token may appear at different levels of the payload depending on event type.
+  const slackActionToken = (event?.action_token as string)
+    || (payload.action_token as string)
+    || undefined;
+
   // Assistant thread events store user_id inside event.assistant_thread, not event.user
   const isAssistantEvent = eventType === 'assistant_thread_started' || eventType === 'assistant_thread_context_changed';
   const assistantThread = event?.assistant_thread as Record<string, unknown> | undefined;
@@ -331,6 +337,7 @@ slackEventsRouter.post('/slack/events', async (c) => {
             threadId: orchestratorThreadId,
             authorName: message.senderName,
             replyTo: { channelType: 'slack', channelId: dispatchChannelId },
+            slackActionToken,
           }),
         }),
       );
@@ -471,6 +478,7 @@ slackEventsRouter.post('/slack/events', async (c) => {
     attachments: attachments.length > 0 ? attachments : undefined,
     replyTo: { channelType: 'slack', channelId: dispatchChannelId },
     scopeKey: bindingScopeKey,
+    slackActionToken,
   });
 
   if (result.dispatched) {

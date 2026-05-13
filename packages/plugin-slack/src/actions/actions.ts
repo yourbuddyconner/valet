@@ -146,6 +146,25 @@ const getReactions: ActionDefinition = {
   }),
 };
 
+const searchContext: ActionDefinition = {
+  id: 'slack.search_context',
+  name: 'Search Workspace',
+  description: 'Semantic + keyword search across the entire Slack workspace. Returns messages, files, channels, and users matching the query. Much faster than reading channels one by one for finding specific information. Requires a Slack action_token from an assistant interaction — if unavailable, falls back to standard search.',
+  riskLevel: 'low',
+  params: z.object({
+    query: z.string().describe('Search query — can be natural language or keywords'),
+    content_types: z.array(z.enum(['messages', 'files', 'channels', 'users'])).optional().describe('Content types to search. Default: messages'),
+    channel_types: z.array(z.enum(['public_channel', 'private_channel', 'mpim', 'im'])).optional().describe('Channel types to include. Default: public_channel'),
+    limit: z.number().int().min(1).max(20).optional().describe('Number of results per page. Default: 20'),
+    cursor: z.string().optional().describe('Pagination cursor from previous response'),
+    include_context_messages: z.boolean().optional().describe('Include surrounding messages for context. Default: true'),
+    sort: z.enum(['score', 'timestamp']).optional().describe('Sort results by relevance score or time'),
+    sort_dir: z.enum(['asc', 'desc']).optional().describe('Sort direction'),
+    before: z.string().optional().describe('UNIX timestamp — filter results before this date'),
+    after: z.string().optional().describe('UNIX timestamp — filter results after this date'),
+  }),
+};
+
 const allActions: ActionDefinition[] = [
   dmOwner,
   dmUser,
@@ -158,6 +177,7 @@ const allActions: ActionDefinition[] = [
   getPins,
   getChannelInfo,
   getReactions,
+  searchContext,
 ];
 
 const NOISE_SUBTYPES = new Set([
@@ -777,6 +797,142 @@ async function executeAction(
         }));
 
         return { success: true, data: { reactions } };
+      }
+
+      case 'slack.search_context': {
+        const p = searchContext.params.parse(params);
+        const actionToken = ctx.credentials.slack_action_token;
+        if (!actionToken) {
+          return {
+            success: false,
+            error: 'No action_token available. The assistant.search.context API requires an action_token from a Slack assistant interaction. This token is only present when the user is interacting via the Slack assistant thread. Try using slack.read_history with filter instead.',
+          };
+        }
+
+        const body: Record<string, unknown> = {
+          query: p.query,
+          action_token: actionToken,
+        };
+        if (p.content_types) body.content_types = p.content_types;
+        if (p.channel_types) body.channel_types = p.channel_types;
+        if (p.limit !== undefined) body.limit = p.limit;
+        if (p.cursor) body.cursor = p.cursor;
+        if (p.include_context_messages !== undefined) body.include_context_messages = p.include_context_messages;
+        if (p.sort) body.sort = p.sort;
+        if (p.sort_dir) body.sort_dir = p.sort_dir;
+        if (p.before) body.before = p.before;
+        if (p.after) body.after = p.after;
+
+        const res = await slackFetch('assistant.search.context', token, body);
+        if (!res.ok) return slackError(res);
+        const data = (await res.json()) as {
+          ok: boolean;
+          error?: string;
+          results?: Record<string, unknown>[];
+          next_cursor?: string;
+          total_count?: number;
+        };
+        if (!data.ok) return slackError(res, data);
+
+        const results = data.results || [];
+
+        // Enrich message results with user/channel display names
+        const messageResults = results.filter((r) => r.type === 'message');
+        const otherResults = results.filter((r) => r.type !== 'message');
+
+        // Extract message objects from search results for entity resolution
+        const messagesToEnrich: Record<string, unknown>[] = [];
+        for (const r of messageResults) {
+          // Search results nest message data; extract fields for resolution
+          const enrichable: Record<string, unknown> = {
+            user: r.user || r.user_id,
+            bot_id: r.bot_id,
+            text: r.text || r.message_text,
+            ts: r.ts || r.message_ts,
+            channel: r.channel,
+          };
+
+          // Include context messages if present
+          const contextMessages = r.context_messages as Record<string, unknown>[] | undefined;
+          if (Array.isArray(contextMessages)) {
+            for (const cm of contextMessages) {
+              messagesToEnrich.push({
+                user: cm.user || cm.user_id,
+                bot_id: cm.bot_id,
+                text: cm.text,
+                ts: cm.ts,
+              });
+            }
+          }
+
+          messagesToEnrich.push(enrichable);
+        }
+
+        // Resolve entities in batch
+        if (messagesToEnrich.length > 0) {
+          await resolveAndEnrichMessages(token, messagesToEnrich);
+          // The cache is now warm — apply enrichment to the actual results
+        }
+
+        // Build enriched results
+        const enrichedResults = results.map((r) => {
+          const enriched = { ...r };
+
+          // Resolve user display for message results
+          if (typeof r.user === 'string' || typeof r.user_id === 'string') {
+            const uid = (r.user || r.user_id) as string;
+            const display = userCache.get(uid);
+            if (display) enriched.user_display = display;
+          }
+
+          // Resolve channel name
+          if (typeof r.channel === 'string') {
+            const channelDisplay = channelCache.get(r.channel as string);
+            if (channelDisplay) enriched.channel_display = channelDisplay;
+          }
+
+          // Resolve mentions in text
+          if (typeof r.text === 'string') {
+            let text = r.text as string;
+            text = text.replace(SLACK_USER_MENTION_RE, (_match, uid: string) => {
+              return userCache.get(uid) || `@${uid}`;
+            });
+            text = text.replace(SLACK_CHANNEL_MENTION_RE, (_match, cid: string, label?: string) => {
+              return channelCache.get(cid) || (label ? `#${label}` : `#${cid}`);
+            });
+            enriched.text = text;
+          }
+
+          // Enrich context messages
+          if (Array.isArray(r.context_messages)) {
+            enriched.context_messages = (r.context_messages as Record<string, unknown>[]).map((cm) => {
+              const enrichedCm = { ...cm };
+              if (typeof cm.user === 'string') {
+                const display = userCache.get(cm.user as string);
+                if (display) enrichedCm.user_display = display;
+              }
+              if (typeof cm.text === 'string') {
+                let text = cm.text as string;
+                text = text.replace(SLACK_USER_MENTION_RE, (_match, uid: string) => {
+                  return userCache.get(uid) || `@${uid}`;
+                });
+                enrichedCm.text = text;
+              }
+              return enrichedCm;
+            });
+          }
+
+          return enriched;
+        });
+
+        return {
+          success: true,
+          data: {
+            total_count: data.total_count,
+            next_cursor: data.next_cursor || undefined,
+            results: enrichedResults,
+          },
+        };
       }
 
       default:

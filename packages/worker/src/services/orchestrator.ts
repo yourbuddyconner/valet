@@ -389,6 +389,8 @@ export async function dispatchOrchestratorPrompt(
     /** Pre-computed scope key from the channel transport. Passed through to ensureChannelBinding
      *  so the binding's scope key matches the lookup path in the inbound event handler. */
     scopeKey?: string;
+    /** Short-lived Slack action_token from assistant events, required by assistant.search.context API. */
+    slackActionToken?: string;
   }
 ): Promise<OrchestratorPromptDispatchResult> {
   // When forcing a new thread, prepend a memory instruction so the agent knows
@@ -490,6 +492,7 @@ export async function dispatchOrchestratorPrompt(
       authorId: params.userId,
       replyTo: params.replyTo,
       queueMode: 'steer',
+      slackActionToken: params.slackActionToken,
     }),
   }));
 
