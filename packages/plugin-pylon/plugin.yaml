@@ -1,0 +1,5 @@
+name: pylon
+version: 0.0.1
+description: Pylon customer support integration for issues, accounts, and contacts
+icon: "\U0001F6CE"
+actionType: mcp

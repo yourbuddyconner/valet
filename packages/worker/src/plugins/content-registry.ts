@@ -1630,6 +1630,15 @@ You can attach builtin or plugin skills to personas — they don't need to be ma
     ],
   },
   {
+    name: "pylon",
+    version: "0.0.1",
+    description: "Pylon customer support integration for issues, accounts, and contacts",
+    icon: "🛎",
+    actionType: "mcp",
+    capabilities: ["actions"],
+    artifacts: [],
+  },
+  {
     name: "sandbox-tunnels",
     version: "0.0.1",
     description: "Sandbox tunnel management",
