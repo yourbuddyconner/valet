@@ -51,10 +51,11 @@ interface TriggerResponse {
 
 export default tool({
   description:
-    "Create or update a trigger in Valet. " +
-    "Supports manual, webhook, and schedule triggers (including schedule target=orchestrator with prompt).",
+    "Create or update a trigger by name. Idempotent — calling with the same name updates the existing trigger " +
+    "rather than creating a duplicate. Supports manual, webhook, and schedule triggers " +
+    "(including schedule target=orchestrator with prompt).",
   args: {
-    trigger_id: z.string().optional().describe("If provided, update this trigger ID instead of creating a new one"),
+    trigger_id: z.string().optional().describe("Optional. Use only for renaming a trigger or explicit UUID-based update"),
     workflow_id: z.string().optional().describe("Workflow ID/slug. Required for webhook/manual and schedule target=workflow"),
     clear_workflow_link: z.boolean().optional().describe("For updates only, set workflowId to null"),
     name: z.string().min(1).describe("Trigger name"),
