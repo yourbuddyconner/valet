@@ -24,6 +24,7 @@
     { "path": "./packages/plugin-google-workspace" },
     { "path": "./packages/plugin-granola" },
     { "path": "./packages/plugin-linear" },
+    { "path": "./packages/plugin-pylon" },
     { "path": "./packages/plugin-typefully" },
     { "path": "./packages/plugin-notion" },
     { "path": "./packages/plugin-stripe" },

@@ -28,6 +28,7 @@
     "@valet/plugin-github": "workspace:*",
     "@valet/plugin-gmail": "workspace:*",
     "@valet/plugin-granola": "workspace:*",
+    "@valet/plugin-pylon": "workspace:*",
     "@valet/plugin-google-auth": "workspace:*",
     "@valet/plugin-google-calendar": "workspace:*",
     "@valet/plugin-google-workspace": "workspace:*",
