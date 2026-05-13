@@ -6,7 +6,6 @@ export const agentPersonas = sqliteTable('agent_personas', {
   id: text().primaryKey(),
   orgId: text().notNull().default('default'),
   name: text().notNull(),
-  slug: text().notNull(),
   description: text(),
   icon: text(),
   visibility: text().notNull().default('shared'),
@@ -16,7 +15,7 @@ export const agentPersonas = sqliteTable('agent_personas', {
   createdAt: text().notNull().default(sql`(datetime('now'))`),
   updatedAt: text().notNull().default(sql`(datetime('now'))`),
 }, (table) => [
-  uniqueIndex('idx_personas_slug').on(table.orgId, table.slug),
+  uniqueIndex('idx_personas_org_name').on(table.orgId, table.name),
 ]);
 
 export const agentPersonaFiles = sqliteTable('agent_persona_files', {

@@ -9,7 +9,6 @@ export const personasRouter = new Hono<{ Bindings: Env; Variables: Variables }>(
 
 const createPersonaSchema = z.object({
   name: z.string().min(1).max(100),
-  slug: z.string().min(1).max(100).regex(/^[a-z0-9-]+$/, 'Slug must be lowercase alphanumeric with dashes'),
   description: z.string().max(500).optional(),
   icon: z.string().max(10).optional(),
   defaultModel: z.string().max(255).optional(),
@@ -75,7 +74,6 @@ personasRouter.post('/', zValidator('json', createPersonaSchema), async (c) => {
   const persona = await db.createPersona(c.get('db'), {
     id: personaId,
     name: body.name,
-    slug: body.slug,
     description: body.description,
     icon: body.icon,
     defaultModel: body.defaultModel,
@@ -102,7 +100,6 @@ personasRouter.post('/', zValidator('json', createPersonaSchema), async (c) => {
 
 const updatePersonaSchema = z.object({
   name: z.string().min(1).max(100).optional(),
-  slug: z.string().min(1).max(100).regex(/^[a-z0-9-]+$/).optional(),
   description: z.string().max(500).optional(),
   icon: z.string().max(10).optional(),
   defaultModel: z.string().max(255).optional(),

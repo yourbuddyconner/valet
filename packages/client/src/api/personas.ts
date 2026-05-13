@@ -34,7 +34,6 @@ export function usePersona(id: string) {
 
 interface CreatePersonaInput {
   name: string;
-  slug: string;
   description?: string;
   icon?: string;
   defaultModel?: string;
@@ -58,7 +57,6 @@ export function useCreatePersona() {
 interface UpdatePersonaInput {
   id: string;
   name?: string;
-  slug?: string;
   description?: string;
   icon?: string;
   defaultModel?: string;

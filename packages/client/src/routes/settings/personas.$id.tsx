@@ -19,7 +19,6 @@ import { useAvailableModels } from '@/api/sessions';
 import { SkillPicker } from '@/components/skills/skill-picker';
 import { PersonaToolPicker } from '@/components/personas/persona-tool-picker';
 import type { PersonaVisibility } from '@/api/types';
-import { slugify } from '@/lib/format';
 
 export const Route = createFileRoute('/settings/personas/$id')({
   component: PersonaEditorPage,
@@ -48,8 +47,6 @@ function PersonaEditorPage() {
 
   // Form state
   const [name, setName] = React.useState('');
-  const [slug, setSlug] = React.useState('');
-  const [slugManual, setSlugManual] = React.useState(false);
   const [description, setDescription] = React.useState('');
   const [icon, setIcon] = React.useState('');
   const [defaultModel, setDefaultModel] = React.useState('');
@@ -72,8 +69,6 @@ function PersonaEditorPage() {
   React.useEffect(() => {
     if (persona) {
       setName(persona.name);
-      setSlug(persona.slug);
-      setSlugManual(true);
       setDescription(persona.description || '');
       setIcon(persona.icon || '');
       setDefaultModel(persona.defaultModel || '');
@@ -97,9 +92,6 @@ function PersonaEditorPage() {
 
   const handleNameChange = (v: string) => {
     setName(v);
-    if (!slugManual) {
-      setSlug(slugify(v));
-    }
   };
 
   const addFile = () => {
@@ -130,7 +122,6 @@ function PersonaEditorPage() {
     if (isNew) {
       const result = await createPersona.mutateAsync({
         name,
-        slug,
         description: description || undefined,
         icon: icon || undefined,
         defaultModel: defaultModel || undefined,
@@ -145,7 +136,6 @@ function PersonaEditorPage() {
       await updatePersona.mutateAsync({
         id,
         name,
-        slug,
         description: description || undefined,
         icon: icon || undefined,
         defaultModel: defaultModel || undefined,
@@ -210,7 +200,7 @@ function PersonaEditorPage() {
           <h1 className="text-xl font-semibold text-neutral-900 dark:text-neutral-100">
             {isNew ? 'New Persona' : persona?.name || 'Edit Persona'}
           </h1>
-          <Button type="submit" disabled={!name.trim() || !slug.trim() || isSaving}>
+          <Button type="submit" disabled={!name.trim() || isSaving}>
             {isSaving ? 'Saving...' : isNew ? 'Create Persona' : 'Save Changes'}
           </Button>
         </div>
@@ -246,23 +236,6 @@ function PersonaEditorPage() {
                     required
                   />
                 </div>
-              </div>
-
-              <div>
-                <label className="mb-1 block text-sm font-medium text-neutral-700 dark:text-neutral-300">
-                  Slug
-                </label>
-                <Input
-                  value={slug}
-                  onChange={(e) => {
-                    setSlug(e.target.value);
-                    setSlugManual(true);
-                  }}
-                  placeholder="code-reviewer"
-                  pattern="^[a-z0-9\-]+$"
-                  required
-                />
-                <p className="mt-1 text-xs text-neutral-400">Lowercase letters, numbers, and dashes only</p>
               </div>
 
               <div>

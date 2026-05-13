@@ -123,7 +123,7 @@ function PersonaCard({
             <h3 className="font-medium text-neutral-900 dark:text-neutral-100">
               {persona.name}
             </h3>
-            <p className="text-xs text-neutral-400">{persona.slug}</p>
+            <p className="text-xs text-neutral-400">{persona.description}</p>
           </div>
         </div>
         <div className="flex items-center gap-1.5">

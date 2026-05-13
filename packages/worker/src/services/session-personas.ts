@@ -52,15 +52,13 @@ export async function handlePersonaAction(
 
   if (action === 'create') {
     const name = payload?.name as string;
-    const slug = payload?.slug as string;
-    if (!name || !slug) {
-      return { error: 'name and slug are required', statusCode: 400 };
+    if (!name) {
+      return { error: 'name is required', statusCode: 400 };
     }
     const personaId = crypto.randomUUID();
     const persona = await createPersona(db, {
       id: personaId,
       name,
-      slug,
       description: payload?.description as string | undefined,
       icon: payload?.icon as string | undefined,
       defaultModel: payload?.defaultModel as string | undefined,
@@ -97,7 +95,6 @@ export async function handlePersonaAction(
     }
     const updates: Record<string, unknown> = {};
     if (payload?.name) updates.name = payload.name;
-    if (payload?.slug) updates.slug = payload.slug;
     if (payload?.description !== undefined) updates.description = payload.description;
     if (payload?.icon !== undefined) updates.icon = payload.icon;
     if (payload?.defaultModel !== undefined) updates.defaultModel = payload.defaultModel;

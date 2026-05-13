@@ -22,7 +22,6 @@ interface PersonaEditorProps {
 
 export interface PersonaFormData {
   name: string;
-  slug: string;
   description: string;
   icon: string;
   defaultModel?: string;
@@ -30,17 +29,8 @@ export interface PersonaFormData {
   files: { filename: string; content: string; sortOrder: number }[];
 }
 
-function slugify(name: string): string {
-  return name
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-|-$/g, '');
-}
-
 export function PersonaEditor({ open, onOpenChange, persona, onSave, isSaving }: PersonaEditorProps) {
   const [name, setName] = React.useState('');
-  const [slug, setSlug] = React.useState('');
-  const [slugManual, setSlugManual] = React.useState(false);
   const [description, setDescription] = React.useState('');
   const [icon, setIcon] = React.useState('');
   const [defaultModel, setDefaultModel] = React.useState('');
@@ -53,8 +43,6 @@ export function PersonaEditor({ open, onOpenChange, persona, onSave, isSaving }:
   React.useEffect(() => {
     if (persona) {
       setName(persona.name);
-      setSlug(persona.slug);
-      setSlugManual(true);
       setDescription(persona.description || '');
       setIcon(persona.icon || '');
       setDefaultModel(persona.defaultModel || '');
@@ -73,8 +61,6 @@ export function PersonaEditor({ open, onOpenChange, persona, onSave, isSaving }:
       );
     } else {
       setName('');
-      setSlug('');
-      setSlugManual(false);
       setDescription('');
       setIcon('');
       setDefaultModel('');
@@ -83,13 +69,6 @@ export function PersonaEditor({ open, onOpenChange, persona, onSave, isSaving }:
       setFiles([]);
     }
   }, [persona, open]);
-
-  const handleNameChange = (v: string) => {
-    setName(v);
-    if (!slugManual) {
-      setSlug(slugify(v));
-    }
-  };
 
   const addFile = () => {
     setFiles([...files, { filename: `instructions-${files.length + 1}.md`, content: '', sortOrder: files.length }]);
@@ -112,7 +91,7 @@ export function PersonaEditor({ open, onOpenChange, persona, onSave, isSaving }:
         : []),
       ...files,
     ];
-    onSave({ name, slug, description, icon, defaultModel: defaultModel || undefined, visibility, files: allFiles });
+    onSave({ name, description, icon, defaultModel: defaultModel || undefined, visibility, files: allFiles });
   };
 
   return (
@@ -146,28 +125,11 @@ export function PersonaEditor({ open, onOpenChange, persona, onSave, isSaving }:
                 </label>
                 <Input
                   value={name}
-                  onChange={(e) => handleNameChange(e.target.value)}
+                  onChange={(e) => setName(e.target.value)}
                   placeholder="Code Reviewer"
                   required
                 />
               </div>
-            </div>
-
-            <div>
-              <label className="mb-1 block text-sm font-medium text-neutral-700 dark:text-neutral-300">
-                Slug
-              </label>
-              <Input
-                value={slug}
-                onChange={(e) => {
-                  setSlug(e.target.value);
-                  setSlugManual(true);
-                }}
-                placeholder="code-reviewer"
-                pattern="^[a-z0-9\-]+$"
-                required
-              />
-              <p className="mt-1 text-xs text-neutral-400">Lowercase letters, numbers, and dashes only</p>
             </div>
 
             <div>
@@ -312,7 +274,7 @@ export function PersonaEditor({ open, onOpenChange, persona, onSave, isSaving }:
             <Button type="button" variant="secondary" onClick={() => onOpenChange(false)}>
               Cancel
             </Button>
-            <Button type="submit" disabled={!name.trim() || !slug.trim() || isSaving}>
+            <Button type="submit" disabled={!name.trim() || isSaving}>
               {isSaving ? 'Saving...' : persona ? 'Save Changes' : 'Create Persona'}
             </Button>
           </DialogFooter>
