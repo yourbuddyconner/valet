@@ -1,0 +1,5 @@
+name: socket
+version: 0.0.1
+description: Socket.dev supply chain security — scan packages for vulnerabilities, malware, and risks
+icon: "\U0001F6E1"
+authRequired: false

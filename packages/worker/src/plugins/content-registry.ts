@@ -1746,6 +1746,15 @@ Large channels require paging via \`cursor\` / \`next_cursor\`. Prefer narrowing
     ],
   },
   {
+    name: "socket",
+    version: "0.0.1",
+    description: "Socket.dev supply chain security — scan packages for vulnerabilities, malware, and risks",
+    icon: "🛡",
+    authRequired: false,
+    capabilities: ["actions"],
+    artifacts: [],
+  },
+  {
     name: "stripe",
     version: "0.0.1",
     description: "Stripe integration for payments, customers, and subscriptions",

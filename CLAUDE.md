@@ -26,6 +26,7 @@ valet/
 │   ├── plugin-cloudflare/   # Cloudflare API integration
 │   ├── plugin-sentry/       # Sentry error tracking
 │   ├── plugin-deepwiki/     # DeepWiki knowledge base
+│   ├── plugin-socket/      # Socket.dev supply chain security
 │   ├── plugin-telegram/     # Telegram (channel adapter)
 │   ├── plugin-browser/      # Browser skill (content-only)
 │   ├── plugin-workflows/    # Workflow skill (content-only)
