@@ -150,7 +150,7 @@ export function ChatInput({
   showActionsButton = false,
   onOpenActions,
   onFocusChange,
-  onCommand,
+  onCommand: _onCommand,
   externalValue,
   onExternalValueConsumed,
 }: ChatInputProps) {

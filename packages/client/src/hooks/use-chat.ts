@@ -1311,13 +1311,14 @@ export function useChat(sessionId: string) {
 
   // ─── Slash Command Execution ──────────────────────────────────────────
 
-  const addLocalSystemMessage = useCallback((content: string) => {
+  const addLocalSystemMessage = useCallback((content: string, threadId?: string) => {
     const msg: Message = {
       id: `local-${crypto.randomUUID()}`,
       sessionId: sessionIdRef.current,
       role: 'system',
       content,
       createdAt: new Date(),
+      ...(threadId ? { threadId } : {}),
     };
     setState((prev) => ({
       ...prev,
@@ -1326,7 +1327,7 @@ export function useChat(sessionId: string) {
   }, []);
 
   const executeCommand = useCallback(
-    async (command: string, _args?: string, channelType?: string, channelId?: string) => {
+    async (command: string, _args?: string, channelType?: string, channelId?: string, _threadId?: string) => {
       const def = SLASH_COMMANDS.find((c) => c.name === command);
       if (!def) return;
 
