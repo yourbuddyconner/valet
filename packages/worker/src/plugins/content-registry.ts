@@ -1436,6 +1436,15 @@ sheets.protect_range({
     ],
   },
   {
+    name: "granola",
+    version: "0.0.1",
+    description: "Granola integration for meeting notes and context",
+    icon: "📝",
+    actionType: "mcp",
+    capabilities: ["actions"],
+    artifacts: [],
+  },
+  {
     name: "linear",
     version: "0.0.1",
     description: "Linear integration for issue tracking and project management",

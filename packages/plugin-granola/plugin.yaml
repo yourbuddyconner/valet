@@ -1,0 +1,5 @@
+name: granola
+version: 0.0.1
+description: Granola integration for meeting notes and context
+icon: "\U0001F4DD"
+actionType: mcp
