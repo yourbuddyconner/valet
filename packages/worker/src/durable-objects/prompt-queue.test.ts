@@ -399,7 +399,7 @@ describe('PromptQueue', () => {
         replyChannelType: 'slack', replyChannelId: 'C123:ts',
       });
       const target = pq.getChannelTargetById('p1');
-      expect(target).toEqual({ channelType: 'slack', channelId: 'C123:ts' });
+      expect(target).toEqual({ channelType: 'slack', channelId: 'C123:ts', threadId: null });
     });
 
     it('falls back to channel_* when reply_channel_* is missing', () => {
@@ -408,7 +408,7 @@ describe('PromptQueue', () => {
         channelType: 'telegram', channelId: '12345',
       });
       const target = pq.getChannelTargetById('p1');
-      expect(target).toEqual({ channelType: 'telegram', channelId: '12345' });
+      expect(target).toEqual({ channelType: 'telegram', channelId: '12345', threadId: null });
     });
 
     it('returns web/thread as valid targets (no special-casing)', () => {
@@ -420,8 +420,8 @@ describe('PromptQueue', () => {
         id: 'p-thread', content: 'b',
         channelType: 'thread', channelId: 'th42',
       });
-      expect(pq.getChannelTargetById('p-web')).toEqual({ channelType: 'web', channelId: 'session-1' });
-      expect(pq.getChannelTargetById('p-thread')).toEqual({ channelType: 'thread', channelId: 'th42' });
+      expect(pq.getChannelTargetById('p-web')).toEqual({ channelType: 'web', channelId: 'session-1', threadId: null });
+      expect(pq.getChannelTargetById('p-thread')).toEqual({ channelType: 'thread', channelId: 'th42', threadId: null });
     });
 
     it('returns undefined when the row is missing', () => {
