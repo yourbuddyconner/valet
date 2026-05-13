@@ -5,7 +5,7 @@ import type { AppDb } from '../lib/drizzle.js';
 import { getDb } from '../lib/drizzle.js';
 import { buildDoWebSocketUrl } from '../lib/do-ws-url.js';
 import { buildOrchestratorPersonaFiles } from '../lib/orchestrator-persona.js';
-import { upsertPersonaByName, upsertPersonaFile } from '../lib/db/personas.js';
+import { findPersonaByName, upsertPersonaByName, upsertPersonaFile } from '../lib/db/personas.js';
 import { generateRunnerToken, assembleProviderEnv, assembleCredentialEnv } from '../lib/env-assembly.js';
 import { ensureTodayJournal } from '../lib/db/memory-files.js';
 import { loadMemorySnapshot, formatMemorySnapshot } from '../lib/memory-snapshot.js';
@@ -71,12 +71,21 @@ export async function restartOrchestratorSession(
   // Backfill: create persona for orchestrators that predate persona support
   if (!identity.personaId) {
     const personaName = `${identity.name} (Orchestrator)`;
-    const { personaId } = await upsertPersonaByName(appDb, env.DB, 'default', {
-      name: personaName,
-      description: 'Auto-managed orchestrator persona',
-      visibility: 'private',
-      createdBy: userId,
-    });
+    let personaId: string;
+    try {
+      ({ personaId } = await upsertPersonaByName(appDb, env.DB, 'default', {
+        name: personaName,
+        description: 'Auto-managed orchestrator persona',
+        visibility: 'private',
+        createdBy: userId,
+      }));
+    } catch {
+      // Concurrent restart may have created the persona between our read and write.
+      // Re-query to find the winner's row.
+      const existing = await findPersonaByName(env.DB, 'default', personaName);
+      if (!existing) throw new Error(`Failed to create or find orchestrator persona "${personaName}"`);
+      personaId = existing.id;
+    }
     if (identity.customInstructions) {
       await upsertPersonaFile(appDb, {
         id: crypto.randomUUID(),

@@ -15,6 +15,7 @@ export const agentPersonas = sqliteTable('agent_personas', {
   createdAt: text().notNull().default(sql`(datetime('now'))`),
   updatedAt: text().notNull().default(sql`(datetime('now'))`),
 }, (table) => [
+  // Note: actual DB index uses COLLATE NOCASE (applied in migration 0012)
   uniqueIndex('idx_personas_org_name').on(table.orgId, table.name),
 ]);
 

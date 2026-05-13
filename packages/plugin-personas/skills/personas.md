@@ -48,7 +48,7 @@ This means attaching a skill to a persona guarantees it's in the agent's context
 
 2. **Create a persona** with role instructions:
    ```
-   create_persona(name: "Frontend Reviewer", icon: "🔍", instructions: "You are a frontend code reviewer...")
+   save_persona(name: "Frontend Reviewer", icon: "🔍", instructions: "You are a frontend code reviewer...")
    ```
 
 3. **Attach skills** to the persona:
@@ -88,9 +88,8 @@ You can attach builtin or plugin skills to personas — they don't need to be ma
 
 | Tool | Purpose |
 |------|---------|
-| `create_persona` | Create a new persona with name, icon, instructions |
-| `update_persona` | Update persona metadata or instructions |
-| `delete_persona` | Remove a persona |
+| `save_persona` | Create or update a persona by name (idempotent) |
+| `delete_persona` | Remove a persona by ID or name |
 | `list_personas` | List all available personas |
 | `create_skill` | Create a managed skill |
 | `update_skill` | Update a managed skill's content |

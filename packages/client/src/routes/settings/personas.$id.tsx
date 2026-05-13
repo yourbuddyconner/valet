@@ -90,10 +90,6 @@ function PersonaEditorPage() {
 
   const isSaving = createPersona.isPending || updatePersona.isPending || updateFiles.isPending;
 
-  const handleNameChange = (v: string) => {
-    setName(v);
-  };
-
   const addFile = () => {
     setFiles([...files, { filename: `instructions-${files.length + 1}.md`, content: '', sortOrder: files.length }]);
   };
@@ -231,7 +227,7 @@ function PersonaEditorPage() {
                   </label>
                   <Input
                     value={name}
-                    onChange={(e) => handleNameChange(e.target.value)}
+                    onChange={(e) => setName(e.target.value)}
                     placeholder="Code Reviewer"
                     required
                   />
