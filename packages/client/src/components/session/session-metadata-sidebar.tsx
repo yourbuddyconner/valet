@@ -108,6 +108,9 @@ export function SessionMetadataSidebar({ sessionId, connectedUsers, selectedMode
       case 'initializing':
       case 'hibernating':
       case 'restoring':
+      case 'waiting_runner':
+      case 'recovering':
+      case 'backoff':
         return 'initializing';
     }
   })();
@@ -131,6 +134,12 @@ export function SessionMetadataSidebar({ sessionId, connectedUsers, selectedMode
         return 'Archived';
       case 'error':
         return 'Error';
+      case 'waiting_runner':
+        return 'Waiting for Runner';
+      case 'recovering':
+        return 'Recovering';
+      case 'backoff':
+        return 'Backoff';
     }
   })();
 

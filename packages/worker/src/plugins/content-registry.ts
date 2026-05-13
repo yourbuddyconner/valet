@@ -1739,6 +1739,19 @@ Use \`slack.get_reactions\` when you need to know **who specifically** agreed or
 
 Access is scoped to channels the session owner is a member of. If access is denied, tell the user rather than guessing at content.
 
+## Workspace Search
+
+\`slack.search_context\` lets you search across the entire Slack workspace — messages, files, channels, and users. This is significantly faster than reading channels one by one when you need to find specific information.
+
+- Use natural language or keywords in \`query\`
+- Filter by \`content_types\` (messages, files, channels, users) — defaults to messages
+- Filter by \`channel_types\` to scope results (public_channel, private_channel, mpim, im)
+- Use \`before\` / \`after\` UNIX timestamps to narrow results to a time window
+- Sort by \`score\` (relevance, default) or \`timestamp\`
+- Set \`include_context_messages: true\` to see surrounding messages for context
+
+**Limitation:** This tool requires a Slack \`action_token\` from an assistant thread interaction. It's only available when the user is messaging through the Slack assistant interface. If unavailable, fall back to \`slack.read_history\` with \`filter\` for keyword-based searching within specific channels.
+
 ## Pagination
 
 Large channels require paging via \`cursor\` / \`next_cursor\`. Prefer narrowing with \`oldest\` / \`latest\` over paging through the full history.
