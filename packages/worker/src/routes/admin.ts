@@ -340,6 +340,7 @@ adminRouter.get('/orchestrators', async (c) => {
       s.id AS session_id,
       s.user_id,
       s.status,
+      s.container_id,
       s.created_at,
       s.last_active_at,
       u.email AS user_email,
@@ -376,7 +377,7 @@ adminRouter.get('/orchestrators', async (c) => {
 
   // Group rows by session (LEFT JOIN may produce multiple rows per session)
   const sessionMap = new Map<string, {
-    sessionId: string; userId: string; status: string;
+    sessionId: string; userId: string; status: string; sandboxId?: string;
     userEmail: string; userName?: string;
     identityName?: string; identityHandle?: string; identityAvatar?: string;
     channels: Array<{ channelType: string; channelId: string; slackChannelId?: string }>;
@@ -390,6 +391,7 @@ adminRouter.get('/orchestrators', async (c) => {
         sessionId: r.session_id,
         userId: r.user_id,
         status: r.status,
+        sandboxId: r.container_id || undefined,
         userEmail: r.user_email,
         userName: r.user_name || undefined,
         identityName: r.identity_name || undefined,

@@ -145,6 +145,7 @@ export interface AdminOrchestrator {
   sessionId: string;
   userId: string;
   status: string;
+  sandboxId?: string;
   userEmail: string;
   userName?: string;
   identityName?: string;

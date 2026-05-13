@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo } from 'react';
 import { Link } from '@tanstack/react-router';
 import { useSession, useSessionChildren, useSessionDoStatus, useDeleteAnySessionTunnel } from '@/api/sessions';
 import { useOrchestratorInfo, useMemoryFiles, useMemoryFile } from '@/api/orchestrator';
-import { SidebarSection, StatusDot } from './session-metadata-sidebar';
+import { SidebarSection, StatusDot, CopyableText } from './session-metadata-sidebar';
 import { Badge } from '@/components/ui/badge';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import type { ConnectedUser } from '@/hooks/use-chat';
@@ -282,6 +282,14 @@ export function OrchestratorMetadataSidebar({
                 Sandbox: {sandboxStatusLabel}
               </span>
             </div>
+            {sandboxId && (
+              <div className="flex items-center gap-1.5">
+                <span className="shrink-0 font-mono text-[10px] text-neutral-500 dark:text-neutral-400">
+                  Sandbox ID:
+                </span>
+                <CopyableText text={sandboxId} />
+              </div>
+            )}
           </div>
         </SidebarSection>
 

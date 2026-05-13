@@ -147,3 +147,18 @@ export async function getCurrentOrchestratorSession(db: D1Database, userId: stri
   return null;
 }
 
+/**
+ * Find all non-terminal orchestrator sessions for a user.
+ * Used during restart to clean up stale/legacy sessions (e.g. UUID-based rows
+ * from before the stable `orchestrator:{userId}` ID scheme).
+ */
+export async function getNonTerminalOrchestratorSessions(db: D1Database, userId: string): Promise<AgentSession[]> {
+  const rows = await db.prepare(
+    `SELECT * FROM sessions
+     WHERE user_id = ? AND is_orchestrator = 1
+       AND status NOT IN ('terminated', 'archived', 'error')
+     ORDER BY created_at DESC`
+  ).bind(userId).all();
+  return (rows.results ?? []).map(mapSessionRow);
+}
+

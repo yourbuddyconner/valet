@@ -727,6 +727,14 @@ function OrchestratorsSection() {
   const refreshOrchestrator = useRefreshOrchestrator();
   const navigate = useNavigate();
   const [refreshTarget, setRefreshTarget] = React.useState<{ sessionId: string; name: string } | null>(null);
+  const [copiedSandboxId, setCopiedSandboxId] = React.useState<string | null>(null);
+
+  const copySandboxId = (id: string) => {
+    navigator.clipboard.writeText(id).then(() => {
+      setCopiedSandboxId(id);
+      setTimeout(() => setCopiedSandboxId((cur) => (cur === id ? null : cur)), 1500);
+    });
+  };
 
   const statusVariant = (status: string): 'success' | 'warning' | 'error' | 'secondary' => {
     if (status === 'running' || status === 'idle') return 'success';
@@ -768,6 +776,7 @@ function OrchestratorsSection() {
                 <th className="pb-2 pr-4">Identity</th>
                 <th className="pb-2 pr-4">Owner</th>
                 <th className="pb-2 pr-4">Status</th>
+                <th className="pb-2 pr-4">Sandbox ID</th>
                 <th className="pb-2 pr-4">Channels</th>
                 <th className="pb-2 pr-4">Last Active</th>
                 <th className="pb-2 pr-4">Actions</th>
@@ -798,6 +807,23 @@ function OrchestratorsSection() {
                   </td>
                   <td className="py-2 pr-4">
                     <Badge variant={statusVariant(orch.status)}>{orch.status}</Badge>
+                  </td>
+                  <td className="py-2 pr-4 font-mono text-xs text-neutral-500 dark:text-neutral-400">
+                    {orch.sandboxId ? (
+                      <button
+                        type="button"
+                        onClick={() => copySandboxId(orch.sandboxId!)}
+                        className="inline-flex items-center gap-1.5 transition-colors hover:text-accent dark:hover:text-accent"
+                        title="Click to copy"
+                      >
+                        <span className="select-all">{orch.sandboxId}</span>
+                        <span className="text-[10px]">
+                          {copiedSandboxId === orch.sandboxId ? '✓' : '⎘'}
+                        </span>
+                      </button>
+                    ) : (
+                      <span className="text-neutral-300 dark:text-neutral-600">&mdash;</span>
+                    )}
                   </td>
                   <td className="py-2 pr-4">
                     {orch.channels.length === 0 ? (

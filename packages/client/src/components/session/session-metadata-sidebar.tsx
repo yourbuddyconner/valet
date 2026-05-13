@@ -270,9 +270,10 @@ export function SessionMetadataSidebar({ sessionId, connectedUsers, selectedMode
             </div>
             {sandboxId && (
               <div className="flex items-center gap-1.5">
-                <span className="font-mono text-[10px] text-neutral-500 dark:text-neutral-400">
-                  Sandbox ID: <span className="select-all">{sandboxId}</span>
+                <span className="shrink-0 font-mono text-[10px] text-neutral-500 dark:text-neutral-400">
+                  Sandbox ID:
                 </span>
+                <CopyableText text={sandboxId} />
               </div>
             )}
           </div>
@@ -549,7 +550,7 @@ export function StatItem({ label, value }: { label: string; value: number | stri
   );
 }
 
-function CopyableText({ text }: { text: string }) {
+export function CopyableText({ text }: { text: string }) {
   const [copied, setCopied] = useState(false);
 
   const handleCopy = () => {

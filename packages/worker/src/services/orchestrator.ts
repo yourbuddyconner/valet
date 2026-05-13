@@ -57,13 +57,15 @@ export async function restartOrchestratorSession(
 ): Promise<{ sessionId: string }> {
   const appDb = getDb(env.DB);
 
-  // ── Stop the old orchestrator session (if any) before creating a new one ──
-  // Without this, the old DO + sandbox + Runner keep running in parallel,
-  // causing duplicate steering messages to child sessions.
-  const oldSession = await db.getOrchestratorSession(env.DB, userId);
-  if (oldSession && !TERMINAL_SESSION_STATUSES.has(oldSession.status)) {
-    console.log(`[restartOrchestrator] Stopping old session ${oldSession.id} (status=${oldSession.status}) before restart`);
-    await stopOldOrchestratorSession(env, appDb, oldSession.id);
+  // ── Stop ALL non-terminal orchestrator sessions for this user ──
+  // Uses getNonTerminalOrchestratorSessions to find legacy UUID-based rows
+  // (from before the stable `orchestrator:{userId}` ID scheme) in addition
+  // to the current stable-ID row. Without this, old sessions linger as
+  // duplicates in D1 and the admin panel.
+  const staleSessions = await db.getNonTerminalOrchestratorSessions(env.DB, userId);
+  for (const old of staleSessions) {
+    console.log(`[restartOrchestrator] Stopping old session ${old.id} (status=${old.status}) before restart`);
+    await stopOldOrchestratorSession(env, appDb, old.id);
   }
 
   // Backfill: create persona for orchestrators that predate persona support
@@ -232,9 +234,10 @@ export async function onboardOrchestrator(
 ): Promise<OnboardOrchestratorResult> {
   const appDb = getDb(env.DB);
   let identity = await db.getOrchestratorIdentity(appDb, userId);
-  const existingSession = await db.getOrchestratorSession(env.DB, userId);
+  const existingSession = await db.getCurrentOrchestratorSession(env.DB, userId);
 
-  if (identity && existingSession && !TERMINAL_SESSION_STATUSES.has(existingSession.status)) {
+  // getCurrentOrchestratorSession already excludes terminal statuses
+  if (identity && existingSession) {
     return { ok: false, reason: 'already_exists' };
   }
 
@@ -310,7 +313,7 @@ export interface OrchestratorInfo {
 export async function getOrchestratorInfo(env: Env, userId: string): Promise<OrchestratorInfo> {
   const database = getDb(env.DB);
   const identity = await db.getOrchestratorIdentity(database, userId);
-  const session = await db.getOrchestratorSession(env.DB, userId);
+  const session = await db.getCurrentOrchestratorSession(env.DB, userId);
   const sessionId = session?.id ?? `orchestrator:${userId}`;
   const needsRestart = !!identity && (!session || TERMINAL_SESSION_STATUSES.has(session.status));
 
