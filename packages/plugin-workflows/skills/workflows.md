@@ -67,6 +67,8 @@ Approval/cancel:
 
 ## Configure triggers and scheduling
 
+Triggers are identified by name. `sync_trigger` is idempotent — calling with the same name updates the existing trigger, preserving its creation time and history. No need to look up trigger IDs first.
+
 Use `sync_trigger` for create/update:
 
 - `type=manual`
@@ -75,15 +77,14 @@ Use `sync_trigger` for create/update:
 
 Schedule specifics:
 
-- `schedule_cron` must be a 5-field cron expression.
-- `schedule_timezone` uses IANA TZ names.
+- `schedule_cron` is a 5-field cron expression evaluated in `schedule_timezone` (default: UTC). Example: `0 8 * * *` with timezone `America/Denver` fires at 8:00 AM Mountain Time daily.
 - `schedule_target=workflow` (default): dispatches workflow execution.
 - `schedule_target=orchestrator`: dispatches `schedule_prompt` to orchestrator session.
 - `schedule_prompt` is required when `schedule_target=orchestrator`.
 
 Use `run_trigger` to test behavior immediately.
 
-Use `delete_trigger` to remove stale triggers.
+Use `delete_trigger` to remove stale triggers (by ID or name).
 
 Variable mapping note:
 
@@ -233,7 +234,7 @@ Behavior:
 
 ## Reliable operating playbook
 
-1. Use `list_workflows` and `list_triggers` before creating/updating to avoid duplicates.
+1. Use `list_workflows` before creating/updating to avoid duplicates. Triggers are idempotent by name — no need to list first.
 2. Use `get_workflow` before patching critical definitions.
 3. Use `run_workflow` or `run_trigger` for tests.
 4. Use `debug_execution` first for incidents.

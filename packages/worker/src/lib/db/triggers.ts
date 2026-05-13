@@ -151,6 +151,55 @@ export async function getTrigger(db: D1Database, userId: string, triggerId: stri
   `).bind(triggerId, userId).first();
 }
 
+export async function findTriggerByName(
+  db: D1Database,
+  userId: string,
+  name: string,
+): Promise<Record<string, unknown> | null> {
+  return db.prepare(`
+    SELECT t.*, w.name as workflow_name
+    FROM triggers t
+    LEFT JOIN workflows w ON t.workflow_id = w.id
+    WHERE t.user_id = ? AND LOWER(t.name) = LOWER(?)
+  `).bind(userId, name).first<Record<string, unknown>>();
+}
+
+export async function upsertTriggerByName(
+  db: AppDb,
+  envDB: D1Database,
+  userId: string,
+  params: {
+    name: string;
+    type: string;
+    config: string;
+    enabled: boolean;
+    workflowId: string | null;
+    variableMapping: string | null;
+    now: string;
+  },
+): Promise<{ triggerId: string; created: boolean }> {
+  const existing = await findTriggerByName(envDB, userId, params.name);
+
+  if (existing && typeof existing.id === 'string') {
+    await updateTriggerFull(db, existing.id, userId, params);
+    return { triggerId: existing.id, created: false };
+  }
+
+  const id = crypto.randomUUID();
+  await createTrigger(db, {
+    id,
+    userId,
+    workflowId: params.workflowId,
+    name: params.name,
+    enabled: params.enabled,
+    type: params.type,
+    config: params.config,
+    variableMapping: params.variableMapping,
+    now: params.now,
+  });
+  return { triggerId: id, created: true };
+}
+
 export async function getWorkflowForTrigger(db: AppDb, userId: string, workflowIdOrSlug: string) {
   return db
     .select({ id: workflows.id })
@@ -221,60 +270,6 @@ export async function getWorkflowForManualRun(db: D1Database, userId: string, wo
     version: string | null;
     data: string;
   }>();
-}
-
-// ─── DO Helpers (Raw SQL) ───────────────────────────────────────────────────
-
-export async function findScheduleTriggerByNameAndWorkflow(
-  db: D1Database,
-  userId: string,
-  workflowId: string | null,
-  name: string,
-) {
-  return db.prepare(`
-    SELECT *
-    FROM triggers
-    WHERE user_id = ?
-      AND type = 'schedule'
-      AND ((? IS NULL AND workflow_id IS NULL) OR workflow_id = ?)
-      AND lower(name) = lower(?)
-    ORDER BY datetime(updated_at) DESC
-    LIMIT 1
-  `).bind(userId, workflowId, workflowId, name).first<Record<string, unknown>>();
-}
-
-export async function findScheduleTriggersByWorkflow(
-  db: D1Database,
-  userId: string,
-  workflowId: string | null,
-  limit: number,
-) {
-  return db.prepare(`
-    SELECT *
-    FROM triggers
-    WHERE user_id = ?
-      AND type = 'schedule'
-      AND ((? IS NULL AND workflow_id IS NULL) OR workflow_id = ?)
-    ORDER BY datetime(updated_at) DESC
-    LIMIT ?
-  `).bind(userId, workflowId, workflowId, limit).all<Record<string, unknown>>();
-}
-
-export async function findScheduleTriggersByName(
-  db: D1Database,
-  userId: string,
-  name: string,
-  limit: number,
-) {
-  return db.prepare(`
-    SELECT *
-    FROM triggers
-    WHERE user_id = ?
-      AND type = 'schedule'
-      AND lower(name) = lower(?)
-    ORDER BY datetime(updated_at) DESC
-    LIMIT ?
-  `).bind(userId, name, limit).all<Record<string, unknown>>();
 }
 
 // ─── Cron Dispatch Helpers ──────────────────────────────────────────────────

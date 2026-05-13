@@ -17,8 +17,7 @@ interface TriggerSummary {
 
 export default tool({
   description:
-    "List workflow triggers for the current user. " +
-    "Use this before creating or updating triggers to avoid duplicates.",
+    "List workflow triggers for the current user.",
   args: {
     workflow_id: tool.schema.string().optional().describe("Optional workflow ID/slug filter"),
     type: tool.schema.enum(["webhook", "schedule", "manual"]).optional().describe("Optional trigger type filter"),
