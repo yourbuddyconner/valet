@@ -38,6 +38,7 @@ export const triggers = sqliteTable('triggers', {
   index('idx_triggers_workflow').on(table.workflowId),
   index('idx_triggers_type').on(table.type),
   index('idx_triggers_enabled').on(table.enabled),
+  uniqueIndex('idx_triggers_user_name').on(table.userId, table.name),
 ]);
 
 export const workflowExecutions = sqliteTable('workflow_executions', {
