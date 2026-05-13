@@ -14,7 +14,7 @@ export const pylonProvider: IntegrationProvider = {
 
   async testConnection(credentials: IntegrationCredentials): Promise<boolean> {
     try {
-      const res = await fetch('https://mcp.usepylon.com/mcp', {
+      const res = await fetch('https://mcp.usepylon.com', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
