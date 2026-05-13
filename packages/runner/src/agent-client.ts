@@ -641,7 +641,7 @@ export class AgentClient {
       this.send({
         type: "trigger-api",
         requestId,
-        action: params.triggerId ? "update" : "create",
+        action: params.triggerId ? "update" : "sync",
         payload: params as Record<string, unknown>,
       });
     });
