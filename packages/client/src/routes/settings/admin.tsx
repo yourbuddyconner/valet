@@ -35,6 +35,7 @@ import { GitHubConfigSection } from '@/components/settings/github-config';
 import { ActionPoliciesSection } from '@/components/settings/action-policies-section';
 import { usePlugins, usePluginDetail, usePluginSettings, useUpdatePluginStatus, useSyncPlugins, useUpdatePluginSettings } from '@/api/plugins';
 import { Badge } from '@/components/ui/badge';
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { useActionCatalog } from '@/api/action-catalog';
 import type { ActionCatalogEntry } from '@/api/action-catalog';
 import { useDisabledActions, useSetServiceDisabledState } from '@/api/disabled-actions';
@@ -722,6 +723,47 @@ function SlackIcon({ className }: { className?: string }) {
 
 // --- Orchestrators ---
 
+function ChannelsSummary({
+  channels,
+  channelLabel,
+}: {
+  channels: Array<{ channelType: string; channelId: string; slackChannelId?: string }>;
+  channelLabel: (ch: { channelType: string; channelId: string; slackChannelId?: string }) => string;
+}) {
+  const grouped = new Map<string, number>();
+  for (const ch of channels) {
+    grouped.set(ch.channelType, (grouped.get(ch.channelType) ?? 0) + 1);
+  }
+
+  return (
+    <TooltipProvider>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <button
+            type="button"
+            className="inline-flex items-center gap-1.5 text-left text-xs text-neutral-600 hover:text-neutral-900 dark:text-neutral-400 dark:hover:text-neutral-200"
+          >
+            {Array.from(grouped.entries()).map(([type, count]) => (
+              <Badge key={type} variant="secondary">
+                {type} ({count})
+              </Badge>
+            ))}
+          </button>
+        </TooltipTrigger>
+        <TooltipContent side="bottom" className="max-w-xs">
+          <div className="flex flex-wrap gap-1">
+            {channels.map((ch, i) => (
+              <span key={i} className="text-[11px]">
+                {channelLabel(ch)}{i < channels.length - 1 ? ',' : ''}
+              </span>
+            ))}
+          </div>
+        </TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
+  );
+}
+
 function OrchestratorsSection() {
   const { data: orchestrators, isLoading, fetchNextPage, isFetchingNextPage, hasNextPage } = useAdminOrchestrators();
   const refreshOrchestrator = useRefreshOrchestrator();
@@ -829,11 +871,7 @@ function OrchestratorsSection() {
                     {orch.channels.length === 0 ? (
                       <span className="text-neutral-400">none</span>
                     ) : (
-                      <div className="flex flex-wrap gap-1">
-                        {orch.channels.map((ch, i) => (
-                          <Badge key={i} variant="secondary">{channelLabel(ch)}</Badge>
-                        ))}
-                      </div>
+                      <ChannelsSummary channels={orch.channels} channelLabel={channelLabel} />
                     )}
                   </td>
                   <td className="py-2 pr-4 text-neutral-500 dark:text-neutral-400">
