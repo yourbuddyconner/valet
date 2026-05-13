@@ -160,7 +160,7 @@ export class McpClient {
       }>(
         'initialize',
         {
-          protocolVersion: '2024-11-05',
+          protocolVersion: '2025-03-26',
           capabilities: {},
           clientInfo: { name: 'valet', version: '1.0.0' },
         },

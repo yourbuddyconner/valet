@@ -87,6 +87,8 @@ export function buildAuthorizationUrl(params: {
   codeChallenge: string;
   state: string;
   scopes?: string[];
+  /** MCP resource server URL (RFC 8707). Scopes the token to this resource. */
+  resource?: string;
 }): string {
   const query = new URLSearchParams({
     client_id: params.clientId,
@@ -98,6 +100,9 @@ export function buildAuthorizationUrl(params: {
   });
   if (params.scopes?.length) {
     query.set('scope', params.scopes.join(' '));
+  }
+  if (params.resource) {
+    query.set('resource', params.resource);
   }
   return `${params.authorizationEndpoint}?${query}`;
 }
@@ -111,17 +116,23 @@ export async function exchangeCodePkce(params: {
   code: string;
   redirectUri: string;
   codeVerifier: string;
+  /** MCP resource server URL (RFC 8707). Must match the value sent in the authorization request. */
+  resource?: string;
 }): Promise<TokenResponse> {
+  const body = new URLSearchParams({
+    grant_type: 'authorization_code',
+    client_id: params.clientId,
+    code: params.code,
+    redirect_uri: params.redirectUri,
+    code_verifier: params.codeVerifier,
+  });
+  if (params.resource) {
+    body.set('resource', params.resource);
+  }
   const res = await fetch(params.tokenEndpoint, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({
-      grant_type: 'authorization_code',
-      client_id: params.clientId,
-      code: params.code,
-      redirect_uri: params.redirectUri,
-      code_verifier: params.codeVerifier,
-    }),
+    body,
   });
   if (!res.ok) {
     const body = await res.text().catch(() => '');

@@ -439,6 +439,7 @@ integrationsRouter.get('/:service/oauth', async (c) => {
       codeChallenge,
       state,
       scopes: provider.oauthScopes,
+      resource: provider.mcpServerUrl,
     });
 
     return c.json({ url, state, code_verifier: codeVerifier });
@@ -492,6 +493,7 @@ integrationsRouter.post('/:service/oauth/callback', async (c) => {
       code,
       redirectUri: redirect_uri,
       codeVerifier: code_verifier,
+      resource: provider.mcpServerUrl,
     });
 
     const credentials: Record<string, string> = {
