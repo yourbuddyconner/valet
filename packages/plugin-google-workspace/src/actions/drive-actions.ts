@@ -101,10 +101,14 @@ function getLabelFilter(params: unknown): string | undefined {
   return (params as Record<string, unknown> | null)?.__labelFilter as string | undefined;
 }
 
-const VALID_CORPORA = new Set(['user', 'domain', 'allDrives']);
+const VALID_CORPORA = new Set(['user', 'domain', 'drive', 'allDrives']);
 
-/** Return the org-configured corpora value, falling back to `'user'`. */
-function resolveCorpora(ctx: ActionContext): string {
+/**
+ * Return the corpora value for a Drive API request.
+ * Priority: per-request override > org-configured value > 'user' default.
+ */
+function resolveCorpora(ctx: ActionContext, override?: string): string {
+  if (typeof override === 'string' && VALID_CORPORA.has(override)) return override;
   const value = ctx.guardConfig?.driveCorpora;
   return typeof value === 'string' && VALID_CORPORA.has(value) ? value : 'user';
 }
@@ -159,6 +163,7 @@ const listFiles: ActionDefinition = {
     ownedByMe: z.boolean().optional().describe('Only return files owned by the authenticated user'),
     sharedWithMe: z.boolean().optional().describe('Only return files shared with the authenticated user'),
     modifiedAfter: z.string().optional().describe('Only return files modified after this date (ISO 8601)'),
+    corpora: z.enum(['user', 'domain', 'drive', 'allDrives']).optional().describe('Which corpus to search. "user" for personal files (default), "domain" for organization-wide, "drive" for a specific shared drive, "allDrives" for everything.'),
   }),
 };
 
@@ -179,6 +184,7 @@ const searchFiles: ActionDefinition = {
     maxResults: z.number().int().min(1).max(100).optional(),
     modifiedAfter: z.string().optional().describe('Only return files modified after this date (ISO 8601)'),
     pageToken: z.string().optional(),
+    corpora: z.enum(['user', 'domain', 'drive', 'allDrives']).optional().describe('Which corpus to search. "user" for personal files (default), "domain" for organization-wide, "drive" for a specific shared drive, "allDrives" for everything.'),
   }),
 };
 
@@ -193,6 +199,7 @@ const listDocuments: ActionDefinition = {
     pageToken: z.string().optional(),
     orderBy: z.enum(['name', 'modifiedTime', 'createdTime']).optional(),
     modifiedAfter: z.string().optional().describe('Only return documents modified after this date (ISO 8601)'),
+    corpora: z.enum(['user', 'domain', 'drive', 'allDrives']).optional().describe('Which corpus to search. "user" for personal files (default), "domain" for organization-wide, "drive" for a specific shared drive, "allDrives" for everything.'),
   }),
 };
 
@@ -207,6 +214,7 @@ const searchDocuments: ActionDefinition = {
     maxResults: z.number().int().min(1).max(100).optional(),
     pageToken: z.string().optional(),
     modifiedAfter: z.string().optional().describe('Only return documents modified after this date (ISO 8601)'),
+    corpora: z.enum(['user', 'domain', 'drive', 'allDrives']).optional().describe('Which corpus to search. "user" for personal files (default), "domain" for organization-wide, "drive" for a specific shared drive, "allDrives" for everything.'),
   }),
 };
 
@@ -219,6 +227,7 @@ const listFolderContents: ActionDefinition = {
     folderId: z.string().describe('Folder ID (use "root" for the root Drive folder)'),
     maxResults: z.number().int().min(1).max(100).optional(),
     pageToken: z.string().optional(),
+    corpora: z.enum(['user', 'domain', 'drive', 'allDrives']).optional().describe('Which corpus to search. "user" for personal files (default), "domain" for organization-wide, "drive" for a specific shared drive, "allDrives" for everything.'),
   }),
 };
 
@@ -400,7 +409,7 @@ async function executeAction(
           : 'modifiedTime desc';
 
         const qs = new URLSearchParams({
-          corpora: resolveCorpora(ctx),
+          corpora: resolveCorpora(ctx, p.corpora),
           fields: `nextPageToken,files(${LIST_FILE_FIELDS})`,
           pageSize: String(p.maxResults || 20),
           supportsAllDrives: 'true',
@@ -459,7 +468,7 @@ async function executeAction(
           : 'modifiedTime desc';
 
         const qs = new URLSearchParams({
-          corpora: resolveCorpora(ctx),
+          corpora: resolveCorpora(ctx, p.corpora),
           q: finalQuery,
           fields: `nextPageToken,files(${LIST_FILE_FIELDS})`,
           pageSize: String(p.maxResults || 10),
@@ -510,7 +519,7 @@ async function executeAction(
         const orderByParam = p.orderBy || 'modifiedTime';
 
         const qs = new URLSearchParams({
-          corpora: resolveCorpora(ctx),
+          corpora: resolveCorpora(ctx, p.corpora),
           q: finalQuery,
           fields: `nextPageToken,files(id,name,modifiedTime,createdTime,webViewLink,owners(displayName,emailAddress))`,
           pageSize: String(p.maxResults || 20),
@@ -562,7 +571,7 @@ async function executeAction(
         const finalQuery = composeQuery(queryParts.join(' and '), labelFilter);
 
         const qs = new URLSearchParams({
-          corpora: resolveCorpora(ctx),
+          corpora: resolveCorpora(ctx, p.corpora),
           q: finalQuery,
           fields: `nextPageToken,files(id,name,modifiedTime,createdTime,webViewLink,owners(displayName))`,
           pageSize: String(p.maxResults || 10),
@@ -599,7 +608,7 @@ async function executeAction(
         const finalQuery = composeQuery(queryParts.join(' and '), labelFilter);
 
         const qs = new URLSearchParams({
-          corpora: resolveCorpora(ctx),
+          corpora: resolveCorpora(ctx, p.corpora),
           q: finalQuery,
           fields: 'nextPageToken,files(id,name,mimeType,size,modifiedTime,webViewLink,owners(displayName))',
           pageSize: String(p.maxResults || 50),
