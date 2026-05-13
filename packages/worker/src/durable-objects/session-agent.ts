@@ -1298,8 +1298,9 @@ export class SessionAgentDO {
 
     const reply = (content: string) => {
       const msgId = crypto.randomUUID();
+      const createdAt = Math.floor(Date.now() / 1000);
       this.messageStore.writeMessage({ id: msgId, role: 'system', content, threadId });
-      this.broadcastToClients({ type: 'message', data: { id: msgId, role: 'system', content, threadId } });
+      this.broadcastToClients({ type: 'message', data: { id: msgId, role: 'system', content, threadId, createdAt } });
     };
 
     switch (command) {
