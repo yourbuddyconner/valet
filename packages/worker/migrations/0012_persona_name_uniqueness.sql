@@ -86,8 +86,42 @@ WHERE persona_id NOT IN (
   ) WHERE rn = 1
 );
 
--- Step 4: Move persona files from duplicates to survivors (update persona_id)
--- For files with the same filename, keep the one from the newest persona
+-- Step 4: Delete duplicate persona files from duplicates that would conflict
+-- with files the survivor already has (same filename). Keep the survivor's version.
+DELETE FROM agent_persona_files
+WHERE id IN (
+  SELECT dpf.id
+  FROM agent_persona_files dpf
+  -- dpf belongs to a duplicate persona (not a survivor)
+  JOIN (
+    SELECT id as dup_id, org_id, name
+    FROM agent_personas
+    WHERE id NOT IN (
+      SELECT id FROM (
+        SELECT id, ROW_NUMBER() OVER (
+          PARTITION BY org_id, name COLLATE NOCASE ORDER BY created_at DESC
+        ) AS rn
+        FROM agent_personas
+      ) WHERE rn = 1
+    )
+  ) dup ON dup.dup_id = dpf.persona_id
+  -- the survivor already has a file with the same filename
+  JOIN (
+    SELECT id as survivor_id, org_id, name
+    FROM agent_personas
+    WHERE id IN (
+      SELECT id FROM (
+        SELECT id, ROW_NUMBER() OVER (
+          PARTITION BY org_id, name COLLATE NOCASE ORDER BY created_at DESC
+        ) AS rn
+        FROM agent_personas
+      ) WHERE rn = 1
+    )
+  ) surv ON surv.org_id = dup.org_id AND surv.name COLLATE NOCASE = dup.name COLLATE NOCASE
+  JOIN agent_persona_files spf ON spf.persona_id = surv.survivor_id AND spf.filename = dpf.filename
+);
+
+-- Step 5: Move remaining persona files from duplicates to survivors (no conflicts now)
 UPDATE agent_persona_files
 SET persona_id = (
   SELECT survivor_id FROM (
@@ -116,18 +150,39 @@ WHERE persona_id NOT IN (
   ) WHERE rn = 1
 );
 
--- Step 5: Delete duplicate persona file rows that now conflict on (persona_id, filename)
--- Keep the one with the latest updated_at
-DELETE FROM agent_persona_files WHERE id NOT IN (
-  SELECT id FROM (
-    SELECT id, ROW_NUMBER() OVER (
-      PARTITION BY persona_id, filename ORDER BY updated_at DESC
-    ) AS rn
-    FROM agent_persona_files
-  ) WHERE rn = 1
+-- Step 6a: Delete persona_skills from duplicates that would conflict with survivor's skills
+DELETE FROM persona_skills
+WHERE id IN (
+  SELECT dps.id
+  FROM persona_skills dps
+  JOIN (
+    SELECT id as dup_id, org_id, name
+    FROM agent_personas
+    WHERE id NOT IN (
+      SELECT id FROM (
+        SELECT id, ROW_NUMBER() OVER (
+          PARTITION BY org_id, name COLLATE NOCASE ORDER BY created_at DESC
+        ) AS rn
+        FROM agent_personas
+      ) WHERE rn = 1
+    )
+  ) dup ON dup.dup_id = dps.persona_id
+  JOIN (
+    SELECT id as survivor_id, org_id, name
+    FROM agent_personas
+    WHERE id IN (
+      SELECT id FROM (
+        SELECT id, ROW_NUMBER() OVER (
+          PARTITION BY org_id, name COLLATE NOCASE ORDER BY created_at DESC
+        ) AS rn
+        FROM agent_personas
+      ) WHERE rn = 1
+    )
+  ) surv ON surv.org_id = dup.org_id AND surv.name COLLATE NOCASE = dup.name COLLATE NOCASE
+  JOIN persona_skills sps ON sps.persona_id = surv.survivor_id AND sps.skill_id = dps.skill_id
 );
 
--- Step 6: Move persona_skills from duplicates to survivors
+-- Step 6b: Move remaining persona_skills from duplicates to survivors
 UPDATE persona_skills
 SET persona_id = (
   SELECT survivor_id FROM (
@@ -156,17 +211,39 @@ WHERE persona_id NOT IN (
   ) WHERE rn = 1
 );
 
--- Delete duplicate persona_skills (same persona_id + skill_id)
-DELETE FROM persona_skills WHERE id NOT IN (
-  SELECT id FROM (
-    SELECT id, ROW_NUMBER() OVER (
-      PARTITION BY persona_id, skill_id ORDER BY created_at DESC
-    ) AS rn
-    FROM persona_skills
-  ) WHERE rn = 1
+-- Step 7a: Delete persona_tools from duplicates that would conflict with survivor's tools
+DELETE FROM persona_tools
+WHERE id IN (
+  SELECT dpt.id
+  FROM persona_tools dpt
+  JOIN (
+    SELECT id as dup_id, org_id, name
+    FROM agent_personas
+    WHERE id NOT IN (
+      SELECT id FROM (
+        SELECT id, ROW_NUMBER() OVER (
+          PARTITION BY org_id, name COLLATE NOCASE ORDER BY created_at DESC
+        ) AS rn
+        FROM agent_personas
+      ) WHERE rn = 1
+    )
+  ) dup ON dup.dup_id = dpt.persona_id
+  JOIN (
+    SELECT id as survivor_id, org_id, name
+    FROM agent_personas
+    WHERE id IN (
+      SELECT id FROM (
+        SELECT id, ROW_NUMBER() OVER (
+          PARTITION BY org_id, name COLLATE NOCASE ORDER BY created_at DESC
+        ) AS rn
+        FROM agent_personas
+      ) WHERE rn = 1
+    )
+  ) surv ON surv.org_id = dup.org_id AND surv.name COLLATE NOCASE = dup.name COLLATE NOCASE
+  JOIN persona_tools spt ON spt.persona_id = surv.survivor_id AND spt.service = dpt.service AND spt.action_id = dpt.action_id
 );
 
--- Step 7: Move persona_tools from duplicates to survivors
+-- Step 7b: Move remaining persona_tools from duplicates to survivors
 UPDATE persona_tools
 SET persona_id = (
   SELECT survivor_id FROM (
@@ -192,16 +269,6 @@ WHERE persona_id NOT IN (
       PARTITION BY org_id, name COLLATE NOCASE ORDER BY created_at DESC
     ) AS rn
     FROM agent_personas
-  ) WHERE rn = 1
-);
-
--- Delete duplicate persona_tools (same persona_id + service + action_id)
-DELETE FROM persona_tools WHERE id NOT IN (
-  SELECT id FROM (
-    SELECT id, ROW_NUMBER() OVER (
-      PARTITION BY persona_id, service, action_id ORDER BY created_at DESC
-    ) AS rn
-    FROM persona_tools
   ) WHERE rn = 1
 );
 
