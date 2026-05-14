@@ -502,7 +502,7 @@ export function ChatContainer({ sessionId, routeSessionId, initialThreadId, init
                 ))}
                 {queuedCount > 0 && (
                   <div className="text-center text-xs text-neutral-500 py-1">
-                    {queuedCount} more approval{queuedCount > 1 ? 's' : ''} queued
+                    {queuedCount} more prompt{queuedCount > 1 ? 's' : ''} queued
                   </div>
                 )}
               </>
