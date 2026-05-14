@@ -100,6 +100,7 @@ export function ChatContainer({ sessionId, routeSessionId, initialThreadId, init
     setSelectedModel,
     sendMessage,
     answerQuestion,
+    dismissQuestion,
     abort,
     revertMessage,
     logEntries,
@@ -495,6 +496,7 @@ export function ChatContainer({ sessionId, routeSessionId, initialThreadId, init
                     <InteractivePromptCard
                       prompt={prompt}
                       onAnswer={answerQuestion}
+                      onDismiss={dismissQuestion}
                       onApproveWs={approveActionWs}
                       onDenyWs={denyActionWs}
                     />

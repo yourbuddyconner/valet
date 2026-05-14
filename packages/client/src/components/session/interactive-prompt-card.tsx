@@ -141,11 +141,12 @@ function ExpandableParams({ params }: { params: Record<string, unknown> }) {
 interface InteractivePromptCardProps {
   prompt: InteractivePromptState;
   onAnswer: (promptId: string, answer: string | boolean) => void;
+  onDismiss: (promptId: string) => void;
   onApproveWs?: (invocationId: string) => void;
   onDenyWs?: (invocationId: string) => void;
 }
 
-export function InteractivePromptCard({ prompt, onAnswer, onApproveWs, onDenyWs }: InteractivePromptCardProps) {
+export function InteractivePromptCard({ prompt, onAnswer, onDismiss, onApproveWs, onDenyWs }: InteractivePromptCardProps) {
   const approveMutation = useApproveAction();
   const denyMutation = useDenyAction();
   const countdown = useCountdown(prompt.expiresAt);
@@ -187,6 +188,12 @@ export function InteractivePromptCard({ prompt, onAnswer, onApproveWs, onDenyWs 
     }
   }
 
+  function handleDismiss() {
+    if (isDisabled) return;
+    setIsSubmitted(true);
+    onDismiss(prompt.id);
+  }
+
   function handleFreeformSubmit(e: React.FormEvent) {
     e.preventDefault();
     const trimmed = freeformValue.trim();
@@ -214,11 +221,23 @@ export function InteractivePromptCard({ prompt, onAnswer, onApproveWs, onDenyWs 
             <Badge variant={riskBadgeVariant(riskLevel)}>{riskLevel}</Badge>
           )}
         </div>
-        {!isResolved && countdown && countdown !== 'expired' && (
-          <span className="shrink-0 text-xs text-neutral-500 dark:text-neutral-400">
-            {countdown}
-          </span>
-        )}
+        <div className="flex shrink-0 items-center gap-2">
+          {!isResolved && !isApproval && (
+            <button
+              type="button"
+              onClick={handleDismiss}
+              disabled={isDisabled}
+              className="text-xs text-neutral-400 hover:text-neutral-600 disabled:opacity-50 dark:text-neutral-500 dark:hover:text-neutral-300"
+            >
+              Skip
+            </button>
+          )}
+          {!isResolved && countdown && countdown !== 'expired' && (
+            <span className="text-xs text-neutral-500 dark:text-neutral-400">
+              {countdown}
+            </span>
+          )}
+        </div>
       </div>
 
       {/* Summary: model-provided explanation */}

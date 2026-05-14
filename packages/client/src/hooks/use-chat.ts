@@ -1290,6 +1290,31 @@ export function useChat(sessionId: string) {
     [isConnected, send]
   );
 
+  const dismissQuestion = useCallback(
+    (promptId: string) => {
+      if (!isConnected) return;
+
+      // Send empty answer — runner treats this the same as an expired question
+      send({ type: 'answer', questionId: promptId, answer: '__expired__' });
+
+      setState((prev) => ({
+        ...prev,
+        interactivePrompts: prev.interactivePrompts.map(
+          (p) => p.id === promptId ? { ...p, status: 'expired' as const } : p
+        ),
+      }));
+      setTimeout(() => {
+        setState((prev) => ({
+          ...prev,
+          interactivePrompts: prev.interactivePrompts.filter(
+            (p) => p.id !== promptId || p.status === 'pending'
+          ),
+        }));
+      }, 5000);
+    },
+    [isConnected, send]
+  );
+
   // Sync WebSocket session status changes back to React Query cache
   // so that session detail/list views stay fresh without waiting for polling
   const prevStatusRef = useRef<SessionStatus | null>(null);
@@ -1539,6 +1564,7 @@ export function useChat(sessionId: string) {
     isConnected,
     sendMessage,
     answerQuestion,
+    dismissQuestion,
     abort,
     revertMessage,
     requestDiff,

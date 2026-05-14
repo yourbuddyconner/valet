@@ -2318,11 +2318,7 @@ export class SessionAgentDO {
           ? `Agent question: ${msg.text.trim()}`
           : 'Agent requested a decision.';
         if (ownerUserId && this.isUserConnected(ownerUserId)) {
-          this.sendToastToUser(ownerUserId, {
-            title: 'Agent question',
-            description: questionSummary.slice(0, 240),
-            variant: 'warning',
-          });
+          // User is connected and will see the interactive prompt card — no toast needed.
         } else {
           await this.enqueueOwnerNotification({
             messageType: 'question',
