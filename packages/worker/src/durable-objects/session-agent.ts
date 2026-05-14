@@ -1602,10 +1602,9 @@ export class SessionAgentDO {
             },
           });
 
-          // Answer each pending question with the promoted message content
-          for (const row of pendingQuestions) {
-            await this.handleAnswer(row.id as string, entry.content);
-          }
+          // Answer only the first pending question — the agent will continue
+          // its turn and re-present subsequent questions naturally.
+          await this.handleAnswer(pendingQuestions[0].id as string, entry.content);
           this.emitAuditEvent('user.queue_promote', `Promoted prompt ${entry.id} as question answer`);
           break;
         }
