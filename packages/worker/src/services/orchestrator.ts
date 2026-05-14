@@ -5,7 +5,7 @@ import type { AppDb } from '../lib/drizzle.js';
 import { getDb } from '../lib/drizzle.js';
 import { buildDoWebSocketUrl } from '../lib/do-ws-url.js';
 import { buildOrchestratorPersonaFiles } from '../lib/orchestrator-persona.js';
-import { createPersona, upsertPersonaFile } from '../lib/db/personas.js';
+import { findPersonaByName, upsertPersonaByName, upsertPersonaFile } from '../lib/db/personas.js';
 import { generateRunnerToken, assembleProviderEnv, assembleCredentialEnv } from '../lib/env-assembly.js';
 import { ensureTodayJournal } from '../lib/db/memory-files.js';
 import { loadMemorySnapshot, formatMemorySnapshot } from '../lib/memory-snapshot.js';
@@ -70,31 +70,33 @@ export async function restartOrchestratorSession(
 
   // Backfill: create persona for orchestrators that predate persona support
   if (!identity.personaId) {
-    const personaId = crypto.randomUUID();
-    const slug = `orchestrator-${identity.handle}-${personaId.slice(0, 8)}`;
+    const personaName = `${identity.name} (Orchestrator)`;
+    let personaId: string;
     try {
-      await createPersona(appDb, {
-        id: personaId,
-        name: `${identity.name} (Orchestrator)`,
-        slug,
+      ({ personaId } = await upsertPersonaByName(appDb, env.DB, 'default', {
+        name: personaName,
         description: 'Auto-managed orchestrator persona',
         visibility: 'private',
         createdBy: userId,
-      });
-      if (identity.customInstructions) {
-        await upsertPersonaFile(appDb, {
-          id: crypto.randomUUID(),
-          personaId,
-          filename: 'custom-instructions.md',
-          content: identity.customInstructions,
-          sortOrder: 10,
-        });
-      }
-      await db.updateOrchestratorIdentity(appDb, identity.id, { personaId });
-      identity = { ...identity, personaId };
-    } catch (err) {
-      console.warn('[Orchestrator] Failed to backfill persona, continuing without:', err);
+      }));
+    } catch {
+      // Concurrent restart may have created the persona between our read and write.
+      // Re-query to find the winner's row.
+      const existing = await findPersonaByName(env.DB, 'default', personaName);
+      if (!existing) throw new Error(`Failed to create or find orchestrator persona "${personaName}"`);
+      personaId = existing.id;
     }
+    if (identity.customInstructions) {
+      await upsertPersonaFile(appDb, {
+        id: crypto.randomUUID(),
+        personaId,
+        filename: 'custom-instructions.md',
+        content: identity.customInstructions,
+        sortOrder: 10,
+      });
+    }
+    await db.updateOrchestratorIdentity(appDb, identity.id, { personaId });
+    identity = { ...identity, personaId };
   }
 
   const personaFiles = buildOrchestratorPersonaFiles(identity as any);
@@ -255,13 +257,11 @@ export async function onboardOrchestrator(
     }
 
     const identityId = crypto.randomUUID();
-    const personaId = crypto.randomUUID();
+    const personaName = `${params.name} (Orchestrator)`;
 
     // Create a real persona for the orchestrator (enables skill attachments)
-    await createPersona(appDb, {
-      id: personaId,
-      name: `${params.name} (Orchestrator)`,
-      slug: `orchestrator-${params.handle}-${personaId.slice(0, 8)}`,
+    const { personaId } = await upsertPersonaByName(appDb, env.DB, 'default', {
+      name: personaName,
       description: 'Auto-managed orchestrator persona',
       visibility: 'private',
       createdBy: userId,

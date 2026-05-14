@@ -697,7 +697,6 @@ export interface AgentPersona {
   id: string;
   orgId: string;
   name: string;
-  slug: string;
   description?: string;
   icon?: string;
   defaultModel?: string;

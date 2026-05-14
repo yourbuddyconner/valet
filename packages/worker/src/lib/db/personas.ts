@@ -7,7 +7,7 @@ import { agentPersonas, agentPersonaFiles, orgRepoPersonaDefaults, personaTools,
 
 export async function createPersona(
   db: AppDb,
-  data: { id: string; name: string; slug: string; description?: string; icon?: string; defaultModel?: string; visibility?: PersonaVisibility; isDefault?: boolean; createdBy: string }
+  data: { id: string; name: string; description?: string; icon?: string; defaultModel?: string; visibility?: PersonaVisibility; isDefault?: boolean; createdBy: string }
 ): Promise<AgentPersona> {
   if (data.isDefault) {
     await db
@@ -19,7 +19,6 @@ export async function createPersona(
   await db.insert(agentPersonas).values({
     id: data.id,
     name: data.name,
-    slug: data.slug,
     description: data.description || null,
     icon: data.icon || null,
     defaultModel: data.defaultModel || null,
@@ -32,7 +31,6 @@ export async function createPersona(
     id: data.id,
     orgId: 'default',
     name: data.name,
-    slug: data.slug,
     description: data.description,
     icon: data.icon,
     defaultModel: data.defaultModel,
@@ -43,6 +41,81 @@ export async function createPersona(
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   };
+}
+
+export async function findPersonaByName(
+  db: D1Database,
+  orgId: string,
+  name: string,
+): Promise<AgentPersona | null> {
+  const row = await db
+    .prepare(
+      `SELECT p.*, u.name as creator_name
+       FROM agent_personas p
+       LEFT JOIN users u ON u.id = p.created_by
+       WHERE p.org_id = ? AND LOWER(p.name) = LOWER(?)`
+    )
+    .bind(orgId, name)
+    .first<Record<string, unknown>>();
+
+  if (!row) return null;
+
+  return {
+    id: row.id as string,
+    orgId: row.org_id as string,
+    name: row.name as string,
+    description: (row.description as string) || undefined,
+    icon: (row.icon as string) || undefined,
+    defaultModel: (row.default_model as string) || undefined,
+    visibility: row.visibility as PersonaVisibility,
+    isDefault: !!(row.is_default),
+    createdBy: row.created_by as string | null,
+    creatorName: (row.creator_name as string) || undefined,
+    createdAt: row.created_at as string,
+    updatedAt: row.updated_at as string,
+  };
+}
+
+export async function upsertPersonaByName(
+  db: AppDb,
+  envDB: D1Database,
+  orgId: string,
+  params: {
+    name: string;
+    description?: string;
+    icon?: string;
+    defaultModel?: string;
+    visibility?: PersonaVisibility;
+    isDefault?: boolean;
+    createdBy: string;
+  },
+): Promise<{ personaId: string; created: boolean }> {
+  const existing = await findPersonaByName(envDB, orgId, params.name);
+
+  if (existing) {
+    await updatePersona(db, existing.id, {
+      name: params.name,
+      description: params.description,
+      icon: params.icon,
+      defaultModel: params.defaultModel,
+      visibility: params.visibility,
+      isDefault: params.isDefault,
+    });
+    return { personaId: existing.id, created: false };
+  }
+
+  const id = crypto.randomUUID();
+  await createPersona(db, {
+    id,
+    name: params.name,
+    description: params.description,
+    icon: params.icon,
+    defaultModel: params.defaultModel,
+    visibility: params.visibility,
+    isDefault: params.isDefault,
+    createdBy: params.createdBy,
+  });
+  return { personaId: id, created: true };
 }
 
 export async function listPersonas(db: D1Database, userId: string, orgId: string = 'default'): Promise<AgentPersona[]> {
@@ -64,7 +137,6 @@ export async function listPersonas(db: D1Database, userId: string, orgId: string
     id: row.id,
     orgId: row.org_id,
     name: row.name,
-    slug: row.slug,
     description: row.description || undefined,
     icon: row.icon || undefined,
     defaultModel: row.default_model || undefined,
@@ -104,7 +176,6 @@ export async function getPersonaWithFiles(db: D1Database, id: string): Promise<A
     id: row.id,
     orgId: row.org_id,
     name: row.name,
-    slug: row.slug,
     description: row.description || undefined,
     icon: row.icon || undefined,
     defaultModel: row.default_model || undefined,
@@ -132,12 +203,11 @@ export async function getPersonaWithFiles(db: D1Database, id: string): Promise<A
 export async function updatePersona(
   db: AppDb,
   id: string,
-  updates: Partial<Pick<AgentPersona, 'name' | 'slug' | 'description' | 'icon' | 'defaultModel' | 'visibility' | 'isDefault'>>
+  updates: Partial<Pick<AgentPersona, 'name' | 'description' | 'icon' | 'defaultModel' | 'visibility' | 'isDefault'>>
 ): Promise<void> {
   const setValues: Record<string, unknown> = {};
 
   if (updates.name !== undefined) setValues.name = updates.name;
-  if (updates.slug !== undefined) setValues.slug = updates.slug;
   if (updates.description !== undefined) setValues.description = updates.description || null;
   if (updates.icon !== undefined) setValues.icon = updates.icon || null;
   if (updates.defaultModel !== undefined) setValues.defaultModel = updates.defaultModel || null;
