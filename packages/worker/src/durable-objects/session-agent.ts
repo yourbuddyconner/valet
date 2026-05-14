@@ -1569,6 +1569,16 @@ export class SessionAgentDO {
           data: { pending: null },
         });
 
+        // Resolve any pending questions before aborting — the promoted message
+        // acts as the user's answer. Without this, the abort orphans the question
+        // in OpenCode and the agent turn ends with an error.
+        const pendingQuestions = this.ctx.storage.sql
+          .exec("SELECT id FROM interactive_prompts WHERE type = 'question' AND status = 'pending'")
+          .toArray();
+        for (const row of pendingQuestions) {
+          await this.handleAnswer(row.id as string, entry.content);
+        }
+
         if (this.promptQueue.runnerBusy) {
           await this.handleAbort();
         }
