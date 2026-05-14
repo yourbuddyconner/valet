@@ -1569,14 +1569,45 @@ export class SessionAgentDO {
           data: { pending: null },
         });
 
-        // Resolve any pending questions before aborting — the promoted message
-        // acts as the user's answer. Without this, the abort orphans the question
-        // in OpenCode and the agent turn ends with an error.
+        // If there are pending questions, the promoted message IS the user's
+        // answer. Resolve the question and let the agent continue its turn —
+        // don't abort or dispatch a new prompt.  An abort races with the answer
+        // on the runner (concurrent WS handlers → concurrent HTTP calls to
+        // OpenCode) and can kill the session before the answer arrives.
         const pendingQuestions = this.ctx.storage.sql
           .exec("SELECT id FROM interactive_prompts WHERE type = 'question' AND status = 'pending'")
           .toArray();
-        for (const row of pendingQuestions) {
-          await this.handleAnswer(row.id as string, entry.content);
+        if (pendingQuestions.length > 0) {
+          // Record the user's message so it appears in chat
+          const messageId = crypto.randomUUID();
+          this.messageStore.writeMessage({
+            id: messageId,
+            role: 'user',
+            content: entry.content,
+            author: entry.authorId
+              ? { id: entry.authorId, email: entry.authorEmail || '', name: entry.authorName || undefined, avatarUrl: entry.authorAvatarUrl || undefined }
+              : undefined,
+          });
+          this.broadcastToClients({
+            type: 'message',
+            data: {
+              id: messageId,
+              role: 'user',
+              content: entry.content,
+              authorId: entry.authorId || undefined,
+              authorEmail: entry.authorEmail || undefined,
+              authorName: entry.authorName || undefined,
+              authorAvatarUrl: entry.authorAvatarUrl || undefined,
+              createdAt: Math.floor(Date.now() / 1000),
+            },
+          });
+
+          // Answer each pending question with the promoted message content
+          for (const row of pendingQuestions) {
+            await this.handleAnswer(row.id as string, entry.content);
+          }
+          this.emitAuditEvent('user.queue_promote', `Promoted prompt ${entry.id} as question answer`);
+          break;
         }
 
         if (this.promptQueue.runnerBusy) {
