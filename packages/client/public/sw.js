@@ -17,6 +17,8 @@ self.addEventListener('activate', (event) => {
 });
 
 self.addEventListener('fetch', (event) => {
-  // Pass all requests through to the network (no caching)
-  event.respondWith(fetch(event.request));
+  // Only intercept same-origin requests; let cross-origin fall through to browser default
+  if (event.request.url.startsWith(self.location.origin)) {
+    event.respondWith(fetch(event.request));
+  }
 });

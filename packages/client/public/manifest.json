@@ -3,6 +3,7 @@
   "short_name": "Valet",
   "description": "AI coding agent platform — background sessions with full dev environments",
   "start_url": "/",
+  "scope": "/",
   "display": "standalone",
   "background_color": "#0a0a0a",
   "theme_color": "#0a0a0a",
