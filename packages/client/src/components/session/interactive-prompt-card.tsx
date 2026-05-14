@@ -150,10 +150,12 @@ export function InteractivePromptCard({ prompt, onAnswer, onApproveWs, onDenyWs 
   const denyMutation = useDenyAction();
   const countdown = useCountdown(prompt.expiresAt);
   const [freeformValue, setFreeformValue] = React.useState('');
+  const [isSubmitted, setIsSubmitted] = React.useState(false);
 
   const isResolved = prompt.status !== 'pending';
-  const isLoading = approveMutation.isPending || denyMutation.isPending;
   const isApproval = prompt.type === 'approval';
+  const isLoading = isApproval && (approveMutation.isPending || denyMutation.isPending);
+  const isDisabled = isLoading || isSubmitted;
 
   const invocationId = (prompt.context?.invocationId as string) ?? prompt.id;
   const toolId = prompt.context?.toolId as string | undefined;
@@ -161,6 +163,7 @@ export function InteractivePromptCard({ prompt, onAnswer, onApproveWs, onDenyWs 
   const params = prompt.context?.params as Record<string, unknown> | undefined;
 
   function handleActionClick(actionId: string) {
+    if (isDisabled) return;
     if (isApproval) {
       if (actionId === 'approve') {
         if (onApproveWs) {
@@ -176,6 +179,7 @@ export function InteractivePromptCard({ prompt, onAnswer, onApproveWs, onDenyWs 
         }
       }
     } else {
+      setIsSubmitted(true);
       const action = prompt.actions.find((a) => a.id === actionId);
       if (action) {
         onAnswer(prompt.id, action.label);
@@ -186,9 +190,10 @@ export function InteractivePromptCard({ prompt, onAnswer, onApproveWs, onDenyWs 
   function handleFreeformSubmit(e: React.FormEvent) {
     e.preventDefault();
     const trimmed = freeformValue.trim();
-    if (trimmed) {
-      onAnswer(prompt.id, trimmed);
-    }
+    if (!trimmed || isSubmitted) return;
+    setIsSubmitted(true);
+    setFreeformValue('');
+    onAnswer(prompt.id, trimmed);
   }
 
   const hasActions = prompt.actions.length > 0;
@@ -236,25 +241,42 @@ export function InteractivePromptCard({ prompt, onAnswer, onApproveWs, onDenyWs 
           </Badge>
         </div>
       ) : hasActions ? (
-        <div className="mt-3 flex gap-2">
-          {prompt.actions.map((action) => (
-            <Button
-              key={action.id}
-              size="sm"
-              variant={action.style === 'primary' ? 'primary' : 'outline'}
-              onClick={() => handleActionClick(action.id)}
-              disabled={isLoading}
-              className={
-                action.style === 'danger'
-                  ? 'border-red-300 text-red-600 hover:bg-red-50 dark:border-red-700 dark:text-red-400 dark:hover:bg-red-900/20'
-                  : action.style === 'primary'
-                    ? 'bg-emerald-600 hover:bg-emerald-700 text-white'
-                    : ''
-              }
-            >
-              {action.label}
-            </Button>
-          ))}
+        <div className="mt-3 space-y-2">
+          <div className="flex flex-wrap gap-2">
+            {prompt.actions.map((action) => (
+              <Button
+                key={action.id}
+                size="sm"
+                variant={action.style === 'primary' ? 'primary' : 'outline'}
+                onClick={() => handleActionClick(action.id)}
+                disabled={isDisabled}
+                className={
+                  action.style === 'danger'
+                    ? 'border-red-300 text-red-600 hover:bg-red-50 dark:border-red-700 dark:text-red-400 dark:hover:bg-red-900/20'
+                    : action.style === 'primary'
+                      ? 'bg-emerald-600 hover:bg-emerald-700 text-white'
+                      : ''
+                }
+              >
+                {action.label}
+              </Button>
+            ))}
+          </div>
+          {!isApproval && (
+            <form onSubmit={handleFreeformSubmit} className="flex gap-2">
+              <input
+                type="text"
+                value={freeformValue}
+                onChange={(e) => setFreeformValue(e.target.value)}
+                disabled={isSubmitted}
+                placeholder="Or type your own answer..."
+                className="flex-1 rounded-md border border-neutral-300 bg-surface-0 px-2.5 py-1.5 text-[13px] text-neutral-900 focus:outline-none focus:ring-2 focus:ring-amber-400/40 dark:border-neutral-600 dark:bg-surface-1 dark:text-neutral-100"
+              />
+              <Button type="submit" size="sm" variant="outline" disabled={isSubmitted || !freeformValue.trim()}>
+                Answer
+              </Button>
+            </form>
+          )}
         </div>
       ) : (
         <form onSubmit={handleFreeformSubmit} className="mt-3 flex gap-2">
