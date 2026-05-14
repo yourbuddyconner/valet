@@ -1294,8 +1294,8 @@ export function useChat(sessionId: string) {
     (promptId: string) => {
       if (!isConnected) return;
 
-      // Send empty answer — runner treats this the same as an expired question
-      send({ type: 'answer', questionId: promptId, answer: '__expired__' });
+      // Send a real text answer so OpenCode continues its turn (empty answers cause errors)
+      send({ type: 'answer', questionId: promptId, answer: 'Skipped — no answer provided. Proceed without this information or make a reasonable default choice.' });
 
       setState((prev) => ({
         ...prev,
