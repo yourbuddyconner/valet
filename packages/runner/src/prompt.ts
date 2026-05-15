@@ -3416,7 +3416,8 @@ export class PromptHandler {
     const eventSessionId = (
       props.sessionID ?? props.sessionId ?? props.session_id ??
       part?.sessionID ?? part?.sessionId ??
-      info?.sessionID ?? info?.sessionId
+      info?.sessionID ?? info?.sessionId ??
+      info?.id
     ) as string | undefined;
     if (eventSessionId && this.ephemeralContent.has(eventSessionId)) {
       const mappedChannel = this.ocSessionToChannel.get(eventSessionId);

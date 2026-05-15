@@ -3082,6 +3082,7 @@ export class SessionAgentDO {
           if (Object.keys(threadUpdates).length > 0) {
             this.ctx.waitUntil(
               updateThread(this.env.DB, threadId, threadUpdates as any)
+                .catch((err) => console.error(`[SessionAgentDO] Failed to update thread ${threadId}:`, err))
             );
           }
           console.log(`[SessionAgentDO] Thread updated: ${threadId} title=${msg.title || '(unchanged)'}`);

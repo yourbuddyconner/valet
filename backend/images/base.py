@@ -17,7 +17,7 @@ import modal
 
 from config import NODE_VERSION
 
-OPENCODE_VERSION = "1.1.52"
+OPENCODE_VERSION = "1.15.0"
 
 
 def get_base_image() -> modal.Image:
@@ -166,7 +166,7 @@ def get_base_image() -> modal.Image:
                 "DISPLAY": ":99",
                 "HOME": "/root",
                 # Force image rebuild on deploy (change this value to trigger rebuild)
-                "IMAGE_BUILD_VERSION": "2026-05-12-v28-trigger-idempotent-upsert",
+                "IMAGE_BUILD_VERSION": "2026-05-15-v29-opencode-1.15.0",
                 "AGENT_BROWSER_EXECUTABLE_PATH": "/usr/bin/chromium",
                 "AGENT_BROWSER_PROFILE": "/root/.agent-browser-profile",
                 "PLAYWRIGHT_BROWSERS_PATH": "/ms-playwright",
