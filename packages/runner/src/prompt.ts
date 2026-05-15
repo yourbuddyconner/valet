@@ -3422,6 +3422,13 @@ export class PromptHandler {
     if (eventSessionId && this.ephemeralContent.has(eventSessionId)) {
       const mappedChannel = this.ocSessionToChannel.get(eventSessionId);
       // Capture text deltas from ephemeral session SSE events
+      if (event.type === "message.part.delta") {
+        // v2 delta event: { sessionID, messageID, partID, field, delta }
+        if (typeof props.field === "string" && props.field === "text" && typeof props.delta === "string") {
+          const prev = this.ephemeralContent.get(eventSessionId) || "";
+          this.ephemeralContent.set(eventSessionId, prev + props.delta);
+        }
+      }
       if (event.type === "message.part.updated") {
         if (part?.type === "text") {
           const partMessageId = typeof part.messageID === "string" ? part.messageID : undefined;
@@ -3526,6 +3533,11 @@ export class PromptHandler {
     switch (event.type) {
       case "message.part.updated": {
         this.handlePartUpdated(props, eventChannel);
+        break;
+      }
+
+      case "message.part.delta": {
+        this.handlePartDelta(props, eventChannel);
         break;
       }
 
@@ -3778,6 +3790,32 @@ export class PromptHandler {
       channel.lastChunkTime = Date.now();
       this.resetResponseTimeout(channel);
     }
+  }
+
+  /**
+   * Handle the v2 `message.part.delta` event emitted by OpenCode ≥1.15.
+   * This carries incremental text (or reasoning) deltas separately from the
+   * full-snapshot `message.part.updated` events.
+   */
+  private handlePartDelta(props: Record<string, unknown>, channel: ChannelSession): void {
+    if (!channel.activeMessageId) return;
+    const field = props.field as string | undefined;
+    if (field !== "text") return; // only stream text deltas, skip reasoning etc.
+    const delta = props.delta as string | undefined;
+    if (!delta) return;
+
+    if (channel.streamedContent === "") {
+      this.agentClient.sendAgentStatus("streaming", undefined, channel.activeMessageId ?? undefined);
+    }
+    channel.hasActivity = true;
+    if (channel.hadToolSinceLastText) {
+      channel.hadToolSinceLastText = false;
+    }
+    channel.streamedContent += delta;
+    channel.lastChunkTime = Date.now();
+    this.ensureTurnCreated(channel);
+    this.agentClient.sendTextDelta(channel.turnId!, delta);
+    this.resetResponseTimeout(channel);
   }
 
   private handleToolPart(part: ToolPart, channel: ChannelSession): void {
