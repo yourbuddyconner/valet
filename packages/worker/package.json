@@ -23,6 +23,7 @@
     "@hono/zod-validator": "^0.2.1",
     "@valet/plugin-cloudflare": "workspace:*",
     "@valet/plugin-deepwiki": "workspace:*",
+    "@valet/plugin-turnkey-docs": "workspace:*",
     "@valet/plugin-email-auth": "workspace:*",
     "@valet/plugin-figma": "workspace:*",
     "@valet/plugin-github": "workspace:*",

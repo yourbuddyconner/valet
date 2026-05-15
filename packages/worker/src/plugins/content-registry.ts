@@ -1817,6 +1817,15 @@ Large channels require paging via \`cursor\` / \`next_cursor\`. Prefer narrowing
     artifacts: [],
   },
   {
+    name: "turnkey-docs",
+    version: "0.0.1",
+    description: "Turnkey documentation search and knowledge base",
+    icon: "🔑",
+    authRequired: false,
+    capabilities: ["actions"],
+    artifacts: [],
+  },
+  {
     name: "typefully",
     version: "0.0.1",
     description: "Typefully integration for social media content management",

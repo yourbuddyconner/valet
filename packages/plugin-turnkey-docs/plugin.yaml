@@ -1,0 +1,5 @@
+name: turnkey-docs
+version: 0.0.1
+description: Turnkey documentation search and knowledge base
+icon: "\U0001F511"
+authRequired: false

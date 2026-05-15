@@ -33,6 +33,7 @@
     { "path": "./packages/plugin-sentry" },
     { "path": "./packages/plugin-socket" },
     { "path": "./packages/plugin-deepwiki" },
+    { "path": "./packages/plugin-turnkey-docs" },
     { "path": "./packages/plugin-email-auth" },
     { "path": "./packages/plugin-google-auth" },
     { "path": "./packages/plugin-telegram" },
