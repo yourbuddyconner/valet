@@ -135,6 +135,24 @@ function TypeSpecificFields({ step, onChange }: Props) {
             onChange={(b) => onChange({ interrupt: b || undefined })}
             helper="Aborts any prompt currently running on the target thread before sending this one."
           />
+          <OutputSchemaEditor
+            schema={step.outputSchema ?? {}}
+            onChange={(next) => {
+              // Clear field entirely when schema is empty so JSON serialization stays clean.
+              const hasFields = Object.keys(next).length > 0;
+              onChange({ outputSchema: hasFields ? next : undefined });
+            }}
+          />
+          {step.outputSchema && Object.keys(step.outputSchema).length > 0 && (
+            <div className="text-[11px] text-neutral-500 italic">
+              Schema-validated structured output. Reference fields in later steps as <code>outputs.&lt;outputVariable&gt;.&lt;field&gt;</code>.
+            </div>
+          )}
+          {step.outputSchema && Object.keys(step.outputSchema).length > 0 && !step.outputVariable && (
+            <div className="text-[11px] text-amber-600">
+              Set an Output variable to make these fields accessible downstream.
+            </div>
+          )}
         </>
       );
 
@@ -495,6 +513,190 @@ function NumberField({ label, value, onChange, min, max }: { label: string; valu
         className="w-full rounded-md border border-neutral-300 px-2 py-1 text-sm font-mono"
       />
     </Field>
+  );
+}
+
+type SchemaFieldType = 'string' | 'number' | 'boolean' | 'array' | 'object';
+type SchemaField = { type: SchemaFieldType; description?: string };
+type OutputSchema = Record<string, SchemaField>;
+
+const TYPE_OPTIONS: Array<SchemaFieldType> = ['string', 'number', 'boolean', 'array', 'object'];
+const VALID_FIELD_NAME = /^[a-zA-Z_][a-zA-Z0-9_]*$/;
+
+function OutputSchemaEditor({
+  schema,
+  onChange,
+}: {
+  schema: OutputSchema;
+  onChange: (next: OutputSchema) => void;
+}) {
+  const [newName, setNewName] = useState('');
+  const [addError, setAddError] = useState<string | null>(null);
+
+  const entries = Object.entries(schema);
+
+  const renameField = (oldKey: string, newKey: string) => {
+    if (!newKey || newKey === oldKey) return false;
+    if (newKey in schema) return false;
+    if (!VALID_FIELD_NAME.test(newKey)) return false;
+    // Preserve insertion order during rename.
+    const next: OutputSchema = {};
+    for (const [k, v] of Object.entries(schema)) {
+      next[k === oldKey ? newKey : k] = v;
+    }
+    onChange(next);
+    return true;
+  };
+
+  const updateType = (key: string, type: SchemaFieldType) => {
+    onChange({ ...schema, [key]: { ...schema[key], type } });
+  };
+
+  const updateDescription = (key: string, description: string) => {
+    const trimmed = description.trim();
+    onChange({
+      ...schema,
+      [key]: { type: schema[key].type, ...(trimmed ? { description: trimmed } : {}) },
+    });
+  };
+
+  const removeField = (key: string) => {
+    const next = { ...schema };
+    delete next[key];
+    onChange(next);
+  };
+
+  const addField = () => {
+    const name = newName.trim();
+    if (!name) return;
+    if (!VALID_FIELD_NAME.test(name)) {
+      setAddError('Invalid name. Use letters, numbers, underscores; must not start with a digit.');
+      return;
+    }
+    if (name in schema) {
+      setAddError('A field with that name already exists.');
+      return;
+    }
+    onChange({ ...schema, [name]: { type: 'string' } });
+    setNewName('');
+    setAddError(null);
+  };
+
+  return (
+    <Field label="Output schema">
+      {entries.length === 0 && (
+        <div className="text-xs text-neutral-500 mb-2">
+          No structured outputs configured. Agent will return free-form text.
+        </div>
+      )}
+      <div className="space-y-1.5">
+        {entries.map(([key, field]) => (
+          <SchemaFieldRow
+            key={key}
+            fieldKey={key}
+            field={field}
+            onRename={(next) => renameField(key, next)}
+            onTypeChange={(t) => updateType(key, t)}
+            onDescriptionChange={(d) => updateDescription(key, d)}
+            onRemove={() => removeField(key)}
+          />
+        ))}
+      </div>
+      <div className="flex gap-1 mt-2">
+        <input
+          type="text"
+          value={newName}
+          placeholder="New field name"
+          onChange={(e) => {
+            setNewName(e.target.value);
+            if (addError) setAddError(null);
+          }}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault();
+              addField();
+            }
+          }}
+          className="flex-1 rounded-md border border-neutral-300 px-2 py-1 text-xs font-mono"
+        />
+        <button
+          onClick={addField}
+          disabled={!newName.trim()}
+          className="px-2 py-1 text-xs border border-neutral-300 rounded-md hover:bg-neutral-50 disabled:opacity-50"
+        >
+          + Add field
+        </button>
+      </div>
+      {addError && <div className="text-[11px] text-red-600 mt-1">{addError}</div>}
+    </Field>
+  );
+}
+
+function SchemaFieldRow({
+  fieldKey,
+  field,
+  onRename,
+  onTypeChange,
+  onDescriptionChange,
+  onRemove,
+}: {
+  fieldKey: string;
+  field: SchemaField;
+  onRename: (next: string) => boolean;
+  onTypeChange: (t: SchemaFieldType) => void;
+  onDescriptionChange: (d: string) => void;
+  onRemove: () => void;
+}) {
+  return (
+    <div className="flex items-center gap-1">
+      <input
+        type="text"
+        defaultValue={fieldKey}
+        onBlur={(e) => {
+          const next = e.target.value;
+          if (next !== fieldKey) {
+            const ok = onRename(next);
+            // Revert the input if rename was rejected so the UI stays in sync with state.
+            if (!ok) e.target.value = fieldKey;
+          }
+        }}
+        className="w-24 shrink-0 rounded-md border border-neutral-300 px-1.5 py-1 text-xs font-mono"
+      />
+      <select
+        value={field.type}
+        onChange={(e) => {
+          const v = e.target.value;
+          // Narrow the raw string from the DOM event against the known type list.
+          const match = TYPE_OPTIONS.find((opt) => opt === v);
+          if (match) onTypeChange(match);
+        }}
+        className="w-20 shrink-0 rounded-md border border-neutral-300 px-1 py-1 text-xs"
+      >
+        {TYPE_OPTIONS.map((t) => (
+          <option key={t} value={t}>
+            {t}
+          </option>
+        ))}
+      </select>
+      <input
+        type="text"
+        defaultValue={field.description ?? ''}
+        placeholder="description"
+        onBlur={(e) => {
+          if (e.target.value !== (field.description ?? '')) {
+            onDescriptionChange(e.target.value);
+          }
+        }}
+        className="flex-1 min-w-0 rounded-md border border-neutral-300 px-1.5 py-1 text-xs"
+      />
+      <button
+        onClick={onRemove}
+        className="text-neutral-400 hover:text-red-600 px-1 shrink-0"
+        aria-label={`Remove field ${fieldKey}`}
+      >
+        ×
+      </button>
+    </div>
   );
 }
 

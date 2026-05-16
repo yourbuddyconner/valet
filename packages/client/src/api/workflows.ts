@@ -60,6 +60,10 @@ export interface WorkflowStep {
   awaitResponse?: boolean;
   awaitTimeoutMs?: number;
   outputVariable?: string;
+  outputSchema?: Record<string, {
+    type: 'string' | 'number' | 'boolean' | 'array' | 'object';
+    description?: string;
+  }>;
   condition?: unknown;
   then?: WorkflowStep[];
   else?: WorkflowStep[];
