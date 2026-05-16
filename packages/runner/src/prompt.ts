@@ -1029,13 +1029,14 @@ export class PromptHandler {
           this.executeWorkflowAgentStep(step, context),
       };
 
-      // Kinds the SessionAgentDO accepts; engine also emits step.cancelled and
-      // execution.* which we drop here.
+      // Kinds the SessionAgentDO accepts; engine also emits execution.* which
+      // we drop here.
       const forwardedKinds = new Set<string>([
         "step.started",
         "step.completed",
         "step.failed",
         "step.skipped",
+        "step.cancelled",
         "approval.required",
         "approval.approved",
         "approval.denied",

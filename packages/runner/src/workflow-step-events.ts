@@ -3,6 +3,7 @@ export type WorkflowStepEventKind =
   | 'step.completed'
   | 'step.failed'
   | 'step.skipped'
+  | 'step.cancelled'
   | 'approval.required'
   | 'approval.approved'
   | 'approval.denied';

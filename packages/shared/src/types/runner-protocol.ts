@@ -335,6 +335,7 @@ export type RunnerToDOMessage =
           | 'step.completed'
           | 'step.failed'
           | 'step.skipped'
+          | 'step.cancelled'
           | 'approval.required'
           | 'approval.approved'
           | 'approval.denied';
