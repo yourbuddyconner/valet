@@ -380,6 +380,8 @@ export function ChatContainer({ sessionId, routeSessionId, initialThreadId, init
                   isOrchestrator={session.isOrchestrator}
                   showOpen={false}
                   showEditorLink={false}
+                  messages={filteredMessages}
+                  sessionTitle={displayTitle}
                 />
               </Suspense>
             )}

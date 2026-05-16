@@ -1,7 +1,10 @@
 import { useState } from 'react';
 import { Link } from '@tanstack/react-router';
 import type { SessionStatus } from '@/api/types';
+import type { Message } from '@valet/shared';
 import { useHibernateSession } from '@/api/sessions';
+import { exportTranscript, downloadTranscript } from '@/lib/transcript';
+import { copyTextToClipboard } from '@/lib/clipboard';
 import { Button } from '@/components/ui/button';
 import {
   DropdownMenu,
@@ -22,6 +25,10 @@ interface SessionActionsMenuProps {
   showEditorLink?: boolean;
   onActionComplete?: () => void;
   align?: 'start' | 'center' | 'end';
+  /** Messages currently visible in the session — used for transcript copy/download. */
+  messages?: Message[];
+  /** Session title for the transcript header. */
+  sessionTitle?: string;
 }
 
 const ACTIVE_STATUSES: SessionStatus[] = ['running', 'idle', 'initializing', 'waiting_runner', 'recovering', 'backoff', 'hibernated', 'restoring', 'hibernating'];
@@ -37,9 +44,12 @@ export function SessionActionsMenu({
   showEditorLink = false,
   onActionComplete,
   align = 'end',
+  messages,
+  sessionTitle,
 }: SessionActionsMenuProps) {
   const [dialog, setDialog] = useState<'terminate' | 'refresh' | 'delete' | null>(null);
   const hibernateMutation = useHibernateSession();
+  const hasTranscript = messages != null && messages.length > 0;
 
   const canTerminate = ACTIVE_STATUSES.includes(session.status);
   const canRefresh = REFRESHABLE_STATUSES.includes(session.status);
@@ -76,7 +86,30 @@ export function SessionActionsMenu({
               </Link>
             </DropdownMenuItem>
           )}
-          {(showOpen || showEditorLink) && (canHibernate || canTerminate || canDelete) && (
+          {(showOpen || showEditorLink) && (hasTranscript || canHibernate || canTerminate || canDelete) && (
+            <DropdownMenuSeparator />
+          )}
+          {hasTranscript && (
+            <DropdownMenuItem
+              onClick={() => {
+                const title = sessionTitle || session.workspace || 'Session';
+                copyTextToClipboard(exportTranscript(title, messages));
+              }}
+            >
+              Copy Transcript
+            </DropdownMenuItem>
+          )}
+          {hasTranscript && (
+            <DropdownMenuItem
+              onClick={() => {
+                const title = sessionTitle || session.workspace || 'Session';
+                downloadTranscript(title, messages);
+              }}
+            >
+              Download Transcript
+            </DropdownMenuItem>
+          )}
+          {hasTranscript && (canHibernate || canTerminate || canDelete || (canRefresh && isOrchestrator)) && (
             <DropdownMenuSeparator />
           )}
           {canHibernate && (

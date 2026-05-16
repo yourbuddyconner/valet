@@ -3,100 +3,12 @@ import { useThread, useContinueThread } from '@/api/threads';
 import { MessageList } from '@/components/chat/message-list';
 import { setPendingContinuation } from '@/components/chat/chat-container';
 import { formatRelativeTime } from '@/lib/format';
-import type { Message, MessagePart, ToolCallPart } from '@valet/shared';
+import { exportTranscript, downloadTranscript } from '@/lib/transcript';
+import { copyTextToClipboard } from '@/lib/clipboard';
 
 export const Route = createFileRoute('/sessions/$sessionId/threads/$threadId')({
   component: ThreadDetailPage,
 });
-
-// ---------------------------------------------------------------------------
-// Thread export
-// ---------------------------------------------------------------------------
-
-function formatToolCall(part: ToolCallPart): string {
-  const lines: string[] = [];
-  lines.push(`  [tool] ${part.toolName} (${part.status})`);
-  if (part.args != null) {
-    const argsStr = typeof part.args === 'string' ? part.args : JSON.stringify(part.args, null, 2);
-    lines.push(`  ARGS:`);
-    for (const line of argsStr.split('\n')) lines.push(`    ${line}`);
-  }
-  if (part.result != null) {
-    const resultStr = typeof part.result === 'string' ? part.result : JSON.stringify(part.result, null, 2);
-    lines.push(`  RESULT:`);
-    for (const line of resultStr.split('\n')) lines.push(`    ${line}`);
-  }
-  if (part.error) {
-    lines.push(`  ERROR: ${part.error}`);
-  }
-  return lines.join('\n');
-}
-
-function formatPart(part: MessagePart): string {
-  switch (part.type) {
-    case 'text':
-      return part.text;
-    case 'tool-call':
-      return formatToolCall(part);
-    case 'error':
-      return `[error] ${part.message}`;
-    case 'finish':
-      return '';
-    default:
-      return '';
-  }
-}
-
-function exportThread(thread: { title?: string; firstMessagePreview?: string; createdAt: Date }, messages: Message[]): string {
-  const lines: string[] = [];
-  const title = thread.title || thread.firstMessagePreview || 'Untitled thread';
-  lines.push(`# ${title}`);
-  lines.push(`Exported: ${new Date().toISOString()}`);
-  lines.push(`Thread started: ${new Date(thread.createdAt).toISOString()}`);
-  lines.push(`Messages: ${messages.length}`);
-  lines.push('');
-  lines.push('---');
-  lines.push('');
-
-  for (const msg of messages) {
-    const timestamp = new Date(msg.createdAt).toISOString();
-    const author = msg.authorName || msg.authorEmail || msg.role;
-    lines.push(`## [${msg.role.toUpperCase()}] ${author} — ${timestamp}`);
-    lines.push('');
-
-    if (msg.parts && msg.parts.length > 0) {
-      for (const part of msg.parts) {
-        const formatted = formatPart(part);
-        if (formatted) {
-          lines.push(formatted);
-          lines.push('');
-        }
-      }
-    } else if (msg.content) {
-      lines.push(msg.content);
-      lines.push('');
-    }
-
-    lines.push('---');
-    lines.push('');
-  }
-
-  return lines.join('\n');
-}
-
-function downloadText(filename: string, content: string) {
-  const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = filename;
-  a.click();
-  URL.revokeObjectURL(url);
-}
-
-function copyToClipboard(text: string): Promise<void> {
-  return navigator.clipboard.writeText(text);
-}
 
 // ---------------------------------------------------------------------------
 // Main component
@@ -168,8 +80,8 @@ function ThreadDetailPage() {
             <button
               type="button"
               onClick={() => {
-                const text = exportThread(thread, messages);
-                copyToClipboard(text);
+                const title = thread.title || thread.firstMessagePreview || 'Untitled thread';
+                copyTextToClipboard(exportTranscript(title, messages));
               }}
               className="rounded-md px-2.5 py-1.5 font-mono text-[10px] text-neutral-400 transition-colors hover:bg-neutral-100 hover:text-neutral-700 dark:text-neutral-500 dark:hover:bg-neutral-800 dark:hover:text-neutral-200"
               title="Copy full thread to clipboard"
@@ -179,9 +91,8 @@ function ThreadDetailPage() {
             <button
               type="button"
               onClick={() => {
-                const text = exportThread(thread, messages);
-                const slug = (thread.title || 'thread').toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 40);
-                downloadText(`${slug}-${threadId.slice(0, 8)}.txt`, text);
+                const title = thread.title || thread.firstMessagePreview || 'Untitled thread';
+                downloadTranscript(title, messages);
               }}
               className="rounded-md px-2.5 py-1.5 font-mono text-[10px] text-neutral-400 transition-colors hover:bg-neutral-100 hover:text-neutral-700 dark:text-neutral-500 dark:hover:bg-neutral-800 dark:hover:text-neutral-200"
               title="Download full thread as text file"
