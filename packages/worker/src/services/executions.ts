@@ -452,8 +452,18 @@ export async function upsertExecutionStepFromEvent(
   db: D1Database,
   appDb: AppDb,
   executionId: string,
+  userId: string,
   event: WorkflowStepEventPayload,
-): Promise<void> {
+): Promise<{ ok: true } | { ok: false; reason: string }> {
+  // Verify the execution belongs to this user before writing step rows.
+  // Defends against a compromised runner injecting events into other users' executions.
+  const row = await db
+    .prepare('SELECT user_id FROM workflow_executions WHERE id = ?')
+    .bind(executionId)
+    .first<{ user_id: string }>();
+  if (!row) return { ok: false, reason: 'execution_not_found' };
+  if (row.user_id !== userId) return { ok: false, reason: 'execution_not_owned' };
+
   const status = mapStepEventKindToStatus(event.kind);
   // Terminal step states should stamp completedAt; approval.required is not terminal.
   const isTerminal =
@@ -476,6 +486,8 @@ export async function upsertExecutionStepFromEvent(
   if (event.kind === 'approval.required') {
     await dbUpdateExecutionStatus(appDb, executionId, 'waiting_approval');
   }
+
+  return { ok: true };
 }
 
 // ─── Update Execution Status (with validation) ─────────────────────────────

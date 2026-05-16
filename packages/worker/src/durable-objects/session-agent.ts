@@ -3522,15 +3522,19 @@ export class SessionAgentDO {
       },
 
       'workflow-step-event': async (msg) => {
-        try {
-          await upsertExecutionStepFromEvent(
-            this.env.DB,
-            this.appDb,
-            msg.executionId,
-            msg.event,
-          );
-        } catch (err) {
-          console.error('[SessionAgentDO] upsertExecutionStepFromEvent error', err);
+        const result = await upsertExecutionStepFromEvent(
+          this.env.DB,
+          this.appDb,
+          msg.executionId,
+          this.sessionState.userId,
+          msg.event,
+        ).catch((err) => {
+          console.error('[SessionAgentDO] upsertExecutionStepFromEvent threw', err);
+          return { ok: false as const, reason: 'exception' };
+        });
+        if (!result.ok) {
+          console.error('[SessionAgentDO] workflow-step-event dropped:', result.reason, msg.executionId);
+          return;
         }
         this.broadcastToClients({
           type: 'workflow.execution.step',
