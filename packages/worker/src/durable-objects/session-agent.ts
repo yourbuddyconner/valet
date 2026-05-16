@@ -3550,6 +3550,43 @@ export class SessionAgentDO {
         });
       },
 
+      // Workflow notify step: forward content as a user prompt to the user's
+      // orchestrator session so the orchestrator agent can react to workflow output.
+      'notify': async (msg) => {
+        try {
+          const target = (msg as { target?: unknown }).target;
+          if (target !== undefined && target !== 'orchestrator') {
+            console.error('[SessionAgentDO] notify: unsupported target', target);
+            return;
+          }
+          const content = (msg as { content?: unknown }).content;
+          if (typeof content !== 'string' || !content.trim()) {
+            console.error('[SessionAgentDO] notify: missing content');
+            return;
+          }
+          const orchestratorId = `orchestrator:${this.sessionState.userId}`;
+          const result = await sendSessionMessage(
+            this.env,
+            this.appDb,
+            this.sessionState.userId,
+            orchestratorId,
+            content,
+            false,
+            this.sessionState.sessionId,
+          );
+          if (!result.success) {
+            console.warn(
+              '[SessionAgentDO] notify failed:',
+              result.error,
+              'executionId=', (msg as { executionId?: unknown }).executionId,
+              'stepId=', (msg as { stepId?: unknown }).stepId,
+            );
+          }
+        } catch (err) {
+          console.error('[SessionAgentDO] notify handler error', err);
+        }
+      },
+
       // ─── Phase C: Mailbox + Task Board ──────────────────────────────
       'mailbox-send': async (msg) => {
         try {

@@ -96,6 +96,15 @@ function validateStep(step: unknown, path: string, errors: string[]): void {
     }
   }
 
+  if (normalizedType === 'notify') {
+    if (typeof step.content !== 'string' || !step.content.trim()) {
+      errors.push(`${path}.content is required for notify steps`);
+    }
+    if (step.target !== undefined && step.target !== 'orchestrator') {
+      errors.push(`${path}.target must be 'orchestrator' (only supported target in v1)`);
+    }
+  }
+
   const nestedKeys = ['then', 'else', 'steps'] as const;
   for (const key of nestedKeys) {
     if (!(key in step)) continue;

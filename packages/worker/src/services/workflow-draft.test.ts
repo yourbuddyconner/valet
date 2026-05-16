@@ -5,8 +5,8 @@ describe('buildSystemPrompt', () => {
   it('mentions every step type by name', () => {
     const sys = buildSystemPrompt();
     for (const t of [
-      'agent_message',
       'agent_prompt',
+      'notify',
       'tool',
       'bash',
       'conditional',
@@ -19,11 +19,12 @@ describe('buildSystemPrompt', () => {
     }
   });
 
-  it('teaches outputSchema, approval checkpoint, and the question-tool prohibition', () => {
+  it('teaches outputSchema, the question-tool prohibition, template interpolation, and deprecates agent_message', () => {
     const sys = buildSystemPrompt();
     expect(sys).toContain('outputSchema');
-    expect(sys).toMatch(/approval[\s\S]*human checkpoint/i);
     expect(sys.toLowerCase()).toContain('cannot ask');
+    expect(sys.toLowerCase()).toContain('template interpolation');
+    expect(sys).toMatch(/agent_message[\s\S]{0,60}DEPRECATED/i);
   });
 });
 
