@@ -348,6 +348,15 @@ export type RunnerToDOMessage =
         durationMs?: number;
       };
     }
+  | {
+      // Workflow `notify` step: forward content as a user prompt to a target session
+      // (currently always the user's orchestrator) so the orchestrator agent can react.
+      type: 'notify';
+      executionId: string;
+      stepId: string;
+      target: 'orchestrator';
+      content: string;
+    }
   | { type: 'question'; messageId?: string; questionId: string; text: string; options?: string[] }
   | { type: 'image'; messageId?: string; data: string; mimeType: string; description: string }
   | { type: 'screenshot'; messageId?: string; data: string; description: string }

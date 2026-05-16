@@ -411,6 +411,10 @@ export class AgentClient {
     this.send({ type: "workflow-step-event", executionId, event });
   }
 
+  sendNotify(payload: { executionId: string; stepId: string; target: 'orchestrator'; content: string }): void {
+    this.send({ type: "notify", ...payload });
+  }
+
   sendRunnerHealth(kind: 'opencode_crash' | 'opencode_health_timeout' | 'opencode_fatal' | 'upgrade_failure', details?: { exitCode?: number; crashCount?: number; message?: string }): void {
     this.send({ type: 'runner-health', kind, ...details });
   }

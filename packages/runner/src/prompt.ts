@@ -1036,6 +1036,8 @@ export class PromptHandler {
           this.executeWorkflowToolStep(step, context),
         onAgentStep: (step: NormalizedWorkflowStep, context: WorkflowStepExecutionContext) =>
           this.executeWorkflowAgentStep(step, context),
+        onNotifyStep: (step: NormalizedWorkflowStep, context: WorkflowStepExecutionContext) =>
+          this.executeWorkflowNotifyStep(step, context),
       };
 
       // Kinds the SessionAgentDO accepts; engine also emits execution.* which
@@ -1204,6 +1206,33 @@ export class PromptHandler {
     return;
   }
 
+  private async executeWorkflowNotifyStep(
+    step: NormalizedWorkflowStep,
+    context: WorkflowStepExecutionContext,
+  ): Promise<WorkflowStepExecutionResult | void> {
+    if (step.type !== "notify") return;
+    const content = typeof step.content === "string" ? step.content.trim() : "";
+    if (!content) {
+      return { status: "failed", error: "notify_missing_content" };
+    }
+    const target = step.target === "orchestrator" || step.target === undefined ? "orchestrator" : null;
+    if (target === null) {
+      return { status: "failed", error: `notify_unsupported_target: ${String(step.target)}` };
+    }
+    try {
+      this.agentClient.sendNotify({
+        executionId: context.executionId,
+        stepId: step.id,
+        target,
+        content,
+      });
+      return { status: "completed", output: { type: "notify", target, delivered: true } };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return { status: "failed", error: `notify_send_failed: ${message}` };
+    }
+  }
+
   private async executeWorkflowAgentStep(
     step: NormalizedWorkflowStep,
     context: WorkflowStepExecutionContext,
@@ -1363,15 +1392,20 @@ export class PromptHandler {
           }
 
           if (recoveredResponse) {
-            this.agentClient.sendWorkflowChatMessage("assistant", recoveredResponse, {
-              workflowExecutionId: context.executionId,
-              workflowStepId: step.id,
-              kind: "agent_message_response",
-            }, {
-              channelType: workflowChannelType,
-              channelId: workflowChannelId,
-              opencodeSessionId: channel.opencodeSessionId ?? undefined,
-            });
+            // When the agent is producing structured JSON for outputSchema, suppress
+            // the raw reply from the workflow channel — it's a machine payload, not
+            // user-facing text. The parsed object still flows through as step output.
+            if (!outputSchema) {
+              this.agentClient.sendWorkflowChatMessage("assistant", recoveredResponse, {
+                workflowExecutionId: context.executionId,
+                workflowStepId: step.id,
+                kind: "agent_message_response",
+              }, {
+                channelType: workflowChannelType,
+                channelId: workflowChannelId,
+                opencodeSessionId: channel.opencodeSessionId ?? undefined,
+              });
+            }
 
             // Structured-output path: parse + validate the reply against the
             // declared schema; on failure, send a fixup follow-up message to
@@ -1409,15 +1443,8 @@ export class PromptHandler {
                   break;
                 }
                 lastResponse = fixupResponse;
-                this.agentClient.sendWorkflowChatMessage("assistant", fixupResponse, {
-                  workflowExecutionId: context.executionId,
-                  workflowStepId: step.id,
-                  kind: "agent_message_response",
-                }, {
-                  channelType: workflowChannelType,
-                  channelId: workflowChannelId,
-                  opencodeSessionId: channel.opencodeSessionId ?? undefined,
-                });
+                // Suppress fixup attempts from the channel — they're either invalid JSON
+                // (noise) or the final valid JSON (machine payload, not user-facing).
                 parseResult = parseStructuredOutput(lastResponse, outputSchema);
                 attempt++;
               }

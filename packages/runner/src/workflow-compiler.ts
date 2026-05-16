@@ -40,7 +40,7 @@ function normalizeStep(stepValue: unknown, path: string, errors: WorkflowCompile
   const normalizedType = type.trim();
 
   const VALID_STEP_TYPES = new Set([
-    'agent', 'agent_message', 'agent_prompt', 'tool', 'bash', 'conditional', 'loop', 'parallel', 'subworkflow', 'approval',
+    'agent', 'agent_message', 'agent_prompt', 'notify', 'tool', 'bash', 'conditional', 'loop', 'parallel', 'subworkflow', 'approval',
   ]);
   if (!VALID_STEP_TYPES.has(normalizedType)) {
     errors.push({
@@ -85,6 +85,18 @@ function normalizeStep(stepValue: unknown, path: string, errors: WorkflowCompile
     if (stepValue.outputSchema !== undefined) {
       const schemaErrors = validateOutputSchemaShape(stepValue.outputSchema, `${path}.outputSchema`);
       for (const e of schemaErrors) errors.push(e);
+    }
+  }
+
+  if (normalizedType === 'notify') {
+    if (typeof stepValue.content !== 'string' || !stepValue.content.trim()) {
+      errors.push({ message: 'notify step requires content (string)', path: `${path}.content` });
+    }
+    if (stepValue.target !== undefined && stepValue.target !== 'orchestrator') {
+      errors.push({
+        message: `notify.target must be 'orchestrator' (only supported target in v1)`,
+        path: `${path}.target`,
+      });
     }
   }
 

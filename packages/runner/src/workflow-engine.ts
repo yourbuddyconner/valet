@@ -1,4 +1,5 @@
 import type { NormalizedWorkflowDefinition, NormalizedWorkflowStep } from './workflow-compiler.js';
+import { resolveStepFields } from './workflow-interpolation.js';
 
 export type WorkflowStatus = 'ok' | 'needs_approval' | 'cancelled' | 'failed';
 
@@ -76,6 +77,7 @@ export interface WorkflowStepExecutionResult {
 export interface WorkflowExecutionHooks {
   onToolStep?: (step: NormalizedWorkflowStep, context: WorkflowStepExecutionContext) => Promise<WorkflowStepExecutionResult | void>;
   onAgentStep?: (step: NormalizedWorkflowStep, context: WorkflowStepExecutionContext) => Promise<WorkflowStepExecutionResult | void>;
+  onNotifyStep?: (step: NormalizedWorkflowStep, context: WorkflowStepExecutionContext) => Promise<WorkflowStepExecutionResult | void>;
 }
 
 export type EventSink = (event: WorkflowEvent) => void;
@@ -231,7 +233,7 @@ function executeBashStep(step: NormalizedWorkflowStep): Promise<WorkflowStepExec
   return executeBashToolStep(toolStep);
 }
 
-async function executeStepAction(step: NormalizedWorkflowStep, ctx: ExecutionContext): Promise<WorkflowStepExecutionResult> {
+async function executeStepAction(rawStep: NormalizedWorkflowStep, ctx: ExecutionContext): Promise<WorkflowStepExecutionResult> {
   const context: WorkflowStepExecutionContext = {
     executionId: ctx.executionId,
     attempt: ctx.attempt,
@@ -239,8 +241,36 @@ async function executeStepAction(step: NormalizedWorkflowStep, ctx: ExecutionCon
     outputs: ctx.outputs,
   };
 
+  // Resolve {{variables.x}} and {{outputs.y.z}} tokens in user-authored string fields
+  // before each step executes. Missing paths warn but don't fail the step.
+  const { step: resolved, missingPaths } = resolveStepFields(rawStep as Record<string, unknown>, {
+    variables: ctx.variables,
+    outputs: ctx.outputs,
+  });
+  if (missingPaths.length > 0) {
+    console.warn(
+      `[workflow-engine] step ${rawStep.id} has unresolved interpolation paths: ${missingPaths.join(', ')}`,
+    );
+  }
+  const step = resolved as NormalizedWorkflowStep;
+
   if (step.type === 'bash') {
     return executeBashStep(step);
+  }
+
+  if (step.type === 'notify') {
+    if (ctx.hooks?.onNotifyStep) {
+      const hooked = await ctx.hooks.onNotifyStep(step, context);
+      if (hooked) return hooked;
+    }
+    return {
+      status: 'completed',
+      output: {
+        type: 'notify',
+        target: typeof step.target === 'string' ? step.target : 'orchestrator',
+        delivered: false,
+      },
+    };
   }
 
   if (step.type === 'tool') {
