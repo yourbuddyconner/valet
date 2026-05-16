@@ -34,6 +34,8 @@ function NewWorkflowPage() {
   const [showJson, setShowJson] = useState(false);
   const [editingStepId, setEditingStepId] = useState<string | null>(null);
   const [trigger, setTrigger] = useState<TriggerDraft | null>({ kind: 'manual', config: {} });
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [stepError, setStepError] = useState<string | null>(null);
 
   const draftMut = useDraftWorkflow();
   const stepMut = useDraftWorkflowStep();
@@ -58,30 +60,40 @@ function NewWorkflowPage() {
 
   const handleStepEdit = async (stepId: string, instruction: string) => {
     if (!draft) return;
-    const result = await stepMut.mutateAsync({ workflow: draft, stepId, instruction });
-    setDraft(result.workflow);
-    setEditingStepId(null);
+    setStepError(null);
+    try {
+      const result = await stepMut.mutateAsync({ workflow: draft, stepId, instruction });
+      setDraft(result.workflow);
+      setEditingStepId(null);
+    } catch (err) {
+      setStepError(err instanceof Error ? err.message : 'Failed to update step.');
+    }
   };
 
   const handleSave = async () => {
     if (!draft) return;
-    await syncMut.mutateAsync({
-      id: draft.id,
-      name: draft.name,
-      description: draft.description,
-      data: draft,
-      version: draft.version ?? '1.0.0',
-    });
-    if (trigger && trigger.kind !== 'manual') {
-      const config = buildTriggerConfig(trigger);
-      await createTrigger.mutateAsync({
-        workflowId: draft.id,
-        name: `${draft.name} ${trigger.kind}`,
-        enabled: true,
-        config,
+    setSaveError(null);
+    try {
+      await syncMut.mutateAsync({
+        id: draft.id,
+        name: draft.name,
+        description: draft.description,
+        data: draft,
+        version: draft.version ?? '1.0.0',
       });
+      if (trigger && trigger.kind !== 'manual') {
+        const config = buildTriggerConfig(trigger);
+        await createTrigger.mutateAsync({
+          workflowId: draft.id,
+          name: `${draft.name} ${trigger.kind}`,
+          enabled: true,
+          config,
+        });
+      }
+      nav({ to: '/automation/workflows/$workflowId', params: { workflowId: draft.id } });
+    } catch (err) {
+      setSaveError(err instanceof Error ? err.message : 'Failed to save workflow.');
     }
-    nav({ to: '/automation/workflows/$workflowId', params: { workflowId: draft.id } });
   };
 
   return (
@@ -94,6 +106,18 @@ function NewWorkflowPage() {
           saving.
         </p>
       </header>
+
+      {stepError && (
+        <div className="px-6 py-2 bg-red-50 border-b border-red-200 text-sm text-red-700 flex items-start justify-between gap-3">
+          <span>{stepError}</span>
+          <button
+            onClick={() => setStepError(null)}
+            className="text-red-700 hover:text-red-900 text-xs font-medium shrink-0"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
 
       {!draft ? (
         <EmptyState onSubmit={handleGenerate} loading={draftMut.isPending} />
@@ -111,6 +135,11 @@ function NewWorkflowPage() {
             refining={draftMut.isPending}
           />
           <WorkflowDraftTriggerForm value={trigger} onChange={setTrigger} />
+          {saveError && (
+            <div className="px-6 py-2 bg-red-50 border-t border-red-200 text-sm text-red-700">
+              {saveError}
+            </div>
+          )}
           <div className="px-6 py-3 bg-white border-t border-neutral-200 flex justify-end gap-2">
             <button
               onClick={() => nav({ to: '/automation/workflows' })}
