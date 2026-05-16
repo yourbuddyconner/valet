@@ -7,6 +7,7 @@ import { getUserIdleTimeout, getUserGitConfig } from '../lib/db/users.js';
 import { getCredential } from '../services/credentials.js';
 import { getSession, getSessionGitState, updateSessionStatus } from '../lib/db/sessions.js';
 import { deriveSandboxJwtSecret } from '../lib/jwt.js';
+import { assembleProviderEnv } from '../lib/env-assembly.js';
 
 interface EnqueueRequest {
   executionId: string;
@@ -317,9 +318,12 @@ export class WorkflowExecutorDO implements DurableObject {
       WORKFLOW_EXECUTION_ID: params.executionId,
     };
 
-    if (this.env.ANTHROPIC_API_KEY) envVars.ANTHROPIC_API_KEY = this.env.ANTHROPIC_API_KEY;
-    if (this.env.OPENAI_API_KEY) envVars.OPENAI_API_KEY = this.env.OPENAI_API_KEY;
-    if (this.env.GOOGLE_API_KEY) envVars.GOOGLE_API_KEY = this.env.GOOGLE_API_KEY;
+    // Resolve provider keys from org DB (with env fallback) so workflow sessions
+    // can reach Anthropic/OpenAI/Google when the keys are configured at the org level.
+    const providerEnv = await assembleProviderEnv(this.appDb, this.env);
+    for (const [k, v] of Object.entries(providerEnv)) {
+      if (v) envVars[k] = v;
+    }
 
     const gitUserRow = await getUserGitConfig(this.appDb, params.userId);
 
