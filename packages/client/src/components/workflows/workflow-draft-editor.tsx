@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { WorkflowData } from '@/api/workflows';
 import { WorkflowDiagram } from './workflow-diagram';
 
@@ -27,6 +27,11 @@ export function WorkflowDraftEditor({
 }: Props) {
   const [refineText, setRefineText] = useState('');
   const [editPrompt, setEditPrompt] = useState(false);
+  const [promptDraft, setPromptDraft] = useState(prompt);
+
+  useEffect(() => {
+    if (editPrompt) setPromptDraft(prompt);
+  }, [editPrompt, prompt]);
 
   return (
     <div className="flex-1 flex flex-col min-h-0">
@@ -34,9 +39,10 @@ export function WorkflowDraftEditor({
         <div className="text-[11px] text-neutral-500 tracking-wider mb-1">YOUR PROMPT</div>
         {editPrompt ? (
           <textarea
-            defaultValue={prompt}
-            onBlur={(e) => {
-              onEditPrompt(e.target.value);
+            value={promptDraft}
+            onChange={(e) => setPromptDraft(e.target.value)}
+            onBlur={() => {
+              onEditPrompt(promptDraft);
               setEditPrompt(false);
             }}
             className="w-full rounded-md border border-neutral-300 px-3 py-2 text-sm"

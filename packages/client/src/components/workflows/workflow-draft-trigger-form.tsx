@@ -26,6 +26,7 @@ export function WorkflowDraftTriggerForm({ value, onChange }: Props) {
           <button
             key={k}
             onClick={() => onChange({ kind: k, config: defaultConfig(k) })}
+            aria-pressed={kind === k}
             className={
               'text-xs px-3 py-1 rounded-full border ' +
               (kind === k
@@ -43,7 +44,7 @@ export function WorkflowDraftTriggerForm({ value, onChange }: Props) {
             <span className="block mb-1 text-neutral-500">Cron</span>
             <input
               type="text"
-              defaultValue={cron}
+              value={cron}
               onChange={(e) =>
                 onChange({ kind: 'schedule', config: { ...value?.config, cron: e.target.value } })
               }
@@ -54,7 +55,7 @@ export function WorkflowDraftTriggerForm({ value, onChange }: Props) {
             <span className="block mb-1 text-neutral-500">Timezone</span>
             <input
               type="text"
-              defaultValue={timezone}
+              value={timezone}
               onChange={(e) =>
                 onChange({
                   kind: 'schedule',
@@ -72,7 +73,7 @@ export function WorkflowDraftTriggerForm({ value, onChange }: Props) {
             <span className="block mb-1 text-neutral-500">Path</span>
             <input
               type="text"
-              defaultValue={path}
+              value={path}
               onChange={(e) =>
                 onChange({ kind: 'webhook', config: { ...value?.config, path: e.target.value } })
               }
@@ -83,7 +84,7 @@ export function WorkflowDraftTriggerForm({ value, onChange }: Props) {
           <label className="text-xs">
             <span className="block mb-1 text-neutral-500">Method</span>
             <select
-              defaultValue={method}
+              value={method}
               onChange={(e) =>
                 onChange({ kind: 'webhook', config: { ...value?.config, method: e.target.value } })
               }
