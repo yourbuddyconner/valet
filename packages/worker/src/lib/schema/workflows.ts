@@ -50,10 +50,12 @@ export const workflowExecutions = sqliteTable('workflow_executions', {
   triggerId: text().references(() => triggers.id, { onDelete: 'set null' }),
   status: text().notNull(),
   triggerType: text().notNull(),
-  triggerMetadata: text({ mode: 'json' }),
-  variables: text({ mode: 'json' }),
-  outputs: text({ mode: 'json' }),
-  steps: text({ mode: 'json' }),
+  // Stored as JSON-encoded text. Writers call JSON.stringify; readers JSON.parse.
+  // Not mode:'json' because Drizzle's auto-serialize would double-encode our pre-stringified values.
+  triggerMetadata: text(),
+  variables: text(),
+  outputs: text(),
+  steps: text(),
   error: text(),
   startedAt: text().notNull(),
   completedAt: text(),
@@ -83,8 +85,10 @@ export const workflowExecutionSteps = sqliteTable('workflow_execution_steps', {
   stepId: text().notNull(),
   attempt: integer().notNull(),
   status: text().notNull(),
-  inputJson: text({ mode: 'json' }),
-  outputJson: text({ mode: 'json' }),
+  // JSON-encoded text. All writes use raw SQL; all reads parse manually. Not mode:'json'
+  // to keep schema honest about that and avoid any future Drizzle double-encoding.
+  inputJson: text(),
+  outputJson: text(),
   error: text(),
   startedAt: text(),
   completedAt: text(),
