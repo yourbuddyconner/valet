@@ -42,7 +42,8 @@ type EventBusEventType =
   | 'sandbox.status'    // Defined but never emitted
   | 'question.asked'
   | 'question.answered'
-  | 'notification';
+  | 'notification'
+  | 'workflow.execution.step';
 
 interface EventBusEvent {
   type: EventBusEventType;
@@ -184,6 +185,7 @@ This replaces any stale client state with the authoritative server state. Pendin
 | `review-result` | Code review result | All clients |
 | `command-result` | Slash command result | All clients |
 | `model-switched` | Model failover | All clients |
+| `workflow.execution.step` | Live workflow step trace update | All clients |
 | `toast` | Server-pushed notification | Per-user |
 | `pong` | Keepalive response | Single client |
 
@@ -231,6 +233,39 @@ Runner                          SessionAgentDO                    Client
 ### Hibernation Recovery
 
 If the DO hibernates mid-turn, `recoverTurnFromSQLite` reconstructs the turn state from the placeholder message row. This allows the V2 protocol to resume streaming after wake without message loss.
+
+### Workflow Step Events (Runner → DO)
+
+The runner forwards every workflow engine event of kind `step.*` or `approval.*` to the SessionAgentDO over the runner WebSocket:
+
+```typescript
+{
+  type: 'workflow-step-event',
+  executionId: string,
+  event: {
+    kind:
+      | 'step.started' | 'step.completed' | 'step.failed'
+      | 'step.skipped' | 'step.cancelled'
+      | 'approval.required' | 'approval.approved' | 'approval.denied',
+    stepId: string,
+    attempt: number,
+    timestamp: string,
+    input?: unknown,
+    output?: unknown,
+    error?: string,
+    durationMs?: number,
+  },
+}
+```
+
+On receipt the DO:
+
+1. Verifies the execution belongs to this session (ownership check against D1).
+2. Upserts a row into `workflow_execution_steps` keyed on `(execution_id, step_id, attempt)`, with `COALESCE` to preserve fields not supplied by the current event.
+3. Broadcasts `workflow.execution.step` to all clients with payload `{ executionId, event }`.
+4. Fire-and-forget publishes `workflow.execution.step` to the EventBus with the same payload.
+
+This replaces the previous "report all steps once at completion" model with live, per-step updates. Clients use the `useExecutionStepEvents` hook, which subscribes to the WS broadcast and patches the React Query cache for `executionKeys.steps(executionId)` so the execution detail view updates in real time.
 
 ### Content-Wins Rule
 
@@ -294,6 +329,7 @@ The `subscribe` message type is parsed but explicitly not implemented. All event
 | `session.errored` | Agent error or sandbox spawn failure |
 | `question.asked` | Agent asks a question |
 | `question.answered` | User answers a question |
+| `workflow.execution.step` | Runner reported a workflow `step.*` / `approval.*` event (payload: `{ executionId, event }`). No consumers today — emitted for future infrastructure. |
 
 **WorkflowExecutorDO** (2 call sites):
 
