@@ -11,6 +11,7 @@ const NODE_TYPES: NodeTypes = {
   tool: StepNode,
   agent: StepNode,
   agent_message: StepNode,
+  agent_prompt: StepNode,
   conditional: StepNode,
   parallel: StepNode,
   loop: StepNode,
