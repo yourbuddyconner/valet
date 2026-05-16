@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { createFileRoute, useNavigate } from '@tanstack/react-router';
 import {
   useDraftWorkflow,
@@ -11,6 +11,7 @@ import {
 import { useCreateTrigger, type TriggerConfig } from '@/api/triggers';
 import { WorkflowDiagram } from '@/components/workflows/workflow-diagram';
 import { WorkflowDraftTriggerForm } from '@/components/workflows/workflow-draft-trigger-form';
+import { WorkflowStepInspector } from '@/components/workflows/workflow-step-inspector';
 import { cn } from '@/lib/cn';
 
 export const Route = createFileRoute('/automation/workflows/new')({
@@ -30,7 +31,7 @@ type ChatMessage =
   | { id: string; role: 'assistant'; content: string }
   | { id: string; role: 'error'; content: string };
 
-type Tab = 'chat' | 'trigger' | 'json';
+type Tab = 'inspect' | 'chat' | 'trigger' | 'json';
 
 function NewWorkflowPage() {
   const nav = useNavigate();
@@ -136,7 +137,20 @@ function NewWorkflowPage() {
       if (prev.size === 1 && prev.has(stepId)) return new Set();
       return new Set([stepId]);
     });
+    // Auto-show the inspector tab when a single step is targeted.
+    if (!opts.modifier) setTab('inspect');
   };
+
+  const handleStepPatch = (stepId: string, patch: Partial<WorkflowStep>) => {
+    if (!draft) return;
+    setDraft({ ...draft, steps: patchStep(draft.steps, stepId, patch) });
+  };
+
+  const selectedStep = useMemo<WorkflowStep | null>(() => {
+    if (!draft || selectedStepIds.size !== 1) return null;
+    const [only] = selectedStepIds;
+    return findStep(draft.steps, only);
+  }, [draft, selectedStepIds]);
 
   const handleSave = async () => {
     if (!draft) return;
@@ -190,7 +204,7 @@ function NewWorkflowPage() {
 
           <aside className="w-full lg:w-[380px] flex flex-col bg-white border-t lg:border-t-0 lg:border-l border-neutral-200 min-h-0">
             <div className="flex border-b border-neutral-200">
-              {(['chat', 'trigger', 'json'] as const).map((t) => (
+              {(['inspect', 'chat', 'trigger', 'json'] as const).map((t) => (
                 <button
                   key={t}
                   onClick={() => setTab(t)}
@@ -208,6 +222,20 @@ function NewWorkflowPage() {
             </div>
 
             <div className="flex-1 min-h-0 overflow-hidden">
+              {tab === 'inspect' && (
+                selectedStep ? (
+                  <WorkflowStepInspector
+                    step={selectedStep}
+                    onChange={(patch) => handleStepPatch(selectedStep.id, patch)}
+                  />
+                ) : (
+                  <div className="h-full flex items-center justify-center px-6 text-xs text-neutral-500 text-center">
+                    {selectedStepIds.size === 0
+                      ? 'Click a node to inspect its parameters.'
+                      : `${selectedStepIds.size} steps selected — use the Chat tab to refine multiple steps at once.`}
+                  </div>
+                )
+              )}
               {tab === 'chat' && (
                 <ChatPanel
                   workflow={draft}
@@ -404,6 +432,33 @@ function ChatMessageView({
     );
   }
   return <div className="text-xs text-neutral-600 px-2.5">↳ {message.content}</div>;
+}
+
+function findStep(steps: WorkflowStep[], id: string): WorkflowStep | null {
+  for (const s of steps) {
+    if (s.id === id) return s;
+    const inner =
+      (s.then && findStep(s.then, id)) ||
+      (s.else && findStep(s.else, id)) ||
+      (s.steps && findStep(s.steps, id));
+    if (inner) return inner;
+  }
+  return null;
+}
+
+function patchStep(
+  steps: WorkflowStep[],
+  id: string,
+  patch: Partial<WorkflowStep>,
+): WorkflowStep[] {
+  return steps.map((s) => {
+    if (s.id === id) return { ...s, ...patch };
+    let next: WorkflowStep = s;
+    if (s.then) next = { ...next, then: patchStep(s.then, id, patch) };
+    if (s.else) next = { ...next, else: patchStep(s.else, id, patch) };
+    if (s.steps) next = { ...next, steps: patchStep(s.steps, id, patch) };
+    return next;
+  });
 }
 
 function collectStepNames(steps: WorkflowStep[], map: Map<string, string>): void {
