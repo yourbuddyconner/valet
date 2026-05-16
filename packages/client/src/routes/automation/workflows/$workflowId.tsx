@@ -67,44 +67,55 @@ function WorkflowDetailPage() {
           }
         }}
       />
-      <div className="flex-1 overflow-y-auto p-6 space-y-8">
-        <Section title="Definition">
-          <div className="h-[480px]">
-            <WorkflowDiagram workflow={workflow.data} mode="view" />
-          </div>
-        </Section>
-
-        <Section title={`Triggers (${triggers.length})`}>
-          {triggers.length === 0 ? (
-            <div className="text-sm text-neutral-500">No triggers attached.</div>
-          ) : (
-            <div className="flex flex-col gap-3">
-              {triggers.map((t) => (
-                <TriggerCard
-                  key={t.id}
-                  trigger={t}
-                  workflowName={workflow.name}
-                  onToggleEnabled={() =>
-                    t.enabled ? disableTrigger.mutate(t.id) : enableTrigger.mutate(t.id)
-                  }
-                  onDelete={() => deleteTrigger.mutate(t.id)}
-                />
-              ))}
+      <div className="flex-1 min-h-0 flex flex-col lg:flex-row overflow-auto lg:overflow-hidden">
+        <div className="flex-1 min-w-0 p-6 lg:overflow-auto lg:flex lg:flex-col">
+          <Section title="Definition" className="lg:flex-1 lg:min-h-0 lg:flex lg:flex-col">
+            <div className="h-[640px] lg:h-auto lg:flex-1 lg:min-h-[480px]">
+              <WorkflowDiagram workflow={workflow.data} mode="view" />
             </div>
-          )}
-        </Section>
+          </Section>
+        </div>
+        <div className="w-full lg:w-[380px] lg:border-l border-neutral-200 p-6 lg:overflow-auto space-y-8">
+          <Section title={`Triggers (${triggers.length})`}>
+            {triggers.length === 0 ? (
+              <div className="text-sm text-neutral-500">No triggers attached.</div>
+            ) : (
+              <div className="flex flex-col gap-3">
+                {triggers.map((t) => (
+                  <TriggerCard
+                    key={t.id}
+                    trigger={t}
+                    workflowName={workflow.name}
+                    onToggleEnabled={() =>
+                      t.enabled ? disableTrigger.mutate(t.id) : enableTrigger.mutate(t.id)
+                    }
+                    onDelete={() => deleteTrigger.mutate(t.id)}
+                  />
+                ))}
+              </div>
+            )}
+          </Section>
 
-        <Section title="Recent executions">
-          <RecentExecutionsSection workflowId={workflow.id} />
-        </Section>
+          <Section title="Recent executions">
+            <RecentExecutionsSection workflowId={workflow.id} />
+          </Section>
+        </div>
       </div>
     </div>
   );
 }
 
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
+function Section({
+  title,
+  children,
+  className,
+}: {
+  title: string;
+  children: React.ReactNode;
+  className?: string;
+}) {
   return (
-    <section>
+    <section className={className}>
       <h2 className="text-base font-semibold text-neutral-900 mb-3">{title}</h2>
       {children}
     </section>
