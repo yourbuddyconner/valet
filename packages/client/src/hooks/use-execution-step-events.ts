@@ -50,7 +50,7 @@ export function useExecutionStepEvents(
       if (parsed.executionId !== executionId) return;
       qc.setQueryData<GetExecutionStepsResponse | undefined>(
         executionKeys.steps(executionId),
-        (prev) => mergeStepEvent(prev, parsed.event),
+        (prev) => mergeStepEvent(prev, parsed.event, executionId),
       );
     },
   });
@@ -108,6 +108,7 @@ function parseStepEventMessage(
 function mergeStepEvent(
   prev: GetExecutionStepsResponse | undefined,
   ev: StepEventMessage['event'],
+  executionId: string,
 ): GetExecutionStepsResponse {
   const steps = prev?.steps ?? [];
   const idx = steps.findIndex(
@@ -122,7 +123,7 @@ function mergeStepEvent(
 
   const updated: ExecutionStepTrace = {
     id: existing?.id ?? crypto.randomUUID(),
-    executionId: existing?.executionId ?? '',
+    executionId: existing?.executionId ?? executionId,
     stepId: ev.stepId,
     attempt: ev.attempt,
     status: mapKindToStatus(ev.kind),
