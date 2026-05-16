@@ -29,6 +29,8 @@ interface SessionActionsMenuProps {
   messages?: Message[];
   /** Session title for the transcript header. */
   sessionTitle?: string;
+  /** Active thread ID — included in transcript for debugging. */
+  activeThreadId?: string;
 }
 
 const ACTIVE_STATUSES: SessionStatus[] = ['running', 'idle', 'initializing', 'waiting_runner', 'recovering', 'backoff', 'hibernated', 'restoring', 'hibernating'];
@@ -46,6 +48,7 @@ export function SessionActionsMenu({
   align = 'end',
   messages,
   sessionTitle,
+  activeThreadId,
 }: SessionActionsMenuProps) {
   const [dialog, setDialog] = useState<'terminate' | 'refresh' | 'delete' | null>(null);
   const hibernateMutation = useHibernateSession();
@@ -93,7 +96,8 @@ export function SessionActionsMenu({
             <DropdownMenuItem
               onClick={() => {
                 const title = sessionTitle || session.workspace || 'Session';
-                copyTextToClipboard(exportTranscript(title, messages));
+                const ids = { sessionId: session.id, threadId: activeThreadId };
+                copyTextToClipboard(exportTranscript(title, messages, ids));
               }}
             >
               Copy Transcript
@@ -103,7 +107,8 @@ export function SessionActionsMenu({
             <DropdownMenuItem
               onClick={() => {
                 const title = sessionTitle || session.workspace || 'Session';
-                downloadTranscript(title, messages);
+                const ids = { sessionId: session.id, threadId: activeThreadId };
+                downloadTranscript(title, messages, ids);
               }}
             >
               Download Transcript

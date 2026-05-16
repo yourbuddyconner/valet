@@ -382,6 +382,7 @@ export function ChatContainer({ sessionId, routeSessionId, initialThreadId, init
                   showEditorLink={false}
                   messages={filteredMessages}
                   sessionTitle={displayTitle}
+                  activeThreadId={activeThreadId ?? undefined}
                 />
               </Suspense>
             )}

@@ -81,7 +81,8 @@ function ThreadDetailPage() {
               type="button"
               onClick={() => {
                 const title = thread.title || thread.firstMessagePreview || 'Untitled thread';
-                copyTextToClipboard(exportTranscript(title, messages));
+                const ids = { sessionId, threadId };
+                copyTextToClipboard(exportTranscript(title, messages, ids));
               }}
               className="rounded-md px-2.5 py-1.5 font-mono text-[10px] text-neutral-400 transition-colors hover:bg-neutral-100 hover:text-neutral-700 dark:text-neutral-500 dark:hover:bg-neutral-800 dark:hover:text-neutral-200"
               title="Copy full thread to clipboard"
@@ -92,7 +93,8 @@ function ThreadDetailPage() {
               type="button"
               onClick={() => {
                 const title = thread.title || thread.firstMessagePreview || 'Untitled thread';
-                downloadTranscript(title, messages);
+                const ids = { sessionId, threadId };
+                downloadTranscript(title, messages, ids);
               }}
               className="rounded-md px-2.5 py-1.5 font-mono text-[10px] text-neutral-400 transition-colors hover:bg-neutral-100 hover:text-neutral-700 dark:text-neutral-500 dark:hover:bg-neutral-800 dark:hover:text-neutral-200"
               title="Download full thread as text file"

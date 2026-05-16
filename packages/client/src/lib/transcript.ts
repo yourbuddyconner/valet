@@ -34,12 +34,20 @@ function formatPart(part: MessagePart): string {
   }
 }
 
+interface TranscriptIds {
+  sessionId: string;
+  threadId?: string;
+}
+
 export function exportTranscript(
   title: string,
   messages: Message[],
+  ids: TranscriptIds,
 ): string {
   const lines: string[] = [];
   lines.push(`# ${title}`);
+  lines.push(`Session: ${ids.sessionId}`);
+  if (ids.threadId) lines.push(`Thread: ${ids.threadId}`);
   lines.push(`Exported: ${new Date().toISOString()}`);
   lines.push(`Messages: ${messages.length}`);
   lines.push('');
@@ -72,10 +80,11 @@ export function exportTranscript(
   return lines.join('\n');
 }
 
-export function downloadTranscript(title: string, messages: Message[]) {
-  const content = exportTranscript(title, messages);
+export function downloadTranscript(title: string, messages: Message[], ids: TranscriptIds) {
+  const content = exportTranscript(title, messages, ids);
   const slug = title.toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 40);
-  const filename = `${slug}.txt`;
+  const idSuffix = ids.threadId ? ids.threadId.slice(0, 8) : ids.sessionId.slice(0, 8);
+  const filename = `${slug}-${idSuffix}.txt`;
   const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
