@@ -74,11 +74,7 @@ const draftWorkflowSchema = z.object({
 
 const draftWorkflowStepSchema = z.object({
   workflow: z.record(z.unknown()),
-  stepId: z
-    .string()
-    .min(1)
-    .max(200)
-    .regex(/^[a-zA-Z0-9_\-]+$/, 'stepId must be alphanumeric/underscore/hyphen only'),
+  stepIds: z.array(z.string().min(1).max(200).regex(/^[a-zA-Z0-9_\-]+$/, 'stepId must be alphanumeric/underscore/hyphen only')).min(1).max(20),
   instruction: z.string().min(1).max(500),
 });
 
@@ -209,7 +205,7 @@ workflowsRouter.post('/draft', zValidator('json', draftWorkflowSchema), async (c
 workflowsRouter.post('/draft/step', zValidator('json', draftWorkflowStepSchema), async (c) => {
   c.get('user');
 
-  const { workflow: baseDraft, stepId, instruction } = c.req.valid('json');
+  const { workflow: baseDraft, stepIds, instruction } = c.req.valid('json');
   const workflowSize = JSON.stringify(baseDraft).length;
   if (workflowSize > MAX_DRAFT_JSON_BYTES) {
     return c.json({ error: 'workflow too large (max 32KB)', code: 'VALIDATION' }, 400);
@@ -220,7 +216,9 @@ workflowsRouter.post('/draft/step', zValidator('json', draftWorkflowStepSchema),
 
   // Replace embedded quotes to keep the interpolated instruction inside its quoted segment in the prompt template.
   const safeInstruction = instruction.replace(/"/g, "'");
-  const userPrompt = `In the workflow below, edit ONLY the step with id "${stepId}" per this instruction: "${safeInstruction}". Preserve every other step exactly. Return the full updated workflow JSON.`;
+  const idList = stepIds.map(id => `"${id}"`).join(', ');
+  const target = stepIds.length === 1 ? `the step with id ${idList}` : `the steps with ids ${idList}`;
+  const userPrompt = `In the workflow below, edit ONLY ${target} per this instruction: "${safeInstruction}". Preserve every other step exactly. Return the full updated workflow JSON.`;
 
   const maxAttempts = 3;
   let lastError: string | null = null;
