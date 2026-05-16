@@ -412,6 +412,84 @@ export async function getExecutionStepsWithOrder(
     }));
 }
 
+// ─── Workflow Step Event Upsert ─────────────────────────────────────────────
+
+export type WorkflowStepEventKindStr =
+  | 'step.started'
+  | 'step.completed'
+  | 'step.failed'
+  | 'step.skipped'
+  | 'step.cancelled'
+  | 'approval.required'
+  | 'approval.approved'
+  | 'approval.denied';
+
+export interface WorkflowStepEventPayload {
+  kind: WorkflowStepEventKindStr;
+  stepId: string;
+  attempt: number;
+  timestamp: string;
+  input?: unknown;
+  output?: unknown;
+  error?: string;
+  durationMs?: number;
+}
+
+function mapStepEventKindToStatus(kind: WorkflowStepEventKindStr): string {
+  switch (kind) {
+    case 'step.started': return 'running';
+    case 'step.completed': return 'completed';
+    case 'step.failed': return 'failed';
+    case 'step.skipped': return 'skipped';
+    case 'step.cancelled': return 'cancelled';
+    case 'approval.required': return 'waiting_approval';
+    case 'approval.approved':
+    case 'approval.denied': return 'completed';
+  }
+}
+
+export async function upsertExecutionStepFromEvent(
+  db: D1Database,
+  appDb: AppDb,
+  executionId: string,
+  userId: string,
+  event: WorkflowStepEventPayload,
+): Promise<{ ok: true } | { ok: false; reason: string }> {
+  // Verify the execution belongs to this user before writing step rows.
+  // Defends against a compromised runner injecting events into other users' executions.
+  const row = await db
+    .prepare('SELECT user_id FROM workflow_executions WHERE id = ?')
+    .bind(executionId)
+    .first<{ user_id: string }>();
+  if (!row) return { ok: false, reason: 'execution_not_found' };
+  if (row.user_id !== userId) return { ok: false, reason: 'execution_not_owned' };
+
+  const status = mapStepEventKindToStatus(event.kind);
+  // Terminal step states should stamp completedAt; approval.required is not terminal.
+  const isTerminal =
+    event.kind === 'step.completed' ||
+    event.kind === 'step.failed' ||
+    event.kind === 'step.skipped' ||
+    event.kind === 'step.cancelled';
+
+  await upsertExecutionStep(db, executionId, {
+    stepId: event.stepId,
+    attempt: event.attempt,
+    status,
+    input: event.input !== undefined ? JSON.stringify(event.input) : null,
+    output: event.output !== undefined ? JSON.stringify(event.output) : null,
+    error: event.error ?? null,
+    startedAt: event.kind === 'step.started' ? event.timestamp : null,
+    completedAt: isTerminal ? event.timestamp : null,
+  });
+
+  if (event.kind === 'approval.required') {
+    await dbUpdateExecutionStatus(appDb, executionId, 'waiting_approval');
+  }
+
+  return { ok: true };
+}
+
 // ─── Update Execution Status (with validation) ─────────────────────────────
 
 export async function updateExecutionStatusChecked(

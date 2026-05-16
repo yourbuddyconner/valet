@@ -357,3 +357,17 @@ export function useRollbackWorkflowVersion() {
     },
   });
 }
+
+export function useDraftWorkflow() {
+  return useMutation({
+    mutationFn: (vars: { prompt: string; baseDraft?: WorkflowData }) =>
+      api.post<{ workflow: WorkflowData; attempts: number }>('/workflows/draft', vars),
+  });
+}
+
+export function useDraftWorkflowStep() {
+  return useMutation({
+    mutationFn: (vars: { workflow: WorkflowData; stepId: string; instruction: string }) =>
+      api.post<{ workflow: WorkflowData; attempts: number }>('/workflows/draft/step', vars),
+  });
+}

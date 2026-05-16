@@ -237,6 +237,8 @@ Active executions (`pending`, `running`, `waiting_approval`) are counted:
 | POST | `/:id/proposals/:proposalId/review` | Approve or reject proposal |
 | POST | `/:id/proposals/:proposalId/apply` | Apply approved proposal |
 | POST | `/:id/rollback` | Roll back to historical hash |
+| POST | `/draft` | LLM-backed workflow drafting (see [Drafting](#workflow-drafting)) |
+| POST | `/draft/step` | LLM-backed per-step refinement |
 
 ### Execution Routes (`/api/executions`)
 
@@ -355,6 +357,28 @@ The cron matcher supports standard 5-field syntax: wildcards (`*`), exact values
 4. Validates the historical snapshot has a `steps` array.
 5. If already at the target hash: returns `alreadyAtVersion: true`.
 6. Updates workflow data, bumps version, creates rollback snapshot.
+
+### Workflow Drafting
+
+LLM-backed drafting endpoints generate or refine workflow definitions from natural language. Both endpoints use the `@anthropic-ai/sdk` server-side, validate the model's JSON output against `validateWorkflowDefinition`, and retry the LLM call up to 3 times on validation failure. Both return `{ workflow, attempts }`.
+
+| Endpoint | Body | Behavior |
+|----------|------|----------|
+| `POST /api/workflows/draft` | `{ prompt: string, baseDraft?: WorkflowDefinition }` | Whole-workflow generation. If `baseDraft` is provided it is supplied to the model as the starting point; otherwise a workflow is drafted from scratch. |
+| `POST /api/workflows/draft/step` | `{ workflow: WorkflowDefinition, stepId: string, instruction: string }` | Scoped refinement of a single step within an existing workflow. The model returns the full workflow with that step replaced. |
+
+These endpoints do not persist anything — they return a draft for the client to review and subsequently `sync` or `PUT`.
+
+### Step Event Reporting
+
+While a workflow execution is running, the runner reports step lifecycle events live (rather than batching them until completion):
+
+1. The workflow engine emits structured events to its sink: `step.started`, `step.completed`, `step.failed`, `step.skipped`, `step.cancelled`, `approval.required`, `approval.approved`, `approval.denied` (plus the lifecycle events listed in [Events](#events)).
+2. The runner filters for `step.*` and `approval.*` and forwards each to the SessionAgentDO via a `workflow-step-event` WebSocket message (see [real-time.md → Workflow Step Events](real-time.md#workflow-step-events-runner--do)).
+3. The DO verifies the execution belongs to its session, upserts a row into `workflow_execution_steps` keyed on `(execution_id, step_id, attempt)`, broadcasts a `workflow.execution.step` message to connected clients, and publishes the same event to the EventBus.
+4. Clients listen via `useExecutionStepEvents` and patch the cached step trace returned by `GET /api/executions/:id/steps`.
+
+The final `POST /api/executions/:id/complete` call still runs at the end and reconciles the denormalized summary on the execution row, but it is no longer the only source of step trace data — the table is populated incrementally as each step finishes.
 
 ## Step Execution Engine
 
@@ -495,6 +519,8 @@ The `parallel` step type exists in the compiler and engine, but executes sub-ste
 - Approval gates with deterministic resume tokens and replay-based resumption
 - Self-modification proposals: create, review, apply with hash-based stale detection
 - Version history with immutable snapshots and rollback
+- Live step event reporting from runner via SessionAgentDO (`workflow-step-event` WS message → `workflow_execution_steps` upsert → `workflow.execution.step` client broadcast)
+- LLM-backed workflow drafting endpoints (`POST /api/workflows/draft`, `POST /api/workflows/draft/step`)
 - Client-side React Query hooks for all operations
 
 ### Partially Implemented / Stubbed
@@ -507,4 +533,3 @@ The `parallel` step type exists in the compiler and engine, but executes sub-ste
 ### Not Implemented
 - No shared TypeScript types for workflows in `packages/shared` — types exist only in client and service layers.
 - No UI for configuring `allowSelfModification` constraint.
-- No real-time step progress reporting during execution (completion reports all steps at once).

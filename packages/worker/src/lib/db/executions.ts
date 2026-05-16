@@ -204,7 +204,7 @@ export async function upsertExecutionStep(
       status = excluded.status,
       input_json = COALESCE(excluded.input_json, workflow_execution_steps.input_json),
       output_json = COALESCE(excluded.output_json, workflow_execution_steps.output_json),
-      error = excluded.error,
+      error = COALESCE(excluded.error, workflow_execution_steps.error),
       started_at = COALESCE(excluded.started_at, workflow_execution_steps.started_at),
       completed_at = COALESCE(excluded.completed_at, workflow_execution_steps.completed_at)
   `).bind(

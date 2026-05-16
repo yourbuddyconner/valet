@@ -42,6 +42,7 @@ import {
   processWorkflowExecutionResult as processWorkflowExecutionResultSvc,
   buildWorkflowDispatch,
 } from '../services/session-workflows.js';
+import { upsertExecutionStepFromEvent } from '../services/executions.js';
 import { sanitizePromptAttachments, attachmentPartsForMessage, parseQueuedPromptAttachments, SUPPORTED_FILE_TYPES_DESCRIPTION } from '../lib/utils/prompt-validation.js';
 import { parseQueuedWorkflowPayload, deriveRuntimeStates } from '../lib/utils/runtime.js';
 
@@ -123,7 +124,7 @@ interface ClientMessage {
 
 /** Messages sent from DO to clients */
 interface ClientOutbound {
-  type: 'message' | 'message.updated' | 'messages.removed' | 'stream' | 'chunk' | 'interactive_prompt' | 'interactive_prompt_resolved' | 'interactive_prompt_expired' | 'status' | 'pong' | 'error' | 'user.joined' | 'user.left' | 'agentStatus' | 'models' | 'diff' | 'review-result' | 'command-result' | 'git-state' | 'pr-created' | 'files-changed' | 'child-session' | 'title' | 'audit_log' | 'model-switched' | 'toast' | 'integration-auth-required' | 'thread.created' | 'thread.updated' | 'queue.state' | 'queue.withdrawn';
+  type: 'message' | 'message.updated' | 'messages.removed' | 'stream' | 'chunk' | 'interactive_prompt' | 'interactive_prompt_resolved' | 'interactive_prompt_expired' | 'status' | 'pong' | 'error' | 'user.joined' | 'user.left' | 'agentStatus' | 'models' | 'diff' | 'review-result' | 'command-result' | 'git-state' | 'pr-created' | 'files-changed' | 'child-session' | 'title' | 'audit_log' | 'model-switched' | 'toast' | 'integration-auth-required' | 'thread.created' | 'thread.updated' | 'queue.state' | 'queue.withdrawn' | 'workflow.execution.step';
   [key: string]: unknown;
 }
 
@@ -3518,6 +3519,35 @@ export class SessionAgentDO {
         if (resultData?.shouldStopSession) {
           this.ctx.waitUntil(this.handleStop(`workflow_execution_${resultData.nextStatus}`));
         }
+      },
+
+      'workflow-step-event': async (msg) => {
+        const result = await upsertExecutionStepFromEvent(
+          this.env.DB,
+          this.appDb,
+          msg.executionId,
+          this.sessionState.userId,
+          msg.event,
+        ).catch((err) => {
+          console.error('[SessionAgentDO] upsertExecutionStepFromEvent threw', err);
+          return { ok: false as const, reason: 'exception' };
+        });
+        if (!result.ok) {
+          console.error('[SessionAgentDO] workflow-step-event dropped:', result.reason, msg.executionId);
+          return;
+        }
+        this.broadcastToClients({
+          type: 'workflow.execution.step',
+          executionId: msg.executionId,
+          event: msg.event,
+        });
+        this.notifyEventBus({
+          type: 'workflow.execution.step',
+          sessionId: this.sessionState.sessionId,
+          userId: this.sessionState.userId,
+          data: { executionId: msg.executionId, event: msg.event },
+          timestamp: new Date().toISOString(),
+        });
       },
 
       // ─── Phase C: Mailbox + Task Board ──────────────────────────────

@@ -23,10 +23,13 @@ import { compileWorkflowDefinition, type NormalizedWorkflowStep } from "./workfl
 import {
   executeWorkflowResume,
   executeWorkflowRun,
+  type EventSink,
+  type WorkflowEventType,
   type WorkflowRunPayload,
   type WorkflowStepExecutionContext,
   type WorkflowStepExecutionResult,
 } from "./workflow-engine.js";
+import type { WorkflowStepEventKind } from "./workflow-step-events.js";
 
 // OpenCode ToolState status values
 type ToolStatus = "pending" | "running" | "completed" | "error";
@@ -1027,8 +1030,39 @@ export class PromptHandler {
           this.executeWorkflowAgentStep(step, context),
       };
 
+      // Kinds the SessionAgentDO accepts; engine also emits execution.* which
+      // we drop here.
+      const forwardedKinds = new Set<WorkflowEventType>([
+        "step.started",
+        "step.completed",
+        "step.failed",
+        "step.skipped",
+        "step.cancelled",
+        "approval.required",
+        "approval.approved",
+        "approval.denied",
+      ]);
+      const isForwardedKind = (t: WorkflowEventType): t is WorkflowStepEventKind =>
+        forwardedKinds.has(t);
+      const stepEventForwarder: EventSink = (event) => {
+        if (!isForwardedKind(event.type)) return;
+        const stepId = typeof event.stepId === "string" ? event.stepId : "";
+        const attempt = typeof event.attempt === "number" ? event.attempt : 1;
+        const timestamp = typeof event.ts === "string" ? event.ts : new Date().toISOString();
+        this.agentClient.sendWorkflowStepEvent(executionId, {
+          kind: event.type,
+          stepId,
+          attempt,
+          timestamp,
+          input: event.input,
+          output: event.output,
+          error: typeof event.error === "string" ? event.error : undefined,
+          durationMs: typeof event.durationMs === "number" ? event.durationMs : undefined,
+        });
+      };
+
       const envelope = request.kind === "run"
-        ? await executeWorkflowRun(executionId, compiled.workflow, runPayload, hooks)
+        ? await executeWorkflowRun(executionId, compiled.workflow, runPayload, hooks, stepEventForwarder)
         : await executeWorkflowResume(
             executionId,
             compiled.workflow,
@@ -1036,6 +1070,7 @@ export class PromptHandler {
             request.resumeToken || "",
             request.decision === "deny" ? "deny" : "approve",
             hooks,
+            stepEventForwarder,
           );
 
       this.agentClient.sendWorkflowExecutionResult(executionId, {

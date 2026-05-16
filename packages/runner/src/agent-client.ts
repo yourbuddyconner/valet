@@ -20,6 +20,7 @@ import type {
 } from "./types.js";
 import { gitCredentials } from "./git-credentials.js";
 import { setupGitConfig, cloneRepo } from "./git-setup.js";
+import type { WorkflowStepEvent } from "./workflow-step-events.js";
 
 export interface PromptAuthor {
   authorId?: string;
@@ -391,11 +392,11 @@ export class AgentClient {
   }
 
   sendChildSession(childSessionId: string, title?: string): void {
-    this.send({ type: "child-session", childSessionId, title } as any);
+    this.send({ type: "child-session", childSessionId, title });
   }
 
   sendAudioTranscript(messageId: string, transcript: string): void {
-    this.send({ type: "audio-transcript", messageId, transcript } as any);
+    this.send({ type: "audio-transcript", messageId, transcript });
   }
 
   sendCommandResult(requestId: string, command: string, result?: unknown, error?: string): void {
@@ -404,6 +405,10 @@ export class AgentClient {
 
   sendOpenCodeConfigApplied(success: boolean, restarted: boolean, error?: string): void {
     this.send({ type: "opencode-config-applied", success, restarted, error });
+  }
+
+  sendWorkflowStepEvent(executionId: string, event: WorkflowStepEvent): void {
+    this.send({ type: "workflow-step-event", executionId, event });
   }
 
   sendRunnerHealth(kind: 'opencode_crash' | 'opencode_health_timeout' | 'opencode_fatal' | 'upgrade_failure', details?: { exitCode?: number; crashCount?: number; message?: string }): void {

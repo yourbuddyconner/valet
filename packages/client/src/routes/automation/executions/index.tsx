@@ -1,4 +1,4 @@
-import { createFileRoute, Link } from '@tanstack/react-router';
+import { createFileRoute, Link, useNavigate } from '@tanstack/react-router';
 import { useInfiniteExecutions } from '@/api/executions';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -20,6 +20,7 @@ const STATUS_OPTIONS = [
 ] as const;
 
 function ExecutionsPage() {
+  const nav = useNavigate();
   const [statusFilter, setStatusFilter] = React.useState<string>('all');
   const { data, isLoading, error, fetchNextPage, isFetchingNextPage, hasNextPage } =
     useInfiniteExecutions(statusFilter === 'all' ? undefined : { status: statusFilter });
@@ -89,7 +90,13 @@ function ExecutionsPage() {
                 {executions.map((execution) => (
                   <tr
                     key={execution.id}
-                    className="hover:bg-neutral-50 dark:hover:bg-neutral-700/50"
+                    onClick={() =>
+                      nav({
+                        to: '/automation/executions/$executionId',
+                        params: { executionId: execution.id },
+                      })
+                    }
+                    className="cursor-pointer hover:bg-neutral-50 dark:hover:bg-neutral-700/50"
                   >
                     <td className="px-4 py-3">
                       <ExecutionStatusBadge status={execution.status} />
@@ -125,6 +132,7 @@ function ExecutionsPage() {
                         <Link
                           to="/sessions/$sessionId"
                           params={{ sessionId: execution.sessionId }}
+                          onClick={(e) => e.stopPropagation()}
                           className="text-accent hover:underline"
                         >
                           {execution.sessionId.slice(0, 8)}...

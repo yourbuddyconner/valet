@@ -12,6 +12,8 @@ import {
   listWorkflowProposals,
 } from '../lib/db.js';
 import * as workflowService from '../services/workflows.js';
+import { draftWorkflow } from '../services/workflow-draft.js';
+import { validateWorkflowDefinition } from '../lib/workflow-definition.js';
 
 export const workflowsRouter = new Hono<{ Bindings: Env; Variables: Variables }>();
 
@@ -63,6 +65,23 @@ const rollbackWorkflowSchema = z.object({
   version: z.string().optional(),
   notes: z.string().optional(),
 });
+
+const draftWorkflowSchema = z.object({
+  prompt: z.string().min(1).max(8000),
+  baseDraft: z.record(z.unknown()).optional(),
+});
+
+const draftWorkflowStepSchema = z.object({
+  workflow: z.record(z.unknown()),
+  stepId: z
+    .string()
+    .min(1)
+    .max(200)
+    .regex(/^[a-zA-Z0-9_\-]+$/, 'stepId must be alphanumeric/underscore/hyphen only'),
+  instruction: z.string().min(1).max(500),
+});
+
+const MAX_DRAFT_JSON_BYTES = 32_000;
 
 /**
  * GET /api/workflows
@@ -141,6 +160,79 @@ workflowsRouter.post('/sync-all', zValidator('json', syncAllWorkflowsSchema), as
 
   const result = await workflowService.syncAllWorkflows(c.get('db'), user.id, workflows);
   return c.json({ success: true, synced: result.synced });
+});
+
+/**
+ * POST /api/workflows/draft
+ * Draft a new workflow from a natural-language prompt via the Anthropic API.
+ * Retries up to 3 times if the LLM produces an invalid workflow definition.
+ */
+// TODO(rate-limit): cap concurrent /draft requests per user; currently unbounded LLM spend per authenticated user.
+workflowsRouter.post('/draft', zValidator('json', draftWorkflowSchema), async (c) => {
+  c.get('user');
+
+  const { prompt, baseDraft } = c.req.valid('json');
+  const baseDraftSize = baseDraft ? JSON.stringify(baseDraft).length : 0;
+  if (baseDraftSize > MAX_DRAFT_JSON_BYTES) {
+    return c.json({ error: 'baseDraft too large (max 32KB)', code: 'VALIDATION' }, 400);
+  }
+  const apiKey = c.env.ANTHROPIC_API_KEY;
+  if (!apiKey) return c.json({ error: 'no ANTHROPIC_API_KEY configured', code: 'CONFIG' }, 500);
+
+  const maxAttempts = 3;
+  let lastError: string | null = null;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const { workflow } = await draftWorkflow({ apiKey, userPrompt: prompt, baseDraft });
+    if (!workflow) {
+      lastError = 'LLM did not return valid JSON';
+      continue;
+    }
+    const validation = validateWorkflowDefinition(workflow);
+    if (validation.valid) {
+      return c.json({ workflow, attempts: attempt });
+    }
+    lastError = validation.errors.join('; ');
+  }
+
+  return c.json({ error: lastError ?? 'failed to draft workflow', code: 'DRAFT_FAILED' }, 502);
+});
+
+/**
+ * POST /api/workflows/draft/step
+ * Refine a single step of an existing workflow draft via natural-language instruction.
+ * The LLM is asked to preserve all other steps; we validate the full result.
+ */
+// TODO(rate-limit): cap concurrent /draft requests per user; currently unbounded LLM spend per authenticated user.
+workflowsRouter.post('/draft/step', zValidator('json', draftWorkflowStepSchema), async (c) => {
+  c.get('user');
+
+  const { workflow: baseDraft, stepId, instruction } = c.req.valid('json');
+  const workflowSize = JSON.stringify(baseDraft).length;
+  if (workflowSize > MAX_DRAFT_JSON_BYTES) {
+    return c.json({ error: 'workflow too large (max 32KB)', code: 'VALIDATION' }, 400);
+  }
+  const apiKey = c.env.ANTHROPIC_API_KEY;
+  if (!apiKey) return c.json({ error: 'no ANTHROPIC_API_KEY configured', code: 'CONFIG' }, 500);
+
+  // Replace embedded quotes to keep the interpolated instruction inside its quoted segment in the prompt template.
+  const safeInstruction = instruction.replace(/"/g, "'");
+  const userPrompt = `In the workflow below, edit ONLY the step with id "${stepId}" per this instruction: "${safeInstruction}". Preserve every other step exactly. Return the full updated workflow JSON.`;
+
+  const maxAttempts = 3;
+  let lastError: string | null = null;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const { workflow } = await draftWorkflow({ apiKey, userPrompt, baseDraft });
+    if (!workflow) {
+      lastError = 'LLM did not return valid JSON';
+      continue;
+    }
+    const validation = validateWorkflowDefinition(workflow);
+    if (validation.valid) return c.json({ workflow, attempts: attempt });
+    lastError = validation.errors.join('; ');
+  }
+
+  return c.json({ error: lastError ?? 'failed to draft step', code: 'DRAFT_FAILED' }, 502);
 });
 
 /**
