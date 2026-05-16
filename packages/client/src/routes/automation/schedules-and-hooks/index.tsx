@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { createFileRoute } from '@tanstack/react-router';
+import { createFileRoute, Link } from '@tanstack/react-router';
 import { useTriggers, useDeleteTrigger, useEnableTrigger, useDisableTrigger, type Trigger } from '@/api/triggers';
 import { useWorkflows } from '@/api/workflows';
 import { TriggerCard } from '@/components/workflows/trigger-card';
@@ -37,9 +37,13 @@ function SchedulesAndHooksPage() {
       <div className="mb-1 text-xs text-neutral-500 tracking-wider">AUTOMATION</div>
       <div className="flex items-baseline justify-between mb-1">
         <h1 className="text-2xl font-semibold text-neutral-900">Schedules &amp; Hooks</h1>
-        <button className="px-4 py-1.5 rounded-lg bg-neutral-900 text-white text-sm font-medium hover:bg-neutral-800">
+        <Link
+          to="/automation/workflows/new"
+          search={{ editId: undefined }}
+          className="px-4 py-1.5 rounded-lg bg-neutral-900 text-white text-sm font-medium hover:bg-neutral-800"
+        >
           + New trigger
-        </button>
+        </Link>
       </div>
       <p className="text-sm text-neutral-600 mb-5">
         Things that run on a schedule, fire from a webhook, or run on demand.
@@ -97,6 +101,7 @@ function FilterPills({
         <button
           key={id}
           onClick={() => onChange(id)}
+          aria-pressed={id === active}
           className={
             'text-xs px-3 py-1 rounded-full cursor-pointer ' +
             (id === active
