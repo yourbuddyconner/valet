@@ -1,7 +1,7 @@
 import type { IntegrationProvider, IntegrationCredentials } from '@valet/sdk';
 
 export const turnkeyDocsProvider: IntegrationProvider = {
-  service: 'turnkey-docs',
+  service: 'turnkey_docs',
   displayName: 'Turnkey Docs',
   authType: 'none',
   supportedEntities: ['documentation'],

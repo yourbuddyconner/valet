@@ -8,7 +8,7 @@ export { turnkeyDocsActions } from './actions.js';
 const turnkeyDocsPackage: IntegrationPackage = {
   name: '@valet/actions-turnkey-docs',
   version: '0.0.1',
-  service: 'turnkey-docs',
+  service: 'turnkey_docs',
   provider: turnkeyDocsProvider,
   actions: turnkeyDocsActions,
 };
