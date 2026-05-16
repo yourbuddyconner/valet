@@ -38,6 +38,7 @@ import { Route as AutomationExecutionsIndexRouteImport } from './routes/automati
 import { Route as SettingsSkillsIdRouteImport } from './routes/settings/skills.$id'
 import { Route as SettingsPersonasIdRouteImport } from './routes/settings/personas.$id'
 import { Route as SessionsJoinTokenRouteImport } from './routes/sessions/join/$token'
+import { Route as AutomationWorkflowsNewRouteImport } from './routes/automation/workflows/new'
 import { Route as AutomationWorkflowsWorkflowIdRouteImport } from './routes/automation/workflows/$workflowId'
 import { Route as AutomationExecutionsExecutionIdRouteImport } from './routes/automation/executions/$executionId'
 import { Route as SessionsSessionIdThreadsIndexRouteImport } from './routes/sessions/$sessionId/threads/index'
@@ -192,6 +193,11 @@ const SessionsJoinTokenRoute = SessionsJoinTokenRouteImport.update({
   path: '/sessions/join/$token',
   getParentRoute: () => rootRouteImport,
 } as any)
+const AutomationWorkflowsNewRoute = AutomationWorkflowsNewRouteImport.update({
+  id: '/workflows/new',
+  path: '/workflows/new',
+  getParentRoute: () => AutomationRoute,
+} as any)
 const AutomationWorkflowsWorkflowIdRoute =
   AutomationWorkflowsWorkflowIdRouteImport.update({
     id: '/workflows/$workflowId',
@@ -241,6 +247,7 @@ export interface FileRoutesByFullPath {
   '/workflows/': typeof WorkflowsIndexRoute
   '/automation/executions/$executionId': typeof AutomationExecutionsExecutionIdRoute
   '/automation/workflows/$workflowId': typeof AutomationWorkflowsWorkflowIdRoute
+  '/automation/workflows/new': typeof AutomationWorkflowsNewRoute
   '/sessions/join/$token': typeof SessionsJoinTokenRoute
   '/settings/personas/$id': typeof SettingsPersonasIdRoute
   '/settings/skills/$id': typeof SettingsSkillsIdRoute
@@ -275,6 +282,7 @@ export interface FileRoutesByTo {
   '/workflows': typeof WorkflowsIndexRoute
   '/automation/executions/$executionId': typeof AutomationExecutionsExecutionIdRoute
   '/automation/workflows/$workflowId': typeof AutomationWorkflowsWorkflowIdRoute
+  '/automation/workflows/new': typeof AutomationWorkflowsNewRoute
   '/sessions/join/$token': typeof SessionsJoinTokenRoute
   '/settings/personas/$id': typeof SettingsPersonasIdRoute
   '/settings/skills/$id': typeof SettingsSkillsIdRoute
@@ -311,6 +319,7 @@ export interface FileRoutesById {
   '/workflows/': typeof WorkflowsIndexRoute
   '/automation/executions/$executionId': typeof AutomationExecutionsExecutionIdRoute
   '/automation/workflows/$workflowId': typeof AutomationWorkflowsWorkflowIdRoute
+  '/automation/workflows/new': typeof AutomationWorkflowsNewRoute
   '/sessions/join/$token': typeof SessionsJoinTokenRoute
   '/settings/personas/$id': typeof SettingsPersonasIdRoute
   '/settings/skills/$id': typeof SettingsSkillsIdRoute
@@ -348,6 +357,7 @@ export interface FileRouteTypes {
     | '/workflows/'
     | '/automation/executions/$executionId'
     | '/automation/workflows/$workflowId'
+    | '/automation/workflows/new'
     | '/sessions/join/$token'
     | '/settings/personas/$id'
     | '/settings/skills/$id'
@@ -382,6 +392,7 @@ export interface FileRouteTypes {
     | '/workflows'
     | '/automation/executions/$executionId'
     | '/automation/workflows/$workflowId'
+    | '/automation/workflows/new'
     | '/sessions/join/$token'
     | '/settings/personas/$id'
     | '/settings/skills/$id'
@@ -417,6 +428,7 @@ export interface FileRouteTypes {
     | '/workflows/'
     | '/automation/executions/$executionId'
     | '/automation/workflows/$workflowId'
+    | '/automation/workflows/new'
     | '/sessions/join/$token'
     | '/settings/personas/$id'
     | '/settings/skills/$id'
@@ -659,6 +671,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SessionsJoinTokenRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/automation/workflows/new': {
+      id: '/automation/workflows/new'
+      path: '/workflows/new'
+      fullPath: '/automation/workflows/new'
+      preLoaderRoute: typeof AutomationWorkflowsNewRouteImport
+      parentRoute: typeof AutomationRoute
+    }
     '/automation/workflows/$workflowId': {
       id: '/automation/workflows/$workflowId'
       path: '/workflows/$workflowId'
@@ -693,6 +712,7 @@ declare module '@tanstack/react-router' {
 interface AutomationRouteChildren {
   AutomationExecutionsExecutionIdRoute: typeof AutomationExecutionsExecutionIdRoute
   AutomationWorkflowsWorkflowIdRoute: typeof AutomationWorkflowsWorkflowIdRoute
+  AutomationWorkflowsNewRoute: typeof AutomationWorkflowsNewRoute
   AutomationExecutionsIndexRoute: typeof AutomationExecutionsIndexRoute
   AutomationSchedulesAndHooksIndexRoute: typeof AutomationSchedulesAndHooksIndexRoute
   AutomationTriggersIndexRoute: typeof AutomationTriggersIndexRoute
@@ -702,6 +722,7 @@ interface AutomationRouteChildren {
 const AutomationRouteChildren: AutomationRouteChildren = {
   AutomationExecutionsExecutionIdRoute: AutomationExecutionsExecutionIdRoute,
   AutomationWorkflowsWorkflowIdRoute: AutomationWorkflowsWorkflowIdRoute,
+  AutomationWorkflowsNewRoute: AutomationWorkflowsNewRoute,
   AutomationExecutionsIndexRoute: AutomationExecutionsIndexRoute,
   AutomationSchedulesAndHooksIndexRoute: AutomationSchedulesAndHooksIndexRoute,
   AutomationTriggersIndexRoute: AutomationTriggersIndexRoute,
