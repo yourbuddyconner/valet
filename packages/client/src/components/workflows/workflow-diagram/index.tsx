@@ -1,5 +1,5 @@
-import { useMemo } from 'react';
-import { ReactFlow, Background, Controls, type NodeTypes } from '@xyflow/react';
+import { useCallback, useMemo } from 'react';
+import { ReactFlow, Background, Controls, type NodeTypes, type Node as FlowNode } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import type { WorkflowDiagramProps } from './types';
 import { layoutWorkflow } from './layout';
@@ -25,11 +25,29 @@ export function WorkflowDiagram({
   runtimeStatus,
   currentStepId,
   stepErrors,
+  selectedStepIds,
   onNodeClick,
 }: WorkflowDiagramProps) {
   const { nodes, edges } = useMemo(
-    () => layoutWorkflow(workflow, { mode, runtimeStatus, currentStepId, stepErrors, onNodeClick }),
-    [workflow, mode, runtimeStatus, currentStepId, stepErrors, onNodeClick],
+    () =>
+      layoutWorkflow(workflow, {
+        mode,
+        runtimeStatus,
+        currentStepId,
+        stepErrors,
+        onNodeClick,
+        selectedStepIds,
+      }),
+    [workflow, mode, runtimeStatus, currentStepId, stepErrors, onNodeClick, selectedStepIds],
+  );
+
+  const handleNodeClick = useCallback(
+    (event: React.MouseEvent, node: FlowNode) => {
+      // Synthetic nodes (start/end) have id starting with __; ignore.
+      if (node.id.startsWith('__')) return;
+      onNodeClick?.(node.id, { modifier: event.ctrlKey || event.metaKey });
+    },
+    [onNodeClick],
   );
 
   return (
@@ -38,6 +56,7 @@ export function WorkflowDiagram({
         nodes={nodes}
         edges={edges}
         nodeTypes={NODE_TYPES}
+        onNodeClick={handleNodeClick}
         fitView
         nodesDraggable={false}
         nodesConnectable={false}

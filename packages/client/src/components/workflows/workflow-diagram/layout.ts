@@ -13,7 +13,8 @@ interface LayoutOptions {
   runtimeStatus?: Record<string, import('./types').StepRuntimeStatus>;
   currentStepId?: string;
   stepErrors?: Record<string, string>;
-  onNodeClick?: (stepId: string) => void;
+  selectedStepIds?: ReadonlySet<string>;
+  onNodeClick?: (stepId: string, opts: { modifier: boolean }) => void;
 }
 
 /**
@@ -52,6 +53,7 @@ export function layoutWorkflow(
         status: opts.runtimeStatus?.[step.id],
         isCurrent: opts.currentStepId === step.id,
         error: opts.stepErrors?.[step.id],
+        selected: opts.selectedStepIds?.has(step.id) ?? false,
         onNodeClick: opts.onNodeClick,
       };
       nodes.push({

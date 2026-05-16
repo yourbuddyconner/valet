@@ -72,17 +72,16 @@ function summaryText(step: WorkflowStep): string {
 }
 
 export function StepNode({ data }: NodeProps<Node<WorkflowNodeData>>) {
-  const { step, mode, status, error } = data;
+  const { step, mode, status, error, selected } = data;
   const summary = summaryText(step);
-  const clickable = mode === 'edit' && data.onNodeClick;
 
   return (
     <div
-      onClick={clickable ? () => data.onNodeClick?.(step.id) : undefined}
       className={cn(
         'relative bg-white rounded-xl shadow-sm w-[260px] px-3 py-2.5',
         status ? STATUS_BORDER[status] : 'border border-neutral-300',
-        clickable && 'cursor-pointer hover:shadow-md transition-shadow',
+        mode === 'edit' && 'cursor-pointer hover:shadow-md transition-shadow',
+        selected && 'ring-2 ring-indigo-500 ring-offset-1',
       )}
       title={error}
     >

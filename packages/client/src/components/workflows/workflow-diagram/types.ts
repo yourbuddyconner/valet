@@ -20,8 +20,10 @@ export interface WorkflowDiagramProps {
   currentStepId?: string;
   /** mode="runtime" only — error string per stepId for tooltip */
   stepErrors?: Record<string, string>;
+  /** mode="edit" — set of step ids currently selected (visual highlight). */
+  selectedStepIds?: ReadonlySet<string>;
   /** mode="edit" — invoked when a node is clicked to open scoped edit */
-  onNodeClick?: (stepId: string) => void;
+  onNodeClick?: (stepId: string, opts: { modifier: boolean }) => void;
 }
 
 /** Internal node data shared across all custom node types. */
@@ -31,7 +33,8 @@ export interface WorkflowNodeData {
   status?: StepRuntimeStatus;
   isCurrent?: boolean;
   error?: string;
-  onNodeClick?: (stepId: string) => void;
+  selected?: boolean;
+  onNodeClick?: (stepId: string, opts: { modifier: boolean }) => void;
   // Index signature required by @xyflow/react Node<T> constraint.
   [key: string]: unknown;
 }
