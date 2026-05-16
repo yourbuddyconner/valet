@@ -7,7 +7,8 @@ const TYPE_LABEL: Record<WorkflowStep['type'], string> = {
   bash: 'BASH',
   tool: 'TOOL',
   agent: 'AGENT',
-  agent_message: 'AGENT',
+  agent_message: 'SEND MSG',
+  agent_prompt: 'AGENT PROMPT',
   conditional: 'CONDITIONAL',
   parallel: 'PARALLEL',
   loop: 'LOOP',
@@ -20,6 +21,7 @@ const TYPE_BADGE_CLASSES: Record<WorkflowStep['type'], string> = {
   tool: 'bg-neutral-700 text-white',
   agent: 'bg-indigo-600 text-white',
   agent_message: 'bg-indigo-600 text-white',
+  agent_prompt: 'bg-purple-600 text-white',
   conditional: 'bg-amber-600 text-white',
   parallel: 'bg-fuchsia-600 text-white',
   loop: 'bg-teal-600 text-white',
@@ -56,6 +58,8 @@ function summaryText(step: WorkflowStep): string {
     case 'agent':
     case 'agent_message':
       return step.content ?? step.goal ?? step.prompt ?? '';
+    case 'agent_prompt':
+      return step.prompt ?? step.content ?? step.goal ?? '';
     case 'conditional':
       return typeof step.condition === 'string' ? step.condition : 'condition';
     case 'approval':

@@ -10,7 +10,8 @@ const TYPE_LABEL: Record<WorkflowStep['type'], string> = {
   bash: 'BASH',
   tool: 'TOOL',
   agent: 'AGENT',
-  agent_message: 'AGENT MESSAGE',
+  agent_message: 'SEND MESSAGE',
+  agent_prompt: 'AGENT PROMPT',
   conditional: 'CONDITIONAL',
   parallel: 'PARALLEL',
   loop: 'LOOP',
@@ -89,34 +90,50 @@ function TypeSpecificFields({ step, onChange }: Props) {
 
     case 'agent_message':
       return (
-        <TextAreaField
-          label="Message content"
-          value={step.content ?? ''}
-          onChange={(v) => onChange({ content: v || undefined })}
-          rows={4}
-        />
-      );
-
-    case 'agent':
-      return (
         <>
-          <TextAreaField
-            label="Goal"
-            value={step.goal ?? ''}
-            onChange={(v) => onChange({ goal: v || undefined })}
-            rows={3}
-          />
-          <TextAreaField
-            label="Prompt"
-            value={step.prompt ?? ''}
-            onChange={(v) => onChange({ prompt: v || undefined })}
-            rows={3}
-          />
           <TextAreaField
             label="Content"
             value={step.content ?? ''}
+            placeholder="Status update to send to the channel…"
             onChange={(v) => onChange({ content: v || undefined })}
-            rows={3}
+            rows={4}
+          />
+          <ThreadField step={step} onChange={onChange} />
+          <CheckboxField
+            label="Await agent response"
+            checked={step.awaitResponse === true}
+            onChange={(b) => onChange({ awaitResponse: b || undefined })}
+            helper="Off by default — fire-and-forget. Turn on to block the workflow on the agent's reply."
+          />
+          <div className="text-[11px] text-neutral-500">
+            Notifications are non-blocking. Use Agent Prompt when later steps need the agent's reply.
+          </div>
+        </>
+      );
+
+    case 'agent_prompt':
+      return (
+        <>
+          <TextAreaField
+            label="Prompt"
+            value={step.prompt ?? ''}
+            placeholder="Tell the Valet agent what to do…"
+            onChange={(v) => onChange({ prompt: v || undefined })}
+            rows={5}
+          />
+          <ThreadField step={step} onChange={onChange} />
+          <NumberField
+            label="Timeout (ms)"
+            value={step.awaitTimeoutMs ?? 120000}
+            onChange={(n) => onChange({ awaitTimeoutMs: n })}
+            min={1000}
+            max={900000}
+          />
+          <CheckboxField
+            label="Interrupt in-flight turn first"
+            checked={step.interrupt === true}
+            onChange={(b) => onChange({ interrupt: b || undefined })}
+            helper="Aborts any prompt currently running on the target thread before sending this one."
           />
         </>
       );
@@ -418,6 +435,66 @@ function ArgRow({
         ×
       </button>
     </div>
+  );
+}
+
+function ThreadField({ step, onChange }: { step: WorkflowStep; onChange: (patch: Partial<WorkflowStep>) => void }) {
+  return (
+    <Field label="Thread">
+      <div className="flex gap-1">
+        <input
+          type="text"
+          value={step.thread ?? ''}
+          placeholder="(shared workflow thread)"
+          onChange={(e) => onChange({ thread: e.target.value || undefined })}
+          className="flex-1 min-w-0 rounded-md border border-neutral-300 px-2 py-1 text-sm font-mono"
+        />
+        <button
+          type="button"
+          onClick={() => onChange({ thread: '@new' })}
+          className="text-xs px-2 py-1 border border-neutral-300 rounded-md hover:bg-neutral-50 shrink-0"
+        >
+          @new
+        </button>
+      </div>
+      <div className="text-[11px] text-neutral-500 mt-1">
+        Name a thread to share context across steps. <code>@new</code> spawns a fresh thread per call.
+      </div>
+    </Field>
+  );
+}
+
+function CheckboxField({ label, checked, onChange, helper }: { label: string; checked: boolean; onChange: (b: boolean) => void; helper?: string }) {
+  return (
+    <Field label={label}>
+      <label className="flex items-center gap-2 text-sm">
+        <input
+          type="checkbox"
+          checked={checked}
+          onChange={(e) => onChange(e.target.checked)}
+        />
+        <span>{checked ? 'On' : 'Off'}</span>
+      </label>
+      {helper && <div className="text-[11px] text-neutral-500 mt-1">{helper}</div>}
+    </Field>
+  );
+}
+
+function NumberField({ label, value, onChange, min, max }: { label: string; value: number; onChange: (n: number) => void; min?: number; max?: number }) {
+  return (
+    <Field label={label}>
+      <input
+        type="number"
+        value={value}
+        min={min}
+        max={max}
+        onChange={(e) => {
+          const n = Number(e.target.value);
+          if (Number.isFinite(n)) onChange(n);
+        }}
+        className="w-full rounded-md border border-neutral-300 px-2 py-1 text-sm font-mono"
+      />
+    </Field>
   );
 }
 

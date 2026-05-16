@@ -44,7 +44,7 @@ export interface VariableDefinition {
 export interface WorkflowStep {
   id: string;
   name: string;
-  type: 'agent' | 'agent_message' | 'tool' | 'bash' | 'conditional' | 'loop' | 'parallel' | 'subworkflow' | 'approval';
+  type: 'agent' | 'agent_message' | 'agent_prompt' | 'tool' | 'bash' | 'conditional' | 'loop' | 'parallel' | 'subworkflow' | 'approval';
   tool?: string;
   command?: string;
   description?: string;
@@ -53,6 +53,7 @@ export interface WorkflowStep {
   context?: string;
   content?: string;
   prompt?: string;
+  thread?: string;
   interrupt?: boolean;
   await_response?: boolean;
   await_timeout_ms?: number;
