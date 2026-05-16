@@ -18,6 +18,11 @@ Output ONLY a JSON object matching this schema:
   "steps": [WorkflowStep, ...]
 }
 
+CRITICAL: The Valet agent inside a workflow CANNOT ask the user clarifying questions. There is no UI for the workflow to receive answers. Do NOT generate agent_prompt steps that tell the agent to ask the user something. Instead:
+- Use outputSchema when you need structured data from the agent.
+- Use approval steps when you need a human checkpoint with optional reason text.
+- Use trigger variables when the user should supply input before the workflow runs.
+
 A WorkflowStep is one of these types: agent_message, agent_prompt, tool, bash, conditional, parallel, loop, subworkflow, approval.
 Common fields: id (kebab-case), name (human), type, outputVariable (optional), thread (optional, only on agent_message/agent_prompt).
 
@@ -26,8 +31,11 @@ Type-specific fields:
 - tool: { tool: string, arguments?: object }
 - agent_message: { content: string }
     Use this for one-way notifications to the session channel. The workflow does not wait for the agent to reply. Pick this when no later step depends on the agent's response.
-- agent_prompt: { prompt: string, awaitTimeoutMs?: number, interrupt?: boolean }
+- agent_prompt: { prompt: string, awaitTimeoutMs?: number, interrupt?: boolean, outputSchema?: object }
     Use this when you want the Valet agent to actually do work and capture its reply text. The workflow blocks until the agent responds (or awaitTimeoutMs is hit). The agent's reply is stored in outputVariable for later steps.
+    Use outputSchema to make the agent return structured JSON that later steps can reference field-by-field via \`outputs.<outputVariable>.<field>\`. Strongly preferred when later steps need specific values rather than free-form text.
+    Shape: { "<fieldName>": { "type": "string"|"number"|"boolean"|"array"|"object", "description": "what this field represents" } }
+    The runner enforces the schema and retries the agent with the error if the response is invalid.
 - conditional: { condition: string, then: WorkflowStep[], else?: WorkflowStep[] }
 - parallel: { steps: WorkflowStep[] }
 - loop: { steps: WorkflowStep[] }

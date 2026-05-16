@@ -7,6 +7,40 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value);
 }
 
+const ALLOWED_OUTPUT_SCHEMA_TYPES = ['string', 'number', 'boolean', 'array', 'object'] as const;
+const FIELD_NAME_REGEX = /^[a-zA-Z_][a-zA-Z0-9_]*$/;
+
+function validateOutputSchema(value: unknown, path: string, errors: string[]): void {
+  if (!isRecord(value)) {
+    errors.push(`${path} must be an object`);
+    return;
+  }
+
+  for (const [fieldName, fieldDef] of Object.entries(value)) {
+    const fieldPath = `${path}.${fieldName}`;
+    if (!FIELD_NAME_REGEX.test(fieldName)) {
+      errors.push(
+        `${fieldPath} field name must match /^[a-zA-Z_][a-zA-Z0-9_]*$/`,
+      );
+    }
+    if (!isRecord(fieldDef)) {
+      errors.push(`${fieldPath} must be an object`);
+      continue;
+    }
+    const fieldType = fieldDef.type;
+    if (typeof fieldType !== 'string') {
+      errors.push(`${fieldPath}.type is required`);
+    } else if (!ALLOWED_OUTPUT_SCHEMA_TYPES.includes(fieldType as typeof ALLOWED_OUTPUT_SCHEMA_TYPES[number])) {
+      errors.push(
+        `${fieldPath}.type must be one of: ${ALLOWED_OUTPUT_SCHEMA_TYPES.join(', ')}`,
+      );
+    }
+    if (fieldDef.description !== undefined && typeof fieldDef.description !== 'string') {
+      errors.push(`${fieldPath}.description must be a string`);
+    }
+  }
+}
+
 function validateStep(step: unknown, path: string, errors: string[]): void {
   if (!isRecord(step)) {
     errors.push(`${path} must be an object`);
@@ -55,6 +89,10 @@ function validateStep(step: unknown, path: string, errors: string[]): void {
 
     if (step.thread !== undefined && typeof step.thread !== 'string') {
       errors.push(`${path}.thread must be a string`);
+    }
+
+    if (step.outputSchema !== undefined) {
+      validateOutputSchema(step.outputSchema, `${path}.outputSchema`, errors);
     }
   }
 

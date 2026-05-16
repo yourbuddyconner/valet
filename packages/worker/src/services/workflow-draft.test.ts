@@ -18,6 +18,13 @@ describe('buildSystemPrompt', () => {
       expect(sys).toContain(t);
     }
   });
+
+  it('teaches outputSchema, approval checkpoint, and the question-tool prohibition', () => {
+    const sys = buildSystemPrompt();
+    expect(sys).toContain('outputSchema');
+    expect(sys).toMatch(/approval[\s\S]*human checkpoint/i);
+    expect(sys.toLowerCase()).toContain('cannot ask');
+  });
 });
 
 describe('extractWorkflowFromResponse', () => {
