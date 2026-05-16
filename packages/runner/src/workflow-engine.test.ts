@@ -86,6 +86,57 @@ describe('workflow-engine', () => {
     expect(output?.stdout).toContain('workflow-ok');
   });
 
+  it('routes agent_prompt steps through onAgentStep hook with thread metadata', async () => {
+    const compiled = await compileWorkflowDefinition({
+      steps: [
+        { id: 'ask-new', type: 'agent_prompt', prompt: 'first question', thread: '@new' },
+        { id: 'ask-named-1', type: 'agent_prompt', prompt: 'second question', thread: 'researcher' },
+        { id: 'ask-named-2', type: 'agent_prompt', prompt: 'follow up', thread: 'researcher' },
+      ],
+    });
+
+    if (!compiled.ok || !compiled.workflow) {
+      throw new Error('compile failed');
+    }
+
+    // Simulate the runner's thread-name resolver so we can assert routing decisions
+    // without booting OpenCode. This mirrors PromptHandler.resolveWorkflowThreadName.
+    const resolveThread = (rawThread: unknown): string => {
+      if (typeof rawThread !== 'string' || rawThread.trim() === '') return '__default__';
+      const trimmed = rawThread.trim();
+      if (trimmed === '@new') return `__new_${crypto.randomUUID()}__`;
+      return trimmed;
+    };
+
+    const channelIds: string[] = [];
+    const result = await executeWorkflowRun(
+      'ex_agent_prompt',
+      compiled.workflow,
+      { variables: {} },
+      {
+        onAgentStep: async (step, ctx) => {
+          if (step.type !== 'agent_prompt') return;
+          const threadName = resolveThread(step.thread);
+          const channelId = `${ctx.executionId}:${threadName}`;
+          channelIds.push(channelId);
+          // Bare-string output to confirm `outputVariable` would capture the reply directly.
+          return { status: 'completed', output: `reply to ${step.prompt as string}` };
+        },
+      },
+    );
+
+    expect(result.status).toBe('ok');
+    expect(result.steps.map((s) => s.status)).toEqual(['completed', 'completed', 'completed']);
+    expect(result.steps[0]?.output).toBe('reply to first question');
+    expect(result.steps[1]?.output).toBe('reply to second question');
+
+    // @new yields a unique channel id; named 'researcher' is reused across calls.
+    expect(channelIds[0]).toMatch(/:__new_[0-9a-f-]+__$/);
+    expect(channelIds[1]).toBe('ex_agent_prompt:researcher');
+    expect(channelIds[2]).toBe('ex_agent_prompt:researcher');
+    expect(channelIds[0]).not.toBe(channelIds[1]);
+  });
+
   it('supports agent_message step hooks', async () => {
     const compiled = await compileWorkflowDefinition({
       steps: [

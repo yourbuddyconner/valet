@@ -1200,30 +1200,37 @@ export class PromptHandler {
     step: NormalizedWorkflowStep,
     context: WorkflowStepExecutionContext,
   ): Promise<WorkflowStepExecutionResult | void> {
-    if (step.type !== "agent_message") {
+    if (step.type !== "agent_message" && step.type !== "agent_prompt") {
       return;
     }
+    const isPrompt = step.type === "agent_prompt";
 
+    // agent_prompt prefers `prompt` field; falls back to content/message/goal for forward-compat.
     const content = (
-      typeof step.content === "string"
-        ? step.content
-        : typeof step.message === "string"
-          ? step.message
-          : typeof step.goal === "string"
-            ? step.goal
-            : ""
+      typeof step.prompt === "string" && isPrompt
+        ? step.prompt
+        : typeof step.content === "string"
+          ? step.content
+          : typeof step.message === "string"
+            ? step.message
+            : typeof step.goal === "string"
+              ? step.goal
+              : ""
     ).trim();
 
     if (!content) {
-      return { status: "failed", error: "agent_message requires content/message/goal" };
+      return { status: "failed", error: `${step.type} requires content/message/goal/prompt` };
     }
 
     if (!this.runnerSessionId) {
-      return { status: "failed", error: "agent_message unavailable: runner session id is missing" };
+      return { status: "failed", error: `${step.type} unavailable: runner session id is missing` };
     }
 
     const interrupt = step.interrupt === true;
-    const awaitResponse = step.await_response === true || step.awaitResponse === true;
+    // agent_prompt always awaits the reply — capturing the reply is the whole point.
+    const awaitResponse = isPrompt
+      ? true
+      : (step.await_response === true || step.awaitResponse === true);
     const awaitTimeoutRaw =
       typeof step.await_timeout_ms === "number"
         ? step.await_timeout_ms
@@ -1240,7 +1247,8 @@ export class PromptHandler {
 
     try {
       const workflowChannelType = "workflow";
-      const workflowChannelId = context.executionId;
+      const threadName = this.resolveWorkflowThreadName(step.thread);
+      const workflowChannelId = `${context.executionId}:${threadName}`;
       const channel = this.getOrCreateChannel(workflowChannelType, workflowChannelId);
       this.currentPromptChannel = channel;
       await this.ensureChannelOpenCodeSession(channel);
@@ -1271,7 +1279,7 @@ export class PromptHandler {
         return {
           status: "completed",
           output: {
-            type: "agent_message",
+            type: step.type,
             targetSessionId: this.runnerSessionId,
             content,
             interrupt,
@@ -1340,9 +1348,11 @@ export class PromptHandler {
               opencodeSessionId: channel.opencodeSessionId ?? undefined,
             });
 
+            // For agent_prompt return the bare reply string so `outputVariable`
+            // captures it directly for downstream `${outputs.var}` interpolation.
             return {
               status: "completed",
-              output: {
+              output: isPrompt ? recoveredResponse : {
                 type: "agent_message",
                 targetSessionId: this.runnerSessionId,
                 content,
@@ -1367,9 +1377,9 @@ export class PromptHandler {
 
         return {
           status: "failed",
-          error: lastFailure || "agent_message_empty_response",
+          error: lastFailure || `${step.type}_empty_response`,
           output: {
-            type: "agent_message",
+            type: step.type,
             targetSessionId: this.runnerSessionId,
             content,
             interrupt,
@@ -1388,7 +1398,7 @@ export class PromptHandler {
         status: "failed",
         error: error instanceof Error ? error.message : String(error),
         output: {
-          type: "agent_message",
+          type: step.type,
           targetSessionId: this.runnerSessionId,
           content,
           interrupt,
@@ -1397,6 +1407,19 @@ export class PromptHandler {
     } finally {
       this.currentPromptChannel = previousChannel;
     }
+  }
+
+  // Resolve a workflow step's `thread` directive to a per-execution channel id suffix.
+  // - missing/empty -> shared default thread (backwards compatible with pre-thread workflows)
+  // - "@new"        -> unique per-call thread (fresh agent context every invocation)
+  // - any other str -> reused across calls within the same execution (named thread)
+  private resolveWorkflowThreadName(rawThread: unknown): string {
+    if (typeof rawThread !== "string" || rawThread.trim() === "") return "__default__";
+    const trimmed = rawThread.trim();
+    if (trimmed === "@new") {
+      return `__new_${crypto.randomUUID()}__`;
+    }
+    return trimmed;
   }
 
   /**

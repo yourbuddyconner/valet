@@ -38,7 +38,7 @@ function normalizeStep(stepValue: unknown, path: string, errors: WorkflowCompile
   const normalizedType = type.trim();
 
   const VALID_STEP_TYPES = new Set([
-    'agent', 'agent_message', 'tool', 'bash', 'conditional', 'loop', 'parallel', 'subworkflow', 'approval',
+    'agent', 'agent_message', 'agent_prompt', 'tool', 'bash', 'conditional', 'loop', 'parallel', 'subworkflow', 'approval',
   ]);
   if (!VALID_STEP_TYPES.has(normalizedType)) {
     errors.push({
@@ -68,6 +68,20 @@ function normalizeStep(stepValue: unknown, path: string, errors: WorkflowCompile
     }
   }
 
+  if (normalizedType === 'agent_prompt') {
+    const content =
+      (typeof stepValue.prompt === 'string' ? stepValue.prompt : '') ||
+      (typeof stepValue.content === 'string' ? stepValue.content : '') ||
+      (typeof stepValue.message === 'string' ? stepValue.message : '') ||
+      (typeof stepValue.goal === 'string' ? stepValue.goal : '');
+    if (!content.trim()) {
+      errors.push({ message: 'agent_prompt step requires a prompt (prompt, content, message, or goal)', path });
+    }
+    if (stepValue.thread !== undefined && typeof stepValue.thread !== 'string') {
+      errors.push({ message: 'agent_prompt.thread must be a string', path: `${path}.thread` });
+    }
+  }
+
   if (normalizedType === 'agent_message') {
     const content =
       (typeof stepValue.content === 'string' ? stepValue.content : '') ||
@@ -79,6 +93,10 @@ function normalizeStep(stepValue: unknown, path: string, errors: WorkflowCompile
 
     if (stepValue.interrupt !== undefined && typeof stepValue.interrupt !== 'boolean') {
       errors.push({ message: 'agent_message.interrupt must be a boolean', path: `${path}.interrupt` });
+    }
+
+    if (stepValue.thread !== undefined && typeof stepValue.thread !== 'string') {
+      errors.push({ message: 'agent_message.thread must be a string', path: `${path}.thread` });
     }
 
     const awaitResponseValue =
