@@ -67,15 +67,21 @@ const rollbackWorkflowSchema = z.object({
 });
 
 const draftWorkflowSchema = z.object({
-  prompt: z.string().min(1),
+  prompt: z.string().min(1).max(8000),
   baseDraft: z.record(z.unknown()).optional(),
 });
 
 const draftWorkflowStepSchema = z.object({
   workflow: z.record(z.unknown()),
-  stepId: z.string().min(1),
-  instruction: z.string().min(1),
+  stepId: z
+    .string()
+    .min(1)
+    .max(200)
+    .regex(/^[a-zA-Z0-9_\-]+$/, 'stepId must be alphanumeric/underscore/hyphen only'),
+  instruction: z.string().min(1).max(500),
 });
+
+const MAX_DRAFT_JSON_BYTES = 32_000;
 
 /**
  * GET /api/workflows
@@ -161,11 +167,15 @@ workflowsRouter.post('/sync-all', zValidator('json', syncAllWorkflowsSchema), as
  * Draft a new workflow from a natural-language prompt via the Anthropic API.
  * Retries up to 3 times if the LLM produces an invalid workflow definition.
  */
+// TODO(rate-limit): cap concurrent /draft requests per user; currently unbounded LLM spend per authenticated user.
 workflowsRouter.post('/draft', zValidator('json', draftWorkflowSchema), async (c) => {
-  const user = c.get('user');
-  if (!user) return c.json({ error: 'unauthorized', code: 'UNAUTHORIZED' }, 401);
+  c.get('user');
 
   const { prompt, baseDraft } = c.req.valid('json');
+  const baseDraftSize = baseDraft ? JSON.stringify(baseDraft).length : 0;
+  if (baseDraftSize > MAX_DRAFT_JSON_BYTES) {
+    return c.json({ error: 'baseDraft too large (max 32KB)', code: 'VALIDATION' }, 400);
+  }
   const apiKey = c.env.ANTHROPIC_API_KEY;
   if (!apiKey) return c.json({ error: 'no ANTHROPIC_API_KEY configured', code: 'CONFIG' }, 500);
 
@@ -193,15 +203,21 @@ workflowsRouter.post('/draft', zValidator('json', draftWorkflowSchema), async (c
  * Refine a single step of an existing workflow draft via natural-language instruction.
  * The LLM is asked to preserve all other steps; we validate the full result.
  */
+// TODO(rate-limit): cap concurrent /draft requests per user; currently unbounded LLM spend per authenticated user.
 workflowsRouter.post('/draft/step', zValidator('json', draftWorkflowStepSchema), async (c) => {
-  const user = c.get('user');
-  if (!user) return c.json({ error: 'unauthorized', code: 'UNAUTHORIZED' }, 401);
+  c.get('user');
 
   const { workflow: baseDraft, stepId, instruction } = c.req.valid('json');
+  const workflowSize = JSON.stringify(baseDraft).length;
+  if (workflowSize > MAX_DRAFT_JSON_BYTES) {
+    return c.json({ error: 'workflow too large (max 32KB)', code: 'VALIDATION' }, 400);
+  }
   const apiKey = c.env.ANTHROPIC_API_KEY;
   if (!apiKey) return c.json({ error: 'no ANTHROPIC_API_KEY configured', code: 'CONFIG' }, 500);
 
-  const userPrompt = `In the workflow below, edit ONLY the step with id "${stepId}" per this instruction: "${instruction}". Preserve every other step exactly. Return the full updated workflow JSON.`;
+  // Replace embedded quotes to keep the interpolated instruction inside its quoted segment in the prompt template.
+  const safeInstruction = instruction.replace(/"/g, "'");
+  const userPrompt = `In the workflow below, edit ONLY the step with id "${stepId}" per this instruction: "${safeInstruction}". Preserve every other step exactly. Return the full updated workflow JSON.`;
 
   const maxAttempts = 3;
   let lastError: string | null = null;
