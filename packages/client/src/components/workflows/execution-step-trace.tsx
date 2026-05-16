@@ -59,6 +59,12 @@ function StepTraceLines({ step, startMs }: { step: ExecutionStepTrace; startMs: 
       text: `[${fmtElapsed(new Date(step.completedAt).getTime() - startMs)}] ${sym} ${step.stepId} ${step.status}`,
       cls,
     });
+    if (step.error) {
+      lines.push({
+        text: `        ↳ ${step.error}`,
+        cls: 'text-red-700 whitespace-pre-wrap break-words',
+      });
+    }
   }
   return (
     <>
