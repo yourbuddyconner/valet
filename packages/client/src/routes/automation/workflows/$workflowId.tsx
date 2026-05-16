@@ -23,7 +23,7 @@ export const Route = createFileRoute('/automation/workflows/$workflowId')({
 function WorkflowDetailPage() {
   const { workflowId } = Route.useParams();
   const nav = useNavigate();
-  const { data, isLoading } = useWorkflow(workflowId);
+  const { data, isLoading, error } = useWorkflow(workflowId);
   const workflow = data?.workflow;
   const { data: triggersData } = useTriggers();
   const del = useDeleteWorkflow();
@@ -33,8 +33,19 @@ function WorkflowDetailPage() {
   const enableTrigger = useEnableTrigger();
   const disableTrigger = useDisableTrigger();
 
-  if (isLoading || !workflow) {
+  if (isLoading) {
     return <div className="p-6 text-sm text-neutral-500">Loading…</div>;
+  }
+  if (error || !workflow) {
+    return (
+      <div className="p-6">
+        <div className="text-xs text-neutral-500 tracking-wider mb-1">AUTOMATION / WORKFLOWS</div>
+        <h1 className="text-xl font-semibold text-neutral-900">Workflow not found</h1>
+        <p className="text-sm text-neutral-600 mt-2">
+          This workflow may have been deleted, or the link may be incorrect.
+        </p>
+      </div>
+    );
   }
 
   const triggers = (triggersData?.triggers ?? []).filter((t) => t.workflowId === workflow.id);

@@ -22,7 +22,7 @@ export const Route = createFileRoute('/automation/executions/$executionId')({
 
 function ExecutionDetailPage() {
   const { executionId } = Route.useParams();
-  const { data: execData, isLoading } = useExecution(executionId);
+  const { data: execData, isLoading, error } = useExecution(executionId);
   const { data: stepsData } = useExecutionSteps(executionId);
   const execution = execData?.execution;
   const { data: workflowData } = useWorkflow(execution?.workflowId ?? '');
@@ -52,8 +52,19 @@ function ExecutionDetailPage() {
     return findStep(workflow.steps, currentStepId);
   }, [currentStepId, workflow]);
 
-  if (isLoading || !execution) {
+  if (isLoading) {
     return <div className="p-6 text-sm text-neutral-500">Loading…</div>;
+  }
+  if (error || !execution) {
+    return (
+      <div className="p-6">
+        <div className="text-xs text-neutral-500 tracking-wider mb-1">AUTOMATION / EXECUTIONS</div>
+        <h1 className="text-xl font-semibold text-neutral-900">Execution not found</h1>
+        <p className="text-sm text-neutral-600 mt-2">
+          This execution may have been deleted, or the link may be incorrect.
+        </p>
+      </div>
+    );
   }
 
   const resumeToken = execution.resumeToken;
