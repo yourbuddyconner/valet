@@ -65,7 +65,7 @@ export interface WorkflowExecutionHooks {
   onAgentStep?: (step: NormalizedWorkflowStep, context: WorkflowStepExecutionContext) => Promise<WorkflowStepExecutionResult | void>;
 }
 
-type EventSink = (event: WorkflowEvent) => void;
+export type EventSink = (event: WorkflowEvent) => void;
 type ResumeDecision = 'approve' | 'deny';
 type ExecuteStepsResult = {
   approval?: WorkflowRunEnvelope['requiresApproval'];
