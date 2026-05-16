@@ -367,7 +367,7 @@ export function useDraftWorkflow() {
 
 export function useDraftWorkflowStep() {
   return useMutation({
-    mutationFn: (vars: { workflow: WorkflowData; stepId: string; instruction: string }) =>
+    mutationFn: (vars: { workflow: WorkflowData; stepIds: string[]; instruction: string }) =>
       api.post<{ workflow: WorkflowData; attempts: number }>('/workflows/draft/step', vars),
   });
 }
