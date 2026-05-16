@@ -29,7 +29,6 @@ import { Route as SessionsSessionIdRouteImport } from './routes/sessions/$sessio
 import { Route as InviteCodeRouteImport } from './routes/invite/$code'
 import { Route as IntegrationsCallbackRouteImport } from './routes/integrations/callback'
 import { Route as AuthCallbackRouteImport } from './routes/auth/callback'
-import { Route as DevWorkflowDiagramPreviewRouteImport } from './routes/_dev/workflow-diagram-preview'
 import { Route as SessionsSessionIdIndexRouteImport } from './routes/sessions/$sessionId/index'
 import { Route as AutomationWorkflowsIndexRouteImport } from './routes/automation/workflows/index'
 import { Route as AutomationTriggersIndexRouteImport } from './routes/automation/triggers/index'
@@ -144,12 +143,6 @@ const AuthCallbackRoute = AuthCallbackRouteImport.update({
   path: '/auth/callback',
   getParentRoute: () => rootRouteImport,
 } as any)
-const DevWorkflowDiagramPreviewRoute =
-  DevWorkflowDiagramPreviewRouteImport.update({
-    id: '/_dev/workflow-diagram-preview',
-    path: '/workflow-diagram-preview',
-    getParentRoute: () => rootRouteImport,
-  } as any)
 const SessionsSessionIdIndexRoute = SessionsSessionIdIndexRouteImport.update({
   id: '/',
   path: '/',
@@ -230,7 +223,6 @@ export interface FileRoutesByFullPath {
   '/login': typeof LoginRoute
   '/onboarding': typeof OnboardingRoute
   '/orchestrator': typeof OrchestratorRoute
-  '/workflow-diagram-preview': typeof DevWorkflowDiagramPreviewRoute
   '/auth/callback': typeof AuthCallbackRoute
   '/integrations/callback': typeof IntegrationsCallbackRoute
   '/invite/$code': typeof InviteCodeRoute
@@ -266,7 +258,6 @@ export interface FileRoutesByTo {
   '/login': typeof LoginRoute
   '/onboarding': typeof OnboardingRoute
   '/orchestrator': typeof OrchestratorRoute
-  '/workflow-diagram-preview': typeof DevWorkflowDiagramPreviewRoute
   '/auth/callback': typeof AuthCallbackRoute
   '/integrations/callback': typeof IntegrationsCallbackRoute
   '/invite/$code': typeof InviteCodeRoute
@@ -302,7 +293,6 @@ export interface FileRoutesById {
   '/login': typeof LoginRoute
   '/onboarding': typeof OnboardingRoute
   '/orchestrator': typeof OrchestratorRoute
-  '/_dev/workflow-diagram-preview': typeof DevWorkflowDiagramPreviewRoute
   '/auth/callback': typeof AuthCallbackRoute
   '/integrations/callback': typeof IntegrationsCallbackRoute
   '/invite/$code': typeof InviteCodeRoute
@@ -340,7 +330,6 @@ export interface FileRouteTypes {
     | '/login'
     | '/onboarding'
     | '/orchestrator'
-    | '/workflow-diagram-preview'
     | '/auth/callback'
     | '/integrations/callback'
     | '/invite/$code'
@@ -376,7 +365,6 @@ export interface FileRouteTypes {
     | '/login'
     | '/onboarding'
     | '/orchestrator'
-    | '/workflow-diagram-preview'
     | '/auth/callback'
     | '/integrations/callback'
     | '/invite/$code'
@@ -411,7 +399,6 @@ export interface FileRouteTypes {
     | '/login'
     | '/onboarding'
     | '/orchestrator'
-    | '/_dev/workflow-diagram-preview'
     | '/auth/callback'
     | '/integrations/callback'
     | '/invite/$code'
@@ -448,7 +435,6 @@ export interface RootRouteChildren {
   LoginRoute: typeof LoginRoute
   OnboardingRoute: typeof OnboardingRoute
   OrchestratorRoute: typeof OrchestratorRoute
-  DevWorkflowDiagramPreviewRoute: typeof DevWorkflowDiagramPreviewRoute
   AuthCallbackRoute: typeof AuthCallbackRoute
   IntegrationsCallbackRoute: typeof IntegrationsCallbackRoute
   InviteCodeRoute: typeof InviteCodeRoute
@@ -606,13 +592,6 @@ declare module '@tanstack/react-router' {
       path: '/auth/callback'
       fullPath: '/auth/callback'
       preLoaderRoute: typeof AuthCallbackRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/_dev/workflow-diagram-preview': {
-      id: '/_dev/workflow-diagram-preview'
-      path: '/workflow-diagram-preview'
-      fullPath: '/workflow-diagram-preview'
-      preLoaderRoute: typeof DevWorkflowDiagramPreviewRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/sessions/$sessionId/': {
@@ -778,7 +757,6 @@ const rootRouteChildren: RootRouteChildren = {
   LoginRoute: LoginRoute,
   OnboardingRoute: OnboardingRoute,
   OrchestratorRoute: OrchestratorRoute,
-  DevWorkflowDiagramPreviewRoute: DevWorkflowDiagramPreviewRoute,
   AuthCallbackRoute: AuthCallbackRoute,
   IntegrationsCallbackRoute: IntegrationsCallbackRoute,
   InviteCodeRoute: InviteCodeRoute,

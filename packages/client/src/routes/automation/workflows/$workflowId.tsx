@@ -44,7 +44,7 @@ function WorkflowDetailPage() {
       <WorkflowDetailHeader
         workflow={workflow}
         onRun={() => run.mutate({ workflowId: workflow.id })}
-        // TODO: enable when /automation/workflows/new route is added (Task 6.6 / 6.10)
+        onEdit={() => nav({ to: '/automation/workflows/new', search: { editId: workflow.id } })}
         onToggleEnabled={() =>
           update.mutate({ workflowId: workflow.id, enabled: !workflow.enabled })
         }
