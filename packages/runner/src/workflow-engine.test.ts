@@ -137,6 +137,96 @@ describe('workflow-engine', () => {
     expect(channelIds[0]).not.toBe(channelIds[1]);
   });
 
+  it('surfaces structured-output object as agent_prompt step output', async () => {
+    const compiled = await compileWorkflowDefinition({
+      steps: [
+        {
+          id: 'extract',
+          type: 'agent_prompt',
+          prompt: 'Extract fields.',
+          outputSchema: {
+            summary: { type: 'string' },
+            count: { type: 'number' },
+          },
+        },
+      ],
+    });
+
+    if (!compiled.ok || !compiled.workflow) {
+      throw new Error('compile failed');
+    }
+
+    const result = await executeWorkflowRun(
+      'ex_struct_ok',
+      compiled.workflow,
+      { variables: {} },
+      {
+        onAgentStep: async (step) => {
+          if (step.type !== 'agent_prompt') return;
+          // Simulate the runner returning the parsed structured payload
+          // (this is what executeWorkflowAgentStep does once parsing succeeds).
+          return { status: 'completed', output: { summary: 'hi', count: 3 } };
+        },
+      },
+    );
+
+    expect(result.status).toBe('ok');
+    expect(result.steps[0]?.status).toBe('completed');
+    expect(result.steps[0]?.output).toEqual({ summary: 'hi', count: 3 });
+  });
+
+  it('surfaces structured-output failure from hook', async () => {
+    const compiled = await compileWorkflowDefinition({
+      steps: [
+        {
+          id: 'extract',
+          type: 'agent_prompt',
+          prompt: 'Extract fields.',
+          outputSchema: { summary: { type: 'string' } },
+        },
+      ],
+    });
+
+    if (!compiled.ok || !compiled.workflow) {
+      throw new Error('compile failed');
+    }
+
+    const result = await executeWorkflowRun(
+      'ex_struct_fail',
+      compiled.workflow,
+      { variables: {} },
+      {
+        onAgentStep: async (step) => {
+          if (step.type !== 'agent_prompt') return;
+          return {
+            status: 'failed',
+            error: 'agent_prompt_structured_output_invalid: missing required field "summary"',
+          };
+        },
+      },
+    );
+
+    expect(result.status).toBe('failed');
+    expect(result.steps[0]?.status).toBe('failed');
+    expect(result.steps[0]?.error).toMatch(/agent_prompt_structured_output_invalid/);
+  });
+
+  it('rejects agent_prompt with invalid outputSchema at compile time', async () => {
+    const compiled = await compileWorkflowDefinition({
+      steps: [
+        {
+          id: 'bad',
+          type: 'agent_prompt',
+          prompt: 'Hi.',
+          outputSchema: { x: { type: 'date' } },
+        },
+      ],
+    });
+
+    expect(compiled.ok).toBe(false);
+    expect(compiled.errors.some((e) => /type must be one of/.test(e.message))).toBe(true);
+  });
+
   it('supports agent_message step hooks', async () => {
     const compiled = await compileWorkflowDefinition({
       steps: [

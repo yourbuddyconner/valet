@@ -9,7 +9,7 @@
     "build": "bun build src/bin.ts --outdir dist --target bun",
     "typecheck": "tsc --noEmit",
     "test": "vitest run && pnpm test:workflows",
-    "test:workflows": "bun test src/workflow-compiler.test.ts src/workflow-engine.test.ts src/workflow-cli.test.ts"
+    "test:workflows": "bun test src/workflow-compiler.test.ts src/workflow-engine.test.ts src/workflow-cli.test.ts src/workflow-structured-output.test.ts"
   },
   "dependencies": {
     "@1password/sdk": "^0.3.1",

@@ -1,3 +1,5 @@
+import { validateOutputSchemaShape } from './workflow-structured-output.js';
+
 export interface WorkflowCompileError {
   message: string;
   path?: string;
@@ -79,6 +81,10 @@ function normalizeStep(stepValue: unknown, path: string, errors: WorkflowCompile
     }
     if (stepValue.thread !== undefined && typeof stepValue.thread !== 'string') {
       errors.push({ message: 'agent_prompt.thread must be a string', path: `${path}.thread` });
+    }
+    if (stepValue.outputSchema !== undefined) {
+      const schemaErrors = validateOutputSchemaShape(stepValue.outputSchema, `${path}.outputSchema`);
+      for (const e of schemaErrors) errors.push(e);
     }
   }
 

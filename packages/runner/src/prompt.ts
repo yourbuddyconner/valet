@@ -21,6 +21,14 @@ import { AgentClient, type PromptAuthor } from "./agent-client.js";
 import type { AvailableModels, DiffFile, PromptAttachment, ReviewFileSummary, ReviewResultData } from "./types.js";
 import { compileWorkflowDefinition, type NormalizedWorkflowStep } from "./workflow-compiler.js";
 import {
+  STRUCTURED_OUTPUT_MAX_ATTEMPTS,
+  buildFixupPrompt,
+  buildSchemaInstructions,
+  parseStructuredOutput,
+  validateOutputSchemaShape,
+  type StructuredOutputSchema,
+} from "./workflow-structured-output.js";
+import {
   executeWorkflowResume,
   executeWorkflowRun,
   type EventSink,
@@ -1222,6 +1230,23 @@ export class PromptHandler {
       return { status: "failed", error: `${step.type} requires content/message/goal/prompt` };
     }
 
+    // Structured output: only applies to agent_prompt and only when the schema
+    // is well-formed. Invalid schemas fail the step early — silently dropping
+    // the schema would let the agent return free-form text that downstream
+    // ${outputs.var.field} accesses can't satisfy.
+    let outputSchema: StructuredOutputSchema | null = null;
+    if (isPrompt && step.outputSchema !== undefined) {
+      const schemaErrors = validateOutputSchemaShape(step.outputSchema);
+      if (schemaErrors.length > 0) {
+        return {
+          status: "failed",
+          error: `agent_prompt_output_schema_invalid: ${schemaErrors[0]?.message ?? "unknown"}`,
+        };
+      }
+      outputSchema = step.outputSchema as StructuredOutputSchema;
+    }
+    const promptToSend = outputSchema ? buildSchemaInstructions(content, outputSchema) : content;
+
     if (!this.runnerSessionId) {
       return { status: "failed", error: `${step.type} unavailable: runner session id is missing` };
     }
@@ -1271,7 +1296,7 @@ export class PromptHandler {
       }
 
       if (!awaitResponse) {
-        await this.sendPromptToChannelWithRecovery(channel, content, {
+        await this.sendPromptToChannelWithRecovery(channel, promptToSend, {
           model: preferredModel,
           channelType: workflowChannelType,
           channelId: workflowChannelId,
@@ -1302,7 +1327,7 @@ export class PromptHandler {
           attemptSessionIds.add(sessionId);
           let idlePromise = this.pollUntilIdle(sessionId, awaitTimeoutMs);
 
-          const sentSessionId = await this.sendPromptToChannelWithRecovery(channel, content, {
+          const sentSessionId = await this.sendPromptToChannelWithRecovery(channel, promptToSend, {
             model: modelCandidate,
             channelType: workflowChannelType,
             channelId: workflowChannelId,
@@ -1348,8 +1373,69 @@ export class PromptHandler {
               opencodeSessionId: channel.opencodeSessionId ?? undefined,
             });
 
-            // For agent_prompt return the bare reply string so `outputVariable`
-            // captures it directly for downstream `${outputs.var}` interpolation.
+            // Structured-output path: parse + validate the reply against the
+            // declared schema; on failure, send a fixup follow-up message to
+            // the SAME OpenCode session and retry, up to STRUCTURED_OUTPUT_MAX_ATTEMPTS.
+            if (outputSchema) {
+              let lastResponse = recoveredResponse;
+              let parseResult = parseStructuredOutput(lastResponse, outputSchema);
+              let attempt = 1;
+              while (!parseResult.ok && attempt < STRUCTURED_OUTPUT_MAX_ATTEMPTS) {
+                const fixup = buildFixupPrompt(parseResult.error, lastResponse, outputSchema);
+                channel.resetPromptState();
+                channel.lastError = null;
+                this.ephemeralContent.set(sessionId, "");
+                const fixupIdle = this.pollUntilIdle(sessionId, awaitTimeoutMs);
+                const fixupSentSessionId = await this.sendPromptToChannelWithRecovery(channel, fixup, {
+                  model: modelCandidate,
+                  channelType: workflowChannelType,
+                  channelId: workflowChannelId,
+                });
+                if (fixupSentSessionId !== sessionId) {
+                  this.ephemeralContent.delete(sessionId);
+                  this.idleWaiters.delete(sessionId);
+                  sessionId = fixupSentSessionId;
+                  this.ephemeralContent.set(sessionId, "");
+                  attemptSessionIds.add(sessionId);
+                }
+                await fixupIdle;
+                let fixupResponse = (this.ephemeralContent.get(sessionId) || "").trim();
+                if (!fixupResponse) {
+                  const recovered = await this.recoverAssistantTextOrError();
+                  if (recovered.text) fixupResponse = recovered.text;
+                }
+                if (!fixupResponse) {
+                  parseResult = { ok: false, error: "no response from agent on retry" };
+                  break;
+                }
+                lastResponse = fixupResponse;
+                this.agentClient.sendWorkflowChatMessage("assistant", fixupResponse, {
+                  workflowExecutionId: context.executionId,
+                  workflowStepId: step.id,
+                  kind: "agent_message_response",
+                }, {
+                  channelType: workflowChannelType,
+                  channelId: workflowChannelId,
+                  opencodeSessionId: channel.opencodeSessionId ?? undefined,
+                });
+                parseResult = parseStructuredOutput(lastResponse, outputSchema);
+                attempt++;
+              }
+
+              if (!parseResult.ok) {
+                lastFailure = `agent_prompt_structured_output_invalid: ${parseResult.error}`;
+                break;
+              }
+
+              return {
+                status: "completed",
+                output: parseResult.value,
+              };
+            }
+
+            // For agent_prompt without a schema, return the bare reply string
+            // so `outputVariable` captures it directly for downstream
+            // `${outputs.var}` interpolation.
             return {
               status: "completed",
               output: isPrompt ? recoveredResponse : {
@@ -2148,6 +2234,20 @@ export class PromptHandler {
 
     if (!requestID || parsedQuestions.length === 0) {
       console.warn("[PromptHandler] question.asked missing request id or questions");
+      return;
+    }
+
+    // Workflow channels run unattended: there's no human to answer questions,
+    // so the `question.asked` tool is unsupported. Fail loudly — set lastError
+    // so the workflow step picks up the failure, and abort the OpenCode
+    // session so pollUntilIdle resolves rather than blocking on a reply.
+    if (channel.channelKey.startsWith("workflow:")) {
+      const questionText = parsedQuestions[0]?.text ?? "(no text)";
+      channel.lastError = `agent_prompt_question_not_supported: agent attempted to ask "${questionText.slice(0, 200)}"`;
+      const sessionId = channel.opencodeSessionId;
+      if (sessionId) {
+        fetch(`${this.opencodeUrl}/session/${sessionId}/abort`, { method: "POST" }).catch(() => undefined);
+      }
       return;
     }
 
