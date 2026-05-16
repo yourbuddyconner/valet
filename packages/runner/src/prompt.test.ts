@@ -21,6 +21,7 @@ type AgentClientMock = {
   sendThreadCreated: ReturnType<typeof vi.fn>;
   sendModelSwitched: ReturnType<typeof vi.fn>;
   sendAudioTranscript: ReturnType<typeof vi.fn>;
+  sendWorkflowStepEvent: ReturnType<typeof vi.fn>;
 };
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -48,7 +49,8 @@ function createAgentClientMock(): AgentClientMock & AgentClient {
     sendThreadCreated: vi.fn(),
     sendModelSwitched: vi.fn(),
     sendAudioTranscript: vi.fn(),
-  } as unknown as AgentClientMock & AgentClient;
+    sendWorkflowStepEvent: vi.fn(),
+  } as AgentClientMock & AgentClient;
 }
 
 function createHandler(agentClient: AgentClientMock & AgentClient): PromptHandler {

@@ -392,11 +392,11 @@ export class AgentClient {
   }
 
   sendChildSession(childSessionId: string, title?: string): void {
-    this.send({ type: "child-session", childSessionId, title } as any);
+    this.send({ type: "child-session", childSessionId, title });
   }
 
   sendAudioTranscript(messageId: string, transcript: string): void {
-    this.send({ type: "audio-transcript", messageId, transcript } as any);
+    this.send({ type: "audio-transcript", messageId, transcript });
   }
 
   sendCommandResult(requestId: string, command: string, result?: unknown, error?: string): void {

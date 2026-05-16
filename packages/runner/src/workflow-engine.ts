@@ -40,8 +40,21 @@ export interface WorkflowRunEnvelope {
   error: string | null;
 }
 
+export type WorkflowEventType =
+  | 'execution.started'
+  | 'execution.finished'
+  | 'execution.resumed'
+  | 'step.started'
+  | 'step.completed'
+  | 'step.failed'
+  | 'step.skipped'
+  | 'step.cancelled'
+  | 'approval.required'
+  | 'approval.approved'
+  | 'approval.denied';
+
 export interface WorkflowEvent {
-  type: string;
+  type: WorkflowEventType;
   executionId: string;
   ts: string;
   [key: string]: unknown;

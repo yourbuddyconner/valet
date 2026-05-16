@@ -24,6 +24,7 @@ import {
   executeWorkflowResume,
   executeWorkflowRun,
   type EventSink,
+  type WorkflowEventType,
   type WorkflowRunPayload,
   type WorkflowStepExecutionContext,
   type WorkflowStepExecutionResult,
@@ -1031,7 +1032,7 @@ export class PromptHandler {
 
       // Kinds the SessionAgentDO accepts; engine also emits execution.* which
       // we drop here.
-      const forwardedKinds = new Set<string>([
+      const forwardedKinds = new Set<WorkflowEventType>([
         "step.started",
         "step.completed",
         "step.failed",
@@ -1041,15 +1042,15 @@ export class PromptHandler {
         "approval.approved",
         "approval.denied",
       ]);
+      const isForwardedKind = (t: WorkflowEventType): t is WorkflowStepEventKind =>
+        forwardedKinds.has(t);
       const stepEventForwarder: EventSink = (event) => {
-        if (!forwardedKinds.has(event.type)) return;
+        if (!isForwardedKind(event.type)) return;
         const stepId = typeof event.stepId === "string" ? event.stepId : "";
         const attempt = typeof event.attempt === "number" ? event.attempt : 1;
         const timestamp = typeof event.ts === "string" ? event.ts : new Date().toISOString();
         this.agentClient.sendWorkflowStepEvent(executionId, {
-          // Narrowed by the forwardedKinds.has() guard above; TS can't track
-          // string-set membership as a discriminant.
-          kind: event.type as WorkflowStepEventKind,
+          kind: event.type,
           stepId,
           attempt,
           timestamp,
