@@ -44,7 +44,8 @@ export interface VariableDefinition {
 export interface WorkflowStep {
   id: string;
   name: string;
-  type: 'agent' | 'agent_message' | 'agent_prompt' | 'tool' | 'bash' | 'conditional' | 'loop' | 'parallel' | 'subworkflow' | 'approval';
+  type: 'agent' | 'agent_message' | 'agent_prompt' | 'notify' | 'tool' | 'bash' | 'conditional' | 'loop' | 'parallel' | 'subworkflow' | 'approval';
+  target?: 'orchestrator';
   tool?: string;
   command?: string;
   description?: string;

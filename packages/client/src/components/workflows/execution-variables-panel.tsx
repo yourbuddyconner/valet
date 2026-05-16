@@ -22,7 +22,10 @@ export function ExecutionVariablesPanel({ outputs }: Props) {
 }
 
 function OutputEntry({ name, value }: { name: string; value: unknown }) {
-  const [expanded, setExpanded] = useState(false);
+  // Auto-expand objects and arrays — they're the main payload of agent_prompt
+  // outputs and users almost always want to see the contents at a glance.
+  const initiallyExpanded = typeOf(value) === 'object' || typeOf(value) === 'array';
+  const [expanded, setExpanded] = useState(initiallyExpanded);
   const summary = formatSummary(value);
   const full = formatFull(value);
   const isExpandable = full !== summary || full.includes('\n');

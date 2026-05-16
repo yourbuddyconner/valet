@@ -12,6 +12,7 @@ const TYPE_LABEL: Record<WorkflowStep['type'], string> = {
   agent: 'AGENT',
   agent_message: 'SEND MESSAGE',
   agent_prompt: 'AGENT PROMPT',
+  notify: 'NOTIFY',
   conditional: 'CONDITIONAL',
   parallel: 'PARALLEL',
   loop: 'LOOP',
@@ -204,6 +205,27 @@ function TypeSpecificFields({ step, onChange }: Props) {
           onChange={(v) => onChange({ prompt: v || undefined })}
           rows={3}
         />
+      );
+
+    case 'notify':
+      return (
+        <>
+          <TextAreaField
+            label="Content"
+            value={step.content ?? ''}
+            placeholder="Tell the orchestrator agent what happened (supports {{outputs.foo.bar}} interpolation)…"
+            onChange={(v) => onChange({ content: v || undefined })}
+            rows={5}
+          />
+          <Field label="Target">
+            <div className="text-xs text-neutral-700 bg-neutral-50 border border-neutral-200 rounded px-2.5 py-1.5">
+              Your orchestrator agent
+            </div>
+            <div className="text-[11px] text-neutral-500 mt-1">
+              Fire-and-forget. The orchestrator decides what to do with this (Slack, message you, take action).
+            </div>
+          </Field>
+        </>
       );
 
     default:
