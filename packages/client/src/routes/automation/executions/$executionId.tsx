@@ -115,7 +115,7 @@ function ExecutionDetailPage() {
             />
           </div>
           <div>
-            <div className="text-[11px] tracking-wider text-neutral-500 mb-2">VARIABLES</div>
+            <div className="text-[11px] tracking-wider text-neutral-500 mb-2">STEP OUTPUTS</div>
             <ExecutionVariablesPanel outputs={execution.outputs} />
           </div>
         </div>
