@@ -66,4 +66,23 @@ describe('layoutWorkflow', () => {
     expect(nodes.length).toBeGreaterThanOrEqual(2); // start + end
     expect(edges.length).toBeGreaterThanOrEqual(1);
   });
+
+  it('routes an approval step like any leaf step', () => {
+    const wf: WorkflowData = {
+      id: 'wf',
+      name: 'Approval',
+      steps: [
+        { id: 'a', name: 'A', type: 'bash', command: 'echo a' },
+        { id: 'ok', name: 'OK?', type: 'approval' },
+        { id: 'b', name: 'B', type: 'bash', command: 'echo b' },
+      ],
+    };
+    const { nodes, edges } = layoutWorkflow(wf);
+    const ids = nodes.map(n => n.id);
+    expect(ids).toEqual(expect.arrayContaining(['a', 'ok', 'b']));
+    expect(edges).toEqual(expect.arrayContaining([
+      expect.objectContaining({ source: 'a', target: 'ok' }),
+      expect.objectContaining({ source: 'ok', target: 'b' }),
+    ]));
+  });
 });

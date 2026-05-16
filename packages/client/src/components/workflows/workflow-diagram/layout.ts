@@ -43,8 +43,6 @@ export function layoutWorkflow(
     data: { kind: 'end', label: 'END' },
   });
 
-  // Walk the step tree.
-  // Returns the list of "tail" node IDs that should connect to whatever follows.
   function walk(steps: WorkflowStep[], prevTails: string[]): string[] {
     let tails = prevTails;
     for (const step of steps) {
@@ -62,7 +60,6 @@ export function layoutWorkflow(
         position: { x: 0, y: 0 },
         data: nodeData,
       });
-      // Connect previous tails into this step.
       for (const t of tails) {
         edges.push({ id: `e_${t}_${step.id}`, source: t, target: step.id });
       }
@@ -70,18 +67,11 @@ export function layoutWorkflow(
       if (step.type === 'conditional') {
         const branchTails: string[] = [];
         if (step.then && step.then.length > 0) {
+          // Walk children with [] so they don't get an unlabeled edge from prior tails; we add labeled THEN/ELSE edges explicitly.
           const thenTails = walk(step.then, []);
-          // Edge from conditional to first then child must carry the label.
-          // Re-emit with label by mutating the most recent matching edge:
           const firstThen = step.then[0]?.id;
           if (firstThen) {
-            const idx = edges.findIndex(e => e.source === step.id && e.target === firstThen);
-            // walk() already added edges from "tails" (prevTails) into the first then-child,
-            // but since we passed [] as prevTails, no edges from prior steps were added.
-            // We need to add the conditional → firstThen edge ourselves with label.
-            if (idx === -1) {
-              edges.push({ id: `e_${step.id}_${firstThen}_then`, source: step.id, target: firstThen, label: 'THEN' });
-            }
+            edges.push({ id: `e_${step.id}_${firstThen}_then`, source: step.id, target: firstThen, label: 'THEN' });
           }
           branchTails.push(...thenTails);
         }
@@ -89,10 +79,7 @@ export function layoutWorkflow(
           const elseTails = walk(step.else, []);
           const firstElse = step.else[0]?.id;
           if (firstElse) {
-            const idx = edges.findIndex(e => e.source === step.id && e.target === firstElse);
-            if (idx === -1) {
-              edges.push({ id: `e_${step.id}_${firstElse}_else`, source: step.id, target: firstElse, label: 'ELSE' });
-            }
+            edges.push({ id: `e_${step.id}_${firstElse}_else`, source: step.id, target: firstElse, label: 'ELSE' });
           }
           branchTails.push(...elseTails);
         }
@@ -124,7 +111,6 @@ export function layoutWorkflow(
     edges.push({ id: `e_${t}_${endId}`, source: t, target: endId });
   }
 
-  // Dagre layout.
   const g = new dagre.graphlib.Graph();
   g.setGraph({ rankdir: 'TB', nodesep: 60, ranksep: 50 });
   g.setDefaultEdgeLabel(() => ({}));
