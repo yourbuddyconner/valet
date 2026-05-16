@@ -33,6 +33,7 @@ import { Route as DevWorkflowDiagramPreviewRouteImport } from './routes/_dev/wor
 import { Route as SessionsSessionIdIndexRouteImport } from './routes/sessions/$sessionId/index'
 import { Route as AutomationWorkflowsIndexRouteImport } from './routes/automation/workflows/index'
 import { Route as AutomationTriggersIndexRouteImport } from './routes/automation/triggers/index'
+import { Route as AutomationSchedulesAndHooksIndexRouteImport } from './routes/automation/schedules-and-hooks/index'
 import { Route as AutomationExecutionsIndexRouteImport } from './routes/automation/executions/index'
 import { Route as SettingsSkillsIdRouteImport } from './routes/settings/skills.$id'
 import { Route as SettingsPersonasIdRouteImport } from './routes/settings/personas.$id'
@@ -163,6 +164,12 @@ const AutomationTriggersIndexRoute = AutomationTriggersIndexRouteImport.update({
   path: '/triggers/',
   getParentRoute: () => AutomationRoute,
 } as any)
+const AutomationSchedulesAndHooksIndexRoute =
+  AutomationSchedulesAndHooksIndexRouteImport.update({
+    id: '/schedules-and-hooks/',
+    path: '/schedules-and-hooks/',
+    getParentRoute: () => AutomationRoute,
+  } as any)
 const AutomationExecutionsIndexRoute =
   AutomationExecutionsIndexRouteImport.update({
     id: '/executions/',
@@ -230,6 +237,7 @@ export interface FileRoutesByFullPath {
   '/settings/personas/$id': typeof SettingsPersonasIdRoute
   '/settings/skills/$id': typeof SettingsSkillsIdRoute
   '/automation/executions/': typeof AutomationExecutionsIndexRoute
+  '/automation/schedules-and-hooks/': typeof AutomationSchedulesAndHooksIndexRoute
   '/automation/triggers/': typeof AutomationTriggersIndexRoute
   '/automation/workflows/': typeof AutomationWorkflowsIndexRoute
   '/sessions/$sessionId/': typeof SessionsSessionIdIndexRoute
@@ -262,6 +270,7 @@ export interface FileRoutesByTo {
   '/settings/personas/$id': typeof SettingsPersonasIdRoute
   '/settings/skills/$id': typeof SettingsSkillsIdRoute
   '/automation/executions': typeof AutomationExecutionsIndexRoute
+  '/automation/schedules-and-hooks': typeof AutomationSchedulesAndHooksIndexRoute
   '/automation/triggers': typeof AutomationTriggersIndexRoute
   '/automation/workflows': typeof AutomationWorkflowsIndexRoute
   '/sessions/$sessionId': typeof SessionsSessionIdIndexRoute
@@ -296,6 +305,7 @@ export interface FileRoutesById {
   '/settings/personas/$id': typeof SettingsPersonasIdRoute
   '/settings/skills/$id': typeof SettingsSkillsIdRoute
   '/automation/executions/': typeof AutomationExecutionsIndexRoute
+  '/automation/schedules-and-hooks/': typeof AutomationSchedulesAndHooksIndexRoute
   '/automation/triggers/': typeof AutomationTriggersIndexRoute
   '/automation/workflows/': typeof AutomationWorkflowsIndexRoute
   '/sessions/$sessionId/': typeof SessionsSessionIdIndexRoute
@@ -331,6 +341,7 @@ export interface FileRouteTypes {
     | '/settings/personas/$id'
     | '/settings/skills/$id'
     | '/automation/executions/'
+    | '/automation/schedules-and-hooks/'
     | '/automation/triggers/'
     | '/automation/workflows/'
     | '/sessions/$sessionId/'
@@ -363,6 +374,7 @@ export interface FileRouteTypes {
     | '/settings/personas/$id'
     | '/settings/skills/$id'
     | '/automation/executions'
+    | '/automation/schedules-and-hooks'
     | '/automation/triggers'
     | '/automation/workflows'
     | '/sessions/$sessionId'
@@ -396,6 +408,7 @@ export interface FileRouteTypes {
     | '/settings/personas/$id'
     | '/settings/skills/$id'
     | '/automation/executions/'
+    | '/automation/schedules-and-hooks/'
     | '/automation/triggers/'
     | '/automation/workflows/'
     | '/sessions/$sessionId/'
@@ -598,6 +611,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AutomationTriggersIndexRouteImport
       parentRoute: typeof AutomationRoute
     }
+    '/automation/schedules-and-hooks/': {
+      id: '/automation/schedules-and-hooks/'
+      path: '/schedules-and-hooks'
+      fullPath: '/automation/schedules-and-hooks/'
+      preLoaderRoute: typeof AutomationSchedulesAndHooksIndexRouteImport
+      parentRoute: typeof AutomationRoute
+    }
     '/automation/executions/': {
       id: '/automation/executions/'
       path: '/executions'
@@ -653,6 +673,7 @@ declare module '@tanstack/react-router' {
 interface AutomationRouteChildren {
   AutomationWorkflowsWorkflowIdRoute: typeof AutomationWorkflowsWorkflowIdRoute
   AutomationExecutionsIndexRoute: typeof AutomationExecutionsIndexRoute
+  AutomationSchedulesAndHooksIndexRoute: typeof AutomationSchedulesAndHooksIndexRoute
   AutomationTriggersIndexRoute: typeof AutomationTriggersIndexRoute
   AutomationWorkflowsIndexRoute: typeof AutomationWorkflowsIndexRoute
 }
@@ -660,6 +681,7 @@ interface AutomationRouteChildren {
 const AutomationRouteChildren: AutomationRouteChildren = {
   AutomationWorkflowsWorkflowIdRoute: AutomationWorkflowsWorkflowIdRoute,
   AutomationExecutionsIndexRoute: AutomationExecutionsIndexRoute,
+  AutomationSchedulesAndHooksIndexRoute: AutomationSchedulesAndHooksIndexRoute,
   AutomationTriggersIndexRoute: AutomationTriggersIndexRoute,
   AutomationWorkflowsIndexRoute: AutomationWorkflowsIndexRoute,
 }

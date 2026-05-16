@@ -1,10 +1,7 @@
-import { createFileRoute } from '@tanstack/react-router';
-import { TriggerList } from '@/components/automation/trigger-list';
+import { createFileRoute, redirect } from '@tanstack/react-router';
 
 export const Route = createFileRoute('/automation/triggers/')({
-  component: TriggersPage,
+  beforeLoad: () => {
+    throw redirect({ to: '/automation/schedules-and-hooks' });
+  },
 });
-
-function TriggersPage() {
-  return <TriggerList />;
-}
