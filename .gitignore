@@ -63,3 +63,6 @@ packages/client/*.js.map
 workspaces/*
 !workspaces/.gitkeep
 .worktrees/
+
+# Brainstorming visual companion artifacts
+.superpowers/
