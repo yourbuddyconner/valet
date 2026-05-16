@@ -20,6 +20,7 @@ import type {
 } from "./types.js";
 import { gitCredentials } from "./git-credentials.js";
 import { setupGitConfig, cloneRepo } from "./git-setup.js";
+import type { WorkflowStepEvent } from "./workflow-step-events.js";
 
 export interface PromptAuthor {
   authorId?: string;
@@ -404,6 +405,12 @@ export class AgentClient {
 
   sendOpenCodeConfigApplied(success: boolean, restarted: boolean, error?: string): void {
     this.send({ type: "opencode-config-applied", success, restarted, error });
+  }
+
+  sendWorkflowStepEvent(executionId: string, event: WorkflowStepEvent): void {
+    // RunnerToDOMessage is a closed union that doesn't yet include workflow-step-event;
+    // cast here until the shared message types are extended.
+    this.send({ type: "workflow-step-event", executionId, event } as unknown as RunnerToDOMessage);
   }
 
   sendRunnerHealth(kind: 'opencode_crash' | 'opencode_health_timeout' | 'opencode_fatal' | 'upgrade_failure', details?: { exitCode?: number; crashCount?: number; message?: string }): void {
