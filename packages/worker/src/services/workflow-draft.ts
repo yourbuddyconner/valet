@@ -60,7 +60,9 @@ export function extractWorkflowFromResponse(text: string): WorkflowDraft | null 
 export async function draftWorkflow(opts: {
   apiKey: string;
   userPrompt: string;
-  baseDraft?: WorkflowDraft;
+  // Accept any object shape — baseDraft is serialized into the LLM context as JSON,
+  // and the caller validates the LLM's output rigorously via validateWorkflowDefinition.
+  baseDraft?: Record<string, unknown>;
 }): Promise<{ workflow: WorkflowDraft | null; rawResponse: string }> {
   const anthropic = new Anthropic({ apiKey: opts.apiKey });
   const userMessage = opts.baseDraft

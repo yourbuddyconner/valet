@@ -12,6 +12,8 @@ import {
   listWorkflowProposals,
 } from '../lib/db.js';
 import * as workflowService from '../services/workflows.js';
+import { draftWorkflow } from '../services/workflow-draft.js';
+import { validateWorkflowDefinition } from '../lib/workflow-definition.js';
 
 export const workflowsRouter = new Hono<{ Bindings: Env; Variables: Variables }>();
 
@@ -62,6 +64,11 @@ const rollbackWorkflowSchema = z.object({
   targetWorkflowHash: z.string().min(1),
   version: z.string().optional(),
   notes: z.string().optional(),
+});
+
+const draftWorkflowSchema = z.object({
+  prompt: z.string().min(1),
+  baseDraft: z.record(z.unknown()).optional(),
 });
 
 /**
@@ -141,6 +148,38 @@ workflowsRouter.post('/sync-all', zValidator('json', syncAllWorkflowsSchema), as
 
   const result = await workflowService.syncAllWorkflows(c.get('db'), user.id, workflows);
   return c.json({ success: true, synced: result.synced });
+});
+
+/**
+ * POST /api/workflows/draft
+ * Draft a new workflow from a natural-language prompt via the Anthropic API.
+ * Retries up to 3 times if the LLM produces an invalid workflow definition.
+ */
+workflowsRouter.post('/draft', zValidator('json', draftWorkflowSchema), async (c) => {
+  const user = c.get('user');
+  if (!user) return c.json({ error: 'unauthorized', code: 'UNAUTHORIZED' }, 401);
+
+  const { prompt, baseDraft } = c.req.valid('json');
+  const apiKey = c.env.ANTHROPIC_API_KEY;
+  if (!apiKey) return c.json({ error: 'no ANTHROPIC_API_KEY configured', code: 'CONFIG' }, 500);
+
+  const maxAttempts = 3;
+  let lastError: string | null = null;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const { workflow } = await draftWorkflow({ apiKey, userPrompt: prompt, baseDraft });
+    if (!workflow) {
+      lastError = 'LLM did not return valid JSON';
+      continue;
+    }
+    const validation = validateWorkflowDefinition(workflow);
+    if (validation.valid) {
+      return c.json({ workflow, attempts: attempt });
+    }
+    lastError = validation.errors.join('; ');
+  }
+
+  return c.json({ error: lastError ?? 'failed to draft workflow', code: 'DRAFT_FAILED' }, 502);
 });
 
 /**
