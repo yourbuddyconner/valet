@@ -47,7 +47,7 @@ describe('workflow-cli contract', () => {
     const envelope = parseStdoutJson<{ ok: boolean; status: string; workflowHash: string }>(result.stdout);
     expect(envelope.ok).toBe(true);
     expect(envelope.status).toBe('valid');
-    expect(envelope.workflowHash).toStartWith('sha256:');
+    expect(envelope.workflowHash).toMatch(/^sha256:/);
   });
 
   it('run command pauses for approval and resume command completes after approval', async () => {
@@ -81,7 +81,7 @@ describe('workflow-cli contract', () => {
       requiresApproval: { resumeToken: string } | null;
     }>(runResult.stdout);
     expect(runEnvelope.status).toBe('needs_approval');
-    expect(runEnvelope.requiresApproval?.resumeToken).toStartWith('wrf_rt_');
+    expect(runEnvelope.requiresApproval?.resumeToken).toMatch(/^wrf_rt_/);
 
     const resumeResult = runCli(
       [

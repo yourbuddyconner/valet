@@ -508,4 +508,3 @@ The `parallel` step type exists in the compiler and engine, but executes sub-ste
 - No shared TypeScript types for workflows in `packages/shared` — types exist only in client and service layers.
 - No UI for configuring `allowSelfModification` constraint.
 - No real-time step progress reporting during execution (completion reports all steps at once).
-- No workflow definition editor in the client.

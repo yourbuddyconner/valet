@@ -26,7 +26,7 @@ describe('workflow-engine', () => {
 
     expect(result.status).toBe('needs_approval');
     expect(result.requiresApproval?.stepId).toBe('approve');
-    expect(result.requiresApproval?.resumeToken).toStartWith('wrf_rt_');
+    expect(result.requiresApproval?.resumeToken).toMatch(/^wrf_rt_/);
     expect(events).toContain('approval.required');
   });
 
@@ -260,6 +260,6 @@ describe('workflow-engine', () => {
     );
 
     expect(resumed.status).toBe('failed');
-    expect(resumed.error).toStartWith('resume_token_mismatch:');
+    expect(resumed.error).toMatch(/^resume_token_mismatch:/);
   });
 });

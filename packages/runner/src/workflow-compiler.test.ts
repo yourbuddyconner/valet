@@ -32,11 +32,11 @@ describe('workflow-compiler', () => {
           id: 'main',
           type: 'conditional',
           then: [
-            { id: 'then-b', type: 'tool' },
-            { id: 'then-a', type: 'tool' },
+            { id: 'then-b', type: 'tool', tool: 'noop' },
+            { id: 'then-a', type: 'tool', tool: 'noop' },
           ],
           else: [
-            { id: 'else-1', type: 'tool' },
+            { id: 'else-1', type: 'tool', tool: 'noop' },
           ],
         },
       ],
