@@ -71,6 +71,12 @@ const draftWorkflowSchema = z.object({
   baseDraft: z.record(z.unknown()).optional(),
 });
 
+const draftWorkflowStepSchema = z.object({
+  workflow: z.record(z.unknown()),
+  stepId: z.string().min(1),
+  instruction: z.string().min(1),
+});
+
 /**
  * GET /api/workflows
  * List user's workflows
@@ -180,6 +186,37 @@ workflowsRouter.post('/draft', zValidator('json', draftWorkflowSchema), async (c
   }
 
   return c.json({ error: lastError ?? 'failed to draft workflow', code: 'DRAFT_FAILED' }, 502);
+});
+
+/**
+ * POST /api/workflows/draft/step
+ * Refine a single step of an existing workflow draft via natural-language instruction.
+ * The LLM is asked to preserve all other steps; we validate the full result.
+ */
+workflowsRouter.post('/draft/step', zValidator('json', draftWorkflowStepSchema), async (c) => {
+  const user = c.get('user');
+  if (!user) return c.json({ error: 'unauthorized', code: 'UNAUTHORIZED' }, 401);
+
+  const { workflow: baseDraft, stepId, instruction } = c.req.valid('json');
+  const apiKey = c.env.ANTHROPIC_API_KEY;
+  if (!apiKey) return c.json({ error: 'no ANTHROPIC_API_KEY configured', code: 'CONFIG' }, 500);
+
+  const userPrompt = `In the workflow below, edit ONLY the step with id "${stepId}" per this instruction: "${instruction}". Preserve every other step exactly. Return the full updated workflow JSON.`;
+
+  const maxAttempts = 3;
+  let lastError: string | null = null;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const { workflow } = await draftWorkflow({ apiKey, userPrompt, baseDraft });
+    if (!workflow) {
+      lastError = 'LLM did not return valid JSON';
+      continue;
+    }
+    const validation = validateWorkflowDefinition(workflow);
+    if (validation.valid) return c.json({ workflow, attempts: attempt });
+    lastError = validation.errors.join('; ');
+  }
+
+  return c.json({ error: lastError ?? 'failed to draft step', code: 'DRAFT_FAILED' }, 502);
 });
 
 /**
