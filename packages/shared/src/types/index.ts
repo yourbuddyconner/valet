@@ -44,7 +44,9 @@ export type EventBusEventType =
   | 'action.approved'
   | 'action.denied'
   | 'thread.created'
-  | 'thread.updated';
+  | 'thread.updated'
+  | 'workflow.execution.step'
+  | 'workflow.execution.status';
 
 export interface EventBusEvent {
   type: EventBusEventType;
