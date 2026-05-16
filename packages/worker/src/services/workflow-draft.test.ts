@@ -6,6 +6,7 @@ describe('buildSystemPrompt', () => {
     const sys = buildSystemPrompt();
     for (const t of [
       'agent_message',
+      'agent_prompt',
       'tool',
       'bash',
       'conditional',

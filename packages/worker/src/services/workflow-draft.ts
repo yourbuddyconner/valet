@@ -18,18 +18,23 @@ Output ONLY a JSON object matching this schema:
   "steps": [WorkflowStep, ...]
 }
 
-A WorkflowStep is one of these types: agent_message, tool, bash, conditional, parallel, loop, subworkflow, approval.
-Common fields: id (kebab-case), name (human), type, outputVariable (optional).
+A WorkflowStep is one of these types: agent_message, agent_prompt, tool, bash, conditional, parallel, loop, subworkflow, approval.
+Common fields: id (kebab-case), name (human), type, outputVariable (optional), thread (optional, only on agent_message/agent_prompt).
 
 Type-specific fields:
 - bash: { command: string }
 - tool: { tool: string, arguments?: object }
 - agent_message: { content: string }
+    Use this for one-way notifications to the session channel. The workflow does not wait for the agent to reply. Pick this when no later step depends on the agent's response.
+- agent_prompt: { prompt: string, awaitTimeoutMs?: number, interrupt?: boolean }
+    Use this when you want the Valet agent to actually do work and capture its reply text. The workflow blocks until the agent responds (or awaitTimeoutMs is hit). The agent's reply is stored in outputVariable for later steps.
 - conditional: { condition: string, then: WorkflowStep[], else?: WorkflowStep[] }
 - parallel: { steps: WorkflowStep[] }
 - loop: { steps: WorkflowStep[] }
 - subworkflow: { steps: WorkflowStep[] }
 - approval: { prompt: string }
+
+The optional \`thread\` field (on agent_message and agent_prompt) routes the message to a named thread within the workflow execution. Omit it to use a single shared thread for the whole workflow (a single agent conversation). Use distinct thread names like "researcher" or "writer" to give different agents their own context. Use the literal value "@new" to spawn a fresh thread for that step (useful inside parallel branches or loops where each iteration needs isolation).
 
 Respond with the JSON object only — no prose, no markdown fences.`;
 

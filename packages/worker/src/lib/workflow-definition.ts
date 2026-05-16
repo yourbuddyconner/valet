@@ -19,13 +19,16 @@ function validateStep(step: unknown, path: string, errors: string[]): void {
   }
   const normalizedType = typeof type === 'string' ? type.trim() : '';
 
-  if (normalizedType === 'agent_message') {
+  if (normalizedType === 'agent_message' || normalizedType === 'agent_prompt') {
     const content =
       (typeof step.content === 'string' ? step.content : '') ||
       (typeof step.message === 'string' ? step.message : '') ||
-      (typeof step.goal === 'string' ? step.goal : '');
+      (typeof step.goal === 'string' ? step.goal : '') ||
+      (typeof step.prompt === 'string' ? step.prompt : '');
     if (!content.trim()) {
-      errors.push(`${path} requires content (content, message, or goal) for agent_message steps`);
+      errors.push(
+        `${path} requires content (content, message, goal, or prompt) for ${normalizedType} steps`,
+      );
     }
     if (step.interrupt !== undefined && typeof step.interrupt !== 'boolean') {
       errors.push(`${path}.interrupt must be a boolean`);
@@ -48,6 +51,10 @@ function validateStep(step: unknown, path: string, errors: string[]): void {
       (typeof awaitTimeoutValue !== 'number' || !Number.isFinite(awaitTimeoutValue) || awaitTimeoutValue < 1000)
     ) {
       errors.push(`${path}.await_timeout_ms must be a number >= 1000`);
+    }
+
+    if (step.thread !== undefined && typeof step.thread !== 'string') {
+      errors.push(`${path}.thread must be a string`);
     }
   }
 
