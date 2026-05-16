@@ -25,6 +25,7 @@
     "@valet/shared": "workspace:*",
     "@xyflow/react": "^12.10.2",
     "clsx": "^2.1.1",
+    "cronstrue": "^3.14.0",
     "dagre": "^0.8.5",
     "heic-to": "^1.4.2",
     "mermaid": "^11.12.2",
