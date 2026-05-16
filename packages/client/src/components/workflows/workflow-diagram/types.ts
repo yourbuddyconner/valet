@@ -8,7 +8,8 @@ export type StepRuntimeStatus =
   | 'completed'
   | 'failed'
   | 'skipped'
-  | 'waiting_approval';
+  | 'waiting_approval'
+  | 'cancelled';
 
 export interface WorkflowDiagramProps {
   workflow: WorkflowData;
