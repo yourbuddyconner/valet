@@ -32,10 +32,14 @@ export interface WorkflowNodeData {
   isCurrent?: boolean;
   error?: string;
   onNodeClick?: (stepId: string) => void;
+  // Index signature required by @xyflow/react Node<T> constraint.
+  [key: string]: unknown;
 }
 
 /** Synthetic START / END / MERGE nodes — not real workflow steps. */
 export interface SyntheticNodeData {
   kind: 'start' | 'end' | 'merge';
   label?: string;
+  // Index signature required by @xyflow/react Node<T> constraint.
+  [key: string]: unknown;
 }
