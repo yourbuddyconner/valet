@@ -326,6 +326,27 @@ export type RunnerToDOMessage =
       channelId?: string;
       opencodeSessionId?: string;
     }
+  | {
+      type: 'workflow-step-event';
+      executionId: string;
+      event: {
+        kind:
+          | 'step.started'
+          | 'step.completed'
+          | 'step.failed'
+          | 'step.skipped'
+          | 'approval.required'
+          | 'approval.approved'
+          | 'approval.denied';
+        stepId: string;
+        attempt: number;
+        timestamp: string;
+        input?: unknown;
+        output?: unknown;
+        error?: string;
+        durationMs?: number;
+      };
+    }
   | { type: 'question'; messageId?: string; questionId: string; text: string; options?: string[] }
   | { type: 'image'; messageId?: string; data: string; mimeType: string; description: string }
   | { type: 'screenshot'; messageId?: string; data: string; description: string }

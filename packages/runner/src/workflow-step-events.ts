@@ -17,9 +17,3 @@ export interface WorkflowStepEvent {
   error?: string;
   durationMs?: number;
 }
-
-export interface WorkflowStepEventMessage {
-  type: 'workflow-step-event';
-  executionId: string;
-  event: WorkflowStepEvent;
-}

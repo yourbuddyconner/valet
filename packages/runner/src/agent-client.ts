@@ -408,9 +408,7 @@ export class AgentClient {
   }
 
   sendWorkflowStepEvent(executionId: string, event: WorkflowStepEvent): void {
-    // RunnerToDOMessage is a closed union that doesn't yet include workflow-step-event;
-    // cast here until the shared message types are extended.
-    this.send({ type: "workflow-step-event", executionId, event } as unknown as RunnerToDOMessage);
+    this.send({ type: "workflow-step-event", executionId, event });
   }
 
   sendRunnerHealth(kind: 'opencode_crash' | 'opencode_health_timeout' | 'opencode_fatal' | 'upgrade_failure', details?: { exitCode?: number; crashCount?: number; message?: string }): void {
