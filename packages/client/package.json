@@ -23,7 +23,9 @@
     "@toon-format/toon": "^2.1.0",
     "@valet/sdk": "workspace:*",
     "@valet/shared": "workspace:*",
+    "@xyflow/react": "^12.10.2",
     "clsx": "^2.1.1",
+    "dagre": "^0.8.5",
     "heic-to": "^1.4.2",
     "mermaid": "^11.12.2",
     "react": "^19.0.0",
@@ -40,6 +42,7 @@
   },
   "devDependencies": {
     "@tanstack/router-plugin": "^1.151.0",
+    "@types/dagre": "^0.7.54",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "@vitejs/plugin-react": "^4.3.4",
