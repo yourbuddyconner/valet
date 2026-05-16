@@ -14,6 +14,7 @@ import {
 import * as workflowService from '../services/workflows.js';
 import { draftWorkflow } from '../services/workflow-draft.js';
 import { validateWorkflowDefinition } from '../lib/workflow-definition.js';
+import { assembleProviderEnv } from '../lib/env-assembly.js';
 
 export const workflowsRouter = new Hono<{ Bindings: Env; Variables: Variables }>();
 
@@ -176,8 +177,9 @@ workflowsRouter.post('/draft', zValidator('json', draftWorkflowSchema), async (c
   if (baseDraftSize > MAX_DRAFT_JSON_BYTES) {
     return c.json({ error: 'baseDraft too large (max 32KB)', code: 'VALIDATION' }, 400);
   }
-  const apiKey = c.env.ANTHROPIC_API_KEY;
-  if (!apiKey) return c.json({ error: 'no ANTHROPIC_API_KEY configured', code: 'CONFIG' }, 500);
+  const providerEnv = await assembleProviderEnv(c.get('db'), c.env);
+  const apiKey = providerEnv.ANTHROPIC_API_KEY;
+  if (!apiKey) return c.json({ error: 'no Anthropic API key configured for this org', code: 'CONFIG' }, 500);
 
   const maxAttempts = 3;
   let lastError: string | null = null;
@@ -212,8 +214,9 @@ workflowsRouter.post('/draft/step', zValidator('json', draftWorkflowStepSchema),
   if (workflowSize > MAX_DRAFT_JSON_BYTES) {
     return c.json({ error: 'workflow too large (max 32KB)', code: 'VALIDATION' }, 400);
   }
-  const apiKey = c.env.ANTHROPIC_API_KEY;
-  if (!apiKey) return c.json({ error: 'no ANTHROPIC_API_KEY configured', code: 'CONFIG' }, 500);
+  const providerEnv = await assembleProviderEnv(c.get('db'), c.env);
+  const apiKey = providerEnv.ANTHROPIC_API_KEY;
+  if (!apiKey) return c.json({ error: 'no Anthropic API key configured for this org', code: 'CONFIG' }, 500);
 
   // Replace embedded quotes to keep the interpolated instruction inside its quoted segment in the prompt template.
   const safeInstruction = instruction.replace(/"/g, "'");
