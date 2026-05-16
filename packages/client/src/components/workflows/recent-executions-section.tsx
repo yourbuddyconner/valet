@@ -19,6 +19,7 @@ interface Props {
 export function RecentExecutionsSection({ workflowId, limit = 10 }: Props) {
   const { data } = useWorkflowExecutions(workflowId);
   const rows = (data?.executions ?? []).slice(0, limit);
+  const total = data?.executions.length ?? 0;
   if (rows.length === 0) {
     return <div className="text-sm text-neutral-500">No runs yet.</div>;
   }
@@ -50,6 +51,14 @@ export function RecentExecutionsSection({ workflowId, limit = 10 }: Props) {
           </Link>
         );
       })}
+      {total > limit && (
+        <Link
+          to="/automation/executions"
+          className="text-xs text-neutral-500 hover:text-neutral-800 mt-1"
+        >
+          View all {total} runs →
+        </Link>
+      )}
     </div>
   );
 }

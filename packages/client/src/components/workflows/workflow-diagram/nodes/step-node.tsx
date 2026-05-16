@@ -89,6 +89,7 @@ export function StepNode({ data }: NodeProps<Node<WorkflowNodeData>>) {
       <Handle type="target" position={Position.Top} />
       {status && (
         <div
+          aria-label={status}
           className={cn(
             'absolute -top-2 -right-2 w-5 h-5 rounded-full flex items-center justify-center text-xs',
             STATUS_BADGE[status].cls,
