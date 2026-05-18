@@ -2,8 +2,10 @@ import { NotFoundError, ValidationError } from '@valet/shared';
 import type { Env } from '../env.js';
 import type { AppDb } from '../lib/drizzle.js';
 import { getDb } from '../lib/drizzle.js';
-import { sha256Hex } from '../lib/workflow-runtime.js';
+import { sha256Hex, createWorkflowSession } from '../lib/workflow-runtime.js';
 import { validateWorkflowDefinition } from '../lib/workflow-definition.js';
+import { createExecution } from '../lib/db/executions.js';
+import { checkWorkflowConcurrency, enqueueWorkflowExecution } from './executions.js';
 import {
   normalizeHash,
   parseJsonObject,
@@ -610,4 +612,102 @@ export async function getWorkflowHistoryWithSnapshot(
   }));
 
   return { currentWorkflowHash, history };
+}
+
+// ─── Test / Dry Run ──────────────────────────────────────────────────────────
+
+export interface RunWorkflowTestDryRunParams {
+  data: Record<string, unknown>;
+  variables?: Record<string, unknown>;
+  // Optional repo context — mirrors manual runs so tests can target a repo.
+  repoUrl?: string;
+  branch?: string;
+  ref?: string;
+}
+
+export interface RunWorkflowTestDryRunResult {
+  executionId: string;
+  sessionId: string | null;
+  status: string;
+  dispatched: boolean;
+}
+
+/**
+ * Run a workflow draft in dry-run / test mode. Skips the workflows table
+ * entirely — the WorkflowData is persisted only in the execution's
+ * workflow_snapshot column. The resulting execution is tagged trigger_type='test'
+ * so it's excluded from default execution listings (use ?includeTest=true to see it).
+ */
+export async function runWorkflowTestDryRun(
+  env: Env,
+  userId: string,
+  params: RunWorkflowTestDryRunParams,
+): Promise<RunWorkflowTestDryRunResult> {
+  const validation = validateWorkflowDefinition(params.data);
+  if (!validation.valid) {
+    throw new ValidationError(`Invalid workflow draft: ${validation.errors.join('; ')}`);
+  }
+
+  const db = getDb(env.DB);
+
+  const concurrency = await checkWorkflowConcurrency(db, userId);
+  if (!concurrency.allowed) {
+    throw new ValidationError(`Too many concurrent executions (${concurrency.reason})`);
+  }
+
+  const executionId = crypto.randomUUID();
+  const now = new Date().toISOString();
+  const workflowSnapshot = JSON.stringify(params.data);
+  const workflowHash = await sha256Hex(workflowSnapshot);
+
+  // Create a workflow session with workflowId=null; createWorkflowSession derives
+  // the workspace name from the execution id when no workflowId is present.
+  const sessionId = await createWorkflowSession(db, {
+    userId,
+    workflowId: null,
+    executionId,
+    sourceRepoUrl: params.repoUrl,
+    branch: params.branch,
+    ref: params.ref,
+  });
+
+  // Idempotency key includes executionId since each test run is fresh.
+  const idempotencyKey = `test:${executionId}`;
+  const variables = {
+    ...(params.variables ?? {}),
+    _trigger: { type: 'test' },
+  };
+
+  await createExecution(env.DB, {
+    id: executionId,
+    workflowId: null,
+    userId,
+    triggerId: null,
+    triggerType: 'test',
+    triggerMetadata: JSON.stringify({ triggeredBy: 'editor_test_run' }),
+    variables: JSON.stringify(variables),
+    now,
+    workflowVersion: typeof params.data.version === 'string' ? params.data.version : null,
+    workflowHash,
+    workflowSnapshot,
+    idempotencyKey,
+    sessionId,
+    initiatorType: 'manual',
+    initiatorUserId: userId,
+  });
+
+  const dispatched = await enqueueWorkflowExecution(env, {
+    executionId,
+    workflowId: null,
+    userId,
+    sessionId,
+    triggerType: 'test',
+  });
+
+  return {
+    executionId,
+    sessionId,
+    status: dispatched ? 'pending' : 'failed',
+    dispatched,
+  };
 }

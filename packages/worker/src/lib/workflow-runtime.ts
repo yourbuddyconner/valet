@@ -27,8 +27,9 @@ export async function sha256Hex(input: string): Promise<string> {
 
 // ─── Data Access Helper ─────────────────────────────────────────────────────
 
-function buildWorkflowWorkspace(workflowId: string, executionId: string): string {
-  const wf = workflowId.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 16) || 'workflow';
+function buildWorkflowWorkspace(workflowId: string | null, executionId: string): string {
+  // For test/dry runs (no workflowId) we derive a stable workspace name from the execution id.
+  const wf = (workflowId ?? 'test').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 16) || 'workflow';
   const ex = executionId.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 16) || 'execution';
   return `workflow-${wf}-${ex}`.slice(0, 100);
 }
@@ -37,7 +38,8 @@ export async function createWorkflowSession(
   database: AppDb,
   params: {
     userId: string;
-    workflowId: string;
+    // Nullable for test/dry runs that don't have a persisted workflow row.
+    workflowId: string | null;
     executionId: string;
     sourceRepoFullName?: string;
     sourceRepoUrl?: string;
@@ -47,15 +49,21 @@ export async function createWorkflowSession(
 ): Promise<string> {
   const sessionId = crypto.randomUUID();
 
+  const titlePrefix = params.workflowId
+    ? `Workflow ${params.workflowId.slice(0, 12)} run`
+    : `Workflow test run ${params.executionId.slice(0, 8)}`;
+
   await db.createSession(database, {
     id: sessionId,
     userId: params.userId,
     workspace: buildWorkflowWorkspace(params.workflowId, params.executionId),
-    title: `Workflow ${params.workflowId.slice(0, 12)} run`,
+    title: titlePrefix,
     metadata: {
       workflowId: params.workflowId,
       executionId: params.executionId,
       internal: true,
+      // Flag test sessions so consumers can hide them from default lists.
+      isTestRun: params.workflowId === null,
     },
     purpose: 'workflow',
   });

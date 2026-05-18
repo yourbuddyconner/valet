@@ -78,6 +78,14 @@ const draftWorkflowStepSchema = z.object({
   instruction: z.string().min(1).max(500),
 });
 
+const testRunWorkflowSchema = z.object({
+  data: z.record(z.unknown()),
+  variables: z.record(z.unknown()).optional(),
+  repoUrl: z.string().optional(),
+  branch: z.string().optional(),
+  ref: z.string().optional(),
+});
+
 const MAX_DRAFT_JSON_BYTES = 32_000;
 
 /**
@@ -133,6 +141,20 @@ workflowsRouter.get('/:id', async (c) => {
       updatedAt: row.updated_at,
     },
   });
+});
+
+/**
+ * POST /api/workflows/test-run
+ * Run an in-memory workflow draft (no persisted workflow row) as a dry/test execution.
+ * Creates an execution with trigger_type='test' so it is excluded from default lists.
+ * Returns { executionId, sessionId } so the client can subscribe to step events.
+ */
+workflowsRouter.post('/test-run', zValidator('json', testRunWorkflowSchema), async (c) => {
+  const user = c.get('user');
+  const body = c.req.valid('json');
+
+  const result = await workflowService.runWorkflowTestDryRun(c.env, user.id, body);
+  return c.json(result, 201);
 });
 
 /**

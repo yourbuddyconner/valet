@@ -380,3 +380,22 @@ export function useDraftWorkflowStep() {
       api.post<{ workflow: WorkflowData; attempts: number }>('/workflows/draft/step', vars),
   });
 }
+
+export interface TestRunWorkflowResponse {
+  executionId: string;
+  sessionId: string | null;
+  status: string;
+  dispatched: boolean;
+}
+
+export function useTestRunWorkflow() {
+  return useMutation({
+    mutationFn: (vars: {
+      data: WorkflowData;
+      variables?: Record<string, unknown>;
+      repoUrl?: string;
+      branch?: string;
+      ref?: string;
+    }) => api.post<TestRunWorkflowResponse>('/workflows/test-run', vars),
+  });
+}

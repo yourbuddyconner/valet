@@ -5,6 +5,7 @@ import {
   useDraftWorkflow,
   useDraftWorkflowStep,
   useSyncWorkflow,
+  useTestRunWorkflow,
   useWorkflow,
   type WorkflowData,
   type WorkflowStep,
@@ -14,6 +15,8 @@ import { WorkflowDiagram } from '@/components/workflows/workflow-diagram';
 import { WorkflowDraftTriggerForm } from '@/components/workflows/workflow-draft-trigger-form';
 import { WorkflowStepInspector } from '@/components/workflows/workflow-step-inspector';
 import { WorkflowVariablesEditor } from '@/components/workflows/workflow-variables-editor';
+import { RunWorkflowDialog } from '@/components/workflows/run-workflow-dialog';
+import { TestRunPanel } from '@/components/workflows/test-run-panel';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/cn';
 
@@ -47,10 +50,15 @@ function NewWorkflowPage() {
   const [tab, setTab] = useState<Tab>('chat');
   const [trigger, setTrigger] = useState<TriggerDraft | null>({ kind: 'manual', config: {} });
   const [saveError, setSaveError] = useState<string | null>(null);
+  // Test-run state: dialog visibility, in-flight error, and the active test execution.
+  const [showTestRunDialog, setShowTestRunDialog] = useState(false);
+  const [testRunError, setTestRunError] = useState<string | null>(null);
+  const [activeTestRun, setActiveTestRun] = useState<{ executionId: string; sessionId: string | null } | null>(null);
 
   const draftMut = useDraftWorkflow();
   const stepMut = useDraftWorkflowStep();
   const syncMut = useSyncWorkflow();
+  const testRunMut = useTestRunWorkflow();
   const createTrigger = useCreateTrigger();
 
   useEffect(() => {
@@ -193,6 +201,35 @@ function NewWorkflowPage() {
   };
 
   const refining = draftMut.isPending || stepMut.isPending;
+
+  // Dispatch a test/dry run with collected variables. If the draft has no declared
+  // variables we skip the dialog and run immediately.
+  const startTestRun = (values: Record<string, unknown>) => {
+    if (!draft) return;
+    setTestRunError(null);
+    testRunMut.mutate(
+      { data: draft, variables: values },
+      {
+        onSuccess: (res) => {
+          setShowTestRunDialog(false);
+          setActiveTestRun({ executionId: res.executionId, sessionId: res.sessionId });
+        },
+        onError: (err) => {
+          setTestRunError(err instanceof Error ? err.message : 'Test run failed to start');
+        },
+      },
+    );
+  };
+
+  const handleTestRunClick = () => {
+    if (!draft) return;
+    const hasVars = Object.keys(draft.variables ?? {}).length > 0;
+    if (hasVars) {
+      setShowTestRunDialog(true);
+    } else {
+      startTestRun({});
+    }
+  };
 
   return (
     <div className="flex flex-col h-full">
@@ -347,12 +384,21 @@ function NewWorkflowPage() {
               )}
             </div>
 
-            {saveError && (
+            {(saveError || testRunError) && (
               <div className="bg-red-500/10 border-t border-red-500/30 text-red-600 dark:text-red-400 text-xs px-3 py-2 font-mono">
-                {saveError}
+                {saveError ?? testRunError}
               </div>
             )}
             <div className="border-t border-border p-3 flex gap-2">
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={handleTestRunClick}
+                disabled={testRunMut.isPending || !!activeTestRun}
+                className="flex-1"
+              >
+                {testRunMut.isPending ? 'Starting…' : 'Test run'}
+              </Button>
               <Button
                 variant="secondary"
                 size="sm"
@@ -373,6 +419,29 @@ function NewWorkflowPage() {
             </div>
           </aside>
         </div>
+      )}
+
+      {showTestRunDialog && draft && (
+        <RunWorkflowDialog
+          name={draft.name}
+          variables={draft.variables ?? {}}
+          loading={testRunMut.isPending}
+          confirmLabel="Start test run"
+          title={`Test run ${draft.name}`}
+          description="Provide sample values to execute this draft without saving. The test execution is excluded from the default executions list."
+          onClose={() => {
+            if (!testRunMut.isPending) setShowTestRunDialog(false);
+          }}
+          onConfirm={startTestRun}
+        />
+      )}
+
+      {activeTestRun && (
+        <TestRunPanel
+          executionId={activeTestRun.executionId}
+          sessionId={activeTestRun.sessionId}
+          onClose={() => setActiveTestRun(null)}
+        />
       )}
     </div>
   );

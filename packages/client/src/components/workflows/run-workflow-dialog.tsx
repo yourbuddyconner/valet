@@ -11,13 +11,22 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Badge } from '@/components/ui/badge';
-import type { Workflow, VariableDefinition } from '@/api/workflows';
+import type { VariableDefinition } from '@/api/workflows';
 
 interface Props {
-  workflow: Workflow;
-  onConfirm: (variables: Record<string, unknown>) => void;
+  // Display name (e.g. workflow name or draft name).
+  name: string;
+  // Variable schema keyed by variable name. Pass {} when there are no variables.
+  variables: Record<string, VariableDefinition>;
+  onConfirm: (values: Record<string, unknown>) => void;
   onClose: () => void;
   loading: boolean;
+  // Override the primary action label (default: "Run workflow").
+  confirmLabel?: string;
+  // Override the dialog title (default: "Run {name}").
+  title?: string;
+  // Override the dialog description.
+  description?: string;
 }
 
 // Each field stores its raw text/checkbox state. We parse to typed values at confirm time.
@@ -100,8 +109,16 @@ function typeBadgeVariant(type: VariableDefinition['type']): 'default' | 'second
   return type === 'boolean' || type === 'number' ? 'secondary' : 'default';
 }
 
-export function RunWorkflowDialog({ workflow, onConfirm, onClose, loading }: Props) {
-  const variables = workflow.data.variables ?? {};
+export function RunWorkflowDialog({
+  name,
+  variables,
+  onConfirm,
+  onClose,
+  loading,
+  confirmLabel,
+  title,
+  description,
+}: Props) {
   const entries = React.useMemo(() => Object.entries(variables), [variables]);
 
   const [state, setState] = React.useState<Record<string, FieldState>>(() => {
@@ -152,9 +169,9 @@ export function RunWorkflowDialog({ workflow, onConfirm, onClose, loading }: Pro
     >
       <DialogContent className="max-w-xl max-h-[85vh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>Run {workflow.name}</DialogTitle>
+          <DialogTitle>{title ?? `Run ${name}`}</DialogTitle>
           <DialogDescription>
-            This workflow requires inputs. Provide values to continue.
+            {description ?? 'This workflow requires inputs. Provide values to continue.'}
           </DialogDescription>
         </DialogHeader>
 
@@ -242,7 +259,7 @@ export function RunWorkflowDialog({ workflow, onConfirm, onClose, loading }: Pro
             Cancel
           </Button>
           <Button type="button" variant="primary" onClick={handleConfirm} disabled={hasError || loading}>
-            {loading ? 'Running…' : 'Run workflow'}
+            {loading ? 'Running…' : (confirmLabel ?? 'Run workflow')}
           </Button>
         </DialogFooter>
       </DialogContent>

@@ -119,7 +119,8 @@ function WorkflowDetailPage() {
       </div>
       {showRunDialog && (
         <RunWorkflowDialog
-          workflow={workflow}
+          name={workflow.name}
+          variables={workflow.data.variables ?? {}}
           loading={run.isPending}
           onClose={() => setShowRunDialog(false)}
           onConfirm={(variables) => {
