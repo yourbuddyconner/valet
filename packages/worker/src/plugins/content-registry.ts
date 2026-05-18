@@ -1436,6 +1436,15 @@ sheets.protect_range({
     ],
   },
   {
+    name: "grafana",
+    version: "0.0.1",
+    description: "Grafana Cloud integration for dashboards, Prometheus, Loki, alerts, incidents, and on-call",
+    icon: "📊",
+    actionType: "mcp",
+    capabilities: ["actions"],
+    artifacts: [],
+  },
+  {
     name: "granola",
     version: "0.0.1",
     description: "Granola integration for meeting notes and context",
