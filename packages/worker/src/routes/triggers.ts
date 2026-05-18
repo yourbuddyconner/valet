@@ -19,6 +19,8 @@ import {
   type TriggerConfig,
 } from '../lib/db.js';
 import * as triggerService from '../services/triggers.js';
+import { loadGitHubApp } from '../services/github-app.js';
+import { getGithubInstallationByLogin } from '../lib/db/github-installations.js';
 
 export const triggersRouter = new Hono<{ Bindings: Env; Variables: Variables }>();
 
@@ -192,6 +194,120 @@ triggersRouter.get('/', async (c) => {
   }));
 
   return c.json({ triggers });
+});
+
+/**
+ * Octokit's RequestError carries a numeric `status`. We don't depend on the
+ * concrete class — just sniff the shape so we don't have to import it.
+ */
+function httpStatusOf(err: unknown): number | null {
+  if (typeof err === 'object' && err !== null && 'status' in err) {
+    const s = (err as { status: unknown }).status;
+    if (typeof s === 'number') return s;
+  }
+  return null;
+}
+
+/**
+ * GET /api/triggers/github/available-events
+ *
+ * Returns the GitHub webhook events the live App subscription will deliver.
+ * Used by the trigger-config UI to populate the events picker.
+ *
+ * Query: ?repo=owner/name (repeatable). With no `repo`, returns the App-level
+ * default subscription. With repos, returns each install's effective list
+ * (org admins can narrow a per-install subscription) plus the union.
+ */
+triggersRouter.get('/github/available-events', async (c) => {
+  const user = c.get('user');
+  const appDb = c.get('db');
+
+  const app = await loadGitHubApp(c.env, appDb);
+  if (!app) {
+    return c.json({ error: 'GitHub App not configured' }, 503);
+  }
+
+  // App-level events serve both the no-repo response and the "union baseline"
+  // when filtering per-repo.
+  const appResp = await app.octokit.request('GET /app');
+  const appEvents: string[] = Array.isArray(appResp.data?.events) ? appResp.data.events : [];
+
+  const rawRepos = c.req.queries('repo') ?? [];
+  if (rawRepos.length === 0) {
+    c.header('Cache-Control', 'private, max-age=60');
+    return c.json({
+      events: appEvents,
+      byRepo: {},
+      notInstalled: [],
+      unsubscribed: [],
+    });
+  }
+
+  for (const repo of rawRepos) {
+    if (!REPO_FULL_NAME_REGEX.test(repo)) {
+      throw new ValidationError(`repo "${repo}" must be in "owner/repo" form`);
+    }
+  }
+
+  const byRepo: Record<string, string[]> = {};
+  const notInstalled: string[] = [];
+  const unionSet = new Set<string>();
+
+  for (const repo of rawRepos) {
+    const [owner, name] = repo.split('/');
+
+    // Authorization: confirm the install for this repo's owner is linked to
+    // the requesting user (or that they're an admin). We do this BEFORE the
+    // GitHub API call because the App JWT bypasses GitHub-side user authz —
+    // a 200 from GitHub doesn't prove the caller is allowed to see the data.
+    const installRow = await getGithubInstallationByLogin(appDb, owner);
+    const isAdmin = user.role === 'admin';
+    if (installRow) {
+      // Org installs with no linked owner are only visible to admins —
+      // a regular member shouldn't be able to enumerate org install events
+      // just because they know the org name.
+      const owns = installRow.linkedUserId === user.id;
+      if (!owns && !isAdmin) {
+        return c.json({ error: 'Forbidden' }, 403);
+      }
+    } else if (!isAdmin) {
+      // No installation row at all and the caller isn't an admin — treat as
+      // forbidden rather than leaking "no install" vs "wrong user".
+      return c.json({ error: 'Forbidden' }, 403);
+    }
+
+    try {
+      const resp = await app.octokit.request('GET /repos/{owner}/{repo}/installation', {
+        owner,
+        repo: name,
+      });
+      const events: string[] = Array.isArray(resp.data?.events) ? resp.data.events : [];
+      byRepo[repo] = events;
+      for (const e of events) unionSet.add(e);
+    } catch (err) {
+      const status = httpStatusOf(err);
+      if (status === 404) {
+        notInstalled.push(repo);
+        continue;
+      }
+      if (status === 403) {
+        // Shouldn't normally happen under an App JWT, but if GitHub denies us
+        // we surface it as a 403 rather than leaking a 500 / stack.
+        return c.json({ error: 'Forbidden' }, 403);
+      }
+      throw err;
+    }
+  }
+
+  c.header('Cache-Control', 'private, max-age=60');
+  return c.json({
+    events: Array.from(unionSet),
+    byRepo,
+    notInstalled,
+    // App-level events not present in any queried install's effective list.
+    // Informational; org admins occasionally narrow a per-install subscription.
+    unsubscribed: appEvents.filter((e) => !unionSet.has(e)),
+  });
 });
 
 /**
