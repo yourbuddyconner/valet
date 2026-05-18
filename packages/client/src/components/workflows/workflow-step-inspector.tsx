@@ -1,7 +1,8 @@
 import { useMemo, useState } from 'react';
 import type { WorkflowData, WorkflowStep } from '@/api/workflows';
-import { inferScope } from './scope-inferencer';
+import { inferScope, type Scope } from './scope-inferencer';
 import { ScopePanel } from './scope-panel';
+import { TemplatedInput } from './templated-input';
 
 interface Props {
   step: WorkflowStep;
@@ -21,6 +22,8 @@ const TYPE_LABEL: Record<WorkflowStep['type'], string> = {
 };
 
 export function WorkflowStepInspector({ step, onChange, workflow }: Props) {
+  // Compute scope once per render so templated inputs and the scope panel share it.
+  const scope = useMemo(() => inferScope(workflow, step.id), [workflow, step.id]);
   return (
     <div className="h-full overflow-y-auto px-4 py-4 space-y-4">
       <div>
@@ -54,11 +57,11 @@ export function WorkflowStepInspector({ step, onChange, workflow }: Props) {
         mono
       />
 
-      <TypeSpecificFields step={step} onChange={onChange} />
+      <TypeSpecificFields step={step} onChange={onChange} scope={scope} />
 
       <div className="border-t border-neutral-200 pt-4 mt-2">
         <div className="text-[10px] text-neutral-500 tracking-wider mb-2">SCOPE</div>
-        <ScopePanel scope={inferScope(workflow, step.id)} />
+        <ScopePanel scope={scope} />
       </div>
     </div>
   );
@@ -67,20 +70,25 @@ export function WorkflowStepInspector({ step, onChange, workflow }: Props) {
 function TypeSpecificFields({
   step,
   onChange,
+  scope,
 }: {
   step: WorkflowStep;
   onChange: (patch: Partial<WorkflowStep>) => void;
+  scope: Scope;
 }) {
   switch (step.type) {
     case 'bash':
       return (
-        <TextAreaField
-          label="Command"
-          value={step.command ?? ''}
-          onChange={(v) => onChange({ command: v || undefined })}
-          mono
-          rows={3}
-        />
+        <Field label="Command">
+          <TemplatedInput
+            value={step.command ?? ''}
+            onChange={(v) => onChange({ command: v || undefined })}
+            scope={scope}
+            multiline
+            rows={3}
+            mono
+          />
+        </Field>
       );
 
     case 'tool':
@@ -103,13 +111,16 @@ function TypeSpecificFields({
     case 'agent_prompt':
       return (
         <>
-          <TextAreaField
-            label="Prompt"
-            value={step.prompt ?? ''}
-            placeholder="Tell the Valet agent what to do…"
-            onChange={(v) => onChange({ prompt: v || undefined })}
-            rows={5}
-          />
+          <Field label="Prompt">
+            <TemplatedInput
+              value={step.prompt ?? ''}
+              placeholder="Tell the Valet agent what to do…"
+              onChange={(v) => onChange({ prompt: v || undefined })}
+              scope={scope}
+              multiline
+              rows={5}
+            />
+          </Field>
           <ThreadField step={step} onChange={onChange} />
           <NumberField
             label="Timeout (ms)"
@@ -150,13 +161,15 @@ function TypeSpecificFields({
       const childrenCount = (step.then?.length ?? 0) + (step.else?.length ?? 0);
       return (
         <>
-          <TextField
-            label="Condition"
-            value={condition}
-            placeholder="e.g. outputs.list_runs.failed > 0"
-            onChange={(v) => onChange({ condition: v })}
-            mono
-          />
+          <Field label="Condition">
+            <TemplatedInput
+              value={condition}
+              placeholder="e.g. outputs.list_runs.failed > 0"
+              onChange={(v) => onChange({ condition: v })}
+              scope={scope}
+              mono
+            />
+          </Field>
           <Field label="Branches">
             <div className="text-xs text-neutral-500">
               {step.then?.length ?? 0} then · {step.else?.length ?? 0} else
@@ -221,24 +234,30 @@ function TypeSpecificFields({
 
     case 'approval':
       return (
-        <TextAreaField
-          label="Prompt"
-          value={step.prompt ?? ''}
-          onChange={(v) => onChange({ prompt: v || undefined })}
-          rows={3}
-        />
+        <Field label="Prompt">
+          <TemplatedInput
+            value={step.prompt ?? ''}
+            onChange={(v) => onChange({ prompt: v || undefined })}
+            scope={scope}
+            multiline
+            rows={3}
+          />
+        </Field>
       );
 
     case 'notify':
       return (
         <>
-          <TextAreaField
-            label="Content"
-            value={step.content ?? ''}
-            placeholder="Tell the orchestrator agent what happened (supports {{outputs.foo.bar}} interpolation)…"
-            onChange={(v) => onChange({ content: v || undefined })}
-            rows={5}
-          />
+          <Field label="Content">
+            <TemplatedInput
+              value={step.content ?? ''}
+              placeholder="Tell the orchestrator agent what happened (supports {{outputs.foo.bar}} interpolation)…"
+              onChange={(v) => onChange({ content: v || undefined })}
+              scope={scope}
+              multiline
+              rows={5}
+            />
+          </Field>
           <Field label="Target">
             <div className="text-xs text-neutral-700 bg-neutral-50 border border-neutral-200 rounded px-2.5 py-1.5">
               Your orchestrator agent
@@ -286,37 +305,6 @@ function TextField({
         onChange={(e) => onChange(e.target.value)}
         className={
           'w-full rounded-md border border-neutral-300 px-2 py-1 text-sm ' +
-          (mono ? 'font-mono' : '')
-        }
-      />
-    </Field>
-  );
-}
-
-function TextAreaField({
-  label,
-  value,
-  placeholder,
-  onChange,
-  mono,
-  rows = 3,
-}: {
-  label: string;
-  value: string;
-  placeholder?: string;
-  onChange: (v: string) => void;
-  mono?: boolean;
-  rows?: number;
-}) {
-  return (
-    <Field label={label}>
-      <textarea
-        value={value}
-        placeholder={placeholder}
-        onChange={(e) => onChange(e.target.value)}
-        rows={rows}
-        className={
-          'w-full rounded-md border border-neutral-300 px-2 py-1 text-sm resize-y ' +
           (mono ? 'font-mono' : '')
         }
       />
