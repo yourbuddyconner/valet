@@ -100,6 +100,48 @@ function renderCondition(trigger: Trigger) {
   if (trigger.type === 'manual') {
     return <div className="text-sm text-neutral-700 dark:text-neutral-300 mb-1">Run manually</div>;
   }
+  if (trigger.type === 'github' && trigger.config.type === 'github') {
+    const cfg = trigger.config;
+    const repoCount = cfg.repos?.length ?? 0;
+    const events = cfg.events ?? [];
+    const filter = cfg.filter;
+    return (
+      <div className="text-sm mb-1">
+        <div className="text-foreground">
+          {repoCount === 0 ? (
+            <span className="text-amber-600 dark:text-amber-400">No repos selected</span>
+          ) : repoCount === 1 ? (
+            <code className="font-mono text-xs">{cfg.repos[0]}</code>
+          ) : (
+            <span><code className="font-mono text-xs">{cfg.repos[0]}</code> <span className="text-neutral-500">+ {repoCount - 1} more</span></span>
+          )}
+        </div>
+        <div className="flex flex-wrap gap-1 mt-1">
+          {events.length === 0 ? (
+            <span className="text-[11px] text-amber-600 dark:text-amber-400">No events selected</span>
+          ) : (
+            events.slice(0, 4).map(e => (
+              <Badge key={e} variant="secondary" className="!font-mono !normal-case !tracking-normal">{e}</Badge>
+            ))
+          )}
+          {events.length > 4 && <span className="text-[11px] text-neutral-500">+{events.length - 4} more</span>}
+        </div>
+        {filter && (filter.branch || filter.labels || filter.actions) && (
+          <div className="flex flex-wrap gap-1 mt-1 text-[11px] text-neutral-500">
+            {filter.actions && filter.actions.length > 0 && (
+              <span>actions: <code className="font-mono">{filter.actions.join(',')}</code></span>
+            )}
+            {filter.branch && (
+              <span>branch: <code className="font-mono">{Array.isArray(filter.branch) ? filter.branch.join(',') : filter.branch}</code></span>
+            )}
+            {filter.labels && filter.labels.length > 0 && (
+              <span>labels: <code className="font-mono">{filter.labels.join(',')}</code></span>
+            )}
+          </div>
+        )}
+      </div>
+    );
+  }
   return null;
 }
 
