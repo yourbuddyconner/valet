@@ -4,14 +4,17 @@ import { api } from './client';
 // Types
 export interface Execution {
   id: string;
-  workflowId: string;
+  /** Nullable when the source workflow has since been deleted. */
+  workflowId: string | null;
   workflowName: string | null;
+  /** Snapshot of the workflow body captured at execution time. Use as a fallback for the diagram when workflowId is null. */
+  workflowSnapshot: Record<string, unknown> | null;
   sessionId?: string | null;
   triggerId: string | null;
   triggerName?: string | null;
   status: 'pending' | 'running' | 'waiting_approval' | 'completed' | 'failed' | 'cancelled';
   resumeToken?: string | null;
-  triggerType: 'webhook' | 'schedule' | 'manual' | 'retry';
+  triggerType: 'webhook' | 'schedule' | 'manual' | 'retry' | 'test' | 'github';
   triggerMetadata: Record<string, unknown> | null;
   variables: Record<string, unknown> | null;
   outputs: Record<string, unknown> | null;

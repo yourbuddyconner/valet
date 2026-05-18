@@ -17,7 +17,7 @@ import { ExecutionStepTracePanel } from '@/components/workflows/execution-step-t
 import { ExecutionStepPanel } from '@/components/workflows/execution-step-panel';
 import { ExecutionVariablesPanel } from '@/components/workflows/execution-variables-panel';
 import { useExecutionStepEvents } from '@/hooks/use-execution-step-events';
-import type { WorkflowStep } from '@/api/workflows';
+import type { WorkflowStep, WorkflowData } from '@/api/workflows';
 
 export const Route = createFileRoute('/automation/executions/$executionId')({
   component: ExecutionDetailPage,
@@ -29,8 +29,13 @@ function ExecutionDetailPage() {
   const { data: execData, isLoading, error } = useExecution(executionId);
   const { data: stepsData } = useExecutionSteps(executionId);
   const execution = execData?.execution;
+  // Only fetch the live workflow when the FK is still intact. If the source
+  // workflow was deleted, fall through to execution.workflowSnapshot below.
   const { data: workflowData } = useWorkflow(execution?.workflowId ?? '');
-  const workflow = workflowData?.workflow?.data;
+  const liveWorkflowDef = workflowData?.workflow?.data ?? null;
+  const snapshotDef = (execution?.workflowSnapshot as WorkflowData | null | undefined) ?? null;
+  const workflow = liveWorkflowDef ?? snapshotDef;
+  const sourceDeleted = !!execution && execution.workflowId === null;
 
   const approve = useApproveExecution();
   const cancel = useCancelExecution();
@@ -108,6 +113,11 @@ function ExecutionDetailPage() {
       />
       <div className="flex flex-1 min-h-0 relative">
         <div className="flex-1 min-w-0 bg-surface-2 border-r border-border flex flex-col min-h-0 relative">
+          {sourceDeleted && (
+            <div className="px-4 py-1.5 text-[11px] text-amber-700 dark:text-amber-300 bg-amber-500/10 border-b border-amber-500/30 font-mono">
+              Source workflow deleted — showing the snapshot captured at execution time.
+            </div>
+          )}
           <div className="flex-1 min-h-0">
             {workflow ? (
               <WorkflowDiagram
@@ -118,7 +128,7 @@ function ExecutionDetailPage() {
                 stepErrors={stepErrors}
               />
             ) : (
-              <div className="text-sm text-neutral-500 p-4">Loading workflow…</div>
+              <div className="text-sm text-neutral-500 p-4">Workflow definition not available.</div>
             )}
           </div>
           {!sidebarOpen && (

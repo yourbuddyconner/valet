@@ -99,11 +99,19 @@ executionsRouter.get('/:id', async (c) => {
     throw new NotFoundError('Execution', id);
   }
 
+  // Parse the workflow snapshot captured at execution time. Used by the detail
+  // page when the source workflow has since been deleted — without this fallback,
+  // orphaned executions hang on "Loading workflow…".
+  const workflowSnapshot = row.workflow_snapshot
+    ? JSON.parse(row.workflow_snapshot as string)
+    : null;
+
   return c.json({
     execution: {
       id: row.id,
       workflowId: row.workflow_id,
-      workflowName: row.workflow_name,
+      workflowName: row.workflow_name ?? (workflowSnapshot?.name ?? null),
+      workflowSnapshot,
       sessionId: row.session_id,
       triggerId: row.trigger_id,
       triggerName: row.trigger_name,
