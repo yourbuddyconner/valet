@@ -86,6 +86,39 @@ describe('workflow-engine', () => {
     expect(output?.stdout).toContain('workflow-ok');
   });
 
+  it('interpolates bash command tokens via env vars, not shell splice', async () => {
+    const compiled = await compileWorkflowDefinition({
+      steps: [
+        {
+          id: 'echo-untrusted',
+          type: 'tool',
+          tool: 'bash',
+          arguments: {
+            // Untrusted-looking variable: contains shell metacharacters that
+            // would be catastrophic if spliced into the command string.
+            command: 'printf %s {{variables.payload}}',
+          },
+        },
+      ],
+    });
+
+    if (!compiled.ok || !compiled.workflow) {
+      throw new Error('compile failed');
+    }
+
+    const result = await executeWorkflowRun('ex_bash_inject', compiled.workflow, {
+      variables: { payload: '"; touch /tmp/valet_pwned_$$; echo "owned' },
+    });
+    expect(result.status).toBe('ok');
+    const output = result.steps[0]?.output as { stdout?: string; command?: string } | undefined;
+    // The stdout MUST contain the raw payload — proving it was passed as data,
+    // not interpreted as shell syntax. The recorded command field should
+    // contain the rewritten "$VALET_TPL_0" form, not the raw payload.
+    expect(output?.stdout).toContain('"; touch /tmp/valet_pwned_');
+    expect(output?.command).toContain('"$VALET_TPL_0"');
+    expect(output?.command).not.toContain('touch /tmp/valet_pwned');
+  });
+
   it('routes agent_prompt steps through onAgentStep hook with thread metadata', async () => {
     const compiled = await compileWorkflowDefinition({
       steps: [
@@ -535,6 +568,109 @@ describe('workflow-engine', () => {
     expect(compiled.errors.some((e) => /loop step requires "over"/.test(e.message))).toBe(true);
   });
 
+  it('rolls back outputs published by completed iterations when a later iteration fails', async () => {
+    // Loop fails on the 3rd iteration ('c'). Without rollback, `outputs.last` would
+    // leak the value from iteration 2 ('b'). With rollback, downstream steps see no
+    // partial loop state.
+    const compiled = await compileWorkflowDefinition({
+      steps: [
+        {
+          id: 'each',
+          type: 'loop',
+          over: 'variables.items',
+          steps: [
+            {
+              id: 'visit',
+              type: 'tool',
+              tool: 'noop',
+              arguments: { value: '{{loop.item}}' },
+              outputVariable: 'last',
+            },
+          ],
+        },
+      ],
+    });
+
+    if (!compiled.ok || !compiled.workflow) {
+      throw new Error('compile failed');
+    }
+
+    const result = await executeWorkflowRun(
+      'ex_loop_rollback',
+      compiled.workflow,
+      { variables: { items: ['a', 'b', 'c'] } },
+      {
+        onToolStep: async (step) => {
+          const args = step.arguments as { value?: unknown } | undefined;
+          if (args?.value === 'c') {
+            return { status: 'failed', error: 'boom' };
+          }
+          return { status: 'completed', output: { ok: true, item: args?.value } };
+        },
+      },
+    );
+
+    expect(result.status).toBe('failed');
+    // outputs.last must be absent — the iterations that ran successfully are rolled back
+    // so callers can't observe partial state from a failed loop step.
+    const outputs = result.output as Record<string, unknown>;
+    expect(outputs).not.toHaveProperty('last');
+  });
+
+  it('preserves outputs that existed before the loop when the loop fails', async () => {
+    // outputs published BEFORE the loop step must survive a loop failure — only
+    // mutations made inside the loop body are rolled back.
+    const compiled = await compileWorkflowDefinition({
+      steps: [
+        {
+          id: 'pre',
+          type: 'tool',
+          tool: 'noop',
+          arguments: { value: 'preloop' },
+          outputVariable: 'pre',
+        },
+        {
+          id: 'each',
+          type: 'loop',
+          over: 'variables.items',
+          steps: [
+            {
+              id: 'visit',
+              type: 'tool',
+              tool: 'noop',
+              arguments: { value: '{{loop.item}}' },
+              outputVariable: 'last',
+            },
+          ],
+        },
+      ],
+    });
+
+    if (!compiled.ok || !compiled.workflow) {
+      throw new Error('compile failed');
+    }
+
+    const result = await executeWorkflowRun(
+      'ex_loop_rollback_pre',
+      compiled.workflow,
+      { variables: { items: ['a', 'b'] } },
+      {
+        onToolStep: async (step) => {
+          const args = step.arguments as { value?: unknown } | undefined;
+          if (args?.value === 'b') {
+            return { status: 'failed', error: 'boom' };
+          }
+          return { status: 'completed', output: { ok: true, item: args?.value } };
+        },
+      },
+    );
+
+    expect(result.status).toBe('failed');
+    const outputs = result.output as Record<string, unknown>;
+    expect(outputs).toHaveProperty('pre');
+    expect(outputs).not.toHaveProperty('last');
+  });
+
   it('replays skipped steps from persisted outputs when startFromStepId is set', async () => {
     const compiled = await compileWorkflowDefinition({
       steps: [
@@ -662,5 +798,275 @@ describe('workflow-engine', () => {
 
     expect(resumed.status).toBe('failed');
     expect(resumed.error).toMatch(/^resume_token_mismatch:/);
+  });
+
+  it('runs parallel branches concurrently rather than sequentially', async () => {
+    const compiled = await compileWorkflowDefinition({
+      steps: [
+        {
+          id: 'fanout',
+          type: 'parallel',
+          steps: [
+            { id: 'branch-a', type: 'agent_prompt', prompt: 'a' },
+            { id: 'branch-b', type: 'agent_prompt', prompt: 'b' },
+          ],
+        },
+      ],
+    });
+
+    if (!compiled.ok || !compiled.workflow) {
+      throw new Error('compile failed');
+    }
+
+    // Each branch's hook delays before resolving. If branches were sequential,
+    // branch-b would not START until branch-a's promise resolved. With true
+    // concurrency, b should START before a FINISHES.
+    const branchStartedAt = new Map<string, number>();
+    const branchFinishedAt = new Map<string, number>();
+
+    const result = await executeWorkflowRun(
+      'ex_parallel_concurrent',
+      compiled.workflow,
+      { variables: {} },
+      {
+        onAgentStep: async (step) => {
+          if (step.type !== 'agent_prompt') return;
+          branchStartedAt.set(step.id, Date.now());
+          await new Promise((resolve) => setTimeout(resolve, 80));
+          branchFinishedAt.set(step.id, Date.now());
+          return { status: 'completed', output: { id: step.id } };
+        },
+      },
+    );
+
+    expect(result.status).toBe('ok');
+
+    const aStart = branchStartedAt.get('branch-a');
+    const aEnd = branchFinishedAt.get('branch-a');
+    const bStart = branchStartedAt.get('branch-b');
+    const bEnd = branchFinishedAt.get('branch-b');
+
+    if (aStart === undefined || aEnd === undefined || bStart === undefined || bEnd === undefined) {
+      throw new Error('missing branch timestamps');
+    }
+
+    // Whichever branch starts first should still be running when the other starts.
+    const firstStart = Math.min(aStart, bStart);
+    const firstEnd = aStart === firstStart ? aEnd : bEnd;
+    const secondStart = Math.max(aStart, bStart);
+    expect(secondStart).toBeLessThan(firstEnd);
+  });
+
+  it('returns failed when one parallel branch fails', async () => {
+    const compiled = await compileWorkflowDefinition({
+      steps: [
+        {
+          id: 'fanout',
+          type: 'parallel',
+          steps: [
+            { id: 'ok', type: 'agent_prompt', prompt: 'fine' },
+            { id: 'bad', type: 'agent_prompt', prompt: 'boom' },
+          ],
+        },
+      ],
+    });
+
+    if (!compiled.ok || !compiled.workflow) {
+      throw new Error('compile failed');
+    }
+
+    const result = await executeWorkflowRun(
+      'ex_parallel_fail',
+      compiled.workflow,
+      { variables: {} },
+      {
+        onAgentStep: async (step) => {
+          if (step.id === 'bad') {
+            return { status: 'failed', error: 'kaboom' };
+          }
+          return { status: 'completed', output: { ok: true } };
+        },
+      },
+    );
+
+    expect(result.status).toBe('failed');
+    expect(result.error).toMatch(/kaboom/);
+  });
+
+  it('isolates outputs between parallel branches', async () => {
+    const compiled = await compileWorkflowDefinition({
+      steps: [
+        {
+          id: 'fanout',
+          type: 'parallel',
+          steps: [
+            { id: 'writer', type: 'agent_prompt', prompt: 'write', outputVariable: 'x' },
+            { id: 'reader', type: 'agent_prompt', prompt: 'read' },
+          ],
+        },
+      ],
+    });
+
+    if (!compiled.ok || !compiled.workflow) {
+      throw new Error('compile failed');
+    }
+
+    let readerSawX: unknown = 'sentinel';
+
+    const result = await executeWorkflowRun(
+      'ex_parallel_iso',
+      compiled.workflow,
+      { variables: {} },
+      {
+        onAgentStep: async (step, ctx) => {
+          if (step.id === 'writer') {
+            // Delay so the reader has a chance to observe the absence first.
+            await new Promise((resolve) => setTimeout(resolve, 40));
+            return { status: 'completed', output: 1 };
+          }
+          if (step.id === 'reader') {
+            readerSawX = ctx.outputs.x;
+            return { status: 'completed', output: { read: true } };
+          }
+          return { status: 'completed' };
+        },
+      },
+    );
+
+    expect(result.status).toBe('ok');
+    expect(readerSawX).toBeUndefined();
+    // After the parallel merges back, the writer's output should be on the parent.
+    expect(result.output.x).toBe(1);
+  });
+
+  it('propagates cancelled through conditional branches', async () => {
+    const compiled = await compileWorkflowDefinition({
+      steps: [
+        {
+          id: 'gate',
+          type: 'conditional',
+          condition: 'true',
+          then: [
+            { id: 'cancels', type: 'agent_prompt', prompt: 'stop' },
+          ],
+        },
+        { id: 'after', type: 'agent_prompt', prompt: 'should not run' },
+      ],
+    });
+
+    if (!compiled.ok || !compiled.workflow) {
+      throw new Error('compile failed');
+    }
+
+    let afterRan = false;
+
+    const result = await executeWorkflowRun(
+      'ex_cond_cancelled',
+      compiled.workflow,
+      { variables: {} },
+      {
+        onAgentStep: async (step) => {
+          if (step.id === 'cancels') {
+            return { status: 'cancelled', error: 'user_cancel' };
+          }
+          if (step.id === 'after') {
+            afterRan = true;
+          }
+          return { status: 'completed' };
+        },
+      },
+    );
+
+    expect(result.status).toBe('cancelled');
+    expect(result.error).toMatch(/user_cancel/);
+    expect(afterRan).toBe(false);
+  });
+
+  it('propagates cancelled through parallel branches', async () => {
+    const compiled = await compileWorkflowDefinition({
+      steps: [
+        {
+          id: 'fanout',
+          type: 'parallel',
+          steps: [
+            { id: 'cancels', type: 'agent_prompt', prompt: 'stop' },
+            { id: 'sibling', type: 'agent_prompt', prompt: 'ok' },
+          ],
+        },
+        { id: 'after', type: 'agent_prompt', prompt: 'should not run' },
+      ],
+    });
+
+    if (!compiled.ok || !compiled.workflow) {
+      throw new Error('compile failed');
+    }
+
+    let afterRan = false;
+
+    const result = await executeWorkflowRun(
+      'ex_parallel_cancelled',
+      compiled.workflow,
+      { variables: {} },
+      {
+        onAgentStep: async (step) => {
+          if (step.id === 'cancels') {
+            return { status: 'cancelled', error: 'parallel_cancel' };
+          }
+          if (step.id === 'after') {
+            afterRan = true;
+          }
+          return { status: 'completed' };
+        },
+      },
+    );
+
+    expect(result.status).toBe('cancelled');
+    expect(result.error).toMatch(/parallel_cancel/);
+    expect(afterRan).toBe(false);
+  });
+
+  it('seeds outputs from previousOutputs on resume', async () => {
+    const compiled = await compileWorkflowDefinition({
+      steps: [
+        { id: 'gate', type: 'approval', prompt: 'go?' },
+        { id: 'reader', type: 'agent_prompt', prompt: 'check outputs' },
+      ],
+    });
+
+    if (!compiled.ok || !compiled.workflow) {
+      throw new Error('compile failed');
+    }
+
+    const firstRun = await executeWorkflowRun('ex_resume_seed', compiled.workflow, { variables: {} });
+    const resumeToken = firstRun.requiresApproval?.resumeToken;
+    if (!resumeToken) {
+      throw new Error('missing resume token');
+    }
+
+    let readerSawOutputs: Record<string, unknown> = {};
+
+    const resumed = await executeWorkflowResume(
+      'ex_resume_seed',
+      compiled.workflow,
+      {
+        variables: {},
+        runtime: { previousOutputs: { upstream: { value: 42 } } },
+      },
+      resumeToken,
+      'approve',
+      {
+        onAgentStep: async (step, ctx) => {
+          if (step.id === 'reader') {
+            readerSawOutputs = { ...ctx.outputs };
+          }
+          return { status: 'completed', output: { ok: true } };
+        },
+      },
+    );
+
+    expect(resumed.status).toBe('ok');
+    expect(readerSawOutputs.upstream).toEqual({ value: 42 });
+    // The seeded value must survive into the final envelope outputs too.
+    expect(resumed.output.upstream).toEqual({ value: 42 });
   });
 });
