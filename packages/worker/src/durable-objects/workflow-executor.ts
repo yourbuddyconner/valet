@@ -11,7 +11,7 @@ import { assembleProviderEnv } from '../lib/env-assembly.js';
 
 // 'test' is for ephemeral test/dry runs from the editor — no persisted workflow row,
 // excluded from the default executions list.
-export type WorkflowTriggerType = 'manual' | 'webhook' | 'schedule' | 'test' | 'retry';
+export type WorkflowTriggerType = 'manual' | 'webhook' | 'schedule' | 'test' | 'retry' | 'github';
 
 interface EnqueueRequest {
   executionId: string;

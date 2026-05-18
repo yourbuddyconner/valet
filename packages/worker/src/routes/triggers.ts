@@ -37,16 +37,32 @@ const scheduleConfigSchema = z.object({
   timezone: z.string().optional(),
   target: z.enum(['workflow', 'orchestrator']).optional().default('workflow'),
   prompt: z.string().min(1).max(100000).optional(),
+  variables: z.record(z.unknown()).optional(),
 });
 
 const manualConfigSchema = z.object({
   type: z.literal('manual'),
 });
 
+// "owner/repo" — same regex GitHub itself accepts for repo full names.
+const REPO_FULL_NAME_REGEX = /^[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+$/;
+
+const githubConfigSchema = z.object({
+  type: z.literal('github'),
+  repos: z.array(z.string().regex(REPO_FULL_NAME_REGEX, 'repos must be in "owner/repo" form')).min(1),
+  events: z.array(z.string().min(1)).min(1),
+  filter: z.object({
+    branch: z.union([z.string(), z.array(z.string())]).optional(),
+    labels: z.array(z.string()).optional(),
+    actions: z.array(z.string()).optional(),
+  }).optional(),
+});
+
 const triggerConfigSchema = z.discriminatedUnion('type', [
   webhookConfigSchema,
   scheduleConfigSchema,
   manualConfigSchema,
+  githubConfigSchema,
 ]);
 
 const createTriggerSchema = z.object({

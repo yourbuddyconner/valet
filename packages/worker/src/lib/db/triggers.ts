@@ -5,10 +5,25 @@ import { triggers, workflows } from '../schema/index.js';
 
 // ─── Pure Helpers ────────────────────────────────────────────────────────────
 
+export interface GitHubTriggerFilter {
+  branch?: string | string[];
+  labels?: string[];
+  actions?: string[];
+}
+
 export type TriggerConfig =
   | { type: 'webhook'; path: string; method?: string; secret?: string; headers?: Record<string, string> }
-  | { type: 'schedule'; cron: string; timezone?: string; target?: 'workflow' | 'orchestrator'; prompt?: string }
-  | { type: 'manual' };
+  | {
+      type: 'schedule';
+      cron: string;
+      timezone?: string;
+      target?: 'workflow' | 'orchestrator';
+      prompt?: string;
+      // Default variable values for workflow-target schedule fires; ignored for orchestrator target.
+      variables?: Record<string, unknown>;
+    }
+  | { type: 'manual' }
+  | { type: 'github'; repos: string[]; events: string[]; filter?: GitHubTriggerFilter };
 
 export function scheduleTarget(config: TriggerConfig): 'workflow' | 'orchestrator' {
   if (config.type !== 'schedule') return 'workflow';
@@ -251,7 +266,7 @@ export async function getTriggerForRun(db: D1Database, userId: string, triggerId
     WHERE t.id = ? AND t.user_id = ?
   `).bind(triggerId, userId).first<{
     id: string;
-    type: 'webhook' | 'schedule' | 'manual';
+    type: 'webhook' | 'schedule' | 'manual' | 'github';
     config: string;
     wf_id: string | null;
     workflow_name: string | null;

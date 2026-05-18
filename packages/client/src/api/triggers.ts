@@ -17,8 +17,8 @@ export interface Trigger {
   workflowName: string | null;
   name: string;
   enabled: boolean;
-  type: 'webhook' | 'schedule' | 'manual';
-  config: WebhookConfig | ScheduleConfig | ManualConfig;
+  type: 'webhook' | 'schedule' | 'manual' | 'github';
+  config: WebhookConfig | ScheduleConfig | ManualConfig | GitHubConfig;
   variableMapping: Record<string, string> | null;
   webhookUrl?: string;
   lastRunAt: string | null;
@@ -40,13 +40,29 @@ export interface ScheduleConfig {
   timezone?: string;
   target?: 'workflow' | 'orchestrator';
   prompt?: string;
+  /** Default variable values for `target: 'workflow'` runs. Ignored for orchestrator target. */
+  variables?: Record<string, unknown>;
 }
 
 export interface ManualConfig {
   type: 'manual';
 }
 
-export type TriggerConfig = WebhookConfig | ScheduleConfig | ManualConfig;
+export interface GitHubConfig {
+  type: 'github';
+  /** Repos to listen on, in "owner/repo" form. */
+  repos: string[];
+  /** Events to fire on. e.g. ['pull_request.opened', 'push'] or ['pull_request'] for any pull_request.* */
+  events: string[];
+  /** Optional filters short-circuited before dispatch. */
+  filter?: {
+    branch?: string | string[];
+    labels?: string[];
+    actions?: string[];
+  };
+}
+
+export type TriggerConfig = WebhookConfig | ScheduleConfig | ManualConfig | GitHubConfig;
 
 export interface CreateTriggerRequest {
   workflowId?: string;

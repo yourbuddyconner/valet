@@ -92,7 +92,7 @@ export async function enqueueWorkflowExecution(
     workflowId: string | null;
     userId: string;
     sessionId?: string;
-    triggerType: 'manual' | 'webhook' | 'schedule' | 'test' | 'retry';
+    triggerType: 'manual' | 'webhook' | 'schedule' | 'test' | 'retry' | 'github';
     workerOrigin?: string;
   }
 ): Promise<boolean> {

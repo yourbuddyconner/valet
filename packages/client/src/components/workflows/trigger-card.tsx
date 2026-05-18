@@ -1,4 +1,4 @@
-import { Clock, Webhook, Play, ArrowRight } from 'lucide-react';
+import { Clock, Webhook, Play, ArrowRight, GitBranch } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import type { Trigger } from '@/api/triggers';
 import { humanizeCron } from './cron-humanize';
@@ -13,6 +13,7 @@ const TYPE_META: Record<Trigger['type'], { label: string; classes: string; icon:
   schedule: { label: 'SCHEDULE', classes: 'bg-indigo-500/10 text-indigo-600 dark:text-indigo-400', icon: Clock },
   webhook: { label: 'WEBHOOK', classes: 'bg-amber-500/10 text-amber-600 dark:text-amber-400', icon: Webhook },
   manual: { label: 'MANUAL', classes: 'bg-surface-3 text-neutral-600 dark:text-neutral-400', icon: Play },
+  github: { label: 'GITHUB', classes: 'bg-violet-500/10 text-violet-600 dark:text-violet-400', icon: GitBranch },
 };
 
 interface TriggerCardProps {

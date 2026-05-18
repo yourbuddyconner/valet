@@ -4,6 +4,7 @@ import * as webhookService from '../services/webhooks.js';
 import { getDb } from '../lib/drizzle.js';
 import { loadGitHubApp } from '../services/github-app.js';
 import { handleInstallationWebhook } from '../services/github-installations.js';
+import { dispatchGitHubTriggers } from '../services/github-triggers.js';
 
 export const webhooksRouter = new Hono<{ Bindings: Env; Variables: Variables }>();
 
@@ -113,6 +114,16 @@ webhooksRouter.post('/github', async (c) => {
     }
   }
 
+  // Dispatch user-defined `github` triggers. Runs for every event type — the dispatcher
+  // does its own event/repo/filter matching. Failures here must not 5xx the webhook.
+  let triggerDispatch: { matched: number; dispatched: number } | null = null;
+  try {
+    const workerOrigin = new URL(c.req.url).origin;
+    triggerDispatch = await dispatchGitHubTriggers(c.env, payload, event, deliveryId, workerOrigin);
+  } catch (error) {
+    console.error('[github webhook] trigger dispatcher error:', error);
+  }
+
   // TODO: route unhandled events to org orchestrator for automation rules
   const handled = new Set(['installation', 'pull_request', 'push']);
   if (!handled.has(event)) {
@@ -120,7 +131,7 @@ webhooksRouter.post('/github', async (c) => {
   }
 
   // Always return 200 — failing to ACK causes GitHub to retry and amplify errors
-  return c.json({ received: true, event, deliveryId });
+  return c.json({ received: true, event, deliveryId, triggers: triggerDispatch });
 });
 
 /**

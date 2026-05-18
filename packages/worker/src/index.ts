@@ -900,6 +900,7 @@ async function dispatchScheduledWorkflows(event: ScheduledController, env: Env):
       timezone?: string;
       target?: 'workflow' | 'orchestrator';
       prompt?: string;
+      variables?: Record<string, unknown>;
     };
     try {
       config = JSON.parse(row.config);
@@ -940,7 +941,10 @@ async function dispatchScheduledWorkflows(event: ScheduledController, env: Env):
         executionId,
       });
 
+      // Defaults from trigger config are overlaid first, then the synthetic _trigger metadata
+      // wins so it can never be clobbered by a user-supplied variable named "_trigger".
       const variables = {
+        ...(config.variables ?? {}),
         _trigger: {
           type: 'schedule',
           triggerId: row.trigger_id,
