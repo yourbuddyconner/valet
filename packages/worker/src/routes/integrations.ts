@@ -153,6 +153,8 @@ integrationsRouter.get('/available', async (c) => {
     .filter((pkg) => {
       // Skip plugins disabled by admin
       if (disabledPlugins.has(pkg.service)) return false;
+      // Skip plugins that don't require user authentication
+      if (pkg.provider.authType === 'none') return false;
       // MCP OAuth services — always available (dynamic client registration)
       if (pkg.provider.mcpServerUrl) return true;
       // Traditional OAuth services — need env vars configured
