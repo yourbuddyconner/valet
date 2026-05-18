@@ -155,8 +155,9 @@ interface TemplatedInputProps {
 }
 
 // Shared classes for the textarea/input and the overlay so they wrap identically.
+// Border + bg + focus styling lives here; overlay strips border via `border-transparent` so only the textarea draws it.
 const SHARED_TEXT_CLASSES =
-  'w-full rounded-md border border-neutral-300 px-2 py-1 text-sm leading-5 whitespace-pre-wrap break-words';
+  'w-full rounded-md border border-border bg-surface-0 dark:bg-surface-2 px-2 py-1 text-sm leading-5 whitespace-pre-wrap break-words focus:outline-none focus:ring-2 focus:ring-accent/30 focus:border-accent transition';
 
 export function TemplatedInput(props: TemplatedInputProps): JSX.Element {
   const {
@@ -282,19 +283,20 @@ export function TemplatedInput(props: TemplatedInputProps): JSX.Element {
 
   const fontClass = mono ? 'font-mono' : '';
 
-  // Overlay must use the same typography + padding + wrapping as the textarea
-  // so each character lands at the same coordinates.
+  // Overlay sits behind the textarea and holds the visible bg + text. The textarea on top
+  // is transparent for both bg and text so only the caret/selection show through.
+  // Border lives on the textarea so the focus ring renders correctly when the user is editing.
   const overlayClasses =
     SHARED_TEXT_CLASSES +
     ' ' +
     fontClass +
-    ' absolute inset-0 pointer-events-none overflow-hidden text-neutral-900 border-transparent';
+    ' absolute inset-0 pointer-events-none overflow-hidden text-foreground border-transparent';
 
   const fieldClasses =
     SHARED_TEXT_CLASSES +
     ' ' +
     fontClass +
-    ' relative bg-transparent text-transparent caret-neutral-900';
+    ' relative !bg-transparent text-transparent caret-foreground';
 
   return (
     <div className="relative">
@@ -339,7 +341,7 @@ export function TemplatedInput(props: TemplatedInputProps): JSX.Element {
         )}
       </div>
       {menuOpen && filtered.length > 0 && (
-        <div className="absolute left-0 right-0 top-full mt-1 z-20 bg-white border border-neutral-200 rounded-md shadow-lg max-h-64 overflow-auto">
+        <div className="absolute left-0 right-0 top-full mt-1 z-20 bg-surface-1 border border-border rounded-md shadow-panel py-1 max-h-72 overflow-y-auto">
           {filtered.map((c, idx) => (
             <button
               key={c.path}
@@ -347,16 +349,16 @@ export function TemplatedInput(props: TemplatedInputProps): JSX.Element {
               onMouseDown={(e) => handleRowClick(e, c)}
               onMouseEnter={() => setHighlight(idx)}
               className={
-                'w-full text-left px-2 py-1 flex items-center gap-2 text-xs ' +
-                (idx === highlight ? 'bg-neutral-100' : 'hover:bg-neutral-50')
+                'w-full text-left px-2.5 py-1.5 text-xs cursor-pointer flex items-center gap-2 ' +
+                (idx === highlight ? 'bg-accent/10 text-foreground' : 'text-foreground hover:bg-surface-2')
               }
             >
-              <code className="font-mono text-neutral-900 truncate">{c.path}</code>
-              <span className="text-[10px] uppercase tracking-wider text-neutral-500 bg-neutral-100 rounded px-1 py-0.5 shrink-0">
+              <code className="font-mono truncate">{c.path}</code>
+              <span className="text-[10px] uppercase tracking-wider text-neutral-500 dark:text-neutral-400 bg-surface-2 rounded px-1 py-0.5 shrink-0">
                 {c.type}
               </span>
               {c.description && (
-                <span className="text-neutral-500 truncate">{c.description}</span>
+                <span className="text-neutral-500 dark:text-neutral-400 truncate">{c.description}</span>
               )}
             </button>
           ))}
@@ -377,7 +379,7 @@ function renderOverlay(tokens: TemplateToken[], scope: Scope): JSX.Element[] {
       return (
         <span
           key={i}
-          className="bg-emerald-100 text-emerald-800 rounded px-0.5"
+          className="bg-accent/15 text-accent rounded px-0.5"
         >
           {tok.text}
         </span>
@@ -386,7 +388,7 @@ function renderOverlay(tokens: TemplateToken[], scope: Scope): JSX.Element[] {
     return (
       <span
         key={i}
-        className="bg-red-100 text-red-800 rounded px-0.5 underline decoration-wavy decoration-red-500"
+        className="bg-red-500/10 text-red-500 dark:text-red-400 underline decoration-wavy decoration-red-500 rounded px-0.5"
         title={`Unresolved path: ${path}`}
       >
         {tok.text}

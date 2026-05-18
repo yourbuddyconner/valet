@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createFileRoute, useNavigate } from '@tanstack/react-router';
+import { ArrowUp, X } from 'lucide-react';
 import {
   useDraftWorkflow,
   useDraftWorkflowStep,
@@ -13,6 +14,7 @@ import { WorkflowDiagram } from '@/components/workflows/workflow-diagram';
 import { WorkflowDraftTriggerForm } from '@/components/workflows/workflow-draft-trigger-form';
 import { WorkflowStepInspector } from '@/components/workflows/workflow-step-inspector';
 import { WorkflowVariablesEditor } from '@/components/workflows/workflow-variables-editor';
+import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/cn';
 
 export const Route = createFileRoute('/automation/workflows/new')({
@@ -183,16 +185,16 @@ function NewWorkflowPage() {
 
   return (
     <div className="flex flex-col h-full">
-      <header className="px-6 py-4 bg-white border-b border-neutral-200">
-        <div className="text-xs text-neutral-500 tracking-wider mb-1">AUTOMATION / WORKFLOWS</div>
-        <h1 className="text-xl font-semibold">{editId ? 'Edit workflow' : 'New workflow'}</h1>
+      <header className="px-6 py-4 bg-surface-1 border-b border-border">
+        <div className="text-xs text-neutral-500 dark:text-neutral-400 tracking-wider mb-1">AUTOMATION / WORKFLOWS</div>
+        <h1 className="text-xl font-semibold text-foreground">{editId ? 'Edit workflow' : 'New workflow'}</h1>
       </header>
 
       {!draft ? (
         <EmptyState onSubmit={handleInitialDraft} loading={draftMut.isPending} />
       ) : (
         <div className="flex-1 min-h-0 flex flex-col lg:flex-row">
-          <div className="flex-1 min-w-0 bg-neutral-50 lg:overflow-hidden">
+          <div className="flex-1 min-w-0 bg-surface-2 lg:overflow-hidden">
             <div className="h-[600px] lg:h-full">
               <WorkflowDiagram
                 workflow={draft}
@@ -203,8 +205,8 @@ function NewWorkflowPage() {
             </div>
           </div>
 
-          <aside className="w-full lg:w-[380px] flex flex-col bg-white border-t lg:border-t-0 lg:border-l border-neutral-200 min-h-0">
-            <div className="flex border-b border-neutral-200">
+          <aside className="w-full lg:w-[380px] flex flex-col bg-surface-1 border-t lg:border-t-0 lg:border-l border-border min-h-0">
+            <div className="flex border-b border-border">
               {(['inspect', 'chat', 'variables', 'trigger', 'json'] as const).map((t) => {
                 const variableCount = Object.keys(draft.variables ?? {}).length;
                 const label =
@@ -217,10 +219,10 @@ function NewWorkflowPage() {
                     onClick={() => setTab(t)}
                     aria-pressed={tab === t}
                     className={cn(
-                      'flex-1 text-xs uppercase tracking-wider py-2.5 font-medium',
+                      'flex-1 text-xs uppercase tracking-wider py-2.5 font-medium transition-colors',
                       tab === t
-                        ? 'text-neutral-900 border-b-2 border-neutral-900'
-                        : 'text-neutral-500 hover:text-neutral-700 border-b-2 border-transparent',
+                        ? 'text-foreground border-b-2 border-accent'
+                        : 'text-neutral-500 hover:text-foreground border-b-2 border-transparent',
                     )}
                   >
                     {label}
@@ -238,7 +240,7 @@ function NewWorkflowPage() {
                     workflow={draft}
                   />
                 ) : (
-                  <div className="h-full flex items-center justify-center px-6 text-xs text-neutral-500 text-center">
+                  <div className="h-full flex items-center justify-center px-6 text-xs text-neutral-500 dark:text-neutral-400 text-center">
                     {selectedStepIds.size === 0
                       ? 'Click a node to inspect its parameters.'
                       : `${selectedStepIds.size} steps selected — use the Chat tab to refine multiple steps at once.`}
@@ -279,31 +281,35 @@ function NewWorkflowPage() {
                 </div>
               )}
               {tab === 'json' && (
-                <pre className="text-xs bg-neutral-50 p-3 overflow-auto h-full font-mono whitespace-pre-wrap break-words">
+                <pre className="text-xs bg-surface-2 text-foreground p-3 overflow-auto h-full font-mono whitespace-pre-wrap break-words">
                   {JSON.stringify(draft, null, 2)}
                 </pre>
               )}
             </div>
 
             {saveError && (
-              <div className="px-3 py-2 text-xs text-red-700 bg-red-50 border-t border-red-200">
+              <div className="bg-red-500/10 border-t border-red-500/30 text-red-600 dark:text-red-400 text-xs px-3 py-2 font-mono">
                 {saveError}
               </div>
             )}
-            <div className="border-t border-neutral-200 p-3 flex gap-2">
-              <button
+            <div className="border-t border-border p-3 flex gap-2">
+              <Button
+                variant="secondary"
+                size="sm"
                 onClick={() => nav({ to: '/automation/workflows' })}
-                className="flex-1 px-3 py-1.5 text-sm border border-neutral-300 rounded-md hover:bg-neutral-50"
+                className="flex-1"
               >
                 Discard
-              </button>
-              <button
+              </Button>
+              <Button
+                variant="primary"
+                size="sm"
                 onClick={handleSave}
                 disabled={syncMut.isPending}
-                className="flex-1 px-3 py-1.5 text-sm bg-emerald-700 text-white rounded-md font-medium hover:bg-emerald-800 disabled:opacity-50"
+                className="flex-1"
               >
                 {syncMut.isPending ? 'Saving…' : 'Save'}
-              </button>
+              </Button>
             </div>
           </aside>
         </div>
@@ -343,7 +349,7 @@ function ChatPanel({
     <div className="h-full flex flex-col">
       <div ref={scrollRef} className="flex-1 overflow-y-auto px-3 py-3 space-y-2">
         {messages.length === 0 && (
-          <div className="text-xs text-neutral-500 text-center pt-6 px-2">
+          <div className="text-xs text-neutral-500 dark:text-neutral-400 text-center pt-6 px-2">
             Click a node to target it (⌘/Ctrl+click to add to selection), then ask the agent to
             refine.
           </div>
@@ -351,18 +357,18 @@ function ChatPanel({
         {messages.map((m) => (
           <ChatMessageView key={m.id} message={m} stepNames={stepNames} />
         ))}
-        {refining && <div className="text-xs text-neutral-500 italic">Drafting…</div>}
+        {refining && <div className="text-xs text-neutral-500 dark:text-neutral-400 italic">Drafting…</div>}
       </div>
 
       {selectedStepIds.size > 0 && (
-        <div className="border-t border-neutral-200 px-3 py-2 bg-indigo-50">
-          <div className="text-[10px] text-indigo-700 font-semibold tracking-wider mb-1.5 flex items-center justify-between">
+        <div className="border-t border-border px-3 py-2 bg-accent/10">
+          <div className="text-[10px] text-accent font-semibold tracking-wider mb-1.5 flex items-center justify-between">
             <span>
               TARGETING {selectedStepIds.size} STEP{selectedStepIds.size === 1 ? '' : 'S'}
             </span>
             <button
               onClick={onClearSelection}
-              className="text-[10px] text-indigo-600 hover:text-indigo-900 normal-case font-normal"
+              className="text-[10px] text-accent hover:opacity-80 normal-case font-normal"
             >
               clear
             </button>
@@ -371,15 +377,15 @@ function ChatPanel({
             {Array.from(selectedStepIds).map((id) => (
               <span
                 key={id}
-                className="inline-flex items-center gap-1 text-xs bg-white border border-indigo-300 text-indigo-800 px-1.5 py-0.5 rounded"
+                className="inline-flex items-center gap-1 text-xs bg-surface-0 border border-accent/40 text-accent px-1.5 py-0.5 rounded"
               >
                 {stepNames.get(id) ?? id}
                 <button
                   onClick={() => onRemoveSelection(id)}
-                  className="text-indigo-500 hover:text-indigo-900"
+                  className="text-accent/70 hover:text-accent"
                   aria-label={`Remove ${id} from selection`}
                 >
-                  ×
+                  <X className="w-3 h-3" strokeWidth={1.5} />
                 </button>
               </span>
             ))}
@@ -387,7 +393,7 @@ function ChatPanel({
         </div>
       )}
 
-      <div className="border-t border-neutral-200 p-3">
+      <div className="border-t border-border p-3">
         <div className="flex gap-2">
           <input
             type="text"
@@ -398,7 +404,7 @@ function ChatPanel({
                 ? 'Refine the selected step(s)…'
                 : 'Refine the whole workflow…'
             }
-            className="flex-1 rounded-md border border-neutral-300 px-2 py-1.5 text-sm"
+            className="flex-1 rounded-md border border-border bg-surface-0 dark:bg-surface-2 text-foreground px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-accent/30 focus:border-accent transition"
             disabled={refining}
             onKeyDown={(e) => {
               if (e.key === 'Enter' && text.trim()) {
@@ -407,7 +413,9 @@ function ChatPanel({
               }
             }}
           />
-          <button
+          <Button
+            variant="primary"
+            size="sm"
             onClick={() => {
               if (text.trim()) {
                 onSend(text.trim());
@@ -415,10 +423,10 @@ function ChatPanel({
               }
             }}
             disabled={refining || !text.trim()}
-            className="px-3 py-1.5 bg-neutral-900 text-white rounded-md text-sm font-medium disabled:opacity-50"
           >
+            <ArrowUp className="w-3.5 h-3.5" strokeWidth={1.5} />
             Send
-          </button>
+          </Button>
         </div>
       </div>
     </div>
@@ -434,24 +442,24 @@ function ChatMessageView({
 }) {
   if (message.role === 'user') {
     return (
-      <div className="bg-indigo-50 border-l-2 border-indigo-500 px-2.5 py-1.5 rounded-r text-xs">
+      <div className="bg-accent/10 border-l-2 border-accent px-2.5 py-1.5 rounded-r text-xs">
         {message.targetIds.length > 0 && (
-          <div className="text-[10px] text-indigo-700 mb-1">
+          <div className="text-[10px] text-accent mb-1">
             Targeting: {message.targetIds.map((id) => stepNames.get(id) ?? id).join(', ')}
           </div>
         )}
-        <div className="text-neutral-800">{message.content}</div>
+        <div className="text-foreground">{message.content}</div>
       </div>
     );
   }
   if (message.role === 'error') {
     return (
-      <div className="bg-red-50 border-l-2 border-red-500 px-2.5 py-1.5 rounded-r text-xs text-red-800">
+      <div className="bg-red-500/10 border-l-2 border-red-500 px-2.5 py-1.5 rounded-r text-xs text-red-600 dark:text-red-400">
         {message.content}
       </div>
     );
   }
-  return <div className="text-xs text-neutral-600 px-2.5">↳ {message.content}</div>;
+  return <div className="text-xs text-neutral-500 dark:text-neutral-400 px-2.5">↳ {message.content}</div>;
 }
 
 function findStep(steps: WorkflowStep[], id: string): WorkflowStep | null {
@@ -527,16 +535,17 @@ function EmptyState({
           value={text}
           onChange={(e) => setText(e.target.value)}
           placeholder="Every weekday at 9am, check my open PRs and send a summary to Slack…"
-          className="w-full min-h-[120px] rounded-xl border border-neutral-300 px-4 py-3 text-sm"
+          className="w-full min-h-[120px] rounded-xl border border-border bg-surface-0 dark:bg-surface-2 text-foreground px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-accent/30 focus:border-accent transition"
         />
         <div className="flex justify-end mt-3">
-          <button
+          <Button
+            variant="primary"
+            size="lg"
             onClick={() => onSubmit(text)}
             disabled={loading || !text.trim()}
-            className="px-5 py-2 bg-neutral-900 text-white rounded-lg text-sm font-medium hover:bg-neutral-800 disabled:opacity-50"
           >
             {loading ? 'Drafting…' : 'Draft workflow →'}
-          </button>
+          </Button>
         </div>
       </div>
     </div>

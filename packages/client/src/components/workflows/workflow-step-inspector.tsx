@@ -1,7 +1,11 @@
 import { useMemo, useState } from 'react';
+import { Plus, X } from 'lucide-react';
 import type { WorkflowData, WorkflowStep } from '@/api/workflows';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 import { inferScope, type Scope } from './scope-inferencer';
 import { ScopePanel } from './scope-panel';
+import { StepTypeIcon } from './step-icons';
 import { TemplatedInput } from './templated-input';
 
 interface Props {
@@ -27,14 +31,15 @@ export function WorkflowStepInspector({ step, onChange, workflow }: Props) {
   return (
     <div className="h-full overflow-y-auto px-4 py-4 space-y-4">
       <div>
-        <div className="text-[10px] text-neutral-500 tracking-wider mb-0.5">TYPE</div>
-        <span className="text-[10px] font-bold tracking-wider bg-neutral-900 text-white px-1.5 py-0.5 rounded">
+        <div className="text-[10px] text-neutral-500 dark:text-neutral-400 tracking-wider mb-1">TYPE</div>
+        <Badge variant="secondary">
+          <StepTypeIcon type={step.type} className="w-3 h-3" />
           {TYPE_LABEL[step.type]}
-        </span>
+        </Badge>
       </div>
 
       <Field label="ID">
-        <code className="text-xs font-mono text-neutral-600">{step.id}</code>
+        <code className="text-xs font-mono text-neutral-500 dark:text-neutral-400">{step.id}</code>
       </Field>
 
       <TextField
@@ -59,8 +64,8 @@ export function WorkflowStepInspector({ step, onChange, workflow }: Props) {
 
       <TypeSpecificFields step={step} onChange={onChange} scope={scope} />
 
-      <div className="border-t border-neutral-200 pt-4 mt-2">
-        <div className="text-[10px] text-neutral-500 tracking-wider mb-2">SCOPE</div>
+      <div className="border-t border-border pt-4 mt-4">
+        <div className="text-[10px] text-neutral-500 dark:text-neutral-400 tracking-wider mb-2">SCOPE</div>
         <ScopePanel scope={scope} />
       </div>
     </div>
@@ -122,37 +127,39 @@ function TypeSpecificFields({
             />
           </Field>
           <ThreadField step={step} onChange={onChange} />
-          <NumberField
-            label="Timeout (ms)"
-            value={step.awaitTimeoutMs ?? 120000}
-            onChange={(n) => onChange({ awaitTimeoutMs: n })}
-            min={1000}
-            max={900000}
-          />
-          <CheckboxField
-            label="Interrupt in-flight turn first"
-            checked={step.interrupt === true}
-            onChange={(b) => onChange({ interrupt: b || undefined })}
-            helper="Aborts any prompt currently running on the target thread before sending this one."
-          />
-          <OutputSchemaEditor
-            schema={step.outputSchema ?? {}}
-            onChange={(next) => {
-              // Clear field entirely when schema is empty so JSON serialization stays clean.
-              const hasFields = Object.keys(next).length > 0;
-              onChange({ outputSchema: hasFields ? next : undefined });
-            }}
-          />
-          {step.outputSchema && Object.keys(step.outputSchema).length > 0 && (
-            <div className="text-[11px] text-neutral-500 italic">
-              Schema-validated structured output. Reference fields in later steps as <code>outputs.&lt;outputVariable&gt;.&lt;field&gt;</code>.
-            </div>
-          )}
-          {step.outputSchema && Object.keys(step.outputSchema).length > 0 && !step.outputVariable && (
-            <div className="text-[11px] text-amber-600">
-              Set an Output variable to make these fields accessible downstream.
-            </div>
-          )}
+          <div className="border-t border-border pt-3 space-y-4">
+            <NumberField
+              label="Timeout (ms)"
+              value={step.awaitTimeoutMs ?? 120000}
+              onChange={(n) => onChange({ awaitTimeoutMs: n })}
+              min={1000}
+              max={900000}
+            />
+            <CheckboxField
+              label="Interrupt in-flight turn first"
+              checked={step.interrupt === true}
+              onChange={(b) => onChange({ interrupt: b || undefined })}
+              helper="Aborts any prompt currently running on the target thread before sending this one."
+            />
+            <OutputSchemaEditor
+              schema={step.outputSchema ?? {}}
+              onChange={(next) => {
+                // Clear field entirely when schema is empty so JSON serialization stays clean.
+                const hasFields = Object.keys(next).length > 0;
+                onChange({ outputSchema: hasFields ? next : undefined });
+              }}
+            />
+            {step.outputSchema && Object.keys(step.outputSchema).length > 0 && (
+              <div className="text-[11px] text-neutral-500 dark:text-neutral-400 italic">
+                Schema-validated structured output. Reference fields in later steps as <code>outputs.&lt;outputVariable&gt;.&lt;field&gt;</code>.
+              </div>
+            )}
+            {step.outputSchema && Object.keys(step.outputSchema).length > 0 && !step.outputVariable && (
+              <div className="text-[11px] text-amber-600 dark:text-amber-400">
+                Set an Output variable to make these fields accessible downstream.
+              </div>
+            )}
+          </div>
         </>
       );
 
@@ -171,7 +178,7 @@ function TypeSpecificFields({
             />
           </Field>
           <Field label="Branches">
-            <div className="text-xs text-neutral-500">
+            <div className="text-xs text-neutral-500 dark:text-neutral-400">
               {step.then?.length ?? 0} then · {step.else?.length ?? 0} else
               {childrenCount > 0 && (
                 <span className="block text-[11px] mt-1">
@@ -187,7 +194,7 @@ function TypeSpecificFields({
     case 'parallel':
       return (
         <Field label="Child steps">
-          <div className="text-xs text-neutral-500">
+          <div className="text-xs text-neutral-500 dark:text-neutral-400">
             {step.steps?.length ?? 0} nested step(s).
             <span className="block text-[11px] mt-1">
               Use the chat to add, remove, or reorder nested steps.
@@ -221,7 +228,7 @@ function TypeSpecificFields({
             mono
           />
           <Field label="Body">
-            <div className="text-xs text-neutral-500">
+            <div className="text-xs text-neutral-500 dark:text-neutral-400">
               {step.steps?.length ?? 0} nested step(s) run per iteration.
               <span className="block text-[11px] mt-1">
                 Reference the current item with <code>{`{{loop.item}}`}</code> and the index with <code>{`{{loop.index}}`}</code>.
@@ -258,14 +265,16 @@ function TypeSpecificFields({
               rows={5}
             />
           </Field>
-          <Field label="Target">
-            <div className="text-xs text-neutral-700 bg-neutral-50 border border-neutral-200 rounded px-2.5 py-1.5">
-              Your orchestrator agent
-            </div>
-            <div className="text-[11px] text-neutral-500 mt-1">
-              Fire-and-forget. The orchestrator decides what to do with this (Slack, message you, take action).
-            </div>
-          </Field>
+          <div className="border-t border-border pt-3">
+            <Field label="Target">
+              <div className="text-xs text-neutral-700 dark:text-neutral-300 bg-surface-2 border border-border rounded px-2.5 py-1.5">
+                Your orchestrator agent
+              </div>
+              <div className="text-[11px] text-neutral-500 dark:text-neutral-400 mt-1">
+                Fire-and-forget. The orchestrator decides what to do with this (Slack, message you, take action).
+              </div>
+            </Field>
+          </div>
         </>
       );
 
@@ -277,11 +286,14 @@ function TypeSpecificFields({
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div>
-      <div className="text-[10px] text-neutral-500 tracking-wider mb-1">{label.toUpperCase()}</div>
+      <div className="text-[10px] text-neutral-500 dark:text-neutral-400 tracking-wider mb-1">{label.toUpperCase()}</div>
       {children}
     </div>
   );
 }
+
+const INPUT_BASE =
+  'w-full rounded-md border border-border bg-surface-0 dark:bg-surface-2 text-foreground px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-accent/30 focus:border-accent transition';
 
 function TextField({
   label,
@@ -303,10 +315,7 @@ function TextField({
         value={value}
         placeholder={placeholder}
         onChange={(e) => onChange(e.target.value)}
-        className={
-          'w-full rounded-md border border-neutral-300 px-2 py-1 text-sm ' +
-          (mono ? 'font-mono' : '')
-        }
+        className={INPUT_BASE + (mono ? ' font-mono' : '')}
       />
     </Field>
   );
@@ -365,7 +374,7 @@ function ArgumentsEditor({
   return (
     <Field label="Arguments">
       {editable.length === 0 && complex.length === 0 && (
-        <div className="text-xs text-neutral-500 mb-2">No arguments yet.</div>
+        <div className="text-xs text-neutral-500 dark:text-neutral-400 mb-2">No arguments yet.</div>
       )}
       <div className="space-y-1.5">
         {editable.map(([k, v]) => (
@@ -381,23 +390,25 @@ function ArgumentsEditor({
         {complex.map(([k, v]) => (
           <div
             key={k}
-            className="flex items-start gap-1 text-xs border border-neutral-200 rounded p-1.5 bg-neutral-50"
+            className="flex items-start gap-1 text-xs border border-border rounded p-1.5 bg-surface-2"
           >
-            <span className="font-mono font-semibold text-neutral-700 shrink-0">{k}:</span>
-            <code className="font-mono text-neutral-600 break-all flex-1 min-w-0">
+            <span className="font-mono font-semibold text-neutral-700 dark:text-neutral-300 shrink-0">{k}:</span>
+            <code className="font-mono text-neutral-500 dark:text-neutral-400 break-all flex-1 min-w-0">
               {safeStringify(v)}
             </code>
-            <button
+            <Button
+              variant="ghost"
+              size="sm"
               onClick={() => removeKey(k)}
-              className="text-neutral-400 hover:text-red-600 px-1"
+              className="!h-6 !w-6 !p-0"
               aria-label={`Remove argument ${k}`}
             >
-              ×
-            </button>
+              <X className="w-3 h-3" strokeWidth={1.5} />
+            </Button>
           </div>
         ))}
         {complex.length > 0 && (
-          <div className="text-[10px] text-neutral-500 italic">
+          <div className="text-[10px] text-neutral-500 dark:text-neutral-400 italic">
             Complex values (objects/arrays) are read-only here — edit via JSON tab.
           </div>
         )}
@@ -414,15 +425,11 @@ function ArgumentsEditor({
               addKey();
             }
           }}
-          className="flex-1 rounded-md border border-neutral-300 px-2 py-1 text-xs font-mono"
+          className="flex-1 rounded-md border border-border bg-surface-0 dark:bg-surface-2 text-foreground px-2 py-1 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-accent/30 focus:border-accent transition"
         />
-        <button
-          onClick={addKey}
-          disabled={!newKey.trim()}
-          className="px-2 py-1 text-xs border border-neutral-300 rounded-md hover:bg-neutral-50 disabled:opacity-50"
-        >
-          + Add
-        </button>
+        <Button variant="secondary" size="sm" onClick={addKey} disabled={!newKey.trim()}>
+          Add
+        </Button>
       </div>
     </Field>
   );
@@ -442,6 +449,9 @@ function ArgRow({
   onRemove: () => void;
 }) {
   const valueType = typeof argValue;
+  // Common input classes for the small grid rows — slimmer padding than INPUT_BASE.
+  const slim =
+    'rounded-md border border-border bg-surface-0 dark:bg-surface-2 text-foreground px-1.5 py-1 text-xs focus:outline-none focus:ring-2 focus:ring-accent/30 focus:border-accent transition';
   return (
     <div className="flex items-center gap-1">
       <input
@@ -450,13 +460,13 @@ function ArgRow({
         onBlur={(e) => {
           if (e.target.value !== argKey) onRename(e.target.value);
         }}
-        className="w-28 shrink-0 rounded-md border border-neutral-300 px-1.5 py-1 text-xs font-mono"
+        className={`w-28 shrink-0 font-mono ${slim}`}
       />
       {valueType === 'boolean' ? (
         <select
           value={String(argValue)}
           onChange={(e) => onValueChange(e.target.value === 'true')}
-          className="flex-1 min-w-0 rounded-md border border-neutral-300 px-1.5 py-1 text-xs"
+          className={`flex-1 min-w-0 ${slim}`}
         >
           <option value="true">true</option>
           <option value="false">false</option>
@@ -474,16 +484,18 @@ function ArgRow({
               onValueChange(raw);
             }
           }}
-          className="flex-1 min-w-0 rounded-md border border-neutral-300 px-1.5 py-1 text-xs font-mono"
+          className={`flex-1 min-w-0 font-mono ${slim}`}
         />
       )}
-      <button
+      <Button
+        variant="ghost"
+        size="sm"
         onClick={onRemove}
-        className="text-neutral-400 hover:text-red-600 px-1 shrink-0"
+        className="!h-6 !w-6 !p-0 shrink-0"
         aria-label={`Remove argument ${argKey}`}
       >
-        ×
-      </button>
+        <X className="w-3 h-3" strokeWidth={1.5} />
+      </Button>
     </div>
   );
 }
@@ -497,17 +509,20 @@ function ThreadField({ step, onChange }: { step: WorkflowStep; onChange: (patch:
           value={step.thread ?? ''}
           placeholder="(shared workflow thread)"
           onChange={(e) => onChange({ thread: e.target.value || undefined })}
-          className="flex-1 min-w-0 rounded-md border border-neutral-300 px-2 py-1 text-sm font-mono"
+          className={INPUT_BASE + ' flex-1 min-w-0 font-mono'}
         />
-        <button
+        <Button
           type="button"
+          variant="secondary"
+          size="sm"
           onClick={() => onChange({ thread: '@new' })}
-          className="text-xs px-2 py-1 border border-neutral-300 rounded-md hover:bg-neutral-50 shrink-0"
+          className="shrink-0"
         >
-          @new
-        </button>
+          <Plus className="w-3 h-3" strokeWidth={1.5} />
+          new
+        </Button>
       </div>
-      <div className="text-[11px] text-neutral-500 mt-1">
+      <div className="text-[11px] text-neutral-500 dark:text-neutral-400 mt-1">
         Name a thread to share context across steps. <code>@new</code> spawns a fresh thread per call.
       </div>
     </Field>
@@ -517,15 +532,16 @@ function ThreadField({ step, onChange }: { step: WorkflowStep; onChange: (patch:
 function CheckboxField({ label, checked, onChange, helper }: { label: string; checked: boolean; onChange: (b: boolean) => void; helper?: string }) {
   return (
     <Field label={label}>
-      <label className="flex items-center gap-2 text-sm">
+      <label className="flex items-center gap-2 text-sm text-foreground">
         <input
           type="checkbox"
           checked={checked}
           onChange={(e) => onChange(e.target.checked)}
+          className="accent-accent"
         />
         <span>{checked ? 'On' : 'Off'}</span>
       </label>
-      {helper && <div className="text-[11px] text-neutral-500 mt-1">{helper}</div>}
+      {helper && <div className="text-[11px] text-neutral-500 dark:text-neutral-400 mt-1">{helper}</div>}
     </Field>
   );
 }
@@ -542,7 +558,7 @@ function NumberField({ label, value, onChange, min, max }: { label: string; valu
           const n = Number(e.target.value);
           if (Number.isFinite(n)) onChange(n);
         }}
-        className="w-full rounded-md border border-neutral-300 px-2 py-1 text-sm font-mono"
+        className={INPUT_BASE + ' font-mono'}
       />
     </Field>
   );
@@ -617,7 +633,7 @@ function OutputSchemaEditor({
   return (
     <Field label="Output schema">
       {entries.length === 0 && (
-        <div className="text-xs text-neutral-500 mb-2">
+        <div className="text-xs text-neutral-500 dark:text-neutral-400 mb-2">
           No structured outputs configured. Agent will return free-form text.
         </div>
       )}
@@ -649,17 +665,14 @@ function OutputSchemaEditor({
               addField();
             }
           }}
-          className="flex-1 rounded-md border border-neutral-300 px-2 py-1 text-xs font-mono"
+          className="flex-1 rounded-md border border-border bg-surface-0 dark:bg-surface-2 text-foreground px-2 py-1 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-accent/30 focus:border-accent transition"
         />
-        <button
-          onClick={addField}
-          disabled={!newName.trim()}
-          className="px-2 py-1 text-xs border border-neutral-300 rounded-md hover:bg-neutral-50 disabled:opacity-50"
-        >
-          + Add field
-        </button>
+        <Button variant="secondary" size="sm" onClick={addField} disabled={!newName.trim()}>
+          <Plus className="w-3 h-3" strokeWidth={1.5} />
+          Add field
+        </Button>
       </div>
-      {addError && <div className="text-[11px] text-red-600 mt-1">{addError}</div>}
+      {addError && <div className="text-[11px] text-red-600 dark:text-red-400 mt-1">{addError}</div>}
     </Field>
   );
 }
@@ -679,6 +692,8 @@ function SchemaFieldRow({
   onDescriptionChange: (d: string) => void;
   onRemove: () => void;
 }) {
+  const slim =
+    'rounded-md border border-border bg-surface-0 dark:bg-surface-2 text-foreground px-1.5 py-1 text-xs focus:outline-none focus:ring-2 focus:ring-accent/30 focus:border-accent transition';
   return (
     <div className="flex items-center gap-1">
       <input
@@ -692,7 +707,7 @@ function SchemaFieldRow({
             if (!ok) e.target.value = fieldKey;
           }
         }}
-        className="w-24 shrink-0 rounded-md border border-neutral-300 px-1.5 py-1 text-xs font-mono"
+        className={`w-24 shrink-0 font-mono ${slim}`}
       />
       <select
         value={field.type}
@@ -702,7 +717,7 @@ function SchemaFieldRow({
           const match = TYPE_OPTIONS.find((opt) => opt === v);
           if (match) onTypeChange(match);
         }}
-        className="w-20 shrink-0 rounded-md border border-neutral-300 px-1 py-1 text-xs"
+        className={`w-20 shrink-0 ${slim}`}
       >
         {TYPE_OPTIONS.map((t) => (
           <option key={t} value={t}>
@@ -719,15 +734,17 @@ function SchemaFieldRow({
             onDescriptionChange(e.target.value);
           }
         }}
-        className="flex-1 min-w-0 rounded-md border border-neutral-300 px-1.5 py-1 text-xs"
+        className={`flex-1 min-w-0 ${slim}`}
       />
-      <button
+      <Button
+        variant="ghost"
+        size="sm"
         onClick={onRemove}
-        className="text-neutral-400 hover:text-red-600 px-1 shrink-0"
+        className="!h-6 !w-6 !p-0 shrink-0"
         aria-label={`Remove field ${fieldKey}`}
       >
-        ×
-      </button>
+        <X className="w-3 h-3" strokeWidth={1.5} />
+      </Button>
     </div>
   );
 }

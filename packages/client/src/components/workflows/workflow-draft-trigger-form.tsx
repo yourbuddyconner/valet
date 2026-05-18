@@ -8,6 +8,10 @@ interface Props {
   onChange: (v: TriggerValue | null) => void;
 }
 
+// Reused input styling — surface tokens, accent focus ring, dark-mode safe.
+const INPUT_BASE =
+  'w-full rounded-md border border-border bg-surface-0 dark:bg-surface-2 text-foreground px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-accent/30 focus:border-accent transition';
+
 export function WorkflowDraftTriggerForm({ value, onChange }: Props) {
   const kind = value?.kind ?? 'manual';
 
@@ -19,40 +23,43 @@ export function WorkflowDraftTriggerForm({ value, onChange }: Props) {
   const method = typeof value?.config.method === 'string' ? value.config.method : 'POST';
 
   return (
-    <div className="px-6 py-4 bg-white border-t border-neutral-200">
-      <div className="text-sm font-semibold text-neutral-900 mb-2">How should this run?</div>
-      <div className="flex gap-2 mb-3">
-        {(['schedule', 'webhook', 'manual'] as const).map((k) => (
-          <button
-            key={k}
-            onClick={() => onChange({ kind: k, config: defaultConfig(k) })}
-            aria-pressed={kind === k}
-            className={
-              'text-xs px-3 py-1 rounded-full border ' +
-              (kind === k
-                ? 'bg-neutral-900 text-white border-neutral-900'
-                : 'bg-white text-neutral-700 border-neutral-300')
-            }
-          >
-            {k}
-          </button>
-        ))}
+    <div className="px-6 py-4 bg-surface-1 border-t border-border">
+      <div className="text-sm font-semibold text-foreground mb-2">How should this run?</div>
+      <div className="inline-flex bg-surface-2 rounded-md p-0.5 mb-3">
+        {(['schedule', 'webhook', 'manual'] as const).map((k) => {
+          const active = kind === k;
+          return (
+            <button
+              key={k}
+              onClick={() => onChange({ kind: k, config: defaultConfig(k) })}
+              aria-pressed={active}
+              className={
+                'px-3 py-1 text-xs font-mono uppercase tracking-wider rounded transition-colors ' +
+                (active
+                  ? 'bg-surface-0 text-foreground shadow-panel'
+                  : 'text-neutral-500 hover:text-foreground')
+              }
+            >
+              {k}
+            </button>
+          );
+        })}
       </div>
       {kind === 'schedule' && (
         <div className="grid grid-cols-2 gap-3 max-w-lg">
           <label className="text-xs">
-            <span className="block mb-1 text-neutral-500">Cron</span>
+            <span className="block mb-1 text-neutral-500 dark:text-neutral-400">Cron</span>
             <input
               type="text"
               value={cron}
               onChange={(e) =>
                 onChange({ kind: 'schedule', config: { ...value?.config, cron: e.target.value } })
               }
-              className="w-full rounded-md border border-neutral-300 px-2 py-1 text-sm font-mono"
+              className={INPUT_BASE + ' font-mono'}
             />
           </label>
           <label className="text-xs">
-            <span className="block mb-1 text-neutral-500">Timezone</span>
+            <span className="block mb-1 text-neutral-500 dark:text-neutral-400">Timezone</span>
             <input
               type="text"
               value={timezone}
@@ -62,7 +69,7 @@ export function WorkflowDraftTriggerForm({ value, onChange }: Props) {
                   config: { ...value?.config, timezone: e.target.value },
                 })
               }
-              className="w-full rounded-md border border-neutral-300 px-2 py-1 text-sm"
+              className={INPUT_BASE}
             />
           </label>
         </div>
@@ -70,7 +77,7 @@ export function WorkflowDraftTriggerForm({ value, onChange }: Props) {
       {kind === 'webhook' && (
         <div className="grid grid-cols-2 gap-3 max-w-lg">
           <label className="text-xs">
-            <span className="block mb-1 text-neutral-500">Path</span>
+            <span className="block mb-1 text-neutral-500 dark:text-neutral-400">Path</span>
             <input
               type="text"
               value={path}
@@ -78,17 +85,17 @@ export function WorkflowDraftTriggerForm({ value, onChange }: Props) {
                 onChange({ kind: 'webhook', config: { ...value?.config, path: e.target.value } })
               }
               placeholder="my-workflow"
-              className="w-full rounded-md border border-neutral-300 px-2 py-1 text-sm font-mono"
+              className={INPUT_BASE + ' font-mono'}
             />
           </label>
           <label className="text-xs">
-            <span className="block mb-1 text-neutral-500">Method</span>
+            <span className="block mb-1 text-neutral-500 dark:text-neutral-400">Method</span>
             <select
               value={method}
               onChange={(e) =>
                 onChange({ kind: 'webhook', config: { ...value?.config, method: e.target.value } })
               }
-              className="w-full rounded-md border border-neutral-300 px-2 py-1 text-sm"
+              className={INPUT_BASE}
             >
               <option>POST</option>
               <option>GET</option>
@@ -97,7 +104,7 @@ export function WorkflowDraftTriggerForm({ value, onChange }: Props) {
         </div>
       )}
       {kind === 'manual' && (
-        <div className="text-sm text-neutral-500">
+        <div className="text-sm text-neutral-500 dark:text-neutral-400">
           This workflow can only be run on demand from the UI or API.
         </div>
       )}

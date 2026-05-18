@@ -1,5 +1,10 @@
 import { useEffect, useState } from 'react';
+import { Plus, X } from 'lucide-react';
 import type { VariableDefinition } from '@/api/workflows';
+import { Button } from '@/components/ui/button';
+
+const INPUT_BASE =
+  'rounded-md border border-border bg-surface-0 dark:bg-surface-2 text-foreground px-1.5 py-1 text-xs focus:outline-none focus:ring-2 focus:ring-accent/30 focus:border-accent transition';
 
 interface Props {
   variables: Record<string, VariableDefinition>;
@@ -73,20 +78,17 @@ export function WorkflowVariablesEditor({ variables, onChange }: Props) {
               addVariable();
             }
           }}
-          className="flex-1 rounded-md border border-neutral-300 px-2 py-1 text-xs font-mono"
+          className={INPUT_BASE + ' flex-1 font-mono'}
         />
-        <button
-          onClick={addVariable}
-          disabled={!newName.trim()}
-          className="px-2 py-1 text-xs border border-neutral-300 rounded-md hover:bg-neutral-50 disabled:opacity-50"
-        >
-          + Add variable
-        </button>
+        <Button variant="ghost" size="sm" onClick={addVariable} disabled={!newName.trim()}>
+          <Plus className="w-3.5 h-3.5" strokeWidth={1.5} />
+          Add variable
+        </Button>
       </div>
-      {addError && <div className="text-[11px] text-red-600">{addError}</div>}
+      {addError && <div className="text-[11px] text-red-600 dark:text-red-400">{addError}</div>}
 
       {entries.length === 0 ? (
-        <div className="text-xs text-neutral-500 italic pt-2">
+        <div className="text-xs text-neutral-500 dark:text-neutral-400 italic pt-2">
           No variables declared. Variables let the workflow accept inputs at run time.
         </div>
       ) : (
@@ -121,7 +123,7 @@ function VariableCard({
   onRemove: () => void;
 }) {
   return (
-    <div className="border border-neutral-200 rounded-md p-2.5 space-y-2 bg-neutral-50">
+    <div className="bg-surface-2 border border-border rounded-md p-2.5 space-y-2">
       <div className="flex items-center gap-1">
         <input
           type="text"
@@ -134,7 +136,7 @@ function VariableCard({
               if (!ok) e.target.value = varKey;
             }
           }}
-          className="flex-1 min-w-0 rounded-md border border-neutral-300 bg-white px-1.5 py-1 text-xs font-mono"
+          className={INPUT_BASE + ' flex-1 min-w-0 font-mono'}
         />
         <select
           value={def.type}
@@ -146,7 +148,7 @@ function VariableCard({
               onUpdate({ type: match, default: undefined });
             }
           }}
-          className="w-20 shrink-0 rounded-md border border-neutral-300 bg-white px-1 py-1 text-xs"
+          className={INPUT_BASE + ' w-20 shrink-0'}
         >
           {TYPE_OPTIONS.map((t) => (
             <option key={t} value={t}>
@@ -154,17 +156,19 @@ function VariableCard({
             </option>
           ))}
         </select>
-        <button
+        <Button
+          variant="ghost"
+          size="sm"
           onClick={onRemove}
-          className="text-neutral-400 hover:text-red-600 px-1 shrink-0"
+          className="!h-6 !w-6 !p-0 shrink-0"
           aria-label={`Remove variable ${varKey}`}
         >
-          ×
-        </button>
+          <X className="w-3 h-3" strokeWidth={1.5} />
+        </Button>
       </div>
 
       <div>
-        <div className="text-[10px] text-neutral-500 tracking-wider mb-1">DESCRIPTION</div>
+        <div className="text-[10px] text-neutral-500 dark:text-neutral-400 tracking-wider mb-1">DESCRIPTION</div>
         <input
           type="text"
           defaultValue={def.description ?? ''}
@@ -175,15 +179,16 @@ function VariableCard({
               onUpdate({ description: trimmed || undefined });
             }
           }}
-          className="w-full rounded-md border border-neutral-300 bg-white px-1.5 py-1 text-xs"
+          className={INPUT_BASE + ' w-full'}
         />
       </div>
 
-      <label className="flex items-center gap-2 text-xs">
+      <label className="flex items-center gap-2 text-xs text-foreground">
         <input
           type="checkbox"
           checked={def.required === true}
           onChange={(e) => onUpdate({ required: e.target.checked ? true : undefined })}
+          className="accent-accent"
         />
         <span>Required</span>
       </label>
@@ -208,7 +213,7 @@ function DefaultValueEditor({
 }) {
   return (
     <div>
-      <div className="text-[10px] text-neutral-500 tracking-wider mb-1">DEFAULT</div>
+      <div className="text-[10px] text-neutral-500 dark:text-neutral-400 tracking-wider mb-1">DEFAULT</div>
       <DefaultInput type={type} value={value} onChange={onChange} />
     </div>
   );
@@ -231,7 +236,7 @@ function DefaultInput({
         value={str}
         onChange={(e) => onChange(e.target.value === '' ? undefined : e.target.value)}
         placeholder="(no default)"
-        className="w-full rounded-md border border-neutral-300 bg-white px-1.5 py-1 text-xs"
+        className={INPUT_BASE + ' w-full'}
       />
     );
   }
@@ -252,7 +257,7 @@ function DefaultInput({
           if (Number.isFinite(n)) onChange(n);
         }}
         placeholder="(no default)"
-        className="w-full rounded-md border border-neutral-300 bg-white px-1.5 py-1 text-xs font-mono"
+        className={INPUT_BASE + ' w-full font-mono'}
       />
     );
   }
@@ -260,11 +265,12 @@ function DefaultInput({
   if (type === 'boolean') {
     const checked = value === true;
     return (
-      <label className="flex items-center gap-2 text-xs">
+      <label className="flex items-center gap-2 text-xs text-foreground">
         <input
           type="checkbox"
           checked={checked}
           onChange={(e) => onChange(e.target.checked)}
+          className="accent-accent"
         />
         <span>{checked ? 'true' : 'false'}</span>
       </label>
@@ -335,9 +341,9 @@ function JsonDefaultInput({
         onBlur={(e) => commit(e.target.value)}
         rows={3}
         placeholder={placeholder}
-        className="w-full rounded-md border border-neutral-300 bg-white px-1.5 py-1 text-xs font-mono resize-y"
+        className={INPUT_BASE + ' w-full font-mono resize-y'}
       />
-      {error && <div className="text-[11px] text-red-600 mt-1">{error}</div>}
+      {error && <div className="text-[11px] text-red-600 dark:text-red-400 mt-1">{error}</div>}
     </div>
   );
 }
