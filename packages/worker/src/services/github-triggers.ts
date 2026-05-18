@@ -115,6 +115,7 @@ export async function dispatchGitHubTriggers(
   eventType: string,
   deliveryId: string,
   workerOrigin: string,
+  options: { testFire?: boolean } = {},
 ): Promise<GitHubDispatchSummary> {
   const summary: GitHubDispatchSummary = { matched: 0, dispatched: 0 };
 
@@ -227,7 +228,7 @@ export async function dispatchGitHubTriggers(
     }
 
     try {
-      const result = await dispatchOne(env, appDb, row, payload, eventType, deliveryId, workerOrigin);
+      const result = await dispatchOne(env, appDb, row, payload, eventType, deliveryId, workerOrigin, options.testFire ?? false);
       if (result.dispatched) summary.dispatched += 1;
       await safeRecord(appDb, {
         triggerId: row.id,
@@ -284,6 +285,7 @@ async function dispatchOne(
   eventType: string,
   deliveryId: string,
   workerOrigin: string,
+  testFire: boolean,
 ): Promise<DispatchOneResult> {
   // github triggers require a workflow per validator; defensive at this boundary.
   if (!row.workflow_id || !row.workflow_data) {
@@ -293,7 +295,10 @@ async function dispatchOne(
   const workflowData = row.workflow_data;
 
   // Idempotency: GitHub delivery IDs are globally unique per webhook delivery.
-  const idempotencyKey = `github:${row.id}:${deliveryId}`;
+  // Test-fires use a `test:` prefix so synthetic runs never collide with real-run keys.
+  const idempotencyKey = testFire
+    ? `test:${row.id}:${deliveryId}`
+    : `github:${row.id}:${deliveryId}`;
   const existing = await db.checkIdempotencyKey(env.DB, workflowId, idempotencyKey);
   if (existing) {
     const existingId = typeof existing.id === 'string' ? existing.id : null;
@@ -360,23 +365,54 @@ async function dispatchOne(
     executionId,
   });
 
-  await db.createExecution(env.DB, {
-    id: executionId,
-    workflowId,
-    userId: row.user_id,
-    triggerId: row.id,
-    triggerType: 'github',
-    triggerMetadata: JSON.stringify({ eventType, action: payload.action, deliveryId, repo: payload.repository?.full_name }),
-    variables: JSON.stringify(variables),
-    now,
-    workflowVersion: row.workflow_version || null,
-    workflowHash,
-    workflowSnapshot: workflowData,
-    idempotencyKey,
-    sessionId,
-    initiatorType: 'github',
-    initiatorUserId: row.user_id,
-  });
+  const triggerMetadata: Record<string, unknown> = {
+    eventType,
+    action: payload.action,
+    deliveryId,
+    repo: payload.repository?.full_name,
+  };
+  if (testFire) {
+    // Preserve the underlying type so the UI can surface the original kind even
+    // though the execution itself is bucketed as `'test'`.
+    triggerMetadata.originalTriggerType = 'github';
+    triggerMetadata.testFire = true;
+  }
+
+  try {
+    await db.createExecution(env.DB, {
+      id: executionId,
+      workflowId,
+      userId: row.user_id,
+      triggerId: row.id,
+      // Test-fires write `'test'` so they don't count against concurrency or
+      // pollute the default listExecutions view (filters trigger_type != 'test').
+      triggerType: testFire ? 'test' : 'github',
+      triggerMetadata: JSON.stringify(triggerMetadata),
+      variables: JSON.stringify(variables),
+      now,
+      workflowVersion: row.workflow_version || null,
+      workflowHash,
+      workflowSnapshot: workflowData,
+      idempotencyKey,
+      sessionId,
+      initiatorType: 'github',
+      initiatorUserId: row.user_id,
+    });
+  } catch (err) {
+    // Two concurrent deliveries can race past `checkIdempotencyKey` and both
+    // try to INSERT. The UNIQUE(workflow_id, idempotency_key) constraint
+    // catches it here; treat as a duplicate rather than a 500 (which would
+    // make GitHub retry and amplify the problem).
+    if (db.isUniqueConstraintError(err)) {
+      return {
+        outcome: 'duplicate',
+        dispatched: false,
+        executionId: null,
+        reason: 'concurrent duplicate',
+      };
+    }
+    throw err;
+  }
 
   await db.updateTriggerLastRun(appDb, row.id, now);
 
@@ -385,7 +421,7 @@ async function dispatchOne(
     workflowId,
     userId: row.user_id,
     sessionId,
-    triggerType: 'github',
+    triggerType: testFire ? 'test' : 'github',
     workerOrigin,
   });
   return {

@@ -17,6 +17,40 @@ async function safeRecord(
   }
 }
 
+/**
+ * Verify an HMAC-SHA256 signature over a webhook body.
+ *
+ * Accepts either a bare hex digest (`abc123...`) or the GitHub-style
+ * `sha256=abc123...` prefix on either side. Returns true when the supplied
+ * signature matches `HMAC-SHA256(secret, body)`.
+ *
+ * We use plain string equality rather than a constant-time compare. Timing
+ * attacks against HMAC verification are not practically exploitable on
+ * Cloudflare Workers (request scheduling, isolate jitter, and the global
+ * front-door queue all add far more noise than a single hex compare leaks),
+ * and the V8 engine doesn't expose a primitive that's reliably constant-time
+ * anyway.
+ */
+async function verifyHmacSha256(
+  secret: string,
+  body: string,
+  signature: string,
+): Promise<boolean> {
+  const key = await crypto.subtle.importKey(
+    'raw',
+    new TextEncoder().encode(secret),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign'],
+  );
+  const sigBuf = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(body));
+  const expected = 'sha256=' + Array.from(new Uint8Array(sigBuf))
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('');
+  const provided = signature.startsWith('sha256=') ? signature : 'sha256=' + signature;
+  return provided === expected;
+}
+
 // ─── Generic Webhook Handler ────────────────────────────────────────────────
 
 export interface GenericWebhookResult {
@@ -44,6 +78,7 @@ export async function handleGenericWebhook(
   headers: { [key: string]: string | undefined },
   query: Record<string, string>,
   workerOrigin: string,
+  options: { skipSecretCheck?: boolean; testFire?: boolean } = {},
 ): Promise<{ result: GenericWebhookResult; statusCode: number } | null> {
   const appDb = getDb(env.DB);
   // Look up trigger by webhook path
@@ -51,7 +86,7 @@ export async function handleGenericWebhook(
 
   if (!trigger) {
     return {
-      result: { received: true, message: 'Webhook not found' } as any,
+      result: { received: true, message: 'Webhook not found' },
       statusCode: 404,
     };
   }
@@ -70,13 +105,14 @@ export async function handleGenericWebhook(
       payloadPreview: truncatePayloadPreview(rawBody),
     });
     return {
-      result: { received: true, message: `Method ${method} not allowed` } as any,
+      result: { received: true, message: `Method ${method} not allowed` },
       statusCode: 405,
     };
   }
 
-  // Verify secret/signature if configured
-  if (config.secret) {
+  // Verify secret/signature if configured. The test-fire path passes
+  // `skipSecretCheck: true` so synthetic deliveries don't require a real HMAC.
+  if (config.secret && !options.skipSecretCheck) {
     const signature = headers['x-webhook-signature'] || headers['x-hub-signature-256'];
     if (!signature) {
       await safeRecord(appDb, {
@@ -89,7 +125,24 @@ export async function handleGenericWebhook(
         payloadPreview: truncatePayloadPreview(rawBody),
       });
       return {
-        result: { received: true, message: 'Missing webhook signature' } as any,
+        result: { received: true, message: 'Missing webhook signature', error: 'invalid signature' },
+        statusCode: 401,
+      };
+    }
+
+    const valid = await verifyHmacSha256(config.secret as string, rawBody, signature);
+    if (!valid) {
+      await safeRecord(appDb, {
+        triggerId: trigger.id,
+        userId: trigger.user_id,
+        eventType: webhookPath,
+        deliveryId: headers['x-github-delivery'] || headers['x-request-id'] || headers['x-webhook-id'] || null,
+        outcome: 'no_match',
+        reason: 'invalid signature',
+        payloadPreview: truncatePayloadPreview(rawBody),
+      });
+      return {
+        result: { received: true, message: 'Invalid webhook signature', error: 'invalid signature' },
         statusCode: 401,
       };
     }
@@ -155,7 +208,10 @@ export async function handleGenericWebhook(
     || headers['x-hub-signature-256']
     || '';
   const fallbackBodyHash = await sha256Hex(`${signature}:${rawBody}`);
-  const idempotencyKey = `webhook:${trigger.id}:${deliveryId || fallbackBodyHash}`;
+  // Test-fire deliveries use a `test:` prefix so synthetic runs never collide with real-run keys.
+  const idempotencyKey = options.testFire
+    ? `test:${trigger.id}:${deliveryId || fallbackBodyHash}`
+    : `webhook:${trigger.id}:${deliveryId || fallbackBodyHash}`;
 
   const existing = await db.checkIdempotencyKey(env.DB, trigger.workflow_id, idempotencyKey);
   const payloadPreview = truncatePayloadPreview(payload);
@@ -221,30 +277,70 @@ export async function handleGenericWebhook(
     executionId,
   });
 
-  await db.createExecution(env.DB, {
-    id: executionId,
-    workflowId: trigger.workflow_id,
-    userId: trigger.user_id,
-    triggerId: trigger.id,
-    triggerType: 'webhook',
-    triggerMetadata: JSON.stringify({ path: webhookPath, method }),
-    variables: JSON.stringify(variables),
-    now,
-    workflowVersion: trigger.version || null,
-    workflowHash,
-    workflowSnapshot: trigger.data,
-    idempotencyKey,
-    sessionId,
-    initiatorType: 'webhook',
-    initiatorUserId: trigger.user_id,
-  });
+  const triggerMetadata: Record<string, unknown> = { path: webhookPath, method };
+  if (options.testFire) {
+    // Preserve original kind so the UI can distinguish a test-fired webhook from
+    // a test-fired schedule even though both record as trigger_type='test'.
+    triggerMetadata.originalTriggerType = 'webhook';
+    triggerMetadata.testFire = true;
+  }
+
+  try {
+    await db.createExecution(env.DB, {
+      id: executionId,
+      workflowId: trigger.workflow_id,
+      userId: trigger.user_id,
+      triggerId: trigger.id,
+      // Test-fires write `'test'` so they don't count against concurrency or
+      // pollute the default listExecutions view.
+      triggerType: options.testFire ? 'test' : 'webhook',
+      triggerMetadata: JSON.stringify(triggerMetadata),
+      variables: JSON.stringify(variables),
+      now,
+      workflowVersion: trigger.version || null,
+      workflowHash,
+      workflowSnapshot: trigger.data,
+      idempotencyKey,
+      sessionId,
+      initiatorType: 'webhook',
+      initiatorUserId: trigger.user_id,
+    });
+  } catch (err) {
+    // Two concurrent webhook deliveries can race past `checkIdempotencyKey`.
+    // The UNIQUE(workflow_id, idempotency_key) constraint catches it here; surface
+    // as a duplicate (200) instead of bubbling a 500 that would trigger upstream
+    // retry storms.
+    if (db.isUniqueConstraintError(err)) {
+      await safeRecord(appDb, {
+        triggerId: trigger.id,
+        userId: trigger.user_id,
+        eventType: webhookPath,
+        deliveryId,
+        outcome: 'duplicate',
+        executionId: null,
+        reason: 'concurrent duplicate',
+        payloadPreview,
+      });
+      return {
+        result: {
+          received: true,
+          deduplicated: true,
+          workflowId: trigger.workflow_id,
+          workflowName: trigger.workflow_name,
+          message: 'Webhook received. Duplicate delivery deduplicated.',
+        },
+        statusCode: 200,
+      };
+    }
+    throw err;
+  }
 
   const dispatched = await enqueueWorkflowExecution(env, {
     executionId,
     workflowId: trigger.workflow_id,
     userId: trigger.user_id,
     sessionId,
-    triggerType: 'webhook',
+    triggerType: options.testFire ? 'test' : 'webhook',
     workerOrigin,
   });
 

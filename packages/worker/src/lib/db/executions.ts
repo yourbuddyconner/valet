@@ -288,6 +288,27 @@ export async function createExecution(
   ).run();
 }
 
+/**
+ * D1 surfaces SQLite UNIQUE constraint violations as `Error` with a message
+ * containing "UNIQUE constraint failed". We sniff the message rather than
+ * depending on a typed error class because the wrangler runtime and the
+ * deployed runtime emit slightly different shapes; the substring is stable.
+ */
+export function isUniqueConstraintError(err: unknown): boolean {
+  if (err instanceof Error) {
+    return err.message.includes('UNIQUE constraint failed')
+      || err.message.includes('SQLITE_CONSTRAINT_UNIQUE');
+  }
+  if (typeof err === 'object' && err !== null && 'message' in err) {
+    const msg = (err as { message: unknown }).message;
+    if (typeof msg === 'string') {
+      return msg.includes('UNIQUE constraint failed')
+        || msg.includes('SQLITE_CONSTRAINT_UNIQUE');
+    }
+  }
+  return false;
+}
+
 export async function checkIdempotencyKey(db: D1Database, workflowId: string, idempotencyKey: string) {
   return db.prepare(`
     SELECT id, status, session_id
@@ -330,6 +351,10 @@ export interface ExecutionWithWorkflowRow {
   session_id: string | null;
   workflow_hash: string | null;
   variables: string | null;
+  // Persisted JSON map of `outputVariable` -> step output from the pre-pause
+  // portion of the run. Surfaced to the engine on resume so post-approval
+  // steps can interpolate values produced before the pause.
+  outputs: string | null;
   trigger_metadata: string | null;
   attempt_count: number | null;
   idempotency_key: string | null;
@@ -354,6 +379,7 @@ export async function getExecutionWithWorkflow(
       e.session_id,
       e.workflow_hash,
       e.variables,
+      e.outputs,
       e.trigger_metadata,
       e.attempt_count,
       e.idempotency_key,
@@ -438,11 +464,19 @@ export async function getTimedOutApprovals(
   db: D1Database,
   cutoff: string,
 ): Promise<{ id: string; user_id: string }[]> {
+  // Join pending_approvals so we filter on the approval's own deadline (timeout_at)
+  // rather than the execution's start time. Previously this used e.started_at,
+  // which timed out long-running executions even if no approval was overdue.
+  // DISTINCT because a single execution may have multiple historical approval
+  // rows; we only want one (id, user_id) per execution to escalate.
   const result = await db.prepare(`
-    SELECT id, user_id
-    FROM workflow_executions
-    WHERE status = 'waiting_approval'
-      AND started_at <= ?
+    SELECT DISTINCT e.id, e.user_id
+    FROM workflow_executions e
+    JOIN pending_approvals pa ON pa.execution_id = e.id
+    WHERE e.status = 'waiting_approval'
+      AND pa.status = 'pending'
+      AND pa.timeout_at IS NOT NULL
+      AND pa.timeout_at <= ?
   `).bind(cutoff).all<{ id: string; user_id: string }>();
   return result.results || [];
 }

@@ -336,15 +336,12 @@ triggersRouter.get('/:id/deliveries', async (c) => {
   const limit = Number.isFinite(rawLimit) ? Math.min(Math.max(Math.trunc(rawLimit), 1), 200) : 50;
   const before = c.req.query('before');
 
-  // Authorization: deliveries are gated by trigger ownership. Admins can read any.
+  // Authorization: deliveries are gated by trigger ownership. Admins can read any —
+  // pass undefined to skip the user_id filter in getTrigger.
   const isAdmin = user.role === 'admin';
-  const triggerRow = await getTrigger(c.env.DB, isAdmin ? (user.id) : user.id, id);
-  if (!triggerRow && !isAdmin) {
+  const triggerRow = await getTrigger(c.env.DB, isAdmin ? undefined : user.id, id);
+  if (!triggerRow) {
     throw new NotFoundError('Trigger', id);
-  }
-  // For admin role, ownership check is bypassed in listTriggerDeliveries.
-  if (!triggerRow && isAdmin) {
-    // Fall through with bypass — verify trigger exists at the deliveries layer.
   }
 
   const { deliveries, hasMore } = await listTriggerDeliveries(appDb, {

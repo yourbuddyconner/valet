@@ -157,7 +157,21 @@ export async function listTriggers(db: D1Database, userId: string) {
   `).bind(userId).all();
 }
 
-export async function getTrigger(db: D1Database, userId: string, triggerId: string) {
+export async function getTrigger(
+  db: D1Database,
+  userId: string | undefined,
+  triggerId: string,
+) {
+  // userId === undefined means caller has already authorized via admin role —
+  // skip the user_id filter so admins can read any trigger row.
+  if (userId === undefined) {
+    return db.prepare(`
+      SELECT t.*, w.name as workflow_name
+      FROM triggers t
+      LEFT JOIN workflows w ON t.workflow_id = w.id
+      WHERE t.id = ?
+    `).bind(triggerId).first();
+  }
   return db.prepare(`
     SELECT t.*, w.name as workflow_name
     FROM triggers t

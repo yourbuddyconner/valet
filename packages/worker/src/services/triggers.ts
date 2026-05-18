@@ -20,6 +20,7 @@ import {
   getWorkflowForManualRun,
   checkIdempotencyKey,
   createExecution,
+  isUniqueConstraintError,
   type TriggerConfig,
 } from '../lib/db.js';
 
@@ -486,8 +487,9 @@ export async function testFireTrigger(
     // The dispatcher iterates over all the user's github triggers and only the
     // one matching repo+events+filters will fire. The others log "no_match" —
     // valid behavior for a real delivery too. Less invasive than refactoring
-    // the dispatcher to take a single trigger.
-    await dispatchGitHubTriggers(env, payload, eventType, deliveryId, workerOrigin);
+    // the dispatcher to take a single trigger. Pass testFire so the matched
+    // execution records as trigger_type='test'.
+    await dispatchGitHubTriggers(env, payload, eventType, deliveryId, workerOrigin, { testFire: true });
 
     const recorded = await findDeliveryByDeliveryId(appDb, triggerId, deliveryId);
     if (!recorded) {
@@ -512,11 +514,15 @@ export async function testFireTrigger(
       config.path,
       method,
       rawBody,
-      // Test-fire bypasses HMAC; pass a dummy signature so the secret-check
-      // path doesn't reject the synthetic request when a secret is configured.
+      // Test-fire passes `skipSecretCheck: true` (below) so handleGenericWebhook
+      // doesn't reject the synthetic request when a secret is configured. The
+      // dummy x-webhook-signature header is retained for parity with the real
+      // webhook path's logging fields.
       { 'content-type': 'application/json', 'x-webhook-id': deliveryId, 'x-webhook-signature': 'test-fire' },
       {},
       workerOrigin,
+      // testFire so the resulting execution records as trigger_type='test'.
+      { skipSecretCheck: true, testFire: true },
     );
     if (!result) {
       throw new NotFoundError('Trigger', triggerId);
@@ -640,31 +646,58 @@ export async function testFireTrigger(
       },
     };
     // Synthetic idempotency key — unique per test-fire so it never collides
-    // with real cron ticks.
-    const idempotencyKey = `schedule:${triggerId}:test:${deliveryId}`;
-    await createExecution(env.DB, {
-      id: executionId,
-      workflowId: row.wf_id,
-      userId,
-      triggerId,
-      triggerType: 'schedule',
-      triggerMetadata: JSON.stringify({ cron: config.cron, timezone: config.timezone || 'UTC', testFire: true }),
-      variables: JSON.stringify(variables),
-      now,
-      workflowVersion: row.workflow_version || null,
-      workflowHash,
-      workflowSnapshot: row.workflow_data,
-      idempotencyKey,
-      sessionId,
-      initiatorType: 'schedule',
-      initiatorUserId: userId,
-    });
+    // with real cron ticks. `test:` prefix matches the github/webhook test-fire
+    // convention.
+    const idempotencyKey = `test:${triggerId}:${deliveryId}`;
+    try {
+      await createExecution(env.DB, {
+        id: executionId,
+        workflowId: row.wf_id,
+        userId,
+        triggerId,
+        // Test-fires record as 'test' so they don't count against concurrency
+        // or appear in the default executions list.
+        triggerType: 'test',
+        triggerMetadata: JSON.stringify({
+          cron: config.cron,
+          timezone: config.timezone || 'UTC',
+          testFire: true,
+          originalTriggerType: 'schedule',
+        }),
+        variables: JSON.stringify(variables),
+        now,
+        workflowVersion: row.workflow_version || null,
+        workflowHash,
+        workflowSnapshot: row.workflow_data,
+        idempotencyKey,
+        sessionId,
+        initiatorType: 'schedule',
+        initiatorUserId: userId,
+      });
+    } catch (err) {
+      // Race window: two test-fires with the same trigger+deliveryId could
+      // collide. UUID-based deliveryId makes this near-impossible, but we
+      // handle it for symmetry with the github/webhook paths.
+      if (isUniqueConstraintError(err)) {
+        const reason = 'concurrent duplicate';
+        try {
+          await recordTriggerDelivery(appDb, {
+            triggerId, userId, eventType: 'test-fire', deliveryId,
+            outcome: 'duplicate', executionId: null, reason, payloadPreview: null,
+          });
+        } catch (recordErr) {
+          console.error('[test-fire schedule] failed to record delivery:', recordErr);
+        }
+        return { ok: true, outcome: 'duplicate', executionId: null, reason };
+      }
+      throw err;
+    }
     const enqueued = await enqueueWorkflowExecution(env, {
       executionId,
       workflowId: row.wf_id,
       userId,
       sessionId,
-      triggerType: 'schedule',
+      triggerType: 'test',
       workerOrigin,
     });
     await updateTriggerLastRun(appDb, triggerId, now);
