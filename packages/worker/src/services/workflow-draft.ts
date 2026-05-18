@@ -31,6 +31,8 @@ Common fields: id (kebab-case), name (human), type, outputVariable (optional), t
 
 Template interpolation: any \`content\`, \`prompt\`, \`command\`, \`condition\`, or string-valued \`arguments\` field can include \`{{variables.<name>}}\` or \`{{outputs.<stepOutputVariable>.<field>}}\` tokens. The runner resolves these at execution time against trigger variables and prior step outputs. Use this to flow data through the workflow without inlining values.
 
+BASH SECURITY: Inside a bash \`command\` (and inside the \`command\` field of \`tool: bash\` steps), \`{{path}}\` tokens are NOT spliced as raw text — that would let attacker-controlled trigger payloads inject shell metacharacters. Instead, the runner rewrites each token into a double-quoted shell variable reference (\`"$VALET_TPL_N"\`) and passes the resolved value via the process environment. The expansion is already safely quoted, so for most uses you just write \`{{variables.pattern}}\` exactly the way you would elsewhere — but you should NOT try to use the token in a way that depends on raw substitution (e.g. building shell flags or unquoted file paths from interpolated values). If you need different quoting, reference the underlying env var name (\`$VALET_TPL_0\`) directly, but prefer just writing \`{{...}}\`.
+
 Type-specific fields:
 - bash: { command: string }
 - tool: { tool: string, arguments?: object }
