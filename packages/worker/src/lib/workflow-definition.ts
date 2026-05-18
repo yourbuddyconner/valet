@@ -59,6 +59,12 @@ function validateStep(step: unknown, path: string, errors: string[]): void {
     );
   }
 
+  if (normalizedType === 'agent_message') {
+    errors.push(
+      `${path}.type "agent_message" is no longer supported. Use 'agent_prompt' to capture an agent's reply, or 'notify' to send a prompt to the orchestrator.`,
+    );
+  }
+
   if (normalizedType === 'loop') {
     if (typeof step.over !== 'string' || !step.over.trim()) {
       errors.push(`${path}.over is required (string path to an array, e.g. "outputs.list")`);
@@ -81,7 +87,7 @@ function validateStep(step: unknown, path: string, errors: string[]): void {
     }
   }
 
-  if (normalizedType === 'agent_message' || normalizedType === 'agent_prompt') {
+  if (normalizedType === 'agent_prompt') {
     const content =
       (typeof step.content === 'string' ? step.content : '') ||
       (typeof step.message === 'string' ? step.message : '') ||

@@ -18,12 +18,12 @@ describe('buildSystemPrompt', () => {
     }
   });
 
-  it('teaches outputSchema, the question-tool prohibition, template interpolation, and deprecates agent_message', () => {
+  it('teaches outputSchema, the question-tool prohibition, template interpolation, and omits agent_message', () => {
     const sys = buildSystemPrompt();
     expect(sys).toContain('outputSchema');
     expect(sys.toLowerCase()).toContain('cannot ask');
     expect(sys.toLowerCase()).toContain('template interpolation');
-    expect(sys).toMatch(/agent_message[\s\S]{0,60}DEPRECATED/i);
+    expect(sys).not.toContain('agent_message');
     expect(sys).toContain('over');
     expect(sys).toContain('loop.item');
   });

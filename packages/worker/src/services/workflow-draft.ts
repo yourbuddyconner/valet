@@ -38,7 +38,6 @@ Type-specific fields:
     The runner enforces the schema and retries the agent with the error if the response is invalid.
 - notify: { content: string, target?: 'orchestrator' }
     Sends a prompt to the user's orchestrator agent so it can react to the workflow's result — forward to Slack/Telegram, message the user, take follow-up action, etc. Use this as the FINAL step of most workflows when the user should be informed of the outcome. The content is a self-contained instruction to the orchestrator, e.g. "The morning PR digest workflow found 3 failed runs: {{outputs.digest.summary}}". Fire-and-forget — the workflow does not wait for the orchestrator. Template interpolation is supported.
-- agent_message: DEPRECATED — do not generate. Use \`notify\` to inform the orchestrator, or a \`tool\` step with the appropriate channel integration for direct user delivery.
 - conditional: { condition: string, then: WorkflowStep[], else?: WorkflowStep[] }
 - parallel: { steps: WorkflowStep[] }
 - loop: { over: string, steps: WorkflowStep[], itemVar?: string, indexVar?: string }
