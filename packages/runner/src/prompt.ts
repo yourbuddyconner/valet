@@ -574,6 +574,15 @@ export class ChannelSession {
   }
 }
 
+// Read `channel.lastError` through a function boundary to defeat TS's flow-narrowing.
+// After `channel.lastError = null`, TS treats the field as permanently `null` inside
+// the same control-flow region — but async event handlers (e.g. `handleQuestionAsked`)
+// can write a non-null value during an intervening `await`. The function call
+// resets the narrowing back to the declared type.
+function readChannelLastError(channel: ChannelSession): string | null {
+  return channel.lastError;
+}
+
 export class PromptHandler {
   private opencodeUrl: string;
   private agentClient: AgentClient;
@@ -1292,11 +1301,20 @@ export class PromptHandler {
       this.workflowExecutionModelPreferences,
     );
 
+    // Resolve thread name up-front so the outer finally can detect ephemeral
+    // (`@new`) threads and tear down their per-call ChannelSession + OpenCode
+    // session. Otherwise a loop foreach with N iterations leaks N channels.
+    const workflowChannelType = "workflow";
+    const threadName = this.resolveWorkflowThreadName(step.thread);
+    const workflowChannelId = `${context.executionId}:${threadName}`;
+    const isEphemeralThread = threadName.startsWith("__new_");
+    let ephemeralChannelForCleanup: ChannelSession | null = null;
+
     try {
-      const workflowChannelType = "workflow";
-      const threadName = this.resolveWorkflowThreadName(step.thread);
-      const workflowChannelId = `${context.executionId}:${threadName}`;
       const channel = this.getOrCreateChannel(workflowChannelType, workflowChannelId);
+      if (isEphemeralThread) {
+        ephemeralChannelForCleanup = channel;
+      }
       this.currentPromptChannel = channel;
       await this.ensureChannelOpenCodeSession(channel);
 
@@ -1347,7 +1365,24 @@ export class PromptHandler {
           await idlePromise;
 
           const responseText = (this.ephemeralContent.get(sessionId) || "").trim();
-          const stepError = channel.lastError || null;
+          // Re-read `lastError` through a helper to defeat TS's flow narrowing
+          // (the earlier `channel.lastError = null` makes TS treat the field as
+          // permanently null inside this control-flow region, but async event
+          // handlers like `handleQuestionAsked` write to it during the await).
+          const stepError = readChannelLastError(channel);
+
+          // If the agent called the interactive question tool in a workflow channel
+          // (no UI to answer), `handleQuestionAsked` already set `channel.lastError`
+          // and aborted the OpenCode session. Any text emitted before that abort is
+          // moot — fail the step with the question-tool error instead of returning a
+          // misleading "completed" status with the partial response.
+          if (stepError && stepError.startsWith('agent_prompt_question_not_supported:')) {
+            return {
+              status: "failed",
+              error: stepError,
+              output: { type: step.type, targetSessionId: this.runnerSessionId, content, interrupt },
+            };
+          }
 
           let recoveredResponse = responseText;
           if (!recoveredResponse) {
@@ -1393,7 +1428,9 @@ export class PromptHandler {
                 channel.resetPromptState();
                 channel.lastError = null;
                 this.ephemeralContent.set(sessionId, "");
-                const fixupIdle = this.pollUntilIdle(sessionId, awaitTimeoutMs);
+                // Send the fixup prompt first so we know the final session id BEFORE
+                // registering an idle waiter. Registering on the old id would never
+                // resolve if `sendPromptToChannelWithRecovery` recreated the session.
                 const fixupSentSessionId = await this.sendPromptToChannelWithRecovery(channel, fixup, {
                   model: modelCandidate,
                   channelType: workflowChannelType,
@@ -1406,6 +1443,7 @@ export class PromptHandler {
                   this.ephemeralContent.set(sessionId, "");
                   attemptSessionIds.add(sessionId);
                 }
+                const fixupIdle = this.pollUntilIdle(sessionId, awaitTimeoutMs);
                 await fixupIdle;
                 let fixupResponse = (this.ephemeralContent.get(sessionId) || "").trim();
                 if (!fixupResponse) {
@@ -1484,6 +1522,21 @@ export class PromptHandler {
       };
     } finally {
       this.currentPromptChannel = previousChannel;
+
+      // Ephemeral (`@new`) threads create a fresh channel + OpenCode session per call.
+      // Without explicit teardown they accumulate in `this.channels` — a loop foreach
+      // with N iterations would leak N channels and N live OpenCode sessions.
+      if (ephemeralChannelForCleanup) {
+        const ch = ephemeralChannelForCleanup;
+        const opencodeSessionId = ch.opencodeSessionId;
+        this.channels.delete(ch.channelKey);
+        if (opencodeSessionId) {
+          this.ocSessionToChannel.delete(opencodeSessionId);
+          // Best-effort abort; the session may already be idle. Errors are swallowed
+          // because cleanup must not turn a successful step into a failure.
+          fetch(`${this.opencodeUrl}/session/${opencodeSessionId}/abort`, { method: "POST" }).catch(() => undefined);
+        }
+      }
     }
   }
 

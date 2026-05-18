@@ -307,6 +307,25 @@ export function parseCondition(input: string): ConditionNode | null {
 
 // --- Evaluator ---------------------------------------------------------------
 
+/**
+ * Resolve a dotted path against the eval context.
+ *
+ * Precedence:
+ *   1. `variables.*` — explicit namespace, reads from `ctx.variables`.
+ *   2. `outputs.*`   — explicit namespace, reads from `ctx.outputs` (prior step outputs).
+ *   3. `loop.*`      — explicit namespace, populated only inside a loop body.
+ *   4. Bare identifier (no namespace) — falls back to `ctx.variables` ONLY.
+ *
+ * FOOTGUN: bare identifiers do NOT consult `ctx.outputs`. A condition like
+ *   `digest === "ok"`
+ * looks at `variables.digest`, NOT at any step output named `digest`. If you
+ * want to read a prior step's output, always use the explicit namespace:
+ *   `outputs.digest === "ok"`.
+ *
+ * The bare-name fallback exists for backwards compatibility with the legacy
+ * `{ variable: 'flag', equals: true }` condition shape, which only ever read
+ * from the trigger/variables bag.
+ */
 function resolvePath(segments: string[], ctx: EvalContext): unknown {
   if (segments.length === 0) return undefined;
   const [root, ...rest] = segments;
@@ -317,6 +336,7 @@ function resolvePath(segments: string[], ctx: EvalContext): unknown {
   else {
     // Bare identifiers (no namespace) fall back to variables — convenient for the
     // legacy `{ variable: 'x' }` mental model written inline as `x === "y"`.
+    // NOTE: this intentionally does NOT consult `ctx.outputs`; see doc comment above.
     cursor = ctx.variables[root];
     for (const seg of rest) {
       if (cursor === null || cursor === undefined) return undefined;

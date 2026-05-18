@@ -1,6 +1,6 @@
 import type { NormalizedWorkflowDefinition, NormalizedWorkflowStep } from './workflow-compiler.js';
 import { evalConditionString } from './workflow-condition.js';
-import { resolveStepFields } from './workflow-interpolation.js';
+import { resolveBashCommand, resolveInterpolation, resolveStepFields } from './workflow-interpolation.js';
 
 export type WorkflowStatus = 'ok' | 'needs_approval' | 'cancelled' | 'failed';
 
@@ -28,6 +28,27 @@ export interface WorkflowRunPayload {
      * the original values rather than nulls.
      */
     replayStepResults?: Record<string, { output?: unknown; status?: string }>;
+    /**
+     * Resume seed: published outputs from the pre-approval portion of the source
+     * execution. Used to populate `context.outputs` so that post-approval steps
+     * can interpolate values produced by steps the engine no longer re-executes.
+     *
+     * KNOWN LIMITATION: resume currently re-walks every step from the top of the
+     * workflow. Steps before the approval checkpoint will re-fire their hooks
+     * (i.e. side effects), then the engine matches the approval token and
+     * proceeds. Seeding `previousOutputs` only restores INTERPOLATION fidelity
+     * for downstream steps — it does not prevent pre-gate re-execution. A full
+     * skip-and-replay (analogous to `startFromStepId`) is the long-term fix.
+     */
+    previousOutputs?: Record<string, unknown>;
+    /**
+     * Server-generated random nonce mixed into the approval resume-token
+     * derivation. Without it, tokens would be derivable from public values
+     * (executionId/stepId/attempt) and attackers could forge approvals.
+     * The worker stores the nonce in `runtime_state.approvalNonce` on first
+     * dispatch and forwards it on every subsequent run/resume payload.
+     */
+    approvalNonce?: string;
   };
 }
 
@@ -132,6 +153,8 @@ type ExecutionContext = {
   resume?: ResumeContext;
   hooks?: WorkflowExecutionHooks;
   replay?: ReplayContext;
+  /** See WorkflowRunPayload.runtime.approvalNonce. */
+  approvalNonce?: string;
 };
 
 const DEFAULT_BASH_TIMEOUT_MS = 120_000;
@@ -188,7 +211,29 @@ function truncateText(value: string): string {
   return `${value.slice(0, MAX_OUTPUT_CHARS)}\n...[truncated]`;
 }
 
-async function executeBashToolStep(step: NormalizedWorkflowStep): Promise<WorkflowStepExecutionResult> {
+/**
+ * Execute a bash tool step.
+ *
+ * SECURITY MODEL — interpolation in bash commands:
+ *
+ * Unlike other step types, the bash `command` field is NOT pre-interpolated
+ * by `resolveStepFields` at the caller. Naively splicing `{{variables.x}}`
+ * into a shell string would let an attacker-controlled webhook payload inject
+ * shell metacharacters (`; rm -rf /`, backticks, `$(...)`, etc.).
+ *
+ * Instead, the caller (`executeStepAction`) rewrites each `{{path}}` token in
+ * the raw command into a shell variable reference (`"$VALET_TPL_N"`) and
+ * passes the resolved values via the process `env` map. The shell then
+ * expands the variable as a single token — no parsing, no injection.
+ *
+ * Workflow authors quote tokens themselves (`"$VAR"`) for safety in arbitrary
+ * positions. The LLM drafter is taught the same convention in
+ * `workflow-draft.ts:SYSTEM_PROMPT`.
+ */
+async function executeBashToolStep(
+  step: NormalizedWorkflowStep,
+  extraEnv?: Record<string, string>,
+): Promise<WorkflowStepExecutionResult> {
   const args = asRecord(step.arguments);
   const command = typeof args.command === 'string' ? args.command.trim() : '';
   if (!command) {
@@ -208,6 +253,7 @@ async function executeBashToolStep(step: NormalizedWorkflowStep): Promise<Workfl
     cwd,
     stdout: 'pipe',
     stderr: 'pipe',
+    env: extraEnv ? { ...process.env, ...extraEnv } : (process.env as Record<string, string>),
   });
 
   let timedOut = false;
@@ -260,7 +306,10 @@ async function executeBashToolStep(step: NormalizedWorkflowStep): Promise<Workfl
   return { status: 'completed', output };
 }
 
-function executeBashStep(step: NormalizedWorkflowStep): Promise<WorkflowStepExecutionResult> {
+function executeBashStep(
+  step: NormalizedWorkflowStep,
+  extraEnv?: Record<string, string>,
+): Promise<WorkflowStepExecutionResult> {
   const command = typeof step.command === 'string' ? step.command.trim() : '';
   if (!command) {
     return Promise.resolve({
@@ -270,11 +319,17 @@ function executeBashStep(step: NormalizedWorkflowStep): Promise<WorkflowStepExec
     });
   }
 
-  const cwd = typeof step.cwd === 'string' && (step.cwd as string).trim() ? (step.cwd as string).trim() : undefined;
-  const timeoutRaw = typeof step.timeoutMs === 'number' ? step.timeoutMs as number : DEFAULT_BASH_TIMEOUT_MS;
-  // Reuse the existing executeBashToolStep by wrapping into the tool step shape
-  const toolStep = { ...step, type: 'tool', tool: 'bash', arguments: { command, cwd, timeoutMs: timeoutRaw } } as NormalizedWorkflowStep;
-  return executeBashToolStep(toolStep);
+  const cwd = typeof step.cwd === 'string' && step.cwd.trim() ? step.cwd.trim() : undefined;
+  const timeoutRaw = typeof step.timeoutMs === 'number' ? step.timeoutMs : DEFAULT_BASH_TIMEOUT_MS;
+  // Reuse the existing executeBashToolStep by wrapping into the tool step shape.
+  // `step.command` is the already-rewritten, interpolated-as-env-vars version.
+  const toolStep: NormalizedWorkflowStep = {
+    ...step,
+    type: 'tool',
+    tool: 'bash',
+    arguments: { command, cwd, timeoutMs: timeoutRaw },
+  };
+  return executeBashToolStep(toolStep, extraEnv);
 }
 
 async function executeStepAction(rawStep: NormalizedWorkflowStep, ctx: ExecutionContext): Promise<WorkflowStepExecutionResult> {
@@ -299,7 +354,21 @@ async function executeStepAction(rawStep: NormalizedWorkflowStep, ctx: Execution
   const step = resolved as NormalizedWorkflowStep;
 
   if (step.type === 'bash') {
-    return executeBashStep(step);
+    // resolveStepFields skips `command` for bash steps — rewrite tokens to env
+    // vars here so untrusted values can't inject shell metacharacters. See
+    // `executeBashToolStep` for the full security model writeup.
+    const rawCommand = typeof rawStep.command === 'string' ? rawStep.command : '';
+    const interp = resolveBashCommand(rawCommand, {
+      variables: ctx.variables,
+      outputs: ctx.outputs,
+    });
+    if (interp.missingPaths.length > 0) {
+      console.warn(
+        `[workflow-engine] bash step ${rawStep.id} has unresolved interpolation paths: ${interp.missingPaths.join(', ')}`,
+      );
+    }
+    const stepWithSafeCommand: NormalizedWorkflowStep = { ...step, command: interp.command };
+    return executeBashStep(stepWithSafeCommand, interp.env);
   }
 
   if (step.type === 'notify') {
@@ -324,7 +393,22 @@ async function executeStepAction(rawStep: NormalizedWorkflowStep, ctx: Execution
     }
 
     if (step.tool === 'bash') {
-      return executeBashToolStep(step);
+      // Same security treatment as `type: bash` — rewrite `{{path}}` tokens in
+      // arguments.command into `"$VALET_TPL_N"` and pass values via env.
+      const rawArgs = asRecord(rawStep.arguments);
+      const rawCommand = typeof rawArgs.command === 'string' ? rawArgs.command : '';
+      const interp = resolveBashCommand(rawCommand, {
+        variables: ctx.variables,
+        outputs: ctx.outputs,
+      });
+      if (interp.missingPaths.length > 0) {
+        console.warn(
+          `[workflow-engine] bash tool step ${rawStep.id} has unresolved interpolation paths: ${interp.missingPaths.join(', ')}`,
+        );
+      }
+      const mergedArgs = { ...asRecord(step.arguments), command: interp.command };
+      const stepWithSafeArgs: NormalizedWorkflowStep = { ...step, arguments: mergedArgs };
+      return executeBashToolStep(stepWithSafeArgs, interp.env);
     }
 
     return {
@@ -374,7 +458,18 @@ function evaluateCondition(step: NormalizedWorkflowStep, ctx: ExecutionContext):
     const loopCtx = loopValue && typeof loopValue === 'object' && !Array.isArray(loopValue)
       ? (loopValue as Record<string, unknown>)
       : undefined;
-    return evalConditionString(condition, {
+    // `evaluateCondition` runs BEFORE `executeStepAction`, so `resolveStepFields` has not
+    // touched the raw condition string yet. Resolve `{{...}}` tokens here so authors can
+    // mix templated values (`{{variables.flag}} === "done"`) with raw paths
+    // (`outputs.list_runs.failed > 0`). The condition parser only understands raw paths.
+    const resolved = resolveInterpolation(condition, {
+      variables: ctx.variables,
+      outputs: ctx.outputs,
+    });
+    if (resolved.missingPaths.length > 0) {
+      console.warn(`[workflow-engine] condition for ${step.id} has unresolved paths: ${resolved.missingPaths.join(', ')}`);
+    }
+    return evalConditionString(resolved.text, {
       variables: ctx.variables,
       outputs: ctx.outputs,
       loop: loopCtx,
@@ -417,8 +512,31 @@ function buildStepInput(step: NormalizedWorkflowStep): Record<string, unknown> {
   return input;
 }
 
-function createApprovalToken(executionId: string, stepId: string, attempt: number): Promise<string> {
-  return sha256Hex(`${executionId}:${stepId}:${attempt}`).then((digest) => `wrf_rt_${digest.slice(0, 24)}`);
+/**
+ * Compute the resume token for an approval step.
+ *
+ * SECURITY: The token MUST NOT be derivable from public values (executionId,
+ * stepId, attempt) alone — any caller with read access to executions could
+ * forge an approval. The `approvalNonce` is a server-generated random string
+ * persisted to `runtime_state.approvalNonce` when the worker first dispatches
+ * the execution. It is never returned to clients. The runner receives it on
+ * both initial run and resume via `payload.runtime.approvalNonce`.
+ *
+ * If `approvalNonce` is missing (legacy executions created before this fix
+ * was deployed), we fall back to the old deterministic derivation so
+ * in-flight workflows can still complete. New executions always carry the
+ * nonce because the worker generates one on first enqueue.
+ */
+function createApprovalToken(
+  executionId: string,
+  stepId: string,
+  attempt: number,
+  approvalNonce: string | undefined,
+): Promise<string> {
+  const seed = approvalNonce
+    ? `${executionId}:${stepId}:${attempt}:${approvalNonce}`
+    : `${executionId}:${stepId}:${attempt}`;
+  return sha256Hex(seed).then((digest) => `wrf_rt_${digest.slice(0, 24)}`);
 }
 
 async function executeSteps(
@@ -487,7 +605,7 @@ async function executeSteps(
       const prompt = typeof step.prompt === 'string' && step.prompt.trim()
         ? step.prompt.trim()
         : `Approval required for step ${step.id}`;
-      const resumeToken = await createApprovalToken(ctx.executionId, step.id, ctx.attempt);
+      const resumeToken = await createApprovalToken(ctx.executionId, step.id, ctx.attempt, ctx.approvalNonce);
       const stepTs = nowIso();
 
       if (ctx.resume && !ctx.resume.matched) {
@@ -589,6 +707,12 @@ async function executeSteps(
       const indexVar = typeof step.indexVar === 'string' && step.indexVar ? step.indexVar : 'index';
       const body = asStepArray(step.steps);
 
+      // Snapshot outputs at loop entry so a mid-loop failure rolls back partial
+      // mutations from completed iterations. Without this, downstream steps after
+      // a failed loop step would observe stale `outputVariable` values from
+      // whichever iterations happened to run before the failure — predictable
+      // strict semantics are preferable to surfacing partial state to retries.
+      const loopOutputsBefore = { ...ctx.outputs };
       let lastChildRun: ExecuteStepsResult = {};
       for (let i = 0; i < items.length; i++) {
         // Shadow user-named variables and publish a `loop` namespace so
@@ -606,6 +730,16 @@ async function executeSteps(
             ctx.variables[itemVar] = savedItem;
             ctx.variables[indexVar] = savedIndex;
             ctx.variables['loop'] = savedLoop;
+            if (lastChildRun.failed) {
+              // Mutate in place so the same object reference held elsewhere
+              // (e.g. returned as `output: context.outputs`) stays valid.
+              for (const key of Object.keys(ctx.outputs)) {
+                if (!(key in loopOutputsBefore)) delete ctx.outputs[key];
+              }
+              for (const [key, value] of Object.entries(loopOutputsBefore)) {
+                ctx.outputs[key] = value;
+              }
+            }
             return lastChildRun;
           }
         } finally {
@@ -638,22 +772,69 @@ async function executeSteps(
 
       emit(sink, { type: 'step.completed', executionId: ctx.executionId, stepId: step.id, attempt: ctx.attempt, ts: completedAt });
 
-      if (branchRun.approval || branchRun.failed) return branchRun;
+      // Propagate cancelled in addition to approval/failed — previously dropped,
+      // which let the parent walk continue past a cancelled child branch.
+      if (branchRun.approval || branchRun.failed || branchRun.cancelled) return branchRun;
       continue;
     }
 
     if (step.type === 'parallel') {
       const branches = asStepArray(step.steps);
-      const branchRun = await executeSteps(branches, ctx, sink);
+      // Snapshot outputs/variables at parallel entry. Each branch builds on this
+      // snapshot independently — sibling branches must not see each other's
+      // outputs (or mutate each other's variables) during concurrent execution.
+      const outputsAtEntry = { ...ctx.outputs };
+      const variablesAtEntry = { ...ctx.variables };
+
+      const branchResults = await Promise.all(
+        branches.map(async (branchStep) => {
+          const branchCtx: ExecutionContext = {
+            ...ctx,
+            outputs: { ...outputsAtEntry },
+            variables: { ...variablesAtEntry },
+            // Step records still flow into the shared list so the envelope's
+            // `steps` array contains every executed step regardless of branch.
+            steps: ctx.steps,
+          };
+          const branchRun = await executeSteps([branchStep], branchCtx, sink);
+          return { branchRun, branchCtx };
+        }),
+      );
+
+      // Merge each branch's NEW outputs back into the parent context. Keys that
+      // already existed at entry are skipped to avoid clobbering with stale
+      // snapshots; for keys produced inside the branches, last writer wins on
+      // collision (use distinct outputVariables across branches to avoid this).
+      for (const { branchCtx } of branchResults) {
+        for (const [k, v] of Object.entries(branchCtx.outputs)) {
+          if (!(k in outputsAtEntry)) ctx.outputs[k] = v;
+        }
+      }
 
       const completedAt = nowIso();
       result.status = 'completed';
       result.completedAt = completedAt;
       result.output = { branchCount: branches.length };
 
-      emit(sink, { type: 'step.completed', executionId: ctx.executionId, stepId: step.id, attempt: ctx.attempt, ts: completedAt });
+      // Surface the first non-clean status from any branch. Priority order:
+      // failed > cancelled > approval — failure is the most actionable, and
+      // we want the engine to stop walking siblings if any branch errored.
+      const failed = branchResults.find((r) => r.branchRun.failed);
+      if (failed) {
+        emit(sink, { type: 'step.failed', executionId: ctx.executionId, stepId: step.id, attempt: ctx.attempt, ts: completedAt, error: failed.branchRun.failed });
+        return { failed: failed.branchRun.failed };
+      }
+      const cancelled = branchResults.find((r) => r.branchRun.cancelled);
+      if (cancelled) {
+        emit(sink, { type: 'step.cancelled', executionId: ctx.executionId, stepId: step.id, attempt: ctx.attempt, ts: completedAt, reason: cancelled.branchRun.cancelled });
+        return { cancelled: cancelled.branchRun.cancelled };
+      }
+      const approval = branchResults.find((r) => r.branchRun.approval);
+      if (approval) {
+        return { approval: approval.branchRun.approval };
+      }
 
-      if (branchRun.approval || branchRun.failed) return branchRun;
+      emit(sink, { type: 'step.completed', executionId: ctx.executionId, stepId: step.id, attempt: ctx.attempt, ts: completedAt });
       continue;
     }
 
@@ -747,6 +928,7 @@ export async function executeWorkflowRun(
     maxSteps,
     visitedSteps: 0,
     hooks,
+    approvalNonce: payload.runtime?.approvalNonce,
   };
 
   const replay: ReplayContext | undefined = startFromStepId
@@ -854,11 +1036,16 @@ export async function executeWorkflowResume(
     executionId,
     attempt,
     variables: { ...(payload.variables || {}) },
-    outputs: {},
+    // Seed outputs from the source execution so steps after the approval gate
+    // can still interpolate `{{outputs.foo}}` for values published before the
+    // pause. Pre-gate steps will still re-execute (and may overwrite these
+    // entries) — see the `previousOutputs` doc comment for the known limitation.
+    outputs: { ...(payload.runtime?.previousOutputs || {}) },
     steps: [],
     maxSteps,
     visitedSteps: 0,
     hooks,
+    approvalNonce: payload.runtime?.approvalNonce,
     resume: {
       resumeToken,
       decision,

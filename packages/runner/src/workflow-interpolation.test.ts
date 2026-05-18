@@ -128,4 +128,53 @@ describe('resolveStepFields', () => {
     );
     expect(step.arguments).toEqual(args);
   });
+
+  it('resolves tokens inside nested object arguments', () => {
+    const { step, missingPaths } = resolveStepFields(
+      {
+        type: 'tool',
+        tool: 'x',
+        arguments: {
+          url: { live: '{{variables.name}}-prod', preview: 'static' },
+          meta: { count: 5, label: 'count={{variables.count}}' },
+        },
+      },
+      ctx,
+    );
+    expect(step.arguments).toEqual({
+      url: { live: 'Alice-prod', preview: 'static' },
+      meta: { count: 5, label: 'count=3' },
+    });
+    expect(missingPaths).toEqual([]);
+  });
+
+  it('resolves tokens inside arrays within arguments', () => {
+    const { step } = resolveStepFields(
+      {
+        type: 'tool',
+        tool: 'x',
+        arguments: {
+          targets: ['{{variables.name}}', 'static', { who: '{{variables.name}}' }],
+        },
+      },
+      ctx,
+    );
+    expect(step.arguments).toEqual({
+      targets: ['Alice', 'static', { who: 'Alice' }],
+    });
+  });
+
+  it('aggregates missing paths from nested object arguments', () => {
+    const { missingPaths } = resolveStepFields(
+      {
+        type: 'tool',
+        tool: 'x',
+        arguments: {
+          nested: { a: '{{variables.missing}}', b: ['{{outputs.gone}}'] },
+        },
+      },
+      ctx,
+    );
+    expect(missingPaths.sort()).toEqual(['outputs.gone', 'variables.missing']);
+  });
 });

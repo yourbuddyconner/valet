@@ -65,7 +65,16 @@ export function resolveStepFields<S extends Record<string, unknown>>(
   const missingPaths: string[] = [];
   const resolved = { ...(step as Record<string, unknown>) };
 
+  // Bash commands skip standard string interpolation. The workflow engine
+  // calls `resolveBashCommand` separately, which routes `{{path}}` values
+  // through env vars instead of splicing them into the shell string (prevents
+  // shell-metacharacter injection from untrusted webhook payloads). See
+  // `executeBashToolStep` for the security model.
+  const isBashStep = resolved.type === "bash"
+    || (resolved.type === "tool" && resolved.tool === "bash");
+
   for (const key of STEP_STRING_FIELDS) {
+    if (isBashStep && key === "command") continue;
     const value = resolved[key];
     if (typeof value === "string") {
       const r = resolveInterpolation(value, ctx);
@@ -76,20 +85,107 @@ export function resolveStepFields<S extends Record<string, unknown>>(
 
   const args = resolved.arguments;
   if (args && typeof args === "object" && !Array.isArray(args)) {
-    const resolvedArgs: Record<string, unknown> = {};
-    for (const [k, v] of Object.entries(args as Record<string, unknown>)) {
-      if (typeof v === "string") {
-        const r = resolveInterpolation(v, ctx);
-        resolvedArgs[k] = r.text;
-        missingPaths.push(...r.missingPaths);
-      } else {
-        resolvedArgs[k] = v;
-      }
+    // Tool args frequently contain nested objects (e.g. `{ url: { live: "{{x}}" } }`).
+    // Walk the whole tree so any string at any depth gets interpolated.
+    // For bash tool steps, skip the `command` arg — same reason as above.
+    const argsRecord = args as Record<string, unknown>;
+    if (isBashStep && "command" in argsRecord) {
+      const { command, ...rest } = argsRecord;
+      const resolvedRest = resolveValue(rest, ctx, missingPaths) as Record<string, unknown>;
+      resolved.arguments = { ...resolvedRest, command };
+    } else {
+      resolved.arguments = resolveValue(args, ctx, missingPaths);
     }
-    resolved.arguments = resolvedArgs;
   }
 
   return { step: resolved as S, missingPaths };
+}
+
+/**
+ * Bash-safe interpolation. Returns a rewritten command where every `{{path}}`
+ * token is replaced with a shell variable reference (`"$VALET_TPL_N"`), and a
+ * map of those env var names to their resolved string values.
+ *
+ * SECURITY: This is the ONLY safe way to inline workflow values into a bash
+ * step's `command` field. Values flow through the OS env table, not the shell
+ * parser, so untrusted payload content cannot inject shell metacharacters.
+ * The replacement uses `"$VAR"` (double-quoted) so each expansion is a single
+ * argument even if the value contains whitespace.
+ */
+export interface BashInterpolationResult {
+  command: string;
+  env: Record<string, string>;
+  missingPaths: string[];
+}
+
+export function resolveBashCommand(
+  template: string,
+  ctx: InterpolationContext,
+): BashInterpolationResult {
+  if (typeof template !== "string" || template.length === 0) {
+    return { command: template ?? "", env: {}, missingPaths: [] };
+  }
+
+  const missingPaths: string[] = [];
+  const env: Record<string, string> = {};
+  let counter = 0;
+
+  const command = template.replace(TOKEN_RE, (_match, rawPath: string) => {
+    const path = rawPath.trim();
+    const [root, ...rest] = path.split(".");
+    let value: unknown;
+    if (root === "variables") {
+      value = walkPath(ctx.variables, rest);
+    } else if (root === "outputs") {
+      value = walkPath(ctx.outputs, rest);
+    } else if (root === "loop") {
+      const loop = ctx.variables.loop && typeof ctx.variables.loop === "object"
+        ? (ctx.variables.loop as Record<string, unknown>)
+        : {};
+      value = walkPath(loop, rest);
+    } else {
+      missingPaths.push(path);
+      const varName = `VALET_TPL_${counter++}`;
+      env[varName] = "";
+      return `"$${varName}"`;
+    }
+
+    if (value === undefined) {
+      missingPaths.push(path);
+      const varName = `VALET_TPL_${counter++}`;
+      env[varName] = "";
+      return `"$${varName}"`;
+    }
+
+    const varName = `VALET_TPL_${counter++}`;
+    env[varName] = renderValue(value);
+    return `"$${varName}"`;
+  });
+
+  return { command, env, missingPaths };
+}
+
+function resolveValue(
+  value: unknown,
+  ctx: InterpolationContext,
+  missingPaths: string[],
+): unknown {
+  if (typeof value === "string") {
+    const r = resolveInterpolation(value, ctx);
+    missingPaths.push(...r.missingPaths);
+    return r.text;
+  }
+  if (Array.isArray(value)) {
+    return value.map((v) => resolveValue(v, ctx, missingPaths));
+  }
+  if (value && typeof value === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      out[k] = resolveValue(v, ctx, missingPaths);
+    }
+    return out;
+  }
+  return value;
 }
 
 const STEP_STRING_FIELDS = [
