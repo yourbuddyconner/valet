@@ -1,5 +1,12 @@
 import { useCallback, useMemo } from 'react';
-import { ReactFlow, Background, Controls, type NodeTypes, type Node as FlowNode } from '@xyflow/react';
+import {
+  ReactFlow,
+  Background,
+  BackgroundVariant,
+  Controls,
+  type NodeTypes,
+  type Node as FlowNode,
+} from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import type { WorkflowDiagramProps } from './types';
 import { layoutWorkflow } from './layout';
@@ -50,7 +57,9 @@ export function WorkflowDiagram({
   );
 
   return (
-    <div className="w-full h-full min-h-[400px] bg-neutral-50 rounded-xl border border-neutral-200">
+    // text-neutral-* drives the BackgroundVariant.Dots color via currentColor so the
+    // grid sits quietly on top of surface-1 in both light and dark mode.
+    <div className="w-full h-full min-h-[400px] bg-surface-1 rounded-xl border border-border text-neutral-300 dark:text-neutral-800">
       <ReactFlow
         nodes={nodes}
         edges={edges}
@@ -62,8 +71,11 @@ export function WorkflowDiagram({
         edgesFocusable={false}
         proOptions={{ hideAttribution: true }}
       >
-        <Background gap={20} size={1} />
-        <Controls showInteractive={false} />
+        <Background variant={BackgroundVariant.Dots} gap={28} size={1.2} color="currentColor" />
+        <Controls
+          showInteractive={false}
+          className="!bg-surface-2 !border !border-border !rounded-md !shadow-panel [&_button]:!bg-transparent [&_button]:!border-0 [&_button]:!text-neutral-500 [&_button:hover]:!text-foreground [&_button]:!w-7 [&_button]:!h-7 [&_svg]:!fill-current"
+        />
       </ReactFlow>
     </div>
   );

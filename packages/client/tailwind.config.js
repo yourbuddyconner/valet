@@ -23,6 +23,7 @@ export default {
           DEFAULT: 'rgb(var(--border) / <alpha-value>)',
           strong: 'rgb(var(--border-strong) / <alpha-value>)',
         },
+        foreground: 'rgb(var(--foreground) / <alpha-value>)',
       },
       fontSize: {
         '2xs': ['0.625rem', { lineHeight: '0.875rem' }],
