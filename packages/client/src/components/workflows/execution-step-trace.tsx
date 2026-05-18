@@ -1,16 +1,23 @@
 import { useEffect, useRef } from 'react';
-import { Check, X, MinusCircle, Play } from 'lucide-react';
+import { Check, X, MinusCircle, Play, RotateCcw } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import type { ExecutionStepTrace } from '@/api/executions';
 import type { StepRuntimeStatus } from './workflow-diagram/types';
 import { STATUS_TEXT_COLOR } from './state-tokens';
+import { Button } from '@/components/ui/button';
 
 interface Props {
   steps: ExecutionStepTrace[];
   startedAt: string;
+  /**
+   * When provided, failed step rows show a "Retry from here" affordance.
+   * Wired by the execution detail page only for failed/cancelled executions.
+   */
+  onRetryFromStep?: (stepId: string) => void;
+  retryDisabled?: boolean;
 }
 
-export function ExecutionStepTracePanel({ steps, startedAt }: Props) {
+export function ExecutionStepTracePanel({ steps, startedAt, onRetryFromStep, retryDisabled }: Props) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     containerRef.current?.scrollTo({ top: containerRef.current.scrollHeight });
@@ -32,7 +39,13 @@ export function ExecutionStepTracePanel({ steps, startedAt }: Props) {
         <span>START</span>
       </div>
       {sorted.map((s) => (
-        <StepTraceLines key={s.id} step={s} startMs={start} />
+        <StepTraceLines
+          key={s.id}
+          step={s}
+          startMs={start}
+          onRetryFromStep={onRetryFromStep}
+          retryDisabled={retryDisabled}
+        />
       ))}
     </div>
   );
@@ -44,7 +57,17 @@ function statusIcon(status: ExecutionStepTrace['status']): LucideIcon {
   return MinusCircle;
 }
 
-function StepTraceLines({ step, startMs }: { step: ExecutionStepTrace; startMs: number }) {
+function StepTraceLines({
+  step,
+  startMs,
+  onRetryFromStep,
+  retryDisabled,
+}: {
+  step: ExecutionStepTrace;
+  startMs: number;
+  onRetryFromStep?: (stepId: string) => void;
+  retryDisabled?: boolean;
+}) {
   // Narrow step.input (unknown) to safely extract a `type` field for display.
   const stepInput = step.input;
   const stepType =
@@ -80,6 +103,19 @@ function StepTraceLines({ step, startMs }: { step: ExecutionStepTrace; startMs: 
           {step.error && (
             <div className="text-red-600 dark:text-red-400 whitespace-pre-wrap break-words">
               {`        ↳ ${step.error}`}
+            </div>
+          )}
+          {step.status === 'failed' && onRetryFromStep && (
+            <div className="ml-8 mt-1">
+              <Button
+                variant="secondary"
+                size="sm"
+                disabled={retryDisabled}
+                onClick={() => onRetryFromStep(step.stepId)}
+              >
+                <RotateCcw className="w-3 h-3 mr-1" />
+                Retry from here
+              </Button>
             </div>
           )}
         </>

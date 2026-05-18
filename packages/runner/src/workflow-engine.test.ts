@@ -535,6 +535,112 @@ describe('workflow-engine', () => {
     expect(compiled.errors.some((e) => /loop step requires "over"/.test(e.message))).toBe(true);
   });
 
+  it('replays skipped steps from persisted outputs when startFromStepId is set', async () => {
+    const compiled = await compileWorkflowDefinition({
+      steps: [
+        {
+          id: 'step1',
+          type: 'tool',
+          tool: 'bash',
+          arguments: { command: 'echo first' },
+          outputVariable: 'first',
+        },
+        {
+          id: 'step2',
+          type: 'tool',
+          tool: 'bash',
+          arguments: { command: 'echo second' },
+          outputVariable: 'second',
+        },
+        {
+          id: 'step3',
+          type: 'tool',
+          tool: 'bash',
+          arguments: { command: 'echo third' },
+        },
+      ],
+    });
+
+    if (!compiled.ok || !compiled.workflow) {
+      throw new Error('compile failed');
+    }
+
+    // Baseline run captures outputs we'll feed back as replay data.
+    const baseline = await executeWorkflowRun('ex_retry_baseline', compiled.workflow, { variables: {} });
+    expect(baseline.status).toBe('ok');
+    expect(baseline.steps.map((s) => s.status)).toEqual(['completed', 'completed', 'completed']);
+
+    const replayStepResults: Record<string, { output?: unknown; status?: string }> = {};
+    for (const s of baseline.steps) {
+      replayStepResults[s.stepId] = { output: s.output, status: s.status };
+    }
+
+    const events: { type: string; stepId?: string }[] = [];
+    const retried = await executeWorkflowRun(
+      'ex_retry_from_step2',
+      compiled.workflow,
+      {
+        variables: {},
+        runtime: {
+          startFromStepId: 'step2',
+          replayOutputs: baseline.output,
+          replayStepResults,
+        },
+      },
+      undefined,
+      (event) => events.push({
+        type: event.type,
+        stepId: typeof event.stepId === 'string' ? event.stepId : undefined,
+      }),
+    );
+
+    expect(retried.status).toBe('ok');
+    expect(retried.steps.map((s) => s.stepId)).toEqual(['step1', 'step2', 'step3']);
+    expect(retried.steps[0]?.status).toBe('skipped');
+    expect(retried.steps[1]?.status).toBe('completed');
+    expect(retried.steps[2]?.status).toBe('completed');
+    // The replayed step1 output (bash result) should be carried into the skipped row.
+    expect(retried.steps[0]?.output).toEqual(baseline.steps[0]?.output);
+    // step1's outputVariable should re-populate outputs so {{outputs.first}} would still resolve.
+    expect(retried.output.first).toEqual(baseline.output.first);
+
+    const skippedEvents = events.filter((e) => e.type === 'step.skipped');
+    expect(skippedEvents).toHaveLength(1);
+    expect(skippedEvents[0]?.stepId).toBe('step1');
+  });
+
+  it('fails with retry_from_step_not_found when target is not at top level', async () => {
+    const compiled = await compileWorkflowDefinition({
+      steps: [
+        {
+          id: 'gate',
+          type: 'conditional',
+          condition: 'true',
+          then: [
+            { id: 'nested-step', type: 'tool', tool: 'bash', arguments: { command: 'echo hi' } },
+          ],
+        },
+        { id: 'after', type: 'tool', tool: 'bash', arguments: { command: 'echo after' } },
+      ],
+    });
+
+    if (!compiled.ok || !compiled.workflow) {
+      throw new Error('compile failed');
+    }
+
+    const result = await executeWorkflowRun(
+      'ex_retry_nested',
+      compiled.workflow,
+      {
+        variables: {},
+        runtime: { startFromStepId: 'nested-step', replayOutputs: {}, replayStepResults: {} },
+      },
+    );
+
+    expect(result.status).toBe('failed');
+    expect(result.error).toMatch(/^retry_from_step_not_found:nested-step$/);
+  });
+
   it('fails resume when token does not match the paused checkpoint', async () => {
     const compiled = await compileWorkflowDefinition({
       steps: [

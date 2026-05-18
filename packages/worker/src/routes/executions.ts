@@ -1,13 +1,15 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { zValidator } from '@hono/zod-validator';
-import { NotFoundError } from '@valet/shared';
+import { NotFoundError, ValidationError } from '@valet/shared';
 import type { Env, Variables } from '../env.js';
 import {
   listExecutions,
   getExecution,
 } from '../lib/db.js';
 import * as executionService from '../services/executions.js';
+import { retryExecutionFromStep } from '../services/session-workflows.js';
+import { getDb } from '../lib/drizzle.js';
 
 export const executionsRouter = new Hono<{ Bindings: Env; Variables: Variables }>();
 
@@ -41,19 +43,25 @@ const cancelSchema = z.object({
   reason: z.string().optional(),
 });
 
+const retryFromSchema = z.object({
+  stepId: z.string().min(1),
+});
+
 /**
  * GET /api/executions
  * List recent workflow executions for the user
  */
 executionsRouter.get('/', async (c) => {
   const user = c.get('user');
-  const { limit, offset, status, workflowId } = c.req.query();
+  const { limit, offset, status, workflowId, includeTest } = c.req.query();
 
   const result = await listExecutions(c.env.DB, user.id, {
     limit: parseInt(limit || '50'),
     offset: parseInt(offset || '0'),
     status,
     workflowId,
+    // Opt-in: callers must pass ?includeTest=true to see ephemeral test/dry runs.
+    includeTest: includeTest === 'true' || includeTest === '1',
   });
 
   const executions = result.results.map((row) => ({
@@ -175,4 +183,34 @@ executionsRouter.post('/:id/cancel', zValidator('json', cancelSchema), async (c)
 
   const result = await executionService.cancelExecution(c.env, id, user.id, body.reason);
   return c.json({ success: true, status: result.status });
+});
+
+/**
+ * POST /api/executions/:id/retry-from
+ * Start a new execution that replays prior steps' outputs from the source
+ * execution and resumes normal execution from `stepId`.
+ *
+ * Only valid when the source is `failed` or `cancelled` and all steps preceding
+ * `stepId` completed successfully. v1 supports only top-level steps; nested
+ * targets return `retry_from_nested_step_not_supported`.
+ */
+executionsRouter.post('/:id/retry-from', zValidator('json', retryFromSchema), async (c) => {
+  const { id } = c.req.param();
+  const user = c.get('user');
+  const body = c.req.valid('json');
+  const db = getDb(c.env.DB);
+
+  const result = await retryExecutionFromStep(db, c.env.DB, c.env, user.id, {
+    sourceExecutionId: id,
+    stepId: body.stepId,
+  });
+
+  if (result.error) {
+    if (result.error.includes('not found')) {
+      throw new NotFoundError('Execution', id);
+    }
+    throw new ValidationError(result.error);
+  }
+
+  return c.json(result.data);
 });

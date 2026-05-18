@@ -11,7 +11,7 @@ export interface Execution {
   triggerName?: string | null;
   status: 'pending' | 'running' | 'waiting_approval' | 'completed' | 'failed' | 'cancelled';
   resumeToken?: string | null;
-  triggerType: 'webhook' | 'schedule' | 'manual';
+  triggerType: 'webhook' | 'schedule' | 'manual' | 'retry';
   triggerMetadata: Record<string, unknown> | null;
   variables: Record<string, unknown> | null;
   outputs: Record<string, unknown> | null;
@@ -186,6 +186,40 @@ export function useApproveExecution() {
     onSuccess: (_, { executionId }) => {
       queryClient.invalidateQueries({ queryKey: executionKeys.detail(executionId) });
       queryClient.invalidateQueries({ queryKey: executionKeys.steps(executionId) });
+      queryClient.invalidateQueries({ queryKey: executionKeys.lists() });
+    },
+  });
+}
+
+export interface RetryFromStepRequest {
+  stepId: string;
+}
+
+export interface RetryFromStepResponse {
+  execution: {
+    executionId: string;
+    workflowId: string;
+    workflowName: string | null;
+    status: string;
+    sessionId: string;
+    sourceExecutionId: string;
+    retryFromStepId: string;
+    dispatched: boolean;
+  };
+}
+
+export function useRetryExecutionFromStep() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ executionId, data }: { executionId: string; data: RetryFromStepRequest }) =>
+      api.post<RetryFromStepResponse>(
+        `/executions/${executionId}/retry-from`,
+        data,
+      ),
+    onSuccess: (_, { executionId }) => {
+      // Refresh the source execution (now has a retry trail) and the list view.
+      queryClient.invalidateQueries({ queryKey: executionKeys.detail(executionId) });
       queryClient.invalidateQueries({ queryKey: executionKeys.lists() });
     },
   });

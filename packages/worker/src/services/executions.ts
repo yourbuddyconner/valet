@@ -88,10 +88,11 @@ export async function enqueueWorkflowExecution(
   env: Env,
   params: {
     executionId: string;
-    workflowId: string;
+    // Nullable for 'test' trigger type (no persisted workflow row).
+    workflowId: string | null;
     userId: string;
     sessionId?: string;
-    triggerType: 'manual' | 'webhook' | 'schedule';
+    triggerType: 'manual' | 'webhook' | 'schedule' | 'test' | 'retry';
     workerOrigin?: string;
   }
 ): Promise<boolean> {

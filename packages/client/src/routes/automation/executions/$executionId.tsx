@@ -1,10 +1,11 @@
-import { createFileRoute } from '@tanstack/react-router';
+import { createFileRoute, useNavigate } from '@tanstack/react-router';
 import { useMemo } from 'react';
 import {
   useExecution,
   useExecutionSteps,
   useApproveExecution,
   useCancelExecution,
+  useRetryExecutionFromStep,
 } from '@/api/executions';
 import { useWorkflow } from '@/api/workflows';
 import { WorkflowDiagram } from '@/components/workflows/workflow-diagram';
@@ -30,6 +31,8 @@ function ExecutionDetailPage() {
 
   const approve = useApproveExecution();
   const cancel = useCancelExecution();
+  const retryFromStep = useRetryExecutionFromStep();
+  const navigate = useNavigate();
 
   useExecutionStepEvents(execution?.sessionId ?? null, executionId);
 
@@ -68,6 +71,21 @@ function ExecutionDetailPage() {
   }
 
   const resumeToken = execution.resumeToken;
+  // Retry is only offered for terminal-failure states. Mid-flight executions can be cancelled first.
+  const canRetry = execution.status === 'failed' || execution.status === 'cancelled';
+  const handleRetryFromStep = (stepId: string) => {
+    retryFromStep.mutate(
+      { executionId, data: { stepId } },
+      {
+        onSuccess: (resp) => {
+          navigate({
+            to: '/automation/executions/$executionId',
+            params: { executionId: resp.execution.executionId },
+          });
+        },
+      },
+    );
+  };
 
   return (
     <div className="flex flex-col h-full bg-surface-0">
@@ -112,6 +130,8 @@ function ExecutionDetailPage() {
             <ExecutionStepTracePanel
               steps={stepsData?.steps ?? []}
               startedAt={execution.startedAt}
+              onRetryFromStep={canRetry ? handleRetryFromStep : undefined}
+              retryDisabled={retryFromStep.isPending}
             />
           </div>
           <div>

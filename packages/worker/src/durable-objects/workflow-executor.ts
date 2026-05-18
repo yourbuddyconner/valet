@@ -9,12 +9,17 @@ import { getSession, getSessionGitState, updateSessionStatus } from '../lib/db/s
 import { deriveSandboxJwtSecret } from '../lib/jwt.js';
 import { assembleProviderEnv } from '../lib/env-assembly.js';
 
+// 'test' is for ephemeral test/dry runs from the editor — no persisted workflow row,
+// excluded from the default executions list.
+export type WorkflowTriggerType = 'manual' | 'webhook' | 'schedule' | 'test' | 'retry';
+
 interface EnqueueRequest {
   executionId: string;
-  workflowId: string;
+  // Nullable so test runs (no persisted workflow row) can still flow through the executor.
+  workflowId: string | null;
   userId: string;
   sessionId?: string;
-  triggerType: 'manual' | 'webhook' | 'schedule';
+  triggerType: WorkflowTriggerType;
   workerOrigin?: string;
 }
 
@@ -36,11 +41,22 @@ interface RuntimeState {
     firstEnqueuedAt: string;
     lastEnqueuedAt: string;
     sessionId?: string;
-    triggerType: 'manual' | 'webhook' | 'schedule';
+    triggerType: WorkflowTriggerType;
     promptDispatchedAt?: string;
     sessionStartedAt?: string;
     workerOrigin?: string;
     lastError?: string;
+  };
+  /**
+   * Step-level retry directive. Populated when the user invokes
+   * `/api/executions/:id/retry-from`. The runner consumes these on the next
+   * dispatch to skip prior steps and resume from `startFromStepId`.
+   */
+  retry?: {
+    sourceExecutionId: string;
+    startFromStepId: string;
+    replayOutputs: Record<string, unknown>;
+    replayStepResults: Record<string, { output?: unknown; status?: string }>;
   };
 }
 
@@ -97,8 +113,12 @@ export class WorkflowExecutorDO implements DurableObject {
 
   private async handleEnqueue(request: Request): Promise<Response> {
     const body = await request.json<EnqueueRequest>();
-    if (!body.executionId || !body.workflowId || !body.userId || !body.triggerType) {
+    // workflowId may be null for test/dry runs that have no persisted workflow row.
+    if (!body.executionId || !body.userId || !body.triggerType) {
       return Response.json({ error: 'Missing required fields' }, { status: 400 });
+    }
+    if (body.triggerType !== 'test' && !body.workflowId) {
+      return Response.json({ error: 'Missing workflowId for non-test trigger' }, { status: 400 });
     }
 
     const row = await getExecutionWithWorkflow(this.env.DB, body.executionId);
@@ -210,7 +230,7 @@ export class WorkflowExecutorDO implements DurableObject {
   private async ensureWorkflowSessionReady(params: {
     sessionId: string;
     userId: string;
-    workflowId: string;
+    workflowId: string | null;
     executionId: string;
     workerOrigin: string;
   }): Promise<EnsureSessionResult> {
@@ -240,7 +260,7 @@ export class WorkflowExecutorDO implements DurableObject {
     sessionId: string;
     workspace: string;
     userId: string;
-    workflowId: string;
+    workflowId: string | null;
     executionId: string;
     workerOrigin: string;
   }): Promise<EnsureSessionResult> {
@@ -309,12 +329,13 @@ export class WorkflowExecutorDO implements DurableObject {
   private async buildSandboxEnvVars(params: {
     userId: string;
     sessionId: string;
-    workflowId: string;
+    workflowId: string | null;
     executionId: string;
   }): Promise<Record<string, string>> {
     const envVars: Record<string, string> = {
       IS_WORKFLOW_SESSION: 'true',
-      WORKFLOW_ID: params.workflowId,
+      // Use a stable sentinel for test runs so the runner can detect dry-run mode.
+      WORKFLOW_ID: params.workflowId ?? `test:${params.executionId}`,
       WORKFLOW_EXECUTION_ID: params.executionId,
     };
 
@@ -384,15 +405,24 @@ export class WorkflowExecutorDO implements DurableObject {
     const workflow = this.parseJsonValue<Record<string, unknown>>(row.workflow_data, {});
     const trigger = this.parseJsonValue<Record<string, unknown>>(row.trigger_metadata, {});
     const variables = this.parseJsonValue<Record<string, unknown>>(row.variables, {});
+    const state = this.parseRuntimeState(row.runtime_state);
+
+    const runtime: Record<string, unknown> = {
+      attempt: (row.attempt_count ?? 0) + 1,
+      idempotencyKey: row.idempotency_key,
+    };
+
+    if (state.retry) {
+      runtime.startFromStepId = state.retry.startFromStepId;
+      runtime.replayOutputs = state.retry.replayOutputs;
+      runtime.replayStepResults = state.retry.replayStepResults;
+    }
 
     return {
       workflow,
       trigger,
       variables,
-      runtime: {
-        attempt: (row.attempt_count ?? 0) + 1,
-        idempotencyKey: row.idempotency_key,
-      },
+      runtime,
     };
   }
 
@@ -695,8 +725,8 @@ export class WorkflowExecutorDO implements DurableObject {
   private async publishEnqueuedEvent(
     executionId: string,
     userId: string,
-    workflowId: string,
-    triggerType: 'manual' | 'webhook' | 'schedule',
+    workflowId: string | null,
+    triggerType: WorkflowTriggerType,
     dispatchCount: number,
     details: {
       sessionId?: string;
@@ -739,7 +769,7 @@ export class WorkflowExecutorDO implements DurableObject {
 
   private async publishLifecycleEvent(
     userId: string,
-    workflowId: string,
+    workflowId: string | null,
     executionId: string,
     action: 'resumed' | 'denied' | 'cancelled',
     reason: string | null

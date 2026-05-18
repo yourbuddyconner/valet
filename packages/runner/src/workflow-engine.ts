@@ -13,6 +13,21 @@ export interface WorkflowRunPayload {
     policy?: {
       maxSteps?: number;
     };
+    /**
+     * Retry-from-step support. When set, the engine walks top-level steps in order,
+     * emits `step.skipped` events (with persisted output) for each step preceding
+     * the target, then resumes normal execution from `startFromStepId` onward.
+     * `replayOutputs` seeds `context.outputs` so interpolation can resolve
+     * already-published `outputVariable` values from the source execution.
+     */
+    startFromStepId?: string;
+    replayOutputs?: Record<string, unknown>;
+    /**
+     * Step results from the source execution, keyed by stepId. Used to populate
+     * the `output` field on `step.skipped` events so the UI/persistence reflects
+     * the original values rather than nulls.
+     */
+    replayStepResults?: Record<string, { output?: unknown; status?: string }>;
   };
 }
 
@@ -95,6 +110,17 @@ type ResumeContext = {
   mismatchStepId?: string;
 };
 
+type ReplayContext = {
+  /** Stop skipping (and run normally) once we hit this top-level stepId. */
+  targetStepId: string;
+  /** Per-stepId step result from the source execution (for output backfill). */
+  results: Record<string, { output?: unknown; status?: string }>;
+  /** Flips false once `targetStepId` has been observed at top-level. */
+  skipping: boolean;
+  /** True once we've actually seen the target — used to detect a missing target. */
+  targetFound: boolean;
+};
+
 type ExecutionContext = {
   executionId: string;
   attempt: number;
@@ -105,6 +131,7 @@ type ExecutionContext = {
   visitedSteps: number;
   resume?: ResumeContext;
   hooks?: WorkflowExecutionHooks;
+  replay?: ReplayContext;
 };
 
 const DEFAULT_BASH_TIMEOUT_MS = 120_000;
@@ -398,6 +425,7 @@ async function executeSteps(
   steps: NormalizedWorkflowStep[],
   ctx: ExecutionContext,
   sink: EventSink | undefined,
+  replay?: ReplayContext,
 ): Promise<ExecuteStepsResult> {
   for (const step of steps) {
     if (ctx.visitedSteps >= ctx.maxSteps) {
@@ -405,6 +433,44 @@ async function executeSteps(
     }
 
     ctx.visitedSteps += 1;
+
+    // Retry-from-step: skip top-level steps until we hit the target.
+    // We mark the target as found before falling through to normal execution.
+    if (replay && replay.skipping) {
+      if (step.id === replay.targetStepId) {
+        replay.skipping = false;
+        replay.targetFound = true;
+      } else {
+        const ts = nowIso();
+        const prior = replay.results[step.id];
+        const replayedOutput = prior?.output ?? null;
+        // Replicate `outputVariable` publication for skipped steps so downstream
+        // interpolation sees the same values as the original run.
+        const outputVar = stepOutputVariable(step);
+        if (outputVar) {
+          ctx.outputs[outputVar] = replayedOutput;
+        }
+        ctx.steps.push({
+          stepId: step.id,
+          status: 'skipped',
+          attempt: ctx.attempt,
+          startedAt: ts,
+          completedAt: ts,
+          input: buildStepInput(step),
+          output: replayedOutput,
+        });
+        emit(sink, {
+          type: 'step.skipped',
+          executionId: ctx.executionId,
+          stepId: step.id,
+          attempt: ctx.attempt,
+          output: replayedOutput,
+          ts,
+        });
+        continue;
+      }
+    }
+
     const startedAt = nowIso();
     const result: WorkflowStepResult = {
       stepId: step.id,
@@ -663,18 +729,54 @@ export async function executeWorkflowRun(
 
   emit(sink, { type: 'execution.started', executionId, ts: startedAt });
 
+  const replayOutputs = payload.runtime?.replayOutputs;
+  const startFromStepId = typeof payload.runtime?.startFromStepId === 'string'
+    ? payload.runtime.startFromStepId.trim()
+    : '';
+  const replayStepResults = payload.runtime?.replayStepResults || {};
+
   const context: ExecutionContext = {
     executionId,
     attempt,
     variables: { ...(payload.variables || {}) },
-    outputs: {},
+    // Seed outputs with the source execution's persisted outputs so downstream
+    // steps' interpolation (e.g. {{outputs.foo.bar}}) resolves against the
+    // original successful values when retrying.
+    outputs: { ...(replayOutputs || {}) },
     steps: [],
     maxSteps,
     visitedSteps: 0,
     hooks,
   };
 
-  const run = await executeSteps(workflow.steps || [], context, sink);
+  const replay: ReplayContext | undefined = startFromStepId
+    ? {
+        targetStepId: startFromStepId,
+        results: replayStepResults,
+        skipping: true,
+        targetFound: false,
+      }
+    : undefined;
+
+  const run = await executeSteps(workflow.steps || [], context, sink, replay);
+
+  // Defensive: top-level walk completed and the target was never hit. The worker
+  // validation layer should have rejected nested targets, but if we get here
+  // surface a clear error rather than silently completing a no-op replay.
+  if (replay && !replay.targetFound) {
+    const finishedAt = nowIso();
+    const error = `retry_from_step_not_found:${replay.targetStepId}`;
+    emit(sink, { type: 'execution.finished', executionId, status: 'failed', ts: finishedAt, error });
+    return {
+      ok: false,
+      status: 'failed',
+      executionId,
+      output: context.outputs,
+      steps: context.steps,
+      requiresApproval: null,
+      error,
+    };
+  }
 
   if (run.cancelled) {
     const finishedAt = nowIso();

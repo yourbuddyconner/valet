@@ -292,6 +292,208 @@ export async function workflowRun(
   };
 }
 
+// ─── retryExecutionFromStep ──────────────────────────────────────────────────
+
+/**
+ * Validate that every step preceding `targetStepId` in the workflow's top-level
+ * step list completed successfully in the source execution. Returns the ordered
+ * list of top-level step ids on success.
+ *
+ * Only top-level steps are considered for retry targets — nested-step retry is
+ * rejected (v1 scope). The runner reads the same snapshot and walks it the same
+ * way, so this validation mirrors what the engine will do.
+ */
+function collectTopLevelStepIds(workflowSnapshot: unknown): string[] {
+  if (!isRecord(workflowSnapshot)) return [];
+  const steps = workflowSnapshot.steps;
+  if (!Array.isArray(steps)) return [];
+  const ids: string[] = [];
+  for (const step of steps) {
+    if (isRecord(step) && typeof step.id === 'string' && step.id.trim()) {
+      ids.push(step.id);
+    }
+  }
+  return ids;
+}
+
+function indexStepResultsById(
+  steps: unknown,
+): Record<string, { output?: unknown; status?: string }> {
+  const out: Record<string, { output?: unknown; status?: string }> = {};
+  if (!Array.isArray(steps)) return out;
+  for (const entry of steps) {
+    if (!isRecord(entry)) continue;
+    const stepId = typeof entry.id === 'string'
+      ? entry.id
+      : typeof entry.stepId === 'string'
+        ? entry.stepId
+        : null;
+    if (!stepId) continue;
+    out[stepId] = {
+      output: entry.output,
+      status: typeof entry.status === 'string' ? entry.status : undefined,
+    };
+  }
+  return out;
+}
+
+export interface RetryExecutionFromStepParams {
+  sourceExecutionId: string;
+  stepId: string;
+  spawnRequest?: { doWsUrl?: string } | null;
+}
+
+export async function retryExecutionFromStep(
+  db: AppDb,
+  envDB: D1Database,
+  env: Env,
+  userId: string,
+  params: RetryExecutionFromStepParams,
+): Promise<WorkflowServiceResult> {
+  const sourceExecutionId = (params.sourceExecutionId || '').trim();
+  const targetStepId = (params.stepId || '').trim();
+  if (!sourceExecutionId) return { error: 'sourceExecutionId is required' };
+  if (!targetStepId) return { error: 'stepId is required' };
+
+  const source = await getExecution(envDB, sourceExecutionId, userId) as {
+    id: string;
+    user_id: string;
+    workflow_id: string | null;
+    status: string;
+    workflow_name: string | null;
+    workflow_version: string | null;
+    workflow_hash: string | null;
+    workflow_snapshot: string | null;
+    variables: string | null;
+    outputs: string | null;
+    steps: string | null;
+  } | null;
+
+  if (!source) return { error: `Execution not found: ${sourceExecutionId}` };
+  if (source.user_id !== userId) return { error: `Execution not found: ${sourceExecutionId}` };
+
+  if (source.status !== 'failed' && source.status !== 'cancelled') {
+    return { error: `Source execution must be failed or cancelled (got ${source.status})` };
+  }
+
+  if (!source.workflow_id) {
+    return { error: 'Cannot retry: source execution has no workflow_id' };
+  }
+
+  const snapshot = parseJsonOrNull(source.workflow_snapshot);
+  if (!isRecord(snapshot)) {
+    return { error: 'Cannot retry: source execution has no workflow snapshot' };
+  }
+
+  const topLevelIds = collectTopLevelStepIds(snapshot);
+  const targetIndex = topLevelIds.indexOf(targetStepId);
+  if (targetIndex < 0) {
+    // Distinguish "nested step" from "unknown step" by scanning the full
+    // workflow tree. We reject nested-step retry at v1.
+    const orderMap = buildWorkflowStepOrderMap(source.workflow_snapshot);
+    if (orderMap.has(targetStepId)) {
+      return { error: 'retry_from_nested_step_not_supported' };
+    }
+    return { error: `Step not found in workflow: ${targetStepId}` };
+  }
+
+  const sourceStepRecords = parseJsonOrNull(source.steps);
+  const stepResultsById = indexStepResultsById(sourceStepRecords);
+
+  // Every preceding top-level step must have completed successfully — otherwise
+  // we have no valid output to replay and the retry would be ill-defined.
+  for (let i = 0; i < targetIndex; i += 1) {
+    const priorId = topLevelIds[i]!;
+    const priorResult = stepResultsById[priorId];
+    if (!priorResult || priorResult.status !== 'completed') {
+      return {
+        error: `Cannot retry: step "${priorId}" did not complete successfully in source execution`,
+      };
+    }
+  }
+
+  const concurrency = await checkWorkflowConcurrency(db, userId);
+  if (!concurrency.allowed) {
+    return { error: `Too many concurrent executions (${concurrency.reason})` };
+  }
+
+  const variables = (parseJsonOrNull(source.variables) as Record<string, unknown> | null) || {};
+  const replayOutputs = (parseJsonOrNull(source.outputs) as Record<string, unknown> | null) || {};
+
+  const executionId = crypto.randomUUID();
+  const now = new Date().toISOString();
+  const workerOrigin = deriveWorkerOriginFromSpawnRequest(params.spawnRequest);
+  const idempotencyKey = `retry:${sourceExecutionId}:${targetStepId}:${executionId}`;
+
+  const sessionId = await createWorkflowSession(db, {
+    userId,
+    workflowId: source.workflow_id,
+    executionId,
+    sourceRepoUrl: undefined,
+    sourceRepoFullName: undefined,
+    branch: undefined,
+    ref: undefined,
+  });
+
+  await createExecution(envDB, {
+    id: executionId,
+    workflowId: source.workflow_id,
+    userId,
+    triggerId: null,
+    triggerType: 'retry',
+    triggerMetadata: JSON.stringify({
+      triggeredBy: 'retry_from_step',
+      sourceExecutionId,
+      retryFromStepId: targetStepId,
+    }),
+    variables: JSON.stringify(variables),
+    now,
+    workflowVersion: source.workflow_version || null,
+    workflowHash: source.workflow_hash || '',
+    workflowSnapshot: source.workflow_snapshot || '{}',
+    idempotencyKey,
+    sessionId,
+    initiatorType: 'manual',
+    initiatorUserId: userId,
+  });
+
+  // Persist the retry directive in runtime_state before enqueue so the
+  // WorkflowExecutorDO's payload builder picks it up on first dispatch.
+  const retryState = {
+    retry: {
+      sourceExecutionId,
+      startFromStepId: targetStepId,
+      replayOutputs,
+      replayStepResults: stepResultsById,
+    },
+  };
+  await updateExecutionRuntimeState(db, executionId, JSON.stringify(retryState), 'pending');
+
+  const dispatched = await enqueueWorkflowExecution(env, {
+    executionId,
+    workflowId: source.workflow_id,
+    userId,
+    sessionId,
+    triggerType: 'retry',
+    workerOrigin,
+  });
+
+  return {
+    data: {
+      execution: {
+        executionId,
+        workflowId: source.workflow_id,
+        workflowName: source.workflow_name,
+        status: 'pending',
+        sessionId,
+        sourceExecutionId,
+        retryFromStepId: targetStepId,
+        dispatched,
+      },
+    },
+  };
+}
+
 // ─── workflowExecutions ──────────────────────────────────────────────────────
 
 export async function workflowExecutions(
