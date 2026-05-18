@@ -44,7 +44,7 @@ export interface VariableDefinition {
 export interface WorkflowStep {
   id: string;
   name: string;
-  type: 'agent_message' | 'agent_prompt' | 'notify' | 'tool' | 'bash' | 'conditional' | 'loop' | 'parallel' | 'approval';
+  type: 'agent_prompt' | 'notify' | 'tool' | 'bash' | 'conditional' | 'loop' | 'parallel' | 'approval';
   target?: 'orchestrator';
   tool?: string;
   command?: string;
@@ -56,9 +56,6 @@ export interface WorkflowStep {
   prompt?: string;
   thread?: string;
   interrupt?: boolean;
-  await_response?: boolean;
-  await_timeout_ms?: number;
-  awaitResponse?: boolean;
   awaitTimeoutMs?: number;
   outputVariable?: string;
   outputSchema?: Record<string, {

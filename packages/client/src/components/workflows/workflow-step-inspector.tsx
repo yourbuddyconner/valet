@@ -9,7 +9,6 @@ interface Props {
 const TYPE_LABEL: Record<WorkflowStep['type'], string> = {
   bash: 'BASH',
   tool: 'TOOL',
-  agent_message: 'SEND MESSAGE',
   agent_prompt: 'AGENT PROMPT',
   notify: 'NOTIFY',
   conditional: 'CONDITIONAL',
@@ -84,29 +83,6 @@ function TypeSpecificFields({ step, onChange }: Props) {
             args={step.arguments ?? {}}
             onChange={(args) => onChange({ arguments: args })}
           />
-        </>
-      );
-
-    case 'agent_message':
-      return (
-        <>
-          <TextAreaField
-            label="Content"
-            value={step.content ?? ''}
-            placeholder="Status update to send to the channel…"
-            onChange={(v) => onChange({ content: v || undefined })}
-            rows={4}
-          />
-          <ThreadField step={step} onChange={onChange} />
-          <CheckboxField
-            label="Await agent response"
-            checked={step.awaitResponse === true}
-            onChange={(b) => onChange({ awaitResponse: b || undefined })}
-            helper="Off by default — fire-and-forget. Turn on to block the workflow on the agent's reply."
-          />
-          <div className="text-[11px] text-neutral-500">
-            Notifications are non-blocking. Use Agent Prompt when later steps need the agent's reply.
-          </div>
         </>
       );
 

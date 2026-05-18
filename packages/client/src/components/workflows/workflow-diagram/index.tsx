@@ -9,7 +9,6 @@ import { SyntheticNode } from './nodes/synthetic-node';
 const NODE_TYPES: NodeTypes = {
   bash: StepNode,
   tool: StepNode,
-  agent_message: StepNode,
   agent_prompt: StepNode,
   notify: StepNode,
   conditional: StepNode,

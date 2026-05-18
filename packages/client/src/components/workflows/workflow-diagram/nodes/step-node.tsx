@@ -6,7 +6,6 @@ import { cn } from '@/lib/cn';
 const TYPE_LABEL: Record<WorkflowStep['type'], string> = {
   bash: 'BASH',
   tool: 'TOOL',
-  agent_message: 'SEND MSG',
   agent_prompt: 'AGENT PROMPT',
   notify: 'NOTIFY',
   conditional: 'CONDITIONAL',
@@ -18,7 +17,6 @@ const TYPE_LABEL: Record<WorkflowStep['type'], string> = {
 const TYPE_BADGE_CLASSES: Record<WorkflowStep['type'], string> = {
   bash: 'bg-neutral-900 text-white',
   tool: 'bg-neutral-700 text-white',
-  agent_message: 'bg-indigo-600 text-white',
   agent_prompt: 'bg-purple-600 text-white',
   notify: 'bg-teal-700 text-white',
   conditional: 'bg-amber-600 text-white',
@@ -53,8 +51,6 @@ function summaryText(step: WorkflowStep): string {
       return step.command ?? '';
     case 'tool':
       return step.tool ? `tool: ${step.tool}` : '';
-    case 'agent_message':
-      return step.content ?? step.goal ?? step.prompt ?? '';
     case 'agent_prompt':
       return step.prompt ?? step.content ?? step.goal ?? '';
     case 'notify':
