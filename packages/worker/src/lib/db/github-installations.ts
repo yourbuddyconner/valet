@@ -83,10 +83,18 @@ export async function getGithubInstallationById(
   db: AppDb,
   githubInstallationId: string,
 ): Promise<GithubInstallation | undefined> {
+  // Filter by active status so suspended/removed installs cannot dispatch
+  // triggers during GitHub's webhook retry window. Matches the pattern used
+  // by sibling lookups (getGithubInstallationByLogin, listGithubInstallationsByUser).
   return db
     .select()
     .from(githubInstallations)
-    .where(eq(githubInstallations.githubInstallationId, githubInstallationId))
+    .where(
+      and(
+        eq(githubInstallations.githubInstallationId, githubInstallationId),
+        eq(githubInstallations.status, 'active'),
+      ),
+    )
     .get();
 }
 

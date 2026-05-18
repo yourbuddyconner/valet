@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
+import { eq } from 'drizzle-orm';
 import { createTestDb } from '../../test-utils/db.js';
 import { githubInstallations } from '../schema/github-installations.js';
 import { users } from '../schema/users.js';
@@ -88,7 +89,12 @@ describe('github-installations DB helpers', () => {
     // Simulate removal
     await updateGithubInstallationStatus(db as any, '12345', 'removed');
 
-    const removed = await getGithubInstallationById(db as any, '12345');
+    // getGithubInstallationById filters by active status; read directly for this assertion.
+    const removed = db
+      .select()
+      .from(githubInstallations)
+      .where(eq(githubInstallations.githubInstallationId, '12345'))
+      .get();
     expect(removed!.status).toBe('removed');
 
     // Reinstall
@@ -170,7 +176,7 @@ describe('github-installations DB helpers', () => {
 
   // ── getGithubInstallationById ─────────────────────────────────────
 
-  it('getById returns any status (for webhook lookups)', async () => {
+  it('getById filters by active status (suspended/removed installs cannot dispatch triggers)', async () => {
     await upsertGithubInstallation(db as any, {
       githubInstallationId: '12345',
       accountLogin: 'my-org',
@@ -179,11 +185,19 @@ describe('github-installations DB helpers', () => {
       repositorySelection: 'all',
     });
 
-    await updateGithubInstallationStatus(db as any, '12345', 'removed');
+    // Active install is visible.
+    expect(await getGithubInstallationById(db as any, '12345')).toBeDefined();
 
-    const result = await getGithubInstallationById(db as any, '12345');
-    expect(result).toBeDefined();
-    expect(result!.status).toBe('removed');
+    // Soft-removed install must not surface — protects the webhook hot path
+    // during GitHub's delivery retry window after an uninstall.
+    await updateGithubInstallationStatus(db as any, '12345', 'removed');
+    expect(await getGithubInstallationById(db as any, '12345')).toBeUndefined();
+
+    // Suspended install is also hidden.
+    await updateGithubInstallationStatus(db as any, '12345', 'active');
+    expect(await getGithubInstallationById(db as any, '12345')).toBeDefined();
+    await updateGithubInstallationStatus(db as any, '12345', 'suspended');
+    expect(await getGithubInstallationById(db as any, '12345')).toBeUndefined();
   });
 
   it('getById returns undefined for non-existent id', async () => {
@@ -342,7 +356,12 @@ describe('github-installations DB helpers', () => {
 
     await updateGithubInstallationStatus(db as any, '12345', 'removed');
 
-    const row = await getGithubInstallationById(db as any, '12345');
+    // getGithubInstallationById filters by active status; read directly to verify the soft-delete persisted.
+    const row = db
+      .select()
+      .from(githubInstallations)
+      .where(eq(githubInstallations.githubInstallationId, '12345'))
+      .get();
     expect(row!.status).toBe('removed');
   });
 
