@@ -71,6 +71,9 @@ importers:
       heic-to:
         specifier: ^1.4.2
         version: 1.4.2
+      lucide-react:
+        specifier: ^1.16.0
+        version: 1.16.0(react@19.2.3)
       mermaid:
         specifier: ^11.12.2
         version: 11.12.2
@@ -3829,6 +3832,11 @@ packages:
 
   lru_map@0.4.1:
     resolution: {integrity: sha512-I+lBvqMMFfqaV8CJCISjI3wbjmwVu/VyOoU7+qtu9d7ioW5klMgsTTiUOUp+DJvfTTzKXoPbyC6YfgkNcyPSOg==}
+
+  lucide-react@1.16.0:
+    resolution: {integrity: sha512-dYwyPzb4MEKpGUmNYk3WKWPnMrHs3FKM+q94kAnJrcDIqqn1hq2xY8scaS2ovsOCM5D51ey2gaRG3PBb1vgoYQ==}
+    peerDependencies:
+      react: ^16.5.1 || ^17.0.0 || ^18.0.0 || ^19.0.0
 
   magic-string@0.25.9:
     resolution: {integrity: sha512-RmF0AsMzgt25qzqqLc1+MbHmhdx0ojF2Fvs4XnOqz2ZOBXzzkEwc/dJQZCYHAn7v1jbVOjAZfK8msRn4BxO4VQ==}
@@ -7862,6 +7870,10 @@ snapshots:
       yallist: 3.1.1
 
   lru_map@0.4.1: {}
+
+  lucide-react@1.16.0(react@19.2.3):
+    dependencies:
+      react: 19.2.3
 
   magic-string@0.25.9:
     dependencies:
