@@ -118,6 +118,12 @@ const triggerRunSchema = z.object({
   sourceRepoFullName: z.string().optional(),
 }).passthrough();
 
+// Optional caller-supplied payload. If absent, the service substitutes a
+// type-appropriate fixture (PR opened for github, {} for webhook).
+const testFireSchema = z.object({
+  payload: z.record(z.unknown()).optional(),
+});
+
 /**
  * POST /api/triggers/manual/run
  * Run a workflow directly without a trigger
@@ -657,4 +663,38 @@ triggersRouter.post('/:id/run', zValidator('json', triggerRunSchema), async (c) 
   }
 
   return c.json({ error: 'Unknown error' }, 500);
+});
+
+/**
+ * POST /api/triggers/:id/test-fire
+ *
+ * Send a synthetic payload through the same dispatcher path a real delivery
+ * would take. Records the result in trigger_deliveries via the existing
+ * logging helpers. Returns { outcome, executionId, reason }.
+ *
+ * Skipped for `manual` triggers — they already have a Run button (POST /run).
+ */
+triggersRouter.post('/:id/test-fire', zValidator('json', testFireSchema), async (c) => {
+  const { id } = c.req.param();
+  const user = c.get('user');
+  const body = c.req.valid('json');
+  const workerOrigin = new URL(c.req.url).origin;
+
+  const result = await triggerService.testFireTrigger(c.env, id, user.id, body.payload, workerOrigin);
+
+  if (!result.ok) {
+    if (result.reason === 'unsupported_type') {
+      return c.json({ error: result.error }, 400);
+    }
+    if (result.reason === 'github_no_installation') {
+      return c.json({ error: result.error }, 409);
+    }
+    return c.json({ error: 'Unknown error' }, 500);
+  }
+
+  return c.json({
+    outcome: result.outcome,
+    executionId: result.executionId,
+    reason: result.reason,
+  }, 200);
 });

@@ -217,6 +217,28 @@ export function useDisableTrigger() {
   });
 }
 
+export interface TestFireResponse {
+  outcome: TriggerDeliveryOutcome;
+  executionId: string | null;
+  reason: string | null;
+}
+
+export function useTestFireTrigger() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ triggerId, payload }: { triggerId: string; payload?: Record<string, unknown> }) =>
+      api.post<TestFireResponse>(
+        `/triggers/${triggerId}/test-fire`,
+        payload ? { payload } : {},
+      ),
+    onSuccess: (_, { triggerId }) => {
+      // Refresh deliveries so the synthetic delivery appears immediately
+      // rather than waiting for the 5s poll.
+      queryClient.invalidateQueries({ queryKey: triggerKeys.deliveries(triggerId) });
+    },
+  });
+}
+
 export function useRunTrigger() {
   const queryClient = useQueryClient();
 

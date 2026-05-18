@@ -4,7 +4,14 @@ import { checkWorkflowConcurrency, enqueueWorkflowExecution } from './executions
 import { dispatchOrchestratorPrompt } from './orchestrator.js';
 import { sha256Hex, createWorkflowSession } from '../lib/workflow-runtime.js';
 import { getDb } from '../lib/drizzle.js';
-import { recordTriggerDelivery } from '../lib/db/trigger-deliveries.js';
+import {
+  recordTriggerDelivery,
+  findDeliveryByDeliveryId,
+  type TriggerDeliveryOutcome,
+} from '../lib/db/trigger-deliveries.js';
+import { dispatchGitHubTriggers } from './github-triggers.js';
+import { handleGenericWebhook } from './webhooks.js';
+import { getGithubInstallationByLogin } from '../lib/db/github-installations.js';
 import {
   scheduleTarget,
   deriveRepoFullName,
@@ -385,6 +392,298 @@ export async function runTrigger(
     variables,
     sessionId,
     dispatched,
+  };
+}
+
+// ─── Test Fire ──────────────────────────────────────────────────────────────
+
+export type TestFireResult =
+  | {
+      ok: true;
+      outcome: TriggerDeliveryOutcome;
+      executionId: string | null;
+      reason: string | null;
+    }
+  | { ok: false; reason: 'unsupported_type'; error: string }
+  | { ok: false; reason: 'github_no_installation'; error: string };
+
+/**
+ * Send a synthetic payload through the same dispatcher path as a real
+ * delivery. Used by the "Test fire" button on the trigger detail page so
+ * users can validate trigger config without provoking a real upstream event.
+ *
+ * The result is also persisted to `trigger_deliveries` by the underlying
+ * dispatcher, so the existing deliveries panel surfaces it automatically.
+ */
+export async function testFireTrigger(
+  env: Env,
+  triggerId: string,
+  userId: string,
+  customPayload: Record<string, unknown> | undefined,
+  workerOrigin: string,
+): Promise<TestFireResult> {
+  const appDb = getDb(env.DB);
+  const row = await getTriggerForRun(env.DB, userId, triggerId);
+  if (!row) {
+    throw new NotFoundError('Trigger', triggerId);
+  }
+
+  const config = JSON.parse(row.config) as TriggerConfig;
+
+  if (config.type === 'manual') {
+    return {
+      ok: false,
+      reason: 'unsupported_type',
+      error: 'Manual triggers do not support test-fire; use the Run button.',
+    };
+  }
+
+  // Synthetic delivery id namespaced so it's easy to spot in the deliveries log.
+  const deliveryId = `test-${crypto.randomUUID()}`;
+
+  if (config.type === 'github') {
+    if (!Array.isArray(config.repos) || config.repos.length === 0) {
+      throw new ValidationError('GitHub trigger has no repos configured');
+    }
+
+    // Pick the first configured event. Default to pull_request.opened so the
+    // synthetic payload exercises both event + action matching paths.
+    const firstEvent = (config.events && config.events[0]) || 'pull_request.opened';
+    const [eventType, action] = firstEvent.includes('.')
+      ? firstEvent.split('.', 2)
+      : [firstEvent, 'opened'];
+
+    const repoFullName = config.repos[0];
+    const [owner] = repoFullName.split('/');
+
+    // dispatchGitHubTriggers scopes candidate triggers by the installation's
+    // linkedUserId. We need a real install for the trigger's first repo's
+    // owner — otherwise the dispatcher silently no-ops.
+    const installation = await getGithubInstallationByLogin(appDb, owner);
+    if (!installation || installation.linkedUserId !== userId) {
+      return {
+        ok: false,
+        reason: 'github_no_installation',
+        error: `No GitHub App installation linked to your account for "${owner}". Install the GitHub App first.`,
+      };
+    }
+
+    const payload: Record<string, unknown> = customPayload ?? {
+      action: action ?? 'opened',
+      repository: { full_name: repoFullName },
+      pull_request: {
+        number: 1,
+        title: 'Test PR',
+        state: 'open',
+        base: { ref: 'main' },
+        head: { ref: 'test-fire' },
+        labels: [],
+      },
+      installation: { id: Number(installation.githubInstallationId) },
+      sender: { login: 'valet-test-fire' },
+    };
+
+    // The dispatcher iterates over all the user's github triggers and only the
+    // one matching repo+events+filters will fire. The others log "no_match" —
+    // valid behavior for a real delivery too. Less invasive than refactoring
+    // the dispatcher to take a single trigger.
+    await dispatchGitHubTriggers(env, payload, eventType, deliveryId, workerOrigin);
+
+    const recorded = await findDeliveryByDeliveryId(appDb, triggerId, deliveryId);
+    if (!recorded) {
+      // This means dispatchGitHubTriggers short-circuited before evaluating
+      // OUR trigger — probably because the installation's linkedUserId
+      // doesn't actually match (we verified above, but be defensive).
+      return {
+        ok: true,
+        outcome: 'no_match',
+        executionId: null,
+        reason: 'Trigger was not evaluated (no installation match for synthetic payload)',
+      };
+    }
+    return { ok: true, outcome: recorded.outcome, executionId: recorded.executionId, reason: recorded.reason };
+  }
+
+  if (config.type === 'webhook') {
+    const rawBody = JSON.stringify(customPayload ?? {});
+    const method = config.method ?? 'POST';
+    const result = await handleGenericWebhook(
+      env,
+      config.path,
+      method,
+      rawBody,
+      // Test-fire bypasses HMAC; pass a dummy signature so the secret-check
+      // path doesn't reject the synthetic request when a secret is configured.
+      { 'content-type': 'application/json', 'x-webhook-id': deliveryId, 'x-webhook-signature': 'test-fire' },
+      {},
+      workerOrigin,
+    );
+    if (!result) {
+      throw new NotFoundError('Trigger', triggerId);
+    }
+    // The webhook dispatcher records its own delivery row. Read it back so
+    // we surface the same outcome the user will see in the deliveries panel.
+    const recorded = await findDeliveryByDeliveryId(appDb, triggerId, deliveryId);
+    if (recorded) {
+      return { ok: true, outcome: recorded.outcome, executionId: recorded.executionId, reason: recorded.reason };
+    }
+    // Fallback: derive from the handler's structured return.
+    if (result.result.executionId) {
+      return { ok: true, outcome: 'matched', executionId: result.result.executionId, reason: null };
+    }
+    return {
+      ok: true,
+      outcome: 'error',
+      executionId: null,
+      reason: result.result.error ?? result.result.message ?? 'Webhook handler returned no execution',
+    };
+  }
+
+  // Schedule trigger: bypass cron matching and tick-bucket dedup (which exist
+  // to prevent multiple isolates from double-firing a real cron tick) and
+  // fire the same downstream dispatch the cron handler would.
+  if (config.type === 'schedule') {
+    const target = scheduleTarget(config);
+
+    if (target === 'orchestrator') {
+      const prompt = config.prompt?.trim();
+      if (!prompt) {
+        throw new ValidationError('Schedule triggers targeting orchestrator require a prompt');
+      }
+      const now = new Date();
+      const timezone = config.timezone || 'UTC';
+      let scheduledDate: string;
+      try {
+        scheduledDate = new Intl.DateTimeFormat('en-US', {
+          weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', timeZone: timezone,
+        }).format(now);
+      } catch {
+        scheduledDate = new Intl.DateTimeFormat('en-US', {
+          weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', timeZone: 'UTC',
+        }).format(now);
+      }
+      const dispatch = await dispatchOrchestratorPrompt(env, {
+        userId,
+        content: `[Test fire — today is ${scheduledDate}]\n\n${prompt}`,
+        forceNewThread: true,
+      });
+
+      const outcome: TriggerDeliveryOutcome = dispatch.dispatched ? 'matched' : 'error';
+      const reason = dispatch.dispatched
+        ? 'Orchestrator prompt dispatched via test-fire'
+        : `Failed to dispatch orchestrator prompt: ${dispatch.reason ?? 'unknown_error'}`;
+      try {
+        await recordTriggerDelivery(appDb, {
+          triggerId,
+          userId,
+          eventType: 'test-fire',
+          deliveryId,
+          outcome,
+          executionId: null,
+          reason,
+          payloadPreview: null,
+        });
+      } catch (err) {
+        console.error('[test-fire schedule] failed to record delivery:', err);
+      }
+      if (dispatch.dispatched) {
+        await updateTriggerLastRun(appDb, triggerId, now.toISOString());
+      }
+      return { ok: true, outcome, executionId: null, reason };
+    }
+
+    // workflow-target schedule
+    if (!row.wf_id || !row.workflow_data) {
+      const reason = 'Linked workflow is missing or disabled';
+      try {
+        await recordTriggerDelivery(appDb, {
+          triggerId, userId, eventType: 'test-fire', deliveryId,
+          outcome: 'workflow_deleted', executionId: null, reason, payloadPreview: null,
+        });
+      } catch (err) {
+        console.error('[test-fire schedule] failed to record delivery:', err);
+      }
+      return { ok: true, outcome: 'workflow_deleted', executionId: null, reason };
+    }
+
+    const concurrency = await checkWorkflowConcurrency(appDb, userId);
+    if (!concurrency.allowed) {
+      const reason = `${concurrency.reason ?? 'concurrency limit'} (activeUser=${concurrency.activeUser}, activeGlobal=${concurrency.activeGlobal})`;
+      try {
+        await recordTriggerDelivery(appDb, {
+          triggerId, userId, eventType: 'test-fire', deliveryId,
+          outcome: 'concurrency_cap', executionId: null, reason, payloadPreview: null,
+        });
+      } catch (err) {
+        console.error('[test-fire schedule] failed to record delivery:', err);
+      }
+      return { ok: true, outcome: 'concurrency_cap', executionId: null, reason };
+    }
+
+    const executionId = crypto.randomUUID();
+    const now = new Date().toISOString();
+    const workflowHash = await sha256Hex(String(row.workflow_data ?? '{}'));
+    const sessionId = await createWorkflowSession(appDb, {
+      userId,
+      workflowId: row.wf_id,
+      executionId,
+    });
+    const variables = {
+      ...(config.variables ?? {}),
+      _trigger: {
+        type: 'schedule',
+        triggerId,
+        cron: config.cron,
+        timezone: config.timezone || 'UTC',
+        testFire: true,
+        timestamp: now,
+      },
+    };
+    // Synthetic idempotency key — unique per test-fire so it never collides
+    // with real cron ticks.
+    const idempotencyKey = `schedule:${triggerId}:test:${deliveryId}`;
+    await createExecution(env.DB, {
+      id: executionId,
+      workflowId: row.wf_id,
+      userId,
+      triggerId,
+      triggerType: 'schedule',
+      triggerMetadata: JSON.stringify({ cron: config.cron, timezone: config.timezone || 'UTC', testFire: true }),
+      variables: JSON.stringify(variables),
+      now,
+      workflowVersion: row.workflow_version || null,
+      workflowHash,
+      workflowSnapshot: row.workflow_data,
+      idempotencyKey,
+      sessionId,
+      initiatorType: 'schedule',
+      initiatorUserId: userId,
+    });
+    const enqueued = await enqueueWorkflowExecution(env, {
+      executionId,
+      workflowId: row.wf_id,
+      userId,
+      sessionId,
+      triggerType: 'schedule',
+      workerOrigin,
+    });
+    await updateTriggerLastRun(appDb, triggerId, now);
+    const reason = enqueued ? null : 'Execution created but dispatch enqueue failed';
+    try {
+      await recordTriggerDelivery(appDb, {
+        triggerId, userId, eventType: 'test-fire', deliveryId,
+        outcome: 'matched', executionId, reason, payloadPreview: null,
+      });
+    } catch (err) {
+      console.error('[test-fire schedule] failed to record delivery:', err);
+    }
+    return { ok: true, outcome: 'matched', executionId, reason };
+  }
+
+  return {
+    ok: false,
+    reason: 'unsupported_type',
+    error: `Unsupported trigger type for test-fire: ${(config as { type: string }).type}`,
   };
 }
 

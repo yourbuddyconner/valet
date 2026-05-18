@@ -52,6 +52,39 @@ export async function recordTriggerDelivery(
   });
 }
 
+/**
+ * Look up a single delivery row by trigger + delivery id. Used by the
+ * test-fire endpoint to surface the outcome/executionId that the shared
+ * dispatcher just recorded.
+ */
+export async function findDeliveryByDeliveryId(
+  db: AppDb,
+  triggerId: string,
+  deliveryId: string,
+): Promise<{
+  outcome: TriggerDeliveryOutcome;
+  executionId: string | null;
+  reason: string | null;
+} | null> {
+  const row = await db
+    .select({
+      outcome: triggerDeliveries.outcome,
+      executionId: triggerDeliveries.executionId,
+      reason: triggerDeliveries.reason,
+    })
+    .from(triggerDeliveries)
+    .where(and(eq(triggerDeliveries.triggerId, triggerId), eq(triggerDeliveries.deliveryId, deliveryId)))
+    .orderBy(desc(triggerDeliveries.receivedAt))
+    .limit(1)
+    .get();
+  if (!row) return null;
+  return {
+    outcome: row.outcome as TriggerDeliveryOutcome,
+    executionId: row.executionId,
+    reason: row.reason,
+  };
+}
+
 export interface TriggerDeliveryRow {
   id: string;
   triggerId: string;

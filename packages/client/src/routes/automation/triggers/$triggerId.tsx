@@ -8,6 +8,7 @@ import {
   useDeleteTrigger,
   useEnableTrigger,
   useDisableTrigger,
+  useTestFireTrigger,
   type Trigger,
   type TriggerDelivery,
   type TriggerDeliveryOutcome,
@@ -17,6 +18,7 @@ import { Button } from '@/components/ui/button';
 import { formatRelativeTime } from '@/lib/format';
 import { cn } from '@/lib/cn';
 import { humanizeCron } from '@/components/workflows/cron-humanize';
+import { toastError, toastSuccess, toastWarning } from '@/hooks/use-toast';
 
 export const Route = createFileRoute('/automation/triggers/$triggerId')({
   component: TriggerDetailPage,
@@ -49,6 +51,7 @@ function TriggerDetailPage() {
   const deleteTrigger = useDeleteTrigger();
   const enableTrigger = useEnableTrigger();
   const disableTrigger = useDisableTrigger();
+  const testFire = useTestFireTrigger();
 
   if (isLoading) {
     return <div className="p-6 text-sm text-neutral-500">Loading…</div>;
@@ -82,6 +85,42 @@ function TriggerDetailPage() {
     });
   };
 
+  const handleTestFire = () => {
+    testFire.mutate(
+      { triggerId: trigger.id },
+      {
+        onSuccess: (data) => {
+          if (data.outcome === 'matched') {
+            toastSuccess(
+              'Test fire dispatched',
+              data.executionId ? 'Execution queued. Click to view.' : 'Dispatched successfully.',
+            );
+            if (data.executionId) {
+              navigate({ to: '/automation/executions/$executionId', params: { executionId: data.executionId } });
+            }
+            return;
+          }
+          // Non-error, non-matched outcomes (no_match, duplicate, concurrency_cap,
+          // workflow_deleted) are surfaced as warnings — the dispatcher ran and
+          // logged a row, but no execution was created.
+          if (data.outcome === 'error') {
+            toastError('Test fire failed', data.reason ?? 'Unknown error');
+            return;
+          }
+          toastWarning(`Test fire: ${data.outcome.replace('_', ' ')}`, data.reason ?? undefined);
+        },
+        onError: (err) => {
+          const msg = err instanceof Error ? err.message : 'Unknown error';
+          toastError('Test fire failed', msg);
+        },
+      },
+    );
+  };
+
+  // Manual triggers have their own Run button; test-fire is for the three
+  // event-driven types where the dispatcher path is what we want to exercise.
+  const canTestFire = trigger.type === 'github' || trigger.type === 'webhook' || trigger.type === 'schedule';
+
   return (
     <div className="flex flex-col h-full bg-surface-0">
       <div className="px-4 py-2.5 bg-surface-0 border-b border-border">
@@ -97,6 +136,17 @@ function TriggerDetailPage() {
             </Badge>
           </div>
           <div className="flex gap-1.5">
+            {canTestFire && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={handleTestFire}
+                disabled={testFire.isPending || !trigger.enabled}
+                title={trigger.enabled ? 'Send a synthetic payload through the dispatcher' : 'Enable the trigger first'}
+              >
+                {testFire.isPending ? 'Sending…' : 'Test fire'}
+              </Button>
+            )}
             <Button variant="ghost" size="sm" onClick={handleToggle}>
               {trigger.enabled ? 'Disable' : 'Enable'}
             </Button>
