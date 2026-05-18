@@ -17,6 +17,7 @@ import { WorkflowDetailHeader } from '@/components/workflows/workflow-detail-hea
 import { TriggerCard } from '@/components/workflows/trigger-card';
 import { RecentExecutionsSection } from '@/components/workflows/recent-executions-section';
 import { RunWorkflowDialog } from '@/components/workflows/run-workflow-dialog';
+import { WorkflowHistorySection } from '@/components/workflows/workflow-history-section';
 
 export const Route = createFileRoute('/automation/workflows/$workflowId')({
   component: WorkflowDetailPage,
@@ -109,6 +110,10 @@ function WorkflowDetailPage() {
 
           <Section title="Recent executions">
             <RecentExecutionsSection workflowId={workflow.id} />
+          </Section>
+
+          <Section title="Version history">
+            <WorkflowHistorySection workflowId={workflow.id} />
           </Section>
         </div>
       </div>
