@@ -1,5 +1,5 @@
 import { createFileRoute, Link, useNavigate } from '@tanstack/react-router';
-import { Clock, Webhook, Play } from 'lucide-react';
+import { Clock, Webhook, Play, GitBranch } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { useInfiniteExecutions } from '@/api/executions';
 import { Badge, StatusDot } from '@/components/ui/badge';
@@ -119,7 +119,7 @@ function ExecutionsPage() {
                       <div className="flex items-center gap-2">
                         <TriggerTypeIcon type={execution.triggerType} />
                         <span className="text-sm text-neutral-600 dark:text-neutral-300">
-                          {execution.triggerType}
+                          {TRIGGER_LABELS[execution.triggerType] ?? execution.triggerType}
                         </span>
                       </div>
                     </td>
@@ -183,7 +183,12 @@ function ExecutionStatusBadge({ status }: { status: string }) {
 const TRIGGER_ICONS: Record<string, LucideIcon> = {
   webhook: Webhook,
   schedule: Clock,
+  github: GitBranch,
   manual: Play,
+};
+
+const TRIGGER_LABELS: Record<string, string> = {
+  github: 'GitHub',
 };
 
 function TriggerTypeIcon({ type }: { type: string }) {

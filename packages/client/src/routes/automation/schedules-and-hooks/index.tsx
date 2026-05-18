@@ -12,7 +12,7 @@ export const Route = createFileRoute('/automation/schedules-and-hooks/')({
   component: SchedulesAndHooksPage,
 });
 
-type Filter = 'all' | 'schedule' | 'webhook' | 'manual';
+type Filter = 'all' | 'schedule' | 'webhook' | 'github' | 'manual';
 
 function SchedulesAndHooksPage() {
   const { data: triggersData, isLoading } = useTriggers();
@@ -34,6 +34,7 @@ function SchedulesAndHooksPage() {
     all: triggers.length,
     schedule: triggers.filter(t => t.type === 'schedule').length,
     webhook: triggers.filter(t => t.type === 'webhook').length,
+    github: triggers.filter(t => t.type === 'github').length,
     manual: triggers.filter(t => t.type === 'manual').length,
   };
 
@@ -48,7 +49,7 @@ function SchedulesAndHooksPage() {
         </Button>
       </div>
       <p className="text-sm text-neutral-500 dark:text-neutral-400 mb-5">
-        Things that run on a schedule, fire from a webhook, or run on demand.
+        Schedules, webhooks, GitHub events, and manual triggers.
       </p>
 
       <FilterPills active={filter} counts={counts} onChange={setFilter} />
@@ -97,6 +98,7 @@ function FilterPills({
     { id: 'all', label: 'All' },
     { id: 'schedule', label: 'Schedules' },
     { id: 'webhook', label: 'Webhooks' },
+    { id: 'github', label: 'GitHub' },
     { id: 'manual', label: 'Manual' },
   ];
   return (
