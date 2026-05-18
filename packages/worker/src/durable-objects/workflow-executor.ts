@@ -390,6 +390,17 @@ export class WorkflowExecutorDO implements DurableObject {
   ): Promise<WorkflowExecutionDispatchPayload> {
     const decision = approve ? 'approve' : 'deny';
     const payload = this.buildWorkflowRunPayload(row);
+
+    // Seed `previousOutputs` from the persisted source outputs so post-approval
+    // steps can interpolate values published before the pause. Resume currently
+    // re-walks every step from the top of the workflow — see the engine doc
+    // comment on `previousOutputs` for the side-effect limitation.
+    const previousOutputs = this.parseJsonValue<Record<string, unknown>>(row.outputs, {});
+    const runtime = (payload as { runtime?: Record<string, unknown> }).runtime;
+    if (runtime && Object.keys(previousOutputs).length > 0) {
+      runtime.previousOutputs = previousOutputs;
+    }
+
     const workflowHash = await this.computeCanonicalWorkflowHash(row.workflow_data);
     return {
       kind: 'resume',
