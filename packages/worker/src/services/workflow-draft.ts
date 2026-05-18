@@ -38,7 +38,16 @@ Type-specific fields:
     The runner enforces the schema and retries the agent with the error if the response is invalid.
 - notify: { content: string, target?: 'orchestrator' }
     Sends a prompt to the user's orchestrator agent so it can react to the workflow's result — forward to Slack/Telegram, message the user, take follow-up action, etc. Use this as the FINAL step of most workflows when the user should be informed of the outcome. The content is a self-contained instruction to the orchestrator, e.g. "The morning PR digest workflow found 3 failed runs: {{outputs.digest.summary}}". Fire-and-forget — the workflow does not wait for the orchestrator. Template interpolation is supported.
-- conditional: { condition: string, then: WorkflowStep[], else?: WorkflowStep[] }
+- conditional: { condition: string | boolean, then: WorkflowStep[], else?: WorkflowStep[] }
+    The \`condition\` is a string expression evaluated at runtime. Supported syntax:
+    - Path lookups: \`variables.foo\`, \`outputs.stepVar.field\`, \`loop.item\`, \`loop.index\`
+    - Comparators: \`==\`, \`!=\`, \`===\`, \`!==\` (all strict — no type coercion), \`>\`, \`<\`, \`>=\`, \`<=\`
+    - Logical: \`&&\`, \`||\`, \`!\`
+    - Literals: numbers (\`42\`), strings (\`"x"\` or \`'x'\`), \`true\`, \`false\`, \`null\`
+    - Grouping with parentheses
+    - A bare path evaluates to its truthy/falsy value
+    Examples: \`outputs.digest.failed > 0\`, \`variables.priority === "high" && outputs.review.approved\`, \`!outputs.list || outputs.list.length === 0\`
+    Missing paths evaluate to falsy without erroring.
 - parallel: { steps: WorkflowStep[] }
 - loop: { over: string, steps: WorkflowStep[], itemVar?: string, indexVar?: string }
     Iterates over an array (foreach). \`over\` is a dot-path resolved against execution context, e.g. "outputs.prs.failed" or "variables.targetUsers". Each iteration runs \`steps\` with \`{{loop.item}}\` and \`{{loop.index}}\` available for interpolation. Also accessible as \`{{variables.<itemVar>}}\` if you set custom names. Required: \`over\` and a non-empty \`steps\` body.

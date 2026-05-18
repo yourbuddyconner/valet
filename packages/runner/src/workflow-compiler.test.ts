@@ -31,6 +31,7 @@ describe('workflow-compiler', () => {
         {
           id: 'main',
           type: 'conditional',
+          condition: true,
           then: [
             { id: 'then-b', type: 'tool', tool: 'noop' },
             { id: 'then-a', type: 'tool', tool: 'noop' },

@@ -1,3 +1,4 @@
+import { parseCondition } from './workflow-condition.js';
 import { validateOutputSchemaShape } from './workflow-structured-output.js';
 
 export interface WorkflowCompileError {
@@ -108,6 +109,35 @@ function normalizeStep(stepValue: unknown, path: string, errors: WorkflowCompile
       errors.push({
         message: 'loop step requires non-empty "steps" array (body to run per iteration)',
         path: `${path}.steps`,
+      });
+    }
+  }
+
+  if (normalizedType === 'conditional') {
+    const condition = stepValue.condition;
+    if (condition === undefined || condition === null) {
+      errors.push({
+        message: 'conditional step requires a "condition" (string expression or boolean)',
+        path: `${path}.condition`,
+      });
+    } else if (typeof condition === 'string') {
+      if (!condition.trim()) {
+        errors.push({
+          message: 'conditional.condition string must not be empty',
+          path: `${path}.condition`,
+        });
+      } else if (!parseCondition(condition)) {
+        // Surface syntax errors at compile time so authors don't ship workflows whose
+        // conditions silently evaluate to false at runtime.
+        errors.push({
+          message: `conditional.condition has invalid syntax: ${condition}`,
+          path: `${path}.condition`,
+        });
+      }
+    } else if (typeof condition !== 'boolean' && !isRecord(condition)) {
+      errors.push({
+        message: 'conditional.condition must be a string, boolean, or legacy { variable, equals } object',
+        path: `${path}.condition`,
       });
     }
   }

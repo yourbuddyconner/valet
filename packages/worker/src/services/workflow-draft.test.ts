@@ -27,6 +27,18 @@ describe('buildSystemPrompt', () => {
     expect(sys).toContain('over');
     expect(sys).toContain('loop.item');
   });
+
+  it('documents the conditional expression syntax', () => {
+    const sys = buildSystemPrompt();
+    expect(sys).toContain('Comparators:');
+    expect(sys).toContain('===');
+    expect(sys).toContain('!==');
+    expect(sys).toContain('&&');
+    expect(sys).toContain('||');
+    expect(sys).toContain('Path lookups');
+    expect(sys.toLowerCase()).toContain('no type coercion');
+    expect(sys.toLowerCase()).toContain('missing paths');
+  });
 });
 
 describe('extractWorkflowFromResponse', () => {

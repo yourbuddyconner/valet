@@ -1,4 +1,5 @@
 import type { NormalizedWorkflowDefinition, NormalizedWorkflowStep } from './workflow-compiler.js';
+import { evalConditionString } from './workflow-condition.js';
 import { resolveStepFields } from './workflow-interpolation.js';
 
 export type WorkflowStatus = 'ok' | 'needs_approval' | 'cancelled' | 'failed';
@@ -339,7 +340,20 @@ async function executeStepAction(rawStep: NormalizedWorkflowStep, ctx: Execution
 function evaluateCondition(step: NormalizedWorkflowStep, ctx: ExecutionContext): boolean {
   const condition = step.condition;
   if (typeof condition === 'boolean') return condition;
-
+  if (typeof condition === 'string' && condition.trim()) {
+    // Loop bodies stash a `{ item, index }` record under `variables.loop` — expose it as a
+    // first-class namespace so authors can write `loop.item` in conditions.
+    const loopValue = ctx.variables.loop;
+    const loopCtx = loopValue && typeof loopValue === 'object' && !Array.isArray(loopValue)
+      ? (loopValue as Record<string, unknown>)
+      : undefined;
+    return evalConditionString(condition, {
+      variables: ctx.variables,
+      outputs: ctx.outputs,
+      loop: loopCtx,
+    });
+  }
+  // Legacy `{ variable, equals }` shape — kept for backward compatibility with old drafts.
   if (condition && typeof condition === 'object' && !Array.isArray(condition)) {
     const conditionObj = condition as Record<string, unknown>;
     const variableName = conditionObj.variable;

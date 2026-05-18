@@ -139,6 +139,23 @@ function validateStep(step: unknown, path: string, errors: string[]): void {
     }
   }
 
+  if (normalizedType === 'conditional') {
+    const condition = step.condition;
+    // Shape-only check here — the runner's compiler does full expression-syntax validation
+    // (see packages/runner/src/workflow-condition.ts). We just require a usable shape.
+    if (condition === undefined || condition === null) {
+      errors.push(`${path}.condition is required for conditional steps (string expression or boolean)`);
+    } else if (typeof condition === 'string') {
+      if (!condition.trim()) {
+        errors.push(`${path}.condition string must not be empty`);
+      }
+    } else if (typeof condition !== 'boolean' && !isRecord(condition)) {
+      errors.push(
+        `${path}.condition must be a string expression, boolean, or legacy { variable, equals } object`,
+      );
+    }
+  }
+
   const nestedKeys = ['then', 'else', 'steps'] as const;
   for (const key of nestedKeys) {
     if (!(key in step)) continue;
@@ -170,6 +187,16 @@ export function validateWorkflowDefinition(value: unknown): WorkflowValidationRe
   }
 
   const errors: string[] = [];
+
+  // Top-level optional `failureNotify` — controls auto-notification of the user's
+  // orchestrator agent when a non-manual execution fails. Defaults to 'orchestrator'
+  // when absent. Only accept the documented values to avoid silent typos.
+  if (value.failureNotify !== undefined) {
+    if (value.failureNotify !== 'orchestrator' && value.failureNotify !== 'none') {
+      errors.push(`workflow.failureNotify must be 'orchestrator' or 'none'`);
+    }
+  }
+
   for (let i = 0; i < steps.length; i += 1) {
     validateStep(steps[i], `workflow.steps[${i}]`, errors);
   }
