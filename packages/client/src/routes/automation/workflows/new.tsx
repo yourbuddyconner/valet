@@ -276,15 +276,60 @@ function NewWorkflowPage() {
                 />
               )}
               {tab === 'variables' && (
-                <WorkflowVariablesEditor
-                  variables={draft.variables ?? {}}
-                  onChange={(next) =>
-                    setDraft({
-                      ...draft,
-                      variables: Object.keys(next).length > 0 ? next : undefined,
-                    })
-                  }
-                />
+                <div className="h-full flex flex-col min-h-0">
+                  <div className="flex-1 min-h-0 overflow-hidden">
+                    <WorkflowVariablesEditor
+                      variables={draft.variables ?? {}}
+                      onChange={(next) =>
+                        setDraft({
+                          ...draft,
+                          variables: Object.keys(next).length > 0 ? next : undefined,
+                        })
+                      }
+                    />
+                  </div>
+                  <div className="border-t border-border px-4 py-3 space-y-1.5">
+                    <div className="text-[11px] uppercase tracking-wide text-neutral-500 dark:text-neutral-400">
+                      Settings
+                    </div>
+                    <label className="text-xs text-foreground block">
+                      On failure (non-manual runs)
+                    </label>
+                    <div className="inline-flex rounded-md border border-border overflow-hidden">
+                      {(['orchestrator', 'none'] as const).map((option) => {
+                        // Undefined defaults to 'orchestrator' on the server.
+                        const current = draft.failureNotify ?? 'orchestrator';
+                        const active = current === option;
+                        return (
+                          <button
+                            key={option}
+                            type="button"
+                            onClick={() =>
+                              setDraft({
+                                ...draft,
+                                failureNotify: option,
+                              })
+                            }
+                            aria-pressed={active}
+                            className={cn(
+                              'px-2.5 py-1 text-xs transition',
+                              active
+                                ? 'bg-accent text-white'
+                                : 'bg-surface-2 text-foreground hover:bg-surface-3',
+                            )}
+                          >
+                            {option === 'orchestrator'
+                              ? 'Notify orchestrator on failure'
+                              : 'No failure notifications'}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <div className="text-[11px] text-neutral-500 dark:text-neutral-400">
+                      Scheduled and webhook failures notify your orchestrator so it can react (Slack message, escalate, etc.).
+                    </div>
+                  </div>
+                </div>
               )}
               {tab === 'trigger' && (
                 <div className="overflow-y-auto h-full">

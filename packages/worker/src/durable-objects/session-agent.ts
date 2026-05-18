@@ -3515,6 +3515,7 @@ export class SessionAgentDO {
           this.env.DB,
           msg,
           this.sessionState.sessionId,
+          this.env,
         );
         if (resultData?.shouldStopSession) {
           this.ctx.waitUntil(this.handleStop(`workflow_execution_${resultData.nextStatus}`));

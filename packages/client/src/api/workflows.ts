@@ -32,6 +32,9 @@ export interface WorkflowData {
   variables?: Record<string, VariableDefinition>;
   steps: WorkflowStep[];
   constraints?: WorkflowConstraints;
+  // Controls whether non-manual execution failures (schedule/webhook) auto-notify
+  // the user's orchestrator agent. Defaults to 'orchestrator' when omitted.
+  failureNotify?: 'orchestrator' | 'none';
 }
 
 export interface VariableDefinition {

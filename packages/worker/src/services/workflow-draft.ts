@@ -15,8 +15,11 @@ Output ONLY a JSON object matching this schema:
   "id": "kebab-case-id",
   "name": "Human Name",
   "description": "What this does",
+  "failureNotify": "orchestrator" | "none" (optional),
   "steps": [WorkflowStep, ...]
 }
+
+Top-level optional field: failureNotify: 'orchestrator' | 'none'. When omitted, defaults to 'orchestrator'. On execution failure for non-manual triggers (schedule/webhook), Valet forwards a structured failure summary to the user's orchestrator agent so it can react (Slack message, escalate, etc.). Use 'none' to opt out for noisy workflows.
 
 CRITICAL: The Valet agent inside a workflow CANNOT ask the user clarifying questions. There is no UI for the workflow to receive answers. Do NOT generate agent_prompt steps that tell the agent to ask the user something. Instead:
 - Use outputSchema when you need structured data from the agent.

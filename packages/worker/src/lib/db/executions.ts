@@ -67,7 +67,7 @@ export function rankStepOrderIndex(value: number | null): number {
 export async function listExecutions(
   db: D1Database,
   userId: string,
-  opts: { limit?: number; offset?: number; status?: string; workflowId?: string } = {}
+  opts: { limit?: number; offset?: number; status?: string; workflowId?: string; includeTest?: boolean } = {}
 ) {
   // Dynamic WHERE + LEFT JOIN — keep as raw SQL
   let query = `
@@ -86,6 +86,11 @@ export async function listExecutions(
   if (opts.workflowId) {
     query += ' AND e.workflow_id = ?';
     params.push(opts.workflowId);
+  }
+
+  // Exclude ephemeral test/dry runs from the default list view.
+  if (!opts.includeTest) {
+    query += " AND e.trigger_type != 'test'";
   }
 
   query += ' ORDER BY e.started_at DESC LIMIT ? OFFSET ?';
@@ -110,10 +115,16 @@ export async function getExecutionWithWorkflowName(
   db: D1Database,
   executionId: string,
 ) {
+  // trigger_type / trigger_name / workflow_snapshot are read by the result handler
+  // to decide whether to auto-notify the orchestrator on failure.
   return db.prepare(`
-    SELECT e.id, e.user_id, e.workflow_id, e.session_id, w.name AS workflow_name
+    SELECT e.id, e.user_id, e.workflow_id, e.session_id,
+           e.trigger_type, e.workflow_snapshot,
+           w.name AS workflow_name,
+           t.name AS trigger_name
     FROM workflow_executions e
     LEFT JOIN workflows w ON w.id = e.workflow_id
+    LEFT JOIN triggers t ON t.id = e.trigger_id
     WHERE e.id = ?
     LIMIT 1
   `).bind(executionId).first<{
@@ -121,6 +132,9 @@ export async function getExecutionWithWorkflowName(
     user_id: string;
     workflow_id: string | null;
     session_id: string | null;
+    trigger_type: string | null;
+    trigger_name: string | null;
+    workflow_snapshot: string | null;
     workflow_name: string | null;
   }>();
 }
@@ -232,7 +246,8 @@ export async function createExecution(
   db: D1Database,
   params: {
     id: string;
-    workflowId: string;
+    // Nullable for test/dry runs (no persisted workflow row).
+    workflowId: string | null;
     userId: string;
     triggerId: string | null;
     triggerType: string;
@@ -319,7 +334,9 @@ export interface ExecutionWithWorkflowRow {
   attempt_count: number | null;
   idempotency_key: string | null;
   user_id: string;
-  workflow_id: string;
+  // Nullable: test/dry-run executions have no persisted workflow row; the snapshot
+  // in `workflow_data` is sufficient for the executor.
+  workflow_id: string | null;
   workflow_data: string | null;
 }
 

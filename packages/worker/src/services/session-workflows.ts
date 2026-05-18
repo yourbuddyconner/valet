@@ -4,11 +4,12 @@ import type { Env } from '../env.js';
 import type { RunnerMessageOf } from '@valet/shared';
 import { listWorkflows, upsertWorkflow, getWorkflowByIdOrSlug, getWorkflowOwnerCheck, deleteWorkflowTriggers, deleteWorkflowById, updateWorkflow, getWorkflowById } from '../lib/db/workflows.js';
 import { listTriggers, getTrigger, deleteTrigger, getTriggerForRun, updateTriggerLastRun, updateTriggerFull, upsertTriggerByName } from '../lib/db/triggers.js';
-import { getExecution, getExecutionWithWorkflowName, getExecutionForAuth, getExecutionSteps, getExecutionOwnerAndStatus, checkIdempotencyKey, createExecution, completeExecutionFull, upsertExecutionStep, listExecutions, buildWorkflowStepOrderMap, rankStepOrderIndex } from '../lib/db/executions.js';
+import { getExecution, getExecutionWithWorkflowName, getExecutionForAuth, getExecutionSteps, getExecutionOwnerAndStatus, checkIdempotencyKey, createExecution, completeExecutionFull, upsertExecutionStep, listExecutions, buildWorkflowStepOrderMap, rankStepOrderIndex, updateExecutionRuntimeState, isRecord } from '../lib/db/executions.js';
 import { checkWorkflowConcurrency, createWorkflowSession, dispatchOrchestratorPrompt, enqueueWorkflowExecution, sha256Hex } from '../lib/workflow-runtime.js';
 import { validateWorkflowDefinition } from '../lib/workflow-definition.js';
 import { deriveRepoFullName as deriveRepoFullNameHelper } from '../lib/db/triggers.js';
 import { enqueueWorkflowApprovalNotificationIfMissing, markWorkflowApprovalNotificationsRead, getSession } from '../lib/db.js';
+import { sendSessionMessage } from './session-cross.js';
 
 // ─── Shared Result Types ─────────────────────────────────────────────────────
 
@@ -1049,6 +1050,8 @@ export async function processWorkflowExecutionResult(
   envDB: D1Database,
   msg: RunnerMessageOf<'workflow-execution-result'>,
   currentSessionId: string | null,
+  // Required for orchestrator failure-notify dispatch via sendSessionMessage.
+  env?: Env,
 ): Promise<WorkflowExecutionResultData | null> {
   const { executionId, envelope } = msg;
   if (!executionId || !envelope) {
@@ -1143,6 +1146,54 @@ export async function processWorkflowExecutionResult(
       await markWorkflowApprovalNotificationsRead(db, execution.user_id, executionId);
     } catch (notifyError) {
       console.error('[session-workflows] Failed to clear workflow approval notifications:', notifyError);
+    }
+  }
+
+  // Auto-notify the user's orchestrator when a non-manual workflow execution
+  // fails. Manual triggers already give the user immediate feedback in the UI,
+  // so we only escalate scheduled/webhook/etc. failures. Workflows can opt out
+  // via `failureNotify: 'none'` in their definition.
+  if (env && (nextStatus === 'failed' || nextStatus === 'cancelled') && execution.trigger_type && execution.trigger_type !== 'manual') {
+    try {
+      const snapshot = execution.workflow_snapshot ? JSON.parse(execution.workflow_snapshot) : null;
+      const failureNotify = (snapshot && typeof snapshot === 'object' && 'failureNotify' in snapshot)
+        ? (snapshot as { failureNotify?: unknown }).failureNotify
+        : undefined;
+      // Default to 'orchestrator' when absent so legacy workflows opt in.
+      const mode = failureNotify === 'none' ? 'none' : 'orchestrator';
+
+      if (mode === 'orchestrator') {
+        const orchestratorId = `orchestrator:${execution.user_id}`;
+        // Pull the first failed step (if any) for context in the message.
+        const failedStep = Array.isArray(envelope.steps)
+          ? envelope.steps.find((s) => s.status === 'failed')
+          : undefined;
+        const stepId = failedStep?.stepId;
+        const errMsg = envelope.error || error || 'workflow failed';
+        const workflowName = execution.workflow_name || 'workflow';
+        const shortId = executionId.slice(0, 8);
+        const stepClause = stepId ? ` at step "${stepId}"` : '';
+        const triggerType = execution.trigger_type;
+        const triggerName = execution.trigger_name;
+        const triggerClause = triggerName ? ` (${triggerName})` : '';
+        const content = `Workflow "${workflowName}" (execution ${shortId}) ${nextStatus}${stepClause}: ${errMsg}\n\nTriggered by ${triggerType}${triggerClause}. Review: /automation/executions/${executionId}`;
+
+        const sendResult = await sendSessionMessage(
+          env,
+          db,
+          execution.user_id,
+          orchestratorId,
+          content,
+          false,
+          currentSessionId || undefined,
+        );
+        if (sendResult.error) {
+          console.warn(`[session-workflows] Failed to notify orchestrator for execution ${executionId}:`, sendResult.error);
+        }
+      }
+    } catch (notifyError) {
+      // Defensive: failure to notify must never throw inside the result handler.
+      console.warn(`[session-workflows] Orchestrator failure-notify dispatch threw for execution ${executionId}:`, notifyError);
     }
   }
 

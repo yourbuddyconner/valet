@@ -28,6 +28,11 @@ describe('buildSystemPrompt', () => {
     expect(sys).toContain('loop.item');
   });
 
+  it('documents failureNotify for orchestrator escalation', () => {
+    const sys = buildSystemPrompt();
+    expect(sys).toContain('failureNotify');
+  });
+
   it('documents the conditional expression syntax', () => {
     const sys = buildSystemPrompt();
     expect(sys).toContain('Comparators:');
