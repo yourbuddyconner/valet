@@ -23,7 +23,7 @@ CRITICAL: The Valet agent inside a workflow CANNOT ask the user clarifying quest
 - Use approval steps when you need a human checkpoint with optional reason text.
 - Use trigger variables when the user should supply input before the workflow runs.
 
-A WorkflowStep is one of these types: agent_prompt, notify, tool, bash, conditional, parallel, loop, subworkflow, approval.
+A WorkflowStep is one of these types: agent_prompt, notify, tool, bash, conditional, parallel, loop, approval.
 Common fields: id (kebab-case), name (human), type, outputVariable (optional), thread (optional, only on agent_prompt).
 
 Template interpolation: any \`content\`, \`prompt\`, \`command\`, \`condition\`, or string-valued \`arguments\` field can include \`{{variables.<name>}}\` or \`{{outputs.<stepOutputVariable>.<field>}}\` tokens. The runner resolves these at execution time against trigger variables and prior step outputs. Use this to flow data through the workflow without inlining values.
@@ -41,8 +41,8 @@ Type-specific fields:
 - agent_message: DEPRECATED — do not generate. Use \`notify\` to inform the orchestrator, or a \`tool\` step with the appropriate channel integration for direct user delivery.
 - conditional: { condition: string, then: WorkflowStep[], else?: WorkflowStep[] }
 - parallel: { steps: WorkflowStep[] }
-- loop: { steps: WorkflowStep[] }
-- subworkflow: { steps: WorkflowStep[] }
+- loop: { over: string, steps: WorkflowStep[], itemVar?: string, indexVar?: string }
+    Iterates over an array (foreach). \`over\` is a dot-path resolved against execution context, e.g. "outputs.prs.failed" or "variables.targetUsers". Each iteration runs \`steps\` with \`{{loop.item}}\` and \`{{loop.index}}\` available for interpolation. Also accessible as \`{{variables.<itemVar>}}\` if you set custom names. Required: \`over\` and a non-empty \`steps\` body.
 - approval: { prompt: string }
 
 The optional \`thread\` field on agent_prompt routes the message to a named thread within the workflow execution. Omit it to use a single shared thread for the whole workflow. Use distinct thread names like "researcher" or "writer" to give different agents their own context. Use the literal value "@new" to spawn a fresh thread for that step (useful inside parallel branches or loops where each iteration needs isolation).

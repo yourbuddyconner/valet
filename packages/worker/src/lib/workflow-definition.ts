@@ -53,6 +53,34 @@ function validateStep(step: unknown, path: string, errors: string[]): void {
   }
   const normalizedType = typeof type === 'string' ? type.trim() : '';
 
+  if (normalizedType === 'agent' || normalizedType === 'subworkflow') {
+    errors.push(
+      `${path}.type "${normalizedType}" is no longer supported. Use agent_prompt instead of agent; inline child steps instead of subworkflow.`,
+    );
+  }
+
+  if (normalizedType === 'loop') {
+    if (typeof step.over !== 'string' || !step.over.trim()) {
+      errors.push(`${path}.over is required (string path to an array, e.g. "outputs.list")`);
+    }
+    if (
+      step.itemVar !== undefined &&
+      (typeof step.itemVar !== 'string' || !/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(step.itemVar))
+    ) {
+      errors.push(`${path}.itemVar must be a valid identifier`);
+    }
+    if (
+      step.indexVar !== undefined &&
+      (typeof step.indexVar !== 'string' || !/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(step.indexVar))
+    ) {
+      errors.push(`${path}.indexVar must be a valid identifier`);
+    }
+    const childSteps = step.steps;
+    if (!Array.isArray(childSteps) || childSteps.length === 0) {
+      errors.push(`${path}.steps must be a non-empty array (loop body)`);
+    }
+  }
+
   if (normalizedType === 'agent_message' || normalizedType === 'agent_prompt') {
     const content =
       (typeof step.content === 'string' ? step.content : '') ||

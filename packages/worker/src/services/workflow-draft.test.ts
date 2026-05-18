@@ -12,7 +12,6 @@ describe('buildSystemPrompt', () => {
       'conditional',
       'parallel',
       'loop',
-      'subworkflow',
       'approval',
     ]) {
       expect(sys).toContain(t);
@@ -25,6 +24,8 @@ describe('buildSystemPrompt', () => {
     expect(sys.toLowerCase()).toContain('cannot ask');
     expect(sys.toLowerCase()).toContain('template interpolation');
     expect(sys).toMatch(/agent_message[\s\S]{0,60}DEPRECATED/i);
+    expect(sys).toContain('over');
+    expect(sys).toContain('loop.item');
   });
 });
 
