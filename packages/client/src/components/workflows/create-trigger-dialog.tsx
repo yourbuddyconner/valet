@@ -219,7 +219,7 @@ function SchedulePromptForm({ onClose, editing }: { onClose: () => void; editing
     if (isEditing && editing) {
       const data: UpdateTriggerRequest = { name: name.trim(), config };
       updateTrigger.mutate(
-        { triggerId: editing.id, data },
+        { triggerId: editing.id, data, previousWorkflowId: editing.workflowId },
         {
           onSuccess: () => onClose(),
           onError: (e: unknown) =>
@@ -339,7 +339,7 @@ function ScheduleWorkflowForm({ onClose, editing }: { onClose: () => void; editi
     if (isEditing && editing) {
       const data: UpdateTriggerRequest = { name: name.trim(), workflowId, config };
       updateTrigger.mutate(
-        { triggerId: editing.id, data },
+        { triggerId: editing.id, data, previousWorkflowId: editing.workflowId },
         {
           onSuccess: () => onClose(),
           onError: (e: unknown) =>
@@ -461,7 +461,7 @@ function WebhookForm({ onClose, editing }: { onClose: () => void; editing?: Trig
         variableMapping,
       };
       updateTrigger.mutate(
-        { triggerId: editing.id, data },
+        { triggerId: editing.id, data, previousWorkflowId: editing.workflowId },
         {
           onSuccess: () => onClose(),
           onError: (e: unknown) =>
@@ -727,7 +727,7 @@ function GitHubForm({ onClose, editing }: { onClose: () => void; editing?: Trigg
         variableMapping,
       };
       updateTrigger.mutate(
-        { triggerId: editing.id, data },
+        { triggerId: editing.id, data, previousWorkflowId: editing.workflowId },
         {
           onSuccess: () => onClose(),
           onError: (e: unknown) =>

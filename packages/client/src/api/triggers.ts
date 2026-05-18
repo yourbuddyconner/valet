@@ -170,11 +170,28 @@ export function useUpdateTrigger() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: ({ triggerId, data }: { triggerId: string; data: UpdateTriggerRequest }) =>
+    mutationFn: ({
+      triggerId,
+      data,
+    }: {
+      triggerId: string;
+      data: UpdateTriggerRequest;
+      // Previous workflowId before the update, so we can invalidate the old
+      // byWorkflow bucket if the trigger was re-pointed to a different workflow.
+      previousWorkflowId?: string | null;
+    }) =>
       api.patch<{ success: boolean; updatedAt: string }>(`/triggers/${triggerId}`, data),
-    onSuccess: (_, { triggerId }) => {
+    onSuccess: (_, { triggerId, data, previousWorkflowId }) => {
       queryClient.invalidateQueries({ queryKey: triggerKeys.detail(triggerId) });
       queryClient.invalidateQueries({ queryKey: triggerKeys.lists() });
+      // Invalidate the byWorkflow bucket for both old and new workflow ids,
+      // since the workflow this trigger belongs to may have changed.
+      if (previousWorkflowId) {
+        queryClient.invalidateQueries({ queryKey: triggerKeys.byWorkflow(previousWorkflowId) });
+      }
+      if (data.workflowId) {
+        queryClient.invalidateQueries({ queryKey: triggerKeys.byWorkflow(data.workflowId) });
+      }
     },
   });
 }
@@ -183,10 +200,15 @@ export function useDeleteTrigger() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: (triggerId: string) =>
+    mutationFn: ({ triggerId }: { triggerId: string; workflowId?: string | null }) =>
       api.delete<{ success: boolean }>(`/triggers/${triggerId}`),
-    onSuccess: () => {
+    onSuccess: (_, { workflowId }) => {
       queryClient.invalidateQueries({ queryKey: triggerKeys.lists() });
+      // Trigger card lists on workflow detail pages are keyed by byWorkflow;
+      // invalidate so the deleted trigger disappears without a page reload.
+      if (workflowId) {
+        queryClient.invalidateQueries({ queryKey: triggerKeys.byWorkflow(workflowId) });
+      }
     },
   });
 }

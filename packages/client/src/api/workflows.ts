@@ -1,4 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useNavigate } from '@tanstack/react-router';
 import { api } from './client';
 import { executionKeys } from './executions';
 
@@ -236,6 +237,7 @@ export function useDeleteWorkflow() {
 
 export function useRunWorkflow() {
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
 
   return useMutation({
     mutationFn: ({ workflowId, variables }: { workflowId: string; variables?: Record<string, unknown> }) =>
@@ -252,10 +254,18 @@ export function useRunWorkflow() {
         variables,
         clientRequestId: createClientRequestId(),
       }),
-    onSuccess: (_, { workflowId }) => {
+    onSuccess: (data, { workflowId }) => {
       queryClient.invalidateQueries({ queryKey: workflowKeys.executions(workflowId) });
       queryClient.invalidateQueries({ queryKey: executionKeys.byWorkflow(workflowId) });
       queryClient.invalidateQueries({ queryKey: executionKeys.lists() });
+      // Navigate to the new execution so users see live progress instead of
+      // staying on the workflow detail page with stale "Recent executions".
+      if (data.executionId) {
+        navigate({
+          to: '/automation/executions/$executionId',
+          params: { executionId: data.executionId },
+        });
+      }
     },
   });
 }

@@ -3,7 +3,7 @@ import { useWebSocket } from '@/hooks/use-websocket';
 import { getWebSocketUrl } from '@/api/client';
 import {
   executionKeys,
-  type ExecutionStepTrace,
+  type Execution,
   type GetExecutionStepsResponse,
 } from '@/api/executions';
 
@@ -36,11 +36,20 @@ interface StepEventMessage {
 export function useExecutionStepEvents(
   sessionId: string | null | undefined,
   executionId: string | null | undefined,
+  executionStatus?: Execution['status'],
 ): void {
   const qc = useQueryClient();
-  const wsUrl = sessionId
-    ? getWebSocketUrl(`/api/sessions/${sessionId}/ws?role=client`)
-    : null;
+  // Terminal executions can't produce new step events, so don't bother opening
+  // the WS. This also avoids late-arriving events clobbering the final state
+  // shown on completed/failed/cancelled execution pages.
+  const isTerminal =
+    executionStatus === 'completed' ||
+    executionStatus === 'failed' ||
+    executionStatus === 'cancelled';
+  const wsUrl =
+    sessionId && executionId && !isTerminal
+      ? getWebSocketUrl(`/api/sessions/${sessionId}/ws?role=client`)
+      : null;
 
   useWebSocket(wsUrl, {
     onMessage: (msg) => {
@@ -50,7 +59,7 @@ export function useExecutionStepEvents(
       if (parsed.executionId !== executionId) return;
       qc.setQueryData<GetExecutionStepsResponse | undefined>(
         executionKeys.steps(executionId),
-        (prev) => mergeStepEvent(prev, parsed.event, executionId),
+        (prev) => mergeStepEvent(prev, parsed.event),
       );
     },
   });
@@ -108,39 +117,41 @@ function parseStepEventMessage(
 function mergeStepEvent(
   prev: GetExecutionStepsResponse | undefined,
   ev: StepEventMessage['event'],
-  executionId: string,
 ): GetExecutionStepsResponse {
   const steps = prev?.steps ?? [];
   const idx = steps.findIndex(
     (s) => s.stepId === ev.stepId && s.attempt === ev.attempt,
   );
-  const existing = idx >= 0 ? steps[idx] : undefined;
+  if (idx < 0) {
+    // The server doesn't have a row for this (stepId, attempt) yet. We could
+    // fabricate an optimistic row, but the 2.5s useExecutionSteps poll would
+    // overwrite our optimistic data anyway — and any events that arrive while
+    // the poll is in flight would be silently dropped. Instead, wait for the
+    // server to acknowledge the step. Trade-off: a step event arriving before
+    // the server has persisted the row is delayed up to one poll cycle
+    // (~2.5s). Acceptable for the simpler, more predictable state.
+    return prev ?? { steps: [] };
+  }
+
+  const existing = steps[idx];
   const isTerminal =
     ev.kind === 'step.completed' ||
     ev.kind === 'step.failed' ||
     ev.kind === 'step.skipped' ||
     ev.kind === 'step.cancelled';
 
-  const updated: ExecutionStepTrace = {
-    id: existing?.id ?? crypto.randomUUID(),
-    executionId: existing?.executionId ?? executionId,
-    stepId: ev.stepId,
-    attempt: ev.attempt,
+  const updated = {
+    ...existing,
     status: mapKindToStatus(ev.kind),
-    input: ev.input !== undefined ? ev.input : (existing?.input ?? null),
-    output: ev.output !== undefined ? ev.output : (existing?.output ?? null),
-    error: ev.error ?? existing?.error ?? null,
-    startedAt:
-      ev.kind === 'step.started' ? ev.timestamp : (existing?.startedAt ?? null),
-    completedAt: isTerminal ? ev.timestamp : (existing?.completedAt ?? null),
-    createdAt: existing?.createdAt ?? ev.timestamp,
-    workflowStepIndex: existing?.workflowStepIndex ?? null,
-    sequence: existing?.sequence ?? steps.length,
+    input: ev.input !== undefined ? ev.input : existing.input,
+    output: ev.output !== undefined ? ev.output : existing.output,
+    error: ev.error ?? existing.error,
+    startedAt: ev.kind === 'step.started' ? ev.timestamp : existing.startedAt,
+    completedAt: isTerminal ? ev.timestamp : existing.completedAt,
   };
 
   const next = [...steps];
-  if (idx >= 0) next[idx] = updated;
-  else next.push(updated);
+  next[idx] = updated;
   return { steps: next };
 }
 
