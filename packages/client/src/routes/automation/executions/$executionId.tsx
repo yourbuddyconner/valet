@@ -1,5 +1,7 @@
 import { createFileRoute, useNavigate } from '@tanstack/react-router';
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
+import { PanelRightClose, PanelRightOpen } from 'lucide-react';
+import { Button } from '@/components/ui/button';
 import {
   useExecution,
   useExecutionSteps,
@@ -23,6 +25,7 @@ export const Route = createFileRoute('/automation/executions/$executionId')({
 
 function ExecutionDetailPage() {
   const { executionId } = Route.useParams();
+  const [sidebarOpen, setSidebarOpen] = useState(true);
   const { data: execData, isLoading, error } = useExecution(executionId);
   const { data: stepsData } = useExecutionSteps(executionId);
   const execution = execData?.execution;
@@ -103,10 +106,9 @@ function ExecutionDetailPage() {
             : undefined
         }
       />
-      <div className="grid grid-cols-[1.5fr_1fr] gap-0 flex-1 min-h-0">
-        <div className="p-6 bg-surface-2 border-r border-border">
-          <div className="text-[11px] tracking-wider text-neutral-500 mb-2">PROGRESS</div>
-          <div className="h-[480px]">
+      <div className="flex flex-1 min-h-0 relative">
+        <div className="flex-1 min-w-0 bg-surface-2 border-r border-border flex flex-col min-h-0 relative">
+          <div className="flex-1 min-h-0">
             {workflow ? (
               <WorkflowDiagram
                 workflow={workflow}
@@ -116,29 +118,43 @@ function ExecutionDetailPage() {
                 stepErrors={stepErrors}
               />
             ) : (
-              <div className="text-sm text-neutral-500">Loading workflow…</div>
+              <div className="text-sm text-neutral-500 p-4">Loading workflow…</div>
             )}
           </div>
+          {!sidebarOpen && (
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => setSidebarOpen(true)}
+              className="!absolute top-2 right-2 z-10"
+              aria-label="Show details"
+            >
+              <PanelRightOpen className="w-3.5 h-3.5 mr-1" />
+              Details
+            </Button>
+          )}
         </div>
-        <div className="p-6 bg-surface-1 space-y-6 overflow-y-auto">
-          <div>
-            <div className="text-[11px] tracking-wider text-neutral-500 mb-2">CURRENT STEP</div>
+        {sidebarOpen && (
+          <div className="w-[440px] shrink-0 p-4 bg-surface-1 space-y-4 overflow-y-auto relative">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setSidebarOpen(false)}
+              className="!absolute top-2 right-2 !h-6 !w-6 !p-0"
+              aria-label="Hide details"
+            >
+              <PanelRightClose className="w-3.5 h-3.5" />
+            </Button>
             <ExecutionStepPanel step={currentStep} />
-          </div>
-          <div>
-            <div className="text-[11px] tracking-wider text-neutral-500 mb-2">STEP TRACE</div>
             <ExecutionStepTracePanel
               steps={stepsData?.steps ?? []}
               startedAt={execution.startedAt}
               onRetryFromStep={canRetry ? handleRetryFromStep : undefined}
               retryDisabled={retryFromStep.isPending}
             />
-          </div>
-          <div>
-            <div className="text-[11px] tracking-wider text-neutral-500 mb-2">STEP OUTPUTS</div>
             <ExecutionVariablesPanel outputs={execution.outputs} />
           </div>
-        </div>
+        )}
       </div>
     </div>
   );

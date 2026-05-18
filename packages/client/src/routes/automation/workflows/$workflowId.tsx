@@ -1,5 +1,7 @@
 import { useState } from 'react';
 import { createFileRoute, useNavigate } from '@tanstack/react-router';
+import { PanelRightClose, PanelRightOpen } from 'lucide-react';
+import { Button } from '@/components/ui/button';
 import {
   useWorkflow,
   useDeleteWorkflow,
@@ -36,6 +38,7 @@ function WorkflowDetailPage() {
   const enableTrigger = useEnableTrigger();
   const disableTrigger = useDisableTrigger();
   const [showRunDialog, setShowRunDialog] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(true);
 
   if (isLoading) {
     return <div className="p-6 text-sm text-neutral-500">Loading…</div>;
@@ -80,14 +83,34 @@ function WorkflowDetailPage() {
         }}
       />
       <div className="flex-1 min-h-0 flex flex-col lg:flex-row overflow-auto lg:overflow-hidden">
-        <div className="flex-1 min-w-0 p-6 lg:overflow-auto lg:flex lg:flex-col">
-          <Section title="Definition" className="lg:flex-1 lg:min-h-0 lg:flex lg:flex-col">
-            <div className="h-[640px] lg:h-auto lg:flex-1 lg:min-h-[480px]">
-              <WorkflowDiagram workflow={workflow.data} mode="view" />
-            </div>
-          </Section>
+        <div className="flex-1 min-w-0 p-4 lg:overflow-hidden lg:flex lg:flex-col min-h-0 relative">
+          <div className="h-[640px] lg:h-auto lg:flex-1 lg:min-h-0">
+            <WorkflowDiagram workflow={workflow.data} mode="view" />
+          </div>
+          {!sidebarOpen && (
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => setSidebarOpen(true)}
+              className="!absolute top-3 right-3 z-10 hidden lg:inline-flex"
+              aria-label="Show details"
+            >
+              <PanelRightOpen className="w-3.5 h-3.5 mr-1" />
+              Details
+            </Button>
+          )}
         </div>
-        <div className="w-full lg:w-[380px] lg:border-l border-border p-6 lg:overflow-auto space-y-8">
+        {sidebarOpen && (
+        <div className="w-full lg:w-[380px] lg:border-l border-border p-4 lg:overflow-auto space-y-6 relative">
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => setSidebarOpen(false)}
+            className="!absolute top-2 right-2 !h-6 !w-6 !p-0 hidden lg:inline-flex"
+            aria-label="Hide details"
+          >
+            <PanelRightClose className="w-3.5 h-3.5" />
+          </Button>
           <Section title={`Triggers (${triggers.length})`}>
             {triggers.length === 0 ? (
               <div className="text-sm text-neutral-500">No triggers attached.</div>
@@ -116,6 +139,7 @@ function WorkflowDetailPage() {
             <WorkflowHistorySection workflowId={workflow.id} />
           </Section>
         </div>
+        )}
       </div>
       {showRunDialog && (
         <RunWorkflowDialog

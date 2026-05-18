@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createFileRoute, useNavigate } from '@tanstack/react-router';
-import { ArrowUp, X } from 'lucide-react';
+import { ArrowUp, ChevronLeft, PanelRightClose, PanelRightOpen, X } from 'lucide-react';
 import {
   useDraftWorkflow,
   useDraftWorkflowStep,
@@ -50,6 +50,7 @@ function NewWorkflowPage() {
   const [tab, setTab] = useState<Tab>('chat');
   const [trigger, setTrigger] = useState<TriggerDraft | null>({ kind: 'manual', config: {} });
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [sidebarOpen, setSidebarOpen] = useState(true);
   // Test-run state: dialog visibility, in-flight error, and the active test execution.
   const [showTestRunDialog, setShowTestRunDialog] = useState(false);
   const [testRunError, setTestRunError] = useState<string | null>(null);
@@ -233,17 +234,24 @@ function NewWorkflowPage() {
 
   return (
     <div className="flex flex-col h-full">
-      <header className="px-6 py-4 bg-surface-1 border-b border-border">
-        <div className="text-xs text-neutral-500 dark:text-neutral-400 tracking-wider mb-1">AUTOMATION / WORKFLOWS</div>
-        <h1 className="text-xl font-semibold text-foreground">{editId ? 'Edit workflow' : 'New workflow'}</h1>
+      <header className="px-4 py-2.5 bg-surface-0 border-b border-border flex items-center gap-2">
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => nav({ to: '/automation/workflows' })}
+          aria-label="Back to workflows"
+        >
+          <ChevronLeft className="w-4 h-4" strokeWidth={1.5} />
+        </Button>
+        <h1 className="text-base font-semibold text-foreground">{editId ? 'Edit workflow' : 'New workflow'}</h1>
       </header>
 
       {!draft ? (
         <EmptyState onSubmit={handleInitialDraft} loading={draftMut.isPending} />
       ) : (
         <div className="flex-1 min-h-0 flex flex-col lg:flex-row">
-          <div className="flex-1 min-w-0 bg-surface-2 lg:overflow-hidden">
-            <div className="h-[600px] lg:h-full">
+          <div className="flex-1 min-w-0 bg-surface-2 lg:overflow-hidden lg:flex lg:flex-col min-h-0 relative">
+            <div className="h-[600px] lg:flex-1 lg:min-h-0">
               <WorkflowDiagram
                 workflow={draft}
                 mode="edit"
@@ -251,9 +259,22 @@ function NewWorkflowPage() {
                 onNodeClick={handleNodeClick}
               />
             </div>
+            {!sidebarOpen && (
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => setSidebarOpen(true)}
+                className="!absolute top-3 right-3 z-10 hidden lg:inline-flex"
+                aria-label="Show sidebar"
+              >
+                <PanelRightOpen className="w-3.5 h-3.5 mr-1" />
+                Sidebar
+              </Button>
+            )}
           </div>
 
-          <aside className="w-full lg:w-[380px] flex flex-col bg-surface-1 border-t lg:border-t-0 lg:border-l border-border min-h-0">
+          {sidebarOpen && (
+          <aside className="w-full lg:w-[380px] flex flex-col bg-surface-1 border-t lg:border-t-0 lg:border-l border-border min-h-0 relative">
             <div className="flex border-b border-border">
               {(['inspect', 'chat', 'variables', 'trigger', 'json'] as const).map((t) => {
                 const variableCount = Object.keys(draft.variables ?? {}).length;
@@ -417,7 +438,17 @@ function NewWorkflowPage() {
                 {syncMut.isPending ? 'Saving…' : 'Save'}
               </Button>
             </div>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setSidebarOpen(false)}
+              className="!absolute top-2 right-2 !h-6 !w-6 !p-0 hidden lg:inline-flex z-10"
+              aria-label="Hide sidebar"
+            >
+              <PanelRightClose className="w-3.5 h-3.5" />
+            </Button>
           </aside>
+          )}
         </div>
       )}
 
