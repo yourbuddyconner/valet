@@ -12,6 +12,7 @@ import { useCreateTrigger, type TriggerConfig } from '@/api/triggers';
 import { WorkflowDiagram } from '@/components/workflows/workflow-diagram';
 import { WorkflowDraftTriggerForm } from '@/components/workflows/workflow-draft-trigger-form';
 import { WorkflowStepInspector } from '@/components/workflows/workflow-step-inspector';
+import { WorkflowVariablesEditor } from '@/components/workflows/workflow-variables-editor';
 import { cn } from '@/lib/cn';
 
 export const Route = createFileRoute('/automation/workflows/new')({
@@ -31,7 +32,7 @@ type ChatMessage =
   | { id: string; role: 'assistant'; content: string }
   | { id: string; role: 'error'; content: string };
 
-type Tab = 'inspect' | 'chat' | 'trigger' | 'json';
+type Tab = 'inspect' | 'chat' | 'variables' | 'trigger' | 'json';
 
 function NewWorkflowPage() {
   const nav = useNavigate();
@@ -204,21 +205,28 @@ function NewWorkflowPage() {
 
           <aside className="w-full lg:w-[380px] flex flex-col bg-white border-t lg:border-t-0 lg:border-l border-neutral-200 min-h-0">
             <div className="flex border-b border-neutral-200">
-              {(['inspect', 'chat', 'trigger', 'json'] as const).map((t) => (
-                <button
-                  key={t}
-                  onClick={() => setTab(t)}
-                  aria-pressed={tab === t}
-                  className={cn(
-                    'flex-1 text-xs uppercase tracking-wider py-2.5 font-medium',
-                    tab === t
-                      ? 'text-neutral-900 border-b-2 border-neutral-900'
-                      : 'text-neutral-500 hover:text-neutral-700 border-b-2 border-transparent',
-                  )}
-                >
-                  {t}
-                </button>
-              ))}
+              {(['inspect', 'chat', 'variables', 'trigger', 'json'] as const).map((t) => {
+                const variableCount = Object.keys(draft.variables ?? {}).length;
+                const label =
+                  t === 'variables' && variableCount > 0
+                    ? `variables (${variableCount})`
+                    : t;
+                return (
+                  <button
+                    key={t}
+                    onClick={() => setTab(t)}
+                    aria-pressed={tab === t}
+                    className={cn(
+                      'flex-1 text-xs uppercase tracking-wider py-2.5 font-medium',
+                      tab === t
+                        ? 'text-neutral-900 border-b-2 border-neutral-900'
+                        : 'text-neutral-500 hover:text-neutral-700 border-b-2 border-transparent',
+                    )}
+                  >
+                    {label}
+                  </button>
+                );
+              })}
             </div>
 
             <div className="flex-1 min-h-0 overflow-hidden">
@@ -251,6 +259,17 @@ function NewWorkflowPage() {
                   }
                   onSend={handleRefine}
                   refining={refining}
+                />
+              )}
+              {tab === 'variables' && (
+                <WorkflowVariablesEditor
+                  variables={draft.variables ?? {}}
+                  onChange={(next) =>
+                    setDraft({
+                      ...draft,
+                      variables: Object.keys(next).length > 0 ? next : undefined,
+                    })
+                  }
                 />
               )}
               {tab === 'trigger' && (
