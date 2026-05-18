@@ -235,6 +235,7 @@ function NewWorkflowPage() {
                   <WorkflowStepInspector
                     step={selectedStep}
                     onChange={(patch) => handleStepPatch(selectedStep.id, patch)}
+                    workflow={draft}
                   />
                 ) : (
                   <div className="h-full flex items-center justify-center px-6 text-xs text-neutral-500 text-center">

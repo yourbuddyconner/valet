@@ -1,9 +1,12 @@
 import { useMemo, useState } from 'react';
-import type { WorkflowStep } from '@/api/workflows';
+import type { WorkflowData, WorkflowStep } from '@/api/workflows';
+import { inferScope } from './scope-inferencer';
+import { ScopePanel } from './scope-panel';
 
 interface Props {
   step: WorkflowStep;
   onChange: (patch: Partial<WorkflowStep>) => void;
+  workflow: WorkflowData;
 }
 
 const TYPE_LABEL: Record<WorkflowStep['type'], string> = {
@@ -17,7 +20,7 @@ const TYPE_LABEL: Record<WorkflowStep['type'], string> = {
   approval: 'APPROVAL',
 };
 
-export function WorkflowStepInspector({ step, onChange }: Props) {
+export function WorkflowStepInspector({ step, onChange, workflow }: Props) {
   return (
     <div className="h-full overflow-y-auto px-4 py-4 space-y-4">
       <div>
@@ -52,11 +55,22 @@ export function WorkflowStepInspector({ step, onChange }: Props) {
       />
 
       <TypeSpecificFields step={step} onChange={onChange} />
+
+      <div className="border-t border-neutral-200 pt-4 mt-2">
+        <div className="text-[10px] text-neutral-500 tracking-wider mb-2">SCOPE</div>
+        <ScopePanel scope={inferScope(workflow, step.id)} />
+      </div>
     </div>
   );
 }
 
-function TypeSpecificFields({ step, onChange }: Props) {
+function TypeSpecificFields({
+  step,
+  onChange,
+}: {
+  step: WorkflowStep;
+  onChange: (patch: Partial<WorkflowStep>) => void;
+}) {
   switch (step.type) {
     case 'bash':
       return (
