@@ -47,26 +47,14 @@ describe('workflow-compiler', () => {
     expect(compiled.stepOrder).toEqual(['main', 'then-a', 'then-b', 'else-1']);
   });
 
-  it('rejects agent_message steps without message content', async () => {
+  it('rejects agent_prompt steps without prompt content', async () => {
     const compiled = await compileWorkflowDefinition({
       steps: [
-        { id: 'msg', type: 'agent_message' },
+        { id: 'msg', type: 'agent_prompt' },
       ],
     });
 
     expect(compiled.ok).toBe(false);
-    expect(compiled.errors.some((error) => error.message.includes('agent_message step requires content'))).toBe(true);
-  });
-
-  it('rejects invalid agent_message await configuration', async () => {
-    const compiled = await compileWorkflowDefinition({
-      steps: [
-        { id: 'msg', type: 'agent_message', content: 'hello', await_response: 'yes', await_timeout_ms: 10 },
-      ],
-    });
-
-    expect(compiled.ok).toBe(false);
-    expect(compiled.errors.some((error) => error.message.includes('await_response must be a boolean'))).toBe(true);
-    expect(compiled.errors.some((error) => error.message.includes('await_timeout_ms must be a number >= 1000'))).toBe(true);
+    expect(compiled.errors.some((error) => error.message.includes('agent_prompt step requires a prompt'))).toBe(true);
   });
 });

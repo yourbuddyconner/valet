@@ -1237,14 +1237,12 @@ export class PromptHandler {
     step: NormalizedWorkflowStep,
     context: WorkflowStepExecutionContext,
   ): Promise<WorkflowStepExecutionResult | void> {
-    if (step.type !== "agent_message" && step.type !== "agent_prompt") {
+    if (step.type !== "agent_prompt") {
       return;
     }
-    const isPrompt = step.type === "agent_prompt";
 
-    // agent_prompt prefers `prompt` field; falls back to content/message/goal for forward-compat.
     const content = (
-      typeof step.prompt === "string" && isPrompt
+      typeof step.prompt === "string"
         ? step.prompt
         : typeof step.content === "string"
           ? step.content
@@ -1259,12 +1257,12 @@ export class PromptHandler {
       return { status: "failed", error: `${step.type} requires content/message/goal/prompt` };
     }
 
-    // Structured output: only applies to agent_prompt and only when the schema
-    // is well-formed. Invalid schemas fail the step early — silently dropping
-    // the schema would let the agent return free-form text that downstream
-    // ${outputs.var.field} accesses can't satisfy.
+    // Structured output: only applies when the schema is well-formed. Invalid
+    // schemas fail the step early — silently dropping the schema would let the
+    // agent return free-form text that downstream ${outputs.var.field}
+    // accesses can't satisfy.
     let outputSchema: StructuredOutputSchema | null = null;
-    if (isPrompt && step.outputSchema !== undefined) {
+    if (step.outputSchema !== undefined) {
       const schemaErrors = validateOutputSchemaShape(step.outputSchema);
       if (schemaErrors.length > 0) {
         return {
@@ -1281,10 +1279,6 @@ export class PromptHandler {
     }
 
     const interrupt = step.interrupt === true;
-    // agent_prompt always awaits the reply — capturing the reply is the whole point.
-    const awaitResponse = isPrompt
-      ? true
-      : (step.await_response === true || step.awaitResponse === true);
     const awaitTimeoutRaw =
       typeof step.await_timeout_ms === "number"
         ? step.await_timeout_ms
@@ -1297,7 +1291,6 @@ export class PromptHandler {
       this.workflowExecutionModel,
       this.workflowExecutionModelPreferences,
     );
-    const preferredModel = modelChain[0];
 
     try {
       const workflowChannelType = "workflow";
@@ -1322,25 +1315,6 @@ export class PromptHandler {
         if (sessionId) {
           await fetch(`${this.opencodeUrl}/session/${sessionId}/abort`, { method: "POST" }).catch(() => undefined);
         }
-      }
-
-      if (!awaitResponse) {
-        await this.sendPromptToChannelWithRecovery(channel, promptToSend, {
-          model: preferredModel,
-          channelType: workflowChannelType,
-          channelId: workflowChannelId,
-        });
-        return {
-          status: "completed",
-          output: {
-            type: step.type,
-            targetSessionId: this.runnerSessionId,
-            content,
-            interrupt,
-            awaitResponse: false,
-            success: true,
-          },
-        };
       }
 
       const attemptSessionIds = new Set<string>();
@@ -1460,21 +1434,12 @@ export class PromptHandler {
               };
             }
 
-            // For agent_prompt without a schema, return the bare reply string
-            // so `outputVariable` captures it directly for downstream
+            // Without a schema, return the bare reply string so
+            // `outputVariable` captures it directly for downstream
             // `${outputs.var}` interpolation.
             return {
               status: "completed",
-              output: isPrompt ? recoveredResponse : {
-                type: "agent_message",
-                targetSessionId: this.runnerSessionId,
-                content,
-                interrupt,
-                awaitResponse: true,
-                awaitTimeoutMs,
-                response: recoveredResponse,
-                model: modelCandidate || null,
-              },
+              output: recoveredResponse,
             };
           }
 
@@ -1484,7 +1449,7 @@ export class PromptHandler {
               break;
             }
           } else {
-            lastFailure = "agent_message_empty_response";
+            lastFailure = "agent_prompt_empty_response";
           }
         }
 

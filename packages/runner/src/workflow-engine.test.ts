@@ -227,10 +227,10 @@ describe('workflow-engine', () => {
     expect(compiled.errors.some((e) => /type must be one of/.test(e.message))).toBe(true);
   });
 
-  it('supports agent_message step hooks', async () => {
+  it('supports agent_prompt step hooks', async () => {
     const compiled = await compileWorkflowDefinition({
       steps: [
-        { id: 'notify', type: 'agent_message', content: 'status update' },
+        { id: 'notify', type: 'agent_prompt', prompt: 'status update' },
       ],
     });
 
@@ -239,15 +239,15 @@ describe('workflow-engine', () => {
     }
 
     const result = await executeWorkflowRun(
-      'ex_agent_message',
+      'ex_agent_prompt',
       compiled.workflow,
       { variables: {} },
       {
         onAgentStep: async (step) => {
-          if (step.type !== 'agent_message') return;
+          if (step.type !== 'agent_prompt') return;
           return {
             status: 'completed',
-            output: { delivered: true, content: step.content },
+            output: { delivered: true, prompt: step.prompt },
           };
         },
       },
@@ -257,7 +257,7 @@ describe('workflow-engine', () => {
     expect(result.steps).toHaveLength(1);
     expect(result.steps[0]?.stepId).toBe('notify');
     expect(result.steps[0]?.status).toBe('completed');
-    expect(result.steps[0]?.output).toEqual({ delivered: true, content: 'status update' });
+    expect(result.steps[0]?.output).toEqual({ delivered: true, prompt: 'status update' });
   });
 
   it('resumes approved checkpoints and continues execution deterministically', async () => {
