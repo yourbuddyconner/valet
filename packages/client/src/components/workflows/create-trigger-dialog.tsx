@@ -171,7 +171,7 @@ function SchedulePromptForm({ onClose }: { onClose: () => void }) {
 
   return (
     <FormShell
-      submitLabel={createTrigger.isPending ? 'Creatingâ¦' : 'Create schedule'}
+      submitLabel={createTrigger.isPending ? 'Creating…' : 'Create schedule'}
       submitDisabled={!canSubmit || createTrigger.isPending}
       onCancel={onClose}
       onSubmit={handleSubmit}
@@ -252,7 +252,7 @@ function ScheduleWorkflowForm({ onClose }: { onClose: () => void }) {
 
   return (
     <FormShell
-      submitLabel={createTrigger.isPending ? 'Creatingâ¦' : 'Create schedule'}
+      submitLabel={createTrigger.isPending ? 'Creating…' : 'Create schedule'}
       submitDisabled={!canSubmit || createTrigger.isPending}
       onCancel={onClose}
       onSubmit={handleSubmit}
@@ -326,7 +326,7 @@ function WebhookForm({ onClose }: { onClose: () => void }) {
 
   return (
     <FormShell
-      submitLabel={createTrigger.isPending ? 'Creatingâ¦' : 'Create webhook'}
+      submitLabel={createTrigger.isPending ? 'Creating…' : 'Create webhook'}
       submitDisabled={!canSubmit || createTrigger.isPending}
       onCancel={onClose}
       onSubmit={handleSubmit}
@@ -476,7 +476,7 @@ function GitHubForm({ onClose }: { onClose: () => void }) {
 
   return (
     <FormShell
-      submitLabel={createTrigger.isPending ? 'Creatingâ¦' : 'Create GitHub trigger'}
+      submitLabel={createTrigger.isPending ? 'Creating…' : 'Create GitHub trigger'}
       submitDisabled={!canSubmit || createTrigger.isPending}
       onCancel={onClose}
       onSubmit={handleSubmit}
@@ -487,7 +487,7 @@ function GitHubForm({ onClose }: { onClose: () => void }) {
 
       <Field label="Repositories" required>
         {reposLoading ? (
-          <div className="text-xs text-neutral-500">Loading reposâ¦</div>
+          <div className="text-xs text-neutral-500">Loading repos…</div>
         ) : repos.length === 0 ? (
           <div className="text-xs text-neutral-500 italic bg-surface-2 border border-border rounded-md px-3 py-2">
             Install the GitHub App on a repo to enable this trigger.{' '}
@@ -694,7 +694,7 @@ function WorkflowSelect({
         onChange={(e) => onChange(e.target.value)}
         className={INPUT_BASE}
       >
-        <option value="">Select a workflowâ¦</option>
+        <option value="">Select a workflow…</option>
         {workflows.map((w) => (
           <option key={w.id} value={w.id}>
             {w.name}

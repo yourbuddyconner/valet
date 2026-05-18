@@ -1,8 +1,11 @@
 import * as React from 'react';
+import { Link } from '@tanstack/react-router';
+import { Plus } from 'lucide-react';
 import { useWorkflows } from '@/api/workflows';
 import { WorkflowCard } from './workflow-card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { SearchInput } from '@/components/ui/search-input';
+import { Button } from '@/components/ui/button';
 
 export function WorkflowList() {
   const [search, setSearch] = React.useState('');
@@ -46,27 +49,31 @@ export function WorkflowList() {
             placeholder="Search workflows..."
           />
         </div>
+        <Button asChild variant="primary" size="sm">
+          <Link to="/automation/workflows/new" search={{ editId: undefined }}>
+            <Plus className="w-3.5 h-3.5 mr-1" />
+            New workflow
+          </Link>
+        </Button>
       </div>
 
       {workflows.length === 0 ? (
-        <div className="rounded-lg border border-neutral-200 bg-white p-8 text-center dark:border-neutral-700 dark:bg-neutral-800">
-          <div className="mx-auto mb-4 flex size-12 items-center justify-center rounded-full bg-neutral-100 dark:bg-neutral-700">
+        <div className="rounded-lg border border-border bg-surface-1 p-8 text-center">
+          <div className="mx-auto mb-4 flex size-12 items-center justify-center rounded-full bg-surface-2">
             <WorkflowIcon className="size-6 text-neutral-400" />
           </div>
-          <h3 className="text-sm font-medium text-balance text-neutral-900 dark:text-neutral-100">
+          <h3 className="text-sm font-medium text-balance text-foreground">
             No workflows yet
           </h3>
-          <p className="mt-1 text-sm text-pretty text-neutral-500 dark:text-neutral-400">
-            Create a workflow with the agent using{' '}
-            <code className="rounded bg-neutral-100 px-1 py-0.5 text-xs dark:bg-neutral-700">
-              sync_workflow
-            </code>{' '}
-            or add one in your{' '}
-            <code className="rounded bg-neutral-100 px-1 py-0.5 text-xs dark:bg-neutral-700">
-              .opencode/workflows/
-            </code>{' '}
-            directory to get started.
+          <p className="mt-1 text-sm text-pretty text-neutral-500 dark:text-neutral-400 max-w-md mx-auto">
+            Describe what you want a workflow to do — Valet drafts it for you, then you refine.
           </p>
+          <Button asChild variant="primary" size="md" className="mt-5">
+            <Link to="/automation/workflows/new" search={{ editId: undefined }}>
+              <Plus className="w-4 h-4 mr-1.5" />
+              New workflow
+            </Link>
+          </Button>
         </div>
       ) : filteredWorkflows.length === 0 ? (
         <div className="rounded-lg border border-neutral-200 bg-white p-8 text-center dark:border-neutral-700 dark:bg-neutral-800">
