@@ -1,9 +1,10 @@
 import { useState } from 'react';
-import { createFileRoute, Link } from '@tanstack/react-router';
+import { createFileRoute } from '@tanstack/react-router';
 import { Plus } from 'lucide-react';
 import { useTriggers, useDeleteTrigger, useEnableTrigger, useDisableTrigger, type Trigger } from '@/api/triggers';
 import { useWorkflows } from '@/api/workflows';
 import { TriggerCard } from '@/components/workflows/trigger-card';
+import { CreateTriggerDialog } from '@/components/workflows/create-trigger-dialog';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/cn';
 
@@ -20,6 +21,7 @@ function SchedulesAndHooksPage() {
   const enableTrigger = useEnableTrigger();
   const disableTrigger = useDisableTrigger();
   const [filter, setFilter] = useState<Filter>('all');
+  const [createOpen, setCreateOpen] = useState(false);
 
   const triggers = triggersData?.triggers ?? [];
   const workflows = workflowsData?.workflows ?? [];
@@ -40,11 +42,9 @@ function SchedulesAndHooksPage() {
       <div className="mb-1 text-xs text-neutral-500 tracking-wider">AUTOMATION</div>
       <div className="flex items-baseline justify-between mb-1">
         <h1 className="text-2xl font-semibold text-foreground">Schedules &amp; Hooks</h1>
-        <Button asChild variant="primary" size="sm">
-          <Link to="/automation/workflows/new" search={{ editId: undefined }}>
-            <Plus className="w-3.5 h-3.5 mr-1" />
-            New trigger
-          </Link>
+        <Button variant="primary" size="sm" onClick={() => setCreateOpen(true)}>
+          <Plus className="w-3.5 h-3.5 mr-1" />
+          New trigger
         </Button>
       </div>
       <p className="text-sm text-neutral-500 dark:text-neutral-400 mb-5">
@@ -78,6 +78,8 @@ function SchedulesAndHooksPage() {
           ))}
         </div>
       )}
+
+      <CreateTriggerDialog open={createOpen} onClose={() => setCreateOpen(false)} />
     </div>
   );
 }
