@@ -928,6 +928,77 @@ function GitHubForm({ onClose, editing }: { onClose: () => void; editing?: Trigg
 
 // ---------- Shared subcomponents ----------
 
+interface RepoPickerRepo {
+  id: number;
+  name: string;
+  fullName: string;
+  private: boolean;
+}
+
+function RepoPicker({
+  repos,
+  selectedRepos,
+  onToggleRepo,
+  search,
+  onSearchChange,
+}: {
+  repos: RepoPickerRepo[];
+  selectedRepos: string[];
+  onToggleRepo: (fullName: string) => void;
+  search: string;
+  onSearchChange: (next: string) => void;
+}) {
+  const trimmed = search.trim().toLowerCase();
+  const filtered = trimmed
+    ? repos.filter(
+        (r) =>
+          r.fullName.toLowerCase().includes(trimmed) ||
+          r.name.toLowerCase().includes(trimmed),
+      )
+    : repos;
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center gap-2">
+        <input
+          type="text"
+          value={search}
+          onChange={(e) => onSearchChange(e.target.value)}
+          placeholder="Filter repos…"
+          className={INPUT_BASE}
+        />
+        <span className="text-[11px] text-neutral-500 whitespace-nowrap">
+          {filtered.length} of {repos.length} repos
+        </span>
+      </div>
+      {filtered.length === 0 ? (
+        <div className="text-xs text-neutral-500 italic bg-surface-2 border border-border rounded-md px-3 py-2">
+          No repos match <span className="font-mono">{search}</span>.
+        </div>
+      ) : (
+        <div className="max-h-40 overflow-y-auto border border-border rounded-md divide-y divide-border">
+          {filtered.map((repo) => (
+            <label
+              key={repo.id}
+              className="flex items-center gap-2 px-3 py-1.5 hover:bg-surface-2 cursor-pointer"
+            >
+              <Checkbox
+                checked={selectedRepos.includes(repo.fullName)}
+                onChange={() => onToggleRepo(repo.fullName)}
+              />
+              <span className="font-mono text-xs text-foreground">{repo.fullName}</span>
+              {repo.private && (
+                <Badge variant="secondary" className="ml-auto">
+                  private
+                </Badge>
+              )}
+            </label>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function FormShell({
   children,
   onCancel,

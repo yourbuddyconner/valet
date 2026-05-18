@@ -70,7 +70,9 @@ export const repoKeys = {
 export function useRepos(page = 1) {
   return useQuery({
     queryKey: repoKeys.list(page),
-    queryFn: () => api.get<ReposResponse>(`/repos?page=${page}&per_page=50&sort=updated`),
+    // TODO: GitHub's per_page max is 100. Users with more installable repos
+    // will need pagination / "load more" — defer beyond v1.
+    queryFn: () => api.get<ReposResponse>(`/repos?page=${page}&per_page=100&sort=updated`),
   });
 }
 
