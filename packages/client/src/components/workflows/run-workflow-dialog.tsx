@@ -174,17 +174,20 @@ export function RunWorkflowDialog({ workflow, onConfirm, onClose, loading }: Pro
                 /paragraph|multi|long|body|markdown|message|prompt/i.test(def.description));
 
             return (
-              <div key={name} className="space-y-1.5">
+              <div
+                key={name}
+                className="space-y-1.5 bg-surface-2 border border-border rounded-md p-2.5 focus-within:ring-2 focus-within:ring-accent/40 transition-colors"
+              >
                 <div className="flex items-center gap-2">
                   <label
                     htmlFor={inputId}
-                    className="font-mono text-sm text-neutral-900"
+                    className="font-mono text-sm text-foreground"
                   >
                     {name}
                   </label>
                   <Badge variant={typeBadgeVariant(def.type)}>{def.type}</Badge>
                   {def.required && (
-                    <span className="text-red-600 text-sm" aria-label="required">
+                    <span className="text-red-500 text-sm" aria-label="required">
                       *
                     </span>
                   )}
@@ -200,7 +203,7 @@ export function RunWorkflowDialog({ workflow, onConfirm, onClose, loading }: Pro
                       checked={fieldState.checked}
                       onChange={(e) => updateChecked(name, e.target.checked)}
                     />
-                    <label htmlFor={inputId} className="text-sm text-neutral-700">
+                    <label htmlFor={inputId} className="text-sm text-neutral-700 dark:text-neutral-300">
                       {fieldState.checked ? 'true' : 'false'}
                     </label>
                   </div>
@@ -210,7 +213,7 @@ export function RunWorkflowDialog({ workflow, onConfirm, onClose, loading }: Pro
                     value={fieldState.raw}
                     onChange={(e) => updateRaw(name, e.target.value)}
                     rows={def.type === 'object' || def.type === 'array' ? 5 : 3}
-                    className="w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm font-mono shadow-sm focus:border-neutral-500 focus:outline-none focus:ring-1 focus:ring-neutral-500 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100"
+                    className="w-full rounded-md border border-border bg-surface-0 px-3 py-2 text-sm font-mono shadow-sm text-foreground focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent"
                     placeholder={
                       def.type === 'array'
                         ? '[]'
@@ -228,7 +231,7 @@ export function RunWorkflowDialog({ workflow, onConfirm, onClose, loading }: Pro
                   />
                 )}
 
-                {error && <div className="text-xs text-red-600">{error}</div>}
+                {error && <div className="text-xs text-red-500">{error}</div>}
               </div>
             );
           })}
@@ -238,7 +241,7 @@ export function RunWorkflowDialog({ workflow, onConfirm, onClose, loading }: Pro
           <Button type="button" variant="secondary" onClick={onClose} disabled={loading}>
             Cancel
           </Button>
-          <Button type="button" onClick={handleConfirm} disabled={hasError || loading}>
+          <Button type="button" variant="primary" onClick={handleConfirm} disabled={hasError || loading}>
             {loading ? 'Running…' : 'Run workflow'}
           </Button>
         </DialogFooter>

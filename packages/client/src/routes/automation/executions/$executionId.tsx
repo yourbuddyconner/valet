@@ -57,10 +57,10 @@ function ExecutionDetailPage() {
   }
   if (error || !execution) {
     return (
-      <div className="p-6">
+      <div className="p-6 bg-surface-0">
         <div className="text-xs text-neutral-500 tracking-wider mb-1">AUTOMATION / EXECUTIONS</div>
-        <h1 className="text-xl font-semibold text-neutral-900">Execution not found</h1>
-        <p className="text-sm text-neutral-600 mt-2">
+        <h1 className="text-xl font-semibold text-foreground">Execution not found</h1>
+        <p className="text-sm text-neutral-600 dark:text-neutral-400 mt-2">
           This execution may have been deleted, or the link may be incorrect.
         </p>
       </div>
@@ -70,7 +70,7 @@ function ExecutionDetailPage() {
   const resumeToken = execution.resumeToken;
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="flex flex-col h-full bg-surface-0">
       <ExecutionHeader
         execution={execution}
         onCancel={() => cancel.mutate({ executionId, data: { reason: 'Cancelled by user' } })}
@@ -86,7 +86,7 @@ function ExecutionDetailPage() {
         }
       />
       <div className="grid grid-cols-[1.5fr_1fr] gap-0 flex-1 min-h-0">
-        <div className="p-6 bg-neutral-50 border-r border-neutral-200">
+        <div className="p-6 bg-surface-2 border-r border-border">
           <div className="text-[11px] tracking-wider text-neutral-500 mb-2">PROGRESS</div>
           <div className="h-[480px]">
             {workflow ? (
@@ -102,7 +102,7 @@ function ExecutionDetailPage() {
             )}
           </div>
         </div>
-        <div className="p-6 bg-white space-y-6 overflow-y-auto">
+        <div className="p-6 bg-surface-1 space-y-6 overflow-y-auto">
           <div>
             <div className="text-[11px] tracking-wider text-neutral-500 mb-2">CURRENT STEP</div>
             <ExecutionStepPanel step={currentStep} />

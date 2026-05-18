@@ -1,5 +1,9 @@
 import { useEffect, useRef } from 'react';
+import { Check, X, MinusCircle, Play } from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
 import type { ExecutionStepTrace } from '@/api/executions';
+import type { StepRuntimeStatus } from './workflow-diagram/types';
+import { STATUS_TEXT_COLOR } from './state-tokens';
 
 interface Props {
   steps: ExecutionStepTrace[];
@@ -20,9 +24,13 @@ export function ExecutionStepTracePanel({ steps, startedAt }: Props) {
   return (
     <div
       ref={containerRef}
-      className="font-mono text-xs leading-relaxed text-neutral-700 bg-neutral-50 border border-neutral-200 rounded-lg p-2.5 max-h-72 overflow-y-auto"
+      className="font-mono text-xs leading-relaxed text-neutral-700 dark:text-neutral-300 bg-surface-2 border border-border rounded-lg p-2.5 max-h-72 overflow-y-auto"
     >
-      <div className="text-emerald-700">[{fmtElapsed(0)}] ▶ START</div>
+      <div className="flex items-center gap-1 text-emerald-600 dark:text-emerald-400 animate-fade-in">
+        <span>[{fmtElapsed(0)}]</span>
+        <Play className="w-3 h-3 inline-block" />
+        <span>START</span>
+      </div>
       {sorted.map((s) => (
         <StepTraceLines key={s.id} step={s} startMs={start} />
       ))}
@@ -30,50 +38,53 @@ export function ExecutionStepTracePanel({ steps, startedAt }: Props) {
   );
 }
 
+function statusIcon(status: ExecutionStepTrace['status']): LucideIcon {
+  if (status === 'completed') return Check;
+  if (status === 'failed') return X;
+  return MinusCircle;
+}
+
 function StepTraceLines({ step, startMs }: { step: ExecutionStepTrace; startMs: number }) {
-  const lines: { text: string; cls: string }[] = [];
-  if (step.startedAt) {
-    // Narrow step.input (unknown) to safely extract a `type` field for display.
-    const stepInput = step.input;
-    const stepType =
-      stepInput !== null &&
-      typeof stepInput === 'object' &&
-      'type' in stepInput &&
-      typeof (stepInput as { type: unknown }).type === 'string'
-        ? (stepInput as { type: string }).type.toUpperCase()
-        : 'STEP';
-    lines.push({
-      text: `[${fmtElapsed(new Date(step.startedAt).getTime() - startMs)}] ${stepType} · ${step.stepId}`,
-      cls: 'text-neutral-700',
-    });
-  }
-  if (step.completedAt) {
-    const sym = step.status === 'completed' ? '✓' : step.status === 'failed' ? '✗' : '⊘';
-    const cls =
-      step.status === 'completed'
-        ? 'text-emerald-700'
-        : step.status === 'failed'
-          ? 'text-red-700'
-          : 'text-neutral-500';
-    lines.push({
-      text: `[${fmtElapsed(new Date(step.completedAt).getTime() - startMs)}] ${sym} ${step.stepId} ${step.status}`,
-      cls,
-    });
-    if (step.error) {
-      lines.push({
-        text: `        ↳ ${step.error}`,
-        cls: 'text-red-700 whitespace-pre-wrap break-words',
-      });
-    }
-  }
+  // Narrow step.input (unknown) to safely extract a `type` field for display.
+  const stepInput = step.input;
+  const stepType =
+    stepInput !== null &&
+    typeof stepInput === 'object' &&
+    'type' in stepInput &&
+    typeof (stepInput as { type: unknown }).type === 'string'
+      ? (stepInput as { type: string }).type.toUpperCase()
+      : 'STEP';
+
+  // Map step.status to the broader runtime-status union for color lookup.
+  const runtimeStatus = step.status as StepRuntimeStatus;
+  const colorCls = STATUS_TEXT_COLOR[runtimeStatus] ?? 'text-neutral-500';
+
+  const Icon = statusIcon(step.status);
+
   return (
-    <>
-      {lines.map((l, i) => (
-        <div key={i} className={l.cls}>
-          {l.text}
+    <div className="animate-fade-in">
+      {step.startedAt && (
+        <div className="text-neutral-700 dark:text-neutral-300">
+          [{fmtElapsed(new Date(step.startedAt).getTime() - startMs)}] {stepType} · {step.stepId}
         </div>
-      ))}
-    </>
+      )}
+      {step.completedAt && (
+        <>
+          <div className={`flex items-center gap-1 ${colorCls}`}>
+            <span>[{fmtElapsed(new Date(step.completedAt).getTime() - startMs)}]</span>
+            <Icon className="w-3 h-3 inline-block" />
+            <span>
+              {step.stepId} {step.status}
+            </span>
+          </div>
+          {step.error && (
+            <div className="text-red-600 dark:text-red-400 whitespace-pre-wrap break-words">
+              {`        ↳ ${step.error}`}
+            </div>
+          )}
+        </>
+      )}
+    </div>
   );
 }
 

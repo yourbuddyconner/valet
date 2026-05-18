@@ -1,6 +1,7 @@
-import type { ButtonHTMLAttributes } from 'react';
+import { Play, Pencil } from 'lucide-react';
 import type { Workflow } from '@/api/workflows';
-import { cn } from '@/lib/cn';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 
 interface Props {
   workflow: Workflow;
@@ -12,59 +13,50 @@ interface Props {
 
 export function WorkflowDetailHeader({ workflow, onEdit, onRun, onToggleEnabled, onDelete }: Props) {
   return (
-    <div className="px-6 py-4 bg-white border-b border-neutral-200">
+    <div className="px-6 py-4 bg-surface-0 border-b border-border">
       <div className="text-xs text-neutral-500 tracking-wider mb-1">AUTOMATION / WORKFLOWS</div>
       <div className="flex items-start justify-between gap-4">
         <div>
           <div className="flex items-center gap-3">
-            <h1 className="text-xl font-semibold text-neutral-900">{workflow.name}</h1>
-            <span
-              className={cn(
-                'text-[11px] px-2 py-0.5 rounded-full font-medium',
-                workflow.enabled ? 'bg-emerald-50 text-emerald-800' : 'bg-neutral-100 text-neutral-500',
-              )}
-            >
-              {workflow.enabled ? '● Enabled' : '○ Disabled'}
-            </span>
+            <h1 className="text-xl font-semibold text-foreground">{workflow.name}</h1>
+            <Badge variant={workflow.enabled ? 'success' : 'secondary'}>
+              {workflow.enabled ? 'Enabled' : 'Disabled'}
+            </Badge>
           </div>
           {workflow.description && (
-            <div className="text-sm text-neutral-600 mt-1.5">{workflow.description}</div>
+            <div className="text-sm text-neutral-600 dark:text-neutral-400 mt-1.5">{workflow.description}</div>
           )}
           <div className="text-xs text-neutral-500 mt-1.5">
-            slug: <code className="bg-neutral-100 px-1 py-0.5 rounded">{workflow.slug ?? '—'}</code> · v
+            slug:{' '}
+            <code className="bg-surface-2 text-foreground px-1 py-0.5 rounded">{workflow.slug ?? '—'}</code> · v
             {workflow.version} · updated {new Date(workflow.updatedAt).toLocaleString()}
           </div>
         </div>
         <div className="flex gap-2">
-          {onRun && <Btn onClick={onRun}>▶ Run now</Btn>}
-          {onEdit && <Btn onClick={onEdit}>✎ Edit</Btn>}
+          {onRun && (
+            <Button variant="primary" size="sm" onClick={onRun}>
+              <Play className="w-3.5 h-3.5 mr-1" />
+              Run now
+            </Button>
+          )}
+          {onEdit && (
+            <Button variant="secondary" size="sm" onClick={onEdit}>
+              <Pencil className="w-3.5 h-3.5 mr-1" />
+              Edit
+            </Button>
+          )}
           {onToggleEnabled && (
-            <Btn onClick={onToggleEnabled}>{workflow.enabled ? 'Disable' : 'Enable'}</Btn>
+            <Button variant="secondary" size="sm" onClick={onToggleEnabled}>
+              {workflow.enabled ? 'Disable' : 'Enable'}
+            </Button>
           )}
           {onDelete && (
-            <Btn variant="danger" onClick={onDelete}>
+            <Button variant="destructive" size="sm" onClick={onDelete}>
               Delete
-            </Btn>
+            </Button>
           )}
         </div>
       </div>
     </div>
-  );
-}
-
-function Btn({
-  variant,
-  className,
-  ...rest
-}: { variant?: 'danger' } & ButtonHTMLAttributes<HTMLButtonElement>) {
-  const v =
-    variant === 'danger'
-      ? 'bg-red-50 text-red-800 border-red-200 hover:bg-red-100'
-      : 'bg-white text-neutral-700 border-neutral-300 hover:bg-neutral-50';
-  return (
-    <button
-      {...rest}
-      className={cn('text-sm px-3 py-1.5 rounded-md border font-medium', v, className)}
-    />
   );
 }

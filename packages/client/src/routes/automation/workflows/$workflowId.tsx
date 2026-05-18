@@ -41,10 +41,10 @@ function WorkflowDetailPage() {
   }
   if (error || !workflow) {
     return (
-      <div className="p-6">
+      <div className="p-6 bg-surface-0">
         <div className="text-xs text-neutral-500 tracking-wider mb-1">AUTOMATION / WORKFLOWS</div>
-        <h1 className="text-xl font-semibold text-neutral-900">Workflow not found</h1>
-        <p className="text-sm text-neutral-600 mt-2">
+        <h1 className="text-xl font-semibold text-foreground">Workflow not found</h1>
+        <p className="text-sm text-neutral-600 dark:text-neutral-400 mt-2">
           This workflow may have been deleted, or the link may be incorrect.
         </p>
       </div>
@@ -54,7 +54,7 @@ function WorkflowDetailPage() {
   const triggers = (triggersData?.triggers ?? []).filter((t) => t.workflowId === workflow.id);
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="flex flex-col h-full bg-surface-0">
       <WorkflowDetailHeader
         workflow={workflow}
         onRun={() => {
@@ -86,7 +86,7 @@ function WorkflowDetailPage() {
             </div>
           </Section>
         </div>
-        <div className="w-full lg:w-[380px] lg:border-l border-neutral-200 p-6 lg:overflow-auto space-y-8">
+        <div className="w-full lg:w-[380px] lg:border-l border-border p-6 lg:overflow-auto space-y-8">
           <Section title={`Triggers (${triggers.length})`}>
             {triggers.length === 0 ? (
               <div className="text-sm text-neutral-500">No triggers attached.</div>
@@ -140,7 +140,7 @@ function Section({
 }) {
   return (
     <section className={className}>
-      <h2 className="text-base font-semibold text-neutral-900 mb-3">{title}</h2>
+      <h2 className="text-base font-semibold text-foreground mb-3">{title}</h2>
       {children}
     </section>
   );

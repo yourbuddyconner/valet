@@ -1,6 +1,8 @@
 import { createFileRoute, Link, useNavigate } from '@tanstack/react-router';
+import { Clock, Webhook, Play } from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
 import { useInfiniteExecutions } from '@/api/executions';
-import { Badge } from '@/components/ui/badge';
+import { Badge, StatusDot } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
 import { LoadMoreButton } from '@/components/ui/load-more-button';
 import { formatRelativeTime } from '@/lib/format';
@@ -28,17 +30,18 @@ function ExecutionsPage() {
   const executions = data?.executions ?? [];
 
   return (
-    <div className="space-y-4">
-      <div className="flex gap-2">
+    <div className="space-y-4 bg-surface-0">
+      <div className="inline-flex bg-surface-2 rounded-full p-0.5">
         {STATUS_OPTIONS.map((option) => (
           <button
             key={option.value}
             onClick={() => setStatusFilter(option.value)}
+            aria-pressed={statusFilter === option.value}
             className={cn(
-              'rounded-md px-3 py-1.5 text-sm font-medium',
+              'px-3 py-1 text-[11px] uppercase tracking-wider font-mono rounded-full transition-colors',
               statusFilter === option.value
-                ? 'bg-neutral-900 text-white dark:bg-neutral-100 dark:text-neutral-900'
-                : 'bg-neutral-100 text-neutral-600 hover:bg-neutral-200 dark:bg-neutral-800 dark:text-neutral-400 dark:hover:bg-neutral-700'
+                ? 'bg-surface-0 text-foreground shadow-panel'
+                : 'text-neutral-500 hover:text-foreground'
             )}
           >
             {option.label}
@@ -49,23 +52,23 @@ function ExecutionsPage() {
       {isLoading ? (
         <ExecutionListSkeleton />
       ) : error ? (
-        <div className="rounded-lg border border-red-200 bg-red-50 p-4 dark:border-red-800 dark:bg-red-950">
+        <div className="rounded-lg border border-red-500/30 bg-red-500/10 p-4">
           <p className="text-sm text-pretty text-red-600 dark:text-red-400">
             Failed to load executions. Please try again.
           </p>
         </div>
       ) : executions.length === 0 ? (
-        <div className="rounded-lg border border-neutral-200 bg-white p-8 text-center dark:border-neutral-700 dark:bg-neutral-800">
+        <div className="rounded-lg border border-border bg-surface-1 p-8 text-center">
           <p className="text-sm text-pretty text-neutral-500 dark:text-neutral-400">
             No executions found. Run a workflow to see execution history.
           </p>
         </div>
       ) : (
         <>
-          <div className="overflow-hidden rounded-lg border border-neutral-200 bg-white dark:border-neutral-700 dark:bg-neutral-800">
+          <div className="overflow-hidden rounded-lg border border-border bg-surface-1">
             <table className="w-full">
               <thead>
-                <tr className="border-b border-neutral-200 bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-800">
+                <tr className="border-b border-border bg-surface-2">
                   <th className="px-4 py-3 text-left text-xs font-medium uppercase text-neutral-500 dark:text-neutral-400">
                     Status
                   </th>
@@ -86,7 +89,7 @@ function ExecutionsPage() {
                   </th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-neutral-200 dark:divide-neutral-700">
+              <tbody className="divide-y divide-border">
                 {executions.map((execution) => (
                   <tr
                     key={execution.id}
@@ -96,14 +99,15 @@ function ExecutionsPage() {
                         params: { executionId: execution.id },
                       })
                     }
-                    className="cursor-pointer hover:bg-neutral-50 dark:hover:bg-neutral-700/50"
+                    tabIndex={0}
+                    className="cursor-pointer transition-colors hover:bg-surface-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
                   >
                     <td className="px-4 py-3">
                       <ExecutionStatusBadge status={execution.status} />
                     </td>
                     <td className="px-4 py-3">
                       <div>
-                        <p className="text-sm font-medium text-neutral-900 dark:text-neutral-100">
+                        <p className="text-sm font-medium text-foreground">
                           {execution.workflowName || 'Unknown'}
                         </p>
                         <p className="text-xs text-neutral-500 dark:text-neutral-400">
@@ -159,43 +163,32 @@ function ExecutionsPage() {
 
 function ExecutionStatusBadge({ status }: { status: string }) {
   const variants: Record<string, 'default' | 'success' | 'warning' | 'error' | 'secondary'> = {
-    pending: 'warning',
+    pending: 'secondary',
     running: 'default',
     waiting_approval: 'warning',
     completed: 'success',
     failed: 'error',
+    cancelled: 'secondary',
   };
-
-  return <Badge variant={variants[status] ?? 'secondary'}>{status}</Badge>;
+  const variant = variants[status] ?? 'secondary';
+  const isRunning = status === 'running';
+  return (
+    <Badge variant={variant} className={isRunning ? 'text-accent' : undefined}>
+      {isRunning && <StatusDot variant="default" />}
+      {status}
+    </Badge>
+  );
 }
 
+const TRIGGER_ICONS: Record<string, LucideIcon> = {
+  webhook: Webhook,
+  schedule: Clock,
+  manual: Play,
+};
+
 function TriggerTypeIcon({ type }: { type: string }) {
-  const iconClass = "size-4 text-neutral-400";
-
-  if (type === 'webhook') {
-    return (
-      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={iconClass}>
-        <path d="M18 16.98h-5.99c-1.1 0-1.95.94-2.48 1.9A4 4 0 0 1 2 17c.01-.7.2-1.4.57-2" />
-        <path d="m6 17 3.13-5.78c.53-.97.1-2.18-.5-3.1a4 4 0 1 1 6.89-4.06" />
-        <path d="m12 6 3.13 5.73C15.66 12.7 16.9 13 18 13a4 4 0 0 1 0 8" />
-      </svg>
-    );
-  }
-
-  if (type === 'schedule') {
-    return (
-      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={iconClass}>
-        <circle cx="12" cy="12" r="10" />
-        <polyline points="12 6 12 12 16 14" />
-      </svg>
-    );
-  }
-
-  return (
-    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={iconClass}>
-      <polygon points="6 3 20 12 6 21 6 3" />
-    </svg>
-  );
+  const Icon = TRIGGER_ICONS[type] ?? Play;
+  return <Icon className="size-4 text-neutral-400" />;
 }
 
 function formatDuration(start: string, end: string): string {
@@ -211,8 +204,8 @@ function formatDuration(start: string, end: string): string {
 
 function ExecutionListSkeleton() {
   return (
-    <div className="overflow-hidden rounded-lg border border-neutral-200 bg-white dark:border-neutral-700 dark:bg-neutral-800">
-      <div className="divide-y divide-neutral-200 dark:divide-neutral-700">
+    <div className="overflow-hidden rounded-lg border border-border bg-surface-1">
+      <div className="divide-y divide-border">
         {Array.from({ length: 5 }).map((_, i) => (
           <div key={i} className="flex items-center gap-4 p-4">
             <Skeleton className="h-6 w-20" />

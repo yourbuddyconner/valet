@@ -1,8 +1,11 @@
 import { useState } from 'react';
 import { createFileRoute, Link } from '@tanstack/react-router';
+import { Plus } from 'lucide-react';
 import { useTriggers, useDeleteTrigger, useEnableTrigger, useDisableTrigger, type Trigger } from '@/api/triggers';
 import { useWorkflows } from '@/api/workflows';
 import { TriggerCard } from '@/components/workflows/trigger-card';
+import { Button } from '@/components/ui/button';
+import { cn } from '@/lib/cn';
 
 export const Route = createFileRoute('/automation/schedules-and-hooks/')({
   component: SchedulesAndHooksPage,
@@ -33,19 +36,18 @@ function SchedulesAndHooksPage() {
   };
 
   return (
-    <div className="px-6 py-5">
+    <div className="px-6 py-5 bg-surface-0">
       <div className="mb-1 text-xs text-neutral-500 tracking-wider">AUTOMATION</div>
       <div className="flex items-baseline justify-between mb-1">
-        <h1 className="text-2xl font-semibold text-neutral-900">Schedules &amp; Hooks</h1>
-        <Link
-          to="/automation/workflows/new"
-          search={{ editId: undefined }}
-          className="px-4 py-1.5 rounded-lg bg-neutral-900 text-white text-sm font-medium hover:bg-neutral-800"
-        >
-          + New trigger
-        </Link>
+        <h1 className="text-2xl font-semibold text-foreground">Schedules &amp; Hooks</h1>
+        <Button asChild variant="primary" size="sm">
+          <Link to="/automation/workflows/new" search={{ editId: undefined }}>
+            <Plus className="w-3.5 h-3.5 mr-1" />
+            New trigger
+          </Link>
+        </Button>
       </div>
-      <p className="text-sm text-neutral-600 mb-5">
+      <p className="text-sm text-neutral-500 dark:text-neutral-400 mb-5">
         Things that run on a schedule, fire from a webhook, or run on demand.
       </p>
 
@@ -96,18 +98,18 @@ function FilterPills({
     { id: 'manual', label: 'Manual' },
   ];
   return (
-    <div className="flex gap-2">
+    <div className="inline-flex bg-surface-2 rounded-full p-0.5">
       {items.map(({ id, label }) => (
         <button
           key={id}
           onClick={() => onChange(id)}
           aria-pressed={id === active}
-          className={
-            'text-xs px-3 py-1 rounded-full cursor-pointer ' +
-            (id === active
-              ? 'bg-neutral-900 text-white'
-              : 'bg-neutral-100 text-neutral-600 hover:bg-neutral-200')
-          }
+          className={cn(
+            'px-3 py-1 text-[11px] uppercase tracking-wider font-mono rounded-full transition-colors',
+            id === active
+              ? 'bg-surface-0 text-foreground shadow-panel'
+              : 'text-neutral-500 hover:text-foreground',
+          )}
         >
           {label} · {counts[id]}
         </button>

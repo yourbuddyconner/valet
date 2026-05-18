@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { ChevronDown, ChevronRight } from 'lucide-react';
 
 interface Props {
   outputs?: Record<string, unknown> | string | null;
@@ -31,28 +32,30 @@ function OutputEntry({ name, value }: { name: string; value: unknown }) {
   const isExpandable = full !== summary || full.includes('\n');
 
   return (
-    <div className="border border-neutral-200 rounded-lg bg-neutral-50 overflow-hidden">
+    <div className="border border-border rounded-lg bg-surface-2 overflow-hidden transition-colors">
       <button
         type="button"
         onClick={() => isExpandable && setExpanded((v) => !v)}
         className={
-          'w-full flex items-center gap-2 px-2.5 py-1.5 text-left ' +
-          (isExpandable ? 'cursor-pointer hover:bg-neutral-100' : 'cursor-default')
+          'w-full flex items-center gap-2 px-2.5 py-1.5 text-left transition-colors ' +
+          (isExpandable ? 'cursor-pointer hover:bg-surface-3' : 'cursor-default')
         }
         aria-expanded={isExpandable ? expanded : undefined}
         disabled={!isExpandable}
       >
-        <span className="font-mono text-xs font-semibold text-neutral-900">{name}</span>
+        <span className="font-mono text-xs font-semibold text-foreground">{name}</span>
         <TypeBadge value={value} />
         {isExpandable && (
-          <span className="ml-auto text-[10px] text-neutral-500">{expanded ? '▾' : '▸'}</span>
+          <span className="ml-auto text-neutral-500">
+            {expanded ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+          </span>
         )}
       </button>
       {!expanded && (
-        <div className="px-2.5 pb-1.5 font-mono text-xs text-neutral-700 truncate">{summary}</div>
+        <div className="px-2.5 pb-1.5 font-mono text-xs text-neutral-700 dark:text-neutral-300 truncate">{summary}</div>
       )}
       {expanded && (
-        <pre className="px-2.5 pb-2 font-mono text-xs text-neutral-800 whitespace-pre-wrap break-words border-t border-neutral-200 pt-2 bg-white">
+        <pre className="px-2.5 pb-2 font-mono text-xs text-foreground whitespace-pre-wrap break-words border-t border-border pt-2 bg-surface-1">
           {full}
         </pre>
       )}
@@ -64,14 +67,14 @@ function TypeBadge({ value }: { value: unknown }) {
   const t = typeOf(value);
   const cls =
     t === 'string'
-      ? 'bg-emerald-50 text-emerald-700'
+      ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
       : t === 'number' || t === 'boolean'
-        ? 'bg-blue-50 text-blue-700'
+        ? 'bg-blue-500/10 text-blue-600 dark:text-blue-400'
         : t === 'array'
-          ? 'bg-fuchsia-50 text-fuchsia-700'
+          ? 'bg-fuchsia-500/10 text-fuchsia-600 dark:text-fuchsia-400'
           : t === 'object'
-            ? 'bg-amber-50 text-amber-800'
-            : 'bg-neutral-100 text-neutral-600';
+            ? 'bg-amber-500/10 text-amber-600 dark:text-amber-400'
+            : 'bg-surface-3 text-neutral-500';
   return (
     <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded ${cls}`}>{t}</span>
   );
@@ -79,7 +82,7 @@ function TypeBadge({ value }: { value: unknown }) {
 
 function RawBlock({ text }: { text: string }) {
   return (
-    <pre className="font-mono text-xs bg-neutral-50 border border-neutral-200 rounded-lg p-2.5 whitespace-pre-wrap break-words">
+    <pre className="font-mono text-xs bg-surface-2 border border-border rounded-lg p-2.5 whitespace-pre-wrap break-words text-foreground">
       {text}
     </pre>
   );

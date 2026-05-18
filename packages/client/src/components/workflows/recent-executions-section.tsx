@@ -1,14 +1,18 @@
 import { Link } from '@tanstack/react-router';
+import { ArrowRight } from 'lucide-react';
 import { useWorkflowExecutions } from '@/api/executions';
 import { formatRelativeTime } from '@/lib/format';
+import { Badge, StatusDot } from '@/components/ui/badge';
 
-const STATUS_CLASSES: Record<string, string> = {
-  pending: 'bg-neutral-100 text-neutral-700',
-  running: 'bg-blue-100 text-blue-800',
-  waiting_approval: 'bg-orange-100 text-orange-800',
-  completed: 'bg-emerald-100 text-emerald-800',
-  failed: 'bg-red-100 text-red-800',
-  cancelled: 'bg-neutral-200 text-neutral-700',
+type BadgeVariant = 'default' | 'success' | 'warning' | 'error' | 'secondary';
+
+const STATUS_VARIANT: Record<string, BadgeVariant> = {
+  pending: 'secondary',
+  running: 'default',
+  waiting_approval: 'warning',
+  completed: 'success',
+  failed: 'error',
+  cancelled: 'secondary',
 };
 
 interface Props {
@@ -30,21 +34,20 @@ export function RecentExecutionsSection({ workflowId, limit = 10 }: Props) {
         const duration = e.completedAt
           ? `${((new Date(e.completedAt).getTime() - new Date(e.startedAt).getTime()) / 1000).toFixed(1)}s`
           : 'running';
+        const variant = STATUS_VARIANT[e.status] ?? 'secondary';
+        const isRunning = e.status === 'running';
         return (
           <Link
             key={e.id}
             to="/automation/executions/$executionId"
             params={{ executionId: e.id }}
-            className="flex items-center gap-3 px-3 py-2 rounded-lg border border-neutral-200 hover:bg-neutral-50"
+            className="flex items-center gap-3 px-3 py-2 rounded-lg border border-border bg-surface-1 transition-colors hover:bg-surface-2"
           >
-            <span
-              className={`text-[11px] px-2 py-0.5 rounded-full font-medium ${
-                STATUS_CLASSES[e.status] ?? 'bg-neutral-100'
-              }`}
-            >
+            <Badge variant={variant} className={isRunning ? 'text-accent' : undefined}>
+              {isRunning && <StatusDot variant="default" />}
               {e.status}
-            </span>
-            <span className="text-sm text-neutral-700">{e.triggerType}</span>
+            </Badge>
+            <span className="text-sm text-neutral-700 dark:text-neutral-300">{e.triggerType}</span>
             <span className="text-xs text-neutral-500 ml-auto">
               {ago} · {duration}
             </span>
@@ -54,9 +57,10 @@ export function RecentExecutionsSection({ workflowId, limit = 10 }: Props) {
       {total > limit && (
         <Link
           to="/automation/executions"
-          className="text-xs text-neutral-500 hover:text-neutral-800 mt-1"
+          className="text-xs text-neutral-500 hover:text-foreground mt-1 inline-flex items-center gap-1"
         >
-          View all {total} runs →
+          View all {total} runs
+          <ArrowRight className="w-3 h-3 inline-block" />
         </Link>
       )}
     </div>
