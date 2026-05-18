@@ -26,6 +26,7 @@
     "@valet/plugin-turnkey-docs": "workspace:*",
     "@valet/plugin-email-auth": "workspace:*",
     "@valet/plugin-figma": "workspace:*",
+    "@valet/plugin-grafana": "workspace:*",
     "@valet/plugin-github": "workspace:*",
     "@valet/plugin-gmail": "workspace:*",
     "@valet/plugin-granola": "workspace:*",
