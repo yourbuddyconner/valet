@@ -9,14 +9,12 @@ interface Props {
 const TYPE_LABEL: Record<WorkflowStep['type'], string> = {
   bash: 'BASH',
   tool: 'TOOL',
-  agent: 'AGENT',
   agent_message: 'SEND MESSAGE',
   agent_prompt: 'AGENT PROMPT',
   notify: 'NOTIFY',
   conditional: 'CONDITIONAL',
   parallel: 'PARALLEL',
   loop: 'LOOP',
-  subworkflow: 'SUBWORKFLOW',
   approval: 'APPROVAL',
 };
 
@@ -184,8 +182,6 @@ function TypeSpecificFields({ step, onChange }: Props) {
     }
 
     case 'parallel':
-    case 'loop':
-    case 'subworkflow':
       return (
         <Field label="Child steps">
           <div className="text-xs text-neutral-500">
@@ -195,6 +191,42 @@ function TypeSpecificFields({ step, onChange }: Props) {
             </span>
           </div>
         </Field>
+      );
+
+    case 'loop':
+      return (
+        <>
+          <TextField
+            label="Over (array path)"
+            value={step.over ?? ''}
+            placeholder="e.g. outputs.prs.failed or variables.targetUsers"
+            onChange={(v) => onChange({ over: v || undefined })}
+            mono
+          />
+          <TextField
+            label="Item variable name"
+            value={step.itemVar ?? ''}
+            placeholder="item (default)"
+            onChange={(v) => onChange({ itemVar: v || undefined })}
+            mono
+          />
+          <TextField
+            label="Index variable name"
+            value={step.indexVar ?? ''}
+            placeholder="index (default)"
+            onChange={(v) => onChange({ indexVar: v || undefined })}
+            mono
+          />
+          <Field label="Body">
+            <div className="text-xs text-neutral-500">
+              {step.steps?.length ?? 0} nested step(s) run per iteration.
+              <span className="block text-[11px] mt-1">
+                Reference the current item with <code>{`{{loop.item}}`}</code> and the index with <code>{`{{loop.index}}`}</code>.
+                Use the chat to add, remove, or reorder body steps.
+              </span>
+            </div>
+          </Field>
+        </>
       );
 
     case 'approval':

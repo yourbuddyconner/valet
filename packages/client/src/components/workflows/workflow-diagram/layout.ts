@@ -97,7 +97,7 @@ export function layoutWorkflow(
           branchTails.push(...subTails);
         }
         tails = branchTails.length > 0 ? branchTails : [step.id];
-      } else if (step.type === 'loop' || step.type === 'subworkflow') {
+      } else if (step.type === 'loop') {
         // Render the body once; treat as linear-after for layout purposes.
         const innerTails = walk(step.steps ?? [], [step.id]);
         tails = innerTails.length > 0 ? innerTails : [step.id];

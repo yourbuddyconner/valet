@@ -6,28 +6,24 @@ import { cn } from '@/lib/cn';
 const TYPE_LABEL: Record<WorkflowStep['type'], string> = {
   bash: 'BASH',
   tool: 'TOOL',
-  agent: 'AGENT',
   agent_message: 'SEND MSG',
   agent_prompt: 'AGENT PROMPT',
   notify: 'NOTIFY',
   conditional: 'CONDITIONAL',
   parallel: 'PARALLEL',
   loop: 'LOOP',
-  subworkflow: 'SUBWORKFLOW',
   approval: 'APPROVAL',
 };
 
 const TYPE_BADGE_CLASSES: Record<WorkflowStep['type'], string> = {
   bash: 'bg-neutral-900 text-white',
   tool: 'bg-neutral-700 text-white',
-  agent: 'bg-indigo-600 text-white',
   agent_message: 'bg-indigo-600 text-white',
   agent_prompt: 'bg-purple-600 text-white',
   notify: 'bg-teal-700 text-white',
   conditional: 'bg-amber-600 text-white',
   parallel: 'bg-fuchsia-600 text-white',
   loop: 'bg-teal-600 text-white',
-  subworkflow: 'bg-slate-600 text-white',
   approval: 'bg-orange-600 text-white',
 };
 
@@ -57,7 +53,6 @@ function summaryText(step: WorkflowStep): string {
       return step.command ?? '';
     case 'tool':
       return step.tool ? `tool: ${step.tool}` : '';
-    case 'agent':
     case 'agent_message':
       return step.content ?? step.goal ?? step.prompt ?? '';
     case 'agent_prompt':
@@ -69,11 +64,9 @@ function summaryText(step: WorkflowStep): string {
     case 'approval':
       return step.prompt ?? 'Approval required';
     case 'loop':
-      return 'loop';
+      return step.over ? `foreach ${step.over}` : 'loop';
     case 'parallel':
       return 'parallel';
-    case 'subworkflow':
-      return 'subworkflow';
     default:
       return '';
   }

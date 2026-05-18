@@ -9,14 +9,12 @@ import { SyntheticNode } from './nodes/synthetic-node';
 const NODE_TYPES: NodeTypes = {
   bash: StepNode,
   tool: StepNode,
-  agent: StepNode,
   agent_message: StepNode,
   agent_prompt: StepNode,
   notify: StepNode,
   conditional: StepNode,
   parallel: StepNode,
   loop: StepNode,
-  subworkflow: StepNode,
   approval: StepNode,
   synthetic: SyntheticNode,
 };
