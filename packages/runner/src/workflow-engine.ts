@@ -133,6 +133,22 @@ function asStepArray(value: unknown): NormalizedWorkflowStep[] {
     .sort((a, b) => a.id.localeCompare(b.id));
 }
 
+function resolveLoopArray(path: string, ctx: ExecutionContext): unknown {
+  const segs = path.split('.');
+  const root = segs.shift();
+  const source = root === 'variables' ? ctx.variables : root === 'outputs' ? ctx.outputs : null;
+  if (!source) return null;
+  let cursor: unknown = source;
+  for (const s of segs) {
+    if (cursor && typeof cursor === 'object' && !Array.isArray(cursor)) {
+      cursor = (cursor as Record<string, unknown>)[s];
+    } else {
+      return null;
+    }
+  }
+  return cursor;
+}
+
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value)
     ? (value as Record<string, unknown>)
@@ -294,7 +310,7 @@ async function executeStepAction(rawStep: NormalizedWorkflowStep, ctx: Execution
     };
   }
 
-  if (step.type === 'agent' || step.type === 'agent_message' || step.type === 'agent_prompt') {
+  if (step.type === 'agent_message' || step.type === 'agent_prompt') {
     if (ctx.hooks?.onAgentStep) {
       const hooked = await ctx.hooks.onAgentStep(step, context);
       if (hooked) return hooked;
@@ -470,6 +486,61 @@ async function executeSteps(
           resumeToken,
         },
       };
+    }
+
+    if (step.type === 'loop') {
+      const overPath = typeof step.over === 'string' ? step.over.trim() : '';
+      if (!overPath) {
+        result.status = 'failed';
+        result.error = 'loop_missing_over';
+        result.completedAt = nowIso();
+        emit(sink, { type: 'step.failed', executionId: ctx.executionId, stepId: step.id, attempt: ctx.attempt, ts: result.completedAt, error: result.error });
+        return { failed: result.error };
+      }
+      const items = resolveLoopArray(overPath, ctx);
+      if (!Array.isArray(items)) {
+        result.status = 'failed';
+        result.error = `loop_over_not_array: ${overPath}`;
+        result.completedAt = nowIso();
+        emit(sink, { type: 'step.failed', executionId: ctx.executionId, stepId: step.id, attempt: ctx.attempt, ts: result.completedAt, error: result.error });
+        return { failed: result.error };
+      }
+      const itemVar = typeof step.itemVar === 'string' && step.itemVar ? step.itemVar : 'item';
+      const indexVar = typeof step.indexVar === 'string' && step.indexVar ? step.indexVar : 'index';
+      const body = asStepArray(step.steps);
+
+      let lastChildRun: ExecuteStepsResult = {};
+      for (let i = 0; i < items.length; i++) {
+        // Shadow user-named variables and publish a `loop` namespace so
+        // {{loop.item}} / {{loop.index}} resolve during interpolation; restore
+        // after each iteration so outer scope isn't polluted.
+        const savedItem = ctx.variables[itemVar];
+        const savedIndex = ctx.variables[indexVar];
+        const savedLoop = ctx.variables['loop'];
+        ctx.variables[itemVar] = items[i];
+        ctx.variables[indexVar] = i;
+        ctx.variables['loop'] = { item: items[i], index: i };
+        try {
+          lastChildRun = await executeSteps(body, ctx, sink);
+          if (lastChildRun.approval || lastChildRun.failed || lastChildRun.cancelled) {
+            ctx.variables[itemVar] = savedItem;
+            ctx.variables[indexVar] = savedIndex;
+            ctx.variables['loop'] = savedLoop;
+            return lastChildRun;
+          }
+        } finally {
+          ctx.variables[itemVar] = savedItem;
+          ctx.variables[indexVar] = savedIndex;
+          ctx.variables['loop'] = savedLoop;
+        }
+      }
+
+      const completedAt = nowIso();
+      result.status = 'completed';
+      result.completedAt = completedAt;
+      result.output = { iterations: items.length };
+      emit(sink, { type: 'step.completed', executionId: ctx.executionId, stepId: step.id, attempt: ctx.attempt, ts: completedAt });
+      continue;
     }
 
     if (step.type === 'conditional') {

@@ -40,7 +40,7 @@ function normalizeStep(stepValue: unknown, path: string, errors: WorkflowCompile
   const normalizedType = type.trim();
 
   const VALID_STEP_TYPES = new Set([
-    'agent', 'agent_message', 'agent_prompt', 'notify', 'tool', 'bash', 'conditional', 'loop', 'parallel', 'subworkflow', 'approval',
+    'agent_message', 'agent_prompt', 'notify', 'tool', 'bash', 'conditional', 'loop', 'parallel', 'approval',
   ]);
   if (!VALID_STEP_TYPES.has(normalizedType)) {
     errors.push({
@@ -85,6 +85,30 @@ function normalizeStep(stepValue: unknown, path: string, errors: WorkflowCompile
     if (stepValue.outputSchema !== undefined) {
       const schemaErrors = validateOutputSchemaShape(stepValue.outputSchema, `${path}.outputSchema`);
       for (const e of schemaErrors) errors.push(e);
+    }
+  }
+
+  if (normalizedType === 'loop') {
+    if (typeof stepValue.over !== 'string' || !stepValue.over.trim()) {
+      errors.push({
+        message: 'loop step requires "over" (string path to an array, e.g. "outputs.list" or "variables.items")',
+        path: `${path}.over`,
+      });
+    }
+    const itemVar = stepValue.itemVar;
+    if (itemVar !== undefined && (typeof itemVar !== 'string' || !/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(itemVar))) {
+      errors.push({ message: 'loop.itemVar must be a valid identifier', path: `${path}.itemVar` });
+    }
+    const indexVar = stepValue.indexVar;
+    if (indexVar !== undefined && (typeof indexVar !== 'string' || !/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(indexVar))) {
+      errors.push({ message: 'loop.indexVar must be a valid identifier', path: `${path}.indexVar` });
+    }
+    const childSteps = stepValue.steps;
+    if (!Array.isArray(childSteps) || childSteps.length === 0) {
+      errors.push({
+        message: 'loop step requires non-empty "steps" array (body to run per iteration)',
+        path: `${path}.steps`,
+      });
     }
   }
 

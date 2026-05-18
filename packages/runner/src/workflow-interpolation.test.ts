@@ -54,6 +54,31 @@ describe('resolveInterpolation', () => {
     expect(r.missingPaths).toEqual(['secret.token']);
   });
 
+  it('resolves {{loop.item}} and {{loop.index}} from ctx.variables.loop', () => {
+    const loopCtx = {
+      variables: { loop: { item: 'apple', index: 2 } },
+      outputs: {},
+    };
+    const r = resolveInterpolation('item={{loop.item}} idx={{loop.index}}', loopCtx);
+    expect(r.text).toBe('item=apple idx=2');
+    expect(r.missingPaths).toEqual([]);
+  });
+
+  it('reports loop paths as missing when no loop is active', () => {
+    const r = resolveInterpolation('{{loop.item}}', ctx);
+    expect(r.text).toBe('');
+    expect(r.missingPaths).toEqual(['loop.item']);
+  });
+
+  it('resolves complex loop items (objects)', () => {
+    const loopCtx = {
+      variables: { loop: { item: { name: 'Bob', score: 9 }, index: 0 } },
+      outputs: {},
+    };
+    const r = resolveInterpolation('hello {{loop.item.name}} - {{loop.item.score}}', loopCtx);
+    expect(r.text).toBe('hello Bob - 9');
+  });
+
   it('trims whitespace inside tokens', () => {
     const r = resolveInterpolation('hi {{  variables.name  }}', ctx);
     expect(r.text).toBe('hi Alice');

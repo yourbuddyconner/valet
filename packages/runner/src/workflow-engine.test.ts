@@ -381,6 +381,160 @@ describe('workflow-engine', () => {
     expect(thirdRun.steps.find((step) => step.stepId === 'second_approval')?.status).toBe('completed');
   });
 
+  it('iterates loop over an array, running body per iteration with loop.item in scope', async () => {
+    const compiled = await compileWorkflowDefinition({
+      steps: [
+        {
+          id: 'each',
+          type: 'loop',
+          over: 'variables.items',
+          steps: [
+            { id: 'visit', type: 'tool', tool: 'noop', arguments: { value: '{{loop.item}}' } },
+          ],
+        },
+      ],
+    });
+
+    if (!compiled.ok || !compiled.workflow) {
+      throw new Error('compile failed');
+    }
+
+    const seen: unknown[] = [];
+    const result = await executeWorkflowRun(
+      'ex_loop_ok',
+      compiled.workflow,
+      { variables: { items: ['a', 'b', 'c'] } },
+      {
+        onToolStep: async (step) => {
+          const args = step.arguments as { value?: unknown } | undefined;
+          seen.push(args?.value);
+          return { status: 'completed', output: { ok: true } };
+        },
+      },
+    );
+
+    expect(result.status).toBe('ok');
+    expect(seen).toEqual(['a', 'b', 'c']);
+    const loopStep = result.steps.find((s) => s.stepId === 'each');
+    expect(loopStep?.status).toBe('completed');
+    expect(loopStep?.output).toEqual({ iterations: 3 });
+  });
+
+  it('fails loop when "over" path resolves to a non-array', async () => {
+    const compiled = await compileWorkflowDefinition({
+      steps: [
+        {
+          id: 'each',
+          type: 'loop',
+          over: 'variables.missing',
+          steps: [{ id: 'noop', type: 'tool', tool: 'noop' }],
+        },
+      ],
+    });
+
+    if (!compiled.ok || !compiled.workflow) {
+      throw new Error('compile failed');
+    }
+
+    const result = await executeWorkflowRun('ex_loop_bad', compiled.workflow, { variables: {} });
+    expect(result.status).toBe('failed');
+    expect(result.error).toMatch(/^loop_over_not_array:/);
+  });
+
+  it('completes loop with iterations=0 when over is an empty array', async () => {
+    const compiled = await compileWorkflowDefinition({
+      steps: [
+        {
+          id: 'each',
+          type: 'loop',
+          over: 'variables.empty',
+          steps: [{ id: 'noop', type: 'tool', tool: 'noop' }],
+        },
+      ],
+    });
+
+    if (!compiled.ok || !compiled.workflow) {
+      throw new Error('compile failed');
+    }
+
+    let calls = 0;
+    const result = await executeWorkflowRun(
+      'ex_loop_empty',
+      compiled.workflow,
+      { variables: { empty: [] } },
+      {
+        onToolStep: async () => {
+          calls += 1;
+          return { status: 'completed' };
+        },
+      },
+    );
+    expect(result.status).toBe('ok');
+    expect(calls).toBe(0);
+    expect(result.steps.find((s) => s.stepId === 'each')?.output).toEqual({ iterations: 0 });
+  });
+
+  it('uses custom itemVar and indexVar identifiers', async () => {
+    const compiled = await compileWorkflowDefinition({
+      steps: [
+        {
+          id: 'each',
+          type: 'loop',
+          over: 'variables.users',
+          itemVar: 'user',
+          indexVar: 'i',
+          steps: [
+            { id: 'greet', type: 'tool', tool: 'noop', arguments: { greeting: 'hi {{variables.user}} ({{variables.i}})' } },
+          ],
+        },
+      ],
+    });
+
+    if (!compiled.ok || !compiled.workflow) {
+      throw new Error('compile failed');
+    }
+
+    const greetings: unknown[] = [];
+    const result = await executeWorkflowRun(
+      'ex_loop_named',
+      compiled.workflow,
+      { variables: { users: ['Alice', 'Bob'] } },
+      {
+        onToolStep: async (step) => {
+          const args = step.arguments as { greeting?: unknown } | undefined;
+          greetings.push(args?.greeting);
+          return { status: 'completed' };
+        },
+      },
+    );
+    expect(result.status).toBe('ok');
+    expect(greetings).toEqual(['hi Alice (0)', 'hi Bob (1)']);
+  });
+
+  it('rejects "agent" and "subworkflow" step types at compile time', async () => {
+    const compiledAgent = await compileWorkflowDefinition({
+      steps: [{ id: 'a', type: 'agent', goal: 'do thing' }],
+    });
+    expect(compiledAgent.ok).toBe(false);
+    expect(compiledAgent.errors.some((e) => /Unknown step type "agent"/.test(e.message))).toBe(true);
+
+    const compiledSub = await compileWorkflowDefinition({
+      steps: [{ id: 's', type: 'subworkflow' }],
+    });
+    expect(compiledSub.ok).toBe(false);
+    expect(compiledSub.errors.some((e) => /Unknown step type "subworkflow"/.test(e.message))).toBe(true);
+  });
+
+  it('rejects loop missing "over" at compile time', async () => {
+    const compiled = await compileWorkflowDefinition({
+      steps: [
+        { id: 'each', type: 'loop', steps: [{ id: 'x', type: 'tool', tool: 'noop' }] },
+      ],
+    });
+    expect(compiled.ok).toBe(false);
+    expect(compiled.errors.some((e) => /loop step requires "over"/.test(e.message))).toBe(true);
+  });
+
   it('fails resume when token does not match the paused checkpoint', async () => {
     const compiled = await compileWorkflowDefinition({
       steps: [

@@ -5,7 +5,8 @@
  * before each step executes. Missing paths render as empty strings and are reported so
  * authors can spot silent misspellings without the workflow hard-failing.
  *
- * Supported root namespaces: `variables`, `outputs`. Other roots are treated as missing.
+ * Supported root namespaces: `variables`, `outputs`, and `loop` (sourced from
+ * `ctx.variables.loop` when a loop step is active). Other roots are treated as missing.
  */
 
 export interface InterpolationContext {
@@ -32,11 +33,20 @@ export function resolveInterpolation(
   const text = template.replace(TOKEN_RE, (_match, rawPath: string) => {
     const path = rawPath.trim();
     const [root, ...rest] = path.split(".");
-    if (root !== "variables" && root !== "outputs") {
+    if (root !== "variables" && root !== "outputs" && root !== "loop") {
       missingPaths.push(path);
       return "";
     }
-    const source = root === "variables" ? ctx.variables : ctx.outputs;
+    // `loop` is a convenience alias for `variables.loop` — populated by the
+    // workflow engine each iteration so authors can write {{loop.item}}.
+    const source =
+      root === "variables"
+        ? ctx.variables
+        : root === "outputs"
+          ? ctx.outputs
+          : ctx.variables.loop && typeof ctx.variables.loop === "object"
+            ? (ctx.variables.loop as Record<string, unknown>)
+            : {};
     const value = walkPath(source, rest);
     if (value === undefined) {
       missingPaths.push(path);
