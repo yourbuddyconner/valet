@@ -11,7 +11,14 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { Checkbox } from '@/components/ui/checkbox';
-import { useCreateTrigger, type CreateTriggerRequest, type TriggerConfig } from '@/api/triggers';
+import {
+  useCreateTrigger,
+  useUpdateTrigger,
+  type CreateTriggerRequest,
+  type Trigger,
+  type TriggerConfig,
+  type UpdateTriggerRequest,
+} from '@/api/triggers';
 import { useWorkflows, type Workflow, type VariableDefinition } from '@/api/workflows';
 import { useRepos } from '@/api/repos';
 import { useGitHubAvailableEvents } from '@/api/github-triggers';
@@ -57,15 +64,38 @@ const GITHUB_DEFAULT_MAPPINGS: Record<string, string> = {
 interface Props {
   open: boolean;
   onClose: () => void;
+  /** When set, dialog operates in edit mode and prefills from this trigger. */
+  editing?: Trigger;
 }
 
-export function CreateTriggerDialog({ open, onClose }: Props) {
+// Derive which form path a trigger uses. Returns null for shapes we can't edit
+// in this dialog (e.g. `manual`).
+function pathForTrigger(t: Trigger): Path | null {
+  if (t.type === 'schedule' && t.config.type === 'schedule') {
+    return t.config.target === 'orchestrator' ? 'schedule-prompt' : 'schedule-workflow';
+  }
+  if (t.type === 'webhook') return 'webhook';
+  if (t.type === 'github') return 'github';
+  return null;
+}
+
+export function CreateTriggerDialog({ open, onClose, editing }: Props) {
   const [path, setPath] = React.useState<Path>('schedule-prompt');
 
-  // Reset path when reopening so we don't leak the prior selection.
+  // Reset path on open. When editing, lock to the trigger's path; otherwise
+  // start at the default. The `editing.id` is part of the dep list so swapping
+  // which trigger we're editing also re-syncs.
   React.useEffect(() => {
-    if (open) setPath('schedule-prompt');
-  }, [open]);
+    if (!open) return;
+    if (editing) {
+      const p = pathForTrigger(editing);
+      if (p) setPath(p);
+    } else {
+      setPath('schedule-prompt');
+    }
+  }, [open, editing]);
+
+  const isEditing = !!editing;
 
   return (
     <Dialog
@@ -76,21 +106,31 @@ export function CreateTriggerDialog({ open, onClose }: Props) {
     >
       <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>New trigger</DialogTitle>
+          <DialogTitle>{isEditing ? 'Edit trigger' : 'New trigger'}</DialogTitle>
           <DialogDescription>
-            Pick how this trigger should fire. Each option configures a different runtime.
+            {isEditing
+              ? 'Update this trigger. The trigger type is fixed; delete and recreate to change it.'
+              : 'Pick how this trigger should fire. Each option configures a different runtime.'}
           </DialogDescription>
         </DialogHeader>
 
-        <div className="mt-4">
-          <PathSelector value={path} onChange={setPath} />
-        </div>
+        {/* Hide the path selector in edit mode — switching trigger type would
+            require a different DB row, which isn't what Edit should do. */}
+        {!isEditing && (
+          <div className="mt-4">
+            <PathSelector value={path} onChange={setPath} />
+          </div>
+        )}
 
         <div className="mt-5">
-          {path === 'schedule-prompt' && <SchedulePromptForm onClose={onClose} />}
-          {path === 'schedule-workflow' && <ScheduleWorkflowForm onClose={onClose} />}
-          {path === 'webhook' && <WebhookForm onClose={onClose} />}
-          {path === 'github' && <GitHubForm onClose={onClose} />}
+          {path === 'schedule-prompt' && (
+            <SchedulePromptForm onClose={onClose} editing={editing} />
+          )}
+          {path === 'schedule-workflow' && (
+            <ScheduleWorkflowForm onClose={onClose} editing={editing} />
+          )}
+          {path === 'webhook' && <WebhookForm onClose={onClose} editing={editing} />}
+          {path === 'github' && <GitHubForm onClose={onClose} editing={editing} />}
         </div>
       </DialogContent>
     </Dialog>
@@ -132,13 +172,34 @@ function PathSelector({ value, onChange }: { value: Path; onChange: (p: Path) =>
 
 // ---------- Path 1: Schedule prompt ----------
 
-function SchedulePromptForm({ onClose }: { onClose: () => void }) {
-  const [name, setName] = React.useState('');
-  const [prompt, setPrompt] = React.useState('');
-  const [cron, setCron] = React.useState(DEFAULT_CRON);
-  const [timezone, setTimezone] = React.useState(DEFAULT_TZ);
+function SchedulePromptForm({ onClose, editing }: { onClose: () => void; editing?: Trigger }) {
+  // Pull initial prompt schedule values from `editing` when present. Guarded
+  // narrowing keeps the discriminated union honest.
+  const initial = React.useMemo(() => {
+    if (
+      editing &&
+      editing.config.type === 'schedule' &&
+      editing.config.target === 'orchestrator'
+    ) {
+      return {
+        name: editing.name,
+        prompt: editing.config.prompt ?? '',
+        cron: editing.config.cron,
+        timezone: editing.config.timezone ?? DEFAULT_TZ,
+      };
+    }
+    return { name: '', prompt: '', cron: DEFAULT_CRON, timezone: DEFAULT_TZ };
+  }, [editing]);
+
+  const [name, setName] = React.useState(initial.name);
+  const [prompt, setPrompt] = React.useState(initial.prompt);
+  const [cron, setCron] = React.useState(initial.cron);
+  const [timezone, setTimezone] = React.useState(initial.timezone);
   const [error, setError] = React.useState<string | null>(null);
   const createTrigger = useCreateTrigger();
+  const updateTrigger = useUpdateTrigger();
+  const isEditing = !!editing;
+  const pending = createTrigger.isPending || updateTrigger.isPending;
 
   const cronPreview = humanizeCron(cron);
   const cronValid = cronPreview !== null;
@@ -155,10 +216,19 @@ function SchedulePromptForm({ onClose }: { onClose: () => void }) {
       target: 'orchestrator',
       prompt: prompt.trim(),
     };
-    const req: CreateTriggerRequest = {
-      name: name.trim(),
-      config,
-    };
+    if (isEditing && editing) {
+      const data: UpdateTriggerRequest = { name: name.trim(), config };
+      updateTrigger.mutate(
+        { triggerId: editing.id, data },
+        {
+          onSuccess: () => onClose(),
+          onError: (e: unknown) =>
+            setError(e instanceof Error ? e.message : 'Failed to update trigger.'),
+        },
+      );
+      return;
+    }
+    const req: CreateTriggerRequest = { name: name.trim(), config };
     createTrigger.mutate(req, {
       onSuccess: () => onClose(),
       onError: (e: unknown) => setError(e instanceof Error ? e.message : 'Failed to create trigger.'),
@@ -167,8 +237,16 @@ function SchedulePromptForm({ onClose }: { onClose: () => void }) {
 
   return (
     <FormShell
-      submitLabel={createTrigger.isPending ? 'Creating…' : 'Create schedule'}
-      submitDisabled={!canSubmit || createTrigger.isPending}
+      submitLabel={
+        pending
+          ? isEditing
+            ? 'Saving…'
+            : 'Creating…'
+          : isEditing
+            ? 'Save changes'
+            : 'Create schedule'
+      }
+      submitDisabled={!canSubmit || pending}
       onCancel={onClose}
       onSubmit={handleSubmit}
       error={error}
@@ -196,17 +274,43 @@ function SchedulePromptForm({ onClose }: { onClose: () => void }) {
 
 // ---------- Path 2: Schedule workflow ----------
 
-function ScheduleWorkflowForm({ onClose }: { onClose: () => void }) {
+function ScheduleWorkflowForm({ onClose, editing }: { onClose: () => void; editing?: Trigger }) {
   const { data: workflowsData } = useWorkflows();
   const workflows = workflowsData?.workflows ?? [];
-  const [name, setName] = React.useState('');
-  const [workflowId, setWorkflowId] = React.useState('');
-  const [cron, setCron] = React.useState(DEFAULT_CRON);
-  const [timezone, setTimezone] = React.useState(DEFAULT_TZ);
-  const [variables, setVariables] = React.useState<Record<string, unknown>>({});
+  const initial = React.useMemo(() => {
+    if (
+      editing &&
+      editing.config.type === 'schedule' &&
+      editing.config.target !== 'orchestrator'
+    ) {
+      return {
+        name: editing.name,
+        workflowId: editing.workflowId ?? '',
+        cron: editing.config.cron,
+        timezone: editing.config.timezone ?? DEFAULT_TZ,
+        variables: editing.config.variables ?? {},
+      };
+    }
+    return {
+      name: '',
+      workflowId: '',
+      cron: DEFAULT_CRON,
+      timezone: DEFAULT_TZ,
+      variables: {} as Record<string, unknown>,
+    };
+  }, [editing]);
+
+  const [name, setName] = React.useState(initial.name);
+  const [workflowId, setWorkflowId] = React.useState(initial.workflowId);
+  const [cron, setCron] = React.useState(initial.cron);
+  const [timezone, setTimezone] = React.useState(initial.timezone);
+  const [variables, setVariables] = React.useState<Record<string, unknown>>(initial.variables);
   const [variableErrors, setVariableErrors] = React.useState<Record<string, string>>({});
   const [error, setError] = React.useState<string | null>(null);
   const createTrigger = useCreateTrigger();
+  const updateTrigger = useUpdateTrigger();
+  const isEditing = !!editing;
+  const pending = createTrigger.isPending || updateTrigger.isPending;
 
   const selectedWorkflow = workflows.find((w) => w.id === workflowId);
   const declaredVariables = selectedWorkflow?.data.variables ?? {};
@@ -232,6 +336,18 @@ function ScheduleWorkflowForm({ onClose }: { onClose: () => void }) {
       target: 'workflow',
       variables: hasVariables && Object.keys(variables).length > 0 ? variables : undefined,
     };
+    if (isEditing && editing) {
+      const data: UpdateTriggerRequest = { name: name.trim(), workflowId, config };
+      updateTrigger.mutate(
+        { triggerId: editing.id, data },
+        {
+          onSuccess: () => onClose(),
+          onError: (e: unknown) =>
+            setError(e instanceof Error ? e.message : 'Failed to update trigger.'),
+        },
+      );
+      return;
+    }
     createTrigger.mutate(
       {
         workflowId,
@@ -248,8 +364,16 @@ function ScheduleWorkflowForm({ onClose }: { onClose: () => void }) {
 
   return (
     <FormShell
-      submitLabel={createTrigger.isPending ? 'Creating…' : 'Create schedule'}
-      submitDisabled={!canSubmit || createTrigger.isPending}
+      submitLabel={
+        pending
+          ? isEditing
+            ? 'Saving…'
+            : 'Creating…'
+          : isEditing
+            ? 'Save changes'
+            : 'Create schedule'
+      }
+      submitDisabled={!canSubmit || pending}
       onCancel={onClose}
       onSubmit={handleSubmit}
       error={error}
@@ -279,16 +403,38 @@ function ScheduleWorkflowForm({ onClose }: { onClose: () => void }) {
 
 // ---------- Path 3: Webhook ----------
 
-function WebhookForm({ onClose }: { onClose: () => void }) {
+function WebhookForm({ onClose, editing }: { onClose: () => void; editing?: Trigger }) {
   const { data: workflowsData } = useWorkflows();
   const workflows = workflowsData?.workflows ?? [];
-  const [name, setName] = React.useState('');
-  const [workflowId, setWorkflowId] = React.useState('');
-  const [hookPath, setHookPath] = React.useState('');
-  const [method, setMethod] = React.useState<'GET' | 'POST'>('POST');
-  const [mapping, setMapping] = React.useState<Record<string, string>>({});
+  const initial = React.useMemo(() => {
+    if (editing && editing.config.type === 'webhook') {
+      return {
+        name: editing.name,
+        workflowId: editing.workflowId ?? '',
+        hookPath: editing.config.path,
+        method: (editing.config.method ?? 'POST') as 'GET' | 'POST',
+        mapping: editing.variableMapping ?? {},
+      };
+    }
+    return {
+      name: '',
+      workflowId: '',
+      hookPath: '',
+      method: 'POST' as const,
+      mapping: {} as Record<string, string>,
+    };
+  }, [editing]);
+
+  const [name, setName] = React.useState(initial.name);
+  const [workflowId, setWorkflowId] = React.useState(initial.workflowId);
+  const [hookPath, setHookPath] = React.useState(initial.hookPath);
+  const [method, setMethod] = React.useState<'GET' | 'POST'>(initial.method);
+  const [mapping, setMapping] = React.useState<Record<string, string>>(initial.mapping);
   const [error, setError] = React.useState<string | null>(null);
   const createTrigger = useCreateTrigger();
+  const updateTrigger = useUpdateTrigger();
+  const isEditing = !!editing;
+  const pending = createTrigger.isPending || updateTrigger.isPending;
 
   const selectedWorkflow = workflows.find((w) => w.id === workflowId);
   const declaredVariables = selectedWorkflow?.data.variables ?? {};
@@ -305,12 +451,31 @@ function WebhookForm({ onClose }: { onClose: () => void }) {
   const handleSubmit = () => {
     if (!canSubmit) return;
     setError(null);
+    const config: TriggerConfig = { type: 'webhook', path: hookPath, method };
+    const variableMapping = Object.keys(mapping).length > 0 ? mapping : undefined;
+    if (isEditing && editing) {
+      const data: UpdateTriggerRequest = {
+        name: name.trim(),
+        workflowId,
+        config,
+        variableMapping,
+      };
+      updateTrigger.mutate(
+        { triggerId: editing.id, data },
+        {
+          onSuccess: () => onClose(),
+          onError: (e: unknown) =>
+            setError(e instanceof Error ? e.message : 'Failed to update trigger.'),
+        },
+      );
+      return;
+    }
     createTrigger.mutate(
       {
         workflowId,
         name: name.trim(),
-        config: { type: 'webhook', path: hookPath, method },
-        variableMapping: Object.keys(mapping).length > 0 ? mapping : undefined,
+        config,
+        variableMapping,
       },
       {
         onSuccess: () => onClose(),
@@ -322,8 +487,16 @@ function WebhookForm({ onClose }: { onClose: () => void }) {
 
   return (
     <FormShell
-      submitLabel={createTrigger.isPending ? 'Creating…' : 'Create webhook'}
-      submitDisabled={!canSubmit || createTrigger.isPending}
+      submitLabel={
+        pending
+          ? isEditing
+            ? 'Saving…'
+            : 'Creating…'
+          : isEditing
+            ? 'Save changes'
+            : 'Create webhook'
+      }
+      submitDisabled={!canSubmit || pending}
       onCancel={onClose}
       onSubmit={handleSubmit}
       error={error}
@@ -369,25 +542,77 @@ function WebhookForm({ onClose }: { onClose: () => void }) {
 
 // ---------- Path 4: GitHub event ----------
 
-function GitHubForm({ onClose }: { onClose: () => void }) {
+function GitHubForm({ onClose, editing }: { onClose: () => void; editing?: Trigger }) {
   const { data: workflowsData } = useWorkflows();
   const workflows = workflowsData?.workflows ?? [];
   const { data: reposData, isLoading: reposLoading } = useRepos();
   const repos = reposData?.repos ?? [];
 
-  const [name, setName] = React.useState('');
-  const [workflowId, setWorkflowId] = React.useState('');
-  const [selectedRepos, setSelectedRepos] = React.useState<string[]>([]);
-  const [selectedEvents, setSelectedEvents] = React.useState<string[]>([]);
+  const initial = React.useMemo(() => {
+    if (editing && editing.config.type === 'github') {
+      const cfg = editing.config;
+      // Re-distribute the flattened `filter.actions` back into per-event
+      // buckets using the known action sets. Actions that don't map to any
+      // selected event are dropped — they wouldn't have been editable anyway.
+      const actionFilters: Record<string, string[]> = {};
+      const flatActions = cfg.filter?.actions ?? [];
+      if (flatActions.length > 0) {
+        for (const ev of cfg.events ?? []) {
+          const knownForEvent = GITHUB_EVENT_ACTIONS[ev];
+          if (!knownForEvent) continue;
+          const matched = flatActions.filter((a) => knownForEvent.includes(a));
+          if (matched.length > 0) actionFilters[ev] = matched;
+        }
+      }
+      const branch = cfg.filter?.branch;
+      return {
+        name: editing.name,
+        workflowId: editing.workflowId ?? '',
+        selectedRepos: cfg.repos ?? [],
+        selectedEvents: cfg.events ?? [],
+        actionFilters,
+        filterBranch: Array.isArray(branch) ? branch.join(',') : branch ?? '',
+        filterLabels: (cfg.filter?.labels ?? []).join(', '),
+        mapping: editing.variableMapping ?? {},
+        // Editing: don't auto-prefill mappings, the user already has values.
+        mappingPrefilled: true,
+      };
+    }
+    return {
+      name: '',
+      workflowId: '',
+      selectedRepos: [] as string[],
+      selectedEvents: [] as string[],
+      actionFilters: {} as Record<string, string[]>,
+      filterBranch: '',
+      filterLabels: '',
+      mapping: {} as Record<string, string>,
+      mappingPrefilled: false,
+    };
+  }, [editing]);
+
+  const [name, setName] = React.useState(initial.name);
+  const [workflowId, setWorkflowId] = React.useState(initial.workflowId);
+  const [selectedRepos, setSelectedRepos] = React.useState<string[]>(initial.selectedRepos);
+  const [repoSearch, setRepoSearch] = React.useState('');
+  const [selectedEvents, setSelectedEvents] = React.useState<string[]>(initial.selectedEvents);
   // Per-event action narrowing. Empty/missing = match all actions of that event.
-  const [actionFilters, setActionFilters] = React.useState<Record<string, string[]>>({});
-  const [showFilters, setShowFilters] = React.useState(false);
-  const [filterBranch, setFilterBranch] = React.useState('');
-  const [filterLabels, setFilterLabels] = React.useState('');
-  const [mapping, setMapping] = React.useState<Record<string, string>>({});
-  const [mappingPrefilled, setMappingPrefilled] = React.useState(false);
+  const [actionFilters, setActionFilters] = React.useState<Record<string, string[]>>(
+    initial.actionFilters,
+  );
+  // Expand filters section by default when editing and any filter is set.
+  const [showFilters, setShowFilters] = React.useState(
+    !!(initial.filterBranch || initial.filterLabels),
+  );
+  const [filterBranch, setFilterBranch] = React.useState(initial.filterBranch);
+  const [filterLabels, setFilterLabels] = React.useState(initial.filterLabels);
+  const [mapping, setMapping] = React.useState<Record<string, string>>(initial.mapping);
+  const [mappingPrefilled, setMappingPrefilled] = React.useState(initial.mappingPrefilled);
   const [error, setError] = React.useState<string | null>(null);
   const createTrigger = useCreateTrigger();
+  const updateTrigger = useUpdateTrigger();
+  const isEditing = !!editing;
+  const pending = createTrigger.isPending || updateTrigger.isPending;
 
   const selectedWorkflow = workflows.find((w) => w.id === workflowId);
   const declaredVariables = selectedWorkflow?.data.variables ?? {};
@@ -493,11 +718,30 @@ function GitHubForm({ onClose }: { onClose: () => void }) {
       events: selectedEvents,
       filter: Object.keys(filter).length > 0 ? filter : undefined,
     };
+    const variableMapping = Object.keys(mapping).length > 0 ? mapping : undefined;
+    if (isEditing && editing) {
+      const data: UpdateTriggerRequest = {
+        name: name.trim(),
+        workflowId,
+        config,
+        variableMapping,
+      };
+      updateTrigger.mutate(
+        { triggerId: editing.id, data },
+        {
+          onSuccess: () => onClose(),
+          onError: (e: unknown) =>
+            setError(e instanceof Error ? e.message : 'Failed to update trigger.'),
+        },
+      );
+      return;
+    }
     createTrigger.mutate(
       {
         workflowId,
         name: name.trim(),
         config,
+        variableMapping,
       },
       {
         onSuccess: () => onClose(),
@@ -509,8 +753,16 @@ function GitHubForm({ onClose }: { onClose: () => void }) {
 
   return (
     <FormShell
-      submitLabel={createTrigger.isPending ? 'Creating…' : 'Create GitHub trigger'}
-      submitDisabled={!canSubmit || createTrigger.isPending}
+      submitLabel={
+        pending
+          ? isEditing
+            ? 'Saving…'
+            : 'Creating…'
+          : isEditing
+            ? 'Save changes'
+            : 'Create GitHub trigger'
+      }
+      submitDisabled={!canSubmit || pending}
       onCancel={onClose}
       onSubmit={handleSubmit}
       error={error}
@@ -530,25 +782,13 @@ function GitHubForm({ onClose }: { onClose: () => void }) {
             .
           </div>
         ) : (
-          <div className="max-h-40 overflow-y-auto border border-border rounded-md divide-y divide-border">
-            {repos.map((repo) => (
-              <label
-                key={repo.id}
-                className="flex items-center gap-2 px-3 py-1.5 hover:bg-surface-2 cursor-pointer"
-              >
-                <Checkbox
-                  checked={selectedRepos.includes(repo.fullName)}
-                  onChange={() => toggleRepo(repo.fullName)}
-                />
-                <span className="font-mono text-xs text-foreground">{repo.fullName}</span>
-                {repo.private && (
-                  <Badge variant="secondary" className="ml-auto">
-                    private
-                  </Badge>
-                )}
-              </label>
-            ))}
-          </div>
+          <RepoPicker
+            repos={repos}
+            selectedRepos={selectedRepos}
+            onToggleRepo={toggleRepo}
+            search={repoSearch}
+            onSearchChange={setRepoSearch}
+          />
         )}
       </Field>
 
@@ -942,20 +1182,22 @@ function VariableInputs({
   onErrorsChange: (next: Record<string, string>) => void;
 }) {
   // Track raw inputs so we can render and parse independently — strings keep
-  // typing fidelity, JSON inputs keep partial state, etc.
+  // typing fidelity, JSON inputs keep partial state, etc. Prefer `values` over
+  // `def.default` so edit-mode prefills (from a persisted trigger) win.
   const [raw, setRaw] = React.useState<Record<string, string>>(() => {
     const initial: Record<string, string> = {};
     for (const [name, def] of Object.entries(variables)) {
-      if (def.default === undefined || def.default === null) {
+      const seed = values[name] !== undefined ? values[name] : def.default;
+      if (seed === undefined || seed === null) {
         initial[name] = '';
         continue;
       }
       if (def.type === 'array' || def.type === 'object') {
-        initial[name] = JSON.stringify(def.default, null, 2);
+        initial[name] = JSON.stringify(seed, null, 2);
       } else if (def.type === 'boolean') {
         initial[name] = '';
       } else {
-        initial[name] = String(def.default);
+        initial[name] = String(seed);
       }
     }
     return initial;
@@ -965,7 +1207,9 @@ function VariableInputs({
     const initial: Record<string, boolean> = {};
     for (const [name, def] of Object.entries(variables)) {
       if (def.type === 'boolean') {
-        initial[name] = typeof def.default === 'boolean' ? def.default : false;
+        const seed = values[name];
+        if (typeof seed === 'boolean') initial[name] = seed;
+        else initial[name] = typeof def.default === 'boolean' ? def.default : false;
       }
     }
     return initial;

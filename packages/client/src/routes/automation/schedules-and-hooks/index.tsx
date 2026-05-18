@@ -22,6 +22,7 @@ function SchedulesAndHooksPage() {
   const disableTrigger = useDisableTrigger();
   const [filter, setFilter] = useState<Filter>('all');
   const [createOpen, setCreateOpen] = useState(false);
+  const [editingTrigger, setEditingTrigger] = useState<Trigger | null>(null);
 
   const triggers = triggersData?.triggers ?? [];
   const workflows = workflowsData?.workflows ?? [];
@@ -65,6 +66,7 @@ function SchedulesAndHooksPage() {
               key={t.id}
               trigger={t}
               workflowName={workflowName(t.workflowId)}
+              onEdit={t.type === 'manual' ? undefined : () => setEditingTrigger(t)}
               onToggleEnabled={() =>
                 t.enabled
                   ? disableTrigger.mutate(t.id)
@@ -81,6 +83,15 @@ function SchedulesAndHooksPage() {
       )}
 
       <CreateTriggerDialog open={createOpen} onClose={() => setCreateOpen(false)} />
+      {/* Edit mode reuses the same dialog. Keyed by trigger id so internal
+          state (form path + per-form `useMemo` initial values) re-derives
+          when switching which trigger we're editing. */}
+      <CreateTriggerDialog
+        key={editingTrigger?.id ?? 'no-edit'}
+        open={!!editingTrigger}
+        onClose={() => setEditingTrigger(null)}
+        editing={editingTrigger ?? undefined}
+      />
     </div>
   );
 }
