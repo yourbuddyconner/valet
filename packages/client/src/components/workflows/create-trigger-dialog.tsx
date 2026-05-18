@@ -14,6 +14,7 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { useCreateTrigger, type CreateTriggerRequest, type TriggerConfig } from '@/api/triggers';
 import { useWorkflows, type Workflow, type VariableDefinition } from '@/api/workflows';
 import { useRepos } from '@/api/repos';
+import { useGitHubAvailableEvents } from '@/api/github-triggers';
 import { humanizeCron } from './cron-humanize';
 import { cn } from '@/lib/cn';
 
@@ -30,21 +31,16 @@ const INPUT_BASE =
 const DEFAULT_CRON = '0 9 * * *';
 const DEFAULT_TZ = 'America/Los_Angeles';
 
-const GITHUB_EVENT_OPTIONS: { id: string; label: string; group: string }[] = [
-  { id: 'pull_request.opened', label: 'PR opened', group: 'pull_request' },
-  { id: 'pull_request.closed', label: 'PR closed', group: 'pull_request' },
-  { id: 'pull_request.synchronize', label: 'PR synchronize', group: 'pull_request' },
-  { id: 'pull_request.reopened', label: 'PR reopened', group: 'pull_request' },
-  // Synthetic event: the GitHub webhook actually fires `pull_request.closed`
-  // with `pull_request.merged === true`. We surface it as its own option for
-  // user clarity; the worker / dispatcher is expected to map it correctly.
-  { id: 'pull_request.merged', label: 'PR merged', group: 'pull_request' },
-  { id: 'push', label: 'Push', group: 'push' },
-  { id: 'issues.opened', label: 'Issue opened', group: 'issues' },
-  { id: 'issues.closed', label: 'Issue closed', group: 'issues' },
-  { id: 'release.published', label: 'Release published', group: 'release' },
-  { id: 'workflow_run.completed', label: 'Workflow run completed', group: 'workflow_run' },
-];
+// Known per-event action sets used by the GitHub Webhooks API. Surfaced as
+// optional sub-checkboxes once the user picks the parent event. Empty selection
+// matches all actions. Source: GitHub Webhook events & payloads docs.
+const GITHUB_EVENT_ACTIONS: Record<string, string[]> = {
+  pull_request: ['opened', 'closed', 'synchronize', 'reopened', 'edited', 'ready_for_review'],
+  issues: ['opened', 'closed', 'reopened', 'edited', 'labeled', 'unlabeled'],
+  release: ['published', 'released', 'created', 'edited'],
+  pull_request_review: ['submitted', 'edited', 'dismissed'],
+  issue_comment: ['created', 'edited', 'deleted'],
+};
 
 // Common GitHub payload paths we pre-fill when a workflow declares a matching
 // variable name. Users can edit or clear them.
@@ -383,11 +379,11 @@ function GitHubForm({ onClose }: { onClose: () => void }) {
   const [workflowId, setWorkflowId] = React.useState('');
   const [selectedRepos, setSelectedRepos] = React.useState<string[]>([]);
   const [selectedEvents, setSelectedEvents] = React.useState<string[]>([]);
-  const [matchAllPR, setMatchAllPR] = React.useState(false);
+  // Per-event action narrowing. Empty/missing = match all actions of that event.
+  const [actionFilters, setActionFilters] = React.useState<Record<string, string[]>>({});
   const [showFilters, setShowFilters] = React.useState(false);
   const [filterBranch, setFilterBranch] = React.useState('');
   const [filterLabels, setFilterLabels] = React.useState('');
-  const [filterActions, setFilterActions] = React.useState('');
   const [mapping, setMapping] = React.useState<Record<string, string>>({});
   const [mappingPrefilled, setMappingPrefilled] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
@@ -395,6 +391,18 @@ function GitHubForm({ onClose }: { onClose: () => void }) {
 
   const selectedWorkflow = workflows.find((w) => w.id === workflowId);
   const declaredVariables = selectedWorkflow?.data.variables ?? {};
+
+  const {
+    data: availableEvents,
+    isLoading: eventsLoading,
+    error: eventsError,
+  } = useGitHubAvailableEvents(selectedRepos);
+
+  const eventList = availableEvents?.events ?? [];
+  const eventsByRepo = availableEvents?.byRepo ?? {};
+  const notInstalled = availableEvents?.notInstalled ?? [];
+  const totalRepos = selectedRepos.length;
+  const hasPullRequestEvent = eventList.includes('pull_request');
 
   // First time the user selects a workflow with declared vars, pre-populate the
   // mapping with common GitHub paths for any variables that have matching names.
@@ -419,17 +427,11 @@ function GitHubForm({ onClose }: { onClose: () => void }) {
     if (!workflowId) setMappingPrefilled(false);
   }, [workflowId]);
 
-  const events = matchAllPR
-    ? // Replace any specific pull_request.* selections with the broad event.
-      ['pull_request', ...selectedEvents.filter((e) => !e.startsWith('pull_request'))]
-    : selectedEvents;
-
-  const showActionsFilter = events.includes('pull_request') || events.includes('issues');
   const canSubmit =
     name.trim().length > 0 &&
     workflowId.length > 0 &&
     selectedRepos.length > 0 &&
-    events.length > 0;
+    selectedEvents.length > 0;
 
   const toggleRepo = (fullName: string) => {
     setSelectedRepos((prev) =>
@@ -438,9 +440,32 @@ function GitHubForm({ onClose }: { onClose: () => void }) {
   };
 
   const toggleEvent = (id: string) => {
-    setSelectedEvents((prev) =>
-      prev.includes(id) ? prev.filter((e) => e !== id) : [...prev, id],
-    );
+    setSelectedEvents((prev) => {
+      if (prev.includes(id)) {
+        // Dropping the event — clear any narrowing actions tied to it.
+        setActionFilters((af) => {
+          if (!af[id]) return af;
+          const next = { ...af };
+          delete next[id];
+          return next;
+        });
+        return prev.filter((e) => e !== id);
+      }
+      return [...prev, id];
+    });
+  };
+
+  const toggleAction = (event: string, action: string) => {
+    setActionFilters((prev) => {
+      const current = prev[event] ?? [];
+      const next = current.includes(action)
+        ? current.filter((a) => a !== action)
+        : [...current, action];
+      const out = { ...prev };
+      if (next.length === 0) delete out[event];
+      else out[event] = next;
+      return out;
+    });
   };
 
   const handleSubmit = () => {
@@ -451,13 +476,21 @@ function GitHubForm({ onClose }: { onClose: () => void }) {
     if (filterLabels.trim()) {
       filter.labels = filterLabels.split(',').map((s) => s.trim()).filter(Boolean);
     }
-    if (showActionsFilter && filterActions.trim()) {
-      filter.actions = filterActions.split(',').map((s) => s.trim()).filter(Boolean);
-    }
+    // Flatten per-event action selections into a single `filter.actions` list
+    // for the dispatcher, which matches across selected events. This matches
+    // the existing matcher's contract (actions is a flat allowlist).
+    const flatActions = Array.from(
+      new Set(
+        selectedEvents
+          .flatMap((ev) => actionFilters[ev] ?? [])
+          .filter((s) => s.length > 0),
+      ),
+    );
+    if (flatActions.length > 0) filter.actions = flatActions;
     const config: GitHubTriggerConfig = {
       type: 'github',
       repos: selectedRepos,
-      events,
+      events: selectedEvents,
       filter: Object.keys(filter).length > 0 ? filter : undefined,
     };
     createTrigger.mutate(
@@ -519,41 +552,95 @@ function GitHubForm({ onClose }: { onClose: () => void }) {
         )}
       </Field>
 
-      <Field label="Events" required>
-        <label className="flex items-center gap-2 mb-2 text-xs">
-          <Checkbox
-            checked={matchAllPR}
-            onChange={(e) => setMatchAllPR(e.target.checked)}
-          />
-          <span className="text-neutral-700 dark:text-neutral-300">
-            Any <span className="font-mono">pull_request.*</span> (collapses individual PR events)
-          </span>
-        </label>
-        <div className="grid grid-cols-2 gap-1.5">
-          {GITHUB_EVENT_OPTIONS.map((opt) => {
-            const isPR = opt.group === 'pull_request';
-            const disabled = matchAllPR && isPR;
-            return (
-              <label
-                key={opt.id}
-                className={cn(
-                  'flex items-center gap-2 px-2 py-1 rounded text-xs',
-                  disabled
-                    ? 'opacity-40 cursor-not-allowed'
-                    : 'hover:bg-surface-2 cursor-pointer',
-                )}
-              >
-                <Checkbox
-                  checked={!disabled && selectedEvents.includes(opt.id)}
-                  disabled={disabled}
-                  onChange={() => toggleEvent(opt.id)}
-                />
-                <span className="font-mono text-foreground">{opt.id}</span>
-                <span className="text-neutral-500">{opt.label}</span>
-              </label>
-            );
-          })}
+      {notInstalled.length > 0 && (
+        <div className="text-xs bg-amber-500/10 border border-amber-500/40 text-amber-900 dark:text-amber-200 rounded-md px-3 py-2">
+          The GitHub App is not installed on:{' '}
+          <span className="font-mono">{notInstalled.join(', ')}</span>. Install it from your{' '}
+          <a
+            href="https://github.com/apps"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-accent hover:underline"
+          >
+            GitHub App settings
+          </a>
+          .
         </div>
+      )}
+
+      <Field label="Events" required>
+        {eventsError ? (
+          <div className="text-xs text-red-500 bg-surface-2 border border-border rounded-md px-3 py-2">
+            Failed to load available events. {eventsError instanceof Error ? eventsError.message : ''}
+          </div>
+        ) : eventsLoading ? (
+          <div className="text-xs text-neutral-500">Loading available events…</div>
+        ) : eventList.length === 0 ? (
+          <div className="text-xs text-neutral-500 italic bg-surface-2 border border-border rounded-md px-3 py-2">
+            No events available. Verify the GitHub App is installed on the selected repo(s).
+          </div>
+        ) : (
+          <div className="space-y-2">
+            {hasPullRequestEvent && (
+              <p className="text-[11px] text-neutral-500 dark:text-neutral-400">
+                GitHub delivers webhooks per top-level event (e.g.{' '}
+                <span className="font-mono">pull_request</span>). Use the optional sub-actions to
+                narrow which actions trigger this workflow.
+              </p>
+            )}
+            <div className="grid grid-cols-1 gap-1.5">
+              {eventList.map((eventName) => {
+                const reposForEvent = eventsByRepo[eventName] ?? [];
+                // Coverage annotation only meaningful when we know the per-repo
+                // breakdown and multiple repos are selected.
+                const showCoverage =
+                  totalRepos > 1 &&
+                  reposForEvent.length > 0 &&
+                  reposForEvent.length < totalRepos;
+                const isChecked = selectedEvents.includes(eventName);
+                const actions = GITHUB_EVENT_ACTIONS[eventName];
+                const selectedActions = actionFilters[eventName] ?? [];
+                return (
+                  <div
+                    key={eventName}
+                    className="rounded border border-border bg-surface-0 dark:bg-surface-2"
+                  >
+                    <label className="flex items-center gap-2 px-2 py-1 text-xs hover:bg-surface-2 cursor-pointer">
+                      <Checkbox checked={isChecked} onChange={() => toggleEvent(eventName)} />
+                      <span className="font-mono text-foreground">{eventName}</span>
+                      {showCoverage && (
+                        <span className="text-[10px] text-neutral-500 ml-auto">
+                          ({reposForEvent.length} of {totalRepos} repos)
+                        </span>
+                      )}
+                    </label>
+                    {isChecked && actions && actions.length > 0 && (
+                      <div className="border-t border-border px-2 py-1.5 bg-surface-2">
+                        <div className="text-[10px] uppercase tracking-wider text-neutral-500 mb-1">
+                          Actions (optional — empty matches all)
+                        </div>
+                        <div className="flex flex-wrap gap-x-3 gap-y-1">
+                          {actions.map((action) => (
+                            <label
+                              key={action}
+                              className="flex items-center gap-1.5 text-[11px] cursor-pointer"
+                            >
+                              <Checkbox
+                                checked={selectedActions.includes(action)}
+                                onChange={() => toggleAction(eventName, action)}
+                              />
+                              <span className="font-mono text-foreground">{action}</span>
+                            </label>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
       </Field>
 
       <div>
@@ -584,17 +671,6 @@ function GitHubForm({ onClose }: { onClose: () => void }) {
                 className={INPUT_BASE + ' font-mono'}
               />
             </Field>
-            {showActionsFilter && (
-              <Field label="Actions (comma-separated)">
-                <input
-                  type="text"
-                  value={filterActions}
-                  onChange={(e) => setFilterActions(e.target.value)}
-                  placeholder="opened, closed"
-                  className={INPUT_BASE + ' font-mono'}
-                />
-              </Field>
-            )}
           </div>
         )}
       </div>
