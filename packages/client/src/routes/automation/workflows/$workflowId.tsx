@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { createFileRoute, useNavigate } from '@tanstack/react-router';
 import {
   useWorkflow,
@@ -15,6 +16,7 @@ import { WorkflowDiagram } from '@/components/workflows/workflow-diagram';
 import { WorkflowDetailHeader } from '@/components/workflows/workflow-detail-header';
 import { TriggerCard } from '@/components/workflows/trigger-card';
 import { RecentExecutionsSection } from '@/components/workflows/recent-executions-section';
+import { RunWorkflowDialog } from '@/components/workflows/run-workflow-dialog';
 
 export const Route = createFileRoute('/automation/workflows/$workflowId')({
   component: WorkflowDetailPage,
@@ -32,6 +34,7 @@ function WorkflowDetailPage() {
   const deleteTrigger = useDeleteTrigger();
   const enableTrigger = useEnableTrigger();
   const disableTrigger = useDisableTrigger();
+  const [showRunDialog, setShowRunDialog] = useState(false);
 
   if (isLoading) {
     return <div className="p-6 text-sm text-neutral-500">Loading…</div>;
@@ -54,7 +57,15 @@ function WorkflowDetailPage() {
     <div className="flex flex-col h-full">
       <WorkflowDetailHeader
         workflow={workflow}
-        onRun={() => run.mutate({ workflowId: workflow.id })}
+        onRun={() => {
+          const hasVars =
+            workflow.data.variables && Object.keys(workflow.data.variables).length > 0;
+          if (hasVars) {
+            setShowRunDialog(true);
+          } else {
+            run.mutate({ workflowId: workflow.id });
+          }
+        }}
         onEdit={() => nav({ to: '/automation/workflows/new', search: { editId: workflow.id } })}
         onToggleEnabled={() =>
           update.mutate({ workflowId: workflow.id, enabled: !workflow.enabled })
@@ -101,6 +112,19 @@ function WorkflowDetailPage() {
           </Section>
         </div>
       </div>
+      {showRunDialog && (
+        <RunWorkflowDialog
+          workflow={workflow}
+          loading={run.isPending}
+          onClose={() => setShowRunDialog(false)}
+          onConfirm={(variables) => {
+            run.mutate(
+              { workflowId: workflow.id, variables },
+              { onSuccess: () => setShowRunDialog(false) },
+            );
+          }}
+        />
+      )}
     </div>
   );
 }
