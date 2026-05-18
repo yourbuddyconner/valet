@@ -88,6 +88,31 @@ export interface GetTriggerResponse {
   trigger: Trigger;
 }
 
+export type TriggerDeliveryOutcome =
+  | 'matched'
+  | 'no_match'
+  | 'concurrency_cap'
+  | 'workflow_deleted'
+  | 'duplicate'
+  | 'error';
+
+export interface TriggerDelivery {
+  id: string;
+  triggerId: string;
+  eventType: string | null;
+  deliveryId: string | null;
+  outcome: TriggerDeliveryOutcome;
+  executionId: string | null;
+  reason: string | null;
+  payloadPreview: string | null;
+  receivedAt: string;
+}
+
+export interface ListTriggerDeliveriesResponse {
+  deliveries: TriggerDelivery[];
+  hasMore: boolean;
+}
+
 // Query keys
 export const triggerKeys = {
   all: ['triggers'] as const,
@@ -95,6 +120,7 @@ export const triggerKeys = {
   list: (filters?: Record<string, unknown>) => [...triggerKeys.lists(), filters] as const,
   details: () => [...triggerKeys.all, 'detail'] as const,
   detail: (id: string) => [...triggerKeys.details(), id] as const,
+  deliveries: (id: string) => [...triggerKeys.detail(id), 'deliveries'] as const,
   byWorkflow: (workflowId: string) => [...triggerKeys.all, 'workflow', workflowId] as const,
 };
 
@@ -111,6 +137,17 @@ export function useTrigger(triggerId: string) {
     queryKey: triggerKeys.detail(triggerId),
     queryFn: () => api.get<GetTriggerResponse>(`/triggers/${triggerId}`),
     enabled: !!triggerId,
+  });
+}
+
+export function useTriggerDeliveries(triggerId: string) {
+  return useQuery({
+    queryKey: triggerKeys.deliveries(triggerId),
+    queryFn: () =>
+      api.get<ListTriggerDeliveriesResponse>(`/triggers/${triggerId}/deliveries?limit=50`),
+    enabled: !!triggerId,
+    // Poll while the page is open so newly-fired deliveries surface live.
+    refetchInterval: 5000,
   });
 }
 

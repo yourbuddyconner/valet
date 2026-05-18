@@ -1,3 +1,5 @@
+import type { MouseEvent } from 'react';
+import { Link } from '@tanstack/react-router';
 import { Clock, Webhook, Play, ArrowRight, GitBranch } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import type { Trigger } from '@/api/triggers';
@@ -34,9 +36,13 @@ export function TriggerCard({ trigger, workflowName, onEdit, onToggleEnabled, on
   const activityLine = renderActivity(trigger);
 
   return (
-    <div
+    <Link
+      to="/automation/triggers/$triggerId"
+      params={{ triggerId: trigger.id }}
       className={cn(
         'flex gap-3.5 p-4 rounded-xl border bg-surface-1 transition-colors hover:bg-surface-2',
+        // The card itself is the link; nested action buttons stopPropagation
+        // so clicks on Edit/Disable/Delete don't navigate.
         disabled ? 'opacity-50 border-border' : 'border-border',
       )}
     >
@@ -63,7 +69,7 @@ export function TriggerCard({ trigger, workflowName, onEdit, onToggleEnabled, on
         onToggleEnabled={onToggleEnabled}
         onDelete={onDelete}
       />
-    </div>
+    </Link>
   );
 }
 
@@ -180,15 +186,21 @@ function TriggerActionsMenu({ trigger, onEdit, onToggleEnabled, onDelete }: {
   onToggleEnabled?: () => void;
   onDelete?: () => void;
 }) {
+  // stopPropagation on each handler so action buttons don't trigger card navigation.
+  const wrap = (fn?: () => void) => (e: MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    fn?.();
+  };
   return (
     <div className="flex gap-1">
       {onEdit && (
-        <Button variant="ghost" size="sm" onClick={onEdit}>
+        <Button variant="ghost" size="sm" onClick={wrap(onEdit)}>
           Edit
         </Button>
       )}
       {onToggleEnabled && (
-        <Button variant="ghost" size="sm" onClick={onToggleEnabled}>
+        <Button variant="ghost" size="sm" onClick={wrap(onToggleEnabled)}>
           {trigger.enabled ? 'Disable' : 'Enable'}
         </Button>
       )}
@@ -196,7 +208,7 @@ function TriggerActionsMenu({ trigger, onEdit, onToggleEnabled, onDelete }: {
         <Button
           variant="ghost"
           size="sm"
-          onClick={onDelete}
+          onClick={wrap(onDelete)}
           className="text-red-500 hover:text-red-600 hover:bg-red-500/10"
         >
           Delete

@@ -4,6 +4,7 @@ import { getDb } from '../lib/drizzle.js';
 import { checkWorkflowConcurrency, enqueueWorkflowExecution } from './executions.js';
 import { sha256Hex, createWorkflowSession } from '../lib/workflow-runtime.js';
 import { getGithubInstallationById } from '../lib/db/github-installations.js';
+import { recordTriggerDelivery, truncatePayloadPreview } from '../lib/db/trigger-deliveries.js';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -140,6 +141,8 @@ export async function dispatchGitHubTriggers(
 
   const userId = installation.linkedUserId;
   const action = typeof payload.action === 'string' ? payload.action : undefined;
+  const fullEventType = action ? `${eventType}.${action}` : eventType;
+  const payloadPreview = truncatePayloadPreview(payload);
 
   const candidates = await env.DB.prepare(`
     SELECT t.id, t.user_id, t.workflow_id, t.config, t.variable_mapping,
@@ -154,25 +157,123 @@ export async function dispatchGitHubTriggers(
     try {
       config = JSON.parse(row.config) as GitHubTriggerConfig;
     } catch {
+      await safeRecord(appDb, {
+        triggerId: row.id,
+        userId: row.user_id,
+        eventType: fullEventType,
+        deliveryId,
+        outcome: 'error',
+        reason: 'Invalid trigger config JSON',
+        payloadPreview,
+      });
       continue;
     }
 
-    if (!Array.isArray(config.repos) || !config.repos.includes(repoFullName)) continue;
-    if (!eventMatches(eventType, action, config.events)) continue;
-    if (!filterMatches(payload, eventType, config)) continue;
+    // Per-trigger no-match logging: we only log when this trigger was actually
+    // evaluated (i.e. it's one of the user's github triggers). Logging from the
+    // top-level handler instead would flood the table for users with no
+    // configured triggers at all.
+    if (!Array.isArray(config.repos) || !config.repos.includes(repoFullName)) {
+      await safeRecord(appDb, {
+        triggerId: row.id,
+        userId: row.user_id,
+        eventType: fullEventType,
+        deliveryId,
+        outcome: 'no_match',
+        reason: `repo "${repoFullName}" not in trigger.repos`,
+        payloadPreview,
+      });
+      continue;
+    }
+    if (!eventMatches(eventType, action, config.events)) {
+      await safeRecord(appDb, {
+        triggerId: row.id,
+        userId: row.user_id,
+        eventType: fullEventType,
+        deliveryId,
+        outcome: 'no_match',
+        reason: `event "${fullEventType}" not in trigger.events`,
+        payloadPreview,
+      });
+      continue;
+    }
+    if (!filterMatches(payload, eventType, config)) {
+      await safeRecord(appDb, {
+        triggerId: row.id,
+        userId: row.user_id,
+        eventType: fullEventType,
+        deliveryId,
+        outcome: 'no_match',
+        reason: 'filter conditions did not match',
+        payloadPreview,
+      });
+      continue;
+    }
 
     summary.matched += 1;
 
     if (!row.workflow_id || !row.workflow_data) {
       // github triggers require a workflow per validator, but be defensive at the boundary.
+      await safeRecord(appDb, {
+        triggerId: row.id,
+        userId: row.user_id,
+        eventType: fullEventType,
+        deliveryId,
+        outcome: 'workflow_deleted',
+        reason: 'Trigger has no linked workflow or workflow data is missing',
+        payloadPreview,
+      });
       continue;
     }
 
-    const dispatched = await dispatchOne(env, appDb, row, payload, eventType, deliveryId, workerOrigin);
-    if (dispatched) summary.dispatched += 1;
+    try {
+      const result = await dispatchOne(env, appDb, row, payload, eventType, deliveryId, workerOrigin);
+      if (result.dispatched) summary.dispatched += 1;
+      await safeRecord(appDb, {
+        triggerId: row.id,
+        userId: row.user_id,
+        eventType: fullEventType,
+        deliveryId,
+        outcome: result.outcome,
+        executionId: result.executionId,
+        reason: result.reason,
+        payloadPreview,
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      await safeRecord(appDb, {
+        triggerId: row.id,
+        userId: row.user_id,
+        eventType: fullEventType,
+        deliveryId,
+        outcome: 'error',
+        reason: message,
+        payloadPreview,
+      });
+      throw err;
+    }
   }
 
   return summary;
+}
+
+// Best-effort logging — never let a delivery-log write break dispatch.
+async function safeRecord(
+  appDb: ReturnType<typeof getDb>,
+  params: Parameters<typeof recordTriggerDelivery>[1],
+): Promise<void> {
+  try {
+    await recordTriggerDelivery(appDb, params);
+  } catch (err) {
+    console.error('[github trigger] failed to record delivery:', err);
+  }
+}
+
+interface DispatchOneResult {
+  outcome: 'matched' | 'duplicate' | 'concurrency_cap' | 'error';
+  dispatched: boolean;
+  executionId: string | null;
+  reason: string | null;
 }
 
 async function dispatchOne(
@@ -183,16 +284,26 @@ async function dispatchOne(
   eventType: string,
   deliveryId: string,
   workerOrigin: string,
-): Promise<boolean> {
+): Promise<DispatchOneResult> {
   // github triggers require a workflow per validator; defensive at this boundary.
-  if (!row.workflow_id || !row.workflow_data) return false;
+  if (!row.workflow_id || !row.workflow_data) {
+    return { outcome: 'error', dispatched: false, executionId: null, reason: 'Missing workflow' };
+  }
   const workflowId = row.workflow_id;
   const workflowData = row.workflow_data;
 
   // Idempotency: GitHub delivery IDs are globally unique per webhook delivery.
   const idempotencyKey = `github:${row.id}:${deliveryId}`;
   const existing = await db.checkIdempotencyKey(env.DB, workflowId, idempotencyKey);
-  if (existing) return false;
+  if (existing) {
+    const existingId = typeof existing.id === 'string' ? existing.id : null;
+    return {
+      outcome: 'duplicate',
+      dispatched: false,
+      executionId: existingId,
+      reason: `Idempotency key already exists: ${idempotencyKey}`,
+    };
+  }
 
   const concurrency = await checkWorkflowConcurrency(appDb, row.user_id);
   if (!concurrency.allowed) {
@@ -200,7 +311,12 @@ async function dispatchOne(
       `[github trigger] skipping ${row.id}: ${concurrency.reason} ` +
       `(activeUser=${concurrency.activeUser}, activeGlobal=${concurrency.activeGlobal})`,
     );
-    return false;
+    return {
+      outcome: 'concurrency_cap',
+      dispatched: false,
+      executionId: null,
+      reason: `${concurrency.reason ?? 'concurrency limit'} (activeUser=${concurrency.activeUser}, activeGlobal=${concurrency.activeGlobal})`,
+    };
   }
 
   // Extract variables via the trigger's variable_mapping (same JSONPath subset as webhooks).
@@ -272,5 +388,10 @@ async function dispatchOne(
     triggerType: 'github',
     workerOrigin,
   });
-  return ok;
+  return {
+    outcome: 'matched',
+    dispatched: ok,
+    executionId,
+    reason: ok ? null : 'Execution created but dispatch enqueue failed',
+  };
 }

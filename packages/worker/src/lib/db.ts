@@ -21,6 +21,7 @@ export * from './db/telegram.js';
 export * from './db/slack.js';
 export * from './db/workflows.js';
 export * from './db/triggers.js';
+export * from './db/trigger-deliveries.js';
 export * from './db/executions.js';
 export * from './db/webhooks.js';
 export * from './db/api-keys.js';

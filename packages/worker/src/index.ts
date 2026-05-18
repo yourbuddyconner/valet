@@ -66,6 +66,7 @@ import {
   getTrackedGitHubResources,
   pruneEmptyJournals,
 } from './lib/db.js';
+import { recordTriggerDelivery } from './lib/db/trigger-deliveries.js';
 import { getCredential } from './services/credentials.js';
 import { getDb } from './lib/drizzle.js';
 import {
@@ -917,6 +918,13 @@ async function dispatchScheduledWorkflows(event: ScheduledController, env: Env):
 
     if (target === 'workflow') {
       if (!row.workflow_id || !row.workflow_data || !row.workflow_enabled) {
+        await safeRecordScheduleDelivery(db, {
+          triggerId: row.trigger_id,
+          userId: row.user_id,
+          deliveryId: tickBucket,
+          outcome: 'workflow_deleted',
+          reason: 'Linked workflow is missing or disabled',
+        });
         continue;
       }
 
@@ -925,11 +933,26 @@ async function dispatchScheduledWorkflows(event: ScheduledController, env: Env):
         console.warn(
           `Skipping scheduled workflow dispatch for trigger ${row.trigger_id}: ${concurrency.reason} (activeUser=${concurrency.activeUser}, activeGlobal=${concurrency.activeGlobal})`,
         );
+        await safeRecordScheduleDelivery(db, {
+          triggerId: row.trigger_id,
+          userId: row.user_id,
+          deliveryId: tickBucket,
+          outcome: 'concurrency_cap',
+          reason: `${concurrency.reason ?? 'concurrency limit'} (activeUser=${concurrency.activeUser}, activeGlobal=${concurrency.activeGlobal})`,
+        });
         continue;
       }
 
       const tickInserted = await insertScheduleTick(env.DB, row.trigger_id, tickBucket);
       if (!tickInserted) {
+        // Tick already recorded for this bucket — another isolate beat us to it.
+        await safeRecordScheduleDelivery(db, {
+          triggerId: row.trigger_id,
+          userId: row.user_id,
+          deliveryId: tickBucket,
+          outcome: 'duplicate',
+          reason: `Schedule tick bucket ${tickBucket} already processed`,
+        });
         continue;
       }
 
@@ -983,12 +1006,21 @@ async function dispatchScheduledWorkflows(event: ScheduledController, env: Env):
 
       await updateTriggerLastRun(db, row.trigger_id, now.toISOString());
 
-      await enqueueWorkflowExecution(env, {
+      const enqueued = await enqueueWorkflowExecution(env, {
         executionId,
         workflowId: row.workflow_id,
         userId: row.user_id,
         sessionId,
         triggerType: 'schedule',
+      });
+
+      await safeRecordScheduleDelivery(db, {
+        triggerId: row.trigger_id,
+        userId: row.user_id,
+        deliveryId: tickBucket,
+        outcome: 'matched',
+        executionId,
+        reason: enqueued ? null : 'Execution created but dispatch enqueue failed',
       });
 
       dispatched++;
@@ -997,11 +1029,25 @@ async function dispatchScheduledWorkflows(event: ScheduledController, env: Env):
 
     const prompt = config.prompt?.trim();
     if (!prompt) {
+      await safeRecordScheduleDelivery(db, {
+        triggerId: row.trigger_id,
+        userId: row.user_id,
+        deliveryId: tickBucket,
+        outcome: 'error',
+        reason: 'Orchestrator-target schedule trigger has no prompt configured',
+      });
       continue;
     }
 
     const orchTickInserted = await insertScheduleTick(env.DB, row.trigger_id, tickBucket);
     if (!orchTickInserted) {
+      await safeRecordScheduleDelivery(db, {
+        triggerId: row.trigger_id,
+        userId: row.user_id,
+        deliveryId: tickBucket,
+        outcome: 'duplicate',
+        reason: `Schedule tick bucket ${tickBucket} already processed`,
+      });
       continue;
     }
 
@@ -1027,14 +1073,58 @@ async function dispatchScheduledWorkflows(event: ScheduledController, env: Env):
       console.warn(
         `Skipping scheduled orchestrator prompt for trigger ${row.trigger_id}: ${dispatch.reason || 'unknown_reason'}`,
       );
+      await safeRecordScheduleDelivery(db, {
+        triggerId: row.trigger_id,
+        userId: row.user_id,
+        deliveryId: tickBucket,
+        outcome: 'error',
+        reason: `Failed to dispatch orchestrator prompt: ${dispatch.reason || 'unknown_reason'}`,
+      });
       continue;
     }
 
     await updateTriggerLastRun(db, row.trigger_id, now.toISOString());
+
+    await safeRecordScheduleDelivery(db, {
+      triggerId: row.trigger_id,
+      userId: row.user_id,
+      deliveryId: tickBucket,
+      outcome: 'matched',
+      reason: 'Orchestrator prompt dispatched',
+    });
+
     dispatched++;
   }
 
   console.log(`Scheduled dispatch complete: ${dispatched} trigger(s) processed`);
+}
+
+// Best-effort schedule-delivery log; never let a logging failure break dispatch.
+async function safeRecordScheduleDelivery(
+  appDb: ReturnType<typeof getDb>,
+  params: {
+    triggerId: string;
+    userId: string;
+    deliveryId: string;
+    outcome: 'matched' | 'no_match' | 'concurrency_cap' | 'workflow_deleted' | 'duplicate' | 'error';
+    executionId?: string;
+    reason?: string | null;
+  },
+): Promise<void> {
+  try {
+    await recordTriggerDelivery(appDb, {
+      triggerId: params.triggerId,
+      userId: params.userId,
+      eventType: 'cron',
+      deliveryId: params.deliveryId,
+      outcome: params.outcome,
+      executionId: params.executionId ?? null,
+      reason: params.reason ?? null,
+      payloadPreview: null,
+    });
+  } catch (err) {
+    console.error('[schedule] failed to record delivery:', err);
+  }
 }
 
 /**

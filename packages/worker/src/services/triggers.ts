@@ -4,6 +4,7 @@ import { checkWorkflowConcurrency, enqueueWorkflowExecution } from './executions
 import { dispatchOrchestratorPrompt } from './orchestrator.js';
 import { sha256Hex, createWorkflowSession } from '../lib/workflow-runtime.js';
 import { getDb } from '../lib/drizzle.js';
+import { recordTriggerDelivery } from '../lib/db/trigger-deliveries.js';
 import {
   scheduleTarget,
   deriveRepoFullName,
@@ -213,6 +214,13 @@ export async function runTrigger(
     }
 
     if (!dispatch.dispatched) {
+      await safeTriggerDelivery(appDb, {
+        triggerId,
+        userId,
+        eventType: 'manual',
+        outcome: 'error',
+        reason: `Failed to dispatch orchestrator prompt: ${dispatch.reason || 'unknown_error'}`,
+      });
       return {
         ok: false,
         reason: 'orchestrator_failed',
@@ -223,6 +231,14 @@ export async function runTrigger(
         dispatchReason: dispatch.reason || 'unknown_error',
       };
     }
+
+    await safeTriggerDelivery(appDb, {
+      triggerId,
+      userId,
+      eventType: 'manual',
+      outcome: 'matched',
+      reason: 'Orchestrator prompt dispatched via manual run',
+    });
 
     return {
       ok: true,
@@ -239,6 +255,13 @@ export async function runTrigger(
 
   const concurrency = await checkWorkflowConcurrency(appDb, userId);
   if (!concurrency.allowed) {
+    await safeTriggerDelivery(appDb, {
+      triggerId,
+      userId,
+      eventType: 'manual',
+      outcome: 'concurrency_cap',
+      reason: `${concurrency.reason ?? 'concurrency limit'} (activeUser=${concurrency.activeUser}, activeGlobal=${concurrency.activeGlobal})`,
+    });
     return {
       ok: false,
       reason: 'rate_limited',
@@ -276,6 +299,15 @@ export async function runTrigger(
   const existing = await checkIdempotencyKey(env.DB, row.wf_id, idempotencyKey);
 
   if (existing) {
+    const existingId = typeof existing.id === 'string' ? existing.id : null;
+    await safeTriggerDelivery(appDb, {
+      triggerId,
+      userId,
+      eventType: 'manual',
+      outcome: 'duplicate',
+      executionId: existingId,
+      reason: `Idempotency key already exists: ${idempotencyKey}`,
+    });
     return {
       ok: false,
       reason: 'duplicate',
@@ -334,6 +366,15 @@ export async function runTrigger(
 
   await updateTriggerLastRun(appDb, triggerId, now);
 
+  await safeTriggerDelivery(appDb, {
+    triggerId,
+    userId,
+    eventType: 'manual',
+    outcome: 'matched',
+    executionId,
+    reason: dispatched ? null : 'Execution created but dispatch enqueue failed',
+  });
+
   return {
     ok: true,
     type: 'workflow',
@@ -345,4 +386,32 @@ export async function runTrigger(
     sessionId,
     dispatched,
   };
+}
+
+// Best-effort logging; never let a delivery-log write break manual runs.
+async function safeTriggerDelivery(
+  appDb: ReturnType<typeof getDb>,
+  params: {
+    triggerId: string;
+    userId: string;
+    eventType: string;
+    outcome: 'matched' | 'no_match' | 'concurrency_cap' | 'workflow_deleted' | 'duplicate' | 'error';
+    executionId?: string | null;
+    reason?: string | null;
+  },
+): Promise<void> {
+  try {
+    await recordTriggerDelivery(appDb, {
+      triggerId: params.triggerId,
+      userId: params.userId,
+      eventType: params.eventType,
+      deliveryId: null,
+      outcome: params.outcome,
+      executionId: params.executionId ?? null,
+      reason: params.reason ?? null,
+      payloadPreview: null,
+    });
+  } catch (err) {
+    console.error('[trigger run] failed to record delivery:', err);
+  }
 }

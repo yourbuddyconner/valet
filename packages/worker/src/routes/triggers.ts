@@ -21,6 +21,7 @@ import {
 import * as triggerService from '../services/triggers.js';
 import { loadGitHubApp } from '../services/github-app.js';
 import { getGithubInstallationByLogin } from '../lib/db/github-installations.js';
+import { listTriggerDeliveries } from '../lib/db/trigger-deliveries.js';
 
 export const triggersRouter = new Hono<{ Bindings: Env; Variables: Variables }>();
 
@@ -308,6 +309,47 @@ triggersRouter.get('/github/available-events', async (c) => {
     // Informational; org admins occasionally narrow a per-install subscription.
     unsubscribed: appEvents.filter((e) => !unionSet.has(e)),
   });
+});
+
+/**
+ * GET /api/triggers/:id/deliveries?limit=50&before=<iso>
+ *
+ * Recent delivery log entries for a trigger. Each row is a single evaluation
+ * of this trigger against an event (webhook hit, GitHub delivery, schedule
+ * tick, manual run). Used by the trigger detail page.
+ *
+ * Defined BEFORE the `/:id` catch-all so the more specific route wins.
+ */
+triggersRouter.get('/:id/deliveries', async (c) => {
+  const { id } = c.req.param();
+  const user = c.get('user');
+  const appDb = c.get('db');
+
+  const rawLimit = Number(c.req.query('limit') ?? '50');
+  // Clamp 1..200 — UI never asks for more, prevents very large queries.
+  const limit = Number.isFinite(rawLimit) ? Math.min(Math.max(Math.trunc(rawLimit), 1), 200) : 50;
+  const before = c.req.query('before');
+
+  // Authorization: deliveries are gated by trigger ownership. Admins can read any.
+  const isAdmin = user.role === 'admin';
+  const triggerRow = await getTrigger(c.env.DB, isAdmin ? (user.id) : user.id, id);
+  if (!triggerRow && !isAdmin) {
+    throw new NotFoundError('Trigger', id);
+  }
+  // For admin role, ownership check is bypassed in listTriggerDeliveries.
+  if (!triggerRow && isAdmin) {
+    // Fall through with bypass — verify trigger exists at the deliveries layer.
+  }
+
+  const { deliveries, hasMore } = await listTriggerDeliveries(appDb, {
+    triggerId: id,
+    userId: user.id,
+    bypassUserCheck: isAdmin,
+    limit,
+    before,
+  });
+
+  return c.json({ deliveries, hasMore });
 });
 
 /**

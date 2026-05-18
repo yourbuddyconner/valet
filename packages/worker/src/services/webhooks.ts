@@ -3,6 +3,19 @@ import * as db from '../lib/db.js';
 import { getDb } from '../lib/drizzle.js';
 import { checkWorkflowConcurrency, enqueueWorkflowExecution } from './executions.js';
 import { sha256Hex, createWorkflowSession } from '../lib/workflow-runtime.js';
+import { recordTriggerDelivery, truncatePayloadPreview } from '../lib/db/trigger-deliveries.js';
+
+// Best-effort logging — never let a delivery-log write break webhook handling.
+async function safeRecord(
+  appDb: ReturnType<typeof getDb>,
+  params: Parameters<typeof recordTriggerDelivery>[1],
+): Promise<void> {
+  try {
+    await recordTriggerDelivery(appDb, params);
+  } catch (err) {
+    console.error('[webhook] failed to record delivery:', err);
+  }
+}
 
 // ─── Generic Webhook Handler ────────────────────────────────────────────────
 
@@ -47,6 +60,15 @@ export async function handleGenericWebhook(
 
   // Verify HTTP method if specified
   if (config.method && config.method !== method) {
+    await safeRecord(appDb, {
+      triggerId: trigger.id,
+      userId: trigger.user_id,
+      eventType: webhookPath,
+      deliveryId: headers['x-github-delivery'] || headers['x-request-id'] || headers['x-webhook-id'] || null,
+      outcome: 'no_match',
+      reason: `Method ${method} not allowed (expected ${config.method})`,
+      payloadPreview: truncatePayloadPreview(rawBody),
+    });
     return {
       result: { received: true, message: `Method ${method} not allowed` } as any,
       statusCode: 405,
@@ -57,6 +79,15 @@ export async function handleGenericWebhook(
   if (config.secret) {
     const signature = headers['x-webhook-signature'] || headers['x-hub-signature-256'];
     if (!signature) {
+      await safeRecord(appDb, {
+        triggerId: trigger.id,
+        userId: trigger.user_id,
+        eventType: webhookPath,
+        deliveryId: headers['x-github-delivery'] || headers['x-request-id'] || headers['x-webhook-id'] || null,
+        outcome: 'no_match',
+        reason: 'Missing webhook signature',
+        payloadPreview: truncatePayloadPreview(rawBody),
+      });
       return {
         result: { received: true, message: 'Missing webhook signature' } as any,
         statusCode: 401,
@@ -127,8 +158,20 @@ export async function handleGenericWebhook(
   const idempotencyKey = `webhook:${trigger.id}:${deliveryId || fallbackBodyHash}`;
 
   const existing = await db.checkIdempotencyKey(env.DB, trigger.workflow_id, idempotencyKey);
+  const payloadPreview = truncatePayloadPreview(payload);
 
   if (existing) {
+    const existingId = typeof existing.id === 'string' ? existing.id : null;
+    await safeRecord(appDb, {
+      triggerId: trigger.id,
+      userId: trigger.user_id,
+      eventType: webhookPath,
+      deliveryId,
+      outcome: 'duplicate',
+      executionId: existingId,
+      reason: `Idempotency key already exists: ${idempotencyKey}`,
+      payloadPreview,
+    });
     return {
       result: {
         received: true,
@@ -146,6 +189,15 @@ export async function handleGenericWebhook(
 
   const concurrency = await checkWorkflowConcurrency(appDb, trigger.user_id);
   if (!concurrency.allowed) {
+    await safeRecord(appDb, {
+      triggerId: trigger.id,
+      userId: trigger.user_id,
+      eventType: webhookPath,
+      deliveryId,
+      outcome: 'concurrency_cap',
+      reason: `${concurrency.reason ?? 'concurrency limit'} (activeUser=${concurrency.activeUser}, activeGlobal=${concurrency.activeGlobal})`,
+      payloadPreview,
+    });
     return {
       result: {
         received: true,
@@ -197,6 +249,17 @@ export async function handleGenericWebhook(
   });
 
   await db.updateTriggerLastRun(appDb, trigger.id, now);
+
+  await safeRecord(appDb, {
+    triggerId: trigger.id,
+    userId: trigger.user_id,
+    eventType: webhookPath,
+    deliveryId,
+    outcome: 'matched',
+    executionId,
+    reason: dispatched ? null : 'Execution created but dispatch enqueue failed',
+    payloadPreview,
+  });
 
   return {
     result: {

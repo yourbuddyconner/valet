@@ -143,6 +143,26 @@ export const pendingApprovals = sqliteTable('pending_approvals', {
   index('idx_pending_approvals_status').on(table.status),
 ]);
 
+export const triggerDeliveries = sqliteTable('trigger_deliveries', {
+  id: text().primaryKey(),
+  triggerId: text('trigger_id').notNull().references(() => triggers.id, { onDelete: 'cascade' }),
+  userId: text('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  eventType: text('event_type'),
+  deliveryId: text('delivery_id'),
+  outcome: text().notNull(),
+  executionId: text('execution_id').references(() => workflowExecutions.id, { onDelete: 'set null' }),
+  reason: text(),
+  payloadPreview: text('payload_preview'),
+  receivedAt: text('received_at').notNull().default(sql`(datetime('now'))`),
+}, (table) => [
+  index('idx_trigger_deliveries_trigger').on(table.triggerId),
+  // Migration 0014 declares this index DESC on received_at; Drizzle's SQLite
+  // dialect doesn't expose .desc() on index columns, so the declarative
+  // mirror here lists the column un-ordered. The actual DB index is correct.
+  index('idx_trigger_deliveries_received').on(table.triggerId, table.receivedAt),
+  index('idx_trigger_deliveries_user').on(table.userId),
+]);
+
 export const workflowVersionHistory = sqliteTable('workflow_version_history', {
   id: text().primaryKey(),
   workflowId: text().notNull().references(() => workflows.id, { onDelete: 'cascade' }),
