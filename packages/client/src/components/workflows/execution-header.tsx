@@ -4,6 +4,7 @@ import type { Execution } from '@/api/executions';
 import { formatRelativeTime } from '@/lib/format';
 import { Badge, StatusDot } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { cn } from '@/lib/cn';
 
 type BadgeVariant = 'default' | 'success' | 'warning' | 'error' | 'secondary';
 
@@ -24,9 +25,14 @@ interface Props {
   onToggleJson?: () => void;
 }
 
+function formatStatus(s: Execution['status']): string {
+  return s.replace(/_/g, ' ');
+}
+
 export function ExecutionHeader({ execution, onCancel, onApprove, onDeny, onToggleJson }: Props) {
   const variant = STATUS_VARIANT[execution.status];
   const isRunning = execution.status === 'running';
+  const isWaitingApproval = execution.status === 'waiting_approval';
   return (
     <div className="px-4 py-2.5 bg-surface-0 border-b border-border">
       {/* Row 1: name + status + id chip on the left, actions on the right. */}
@@ -35,9 +41,10 @@ export function ExecutionHeader({ execution, onCancel, onApprove, onDeny, onTogg
           <h1 className="text-base font-semibold text-foreground truncate">
             {execution.workflowName ?? 'Workflow'}
           </h1>
-          <Badge variant={variant} className={isRunning ? 'text-accent' : undefined}>
+          <Badge variant={variant} className={cn('capitalize', isRunning && 'text-accent')}>
             {isRunning && <StatusDot variant="default" />}
-            {isRunning ? `Running · ${formatRelativeTime(execution.startedAt)}` : execution.status}
+            {isWaitingApproval && <StatusDot variant="warning" />}
+            {isRunning ? `Running · ${formatRelativeTime(execution.startedAt)}` : formatStatus(execution.status)}
           </Badge>
           <code className="bg-surface-2 text-neutral-500 dark:text-neutral-400 font-mono px-1.5 py-0.5 rounded text-[10px]">
             {execution.id.slice(0, 8)}

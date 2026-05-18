@@ -186,7 +186,30 @@ export function useApproveExecution() {
         `/executions/${executionId}/approve`,
         data
       ),
-    onSuccess: (_, { executionId }) => {
+    onMutate: async ({ executionId, data }) => {
+      await queryClient.cancelQueries({ queryKey: executionKeys.detail(executionId) });
+      const previous = queryClient.getQueryData<GetExecutionResponse>(
+        executionKeys.detail(executionId),
+      );
+      if (previous) {
+        const nextStatus: Execution['status'] = data.approve ? 'running' : 'cancelled';
+        const optimistic: GetExecutionResponse = {
+          ...previous,
+          execution: {
+            ...previous.execution,
+            status: nextStatus,
+          },
+        };
+        queryClient.setQueryData(executionKeys.detail(executionId), optimistic);
+      }
+      return { previous };
+    },
+    onError: (_err, { executionId }, ctx) => {
+      if (ctx?.previous) {
+        queryClient.setQueryData(executionKeys.detail(executionId), ctx.previous);
+      }
+    },
+    onSettled: (_data, _err, { executionId }) => {
       queryClient.invalidateQueries({ queryKey: executionKeys.detail(executionId) });
       queryClient.invalidateQueries({ queryKey: executionKeys.steps(executionId) });
       queryClient.invalidateQueries({ queryKey: executionKeys.lists() });
@@ -215,15 +238,32 @@ export function useRetryExecutionFromStep() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: ({ executionId, data }: { executionId: string; data: RetryFromStepRequest }) =>
+    mutationFn: ({
+      executionId,
+      data,
+    }: {
+      executionId: string;
+      data: RetryFromStepRequest;
+      // workflowId is passed through so we can invalidate the workflow-scoped
+      // execution lists shown on the workflow detail page.
+      workflowId?: string | null;
+    }) =>
       api.post<RetryFromStepResponse>(
         `/executions/${executionId}/retry-from`,
         data,
       ),
-    onSuccess: (_, { executionId }) => {
+    onSuccess: (_, { executionId, workflowId }) => {
       // Refresh the source execution (now has a retry trail) and the list view.
       queryClient.invalidateQueries({ queryKey: executionKeys.detail(executionId) });
       queryClient.invalidateQueries({ queryKey: executionKeys.lists() });
+      if (workflowId) {
+        queryClient.invalidateQueries({ queryKey: executionKeys.byWorkflow(workflowId) });
+        // Mirrors workflowKeys.executions(workflowId) from api/workflows.ts.
+        // Inlined here to avoid a circular import between workflows.ts and executions.ts.
+        queryClient.invalidateQueries({
+          queryKey: ['workflows', 'detail', workflowId, 'executions'],
+        });
+      }
     },
   });
 }

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { Fragment, useState } from 'react';
 import { createFileRoute, Link, useNavigate } from '@tanstack/react-router';
 import { ArrowRight, ChevronDown, ChevronRight, Clock, GitBranch, Play, Webhook } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
@@ -15,6 +15,7 @@ import {
 } from '@/api/triggers';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { Skeleton } from '@/components/ui/skeleton';
 import { formatRelativeTime } from '@/lib/format';
 import { cn } from '@/lib/cn';
 import { humanizeCron } from '@/components/workflows/cron-humanize';
@@ -54,7 +55,23 @@ function TriggerDetailPage() {
   const testFire = useTestFireTrigger();
 
   if (isLoading) {
-    return <div className="p-6 text-sm text-neutral-500">Loading…</div>;
+    return (
+      <div className="flex flex-col h-full bg-surface-0">
+        <div className="px-4 py-2.5 bg-surface-0 border-b border-border">
+          <div className="flex items-center gap-2.5 h-7">
+            <Skeleton className="h-5 w-48" />
+            <Skeleton className="h-5 w-20" />
+            <Skeleton className="h-5 w-16" />
+          </div>
+          <div className="mt-1">
+            <Skeleton className="h-3 w-64" />
+          </div>
+        </div>
+        <div className="flex-1 p-4">
+          <Skeleton className="h-full w-full" />
+        </div>
+      </div>
+    );
   }
   if (error || !triggerData) {
     return (
@@ -80,9 +97,12 @@ function TriggerDetailPage() {
 
   const handleDelete = () => {
     if (!confirm(`Delete trigger "${trigger.name}"?`)) return;
-    deleteTrigger.mutate(trigger.id, {
-      onSuccess: () => navigate({ to: '/automation/schedules-and-hooks' }),
-    });
+    deleteTrigger.mutate(
+      { triggerId: trigger.id, workflowId: trigger.workflowId },
+      {
+        onSuccess: () => navigate({ to: '/automation/schedules-and-hooks' }),
+      },
+    );
   };
 
   const handleTestFire = () => {
@@ -203,7 +223,11 @@ function DeliveriesPanel({
         <span className="text-xs text-neutral-500">{deliveries.length} shown</span>
       </div>
       {isLoading ? (
-        <div className="p-4 text-sm text-neutral-500">Loading…</div>
+        <div className="p-4 space-y-2">
+          <Skeleton className="h-4 w-full" />
+          <Skeleton className="h-4 w-full" />
+          <Skeleton className="h-4 w-3/4" />
+        </div>
       ) : deliveries.length === 0 ? (
         <div className="p-6 text-sm text-neutral-500 text-center">
           No deliveries yet. {emptyHint(triggerType)}
@@ -225,9 +249,8 @@ function DeliveriesPanel({
                 const isOpen = expanded === d.id;
                 const om = OUTCOME_META[d.outcome];
                 return (
-                  <>
+                  <Fragment key={d.id}>
                     <tr
-                      key={d.id}
                       className="border-b border-border last:border-0 hover:bg-surface-2 cursor-pointer"
                       onClick={() => setExpanded(isOpen ? null : d.id)}
                     >
@@ -262,13 +285,13 @@ function DeliveriesPanel({
                       </td>
                     </tr>
                     {isOpen && (
-                      <tr key={`${d.id}-expand`} className="border-b border-border last:border-0 bg-surface-0">
+                      <tr className="border-b border-border last:border-0 bg-surface-0">
                         <td colSpan={5} className="px-4 py-3 text-xs space-y-2">
                           <DeliveryDetail delivery={d} />
                         </td>
                       </tr>
                     )}
-                  </>
+                  </Fragment>
                 );
               })}
             </tbody>

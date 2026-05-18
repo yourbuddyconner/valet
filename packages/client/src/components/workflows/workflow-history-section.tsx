@@ -8,6 +8,7 @@ import { Badge, type BadgeProps } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { RestoreVersionDialog } from './restore-version-dialog';
 import { VersionViewDialog } from './version-view-dialog';
+import { Skeleton } from '@/components/ui/skeleton';
 
 type Source = WorkflowVersionHistoryEntry['source'];
 
@@ -46,7 +47,13 @@ export function WorkflowHistorySection({ workflowId }: Props) {
   const [restoreEntry, setRestoreEntry] = React.useState<WorkflowVersionHistoryEntry | null>(null);
 
   if (isLoading) {
-    return <div className="text-sm text-neutral-500">Loading…</div>;
+    return (
+      <div className="flex flex-col gap-1.5">
+        {Array.from({ length: 3 }).map((_, i) => (
+          <Skeleton key={i} className="h-14 w-full" />
+        ))}
+      </div>
+    );
   }
 
   const history = data?.history ?? [];

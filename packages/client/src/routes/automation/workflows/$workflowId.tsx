@@ -20,6 +20,7 @@ import { TriggerCard } from '@/components/workflows/trigger-card';
 import { RecentExecutionsSection } from '@/components/workflows/recent-executions-section';
 import { RunWorkflowDialog } from '@/components/workflows/run-workflow-dialog';
 import { WorkflowHistorySection } from '@/components/workflows/workflow-history-section';
+import { Skeleton } from '@/components/ui/skeleton';
 
 export const Route = createFileRoute('/automation/workflows/$workflowId')({
   component: WorkflowDetailPage,
@@ -41,7 +42,22 @@ function WorkflowDetailPage() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
 
   if (isLoading) {
-    return <div className="p-6 text-sm text-neutral-500">Loading…</div>;
+    return (
+      <div className="flex flex-col h-full bg-surface-0">
+        <div className="px-4 py-2.5 bg-surface-0 border-b border-border">
+          <div className="flex items-center gap-2.5 h-7">
+            <Skeleton className="h-5 w-48" />
+            <Skeleton className="h-5 w-16" />
+          </div>
+          <div className="mt-1">
+            <Skeleton className="h-3 w-64" />
+          </div>
+        </div>
+        <div className="flex-1 p-4">
+          <Skeleton className="h-full w-full" />
+        </div>
+      </div>
+    );
   }
   if (error || !workflow) {
     return (
@@ -124,7 +140,9 @@ function WorkflowDetailPage() {
                     onToggleEnabled={() =>
                       t.enabled ? disableTrigger.mutate(t.id) : enableTrigger.mutate(t.id)
                     }
-                    onDelete={() => deleteTrigger.mutate(t.id)}
+                    onDelete={() =>
+                      deleteTrigger.mutate({ triggerId: t.id, workflowId: workflow.id })
+                    }
                   />
                 ))}
               </div>

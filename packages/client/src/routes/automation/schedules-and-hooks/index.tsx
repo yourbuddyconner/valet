@@ -6,6 +6,7 @@ import { useWorkflows } from '@/api/workflows';
 import { TriggerCard } from '@/components/workflows/trigger-card';
 import { CreateTriggerDialog } from '@/components/workflows/create-trigger-dialog';
 import { Button } from '@/components/ui/button';
+import { Skeleton } from '@/components/ui/skeleton';
 import { cn } from '@/lib/cn';
 
 export const Route = createFileRoute('/automation/schedules-and-hooks/')({
@@ -56,7 +57,11 @@ function SchedulesAndHooksPage() {
       <FilterPills active={filter} counts={counts} onChange={setFilter} />
 
       {isLoading ? (
-        <div className="text-sm text-neutral-500 mt-6">Loading…</div>
+        <div className="flex flex-col gap-3 mt-4">
+          {Array.from({ length: 3 }).map((_, i) => (
+            <Skeleton key={i} className="h-20 w-full" />
+          ))}
+        </div>
       ) : filtered.length === 0 ? (
         <div className="text-sm text-neutral-500 mt-6">No triggers yet.</div>
       ) : (
@@ -74,7 +79,7 @@ function SchedulesAndHooksPage() {
               }
               onDelete={() => {
                 if (confirm(`Delete trigger "${t.name}"?`)) {
-                  deleteTrigger.mutate(t.id);
+                  deleteTrigger.mutate({ triggerId: t.id, workflowId: t.workflowId });
                 }
               }}
             />

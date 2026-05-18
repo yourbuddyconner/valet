@@ -18,6 +18,7 @@ import { ExecutionStepPanel } from '@/components/workflows/execution-step-panel'
 import { ExecutionVariablesPanel } from '@/components/workflows/execution-variables-panel';
 import { useExecutionStepEvents } from '@/hooks/use-execution-step-events';
 import type { WorkflowStep, WorkflowData } from '@/api/workflows';
+import { Skeleton } from '@/components/ui/skeleton';
 
 export const Route = createFileRoute('/automation/executions/$executionId')({
   component: ExecutionDetailPage,
@@ -42,7 +43,7 @@ function ExecutionDetailPage() {
   const retryFromStep = useRetryExecutionFromStep();
   const navigate = useNavigate();
 
-  useExecutionStepEvents(execution?.sessionId ?? null, executionId);
+  useExecutionStepEvents(execution?.sessionId ?? null, executionId, execution?.status);
 
   const { runtimeStatus, currentStepId, stepErrors } = useMemo(() => {
     const map: Record<string, StepRuntimeStatus> = {};
@@ -64,7 +65,23 @@ function ExecutionDetailPage() {
   }, [currentStepId, workflow]);
 
   if (isLoading) {
-    return <div className="p-6 text-sm text-neutral-500">Loading…</div>;
+    return (
+      <div className="flex flex-col h-full bg-surface-0">
+        <div className="px-4 py-2.5 bg-surface-0 border-b border-border">
+          <div className="flex items-center gap-2.5 h-7">
+            <Skeleton className="h-5 w-48" />
+            <Skeleton className="h-5 w-20" />
+            <Skeleton className="h-4 w-16" />
+          </div>
+          <div className="mt-1">
+            <Skeleton className="h-3 w-64" />
+          </div>
+        </div>
+        <div className="flex-1 p-4">
+          <Skeleton className="h-full w-full" />
+        </div>
+      </div>
+    );
   }
   if (error || !execution) {
     return (
@@ -83,7 +100,7 @@ function ExecutionDetailPage() {
   const canRetry = execution.status === 'failed' || execution.status === 'cancelled';
   const handleRetryFromStep = (stepId: string) => {
     retryFromStep.mutate(
-      { executionId, data: { stepId } },
+      { executionId, data: { stepId }, workflowId: execution.workflowId },
       {
         onSuccess: (resp) => {
           navigate({

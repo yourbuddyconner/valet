@@ -172,10 +172,13 @@ function ExecutionStatusBadge({ status }: { status: string }) {
   };
   const variant = variants[status] ?? 'secondary';
   const isRunning = status === 'running';
+  const isWaitingApproval = status === 'waiting_approval';
+  const label = status.replace(/_/g, ' ');
   return (
-    <Badge variant={variant} className={isRunning ? 'text-accent' : undefined}>
+    <Badge variant={variant} className={cn('capitalize', isRunning && 'text-accent')}>
       {isRunning && <StatusDot variant="default" />}
-      {status}
+      {isWaitingApproval && <StatusDot variant="warning" />}
+      {label}
     </Badge>
   );
 }
