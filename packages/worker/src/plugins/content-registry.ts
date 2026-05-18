@@ -1436,7 +1436,7 @@ sheets.protect_range({
     ],
   },
   {
-    name: "grafana",
+    name: "grafana-cloud",
     version: "0.0.1",
     description: "Grafana Cloud integration for dashboards, Prometheus, Loki, alerts, incidents, and on-call",
     icon: "📊",

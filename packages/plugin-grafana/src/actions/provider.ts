@@ -2,7 +2,7 @@ import type { IntegrationProvider, IntegrationCredentials } from '@valet/sdk';
 
 export const grafanaProvider: IntegrationProvider = {
   service: 'grafana',
-  displayName: 'Grafana',
+  displayName: 'Grafana Cloud',
   authType: 'oauth2',
   supportedEntities: ['dashboards', 'prometheus', 'loki', 'alerts', 'incidents', 'oncall'],
   oauthScopes: [],
