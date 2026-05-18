@@ -11,37 +11,16 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { Checkbox } from '@/components/ui/checkbox';
-import { useCreateTrigger, type CreateTriggerRequest } from '@/api/triggers';
+import { useCreateTrigger, type CreateTriggerRequest, type TriggerConfig } from '@/api/triggers';
 import { useWorkflows, type Workflow, type VariableDefinition } from '@/api/workflows';
 import { useRepos } from '@/api/repos';
 import { humanizeCron } from './cron-humanize';
 import { cn } from '@/lib/cn';
 
-// Local fallback type. T-A (parallel agent adding `github` to TriggerConfig union)
-// hadn't landed when this file was authored — once it does, remove this local
-// type and the cast at the API boundary, then `config: GitHubConfig` will fit
-// the shared union directly.
-interface GitHubTriggerConfig {
-  type: 'github';
-  repos: string[];
-  events: string[];
-  filter?: {
-    branch?: string;
-    labels?: string[];
-    actions?: string[];
-  };
-}
-
-// Local fallback so we can attach `variables` to a schedule config for
-// cron-fired workflow runs. T-A is adding this to the shared ScheduleConfig.
-interface ScheduleConfigWithVars {
-  type: 'schedule';
-  cron: string;
-  timezone?: string;
-  target?: 'workflow' | 'orchestrator';
-  prompt?: string;
-  variables?: Record<string, unknown>;
-}
+// Use the shared union types. `ScheduleConfig.variables` and the `GitHubConfig`
+// variant both live in @/api/triggers now.
+type GitHubTriggerConfig = Extract<TriggerConfig, { type: 'github' }>;
+type ScheduleConfigWithVars = Extract<TriggerConfig, { type: 'schedule' }>;
 
 type Path = 'schedule-prompt' | 'schedule-workflow' | 'webhook' | 'github';
 
@@ -182,10 +161,7 @@ function SchedulePromptForm({ onClose }: { onClose: () => void }) {
     };
     const req: CreateTriggerRequest = {
       name: name.trim(),
-      // Bridge until T-A lands: ScheduleConfig in shared types doesn't yet have
-      // the optional `variables` field on ScheduleConfigWithVars. The runtime
-      // payload shape is still valid; this is a typing-only bridge.
-      config: config as CreateTriggerRequest['config'],
+      config,
     };
     createTrigger.mutate(req, {
       onSuccess: () => onClose(),
@@ -264,7 +240,7 @@ function ScheduleWorkflowForm({ onClose }: { onClose: () => void }) {
       {
         workflowId,
         name: name.trim(),
-        config: config as CreateTriggerRequest['config'],
+        config,
       },
       {
         onSuccess: () => onClose(),
@@ -488,8 +464,7 @@ function GitHubForm({ onClose }: { onClose: () => void }) {
       {
         workflowId,
         name: name.trim(),
-        // Bridge until T-A's union update lands. See top-of-file comment.
-        config: config as unknown as CreateTriggerRequest['config'],
+        config,
       },
       {
         onSuccess: () => onClose(),
