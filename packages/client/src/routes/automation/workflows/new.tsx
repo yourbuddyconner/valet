@@ -168,11 +168,22 @@ function NewWorkflowPage() {
       });
       if (trigger && trigger.kind !== 'manual') {
         const config = buildTriggerConfig(trigger);
+        // variableMapping is a top-level field on CreateTriggerRequest, not part of config.
+        // The trigger form stores it transiently on config.variableMapping for convenience.
+        const rawMapping = trigger.config.variableMapping;
+        const variableMapping =
+          rawMapping &&
+          typeof rawMapping === 'object' &&
+          !Array.isArray(rawMapping) &&
+          Object.keys(rawMapping).length > 0
+            ? (rawMapping as Record<string, string>)
+            : undefined;
         await createTrigger.mutateAsync({
           workflowId: draft.id,
           name: `${draft.name} ${trigger.kind}`,
           enabled: true,
           config,
+          variableMapping,
         });
       }
       nav({ to: '/automation/workflows/$workflowId', params: { workflowId: draft.id } });
@@ -277,7 +288,11 @@ function NewWorkflowPage() {
               )}
               {tab === 'trigger' && (
                 <div className="overflow-y-auto h-full">
-                  <WorkflowDraftTriggerForm value={trigger} onChange={setTrigger} />
+                  <WorkflowDraftTriggerForm
+                    value={trigger}
+                    onChange={setTrigger}
+                    availableVariables={draft.variables ?? {}}
+                  />
                 </div>
               )}
               {tab === 'json' && (

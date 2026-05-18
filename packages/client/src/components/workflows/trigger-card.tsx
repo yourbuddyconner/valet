@@ -80,10 +80,20 @@ function renderCondition(trigger: Trigger) {
     );
   }
   if (trigger.type === 'webhook' && trigger.config.type === 'webhook') {
+    const mappingCount = trigger.variableMapping
+      ? Object.keys(trigger.variableMapping).length
+      : 0;
     return (
-      <div className="text-sm text-neutral-700 dark:text-neutral-300 mb-1 font-mono">
-        {trigger.config.method ?? 'POST'} /webhooks/{trigger.config.path}
-      </div>
+      <>
+        <div className="text-sm text-neutral-700 dark:text-neutral-300 mb-1 font-mono">
+          {trigger.config.method ?? 'POST'} /webhooks/{trigger.config.path}
+        </div>
+        {mappingCount > 0 && (
+          <div className="text-xs text-neutral-500 mb-1">
+            Maps to {mappingCount} variable{mappingCount === 1 ? '' : 's'}
+          </div>
+        )}
+      </>
     );
   }
   if (trigger.type === 'manual') {
