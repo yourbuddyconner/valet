@@ -18,6 +18,7 @@ import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { SearchInput } from '@/components/ui/search-input';
 import type { Integration } from '@/api/types';
+import { getIntegrationListDisplayState } from './integration-list-display';
 
 type StatusFilter = Integration['status'] | 'all';
 
@@ -116,6 +117,11 @@ export function IntegrationList({ onAddIntegration, addIntegrationLabel = 'Conne
       return true;
     });
   }, [allItems, search, statusFilter]);
+  const displayState = getIntegrationListDisplayState({
+    totalItems: allItems.length,
+    visibleItems: filteredItems.length,
+    canAddIntegration: !!onAddIntegration,
+  });
 
   if (isLoading) {
     return <IntegrationListSkeleton />;
@@ -158,20 +164,13 @@ export function IntegrationList({ onAddIntegration, addIntegrationLabel = 'Conne
         </div>
       </div>
 
-      {allItems.length === 0 ? (
-        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-          {onAddIntegration && (
-            <AddIntegrationCard label={addIntegrationLabel} onClick={onAddIntegration} />
-          )}
-          {!onAddIntegration && (
-            <div className="rounded-lg border border-neutral-200 bg-white p-8 text-center dark:border-neutral-700 dark:bg-neutral-800 md:col-span-2 lg:col-span-3">
-              <p className="text-sm text-neutral-500 text-pretty dark:text-neutral-400">
-                No integrations configured. Connect your first service to get started.
-              </p>
-            </div>
-          )}
+      {displayState === 'empty' ? (
+        <div className="rounded-lg border border-neutral-200 bg-white p-8 text-center dark:border-neutral-700 dark:bg-neutral-800">
+          <p className="text-sm text-neutral-500 text-pretty dark:text-neutral-400">
+            No integrations configured. Connect your first service to get started.
+          </p>
         </div>
-      ) : filteredItems.length === 0 ? (
+      ) : displayState === 'no-matches' ? (
         <div className="rounded-lg border border-neutral-200 bg-white p-8 text-center dark:border-neutral-700 dark:bg-neutral-800">
           <p className="text-sm text-neutral-500 text-pretty dark:text-neutral-400">
             No integrations match your filters.
