@@ -507,8 +507,10 @@ describe('TelegramTransport', () => {
         type: 'approval',
         title: 'Approve this action?',
         actions: [
-          { id: 'approve', label: 'Approve', style: 'primary' },
-          { id: 'deny', label: 'Deny', style: 'danger' },
+          { id: 'allow_once', label: 'Allow', style: 'primary' },
+          { id: 'allow_session', label: 'Allow for Session' },
+          { id: 'allow_always', label: 'Always Allow' },
+          { id: 'cancel', label: 'Cancel', style: 'danger' },
         ],
       }, ctx);
 
@@ -518,10 +520,10 @@ describe('TelegramTransport', () => {
       expect(url).toContain('/sendMessage');
       const body = JSON.parse(opts.body);
       expect(body.reply_markup.inline_keyboard).toHaveLength(1);
-      expect(body.reply_markup.inline_keyboard[0]).toHaveLength(2);
-      expect(body.reply_markup.inline_keyboard[0][0].text).toBe('✅ Approve');
-      expect(body.reply_markup.inline_keyboard[0][1].text).toBe('❌ Deny');
-      expect(body.reply_markup.inline_keyboard[0][0].callback_data).toBe('approve|prompt2');
+      expect(body.reply_markup.inline_keyboard[0]).toHaveLength(4);
+      expect(body.reply_markup.inline_keyboard[0][0].text).toBe('✅ Allow');
+      expect(body.reply_markup.inline_keyboard[0][3].text).toBe('❌ Cancel');
+      expect(body.reply_markup.inline_keyboard[0][1].callback_data).toBe('allow_session|prompt2');
     });
 
     it('returns null on API error', async () => {
@@ -586,6 +588,32 @@ describe('TelegramTransport', () => {
       const [, opts] = mockFetch.mock.calls[0];
       const body = JSON.parse(opts.body);
       expect(body.text).toContain('Expired');
+    });
+
+    it('updates message with session allow status', async () => {
+      mockFetch.mockResolvedValueOnce(jsonResponse({ ok: true }));
+
+      await transport.updateInteractivePrompt!(target, ref, {
+        actionId: 'allow_session',
+        resolvedBy: 'Alice',
+      }, ctx);
+
+      const [, opts] = mockFetch.mock.calls[0];
+      const body = JSON.parse(opts.body);
+      expect(body.text).toContain('Allowed for session by Alice');
+    });
+
+    it('updates message with cancel status', async () => {
+      mockFetch.mockResolvedValueOnce(jsonResponse({ ok: true }));
+
+      await transport.updateInteractivePrompt!(target, ref, {
+        actionId: 'cancel',
+        resolvedBy: 'Bob',
+      }, ctx);
+
+      const [, opts] = mockFetch.mock.calls[0];
+      const body = JSON.parse(opts.body);
+      expect(body.text).toContain('Cancelled by Bob');
     });
   });
 });

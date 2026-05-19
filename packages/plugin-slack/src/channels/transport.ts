@@ -860,8 +860,17 @@ export class SlackTransport implements ChannelTransport {
       statusText = '⏰ Expired';
     } else if (resolution.actionId === 'approve') {
       statusText = `✅ Approved by ${resolution.resolvedBy}`;
+    } else if (resolution.actionId === 'allow_once') {
+      statusText = `✅ Allowed once by ${resolution.resolvedBy}`;
+    } else if (resolution.actionId === 'allow_session') {
+      statusText = `✅ Allowed for session by ${resolution.resolvedBy}`;
+    } else if (resolution.actionId === 'allow_always') {
+      statusText = `✅ Always allowed by ${resolution.resolvedBy}`;
     } else if (resolution.actionId === 'deny') {
       statusText = `❌ Denied by ${resolution.resolvedBy}`;
+      if (resolution.value) statusText += `: ${resolution.value}`;
+    } else if (resolution.actionId === 'cancel') {
+      statusText = `❌ Cancelled by ${resolution.resolvedBy}`;
       if (resolution.value) statusText += `: ${resolution.value}`;
     } else if (resolution.actionLabel || resolution.actionId) {
       const label = resolution.actionLabel || resolution.actionId;
