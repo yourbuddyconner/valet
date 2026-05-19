@@ -325,8 +325,8 @@ Thread channels (`"thread:<threadId>"`) additionally reuse the persisted `sessio
 4. Build model failover chain from `modelPreferences`.
 5. Transcribe audio attachments via whisper.cpp if present.
 6. Send `agentStatus: thinking` to DO.
-7. POST `prompt_async` to OpenCode with attributed content and model selection.
-8. Return immediately — response arrives via SSE.
+7. POST `/session/:id/message` to OpenCode with attributed content and model selection.
+8. Finalize the turn from the sync response, supplemented by SSE deltas that arrived while the request was in flight.
 
 **SSE event consumption (`consumeEventStream()`):**
 - Connects to `/global/event` (fallback: `/event`).
@@ -336,9 +336,10 @@ Thread channels (`"thread:<threadId>"`) additionally reuse the persisted `sessio
   - `message.part.updated` (tool): sends `message.part.tool-update` with status changes.
   - `session.idle`: finalizes the response turn.
   - `session.error`: detects retriable provider errors, attempts model failover.
+  - `session.status=retry`: if OpenCode repeatedly retries with no assistant output, tool activity, or provider error, the runner aborts the stuck sync request and advances the model failover chain.
   - `permission.asked`: auto-approves all permissions (headless agent).
 
-**Model failover:** When a provider error is detected (rate limit, auth, billing), `attemptModelFailover()` tries the next model in the preferences chain. Resets channel state, sends `model-switched` notification, re-dispatches prompt.
+**Model failover:** When a provider error is detected (rate limit, auth, billing), a sync prompt times out, or OpenCode enters a zero-output provider retry loop, the prompt handler tries the next model in the preferences chain. It resets channel state, sends a `model-switched` notification, and re-dispatches the prompt. If no fallback model remains, the runner finalizes the turn with a user-visible error instead of leaving the session stuck in `WAITING_RUNNER`.
 
 ## WebSocket Protocol (Runner ↔ DO)
 

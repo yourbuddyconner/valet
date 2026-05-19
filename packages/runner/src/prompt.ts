@@ -195,6 +195,22 @@ function openCodeErrorToMessage(raw: unknown): string | null {
   return fallback && fallback !== "{}" ? fallback : null;
 }
 
+function retryStatusToMessage(rawStatus: unknown): string | null {
+  if (!isRecord(rawStatus)) return null;
+
+  const directMessage =
+    (typeof rawStatus.message === "string" ? rawStatus.message : undefined) ??
+    (typeof rawStatus.reason === "string" ? rawStatus.reason : undefined) ??
+    (typeof rawStatus.description === "string" ? rawStatus.description : undefined);
+  if (directMessage?.trim()) return directMessage.trim();
+
+  return (
+    openCodeErrorToMessage(rawStatus.error) ??
+    openCodeErrorToMessage(rawStatus.cause) ??
+    openCodeErrorToMessage(rawStatus.data)
+  );
+}
+
 /** Max characters to inject from a single text file into the prompt. */
 const MAX_TEXT_FILE_CHARS = 512_000; // 500KB
 
@@ -219,6 +235,10 @@ const FIRST_RESPONSE_TIMEOUT_MS = 90_000;
 // Hard ceiling on a single sync prompt attempt. Prevents the sync fetch from blocking
 // forever when OpenCode enters an internal provider retry loop (e.g. repeated 429/5xx).
 const SYNC_PROMPT_TIMEOUT_MS = 300_000; // 5 minutes
+
+// Repeated zero-output retry status events mean OpenCode is retrying the same
+// provider internally without returning a usable response to the runner.
+const PROVIDER_RETRY_LOOP_ABORT_RETRIES = 4;
 
 // Review polling configuration
 const REVIEW_POLL_INTERVAL_MS = 500;
@@ -465,6 +485,12 @@ export class ChannelSession {
   // Callback to reset the sync prompt timeout on SSE activity.
   // Set by the failover loop, cleared when the sync fetch completes.
   resetSyncTimeout: (() => void) | null = null;
+  // Callback to abort the current sync prompt attempt when OpenCode gets stuck
+  // retrying a provider without returning a response.
+  abortSyncAttempt: ((reason: string) => void) | null = null;
+  syncAbortReason: string | null = null;
+  providerRetryCount = 0;
+  providerRetryStartedAt = 0;
 
   // Per-message usage entries for the current turn (reset per prompt)
   usageEntries = new Map<string, { model: string; inputTokens: number; outputTokens: number }>();
@@ -505,6 +531,10 @@ export class ChannelSession {
     this.turnCreated = false;
     this.turnId = null;
     this.resetSyncTimeout = null;
+    this.abortSyncAttempt = null;
+    this.syncAbortReason = null;
+    this.providerRetryCount = 0;
+    this.providerRetryStartedAt = 0;
     this.usageEntries.clear();
   }
 
@@ -527,6 +557,10 @@ export class ChannelSession {
     this.turnCreated = false;
     this.turnId = null;
     this.resetSyncTimeout = null;
+    this.abortSyncAttempt = null;
+    this.syncAbortReason = null;
+    this.providerRetryCount = 0;
+    this.providerRetryStartedAt = 0;
     // Note: usageEntries NOT cleared on retry — entries from failed attempt
     // are still valid usage that was billed by the provider
   }
@@ -551,6 +585,10 @@ export class ChannelSession {
     this.turnCreated = false;
     this.turnId = null;
     this.resetSyncTimeout = null;
+    this.abortSyncAttempt = null;
+    this.syncAbortReason = null;
+    this.providerRetryCount = 0;
+    this.providerRetryStartedAt = 0;
     // Tokens consumed during aborted turns are still billed by the provider
     // but we drop them here since turnId is cleared and we can't attribute them.
     // This causes minor underreporting of actual provider cost on aborted turns.
@@ -1609,25 +1647,30 @@ export class PromptHandler {
 
         // Create an AbortController with a resettable inactivity timeout.
         // The timeout resets whenever SSE events indicate the model is actively
-        // working (text streaming, tool calls, step events). This prevents
+        // working (text streaming, tool calls, reasoning). This prevents
         // aborting long-running but actively-progressing prompts.
         const syncAbort = new AbortController();
         const sessionId = channel.opencodeSessionId;
         let syncTimeoutId: ReturnType<typeof setTimeout> | undefined;
+        const abortSyncAttempt = (reason: string) => {
+          if (syncAbort.signal.aborted) return;
+          channel.syncAbortReason = reason;
+          console.warn(`[PromptHandler] Aborting sync prompt attempt: ${reason}`);
+          syncAbort.abort();
+          if (sessionId) {
+            fetch(`${this.opencodeUrl}/session/${sessionId}/abort`, { method: "POST" }).catch(() => undefined);
+          }
+        };
         const startSyncTimeout = () => {
           clearTimeout(syncTimeoutId);
           syncTimeoutId = setTimeout(() => {
-            console.log(`[PromptHandler] Sync prompt inactivity timeout (${SYNC_PROMPT_TIMEOUT_MS}ms) — aborting fetch and OpenCode session`);
-            syncAbort.abort();
-            // Abort the OpenCode session to stop its internal retry loop
-            if (sessionId) {
-              fetch(`${this.opencodeUrl}/session/${sessionId}/abort`, { method: "POST" }).catch(() => undefined);
-            }
+            abortSyncAttempt(`Model did not respond (sync prompt timed out after ${SYNC_PROMPT_TIMEOUT_MS}ms)`);
           }, SYNC_PROMPT_TIMEOUT_MS);
         };
         startSyncTimeout();
         // Expose to SSE handlers so activity resets the timeout
         channel.resetSyncTimeout = startSyncTimeout;
+        channel.abortSyncAttempt = abortSyncAttempt;
 
         try {
           console.log(`[PromptHandler] Sending sync prompt ${messageId} (channel: ${channel.channelKey})${currentModel ? ` (model: ${currentModel})` : ''}`);
@@ -1710,8 +1753,8 @@ export class PromptHandler {
           const errMsg = err instanceof Error ? err.message : String(err);
           // Treat sync timeout abort as a retriable error for failover
           if (syncAbort.signal.aborted) {
-            lastModelError = "Model did not respond (sync prompt timed out)";
-            console.log(`[PromptHandler] Sync prompt timed out for ${messageId} — trying next model`);
+            lastModelError = channel.syncAbortReason || "Model did not respond (sync prompt timed out)";
+            console.log(`[PromptHandler] Sync prompt aborted for ${messageId}: ${lastModelError} — trying next model`);
             continue;
           }
           // Suppress abort exceptions from a wait_for_event yield-abort —
@@ -1751,6 +1794,8 @@ export class PromptHandler {
         } finally {
           clearTimeout(syncTimeoutId);
           channel.resetSyncTimeout = null;
+          channel.abortSyncAttempt = null;
+          channel.syncAbortReason = null;
         }
       }
 
@@ -1931,6 +1976,11 @@ export class PromptHandler {
     channel.retryPending = false;
     channel.finalizeInFlight = false;
     channel.syncPromptInFlight = false;
+    channel.resetSyncTimeout = null;
+    channel.abortSyncAttempt = null;
+    channel.syncAbortReason = null;
+    channel.providerRetryCount = 0;
+    channel.providerRetryStartedAt = 0;
     console.log(`[PromptHandler] Response finalized (channelKey=${channel.channelKey})`);
   }
 
@@ -4051,6 +4101,60 @@ export class PromptHandler {
     }
   }
 
+  private hasUsefulProviderOutput(channel: ChannelSession): boolean {
+    return (
+      channel.streamedContent.trim().length > 0 ||
+      channel.latestAssistantTextSnapshot.trim().length > 0 ||
+      channel.toolStates.size > 0
+    );
+  }
+
+  private handleProviderRetryStatus(
+    channel: ChannelSession,
+    rawStatus: unknown,
+    props: Record<string, unknown>,
+  ): void {
+    if (!channel.activeMessageId || !channel.syncPromptInFlight || !channel.abortSyncAttempt) {
+      return;
+    }
+
+    if (this.hasUsefulProviderOutput(channel)) {
+      return;
+    }
+
+    const now = Date.now();
+    if (channel.providerRetryCount === 0) {
+      channel.providerRetryStartedAt = now;
+    }
+    channel.providerRetryCount++;
+
+    const retryReason =
+      retryStatusToMessage(rawStatus) ??
+      retryStatusToMessage(props) ??
+      "OpenCode entered provider retry state without exposing the provider error";
+
+    channel.recentEventTrace.push(`status.retry:${retryReason.slice(0, 120)}`);
+    if (channel.recentEventTrace.length > 40) {
+      channel.recentEventTrace.shift();
+    }
+
+    console.warn(
+      `[PromptHandler] session.status=retry (${channel.providerRetryCount}/${PROVIDER_RETRY_LOOP_ABORT_RETRIES}) ` +
+      `with no provider output: ${retryReason}`
+    );
+
+    if (channel.providerRetryCount < PROVIDER_RETRY_LOOP_ABORT_RETRIES) {
+      return;
+    }
+
+    const elapsedMs = channel.providerRetryStartedAt > 0 ? now - channel.providerRetryStartedAt : 0;
+    const abortReason =
+      `OpenCode entered a provider retry loop with no output after ` +
+      `${channel.providerRetryCount} retries over ${elapsedMs}ms. ${retryReason}`;
+    channel.lastError = abortReason;
+    channel.abortSyncAttempt(abortReason);
+  }
+
   private handleSessionStatus(props: Record<string, unknown>, channel: ChannelSession): void {
     // SessionStatus is an object: { type: "idle" | "busy" | "retry" }
     const rawStatus = props.status;
@@ -4091,6 +4195,8 @@ export class PromptHandler {
         channel.retryPending = false;
       }
       channel.idleNotified = false;
+    } else if (statusType === "retry") {
+      this.handleProviderRetryStatus(channel, rawStatus, props);
     }
   }
 

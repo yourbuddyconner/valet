@@ -421,6 +421,118 @@ describe("PromptHandler dedup guard", () => {
   });
 });
 
+describe("PromptHandler provider retry loop failover", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("aborts a zero-output OpenCode retry loop and falls back to the next model", async () => {
+    const agentClient = createAgentClientMock();
+    const handler = createHandler(agentClient);
+    let primaryAttemptAbortSignal: AbortSignal | undefined;
+    let rejectPrimaryAttempt: ((reason?: unknown) => void) | undefined;
+    let primaryAttemptStarted: (() => void) | undefined;
+    const primaryAttemptReady = new Promise<void>((resolve) => {
+      primaryAttemptStarted = resolve;
+    });
+
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      const body = typeof init?.body === "string" ? JSON.parse(init.body) : undefined;
+
+      if (url === "http://opencode.test/session" && method === "POST") {
+        return jsonResponse({ id: "retry-loop-session" });
+      }
+
+      if (url === "http://opencode.test/session/retry-loop-session/abort" && method === "POST") {
+        return new Response(null, { status: 204 });
+      }
+
+      if (url === "http://opencode.test/session/retry-loop-session/message" && method === "POST") {
+        const requestedModel = body?.model as { providerID?: string; modelID?: string } | undefined;
+        const fullModel = requestedModel
+          ? `${requestedModel.providerID}/${requestedModel.modelID}`
+          : undefined;
+
+        if (fullModel === "openai/gpt-5.5") {
+          primaryAttemptAbortSignal = init?.signal ?? undefined;
+          primaryAttemptStarted?.();
+          return new Promise<Response>((_resolve, reject) => {
+            rejectPrimaryAttempt = reject;
+            primaryAttemptAbortSignal?.addEventListener("abort", () => {
+              reject(new DOMException("This operation was aborted", "AbortError"));
+            });
+          });
+        }
+
+        if (fullModel === "anthropic/claude-sonnet-4-5") {
+          return jsonResponse({
+            info: { id: "assistant-fallback", role: "assistant", content: "fallback reply" },
+            parts: [],
+          });
+        }
+      }
+
+      throw new Error(`Unexpected fetch: ${method} ${url}`);
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    const promptPromise = handler.handlePrompt(
+      "msg-retry-loop",
+      "please continue",
+      "openai/gpt-5.5",
+      undefined,
+      ["anthropic/claude-sonnet-4-5"],
+      undefined,
+      "thread",
+      "retry-loop-thread",
+    );
+
+    await primaryAttemptReady;
+    const channel = (handler as any).channels.get("thread:retry-loop-thread");
+
+    for (let i = 0; i < 4; i++) {
+      (handler as any).handlePartUpdated(
+        { part: { type: "step-start", id: `step-${i}` } },
+        channel,
+      );
+      (handler as any).handleSessionStatus(
+        { status: { type: "retry" } },
+        channel,
+      );
+    }
+
+    const outcome = await Promise.race([
+      promptPromise.then(() => "completed"),
+      new Promise<"stuck">((resolve) => setTimeout(() => resolve("stuck"), 25)),
+    ]);
+    if (outcome !== "completed") {
+      rejectPrimaryAttempt?.(new Error("cleanup after stuck primary attempt"));
+      await promptPromise.catch(() => undefined);
+    }
+
+    expect(outcome).toBe("completed");
+    expect(primaryAttemptAbortSignal?.aborted).toBe(true);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://opencode.test/session/retry-loop-session/abort",
+      { method: "POST" },
+    );
+    expect(agentClient.sendModelSwitched).toHaveBeenCalledWith(
+      "msg-retry-loop",
+      "openai/gpt-5.5",
+      "anthropic/claude-sonnet-4-5",
+      expect.stringContaining("retry"),
+    );
+    expect(agentClient.sendTurnFinalize).toHaveBeenCalledWith(
+      expect.any(String),
+      "end_turn",
+      "fallback reply",
+    );
+  });
+});
+
 describe("PromptHandler idle suppression", () => {
   afterEach(() => {
     vi.restoreAllMocks();
