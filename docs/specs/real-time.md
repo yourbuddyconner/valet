@@ -177,7 +177,7 @@ This replaces any stale client state with the authoritative server state. Pendin
 | `git-state` | Branch/commit updates | All clients |
 | `pr-created` | PR creation | All clients |
 | `files-changed` | File modification list | All clients |
-| `child-session` | Child session spawned | All clients |
+| `child-session` | Child session spawned; includes `threadId` when spawned from an orchestrator thread so cards can be scoped to that thread | All clients |
 | `title` | Title update | All clients |
 | `audit_log` | Audit entry | All clients |
 | `diff` | Git diff result | All clients |
@@ -347,7 +347,7 @@ interface ChatState {
   diffData: DiffFile[] | null;
   runnerConnected: boolean;
   sessionTitle?: string;
-  childSessionEvents: ChildSessionEvent[];
+  childSessionEvents: ChildSessionEvent[]; // each event may carry threadId for thread-scoped cards
   reviewResult: ReviewResultData | null;
   // ...
 }
@@ -357,7 +357,7 @@ interface ChatState {
 
 | Message Type | Behavior |
 |-------------|----------|
-| `init` | Complete state replacement. Reconstructs child sessions from message history. Normalizes connected users. Seeds audit log. Auto-selects model. |
+| `init` | Complete state replacement. Reconstructs child sessions from message history, preserving message `threadId` for thread-scoped cards. Normalizes connected users. Seeds audit log. Auto-selects model. |
 | `message` | Adds new message. **Deduplicates by ID** — skips if message already exists. |
 | `message.updated` | Updates existing message in-place with content-wins rule. |
 | `chunk` | Appends text delta to message content and parts. Sets `streaming: true` on text part. |

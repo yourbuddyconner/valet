@@ -332,7 +332,7 @@ Client connects via `GET /api/sessions/:id/ws?role=client&userId={userId}&token=
 | `git-state` | Branch/commit updates |
 | `pr-created` | PR creation notification |
 | `files-changed` | File modification list |
-| `child-session` | Child session spawned |
+| `child-session` | Child session spawned; includes `threadId` for orchestrator-thread spawns so the web UI only renders the child card in the originating thread |
 | `title` | Session title update |
 | `audit_log` | Audit log entry |
 | `diff` | Git diff result |
@@ -548,6 +548,7 @@ Active sessions (`initializing`, `running`, `idle`, `restoring`) are counted per
 - Concurrency limits
 - Channel system (web, telegram, etc.)
 - Child session spawning and cascade termination
+- Thread-scoped child session cards for orchestrator threads
 - Model discovery, preferences, and failover
 - Persona support
 - Same-thread orchestrator resume with persisted OpenCode session reuse

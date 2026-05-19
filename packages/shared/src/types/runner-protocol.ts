@@ -126,7 +126,7 @@ export type DOToRunnerMessage =
   | { type: 'diff'; requestId: string }
   | { type: 'review'; requestId: string }
   | { type: 'pong' }
-  | { type: 'spawn-child-result'; requestId: string; childSessionId?: string; error?: string }
+  | { type: 'spawn-child-result'; requestId: string; childSessionId?: string; parentThreadId?: string; error?: string }
   | { type: 'session-message-result'; requestId: string; success?: boolean; error?: string }
   | {
       type: 'session-messages-result';
@@ -594,7 +594,7 @@ export type RunnerToDOMessage =
       action: string;
       payload?: Record<string, unknown>;
     }
-  | { type: 'child-session'; childSessionId: string; title?: string }
+  | { type: 'child-session'; childSessionId: string; title?: string; threadId?: string }
   | { type: 'title'; title: string }
   | { type: 'audio-transcript'; messageId: string; transcript: string }
   | {

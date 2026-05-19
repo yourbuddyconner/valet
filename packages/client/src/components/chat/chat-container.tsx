@@ -18,7 +18,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { useAuthStore } from '@/stores/auth';
 import { useIsMobile } from '@/hooks/use-is-mobile';
 import { useAutoRestartOrchestrator } from '@/hooks/use-auto-restart-orchestrator';
-import { getEffectiveActiveThreadId } from './thread-selection';
+import { filterChildSessionEventsForThread, getEffectiveActiveThreadId } from './thread-selection';
 
 const InteractivePromptCard = lazy(async () => {
   const mod = await import('@/components/session/interactive-prompt-card');
@@ -210,6 +210,11 @@ export function ChatContainer({ sessionId, routeSessionId, initialThreadId, init
     }
     return filtered;
   }, [messages, activeThreadId, isResolvingThread]);
+
+  const filteredChildSessionEvents = useMemo(() => {
+    if (isResolvingThread) return [];
+    return filterChildSessionEventsForThread(childSessionEvents, activeThreadId);
+  }, [childSessionEvents, activeThreadId, isResolvingThread]);
 
   const handleSendMessage = useCallback(
     async (content: string, model?: string, attachments?: Parameters<typeof sendMessage>[2]) => {
@@ -478,7 +483,7 @@ export function ChatContainer({ sessionId, routeSessionId, initialThreadId, init
               agentStatus={agentStatus}
               agentStatusDetail={agentStatusDetail}
               onRevert={revertMessage}
-              childSessionEvents={childSessionEvents}
+              childSessionEvents={filteredChildSessionEvents}
               childSessions={childSessions}
               connectedUsers={connectedUsers}
             />

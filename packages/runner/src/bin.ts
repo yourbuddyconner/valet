@@ -205,7 +205,7 @@ async function main() {
     onSpawnChild: async (params) => {
       const result = await agentClient.requestSpawnChild(params);
       // Notify clients of the new child session for UI updates
-      agentClient.sendChildSession(result.childSessionId, params.title || params.workspace);
+      agentClient.sendChildSession(result.childSessionId, params.title || params.workspace, result.parentThreadId);
       return result;
     },
     onTerminateChild: async (childSessionId) => {

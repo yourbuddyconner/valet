@@ -2890,6 +2890,7 @@ export class SessionAgentDO {
           type: 'child-session',
           childSessionId: (msg as any).childSessionId,
           title: msg.title,
+          threadId: (msg as any).threadId,
         } as any);
       },
 
@@ -2954,7 +2955,7 @@ export class SessionAgentDO {
           if (result.error) {
             this.runnerLink.send({ type: 'spawn-child-result', requestId, error: result.error });
           } else {
-            this.runnerLink.send({ type: 'spawn-child-result', requestId, childSessionId: result.childSessionId });
+            this.runnerLink.send({ type: 'spawn-child-result', requestId, childSessionId: result.childSessionId, parentThreadId: resolvedParentThreadId });
           }
         } catch (err) {
           console.error('[SessionAgentDO] Failed to spawn child:', err);

@@ -394,7 +394,7 @@ Thread channels (`"thread:<threadId>"`) additionally reuse the persisted `sessio
 | `self-terminate` | Self-terminate session |
 | `memory-read/write/delete` | Memory operations |
 | `create-pr` / `update-pr` | GitHub PR operations |
-| `pr-created` / `files-changed` / `child-session` / `title` | State update broadcasts |
+| `pr-created` / `files-changed` / `child-session` / `title` | State update broadcasts; `child-session` carries `threadId` when the spawn originated from an orchestrator thread |
 | `workflow-list/run/sync/update/delete` | Workflow operations |
 | `channel-reply` | Reply to external channel |
 | `task-create/list/update` | Task operations |

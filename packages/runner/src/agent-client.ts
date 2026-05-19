@@ -390,8 +390,8 @@ export class AgentClient {
     this.send({ type: "review-result", requestId, data, diffFiles, error });
   }
 
-  sendChildSession(childSessionId: string, title?: string): void {
-    this.send({ type: "child-session", childSessionId, title } as any);
+  sendChildSession(childSessionId: string, title?: string, threadId?: string): void {
+    this.send({ type: "child-session", childSessionId, title, threadId } as any);
   }
 
   sendAudioTranscript(messageId: string, transcript: string): void {
@@ -435,7 +435,7 @@ export class AgentClient {
     sourceRepoFullName?: string;
     model?: string;
     personaId?: string;
-  }): Promise<{ childSessionId: string }> {
+  }): Promise<{ childSessionId: string; parentThreadId?: string }> {
     const requestId = crypto.randomUUID();
     return this.createPendingRequest(requestId, SPAWN_CHILD_TIMEOUT_MS, () => {
       this.send({ type: "spawn-child", requestId, ...params });
@@ -1064,7 +1064,7 @@ export class AgentClient {
           if (msg.error) {
             this.rejectPendingRequest(msg.requestId, msg.error);
           } else {
-            this.resolvePendingRequest(msg.requestId, { childSessionId: msg.childSessionId });
+            this.resolvePendingRequest(msg.requestId, { childSessionId: msg.childSessionId, parentThreadId: msg.parentThreadId });
           }
           break;
 

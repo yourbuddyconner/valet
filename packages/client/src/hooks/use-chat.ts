@@ -51,6 +51,7 @@ export interface ChildSessionEvent {
   childSessionId: string;
   title?: string;
   timestamp: number;
+  threadId?: string;
 }
 
 export interface ConnectedUser {
@@ -282,6 +283,7 @@ interface WebSocketChildSessionMessage {
   type: 'child-session';
   childSessionId: string;
   title?: string;
+  threadId?: string;
 }
 
 interface WebSocketReviewResultMessage {
@@ -595,6 +597,7 @@ export function useChat(sessionId: string) {
             args: unknown,
             result: unknown,
             timestamp: number,
+            threadId?: string,
           ) => {
             if (toolName !== 'spawn_session' || typeof result !== 'string') return;
             const match = result.match(/Child session spawned:\s*(\S+)/) || result.match(UUID_RE);
@@ -605,6 +608,7 @@ export function useChat(sessionId: string) {
               childSessionId: childId,
               title: (argsObj.title as string) || (argsObj.workspace as string) || undefined,
               timestamp,
+              threadId,
             });
           };
           for (const m of sortedMessages) {
@@ -612,7 +616,7 @@ export function useChat(sessionId: string) {
             // V1 legacy format
             if (m.role === 'tool' && m.parts && typeof m.parts === 'object' && !Array.isArray(m.parts)) {
               const p = m.parts as unknown as Record<string, unknown>;
-              recordSpawn(p.toolName, p.args, p.result, ts);
+              recordSpawn(p.toolName, p.args, p.result, ts, m.threadId);
               continue;
             }
             // V2 turn format — scan assistant turn parts for tool-call parts
@@ -620,7 +624,7 @@ export function useChat(sessionId: string) {
               for (const part of m.parts as unknown as Record<string, unknown>[]) {
                 if (!part || typeof part !== 'object') continue;
                 if (part.type === 'tool-call') {
-                  recordSpawn(part.toolName, part.args, part.result, ts);
+                  recordSpawn(part.toolName, part.args, part.result, ts, m.threadId);
                 }
               }
             }
@@ -993,6 +997,7 @@ export function useChat(sessionId: string) {
               childSessionId: childMsg.childSessionId,
               title: childMsg.title,
               timestamp: Date.now(),
+              threadId: childMsg.threadId,
             },
           ],
         }));
