@@ -947,6 +947,10 @@ export type AvailableModels = ProviderModels[];
 
 export type ActionMode = 'allow' | 'require_approval' | 'deny';
 export type ActionInvocationStatus = 'pending' | 'approved' | 'denied' | 'executed' | 'failed' | 'expired';
+export type ActionPolicyLifetime = 'persistent' | 'session' | 'timed';
+export type ActionPolicySource = 'settings' | 'approval_prompt';
+export type EffectivePolicySource = 'system_default' | 'org_policy' | 'user_override' | 'session_override';
+export type ActionPolicyScope = 'action' | 'service' | 'risk_level' | 'none';
 
 export interface ActionPolicy {
   id: string;
@@ -955,6 +959,22 @@ export interface ActionPolicy {
   riskLevel?: string;
   mode: ActionMode;
   createdBy: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ActionPolicyOverride {
+  id: string;
+  userId: string;
+  service?: string | null;
+  actionId?: string | null;
+  riskLevel?: string | null;
+  mode: ActionMode;
+  lifetime: ActionPolicyLifetime;
+  sessionId?: string | null;
+  expiresAt?: string | null;
+  source: ActionPolicySource;
+  sourceInvocationId?: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -984,6 +1004,13 @@ export interface ActionInvocation {
   executedAt?: string;
   expiresAt?: string;
   policyId?: string;
+  orgPolicyId?: string | null;
+  baseMode?: ActionMode | null;
+  baseSource?: 'org_policy' | 'system_default' | null;
+  userOverrideId?: string | null;
+  policySource?: EffectivePolicySource | null;
+  policyLifetime?: ActionPolicyLifetime | null;
+  policyScope?: ActionPolicyScope | null;
   createdAt: string;
   updatedAt: string;
 }

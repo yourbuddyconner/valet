@@ -16,6 +16,28 @@ export const actionPolicies = sqliteTable('action_policies', {
 // Note: Partial unique indexes (idx_ap_action, idx_ap_service, idx_ap_risk) are defined
 // in the migration SQL. Drizzle's SQLite index builder does not support WHERE clauses.
 
+export const userActionPolicyOverrides = sqliteTable('user_action_policy_overrides', {
+  id: text().primaryKey(),
+  userId: text().notNull().references(() => users.id, { onDelete: 'cascade' }),
+  service: text(),
+  actionId: text(),
+  riskLevel: text(),
+  mode: text().notNull(),
+  lifetime: text().notNull().default('persistent'),
+  sessionId: text().references(() => sessions.id, { onDelete: 'cascade' }),
+  expiresAt: text(),
+  source: text().notNull().default('settings'),
+  sourceInvocationId: text(),
+  createdAt: text().notNull().default(sql`(datetime('now'))`),
+  updatedAt: text().notNull().default(sql`(datetime('now'))`),
+}, (table) => [
+  index('idx_uapo_user').on(table.userId),
+  index('idx_uapo_session').on(table.sessionId),
+  index('idx_uapo_expires').on(table.expiresAt),
+]);
+// Note: Partial unique indexes for user overrides are defined in the migration SQL.
+// Drizzle's SQLite index builder does not support WHERE clauses.
+
 export const actionInvocations = sqliteTable('action_invocations', {
   id: text().primaryKey(),
   sessionId: text().notNull().references(() => sessions.id, { onDelete: 'cascade' }),
@@ -33,6 +55,13 @@ export const actionInvocations = sqliteTable('action_invocations', {
   executedAt: text(),
   expiresAt: text(),
   policyId: text().references(() => actionPolicies.id, { onDelete: 'set null' }),
+  orgPolicyId: text().references(() => actionPolicies.id, { onDelete: 'set null' }),
+  baseMode: text(),
+  baseSource: text(),
+  userOverrideId: text().references(() => userActionPolicyOverrides.id, { onDelete: 'set null' }),
+  policySource: text(),
+  policyLifetime: text(),
+  policyScope: text(),
   createdAt: text().notNull().default(sql`(datetime('now'))`),
   updatedAt: text().notNull().default(sql`(datetime('now'))`),
 }, (table) => [
