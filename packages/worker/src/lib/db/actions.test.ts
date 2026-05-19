@@ -12,6 +12,7 @@ import {
   upsertActionPolicy,
   upsertUserActionPolicyOverride,
 } from './actions.js';
+import { invokeAction } from '../../services/actions.js';
 
 const USER_ID = 'user-action-policy';
 const OTHER_USER_ID = 'user-action-policy-other';
@@ -439,6 +440,129 @@ describe('action policy DB helpers', () => {
       policySource: 'user_override',
       policyLifetime: 'persistent',
       policyScope: 'service',
+    });
+  });
+
+  describe('invokeAction effective policy integration', () => {
+    it('auto-allows from a user override and stores base policy audit fields', async () => {
+      await upsertUserActionPolicyOverride(db as any, {
+        id: 'user-exact-allow',
+        userId: USER_ID,
+        service: 'gmail',
+        actionId: 'draft.create',
+        mode: 'allow',
+        lifetime: 'persistent',
+        source: 'settings',
+      });
+
+      const result = await invokeAction(db as any, {
+        sessionId: SESSION_ID,
+        userId: USER_ID,
+        service: 'gmail',
+        actionId: 'draft.create',
+        riskLevel: 'medium',
+        params: { to: 'customer@example.com' },
+      });
+      const invocation = await getInvocation(db as any, result.invocationId);
+
+      expect(result).toMatchObject({
+        outcome: 'allowed',
+        mode: 'allow',
+        policyId: null,
+      });
+      expect(invocation).toMatchObject({
+        status: 'executed',
+        resolvedMode: 'allow',
+        baseMode: 'require_approval',
+        baseSource: 'system_default',
+        orgPolicyId: null,
+        userOverrideId: 'user-exact-allow',
+        policySource: 'user_override',
+        policyLifetime: 'persistent',
+        policyScope: 'action',
+      });
+    });
+
+    it('keeps explicit org deny effective even when user allow exists', async () => {
+      await upsertActionPolicy(db as any, {
+        id: 'org-exact-deny',
+        service: 'gmail',
+        actionId: 'draft.create',
+        mode: 'deny',
+        createdBy: USER_ID,
+      });
+      await upsertUserActionPolicyOverride(db as any, {
+        id: 'user-exact-allow',
+        userId: USER_ID,
+        service: 'gmail',
+        actionId: 'draft.create',
+        mode: 'allow',
+        lifetime: 'persistent',
+        source: 'settings',
+      });
+
+      const result = await invokeAction(db as any, {
+        sessionId: SESSION_ID,
+        userId: USER_ID,
+        service: 'gmail',
+        actionId: 'draft.create',
+        riskLevel: 'medium',
+      });
+      const invocation = await getInvocation(db as any, result.invocationId);
+
+      expect(result).toMatchObject({
+        outcome: 'denied',
+        mode: 'deny',
+        policyId: 'org-exact-deny',
+      });
+      expect(invocation).toMatchObject({
+        status: 'denied',
+        resolvedMode: 'deny',
+        baseMode: 'deny',
+        baseSource: 'org_policy',
+        orgPolicyId: 'org-exact-deny',
+        userOverrideId: null,
+        policySource: 'org_policy',
+        policyLifetime: null,
+        policyScope: 'action',
+      });
+    });
+
+    it('records session override source and lifetime on auto-allowed invocations', async () => {
+      await upsertUserActionPolicyOverride(db as any, {
+        id: 'user-session-allow',
+        userId: USER_ID,
+        service: 'gmail',
+        actionId: 'draft.create',
+        mode: 'allow',
+        lifetime: 'session',
+        sessionId: SESSION_ID,
+        source: 'approval_prompt',
+      });
+
+      const result = await invokeAction(db as any, {
+        sessionId: SESSION_ID,
+        userId: USER_ID,
+        service: 'gmail',
+        actionId: 'draft.create',
+        riskLevel: 'high',
+      });
+      const invocation = await getInvocation(db as any, result.invocationId);
+
+      expect(result).toMatchObject({
+        outcome: 'allowed',
+        mode: 'allow',
+      });
+      expect(invocation).toMatchObject({
+        status: 'executed',
+        resolvedMode: 'allow',
+        baseMode: 'require_approval',
+        baseSource: 'system_default',
+        userOverrideId: 'user-session-allow',
+        policySource: 'session_override',
+        policyLifetime: 'session',
+        policyScope: 'action',
+      });
     });
   });
 });

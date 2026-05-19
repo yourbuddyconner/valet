@@ -4,7 +4,7 @@ import {
   getInvocation,
   updateInvocationStatus,
 } from '../lib/db.js';
-import { resolveMode } from './action-policy.js';
+import { resolveEffectiveMode } from './action-policy.js';
 import type { ActionMode } from '@valet/shared';
 
 const APPROVAL_EXPIRY_MS = 10 * 60 * 1000; // 10 minutes
@@ -33,14 +33,20 @@ export async function invokeAction(
   db: AppDb,
   input: InvokeActionParams,
 ): Promise<InvokeActionResult> {
-  const { mode, policyId } = await resolveMode(db, input.service, input.actionId, input.riskLevel);
+  const policy = await resolveEffectiveMode(db, {
+    userId: input.userId,
+    sessionId: input.sessionId,
+    service: input.service,
+    actionId: input.actionId,
+    riskLevel: input.riskLevel,
+  });
   const invocationId = crypto.randomUUID();
 
-  const expiresAt = mode === 'require_approval'
+  const expiresAt = policy.mode === 'require_approval'
     ? new Date(Date.now() + APPROVAL_EXPIRY_MS).toISOString()
     : undefined;
 
-  const status = mode === 'deny' ? 'denied' : mode === 'allow' ? 'executed' : 'pending';
+  const status = policy.mode === 'deny' ? 'denied' : policy.mode === 'allow' ? 'executed' : 'pending';
 
   await createInvocation(db, {
     id: invocationId,
@@ -49,15 +55,21 @@ export async function invokeAction(
     service: input.service,
     actionId: input.actionId,
     riskLevel: input.riskLevel,
-    resolvedMode: mode,
+    resolvedMode: policy.mode,
     params: input.params ? JSON.stringify(input.params) : undefined,
     expiresAt,
-    policyId,
+    policyId: policy.orgPolicyId,
+    orgPolicyId: policy.orgPolicyId,
+    baseMode: policy.baseMode,
+    baseSource: policy.baseSource,
+    userOverrideId: policy.userOverrideId,
+    policySource: policy.source,
+    policyLifetime: policy.lifetime,
+    policyScope: policy.scope,
     status,
   });
 
-  const outcome = mode === 'allow' ? 'allowed' : mode === 'deny' ? 'denied' : 'pending_approval';
-  return { outcome, invocationId, mode, policyId };
+  return { outcome: policy.outcome, invocationId, mode: policy.mode, policyId: policy.orgPolicyId };
 }
 
 /**
