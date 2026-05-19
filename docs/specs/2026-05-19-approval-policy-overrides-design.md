@@ -46,7 +46,8 @@ When the resolved mode is `require_approval`, `SessionAgentDO` stores an `intera
 
 ## Decision Summary
 
-- Organization/system `deny` is a hard ceiling. User overrides cannot loosen it.
+- Explicit organization `deny` is a hard ceiling. User overrides cannot loosen it.
+- System defaults are fallback policy, not the hard ceiling. A user override may loosen a system default `deny` unless an explicit org policy denies the matching action.
 - User settings can create persistent overrides at the same scopes as org policies: exact action, service, or risk level.
 - Approval-card shortcuts create exact-tool overrides only.
 - `Allow for Session` expires when the session reaches a terminal state: `terminated`, `archived`, or `error`.
@@ -115,10 +116,12 @@ Session-scoped overrides created from approval prompts are exact-action only. A 
 
 ### Invocation Audit Fields
 
-Extend `action_invocations` so each invocation records both the org/system result and any user override that affected it.
+Extend `action_invocations` so each invocation records both the base org/system result and any user override that affected it. Existing `resolvedMode` remains the final effective mode.
 
 ```sql
 ALTER TABLE action_invocations ADD COLUMN org_policy_id TEXT REFERENCES action_policies(id) ON DELETE SET NULL;
+ALTER TABLE action_invocations ADD COLUMN base_mode TEXT;
+ALTER TABLE action_invocations ADD COLUMN base_source TEXT;
 ALTER TABLE action_invocations ADD COLUMN user_override_id TEXT REFERENCES user_action_policy_overrides(id) ON DELETE SET NULL;
 ALTER TABLE action_invocations ADD COLUMN policy_source TEXT;
 ALTER TABLE action_invocations ADD COLUMN policy_lifetime TEXT;
@@ -141,6 +144,8 @@ ALTER TABLE action_invocations ADD COLUMN policy_scope TEXT;
 
 The existing `policy_id` column can be retained for compatibility and treated as the org policy ID. New code should prefer `org_policy_id` for clarity; if both exist during the transition, write both to the same org policy value.
 
+`base_mode` records the result before user overrides are applied. `base_source` is either `org_policy` or `system_default`. This preserves auditability for invocations where `resolvedMode` was changed by a user override.
+
 ## Effective Policy Resolution
 
 Policy resolution should happen in one helper with a clear return type, not as scattered conditionals across `services/actions.ts` and `services/session-tools.ts`.
@@ -150,7 +155,8 @@ type EffectivePolicy = {
   mode: ActionMode;
   outcome: 'allowed' | 'pending_approval' | 'denied';
   riskLevel: string;
-  orgMode: ActionMode;
+  baseMode: ActionMode;
+  baseSource: 'org_policy' | 'system_default';
   orgPolicyId: string | null;
   userOverrideId: string | null;
   source: 'system_default' | 'org_policy' | 'user_override' | 'session_override';
@@ -163,11 +169,13 @@ Resolution order:
 
 1. Validate the tool exists and is not disabled by org disabled action/plugin controls.
 2. Resolve the tool risk level.
-3. Resolve the org/system mode using the existing org cascade.
-4. If the org/system mode is `deny`, return denied immediately. User overrides are ignored.
-5. Resolve active user overrides for the current `userId`, `sessionId`, `service`, `actionId`, and `riskLevel`.
-6. If a user override matches, use it as the effective mode.
-7. If no user override matches, use the org/system mode.
+3. Resolve explicit org policy matches using the existing org cascade: exact action, service, then risk level.
+4. If an explicit org policy resolves to `deny`, return denied immediately. User overrides are ignored.
+5. If an explicit org policy resolves to `allow` or `require_approval`, use it as the base mode.
+6. If no explicit org policy matches, resolve the system default for the risk level and use it as the base mode.
+7. Resolve active user overrides for the current `userId`, `sessionId`, `service`, `actionId`, and `riskLevel`.
+8. If a user override matches, use it as the effective mode.
+9. If no user override matches, use the org/system base mode.
 
 Active override filtering:
 
@@ -192,7 +200,8 @@ If two active rows have the same specificity, prefer session/timed rows over per
 | `require_approval` exact action | `allow` service | `allow` |
 | `allow` service | `deny` exact action | `deny` |
 | `allow` risk level | `require_approval` service | `require_approval` |
-| critical system default `deny` | `allow` exact action | `deny` |
+| org risk `deny` | `allow` exact action | `deny` |
+| critical system default `deny` | `allow` exact action | `allow` |
 | medium system default `require_approval` | `allow` risk level | `allow` |
 
 ## User Settings
@@ -233,7 +242,7 @@ Validation mirrors admin action policy validation:
 - `actionId` requires `service`.
 - A user can only read, update, or delete their own overrides.
 
-For exact-action `allow` overrides, if the service/action/risk can be resolved and org/system policy is already `deny`, the API should reject the save with a clear validation error. For broad service or risk-level overrides, saving is allowed with the understanding that org-denied matching actions remain denied at execution time.
+For exact-action `allow` overrides, if the service/action/risk can be resolved and an explicit org policy denies it, the API should reject the save with a clear validation error. System default `deny` does not block saving a user override. For broad service or risk-level overrides, saving is allowed with the understanding that org-denied matching actions remain denied at execution time.
 
 ## Approval UI
 
@@ -253,7 +262,7 @@ Choices:
 | `allow_once` | Allow | Run the tool once and continue. | Approve and execute this invocation only. |
 | `allow_session` | Allow for Session | Run the tool and remember this choice for this session. | Create session-scoped exact-action allow override, then execute. |
 | `allow_always` | Always Allow | Run the tool and remember this choice for future tool calls. | Create persistent exact-action allow override, then execute. |
-| `cancel` | Cancel | Cancel this tool call. | Deny/cancel this invocation without creating an override. |
+| `cancel` | Cancel | Cancel this tool call. | Store the invocation as `denied` without creating an override. |
 
 Keyboard behavior:
 
@@ -288,7 +297,7 @@ New action handling:
 - `allow_once`: approve and execute the current invocation.
 - `allow_session`: create a session-scoped exact-action allow override, then approve and execute.
 - `allow_always`: create or update a persistent exact-action allow override, then approve and execute.
-- `cancel`: mark the invocation as denied/cancelled and send a cancellation error to the runner.
+- `cancel`: mark the invocation as `denied` and send a cancellation error to the runner.
 
 Legacy action handling:
 
@@ -299,9 +308,21 @@ Override creation must be ownership-checked and idempotent:
 
 - The pending prompt must belong to the session owner.
 - The invocation must still be pending.
-- The org/system effective result must not be `deny` at the time the override is created.
-- If creating the override fails, do not execute the tool.
+- No explicit org policy can deny the tool at the time the override is created.
+- If creating the override fails, do not execute the tool and leave the prompt retryable.
 - If the prompt was already resolved, the second resolution is ignored.
+
+The current handler deletes the local `interactive_prompts` row before doing D1 approval and execution work. This flow must change for override actions. Resolution should claim the prompt first, then delete it only after all required D1 writes succeed:
+
+1. Read the pending prompt row.
+2. Atomically mark it `status='resolving'` with a `WHERE status='pending'` guard. If no row is updated, another resolver won.
+3. Validate ownership and invocation status.
+4. For `allow_session` and `allow_always`, create or update the override.
+5. Approve or deny the invocation.
+6. On success, delete the local prompt row and broadcast/update channel resolution.
+7. On override-write or validation failure, restore the prompt to `status='pending'`, surface an error to the web UI/channel where practical, and keep the runner waiting so the user can choose `Allow`, `Cancel`, or retry the override action.
+
+`allow_once` and legacy `approve` do not need override writes, but can use the same claim/delete pattern to avoid two divergent resolution paths.
 
 For `allow_session`, insert or update:
 
@@ -334,6 +355,8 @@ Session-scoped overrides expire when the session reaches a terminal state:
 
 On terminal transition, the session lifecycle path should set `expiresAt = now` for active session overrides tied to that session. This is not required for runtime safety, because terminal sessions do not run new tool calls, but it keeps user settings and audit displays accurate.
 
+Implement this with a single DB helper, for example `expireSessionActionPolicyOverrides(db, sessionId, now)`, and call it from the centralized session status transition path whenever the new status is in `TERMINAL_SESSION_STATUSES`. The existing code has multiple terminal paths (`terminateSession`, `SessionAgentDO.handleStop`, error paths, and bulk/archive helpers), so the implementation should not rely on scattered best-effort calls. Prefer wiring the helper into `updateSessionStatus`; any raw SQL bulk archival path should either call the same helper or be covered by the fact that terminated sessions already expired their overrides.
+
 Hibernation and restore do not expire session overrides. The logical session ID is unchanged, so the override remains active.
 
 ## Channel Behavior
@@ -352,7 +375,7 @@ If a channel cannot support the complete chooser cleanly, the web session UI is 
 ## Security and Privacy
 
 - User overrides are per-user only. They never affect other users in the org.
-- User overrides never bypass org/system `deny`.
+- User overrides never bypass explicit org `deny`.
 - All override management routes require authentication.
 - The DO prompt resolution path must continue to enforce session ownership.
 - Broad user allows may be saved without exposing the full org policy graph; blocked actions still fail at execution time due to the hard ceiling.
@@ -373,7 +396,8 @@ Existing channel transports can ignore `InteractiveAction.description` because i
 - Org exact `deny` blocks user exact `allow`.
 - Org service `deny` blocks user exact `allow`.
 - Org risk `deny` blocks user service `allow`.
-- Critical system default `deny` blocks user exact `allow`.
+- Critical system default `deny` is loosened by user exact `allow`.
+- Base mode/source is recorded separately from final `resolvedMode`.
 - User exact override beats user service and risk overrides.
 - User service override beats user risk override.
 - Session override is active only for matching session ID.
@@ -388,7 +412,7 @@ Existing channel transports can ignore `InteractiveAction.description` because i
 - Invalid scope combinations are rejected.
 - `actionId` without `service` is rejected.
 - User cannot update or delete another user's override.
-- Exact-action allow rejected when resolved org/system policy is deny.
+- Exact-action allow rejected when an explicit org policy denies the action.
 
 ### SessionAgent Tests
 
@@ -396,9 +420,10 @@ Existing channel transports can ignore `InteractiveAction.description` because i
 - `allow_once` executes once and creates no override.
 - `allow_session` creates a session exact-action override and executes.
 - `allow_always` creates a persistent exact-action override and executes.
-- `cancel` does not execute and creates no override.
+- `cancel` stores the invocation as `denied`, does not execute, and creates no override.
 - Legacy `approve` and `deny` still work for old pending prompts.
-- Failed override creation does not execute the tool.
+- Failed override creation does not execute the tool and leaves the prompt retryable.
+- Terminal session status transition expires session-scoped overrides.
 
 ### UI Tests
 
