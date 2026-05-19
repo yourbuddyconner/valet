@@ -100,9 +100,11 @@ const readThread: ActionDefinition = {
 const listUsers: ActionDefinition = {
   id: 'slack.list_users',
   name: 'List Users',
-  description: 'List active human users in the Slack workspace. Returns user IDs needed for dm_user.',
+  description: 'List human users in the Slack workspace. Returns user IDs needed for dm_user. Use filter to search by ID, handle, real name, display name, or email.',
   riskLevel: 'low',
-  params: z.object({}),
+  params: z.object({
+    filter: z.string().optional().describe('Case-insensitive search over user ID, handle, real name, display name, and email. Use this to avoid dumping the full user list.'),
+  }),
 };
 
 const fetchFile: ActionDefinition = {
@@ -280,13 +282,22 @@ async function resolveAndEnrichMessages(token: string, messages: Record<string, 
 
 function slimUser(u: Record<string, unknown>): Record<string, unknown> {
   const profile = (u.profile || {}) as Record<string, unknown>;
-  return {
+  const user: Record<string, unknown> = {
     id: u.id,
     name: u.name,
     real_name: profile.real_name || u.real_name,
     display_name: profile.display_name || undefined,
     email: profile.email || undefined,
   };
+  if (u.deleted === true) user.deleted = true;
+  return user;
+}
+
+function matchesUserFilter(user: Record<string, unknown>, filter: string): boolean {
+  return ['id', 'name', 'real_name', 'display_name', 'email'].some((key) => {
+    const value = user[key];
+    return typeof value === 'string' && value.toLowerCase().includes(filter);
+  });
 }
 
 function slimChannel(ch: Record<string, unknown>): Record<string, unknown> {
@@ -540,18 +551,35 @@ async function executeAction(
       }
 
       case 'slack.list_users': {
-        // Single page — most workspaces under 200 humans
-        const res = await slackGet('users.list', token, { limit: 200 });
-        if (!res.ok) return slackError(res);
-        const data = (await res.json()) as { ok: boolean; error?: string; members?: unknown[] };
-        if (!data.ok) return slackError(res, data);
+        const p = listUsers.params.parse(params);
 
-        const members = (data.members || [])
-          .map((m) => m as Record<string, unknown>)
-          .filter((m) => !m.is_bot && !m.deleted)
+        const allMembers: Record<string, unknown>[] = [];
+        let cursor: string | undefined;
+        do {
+          const query: Record<string, unknown> = { limit: 200 };
+          if (cursor) query.cursor = cursor;
+          const res = await slackGet('users.list', token, query);
+          if (!res.ok) return slackError(res);
+          const data = (await res.json()) as {
+            ok: boolean; error?: string; members?: unknown[];
+            response_metadata?: { next_cursor?: string };
+          };
+          if (!data.ok) return slackError(res, data);
+          allMembers.push(...(data.members || []).map((m) => m as Record<string, unknown>));
+          cursor = data.response_metadata?.next_cursor || undefined;
+        } while (cursor);
+
+        let members = allMembers
+          .filter((m) => m.is_bot !== true && m.id !== 'USLACKBOT')
           .map(slimUser);
 
-        return { success: true, data: { members } };
+        const filter = p.filter?.trim();
+        if (filter) {
+          const normalizedFilter = filter.toLowerCase();
+          members = members.filter((user) => matchesUserFilter(user, normalizedFilter));
+        }
+
+        return { success: true, data: { ...(filter ? { filter } : {}), total: members.length, members } };
       }
 
       case 'slack.fetch_file': {
