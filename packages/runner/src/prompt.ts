@@ -1659,6 +1659,13 @@ export class PromptHandler {
             channel.pendingVisionAttachments = [];
             channel.abortedForVision = false;
             channel.resetPromptState();
+            // Suppress idle-based finalization until the async re-send
+            // makes the session busy. Without this, trailing idle events
+            // from the abort ripple (e.g. other pending tools erroring out)
+            // trigger premature finalization before the re-send is picked up.
+            // retryPending is cleared by handleSessionStatus when session
+            // transitions to "busy".
+            channel.retryPending = true;
             await this.sendPromptAsync(
               channel.opencodeSessionId!,
               'The requested image(s) are attached. Describe what you see and continue with your task.',
@@ -1722,6 +1729,9 @@ export class PromptHandler {
             channel.pendingVisionAttachments = [];
             channel.abortedForVision = false;
             channel.resetPromptState();
+            // Suppress trailing idle events from the abort — see comment in
+            // the response-error vision abort path above.
+            channel.retryPending = true;
             await this.sendPromptAsync(
               channel.opencodeSessionId!,
               'The requested image(s) are attached. Describe what you see and continue with your task.',
