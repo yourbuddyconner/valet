@@ -9,13 +9,14 @@ import type { Message, SessionStatus } from '@/api/types';
 import type { MessagePart } from '@valet/shared';
 import { useAuthStore } from '@/stores/auth';
 import { SLASH_COMMANDS, type QueueMode } from '@valet/shared';
+import { buildApprovalResolutionSocketMessage } from '@/lib/approval-prompts';
 export interface InteractivePromptState {
   id: string;
   sessionId: string;
   type: string;
   title: string;
   body?: string;
-  actions: Array<{ id: string; label: string; style?: 'primary' | 'danger' }>;
+  actions: Array<{ id: string; label: string; style?: 'primary' | 'danger'; description?: string }>;
   expiresAt?: number;
   context?: Record<string, unknown>;
   status: 'pending' | 'resolved' | 'expired';
@@ -194,7 +195,7 @@ interface WebSocketInteractivePromptMessage {
     type: string;
     title: string;
     body?: string;
-    actions: Array<{ id: string; label: string; style?: 'primary' | 'danger' }>;
+    actions: Array<{ id: string; label: string; style?: 'primary' | 'danger'; description?: string }>;
     expiresAt?: number;
     context?: Record<string, unknown>;
   };
@@ -1586,14 +1587,19 @@ export function useChat(sessionId: string) {
     executeCommand,
     integrationAuthErrors: state.integrationAuthErrors,
     dismissIntegrationAuth,
-    approveActionWs: useCallback((invocationId: string) => {
+    resolveApprovalWs: useCallback((invocationId: string, actionId: string) => {
       if (isConnected) {
-        send({ type: 'approve-action', invocationId } as any);
+        send(buildApprovalResolutionSocketMessage(invocationId, actionId) as any);
       }
     }, [isConnected, send]),
-    denyActionWs: useCallback((invocationId: string) => {
+    approveActionWs: useCallback((invocationId: string, actionId = 'approve') => {
       if (isConnected) {
-        send({ type: 'deny-action', invocationId } as any);
+        send({ type: 'approve-action', invocationId, actionId } as any);
+      }
+    }, [isConnected, send]),
+    denyActionWs: useCallback((invocationId: string, actionId = 'deny') => {
+      if (isConnected) {
+        send({ type: 'deny-action', invocationId, actionId } as any);
       }
     }, [isConnected, send]),
     loadThreadMessages,

@@ -108,6 +108,7 @@ export function ChatContainer({ sessionId, routeSessionId, initialThreadId, init
     childSessionEvents,
     connectedUsers,
     executeCommand,
+    resolveApprovalWs,
     approveActionWs,
     denyActionWs,
     integrationAuthErrors,
@@ -505,6 +506,7 @@ export function ChatContainer({ sessionId, routeSessionId, initialThreadId, init
                       prompt={prompt}
                       onAnswer={answerQuestion}
                       onDismiss={dismissQuestion}
+                      onResolveApprovalWs={resolveApprovalWs}
                       onApproveWs={approveActionWs}
                       onDenyWs={denyActionWs}
                     />

@@ -3,6 +3,13 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { useApproveAction, useDenyAction } from '@/api/action-invocations';
 import type { InteractivePromptState } from '@/hooks/use-chat';
+import {
+  buildApprovalResolutionSocketMessage,
+  getApprovalActionDescription,
+  getDefaultApprovalActionId,
+  getNextApprovalActionId,
+  isApprovalCancelAction,
+} from '@/lib/approval-prompts';
 
 function useCountdown(expiresAt?: number) {
   const [remaining, setRemaining] = React.useState<string>('');
@@ -142,16 +149,25 @@ interface InteractivePromptCardProps {
   prompt: InteractivePromptState;
   onAnswer: (promptId: string, answer: string | boolean) => void;
   onDismiss: (promptId: string) => void;
-  onApproveWs?: (invocationId: string) => void;
-  onDenyWs?: (invocationId: string) => void;
+  onResolveApprovalWs?: (invocationId: string, actionId: string) => void;
+  onApproveWs?: (invocationId: string, actionId?: string) => void;
+  onDenyWs?: (invocationId: string, actionId?: string) => void;
 }
 
-export function InteractivePromptCard({ prompt, onAnswer, onDismiss, onApproveWs, onDenyWs }: InteractivePromptCardProps) {
+export function InteractivePromptCard({
+  prompt,
+  onAnswer,
+  onDismiss,
+  onResolveApprovalWs,
+  onApproveWs,
+  onDenyWs,
+}: InteractivePromptCardProps) {
   const approveMutation = useApproveAction();
   const denyMutation = useDenyAction();
   const countdown = useCountdown(prompt.expiresAt);
   const [freeformValue, setFreeformValue] = React.useState('');
   const [isSubmitted, setIsSubmitted] = React.useState(false);
+  const [selectedApprovalActionId, setSelectedApprovalActionId] = React.useState(() => getDefaultApprovalActionId(prompt.actions));
 
   const isResolved = prompt.status !== 'pending';
   const isApproval = prompt.type === 'approval';
@@ -163,22 +179,49 @@ export function InteractivePromptCard({ prompt, onAnswer, onDismiss, onApproveWs
   const riskLevel = prompt.context?.riskLevel as string | undefined;
   const params = prompt.context?.params as Record<string, unknown> | undefined;
 
+  React.useEffect(() => {
+    if (!isApproval || prompt.actions.length === 0) return;
+    setSelectedApprovalActionId((current) => (
+      prompt.actions.some((action) => action.id === current)
+        ? current
+        : getDefaultApprovalActionId(prompt.actions)
+    ));
+  }, [isApproval, prompt.actions]);
+
+  function submitApprovalAction(actionId: string) {
+    if (isDisabled) return;
+
+    const message = buildApprovalResolutionSocketMessage(invocationId, actionId);
+    if (onResolveApprovalWs) {
+      setIsSubmitted(true);
+      onResolveApprovalWs(invocationId, actionId);
+      return;
+    }
+
+    if (message.type === 'approve-action') {
+      if (onApproveWs) {
+        setIsSubmitted(true);
+        onApproveWs(invocationId, actionId);
+      } else if (actionId === 'approve' || actionId === 'allow_once') {
+        setIsSubmitted(true);
+        approveMutation.mutate(invocationId);
+      }
+      return;
+    }
+
+    if (onDenyWs) {
+      setIsSubmitted(true);
+      onDenyWs(invocationId, actionId);
+    } else if (actionId === 'deny' || actionId === 'cancel') {
+      setIsSubmitted(true);
+      denyMutation.mutate({ invocationId });
+    }
+  }
+
   function handleActionClick(actionId: string) {
     if (isDisabled) return;
     if (isApproval) {
-      if (actionId === 'approve') {
-        if (onApproveWs) {
-          onApproveWs(invocationId);
-        } else {
-          approveMutation.mutate(invocationId);
-        }
-      } else if (actionId === 'deny') {
-        if (onDenyWs) {
-          onDenyWs(invocationId);
-        } else {
-          denyMutation.mutate({ invocationId });
-        }
-      }
+      submitApprovalAction(actionId);
     } else {
       setIsSubmitted(true);
       const action = prompt.actions.find((a) => a.id === actionId);
@@ -201,6 +244,36 @@ export function InteractivePromptCard({ prompt, onAnswer, onDismiss, onApproveWs
     setIsSubmitted(true);
     setFreeformValue('');
     onAnswer(prompt.id, trimmed);
+  }
+
+  function handleApprovalKeyDown(e: React.KeyboardEvent) {
+    if (!isApproval || isResolved || isDisabled || prompt.actions.length === 0) return;
+
+    if (e.key === 'ArrowDown' || e.key === 'ArrowRight') {
+      e.preventDefault();
+      setSelectedApprovalActionId((current) => getNextApprovalActionId(prompt.actions, current, 1));
+      return;
+    }
+
+    if (e.key === 'ArrowUp' || e.key === 'ArrowLeft') {
+      e.preventDefault();
+      setSelectedApprovalActionId((current) => getNextApprovalActionId(prompt.actions, current, -1));
+      return;
+    }
+
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      submitApprovalAction(selectedApprovalActionId || getDefaultApprovalActionId(prompt.actions));
+      return;
+    }
+
+    if (e.key === 'Escape') {
+      const cancelActionId = prompt.actions.find((action) => isApprovalCancelAction(action.id))?.id;
+      if (cancelActionId) {
+        e.preventDefault();
+        submitApprovalAction(cancelActionId);
+      }
+    }
   }
 
   const hasActions = prompt.actions.length > 0;
@@ -258,6 +331,53 @@ export function InteractivePromptCard({ prompt, onAnswer, onDismiss, onApproveWs
           <Badge variant={prompt.status === 'resolved' ? 'success' : 'secondary'}>
             {prompt.status === 'resolved' ? 'Resolved' : 'Expired'}
           </Badge>
+        </div>
+      ) : isApproval && hasActions ? (
+        <div className="mt-3">
+          <div
+            role="listbox"
+            aria-label={prompt.title}
+            tabIndex={0}
+            onKeyDown={handleApprovalKeyDown}
+            className="overflow-hidden rounded-md border border-neutral-200 bg-white shadow-sm outline-none focus:ring-2 focus:ring-amber-400/40 dark:border-neutral-700 dark:bg-neutral-900"
+          >
+            {prompt.actions.map((action) => {
+              const selected = action.id === selectedApprovalActionId;
+              const description = getApprovalActionDescription(action);
+              const isCancel = isApprovalCancelAction(action.id);
+              return (
+                <button
+                  key={action.id}
+                  type="button"
+                  role="option"
+                  aria-selected={selected}
+                  onFocus={() => setSelectedApprovalActionId(action.id)}
+                  onMouseEnter={() => setSelectedApprovalActionId(action.id)}
+                  onClick={() => handleActionClick(action.id)}
+                  disabled={isDisabled}
+                  className={`grid w-full grid-cols-[1.5rem_minmax(0,1fr)] gap-2 px-3 py-2 text-left text-sm transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${
+                    selected
+                      ? 'bg-neutral-100 text-neutral-950 dark:bg-neutral-800 dark:text-neutral-50'
+                      : 'text-neutral-700 hover:bg-neutral-50 dark:text-neutral-200 dark:hover:bg-neutral-800/70'
+                  }`}
+                >
+                  <span className={`pt-0.5 font-mono text-xs ${selected ? 'text-sky-500' : 'text-transparent'}`}>
+                    &gt;
+                  </span>
+                  <span className="min-w-0">
+                    <span className={`block font-medium ${isCancel ? 'text-red-600 dark:text-red-400' : ''}`}>
+                      {action.label}
+                    </span>
+                    {description && (
+                      <span className="mt-0.5 block text-xs leading-5 text-neutral-500 dark:text-neutral-400">
+                        {description}
+                      </span>
+                    )}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
         </div>
       ) : hasActions ? (
         <div className="mt-3 space-y-2">
