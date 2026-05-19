@@ -1,5 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { SessionAgentDO, buildForwardedParts, resolveSlackChannelId } from './session-agent.js';
+import { SessionAgentDO, buildActionApprovalPromptActions, buildForwardedParts, resolveSlackChannelId } from './session-agent.js';
+import { createTestDb } from '../test-utils/db.js';
+import { sessions } from '../lib/schema/sessions.js';
+import { users } from '../lib/schema/users.js';
+import { createInvocation, getInvocation, getUserActionPolicyOverride } from '../lib/db/actions.js';
 
 interface QueueRow {
   id: string;
@@ -33,10 +37,12 @@ interface InteractivePromptRow {
   type: string;
   request_id: string | null;
   title: string;
+  body?: string | null;
   actions: string;
   context: string;
   status: string;
   expires_at: number | null;
+  channel_refs?: string | null;
 }
 
 function cursor<T>(rows: T[]): { toArray(): T[]; one(): T } {
@@ -247,20 +253,50 @@ function createMockSql(): SqlStorage & {
       }
 
       if (q.startsWith('INSERT INTO interactive_prompts') || q.startsWith('INSERT OR REPLACE INTO interactive_prompts')) {
+        const hasBodyColumn = q.includes('body, actions');
         interactivePrompts.set(String(params[0]), {
           id: String(params[0]),
           type: String(q.includes("'approval'") ? 'approval' : 'question'),
           request_id: (params[1] as string) || null,
           title: String(params[2] ?? ''),
-          actions: String(params[3] ?? ''),
-          context: String(params[4] ?? ''),
+          body: hasBodyColumn ? String(params[3] ?? '') : null,
+          actions: String(params[hasBodyColumn ? 4 : 3] ?? ''),
+          context: String(params[hasBodyColumn ? 5 : 4] ?? ''),
           status: 'pending',
-          expires_at: typeof params[5] === 'number' ? params[5] : null,
+          expires_at: typeof params[hasBodyColumn ? 6 : 5] === 'number' ? params[hasBodyColumn ? 6 : 5] as number : null,
+          channel_refs: null,
         });
         return cursor([]);
       }
 
+      if (q.startsWith('SELECT') && q.includes('FROM interactive_prompts')) {
+        if (q.includes('WHERE id = ?')) {
+          const row = interactivePrompts.get(String(params[0]));
+          if (!row) return cursor([]);
+          if (q.includes("status = 'pending'") && row.status !== 'pending') return cursor([]);
+          return cursor([row]);
+        }
+        return cursor(Array.from(interactivePrompts.values()));
+      }
+
+      if (q.startsWith("UPDATE interactive_prompts SET status = 'resolving'")) {
+        const row = interactivePrompts.get(String(params[0]));
+        if (row?.status === 'pending') row.status = 'resolving';
+        return cursor([]);
+      }
+
+      if (q.startsWith("UPDATE interactive_prompts SET status = 'pending'")) {
+        const row = interactivePrompts.get(String(params[0]));
+        if (row?.status === 'resolving') row.status = 'pending';
+        return cursor([]);
+      }
+
       if (q.startsWith('UPDATE interactive_prompts SET channel_refs = ? WHERE id = ?')) {
+        return cursor([]);
+      }
+
+      if (q.startsWith('DELETE FROM interactive_prompts')) {
+        interactivePrompts.delete(String(params[0]));
         return cursor([]);
       }
 
@@ -1576,6 +1612,129 @@ describe('SessionAgentDO', () => {
       type: 'interactive_prompt',
       channelType: 'slack',
       channelId: 'C123',
+    });
+  });
+
+  describe('action approval prompts', () => {
+    async function setupApprovalPrompt(actionId = 'allow_session') {
+      const { agent, sql, broadcasts } = await createTestAgent();
+      const testDb = createTestDb();
+      const appDb = testDb.db;
+      appDb.insert(users).values({ id: 'user-1', email: 'user-1@example.com' }).run();
+      appDb.insert(sessions).values({
+        id: 'orchestrator:user-1',
+        userId: 'user-1',
+        workspace: '/tmp/session-agent-approval',
+        status: 'running',
+      }).run();
+
+      await createInvocation(appDb as any, {
+        id: 'inv-approval',
+        sessionId: 'orchestrator:user-1',
+        userId: 'user-1',
+        service: 'gmail',
+        actionId: 'draft.create',
+        riskLevel: 'medium',
+        resolvedMode: 'require_approval',
+        status: 'pending',
+      });
+
+      Object.defineProperty(agent, 'appDb', { value: appDb });
+      (agent as any).executeActionAndSend = vi.fn().mockResolvedValue(undefined);
+      sql.interactivePrompts.set('inv-approval', {
+        id: 'inv-approval',
+        type: 'approval',
+        request_id: 'request-approval',
+        title: 'Action requires approval',
+        body: 'Create a Gmail draft',
+        actions: JSON.stringify(buildActionApprovalPromptActions()),
+        context: JSON.stringify({
+          toolId: 'gmail:draft.create',
+          service: 'gmail',
+          actionId: 'draft.create',
+          params: { to: 'customer@example.com' },
+          riskLevel: 'medium',
+          invocationId: 'inv-approval',
+          summary: 'Create a Gmail draft',
+        }),
+        status: 'pending',
+        expires_at: Math.floor(Date.now() / 1000) + 600,
+        channel_refs: null,
+      });
+
+      await (agent as any).handlePromptResolved('inv-approval', {
+        actionId,
+        resolvedBy: 'user-1',
+      });
+
+      return { agent, sql, broadcasts, appDb };
+    }
+
+    it('builds Codex-style approval choices', () => {
+      expect(buildActionApprovalPromptActions()).toEqual([
+        { id: 'allow_once', label: 'Allow', description: 'Run the tool once and continue.', style: 'primary' },
+        { id: 'allow_session', label: 'Allow for Session', description: 'Run the tool and remember this choice for this session.' },
+        { id: 'allow_always', label: 'Always Allow', description: 'Run the tool and remember this choice for future tool calls.' },
+        { id: 'cancel', label: 'Cancel', description: 'Cancel this tool call.', style: 'danger' },
+      ]);
+    });
+
+    it('allow_session creates a session-scoped exact override before executing', async () => {
+      const { agent, sql, appDb } = await setupApprovalPrompt('allow_session');
+
+      const override = await getUserActionPolicyOverride(appDb as any, 'inv-approval:session');
+      const invocation = await getInvocation(appDb as any, 'inv-approval');
+
+      expect(override).toMatchObject({
+        userId: 'user-1',
+        service: 'gmail',
+        actionId: 'draft.create',
+        mode: 'allow',
+        lifetime: 'session',
+        sessionId: 'orchestrator:user-1',
+        source: 'approval_prompt',
+        sourceInvocationId: 'inv-approval',
+      });
+      expect(invocation).toMatchObject({ status: 'approved', resolvedBy: 'user-1' });
+      expect((agent as any).executeActionAndSend).toHaveBeenCalledOnce();
+      expect(sql.interactivePrompts.has('inv-approval')).toBe(false);
+    });
+
+    it('allow_always creates a persistent exact override before executing', async () => {
+      const { agent, appDb } = await setupApprovalPrompt('allow_always');
+
+      const override = await getUserActionPolicyOverride(appDb as any, 'inv-approval:persistent');
+
+      expect(override).toMatchObject({
+        userId: 'user-1',
+        service: 'gmail',
+        actionId: 'draft.create',
+        mode: 'allow',
+        lifetime: 'persistent',
+        sessionId: null,
+        source: 'approval_prompt',
+        sourceInvocationId: 'inv-approval',
+      });
+      expect((agent as any).executeActionAndSend).toHaveBeenCalledOnce();
+    });
+
+    it('cancel denies the invocation without executing', async () => {
+      const { agent, appDb } = await setupApprovalPrompt('cancel');
+
+      const invocation = await getInvocation(appDb as any, 'inv-approval');
+
+      expect(invocation).toMatchObject({ status: 'denied', resolvedBy: 'user-1' });
+      expect((agent as any).executeActionAndSend).not.toHaveBeenCalled();
+    });
+
+    it('keeps legacy approve mapped to allow_once', async () => {
+      const { agent, appDb } = await setupApprovalPrompt('approve');
+
+      const invocation = await getInvocation(appDb as any, 'inv-approval');
+
+      expect(invocation).toMatchObject({ status: 'approved', resolvedBy: 'user-1' });
+      expect(await getUserActionPolicyOverride(appDb as any, 'inv-approval:session')).toBeUndefined();
+      expect((agent as any).executeActionAndSend).toHaveBeenCalledOnce();
     });
   });
 

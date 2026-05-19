@@ -11,7 +11,7 @@ import { resolveAvailableModels } from '../services/model-catalog.js';
 import { integrationRegistry } from '../integrations/registry.js';
 import { updateIntegrationStatus } from '../lib/db/integrations.js';
 import { approveInvocation, denyInvocation } from '../services/actions.js';
-import { updateInvocationStatus } from '../lib/db/actions.js';
+import { resolveOrgPolicyMatch, updateInvocationStatus, upsertUserActionPolicyOverride } from '../lib/db/actions.js';
 import { getActivePluginArtifacts, getPluginSettings } from '../lib/db/plugins.js';
 import { getPersonaSkills, getOrgDefaultSkills, getPersonaToolWhitelist } from '../lib/db.js';
 import type { ChannelTarget, ChannelContext, InteractivePrompt, InteractiveAction, InteractivePromptRef, InteractiveResolution } from '@valet/sdk';
@@ -50,6 +50,32 @@ import { parseQueuedWorkflowPayload, deriveRuntimeStates } from '../lib/utils/ru
 const MAX_CHANNEL_FOLLOWUP_REMINDERS = 3;
 const PARENT_IDLE_DEBOUNCE_MS = 10_000;
 const ACTION_APPROVAL_EXPIRY_MS = 10 * 60 * 1000; // 10 minutes
+
+export function buildActionApprovalPromptActions(): InteractiveAction[] {
+  return [
+    { id: 'allow_once', label: 'Allow', description: 'Run the tool once and continue.', style: 'primary' },
+    { id: 'allow_session', label: 'Allow for Session', description: 'Run the tool and remember this choice for this session.' },
+    { id: 'allow_always', label: 'Always Allow', description: 'Run the tool and remember this choice for future tool calls.' },
+    { id: 'cancel', label: 'Cancel', description: 'Cancel this tool call.', style: 'danger' },
+  ];
+}
+
+function normalizeApprovalAction(actionId?: string): 'allow_once' | 'allow_session' | 'allow_always' | 'cancel' | null {
+  switch (actionId) {
+    case 'approve':
+    case 'allow_once':
+      return 'allow_once';
+    case 'allow_session':
+      return 'allow_session';
+    case 'allow_always':
+      return 'allow_always';
+    case 'deny':
+    case 'cancel':
+      return 'cancel';
+    default:
+      return null;
+  }
+}
 
 function buildThreadContinuationContext(rows: Array<{ role?: unknown; content?: unknown }>): string {
   return rows
@@ -118,6 +144,7 @@ interface ClientMessage {
   threadId?: string;
   continuationContext?: string;
   invocationId?: string;
+  actionId?: string;
   reason?: string;
 }
 
@@ -1487,7 +1514,7 @@ export class SessionAgentDO {
           return;
         }
         await this.handlePromptResolved(msg.invocationId, {
-          actionId: 'approve',
+          actionId: msg.actionId || 'approve',
           resolvedBy: this.sessionState.userId || 'user',
         });
         break;
@@ -1499,7 +1526,7 @@ export class SessionAgentDO {
           return;
         }
         await this.handlePromptResolved(msg.invocationId, {
-          actionId: 'deny',
+          actionId: msg.actionId || 'deny',
           value: msg.reason,
           resolvedBy: this.sessionState.userId || 'user',
         });
@@ -6145,6 +6172,7 @@ export class SessionAgentDO {
 
         // Use model-provided summary as the approval body
         const approvalBody = summary;
+        const approvalActions = buildActionApprovalPromptActions();
 
         // Store in interactive_prompts for alarm-based expiry and later execution
         this.ctx.storage.sql.exec(
@@ -6155,10 +6183,7 @@ export class SessionAgentDO {
           requestId,
           'Action requires approval',
           approvalBody,
-          JSON.stringify([
-            { id: 'approve', label: 'Approve', style: 'primary' },
-            { id: 'deny', label: 'Deny', style: 'danger' },
-          ]),
+          JSON.stringify(approvalActions),
           JSON.stringify(approvalContext),
           expiresAt,
         );
@@ -6177,10 +6202,7 @@ export class SessionAgentDO {
           type: 'approval',
           title: 'Action requires approval',
           body: approvalBody,
-          actions: [
-            { id: 'approve', label: 'Approve', style: 'primary' },
-            { id: 'deny', label: 'Deny', style: 'danger' },
-          ],
+          actions: approvalActions,
           expiresAt: expiresAt * 1000,
           context: approvalContext,
         };
@@ -6341,6 +6363,20 @@ export class SessionAgentDO {
     const requestId = row.request_id as string | null;
     const context = row.context ? JSON.parse(row.context as string) : {};
     const channelRefsJson = (row.channel_refs as string) || null;
+    this.ctx.storage.sql.exec(
+      "UPDATE interactive_prompts SET status = 'resolving' WHERE id = ? AND status = 'pending'",
+      promptId,
+    );
+    const restorePrompt = () => {
+      this.ctx.storage.sql.exec(
+        "UPDATE interactive_prompts SET status = 'pending' WHERE id = ? AND status = 'resolving'",
+        promptId,
+      );
+    };
+    const deletePrompt = () => {
+      this.ctx.storage.sql.exec('DELETE FROM interactive_prompts WHERE id = ?', promptId);
+    };
+    let effectiveResolution = resolution;
 
     // Resolve actionId → human-readable label from the stored actions list
     let actionLabel: string | undefined;
@@ -6352,9 +6388,6 @@ export class SessionAgentDO {
       } catch { /* best-effort */ }
     }
 
-    // Delete the row
-    this.ctx.storage.sql.exec('DELETE FROM interactive_prompts WHERE id = ?', promptId);
-
     const userId = this.sessionState.userId;
     const sessionId = this.sessionState.sessionId;
 
@@ -6363,6 +6396,23 @@ export class SessionAgentDO {
       const service = context.service || '';
       const actionId = context.actionId || '';
       const params = context.params || {};
+      const resolutionAction = normalizeApprovalAction(resolution.actionId);
+      if (!resolutionAction) {
+        restorePrompt();
+        if (requestId) {
+          this.runnerLink.send({ type: 'call-tool-result', requestId, error: `Unknown approval action: ${resolution.actionId || 'missing'}` } as any);
+        }
+        return;
+      }
+      effectiveResolution = { ...resolution, actionId: resolutionAction };
+
+      if (row.actions) {
+        try {
+          const actions = JSON.parse(row.actions as string) as Array<{ id: string; label: string }>;
+          const match = actions.find(a => a.id === resolutionAction);
+          if (match) actionLabel = match.label;
+        } catch { /* best-effort */ }
+      }
 
       if ('credentialSources' in context || 'isOrgScoped' in context) {
         // Approval was created before the unified-auth migration; context is stale.
@@ -6371,21 +6421,53 @@ export class SessionAgentDO {
         if (requestId) {
           this.runnerLink.send({ type: 'call-tool-result', requestId, error: 'This action approval expired during a system update. Please retry the action.' } as any);
         }
+        deletePrompt();
         return;
       }
 
-      if (resolution.actionId === 'approve') {
+      if (resolutionAction !== 'cancel') {
         if (!userId) {
           if (requestId) {
             this.runnerLink.send({ type: 'call-tool-result', requestId, error: 'No userId on session' } as any);
           }
-          // Still update channel messages before returning
-          if (channelRefsJson) {
-            this.ctx.waitUntil(
-              this.updateChannelInteractivePrompts(channelRefsJson, { ...resolution, resolvedBy: 'system' })
-            );
-          }
+          restorePrompt();
           return;
+        }
+
+        if (resolutionAction === 'allow_session' || resolutionAction === 'allow_always') {
+          try {
+            const orgPolicy = await resolveOrgPolicyMatch(this.appDb, String(service), String(actionId), String(context.riskLevel || 'medium'));
+            if (orgPolicy?.mode === 'deny') {
+              restorePrompt();
+              if (requestId) {
+                this.runnerLink.send({ type: 'call-tool-result', requestId, error: `Action "${toolId}" is denied by organization policy and cannot be allowed.` } as any);
+              }
+              return;
+            }
+
+            const lifetime = resolutionAction === 'allow_session' ? 'session' : 'persistent';
+            await upsertUserActionPolicyOverride(this.appDb, {
+              id: `${promptId}:${lifetime}`,
+              userId,
+              service: String(service),
+              actionId: String(actionId),
+              mode: 'allow',
+              lifetime,
+              sessionId: lifetime === 'session' ? sessionId : null,
+              source: 'approval_prompt',
+              sourceInvocationId: promptId,
+            });
+          } catch (err) {
+            restorePrompt();
+            if (requestId) {
+              this.runnerLink.send({
+                type: 'call-tool-result',
+                requestId,
+                error: `Failed to save approval override: ${err instanceof Error ? err.message : String(err)}`,
+              } as any);
+            }
+            return;
+          }
         }
 
         // Update D1 status to approved
@@ -6401,7 +6483,7 @@ export class SessionAgentDO {
           type: 'interactive_prompt_resolved',
           promptId,
           promptType,
-          resolution,
+          resolution: effectiveResolution,
           context,
         });
 
@@ -6415,15 +6497,16 @@ export class SessionAgentDO {
         });
 
         this.emitAuditEvent('agent.tool_call', `Action ${toolId} approved and executed`, undefined, { invocationId: promptId });
+        deletePrompt();
       } else {
-        // Deny
+        // Cancel
         const reason = resolution.value;
         await denyInvocation(this.appDb, promptId, userId || 'system', reason);
 
         // Send error to runner
         const errorMsg = reason
-          ? `Action "${toolId}" was denied: ${reason}`
-          : `Action "${toolId}" was denied by a reviewer`;
+          ? `Action "${toolId}" was cancelled: ${reason}`
+          : `Action "${toolId}" was cancelled`;
         if (requestId) {
           this.runnerLink.send({ type: 'call-tool-result', requestId, error: errorMsg } as any);
         }
@@ -6433,7 +6516,7 @@ export class SessionAgentDO {
           type: 'interactive_prompt_resolved',
           promptId,
           promptType,
-          resolution,
+          resolution: effectiveResolution,
           context,
         });
 
@@ -6446,7 +6529,8 @@ export class SessionAgentDO {
           timestamp: new Date().toISOString(),
         });
 
-        this.emitAuditEvent('agent.tool_call', `Action ${toolId} denied${reason ? `: ${reason}` : ''}`, undefined, { invocationId: promptId });
+        this.emitAuditEvent('agent.tool_call', `Action ${toolId} cancelled${reason ? `: ${reason}` : ''}`, undefined, { invocationId: promptId });
+        deletePrompt();
       }
     } else if (promptType === 'question') {
       // Send answer to runner — use the human-readable label when available
@@ -6474,19 +6558,20 @@ export class SessionAgentDO {
         data: { questionId: promptId, answer: String(answer) },
         timestamp: new Date().toISOString(),
       });
+      deletePrompt();
     }
 
     // Resolve display name and update channel messages
     if (channelRefsJson) {
       // Enrich resolution with label, title, and display name
       let displayResolution: InteractiveResolution = {
-        ...resolution,
+        ...effectiveResolution,
         ...(actionLabel ? { actionLabel } : {}),
         ...(promptTitle ? { promptTitle } : {}),
       };
-      if (resolution.resolvedBy && userId) {
+      if (effectiveResolution.resolvedBy && userId) {
         try {
-          const user = await getUserById(this.appDb, resolution.resolvedBy);
+          const user = await getUserById(this.appDb, effectiveResolution.resolvedBy);
           if (user?.name) {
             displayResolution = { ...displayResolution, resolvedBy: user.name };
           } else if (user?.email) {
