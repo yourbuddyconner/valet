@@ -5,6 +5,7 @@ import { users } from '../schema/users.js';
 import {
   createInvocation,
   getInvocation,
+  getUserActionPolicyOverride,
   resolveEffectiveActionPolicy,
   resolveOrgPolicyMatch,
   resolvePolicy,
@@ -12,6 +13,7 @@ import {
   upsertActionPolicy,
   upsertUserActionPolicyOverride,
 } from './actions.js';
+import { updateSessionStatus } from './sessions.js';
 import { invokeAction } from '../../services/actions.js';
 
 const USER_ID = 'user-action-policy';
@@ -563,6 +565,70 @@ describe('action policy DB helpers', () => {
         policyLifetime: 'session',
         policyScope: 'action',
       });
+    });
+  });
+
+  describe('session override expiry', () => {
+    it('expires only matching session-scoped overrides when a session reaches terminal status', async () => {
+      await upsertUserActionPolicyOverride(db as any, {
+        id: 'session-override',
+        userId: USER_ID,
+        service: 'gmail',
+        actionId: 'draft.create',
+        mode: 'allow',
+        lifetime: 'session',
+        sessionId: SESSION_ID,
+        source: 'approval_prompt',
+      });
+      await upsertUserActionPolicyOverride(db as any, {
+        id: 'other-session-override',
+        userId: USER_ID,
+        service: 'linear',
+        actionId: 'issue.create',
+        mode: 'allow',
+        lifetime: 'session',
+        sessionId: OTHER_SESSION_ID,
+        source: 'approval_prompt',
+      });
+      await upsertUserActionPolicyOverride(db as any, {
+        id: 'persistent-override',
+        userId: USER_ID,
+        service: 'gmail',
+        mode: 'deny',
+        lifetime: 'persistent',
+        source: 'settings',
+      });
+
+      const before = Date.now();
+      await updateSessionStatus(db as any, SESSION_ID, 'terminated');
+
+      const expired = await getUserActionPolicyOverride(db as any, 'session-override');
+      const otherSession = await getUserActionPolicyOverride(db as any, 'other-session-override');
+      const persistent = await getUserActionPolicyOverride(db as any, 'persistent-override');
+
+      expect(expired?.expiresAt).toBeTruthy();
+      expect(Date.parse(expired!.expiresAt!)).toBeGreaterThanOrEqual(before - 1000);
+      expect(Date.parse(expired!.expiresAt!)).toBeLessThanOrEqual(Date.now() + 1000);
+      expect(otherSession?.expiresAt).toBeNull();
+      expect(persistent?.expiresAt).toBeNull();
+    });
+
+    it('does not expire session-scoped overrides when a session hibernates', async () => {
+      await upsertUserActionPolicyOverride(db as any, {
+        id: 'hibernating-session-override',
+        userId: USER_ID,
+        service: 'gmail',
+        actionId: 'draft.create',
+        mode: 'allow',
+        lifetime: 'session',
+        sessionId: SESSION_ID,
+        source: 'approval_prompt',
+      });
+
+      await updateSessionStatus(db as any, SESSION_ID, 'hibernated');
+
+      const override = await getUserActionPolicyOverride(db as any, 'hibernating-session-override');
+      expect(override?.expiresAt).toBeNull();
     });
   });
 });

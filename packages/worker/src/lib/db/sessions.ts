@@ -1,4 +1,5 @@
 import type { D1Database } from '@cloudflare/workers-types';
+import { TERMINAL_SESSION_STATUSES } from '@valet/shared';
 import type {
   AgentSession,
   SessionGitState,
@@ -28,6 +29,7 @@ import {
 import { users } from '../schema/users.js';
 import { agentPersonas } from '../schema/personas.js';
 import { generateShareToken, ROLE_HIERARCHY, ACTIVE_SESSION_STATUSES, DEFAULT_MAX_ACTIVE_SESSIONS } from './constants.js';
+import { expireSessionActionPolicyOverrides } from './actions.js';
 import { getOrgSettings } from './org.js';
 
 // ─── Exported Types ─────────────────────────────────────────────────────────
@@ -382,6 +384,10 @@ export async function updateSessionStatus(
       lastActiveAt: sql`datetime('now')`,
     })
     .where(eq(sessions.id, id));
+
+  if (TERMINAL_SESSION_STATUSES.has(status)) {
+    await expireSessionActionPolicyOverrides(db, id);
+  }
 }
 
 export async function deleteSession(db: AppDb, id: string): Promise<void> {
