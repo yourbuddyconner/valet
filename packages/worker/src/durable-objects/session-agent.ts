@@ -271,6 +271,9 @@ export class SessionAgentDO {
   private lifecycle!: SessionLifecycle;
 
   private static readonly RUNNER_GRACE_PERIOD_MS = 60_000;
+  private static readonly MODAL_SANDBOX_MAX_LIFETIME_MS = 24 * 60 * 60 * 1000;
+  private static readonly MODAL_SANDBOX_TIMEOUT_EDGE_THRESHOLD_MS =
+    SessionAgentDO.MODAL_SANDBOX_MAX_LIFETIME_MS - 5 * 60 * 1000;
 
   private readonly healthMonitor = new SessionHealthMonitor();
 
@@ -3947,6 +3950,7 @@ export class SessionAgentDO {
     // If sandbox info was provided directly, we're already running
     if (body.sandboxId && body.tunnelUrls) {
       this.sessionState.status = 'running';
+      this.sessionState.sandboxStartedAt = Date.now();
       this.lifecycle.markRunningStarted();
       updateSessionStatus(this.appDb, body.sessionId, 'running', body.sandboxId).catch((err) =>
         console.error('[SessionAgentDO] Failed to sync status to D1:', err),
@@ -4029,6 +4033,7 @@ export class SessionAgentDO {
       // Store sandbox info — transition to waiting_runner until Runner connects
       // and signals readiness via agentStatus: idle.
       this.sessionState.sandboxId = result.sandboxId;
+      this.sessionState.sandboxStartedAt = Date.now();
       this.sessionState.tunnelUrls = result.tunnelUrls;
       this.sessionState.status = 'waiting_runner';
       this.lifecycle.markRunningStarted();
@@ -4169,6 +4174,7 @@ export class SessionAgentDO {
     // Update state
     this.sessionState.status = 'terminated';
     this.sessionState.sandboxId = undefined;
+    this.sessionState.sandboxStartedAt = 0;
     this.sessionState.tunnelUrls = null;
     this.sessionState.tunnels = [];
     this.sessionState.snapshotImageId = undefined;
@@ -5082,6 +5088,7 @@ export class SessionAgentDO {
 
     // Clear state for fresh start
     this.sessionState.sandboxId = undefined;
+    this.sessionState.sandboxStartedAt = 0;
     this.sessionState.tunnelUrls = null;
     this.sessionState.tunnels = [];
     this.sessionState.snapshotImageId = undefined;
@@ -5105,6 +5112,36 @@ export class SessionAgentDO {
     return Response.json({ status: 'recovering' }, { status: 202 });
   }
 
+  private logModalHardTimeoutEdgeIfNeeded(reason: string, now: number): void {
+    if (reason !== 'sandbox_lost') return;
+
+    const sandboxStartedAt = this.sessionState.sandboxStartedAt;
+    if (!sandboxStartedAt) return;
+
+    const sandboxAgeMs = now - sandboxStartedAt;
+    if (sandboxAgeMs < SessionAgentDO.MODAL_SANDBOX_TIMEOUT_EDGE_THRESHOLD_MS) return;
+
+    const sandboxId = this.sessionState.sandboxId;
+    const sessionId = this.sessionState.sessionId;
+    const modalTimeoutMs = SessionAgentDO.MODAL_SANDBOX_MAX_LIFETIME_MS;
+
+    console.error(
+      `[SessionAgentDO] Modal sandbox hard timeout edge: sandbox_lost after ${Math.round(sandboxAgeMs / 60_000)}m (session=${sessionId || 'unknown'}, sandbox=${sandboxId || 'unknown'})`,
+    );
+
+    this.emitEvent('session.recovery', {
+      summary: 'modal_sandbox_hard_timeout_edge',
+      properties: {
+        reason,
+        sandboxId,
+        sandboxStartedAt,
+        sandboxAgeMs,
+        modalTimeoutMs,
+        sessionId,
+      },
+    });
+  }
+
   /**
    * Attempt to recover from a sandbox loss by respawning the sandbox.
    * Called when the runner grace period expires instead of immediately terminating.
@@ -5121,6 +5158,7 @@ export class SessionAgentDO {
     const now = Date.now();
 
     console.log(`[SessionAgentDO] performRecovery(${reason}) for session ${sessionId}`);
+    this.logModalHardTimeoutEdgeIfNeeded(reason, now);
 
     // ─── 1. Transition to recovering ────────────────────────────────
     this.sessionState.status = 'recovering';
@@ -5304,6 +5342,7 @@ export class SessionAgentDO {
       // State writes from result
       this.sessionState.snapshotImageId = result.snapshotImageId;
       this.sessionState.sandboxId = undefined;
+      this.sessionState.sandboxStartedAt = 0;
       this.sessionState.tunnelUrls = null;
       this.sessionState.tunnels = [];
       this.promptQueue.runnerBusy = false;
@@ -5425,6 +5464,7 @@ export class SessionAgentDO {
       // State writes from result — transition to waiting_runner until Runner reconnects
       // and signals readiness via agentStatus: idle.
       this.sessionState.sandboxId = result.sandboxId;
+      this.sessionState.sandboxStartedAt = Date.now();
       this.sessionState.tunnelUrls = result.tunnelUrls;
       this.sessionState.snapshotImageId = undefined;
       this.sessionState.status = 'waiting_runner';

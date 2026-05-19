@@ -221,6 +221,15 @@ export class SessionState {
     this.set('sandboxWakeStartedAt', ts ? String(ts) : '');
   }
 
+  get sandboxStartedAt(): number {
+    const raw = this.get('sandboxStartedAt');
+    return raw ? parseInt(raw, 10) : 0;
+  }
+
+  set sandboxStartedAt(ts: number) {
+    this.set('sandboxStartedAt', ts ? String(ts) : '');
+  }
+
   // ─── Tunnels ──────────────────────────────────────────────────────
 
   get tunnelUrls(): Record<string, string> | null {
@@ -410,6 +419,7 @@ export class SessionState {
     this.tunnels = [];
     this.runningStartedAt = 0;
     this.sandboxWakeStartedAt = 0;
+    this.sandboxStartedAt = 0;
     this.initialPrompt = undefined;
     this.initialModel = undefined;
     this.parentThreadId = undefined;

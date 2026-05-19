@@ -245,7 +245,6 @@ sandbox = await modal.Sandbox.create.aio(
     image=image,
     encrypted_ports=[4096, 9000],
     timeout=86400,                    # 24 hours max
-    idle_timeout=idle_timeout + 1800, # user timeout + 30-min buffer
     secrets=[modal.Secret.from_dict(secrets_dict)],
     volumes={
         "/workspace": modal.Volume.from_name(volume_name, create_if_missing=True),
@@ -253,6 +252,8 @@ sandbox = await modal.Sandbox.create.aio(
     },
 )
 ```
+
+Modal `idle_timeout` is intentionally not set. SessionAgent DO hibernates idle sessions and snapshots the filesystem. Modal's own sandbox idle detector does not treat the runner's outbound WebSocket or active OpenCode work as sandbox activity, so a Modal idle timeout can terminate active Valet sessions.
 
 ### Volumes
 
@@ -289,7 +290,7 @@ return image.object_id
 
 - Uses Modal's `snapshot_filesystem` API with 55-second timeout.
 - Returns a Modal image reference (`object_id`).
-- If sandbox already exited (idle timeout), `ConflictError` → `SandboxAlreadyFinishedError`.
+- If sandbox already exited, `ConflictError` -> `SandboxAlreadyFinishedError`.
 - Sandbox terminated **after** snapshot succeeds.
 - Snapshot ID stored in D1 `sessions.snapshot_image_id`.
 
@@ -343,7 +344,6 @@ No Runner, no VNC, no code-server, no TTYD, no gateway. Only exposes port 4096. 
 ```python
 # backend/config.py
 DEFAULT_IDLE_TIMEOUT_SECONDS = 15 * 60    # 15 minutes
-MODAL_IDLE_TIMEOUT_BUFFER_SECONDS = 30 * 60  # 30 minutes beyond DO timeout
 MAX_TIMEOUT_SECONDS = 24 * 60 * 60       # 24 hours
 OPENCODE_PORT = 4096
 GATEWAY_PORT = 9000
@@ -362,7 +362,7 @@ WHISPER_MODELS_MOUNT = "/models/whisper"
 
 ### Snapshot Timeout
 
-Modal's `snapshot_filesystem` has a 55-second timeout. Large filesystem states (many installed packages, large repos) may exceed this. The caller (SessionAgentDO) catches failures and sets session status to `error`.
+Modal's `snapshot_filesystem` has a 55-second timeout. Large filesystem states (many installed packages, large repos) may exceed this. Recognized snapshot creation failures are surfaced to SessionAgent DO as snapshot failures; the DO terminates the sandbox and records the session as `terminated` with reason `snapshot_failed`.
 
 ### Snapshot vs. Volume Boundary
 

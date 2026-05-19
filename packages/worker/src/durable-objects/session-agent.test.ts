@@ -450,6 +450,33 @@ describe('SessionAgentDO', () => {
     expect(scheduleAlarm).toHaveBeenCalledTimes(1);
   });
 
+  it('logs loudly when sandbox_lost happens near the Modal 24h hard timeout', async () => {
+    const { agent } = await createTestAgent();
+    const now = 1_779_300_000_000;
+    const twentyFourHoursMs = 24 * 60 * 60 * 1000;
+    vi.spyOn(Date, 'now').mockReturnValue(now);
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    (agent as any).sessionState.sandboxStartedAt = now - twentyFourHoursMs - 30_000;
+    (agent as any).sessionState.sandboxId = 'sb-24h';
+    (agent as any).sessionState.backendUrl = 'https://backend/create-session';
+    (agent as any).sessionState.spawnRequest = { sessionId: 'orchestrator:user-1' };
+    (agent as any).spawnSandbox = vi.fn().mockResolvedValue(undefined);
+
+    await (agent as any).performRecovery('sandbox_lost');
+
+    expect(consoleError).toHaveBeenCalledWith(expect.stringContaining('Modal sandbox hard timeout edge'));
+    expect((agent as any).emitEvent).toHaveBeenCalledWith('session.recovery', {
+      summary: 'modal_sandbox_hard_timeout_edge',
+      properties: expect.objectContaining({
+        reason: 'sandbox_lost',
+        sandboxId: 'sb-24h',
+        sandboxAgeMs: twentyFourHoursMs + 30_000,
+        modalTimeoutMs: twentyFourHoursMs,
+      }),
+    });
+  });
+
   it('sends a minimal init payload during client websocket upgrade', async () => {
     const send = vi.fn();
     const serverSocket = { send };

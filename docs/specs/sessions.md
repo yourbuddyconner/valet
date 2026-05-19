@@ -190,7 +190,8 @@ RUNNING ───────────────> HIBERNATING    (user requ
 
 HIBERNATING ───────────> HIBERNATED     (snapshot completed)
             ───────────> TERMINATED     (sandbox already exited; 409 from Modal)
-            ───────────> ERROR          (snapshot failed)
+            ───────────> TERMINATED     (snapshot failed; sandbox terminated without snapshot)
+            ───────────> ERROR          (unexpected hibernation failure)
 
 HIBERNATED ────────────> RESTORING      (wake request, or auto-wake when prompt arrives)
            ────────────> TERMINATED     (stop called while hibernated)
@@ -223,6 +224,8 @@ Status exists in two places:
 2. **DO SQLite** (`state` table): Authoritative for live state. Used by real-time operations within the DO.
 
 Status is synced from DO to D1 at transition points via `updateSessionStatus()` calls, but this is best-effort (failures are caught and logged). The `getSessionWithStatus()` service function resolves conflicts by treating D1 as authoritative for terminal states (`terminated`, `archived`, `error`).
+
+The DO state also stores transient sandbox timing keys. `sandboxStartedAt` records when the current live Modal sandbox was accepted from create/restore/start input; it is cleared on hibernate, refresh, stop, and new lifecycle initialization. It is used only for runtime diagnostics, not billing.
 
 ### Derived Runtime State
 
@@ -426,9 +429,10 @@ For orchestrator sessions, both modes read across all of the user's orchestrator
 3. Set status to `hibernating`, sync to D1.
 4. POST to Modal backend's `/hibernate-session` (snapshots filesystem, terminates sandbox).
 5. Special case: if sandbox already exited (409 from Modal), set status to `terminated`.
-6. On success: store `snapshotImageId`, clear sandbox info, set status to `hibernated`.
-7. Revert any `processing` prompts to `queued`.
-8. **Auto-wake**: if prompts arrived during hibernation, immediately trigger wake.
+6. Special case: if snapshot creation fails (503 from Modal backend, or a recognized Modal snapshot timeout/error), explicitly terminate the sandbox and route through `handleStop('snapshot_failed')` so the session ends as `terminated` instead of remaining in `error`.
+7. On success: store `snapshotImageId`, clear sandbox info, set status to `hibernated`.
+8. Revert any `processing` prompts to `queued`.
+9. **Auto-wake**: if prompts arrived during hibernation, immediately trigger wake.
 
 ### Wake/Restore
 
@@ -477,9 +481,17 @@ D1 and DO can disagree on status (e.g., DO hibernated but D1 still shows `runnin
 
 All `processing` prompts revert to `queued`. When a new runner connects and signals `idle`, the queue drains automatically.
 
+### Sandbox Loss Near Modal Hard Timeout
+
+If runner loss becomes `sandbox_lost` and the current sandbox age is near Modal's 24-hour hard timeout, SessionAgent DO logs a loud `console.error` and records a `session.recovery` analytics event with summary `modal_sandbox_hard_timeout_edge`. Recovery still proceeds normally; the event exists to prove the unlikely max-lifetime edge case if it ever happens.
+
 ### Sandbox Exit During Hibernation
 
-If the sandbox self-terminated (idle timeout) before the hibernate call, Modal returns 409. The DO sets status to `terminated` directly, bypassing the normal stop flow (skips parent notification, child cascade, and audit logging).
+If the sandbox already exited before the hibernate call (for example manual termination, max lifetime, or another Modal-side stop), Modal returns 409. The DO sets status to `terminated` directly, bypassing the normal stop flow (skips parent notification, child cascade, and audit logging).
+
+### Snapshot Failure During Hibernation
+
+If Modal cannot create the snapshot image (for example, image creation times out), the backend returns a structured snapshot failure. The DO treats this as non-recoverable hibernation failure, terminates the sandbox, and records the session as `terminated` with reason `snapshot_failed`. Unknown hibernation failures still move the session to `error`.
 
 ### Concurrent Wake Requests
 

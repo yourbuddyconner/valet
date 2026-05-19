@@ -192,6 +192,14 @@ describe('SessionState', () => {
       ss.sandboxWakeStartedAt = 0;
       expect(ss.sandboxWakeStartedAt).toBe(0);
     });
+
+    it('reads/writes sandboxStartedAt', () => {
+      expect(ss.sandboxStartedAt).toBe(0);
+      ss.sandboxStartedAt = 1234567890;
+      expect(ss.sandboxStartedAt).toBe(1234567890);
+      ss.sandboxStartedAt = 0;
+      expect(ss.sandboxStartedAt).toBe(0);
+    });
   });
 
   // ─── Tunnels ──────────────────────────────────────────────────────
@@ -393,6 +401,7 @@ describe('SessionState', () => {
       ss.tunnels = [{ name: 'web', port: 8080, path: '/' }];
       ss.runningStartedAt = 9999;
       ss.sandboxWakeStartedAt = 8888;
+      ss.sandboxStartedAt = 7777;
       ss.initialPrompt = 'old prompt';
       ss.initialModel = 'old-model';
       ss.parentThreadId = 'old-thread';
@@ -408,6 +417,7 @@ describe('SessionState', () => {
       expect(ss.tunnels).toEqual([]);
       expect(ss.runningStartedAt).toBe(0);
       expect(ss.sandboxWakeStartedAt).toBe(0);
+      expect(ss.sandboxStartedAt).toBe(0);
       expect(ss.initialPrompt).toBeUndefined();
       expect(ss.initialModel).toBeUndefined();
       expect(ss.parentThreadId).toBeUndefined();

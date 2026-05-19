@@ -143,6 +143,15 @@ export class SessionLifecycle {
       throw new SandboxSnapshotFailedError(message);
     }
 
+    if (response.status === 500) {
+      const err = await response.text();
+      const snapshotMessage = this.extractSnapshotFailureMessage(err);
+      if (snapshotMessage) {
+        throw new SandboxSnapshotFailedError(`Snapshot failed: ${snapshotMessage}`);
+      }
+      throw new Error(`Backend returned ${response.status}: ${err}`);
+    }
+
     if (!response.ok) {
       const err = await response.text();
       throw new Error(`Backend returned ${response.status}: ${err}`);
@@ -150,6 +159,17 @@ export class SessionLifecycle {
 
     const result = await response.json() as { snapshotImageId: string };
     return { snapshotImageId: result.snapshotImageId };
+  }
+
+  private extractSnapshotFailureMessage(errorText: string): string | null {
+    const normalized = errorText.toLowerCase();
+    if (normalized.includes('timed out waiting for image to be created')) {
+      return 'Timed out waiting for image to be created';
+    }
+    if (normalized.includes('failed to create image')) {
+      return 'Failed to create image';
+    }
+    return null;
   }
 
   /** Restore a sandbox from a snapshot. */

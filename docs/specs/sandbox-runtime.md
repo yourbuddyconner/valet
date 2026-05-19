@@ -48,7 +48,6 @@ Orchestrator workspace volumes use a stable name across session ID rotations: `w
 
 ```python
 DEFAULT_IDLE_TIMEOUT_SECONDS = 15 * 60   # 15 minutes
-MODAL_IDLE_TIMEOUT_BUFFER_SECONDS = 30 * 60  # 30-minute safety buffer
 MAX_TIMEOUT_SECONDS = 24 * 60 * 60  # 24 hours
 OPENCODE_PORT = 4096
 GATEWAY_PORT = 9000
@@ -442,9 +441,11 @@ Supports hibernation recovery — if DO hibernates mid-turn, `recoverTurnFromSQL
    - Command: `/bin/bash /start.sh`
    - Encrypted ports: `[4096, 9000]`
    - Timeout: 24 hours max
-   - Idle timeout: user timeout + 30-minute buffer
+   - No Modal `idle_timeout`: Valet owns idle hibernation in the SessionAgent DO. Modal's sandbox idle detection does not count the runner's outbound WebSocket or OpenCode work, so setting `idle_timeout` can kill active agents.
    - Volumes: workspace (`/workspace`), whisper models (`/models/whisper`)
 5. Retrieve tunnel URLs from `sandbox.tunnels`.
+
+SessionAgent DO records when each live sandbox starts. If the runner disappears with `sandbox_lost` near the 24-hour Modal hard timeout, the DO emits a loud `console.error` and a `session.recovery` analytics event with summary `modal_sandbox_hard_timeout_edge`.
 
 ### Tunnel URL Structure
 
@@ -468,7 +469,8 @@ await sandbox.terminate.aio()
 return image.object_id
 ```
 
-Raises `SandboxAlreadyFinishedError` if sandbox already exited (e.g., Modal idle timeout).
+Raises `SandboxAlreadyFinishedError` if sandbox already exited before the snapshot call.
+Recognized Modal snapshot failures, including image creation timeouts and "failed to create image" errors, are surfaced as `SandboxSnapshotFailedError` so the Worker can terminate the session cleanly instead of leaving it in `error`.
 
 ### Restore
 
