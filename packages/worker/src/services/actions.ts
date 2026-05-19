@@ -25,6 +25,12 @@ export interface InvokeActionResult {
   policyId: string | null;
 }
 
+function isExpiredTimestamp(value: string | null, nowMs: number): boolean {
+  if (!value) return false;
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) && timestamp <= nowMs;
+}
+
 /**
  * Create an invocation record and resolve the action mode.
  * Does NOT execute the action — the caller must handle execution based on outcome.
@@ -82,11 +88,27 @@ export async function approveInvocation(
   approvedBy: string,
 ): Promise<{ ok: boolean; invocation?: Awaited<ReturnType<typeof getInvocation>> }> {
   const inv = await getInvocation(db, invocationId);
-  if (!inv || inv.status !== 'pending') {
+  if (!inv) {
     return { ok: false };
   }
 
-  const now = new Date().toISOString();
+  if (inv.status === 'approved' && inv.resolvedBy === approvedBy) {
+    return { ok: true, invocation: inv };
+  }
+  if (inv.status !== 'pending') {
+    return { ok: false, invocation: inv };
+  }
+
+  const nowMs = Date.now();
+  if (isExpiredTimestamp(inv.expiresAt, nowMs)) {
+    await updateInvocationStatus(db, invocationId, {
+      status: 'expired',
+      expectedStatus: 'pending',
+    });
+    return { ok: false, invocation: await getInvocation(db, invocationId) };
+  }
+
+  const now = new Date(nowMs).toISOString();
   await updateInvocationStatus(db, invocationId, {
     status: 'approved',
     resolvedBy: approvedBy,
@@ -94,8 +116,10 @@ export async function approveInvocation(
     expectedStatus: 'pending',
   });
 
-  // Re-fetch to return fresh state
   const updated = await getInvocation(db, invocationId);
+  if (updated?.status !== 'approved' || updated.resolvedBy !== approvedBy) {
+    return { ok: false, invocation: updated };
+  }
   return { ok: true, invocation: updated };
 }
 
@@ -108,13 +132,29 @@ export async function denyInvocation(
   invocationId: string,
   deniedBy: string,
   reason?: string,
-): Promise<{ ok: boolean }> {
+): Promise<{ ok: boolean; invocation?: Awaited<ReturnType<typeof getInvocation>> }> {
   const inv = await getInvocation(db, invocationId);
-  if (!inv || inv.status !== 'pending') {
+  if (!inv) {
     return { ok: false };
   }
 
-  const now = new Date().toISOString();
+  if (inv.status === 'denied' && inv.resolvedBy === deniedBy) {
+    return { ok: true, invocation: inv };
+  }
+  if (inv.status !== 'pending') {
+    return { ok: false, invocation: inv };
+  }
+
+  const nowMs = Date.now();
+  if (isExpiredTimestamp(inv.expiresAt, nowMs)) {
+    await updateInvocationStatus(db, invocationId, {
+      status: 'expired',
+      expectedStatus: 'pending',
+    });
+    return { ok: false, invocation: await getInvocation(db, invocationId) };
+  }
+
+  const now = new Date(nowMs).toISOString();
   await updateInvocationStatus(db, invocationId, {
     status: 'denied',
     resolvedBy: deniedBy,
@@ -123,7 +163,11 @@ export async function denyInvocation(
     expectedStatus: 'pending',
   });
 
-  return { ok: true };
+  const updated = await getInvocation(db, invocationId);
+  if (updated?.status !== 'denied' || updated.resolvedBy !== deniedBy) {
+    return { ok: false, invocation: updated };
+  }
+  return { ok: true, invocation: updated };
 }
 
 /**

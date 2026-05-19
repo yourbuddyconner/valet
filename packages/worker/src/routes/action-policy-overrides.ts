@@ -63,6 +63,7 @@ actionPolicyOverridesRouter.get('/', async (c) => {
 // PUT /api/action-policy-overrides/:id
 actionPolicyOverridesRouter.put('/:id', async (c) => {
   const id = c.req.param('id');
+  const user = c.get('user');
   const body = await c.req.json<{
     service?: string | null;
     actionId?: string | null;
@@ -73,14 +74,24 @@ actionPolicyOverridesRouter.put('/:id', async (c) => {
   const mode = validateMode(body.mode);
   const { service, actionId, riskLevel } = validateTarget(body);
 
-  if (mode === 'allow' && service && actionId) {
-    const explicitOrg = await resolveOrgPolicyMatch(c.get('db'), service, actionId, '__unknown__');
+  const existing = await getUserActionPolicyOverride(c.get('db'), id);
+  if (existing && existing.userId !== user.id) {
+    throw new NotFoundError('Action policy override', id);
+  }
+
+  if (mode === 'allow') {
+    const explicitOrg = service && actionId
+      ? await resolveOrgPolicyMatch(c.get('db'), service, actionId, '__unknown__')
+      : service
+        ? await resolveOrgPolicyMatch(c.get('db'), service, '__unknown__', '__unknown__')
+        : riskLevel
+          ? await resolveOrgPolicyMatch(c.get('db'), '__unknown__', '__unknown__', riskLevel)
+          : null;
     if (explicitOrg?.mode === 'deny') {
-      throw new ValidationError('This action is denied by organization policy and cannot be allowed by a user override');
+      throw new ValidationError('This target is denied by organization policy and cannot be allowed by a user override');
     }
   }
 
-  const user = c.get('user');
   await upsertUserActionPolicyOverride(c.get('db'), {
     id,
     userId: user.id,

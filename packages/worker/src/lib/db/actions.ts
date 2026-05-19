@@ -238,13 +238,22 @@ export async function upsertUserActionPolicyOverride(
   const source = data.source ?? 'settings';
   const sourceInvocationId = data.sourceInvocationId ?? null;
 
+  const idOwner = await db
+    .select({ userId: userActionPolicyOverrides.userId })
+    .from(userActionPolicyOverrides)
+    .where(eq(userActionPolicyOverrides.id, data.id))
+    .get();
+  if (idOwner && idOwner.userId !== data.userId) {
+    throw new Error('Action policy override not found');
+  }
+
+  if (lifetime === 'session' && !sessionId) {
+    throw new Error('sessionId is required for session-scoped action policy overrides');
+  }
+
   let existingId: string | null = null;
 
   if (svc && act) {
-    if (lifetime === 'session' && !sessionId) {
-      throw new Error('sessionId is required for session-scoped action policy overrides');
-    }
-
     const conditions = [
       eq(userActionPolicyOverrides.userId, data.userId),
       eq(userActionPolicyOverrides.lifetime, lifetime),
@@ -252,11 +261,7 @@ export async function upsertUserActionPolicyOverride(
       eq(userActionPolicyOverrides.actionId, act),
     ];
     if (lifetime === 'session') {
-      const scopedSessionId = sessionId;
-      if (!scopedSessionId) {
-        throw new Error('sessionId is required for session-scoped action policy overrides');
-      }
-      conditions.push(eq(userActionPolicyOverrides.sessionId, scopedSessionId));
+      conditions.push(eq(userActionPolicyOverrides.sessionId, sessionId as string));
     }
 
     const existing = await db
@@ -266,29 +271,39 @@ export async function upsertUserActionPolicyOverride(
       .get();
     existingId = existing?.id ?? null;
   } else if (svc && !act && !risk) {
+    const conditions = [
+      eq(userActionPolicyOverrides.userId, data.userId),
+      eq(userActionPolicyOverrides.lifetime, lifetime),
+      eq(userActionPolicyOverrides.service, svc),
+      isNull(userActionPolicyOverrides.actionId),
+      isNull(userActionPolicyOverrides.riskLevel),
+    ];
+    if (lifetime === 'session') {
+      conditions.push(eq(userActionPolicyOverrides.sessionId, sessionId as string));
+    }
+
     const existing = await db
       .select({ id: userActionPolicyOverrides.id })
       .from(userActionPolicyOverrides)
-      .where(and(
-        eq(userActionPolicyOverrides.userId, data.userId),
-        eq(userActionPolicyOverrides.lifetime, lifetime),
-        eq(userActionPolicyOverrides.service, svc),
-        isNull(userActionPolicyOverrides.actionId),
-        isNull(userActionPolicyOverrides.riskLevel),
-      ))
+      .where(and(...conditions))
       .get();
     existingId = existing?.id ?? null;
   } else if (!svc && !act && risk) {
+    const conditions = [
+      eq(userActionPolicyOverrides.userId, data.userId),
+      eq(userActionPolicyOverrides.lifetime, lifetime),
+      isNull(userActionPolicyOverrides.service),
+      isNull(userActionPolicyOverrides.actionId),
+      eq(userActionPolicyOverrides.riskLevel, risk),
+    ];
+    if (lifetime === 'session') {
+      conditions.push(eq(userActionPolicyOverrides.sessionId, sessionId as string));
+    }
+
     const existing = await db
       .select({ id: userActionPolicyOverrides.id })
       .from(userActionPolicyOverrides)
-      .where(and(
-        eq(userActionPolicyOverrides.userId, data.userId),
-        eq(userActionPolicyOverrides.lifetime, lifetime),
-        isNull(userActionPolicyOverrides.service),
-        isNull(userActionPolicyOverrides.actionId),
-        eq(userActionPolicyOverrides.riskLevel, risk),
-      ))
+      .where(and(...conditions))
       .get();
     existingId = existing?.id ?? null;
   }

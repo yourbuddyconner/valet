@@ -46,6 +46,14 @@ CREATE UNIQUE INDEX idx_uapo_session_action
   ON user_action_policy_overrides(user_id, session_id, service, action_id)
   WHERE lifetime = 'session' AND action_id IS NOT NULL;
 
+CREATE UNIQUE INDEX idx_uapo_session_service
+  ON user_action_policy_overrides(user_id, session_id, service)
+  WHERE lifetime = 'session' AND action_id IS NULL AND risk_level IS NULL AND service IS NOT NULL;
+
+CREATE UNIQUE INDEX idx_uapo_session_risk
+  ON user_action_policy_overrides(user_id, session_id, risk_level)
+  WHERE lifetime = 'session' AND service IS NULL AND action_id IS NULL AND risk_level IS NOT NULL;
+
 ALTER TABLE action_invocations ADD COLUMN org_policy_id TEXT REFERENCES action_policies(id) ON DELETE SET NULL;
 ALTER TABLE action_invocations ADD COLUMN base_mode TEXT;
 ALTER TABLE action_invocations ADD COLUMN base_source TEXT;

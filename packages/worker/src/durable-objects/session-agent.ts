@@ -1171,64 +1171,13 @@ export class SessionAgentDO {
     // ─── Interactive Prompt Expiry ──────────────────────────────────
     const expiredPrompts = this.ctx.storage.sql
       .exec(
-        'SELECT id, type, request_id, context, channel_refs FROM interactive_prompts WHERE expires_at IS NOT NULL AND expires_at <= ?',
+        "SELECT id, type, request_id, context, channel_refs FROM interactive_prompts WHERE status = 'pending' AND expires_at IS NOT NULL AND expires_at <= ?",
         nowSecs
       )
       .toArray();
 
     for (const ep of expiredPrompts) {
-      const epId = ep.id as string;
-      const epType = ep.type as string;
-      const epRequestId = ep.request_id as string | null;
-      const epContext = ep.context ? JSON.parse(ep.context as string) : {};
-      const epChannelRefs = (ep.channel_refs as string) || null;
-
-      // Delete from local SQLite
-      this.ctx.storage.sql.exec('DELETE FROM interactive_prompts WHERE id = ?', epId);
-
-      if (epType === 'approval') {
-        const toolId = epContext.toolId || '';
-
-        // Update D1 status to expired (use invocationId from context, falls back to prompt ID)
-        const invocationId = epContext.invocationId || epId;
-        this.ctx.waitUntil(
-          updateInvocationStatus(this.appDb, invocationId, {
-            status: 'expired',
-          }).catch((err) => console.error('[SessionAgentDO] Failed to mark invocation expired:', err))
-        );
-
-        // Send error to runner to unblock the pending request
-        if (epRequestId) {
-          this.runnerLink.send({ type: 'call-tool-result', requestId: epRequestId, error: `Action "${toolId}" approval expired after 10 minutes` } as any);
-        } else {
-          console.warn(`[SessionAgentDO] Approval prompt ${epId} expired with no request_id — runner may be stuck`);
-        }
-
-        this.emitAuditEvent('agent.tool_call', `Action ${toolId} approval expired`, undefined, { invocationId: epId });
-      } else if (epType === 'question') {
-        this.runnerLink.send({
-          type: 'answer',
-          questionId: epId,
-          answer: '__expired__',
-        });
-
-        this.emitAuditEvent('agent.question', `Question ${epId} expired`, undefined, { questionId: epId });
-      }
-
-      // Broadcast expiry to clients
-      this.broadcastToClients({
-        type: 'interactive_prompt_expired',
-        promptId: epId,
-        promptType: epType,
-        context: epContext,
-      });
-
-      // Update channel messages with expired status
-      if (epChannelRefs) {
-        this.ctx.waitUntil(
-          this.updateChannelInteractivePrompts(epChannelRefs, { actionId: '__expired__', resolvedBy: 'system' })
-        );
-      }
+      await this.expireInteractivePromptRow(ep as Record<string, unknown>);
     }
 
     // Metrics flush removed from alarm handler — flushed at lifecycle
@@ -6343,6 +6292,59 @@ export class SessionAgentDO {
     }
   }
 
+  private async expireInteractivePromptRow(row: Record<string, unknown>) {
+    const promptId = String(row.id);
+    const promptType = String(row.type);
+    const requestId = (row.request_id as string | null) ?? null;
+    const context = row.context ? JSON.parse(String(row.context)) : {};
+    const channelRefs = (row.channel_refs as string) || null;
+
+    this.ctx.storage.sql.exec('DELETE FROM interactive_prompts WHERE id = ?', promptId);
+
+    if (promptType === 'approval') {
+      const toolId = String(context.toolId || '');
+      const invocationId = String(context.invocationId || promptId);
+
+      try {
+        await updateInvocationStatus(this.appDb, invocationId, {
+          status: 'expired',
+          expectedStatus: 'pending',
+        });
+      } catch (err) {
+        console.error('[SessionAgentDO] Failed to mark invocation expired:', err);
+      }
+
+      if (requestId) {
+        this.runnerLink.send({ type: 'call-tool-result', requestId, error: `Action "${toolId}" approval expired after 10 minutes` } as any);
+      } else {
+        console.warn(`[SessionAgentDO] Approval prompt ${promptId} expired with no request_id — runner may be stuck`);
+      }
+
+      this.emitAuditEvent('agent.tool_call', `Action ${toolId} approval expired`, undefined, { invocationId });
+    } else if (promptType === 'question') {
+      this.runnerLink.send({
+        type: 'answer',
+        questionId: promptId,
+        answer: '__expired__',
+      });
+
+      this.emitAuditEvent('agent.question', `Question ${promptId} expired`, undefined, { questionId: promptId });
+    }
+
+    this.broadcastToClients({
+      type: 'interactive_prompt_expired',
+      promptId,
+      promptType,
+      context,
+    });
+
+    if (channelRefs) {
+      this.ctx.waitUntil(
+        this.updateChannelInteractivePrompts(channelRefs, { actionId: '__expired__', resolvedBy: 'system' })
+      );
+    }
+  }
+
   /**
    * Unified handler for resolving any interactive prompt (approval or question).
    */
@@ -6358,6 +6360,17 @@ export class SessionAgentDO {
     }
 
     const row = rows[0];
+    const rawExpiresAt = row.expires_at;
+    const rowExpiresAt = typeof rawExpiresAt === 'number'
+      ? rawExpiresAt
+      : typeof rawExpiresAt === 'string'
+        ? Number(rawExpiresAt)
+        : Number.NaN;
+    if (Number.isFinite(rowExpiresAt) && rowExpiresAt <= Math.floor(Date.now() / 1000)) {
+      await this.expireInteractivePromptRow(row as Record<string, unknown>);
+      return;
+    }
+
     const promptType = row.type as string;
     const promptTitle = (row.title as string) || '';
     const requestId = row.request_id as string | null;
@@ -6375,6 +6388,23 @@ export class SessionAgentDO {
     };
     const deletePrompt = () => {
       this.ctx.storage.sql.exec('DELETE FROM interactive_prompts WHERE id = ?', promptId);
+    };
+    const deleteNoLongerPendingPrompt = (message = 'This action approval is no longer pending.') => {
+      deletePrompt();
+      if (requestId) {
+        this.runnerLink.send({ type: 'call-tool-result', requestId, error: message } as any);
+      }
+      this.broadcastToClients({
+        type: 'interactive_prompt_expired',
+        promptId,
+        promptType,
+        context,
+      });
+      if (channelRefsJson) {
+        this.ctx.waitUntil(
+          this.updateChannelInteractivePrompts(channelRefsJson, { actionId: '__expired__', resolvedBy: 'system' })
+        );
+      }
     };
     let effectiveResolution = resolution;
 
@@ -6470,8 +6500,11 @@ export class SessionAgentDO {
           }
         }
 
-        // Update D1 status to approved
-        await approveInvocation(this.appDb, promptId, userId);
+        const approval = await approveInvocation(this.appDb, promptId, userId);
+        if (!approval.ok) {
+          deleteNoLongerPendingPrompt();
+          return;
+        }
 
         const actionSource = integrationRegistry.getActions(service);
         if (requestId) {
@@ -6501,7 +6534,11 @@ export class SessionAgentDO {
       } else {
         // Cancel
         const reason = resolution.value;
-        await denyInvocation(this.appDb, promptId, userId || 'system', reason);
+        const denial = await denyInvocation(this.appDb, promptId, userId || 'system', reason);
+        if (!denial.ok) {
+          deleteNoLongerPendingPrompt();
+          return;
+        }
 
         // Send error to runner
         const errorMsg = reason

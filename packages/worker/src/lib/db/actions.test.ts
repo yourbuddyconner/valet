@@ -325,6 +325,108 @@ describe('action policy DB helpers', () => {
     });
   });
 
+  it('keeps session-scoped service overrides isolated by session', async () => {
+    await upsertUserActionPolicyOverride(db as any, {
+      id: 'session-service-allow',
+      userId: USER_ID,
+      service: 'gmail',
+      mode: 'allow',
+      lifetime: 'session',
+      sessionId: SESSION_ID,
+      source: 'approval_prompt',
+    });
+    await upsertUserActionPolicyOverride(db as any, {
+      id: 'other-session-service-deny',
+      userId: USER_ID,
+      service: 'gmail',
+      mode: 'deny',
+      lifetime: 'session',
+      sessionId: OTHER_SESSION_ID,
+      source: 'approval_prompt',
+    });
+
+    const matchingSession = await resolveEffectiveActionPolicy(db as any, {
+      userId: USER_ID,
+      sessionId: SESSION_ID,
+      service: 'gmail',
+      actionId: 'draft.create',
+      riskLevel: 'medium',
+    });
+    const otherSession = await resolveEffectiveActionPolicy(db as any, {
+      userId: USER_ID,
+      sessionId: OTHER_SESSION_ID,
+      service: 'gmail',
+      actionId: 'draft.create',
+      riskLevel: 'medium',
+    });
+
+    expect(matchingSession).toMatchObject({
+      mode: 'allow',
+      userOverrideId: 'session-service-allow',
+      source: 'session_override',
+      lifetime: 'session',
+      scope: 'service',
+    });
+    expect(otherSession).toMatchObject({
+      mode: 'deny',
+      userOverrideId: 'other-session-service-deny',
+      source: 'session_override',
+      lifetime: 'session',
+      scope: 'service',
+    });
+  });
+
+  it('keeps session-scoped risk overrides isolated by session', async () => {
+    await upsertUserActionPolicyOverride(db as any, {
+      id: 'session-risk-allow',
+      userId: USER_ID,
+      riskLevel: 'high',
+      mode: 'allow',
+      lifetime: 'session',
+      sessionId: SESSION_ID,
+      source: 'approval_prompt',
+    });
+    await upsertUserActionPolicyOverride(db as any, {
+      id: 'other-session-risk-deny',
+      userId: USER_ID,
+      riskLevel: 'high',
+      mode: 'deny',
+      lifetime: 'session',
+      sessionId: OTHER_SESSION_ID,
+      source: 'approval_prompt',
+    });
+
+    const matchingSession = await resolveEffectiveActionPolicy(db as any, {
+      userId: USER_ID,
+      sessionId: SESSION_ID,
+      service: 'gmail',
+      actionId: 'draft.create',
+      riskLevel: 'high',
+    });
+    const otherSession = await resolveEffectiveActionPolicy(db as any, {
+      userId: USER_ID,
+      sessionId: OTHER_SESSION_ID,
+      service: 'linear',
+      actionId: 'issue.create',
+      riskLevel: 'high',
+    });
+
+    expect(matchingSession).toMatchObject({
+      mode: 'allow',
+      userOverrideId: 'session-risk-allow',
+      source: 'session_override',
+      lifetime: 'session',
+      scope: 'risk_level',
+    });
+    expect(otherSession).toMatchObject({
+      mode: 'deny',
+      userOverrideId: 'other-session-risk-deny',
+      source: 'session_override',
+      lifetime: 'session',
+      scope: 'risk_level',
+    });
+  });
+
   it('ignores expired timed overrides', async () => {
     await upsertUserActionPolicyOverride(db as any, {
       id: 'user-expired-allow',

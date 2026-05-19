@@ -135,6 +135,42 @@ describe('actionPolicyOverridesRouter', () => {
     expect(await getUserActionPolicyOverride(db as any, 'rejected')).toBeUndefined();
   });
 
+  it('rejects service allow when organization policy denies the service', async () => {
+    await upsertActionPolicy(db as any, {
+      id: 'org-deny-gmail',
+      service: 'gmail',
+      mode: 'deny',
+      createdBy: USER_ID,
+    });
+
+    const res = await app.fetch(new Request('http://localhost/rejected-service', {
+      method: 'PUT',
+      body: JSON.stringify({ service: 'gmail', mode: 'allow' }),
+      headers: { 'content-type': 'application/json' },
+    }), { DB: {} } as any);
+
+    expect(res.status).toBe(400);
+    expect(await getUserActionPolicyOverride(db as any, 'rejected-service')).toBeUndefined();
+  });
+
+  it('rejects risk-level allow when organization policy denies the risk level', async () => {
+    await upsertActionPolicy(db as any, {
+      id: 'org-deny-critical',
+      riskLevel: 'critical',
+      mode: 'deny',
+      createdBy: USER_ID,
+    });
+
+    const res = await app.fetch(new Request('http://localhost/rejected-risk', {
+      method: 'PUT',
+      body: JSON.stringify({ riskLevel: 'critical', mode: 'allow' }),
+      headers: { 'content-type': 'application/json' },
+    }), { DB: {} } as any);
+
+    expect(res.status).toBe(400);
+    expect(await getUserActionPolicyOverride(db as any, 'rejected-risk')).toBeUndefined();
+  });
+
   it('allows exact-action allow when only system default would deny', async () => {
     const res = await app.fetch(new Request('http://localhost/critical-allow', {
       method: 'PUT',
@@ -170,6 +206,30 @@ describe('actionPolicyOverridesRouter', () => {
     expect(await getUserActionPolicyOverride(db as any, 'theirs')).toMatchObject({
       id: 'theirs',
       userId: OTHER_USER_ID,
+    });
+  });
+
+  it('does not update another user override by id collision', async () => {
+    await upsertUserActionPolicyOverride(db as any, {
+      id: 'theirs',
+      userId: OTHER_USER_ID,
+      service: 'gmail',
+      mode: 'deny',
+      source: 'settings',
+    });
+
+    const res = await app.fetch(new Request('http://localhost/theirs', {
+      method: 'PUT',
+      body: JSON.stringify({ service: 'linear', mode: 'allow' }),
+      headers: { 'content-type': 'application/json' },
+    }), { DB: {} } as any);
+
+    expect(res.status).toBe(404);
+    expect(await getUserActionPolicyOverride(db as any, 'theirs')).toMatchObject({
+      id: 'theirs',
+      userId: OTHER_USER_ID,
+      service: 'gmail',
+      mode: 'deny',
     });
   });
 });

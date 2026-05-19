@@ -4,6 +4,7 @@ import {
   getDefaultApprovalActionId,
   getNextApprovalActionId,
   getApprovalActionDescription,
+  isApprovalPromptExpired,
 } from './approval-prompts';
 
 const approvalActions = [
@@ -57,5 +58,12 @@ describe('approval prompt helpers', () => {
     expect(getApprovalActionDescription({ id: 'allow_session', label: 'Allow for Session' })).toBe('Run the tool and remember this choice for this session.');
     expect(getApprovalActionDescription({ id: 'custom', label: 'Custom', description: 'Custom behavior.' })).toBe('Custom behavior.');
     expect(getApprovalActionDescription({ id: 'custom', label: 'Custom' })).toBeUndefined();
+  });
+
+  it('detects expired approval prompts from millisecond timestamps', () => {
+    expect(isApprovalPromptExpired(undefined, 1_000)).toBe(false);
+    expect(isApprovalPromptExpired(999, 1_000)).toBe(true);
+    expect(isApprovalPromptExpired(1_000, 1_000)).toBe(true);
+    expect(isApprovalPromptExpired(1_001, 1_000)).toBe(false);
   });
 });

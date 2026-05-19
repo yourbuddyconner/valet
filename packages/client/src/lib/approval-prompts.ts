@@ -52,3 +52,7 @@ export function getNextApprovalActionId(
 export function getApprovalActionDescription(action: ApprovalPromptAction): string | undefined {
   return action.description ?? DEFAULT_ACTION_DESCRIPTIONS[action.id];
 }
+
+export function isApprovalPromptExpired(expiresAt?: number, now = Date.now()): boolean {
+  return typeof expiresAt === 'number' && expiresAt <= now;
+}

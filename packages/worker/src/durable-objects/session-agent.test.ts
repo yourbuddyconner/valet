@@ -276,7 +276,14 @@ function createMockSql(): SqlStorage & {
           if (q.includes("status = 'pending'") && row.status !== 'pending') return cursor([]);
           return cursor([row]);
         }
-        return cursor(Array.from(interactivePrompts.values()));
+        let rows = Array.from(interactivePrompts.values());
+        if (q.includes("status = 'pending'")) {
+          rows = rows.filter((row) => row.status === 'pending');
+        }
+        if (q.includes('expires_at IS NOT NULL') && typeof params[0] === 'number') {
+          rows = rows.filter((row) => row.expires_at !== null && row.expires_at <= Number(params[0]));
+        }
+        return cursor(rows);
       }
 
       if (q.startsWith("UPDATE interactive_prompts SET status = 'resolving'")) {
@@ -1616,7 +1623,10 @@ describe('SessionAgentDO', () => {
   });
 
   describe('action approval prompts', () => {
-    async function setupApprovalPrompt(actionId = 'allow_session') {
+    async function setupApprovalPrompt(
+      actionId = 'allow_session',
+      opts?: { expiresAt?: number; invocationStatus?: string },
+    ) {
       const { agent, sql, broadcasts } = await createTestAgent();
       const testDb = createTestDb();
       const appDb = testDb.db;
@@ -1636,7 +1646,7 @@ describe('SessionAgentDO', () => {
         actionId: 'draft.create',
         riskLevel: 'medium',
         resolvedMode: 'require_approval',
-        status: 'pending',
+        status: opts?.invocationStatus ?? 'pending',
       });
 
       Object.defineProperty(agent, 'appDb', { value: appDb });
@@ -1658,7 +1668,7 @@ describe('SessionAgentDO', () => {
           summary: 'Create a Gmail draft',
         }),
         status: 'pending',
-        expires_at: Math.floor(Date.now() / 1000) + 600,
+        expires_at: opts?.expiresAt ?? Math.floor(Date.now() / 1000) + 600,
         channel_refs: null,
       });
 
@@ -1735,6 +1745,62 @@ describe('SessionAgentDO', () => {
       expect(invocation).toMatchObject({ status: 'approved', resolvedBy: 'user-1' });
       expect(await getUserActionPolicyOverride(appDb as any, 'inv-approval:session')).toBeUndefined();
       expect((agent as any).executeActionAndSend).toHaveBeenCalledOnce();
+    });
+
+    it('expires stale approval prompts instead of executing them', async () => {
+      const { agent, sql, appDb, broadcasts } = await setupApprovalPrompt('allow_once', {
+        expiresAt: Math.floor(Date.now() / 1000) - 1,
+      });
+
+      const invocation = await getInvocation(appDb as any, 'inv-approval');
+
+      expect(invocation).toMatchObject({ status: 'expired' });
+      expect((agent as any).executeActionAndSend).not.toHaveBeenCalled();
+      expect(sql.interactivePrompts.has('inv-approval')).toBe(false);
+      expect(broadcasts).toContainEqual(expect.objectContaining({
+        type: 'interactive_prompt_expired',
+        promptId: 'inv-approval',
+      }));
+    });
+
+    it('does not execute when the invocation is no longer pending', async () => {
+      const { agent, sql, appDb } = await setupApprovalPrompt('allow_once', {
+        invocationStatus: 'denied',
+      });
+
+      const invocation = await getInvocation(appDb as any, 'inv-approval');
+
+      expect(invocation).toMatchObject({ status: 'denied' });
+      expect((agent as any).executeActionAndSend).not.toHaveBeenCalled();
+      expect(sql.interactivePrompts.has('inv-approval')).toBe(false);
+    });
+
+    it('does not expire prompts that are already being resolved', async () => {
+      const { agent, sql } = await createTestAgent();
+      sql.interactivePrompts.set('resolving-approval', {
+        id: 'resolving-approval',
+        type: 'approval',
+        request_id: 'request-resolving',
+        title: 'Action requires approval',
+        body: 'Create a Gmail draft',
+        actions: JSON.stringify(buildActionApprovalPromptActions()),
+        context: JSON.stringify({
+          toolId: 'gmail:draft.create',
+          service: 'gmail',
+          actionId: 'draft.create',
+          params: { to: 'customer@example.com' },
+          riskLevel: 'medium',
+          invocationId: 'resolving-approval',
+          summary: 'Create a Gmail draft',
+        }),
+        status: 'resolving',
+        expires_at: Math.floor(Date.now() / 1000) - 1,
+        channel_refs: null,
+      });
+
+      await agent.alarm();
+
+      expect(sql.interactivePrompts.has('resolving-approval')).toBe(true);
     });
   });
 

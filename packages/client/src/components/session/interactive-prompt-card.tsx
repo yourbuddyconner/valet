@@ -9,6 +9,7 @@ import {
   getDefaultApprovalActionId,
   getNextApprovalActionId,
   isApprovalCancelAction,
+  isApprovalPromptExpired,
 } from '@/lib/approval-prompts';
 
 function useCountdown(expiresAt?: number) {
@@ -172,7 +173,8 @@ export function InteractivePromptCard({
   const isResolved = prompt.status !== 'pending';
   const isApproval = prompt.type === 'approval';
   const isLoading = isApproval && (approveMutation.isPending || denyMutation.isPending);
-  const isDisabled = isLoading || isSubmitted;
+  const isExpired = isApproval && isApprovalPromptExpired(prompt.expiresAt);
+  const isDisabled = isLoading || isSubmitted || isExpired;
 
   const invocationId = (prompt.context?.invocationId as string) ?? prompt.id;
   const toolId = prompt.context?.toolId as string | undefined;
@@ -305,7 +307,7 @@ export function InteractivePromptCard({
               Skip
             </button>
           )}
-          {!isResolved && countdown && countdown !== 'expired' && (
+          {!isResolved && countdown && (
             <span className="text-xs text-neutral-500 dark:text-neutral-400">
               {countdown}
             </span>
