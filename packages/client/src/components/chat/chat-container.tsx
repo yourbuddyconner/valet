@@ -191,6 +191,7 @@ export function ChatContainer({ sessionId, routeSessionId, initialThreadId, init
     try {
       const thread = await createThread.mutateAsync();
       selectThread(thread.id);
+      requestAnimationFrame(() => chatInputRef.current?.focus());
     } catch (err) {
       console.error('[ChatContainer] Failed to create thread:', err);
     }
@@ -288,6 +289,7 @@ export function ChatContainer({ sessionId, routeSessionId, initialThreadId, init
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [editTitleValue, setEditTitleValue] = useState('');
   const titleInputRef = useRef<HTMLInputElement>(null);
+  const chatInputRef = useRef<HTMLTextAreaElement>(null);
 
   const displayTitle = sessionTitle || session?.title || session?.workspace || sessionId.slice(0, 8);
 
@@ -593,6 +595,7 @@ export function ChatContainer({ sessionId, routeSessionId, initialThreadId, init
             onCommand={handleCommand}
             externalValue={editingWithdrawnContent}
             onExternalValueConsumed={() => setEditingWithdrawnContent(null)}
+            inputRef={chatInputRef}
           />
           {isMobile && (
             mobileActionsOpen ? (
