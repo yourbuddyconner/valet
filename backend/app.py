@@ -20,9 +20,9 @@ fn_image = (
     modal.Image.debian_slim()
     .pip_install("fastapi[standard]")
     .add_local_python_source("session", "sandboxes", "config", "images")
-    .add_local_dir("docker", remote_path="/root/docker")
-    .add_local_dir("packages/runner", remote_path="/root/packages/runner")
-    .add_local_dir("packages/shared", remote_path="/root/packages/shared")
+    .add_local_dir("docker", remote_path="/root/docker", ignore=["**/node_modules"])
+    .add_local_dir("packages/runner", remote_path="/root/packages/runner", ignore=["**/node_modules"])
+    .add_local_dir("packages/shared", remote_path="/root/packages/shared", ignore=["**/node_modules"])
 )
 
 from sandboxes import SandboxAlreadyFinishedError, SandboxSnapshotFailedError
