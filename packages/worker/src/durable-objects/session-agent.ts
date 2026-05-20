@@ -6464,10 +6464,13 @@ export class SessionAgentDO {
     const requestId = row.request_id as string | null;
     const context = row.context ? JSON.parse(row.context as string) : {};
     const channelRefsJson = (row.channel_refs as string) || null;
-    this.ctx.storage.sql.exec(
-      "UPDATE interactive_prompts SET status = 'resolving' WHERE id = ? AND status = 'pending'",
+    const claimedRows = this.ctx.storage.sql.exec(
+      "UPDATE interactive_prompts SET status = 'resolving' WHERE id = ? AND status = 'pending' RETURNING id",
       promptId,
-    );
+    ).toArray();
+    if (claimedRows.length === 0) {
+      return { ok: false, status: 409, error: 'This prompt is no longer pending.' };
+    }
     const restorePrompt = () => {
       this.ctx.storage.sql.exec(
         "UPDATE interactive_prompts SET status = 'pending' WHERE id = ? AND status = 'resolving'",

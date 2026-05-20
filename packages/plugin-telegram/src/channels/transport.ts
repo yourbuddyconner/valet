@@ -472,6 +472,9 @@ export class TelegramTransport implements ChannelTransport {
     let statusText: string;
     if (resolution.actionId === '__expired__') {
       statusText = '⏰ Expired';
+    } else if (resolution.actionId === '__failed__') {
+      statusText = '❌ Failed';
+      if (resolution.value) statusText += `: ${resolution.value}`;
     } else if (resolution.actionId === 'approve') {
       statusText = `✅ Approved by ${resolution.resolvedBy}`;
     } else if (resolution.actionId === 'allow_once') {

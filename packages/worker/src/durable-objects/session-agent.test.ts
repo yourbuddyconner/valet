@@ -289,7 +289,10 @@ function createMockSql(): SqlStorage & {
 
       if (q.startsWith("UPDATE interactive_prompts SET status = 'resolving'")) {
         const row = interactivePrompts.get(String(params[0]));
-        if (row?.status === 'pending') row.status = 'resolving';
+        if (row?.status === 'pending') {
+          row.status = 'resolving';
+          return cursor(q.includes('RETURNING') ? [{ id: row.id }] : []);
+        }
         return cursor([]);
       }
 
@@ -1972,6 +1975,34 @@ describe('SessionAgentDO', () => {
       expect(result).toMatchObject({ ok: false, status: 500 });
       expect(invocation).toMatchObject({ status: 'pending', resolvedBy: null });
       expect(sql.interactivePrompts.get('inv-approval')).toMatchObject({ status: 'pending' });
+      expect((agent as any).runnerLink.send).not.toHaveBeenCalledWith(expect.objectContaining({
+        type: 'call-tool-result',
+        requestId: 'request-approval',
+      }));
+    });
+
+    it('stops resolution when the pending prompt claim does not update a row', async () => {
+      const { agent, sql, appDb } = await setupApprovalPrompt('allow_once', {
+        skipResolve: true,
+      });
+      const originalExec = sql.exec.bind(sql);
+      vi.spyOn(sql, 'exec').mockImplementation((query: string, ...params: unknown[]) => {
+        if (query.trim().startsWith("UPDATE interactive_prompts SET status = 'resolving'")) {
+          return originalExec("SELECT * FROM interactive_prompts WHERE id = ?", "__missing__");
+        }
+        return originalExec(query, ...params);
+      });
+
+      const result = await (agent as any).handlePromptResolved('inv-approval', {
+        actionId: 'allow_once',
+        resolvedBy: 'user-1',
+      });
+      const invocation = await getInvocation(appDb as any, 'inv-approval');
+
+      expect(result).toMatchObject({ ok: false, status: 409 });
+      expect(invocation).toMatchObject({ status: 'pending', resolvedBy: null });
+      expect(sql.interactivePrompts.get('inv-approval')).toMatchObject({ status: 'pending' });
+      expect((agent as any).executeActionAndSend).not.toHaveBeenCalled();
       expect((agent as any).runnerLink.send).not.toHaveBeenCalledWith(expect.objectContaining({
         type: 'call-tool-result',
         requestId: 'request-approval',

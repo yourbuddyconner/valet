@@ -136,7 +136,7 @@ describe('actionPolicyOverridesRouter', () => {
     expect(await getUserActionPolicyOverride(db as any, 'rejected')).toBeUndefined();
   });
 
-  it('rejects service allow when organization policy denies the service', async () => {
+  it('allows service-scope allow even when organization policy denies the service', async () => {
     await upsertActionPolicy(db as any, {
       id: 'org-deny-gmail',
       service: 'gmail',
@@ -150,11 +150,18 @@ describe('actionPolicyOverridesRouter', () => {
       headers: { 'content-type': 'application/json' },
     }), { DB: {} } as any);
 
-    expect(res.status).toBe(400);
-    expect(await getUserActionPolicyOverride(db as any, 'rejected-service')).toBeUndefined();
+    expect(res.status).toBe(200);
+    expect(await getUserActionPolicyOverride(db as any, 'rejected-service')).toMatchObject({
+      id: 'rejected-service',
+      userId: USER_ID,
+      service: 'gmail',
+      actionId: null,
+      riskLevel: null,
+      mode: 'allow',
+    });
   });
 
-  it('rejects risk-level allow when organization policy denies the risk level', async () => {
+  it('allows risk-scope allow even when organization policy denies the risk level', async () => {
     await upsertActionPolicy(db as any, {
       id: 'org-deny-critical',
       riskLevel: 'critical',
@@ -168,8 +175,15 @@ describe('actionPolicyOverridesRouter', () => {
       headers: { 'content-type': 'application/json' },
     }), { DB: {} } as any);
 
-    expect(res.status).toBe(400);
-    expect(await getUserActionPolicyOverride(db as any, 'rejected-risk')).toBeUndefined();
+    expect(res.status).toBe(200);
+    expect(await getUserActionPolicyOverride(db as any, 'rejected-risk')).toMatchObject({
+      id: 'rejected-risk',
+      userId: USER_ID,
+      service: null,
+      actionId: null,
+      riskLevel: 'critical',
+      mode: 'allow',
+    });
   });
 
   it('rejects exact-action allow when organization policy denies the action risk level', async () => {

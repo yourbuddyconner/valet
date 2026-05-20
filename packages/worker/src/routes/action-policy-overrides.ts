@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import type { Env, Variables } from '../env.js';
 import { NotFoundError, ValidationError } from '@valet/shared';
+import type { ActionRiskLevel } from '@valet/shared';
 import {
   deleteUserActionPolicyOverride,
   getUserActionPolicyOverride,
@@ -18,7 +19,8 @@ export const actionPolicyOverridesRouter = new Hono<{ Bindings: Env; Variables: 
 type OverrideMode = 'allow' | 'require_approval' | 'deny';
 
 const VALID_MODES = new Set<OverrideMode>(['allow', 'require_approval', 'deny']);
-const VALID_RISK_LEVELS = new Set(['low', 'medium', 'high', 'critical']);
+const VALID_RISK_LEVELS = ['low', 'medium', 'high', 'critical'] as const satisfies readonly ActionRiskLevel[];
+const VALID_RISK_LEVEL_SET = new Set<string>(VALID_RISK_LEVELS);
 
 function nullableString(value: unknown): string | null {
   return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null;
@@ -36,8 +38,8 @@ function validateTarget(body: { service?: unknown; actionId?: unknown; riskLevel
   const actionId = nullableString(body.actionId);
   const riskLevel = nullableString(body.riskLevel);
 
-  if (riskLevel && !VALID_RISK_LEVELS.has(riskLevel)) {
-    throw new ValidationError(`Invalid risk level: ${riskLevel}. Must be one of: ${Array.from(VALID_RISK_LEVELS).join(', ')}`);
+  if (riskLevel && !VALID_RISK_LEVEL_SET.has(riskLevel)) {
+    throw new ValidationError(`Invalid risk level: ${riskLevel}. Must be one of: ${VALID_RISK_LEVELS.join(', ')}`);
   }
 
   if (actionId && !service) {
@@ -96,17 +98,9 @@ actionPolicyOverridesRouter.put('/:id', async (c) => {
     throw new NotFoundError('Action policy override', id);
   }
 
-  if (mode === 'allow') {
-    const resolvedRiskLevel = service && actionId
-      ? await resolveCatalogRiskLevel(c.get('db'), service, actionId)
-      : riskLevel;
-    const explicitOrg = service && actionId
-      ? await resolveOrgPolicyMatch(c.get('db'), service, actionId, resolvedRiskLevel ?? '__unknown__')
-      : service
-        ? await resolveOrgPolicyMatch(c.get('db'), service, '__unknown__', '__unknown__')
-        : riskLevel
-          ? await resolveOrgPolicyMatch(c.get('db'), '__unknown__', '__unknown__', riskLevel)
-          : null;
+  if (mode === 'allow' && service && actionId) {
+    const resolvedRiskLevel = await resolveCatalogRiskLevel(c.get('db'), service, actionId);
+    const explicitOrg = await resolveOrgPolicyMatch(c.get('db'), service, actionId, resolvedRiskLevel ?? '__unknown__');
     if (explicitOrg?.mode === 'deny') {
       throw new ValidationError('This target is denied by organization policy and cannot be allowed by a user override');
     }

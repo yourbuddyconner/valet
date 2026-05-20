@@ -590,6 +590,22 @@ describe('TelegramTransport', () => {
       expect(body.text).toContain('Expired');
     });
 
+    it('updates message with failure status instead of rendering the synthetic action id', async () => {
+      mockFetch.mockResolvedValueOnce(jsonResponse({ ok: true }));
+
+      await transport.updateInteractivePrompt!(target, ref, {
+        actionId: '__failed__',
+        resolvedBy: 'system',
+        value: 'Organization policy denied this action',
+      }, ctx);
+
+      const [, opts] = mockFetch.mock.calls[0];
+      const body = JSON.parse(opts.body);
+      expect(body.text).toContain('Failed');
+      expect(body.text).toContain('Organization policy denied this action');
+      expect(body.text).not.toContain('__failed__');
+    });
+
     it('updates message with session allow status', async () => {
       mockFetch.mockResolvedValueOnce(jsonResponse({ ok: true }));
 

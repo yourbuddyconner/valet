@@ -5,6 +5,7 @@ import { sessions } from './sessions.js';
 
 export const actionPolicies = sqliteTable('action_policies', {
   id: text().primaryKey(),
+  // IntegrationPackage.service id. Services are registry-backed, not all service ids have DB rows.
   service: text(),
   actionId: text(),
   riskLevel: text(),
@@ -19,6 +20,7 @@ export const actionPolicies = sqliteTable('action_policies', {
 export const userActionPolicyOverrides = sqliteTable('user_action_policy_overrides', {
   id: text().primaryKey(),
   userId: text().notNull().references(() => users.id, { onDelete: 'cascade' }),
+  // IntegrationPackage.service id. Intentionally mirrors action_policies.service.
   service: text(),
   actionId: text(),
   riskLevel: text(),

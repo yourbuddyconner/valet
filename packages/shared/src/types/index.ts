@@ -947,6 +947,9 @@ export type AvailableModels = ProviderModels[];
 
 export type ActionMode = 'allow' | 'require_approval' | 'deny';
 export type ActionInvocationStatus = 'pending' | 'approved' | 'denied' | 'executed' | 'failed' | 'expired';
+export type ActionRiskLevel = 'low' | 'medium' | 'high' | 'critical';
+// Registry-backed IntegrationPackage.service id, e.g. "gmail" or "linear".
+export type ActionServiceId = string;
 export type ActionPolicyLifetime = 'persistent' | 'session' | 'timed';
 export type ActionPolicySource = 'settings' | 'approval_prompt';
 export type EffectivePolicySource = 'system_default' | 'org_policy' | 'user_override' | 'session_override';
@@ -954,9 +957,9 @@ export type ActionPolicyScope = 'action' | 'service' | 'risk_level' | 'none';
 
 export interface ActionPolicy {
   id: string;
-  service?: string;
+  service?: ActionServiceId;
   actionId?: string;
-  riskLevel?: string;
+  riskLevel?: ActionRiskLevel;
   mode: ActionMode;
   createdBy: string | null;
   createdAt: string;
@@ -966,9 +969,9 @@ export interface ActionPolicy {
 export interface ActionPolicyOverride {
   id: string;
   userId: string;
-  service?: string | null;
+  service?: ActionServiceId | null;
   actionId?: string | null;
-  riskLevel?: string | null;
+  riskLevel?: ActionRiskLevel | null;
   mode: ActionMode;
   lifetime: ActionPolicyLifetime;
   sessionId?: string | null;
@@ -981,7 +984,7 @@ export interface ActionPolicyOverride {
 
 export interface DisabledAction {
   id: string;
-  service: string;
+  service: ActionServiceId;
   actionId?: string | null;
   disabledBy: string | null;
   createdAt: string;
@@ -991,9 +994,9 @@ export interface ActionInvocation {
   id: string;
   sessionId: string;
   userId: string;
-  service: string;
+  service: ActionServiceId;
   actionId: string;
-  riskLevel: string;
+  riskLevel: ActionRiskLevel;
   resolvedMode: ActionMode;
   status: ActionInvocationStatus;
   params?: string;
