@@ -4,7 +4,12 @@ import {
   getDefaultApprovalActionId,
   getNextApprovalActionId,
   getApprovalActionDescription,
+  getWebSocketErrorText,
   isApprovalPromptExpired,
+  markInteractivePromptError,
+  markInteractivePromptTerminal,
+  pruneTerminalInteractivePrompt,
+  upsertInteractivePrompt,
 } from './approval-prompts';
 
 const approvalActions = [
@@ -65,5 +70,51 @@ describe('approval prompt helpers', () => {
     expect(isApprovalPromptExpired(999, 1_000)).toBe(true);
     expect(isApprovalPromptExpired(1_000, 1_000)).toBe(true);
     expect(isApprovalPromptExpired(1_001, 1_000)).toBe(false);
+  });
+
+  it('replaces an existing prompt when reconnect replays the same pending prompt', () => {
+    const existing = { id: 'prompt-1', title: 'Old title', status: 'pending' };
+    const replayed = { id: 'prompt-1', title: 'Fresh title', status: 'pending' };
+
+    expect(upsertInteractivePrompt([existing], replayed)).toEqual([replayed]);
+  });
+
+  it('extracts websocket error text from the worker message field', () => {
+    expect(getWebSocketErrorText({ type: 'error', message: 'This prompt has expired.' })).toBe('This prompt has expired.');
+    expect(getWebSocketErrorText({ type: 'error', error: 'Denied by policy.' })).toBe('Denied by policy.');
+    expect(getWebSocketErrorText({ type: 'error', content: 'Fallback content.' })).toBe('Fallback content.');
+    expect(getWebSocketErrorText({ type: 'error', data: { message: 'Nested error.' } })).toBe('Nested error.');
+  });
+
+  it('keeps approval prompts pending but records websocket errors for retry', () => {
+    const prompts = [
+      { id: 'prompt-1', status: 'pending' as const },
+      { id: 'prompt-2', status: 'pending' as const },
+    ];
+
+    expect(markInteractivePromptError(prompts, 'prompt-1', 'Unknown approval action')).toEqual([
+      { id: 'prompt-1', status: 'pending', error: 'Unknown approval action' },
+      { id: 'prompt-2', status: 'pending' },
+    ]);
+  });
+
+  it('marks prompts terminal locally and prunes only terminal copies', () => {
+    const prompts = [
+      { id: 'prompt-1', status: 'pending' as const },
+      { id: 'prompt-2', status: 'pending' as const },
+    ];
+
+    const resolved = markInteractivePromptTerminal(prompts, 'prompt-1', 'resolved');
+
+    expect(resolved).toEqual([
+      { id: 'prompt-1', status: 'resolved' },
+      { id: 'prompt-2', status: 'pending' },
+    ]);
+    expect(pruneTerminalInteractivePrompt(resolved, 'prompt-1')).toEqual([
+      { id: 'prompt-2', status: 'pending' },
+    ]);
+    expect(pruneTerminalInteractivePrompt([{ id: 'prompt-1', status: 'pending' }], 'prompt-1')).toEqual([
+      { id: 'prompt-1', status: 'pending' },
+    ]);
   });
 });

@@ -11,6 +11,7 @@ import {
   upsertActionPolicy,
   upsertUserActionPolicyOverride,
 } from '../lib/db/actions.js';
+import { upsertMcpToolCache } from '../lib/db/mcp-tool-cache.js';
 
 const USER_ID = 'route-user';
 const OTHER_USER_ID = 'route-other-user';
@@ -171,6 +172,49 @@ describe('actionPolicyOverridesRouter', () => {
     expect(await getUserActionPolicyOverride(db as any, 'rejected-risk')).toBeUndefined();
   });
 
+  it('rejects exact-action allow when organization policy denies the action risk level', async () => {
+    await upsertActionPolicy(db as any, {
+      id: 'org-deny-high',
+      riskLevel: 'high',
+      mode: 'deny',
+      createdBy: USER_ID,
+    });
+
+    const res = await app.fetch(new Request('http://localhost/rejected-high-action', {
+      method: 'PUT',
+      body: JSON.stringify({ service: 'github', actionId: 'github.create_repository', mode: 'allow' }),
+      headers: { 'content-type': 'application/json' },
+    }), { DB: {} } as any);
+
+    expect(res.status).toBe(400);
+    expect(await getUserActionPolicyOverride(db as any, 'rejected-high-action')).toBeUndefined();
+  });
+
+  it('rejects exact-action allow when cached MCP metadata puts it under an organization risk deny', async () => {
+    await upsertActionPolicy(db as any, {
+      id: 'org-deny-critical',
+      riskLevel: 'critical',
+      mode: 'deny',
+      createdBy: USER_ID,
+    });
+    await upsertMcpToolCache(db as any, [{
+      service: 'linear',
+      actionId: 'linear.mcp_delete_issue',
+      name: 'Delete issue',
+      description: 'Delete a Linear issue',
+      riskLevel: 'critical',
+    }]);
+
+    const res = await app.fetch(new Request('http://localhost/rejected-cached-action', {
+      method: 'PUT',
+      body: JSON.stringify({ service: 'linear', actionId: 'linear.mcp_delete_issue', mode: 'allow' }),
+      headers: { 'content-type': 'application/json' },
+    }), { DB: {} } as any);
+
+    expect(res.status).toBe(400);
+    expect(await getUserActionPolicyOverride(db as any, 'rejected-cached-action')).toBeUndefined();
+  });
+
   it('allows exact-action allow when only system default would deny', async () => {
     const res = await app.fetch(new Request('http://localhost/critical-allow', {
       method: 'PUT',
@@ -230,6 +274,29 @@ describe('actionPolicyOverridesRouter', () => {
       userId: OTHER_USER_ID,
       service: 'gmail',
       mode: 'deny',
+    });
+  });
+
+  it('returns the existing override id when upserting a duplicate target', async () => {
+    await upsertUserActionPolicyOverride(db as any, {
+      id: 'existing-service-override',
+      userId: USER_ID,
+      service: 'gmail',
+      mode: 'require_approval',
+      source: 'settings',
+    });
+
+    const res = await app.fetch(new Request('http://localhost/new-service-override-id', {
+      method: 'PUT',
+      body: JSON.stringify({ service: 'gmail', mode: 'allow' }),
+      headers: { 'content-type': 'application/json' },
+    }), { DB: {} } as any);
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true, id: 'existing-service-override' });
+    expect(await getUserActionPolicyOverride(db as any, 'new-service-override-id')).toBeUndefined();
+    expect(await getUserActionPolicyOverride(db as any, 'existing-service-override')).toMatchObject({
+      mode: 'allow',
     });
   });
 });

@@ -34,8 +34,8 @@ export function useApproveAction() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: (invocationId: string) =>
-      api.post<{ ok: boolean }>(`/action-invocations/${invocationId}/approve`, {}),
+    mutationFn: ({ invocationId, actionId }: { invocationId: string; actionId?: string }) =>
+      api.post<{ ok: boolean }>(`/action-invocations/${invocationId}/approve`, { actionId }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: actionInvocationKeys.pending() });
       queryClient.invalidateQueries({ queryKey: actionInvocationKeys.all });
@@ -47,8 +47,8 @@ export function useDenyAction() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: ({ invocationId, reason }: { invocationId: string; reason?: string }) =>
-      api.post<{ ok: boolean }>(`/action-invocations/${invocationId}/deny`, { reason }),
+    mutationFn: ({ invocationId, actionId, reason }: { invocationId: string; actionId?: string; reason?: string }) =>
+      api.post<{ ok: boolean }>(`/action-invocations/${invocationId}/deny`, { actionId, reason }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: actionInvocationKeys.pending() });
       queryClient.invalidateQueries({ queryKey: actionInvocationKeys.all });

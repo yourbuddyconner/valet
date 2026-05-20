@@ -5,7 +5,7 @@ import { integrationRegistry } from '../integrations/registry.js';
 import { getUserIntegrations, getOrgIntegrations } from '../lib/db/integrations.js';
 import { invokeAction, markExecuted, markFailed } from '../services/actions.js';
 import { getDisabledActionsIndex, isActionDisabled } from '../lib/db/disabled-actions.js';
-import { upsertMcpToolCache } from '../lib/db/mcp-tool-cache.js';
+import { listMcpToolCache, upsertMcpToolCache } from '../lib/db/mcp-tool-cache.js';
 import { getAutoEnabledServices, getDisabledPluginServices } from '../lib/db/plugins.js';
 import { getUserIdentityLinks, getOrchestratorIdentity } from '../lib/db.js';
 
@@ -384,7 +384,13 @@ export async function resolveActionPolicy(
       }
     }
     const actionDef = (await actionSource.listActions(listCtx)).find(a => a.id === actionId);
-    riskLevel = actionDef?.riskLevel || 'medium';
+    if (actionDef?.riskLevel) {
+      riskLevel = actionDef.riskLevel;
+    } else {
+      const cachedTool = (await listMcpToolCache(appDb, service))
+        .find((entry) => entry.actionId === actionId);
+      riskLevel = cachedTool?.riskLevel || 'medium';
+    }
   }
 
   // Resolve policy mode
@@ -483,30 +489,42 @@ export async function executeAction(
   };
 
   const toolExecStart = Date.now();
-  let actionResult = await actionSource.execute(actionId, params, { credentials, userId, attribution, callerIdentity, analytics: actionAnalytics, guardConfig: opts.guardConfig });
+  let actionResult;
+  try {
+    actionResult = await actionSource.execute(actionId, params, { credentials, userId, attribution, callerIdentity, analytics: actionAnalytics, guardConfig: opts.guardConfig });
 
-  // Auth failure retry — force-refresh on 401 and retry once (simple token-expired retry)
-  // Note: 403 is excluded — GitHub 403s are permission problems (missing App permissions),
-  // not credential problems. Retrying with a different token won't help.
-  const isAuthError = !actionResult.success && actionResult.error &&
-    /\b(401|unauthorized|invalid.credentials|token.*expired|token.*revoked)\b/i.test(actionResult.error);
+    // Auth failure retry — force-refresh on 401 and retry once (simple token-expired retry)
+    // Note: 403 is excluded — GitHub 403s are permission problems (missing App permissions),
+    // not credential problems. Retrying with a different token won't help.
+    const isAuthError = !actionResult.success && actionResult.error &&
+      /\b(401|unauthorized|invalid.credentials|token.*expired|token.*revoked)\b/i.test(actionResult.error);
 
-  if (provider?.authType !== 'none' && provider?.authType !== 'bot_token' && isAuthError) {
-    console.log(`[session-tools] Tool "${toolId}" auth error, force-refreshing credential`);
-    const refreshed = await integrationRegistry.resolveCredentials(service, env, userId, {
-      params,
-      forceRefresh: true,
-    });
-    if (refreshed.ok) {
-      const refreshedCredentials = buildCredentials(refreshed);
-      attribution = refreshed.credential.attribution;
-      if (service === 'slack' && credentials.owner_slack_user_id) {
-        refreshedCredentials.owner_slack_user_id = credentials.owner_slack_user_id;
-      }
-      actionResult = await actionSource.execute(actionId, params, {
-        credentials: refreshedCredentials, userId, attribution, callerIdentity, analytics: actionAnalytics, guardConfig: opts.guardConfig,
+    if (provider?.authType !== 'none' && provider?.authType !== 'bot_token' && isAuthError) {
+      console.log(`[session-tools] Tool "${toolId}" auth error, force-refreshing credential`);
+      const refreshed = await integrationRegistry.resolveCredentials(service, env, userId, {
+        params,
+        forceRefresh: true,
       });
+      if (refreshed.ok) {
+        const refreshedCredentials = buildCredentials(refreshed);
+        attribution = refreshed.credential.attribution;
+        if (service === 'slack' && credentials.owner_slack_user_id) {
+          refreshedCredentials.owner_slack_user_id = credentials.owner_slack_user_id;
+        }
+        actionResult = await actionSource.execute(actionId, params, {
+          credentials: refreshedCredentials, userId, attribution, callerIdentity, analytics: actionAnalytics, guardConfig: opts.guardConfig,
+        });
+      }
     }
+  } catch (err) {
+    const error = err instanceof Error ? err.message : String(err);
+    await markFailed(appDb, invocationId, error);
+    return {
+      success: false,
+      error,
+      analyticsEvents: collectedEvents,
+      durationMs: Date.now() - toolExecStart,
+    };
   }
 
   const durationMs = Date.now() - toolExecStart;

@@ -645,6 +645,67 @@ slackEventsRouter.post('/slack/interactive', async (c) => {
   // chat.update with the final "Approved/Denied by ..." state.
   const responseUrl = payload.response_url as string | undefined;
   const originalMessage = payload.message as Record<string, unknown> | undefined;
+  const payloadChannel = payload.channel as Record<string, unknown> | undefined;
+  const payloadContainer = payload.container as Record<string, unknown> | undefined;
+  const fallbackChannelId = (payloadChannel?.id as string | undefined)
+    || (payloadContainer?.channel_id as string | undefined);
+  const fallbackMessageTs = (payloadContainer?.message_ts as string | undefined)
+    || (originalMessage?.ts as string | undefined);
+  const replaceOriginalViaChatUpdate = async (text: string, blocks: Array<Record<string, unknown>>) => {
+    if (!install.botToken || !fallbackChannelId || !fallbackMessageTs) return false;
+    try {
+      const resp = await fetch('https://slack.com/api/chat.update', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json; charset=utf-8',
+          Authorization: `Bearer ${install.botToken}`,
+        },
+        body: JSON.stringify({
+          channel: fallbackChannelId,
+          ts: fallbackMessageTs,
+          text,
+          blocks,
+        }),
+      });
+      if (!resp.ok) {
+        console.warn(`[Slack Interactive] chat.update fallback failed: status=${resp.status}`);
+        return false;
+      }
+      const body = await resp.json().catch(() => ({ ok: false })) as { ok?: boolean; error?: string };
+      if (!body.ok) {
+        console.warn(`[Slack Interactive] chat.update fallback error: ${body.error || 'unknown_error'}`);
+        return false;
+      }
+      return true;
+    } catch (err) {
+      console.warn('[Slack Interactive] chat.update fallback threw:', err);
+      return false;
+    }
+  };
+  const replaceOriginalMessage = async (text: string, blocks: Array<Record<string, unknown>>) => {
+    if (!responseUrl) {
+      await replaceOriginalViaChatUpdate(text, blocks);
+      return;
+    }
+    try {
+      const resp = await fetch(responseUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          replace_original: true,
+          text,
+          blocks,
+        }),
+      });
+      if (!resp.ok) {
+        console.warn(`[Slack Interactive] response_url update failed: status=${resp.status}`);
+        await replaceOriginalViaChatUpdate(text, blocks);
+      }
+    } catch (err) {
+      console.warn('[Slack Interactive] response_url update threw:', err);
+      await replaceOriginalViaChatUpdate(text, blocks);
+    }
+  };
   if (responseUrl && originalMessage) {
     const originalBlocks = (originalMessage.blocks as Array<Record<string, unknown>> | undefined) ?? [];
     const preservedBlocks = originalBlocks.filter((b) => b.type !== 'actions');
@@ -652,22 +713,7 @@ slackEventsRouter.post('/slack/interactive', async (c) => {
       ...preservedBlocks,
       { type: 'context', elements: [{ type: 'mrkdwn', text: '⏳ Processing…' }] },
     ];
-    try {
-      const resp = await fetch(responseUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          replace_original: true,
-          text: (originalMessage.text as string) || 'Processing…',
-          blocks: processingBlocks,
-        }),
-      });
-      if (!resp.ok) {
-        console.warn(`[Slack Interactive] response_url update failed: status=${resp.status}`);
-      }
-    } catch (err) {
-      console.warn('[Slack Interactive] response_url update threw:', err);
-    }
+    await replaceOriginalMessage((originalMessage.text as string) || 'Processing…', processingBlocks);
   }
 
   // Respond to Slack immediately (3-second deadline)
@@ -688,9 +734,33 @@ slackEventsRouter.post('/slack/interactive', async (c) => {
       if (!res.ok) {
         const errText = await res.text().catch(() => '');
         console.error(`[Slack Interactive] DO rejected prompt resolution: status=${res.status} body=${errText}`);
+        let errMessage = 'This prompt could not be resolved.';
+        try {
+          const parsed = JSON.parse(errText) as { error?: unknown };
+          if (typeof parsed.error === 'string' && parsed.error.trim()) {
+            errMessage = parsed.error;
+          }
+        } catch {
+          if (errText.trim()) errMessage = errText.trim();
+        }
+        await replaceOriginalMessage('Approval could not be resolved', [
+          {
+            type: 'section',
+            text: { type: 'mrkdwn', text: `*Approval could not be resolved*\n${errMessage}` },
+          },
+        ]);
       }
     } catch (err) {
       console.error('[Slack Interactive] Failed to notify DO:', err);
+      await replaceOriginalMessage('Approval could not be resolved', [
+        {
+          type: 'section',
+          text: {
+            type: 'mrkdwn',
+            text: '*Approval could not be resolved*\nThe session could not be reached. Try again from the session UI.',
+          },
+        },
+      ]);
     }
   })());
 

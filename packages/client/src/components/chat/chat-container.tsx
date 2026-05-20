@@ -107,11 +107,13 @@ export function ChatContainer({ sessionId, routeSessionId, initialThreadId, init
     sessionTitle,
     childSessionEvents,
     connectedUsers,
-    executeCommand,
-    resolveApprovalWs,
-    approveActionWs,
-    denyActionWs,
-    integrationAuthErrors,
+	    executeCommand,
+	    resolveApprovalWs,
+	    approveActionWs,
+	    denyActionWs,
+	    resolveApprovalLocally,
+	    expireApprovalLocally,
+	    integrationAuthErrors,
     dismissIntegrationAuth,
     loadThreadMessages,
     pendingFollowup,
@@ -506,10 +508,12 @@ export function ChatContainer({ sessionId, routeSessionId, initialThreadId, init
                       prompt={prompt}
                       onAnswer={answerQuestion}
                       onDismiss={dismissQuestion}
-                      onResolveApprovalWs={resolveApprovalWs}
-                      onApproveWs={approveActionWs}
-                      onDenyWs={denyActionWs}
-                    />
+	                      onResolveApprovalWs={resolveApprovalWs}
+	                      onApproveWs={approveActionWs}
+	                      onDenyWs={denyActionWs}
+	                      onResolveLocal={resolveApprovalLocally}
+	                      onExpireLocal={expireApprovalLocally}
+	                    />
                   </Suspense>
                 ))}
                 {queuedCount > 0 && (

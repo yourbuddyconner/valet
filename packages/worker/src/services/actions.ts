@@ -7,7 +7,7 @@ import {
 import { resolveEffectiveMode } from './action-policy.js';
 import type { ActionMode } from '@valet/shared';
 
-const APPROVAL_EXPIRY_MS = 10 * 60 * 1000; // 10 minutes
+const APPROVAL_EXPIRY_MS = 240 * 1000;
 
 export interface InvokeActionParams {
   sessionId: string;

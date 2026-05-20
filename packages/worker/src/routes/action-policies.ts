@@ -37,14 +37,18 @@ actionPoliciesRouter.put('/:id', async (c) => {
     throw new ValidationError(`Invalid risk level: ${body.riskLevel}. Must be one of: ${validRiskLevels.join(', ')}`);
   }
 
-  // Must have at least one targeting field
-  if (!body.service && !body.actionId && !body.riskLevel) {
-    throw new ValidationError('Policy must target at least one of: service, actionId, or riskLevel');
-  }
-
   // actionId requires service
   if (body.actionId && !body.service) {
     throw new ValidationError('actionId requires a service to be specified');
+  }
+
+  const isActionScope = Boolean(body.service && body.actionId && !body.riskLevel);
+  const isServiceScope = Boolean(body.service && !body.actionId && !body.riskLevel);
+  const isRiskScope = Boolean(!body.service && !body.actionId && body.riskLevel);
+  const targetCount = [isActionScope, isServiceScope, isRiskScope].filter(Boolean).length;
+
+  if (targetCount !== 1) {
+    throw new ValidationError('Policy must target exactly one of: action, service, or riskLevel');
   }
 
   const user = c.get('user');

@@ -9,6 +9,9 @@ import {
   upsertUserActionPolicyOverride,
 } from '../lib/db.js';
 import type { ActionPolicyLifetime } from '../lib/db/actions.js';
+import { listMcpToolCache } from '../lib/db/mcp-tool-cache.js';
+import type { AppDb } from '../lib/drizzle.js';
+import { integrationRegistry } from '../integrations/registry.js';
 
 export const actionPolicyOverridesRouter = new Hono<{ Bindings: Env; Variables: Variables }>();
 
@@ -53,6 +56,20 @@ function validateTarget(body: { service?: unknown; actionId?: unknown; riskLevel
   return { service, actionId, riskLevel };
 }
 
+async function resolveCatalogRiskLevel(db: AppDb, service: string, actionId: string): Promise<string | null> {
+  try {
+    const actions = await (integrationRegistry.getActions(service)?.listActions() ?? []);
+    const staticRisk = actions.find((action) => action.id === actionId)?.riskLevel;
+    if (staticRisk) return staticRisk;
+
+    const cached = await listMcpToolCache(db, service);
+    return cached.find((action) => action.service === service && action.actionId === actionId)?.riskLevel ?? null;
+  } catch (err) {
+    console.warn('[action-policy-overrides] Failed to resolve action risk level:', err);
+    return null;
+  }
+}
+
 // GET /api/action-policy-overrides
 actionPolicyOverridesRouter.get('/', async (c) => {
   const user = c.get('user');
@@ -80,8 +97,11 @@ actionPolicyOverridesRouter.put('/:id', async (c) => {
   }
 
   if (mode === 'allow') {
+    const resolvedRiskLevel = service && actionId
+      ? await resolveCatalogRiskLevel(c.get('db'), service, actionId)
+      : riskLevel;
     const explicitOrg = service && actionId
-      ? await resolveOrgPolicyMatch(c.get('db'), service, actionId, '__unknown__')
+      ? await resolveOrgPolicyMatch(c.get('db'), service, actionId, resolvedRiskLevel ?? '__unknown__')
       : service
         ? await resolveOrgPolicyMatch(c.get('db'), service, '__unknown__', '__unknown__')
         : riskLevel
@@ -92,7 +112,7 @@ actionPolicyOverridesRouter.put('/:id', async (c) => {
     }
   }
 
-  await upsertUserActionPolicyOverride(c.get('db'), {
+  const savedId = await upsertUserActionPolicyOverride(c.get('db'), {
     id,
     userId: user.id,
     service,
@@ -103,7 +123,7 @@ actionPolicyOverridesRouter.put('/:id', async (c) => {
     source: 'settings',
   });
 
-  return c.json({ ok: true, id });
+  return c.json({ ok: true, id: savedId });
 });
 
 // DELETE /api/action-policy-overrides/:id

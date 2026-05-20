@@ -2,6 +2,7 @@ import * as React from 'react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { useApproveAction, useDenyAction } from '@/api/action-invocations';
+import { ApiError } from '@/api/client';
 import type { InteractivePromptState } from '@/hooks/use-chat';
 import {
   buildApprovalResolutionSocketMessage,
@@ -150,9 +151,11 @@ interface InteractivePromptCardProps {
   prompt: InteractivePromptState;
   onAnswer: (promptId: string, answer: string | boolean) => void;
   onDismiss: (promptId: string) => void;
-  onResolveApprovalWs?: (invocationId: string, actionId: string) => void;
-  onApproveWs?: (invocationId: string, actionId?: string) => void;
-  onDenyWs?: (invocationId: string, actionId?: string) => void;
+  onResolveApprovalWs?: (invocationId: string, actionId: string) => boolean;
+  onApproveWs?: (invocationId: string, actionId?: string) => boolean;
+  onDenyWs?: (invocationId: string, actionId?: string) => boolean;
+  onResolveLocal?: (promptId: string) => void;
+  onExpireLocal?: (promptId: string) => void;
 }
 
 export function InteractivePromptCard({
@@ -162,12 +165,15 @@ export function InteractivePromptCard({
   onResolveApprovalWs,
   onApproveWs,
   onDenyWs,
+  onResolveLocal,
+  onExpireLocal,
 }: InteractivePromptCardProps) {
   const approveMutation = useApproveAction();
   const denyMutation = useDenyAction();
   const countdown = useCountdown(prompt.expiresAt);
   const [freeformValue, setFreeformValue] = React.useState('');
   const [isSubmitted, setIsSubmitted] = React.useState(false);
+  const [submissionError, setSubmissionError] = React.useState<string | null>(null);
   const [selectedApprovalActionId, setSelectedApprovalActionId] = React.useState(() => getDefaultApprovalActionId(prompt.actions));
 
   const isResolved = prompt.status !== 'pending';
@@ -190,34 +196,70 @@ export function InteractivePromptCard({
     ));
   }, [isApproval, prompt.actions]);
 
+  React.useEffect(() => {
+    if (isApproval && prompt.status === 'pending' && isExpired) {
+      onExpireLocal?.(prompt.id);
+    }
+  }, [isApproval, isExpired, onExpireLocal, prompt.id, prompt.status]);
+
+  React.useEffect(() => {
+    if (prompt.status === 'pending' && prompt.error) {
+      setIsSubmitted(false);
+      setSubmissionError(prompt.error);
+    }
+  }, [prompt.error, prompt.status]);
+
+  function handleApprovalMutationError(error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    setSubmissionError(message);
+    if (error instanceof ApiError && [404, 409, 410].includes(error.status)) {
+      onExpireLocal?.(prompt.id);
+      return;
+    }
+    setIsSubmitted(false);
+  }
+
   function submitApprovalAction(actionId: string) {
     if (isDisabled) return;
+    setSubmissionError(null);
 
     const message = buildApprovalResolutionSocketMessage(invocationId, actionId);
-    if (onResolveApprovalWs) {
+    const sentViaUnifiedWs = onResolveApprovalWs?.(invocationId, actionId) ?? false;
+    if (sentViaUnifiedWs) {
       setIsSubmitted(true);
-      onResolveApprovalWs(invocationId, actionId);
       return;
     }
 
     if (message.type === 'approve-action') {
-      if (onApproveWs) {
+      const sentViaApproveWs = onApproveWs?.(invocationId, actionId) ?? false;
+      if (sentViaApproveWs) {
         setIsSubmitted(true);
-        onApproveWs(invocationId, actionId);
-      } else if (actionId === 'approve' || actionId === 'allow_once') {
-        setIsSubmitted(true);
-        approveMutation.mutate(invocationId);
+        return;
       }
+      setIsSubmitted(true);
+      approveMutation.mutate(
+        { invocationId, actionId },
+        {
+          onSuccess: () => onResolveLocal?.(prompt.id),
+          onError: handleApprovalMutationError,
+        },
+      );
       return;
     }
 
-    if (onDenyWs) {
+    const sentViaDenyWs = onDenyWs?.(invocationId, actionId) ?? false;
+    if (sentViaDenyWs) {
       setIsSubmitted(true);
-      onDenyWs(invocationId, actionId);
-    } else if (actionId === 'deny' || actionId === 'cancel') {
-      setIsSubmitted(true);
-      denyMutation.mutate({ invocationId });
+      return;
     }
+    setIsSubmitted(true);
+    denyMutation.mutate(
+      { invocationId, actionId },
+      {
+        onSuccess: () => onResolveLocal?.(prompt.id),
+        onError: handleApprovalMutationError,
+      },
+    );
   }
 
   function handleActionClick(actionId: string) {
@@ -319,6 +361,12 @@ export function InteractivePromptCard({
       {prompt.body && (
         <p className="mt-1.5 text-sm text-neutral-800 dark:text-neutral-200">
           {prompt.body}
+        </p>
+      )}
+
+      {(submissionError || prompt.error) && (
+        <p className="mt-2 text-xs text-red-600 dark:text-red-400">
+          {submissionError || prompt.error}
         </p>
       )}
 

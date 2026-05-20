@@ -56,3 +56,73 @@ export function getApprovalActionDescription(action: ApprovalPromptAction): stri
 export function isApprovalPromptExpired(expiresAt?: number, now = Date.now()): boolean {
   return typeof expiresAt === 'number' && expiresAt <= now;
 }
+
+export function upsertInteractivePrompt<T extends { id: string }>(prompts: T[], prompt: T): T[] {
+  const index = prompts.findIndex((existing) => existing.id === prompt.id);
+  if (index === -1) return [...prompts, prompt];
+  const next = [...prompts];
+  next[index] = prompt;
+  return next;
+}
+
+export function markInteractivePromptTerminal<
+  T extends { id: string; status: 'pending' | 'resolved' | 'expired' },
+>(
+  prompts: T[],
+  promptId: string,
+  status: 'resolved' | 'expired',
+): T[] {
+  return prompts.map((prompt) => (
+    prompt.id === promptId ? { ...prompt, status } : prompt
+  ));
+}
+
+export function markInteractivePromptError<
+  T extends { id: string; status: 'pending' | 'resolved' | 'expired'; error?: string },
+>(
+  prompts: T[],
+  promptId: string,
+  error: string,
+): T[] {
+  return prompts.map((prompt) => (
+    prompt.id === promptId && prompt.status === 'pending'
+      ? { ...prompt, error }
+      : prompt
+  ));
+}
+
+export function pruneTerminalInteractivePrompt<
+  T extends { id: string; status: 'pending' | 'resolved' | 'expired' },
+>(prompts: T[], promptId: string): T[] {
+  return prompts.filter((prompt) => prompt.id !== promptId || prompt.status === 'pending');
+}
+
+export function getWebSocketErrorText<T extends {
+  error?: unknown;
+  content?: unknown;
+  message?: unknown;
+  data?: unknown;
+}>(message: T): string {
+  const nestedMessage = message.data && typeof message.data === 'object'
+    ? (message.data as Record<string, unknown>).message
+    : undefined;
+  const rawError = message.error ?? message.content ?? message.message ?? nestedMessage ?? 'Unknown error';
+  if (typeof rawError === 'string') return rawError;
+  if (rawError && typeof rawError === 'object') {
+    const objectMessage = (rawError as Record<string, unknown>).message;
+    return typeof objectMessage === 'string' ? objectMessage : JSON.stringify(rawError);
+  }
+  return String(rawError);
+}
+
+export function getWebSocketErrorPromptId<T extends {
+  promptId?: unknown;
+  data?: unknown;
+}>(message: T): string | undefined {
+  if (typeof message.promptId === 'string') return message.promptId;
+  if (message.data && typeof message.data === 'object') {
+    const nestedPromptId = (message.data as Record<string, unknown>).promptId;
+    if (typeof nestedPromptId === 'string') return nestedPromptId;
+  }
+  return undefined;
+}

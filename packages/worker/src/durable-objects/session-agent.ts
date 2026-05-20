@@ -10,7 +10,7 @@ import { assembleCustomProviders, assembleBuiltInProviderModelConfigs, assembleR
 import { resolveAvailableModels } from '../services/model-catalog.js';
 import { integrationRegistry } from '../integrations/registry.js';
 import { updateIntegrationStatus } from '../lib/db/integrations.js';
-import { approveInvocation, denyInvocation } from '../services/actions.js';
+import { approveInvocation, denyInvocation, markFailed } from '../services/actions.js';
 import { resolveOrgPolicyMatch, updateInvocationStatus, upsertUserActionPolicyOverride } from '../lib/db/actions.js';
 import { getActivePluginArtifacts, getPluginSettings } from '../lib/db/plugins.js';
 import { getPersonaSkills, getOrgDefaultSkills, getPersonaToolWhitelist } from '../lib/db.js';
@@ -49,7 +49,7 @@ import { parseQueuedWorkflowPayload, deriveRuntimeStates } from '../lib/utils/ru
 
 const MAX_CHANNEL_FOLLOWUP_REMINDERS = 3;
 const PARENT_IDLE_DEBOUNCE_MS = 10_000;
-const ACTION_APPROVAL_EXPIRY_MS = 10 * 60 * 1000; // 10 minutes
+export const ACTION_APPROVAL_EXPIRY_MS = 240 * 1000;
 
 export function buildActionApprovalPromptActions(): InteractiveAction[] {
   return [
@@ -76,6 +76,19 @@ function normalizeApprovalAction(actionId?: string): 'allow_once' | 'allow_sessi
       return null;
   }
 }
+
+function isApprovalTransportAction(actionId: string): boolean {
+  const normalized = normalizeApprovalAction(actionId);
+  return normalized !== null && normalized !== 'cancel';
+}
+
+function isCancelTransportAction(actionId: string): boolean {
+  return normalizeApprovalAction(actionId) === 'cancel';
+}
+
+type PromptResolutionResult =
+  | { ok: true }
+  | { ok: false; status: number; error: string };
 
 function buildThreadContinuationContext(rows: Array<{ role?: unknown; content?: unknown }>): string {
   return rows
@@ -605,11 +618,14 @@ export class SessionAgentDO {
         if (!body.resolvedBy || !ownerUserId || body.resolvedBy !== ownerUserId) {
           return new Response(JSON.stringify({ error: 'Only the session owner can resolve this prompt' }), { status: 403 });
         }
-        await this.handlePromptResolved(body.promptId, {
+        const result = await this.handlePromptResolved(body.promptId, {
           actionId: body.actionId,
           value: body.value,
           resolvedBy: body.resolvedBy,
         });
+        if (!result.ok) {
+          return new Response(JSON.stringify({ error: result.error }), { status: result.status });
+        }
         return Response.json({ success: true });
       }
     }
@@ -1368,6 +1384,11 @@ export class SessionAgentDO {
 
   // ─── Client Message Handling ───────────────────────────────────────────
 
+  private getClientUserId(ws: WebSocket): string | undefined {
+    const clientTag = this.ctx.getTags(ws).find((tag: string) => tag.startsWith('client:'));
+    return clientTag?.replace('client:', '') || undefined;
+  }
+
   private async handleClientMessage(ws: WebSocket, msg: ClientMessage) {
     switch (msg.type) {
       case 'prompt': {
@@ -1462,10 +1483,27 @@ export class SessionAgentDO {
           ws.send(JSON.stringify({ type: 'error', message: 'Missing invocationId' }));
           return;
         }
-        await this.handlePromptResolved(msg.invocationId, {
-          actionId: msg.actionId || 'approve',
-          resolvedBy: this.sessionState.userId || 'user',
+        const actionId = msg.actionId || 'approve';
+        if (!isApprovalTransportAction(actionId)) {
+          ws.send(JSON.stringify({
+            type: 'error',
+            error: `approve-action transport does not accept cancel action: ${actionId}`,
+            promptId: msg.invocationId,
+          }));
+          return;
+        }
+        const resolvedBy = this.getClientUserId(ws);
+        if (!resolvedBy) {
+          ws.send(JSON.stringify({ type: 'error', message: 'Missing authenticated client user' }));
+          return;
+        }
+        const result = await this.handlePromptResolved(msg.invocationId, {
+          actionId,
+          resolvedBy,
         });
+        if (!result.ok) {
+          ws.send(JSON.stringify({ type: 'error', error: result.error, promptId: msg.invocationId }));
+        }
         break;
       }
 
@@ -1474,11 +1512,28 @@ export class SessionAgentDO {
           ws.send(JSON.stringify({ type: 'error', message: 'Missing invocationId' }));
           return;
         }
-        await this.handlePromptResolved(msg.invocationId, {
-          actionId: msg.actionId || 'deny',
+        const actionId = msg.actionId || 'deny';
+        if (!isCancelTransportAction(actionId)) {
+          ws.send(JSON.stringify({
+            type: 'error',
+            error: `deny-action transport does not accept approval action: ${actionId}`,
+            promptId: msg.invocationId,
+          }));
+          return;
+        }
+        const resolvedBy = this.getClientUserId(ws);
+        if (!resolvedBy) {
+          ws.send(JSON.stringify({ type: 'error', message: 'Missing authenticated client user' }));
+          return;
+        }
+        const result = await this.handlePromptResolved(msg.invocationId, {
+          actionId,
           value: msg.reason,
-          resolvedBy: this.sessionState.userId || 'user',
+          resolvedBy,
         });
+        if (!result.ok) {
+          ws.send(JSON.stringify({ type: 'error', error: result.error, promptId: msg.invocationId }));
+        }
         break;
       }
 
@@ -6058,6 +6113,9 @@ export class SessionAgentDO {
   }
 
   private async handleCallTool(requestId: string, toolId: string, params: Record<string, unknown>, summary?: string) {
+    let invocationIdForCleanup: string | null = null;
+    let promptInsertedForCleanup = false;
+    let shouldFailInvocationOnCatch = false;
     try {
       const userId = this.sessionState.userId;
       const sessionId = this.sessionState.sessionId;
@@ -6078,6 +6136,7 @@ export class SessionAgentDO {
       this.disabledPluginServicesCache = policyResult.disabledPluginServicesCache;
 
       const { outcome, invocationId, riskLevel, service, actionId, actionSource } = policyResult;
+      invocationIdForCleanup = invocationId;
 
       // ─── Deny ──────────────────────────────────────────────────────────
       if (outcome === 'denied') {
@@ -6088,11 +6147,16 @@ export class SessionAgentDO {
 
       // ─── Require Approval ──────────────────────────────────────────────
       if (outcome === 'pending_approval') {
+        shouldFailInvocationOnCatch = true;
         if (!summary) {
+          const error = `Action "${toolId}" requires approval but no summary was provided. The call_tool summary parameter is required.`;
+          await markFailed(this.appDb, invocationId, error).catch((err) => {
+            console.error('[SessionAgentDO] Failed to mark invocation failed after missing approval summary:', err);
+          });
           this.runnerLink.send({
             type: 'call-tool-result',
             requestId,
-            error: `Action "${toolId}" requires approval but no summary was provided. The call_tool summary parameter is required.`,
+            error,
           } as any);
           return;
         }
@@ -6136,6 +6200,7 @@ export class SessionAgentDO {
           JSON.stringify(approvalContext),
           expiresAt,
         );
+        promptInsertedForCleanup = true;
 
         // Notify runner to extend its timeout
         this.runnerLink.send({
@@ -6179,24 +6244,31 @@ export class SessionAgentDO {
 
         this.emitAuditEvent('agent.tool_call', `Action ${toolId} requires approval (${riskLevel})`, undefined, { invocationId: invocationId, riskLevel });
 
-        // Fire-and-forget: send interactive prompts to all bound channels
-        this.ctx.waitUntil(
-          this.sendChannelInteractivePrompts(invocationId, prompt)
-        );
+        await this.sendChannelInteractivePrompts(invocationId, prompt);
 
         // Schedule alarm for expiry
         await this.ensureActionExpiryAlarm(expiresAt * 1000);
 
+        shouldFailInvocationOnCatch = false;
         return; // Don't send call-tool-result — the runner will wait
       }
 
       // ─── Allow — execute immediately ───────────────────────────────────
       await this.executeActionAndSend(requestId, toolId, service, actionId, params, userId, actionSource, invocationId);
     } catch (err) {
+      const error = err instanceof Error ? err.message : String(err);
+      if (shouldFailInvocationOnCatch && invocationIdForCleanup) {
+        await markFailed(this.appDb, invocationIdForCleanup, error).catch((markErr) => {
+          console.error('[SessionAgentDO] Failed to mark invocation failed after approval setup error:', markErr);
+        });
+      }
+      if (promptInsertedForCleanup && invocationIdForCleanup) {
+        this.ctx.storage.sql.exec('DELETE FROM interactive_prompts WHERE id = ?', invocationIdForCleanup);
+      }
       this.runnerLink.send({
         type: 'call-tool-result',
         requestId,
-        error: err instanceof Error ? err.message : String(err),
+        error,
       } as any);
     }
   }
@@ -6214,16 +6286,30 @@ export class SessionAgentDO {
     userId: string,
     actionSource: ReturnType<typeof integrationRegistry.getActions>,
     invocationId: string,
-  ) {
+  ): Promise<{ success: boolean; error?: string }> {
     const spawnRequest = this.sessionState.spawnRequest;
     const spawnEnvVars = spawnRequest?.envVars as Record<string, string> | undefined;
     const guardConfig = await this.getGuardConfig();
 
-    const result = await executeActionSvc(
-      this.appDb, this.env, userId, toolId, service, actionId, params,
-      actionSource, invocationId,
-      { credentialCache: this.credentialCacheAdapter, spawnEnvVars, guardConfig },
-    );
+    let result;
+    try {
+      result = await executeActionSvc(
+        this.appDb, this.env, userId, toolId, service, actionId, params,
+        actionSource, invocationId,
+        { credentialCache: this.credentialCacheAdapter, spawnEnvVars, guardConfig },
+      );
+    } catch (err) {
+      const error = err instanceof Error ? err.message : String(err);
+      await markFailed(this.appDb, invocationId, error).catch((markErr) => {
+        console.error('[SessionAgentDO] Failed to mark invocation failed after action execution throw:', markErr);
+      });
+      this.runnerLink.send({ type: 'call-tool-result', requestId, error } as any);
+      this.emitEvent('tool_exec', {
+        toolName: toolId,
+        errorCode: 'action_failed',
+      });
+      return { success: false, error };
+    }
 
     // Emit tool_exec timing event
     this.emitEvent('tool_exec', {
@@ -6290,6 +6376,8 @@ export class SessionAgentDO {
       }
       this.runnerLink.send(msg as any);
     }
+
+    return { success: result.success, error: result.error };
   }
 
   private async expireInteractivePromptRow(row: Record<string, unknown>) {
@@ -6315,7 +6403,7 @@ export class SessionAgentDO {
       }
 
       if (requestId) {
-        this.runnerLink.send({ type: 'call-tool-result', requestId, error: `Action "${toolId}" approval expired after 10 minutes` } as any);
+        this.runnerLink.send({ type: 'call-tool-result', requestId, error: `Action "${toolId}" approval expired` } as any);
       } else {
         console.warn(`[SessionAgentDO] Approval prompt ${promptId} expired with no request_id — runner may be stuck`);
       }
@@ -6348,7 +6436,7 @@ export class SessionAgentDO {
   /**
    * Unified handler for resolving any interactive prompt (approval or question).
    */
-  private async handlePromptResolved(promptId: string, resolution: InteractiveResolution) {
+  private async handlePromptResolved(promptId: string, resolution: InteractiveResolution): Promise<PromptResolutionResult> {
     // Read from interactive_prompts
     const rows = this.ctx.storage.sql
       .exec("SELECT * FROM interactive_prompts WHERE id = ? AND status = 'pending'", promptId)
@@ -6356,7 +6444,7 @@ export class SessionAgentDO {
 
     if (rows.length === 0) {
       console.warn(`[SessionAgentDO] handlePromptResolved: no pending prompt found for ${promptId}`);
-      return;
+      return { ok: false, status: 404, error: 'No pending prompt found' };
     }
 
     const row = rows[0];
@@ -6368,7 +6456,7 @@ export class SessionAgentDO {
         : Number.NaN;
     if (Number.isFinite(rowExpiresAt) && rowExpiresAt <= Math.floor(Date.now() / 1000)) {
       await this.expireInteractivePromptRow(row as Record<string, unknown>);
-      return;
+      return { ok: false, status: 410, error: 'This prompt has expired.' };
     }
 
     const promptType = row.type as string;
@@ -6389,11 +6477,7 @@ export class SessionAgentDO {
     const deletePrompt = () => {
       this.ctx.storage.sql.exec('DELETE FROM interactive_prompts WHERE id = ?', promptId);
     };
-    const deleteNoLongerPendingPrompt = (message = 'This action approval is no longer pending.') => {
-      deletePrompt();
-      if (requestId) {
-        this.runnerLink.send({ type: 'call-tool-result', requestId, error: message } as any);
-      }
+    const broadcastPromptExpired = () => {
       this.broadcastToClients({
         type: 'interactive_prompt_expired',
         promptId,
@@ -6405,6 +6489,44 @@ export class SessionAgentDO {
           this.updateChannelInteractivePrompts(channelRefsJson, { actionId: '__expired__', resolvedBy: 'system' })
         );
       }
+    };
+    const broadcastPromptFailed = (error: string) => {
+      const failedResolution: InteractiveResolution = {
+        actionId: '__failed__',
+        value: error,
+        resolvedBy: 'system',
+        ...(promptTitle ? { promptTitle } : {}),
+      };
+      this.broadcastToClients({
+        type: 'interactive_prompt_resolved',
+        promptId,
+        promptType,
+        resolution: failedResolution,
+        context,
+      });
+      if (channelRefsJson) {
+        this.ctx.waitUntil(
+          this.updateChannelInteractivePrompts(channelRefsJson, failedResolution)
+        );
+      }
+    };
+    const failAndDeletePrompt = async (error: string, status: number): Promise<PromptResolutionResult> => {
+      await markFailed(this.appDb, promptId, error).catch((markErr) => {
+        console.error('[session-agent] Failed to mark invocation failed while terminalizing prompt:', markErr);
+      });
+      if (requestId) {
+        this.runnerLink.send({ type: 'call-tool-result', requestId, error } as any);
+      }
+      broadcastPromptFailed(error);
+      deletePrompt();
+      return { ok: false, status, error };
+    };
+    const deleteNoLongerPendingPrompt = (message = 'This action approval is no longer pending.') => {
+      deletePrompt();
+      if (requestId) {
+        this.runnerLink.send({ type: 'call-tool-result', requestId, error: message } as any);
+      }
+      broadcastPromptExpired();
     };
     let effectiveResolution = resolution;
 
@@ -6429,10 +6551,8 @@ export class SessionAgentDO {
       const resolutionAction = normalizeApprovalAction(resolution.actionId);
       if (!resolutionAction) {
         restorePrompt();
-        if (requestId) {
-          this.runnerLink.send({ type: 'call-tool-result', requestId, error: `Unknown approval action: ${resolution.actionId || 'missing'}` } as any);
-        }
-        return;
+        const error = `Unknown approval action: ${resolution.actionId || 'missing'}`;
+        return { ok: false, status: 400, error };
       }
       effectiveResolution = { ...resolution, actionId: resolutionAction };
 
@@ -6444,37 +6564,62 @@ export class SessionAgentDO {
         } catch { /* best-effort */ }
       }
 
+      if (!userId) {
+        const error = 'No userId on session';
+        return failAndDeletePrompt(error, 409);
+      }
+
+      if (!resolution.resolvedBy || resolution.resolvedBy !== userId) {
+        const error = 'Only the session owner can resolve this prompt';
+        restorePrompt();
+        return { ok: false, status: 403, error };
+      }
+
       if ('credentialSources' in context || 'isOrgScoped' in context) {
         // Approval was created before the unified-auth migration; context is stale.
         // Credentials are now resolved fresh at execution time.
+        const error = 'This action approval expired during a system update. Please retry the action.';
         console.warn(`[session-agent] Stale approval context (pre-unified-auth), skipping`);
+        await markFailed(this.appDb, promptId, error).catch((markErr) => {
+          console.error('[session-agent] Failed to mark invocation failed after stale approval context:', markErr);
+        });
         if (requestId) {
-          this.runnerLink.send({ type: 'call-tool-result', requestId, error: 'This action approval expired during a system update. Please retry the action.' } as any);
+          this.runnerLink.send({ type: 'call-tool-result', requestId, error } as any);
         }
+        broadcastPromptExpired();
         deletePrompt();
-        return;
+        return { ok: false, status: 409, error };
       }
 
       if (resolutionAction !== 'cancel') {
-        if (!userId) {
-          if (requestId) {
-            this.runnerLink.send({ type: 'call-tool-result', requestId, error: 'No userId on session' } as any);
+        try {
+          const orgPolicy = await resolveOrgPolicyMatch(this.appDb, String(service), String(actionId), String(context.riskLevel || 'medium'));
+          if (orgPolicy?.mode === 'deny') {
+            const error = `Action "${toolId}" is denied by organization policy and cannot be allowed.`;
+            return failAndDeletePrompt(error, 403);
           }
+        } catch (err) {
+          const error = `Failed to check organization policy: ${err instanceof Error ? err.message : String(err)}`;
           restorePrompt();
-          return;
+          return { ok: false, status: 500, error };
+        }
+
+        let approval;
+        try {
+          approval = await approveInvocation(this.appDb, promptId, userId);
+        } catch (err) {
+          const error = err instanceof Error ? err.message : String(err);
+          restorePrompt();
+          return { ok: false, status: 500, error };
+        }
+        if (!approval.ok) {
+          const error = 'This action approval is no longer pending.';
+          deleteNoLongerPendingPrompt(error);
+          return { ok: false, status: 409, error };
         }
 
         if (resolutionAction === 'allow_session' || resolutionAction === 'allow_always') {
           try {
-            const orgPolicy = await resolveOrgPolicyMatch(this.appDb, String(service), String(actionId), String(context.riskLevel || 'medium'));
-            if (orgPolicy?.mode === 'deny') {
-              restorePrompt();
-              if (requestId) {
-                this.runnerLink.send({ type: 'call-tool-result', requestId, error: `Action "${toolId}" is denied by organization policy and cannot be allowed.` } as any);
-              }
-              return;
-            }
-
             const lifetime = resolutionAction === 'allow_session' ? 'session' : 'persistent';
             await upsertUserActionPolicyOverride(this.appDb, {
               id: `${promptId}:${lifetime}`,
@@ -6488,27 +6633,32 @@ export class SessionAgentDO {
               sourceInvocationId: promptId,
             });
           } catch (err) {
-            restorePrompt();
+            const error = `Failed to save approval override: ${err instanceof Error ? err.message : String(err)}`;
+            await markFailed(this.appDb, promptId, error).catch((markErr) => {
+              console.error('[session-agent] Failed to mark invocation failed after override save error:', markErr);
+            });
             if (requestId) {
-              this.runnerLink.send({
-                type: 'call-tool-result',
-                requestId,
-                error: `Failed to save approval override: ${err instanceof Error ? err.message : String(err)}`,
-              } as any);
+              this.runnerLink.send({ type: 'call-tool-result', requestId, error } as any);
             }
-            return;
+            broadcastPromptExpired();
+            deletePrompt();
+            return { ok: false, status: 500, error };
           }
         }
 
-        const approval = await approveInvocation(this.appDb, promptId, userId);
-        if (!approval.ok) {
-          deleteNoLongerPendingPrompt();
-          return;
-        }
-
         const actionSource = integrationRegistry.getActions(service);
+        let executionResult: { success: boolean; error?: string } = { success: true };
         if (requestId) {
-          await this.executeActionAndSend(requestId, toolId, service, actionId, params, userId, actionSource, promptId);
+          try {
+            executionResult = await this.executeActionAndSend(requestId, toolId, service, actionId, params, userId, actionSource, promptId);
+          } catch (err) {
+            const error = err instanceof Error ? err.message : String(err);
+            await markFailed(this.appDb, promptId, error).catch((markErr) => {
+              console.error('[session-agent] Failed to mark invocation failed after action execution throw:', markErr);
+            });
+            this.runnerLink.send({ type: 'call-tool-result', requestId, error } as any);
+            executionResult = { success: false, error };
+          }
         }
 
         // Broadcast approval to clients
@@ -6525,19 +6675,41 @@ export class SessionAgentDO {
           type: 'action.approved',
           sessionId,
           userId,
-          data: { invocationId: promptId, toolId, service, actionId },
+          data: {
+            invocationId: promptId,
+            toolId,
+            service,
+            actionId,
+            executionStatus: executionResult.success ? 'executed' : 'failed',
+            ...(executionResult.error ? { error: executionResult.error } : {}),
+          },
           timestamp: new Date().toISOString(),
         });
 
-        this.emitAuditEvent('agent.tool_call', `Action ${toolId} approved and executed`, undefined, { invocationId: promptId });
+        this.emitAuditEvent(
+          'agent.tool_call',
+          executionResult.success
+            ? `Action ${toolId} approved and executed`
+            : `Action ${toolId} approved but execution failed: ${executionResult.error || 'Action failed'}`,
+          undefined,
+          { invocationId: promptId },
+        );
         deletePrompt();
       } else {
         // Cancel
         const reason = resolution.value;
-        const denial = await denyInvocation(this.appDb, promptId, userId || 'system', reason);
+        let denial;
+        try {
+          denial = await denyInvocation(this.appDb, promptId, userId, reason);
+        } catch (err) {
+          const error = err instanceof Error ? err.message : String(err);
+          restorePrompt();
+          return { ok: false, status: 500, error };
+        }
         if (!denial.ok) {
-          deleteNoLongerPendingPrompt();
-          return;
+          const error = 'This action approval is no longer pending.';
+          deleteNoLongerPendingPrompt(error);
+          return { ok: false, status: 409, error };
         }
 
         // Send error to runner
@@ -6621,6 +6793,7 @@ export class SessionAgentDO {
         this.updateChannelInteractivePrompts(channelRefsJson, displayResolution)
       );
     }
+    return { ok: true };
   }
 
   private async sendChannelInteractivePrompts(promptId: string, prompt: InteractivePrompt) {
@@ -6670,10 +6843,8 @@ export class SessionAgentDO {
           );
           this.broadcastToClients({
             type: 'error',
-            data: {
-              message: 'Approval could not be delivered to Slack: no origin channel context. Please approve via the web dashboard.',
-              promptId,
-            },
+            error: 'Approval could not be delivered to Slack: no origin channel context. Please approve via the web dashboard.',
+            promptId,
           });
         }
         return;

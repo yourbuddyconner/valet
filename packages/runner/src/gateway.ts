@@ -1985,9 +1985,9 @@ export function startGateway(port: number, callbacks: GatewayCallbacks): void {
 
   Bun.serve({
     port,
-    // Gateway proxies long-running operations (tool calls up to 30s, approval
-    // gates up to 11min). Bun's default 10s idle timeout closes the HTTP socket
-    // before the handler responds, causing "socket closed unexpectedly" errors.
+    // Gateway proxies tool calls and approval gates. Keep approval waits below
+    // this Bun idle ceiling so the sandbox HTTP call cannot time out before the
+    // human approval prompt expires.
     idleTimeout: 255,
 
     async fetch(req: Request, server: any): Promise<Response> {

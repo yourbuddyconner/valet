@@ -1,9 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { SessionAgentDO, buildActionApprovalPromptActions, buildForwardedParts, resolveSlackChannelId } from './session-agent.js';
+import { ACTION_APPROVAL_EXPIRY_MS, SessionAgentDO, buildActionApprovalPromptActions, buildForwardedParts, resolveSlackChannelId } from './session-agent.js';
 import { createTestDb } from '../test-utils/db.js';
 import { sessions } from '../lib/schema/sessions.js';
 import { users } from '../lib/schema/users.js';
-import { createInvocation, getInvocation, getUserActionPolicyOverride } from '../lib/db/actions.js';
+import { createInvocation, getInvocation, getUserActionPolicyOverride, upsertActionPolicy } from '../lib/db/actions.js';
+import * as sessionTools from '../services/session-tools.js';
 
 interface QueueRow {
   id: string;
@@ -299,6 +300,8 @@ function createMockSql(): SqlStorage & {
       }
 
       if (q.startsWith('UPDATE interactive_prompts SET channel_refs = ? WHERE id = ?')) {
+        const row = interactivePrompts.get(String(params[1]));
+        if (row) row.channel_refs = (params[0] as string) || null;
         return cursor([]);
       }
 
@@ -1625,9 +1628,20 @@ describe('SessionAgentDO', () => {
   describe('action approval prompts', () => {
     async function setupApprovalPrompt(
       actionId = 'allow_session',
-      opts?: { expiresAt?: number; invocationStatus?: string },
+      opts?: {
+        expiresAt?: number;
+        failInvocationApprove?: boolean;
+        failOverrideWrite?: boolean;
+        executionRejects?: boolean;
+        invocationStatus?: string;
+        legacyContext?: boolean;
+        noSummary?: boolean;
+        orgDenyBeforeResolve?: boolean;
+        resolvedBy?: string;
+        skipResolve?: boolean;
+      },
     ) {
-      const { agent, sql, broadcasts } = await createTestAgent();
+      const { agent, sql, broadcasts, ctx } = await createTestAgent();
       const testDb = createTestDb();
       const appDb = testDb.db;
       appDb.insert(users).values({ id: 'user-1', email: 'user-1@example.com' }).run();
@@ -1650,7 +1664,20 @@ describe('SessionAgentDO', () => {
       });
 
       Object.defineProperty(agent, 'appDb', { value: appDb });
-      (agent as any).executeActionAndSend = vi.fn().mockResolvedValue(undefined);
+      (agent as any).runnerLink.send = vi.fn().mockReturnValue(true);
+      (agent as any).executeActionAndSend = opts?.executionRejects
+        ? vi.fn().mockRejectedValue(new Error('execution exploded'))
+        : vi.fn().mockResolvedValue({ success: true });
+      const promptContext = {
+        toolId: 'gmail:draft.create',
+        service: 'gmail',
+        actionId: 'draft.create',
+        params: { to: 'customer@example.com' },
+        riskLevel: 'medium',
+        invocationId: 'inv-approval',
+        ...(opts?.noSummary ? {} : { summary: 'Create a Gmail draft' }),
+        ...(opts?.legacyContext ? { credentialSources: [] } : {}),
+      };
       sql.interactivePrompts.set('inv-approval', {
         id: 'inv-approval',
         type: 'approval',
@@ -1658,26 +1685,53 @@ describe('SessionAgentDO', () => {
         title: 'Action requires approval',
         body: 'Create a Gmail draft',
         actions: JSON.stringify(buildActionApprovalPromptActions()),
-        context: JSON.stringify({
-          toolId: 'gmail:draft.create',
-          service: 'gmail',
-          actionId: 'draft.create',
-          params: { to: 'customer@example.com' },
-          riskLevel: 'medium',
-          invocationId: 'inv-approval',
-          summary: 'Create a Gmail draft',
-        }),
+        context: JSON.stringify(promptContext),
         status: 'pending',
         expires_at: opts?.expiresAt ?? Math.floor(Date.now() / 1000) + 600,
         channel_refs: null,
       });
 
-      await (agent as any).handlePromptResolved('inv-approval', {
-        actionId,
-        resolvedBy: 'user-1',
-      });
+      if (opts?.failOverrideWrite) {
+        testDb.sqlite.exec(`
+          CREATE TRIGGER fail_uapo_insert BEFORE INSERT ON user_action_policy_overrides
+          BEGIN
+            SELECT RAISE(ABORT, 'override write failed');
+          END;
+          CREATE TRIGGER fail_uapo_update BEFORE UPDATE ON user_action_policy_overrides
+          BEGIN
+            SELECT RAISE(ABORT, 'override write failed');
+          END;
+        `);
+      }
 
-      return { agent, sql, broadcasts, appDb };
+      if (opts?.failInvocationApprove) {
+        testDb.sqlite.exec(`
+          CREATE TRIGGER fail_action_invocation_approve BEFORE UPDATE OF status ON action_invocations
+          WHEN NEW.status = 'approved'
+          BEGIN
+            SELECT RAISE(ABORT, 'approve write failed');
+          END;
+        `);
+      }
+
+      if (opts?.orgDenyBeforeResolve) {
+        await upsertActionPolicy(appDb as any, {
+          id: 'org-deny-before-resolve',
+          service: 'gmail',
+          actionId: 'draft.create',
+          mode: 'deny',
+          createdBy: 'user-1',
+        });
+      }
+
+      if (!opts?.skipResolve) {
+        await (agent as any).handlePromptResolved('inv-approval', {
+          actionId,
+          resolvedBy: opts?.resolvedBy ?? 'user-1',
+        });
+      }
+
+      return { agent, sql, broadcasts, appDb, ctx };
     }
 
     it('builds Codex-style approval choices', () => {
@@ -1689,7 +1743,11 @@ describe('SessionAgentDO', () => {
       ]);
     });
 
-    it('allow_session creates a session-scoped exact override before executing', async () => {
+    it('keeps approval expiry below the sandbox gateway idle ceiling', () => {
+      expect(ACTION_APPROVAL_EXPIRY_MS).toBeLessThan(255_000);
+    });
+
+    it('allow_session creates a session-scoped exact override and executes', async () => {
       const { agent, sql, appDb } = await setupApprovalPrompt('allow_session');
 
       const override = await getUserActionPolicyOverride(appDb as any, 'inv-approval:session');
@@ -1710,7 +1768,7 @@ describe('SessionAgentDO', () => {
       expect(sql.interactivePrompts.has('inv-approval')).toBe(false);
     });
 
-    it('allow_always creates a persistent exact override before executing', async () => {
+    it('allow_always creates a persistent exact override and executes', async () => {
       const { agent, appDb } = await setupApprovalPrompt('allow_always');
 
       const override = await getUserActionPolicyOverride(appDb as any, 'inv-approval:persistent');
@@ -1773,6 +1831,222 @@ describe('SessionAgentDO', () => {
       expect(invocation).toMatchObject({ status: 'denied' });
       expect((agent as any).executeActionAndSend).not.toHaveBeenCalled();
       expect(sql.interactivePrompts.has('inv-approval')).toBe(false);
+    });
+
+    it('does not persist an allow override when the invocation is no longer pending', async () => {
+      const { agent, appDb } = await setupApprovalPrompt('allow_session', {
+        invocationStatus: 'denied',
+      });
+
+      const invocation = await getInvocation(appDb as any, 'inv-approval');
+
+      expect(invocation).toMatchObject({ status: 'denied' });
+      expect(await getUserActionPolicyOverride(appDb as any, 'inv-approval:session')).toBeUndefined();
+      expect((agent as any).executeActionAndSend).not.toHaveBeenCalled();
+    });
+
+    it('terminalizes allow_once when organization policy now denies the action', async () => {
+      const { agent, sql, appDb, broadcasts } = await setupApprovalPrompt('allow_once', {
+        orgDenyBeforeResolve: true,
+      });
+
+      const invocation = await getInvocation(appDb as any, 'inv-approval');
+
+      expect(invocation).toMatchObject({
+        status: 'failed',
+        error: expect.stringContaining('denied by organization policy'),
+      });
+      expect(sql.interactivePrompts.has('inv-approval')).toBe(false);
+      expect(broadcasts).toContainEqual(expect.objectContaining({
+        type: 'interactive_prompt_resolved',
+        promptId: 'inv-approval',
+      }));
+      expect((agent as any).executeActionAndSend).not.toHaveBeenCalled();
+    });
+
+    it('keeps the prompt pending without releasing the runner for unknown approval actions', async () => {
+      const { agent, sql, appDb } = await setupApprovalPrompt('__bogus__');
+
+      const invocation = await getInvocation(appDb as any, 'inv-approval');
+
+      expect(invocation).toMatchObject({ status: 'pending', resolvedBy: null });
+      expect(sql.interactivePrompts.get('inv-approval')).toMatchObject({ status: 'pending' });
+      expect((agent as any).runnerLink.send).not.toHaveBeenCalledWith(expect.objectContaining({
+        type: 'call-tool-result',
+        requestId: 'request-approval',
+      }));
+    });
+
+    it('cleans up and fails the invocation when execution throws after approval', async () => {
+      const { agent, sql, appDb, broadcasts } = await setupApprovalPrompt('allow_once', {
+        executionRejects: true,
+      });
+
+      const invocation = await getInvocation(appDb as any, 'inv-approval');
+
+      expect(invocation).toMatchObject({
+        status: 'failed',
+        resolvedBy: 'user-1',
+        error: 'execution exploded',
+      });
+      expect(sql.interactivePrompts.has('inv-approval')).toBe(false);
+      expect(broadcasts).toContainEqual(expect.objectContaining({
+        type: 'interactive_prompt_resolved',
+        promptId: 'inv-approval',
+      }));
+    });
+
+    it('fails stale legacy approvals and broadcasts terminal prompt state', async () => {
+      const { agent, sql, appDb, broadcasts } = await setupApprovalPrompt('allow_once', {
+        legacyContext: true,
+      });
+
+      const invocation = await getInvocation(appDb as any, 'inv-approval');
+
+      expect(invocation).toMatchObject({
+        status: 'failed',
+        error: expect.stringContaining('expired during a system update'),
+      });
+      expect((agent as any).executeActionAndSend).not.toHaveBeenCalled();
+      expect(sql.interactivePrompts.has('inv-approval')).toBe(false);
+      expect(broadcasts).toContainEqual(expect.objectContaining({
+        type: 'interactive_prompt_expired',
+        promptId: 'inv-approval',
+        promptType: 'approval',
+      }));
+    });
+
+    it('broadcasts terminal prompt state when override persistence fails after approval', async () => {
+      const { agent, sql, appDb, broadcasts } = await setupApprovalPrompt('allow_session', {
+        failOverrideWrite: true,
+      });
+
+      const invocation = await getInvocation(appDb as any, 'inv-approval');
+
+      expect(invocation).toMatchObject({
+        status: 'failed',
+        resolvedBy: 'user-1',
+      });
+      expect((agent as any).executeActionAndSend).not.toHaveBeenCalled();
+      expect(sql.interactivePrompts.has('inv-approval')).toBe(false);
+      expect(broadcasts).toContainEqual(expect.objectContaining({
+        type: 'interactive_prompt_expired',
+        promptId: 'inv-approval',
+        promptType: 'approval',
+      }));
+    });
+
+    it('rejects approval resolution from a non-owner websocket user', async () => {
+      const { agent, sql, appDb, ctx } = await setupApprovalPrompt('allow_once', {
+        skipResolve: true,
+      });
+      const socket = { send: vi.fn() };
+      (ctx as any).acceptWebSocket(socket, ['client:user-2']);
+
+      await (agent as any).handleClientMessage(socket, {
+        type: 'approve-action',
+        invocationId: 'inv-approval',
+        actionId: 'allow_once',
+      });
+
+      const invocation = await getInvocation(appDb as any, 'inv-approval');
+
+      expect(invocation).toMatchObject({ status: 'pending' });
+      expect(sql.interactivePrompts.get('inv-approval')).toMatchObject({ status: 'pending' });
+      expect((agent as any).executeActionAndSend).not.toHaveBeenCalled();
+      expect(socket.send).toHaveBeenCalledWith(expect.stringContaining('Only the session owner can resolve this prompt'));
+    });
+
+    it('restores the prompt when approving throws before the runner is released', async () => {
+      const { agent, sql, appDb } = await setupApprovalPrompt('allow_once', {
+        failInvocationApprove: true,
+        skipResolve: true,
+      });
+
+      const result = await (agent as any).handlePromptResolved('inv-approval', {
+        actionId: 'allow_once',
+        resolvedBy: 'user-1',
+      });
+      const invocation = await getInvocation(appDb as any, 'inv-approval');
+
+      expect(result).toMatchObject({ ok: false, status: 500 });
+      expect(invocation).toMatchObject({ status: 'pending', resolvedBy: null });
+      expect(sql.interactivePrompts.get('inv-approval')).toMatchObject({ status: 'pending' });
+      expect((agent as any).runnerLink.send).not.toHaveBeenCalledWith(expect.objectContaining({
+        type: 'call-tool-result',
+        requestId: 'request-approval',
+      }));
+    });
+
+    it('rejects approve actions sent through the deny websocket transport', async () => {
+      const { agent, sql, appDb, ctx } = await setupApprovalPrompt('allow_once', {
+        skipResolve: true,
+      });
+      const socket = { send: vi.fn() };
+      (ctx as any).acceptWebSocket(socket, ['client:user-1']);
+
+      await (agent as any).handleClientMessage(socket, {
+        type: 'deny-action',
+        invocationId: 'inv-approval',
+        actionId: 'allow_session',
+      });
+
+      const invocation = await getInvocation(appDb as any, 'inv-approval');
+
+      expect(invocation).toMatchObject({ status: 'pending', resolvedBy: null });
+      expect(sql.interactivePrompts.get('inv-approval')).toMatchObject({ status: 'pending' });
+      expect((agent as any).executeActionAndSend).not.toHaveBeenCalled();
+      expect(socket.send).toHaveBeenCalledWith(expect.stringContaining('does not accept approval action'));
+    });
+
+    it('cleans up prompt and invocation when approval setup fails after notifying the runner', async () => {
+      const { agent, sql } = await createTestAgent();
+      const testDb = createTestDb();
+      const appDb = testDb.db;
+      appDb.insert(users).values({ id: 'user-1', email: 'user-1@example.com' }).run();
+      appDb.insert(sessions).values({
+        id: 'orchestrator:user-1',
+        userId: 'user-1',
+        workspace: '/tmp/session-agent-approval-setup',
+        status: 'running',
+      }).run();
+      await createInvocation(appDb as any, {
+        id: 'inv-setup-failure',
+        sessionId: 'orchestrator:user-1',
+        userId: 'user-1',
+        service: 'gmail',
+        actionId: 'draft.create',
+        riskLevel: 'medium',
+        resolvedMode: 'require_approval',
+        status: 'pending',
+      });
+      Object.defineProperty(agent, 'appDb', { value: appDb });
+      (agent as any).runnerLink.send = vi.fn().mockReturnValue(true);
+      (agent as any).ensureActionExpiryAlarm = vi.fn().mockRejectedValue(new Error('alarm failed'));
+      vi.spyOn(sessionTools, 'resolveActionPolicy').mockResolvedValue({
+        outcome: 'pending_approval',
+        invocationId: 'inv-setup-failure',
+        riskLevel: 'medium',
+        service: 'gmail',
+        actionId: 'draft.create',
+        actionSource: {} as any,
+        disabledPluginServicesCache: null,
+      });
+
+      await (agent as any).handleCallTool('request-setup-failure', 'gmail:draft.create', {}, 'Create a draft');
+      const invocation = await getInvocation(appDb as any, 'inv-setup-failure');
+
+      expect((agent as any).runnerLink.send).toHaveBeenCalledWith(expect.objectContaining({
+        type: 'call-tool-pending',
+        requestId: 'request-setup-failure',
+      }));
+      expect((agent as any).runnerLink.send).toHaveBeenCalledWith(expect.objectContaining({
+        type: 'call-tool-result',
+        requestId: 'request-setup-failure',
+        error: 'alarm failed',
+      }));
+      expect(invocation).toMatchObject({ status: 'failed', error: 'alarm failed' });
+      expect(sql.interactivePrompts.has('inv-setup-failure')).toBe(false);
     });
 
     it('does not expire prompts that are already being resolved', async () => {

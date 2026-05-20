@@ -227,7 +227,7 @@ export async function upsertUserActionPolicyOverride(
     source?: ActionPolicySource;
     sourceInvocationId?: string | null;
   },
-) {
+): Promise<string> {
   const now = new Date().toISOString();
   const svc = data.service ?? null;
   const act = data.actionId ?? null;
@@ -342,6 +342,8 @@ export async function upsertUserActionPolicyOverride(
         updatedAt: now,
       },
     });
+
+  return effectiveId;
 }
 
 export async function deleteUserActionPolicyOverride(db: AppDb, id: string, userId: string) {

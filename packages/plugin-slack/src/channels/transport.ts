@@ -858,6 +858,9 @@ export class SlackTransport implements ChannelTransport {
     let statusText: string;
     if (resolution.actionId === '__expired__') {
       statusText = '⏰ Expired';
+    } else if (resolution.actionId === '__failed__') {
+      statusText = `❌ Could not resolve approval`;
+      if (resolution.value) statusText += `: ${resolution.value}`;
     } else if (resolution.actionId === 'approve') {
       statusText = `✅ Approved by ${resolution.resolvedBy}`;
     } else if (resolution.actionId === 'allow_once') {
