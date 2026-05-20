@@ -2614,19 +2614,24 @@ export class SessionAgentDO {
         // If messageId is absent (startup/reconnect idle signals), broadcast without
         // channel attribution — this is legitimate session-wide status, not a drop.
         let statusCh: { channelType: string; channelId: string } | null = null;
+        let statusThreadId: string | null = null;
         if (msg.messageId) {
-          const statusLookup = this.getChannelForMessage(msg.messageId);
-          if (!statusLookup.found) {
-            dropEmission(statusLookup.reason, { eventType: 'agentStatus', messageId: msg.messageId, status: msg.status });
+          const row = this.promptQueue.getChannelTargetById(msg.messageId);
+          if (!row) {
+            dropEmission('no_prompt_row', { eventType: 'agentStatus', messageId: msg.messageId, status: msg.status });
             return;
           }
-          statusCh = statusLookup.target;
+          if (row.channelType && row.channelId) {
+            statusCh = { channelType: row.channelType, channelId: row.channelId };
+          }
+          statusThreadId = row.threadId;
         }
         this.broadcastToClients({
           type: 'agentStatus',
           status: msg.status,
           detail: msg.detail,
           ...(statusCh ? { channelType: statusCh.channelType, channelId: statusCh.channelId } : {}),
+          ...(statusThreadId ? { threadId: statusThreadId } : {}),
         });
         if (msg.status === 'idle') {
           // If runner was initializing (not yet ready), mark it ready now.

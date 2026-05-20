@@ -114,6 +114,7 @@ export function ChatContainer({ sessionId, routeSessionId, initialThreadId, init
     dismissIntegrationAuth,
     loadThreadMessages,
     pendingFollowup,
+    agentStatusThreadId,
     queueWithdraw,
     queuePromote,
     queueReplace,
@@ -164,6 +165,11 @@ export function ChatContainer({ sessionId, routeSessionId, initialThreadId, init
   const activeThreadId = isOrchestrator
     ? (localThreadId ?? serverActiveThread?.id ?? null)
     : getEffectiveActiveThreadId(initialThreadId, serverActiveThread?.id);
+
+  // Scope pending followup & thinking indicator to the active thread
+  const pendingIsForOtherThread = !!pendingFollowup?.threadId && pendingFollowup.threadId !== activeThreadId;
+  const pendingIsForThisThread = !!pendingFollowup && !pendingIsForOtherThread;
+  const isAgentThinkingInThread = isAgentThinking && (!agentStatusThreadId || agentStatusThreadId === activeThreadId);
 
   const selectThread = useCallback(
     (threadId: string) => {
@@ -251,17 +257,25 @@ export function ChatContainer({ sessionId, routeSessionId, initialThreadId, init
   // Promote pending followup (dispatch immediately as steer)
   const handlePromotePending = useCallback(() => {
     if (!pendingFollowup) return;
+    if (pendingFollowup.threadId && pendingFollowup.threadId !== activeThreadId) return;
     queuePromote();
-  }, [pendingFollowup, queuePromote]);
+  }, [pendingFollowup, queuePromote, activeThreadId]);
 
   // Edit pending followup — withdraw and populate text box
   const [editingWithdrawnContent, setEditingWithdrawnContent] = useState<string | null>(null);
   const handleEditPending = useCallback(() => {
     if (!pendingFollowup) return;
+    if (pendingFollowup.threadId && pendingFollowup.threadId !== activeThreadId) return;
     // Save content before withdrawing so we can populate the text box
     setEditingWithdrawnContent(pendingFollowup.content);
     queueWithdraw();
-  }, [pendingFollowup, queueWithdraw]);
+  }, [pendingFollowup, queueWithdraw, activeThreadId]);
+
+  const handleCancelPending = useCallback(() => {
+    if (!pendingFollowup) return;
+    if (pendingFollowup.threadId && pendingFollowup.threadId !== activeThreadId) return;
+    queueWithdraw();
+  }, [pendingFollowup, queueWithdraw, activeThreadId]);
 
   // Share dialog state
   const [shareOpen, setShareOpen] = useState(false);
@@ -479,7 +493,7 @@ export function ChatContainer({ sessionId, routeSessionId, initialThreadId, init
           <div className="relative flex min-h-0 flex-1 flex-col">
             <MessageList
               messages={filteredMessages}
-              isAgentThinking={isAgentThinking}
+              isAgentThinking={isAgentThinkingInThread}
               agentStatus={agentStatus}
               agentStatusDetail={agentStatusDetail}
               onRevert={revertMessage}
@@ -524,7 +538,7 @@ export function ChatContainer({ sessionId, routeSessionId, initialThreadId, init
               onDismiss={dismissIntegrationAuth}
             />
           )}
-          {pendingFollowup && (
+          {pendingIsForThisThread && pendingFollowup && (
             <div className="border-t border-neutral-100 bg-surface-0 px-3 py-2 dark:border-neutral-800/50 dark:bg-surface-0">
               <div className="mb-1 flex items-center justify-between">
                 <span className="font-mono text-[10px] text-amber-700 dark:text-amber-300">
@@ -540,7 +554,7 @@ export function ChatContainer({ sessionId, routeSessionId, initialThreadId, init
                   </button>
                   <button
                     type="button"
-                    onClick={() => queueWithdraw()}
+                    onClick={handleCancelPending}
                     className="rounded px-1.5 py-0.5 font-mono text-[10px] text-neutral-500 transition-colors hover:bg-neutral-100 hover:text-neutral-700 dark:text-neutral-400 dark:hover:bg-neutral-800 dark:hover:text-neutral-200"
                   >
                     cancel
@@ -557,7 +571,7 @@ export function ChatContainer({ sessionId, routeSessionId, initialThreadId, init
           <ChatInput
             onSend={handleSendMessage}
             onPromotePending={handlePromotePending}
-            hasPendingFollowup={!!pendingFollowup}
+            hasPendingFollowup={pendingIsForThisThread}
             disabled={isDisabled}
             sendDisabled={false}
             placeholder={

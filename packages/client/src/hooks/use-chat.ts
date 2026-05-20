@@ -112,6 +112,7 @@ interface ChatState {
   reviewDiffFiles: DiffFile[] | null;
   agentStatusChannelType?: string;
   agentStatusChannelId?: string;
+  agentStatusThreadId?: string;
   integrationAuthErrors: IntegrationAuthError[];
   pendingFollowup: { messageId: string; content: string; attachments?: unknown; threadId?: string } | null;
 }
@@ -216,6 +217,7 @@ interface WebSocketAgentStatusMessage {
   detail?: string;
   channelType?: string;
   channelId?: string;
+  threadId?: string;
 }
 
 interface WebSocketMessageUpdatedMessage {
@@ -879,6 +881,7 @@ export function useChat(sessionId: string) {
             agentStatusDetail: statusMsg.detail,
             agentStatusChannelType: statusMsg.channelType,
             agentStatusChannelId: statusMsg.channelId,
+            agentStatusThreadId: statusMsg.threadId,
             // Also update isAgentThinking for backward compatibility
             isAgentThinking: statusMsg.status !== 'idle' && !isTerminalSessionStatus(prev.status),
           };
@@ -1562,6 +1565,7 @@ export function useChat(sessionId: string) {
     agentStatusDetail: state.agentStatusDetail,
     agentStatusChannelType: state.agentStatusChannelType,
     agentStatusChannelId: state.agentStatusChannelId,
+    agentStatusThreadId: state.agentStatusThreadId,
     availableModels: state.availableModels,
     selectedModel,
     setSelectedModel: handleModelChange,
