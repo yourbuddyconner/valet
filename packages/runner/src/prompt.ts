@@ -1664,6 +1664,17 @@ export class PromptHandler {
         const startSyncTimeout = () => {
           clearTimeout(syncTimeoutId);
           syncTimeoutId = setTimeout(() => {
+            // If any tools are still running (e.g. task/Agent subagents),
+            // the model is blocked waiting for tool results — not hung.
+            // Restart the timeout instead of aborting.
+            const hasRunningTools = Array.from(channel.toolStates.values()).some(
+              (t) => t.status === "running" || t.status === "pending"
+            );
+            if (hasRunningTools) {
+              console.log(`[PromptHandler] Sync timeout fired but tools still running — extending timeout`);
+              startSyncTimeout();
+              return;
+            }
             abortSyncAttempt(`Model did not respond (sync prompt timed out after ${SYNC_PROMPT_TIMEOUT_MS}ms)`);
           }, SYNC_PROMPT_TIMEOUT_MS);
         };
@@ -3469,6 +3480,23 @@ export class PromptHandler {
     const props = event.properties;
     if (!props) return;
 
+    // Heartbeats arrive every ~10s from OpenCode with no sessionID.
+    // When tools are actively running (e.g. a task/Agent subagent), the parent
+    // session produces no other SSE events. Use heartbeats to keep the sync
+    // prompt timeout alive so long-running tools don't trigger a spurious abort.
+    if (event.type === "server.heartbeat") {
+      for (const channel of this.ocSessionToChannel.values()) {
+        if (!channel.syncPromptInFlight) continue;
+        const hasRunningTools = Array.from(channel.toolStates.values()).some(
+          (t) => t.status === "running" || t.status === "pending"
+        );
+        if (hasRunningTools) {
+          channel.resetSyncTimeout?.();
+        }
+      }
+      return;
+    }
+
     // Check for ephemeral session events before filtering
     // Session ID can be at top level or nested inside part/info objects
     const part = props.part as Record<string, unknown> | undefined;
@@ -3708,7 +3736,6 @@ export class PromptHandler {
       }
 
       case "server.connected":
-      case "server.heartbeat":
       case "session.created":
       case "session.deleted":
       case "session.diff":
