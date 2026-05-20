@@ -180,7 +180,7 @@ make deploy-modal
 
 **Forcing image rebuilds:**
 
-The sandbox image is cached. To force a rebuild after changing `docker/start.sh` or `packages/runner/`:
+The sandbox image is cached. To force a rebuild after changing `docker/start.sh`, `packages/runner/`, or `docker/opencode/`:
 
 1. Bump the version in `backend/images/base.py`:
    ```python
@@ -188,6 +188,8 @@ The sandbox image is cached. To force a rebuild after changing `docker/start.sh`
    ```
 2. Redeploy: `make deploy-modal`
 3. Create a new session (existing sandboxes won't update)
+
+**Important:** Any changes to `packages/runner/` or `docker/` run inside the sandbox, not the worker. Always bump `IMAGE_BUILD_VERSION` when modifying these paths — without it the deploy will ship the old image and your changes won't take effect.
 
 ## Developing Inside a Sandbox
 
