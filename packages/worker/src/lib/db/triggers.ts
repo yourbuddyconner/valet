@@ -274,22 +274,26 @@ export async function getWorkflowForManualRun(db: D1Database, userId: string, wo
 
 // ─── Cron Dispatch Helpers ──────────────────────────────────────────────────
 
-export async function getActiveScheduleTriggers(db: D1Database): Promise<{
+interface ActiveScheduleTriggerRow {
   trigger_id: string;
   user_id: string;
   workflow_id: string | null;
   config: string;
+  last_run_at: string | null;
   workflow_enabled: number | null;
   workflow_name: string | null;
   workflow_version: string | null;
   workflow_data: string | null;
-}[]> {
+}
+
+export async function getActiveScheduleTriggers(db: D1Database): Promise<ActiveScheduleTriggerRow[]> {
   const result = await db.prepare(`
     SELECT
       t.id as trigger_id,
       t.user_id,
       t.workflow_id,
       t.config,
+      t.last_run_at,
       w.enabled as workflow_enabled,
       w.name as workflow_name,
       w.version as workflow_version,
@@ -298,8 +302,8 @@ export async function getActiveScheduleTriggers(db: D1Database): Promise<{
     LEFT JOIN workflows w ON t.workflow_id = w.id
     WHERE t.type = 'schedule'
       AND t.enabled = 1
-  `).all();
-  return (result.results || []) as any;
+  `).all<ActiveScheduleTriggerRow>();
+  return result.results;
 }
 
 export async function insertScheduleTick(
