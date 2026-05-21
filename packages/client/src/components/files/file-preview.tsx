@@ -73,13 +73,13 @@ export function FilePreview({ sessionId, path, showHeader = true }: FilePreviewP
   }
 
   return (
-    <div className="h-full overflow-auto">
+    <div className="flex h-full flex-col overflow-hidden">
       {showHeader && (
-        <div className="sticky top-0 flex items-center justify-between border-b border-neutral-200 bg-neutral-100 px-4 py-2 dark:border-neutral-700 dark:bg-neutral-800">
-          <span className="text-sm font-medium text-neutral-700 dark:text-neutral-300">
+        <div className="flex shrink-0 items-center justify-between border-b border-neutral-200 bg-neutral-100 px-4 py-2 dark:border-neutral-700 dark:bg-neutral-800">
+          <span className="min-w-0 truncate text-sm font-medium text-neutral-700 dark:text-neutral-300">
             {path}
           </span>
-          <div className="flex items-center gap-2">
+          <div className="flex shrink-0 items-center gap-2">
             {isMarkdown && (
               <button
                 onClick={() => setRenderMarkdown((v) => !v)}
@@ -109,16 +109,18 @@ export function FilePreview({ sessionId, path, showHeader = true }: FilePreviewP
           </div>
         </div>
       )}
-      {isMarkdown && renderMarkdown ? (
-        <div className="p-4">
-          <MarkdownContent content={data.content} />
-        </div>
-      ) : (
-        <File
-          file={{ name: path.split('/').pop() || 'file.txt', contents: data.content }}
-          options={{ theme, overflow: 'scroll' }}
-        />
-      )}
+      <div className="min-h-0 flex-1 overflow-auto">
+        {isMarkdown && renderMarkdown ? (
+          <div className="p-4">
+            <MarkdownContent content={data.content} />
+          </div>
+        ) : (
+          <File
+            file={{ name: path.split('/').pop() || 'file.txt', contents: data.content }}
+            options={{ theme, overflow: 'scroll' }}
+          />
+        )}
+      </div>
     </div>
   );
 }

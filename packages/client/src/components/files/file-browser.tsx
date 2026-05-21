@@ -81,7 +81,7 @@ export function FileBrowser({ sessionId, initialFilePath, onFileConsumed }: File
         />
       </div>
 
-      <div className="flex flex-1 overflow-hidden">
+      <div className="flex min-h-0 flex-1 overflow-hidden">
         {isMobile ? (
           <>
             {showMobilePreview && selectedFile ? (
@@ -95,7 +95,7 @@ export function FileBrowser({ sessionId, initialFilePath, onFileConsumed }: File
                     <BackIcon className="h-4 w-4" />
                     Files
                   </button>
-                  <span className="truncate text-[12px] text-neutral-500 dark:text-neutral-400">
+                  <span className="min-w-0 flex-1 truncate text-[12px] text-neutral-500 dark:text-neutral-400">
                     {selectedFile.path}
                   </span>
                 </div>
@@ -138,7 +138,7 @@ export function FileBrowser({ sessionId, initialFilePath, onFileConsumed }: File
             <div className="w-64 flex-shrink-0 overflow-auto border-r border-neutral-200 dark:border-neutral-700">
               {!showingSearch && currentPath !== '/' && (
                 <div className="border-b border-neutral-100 px-3 py-1.5 dark:border-neutral-700/50">
-                  <span className="font-mono text-[10px] text-neutral-400 dark:text-neutral-500" title={currentPath}>
+                  <span className="block truncate font-mono text-[10px] text-neutral-400 dark:text-neutral-500" title={currentPath}>
                     {currentPath}
                   </span>
                 </div>
@@ -167,7 +167,7 @@ export function FileBrowser({ sessionId, initialFilePath, onFileConsumed }: File
             </div>
 
             {/* File preview */}
-            <div className="flex-1 overflow-hidden bg-neutral-50 dark:bg-neutral-900">
+            <div className="min-w-0 flex-1 overflow-hidden bg-neutral-50 dark:bg-neutral-900">
               {selectedFile ? (
                 <FilePreview sessionId={sessionId} path={selectedFile.path} />
               ) : (
