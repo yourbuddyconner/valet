@@ -40,7 +40,7 @@ export interface OpenCodeManagerOptions {
   workspaceDir: string;
   port: number;
   configSourceDir: string; // /opencode-config
-  authJsonPath: string;    // /root/.local/share/opencode/auth.json
+  authJsonPath: string;    // $HOME/.local/share/opencode/auth.json
   // Test injection points
   spawnFn?: (cmd: string[], opts: any) => Subprocess;
   spawnSyncFn?: (cmd: string[], opts: any) => { exitCode: number };

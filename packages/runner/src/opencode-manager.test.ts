@@ -66,7 +66,7 @@ function createTestManager(
     workspaceDir: "/workspace",
     port: 4096,
     configSourceDir: "/opencode-config",
-    authJsonPath: "/root/.local/share/opencode/auth.json",
+    authJsonPath: "/workspace/.local/share/opencode/auth.json",
     configWriter: { write: vi.fn() },
     spawnFn: (_cmd: string[], _opts: any) => {
       currentMock = createMockProcess();
@@ -266,7 +266,7 @@ describe("OpenCodeManager", () => {
       workspaceDir: "/workspace",
       port: 4096,
       configSourceDir: "/opencode-config",
-      authJsonPath: "/root/.local/share/opencode/auth.json",
+      authJsonPath: "/workspace/.local/share/opencode/auth.json",
       configWriter: { write: vi.fn() },
       spawnFn: (_cmd: string[], _opts: any) => {
         spawnCount++;

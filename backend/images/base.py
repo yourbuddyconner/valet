@@ -164,11 +164,11 @@ def get_base_image() -> modal.Image:
                 "BUN_INSTALL": "/root/.bun",
                 "PATH": "/root/.bun/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
                 "DISPLAY": ":99",
-                "HOME": "/root",
+                "HOME": "/workspace",
                 # Force image rebuild on deploy (change this value to trigger rebuild)
-                "IMAGE_BUILD_VERSION": "2026-05-20-v31-sync-timeout-fix",
+                "IMAGE_BUILD_VERSION": "2026-05-21-v32-persistent-home",
                 "AGENT_BROWSER_EXECUTABLE_PATH": "/usr/bin/chromium",
-                "AGENT_BROWSER_PROFILE": "/root/.agent-browser-profile",
+                "AGENT_BROWSER_PROFILE": "/workspace/.agent-browser-profile",
                 "PLAYWRIGHT_BROWSERS_PATH": "/ms-playwright",
                 # 6 min default bash timeout (OpenCode default is 2 min)
                 "OPENCODE_EXPERIMENTAL_BASH_DEFAULT_TIMEOUT_MS": "360000",

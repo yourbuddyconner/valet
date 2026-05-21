@@ -154,7 +154,8 @@ async function main() {
   const opencodePort = new URL(opencodeUrl!).port || "4096";
   const workspaceDir = process.env.WORK_DIR || "/workspace";
   const configSourceDir = "/opencode-config";
-  const authJsonPath = "/root/.local/share/opencode/auth.json";
+  const home = process.env.HOME || "/workspace";
+  const authJsonPath = `${home}/.local/share/opencode/auth.json`;
 
   // ─── Create OpenCode Manager (defer start until DO sends config) ────
   const openCodeManager = new OpenCodeManager({
@@ -501,7 +502,7 @@ async function main() {
     activeToolWhitelist = content.toolWhitelist ?? null;
 
     const { mkdirSync } = await import('node:fs');
-    const baseDir = '/root/.opencode';
+    const baseDir = `${process.env.HOME || '/workspace'}/.opencode`;
 
     // Write persona files to .valet/persona/ — OpenCode watches this glob
     // via opencode.json instructions, so changes are picked up automatically.

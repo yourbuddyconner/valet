@@ -2,7 +2,10 @@
 set -e
 
 export DISPLAY=:99
-export HOME=/root
+export HOME=/workspace
+
+# Copy default dotfiles to persistent workspace on first boot
+[ ! -f /workspace/.bashrc ] && cp /root/.bashrc /workspace/.bashrc
 
 OPENCODE_PORT=4096
 VSCODE_PORT=8765
@@ -19,12 +22,12 @@ echo "[start.sh] Starting VNC stack (Xvfb + fluxbox + x11vnc + websockify)"
 # Clean up stale lock/socket files from previous runs (e.g. after snapshot restore).
 # After a filesystem snapshot restore, all processes are dead but their lock files persist.
 rm -f /tmp/.X99-lock /tmp/.X11-unix/X99
-rm -f /root/.local/share/code-server/heartbeat /root/.local/share/code-server/*.sock
+rm -f "$HOME/.local/share/code-server/heartbeat" "$HOME/.local/share/code-server"/*.sock
 Xvfb :99 -screen 0 1920x1080x24 &
 sleep 0.3
 # Pre-create fluxbox init file to suppress "Failed to read" config spam on stderr
-mkdir -p /root/.fluxbox
-cat > /root/.fluxbox/init <<'FBEOF'
+mkdir -p "$HOME/.fluxbox"
+cat > "$HOME/.fluxbox/init" <<'FBEOF'
 session.screen0.workspaces: 1
 session.screen0.toolbar.visible: false
 session.screen0.windowPlacement: RowSmartPlacement
@@ -40,11 +43,11 @@ echo "[start.sh] VNC accessible on port ${VNC_PORT}"
 # start.sh only sets up the global gitignore.
 
 # Global gitignore — prevent sandbox-injected dirs from being committed
-cat > /root/.gitignore_global << 'GITIGNORE'
+cat > "$HOME/.gitignore_global" << 'GITIGNORE'
 .valet/
 .opencode/
 GITIGNORE
-git config --global core.excludesFile /root/.gitignore_global
+git config --global core.excludesFile "$HOME/.gitignore_global"
 
 # ─── Workspace Setup ─────────────────────────────────────────────────
 # Repo cloning is handled by the Runner process. start.sh just sets up
