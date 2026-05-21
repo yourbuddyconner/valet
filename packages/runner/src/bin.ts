@@ -15,6 +15,7 @@ import { AgentClient } from "./agent-client.js";
 import { PromptHandler } from "./prompt.js";
 import { startGateway, cleanupAllCloudflared } from "./gateway.js";
 import { OpenCodeManager, type OpenCodeConfig } from "./opencode-manager.js";
+import { installReviewsCli } from "@valet/plugin-reviews";
 
 function mergeOpenCodeConfig(
   current: OpenCodeConfig,
@@ -600,6 +601,17 @@ async function main() {
   console.log(`[Runner] Starting OpenCode with ${Object.keys(currentConfig.providerKeys).length} provider key(s)`);
   await openCodeManager.setDesiredConfig(currentConfig);
   console.log(`[Runner] OpenCode URL: ${openCodeManager.getUrl()}`);
+
+  // Install Reviews CLI in the background — non-blocking, failure is logged but does not halt startup.
+  installReviewsCli().then((result) => {
+    if (result.installed) {
+      console.log(`[Runner] Reviews CLI ready${result.version ? ` (${result.version})` : ''}`);
+    } else {
+      console.warn(`[Runner] Reviews CLI install failed (non-fatal): ${result.error ?? 'unknown error'}`);
+    }
+  }).catch((err) => {
+    console.warn('[Runner] Reviews CLI install threw unexpectedly (non-fatal):', err);
+  });
 
   // Ack config to the DO
   agentClient.sendOpenCodeConfigApplied(true, false);

@@ -1,0 +1,4 @@
+name: reviews
+version: 0.0.1
+description: Reviews integration — push review packets before PRs
+icon: "🔍"
