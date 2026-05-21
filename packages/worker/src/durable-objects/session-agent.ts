@@ -11,7 +11,7 @@ import { resolveAvailableModels } from '../services/model-catalog.js';
 import { integrationRegistry } from '../integrations/registry.js';
 import { updateIntegrationStatus } from '../lib/db/integrations.js';
 import { approveInvocation, denyInvocation, markFailed } from '../services/actions.js';
-import { resolveOrgPolicyMatch, updateInvocationStatus, upsertUserActionPolicyOverride } from '../lib/db/actions.js';
+import { resolveOrgPolicyMatch, updateInvocationStatus, upsertUserActionPolicyOverride, expireSessionActionPolicyOverrides } from '../lib/db/actions.js';
 import { getActivePluginArtifacts, getPluginSettings } from '../lib/db/plugins.js';
 import { getPersonaSkills, getOrgDefaultSkills, getPersonaToolWhitelist } from '../lib/db.js';
 import type { ChannelTarget, ChannelContext, InteractivePrompt, InteractiveAction, InteractivePromptRef, InteractiveResolution } from '@valet/sdk';
@@ -5138,6 +5138,13 @@ export class SessionAgentDO {
         { status: 'error', error: 'Missing spawn configuration — session needs re-initialization via /start' },
         { status: 500 },
       );
+    }
+
+    // Expire session-scoped action policy overrides — the sandbox is being
+    // replaced, so ephemeral "allow for this session" approvals should not
+    // carry over to the fresh OpenCode instance.
+    if (sessionId) {
+      await expireSessionActionPolicyOverrides(this.appDb, sessionId);
     }
 
     // Explicit refresh — reset circuit breaker so the user can force a restart

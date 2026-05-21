@@ -385,7 +385,7 @@ export async function updateSessionStatus(
     })
     .where(eq(sessions.id, id));
 
-  if (TERMINAL_SESSION_STATUSES.has(status)) {
+  if (TERMINAL_SESSION_STATUSES.has(status) || status === 'hibernated') {
     await expireSessionActionPolicyOverrides(db, id);
   }
 }

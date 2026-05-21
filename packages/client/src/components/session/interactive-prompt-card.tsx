@@ -383,51 +383,42 @@ export function InteractivePromptCard({
           </Badge>
         </div>
       ) : isApproval && hasActions ? (
-        <div className="mt-3">
-          <div
-            role="listbox"
-            aria-label={prompt.title}
-            tabIndex={0}
-            onKeyDown={handleApprovalKeyDown}
-            className="overflow-hidden rounded-md border border-neutral-200 bg-white shadow-sm outline-none focus:ring-2 focus:ring-amber-400/40 dark:border-neutral-700 dark:bg-neutral-900"
-          >
-            {prompt.actions.map((action) => {
-              const selected = action.id === selectedApprovalActionId;
-              const description = getApprovalActionDescription(action);
-              const isCancel = isApprovalCancelAction(action.id);
-              return (
-                <button
-                  key={action.id}
-                  type="button"
-                  role="option"
-                  aria-selected={selected}
-                  onFocus={() => setSelectedApprovalActionId(action.id)}
-                  onMouseEnter={() => setSelectedApprovalActionId(action.id)}
-                  onClick={() => handleActionClick(action.id)}
-                  disabled={isDisabled}
-                  className={`grid w-full grid-cols-[1.5rem_minmax(0,1fr)] gap-2 px-3 py-2 text-left text-sm transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${
-                    selected
-                      ? 'bg-neutral-100 text-neutral-950 dark:bg-neutral-800 dark:text-neutral-50'
-                      : 'text-neutral-700 hover:bg-neutral-50 dark:text-neutral-200 dark:hover:bg-neutral-800/70'
-                  }`}
-                >
-                  <span className={`pt-0.5 font-mono text-xs ${selected ? 'text-sky-500' : 'text-transparent'}`}>
-                    &gt;
-                  </span>
-                  <span className="min-w-0">
-                    <span className={`block font-medium ${isCancel ? 'text-red-600 dark:text-red-400' : ''}`}>
-                      {action.label}
-                    </span>
-                    {description && (
-                      <span className="mt-0.5 block text-xs leading-5 text-neutral-500 dark:text-neutral-400">
-                        {description}
-                      </span>
-                    )}
-                  </span>
-                </button>
-              );
-            })}
-          </div>
+        <div
+          className="mt-3 flex flex-wrap gap-2"
+          role="listbox"
+          aria-label={prompt.title}
+          tabIndex={0}
+          onKeyDown={handleApprovalKeyDown}
+        >
+          {prompt.actions.map((action) => {
+            const selected = action.id === selectedApprovalActionId;
+            const description = getApprovalActionDescription(action);
+            const isCancel = isApprovalCancelAction(action.id);
+            return (
+              <button
+                key={action.id}
+                type="button"
+                role="option"
+                aria-selected={selected}
+                title={description || undefined}
+                onFocus={() => setSelectedApprovalActionId(action.id)}
+                onMouseEnter={() => setSelectedApprovalActionId(action.id)}
+                onClick={() => handleActionClick(action.id)}
+                disabled={isDisabled}
+                className={`rounded-md border px-3 py-1.5 text-xs font-medium transition-colors outline-none disabled:cursor-not-allowed disabled:opacity-60 ${
+                  isCancel
+                    ? selected
+                      ? 'border-red-300 bg-red-50 text-red-600 ring-2 ring-red-400/40 dark:border-red-700 dark:bg-red-900/30 dark:text-red-400'
+                      : 'border-neutral-200 text-red-600 hover:border-red-300 hover:bg-red-50 dark:border-neutral-700 dark:text-red-400 dark:hover:border-red-700 dark:hover:bg-red-900/30'
+                    : selected
+                      ? 'border-amber-300 bg-amber-100 text-neutral-900 ring-2 ring-amber-400/40 dark:border-amber-700 dark:bg-amber-900/30 dark:text-neutral-100'
+                      : 'border-neutral-200 text-neutral-700 hover:border-amber-300 hover:bg-amber-50 dark:border-neutral-700 dark:text-neutral-200 dark:hover:border-amber-700 dark:hover:bg-amber-900/20'
+                }`}
+              >
+                {action.label}
+              </button>
+            );
+          })}
         </div>
       ) : hasActions ? (
         <div className="mt-3 space-y-2">

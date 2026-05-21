@@ -715,7 +715,7 @@ describe('action policy DB helpers', () => {
       expect(persistent?.expiresAt).toBeNull();
     });
 
-    it('does not expire session-scoped overrides when a session hibernates', async () => {
+    it('expires session-scoped overrides when a session hibernates', async () => {
       await upsertUserActionPolicyOverride(db as any, {
         id: 'hibernating-session-override',
         userId: USER_ID,
@@ -727,10 +727,13 @@ describe('action policy DB helpers', () => {
         source: 'approval_prompt',
       });
 
+      const before = Date.now();
       await updateSessionStatus(db as any, SESSION_ID, 'hibernated');
 
       const override = await getUserActionPolicyOverride(db as any, 'hibernating-session-override');
-      expect(override?.expiresAt).toBeNull();
+      expect(override?.expiresAt).toBeTruthy();
+      expect(Date.parse(override!.expiresAt!)).toBeGreaterThanOrEqual(before - 1000);
+      expect(Date.parse(override!.expiresAt!)).toBeLessThanOrEqual(Date.now() + 1000);
     });
   });
 });
