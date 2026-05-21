@@ -114,7 +114,7 @@ export function FilePreview({ sessionId, path, showHeader = true }: FilePreviewP
           <MarkdownContent content={data.content} />
         </div>
       ) : (
-        <div className="min-h-0 min-w-0 flex-1">
+        <div className="min-h-0 min-w-0 flex-1 overflow-auto">
           <File
             file={{ name: path.split('/').pop() || 'file.txt', contents: data.content }}
             options={{ theme, overflow: 'scroll' }}
