@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import { Link } from '@tanstack/react-router';
 import { useSession, useSessionGitState, useSessionChildren, useSessionFilesChanged, useSessionDoStatus, useDeleteSessionTunnel } from '@/api/sessions';
-import { useDrawer } from '@/routes/sessions/$sessionId';
+import { useDrawer } from '@/hooks/use-drawer';
 import { Badge } from '@/components/ui/badge';
 import type { PRState, SessionFileChanged } from '@/api/types';
 import type { ConnectedUser } from '@/hooks/use-chat';

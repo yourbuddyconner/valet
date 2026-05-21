@@ -1,4 +1,4 @@
-import { useDrawer } from '@/routes/sessions/$sessionId';
+import { useDrawer } from '@/hooks/use-drawer';
 import { useSession } from '@/api/sessions';
 import { FileBrowser } from '@/components/files/file-browser';
 import { useIsMobile } from '@/hooks/use-is-mobile';

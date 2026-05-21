@@ -5,7 +5,7 @@ import { useChat } from '@/hooks/use-chat';
 import type { IntegrationAuthError } from '@/hooks/use-chat';
 import { useSession, useSessionGitState, useUpdateSessionTitle, useSessionChildren } from '@/api/sessions';
 import { useActiveThread, useCreateThread } from '@/api/threads';
-import { useDrawer } from '@/routes/sessions/$sessionId';
+import { useDrawer } from '@/hooks/use-drawer';
 import { MessageList } from './message-list';
 import { ChatInput } from './chat-input';
 import { shouldShowChatSkeleton } from './chat-loading';

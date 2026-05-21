@@ -7,7 +7,7 @@ import { DeferredMarkdownContent } from './markdown/deferred-markdown-content';
 import { DeferredToolCard } from './deferred-tool-card';
 import type { ToolCallData, ToolCallStatus } from './tool-cards/types';
 import { ChildSessionInlineList } from './child-session-card';
-import { useDrawer } from '@/routes/sessions/$sessionId';
+import { useDrawer } from '@/hooks/use-drawer';
 import type { ChildSessionEvent, ConnectedUser } from '@/hooks/use-chat';
 import type { ChildSessionSummary } from '@/api/types';
 import { MessageCopyButton } from './message-copy-button';

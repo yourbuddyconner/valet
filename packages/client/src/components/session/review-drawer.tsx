@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useDrawer } from '@/routes/sessions/$sessionId';
+import { useDrawer } from '@/hooks/use-drawer';
 import { useChat } from '@/hooks/use-chat';
 import { cn } from '@/lib/cn';
 import { useReview } from './review/use-review';
