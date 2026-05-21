@@ -6,6 +6,10 @@ NOTE: Do NOT add "Co-Authored-by" trailers mentioning AI models (e.g., Opus, Cla
 
 Valet is a hosted background coding agent platform. Users interact with an AI coworker through a web UI, Slack, or Telegram. Each session runs in an isolated Modal sandbox with a full dev environment (VS Code, browser via VNC, terminal, and an OpenCode agent with 73 custom tools). A per-user orchestrator ("Jarvis") manages sessions, routes messages across channels, and maintains long-term memory. The architecture is modeled after Ramp's Inspect system.
 
+## OpenCode Source Reference
+
+When you need context on OpenCode internals (agent behavior, tools, SDK, server protocol), check `~/code/opencode` first — there may be a local checkout. If it doesn't exist, you may do a shallow clone: `git clone --depth=1 https://github.com/anomalyco/opencode.git /tmp/opencode`.
+
 ## Project Structure
 
 ```
