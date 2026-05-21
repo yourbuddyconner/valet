@@ -166,7 +166,7 @@ def get_base_image() -> modal.Image:
                 "DISPLAY": ":99",
                 "HOME": "/workspace",
                 # Force image rebuild on deploy (change this value to trigger rebuild)
-                "IMAGE_BUILD_VERSION": "2026-05-21-v32-persistent-home",
+                "IMAGE_BUILD_VERSION": "2026-05-21-v33-agents-skills-dir",
                 "AGENT_BROWSER_EXECUTABLE_PATH": "/usr/bin/chromium",
                 "AGENT_BROWSER_PROFILE": "/workspace/.agent-browser-profile",
                 "PLAYWRIGHT_BROWSERS_PATH": "/ms-playwright",
