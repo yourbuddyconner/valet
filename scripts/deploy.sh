@@ -195,7 +195,14 @@ cmd_client() {
     echo -e "${GREEN}✓ Using API URL: ${WORKER_URL}/api${NC}"
     echo ""
 
-    (cd packages/client && VITE_API_URL="${WORKER_URL}/api" pnpm run build)
+    # Build in development mode for non-prod environments — preserves component
+    # names, React DevTools support, and readable stack traces.
+    local VITE_MODE_FLAG=""
+    if [ "${ENVIRONMENT}" != "prod" ]; then
+        VITE_MODE_FLAG="-- --mode development"
+        echo -e "${YELLOW}Building client in development mode (ENVIRONMENT=${ENVIRONMENT})${NC}"
+    fi
+    (cd packages/client && VITE_API_URL="${WORKER_URL}/api" pnpm run build ${VITE_MODE_FLAG})
     (cd packages/client && wrangler pages deploy dist --project-name="$PAGES_PROJECT_NAME")
     echo -e "${GREEN}✓ Client deployed: https://${PAGES_PROJECT_NAME}.pages.dev${NC}"
 }
@@ -262,7 +269,12 @@ cmd_all() {
     # --- Step 7: Build and deploy client ---
     echo ""
     echo "Step 7/7: Building and deploying client..."
-    (cd packages/client && VITE_API_URL="${WORKER_URL}/api" pnpm run build)
+    local VITE_MODE_FLAG=""
+    if [ "${ENVIRONMENT}" != "prod" ]; then
+        VITE_MODE_FLAG="-- --mode development"
+        echo -e "${YELLOW}Building client in development mode (ENVIRONMENT=${ENVIRONMENT})${NC}"
+    fi
+    (cd packages/client && VITE_API_URL="${WORKER_URL}/api" pnpm run build ${VITE_MODE_FLAG})
     (cd packages/client && wrangler pages deploy dist --project-name="$PAGES_PROJECT_NAME")
     echo -e "${GREEN}✓ Client deployed${NC}"
 
