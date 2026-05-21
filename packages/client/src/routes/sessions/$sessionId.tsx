@@ -241,8 +241,8 @@ function SessionLayout() {
             <PanelResizeHandle className="group relative w-px bg-neutral-200 transition-colors hover:bg-accent/40 active:bg-accent dark:bg-neutral-800 dark:hover:bg-accent/40">
               <div className="absolute inset-y-0 -left-1 -right-1" />
             </PanelResizeHandle>
-            <Panel defaultSize={75} minSize={30}>
-              <div className="flex h-full">
+            <Panel defaultSize={75} minSize={30} className="!overflow-hidden">
+              <div className="flex h-full min-w-0 overflow-hidden">
                 <Suspense>
                   {sidebarOpen && (
                     session?.isOrchestrator

@@ -13,9 +13,18 @@ vi.mock('@/hooks/use-pierre-theme', () => ({
   usePierreTheme: () => 'github-light',
 }));
 
-vi.mock('@pierre/diffs/react', () => ({
-  File: () => null,
-}));
+vi.mock('@pierre/diffs/react', async () => {
+  const React = await import('react');
+
+  return {
+    File: ({ className, style }: { className?: string; style?: React.CSSProperties }) =>
+      React.createElement('div', {
+        'data-file-host': 'true',
+        className,
+        style,
+      }),
+  };
+});
 
 describe('FilePreview', () => {
   it('keeps raw file previews inside a local scroll container', () => {
@@ -36,5 +45,7 @@ describe('FilePreview', () => {
     );
 
     expect(html).toContain('min-h-0 min-w-0 flex-1 overflow-auto');
+    expect(html).toContain('class="block min-w-0 max-w-full overflow-hidden"');
+    expect(html).toContain('contain:inline-size');
   });
 });

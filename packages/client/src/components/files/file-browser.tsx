@@ -71,7 +71,7 @@ export function FileBrowser({ sessionId, initialFilePath, onFileConsumed }: File
   const showMobilePreview = isMobile && !!selectedFile && !showingSearch;
 
   return (
-    <div className="flex h-full flex-col overflow-hidden rounded-lg border border-neutral-200 bg-white dark:border-neutral-700 dark:bg-neutral-800">
+    <div className="flex h-full min-w-0 flex-col overflow-hidden rounded-lg border border-neutral-200 bg-white dark:border-neutral-700 dark:bg-neutral-800">
       {/* Search bar */}
       <div className={`border-b border-neutral-200 dark:border-neutral-700 ${isMobile ? 'p-2.5' : 'p-3'}`}>
         <SearchInput
@@ -81,11 +81,11 @@ export function FileBrowser({ sessionId, initialFilePath, onFileConsumed }: File
         />
       </div>
 
-      <div className="flex min-h-0 flex-1 overflow-hidden">
+      <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
         {isMobile ? (
           <>
             {showMobilePreview && selectedFile ? (
-              <div className="flex min-h-0 flex-1 flex-col bg-neutral-50 dark:bg-neutral-900">
+              <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-neutral-50 dark:bg-neutral-900">
                 <div className="flex h-11 shrink-0 items-center gap-2 border-b border-neutral-200 bg-surface-0 px-3 dark:border-neutral-700 dark:bg-surface-1">
                   <button
                     type="button"
@@ -99,7 +99,7 @@ export function FileBrowser({ sessionId, initialFilePath, onFileConsumed }: File
                     {selectedFile.path}
                   </span>
                 </div>
-                <div className="min-h-0 flex-1">
+                <div className="min-h-0 min-w-0 flex-1">
                   <FilePreview sessionId={sessionId} path={selectedFile.path} showHeader={false} />
                 </div>
               </div>

@@ -15,7 +15,7 @@ export function FilesDrawer({ sessionId }: FilesDrawerProps) {
   const isHibernated = session?.status === 'hibernated';
 
   return (
-    <div className="flex h-full flex-col bg-neutral-50 dark:bg-neutral-900">
+    <div className="flex h-full min-w-0 flex-col overflow-hidden bg-neutral-50 dark:bg-neutral-900">
       {/* Header */}
       <div className={`shrink-0 border-b border-neutral-200 bg-surface-1 dark:border-neutral-800 dark:bg-surface-1 ${isMobile ? 'flex h-12 items-center justify-between px-3' : 'flex h-10 items-center justify-between px-2'}`}>
         <span className="px-2.5 font-mono text-[11px] font-medium text-neutral-900 dark:text-neutral-100">
@@ -40,7 +40,7 @@ export function FilesDrawer({ sessionId }: FilesDrawerProps) {
           </p>
         </div>
       ) : (
-        <div className={`flex-1 overflow-hidden ${isMobile ? 'p-2.5' : 'p-4'}`}>
+        <div className={`min-h-0 min-w-0 flex-1 overflow-hidden ${isMobile ? 'p-2.5' : 'p-4'}`}>
           <FileBrowser sessionId={sessionId} initialFilePath={initialFilePath} onFileConsumed={clearPendingFile} />
         </div>
       )}

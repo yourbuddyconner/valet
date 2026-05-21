@@ -73,7 +73,7 @@ export function FilePreview({ sessionId, path, showHeader = true }: FilePreviewP
   }
 
   return (
-    <div className="flex h-full flex-col overflow-hidden">
+    <div className="flex h-full min-w-0 flex-col overflow-hidden">
       {showHeader && (
         <div className="flex shrink-0 items-center justify-between border-b border-neutral-200 bg-neutral-100 px-4 py-2 dark:border-neutral-700 dark:bg-neutral-800">
           <span className="min-w-0 truncate text-sm font-medium text-neutral-700 dark:text-neutral-300">
@@ -116,8 +116,10 @@ export function FilePreview({ sessionId, path, showHeader = true }: FilePreviewP
       ) : (
         <div className="min-h-0 min-w-0 flex-1 overflow-auto">
           <File
+            className="block min-w-0 max-w-full overflow-hidden"
             file={{ name: path.split('/').pop() || 'file.txt', contents: data.content }}
             options={{ theme, overflow: 'scroll' }}
+            style={{ contain: 'inline-size' }}
           />
         </div>
       )}
