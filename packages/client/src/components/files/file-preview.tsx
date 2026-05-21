@@ -109,18 +109,18 @@ export function FilePreview({ sessionId, path, showHeader = true }: FilePreviewP
           </div>
         </div>
       )}
-      <div className="min-h-0 flex-1 overflow-auto">
-        {isMarkdown && renderMarkdown ? (
-          <div className="p-4">
-            <MarkdownContent content={data.content} />
-          </div>
-        ) : (
+      {isMarkdown && renderMarkdown ? (
+        <div className="min-h-0 flex-1 overflow-auto p-4">
+          <MarkdownContent content={data.content} />
+        </div>
+      ) : (
+        <div className="min-h-0 min-w-0 flex-1">
           <File
             file={{ name: path.split('/').pop() || 'file.txt', contents: data.content }}
             options={{ theme, overflow: 'scroll' }}
           />
-        )}
-      </div>
+        </div>
+      )}
     </div>
   );
 }
