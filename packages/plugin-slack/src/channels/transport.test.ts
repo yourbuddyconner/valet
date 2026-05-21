@@ -1295,8 +1295,10 @@ describe('SlackTransport', () => {
         type: 'approval',
         title: 'Action requires approval',
         actions: [
-          { id: 'approve', label: 'Approve', style: 'primary' },
-          { id: 'deny', label: 'Deny', style: 'danger' },
+          { id: 'allow_once', label: 'Allow', style: 'primary' },
+          { id: 'allow_session', label: 'Allow for Session' },
+          { id: 'allow_always', label: 'Always Allow' },
+          { id: 'cancel', label: 'Cancel', style: 'danger' },
         ],
       };
 
@@ -1309,6 +1311,45 @@ describe('SlackTransport', () => {
       expect(body.channel).toBe('C456');
       expect(body.thread_ts).toBe('1234567890.123456');
       expect(body.blocks[1].elements[0].value).toBe('orchestrator:user-1:prompt-1');
+      expect(body.blocks[1].elements.map((button: { action_id: string }) => button.action_id)).toEqual([
+        'allow_once',
+        'allow_session',
+        'allow_always',
+        'cancel',
+      ]);
+    });
+  });
+
+  describe('updateInteractivePrompt', () => {
+    const target: ChannelTarget = { channelType: 'slack', channelId: 'C456' };
+    const ctx: ChannelContext = { token: 'xoxb-test-token', userId: 'u1' };
+    const ref = { messageId: '1234567891.000000', channelId: 'C456' };
+
+    it('renders session allow resolution status', async () => {
+      mockFetch.mockResolvedValueOnce(jsonResponse({ ok: true }));
+
+      await transport.updateInteractivePrompt!(target, ref, {
+        actionId: 'allow_session',
+        resolvedBy: 'Alice',
+      }, ctx);
+
+      const [url, opts] = mockFetch.mock.calls[0];
+      expect(url).toBe('https://slack.com/api/chat.update');
+      const body = JSON.parse(opts.body);
+      expect(body.text).toContain('Allowed for session by Alice');
+    });
+
+    it('renders cancel resolution status', async () => {
+      mockFetch.mockResolvedValueOnce(jsonResponse({ ok: true }));
+
+      await transport.updateInteractivePrompt!(target, ref, {
+        actionId: 'cancel',
+        resolvedBy: 'Bob',
+      }, ctx);
+
+      const [, opts] = mockFetch.mock.calls[0];
+      const body = JSON.parse(opts.body);
+      expect(body.text).toContain('Cancelled by Bob');
     });
   });
 });

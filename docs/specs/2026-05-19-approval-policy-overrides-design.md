@@ -242,7 +242,9 @@ Validation mirrors admin action policy validation:
 - `actionId` requires `service`.
 - A user can only read, update, or delete their own overrides.
 
-For exact-action `allow` overrides, if the service/action/risk can be resolved and an explicit org policy denies it, the API should reject the save with a clear validation error. System default `deny` does not block saving a user override. For broad service or risk-level overrides, saving is allowed with the understanding that org-denied matching actions remain denied at execution time.
+For exact-action `allow` overrides, if the service/action/risk can be resolved and an explicit org policy denies it, the API should reject the save with a clear validation error. This includes risk-level org denies when the action catalog can resolve the selected action's risk level. System default `deny` does not block saving a user override. For broad service or risk-level overrides, saving is allowed with the understanding that org-denied matching actions remain denied at execution time.
+
+V1 settings can create and edit only persistent overrides. Session-scoped overrides are created from approval prompts, shown as temporary/read-only rows in settings, and may be deleted by the user. Timed settings overrides remain a reserved schema/API concept until there is a dedicated duration UX.
 
 ## Approval UI
 
@@ -260,8 +262,8 @@ Choices:
 | Action ID | Label | Description | Effect |
 |---|---|---|---|
 | `allow_once` | Allow | Run the tool once and continue. | Approve and execute this invocation only. |
-| `allow_session` | Allow for Session | Run the tool and remember this choice for this session. | Create session-scoped exact-action allow override, then execute. |
-| `allow_always` | Always Allow | Run the tool and remember this choice for future tool calls. | Create persistent exact-action allow override, then execute. |
+| `allow_session` | Allow for Session | Run the tool and remember this choice for this session. | Approve this invocation, create a session-scoped exact-action allow override, then execute. |
+| `allow_always` | Always Allow | Run the tool and remember this choice for future tool calls. | Approve this invocation, create a persistent exact-action allow override, then execute. |
 | `cancel` | Cancel | Cancel this tool call. | Store the invocation as `denied` without creating an override. |
 
 Keyboard behavior:
@@ -295,8 +297,8 @@ Channel transports can ignore `description` if the channel's native interactive 
 New action handling:
 
 - `allow_once`: approve and execute the current invocation.
-- `allow_session`: create a session-scoped exact-action allow override, then approve and execute.
-- `allow_always`: create or update a persistent exact-action allow override, then approve and execute.
+- `allow_session`: approve the current invocation, create a session-scoped exact-action allow override, then execute.
+- `allow_always`: approve the current invocation, create or update a persistent exact-action allow override, then execute.
 - `cancel`: mark the invocation as `denied` and send a cancellation error to the runner.
 
 Legacy action handling:
@@ -308,21 +310,32 @@ Override creation must be ownership-checked and idempotent:
 
 - The pending prompt must belong to the session owner.
 - The invocation must still be pending.
-- No explicit org policy can deny the tool at the time the override is created.
-- If creating the override fails, do not execute the tool and leave the prompt retryable.
+- No explicit org policy can deny the tool at the time any non-cancel approval is resolved.
+- Override rows must not be written until the invocation has been atomically approved from `pending`.
+- If creating the override fails after approval, mark the invocation failed, do not execute the tool, delete the local prompt, and return an error to the resolver/runner.
 - If the prompt was already resolved, the second resolution is ignored.
+
+Only the session owner may resolve an approval prompt. The web session WebSocket can be opened by viewers/collaborators for multiplayer, so approval messages must use the authenticated WebSocket tag (`client:{userId}`) as `resolvedBy`; they must not substitute the session owner server-side.
+
+REST approval endpoints (`POST /api/action-invocations/:id/approve` and `/deny`) are a fallback transport for the same resolution path. They verify current-user ownership, then delegate to `SessionAgentDO /prompt-resolved` with the selected `actionId`. They must not pre-mutate D1. If the DO rejects or cannot be reached, the route returns an error and the `action_invocations` row remains unchanged.
 
 The current handler deletes the local `interactive_prompts` row before doing D1 approval and execution work. This flow must change for override actions. Resolution should claim the prompt first, then delete it only after all required D1 writes succeed:
 
 1. Read the pending prompt row.
 2. Atomically mark it `status='resolving'` with a `WHERE status='pending'` guard. If no row is updated, another resolver won.
 3. Validate ownership and invocation status.
-4. For `allow_session` and `allow_always`, create or update the override.
-5. Approve or deny the invocation.
-6. On success, delete the local prompt row and broadcast/update channel resolution.
-7. On override-write or validation failure, restore the prompt to `status='pending'`, surface an error to the web UI/channel where practical, and keep the runner waiting so the user can choose `Allow`, `Cancel`, or retry the override action.
+4. For every non-cancel approval action, check the current org policy hard ceiling before mutating anything.
+5. Approve or deny the invocation with a pending-status guard.
+6. For `allow_session` and `allow_always`, create or update the override only after approval succeeds.
+7. On success, delete the local prompt row and broadcast/update channel resolution.
+8. On validation failure before approval, restore the prompt to `status='pending'`, surface an error to the web UI/channel where practical, and keep the runner waiting.
+9. On override-write failure after approval, mark the invocation failed, notify the runner with an error, and delete the prompt rather than executing without the requested override.
+
+Approvals created before the unified-auth approval context must be treated as stale: mark the invocation failed, notify the runner, delete the local prompt, and broadcast/update channels with terminal prompt state so stale approval UI is removed.
 
 `allow_once` and legacy `approve` do not need override writes, but can use the same claim/delete pattern to avoid two divergent resolution paths.
+
+Client reconnect can replay pending `interactive_prompt` events. The web client must upsert prompts by ID instead of blindly appending, so reconnects do not duplicate the same pending approval card. When a WebSocket approval send is unavailable, the approval card must fall back to REST and include the selected `actionId` so `allow_session` and `allow_always` preserve their meaning.
 
 For `allow_session`, insert or update:
 
@@ -422,7 +435,10 @@ Existing channel transports can ignore `InteractiveAction.description` because i
 - `allow_always` creates a persistent exact-action override and executes.
 - `cancel` stores the invocation as `denied`, does not execute, and creates no override.
 - Legacy `approve` and `deny` still work for old pending prompts.
-- Failed override creation does not execute the tool and leaves the prompt retryable.
+- Non-owner WebSocket clients cannot approve or deny a session owner's tool approval.
+- Session-scoped/persistent override shortcuts do not persist an override if the invocation is already resolved.
+- REST approval and denial routes do not mutate D1 when the SessionAgent rejects the prompt resolution.
+- Failed override creation after approval does not execute the tool and marks the invocation failed.
 - Terminal session status transition expires session-scoped overrides.
 
 ### UI Tests

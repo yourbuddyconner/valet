@@ -20,6 +20,7 @@ import type {
 } from "./types.js";
 import { gitCredentials } from "./git-credentials.js";
 import { setupGitConfig, cloneRepo } from "./git-setup.js";
+import { APPROVAL_TIMEOUT_MS } from "./timeouts.js";
 
 export interface PromptAuthor {
   authorId?: string;
@@ -36,7 +37,6 @@ const SPAWN_CHILD_TIMEOUT_MS = 60_000;
 const TERMINATE_CHILD_TIMEOUT_MS = 30_000;
 const MESSAGE_OP_TIMEOUT_MS = 15_000;
 const TOOL_OP_TIMEOUT_MS = 30_000;
-const APPROVAL_TIMEOUT_MS = 11 * 60 * 1000; // 11 min — slightly longer than DO's 10 min expiry
 // If the server rejects the WebSocket upgrade N times in a row (e.g. 401 due to
 // rotated token), stop retrying and exit — the sandbox has been replaced.
 const MAX_CONSECUTIVE_UPGRADE_FAILURES = 5;

@@ -947,21 +947,44 @@ export type AvailableModels = ProviderModels[];
 
 export type ActionMode = 'allow' | 'require_approval' | 'deny';
 export type ActionInvocationStatus = 'pending' | 'approved' | 'denied' | 'executed' | 'failed' | 'expired';
+export type ActionRiskLevel = 'low' | 'medium' | 'high' | 'critical';
+// Registry-backed IntegrationPackage.service id, e.g. "gmail" or "linear".
+export type ActionServiceId = string;
+export type ActionPolicyLifetime = 'persistent' | 'session' | 'timed';
+export type ActionPolicySource = 'settings' | 'approval_prompt';
+export type EffectivePolicySource = 'system_default' | 'org_policy' | 'user_override' | 'session_override';
+export type ActionPolicyScope = 'action' | 'service' | 'risk_level' | 'none';
 
 export interface ActionPolicy {
   id: string;
-  service?: string;
+  service?: ActionServiceId;
   actionId?: string;
-  riskLevel?: string;
+  riskLevel?: ActionRiskLevel;
   mode: ActionMode;
   createdBy: string | null;
   createdAt: string;
   updatedAt: string;
 }
 
+export interface ActionPolicyOverride {
+  id: string;
+  userId: string;
+  service?: ActionServiceId | null;
+  actionId?: string | null;
+  riskLevel?: ActionRiskLevel | null;
+  mode: ActionMode;
+  lifetime: ActionPolicyLifetime;
+  sessionId?: string | null;
+  expiresAt?: string | null;
+  source: ActionPolicySource;
+  sourceInvocationId?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface DisabledAction {
   id: string;
-  service: string;
+  service: ActionServiceId;
   actionId?: string | null;
   disabledBy: string | null;
   createdAt: string;
@@ -971,9 +994,9 @@ export interface ActionInvocation {
   id: string;
   sessionId: string;
   userId: string;
-  service: string;
+  service: ActionServiceId;
   actionId: string;
-  riskLevel: string;
+  riskLevel: ActionRiskLevel;
   resolvedMode: ActionMode;
   status: ActionInvocationStatus;
   params?: string;
@@ -984,6 +1007,13 @@ export interface ActionInvocation {
   executedAt?: string;
   expiresAt?: string;
   policyId?: string;
+  orgPolicyId?: string | null;
+  baseMode?: ActionMode | null;
+  baseSource?: 'org_policy' | 'system_default' | null;
+  userOverrideId?: string | null;
+  policySource?: EffectivePolicySource | null;
+  policyLifetime?: ActionPolicyLifetime | null;
+  policyScope?: ActionPolicyScope | null;
   createdAt: string;
   updatedAt: string;
 }

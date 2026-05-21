@@ -39,6 +39,7 @@ import { adminGitHubRouter, githubAppSetupCallbackRouter } from './routes/admin-
 import { slackEventsRouter } from './routes/slack-events.js';
 import { channelWebhooksRouter } from './routes/channel-webhooks.js';
 import { actionPoliciesRouter } from './routes/action-policies.js';
+import { actionPolicyOverridesRouter } from './routes/action-policy-overrides.js';
 import { disabledActionsRouter } from './routes/disabled-actions.js';
 import { actionInvocationsRouter } from './routes/action-invocations.js';
 import { usageRouter } from './routes/usage.js';
@@ -197,6 +198,7 @@ app.route('/api/me/telegram', telegramApiRouter);
 app.route('/api/admin/slack', slackAdminRouter);
 app.route('/api/admin/github', adminGitHubRouter);
 app.route('/api/admin/action-policies', actionPoliciesRouter);
+app.route('/api/action-policy-overrides', actionPolicyOverridesRouter);
 app.route('/api/admin/disabled-actions', disabledActionsRouter);
 app.route('/api/admin/default-skills', orgDefaultSkillsRouter);
 app.route('/api/action-invocations', actionInvocationsRouter);

@@ -1,6 +1,6 @@
 import { eq, and, or, isNull, desc, sql } from 'drizzle-orm';
 import type { AppDb } from '../drizzle.js';
-import { actionPolicies, actionInvocations } from '../schema/index.js';
+import { actionPolicies, actionInvocations, userActionPolicyOverrides } from '../schema/index.js';
 import type { ActionMode } from '@valet/shared';
 
 // ─── System Defaults ─────────────────────────────────────────────────────────
@@ -11,6 +11,43 @@ const SYSTEM_DEFAULTS: Record<string, ActionMode> = {
   high: 'require_approval',
   critical: 'deny',
 };
+
+export type ActionPolicyLifetime = 'persistent' | 'session' | 'timed';
+export type ActionPolicySource = 'settings' | 'approval_prompt';
+export type EffectivePolicySource = 'system_default' | 'org_policy' | 'user_override' | 'session_override';
+export type PolicyScope = 'action' | 'service' | 'risk_level' | 'none';
+export type ActionPolicyOverrideRow = typeof userActionPolicyOverrides.$inferSelect;
+
+export interface EffectivePolicyResult {
+  mode: ActionMode;
+  outcome: 'allowed' | 'pending_approval' | 'denied';
+  riskLevel: string;
+  baseMode: ActionMode;
+  baseSource: 'org_policy' | 'system_default';
+  orgPolicyId: string | null;
+  userOverrideId: string | null;
+  source: EffectivePolicySource;
+  lifetime: ActionPolicyLifetime | null;
+  scope: PolicyScope;
+}
+
+function modeToOutcome(mode: ActionMode): EffectivePolicyResult['outcome'] {
+  if (mode === 'allow') return 'allowed';
+  if (mode === 'deny') return 'denied';
+  return 'pending_approval';
+}
+
+function systemDefaultForRisk(riskLevel: string): ActionMode {
+  return SYSTEM_DEFAULTS[riskLevel] || 'require_approval';
+}
+
+function timestampMs(value: string | null): number {
+  if (!value) return 0;
+  const normalized = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(value)
+    ? `${value.replace(' ', 'T')}Z`
+    : value;
+  return new Date(normalized).getTime();
+}
 
 // ─── Policies ────────────────────────────────────────────────────────────────
 
@@ -94,6 +131,44 @@ export async function deleteActionPolicy(db: AppDb, id: string) {
   await db.delete(actionPolicies).where(eq(actionPolicies.id, id));
 }
 
+export async function resolveOrgPolicyMatch(
+  db: AppDb,
+  service: string,
+  actionId: string,
+  riskLevel: string,
+): Promise<{ mode: ActionMode; policyId: string; scope: PolicyScope } | null> {
+  const rows = await db
+    .select()
+    .from(actionPolicies)
+    .where(
+      or(
+        and(eq(actionPolicies.service, service), eq(actionPolicies.actionId, actionId)),
+        and(eq(actionPolicies.service, service), isNull(actionPolicies.actionId), isNull(actionPolicies.riskLevel)),
+        and(isNull(actionPolicies.service), isNull(actionPolicies.actionId), eq(actionPolicies.riskLevel, riskLevel)),
+      ),
+    )
+    .all();
+
+  type PolicyRow = typeof rows[number];
+
+  const actionMatch = rows.find((r: PolicyRow) => r.service === service && r.actionId === actionId);
+  if (actionMatch) {
+    return { mode: actionMatch.mode as ActionMode, policyId: actionMatch.id, scope: 'action' };
+  }
+
+  const serviceMatch = rows.find((r: PolicyRow) => r.service === service && !r.actionId && !r.riskLevel);
+  if (serviceMatch) {
+    return { mode: serviceMatch.mode as ActionMode, policyId: serviceMatch.id, scope: 'service' };
+  }
+
+  const riskMatch = rows.find((r: PolicyRow) => !r.service && !r.actionId && r.riskLevel === riskLevel);
+  if (riskMatch) {
+    return { mode: riskMatch.mode as ActionMode, policyId: riskMatch.id, scope: 'risk_level' };
+  }
+
+  return null;
+}
+
 /**
  * Cascade resolution: fetch all potentially matching policies, then pick the
  * most specific match.
@@ -110,45 +185,316 @@ export async function resolvePolicy(
   actionId: string,
   riskLevel: string,
 ): Promise<{ mode: ActionMode; policyId: string | null }> {
+  const explicit = await resolveOrgPolicyMatch(db, service, actionId, riskLevel);
+  if (explicit) {
+    return { mode: explicit.mode, policyId: explicit.policyId };
+  }
+
+  return { mode: systemDefaultForRisk(riskLevel), policyId: null };
+}
+
+// ─── User Overrides ─────────────────────────────────────────────────────────
+
+export async function listUserActionPolicyOverrides(db: AppDb, userId: string) {
+  return db
+    .select()
+    .from(userActionPolicyOverrides)
+    .where(eq(userActionPolicyOverrides.userId, userId))
+    .orderBy(desc(userActionPolicyOverrides.updatedAt))
+    .all();
+}
+
+export async function getUserActionPolicyOverride(db: AppDb, id: string) {
+  return db
+    .select()
+    .from(userActionPolicyOverrides)
+    .where(eq(userActionPolicyOverrides.id, id))
+    .get();
+}
+
+export async function upsertUserActionPolicyOverride(
+  db: AppDb,
+  data: {
+    id: string;
+    userId: string;
+    service?: string | null;
+    actionId?: string | null;
+    riskLevel?: string | null;
+    mode: ActionMode;
+    lifetime?: ActionPolicyLifetime;
+    sessionId?: string | null;
+    expiresAt?: string | null;
+    source?: ActionPolicySource;
+    sourceInvocationId?: string | null;
+  },
+): Promise<string> {
+  const now = new Date().toISOString();
+  const svc = data.service ?? null;
+  const act = data.actionId ?? null;
+  const risk = data.riskLevel ?? null;
+  const lifetime = data.lifetime ?? 'persistent';
+  const sessionId = lifetime === 'session' ? data.sessionId ?? null : null;
+  const expiresAt = data.expiresAt ?? null;
+  const source = data.source ?? 'settings';
+  const sourceInvocationId = data.sourceInvocationId ?? null;
+
+  const idOwner = await db
+    .select({ userId: userActionPolicyOverrides.userId })
+    .from(userActionPolicyOverrides)
+    .where(eq(userActionPolicyOverrides.id, data.id))
+    .get();
+  if (idOwner && idOwner.userId !== data.userId) {
+    throw new Error('Action policy override not found');
+  }
+
+  if (lifetime === 'session' && !sessionId) {
+    throw new Error('sessionId is required for session-scoped action policy overrides');
+  }
+
+  let existingId: string | null = null;
+
+  if (svc && act) {
+    const conditions = [
+      eq(userActionPolicyOverrides.userId, data.userId),
+      eq(userActionPolicyOverrides.lifetime, lifetime),
+      eq(userActionPolicyOverrides.service, svc),
+      eq(userActionPolicyOverrides.actionId, act),
+    ];
+    if (lifetime === 'session') {
+      conditions.push(eq(userActionPolicyOverrides.sessionId, sessionId as string));
+    }
+
+    const existing = await db
+      .select({ id: userActionPolicyOverrides.id })
+      .from(userActionPolicyOverrides)
+      .where(and(...conditions))
+      .get();
+    existingId = existing?.id ?? null;
+  } else if (svc && !act && !risk) {
+    const conditions = [
+      eq(userActionPolicyOverrides.userId, data.userId),
+      eq(userActionPolicyOverrides.lifetime, lifetime),
+      eq(userActionPolicyOverrides.service, svc),
+      isNull(userActionPolicyOverrides.actionId),
+      isNull(userActionPolicyOverrides.riskLevel),
+    ];
+    if (lifetime === 'session') {
+      conditions.push(eq(userActionPolicyOverrides.sessionId, sessionId as string));
+    }
+
+    const existing = await db
+      .select({ id: userActionPolicyOverrides.id })
+      .from(userActionPolicyOverrides)
+      .where(and(...conditions))
+      .get();
+    existingId = existing?.id ?? null;
+  } else if (!svc && !act && risk) {
+    const conditions = [
+      eq(userActionPolicyOverrides.userId, data.userId),
+      eq(userActionPolicyOverrides.lifetime, lifetime),
+      isNull(userActionPolicyOverrides.service),
+      isNull(userActionPolicyOverrides.actionId),
+      eq(userActionPolicyOverrides.riskLevel, risk),
+    ];
+    if (lifetime === 'session') {
+      conditions.push(eq(userActionPolicyOverrides.sessionId, sessionId as string));
+    }
+
+    const existing = await db
+      .select({ id: userActionPolicyOverrides.id })
+      .from(userActionPolicyOverrides)
+      .where(and(...conditions))
+      .get();
+    existingId = existing?.id ?? null;
+  }
+
+  const effectiveId = existingId ?? data.id;
+
+  await db
+    .insert(userActionPolicyOverrides)
+    .values({
+      id: effectiveId,
+      userId: data.userId,
+      service: svc,
+      actionId: act,
+      riskLevel: risk,
+      mode: data.mode,
+      lifetime,
+      sessionId,
+      expiresAt,
+      source,
+      sourceInvocationId,
+      createdAt: now,
+      updatedAt: now,
+    })
+    .onConflictDoUpdate({
+      target: userActionPolicyOverrides.id,
+      set: {
+        service: svc,
+        actionId: act,
+        riskLevel: risk,
+        mode: data.mode,
+        lifetime,
+        sessionId,
+        expiresAt,
+        source,
+        sourceInvocationId,
+        updatedAt: now,
+      },
+    });
+
+  return effectiveId;
+}
+
+export async function deleteUserActionPolicyOverride(db: AppDb, id: string, userId: string) {
+  await db
+    .delete(userActionPolicyOverrides)
+    .where(and(eq(userActionPolicyOverrides.id, id), eq(userActionPolicyOverrides.userId, userId)));
+}
+
+export async function expireSessionActionPolicyOverrides(
+  db: AppDb,
+  sessionId: string,
+  now = new Date().toISOString(),
+): Promise<void> {
+  await db
+    .update(userActionPolicyOverrides)
+    .set({
+      expiresAt: now,
+      updatedAt: now,
+    })
+    .where(and(
+      eq(userActionPolicyOverrides.lifetime, 'session'),
+      eq(userActionPolicyOverrides.sessionId, sessionId),
+      or(
+        isNull(userActionPolicyOverrides.expiresAt),
+        sql`${userActionPolicyOverrides.expiresAt} > ${now}`,
+      ),
+    ));
+}
+
+export async function resolveUserActionPolicyOverride(
+  db: AppDb,
+  input: { userId: string; sessionId?: string; service: string; actionId: string; riskLevel: string },
+): Promise<{ override: ActionPolicyOverrideRow; scope: PolicyScope } | null> {
+  const now = new Date().toISOString();
   const rows = await db
     .select()
-    .from(actionPolicies)
+    .from(userActionPolicyOverrides)
     .where(
-      or(
-        // Match specific action
-        and(eq(actionPolicies.service, service), eq(actionPolicies.actionId, actionId)),
-        // Match service-level (no actionId, no riskLevel)
-        and(eq(actionPolicies.service, service), isNull(actionPolicies.actionId), isNull(actionPolicies.riskLevel)),
-        // Match risk-level (no service, no actionId)
-        and(isNull(actionPolicies.service), isNull(actionPolicies.actionId), eq(actionPolicies.riskLevel, riskLevel)),
+      and(
+        eq(userActionPolicyOverrides.userId, input.userId),
+        or(
+          and(eq(userActionPolicyOverrides.service, input.service), eq(userActionPolicyOverrides.actionId, input.actionId)),
+          and(eq(userActionPolicyOverrides.service, input.service), isNull(userActionPolicyOverrides.actionId), isNull(userActionPolicyOverrides.riskLevel)),
+          and(isNull(userActionPolicyOverrides.service), isNull(userActionPolicyOverrides.actionId), eq(userActionPolicyOverrides.riskLevel, input.riskLevel)),
+        ),
       ),
     )
     .all();
 
-  // Find most specific match
-  type PolicyRow = typeof rows[number];
+  type OverrideCandidate = { override: ActionPolicyOverrideRow; scope: Exclude<PolicyScope, 'none'> };
+  const typedRows = rows as ActionPolicyOverrideRow[];
+  const candidates = typedRows
+    .map((override: ActionPolicyOverrideRow): OverrideCandidate | null => {
+      let scope: OverrideCandidate['scope'] | null = null;
+      if (override.service === input.service && override.actionId === input.actionId) {
+        scope = 'action';
+      } else if (override.service === input.service && !override.actionId && !override.riskLevel) {
+        scope = 'service';
+      } else if (!override.service && !override.actionId && override.riskLevel === input.riskLevel) {
+        scope = 'risk_level';
+      }
 
-  // Priority 1: exact action match
-  const actionMatch = rows.find((r: PolicyRow) => r.service === service && r.actionId === actionId);
-  if (actionMatch) {
-    return { mode: actionMatch.mode as ActionMode, policyId: actionMatch.id };
+      if (!scope) return null;
+
+      if (override.expiresAt && override.expiresAt <= now) return null;
+
+      if (override.lifetime === 'session') {
+        if (!input.sessionId || override.sessionId !== input.sessionId) return null;
+      } else if (override.lifetime === 'timed') {
+        if (!override.expiresAt || override.expiresAt <= now) return null;
+      }
+
+      return { override, scope };
+    })
+    .filter((candidate): candidate is OverrideCandidate => candidate !== null);
+
+  const scopeRank: Record<PolicyScope, number> = {
+    action: 3,
+    service: 2,
+    risk_level: 1,
+    none: 0,
+  };
+  const lifetimeRank = (lifetime: string) => lifetime === 'persistent' ? 0 : 1;
+
+  candidates.sort((a, b) => {
+    const scopeDelta = scopeRank[b.scope] - scopeRank[a.scope];
+    if (scopeDelta !== 0) return scopeDelta;
+
+    const lifetimeDelta = lifetimeRank(b.override.lifetime) - lifetimeRank(a.override.lifetime);
+    if (lifetimeDelta !== 0) return lifetimeDelta;
+
+    return timestampMs(b.override.updatedAt) - timestampMs(a.override.updatedAt);
+  });
+
+  return candidates[0] ?? null;
+}
+
+export async function resolveEffectiveActionPolicy(
+  db: AppDb,
+  input: { userId: string; sessionId: string; service: string; actionId: string; riskLevel: string },
+): Promise<EffectivePolicyResult> {
+  const orgPolicy = await resolveOrgPolicyMatch(db, input.service, input.actionId, input.riskLevel);
+
+  if (orgPolicy?.mode === 'deny') {
+    return {
+      mode: 'deny',
+      outcome: 'denied',
+      riskLevel: input.riskLevel,
+      baseMode: 'deny',
+      baseSource: 'org_policy',
+      orgPolicyId: orgPolicy.policyId,
+      userOverrideId: null,
+      source: 'org_policy',
+      lifetime: null,
+      scope: orgPolicy.scope,
+    };
   }
 
-  // Priority 2: service-level match
-  const serviceMatch = rows.find((r: PolicyRow) => r.service === service && !r.actionId && !r.riskLevel);
-  if (serviceMatch) {
-    return { mode: serviceMatch.mode as ActionMode, policyId: serviceMatch.id };
+  const baseMode = orgPolicy?.mode ?? systemDefaultForRisk(input.riskLevel);
+  const baseSource = orgPolicy ? 'org_policy' : 'system_default';
+  const userOverride = await resolveUserActionPolicyOverride(db, input);
+
+  if (userOverride) {
+    const mode = userOverride.override.mode as ActionMode;
+    const lifetime = userOverride.override.lifetime as ActionPolicyLifetime;
+    return {
+      mode,
+      outcome: modeToOutcome(mode),
+      riskLevel: input.riskLevel,
+      baseMode,
+      baseSource,
+      orgPolicyId: orgPolicy?.policyId ?? null,
+      userOverrideId: userOverride.override.id,
+      source: lifetime === 'session' ? 'session_override' : 'user_override',
+      lifetime,
+      scope: userOverride.scope,
+    };
   }
 
-  // Priority 3: risk-level match
-  const riskMatch = rows.find((r: PolicyRow) => !r.service && !r.actionId && r.riskLevel === riskLevel);
-  if (riskMatch) {
-    return { mode: riskMatch.mode as ActionMode, policyId: riskMatch.id };
-  }
-
-  // Priority 4: system default
-  const defaultMode = SYSTEM_DEFAULTS[riskLevel] || 'require_approval';
-  return { mode: defaultMode, policyId: null };
+  return {
+    mode: baseMode,
+    outcome: modeToOutcome(baseMode),
+    riskLevel: input.riskLevel,
+    baseMode,
+    baseSource,
+    orgPolicyId: orgPolicy?.policyId ?? null,
+    userOverrideId: null,
+    source: baseSource,
+    lifetime: null,
+    scope: orgPolicy?.scope ?? 'none',
+  };
 }
 
 // ─── Invocations ─────────────────────────────────────────────────────────────
@@ -166,6 +512,13 @@ export async function createInvocation(
     params?: string;
     expiresAt?: string;
     policyId?: string | null;
+    orgPolicyId?: string | null;
+    baseMode?: ActionMode | null;
+    baseSource?: 'org_policy' | 'system_default' | null;
+    userOverrideId?: string | null;
+    policySource?: EffectivePolicySource | null;
+    policyLifetime?: ActionPolicyLifetime | null;
+    policyScope?: PolicyScope | null;
     status?: string;
   },
 ) {
@@ -180,7 +533,14 @@ export async function createInvocation(
     resolvedMode: data.resolvedMode,
     params: data.params,
     expiresAt: data.expiresAt,
-    policyId: data.policyId ?? null,
+    policyId: data.policyId ?? data.orgPolicyId ?? null,
+    orgPolicyId: data.orgPolicyId ?? data.policyId ?? null,
+    baseMode: data.baseMode ?? null,
+    baseSource: data.baseSource ?? null,
+    userOverrideId: data.userOverrideId ?? null,
+    policySource: data.policySource ?? null,
+    policyLifetime: data.policyLifetime ?? null,
+    policyScope: data.policyScope ?? null,
     status: data.status || 'pending',
     createdAt: now,
     updatedAt: now,

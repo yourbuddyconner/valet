@@ -16,6 +16,7 @@
 import { Hono } from "hono";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { gitCredentials } from "./git-credentials.js";
+import { SANDBOX_GATEWAY_IDLE_TIMEOUT_MS } from "./timeouts.js";
 
 const app = new Hono();
 
@@ -1985,10 +1986,10 @@ export function startGateway(port: number, callbacks: GatewayCallbacks): void {
 
   Bun.serve({
     port,
-    // Gateway proxies long-running operations (tool calls up to 30s, approval
-    // gates up to 11min). Bun's default 10s idle timeout closes the HTTP socket
-    // before the handler responds, causing "socket closed unexpectedly" errors.
-    idleTimeout: 255,
+    // Gateway proxies tool calls and approval gates. Keep approval waits below
+    // this Bun idle ceiling so the sandbox HTTP call cannot time out before the
+    // human approval prompt expires.
+    idleTimeout: SANDBOX_GATEWAY_IDLE_TIMEOUT_MS / 1000,
 
     async fetch(req: Request, server: any): Promise<Response> {
       const url = new URL(req.url);
