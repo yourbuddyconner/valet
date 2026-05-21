@@ -136,6 +136,13 @@ export function FileBrowser({ sessionId, initialFilePath, onFileConsumed }: File
           <>
             {/* File tree sidebar */}
             <div className="w-64 flex-shrink-0 overflow-auto border-r border-neutral-200 dark:border-neutral-700">
+              {!showingSearch && currentPath !== '/' && (
+                <div className="border-b border-neutral-100 px-3 py-1.5 dark:border-neutral-700/50">
+                  <span className="font-mono text-[10px] text-neutral-400 dark:text-neutral-500" title={currentPath}>
+                    {currentPath}
+                  </span>
+                </div>
+              )}
               {showingSearch ? (
                 <SearchResults
                   results={searchResults.results}
