@@ -87,6 +87,8 @@ def get_base_image() -> modal.Image:
             "chmod +x /usr/local/bin/cloudflared",
             # code-server (VS Code in browser)
             "curl -fsSL https://code-server.dev/install.sh | sh",
+            # Reviews CLI (code review tool)
+            "curl -fsSL https://raw.githubusercontent.com/figitaki/reviews/main/install.sh | sh -s -- --no-skills --yes",
         )
         # ─── OpenCode + Playwright (changes when OPENCODE_VERSION bumps) ─
         .run_commands(
@@ -162,11 +164,11 @@ def get_base_image() -> modal.Image:
         .env(
             {
                 "BUN_INSTALL": "/root/.bun",
-                "PATH": "/root/.bun/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+                "PATH": "/workspace/.local/bin:/root/.bun/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
                 "DISPLAY": ":99",
                 "HOME": "/workspace",
                 # Force image rebuild on deploy (change this value to trigger rebuild)
-                "IMAGE_BUILD_VERSION": "2026-05-21-v33-agents-skills-dir",
+                "IMAGE_BUILD_VERSION": "2026-05-21-v34-reviews-cli",
                 "AGENT_BROWSER_EXECUTABLE_PATH": "/usr/bin/chromium",
                 "AGENT_BROWSER_PROFILE": "/workspace/.agent-browser-profile",
                 "PLAYWRIGHT_BROWSERS_PATH": "/ms-playwright",

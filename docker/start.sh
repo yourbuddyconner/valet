@@ -4,8 +4,9 @@ set -e
 export DISPLAY=:99
 export HOME=/workspace
 
-# Copy default dotfiles to persistent workspace on first boot
+# First-boot setup: copy default dotfiles and create persistent bin dir
 [ ! -f /workspace/.bashrc ] && cp /root/.bashrc /workspace/.bashrc
+mkdir -p /workspace/.local/bin
 
 OPENCODE_PORT=4096
 VSCODE_PORT=8765
