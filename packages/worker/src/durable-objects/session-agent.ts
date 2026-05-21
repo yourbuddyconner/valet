@@ -11,7 +11,7 @@ import { resolveAvailableModels } from '../services/model-catalog.js';
 import { integrationRegistry } from '../integrations/registry.js';
 import { updateIntegrationStatus } from '../lib/db/integrations.js';
 import { approveInvocation, denyInvocation, markFailed } from '../services/actions.js';
-import { resolveOrgPolicyMatch, updateInvocationStatus, upsertUserActionPolicyOverride, expireSessionActionPolicyOverrides } from '../lib/db/actions.js';
+import { resolveOrgPolicyMatch, updateInvocationStatus, upsertUserActionPolicyOverride, deleteSessionActionPolicyOverrides } from '../lib/db/actions.js';
 import { getActivePluginArtifacts, getPluginSettings } from '../lib/db/plugins.js';
 import { getPersonaSkills, getOrgDefaultSkills, getPersonaToolWhitelist } from '../lib/db.js';
 import type { ChannelTarget, ChannelContext, InteractivePrompt, InteractiveAction, InteractivePromptRef, InteractiveResolution } from '@valet/sdk';
@@ -4159,6 +4159,12 @@ export class SessionAgentDO {
     await this.flushMetrics();
     await this.flushMessagesToD1();
 
+    // Expire session-scoped action policy overrides before stopping the runner
+    // so no in-flight tool call can sneak through with a stale auto-allow.
+    if (sessionId) {
+      await deleteSessionActionPolicyOverrides(this.appDb, sessionId);
+    }
+
     // Tell runner to stop
     this.runnerLink.send({ type: 'stop' });
 
@@ -5144,7 +5150,7 @@ export class SessionAgentDO {
     // replaced, so ephemeral "allow for this session" approvals should not
     // carry over to the fresh OpenCode instance.
     if (sessionId) {
-      await expireSessionActionPolicyOverrides(this.appDb, sessionId);
+      await deleteSessionActionPolicyOverrides(this.appDb, sessionId);
     }
 
     // Explicit refresh — reset circuit breaker so the user can force a restart
@@ -5371,6 +5377,12 @@ export class SessionAgentDO {
         updateSessionStatus(this.appDb, sessionId, 'hibernating').catch((e) =>
           console.error('[SessionAgentDO] Failed to sync hibernating status to D1:', e),
         );
+      }
+
+      // Expire session-scoped action policy overrides before snapshot/stop
+      // so no in-flight tool call can sneak through with a stale auto-allow.
+      if (sessionId) {
+        await deleteSessionActionPolicyOverrides(this.appDb, sessionId);
       }
 
       // Snapshot via lifecycle (pure HTTP)

@@ -253,57 +253,31 @@ export async function upsertUserActionPolicyOverride(
 
   let existingId: string | null = null;
 
-  if (svc && act) {
-    const conditions = [
+  function buildScopeConditions() {
+    const base = [
       eq(userActionPolicyOverrides.userId, data.userId),
       eq(userActionPolicyOverrides.lifetime, lifetime),
-      eq(userActionPolicyOverrides.service, svc),
-      eq(userActionPolicyOverrides.actionId, act),
     ];
     if (lifetime === 'session') {
-      conditions.push(eq(userActionPolicyOverrides.sessionId, sessionId as string));
+      base.push(eq(userActionPolicyOverrides.sessionId, sessionId as string));
     }
 
+    if (svc && act) {
+      return [...base, eq(userActionPolicyOverrides.service, svc), eq(userActionPolicyOverrides.actionId, act)];
+    } else if (svc && !act && !risk) {
+      return [...base, eq(userActionPolicyOverrides.service, svc), isNull(userActionPolicyOverrides.actionId), isNull(userActionPolicyOverrides.riskLevel)];
+    } else if (!svc && !act && risk) {
+      return [...base, isNull(userActionPolicyOverrides.service), isNull(userActionPolicyOverrides.actionId), eq(userActionPolicyOverrides.riskLevel, risk)];
+    }
+    return null;
+  }
+
+  const scopeConditions = buildScopeConditions();
+  if (scopeConditions) {
     const existing = await db
       .select({ id: userActionPolicyOverrides.id })
       .from(userActionPolicyOverrides)
-      .where(and(...conditions))
-      .get();
-    existingId = existing?.id ?? null;
-  } else if (svc && !act && !risk) {
-    const conditions = [
-      eq(userActionPolicyOverrides.userId, data.userId),
-      eq(userActionPolicyOverrides.lifetime, lifetime),
-      eq(userActionPolicyOverrides.service, svc),
-      isNull(userActionPolicyOverrides.actionId),
-      isNull(userActionPolicyOverrides.riskLevel),
-    ];
-    if (lifetime === 'session') {
-      conditions.push(eq(userActionPolicyOverrides.sessionId, sessionId as string));
-    }
-
-    const existing = await db
-      .select({ id: userActionPolicyOverrides.id })
-      .from(userActionPolicyOverrides)
-      .where(and(...conditions))
-      .get();
-    existingId = existing?.id ?? null;
-  } else if (!svc && !act && risk) {
-    const conditions = [
-      eq(userActionPolicyOverrides.userId, data.userId),
-      eq(userActionPolicyOverrides.lifetime, lifetime),
-      isNull(userActionPolicyOverrides.service),
-      isNull(userActionPolicyOverrides.actionId),
-      eq(userActionPolicyOverrides.riskLevel, risk),
-    ];
-    if (lifetime === 'session') {
-      conditions.push(eq(userActionPolicyOverrides.sessionId, sessionId as string));
-    }
-
-    const existing = await db
-      .select({ id: userActionPolicyOverrides.id })
-      .from(userActionPolicyOverrides)
-      .where(and(...conditions))
+      .where(and(...scopeConditions))
       .get();
     existingId = existing?.id ?? null;
   }
@@ -352,24 +326,15 @@ export async function deleteUserActionPolicyOverride(db: AppDb, id: string, user
     .where(and(eq(userActionPolicyOverrides.id, id), eq(userActionPolicyOverrides.userId, userId)));
 }
 
-export async function expireSessionActionPolicyOverrides(
+export async function deleteSessionActionPolicyOverrides(
   db: AppDb,
   sessionId: string,
-  now = new Date().toISOString(),
 ): Promise<void> {
   await db
-    .update(userActionPolicyOverrides)
-    .set({
-      expiresAt: now,
-      updatedAt: now,
-    })
+    .delete(userActionPolicyOverrides)
     .where(and(
       eq(userActionPolicyOverrides.lifetime, 'session'),
       eq(userActionPolicyOverrides.sessionId, sessionId),
-      or(
-        isNull(userActionPolicyOverrides.expiresAt),
-        sql`${userActionPolicyOverrides.expiresAt} > ${now}`,
-      ),
     ));
 }
 
@@ -377,7 +342,6 @@ export async function resolveUserActionPolicyOverride(
   db: AppDb,
   input: { userId: string; sessionId?: string; service: string; actionId: string; riskLevel: string },
 ): Promise<{ override: ActionPolicyOverrideRow; scope: PolicyScope } | null> {
-  const now = new Date().toISOString();
   const rows = await db
     .select()
     .from(userActionPolicyOverrides)
@@ -408,12 +372,14 @@ export async function resolveUserActionPolicyOverride(
 
       if (!scope) return null;
 
-      if (override.expiresAt && override.expiresAt <= now) return null;
-
+      // Session overrides only apply to the matching session
       if (override.lifetime === 'session') {
         if (!input.sessionId || override.sessionId !== input.sessionId) return null;
-      } else if (override.lifetime === 'timed') {
-        if (!override.expiresAt || override.expiresAt <= now) return null;
+      }
+
+      // Timed overrides use expiresAt as "valid until" — check at resolution time
+      if (override.lifetime === 'timed') {
+        if (!override.expiresAt || override.expiresAt <= new Date().toISOString()) return null;
       }
 
       return { override, scope };

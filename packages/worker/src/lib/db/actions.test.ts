@@ -670,8 +670,8 @@ describe('action policy DB helpers', () => {
     });
   });
 
-  describe('session override expiry', () => {
-    it('expires only matching session-scoped overrides when a session reaches terminal status', async () => {
+  describe('session override deletion', () => {
+    it('deletes only matching session-scoped overrides when a session reaches terminal status', async () => {
       await upsertUserActionPolicyOverride(db as any, {
         id: 'session-override',
         userId: USER_ID,
@@ -701,21 +701,18 @@ describe('action policy DB helpers', () => {
         source: 'settings',
       });
 
-      const before = Date.now();
       await updateSessionStatus(db as any, SESSION_ID, 'terminated');
 
-      const expired = await getUserActionPolicyOverride(db as any, 'session-override');
+      const deleted = await getUserActionPolicyOverride(db as any, 'session-override');
       const otherSession = await getUserActionPolicyOverride(db as any, 'other-session-override');
       const persistent = await getUserActionPolicyOverride(db as any, 'persistent-override');
 
-      expect(expired?.expiresAt).toBeTruthy();
-      expect(Date.parse(expired!.expiresAt!)).toBeGreaterThanOrEqual(before - 1000);
-      expect(Date.parse(expired!.expiresAt!)).toBeLessThanOrEqual(Date.now() + 1000);
-      expect(otherSession?.expiresAt).toBeNull();
-      expect(persistent?.expiresAt).toBeNull();
+      expect(deleted).toBeUndefined();
+      expect(otherSession).toBeDefined();
+      expect(persistent).toBeDefined();
     });
 
-    it('expires session-scoped overrides when a session hibernates', async () => {
+    it('deletes session-scoped overrides when a session hibernates', async () => {
       await upsertUserActionPolicyOverride(db as any, {
         id: 'hibernating-session-override',
         userId: USER_ID,
@@ -727,13 +724,10 @@ describe('action policy DB helpers', () => {
         source: 'approval_prompt',
       });
 
-      const before = Date.now();
       await updateSessionStatus(db as any, SESSION_ID, 'hibernated');
 
-      const override = await getUserActionPolicyOverride(db as any, 'hibernating-session-override');
-      expect(override?.expiresAt).toBeTruthy();
-      expect(Date.parse(override!.expiresAt!)).toBeGreaterThanOrEqual(before - 1000);
-      expect(Date.parse(override!.expiresAt!)).toBeLessThanOrEqual(Date.now() + 1000);
+      const deleted = await getUserActionPolicyOverride(db as any, 'hibernating-session-override');
+      expect(deleted).toBeUndefined();
     });
   });
 });
