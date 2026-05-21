@@ -166,8 +166,8 @@ export class OpenCodeConfigWriter {
       }
     }
 
-    // Copy skills (these are directories, not flat files)
-    const skillsDir = join(this.workspaceDir, ".opencode", "skills");
+    // Copy skills to .agents/skills/ (cross-platform agent convention)
+    const skillsDir = join(this.workspaceDir, ".agents", "skills");
     if (!existsSync(skillsDir)) {
       mkdirSync(skillsDir, { recursive: true });
     }

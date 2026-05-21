@@ -502,7 +502,8 @@ async function main() {
     activeToolWhitelist = content.toolWhitelist ?? null;
 
     const { mkdirSync } = await import('node:fs');
-    const baseDir = `${process.env.HOME || '/workspace'}/.opencode`;
+    const opencodeDir = `${process.env.HOME || '/workspace'}/.opencode`;
+    const agentsDir = `${process.env.HOME || '/workspace'}/.agents`;
 
     // Write persona files to .valet/persona/ — OpenCode watches this glob
     // via opencode.json instructions, so changes are picked up automatically.
@@ -514,9 +515,9 @@ async function main() {
       }
     }
 
-    // Write skill files
+    // Write skill files to .agents/skills/ (cross-platform agent convention)
     if (content.skills.length > 0) {
-      const dir = `${baseDir}/skills`;
+      const dir = `${agentsDir}/skills`;
       mkdirSync(dir, { recursive: true });
       for (const skill of content.skills) {
         await Bun.write(`${dir}/${skill.filename}`, skill.content);
@@ -525,7 +526,7 @@ async function main() {
 
     // Write tool/plugin files
     if (content.tools.length > 0) {
-      const dir = `${baseDir}/plugins/valet`;
+      const dir = `${opencodeDir}/plugins/valet`;
       mkdirSync(dir, { recursive: true });
       for (const tool of content.tools) {
         await Bun.write(`${dir}/${tool.filename}`, tool.content);

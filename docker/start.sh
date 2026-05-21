@@ -46,6 +46,7 @@ echo "[start.sh] VNC accessible on port ${VNC_PORT}"
 cat > "$HOME/.gitignore_global" << 'GITIGNORE'
 .valet/
 .opencode/
+.agents/
 GITIGNORE
 git config --global core.excludesFile "$HOME/.gitignore_global"
 
