@@ -351,7 +351,7 @@ Central authorization function. Check order:
 
 ### Route-Level Access
 
-- **viewer**: read-only endpoints (detail, messages, children, audit log, git state, tunnels, sandbox token, participants, files changed)
+- **viewer**: read-only endpoints (detail, messages, children, audit log, git state, tunnels, sandbox token, participants, files changed, live workspace file browser)
 - **collaborator**: send messages, clear queue, hibernate, wake, delete tunnels
 - **owner**: terminate, update title, manage participants, manage share links, delete
 

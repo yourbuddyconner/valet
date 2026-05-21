@@ -531,6 +531,8 @@ Active sessions (`initializing`, `running`, `idle`, `restoring`) are counted per
 - **collaborator**: send messages, clear queue, hibernate, wake, delete tunnels
 - **owner**: terminate, update title, manage participants, manage share links, delete
 
+Live workspace file browser routes under `/api/files/{find,search,read,list}` accept a `sessionId` query parameter. They resolve the `orchestrator` alias the same way `/api/sessions/:id` routes do, require viewer access on the resolved session, and proxy to the session DO/OpenCode file endpoints.
+
 ## Implementation Status
 
 ### Fully Implemented

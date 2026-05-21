@@ -14,6 +14,27 @@ async function proxyToSession(env: Env, sessionId: string, path: string): Promis
   return sessionDO.fetch(new Request(`http://do/proxy/${path}`));
 }
 
+async function resolveRequestedSessionId(env: Env, userId: string, requestedId: string): Promise<string> {
+  if (requestedId !== 'orchestrator') return requestedId;
+
+  const session = await db.getCurrentOrchestratorSession(env.DB, userId);
+  if (!session) {
+    throw new NotFoundError('Session', requestedId);
+  }
+  return session.id;
+}
+
+async function assertFileSessionAccess(
+  env: Env,
+  appDb: Variables['db'],
+  userId: string,
+  requestedId: string,
+): Promise<string> {
+  const resolvedId = await resolveRequestedSessionId(env, userId, requestedId);
+  await db.assertSessionAccess(appDb, resolvedId, userId, 'viewer');
+  return resolvedId;
+}
+
 /**
  * GET /api/files/find
  * Fuzzy find files by name in a session's workspace via OpenCode
@@ -30,15 +51,12 @@ filesRouter.get('/find', async (c) => {
     throw new ValidationError('query is required');
   }
 
-  const session = await db.getSession(c.get('db'), sessionId);
-  if (!session || session.userId !== user.id) {
-    throw new NotFoundError('Session', sessionId);
-  }
+  const resolvedId = await assertFileSessionAccess(c.env, c.get('db'), user.id, sessionId);
 
   const params = new URLSearchParams({ query });
   if (limit) params.set('limit', limit);
 
-  const response = await proxyToSession(c.env, sessionId, `find/file?${params}`);
+  const response = await proxyToSession(c.env, resolvedId, `find/file?${params}`);
 
   if (!response.ok) {
     return c.json({ paths: [] });
@@ -66,15 +84,12 @@ filesRouter.get('/search', async (c) => {
     throw new ValidationError('query is required');
   }
 
-  const session = await db.getSession(c.get('db'), sessionId);
-  if (!session || session.userId !== user.id) {
-    throw new NotFoundError('Session', sessionId);
-  }
+  const resolvedId = await assertFileSessionAccess(c.env, c.get('db'), user.id, sessionId);
 
   const params = new URLSearchParams({ pattern: query });
   if (limit) params.set('limit', limit);
 
-  const response = await proxyToSession(c.env, sessionId, `find?${params}`);
+  const response = await proxyToSession(c.env, resolvedId, `find?${params}`);
 
   if (!response.ok) {
     return c.json({ results: [] });
@@ -110,15 +125,12 @@ filesRouter.get('/read', async (c) => {
     throw new ValidationError('path is required');
   }
 
-  const session = await db.getSession(c.get('db'), sessionId);
-  if (!session || session.userId !== user.id) {
-    throw new NotFoundError('Session', sessionId);
-  }
+  const resolvedId = await assertFileSessionAccess(c.env, c.get('db'), user.id, sessionId);
 
   // OpenCode endpoint: GET /file/content?path=X → { type: "text", content: "..." }
   const response = await proxyToSession(
     c.env,
-    sessionId,
+    resolvedId,
     `file/content?path=${encodeURIComponent(path)}`,
   );
 
@@ -144,15 +156,12 @@ filesRouter.get('/list', async (c) => {
 
   const dirPath = path || '/';
 
-  const session = await db.getSession(c.get('db'), sessionId);
-  if (!session || session.userId !== user.id) {
-    throw new NotFoundError('Session', sessionId);
-  }
+  const resolvedId = await assertFileSessionAccess(c.env, c.get('db'), user.id, sessionId);
 
   // OpenCode endpoint: GET /file?path=X → Array<FileNode>
   const response = await proxyToSession(
     c.env,
-    sessionId,
+    resolvedId,
     `file?path=${encodeURIComponent(dirPath)}`,
   );
 
