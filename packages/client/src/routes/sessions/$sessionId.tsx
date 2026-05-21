@@ -1,4 +1,4 @@
-import { createContext, lazy, Suspense, useCallback, useContext, useState } from 'react';
+import { createContext, lazy, Suspense, useCallback, useContext, useEffect, useState } from 'react';
 import { createFileRoute, Outlet } from '@tanstack/react-router';
 import { Panel, Group as PanelGroup, Separator as PanelResizeHandle } from 'react-resizable-panels';
 import { useSession } from '@/api/sessions';
@@ -146,6 +146,15 @@ function SessionLayout() {
   const [selectedModel, setSelectedModel] = useState<string | undefined>(undefined);
   const [pendingFilePath, setPendingFilePath] = useState<string | null>(null);
   const [mobileMetadataOpen, setMobileMetadataOpen] = useState(false);
+
+  // Safety: auto-clear transition overlays after 10s to prevent stuck click-blocking states
+  useEffect(() => {
+    if (overlay?.type === 'transition') {
+      const timer = setTimeout(() => setOverlay(null), 10000);
+      return () => clearTimeout(timer);
+    }
+  }, [overlay]);
+
   const [sidebarOpen, setSidebarOpen] = useState(() => {
     try {
       const val = localStorage.getItem(SIDEBAR_STORAGE_KEY);

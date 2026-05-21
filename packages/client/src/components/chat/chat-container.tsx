@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo, lazy, Suspense } from 'react';
+import { cn } from '@/lib/cn';
 import { useNavigate, useRouter } from '@tanstack/react-router';
 import { useQueryClient } from '@tanstack/react-query';
 import { useChat } from '@/hooks/use-chat';
@@ -417,27 +418,27 @@ export function ChatContainer({ sessionId, routeSessionId, initialThreadId, init
       {/* Desktop action toolbar */}
       {!isMobile && (
         <div className="flex h-8 shrink-0 items-center gap-0.5 border-b border-neutral-100 bg-surface-0 px-2 dark:border-neutral-800/50 dark:bg-surface-0">
-          <Button variant="ghost" size="sm" onClick={drawer.toggleVscode} className="h-6 gap-1 px-2 text-[11px] font-medium text-neutral-500 hover:text-neutral-800 dark:text-neutral-400 dark:hover:text-neutral-200">
+          <Button variant="ghost" size="sm" onClick={drawer.toggleVscode} className={cn("h-6 gap-1 px-2 text-[11px] font-medium", drawer.activePanel === 'vscode' ? "text-accent bg-accent/10" : "text-neutral-500 hover:text-neutral-800 dark:text-neutral-400 dark:hover:text-neutral-200")}>
             <EditorIcon className="h-3 w-3" />
             VS Code
           </Button>
-          <Button variant="ghost" size="sm" onClick={drawer.toggleDesktop} className="h-6 gap-1 px-2 text-[11px] font-medium text-neutral-500 hover:text-neutral-800 dark:text-neutral-400 dark:hover:text-neutral-200">
+          <Button variant="ghost" size="sm" onClick={drawer.toggleDesktop} className={cn("h-6 gap-1 px-2 text-[11px] font-medium", drawer.activePanel === 'desktop' ? "text-accent bg-accent/10" : "text-neutral-500 hover:text-neutral-800 dark:text-neutral-400 dark:hover:text-neutral-200")}>
             <DesktopIcon className="h-3 w-3" />
             Desktop
           </Button>
-          <Button variant="ghost" size="sm" onClick={drawer.toggleTerminal} className="h-6 gap-1 px-2 text-[11px] font-medium text-neutral-500 hover:text-neutral-800 dark:text-neutral-400 dark:hover:text-neutral-200">
+          <Button variant="ghost" size="sm" onClick={drawer.toggleTerminal} className={cn("h-6 gap-1 px-2 text-[11px] font-medium", drawer.activePanel === 'terminal' ? "text-accent bg-accent/10" : "text-neutral-500 hover:text-neutral-800 dark:text-neutral-400 dark:hover:text-neutral-200")}>
             <TerminalIcon className="h-3 w-3" />
             Terminal
           </Button>
-          <Button variant="ghost" size="sm" onClick={drawer.toggleFiles} className="h-6 gap-1 px-2 text-[11px] font-medium text-neutral-500 hover:text-neutral-800 dark:text-neutral-400 dark:hover:text-neutral-200">
+          <Button variant="ghost" size="sm" onClick={drawer.toggleFiles} className={cn("h-6 gap-1 px-2 text-[11px] font-medium", drawer.activePanel === 'files' ? "text-accent bg-accent/10" : "text-neutral-500 hover:text-neutral-800 dark:text-neutral-400 dark:hover:text-neutral-200")}>
             <FilesIcon className="h-3 w-3" />
             Files
           </Button>
-          <Button variant="ghost" size="sm" onClick={drawer.toggleReview} className="h-6 gap-1 px-2 text-[11px] font-medium text-neutral-500 hover:text-neutral-800 dark:text-neutral-400 dark:hover:text-neutral-200">
+          <Button variant="ghost" size="sm" onClick={drawer.toggleReview} className={cn("h-6 gap-1 px-2 text-[11px] font-medium", drawer.activePanel === 'review' ? "text-accent bg-accent/10" : "text-neutral-500 hover:text-neutral-800 dark:text-neutral-400 dark:hover:text-neutral-200")}>
             <ReviewIcon className="h-3 w-3" />
             Review
           </Button>
-          <Button variant="ghost" size="sm" onClick={drawer.toggleLogs} className="h-6 gap-1 px-2 text-[11px] font-medium text-neutral-500 hover:text-neutral-800 dark:text-neutral-400 dark:hover:text-neutral-200">
+          <Button variant="ghost" size="sm" onClick={drawer.toggleLogs} className={cn("h-6 gap-1 px-2 text-[11px] font-medium", drawer.activePanel === 'logs' ? "text-accent bg-accent/10" : "text-neutral-500 hover:text-neutral-800 dark:text-neutral-400 dark:hover:text-neutral-200")}>
             <LogsIcon className="h-3 w-3" />
             Logs
           </Button>
