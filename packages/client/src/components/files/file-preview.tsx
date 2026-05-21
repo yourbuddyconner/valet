@@ -50,10 +50,24 @@ export function FilePreview({ sessionId, path, showHeader = true }: FilePreviewP
 
   if (isBinary) {
     return (
-      <div className="flex h-full items-center justify-center p-4">
+      <div className="flex h-full flex-col items-center justify-center gap-3 p-4">
         <p className="text-sm text-neutral-500 dark:text-neutral-400">
           Binary file cannot be displayed
         </p>
+        <button
+          onClick={() => {
+            const blob = new Blob([data.content], { type: 'application/octet-stream' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = path.split('/').pop() || 'file';
+            a.click();
+            URL.revokeObjectURL(url);
+          }}
+          className="rounded border border-neutral-300 px-3 py-1 text-xs text-neutral-600 transition-colors hover:bg-neutral-200 dark:border-neutral-600 dark:text-neutral-400 dark:hover:bg-neutral-700"
+        >
+          Download
+        </button>
       </div>
     );
   }
@@ -74,6 +88,21 @@ export function FilePreview({ sessionId, path, showHeader = true }: FilePreviewP
                 {renderMarkdown ? 'Raw' : 'Preview'}
               </button>
             )}
+            <button
+              onClick={() => {
+                const blob = new Blob([data.content], { type: 'text/plain' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = path.split('/').pop() || 'file.txt';
+                a.click();
+                URL.revokeObjectURL(url);
+              }}
+              className="rounded border border-neutral-300 px-2 py-0.5 text-xs text-neutral-600 transition-colors hover:bg-neutral-200 dark:border-neutral-600 dark:text-neutral-400 dark:hover:bg-neutral-700"
+              title="Download file"
+            >
+              Download
+            </button>
             <span className="text-xs text-neutral-500 dark:text-neutral-400">
               {language}
             </span>
