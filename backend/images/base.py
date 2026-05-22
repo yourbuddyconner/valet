@@ -89,7 +89,7 @@ def get_base_image() -> modal.Image:
             "curl -fsSL https://code-server.dev/install.sh | sh",
             # Reviews CLI (code review tool) — install to /usr/local/bin (image-baked, not HOME-relative)
             # Skills go to /opencode-config/skills so they get copied to the workspace at runtime
-            f"INSTALL_DIR=/usr/local/bin REVIEWS_SKILLS_DIR=/opencode-config/skills curl -fsSL https://raw.githubusercontent.com/figitaki/reviews/{REVIEWS_CLI_VERSION}/install.sh | sh -s -- --with-skills --yes",
+            f"curl -fsSL https://raw.githubusercontent.com/figitaki/reviews/cli-v0.0.1-alpha.0/install.sh | INSTALL_DIR=/usr/local/bin REVIEWS_SKILLS_DIR=/opencode-config/skills sh -s -- --with-skills --yes",
         )
         # ─── OpenCode + Playwright (changes when OPENCODE_VERSION bumps) ─
         .run_commands(
@@ -170,7 +170,7 @@ def get_base_image() -> modal.Image:
                 "DISPLAY": ":99",
                 "HOME": "/workspace",
                 # Force image rebuild on deploy (change this value to trigger rebuild)
-                "IMAGE_BUILD_VERSION": "2026-05-21-v35-trixie-reviews-pin",
+                "IMAGE_BUILD_VERSION": "2026-05-22-v36-reviews-install-fix",
                 "AGENT_BROWSER_EXECUTABLE_PATH": "/usr/bin/chromium",
                 "AGENT_BROWSER_PROFILE": "/workspace/.agent-browser-profile",
                 "PLAYWRIGHT_BROWSERS_PATH": "/ms-playwright",
