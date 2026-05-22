@@ -60,7 +60,6 @@ def get_base_image() -> modal.Image:
         .run_commands(
             f"curl -fsSL https://deb.nodesource.com/setup_{NODE_VERSION}.x | bash -",
             "apt-get install -y nodejs",
-            "npm install -g npm@latest",
         )
         # Install Bun
         .run_commands(
