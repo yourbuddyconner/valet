@@ -18,12 +18,13 @@ import modal
 from config import NODE_VERSION
 
 OPENCODE_VERSION = "1.15.0"
+REVIEWS_CLI_VERSION = "cli-v0.0.1-alpha.0"
 
 
 def get_base_image() -> modal.Image:
     """Build the full sandbox image with all dev environment services."""
     return (
-        modal.Image.from_registry("debian:bookworm-slim", add_python="3.12")
+        modal.Image.from_registry("debian:trixie-slim", add_python="3.12")
         # ─── Single apt layer: all system packages ──────────────────────
         # Merging apt_install calls avoids redundant apt-get update runs.
         .apt_install(
@@ -88,7 +89,7 @@ def get_base_image() -> modal.Image:
             # code-server (VS Code in browser)
             "curl -fsSL https://code-server.dev/install.sh | sh",
             # Reviews CLI (code review tool)
-            "curl -fsSL https://raw.githubusercontent.com/figitaki/reviews/main/install.sh | sh -s -- --no-skills --yes",
+            f"curl -fsSL https://raw.githubusercontent.com/figitaki/reviews/{REVIEWS_CLI_VERSION}/install.sh | sh -s -- --with-skills --yes",
         )
         # ─── OpenCode + Playwright (changes when OPENCODE_VERSION bumps) ─
         .run_commands(
