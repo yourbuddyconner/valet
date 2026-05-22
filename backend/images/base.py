@@ -88,8 +88,9 @@ def get_base_image() -> modal.Image:
             "chmod +x /usr/local/bin/cloudflared",
             # code-server (VS Code in browser)
             "curl -fsSL https://code-server.dev/install.sh | sh",
-            # Reviews CLI (code review tool)
-            f"curl -fsSL https://raw.githubusercontent.com/figitaki/reviews/{REVIEWS_CLI_VERSION}/install.sh | sh -s -- --with-skills --yes",
+            # Reviews CLI (code review tool) — install to /usr/local/bin (image-baked, not HOME-relative)
+            # Skills go to /opencode-config/skills so they get copied to the workspace at runtime
+            f"INSTALL_DIR=/usr/local/bin REVIEWS_SKILLS_DIR=/opencode-config/skills curl -fsSL https://raw.githubusercontent.com/figitaki/reviews/{REVIEWS_CLI_VERSION}/install.sh | sh -s -- --with-skills --yes",
         )
         # ─── OpenCode + Playwright (changes when OPENCODE_VERSION bumps) ─
         .run_commands(
