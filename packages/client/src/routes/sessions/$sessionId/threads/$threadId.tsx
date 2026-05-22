@@ -1,5 +1,6 @@
+import { useState, useRef, useCallback } from 'react';
 import { createFileRoute, Link, useNavigate } from '@tanstack/react-router';
-import { useThread, useContinueThread } from '@/api/threads';
+import { useThread, useContinueThread, useRenameThread } from '@/api/threads';
 import { MessageList } from '@/components/chat/message-list';
 import { setPendingContinuation } from '@/components/chat/chat-container';
 import { formatRelativeTime } from '@/lib/format';
@@ -18,10 +19,29 @@ function ThreadDetailPage() {
   const { sessionId, threadId } = Route.useParams();
   const { data, isLoading, isError } = useThread(sessionId, threadId);
   const continueThread = useContinueThread(sessionId);
+  const renameThread = useRenameThread(sessionId);
   const navigate = useNavigate();
+
+  const [isEditingTitle, setIsEditingTitle] = useState(false);
+  const [editTitleValue, setEditTitleValue] = useState('');
+  const titleInputRef = useRef<HTMLInputElement>(null);
 
   const thread = data?.thread;
   const messages = data?.messages ?? [];
+
+  const startEditingTitle = useCallback(() => {
+    setEditTitleValue(thread?.title || thread?.firstMessagePreview || '');
+    setIsEditingTitle(true);
+    setTimeout(() => titleInputRef.current?.select(), 0);
+  }, [thread?.title, thread?.firstMessagePreview]);
+
+  const saveTitle = useCallback(() => {
+    const trimmed = editTitleValue.trim();
+    if (trimmed !== (thread?.title || '')) {
+      renameThread.mutate({ threadId, title: trimmed });
+    }
+    setIsEditingTitle(false);
+  }, [editTitleValue, thread?.title, threadId, renameThread]);
 
   const handleContinue = () => {
     continueThread.mutate(threadId, {
@@ -52,9 +72,34 @@ function ThreadDetailPage() {
             &larr; Threads
           </Link>
           <div className="min-w-0">
-            <h1 className="truncate font-mono text-sm font-semibold text-neutral-800 dark:text-neutral-100">
-              {thread?.title || thread?.firstMessagePreview || 'Untitled thread'}
-            </h1>
+            {isEditingTitle ? (
+              <input
+                ref={titleInputRef}
+                value={editTitleValue}
+                onChange={(e) => setEditTitleValue(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') saveTitle();
+                  if (e.key === 'Escape') setIsEditingTitle(false);
+                }}
+                onBlur={saveTitle}
+                className="w-full rounded border border-violet-300 bg-white px-1 py-0.5 font-mono text-sm font-semibold text-neutral-800 outline-none focus:ring-1 focus:ring-violet-400 dark:border-violet-600 dark:bg-neutral-900 dark:text-neutral-100"
+                autoFocus
+                maxLength={200}
+              />
+            ) : (
+              <h1 className="group flex items-center gap-1.5 truncate font-mono text-sm font-semibold text-neutral-800 dark:text-neutral-100">
+                <span className="truncate">{thread?.title || thread?.firstMessagePreview || 'Untitled thread'}</span>
+                <span
+                  role="button"
+                  tabIndex={-1}
+                  onClick={startEditingTitle}
+                  className="shrink-0 rounded p-0.5 text-neutral-400 opacity-0 transition-opacity hover:bg-neutral-200 hover:text-neutral-600 group-hover:opacity-100 dark:hover:bg-neutral-700 dark:hover:text-neutral-300"
+                  title="Rename"
+                >
+                  <PencilIcon className="h-3 w-3" />
+                </span>
+              </h1>
+            )}
             {thread && (
               <div className="flex items-center gap-2 font-mono text-[10px] text-neutral-400 dark:text-neutral-500">
                 <span>{messages.length} {messages.length === 1 ? 'message' : 'messages'}</span>
@@ -139,5 +184,13 @@ function ThreadDetailPage() {
         </>
       )}
     </div>
+  );
+}
+
+function PencilIcon({ className }: { className?: string }) {
+  return (
+    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+      <path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z" /><path d="m15 5 4 4" />
+    </svg>
   );
 }

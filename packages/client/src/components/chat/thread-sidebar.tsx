@@ -1,5 +1,5 @@
-import { useState, useMemo, useCallback, useEffect } from 'react';
-import { useThreads, useDismissThread, useReactivateThread } from '@/api/threads';
+import { useState, useMemo, useCallback, useEffect, useRef } from 'react';
+import { useThreads, useDismissThread, useReactivateThread, useRenameThread } from '@/api/threads';
 import { useQueries } from '@tanstack/react-query';
 import { api } from '@/api/client';
 import { formatChannelLabel } from '@valet/sdk';
@@ -120,16 +120,58 @@ function ThreadItem({
   onSelect,
   onDismiss,
   isDismissed,
+  sessionId,
 }: {
   thread: SessionThread;
   isActive: boolean;
   onSelect: () => void;
   onDismiss?: () => void;
   isDismissed?: boolean;
+  sessionId: string;
 }) {
+  const [isEditing, setIsEditing] = useState(false);
+  const [editValue, setEditValue] = useState('');
+  const inputRef = useRef<HTMLInputElement>(null);
+  const renameThread = useRenameThread(sessionId);
+
   const lastViewed = getLastViewed(thread.id);
   const threadLastActive = new Date(thread.lastActiveAt).getTime();
   const hasUnread = !isActive && threadLastActive > lastViewed && thread.messageCount > 0;
+
+  const startEditing = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation();
+    setEditValue(thread.title || thread.firstMessagePreview || '');
+    setIsEditing(true);
+    setTimeout(() => inputRef.current?.select(), 0);
+  }, [thread.title, thread.firstMessagePreview]);
+
+  const saveTitle = useCallback(() => {
+    const trimmed = editValue.trim();
+    if (trimmed !== (thread.title || '')) {
+      renameThread.mutate({ threadId: thread.id, title: trimmed });
+    }
+    setIsEditing(false);
+  }, [editValue, thread.title, thread.id, renameThread]);
+
+  if (isEditing) {
+    return (
+      <div className="px-2 py-1">
+        <input
+          ref={inputRef}
+          value={editValue}
+          onChange={(e) => setEditValue(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') saveTitle();
+            if (e.key === 'Escape') setIsEditing(false);
+          }}
+          onBlur={saveTitle}
+          className="w-full rounded border border-violet-300 bg-white px-1 py-0.5 text-[11px] text-neutral-900 outline-none focus:ring-1 focus:ring-violet-400 dark:border-violet-600 dark:bg-neutral-900 dark:text-neutral-100"
+          autoFocus
+          maxLength={200}
+        />
+      </div>
+    );
+  }
 
   return (
     <button
@@ -148,6 +190,15 @@ function ThreadItem({
       {hasUnread && !isDismissed && (
         <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-violet-500" />
       )}
+      <span
+        role="button"
+        tabIndex={-1}
+        onClick={startEditing}
+        className="shrink-0 rounded p-0.5 text-neutral-400 opacity-0 transition-opacity hover:bg-neutral-200 hover:text-neutral-600 group-hover:opacity-100 dark:hover:bg-neutral-700 dark:hover:text-neutral-300"
+        title="Rename"
+      >
+        <PencilIcon className="h-2.5 w-2.5" />
+      </span>
       {onDismiss && (
         <span
           role="button"
@@ -288,6 +339,7 @@ export function ThreadSidebar({
                 isActive={thread.id === activeThreadId}
                 onSelect={() => onSelectThread(thread.id)}
                 onDismiss={() => handleDismiss(thread.id)}
+                sessionId={sessionId}
               />
             ))}
           </div>
@@ -318,6 +370,7 @@ export function ThreadSidebar({
                   isActive={false}
                   onSelect={() => handleReactivate(thread.id)}
                   isDismissed
+                  sessionId={sessionId}
                 />
               ))}
             </div>
@@ -358,6 +411,14 @@ function ChevronRightIcon({ className }: { className?: string }) {
   return (
     <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
       <path d="m9 18 6-6-6-6" />
+    </svg>
+  );
+}
+
+function PencilIcon({ className }: { className?: string }) {
+  return (
+    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+      <path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z" /><path d="m15 5 4 4" />
     </svg>
   );
 }
