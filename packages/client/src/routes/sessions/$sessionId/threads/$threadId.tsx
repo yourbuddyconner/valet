@@ -25,17 +25,21 @@ function ThreadDetailPage() {
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [editTitleValue, setEditTitleValue] = useState('');
   const titleInputRef = useRef<HTMLInputElement>(null);
+  const savedRef = useRef(false);
 
   const thread = data?.thread;
   const messages = data?.messages ?? [];
 
   const startEditingTitle = useCallback(() => {
+    savedRef.current = false;
     setEditTitleValue(thread?.title || thread?.firstMessagePreview || '');
     setIsEditingTitle(true);
     setTimeout(() => titleInputRef.current?.select(), 0);
   }, [thread?.title, thread?.firstMessagePreview]);
 
   const saveTitle = useCallback(() => {
+    if (savedRef.current) return;
+    savedRef.current = true;
     const trimmed = editTitleValue.trim();
     if (trimmed !== (thread?.title || '')) {
       renameThread.mutate({ threadId, title: trimmed });

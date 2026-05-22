@@ -132,6 +132,7 @@ function ThreadItem({
   const [isEditing, setIsEditing] = useState(false);
   const [editValue, setEditValue] = useState('');
   const inputRef = useRef<HTMLInputElement>(null);
+  const savedRef = useRef(false);
   const renameThread = useRenameThread(sessionId);
 
   const lastViewed = getLastViewed(thread.id);
@@ -140,12 +141,15 @@ function ThreadItem({
 
   const startEditing = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
+    savedRef.current = false;
     setEditValue(thread.title || thread.firstMessagePreview || '');
     setIsEditing(true);
     setTimeout(() => inputRef.current?.select(), 0);
   }, [thread.title, thread.firstMessagePreview]);
 
   const saveTitle = useCallback(() => {
+    if (savedRef.current) return;
+    savedRef.current = true;
     const trimmed = editValue.trim();
     if (trimmed !== (thread.title || '')) {
       renameThread.mutate({ threadId: thread.id, title: trimmed });

@@ -128,6 +128,7 @@ export function useRenameThread(sessionId: string) {
       ),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: threadKeys.list(sessionId) });
+      queryClient.invalidateQueries({ queryKey: threadKeys.details() });
     },
   });
 }
