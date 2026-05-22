@@ -115,7 +115,8 @@ def get_base_image() -> modal.Image:
             "echo 'alias ls=\"ls --color=auto\"' >> /root/.bashrc",
             "echo 'alias ll=\"ls -la\"' >> /root/.bashrc",
             "echo 'export BUN_INSTALL=\"/root/.bun\"' >> /root/.bashrc",
-            "echo 'export PATH=\"$BUN_INSTALL/bin:$PATH\"' >> /root/.bashrc",
+            "echo 'export PATH=\"/workspace/.local/bin:$BUN_INSTALL/bin:$PATH\"' >> /root/.bashrc",
+            "echo 'export REVIEWS_SKILLS_DIR=\"/workspace/.agents/skills\"' >> /root/.bashrc",
             "cp /root/.bashrc /etc/bash.bashrc",
         )
         # ─── Frequently-changing layers (last for cache efficiency) ─────
@@ -172,6 +173,7 @@ def get_base_image() -> modal.Image:
                 "AGENT_BROWSER_EXECUTABLE_PATH": "/usr/bin/chromium",
                 "AGENT_BROWSER_PROFILE": "/workspace/.agent-browser-profile",
                 "PLAYWRIGHT_BROWSERS_PATH": "/ms-playwright",
+                "REVIEWS_SKILLS_DIR": "/workspace/.agents/skills",
                 # 6 min default bash timeout (OpenCode default is 2 min)
                 "OPENCODE_EXPERIMENTAL_BASH_DEFAULT_TIMEOUT_MS": "360000",
             }
