@@ -166,7 +166,7 @@ function ThreadItem({
           onChange={(e) => setEditValue(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === 'Enter') saveTitle();
-            if (e.key === 'Escape') setIsEditing(false);
+            if (e.key === 'Escape') { savedRef.current = true; setIsEditing(false); }
           }}
           onBlur={saveTitle}
           className="w-full rounded border border-violet-300 bg-white px-1 py-0.5 text-[11px] text-neutral-900 outline-none focus:ring-1 focus:ring-violet-400 dark:border-violet-600 dark:bg-neutral-900 dark:text-neutral-100"

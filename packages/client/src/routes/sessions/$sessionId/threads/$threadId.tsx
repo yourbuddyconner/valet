@@ -83,7 +83,7 @@ function ThreadDetailPage() {
                 onChange={(e) => setEditTitleValue(e.target.value)}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') saveTitle();
-                  if (e.key === 'Escape') setIsEditingTitle(false);
+                  if (e.key === 'Escape') { savedRef.current = true; setIsEditingTitle(false); }
                 }}
                 onBlur={saveTitle}
                 className="w-full rounded border border-violet-300 bg-white px-1 py-0.5 font-mono text-sm font-semibold text-neutral-800 outline-none focus:ring-1 focus:ring-violet-400 dark:border-violet-600 dark:bg-neutral-900 dark:text-neutral-100"
