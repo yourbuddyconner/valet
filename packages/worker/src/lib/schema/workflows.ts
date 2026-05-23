@@ -38,6 +38,9 @@ export const triggers = sqliteTable('triggers', {
   index('idx_triggers_workflow').on(table.workflowId),
   index('idx_triggers_type').on(table.type),
   index('idx_triggers_enabled').on(table.enabled),
+  // Composite for the webhook + cron dispatch path: WHERE type = ? AND enabled = 1.
+  // See migration 0016.
+  index('idx_triggers_type_enabled').on(table.type, table.enabled),
   // Note: SQL migration 0011 creates this with COLLATE NOCASE for case-insensitive matching.
   // Drizzle ORM does not support collation modifiers on index columns.
   uniqueIndex('idx_triggers_user_name').on(table.userId, table.name),
@@ -75,6 +78,10 @@ export const workflowExecutions = sqliteTable('workflow_executions', {
   index('idx_workflow_executions_trigger').on(table.triggerId),
   index('idx_workflow_executions_status').on(table.status),
   index('idx_workflow_executions_started').on(table.startedAt),
+  // Composite for the executions list query (WHERE user_id = ? ORDER BY started_at DESC).
+  // Drizzle's SQLite dialect doesn't expose .desc() on index columns; migration 0016
+  // declares the DESC ordering on disk.
+  index('idx_workflow_executions_user_started').on(table.userId, table.startedAt),
   uniqueIndex('idx_workflow_executions_idempotency').on(table.workflowId, table.idempotencyKey),
   index('idx_workflow_executions_session').on(table.sessionId),
 ]);

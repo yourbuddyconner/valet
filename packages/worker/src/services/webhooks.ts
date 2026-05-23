@@ -102,7 +102,7 @@ export async function handleGenericWebhook(
       deliveryId: headers['x-github-delivery'] || headers['x-request-id'] || headers['x-webhook-id'] || null,
       outcome: 'no_match',
       reason: `Method ${method} not allowed (expected ${config.method})`,
-      payloadPreview: truncatePayloadPreview(rawBody),
+      payloadPreview: truncatePayloadPreview(rawBody, 'no_match'),
     });
     return {
       result: { received: true, message: `Method ${method} not allowed` },
@@ -122,7 +122,7 @@ export async function handleGenericWebhook(
         deliveryId: headers['x-github-delivery'] || headers['x-request-id'] || headers['x-webhook-id'] || null,
         outcome: 'no_match',
         reason: 'Missing webhook signature',
-        payloadPreview: truncatePayloadPreview(rawBody),
+        payloadPreview: truncatePayloadPreview(rawBody, 'no_match'),
       });
       return {
         result: { received: true, message: 'Missing webhook signature', error: 'invalid signature' },
@@ -139,7 +139,7 @@ export async function handleGenericWebhook(
         deliveryId: headers['x-github-delivery'] || headers['x-request-id'] || headers['x-webhook-id'] || null,
         outcome: 'no_match',
         reason: 'invalid signature',
-        payloadPreview: truncatePayloadPreview(rawBody),
+        payloadPreview: truncatePayloadPreview(rawBody, 'no_match'),
       });
       return {
         result: { received: true, message: 'Invalid webhook signature', error: 'invalid signature' },
@@ -214,7 +214,10 @@ export async function handleGenericWebhook(
     : `webhook:${trigger.id}:${deliveryId || fallbackBodyHash}`;
 
   const existing = await db.checkIdempotencyKey(env.DB, trigger.workflow_id, idempotencyKey);
-  const payloadPreview = truncatePayloadPreview(payload);
+  // Precompute both caps once. Matched gets 8KB; everything else gets 512B.
+  // A single webhook delivery only ever produces one row, so this is cheap.
+  const matchedPreview = truncatePayloadPreview(payload, 'matched');
+  const nonMatchedPreview = truncatePayloadPreview(payload, 'no_match');
 
   if (existing) {
     const existingId = typeof existing.id === 'string' ? existing.id : null;
@@ -226,7 +229,7 @@ export async function handleGenericWebhook(
       outcome: 'duplicate',
       executionId: existingId,
       reason: `Idempotency key already exists: ${idempotencyKey}`,
-      payloadPreview,
+      payloadPreview: nonMatchedPreview,
     });
     return {
       result: {
@@ -252,7 +255,7 @@ export async function handleGenericWebhook(
       deliveryId,
       outcome: 'concurrency_cap',
       reason: `${concurrency.reason ?? 'concurrency limit'} (activeUser=${concurrency.activeUser}, activeGlobal=${concurrency.activeGlobal})`,
-      payloadPreview,
+      payloadPreview: nonMatchedPreview,
     });
     return {
       result: {
@@ -319,7 +322,7 @@ export async function handleGenericWebhook(
         outcome: 'duplicate',
         executionId: null,
         reason: 'concurrent duplicate',
-        payloadPreview,
+        payloadPreview: nonMatchedPreview,
       });
       return {
         result: {
@@ -354,7 +357,7 @@ export async function handleGenericWebhook(
     outcome: 'matched',
     executionId,
     reason: dispatched ? null : 'Execution created but dispatch enqueue failed',
-    payloadPreview,
+    payloadPreview: matchedPreview,
   });
 
   return {

@@ -28,8 +28,14 @@ function ExecutionDetailPage() {
   const { executionId } = Route.useParams();
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const { data: execData, isLoading, error } = useExecution(executionId);
-  const { data: stepsData } = useExecutionSteps(executionId);
   const execution = execData?.execution;
+  // Gate step polling on the parent execution's terminal status: once the run
+  // is done there are no more steps to fetch and the 2.5s interval is pure
+  // waste (and was previously also running in the background tab).
+  const isTerminal = execution
+    ? ['completed', 'failed', 'cancelled'].includes(execution.status)
+    : false;
+  const { data: stepsData } = useExecutionSteps(executionId, { isTerminal });
   // Only fetch the live workflow when the FK is still intact. If the source
   // workflow was deleted, fall through to execution.workflowSnapshot below.
   const { data: workflowData } = useWorkflow(execution?.workflowId ?? '');

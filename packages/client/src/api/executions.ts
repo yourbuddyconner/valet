@@ -146,17 +146,26 @@ export function useWorkflowExecutions(workflowId: string) {
     queryFn: () => api.get<ListExecutionsResponse>(`/workflows/${workflowId}/executions`),
     enabled: !!workflowId,
     refetchInterval: 2500,
-    refetchIntervalInBackground: true,
+    // List of executions has no single terminal status; cap the waste by
+    // stopping when the tab isn't visible instead of running forever.
+    refetchIntervalInBackground: false,
   });
 }
 
-export function useExecutionSteps(executionId: string) {
+export function useExecutionSteps(
+  executionId: string,
+  opts?: { isTerminal?: boolean },
+) {
   return useQuery({
     queryKey: executionKeys.steps(executionId),
     queryFn: () => api.get<GetExecutionStepsResponse>(`/executions/${executionId}/steps`),
     enabled: !!executionId,
-    refetchInterval: executionId ? 2500 : false,
-    refetchIntervalInBackground: true,
+    // Stop polling once the parent execution reaches a terminal state. The
+    // detail route reads execution.status from the cached useExecution result
+    // and forwards it via opts.isTerminal, so completed/failed/cancelled
+    // executions don't keep hitting the worker forever.
+    refetchInterval: opts?.isTerminal ? false : 2500,
+    refetchIntervalInBackground: opts?.isTerminal ? false : true,
   });
 }
 

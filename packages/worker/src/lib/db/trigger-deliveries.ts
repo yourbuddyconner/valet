@@ -21,15 +21,24 @@ export interface RecordTriggerDeliveryParams {
   payloadPreview?: string | null;
 }
 
-// 8KB cap for payload previews — large enough to debug, small enough that a
-// flood of webhooks doesn't blow up the row size.
-const MAX_PAYLOAD_PREVIEW_BYTES = 8192;
+// Matched deliveries are the ones users actually inspect to debug what their
+// workflow saw; keep a generous 8KB slice. Non-matched outcomes (no_match,
+// concurrency_cap, workflow_deleted, duplicate, error) are dominated by
+// fan-out noise — every webhook fans out across every github trigger the
+// user owns and records a no_match row per non-matching trigger — so cap
+// those at 512B to keep row size (and D1 write amplification) bounded.
+export const PAYLOAD_PREVIEW_MAX_MATCHED = 8192;
+export const PAYLOAD_PREVIEW_MAX_NON_MATCHED = 512;
 
-export function truncatePayloadPreview(payload: unknown): string | null {
+export function truncatePayloadPreview(
+  payload: unknown,
+  outcome: TriggerDeliveryOutcome,
+): string | null {
   if (payload === undefined || payload === null) return null;
   try {
     const json = typeof payload === 'string' ? payload : JSON.stringify(payload);
-    return json.slice(0, MAX_PAYLOAD_PREVIEW_BYTES);
+    const cap = outcome === 'matched' ? PAYLOAD_PREVIEW_MAX_MATCHED : PAYLOAD_PREVIEW_MAX_NON_MATCHED;
+    return json.slice(0, cap);
   } catch {
     return null;
   }
@@ -50,6 +59,37 @@ export async function recordTriggerDelivery(
     reason: params.reason ?? null,
     payloadPreview: params.payloadPreview ?? null,
   });
+}
+
+/**
+ * Bulk-insert delivery rows in a single D1 batch. The github webhook
+ * dispatcher fans out across every github trigger the user owns and would
+ * otherwise issue one round-trip per no-match row; batching collapses that
+ * to a single round-trip.
+ */
+export async function recordTriggerDeliveriesBulk(
+  db: D1Database,
+  rows: RecordTriggerDeliveryParams[],
+): Promise<void> {
+  if (rows.length === 0) return;
+  const stmts = rows.map((row) =>
+    db.prepare(
+      `INSERT INTO trigger_deliveries
+         (id, trigger_id, user_id, event_type, delivery_id, outcome, execution_id, reason, payload_preview)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).bind(
+      crypto.randomUUID(),
+      row.triggerId,
+      row.userId,
+      row.eventType,
+      row.deliveryId,
+      row.outcome,
+      row.executionId ?? null,
+      row.reason ?? null,
+      row.payloadPreview ?? null,
+    ),
+  );
+  await db.batch(stmts);
 }
 
 /**

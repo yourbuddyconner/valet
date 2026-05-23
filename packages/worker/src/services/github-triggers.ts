@@ -4,7 +4,12 @@ import { getDb } from '../lib/drizzle.js';
 import { checkWorkflowConcurrency, enqueueWorkflowExecution } from './executions.js';
 import { sha256Hex, createWorkflowSession } from '../lib/workflow-runtime.js';
 import { getGithubInstallationById } from '../lib/db/github-installations.js';
-import { recordTriggerDelivery, truncatePayloadPreview } from '../lib/db/trigger-deliveries.js';
+import {
+  recordTriggerDelivery,
+  recordTriggerDeliveriesBulk,
+  truncatePayloadPreview,
+  type RecordTriggerDeliveryParams,
+} from '../lib/db/trigger-deliveries.js';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -143,7 +148,11 @@ export async function dispatchGitHubTriggers(
   const userId = installation.linkedUserId;
   const action = typeof payload.action === 'string' ? payload.action : undefined;
   const fullEventType = action ? `${eventType}.${action}` : eventType;
-  const payloadPreview = truncatePayloadPreview(payload);
+  // Precompute both caps once: matched rows get the generous slice, the
+  // hot-path no_match rows get the small slice. Computing both up front
+  // avoids re-serializing per candidate.
+  const matchedPreview = truncatePayloadPreview(payload, 'matched');
+  const noMatchPreview = truncatePayloadPreview(payload, 'no_match');
 
   const candidates = await env.DB.prepare(`
     SELECT t.id, t.user_id, t.workflow_id, t.config, t.variable_mapping,
@@ -153,105 +162,123 @@ export async function dispatchGitHubTriggers(
     WHERE t.type = 'github' AND t.enabled = 1 AND t.user_id = ?
   `).bind(userId).all<GitHubTriggerRow>();
 
-  for (const row of candidates.results ?? []) {
-    let config: GitHubTriggerConfig;
-    try {
-      config = JSON.parse(row.config) as GitHubTriggerConfig;
-    } catch {
-      await safeRecord(appDb, {
-        triggerId: row.id,
-        userId: row.user_id,
-        eventType: fullEventType,
-        deliveryId,
-        outcome: 'error',
-        reason: 'Invalid trigger config JSON',
-        payloadPreview,
-      });
-      continue;
-    }
+  // Deferred no_match writes are collapsed into a single D1 batch at the
+  // bottom of the function — a user with N github triggers gets one round
+  // trip instead of N. Rare outcomes (matched/error/etc.) still write
+  // synchronously since there's usually <5 of those per delivery.
+  const deferredNoMatches: RecordTriggerDeliveryParams[] = [];
 
-    // Per-trigger no-match logging: we only log when this trigger was actually
-    // evaluated (i.e. it's one of the user's github triggers). Logging from the
-    // top-level handler instead would flood the table for users with no
-    // configured triggers at all.
-    if (!Array.isArray(config.repos) || !config.repos.includes(repoFullName)) {
-      await safeRecord(appDb, {
-        triggerId: row.id,
-        userId: row.user_id,
-        eventType: fullEventType,
-        deliveryId,
-        outcome: 'no_match',
-        reason: `repo "${repoFullName}" not in trigger.repos`,
-        payloadPreview,
-      });
-      continue;
-    }
-    if (!eventMatches(eventType, action, config.events)) {
-      await safeRecord(appDb, {
-        triggerId: row.id,
-        userId: row.user_id,
-        eventType: fullEventType,
-        deliveryId,
-        outcome: 'no_match',
-        reason: `event "${fullEventType}" not in trigger.events`,
-        payloadPreview,
-      });
-      continue;
-    }
-    if (!filterMatches(payload, eventType, config)) {
-      await safeRecord(appDb, {
-        triggerId: row.id,
-        userId: row.user_id,
-        eventType: fullEventType,
-        deliveryId,
-        outcome: 'no_match',
-        reason: 'filter conditions did not match',
-        payloadPreview,
-      });
-      continue;
-    }
+  try {
+    for (const row of candidates.results ?? []) {
+      let config: GitHubTriggerConfig;
+      try {
+        config = JSON.parse(row.config) as GitHubTriggerConfig;
+      } catch {
+        await safeRecord(appDb, {
+          triggerId: row.id,
+          userId: row.user_id,
+          eventType: fullEventType,
+          deliveryId,
+          outcome: 'error',
+          reason: 'Invalid trigger config JSON',
+          payloadPreview: truncatePayloadPreview(payload, 'error'),
+        });
+        continue;
+      }
 
-    summary.matched += 1;
+      // Per-trigger no-match logging: we only log when this trigger was actually
+      // evaluated (i.e. it's one of the user's github triggers). Logging from the
+      // top-level handler instead would flood the table for users with no
+      // configured triggers at all.
+      if (!Array.isArray(config.repos) || !config.repos.includes(repoFullName)) {
+        deferredNoMatches.push({
+          triggerId: row.id,
+          userId: row.user_id,
+          eventType: fullEventType,
+          deliveryId,
+          outcome: 'no_match',
+          reason: `repo "${repoFullName}" not in trigger.repos`,
+          payloadPreview: noMatchPreview,
+        });
+        continue;
+      }
+      if (!eventMatches(eventType, action, config.events)) {
+        deferredNoMatches.push({
+          triggerId: row.id,
+          userId: row.user_id,
+          eventType: fullEventType,
+          deliveryId,
+          outcome: 'no_match',
+          reason: `event "${fullEventType}" not in trigger.events`,
+          payloadPreview: noMatchPreview,
+        });
+        continue;
+      }
+      if (!filterMatches(payload, eventType, config)) {
+        deferredNoMatches.push({
+          triggerId: row.id,
+          userId: row.user_id,
+          eventType: fullEventType,
+          deliveryId,
+          outcome: 'no_match',
+          reason: 'filter conditions did not match',
+          payloadPreview: noMatchPreview,
+        });
+        continue;
+      }
 
-    if (!row.workflow_id || !row.workflow_data) {
-      // github triggers require a workflow per validator, but be defensive at the boundary.
-      await safeRecord(appDb, {
-        triggerId: row.id,
-        userId: row.user_id,
-        eventType: fullEventType,
-        deliveryId,
-        outcome: 'workflow_deleted',
-        reason: 'Trigger has no linked workflow or workflow data is missing',
-        payloadPreview,
-      });
-      continue;
+      summary.matched += 1;
+
+      if (!row.workflow_id || !row.workflow_data) {
+        // github triggers require a workflow per validator, but be defensive at the boundary.
+        await safeRecord(appDb, {
+          triggerId: row.id,
+          userId: row.user_id,
+          eventType: fullEventType,
+          deliveryId,
+          outcome: 'workflow_deleted',
+          reason: 'Trigger has no linked workflow or workflow data is missing',
+          payloadPreview: truncatePayloadPreview(payload, 'workflow_deleted'),
+        });
+        continue;
+      }
+
+      try {
+        const result = await dispatchOne(env, appDb, row, payload, eventType, deliveryId, workerOrigin, options.testFire ?? false);
+        if (result.dispatched) summary.dispatched += 1;
+        await safeRecord(appDb, {
+          triggerId: row.id,
+          userId: row.user_id,
+          eventType: fullEventType,
+          deliveryId,
+          outcome: result.outcome,
+          executionId: result.executionId,
+          reason: result.reason,
+          payloadPreview: result.outcome === 'matched' ? matchedPreview : truncatePayloadPreview(payload, result.outcome),
+        });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        await safeRecord(appDb, {
+          triggerId: row.id,
+          userId: row.user_id,
+          eventType: fullEventType,
+          deliveryId,
+          outcome: 'error',
+          reason: message,
+          payloadPreview: truncatePayloadPreview(payload, 'error'),
+        });
+        throw err;
+      }
     }
-
-    try {
-      const result = await dispatchOne(env, appDb, row, payload, eventType, deliveryId, workerOrigin, options.testFire ?? false);
-      if (result.dispatched) summary.dispatched += 1;
-      await safeRecord(appDb, {
-        triggerId: row.id,
-        userId: row.user_id,
-        eventType: fullEventType,
-        deliveryId,
-        outcome: result.outcome,
-        executionId: result.executionId,
-        reason: result.reason,
-        payloadPreview,
-      });
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      await safeRecord(appDb, {
-        triggerId: row.id,
-        userId: row.user_id,
-        eventType: fullEventType,
-        deliveryId,
-        outcome: 'error',
-        reason: message,
-        payloadPreview,
-      });
-      throw err;
+  } finally {
+    // Flush deferred no_match writes even on a thrown error: losing the log
+    // rows would make the dispatch unattributable from the deliveries panel.
+    if (deferredNoMatches.length > 0) {
+      try {
+        await recordTriggerDeliveriesBulk(env.DB, deferredNoMatches);
+      } catch (err) {
+        console.error('[github trigger] failed to bulk-record no_match deliveries:', err);
+      }
     }
   }
 
