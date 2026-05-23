@@ -1,5 +1,6 @@
 import { tool } from "@opencode-ai/plugin"
 import { z } from "zod"
+import { denyInWorkflowSession } from "./_workflow_session_guard"
 
 export default tool({
   description: "Delete a trigger by ID or name.",
@@ -8,6 +9,9 @@ export default tool({
     name: z.string().optional().describe("Trigger name (alternative to trigger_id)"),
   },
   async execute(args) {
+    const denied = denyInWorkflowSession("delete_trigger")
+    if (denied) return denied
+
     let triggerId = args.trigger_id
 
     if (!triggerId && !args.name) {

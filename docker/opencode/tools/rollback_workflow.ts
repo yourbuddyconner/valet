@@ -1,6 +1,7 @@
 import { tool } from "@opencode-ai/plugin"
 import { z } from "zod"
 import { formatOutput } from "./_format"
+import { denyInWorkflowSession } from "./_workflow_session_guard"
 
 export default tool({
   description:
@@ -13,6 +14,9 @@ export default tool({
     notes: z.string().optional().describe("Optional rollback note"),
   },
   async execute(args) {
+    const denied = denyInWorkflowSession("rollback_workflow")
+    if (denied) return denied
+
     try {
       const res = await fetch(`http://localhost:9000/api/workflows/${encodeURIComponent(args.workflow_id)}/rollback`, {
         method: "POST",

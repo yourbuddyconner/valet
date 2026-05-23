@@ -1,6 +1,7 @@
 import { tool } from "@opencode-ai/plugin"
 import { z } from "zod"
 import { formatOutput } from "./_format"
+import { denyInWorkflowSession } from "./_workflow_session_guard"
 
 export default tool({
   description: "Apply an approved workflow proposal to update the workflow definition.",
@@ -11,6 +12,9 @@ export default tool({
     version: z.string().optional().describe("Optional explicit version after apply"),
   },
   async execute(args) {
+    const denied = denyInWorkflowSession("apply_workflow_proposal")
+    if (denied) return denied
+
     try {
       const res = await fetch(
         `http://localhost:9000/api/workflows/${encodeURIComponent(args.workflow_id)}/proposals/${encodeURIComponent(args.proposal_id)}/apply`,

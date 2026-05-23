@@ -1,5 +1,6 @@
 import { tool } from "@opencode-ai/plugin"
 import { z } from "zod"
+import { denyInWorkflowSession } from "./_workflow_session_guard"
 
 function parseJsonObject(raw: string): { ok: true; value: Record<string, string> } | { ok: false; error: string } {
   try {
@@ -74,6 +75,9 @@ export default tool({
       .describe("Optional JSON object mapping variable names to extraction paths"),
   },
   async execute(args) {
+    const denied = denyInWorkflowSession("sync_trigger")
+    if (denied) return denied
+
     try {
       const scheduleTarget = args.schedule_target || "workflow"
 

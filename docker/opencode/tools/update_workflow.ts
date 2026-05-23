@@ -1,6 +1,7 @@
 import { tool } from "@opencode-ai/plugin"
 import { z } from "zod"
 import { formatOutput } from "./_format"
+import { denyInWorkflowSession } from "./_workflow_session_guard"
 
 function parseJsonObject(raw: string): { ok: true; value: Record<string, unknown> } | { ok: false; error: string } {
   try {
@@ -50,6 +51,9 @@ export default tool({
     data_json: z.string().optional().describe("Full workflow data JSON object"),
   },
   async execute(args) {
+    const denied = denyInWorkflowSession("update_workflow")
+    if (denied) return denied
+
     try {
       const payload: {
         name?: string

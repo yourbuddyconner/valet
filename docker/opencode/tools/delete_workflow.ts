@@ -1,5 +1,6 @@
 import { tool } from "@opencode-ai/plugin"
 import { z } from "zod"
+import { denyInWorkflowSession } from "./_workflow_session_guard"
 
 export default tool({
   description: "Delete a workflow by ID or slug.",
@@ -7,6 +8,9 @@ export default tool({
     workflow_id: z.string().min(1).describe("Workflow ID or slug"),
   },
   async execute(args) {
+    const denied = denyInWorkflowSession("delete_workflow")
+    if (denied) return denied
+
     const endpoint = `http://localhost:9000/api/workflows/${encodeURIComponent(args.workflow_id)}`
 
     // Use curl subprocess to avoid Bun fetch() connection reuse bugs
