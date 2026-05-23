@@ -1,4 +1,5 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from 'react';
+import { createPortal } from 'react-dom';
 import type { WorkflowStep } from '@/api/workflows';
 import { StepTypeIcon } from '../../step-icons';
 import { cn } from '@/lib/cn';
@@ -19,27 +20,64 @@ const STEP_TYPES: ReadonlyArray<{
 ];
 
 interface Props {
+  // The element this popover should anchor to. Position is computed from
+  // anchor.getBoundingClientRect(); auto-flips above when there isn't enough
+  // room below.
+  anchorRef: RefObject<HTMLElement | null>;
   onPick: (type: WorkflowStep['type']) => void;
   onClose: () => void;
   // Header label shown above the list; e.g. "Insert step", "Add to then".
   title?: string;
 }
 
+const POPOVER_WIDTH = 240;
+const VIEWPORT_MARGIN = 8;
+
 /**
- * A small floating menu of the 8 step types. Designed to be positioned
- * absolutely by the caller relative to the trigger button. Matches the
- * dropdown-menu look (surface-0/-1 bg, border, shadow-panel).
+ * Step-type chooser rendered through a portal at document.body so it escapes
+ * any ancestor with overflow-hidden (the WorkflowShell, the diagram, etc).
+ * Auto-flips above the anchor when it would overflow the viewport below.
  */
-export function StepTypePopover({ onPick, onClose, title }: Props) {
+export function StepTypePopover({ anchorRef, onPick, onClose, title }: Props) {
   const rootRef = useRef<HTMLDivElement | null>(null);
+  const [pos, setPos] = useState<{ top: number; left: number; placement: 'top' | 'bottom' } | null>(
+    null,
+  );
+
+  // Compute position from the anchor before paint so we never flash at 0,0.
+  useLayoutEffect(() => {
+    const anchor = anchorRef.current;
+    const node = rootRef.current;
+    if (!anchor || !node) return;
+    const anchorRect = anchor.getBoundingClientRect();
+    const popoverHeight = node.offsetHeight;
+    const spaceBelow = window.innerHeight - anchorRect.bottom;
+    const spaceAbove = anchorRect.top;
+    const placement: 'top' | 'bottom' =
+      spaceBelow < popoverHeight + VIEWPORT_MARGIN && spaceAbove > spaceBelow ? 'top' : 'bottom';
+
+    const top =
+      placement === 'bottom' ? anchorRect.bottom + 8 : anchorRect.top - popoverHeight - 8;
+    // Center horizontally on the anchor, clamped to viewport with margin.
+    const anchorCenter = anchorRect.left + anchorRect.width / 2;
+    const rawLeft = anchorCenter - POPOVER_WIDTH / 2;
+    const left = Math.min(
+      Math.max(rawLeft, VIEWPORT_MARGIN),
+      window.innerWidth - POPOVER_WIDTH - VIEWPORT_MARGIN,
+    );
+    setPos({ top, left, placement });
+  }, [anchorRef]);
 
   // Close on outside click / Escape so the popover stays modal-but-light.
   useEffect(() => {
     function handleClick(e: MouseEvent) {
       if (!rootRef.current) return;
-      if (e.target instanceof Node && !rootRef.current.contains(e.target)) {
-        onClose();
-      }
+      const target = e.target;
+      if (!(target instanceof Node)) return;
+      // Clicks on the anchor itself are forwarded to the trigger's own onClick;
+      // ignore them so we don't fight the toggle.
+      if (anchorRef.current?.contains(target)) return;
+      if (!rootRef.current.contains(target)) onClose();
     }
     function handleKey(e: KeyboardEvent) {
       if (e.key === 'Escape') onClose();
@@ -55,17 +93,23 @@ export function StepTypePopover({ onPick, onClose, title }: Props) {
       document.removeEventListener('mousedown', handleClick);
       document.removeEventListener('keydown', handleKey);
     };
-  }, [onClose]);
+  }, [onClose, anchorRef]);
 
-  return (
+  return createPortal(
     <div
       ref={rootRef}
       role="menu"
-      // Stops the click from bubbling into React Flow (which treats blank-area
-      // clicks as a pane click / deselection).
       onClick={(e) => e.stopPropagation()}
       onMouseDown={(e) => e.stopPropagation()}
-      className="z-50 w-[240px] rounded-md border border-border bg-surface-0 dark:bg-surface-1 p-1 shadow-panel"
+      style={{
+        position: 'fixed',
+        top: pos?.top ?? -9999,
+        left: pos?.left ?? -9999,
+        width: POPOVER_WIDTH,
+        // Hidden until positioned to prevent the brief offscreen flash.
+        visibility: pos ? 'visible' : 'hidden',
+      }}
+      className="z-50 rounded-md border border-border bg-surface-0 dark:bg-surface-1 p-1 shadow-panel"
     >
       {title && (
         <div className="px-2 pt-1.5 pb-1 text-[10px] uppercase tracking-wider text-neutral-500 font-mono">
@@ -98,6 +142,7 @@ export function StepTypePopover({ onPick, onClose, title }: Props) {
           </button>
         ))}
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }

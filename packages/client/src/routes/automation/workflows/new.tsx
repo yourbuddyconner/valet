@@ -599,6 +599,7 @@ function EmptyDiagram({
   onPick: (type: WorkflowStep['type']) => void;
   onFocusChat: () => void;
 }) {
+  const firstStepBtnRef = useRef<HTMLButtonElement | null>(null);
   return (
     <div className="h-[640px] lg:h-auto lg:flex-1 lg:min-h-0 bg-surface-1 rounded-xl border border-border flex flex-col items-stretch px-6 py-4">
       {/* Banner sits at the top of the normal flow so it never overlaps the
@@ -629,8 +630,9 @@ function EmptyDiagram({
           </div>
         </div>
 
-        <div className="relative">
+        <div>
           <Button
+            ref={firstStepBtnRef}
             variant="primary"
             size="lg"
             disabled={loading}
@@ -640,13 +642,12 @@ function EmptyDiagram({
             Add your first step
           </Button>
           {open && (
-            <div className="absolute left-1/2 top-full mt-2 -translate-x-1/2 z-10">
-              <StepTypePopover
-                title="Pick a step type"
-                onClose={() => setOpen(false)}
-                onPick={onPick}
-              />
-            </div>
+            <StepTypePopover
+              anchorRef={firstStepBtnRef}
+              title="Pick a step type"
+              onClose={() => setOpen(false)}
+              onPick={onPick}
+            />
           )}
         </div>
 

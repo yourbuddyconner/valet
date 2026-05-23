@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { Handle, Position, type Node, type NodeProps } from '@xyflow/react';
 import { Plus, Trash2 } from 'lucide-react';
 import type { WorkflowNodeData } from '../types';
@@ -48,6 +48,9 @@ export function StepNode({ data }: NodeProps<Node<WorkflowNodeData>>) {
   const editable = mode === 'edit';
 
   const [open, setOpen] = useState<OpenPopover>(null);
+  // Tracks whichever button (+ pill or an "add child") triggered the popover so
+  // the popover can position itself against it via portal.
+  const anchorRef = useRef<HTMLButtonElement | null>(null);
 
   return (
     <div className="relative group">
@@ -91,17 +94,26 @@ export function StepNode({ data }: NodeProps<Node<WorkflowNodeData>>) {
               <>
                 <AddChildButton
                   label="+ then"
-                  onClick={() => setOpen({ kind: 'into', slot: 'then' })}
+                  onClick={(e) => {
+                    anchorRef.current = e.currentTarget;
+                    setOpen({ kind: 'into', slot: 'then' });
+                  }}
                 />
                 <AddChildButton
                   label="+ else"
-                  onClick={() => setOpen({ kind: 'into', slot: 'else' })}
+                  onClick={(e) => {
+                    anchorRef.current = e.currentTarget;
+                    setOpen({ kind: 'into', slot: 'else' });
+                  }}
                 />
               </>
             ) : (
               <AddChildButton
                 label="+ child"
-                onClick={() => setOpen({ kind: 'into', slot: 'steps' })}
+                onClick={(e) => {
+                  anchorRef.current = e.currentTarget;
+                  setOpen({ kind: 'into', slot: 'steps' });
+                }}
               />
             )}
           </div>
@@ -169,6 +181,7 @@ export function StepNode({ data }: NodeProps<Node<WorkflowNodeData>>) {
             aria-label="Insert step after"
             onClick={(e) => {
               e.stopPropagation();
+              anchorRef.current = e.currentTarget;
               setOpen({ kind: 'after' });
             }}
             className={cn(
@@ -184,42 +197,46 @@ export function StepNode({ data }: NodeProps<Node<WorkflowNodeData>>) {
       )}
 
       {open?.kind === 'after' && onInsertAfter && (
-        <div className="absolute left-1/2 top-full mt-2 -translate-x-1/2">
-          <StepTypePopover
-            title="Insert step"
-            onClose={() => setOpen(null)}
-            onPick={(type) => {
-              setOpen(null);
-              onInsertAfter(step.id, type);
-            }}
-          />
-        </div>
+        <StepTypePopover
+          anchorRef={anchorRef}
+          title="Insert step"
+          onClose={() => setOpen(null)}
+          onPick={(type) => {
+            setOpen(null);
+            onInsertAfter(step.id, type);
+          }}
+        />
       )}
 
       {open?.kind === 'into' && onInsertInto && (
-        <div className="absolute left-1/2 top-full mt-2 -translate-x-1/2">
-          <StepTypePopover
-            title={`Add to ${open.slot}`}
-            onClose={() => setOpen(null)}
-            onPick={(type) => {
-              const slot = open.slot;
-              setOpen(null);
-              onInsertInto(step.id, slot, type);
-            }}
-          />
-        </div>
+        <StepTypePopover
+          anchorRef={anchorRef}
+          title={`Add to ${open.slot}`}
+          onClose={() => setOpen(null)}
+          onPick={(type) => {
+            const slot = open.slot;
+            setOpen(null);
+            onInsertInto(step.id, slot, type);
+          }}
+        />
       )}
     </div>
   );
 }
 
-function AddChildButton({ label, onClick }: { label: string; onClick: () => void }) {
+function AddChildButton({
+  label,
+  onClick,
+}: {
+  label: string;
+  onClick: (e: React.MouseEvent<HTMLButtonElement>) => void;
+}) {
   return (
     <button
       type="button"
       onClick={(e) => {
         e.stopPropagation();
-        onClick();
+        onClick(e);
       }}
       className={cn(
         'text-[10px] uppercase tracking-wider font-mono px-2 py-0.5 rounded',
