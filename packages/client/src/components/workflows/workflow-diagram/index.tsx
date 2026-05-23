@@ -33,6 +33,9 @@ export function WorkflowDiagram({
   stepErrors,
   selectedStepIds,
   onNodeClick,
+  onInsertAfter,
+  onInsertInto,
+  onDelete,
 }: WorkflowDiagramProps) {
   const { nodes, edges } = useMemo(
     () =>
@@ -43,8 +46,22 @@ export function WorkflowDiagram({
         stepErrors,
         onNodeClick,
         selectedStepIds,
+        onInsertAfter,
+        onInsertInto,
+        onDelete,
       }),
-    [workflow, mode, runtimeStatus, currentStepId, stepErrors, onNodeClick, selectedStepIds],
+    [
+      workflow,
+      mode,
+      runtimeStatus,
+      currentStepId,
+      stepErrors,
+      onNodeClick,
+      selectedStepIds,
+      onInsertAfter,
+      onInsertInto,
+      onDelete,
+    ],
   );
 
   const handleNodeClick = useCallback(

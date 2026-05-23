@@ -15,6 +15,13 @@ interface LayoutOptions {
   stepErrors?: Record<string, string>;
   selectedStepIds?: ReadonlySet<string>;
   onNodeClick?: (stepId: string, opts: { modifier: boolean }) => void;
+  onInsertAfter?: (targetStepId: string, type: WorkflowStep['type']) => void;
+  onInsertInto?: (
+    containerId: string,
+    slot: 'then' | 'else' | 'steps',
+    type: WorkflowStep['type'],
+  ) => void;
+  onDelete?: (stepId: string) => void;
 }
 
 /**
@@ -55,6 +62,9 @@ export function layoutWorkflow(
         error: opts.stepErrors?.[step.id],
         selected: opts.selectedStepIds?.has(step.id) ?? false,
         onNodeClick: opts.onNodeClick,
+        onInsertAfter: opts.onInsertAfter,
+        onInsertInto: opts.onInsertInto,
+        onDelete: opts.onDelete,
       };
       nodes.push({
         id: step.id,
@@ -114,7 +124,10 @@ export function layoutWorkflow(
   }
 
   const g = new dagre.graphlib.Graph();
-  g.setGraph({ rankdir: 'TB', nodesep: 60, ranksep: 50 });
+  // Edit mode renders an insert-"+" pill below each node; widen the rank
+  // separation so the affordance doesn't crowd the edge labels.
+  const ranksep = opts.mode === 'edit' ? 90 : 50;
+  g.setGraph({ rankdir: 'TB', nodesep: 60, ranksep });
   g.setDefaultEdgeLabel(() => ({}));
   for (const n of nodes) g.setNode(n.id, { width: NODE_WIDTH, height: NODE_HEIGHT });
   for (const e of edges) g.setEdge(e.source, e.target);

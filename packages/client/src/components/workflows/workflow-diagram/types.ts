@@ -24,6 +24,16 @@ export interface WorkflowDiagramProps {
   selectedStepIds?: ReadonlySet<string>;
   /** mode="edit" — invoked when a node is clicked to open scoped edit */
   onNodeClick?: (stepId: string, opts: { modifier: boolean }) => void;
+  /** mode="edit" — user picked a step type from the "+" after a step. */
+  onInsertAfter?: (targetStepId: string, type: import('@/api/workflows').WorkflowStep['type']) => void;
+  /** mode="edit" — user picked a step type from a container's "Add child" button. */
+  onInsertInto?: (
+    containerId: string,
+    slot: 'then' | 'else' | 'steps',
+    type: import('@/api/workflows').WorkflowStep['type'],
+  ) => void;
+  /** mode="edit" — user clicked the delete affordance on a step. */
+  onDelete?: (stepId: string) => void;
 }
 
 /** Internal node data shared across all custom node types. */
@@ -35,6 +45,14 @@ export interface WorkflowNodeData {
   error?: string;
   selected?: boolean;
   onNodeClick?: (stepId: string, opts: { modifier: boolean }) => void;
+  // Edit-mode callbacks; only meaningful when mode === 'edit'.
+  onInsertAfter?: (targetStepId: string, type: WorkflowStep['type']) => void;
+  onInsertInto?: (
+    containerId: string,
+    slot: 'then' | 'else' | 'steps',
+    type: WorkflowStep['type'],
+  ) => void;
+  onDelete?: (stepId: string) => void;
   // Index signature required by @xyflow/react Node<T> constraint.
   [key: string]: unknown;
 }

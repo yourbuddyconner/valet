@@ -16,6 +16,7 @@ import {
 } from '@/api/triggers';
 import { WorkflowDiagram } from '@/components/workflows/workflow-diagram';
 import { WorkflowDetailHeader } from '@/components/workflows/workflow-detail-header';
+import { WorkflowShell } from '@/components/workflows/workflow-shell';
 import { TriggerCard } from '@/components/workflows/trigger-card';
 import { RecentExecutionsSection } from '@/components/workflows/recent-executions-section';
 import { RunWorkflowDialog } from '@/components/workflows/run-workflow-dialog';
@@ -74,91 +75,97 @@ function WorkflowDetailPage() {
   const triggers = (triggersData?.triggers ?? []).filter((t) => t.workflowId === workflow.id);
 
   return (
-    <div className="flex flex-col h-full bg-surface-0">
-      <WorkflowDetailHeader
-        workflow={workflow}
-        onRun={() => {
-          const hasVars =
-            workflow.data.variables && Object.keys(workflow.data.variables).length > 0;
-          if (hasVars) {
-            setShowRunDialog(true);
-          } else {
-            run.mutate({ workflowId: workflow.id });
-          }
-        }}
-        onEdit={() => nav({ to: '/automation/workflows/new', search: { editId: workflow.id } })}
-        onToggleEnabled={() =>
-          update.mutate({ workflowId: workflow.id, enabled: !workflow.enabled })
+    <>
+      <WorkflowShell
+        header={
+          <WorkflowDetailHeader
+            workflow={workflow}
+            onRun={() => {
+              const hasVars =
+                workflow.data.variables && Object.keys(workflow.data.variables).length > 0;
+              if (hasVars) {
+                setShowRunDialog(true);
+              } else {
+                run.mutate({ workflowId: workflow.id });
+              }
+            }}
+            onEdit={() => nav({ to: '/automation/workflows/new', search: { editId: workflow.id } })}
+            onToggleEnabled={() =>
+              update.mutate({ workflowId: workflow.id, enabled: !workflow.enabled })
+            }
+            onDelete={() => {
+              if (confirm(`Delete workflow "${workflow.name}"?`)) {
+                del.mutate(workflow.id, {
+                  onSuccess: () => nav({ to: '/automation/workflows' }),
+                });
+              }
+            }}
+          />
         }
-        onDelete={() => {
-          if (confirm(`Delete workflow "${workflow.name}"?`)) {
-            del.mutate(workflow.id, {
-              onSuccess: () => nav({ to: '/automation/workflows' }),
-            });
-          }
-        }}
-      />
-      <div className="flex-1 min-h-0 flex flex-col lg:flex-row overflow-auto lg:overflow-hidden">
-        <div className="flex-1 min-w-0 p-4 lg:overflow-hidden lg:flex lg:flex-col min-h-0 relative">
-          <div className="h-[640px] lg:h-auto lg:flex-1 lg:min-h-0">
-            <WorkflowDiagram workflow={workflow.data} mode="view" />
-          </div>
-          {!sidebarOpen && (
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={() => setSidebarOpen(true)}
-              className="!absolute top-3 right-3 z-10 hidden lg:inline-flex"
-              aria-label="Show details"
-            >
-              <PanelRightOpen className="w-3.5 h-3.5 mr-1" />
-              Details
-            </Button>
-          )}
-        </div>
-        {sidebarOpen && (
-        <div className="w-full lg:w-[380px] lg:border-l border-border p-4 lg:overflow-auto space-y-6 relative">
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => setSidebarOpen(false)}
-            className="!absolute top-2 right-2 !h-6 !w-6 !p-0 hidden lg:inline-flex"
-            aria-label="Hide details"
-          >
-            <PanelRightClose className="w-3.5 h-3.5" />
-          </Button>
-          <Section title={`Triggers (${triggers.length})`}>
-            {triggers.length === 0 ? (
-              <div className="text-sm text-neutral-500">No triggers attached.</div>
-            ) : (
-              <div className="flex flex-col gap-3">
-                {triggers.map((t) => (
-                  <TriggerCard
-                    key={t.id}
-                    trigger={t}
-                    workflowName={workflow.name}
-                    onToggleEnabled={() =>
-                      t.enabled ? disableTrigger.mutate(t.id) : enableTrigger.mutate(t.id)
-                    }
-                    onDelete={() =>
-                      deleteTrigger.mutate({ triggerId: t.id, workflowId: workflow.id })
-                    }
-                  />
-                ))}
-              </div>
+        main={
+          <>
+            <div className="h-[640px] lg:h-auto lg:flex-1 lg:min-h-0">
+              <WorkflowDiagram workflow={workflow.data} mode="view" />
+            </div>
+            {!sidebarOpen && (
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => setSidebarOpen(true)}
+                className="!absolute top-3 right-3 z-10 hidden lg:inline-flex"
+                aria-label="Show details"
+              >
+                <PanelRightOpen className="w-3.5 h-3.5 mr-1" />
+                Details
+              </Button>
             )}
-          </Section>
+          </>
+        }
+        sidebar={
+          sidebarOpen ? (
+            <div className="p-4 lg:overflow-auto space-y-6 relative flex-1">
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setSidebarOpen(false)}
+                className="!absolute top-2 right-2 !h-6 !w-6 !p-0 hidden lg:inline-flex"
+                aria-label="Hide details"
+              >
+                <PanelRightClose className="w-3.5 h-3.5" />
+              </Button>
+              <Section title={`Triggers (${triggers.length})`}>
+                {triggers.length === 0 ? (
+                  <div className="text-sm text-neutral-500">No triggers attached.</div>
+                ) : (
+                  <div className="flex flex-col gap-3">
+                    {triggers.map((t) => (
+                      <TriggerCard
+                        key={t.id}
+                        trigger={t}
+                        workflowName={workflow.name}
+                        onToggleEnabled={() =>
+                          t.enabled ? disableTrigger.mutate(t.id) : enableTrigger.mutate(t.id)
+                        }
+                        onDelete={() =>
+                          deleteTrigger.mutate({ triggerId: t.id, workflowId: workflow.id })
+                        }
+                      />
+                    ))}
+                  </div>
+                )}
+              </Section>
 
-          <Section title="Recent executions">
-            <RecentExecutionsSection workflowId={workflow.id} />
-          </Section>
+              <Section title="Recent executions">
+                <RecentExecutionsSection workflowId={workflow.id} />
+              </Section>
 
-          <Section title="Version history">
-            <WorkflowHistorySection workflowId={workflow.id} />
-          </Section>
-        </div>
-        )}
-      </div>
+              <Section title="Version history">
+                <WorkflowHistorySection workflowId={workflow.id} />
+              </Section>
+            </div>
+          ) : null
+        }
+      />
       {showRunDialog && (
         <RunWorkflowDialog
           name={workflow.name}
@@ -173,7 +180,7 @@ function WorkflowDetailPage() {
           }}
         />
       )}
-    </div>
+    </>
   );
 }
 

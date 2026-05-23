@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createFileRoute, useNavigate } from '@tanstack/react-router';
-import { ArrowUp, ChevronLeft, PanelRightClose, PanelRightOpen, X } from 'lucide-react';
+import { ArrowUp, PanelRightClose, PanelRightOpen, Plus, Sparkles, X } from 'lucide-react';
 import {
   useDraftWorkflow,
   useDraftWorkflowStep,
@@ -17,8 +17,18 @@ import { WorkflowStepInspector } from '@/components/workflows/workflow-step-insp
 import { WorkflowVariablesEditor } from '@/components/workflows/workflow-variables-editor';
 import { RunWorkflowDialog } from '@/components/workflows/run-workflow-dialog';
 import { TestRunPanel } from '@/components/workflows/test-run-panel';
+import { WorkflowShell } from '@/components/workflows/workflow-shell';
+import { CompactWorkflowHeader } from '@/components/workflows/compact-workflow-header';
+import { StepTypePopover } from '@/components/workflows/workflow-diagram/nodes/step-type-popover';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/cn';
+import {
+  collectAllStepIds,
+  insertAfter,
+  insertInto,
+  makeStepOfType,
+  removeStep,
+} from '@/lib/workflow-step-factory';
 
 export const Route = createFileRoute('/automation/workflows/new')({
   component: NewWorkflowPage,
@@ -47,7 +57,7 @@ function NewWorkflowPage() {
   const [draft, setDraft] = useState<WorkflowData | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [selectedStepIds, setSelectedStepIds] = useState<ReadonlySet<string>>(new Set());
-  const [tab, setTab] = useState<Tab>('chat');
+  const [tab, setTab] = useState<Tab>('inspect');
   const [trigger, setTrigger] = useState<TriggerDraft | null>({ kind: 'manual', config: {} });
   const [saveError, setSaveError] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
@@ -55,12 +65,18 @@ function NewWorkflowPage() {
   const [showTestRunDialog, setShowTestRunDialog] = useState(false);
   const [testRunError, setTestRunError] = useState<string | null>(null);
   const [activeTestRun, setActiveTestRun] = useState<{ executionId: string; sessionId: string | null } | null>(null);
+  // Empty-state "Add your first step" popover.
+  const [firstStepOpen, setFirstStepOpen] = useState(false);
 
   const draftMut = useDraftWorkflow();
   const stepMut = useDraftWorkflowStep();
   const syncMut = useSyncWorkflow();
   const testRunMut = useTestRunWorkflow();
   const createTrigger = useCreateTrigger();
+
+  // Ref into the chat panel input so the "ask the AI" CTA in the empty state
+  // can focus it after switching to the chat tab.
+  const chatInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     if (existing.data?.workflow && !draft) {
@@ -74,6 +90,21 @@ function NewWorkflowPage() {
       ]);
     }
   }, [existing.data, draft]);
+
+  // Bootstrap a brand-new draft when the user clicks "Add your first step".
+  // We create a tiny WorkflowData with one step so the rest of the page can
+  // light up.
+  const startBlankDraftWith = (type: WorkflowStep['type']) => {
+    const id = crypto.randomUUID();
+    const firstStep = makeStepOfType(type, new Set());
+    setDraft({
+      id,
+      name: 'Untitled workflow',
+      steps: [firstStep],
+    });
+    setSelectedStepIds(new Set([firstStep.id]));
+    setTab('inspect');
+  };
 
   const handleInitialDraft = (text: string) => {
     setMessages([{ id: crypto.randomUUID(), role: 'user', content: text, targetIds: [] }]);
@@ -99,7 +130,11 @@ function NewWorkflowPage() {
   };
 
   const handleRefine = (text: string) => {
-    if (!draft) return;
+    if (!draft) {
+      // First chat message with no draft → kick off the AI draft path.
+      handleInitialDraft(text);
+      return;
+    }
     const targetIds = Array.from(selectedStepIds);
     setMessages((m) => [
       ...m,
@@ -156,6 +191,48 @@ function NewWorkflowPage() {
   const handleStepPatch = (stepId: string, patch: Partial<WorkflowStep>) => {
     if (!draft) return;
     setDraft({ ...draft, steps: patchStep(draft.steps, stepId, patch) });
+  };
+
+  const handleInsertAfter = (targetStepId: string, type: WorkflowStep['type']) => {
+    if (!draft) return;
+    const newStep = makeStepOfType(type, collectAllStepIds(draft.steps));
+    setDraft({ ...draft, steps: insertAfter(draft.steps, targetStepId, newStep) });
+    setSelectedStepIds(new Set([newStep.id]));
+    setTab('inspect');
+  };
+
+  const handleInsertInto = (
+    containerId: string,
+    slot: 'then' | 'else' | 'steps',
+    type: WorkflowStep['type'],
+  ) => {
+    if (!draft) return;
+    const newStep = makeStepOfType(type, collectAllStepIds(draft.steps));
+    setDraft({ ...draft, steps: insertInto(draft.steps, containerId, slot, newStep) });
+    setSelectedStepIds(new Set([newStep.id]));
+    setTab('inspect');
+  };
+
+  const handleDeleteStep = (stepId: string) => {
+    if (!draft) return;
+    const step = findStep(draft.steps, stepId);
+    const hasChildren = step
+      ? (step.then && step.then.length > 0) ||
+        (step.else && step.else.length > 0) ||
+        (step.steps && step.steps.length > 0)
+      : false;
+    const label = step?.name ?? stepId;
+    const msg = hasChildren
+      ? `Delete "${label}" and all of its child steps?`
+      : `Delete "${label}"?`;
+    if (!confirm(msg)) return;
+    setDraft({ ...draft, steps: removeStep(draft.steps, stepId) });
+    setSelectedStepIds((prev) => {
+      if (!prev.has(stepId)) return prev;
+      const next = new Set(prev);
+      next.delete(stepId);
+      return next;
+    });
   };
 
   const selectedStep = useMemo<WorkflowStep | null>(() => {
@@ -232,225 +309,256 @@ function NewWorkflowPage() {
     }
   };
 
-  return (
-    <div className="flex flex-col h-full">
-      <header className="px-4 py-2.5 bg-surface-0 border-b border-border flex items-center gap-2">
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={() => nav({ to: '/automation/workflows' })}
-          aria-label="Back to workflows"
-        >
-          <ChevronLeft className="w-4 h-4" strokeWidth={1.5} />
-        </Button>
-        <h1 className="text-base font-semibold text-foreground">{editId ? 'Edit workflow' : 'New workflow'}</h1>
-      </header>
+  const header = (
+    <CompactWorkflowHeader
+      title={
+        draft
+          ? draft.name || (editId ? 'Edit workflow' : 'New workflow')
+          : editId
+            ? 'Edit workflow'
+            : 'New workflow'
+      }
+      badge={draft ? { label: 'Draft', variant: 'secondary' } : undefined}
+      description={draft?.description ?? ''}
+      meta={draft ? <span>v{draft.version ?? '1.0.0'}</span> : null}
+    />
+  );
 
-      {!draft ? (
-        <EmptyState onSubmit={handleInitialDraft} loading={draftMut.isPending} />
-      ) : (
-        <div className="flex-1 min-h-0 flex flex-col lg:flex-row">
-          <div className="flex-1 min-w-0 bg-surface-2 lg:overflow-hidden lg:flex lg:flex-col min-h-0 relative">
-            <div className="h-[600px] lg:flex-1 lg:min-h-0">
-              <WorkflowDiagram
-                workflow={draft}
-                mode="edit"
-                selectedStepIds={selectedStepIds}
-                onNodeClick={handleNodeClick}
+  // Footer is the Save/Test/Discard action bar — only rendered once there's a
+  // draft to act on.
+  const footer = draft && sidebarOpen ? (
+    <>
+      <Button
+        variant="secondary"
+        size="sm"
+        onClick={handleTestRunClick}
+        disabled={testRunMut.isPending || !!activeTestRun}
+        className="flex-1"
+      >
+        {testRunMut.isPending ? 'Starting…' : 'Test run'}
+      </Button>
+      <Button
+        variant="secondary"
+        size="sm"
+        onClick={() => nav({ to: '/automation/workflows' })}
+        className="flex-1"
+      >
+        Discard
+      </Button>
+      <Button
+        variant="primary"
+        size="sm"
+        onClick={handleSave}
+        disabled={syncMut.isPending}
+        className="flex-1"
+      >
+        {syncMut.isPending ? 'Saving…' : 'Save'}
+      </Button>
+    </>
+  ) : undefined;
+
+  const mainContent = draft ? (
+    <>
+      <div className="h-[640px] lg:h-auto lg:flex-1 lg:min-h-0">
+        <WorkflowDiagram
+          workflow={draft}
+          mode="edit"
+          selectedStepIds={selectedStepIds}
+          onNodeClick={handleNodeClick}
+          onInsertAfter={handleInsertAfter}
+          onInsertInto={handleInsertInto}
+          onDelete={handleDeleteStep}
+        />
+      </div>
+      {!sidebarOpen && (
+        <Button
+          variant="secondary"
+          size="sm"
+          onClick={() => setSidebarOpen(true)}
+          className="!absolute top-3 right-3 z-10 hidden lg:inline-flex"
+          aria-label="Show sidebar"
+        >
+          <PanelRightOpen className="w-3.5 h-3.5 mr-1" />
+          Sidebar
+        </Button>
+      )}
+    </>
+  ) : (
+    <EmptyDiagram
+      loading={draftMut.isPending}
+      onPick={(type) => {
+        setFirstStepOpen(false);
+        startBlankDraftWith(type);
+      }}
+      open={firstStepOpen}
+      setOpen={setFirstStepOpen}
+      onFocusChat={() => {
+        setTab('chat');
+        // Defer focus until the chat tab has actually mounted.
+        requestAnimationFrame(() => chatInputRef.current?.focus());
+      }}
+    />
+  );
+
+  const sidebar = sidebarOpen ? (
+    <>
+      <div className="flex border-b border-border">
+        {(['inspect', 'chat', 'variables', 'trigger', 'json'] as const).map((t) => {
+          const variableCount = Object.keys(draft?.variables ?? {}).length;
+          const label =
+            t === 'variables' && variableCount > 0 ? `variables (${variableCount})` : t;
+          // Tabs that operate on a draft (inspect/variables/trigger/json) are
+          // disabled when there's no draft yet; chat is always available so
+          // the user can ask the AI to draft.
+          const disabled = !draft && t !== 'chat';
+          return (
+            <button
+              key={t}
+              onClick={() => !disabled && setTab(t)}
+              aria-pressed={tab === t}
+              disabled={disabled}
+              className={cn(
+                'flex-1 text-xs uppercase tracking-wider py-2.5 font-medium transition-colors',
+                tab === t
+                  ? 'text-foreground border-b-2 border-accent'
+                  : 'text-neutral-500 hover:text-foreground border-b-2 border-transparent',
+                disabled && 'opacity-40 cursor-not-allowed hover:text-neutral-500',
+              )}
+            >
+              {label}
+            </button>
+          );
+        })}
+      </div>
+
+      <div className="flex-1 min-h-0 overflow-hidden">
+        {tab === 'inspect' &&
+          (draft && selectedStep ? (
+            <WorkflowStepInspector
+              step={selectedStep}
+              onChange={(patch) => handleStepPatch(selectedStep.id, patch)}
+              workflow={draft}
+            />
+          ) : (
+            <div className="h-full flex items-center justify-center px-6 text-xs text-neutral-500 dark:text-neutral-400 text-center">
+              {!draft
+                ? 'Add a step or ask the AI to draft a workflow.'
+                : selectedStepIds.size === 0
+                  ? 'Click a node to inspect its parameters.'
+                  : `${selectedStepIds.size} steps selected — use the Chat tab to refine multiple steps at once.`}
+            </div>
+          ))}
+        {tab === 'chat' && (
+          <ChatPanel
+            workflow={draft}
+            messages={messages}
+            selectedStepIds={selectedStepIds}
+            onClearSelection={() => setSelectedStepIds(new Set())}
+            onRemoveSelection={(id) =>
+              setSelectedStepIds((prev) => {
+                const next = new Set(prev);
+                next.delete(id);
+                return next;
+              })
+            }
+            onSend={handleRefine}
+            refining={refining}
+            inputRef={chatInputRef}
+          />
+        )}
+        {tab === 'variables' && draft && (
+          <div className="h-full flex flex-col min-h-0">
+            <div className="flex-1 min-h-0 overflow-hidden">
+              <WorkflowVariablesEditor
+                variables={draft.variables ?? {}}
+                onChange={(next) =>
+                  setDraft({
+                    ...draft,
+                    variables: Object.keys(next).length > 0 ? next : undefined,
+                  })
+                }
               />
             </div>
-            {!sidebarOpen && (
-              <Button
-                variant="secondary"
-                size="sm"
-                onClick={() => setSidebarOpen(true)}
-                className="!absolute top-3 right-3 z-10 hidden lg:inline-flex"
-                aria-label="Show sidebar"
-              >
-                <PanelRightOpen className="w-3.5 h-3.5 mr-1" />
-                Sidebar
-              </Button>
-            )}
-          </div>
-
-          {sidebarOpen && (
-          <aside className="w-full lg:w-[380px] flex flex-col bg-surface-1 border-t lg:border-t-0 lg:border-l border-border min-h-0 relative">
-            <div className="flex border-b border-border">
-              {(['inspect', 'chat', 'variables', 'trigger', 'json'] as const).map((t) => {
-                const variableCount = Object.keys(draft.variables ?? {}).length;
-                const label =
-                  t === 'variables' && variableCount > 0
-                    ? `variables (${variableCount})`
-                    : t;
-                return (
-                  <button
-                    key={t}
-                    onClick={() => setTab(t)}
-                    aria-pressed={tab === t}
-                    className={cn(
-                      'flex-1 text-xs uppercase tracking-wider py-2.5 font-medium transition-colors',
-                      tab === t
-                        ? 'text-foreground border-b-2 border-accent'
-                        : 'text-neutral-500 hover:text-foreground border-b-2 border-transparent',
-                    )}
-                  >
-                    {label}
-                  </button>
-                );
-              })}
-            </div>
-
-            <div className="flex-1 min-h-0 overflow-hidden">
-              {tab === 'inspect' && (
-                selectedStep ? (
-                  <WorkflowStepInspector
-                    step={selectedStep}
-                    onChange={(patch) => handleStepPatch(selectedStep.id, patch)}
-                    workflow={draft}
-                  />
-                ) : (
-                  <div className="h-full flex items-center justify-center px-6 text-xs text-neutral-500 dark:text-neutral-400 text-center">
-                    {selectedStepIds.size === 0
-                      ? 'Click a node to inspect its parameters.'
-                      : `${selectedStepIds.size} steps selected — use the Chat tab to refine multiple steps at once.`}
-                  </div>
-                )
-              )}
-              {tab === 'chat' && (
-                <ChatPanel
-                  workflow={draft}
-                  messages={messages}
-                  selectedStepIds={selectedStepIds}
-                  onClearSelection={() => setSelectedStepIds(new Set())}
-                  onRemoveSelection={(id) =>
-                    setSelectedStepIds((prev) => {
-                      const next = new Set(prev);
-                      next.delete(id);
-                      return next;
-                    })
-                  }
-                  onSend={handleRefine}
-                  refining={refining}
-                />
-              )}
-              {tab === 'variables' && (
-                <div className="h-full flex flex-col min-h-0">
-                  <div className="flex-1 min-h-0 overflow-hidden">
-                    <WorkflowVariablesEditor
-                      variables={draft.variables ?? {}}
-                      onChange={(next) =>
+            <div className="border-t border-border px-4 py-3 space-y-1.5">
+              <div className="text-[11px] uppercase tracking-wide text-neutral-500 dark:text-neutral-400">
+                Settings
+              </div>
+              <label className="text-xs text-foreground block">
+                On failure (non-manual runs)
+              </label>
+              <div className="inline-flex rounded-md border border-border overflow-hidden">
+                {(['orchestrator', 'none'] as const).map((option) => {
+                  // Undefined defaults to 'orchestrator' on the server.
+                  const current = draft.failureNotify ?? 'orchestrator';
+                  const active = current === option;
+                  return (
+                    <button
+                      key={option}
+                      type="button"
+                      onClick={() =>
                         setDraft({
                           ...draft,
-                          variables: Object.keys(next).length > 0 ? next : undefined,
+                          failureNotify: option,
                         })
                       }
-                    />
-                  </div>
-                  <div className="border-t border-border px-4 py-3 space-y-1.5">
-                    <div className="text-[11px] uppercase tracking-wide text-neutral-500 dark:text-neutral-400">
-                      Settings
-                    </div>
-                    <label className="text-xs text-foreground block">
-                      On failure (non-manual runs)
-                    </label>
-                    <div className="inline-flex rounded-md border border-border overflow-hidden">
-                      {(['orchestrator', 'none'] as const).map((option) => {
-                        // Undefined defaults to 'orchestrator' on the server.
-                        const current = draft.failureNotify ?? 'orchestrator';
-                        const active = current === option;
-                        return (
-                          <button
-                            key={option}
-                            type="button"
-                            onClick={() =>
-                              setDraft({
-                                ...draft,
-                                failureNotify: option,
-                              })
-                            }
-                            aria-pressed={active}
-                            className={cn(
-                              'px-2.5 py-1 text-xs transition',
-                              active
-                                ? 'bg-accent text-white'
-                                : 'bg-surface-2 text-foreground hover:bg-surface-3',
-                            )}
-                          >
-                            {option === 'orchestrator'
-                              ? 'Notify orchestrator on failure'
-                              : 'No failure notifications'}
-                          </button>
-                        );
-                      })}
-                    </div>
-                    <div className="text-[11px] text-neutral-500 dark:text-neutral-400">
-                      Scheduled and webhook failures notify your orchestrator so it can react (Slack message, escalate, etc.).
-                    </div>
-                  </div>
-                </div>
-              )}
-              {tab === 'trigger' && (
-                <div className="overflow-y-auto h-full">
-                  <WorkflowDraftTriggerForm
-                    value={trigger}
-                    onChange={setTrigger}
-                    availableVariables={draft.variables ?? {}}
-                  />
-                </div>
-              )}
-              {tab === 'json' && (
-                <pre className="text-xs bg-surface-2 text-foreground p-3 overflow-auto h-full font-mono whitespace-pre-wrap break-words">
-                  {JSON.stringify(draft, null, 2)}
-                </pre>
-              )}
-            </div>
-
-            {(saveError || testRunError) && (
-              <div className="bg-red-500/10 border-t border-red-500/30 text-red-600 dark:text-red-400 text-xs px-3 py-2 font-mono">
-                {saveError ?? testRunError}
+                      aria-pressed={active}
+                      className={cn(
+                        'px-2.5 py-1 text-xs transition',
+                        active
+                          ? 'bg-accent text-white'
+                          : 'bg-surface-2 text-foreground hover:bg-surface-3',
+                      )}
+                    >
+                      {option === 'orchestrator'
+                        ? 'Notify orchestrator on failure'
+                        : 'No failure notifications'}
+                    </button>
+                  );
+                })}
               </div>
-            )}
-            <div className="border-t border-border p-3 flex gap-2">
-              <Button
-                variant="secondary"
-                size="sm"
-                onClick={handleTestRunClick}
-                disabled={testRunMut.isPending || !!activeTestRun}
-                className="flex-1"
-              >
-                {testRunMut.isPending ? 'Starting…' : 'Test run'}
-              </Button>
-              <Button
-                variant="secondary"
-                size="sm"
-                onClick={() => nav({ to: '/automation/workflows' })}
-                className="flex-1"
-              >
-                Discard
-              </Button>
-              <Button
-                variant="primary"
-                size="sm"
-                onClick={handleSave}
-                disabled={syncMut.isPending}
-                className="flex-1"
-              >
-                {syncMut.isPending ? 'Saving…' : 'Save'}
-              </Button>
+              <div className="text-[11px] text-neutral-500 dark:text-neutral-400">
+                Scheduled and webhook failures notify your orchestrator so it can react (Slack message, escalate, etc.).
+              </div>
             </div>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => setSidebarOpen(false)}
-              className="!absolute top-2 right-2 !h-6 !w-6 !p-0 hidden lg:inline-flex z-10"
-              aria-label="Hide sidebar"
-            >
-              <PanelRightClose className="w-3.5 h-3.5" />
-            </Button>
-          </aside>
-          )}
-        </div>
-      )}
+          </div>
+        )}
+        {tab === 'trigger' && draft && (
+          <div className="overflow-y-auto h-full">
+            <WorkflowDraftTriggerForm
+              value={trigger}
+              onChange={setTrigger}
+              availableVariables={draft.variables ?? {}}
+            />
+          </div>
+        )}
+        {tab === 'json' && draft && (
+          <pre className="text-xs bg-surface-2 text-foreground p-3 overflow-auto h-full font-mono whitespace-pre-wrap break-words">
+            {JSON.stringify(draft, null, 2)}
+          </pre>
+        )}
+      </div>
+
+      <Button
+        variant="ghost"
+        size="sm"
+        onClick={() => setSidebarOpen(false)}
+        className="!absolute top-2 right-2 !h-6 !w-6 !p-0 hidden lg:inline-flex z-10"
+        aria-label="Hide sidebar"
+      >
+        <PanelRightClose className="w-3.5 h-3.5" />
+      </Button>
+    </>
+  ) : null;
+
+  return (
+    <>
+      <WorkflowShell
+        header={header}
+        main={mainContent}
+        sidebar={sidebar}
+        footer={footer}
+        errorBanner={saveError ?? testRunError ?? undefined}
+      />
 
       {showTestRunDialog && draft && (
         <RunWorkflowDialog
@@ -474,6 +582,79 @@ function NewWorkflowPage() {
           onClose={() => setActiveTestRun(null)}
         />
       )}
+    </>
+  );
+}
+
+// Diagram placeholder shown when there's no draft yet. A single "start" disc
+// and a big "+ Add your first step" button below it, plus an AI-draft CTA.
+function EmptyDiagram({
+  loading,
+  open,
+  setOpen,
+  onPick,
+  onFocusChat,
+}: {
+  loading: boolean;
+  open: boolean;
+  setOpen: (v: boolean) => void;
+  onPick: (type: WorkflowStep['type']) => void;
+  onFocusChat: () => void;
+}) {
+  return (
+    <div className="h-[640px] lg:h-auto lg:flex-1 lg:min-h-0 bg-surface-1 rounded-xl border border-border flex flex-col items-center justify-center px-6 relative">
+      {/* Top banner: "Build manually or ask the AI…". Sits centered at the top
+          so it doesn't fight with the first-step button visually. */}
+      <button
+        type="button"
+        onClick={onFocusChat}
+        className={cn(
+          'absolute top-4 left-1/2 -translate-x-1/2',
+          'flex items-center gap-1.5 text-[11px] text-neutral-500 hover:text-foreground transition',
+        )}
+      >
+        <Sparkles className="w-3 h-3" strokeWidth={1.5} />
+        <span>Build manually or ask the AI to draft from a prompt</span>
+        <span aria-hidden="true">→</span>
+      </button>
+
+      <div className="flex flex-col items-center gap-4">
+        {/* Mirror the synthetic start-node visual so the empty state feels like
+            an extension of the diagram, not a separate screen. */}
+        <div className="flex flex-col items-center">
+          <div className="w-7 h-7 rounded-full bg-surface-2 border border-border-strong flex items-center justify-center text-neutral-500 shadow-panel">
+            <span className="w-3 h-3 rounded-full bg-current" />
+          </div>
+          <div className="text-[9px] tracking-[0.18em] uppercase font-mono text-neutral-500 mt-1.5">
+            START
+          </div>
+        </div>
+
+        <div className="relative">
+          <Button
+            variant="primary"
+            size="lg"
+            disabled={loading}
+            onClick={() => setOpen(!open)}
+          >
+            <Plus className="w-4 h-4 mr-1.5" strokeWidth={2} />
+            Add your first step
+          </Button>
+          {open && (
+            <div className="absolute left-1/2 top-full mt-2 -translate-x-1/2 z-10">
+              <StepTypePopover
+                title="Pick a step type"
+                onClose={() => setOpen(false)}
+                onPick={onPick}
+              />
+            </div>
+          )}
+        </div>
+
+        {loading && (
+          <div className="text-xs text-neutral-500 italic">Drafting…</div>
+        )}
+      </div>
     </div>
   );
 }
@@ -486,14 +667,16 @@ function ChatPanel({
   onRemoveSelection,
   onSend,
   refining,
+  inputRef,
 }: {
-  workflow: WorkflowData;
+  workflow: WorkflowData | null;
   messages: ChatMessage[];
   selectedStepIds: ReadonlySet<string>;
   onClearSelection: () => void;
   onRemoveSelection: (id: string) => void;
   onSend: (text: string) => void;
   refining: boolean;
+  inputRef: React.RefObject<HTMLInputElement | null>;
 }) {
   const [text, setText] = useState('');
   const scrollRef = useRef<HTMLDivElement | null>(null);
@@ -503,15 +686,22 @@ function ChatPanel({
   }, [messages.length]);
 
   const stepNames = new Map<string, string>();
-  collectStepNames(workflow.steps, stepNames);
+  if (workflow) collectStepNames(workflow.steps, stepNames);
+
+  const placeholder = !workflow
+    ? 'Describe the workflow you want — e.g. "Every weekday at 9am, summarize my PRs to Slack"'
+    : selectedStepIds.size > 0
+      ? 'Refine the selected step(s)…'
+      : 'Refine the whole workflow…';
 
   return (
     <div className="h-full flex flex-col">
       <div ref={scrollRef} className="flex-1 overflow-y-auto px-3 py-3 space-y-2">
         {messages.length === 0 && (
           <div className="text-xs text-neutral-500 dark:text-neutral-400 text-center pt-6 px-2">
-            Click a node to target it (⌘/Ctrl+click to add to selection), then ask the agent to
-            refine.
+            {!workflow
+              ? 'Describe the workflow you want and the agent will draft it. Or close this panel and build manually with the + buttons.'
+              : 'Click a node to target it (⌘/Ctrl+click to add to selection), then ask the agent to refine.'}
           </div>
         )}
         {messages.map((m) => (
@@ -556,14 +746,11 @@ function ChatPanel({
       <div className="border-t border-border p-3">
         <div className="flex gap-2">
           <input
+            ref={inputRef}
             type="text"
             value={text}
             onChange={(e) => setText(e.target.value)}
-            placeholder={
-              selectedStepIds.size > 0
-                ? 'Refine the selected step(s)…'
-                : 'Refine the whole workflow…'
-            }
+            placeholder={placeholder}
             className="flex-1 rounded-md border border-border bg-surface-0 dark:bg-surface-2 text-foreground px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-accent/30 focus:border-accent transition"
             disabled={refining}
             onKeyDown={(e) => {
@@ -678,36 +865,4 @@ function buildTriggerConfig(trigger: TriggerDraft): TriggerConfig {
     return { type: 'webhook', path, method };
   }
   return { type: 'manual' };
-}
-
-function EmptyState({
-  onSubmit,
-  loading,
-}: {
-  onSubmit: (s: string) => void;
-  loading: boolean;
-}) {
-  const [text, setText] = useState('');
-  return (
-    <div className="flex-1 flex flex-col items-center justify-center p-6">
-      <div className="w-full max-w-2xl">
-        <textarea
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          placeholder="Every weekday at 9am, check my open PRs and send a summary to Slack…"
-          className="w-full min-h-[120px] rounded-xl border border-border bg-surface-0 dark:bg-surface-2 text-foreground px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-accent/30 focus:border-accent transition"
-        />
-        <div className="flex justify-end mt-3">
-          <Button
-            variant="primary"
-            size="lg"
-            onClick={() => onSubmit(text)}
-            disabled={loading || !text.trim()}
-          >
-            {loading ? 'Drafting…' : 'Draft workflow →'}
-          </Button>
-        </div>
-      </div>
-    </div>
-  );
 }
