@@ -402,7 +402,7 @@ function NewWorkflowPage() {
 
   const sidebar = sidebarOpen ? (
     <>
-      <div className="flex border-b border-border">
+      <div className="flex border-b border-border items-stretch">
         {(['inspect', 'chat', 'variables', 'trigger', 'json'] as const).map((t) => {
           const variableCount = Object.keys(draft?.variables ?? {}).length;
           const label =
@@ -418,7 +418,7 @@ function NewWorkflowPage() {
               aria-pressed={tab === t}
               disabled={disabled}
               className={cn(
-                'flex-1 text-xs uppercase tracking-wider py-2.5 font-medium transition-colors',
+                'flex-1 min-w-0 text-xs uppercase tracking-wider py-2.5 font-medium transition-colors',
                 tab === t
                   ? 'text-foreground border-b-2 border-accent'
                   : 'text-neutral-500 hover:text-foreground border-b-2 border-transparent',
@@ -429,6 +429,14 @@ function NewWorkflowPage() {
             </button>
           );
         })}
+        <button
+          type="button"
+          onClick={() => setSidebarOpen(false)}
+          className="flex-shrink-0 px-2 text-neutral-500 hover:text-foreground hidden lg:inline-flex items-center"
+          aria-label="Hide sidebar"
+        >
+          <PanelRightClose className="w-3.5 h-3.5" />
+        </button>
       </div>
 
       <div className="flex-1 min-h-0 overflow-hidden">
@@ -537,16 +545,6 @@ function NewWorkflowPage() {
           </pre>
         )}
       </div>
-
-      <Button
-        variant="ghost"
-        size="sm"
-        onClick={() => setSidebarOpen(false)}
-        className="!absolute top-2 right-2 !h-6 !w-6 !p-0 hidden lg:inline-flex z-10"
-        aria-label="Hide sidebar"
-      >
-        <PanelRightClose className="w-3.5 h-3.5" />
-      </Button>
     </>
   ) : null;
 
@@ -602,23 +600,24 @@ function EmptyDiagram({
   onFocusChat: () => void;
 }) {
   return (
-    <div className="h-[640px] lg:h-auto lg:flex-1 lg:min-h-0 bg-surface-1 rounded-xl border border-border flex flex-col items-center justify-center px-6 relative">
-      {/* Top banner: "Build manually or ask the AI…". Sits centered at the top
-          so it doesn't fight with the first-step button visually. */}
-      <button
-        type="button"
-        onClick={onFocusChat}
-        className={cn(
-          'absolute top-4 left-1/2 -translate-x-1/2',
-          'flex items-center gap-1.5 text-[11px] text-neutral-500 hover:text-foreground transition',
-        )}
-      >
-        <Sparkles className="w-3 h-3" strokeWidth={1.5} />
-        <span>Build manually or ask the AI to draft from a prompt</span>
-        <span aria-hidden="true">→</span>
-      </button>
+    <div className="h-[640px] lg:h-auto lg:flex-1 lg:min-h-0 bg-surface-1 rounded-xl border border-border flex flex-col items-stretch px-6 py-4">
+      {/* Banner sits at the top of the normal flow so it never overlaps the
+          start disc on short viewports. */}
+      <div className="flex justify-center">
+        <button
+          type="button"
+          onClick={onFocusChat}
+          className={cn(
+            'flex items-center gap-1.5 text-[11px] text-neutral-500 hover:text-foreground transition',
+          )}
+        >
+          <Sparkles className="w-3 h-3" strokeWidth={1.5} />
+          <span>Build manually or ask the AI to draft from a prompt</span>
+          <span aria-hidden="true">→</span>
+        </button>
+      </div>
 
-      <div className="flex flex-col items-center gap-4">
+      <div className="flex-1 flex flex-col items-center justify-center gap-4">
         {/* Mirror the synthetic start-node visual so the empty state feels like
             an extension of the diagram, not a separate screen. */}
         <div className="flex flex-col items-center">

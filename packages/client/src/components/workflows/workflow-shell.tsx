@@ -23,8 +23,12 @@ interface WorkflowShellProps {
  * inside the sidebar column so they stick to its bottom.
  */
 export function WorkflowShell({ header, main, sidebar, footer, errorBanner }: WorkflowShellProps) {
+  // Viewport-pinned height: the route's parent (PageContainer) only sizes to
+  // content, so we can't rely on h-full. 100vh - approx (top nav + automation
+  // header + tabs + page padding); min-height keeps the diagram usable on
+  // small viewports.
   return (
-    <div className="flex flex-col h-full bg-surface-0">
+    <div className="flex flex-col bg-surface-0 h-[calc(100vh-13rem)] min-h-[600px] rounded-xl border border-border overflow-hidden">
       {header}
       <div className="flex-1 min-h-0 flex flex-col lg:flex-row overflow-auto lg:overflow-hidden">
         <div className="flex-1 min-w-0 p-4 lg:overflow-hidden lg:flex lg:flex-col min-h-0 relative">
