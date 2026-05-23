@@ -54,12 +54,15 @@ export async function checkWorkflowConcurrency(
   database: AppDb,
   userId: string,
   limits: { perUser?: number; global?: number } = {},
+  // The global active count is invariant across a cron tick processing many triggers;
+  // callers iterating triggers should compute it once and pass it in to skip the scan.
+  precomputedGlobalCount?: number,
 ): Promise<{ allowed: boolean; reason?: string; activeUser: number; activeGlobal: number }> {
   const perUserLimit = limits.perUser ?? 5;
   const globalLimit = limits.global ?? 50;
 
   const activeUser = await countActiveExecutions(database, userId);
-  const activeGlobal = await countActiveExecutionsGlobal(database);
+  const activeGlobal = precomputedGlobalCount ?? await countActiveExecutionsGlobal(database);
 
   if (activeUser >= perUserLimit) {
     return {

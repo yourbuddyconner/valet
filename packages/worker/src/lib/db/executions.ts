@@ -1,4 +1,4 @@
-import type { D1Database } from '@cloudflare/workers-types';
+import type { D1Database, D1PreparedStatement } from '@cloudflare/workers-types';
 import { eq, and, sql, inArray } from 'drizzle-orm';
 import type { AppDb } from '../drizzle.js';
 import { workflowExecutions, workflowExecutionSteps } from '../schema/index.js';
@@ -506,7 +506,7 @@ export async function finalizeExecution(
     .where(eq(workflowExecutions.id, executionId));
 }
 
-export async function getStaleWorkflowExecutions(db: D1Database): Promise<{
+export interface StaleWorkflowExecutionRow {
   id: string;
   user_id: string;
   status: string;
@@ -515,7 +515,11 @@ export async function getStaleWorkflowExecutions(db: D1Database): Promise<{
   workflow_id: string | null;
   workflow_name: string | null;
   session_status: string;
-}[]> {
+}
+
+export async function getStaleWorkflowExecutions(
+  db: D1Database,
+): Promise<StaleWorkflowExecutionRow[]> {
   const result = await db.prepare(`
     SELECT
       e.id,
@@ -532,48 +536,71 @@ export async function getStaleWorkflowExecutions(db: D1Database): Promise<{
     WHERE e.status IN ('pending', 'running', 'waiting_approval')
       AND COALESCE(s.purpose, 'interactive') = 'workflow'
       AND s.status IN ('terminated', 'error', 'hibernated')
-  `).all();
-  return (result.results || []) as any;
+  `).all<StaleWorkflowExecutionRow>();
+  return result.results ?? [];
+}
+
+export interface StepTraceEntry {
+  stepId: string;
+  status: string;
+  attempt?: number;
+  startedAt?: string;
+  completedAt?: string;
+  input?: unknown;
+  output?: unknown;
+  error?: string;
+}
+
+function buildPersistStepStatement(
+  db: D1Database,
+  executionId: string,
+  step: StepTraceEntry,
+): D1PreparedStatement {
+  const attempt = step.attempt && step.attempt > 0 ? step.attempt : 1;
+  return db.prepare(`
+    INSERT INTO workflow_execution_steps
+      (id, execution_id, step_id, attempt, status, input_json, output_json, error, started_at, completed_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(execution_id, step_id, attempt) DO UPDATE SET
+      status = excluded.status,
+      input_json = COALESCE(excluded.input_json, workflow_execution_steps.input_json),
+      output_json = COALESCE(excluded.output_json, workflow_execution_steps.output_json),
+      error = excluded.error,
+      started_at = COALESCE(excluded.started_at, workflow_execution_steps.started_at),
+      completed_at = COALESCE(excluded.completed_at, workflow_execution_steps.completed_at)
+  `).bind(
+    crypto.randomUUID(),
+    executionId,
+    step.stepId,
+    attempt,
+    step.status,
+    step.input !== undefined ? JSON.stringify(step.input) : null,
+    step.output !== undefined ? JSON.stringify(step.output) : null,
+    step.error || null,
+    step.startedAt || null,
+    step.completedAt || null,
+  );
 }
 
 export async function persistStepTrace(
   db: D1Database,
   executionId: string,
-  steps: Array<{
-    stepId: string;
-    status: string;
-    attempt?: number;
-    startedAt?: string;
-    completedAt?: string;
-    input?: unknown;
-    output?: unknown;
-    error?: string;
-  }>,
+  steps: Array<StepTraceEntry>,
 ): Promise<void> {
-  for (const step of steps) {
-    const attempt = step.attempt && step.attempt > 0 ? step.attempt : 1;
-    await db.prepare(`
-      INSERT INTO workflow_execution_steps
-        (id, execution_id, step_id, attempt, status, input_json, output_json, error, started_at, completed_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(execution_id, step_id, attempt) DO UPDATE SET
-        status = excluded.status,
-        input_json = COALESCE(excluded.input_json, workflow_execution_steps.input_json),
-        output_json = COALESCE(excluded.output_json, workflow_execution_steps.output_json),
-        error = excluded.error,
-        started_at = COALESCE(excluded.started_at, workflow_execution_steps.started_at),
-        completed_at = COALESCE(excluded.completed_at, workflow_execution_steps.completed_at)
-    `).bind(
-      crypto.randomUUID(),
-      executionId,
-      step.stepId,
-      attempt,
-      step.status,
-      step.input !== undefined ? JSON.stringify(step.input) : null,
-      step.output !== undefined ? JSON.stringify(step.output) : null,
-      step.error || null,
-      step.startedAt || null,
-      step.completedAt || null,
-    ).run();
-  }
+  // Single batched round-trip — long traces previously paid N D1 round-trips.
+  if (steps.length === 0) return;
+  const stmts = steps.map((step) => buildPersistStepStatement(db, executionId, step));
+  await db.batch(stmts);
+}
+
+/**
+ * Alias kept for callers that want to be explicit about the batched semantics.
+ * Implementation is identical to persistStepTrace.
+ */
+export async function persistStepTraceBulk(
+  db: D1Database,
+  executionId: string,
+  steps: Array<StepTraceEntry>,
+): Promise<void> {
+  return persistStepTrace(db, executionId, steps);
 }

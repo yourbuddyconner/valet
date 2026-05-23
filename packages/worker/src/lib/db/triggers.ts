@@ -303,7 +303,7 @@ export async function getWorkflowForManualRun(db: D1Database, userId: string, wo
 
 // ─── Cron Dispatch Helpers ──────────────────────────────────────────────────
 
-export async function getActiveScheduleTriggers(db: D1Database): Promise<{
+export interface ActiveScheduleTriggerRow {
   trigger_id: string;
   user_id: string;
   workflow_id: string | null;
@@ -312,7 +312,19 @@ export async function getActiveScheduleTriggers(db: D1Database): Promise<{
   workflow_name: string | null;
   workflow_version: string | null;
   workflow_data: string | null;
-}[]> {
+}
+
+// Hard cap on triggers fetched per cron tick — bounds the query payload (workflow_data
+// is included because the dispatch path hashes/persists it inline). When growth exceeds
+// this, we warn so we know to add proper paging.
+export const ACTIVE_SCHEDULE_TRIGGER_LIMIT = 500;
+
+export async function getActiveScheduleTriggers(
+  db: D1Database,
+  options: { limit?: number; offset?: number } = {},
+): Promise<ActiveScheduleTriggerRow[]> {
+  const limit = options.limit ?? ACTIVE_SCHEDULE_TRIGGER_LIMIT;
+  const offset = options.offset ?? 0;
   const result = await db.prepare(`
     SELECT
       t.id as trigger_id,
@@ -327,8 +339,17 @@ export async function getActiveScheduleTriggers(db: D1Database): Promise<{
     LEFT JOIN workflows w ON t.workflow_id = w.id
     WHERE t.type = 'schedule'
       AND t.enabled = 1
-  `).all();
-  return (result.results || []) as any;
+    ORDER BY t.id
+    LIMIT ? OFFSET ?
+  `).bind(limit, offset).all<ActiveScheduleTriggerRow>();
+  const rows = result.results ?? [];
+  if (rows.length >= limit) {
+    console.warn(
+      `[triggers] getActiveScheduleTriggers hit limit of ${limit} (offset=${offset}); ` +
+      `some scheduled triggers may not be processed this tick. Add OFFSET paging.`,
+    );
+  }
+  return rows;
 }
 
 export async function insertScheduleTick(

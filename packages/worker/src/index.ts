@@ -58,6 +58,7 @@ import {
   finalizeExecution,
   getStaleWorkflowExecutions,
   persistStepTrace,
+  countActiveExecutionsGlobal,
   getActiveScheduleTriggers,
   insertScheduleTick,
   updateTriggerLastRun,
@@ -273,6 +274,25 @@ const scheduled: ExportedHandlerScheduledHandler<Env> = async (event, env, ctx) 
       }
     } catch (error) {
       console.error('Analytics retention error:', error);
+    }
+  }
+
+  // Prune old trigger delivery log entries. Each row may include an 8KB payload preview,
+  // so unbounded growth is a real D1 size risk on busy webhook triggers. Gated to the
+  // top of the hour because the cron fires every minute and D1 doesn't need this every tick.
+  if (new Date().getMinutes() === 0) {
+    try {
+      // received_at is stored via SQLite's `datetime('now')` -> 'YYYY-MM-DD HH:MM:SS'.
+      // Compare in SQL with the same format so string ordering matches time ordering;
+      // an ISO string ('T'/'Z') would sort wrong against the existing rows.
+      const result = await env.DB.prepare(
+        `DELETE FROM trigger_deliveries WHERE received_at < datetime('now', '-30 days')`,
+      ).run();
+      if (result.meta.changes && result.meta.changes > 0) {
+        console.log(`[cron] Pruned ${result.meta.changes} trigger_deliveries rows older than 30 days`);
+      }
+    } catch (err) {
+      console.error('[cron] trigger_deliveries prune failed', err);
     }
   }
 
@@ -893,6 +913,10 @@ async function dispatchScheduledWorkflows(event: ScheduledController, env: Env):
 
   const activeTriggers = await getActiveScheduleTriggers(env.DB);
 
+  // The global active-execution count is constant across this cron tick; compute once
+  // and pass into checkWorkflowConcurrency to avoid re-scanning workflow_executions per trigger.
+  const globalActive = await countActiveExecutionsGlobal(db);
+
   let dispatched = 0;
 
   for (const row of activeTriggers) {
@@ -928,7 +952,7 @@ async function dispatchScheduledWorkflows(event: ScheduledController, env: Env):
         continue;
       }
 
-      const concurrency = await checkWorkflowConcurrency(db, row.user_id);
+      const concurrency = await checkWorkflowConcurrency(db, row.user_id, {}, globalActive);
       if (!concurrency.allowed) {
         console.warn(
           `Skipping scheduled workflow dispatch for trigger ${row.trigger_id}: ${concurrency.reason} (activeUser=${concurrency.activeUser}, activeGlobal=${concurrency.activeGlobal})`,
