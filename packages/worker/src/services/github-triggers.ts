@@ -173,7 +173,13 @@ export async function dispatchGitHubTriggers(
       let config: GitHubTriggerConfig;
       try {
         config = JSON.parse(row.config) as GitHubTriggerConfig;
-      } catch {
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        console.error('[dispatch] github trigger error', {
+          triggerId: row.id,
+          deliveryId,
+          error: `Invalid trigger config JSON: ${message}`,
+        });
         await safeRecord(appDb, {
           triggerId: row.id,
           userId: row.user_id,
@@ -258,6 +264,14 @@ export async function dispatchGitHubTriggers(
         });
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
+        // Surface dispatch failures in logs alongside the recorded delivery row.
+        // Without this, errors only landed in trigger_deliveries; ops had no
+        // signal in the worker logs that something broke.
+        console.error('[dispatch] github trigger error', {
+          triggerId: row.id,
+          deliveryId,
+          error: message,
+        });
         await safeRecord(appDb, {
           triggerId: row.id,
           userId: row.user_id,

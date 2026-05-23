@@ -57,6 +57,7 @@ import {
   getTimedOutApprovals,
   finalizeExecution,
   getStaleWorkflowExecutions,
+  sweepStuckRunningExecutions,
   persistStepTrace,
   countActiveExecutionsGlobal,
   getActiveScheduleTriggers,
@@ -226,6 +227,19 @@ const scheduled: ExportedHandlerScheduledHandler<Env> = async (event, env, ctx) 
     await reconcileWorkflowExecutions(env);
   } catch (error) {
     console.error('Workflow execution reconcile error:', error);
+  }
+
+  // Stuck-running sweep: catches executions where reconcile's session-status
+  // probe can't help (session technically alive but workflow wedged for >2h).
+  try {
+    const swept = await sweepStuckRunningExecutions(getDb(env.DB));
+    if (swept.length > 0) {
+      console.warn(`[cron] swept ${swept.length} stuck running execution(s)`, {
+        executionIds: swept.map((row) => row.id),
+      });
+    }
+  } catch (error) {
+    console.error('Stuck-running execution sweep error:', error);
   }
 
   try {
@@ -1028,7 +1042,7 @@ async function dispatchScheduledWorkflows(event: ScheduledController, env: Env):
         row.trigger_id,
         'pending',
         'schedule',
-        JSON.stringify({ cron: config.cron, timezone, tickBucket }),
+        JSON.stringify({ cron: config.cron, timezone, tickBucket, deliveryId: tickBucket }),
         JSON.stringify(variables),
         now.toISOString(),
         row.workflow_version || null,

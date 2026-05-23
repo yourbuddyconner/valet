@@ -506,6 +506,53 @@ export async function finalizeExecution(
     .where(eq(workflowExecutions.id, executionId));
 }
 
+export interface StuckRunningExecutionRow {
+  id: string;
+  userId: string;
+  workflowId: string | null;
+}
+
+/**
+ * Mark executions stuck in `running` for >2h as failed. Catches cases where
+ * the result handler never fires (sandbox crashed mid-turn, runner WS dropped
+ * after enqueue) and the existing session-status reconcile sweep doesn't
+ * notice because the session is still technically alive. Returns the rows
+ * that were swept so the caller can log/notify.
+ */
+export async function sweepStuckRunningExecutions(
+  db: AppDb,
+): Promise<StuckRunningExecutionRow[]> {
+  const stuck = await db
+    .select({
+      id: workflowExecutions.id,
+      userId: workflowExecutions.userId,
+      workflowId: workflowExecutions.workflowId,
+    })
+    .from(workflowExecutions)
+    .where(and(
+      eq(workflowExecutions.status, 'running'),
+      sql`${workflowExecutions.startedAt} < datetime('now', '-2 hours')`,
+    ))
+    .all();
+
+  for (const row of stuck) {
+    await db
+      .update(workflowExecutions)
+      .set({
+        status: 'failed',
+        error: 'Stuck running >2h, swept by cron',
+        completedAt: sql`datetime('now')`,
+      })
+      .where(eq(workflowExecutions.id, row.id));
+  }
+
+  return stuck.map((row: { id: string; userId: string; workflowId: string | null }) => ({
+    id: row.id,
+    userId: row.userId,
+    workflowId: row.workflowId,
+  }));
+}
+
 export interface StaleWorkflowExecutionRow {
   id: string;
   user_id: string;

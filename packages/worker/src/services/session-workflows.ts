@@ -257,7 +257,7 @@ export async function workflowRun(
     userId,
     triggerId: null,
     triggerType: 'manual',
-    triggerMetadata: JSON.stringify({ triggeredBy: 'agent_tool', direct: true }),
+    triggerMetadata: JSON.stringify({ triggeredBy: 'agent_tool', direct: true, deliveryId: requestId }),
     variables: JSON.stringify(params.variables || {}),
     now,
     workflowVersion: workflow.version || null,
@@ -445,6 +445,9 @@ export async function retryExecutionFromStep(
       triggeredBy: 'retry_from_step',
       sourceExecutionId,
       retryFromStepId: targetStepId,
+      // Use the new executionId as the deliveryId so runner step logs can be
+      // correlated to a specific retry attempt.
+      deliveryId: `retry:${sourceExecutionId}:${targetStepId}:${executionId.slice(0, 8)}`,
     }),
     variables: JSON.stringify(variables),
     now,
@@ -1030,7 +1033,7 @@ export async function handleTriggerAction(
       userId,
       triggerId,
       triggerType: 'manual',
-      triggerMetadata: JSON.stringify({ triggeredBy: 'api' }),
+      triggerMetadata: JSON.stringify({ triggeredBy: 'api', deliveryId: requestId }),
       variables: JSON.stringify(variables),
       now,
       workflowVersion: row.workflow_version || null,
@@ -1302,6 +1305,24 @@ export async function processWorkflowExecutionResult(
       error = null;
       completedAt = null;
     }
+  }
+
+  // Detect silently no-op workflows: a "completed" status with no outputs AND
+  // zero step traces almost always means the engine produced an empty envelope
+  // (e.g. the workflow ran but every step short-circuited). Worth alerting on
+  // because the user sees a "success" they didn't actually get any value from.
+  const hasOutputs = !!envelope.output && Object.keys(envelope.output).length > 0;
+  const stepCount = Array.isArray(envelope.steps) ? envelope.steps.length : 0;
+  if (
+    (nextStatus === 'completed' && stepCount === 0)
+    || (!hasOutputs && stepCount === 0 && envelope.status !== 'needs_approval')
+  ) {
+    console.warn('[workflow] suspicious finalize', {
+      executionId,
+      status: nextStatus,
+      hasOutputs,
+      stepCount,
+    });
   }
 
   await completeExecutionFull(db, executionId, {

@@ -3517,12 +3517,33 @@ export class SessionAgentDO {
           this.sessionState.sessionId,
           this.env,
         );
+        if (resultData) {
+          // Tagged with executionId so analytics can correlate finalize events
+          // back to the dispatch/step trail.
+          this.emitEvent('workflow_execution_finalized', {
+            properties: {
+              executionId: resultData.executionId,
+              status: resultData.nextStatus,
+            },
+          });
+        }
         if (resultData?.shouldStopSession) {
           this.ctx.waitUntil(this.handleStop(`workflow_execution_${resultData.nextStatus}`));
         }
       },
 
       'workflow-step-event': async (msg) => {
+        // Defensive: a runner that bugs out and forwards an event without a
+        // session_id resolution (i.e. routed through a wrong DO) would silently
+        // do nothing; surface it instead so it shows up in logs.
+        if (!this.sessionState.sessionId) {
+          console.warn('[session-agent] dropped event, missing/unknown session', {
+            sessionId: this.sessionState.sessionId,
+            eventType: 'workflow-step-event',
+            executionId: msg.executionId,
+          });
+          return;
+        }
         const result = await upsertExecutionStepFromEvent(
           this.env.DB,
           this.appDb,
@@ -3534,8 +3555,25 @@ export class SessionAgentDO {
           return { ok: false as const, reason: 'exception' };
         });
         if (!result.ok) {
-          console.error('[SessionAgentDO] workflow-step-event dropped:', result.reason, msg.executionId);
+          console.warn('[session-agent] dropped event, missing/unknown session', {
+            sessionId: this.sessionState.sessionId,
+            eventType: 'workflow-step-event',
+            executionId: msg.executionId,
+            reason: result.reason,
+          });
           return;
+        }
+        // Tag the analytics event with executionId so the "join everything by
+        // executionId" query works end-to-end (webhook -> dispatch -> step).
+        const kind = msg.event.kind;
+        if (kind === 'step.started' || kind === 'step.completed' || kind === 'step.failed') {
+          this.emitEvent(`workflow_${kind.replace('.', '_')}`, {
+            properties: {
+              executionId: msg.executionId,
+              stepId: msg.event.stepId,
+              attempt: msg.event.attempt,
+            },
+          });
         }
         this.broadcastToClients({
           type: 'workflow.execution.step',

@@ -1063,11 +1063,25 @@ export class PromptHandler {
       ]);
       const isForwardedKind = (t: WorkflowEventType): t is WorkflowStepEventKind =>
         forwardedKinds.has(t);
+      // Pull deliveryId off the trigger metadata so step logs can be correlated
+      // end-to-end (webhook delivery -> execution -> step). Falls back to
+      // executionId when absent (e.g. legacy executions predating the field).
+      const triggerDeliveryId = typeof runPayload.trigger?.deliveryId === "string"
+        ? runPayload.trigger.deliveryId
+        : undefined;
       const stepEventForwarder: EventSink = (event) => {
         if (!isForwardedKind(event.type)) return;
         const stepId = typeof event.stepId === "string" ? event.stepId : "";
         const attempt = typeof event.attempt === "number" ? event.attempt : 1;
         const timestamp = typeof event.ts === "string" ? event.ts : new Date().toISOString();
+        if (event.type === "step.started" || event.type === "step.completed" || event.type === "step.failed") {
+          console.log(`[workflow-engine] ${event.type}`, {
+            executionId,
+            stepId,
+            attempt,
+            deliveryId: triggerDeliveryId,
+          });
+        }
         this.agentClient.sendWorkflowStepEvent(executionId, {
           kind: event.type,
           stepId,

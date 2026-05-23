@@ -132,11 +132,19 @@ export async function handleGenericWebhook(
 
     const valid = await verifyHmacSha256(config.secret as string, rawBody, signature);
     if (!valid) {
+      const mismatchDeliveryId = headers['x-github-delivery'] || headers['x-request-id'] || headers['x-webhook-id'] || null;
+      // Surface HMAC mismatches in logs alongside the recorded delivery row.
+      // Never log the signature bytes — they're a shared-secret derivative.
+      console.warn('[webhook] hmac mismatch', {
+        triggerId: trigger.id,
+        pathSlug: webhookPath,
+        deliveryId: mismatchDeliveryId,
+      });
       await safeRecord(appDb, {
         triggerId: trigger.id,
         userId: trigger.user_id,
         eventType: webhookPath,
-        deliveryId: headers['x-github-delivery'] || headers['x-request-id'] || headers['x-webhook-id'] || null,
+        deliveryId: mismatchDeliveryId,
         outcome: 'no_match',
         reason: 'invalid signature',
         payloadPreview: truncatePayloadPreview(rawBody, 'no_match'),
@@ -280,7 +288,7 @@ export async function handleGenericWebhook(
     executionId,
   });
 
-  const triggerMetadata: Record<string, unknown> = { path: webhookPath, method };
+  const triggerMetadata: Record<string, unknown> = { path: webhookPath, method, deliveryId };
   if (options.testFire) {
     // Preserve original kind so the UI can distinguish a test-fired webhook from
     // a test-fired schedule even though both record as trigger_type='test'.
