@@ -604,3 +604,39 @@ export async function persistStepTraceBulk(
 ): Promise<void> {
   return persistStepTrace(db, executionId, steps);
 }
+
+// ─── Retention ──────────────────────────────────────────────────────────────
+
+/**
+ * Deletes terminal workflow executions older than `olderThanDays`.
+ *
+ * Batched in chunks of 1000 because D1 enforces row-change limits per statement
+ * and unbounded DELETEs can time out on busy workspaces. The `id IN (SELECT ...
+ * LIMIT 1000)` pattern keeps each delete bounded so the loop converges.
+ *
+ * Note: `workflow_execution_steps.execution_id` is `ON DELETE CASCADE`, so
+ * child step rows are removed automatically — no separate orphan sweep is
+ * needed.
+ */
+export async function pruneOldExecutions(
+  db: D1Database,
+  olderThanDays = 90,
+): Promise<number> {
+  let totalDeleted = 0;
+  let deleted: number;
+  do {
+    const result = await db.prepare(
+      `DELETE FROM workflow_executions
+       WHERE id IN (
+         SELECT id FROM workflow_executions
+         WHERE status IN ('completed', 'failed', 'cancelled')
+           AND completed_at IS NOT NULL
+           AND completed_at < datetime('now', '-' || ? || ' days')
+         LIMIT 1000
+       )`,
+    ).bind(olderThanDays).run();
+    deleted = result.meta.changes ?? 0;
+    totalDeleted += deleted;
+  } while (deleted >= 1000);
+  return totalDeleted;
+}

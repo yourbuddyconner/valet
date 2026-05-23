@@ -275,6 +275,18 @@ const scheduled: ExportedHandlerScheduledHandler<Env> = async (event, env, ctx) 
     } catch (error) {
       console.error('Analytics retention error:', error);
     }
+
+    // Prune terminal workflow executions older than 90 days. Step rows cascade
+    // via the FK on workflow_execution_steps.execution_id.
+    try {
+      const { pruneOldExecutions } = await import('./lib/db/executions.js');
+      const pruned = await pruneOldExecutions(env.DB, 90);
+      if (pruned > 0) {
+        console.log(`Workflow execution retention: deleted ${pruned} rows older than 90 days`);
+      }
+    } catch (error) {
+      console.error('Workflow execution retention error:', error);
+    }
   }
 
   // Prune old trigger delivery log entries. Each row may include an 8KB payload preview,

@@ -143,7 +143,18 @@ adminGitHubRouter.post('/app/manifest', async (c) => {
     actions: 'write',
     checks: 'read',
   };
-  const defaultEvents = ['push', 'pull_request'];
+  // Includes `issue_comment`, `issues`, `release`, and `workflow_run` so the
+  // most common workflow triggers fire on fresh installs without an admin
+  // having to re-install the App. Existing installs must be re-installed by
+  // the user to pick up newly-added events.
+  const defaultEvents = [
+    'push',
+    'pull_request',
+    'issue_comment',
+    'issues',
+    'release',
+    'workflow_run',
+  ];
 
   // Merge caller-provided permissions/events with defaults
   const permissions = body.permissions
