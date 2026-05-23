@@ -22,6 +22,7 @@ This spec covers:
 - This spec does NOT cover session lifecycle or state machine transitions (see [sessions.md](sessions.md))
 - This spec does NOT cover Runner-to-DO WebSocket protocol details or sandbox internals (see [sandbox-runtime.md](sandbox-runtime.md))
 - This spec does NOT cover business logic (prompt queue modes, hibernation, etc.) — only the transport and broadcasting layer
+- This spec does NOT define the semantics of workflow step types or the workflow execution model — see [workflows.md](workflows.md). This spec only documents the wire-level events that carry workflow data.
 
 ## Data Model
 
@@ -53,6 +54,10 @@ interface EventBusEvent {
   timestamp: string;
 }
 ```
+
+The `workflow.execution.step` event carries `data: { executionId, event }` where `event` is the raw runner-emitted step event (see [Workflow Step Events](#workflow-step-events-runner--do) below).
+
+The `notification` event type is multiplexed; the consumer disambiguates via `data.category`. Workflow-related categories emitted by the WorkflowExecutorDO include `workflow.execution.enqueued`, `workflow.execution.resumed`, `workflow.execution.denied`, and `workflow.execution.cancelled`.
 
 ## Architecture Overview
 
@@ -234,6 +239,18 @@ Runner                          SessionAgentDO                    Client
 
 If the DO hibernates mid-turn, `recoverTurnFromSQLite` reconstructs the turn state from the placeholder message row. This allows the V2 protocol to resume streaming after wake without message loss.
 
+### Workflow Messages (Runner → DO)
+
+In addition to the V2 turn-streaming messages, the runner WebSocket carries three workflow-specific message types. The DO handler in `packages/worker/src/durable-objects/session-agent.ts` routes them as follows:
+
+| Runner message | Semantics | DO behavior |
+|----------------|-----------|-------------|
+| `workflow-chat-message` | Synthetic user/assistant message produced by an `agent_prompt` step (sent on the inbound `user` content and the captured `assistant` reply, unless suppressed because the reply is a structured-output machine payload). | Stored in DO SQLite under the workflow execution's channel; broadcast to clients as `message` / `message.updated`. |
+| `workflow-step-event` | Lifecycle event from the workflow engine (`step.*` or `approval.*`). | Ownership check, upsert into `workflow_execution_steps` keyed on `(execution_id, step_id, attempt)` with COALESCE, then broadcast `workflow.execution.step` and fire-and-forget `notifyEventBus`. |
+| `notify` | Output of a `notify` step. | Looks up `orchestrator:{userId}` and calls `sendSessionMessage(...)` with the step content. The orchestrator agent receives it like any other inbound message. |
+
+For the semantics of these step types and the structured-output / question-tool rules, see [workflows.md → Step Execution Engine](workflows.md#step-execution-engine).
+
 ### Workflow Step Events (Runner → DO)
 
 The runner forwards every workflow engine event of kind `step.*` or `approval.*` to the SessionAgentDO over the runner WebSocket:
@@ -265,7 +282,7 @@ On receipt the DO:
 3. Broadcasts `workflow.execution.step` to all clients with payload `{ executionId, event }`.
 4. Fire-and-forget publishes `workflow.execution.step` to the EventBus with the same payload.
 
-This replaces the previous "report all steps once at completion" model with live, per-step updates. Clients use the `useExecutionStepEvents` hook, which subscribes to the WS broadcast and patches the React Query cache for `executionKeys.steps(executionId)` so the execution detail view updates in real time.
+This replaces the previous "report all steps once at completion" model with live, per-step updates. `workflow-step-event` is the V2 streaming protocol for step status transitions: it is the live, incremental counterpart to the post-hoc `GET /api/executions/:id/steps` snapshot. The execution detail page subscribes to the workflow session's WebSocket and the `useExecutionStepEvents` hook patches the React Query cache for `executionKeys.steps(executionId)` so the trace updates without polling.
 
 ### Content-Wins Rule
 

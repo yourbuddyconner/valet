@@ -22,7 +22,7 @@ This spec covers:
 - This spec does NOT cover individual session behavior, prompt queue, or sandbox lifecycle (see [sessions.md](sessions.md))
 - This spec does NOT cover sandbox boot sequence, Runner internals, or auth gateway (see [sandbox-runtime.md](sandbox-runtime.md))
 - This spec does NOT cover WebSocket transport or event broadcasting (see [real-time.md](real-time.md))
-- This spec does NOT cover workflow execution logic (see [workflows.md](workflows.md))
+- This spec does NOT cover workflow step semantics or the workflow execution model (see [workflows.md](workflows.md)) — this spec only documents the orchestrator's role as the recipient of workflow `notify` and failure-escalation messages and the tool guards that apply to workflow sessions.
 
 ## Data Model
 
@@ -548,6 +548,26 @@ Tools available to the orchestrator inside the sandbox, communicating via `http:
 - **Skip lifecycle EventBus notifications:** `session.started` and `session.completed` events are not emitted for orchestrator sessions (guarded by `sessionId?.startsWith('orchestrator:')`).
 - **Config flag:** `isOrchestrator: true` is sent to the Runner in `opencode-config`, which triggers tool filtering (removes `complete_session` and `notify_parent`).
 - **Clear-on-start:** The DO explicitly clears old messages, queue, audit log when starting an orchestrator session to handle DO reuse.
+
+## Workflow Session Tool Policy
+
+Sandboxes spawned by the WorkflowExecutorDO are tagged with the env var `IS_WORKFLOW_SESSION=true` (see `buildSandboxEnvVars` in `packages/worker/src/durable-objects/workflow-executor.ts`). Several destructive workflow-management tools refuse to run in that context to prevent a workflow from deleting or mutating the very workflow that spawned it (or its triggers) mid-execution.
+
+The shared guard lives at `docker/opencode/tools/_workflow_session_guard.ts` and is applied by:
+
+| Tool | Why it's blocked in workflow sessions |
+|------|---------------------------------------|
+| `delete_workflow` | A workflow deleting itself disappears mid-run; downstream steps lose snapshot integrity. |
+| `sync_trigger` | Mutating the trigger config during a delivery can race with the in-flight dispatcher. |
+| `delete_trigger` | Same race; also breaks delivery-log attribution. |
+| `update_workflow` | Surface for self-mutation goes through the **proposal** flow (see [workflows.md → Self-Modification Proposal](workflows.md#self-modification-proposal)) instead. |
+| `sync_workflow` | Replacing the workflow blob mid-run desynchronizes the executing engine. |
+| `rollback_workflow` | Same reasoning as `update_workflow`. |
+| `review_workflow_proposal` / `apply_workflow_proposal` | Reviewing or applying proposals belongs with the human reviewer's session, not the workflow that triggered the proposal. |
+
+When invoked inside a workflow session, these tools return a structured error string explaining the restriction and pointing the agent at the orchestrator. The intended escape hatch is for the workflow to `notify` the user's orchestrator (see [workflows.md → Notify step](workflows.md#notify-step)), and the orchestrator (running outside `IS_WORKFLOW_SESSION`) carries out the destructive change on the user's behalf.
+
+This policy is enforced **at the tool layer**, not by stripping tools from the OpenCode config — the tools remain registered (so the agent can list them and learn what they do) but refuse to execute.
 
 ## Edge Cases & Failure Modes
 
