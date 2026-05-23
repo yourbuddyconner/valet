@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import { Plus, X } from 'lucide-react';
 import type { WorkflowData, WorkflowStep } from '@/api/workflows';
+import { usePersonas } from '@/api/personas';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { inferScope, type Scope } from './scope-inferencer';
@@ -127,6 +128,7 @@ function TypeSpecificFields({
             />
           </Field>
           <ThreadField step={step} onChange={onChange} />
+          <PersonaField step={step} onChange={onChange} />
           <div className="border-t border-border pt-3 space-y-4">
             <NumberField
               label="Timeout (ms)"
@@ -524,6 +526,32 @@ function ThreadField({ step, onChange }: { step: WorkflowStep; onChange: (patch:
       </div>
       <div className="text-[11px] text-neutral-500 dark:text-neutral-400 mt-1">
         Name a thread to share context across steps. <code>@new</code> spawns a fresh thread per call.
+      </div>
+    </Field>
+  );
+}
+
+function PersonaField({ step, onChange }: { step: WorkflowStep; onChange: (patch: Partial<WorkflowStep>) => void }) {
+  // Personas come from the user's org. An empty value clears the override so
+  // the call uses OpenCode's default per-session system prompt.
+  const { data: personas, isLoading } = usePersonas();
+  return (
+    <Field label="Persona">
+      <select
+        value={step.persona ?? ''}
+        onChange={(e) => onChange({ persona: e.target.value || undefined })}
+        className={INPUT_BASE}
+        disabled={isLoading}
+      >
+        <option value="">Default (no persona)</option>
+        {(personas ?? []).map((p) => (
+          <option key={p.id} value={p.id}>
+            {p.name}
+          </option>
+        ))}
+      </select>
+      <div className="text-[11px] text-neutral-500 dark:text-neutral-400 mt-1">
+        Override the agent's system prompt for this step.
       </div>
     </Field>
   );

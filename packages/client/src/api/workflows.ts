@@ -61,6 +61,9 @@ export interface WorkflowStep {
   thread?: string;
   interrupt?: boolean;
   awaitTimeoutMs?: number;
+  // Persona id (agent_personas.id). Sent to OpenCode as the `system` field for
+  // this single `agent_prompt` call, overriding the default per-call.
+  persona?: string;
   outputVariable?: string;
   outputSchema?: Record<string, {
     type: 'string' | 'number' | 'boolean' | 'array' | 'object';

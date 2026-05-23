@@ -485,6 +485,7 @@ There is no `delay` / `sleep` step at the workflow layer; long pauses are expres
 - `thread` (string, optional): a stable name reuses the same channel + OpenCode session across calls within the execution. The literal value `@new` creates a fresh, single-use channel and tears it down on completion (preventing per-iteration channel leaks in loops). Absent/empty `thread` uses the shared default.
 - `interrupt` (boolean, optional): aborts any in-flight OpenCode turn on that thread before sending.
 - `await_timeout_ms` (number, optional, default `120_000`): clamped to `[1_000, 900_000]`.
+- `persona` (string, optional): persona ID to use as the system prompt for this step. Sent to OpenCode as the `system` field on `/session/:id/prompt_async`, overriding the default persona for this single call. The runner resolves IDs against the persona map shipped via the `plugin-content` Runner WebSocket message (which now includes every org persona's id + concatenated file content). A reference to a missing persona fails the step with `agent_prompt_persona_not_found:<id>`.
 - `outputSchema` — see below.
 
 The runner builds a per-execution model-failover chain (`buildModelFailoverChain`) and retries non-fatal provider errors across candidates.
@@ -578,7 +579,7 @@ The worker-side validator (`packages/worker/src/lib/workflow-definition.ts`) che
 - Top-level `failureNotify`, when present, is `'orchestrator'` or `'none'`.
 - Each step has a `type` string.
 - Explicitly **rejects** legacy step types with guidance: `agent` → use `agent_prompt`; `agent_message` → use `notify` or `agent_prompt`; `subworkflow` → inline the steps.
-- `agent_prompt` requires content (`prompt` / `content` / `message` / `goal`); validates `interrupt` and `await_response` as boolean, `await_timeout_ms` as number ≥ 1000, `thread` as string, and `outputSchema` shape.
+- `agent_prompt` requires content (`prompt` / `content` / `message` / `goal`); validates `interrupt` and `await_response` as boolean, `await_timeout_ms` as number ≥ 1000, `thread` as string, `persona` as string (persona id), and `outputSchema` shape.
 - `notify` requires `content`; `target`, when present, must be `'orchestrator'`.
 - `loop` requires `over` (string) and a non-empty `steps` body; `itemVar` / `indexVar` must be valid identifiers.
 - `conditional` requires a `condition` of type string / boolean / record. Full expression-syntax validation runs in the runner compiler.

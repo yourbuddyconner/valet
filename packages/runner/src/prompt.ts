@@ -712,10 +712,30 @@ export class PromptHandler {
   // falling through to OpenCode's internal default (which may be a wrong provider).
   private discoveredDefaultModel: string | undefined;
 
+  // Persona id → resolved persona content. Populated by `setPersonas` whenever
+  // the DO ships plugin-content; used to resolve `agent_prompt.persona` (a
+  // persona id) into the OpenCode `system` override per call.
+  private personasById = new Map<string, { filename: string; content: string }>();
+
   constructor(opencodeUrl: string, agentClient: AgentClient, runnerSessionId?: string) {
     this.opencodeUrl = opencodeUrl;
     this.agentClient = agentClient;
     this.runnerSessionId = runnerSessionId?.trim() || null;
+  }
+
+  /**
+   * Replace the persona-by-id index used by `executeWorkflowAgentStep` to
+   * resolve `step.persona` (a persona id) into the OpenCode `system` field.
+   * Plugin-content entries without an `id` are ignored — they're not
+   * addressable by workflow steps.
+   */
+  setPersonas(personas: Array<{ id?: string; filename: string; content: string }>): void {
+    this.personasById.clear();
+    for (const p of personas) {
+      if (typeof p.id === 'string' && p.id) {
+        this.personasById.set(p.id, { filename: p.filename, content: p.content });
+      }
+    }
   }
 
   /** Populate the provider model config map for filtering in fetchAvailableModels(). */
@@ -921,6 +941,7 @@ export class PromptHandler {
       author?: PromptAuthor;
       channelType?: string;
       channelId?: string;
+      systemPrompt?: string;
     },
   ): Promise<string> {
     let currentSessionId = await this.ensureChannelOpenCodeSession(channel);
@@ -934,6 +955,7 @@ export class PromptHandler {
         options?.author,
         options?.channelType,
         options?.channelId,
+        options?.systemPrompt,
       );
       return currentSessionId;
     } catch (err) {
@@ -950,6 +972,7 @@ export class PromptHandler {
         options?.author,
         options?.channelType,
         options?.channelId,
+        options?.systemPrompt,
       );
       return recreatedSessionId;
     }
@@ -1297,6 +1320,23 @@ export class PromptHandler {
     }
     const promptToSend = outputSchema ? buildSchemaInstructions(content, outputSchema) : content;
 
+    // Per-step persona override. The DO ships every org persona via plugin-content
+    // with a stable id; `step.persona` is that id. Fail loud on miss so the user
+    // notices a stale workflow reference (e.g. persona was deleted) instead of
+    // silently running with the default system prompt.
+    let stepSystemPrompt: string | undefined;
+    const personaRef = typeof step.persona === "string" ? step.persona.trim() : "";
+    if (personaRef) {
+      const resolved = this.personasById.get(personaRef);
+      if (!resolved) {
+        return {
+          status: "failed",
+          error: `agent_prompt_persona_not_found: ${personaRef}`,
+        };
+      }
+      stepSystemPrompt = resolved.content;
+    }
+
     if (!this.runnerSessionId) {
       return { status: "failed", error: `${step.type} unavailable: runner session id is missing` };
     }
@@ -1366,6 +1406,7 @@ export class PromptHandler {
             model: modelCandidate,
             channelType: workflowChannelType,
             channelId: workflowChannelId,
+            systemPrompt: stepSystemPrompt,
           });
           if (sentSessionId !== sessionId) {
             this.ephemeralContent.delete(sessionId);
@@ -1449,6 +1490,7 @@ export class PromptHandler {
                   model: modelCandidate,
                   channelType: workflowChannelType,
                   channelId: workflowChannelId,
+                  systemPrompt: stepSystemPrompt,
                 });
                 if (fixupSentSessionId !== sessionId) {
                   this.ephemeralContent.delete(sessionId);
@@ -3317,6 +3359,7 @@ export class PromptHandler {
     author?: PromptAuthor,
     channelType?: string,
     channelId?: string,
+    systemPrompt?: string,
   ): Record<string, unknown> {
     const promptParts: Array<Record<string, unknown>> = [];
     for (const attachment of attachments ?? []) {
@@ -3352,6 +3395,13 @@ export class PromptHandler {
     const body: Record<string, unknown> = {
       parts: promptParts,
     };
+    // OpenCode's `system` body field overrides the per-call system prompt.
+    // For workflow `agent_prompt` steps with a `persona`, we send ONLY the
+    // resolved persona content here — the persona file already encodes its
+    // identity, so no extra "Acting as X" wrapping is needed.
+    if (systemPrompt) {
+      body.system = systemPrompt;
+    }
     if (model) {
       // OpenCode expects model as { providerID, modelID }
       // Our model IDs come from the provider list as raw model IDs (e.g. "claude-3-5-sonnet-20241022")
@@ -3370,11 +3420,11 @@ export class PromptHandler {
     return body;
   }
 
-  private async sendPromptAsync(sessionId: string, content: string, model?: string, attachments?: PromptAttachment[], author?: PromptAuthor, channelType?: string, channelId?: string): Promise<void> {
+  private async sendPromptAsync(sessionId: string, content: string, model?: string, attachments?: PromptAttachment[], author?: PromptAuthor, channelType?: string, channelId?: string, systemPrompt?: string): Promise<void> {
     const url = `${this.opencodeUrl}/session/${sessionId}/prompt_async`;
-    console.log(`[PromptHandler] POST ${url}${model ? ` (model: ${model})` : ''}${attachments?.length ? ` (attachments: ${attachments.length})` : ''}`);
+    console.log(`[PromptHandler] POST ${url}${model ? ` (model: ${model})` : ''}${attachments?.length ? ` (attachments: ${attachments.length})` : ''}${systemPrompt ? ` (system: ${systemPrompt.length} chars)` : ''}`);
 
-    const body = this.buildPromptBody(content, model, attachments, author, channelType, channelId);
+    const body = this.buildPromptBody(content, model, attachments, author, channelType, channelId, systemPrompt);
 
     const res = await fetch(url, {
       method: "POST",
@@ -3403,11 +3453,12 @@ export class PromptHandler {
     channelType?: string,
     channelId?: string,
     signal?: AbortSignal,
+    systemPrompt?: string,
   ): Promise<{ info: OpenCodeMessageInfo; parts: unknown[] } | null> {
     const url = `${this.opencodeUrl}/session/${sessionId}/message`;
-    console.log(`[PromptHandler] POST ${url}${model ? ` (model: ${model})` : ''}${attachments?.length ? ` (attachments: ${attachments.length})` : ''}`);
+    console.log(`[PromptHandler] POST ${url}${model ? ` (model: ${model})` : ''}${attachments?.length ? ` (attachments: ${attachments.length})` : ''}${systemPrompt ? ` (system: ${systemPrompt.length} chars)` : ''}`);
 
-    const body = this.buildPromptBody(content, model, attachments, author, channelType, channelId);
+    const body = this.buildPromptBody(content, model, attachments, author, channelType, channelId, systemPrompt);
 
     const res = await fetch(url, {
       method: "POST",
@@ -3457,6 +3508,7 @@ export class PromptHandler {
       signal?: AbortSignal;
       continuationContext?: string;
       resumeWithoutPersistedSession?: boolean;
+      systemPrompt?: string;
     },
   ): Promise<{ sessionId: string; result: { info: OpenCodeMessageInfo; parts: unknown[] } | null }> {
     let currentSessionId = await this.ensureChannelOpenCodeSession(channel);
@@ -3475,6 +3527,7 @@ export class PromptHandler {
         options?.channelType,
         options?.channelId,
         options?.signal,
+        options?.systemPrompt,
       );
       return { sessionId: currentSessionId, result };
     } catch (err) {
@@ -3495,6 +3548,7 @@ export class PromptHandler {
         options?.channelType,
         options?.channelId,
         options?.signal,
+        options?.systemPrompt,
       );
       return { sessionId: recreatedSessionId, result };
     }

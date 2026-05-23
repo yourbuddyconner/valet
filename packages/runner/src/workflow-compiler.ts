@@ -83,6 +83,9 @@ function normalizeStep(stepValue: unknown, path: string, errors: WorkflowCompile
     if (stepValue.thread !== undefined && typeof stepValue.thread !== 'string') {
       errors.push({ message: 'agent_prompt.thread must be a string', path: `${path}.thread` });
     }
+    if (stepValue.persona !== undefined && typeof stepValue.persona !== 'string') {
+      errors.push({ message: 'agent_prompt.persona must be a string (persona id)', path: `${path}.persona` });
+    }
     if (stepValue.outputSchema !== undefined) {
       const schemaErrors = validateOutputSchemaShape(stepValue.outputSchema, `${path}.outputSchema`);
       for (const e of schemaErrors) errors.push(e);

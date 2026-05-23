@@ -14,6 +14,7 @@ import { approveInvocation, denyInvocation } from '../services/actions.js';
 import { updateInvocationStatus } from '../lib/db/actions.js';
 import { getActivePluginArtifacts, getPluginSettings } from '../lib/db/plugins.js';
 import { getPersonaSkills, getOrgDefaultSkills, getPersonaToolWhitelist } from '../lib/db.js';
+import { listPersonas, getPersonaWithFiles } from '../lib/db/personas.js';
 import type { ChannelTarget, ChannelContext, InteractivePrompt, InteractiveAction, InteractivePromptRef, InteractiveResolution } from '@valet/sdk';
 import { MessageStore } from './message-store.js';
 import { getChannelForMessage, dropEmission } from './channel-resolver.js';
@@ -6935,6 +6936,35 @@ export class SessionAgentDO {
       // Fall back to empty skills
     }
 
+    // Load all org personas with their files so workflow `agent_prompt` steps
+    // can switch personas per call by id. Each persona's files are concatenated
+    // (sortOrder asc) into one content blob; that blob is what gets sent as the
+    // OpenCode `system` field when a step references the persona by id.
+    const orgPersonas: Array<{ id: string; filename: string; content: string; sortOrder: number }> = [];
+    try {
+      const userId = this.sessionState.userId;
+      if (userId) {
+        const personasList = await listPersonas(this.env.DB, userId, orgId);
+        for (const p of personasList) {
+          const full = await getPersonaWithFiles(this.env.DB, p.id);
+          if (!full) continue;
+          const files = (full.files ?? []).slice().sort((a, b) => a.sortOrder - b.sortOrder);
+          const concatenated = files.map((f) => f.content).join('\n\n').trim();
+          if (!concatenated) continue;
+          orgPersonas.push({
+            id: p.id,
+            // Synthesize a stable on-disk filename; the workflow path looks
+            // personas up by id, not filename, so collisions don't matter.
+            filename: `org-${p.id}.md`,
+            content: concatenated,
+            sortOrder: 0,
+          });
+        }
+      }
+    } catch (err) {
+      console.warn('[SessionAgentDO] sendPluginContent: failed to load org personas for workflow id-lookup', err);
+    }
+
     const content = {
       personas: [
         ...artifacts.filter(a => a.type === 'persona').map(a => ({
@@ -6943,6 +6973,7 @@ export class SessionAgentDO {
           sortOrder: a.sortOrder,
         })),
         ...sessionPersonas,
+        ...orgPersonas,
       ],
       skills: resolvedSkills,
       tools: artifacts.filter(a => a.type === 'tool').map(a => ({

@@ -125,6 +125,13 @@ function validateStep(step: unknown, path: string, errors: string[]): void {
       errors.push(`${path}.thread must be a string`);
     }
 
+    // persona is a persona id (UUID string) that overrides the OpenCode
+    // `system` prompt for this single agent_prompt call. The runner resolves
+    // the id against the persona Map shipped via plugin-content.
+    if (step.persona !== undefined && typeof step.persona !== 'string') {
+      errors.push(`${path}.persona must be a string (persona id)`);
+    }
+
     if (step.outputSchema !== undefined) {
       validateOutputSchema(step.outputSchema, `${path}.outputSchema`, errors);
     }

@@ -513,6 +513,11 @@ async function main() {
       }
     }
 
+    // Build the id→content map for workflow per-step persona overrides. Only
+    // personas with an `id` (the agent_personas.id from D1) are addressable;
+    // plugin-content artifacts without an id are not selectable from the UI.
+    promptHandler.setPersonas(content.personas);
+
     // Write skill files
     if (content.skills.length > 0) {
       const dir = `${baseDir}/skills`;

@@ -1122,7 +1122,9 @@ export interface OrgPluginSettings {
 }
 
 export interface PluginContentPayload {
-  personas: Array<{ filename: string; content: string; sortOrder: number }>;
+  // `id` is the persona's DB row id (UUID); the runner uses it to resolve
+  // per-step persona overrides on `agent_prompt` workflow steps.
+  personas: Array<{ id?: string; filename: string; content: string; sortOrder: number }>;
   skills: Array<{ filename: string; content: string }>;
   tools: Array<{ filename: string; content: string }>;
   allowRepoContent: boolean;
