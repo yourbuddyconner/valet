@@ -17,7 +17,7 @@
  */
 
 import { createTwoFilesPatch } from "diff";
-import { AgentClient, type PromptAuthor } from "./agent-client.js";
+import { AgentClient, type PromptAuthor, type PromptDispatch } from "./agent-client.js";
 import type { AvailableModels, DiffFile, PromptAttachment, ReviewFileSummary, ReviewResultData } from "./types.js";
 import { compileWorkflowDefinition, type NormalizedWorkflowStep } from "./workflow-compiler.js";
 import {
@@ -27,9 +27,52 @@ import {
   type WorkflowStepExecutionContext,
   type WorkflowStepExecutionResult,
 } from "./workflow-engine.js";
+import { flushTracing, parentFromTraceparent, SpanKind, startSpan, traceparentFromSpan } from "./tracing.js";
 
 // OpenCode ToolState status values
 type ToolStatus = "pending" | "running" | "completed" | "error";
+
+const GEN_AI_PROVIDER_OPENCODE = "opencode";
+const GEN_AI_OPERATION_CHAT = "chat";
+const GEN_AI_OPERATION_EXECUTE_TOOL = "execute_tool";
+const GEN_AI_OUTPUT_TYPE_TEXT = "text";
+
+function captureOtelContent(): boolean {
+  const value = process.env.OTEL_CAPTURE_CONTENT?.trim().toLowerCase();
+  return value === "1" || value === "true" || value === "yes";
+}
+
+function truncateTelemetryContent(value: string, maxLength = 8000): string {
+  return value.length > maxLength ? `${value.slice(0, maxLength)}...[truncated]` : value;
+}
+
+function stringifyTelemetryContent(value: unknown): string | undefined {
+  if (value == null) return undefined;
+  try {
+    return truncateTelemetryContent(typeof value === "string" ? value : JSON.stringify(value));
+  } catch {
+    return truncateTelemetryContent(String(value));
+  }
+}
+
+function normalizeGenAIProvider(providerId: string | undefined): string {
+  if (!providerId?.trim()) return GEN_AI_PROVIDER_OPENCODE;
+  const provider = providerId.trim().toLowerCase().replace(/_/g, "-");
+  if (provider === "azure-openai" || provider === "azure") return "azure.ai.openai";
+  if (provider === "amazon-bedrock" || provider === "bedrock") return "aws.bedrock";
+  if (provider === "google" || provider === "google-ai" || provider === "gemini") return "gcp.gemini";
+  if (provider === "vertex" || provider === "vertex-ai") return "vertex_ai";
+  if (provider === "mistral") return "mistral_ai";
+  return provider;
+}
+
+function buildGenAIMessage(role: string, content: string): string {
+  return JSON.stringify([{ role, content: truncateTelemetryContent(content) }]);
+}
+
+function toolTypeForName(toolName: string): string {
+  return toolName.startsWith("mcp__") ? "extension" : "function";
+}
 
 interface ToolState {
   status: ToolStatus;
@@ -449,6 +492,8 @@ export class ChannelSession {
   activeAssistantMessageIds = new Set<string>();
   // Latest full assistant text snapshot observed via message.updated
   latestAssistantTextSnapshot = "";
+  // Current user prompt, retained only long enough to optionally attach to GenAI spans.
+  activePromptContent = "";
   // Compact event trace for debugging empty-response classification
   recentEventTrace: string[] = [];
   lastError: string | null = null;
@@ -521,6 +566,7 @@ export class ChannelSession {
     this.messageRoles.clear();
     this.activeAssistantMessageIds.clear();
     this.latestAssistantTextSnapshot = "";
+    this.activePromptContent = "";
     this.recentEventTrace = [];
     this.waitForEventForced = false;
     this.abortedForYield = false;
@@ -579,6 +625,7 @@ export class ChannelSession {
     this.messageRoles.clear();
     this.activeAssistantMessageIds.clear();
     this.latestAssistantTextSnapshot = "";
+    this.activePromptContent = "";
     this.recentEventTrace = [];
     this.syncPromptInFlight = false;
     this.awaitingAssistantForAttempt = false;
@@ -635,6 +682,7 @@ export class PromptHandler {
    * explicit.
    */
   private currentPromptChannel: ChannelSession | null = null;
+  private currentPromptTraceparent: string | undefined;
 
   // Legacy single-session compat — points to currentPromptChannel's OC session ID
   // Used by ephemeral sessions, reviews, etc. that don't need per-channel routing
@@ -1101,16 +1149,35 @@ export class PromptHandler {
     payload: WorkflowExecutionDispatchPayload,
     model?: string,
     modelPreferences?: string[],
+    traceparent?: string,
   ): Promise<void> {
+    const span = startSpan("valet.workflow.execute", {
+      parent: parentFromTraceparent(traceparent),
+      attributes: {
+        "valet.session.id": this.runnerSessionId || undefined,
+        "valet.workflow.execution_id": executionId,
+        "valet.workflow.kind": payload.kind,
+      },
+    });
+    this.currentPromptTraceparent = traceparentFromSpan(span);
     const request: WorkflowExecutionDispatchPayload = {
       ...payload,
       executionId: payload.executionId || executionId,
     };
-    await this.handleWorkflowExecutionPrompt(`workflow:${executionId}`, request, {
-      emitChatError: false,
-      model,
-      modelPreferences,
-    });
+    try {
+      await this.handleWorkflowExecutionPrompt(`workflow:${executionId}`, request, {
+        emitChatError: false,
+        model,
+        modelPreferences,
+      });
+    } catch (err) {
+      span.recordException(err);
+      throw err;
+    } finally {
+      span.end();
+      await flushTracing();
+      this.currentPromptTraceparent = undefined;
+    }
   }
 
   private async executeWorkflowToolStep(
@@ -1435,8 +1502,35 @@ export class PromptHandler {
     });
   }
 
-  async handlePrompt(messageId: string, content: string, model?: string, author?: { authorId?: string; gitName?: string; gitEmail?: string; authorName?: string; authorEmail?: string }, modelPreferences?: string[], attachments?: PromptAttachment[], channelType?: string, channelId?: string, opencodeSessionId?: string, continuationContext?: string, threadId?: string, replyChannelType?: string, replyChannelId?: string): Promise<void> {
+  async handlePrompt(dispatch: PromptDispatch): Promise<void> {
+    const {
+      messageId,
+      content,
+      model,
+      author,
+      modelPreferences,
+      attachments,
+      channelType,
+      channelId,
+      opencodeSessionId,
+      continuationContext,
+      threadId,
+      replyChannelType,
+      replyChannelId,
+      traceparent,
+    } = dispatch;
     console.log(`[PromptHandler] Handling prompt ${messageId}: "${content.slice(0, 80)}"${model ? ` (model: ${model})` : ''}${author?.authorName ? ` (by: ${author.authorName})` : ''}${modelPreferences?.length ? ` (prefs: ${modelPreferences.length})` : ''}${attachments?.length ? ` (attachments: ${attachments.length})` : ''}${channelType ? ` (channel: ${channelType})` : ''}${continuationContext ? ' (with continuation context)' : ''}`);
+    const turnSpan = startSpan("valet.turn", {
+      parent: parentFromTraceparent(traceparent),
+      attributes: {
+        "valet.session.id": this.runnerSessionId || undefined,
+        "valet.message.id": messageId,
+        "valet.channel.type": channelType,
+        "valet.channel.id": channelId,
+      },
+    });
+    this.currentPromptTraceparent = traceparentFromSpan(turnSpan);
+    process.env.TRACEPARENT = this.currentPromptTraceparent;
 
     // Dedup: if this exact messageId is already being processed by a sync prompt, skip it.
     // This handles the case where the DO re-dispatches after a transient disconnect
@@ -1445,6 +1539,10 @@ export class PromptHandler {
     if (channel.activeMessageId === messageId && channel.syncPromptInFlight) {
       console.log(`[PromptHandler] Ignoring duplicate prompt ${messageId} — sync prompt already in flight`);
       this.agentClient.sendComplete(messageId);
+      turnSpan.setAttribute("valet.turn.skipped", "duplicate_in_flight");
+      turnSpan.end();
+      await flushTracing();
+      this.currentPromptTraceparent = undefined;
       return;
     }
 
@@ -1596,6 +1694,7 @@ export class PromptHandler {
       }
 
       // Store failover state (use post-transcription values so model failover doesn't re-transcribe)
+      channel.activePromptContent = effectiveContent;
       this.currentModelPreferences = failoverChain.length > 0 ? failoverChain : undefined;
       this.pendingRetryContent = effectiveContent;
       this.pendingRetryAttachments = effectiveAttachments;
@@ -1818,10 +1917,15 @@ export class PromptHandler {
       await this.finalizeSyncResponse(channel, null, exhaustedError);
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : String(err);
+      turnSpan.recordException(err);
       console.error("[PromptHandler] Error processing prompt:", errorMsg);
       this.agentClient.sendError(messageId, errorMsg);
       this.agentClient.sendComplete(this.activeMessageId ?? undefined);
       this.agentClient.sendAgentStatus("idle", undefined, messageId);
+    } finally {
+      turnSpan.end();
+      await flushTracing();
+      this.currentPromptTraceparent = undefined;
     }
   }
 
@@ -3232,7 +3336,10 @@ export class PromptHandler {
 
     const res = await fetch(url, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        ...(this.currentPromptTraceparent ? { Traceparent: this.currentPromptTraceparent } : {}),
+      },
       body: JSON.stringify(body),
       // @ts-expect-error Bun-specific option — disable default fetch timeout
       timeout: false,
@@ -3265,7 +3372,10 @@ export class PromptHandler {
 
     const res = await fetch(url, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        ...(this.currentPromptTraceparent ? { Traceparent: this.currentPromptTraceparent } : {}),
+      },
       body: JSON.stringify(body),
       signal,
       // @ts-expect-error Bun-specific option — disable default fetch timeout
@@ -3956,6 +4066,29 @@ export class PromptHandler {
     } else if (currentStatus === "completed") {
       const toolResult = state.output ?? null;
       console.log(`[PromptHandler] Tool "${toolName}" completed (output: ${typeof toolResult === "string" ? toolResult.length + " chars" : "null"})`);
+      const toolSpan = startSpan(`${GEN_AI_OPERATION_EXECUTE_TOOL} ${toolName}`, {
+        parent: parentFromTraceparent(this.currentPromptTraceparent),
+        attributes: {
+          "valet.session.id": this.runnerSessionId || undefined,
+          "valet.message.id": channel.activeMessageId || undefined,
+          "gen_ai.system": GEN_AI_PROVIDER_OPENCODE,
+          "gen_ai.provider.name": GEN_AI_PROVIDER_OPENCODE,
+          "gen_ai.operation.name": GEN_AI_OPERATION_EXECUTE_TOOL,
+          "gen_ai.tool.name": toolName,
+          "gen_ai.tool.call.id": callID,
+          "gen_ai.tool.call.type": toolTypeForName(toolName),
+          "gen_ai.tool.type": toolTypeForName(toolName),
+          "valet.tool.name": toolName,
+          "valet.tool.status": currentStatus,
+          ...(captureOtelContent()
+            ? {
+                "gen_ai.tool.call.arguments": stringifyTelemetryContent(state.input),
+                "gen_ai.tool.call.result": stringifyTelemetryContent(toolResult),
+              }
+            : {}),
+        },
+      });
+      toolSpan.end();
 
       // Extract images from tool results that return structured objects with an images array.
       // For actions via call_tool, images are routed through the gateway's /api/image path instead
@@ -4028,6 +4161,31 @@ export class PromptHandler {
 
     } else if (currentStatus === "error") {
       console.log(`[PromptHandler] Tool "${toolName}" error: ${state.error}`);
+      const toolSpan = startSpan(`${GEN_AI_OPERATION_EXECUTE_TOOL} ${toolName}`, {
+        parent: parentFromTraceparent(this.currentPromptTraceparent),
+        attributes: {
+          "valet.session.id": this.runnerSessionId || undefined,
+          "valet.message.id": channel.activeMessageId || undefined,
+          "gen_ai.system": GEN_AI_PROVIDER_OPENCODE,
+          "gen_ai.provider.name": GEN_AI_PROVIDER_OPENCODE,
+          "gen_ai.operation.name": GEN_AI_OPERATION_EXECUTE_TOOL,
+          "gen_ai.tool.name": toolName,
+          "gen_ai.tool.call.id": callID,
+          "gen_ai.tool.call.type": toolTypeForName(toolName),
+          "gen_ai.tool.type": toolTypeForName(toolName),
+          "error.type": "ToolExecutionError",
+          "valet.tool.name": toolName,
+          "valet.tool.status": currentStatus,
+          "valet.tool.error": state.error,
+          ...(captureOtelContent()
+            ? {
+                "gen_ai.tool.call.arguments": stringifyTelemetryContent(state.input),
+              }
+            : {}),
+        },
+      });
+      toolSpan.recordException(state.error || "tool execution failed");
+      toolSpan.end();
       this.agentClient.sendToolUpdate(channel.turnId!, callID, toolName, "error", state.input ?? undefined, undefined, state.error ?? undefined);
     }
   }
@@ -4122,6 +4280,39 @@ export class PromptHandler {
               inputTokens: input,
               outputTokens: output,
             });
+            const provider = normalizeGenAIProvider(providerId);
+            const requestModel = modelId || usageModel;
+            const llmSpan = startSpan(`${GEN_AI_OPERATION_CHAT} ${requestModel}`, {
+              parent: parentFromTraceparent(this.currentPromptTraceparent),
+              kind: SpanKind.CLIENT,
+              attributes: {
+                "valet.session.id": this.runnerSessionId || undefined,
+                "valet.message.id": channel.activeMessageId || undefined,
+                "valet.llm.provider_id": providerId,
+                "valet.llm.model_id": modelId,
+                "gen_ai.system": provider,
+                "gen_ai.provider.name": provider,
+                "gen_ai.operation.name": GEN_AI_OPERATION_CHAT,
+                "gen_ai.request.model": requestModel,
+                "gen_ai.response.model": requestModel,
+                "gen_ai.request.is_stream": true,
+                "gen_ai.output.type": GEN_AI_OUTPUT_TYPE_TEXT,
+                "gen_ai.usage.input_tokens": input,
+                "gen_ai.usage.output_tokens": output,
+                "gen_ai.usage.total_tokens": input + output,
+                ...(captureOtelContent()
+                  ? {
+                      "gen_ai.input.messages": channel.activePromptContent
+                        ? buildGenAIMessage("user", channel.activePromptContent)
+                        : undefined,
+                      "gen_ai.output.messages": channel.latestAssistantTextSnapshot
+                        ? buildGenAIMessage("assistant", channel.latestAssistantTextSnapshot)
+                        : undefined,
+                    }
+                  : {}),
+              },
+            });
+            llmSpan.end();
           }
         }
       }

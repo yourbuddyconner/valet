@@ -15,6 +15,7 @@ import { resolveOrgPolicyMatch, updateInvocationStatus, upsertUserActionPolicyOv
 import { getActivePluginArtifacts, getPluginSettings } from '../lib/db/plugins.js';
 import { getPersonaSkills, getOrgDefaultSkills, getPersonaToolWhitelist } from '../lib/db.js';
 import type { ChannelTarget, ChannelContext, InteractivePrompt, InteractiveAction, InteractivePromptRef, InteractiveResolution } from '@valet/sdk';
+import { SimpleTracer, formatTraceparent, parseTraceparent, type SimpleSpan, type TraceContext, type SpanAttributes } from '@valet/shared';
 import { MessageStore } from './message-store.js';
 import { getChannelForMessage, dropEmission } from './channel-resolver.js';
 import { ChannelRouter } from './channel-router.js';
@@ -309,6 +310,7 @@ export class SessionAgentDO {
   private runnerLink!: RunnerLink;
   private sessionState!: SessionState;
   private lifecycle!: SessionLifecycle;
+  private tracer!: SimpleTracer;
 
   private static readonly RUNNER_GRACE_PERIOD_MS = 60_000;
   private static readonly MODAL_SANDBOX_MAX_LIFETIME_MS = 24 * 60 * 60 * 1000;
@@ -399,8 +401,67 @@ export class SessionAgentDO {
         ...stateDeps,
       });
       this.lifecycle = new SessionLifecycle(this.sessionState, this.ctx);
+      this.tracer = new SimpleTracer({
+        serviceName: 'valet-worker',
+        endpoint: this.env.OTEL_EXPORTER_OTLP_ENDPOINT,
+        headers: this.env.OTEL_EXPORTER_OTLP_HEADERS,
+        // Auto-flush in batches so high-volume span sites (prompt dispatch,
+        // child events) don't fire one OTLP POST per span. Boundary flushes
+        // (hibernate/terminate/error finally blocks) still call flushTracing()
+        // explicitly to drain the buffer before the DO goes idle.
+        maxQueuedSpans: 50,
+        scheduleFlush: (promise) => this.ctx.waitUntil(promise),
+      });
 
       this.initialized = true;
+    });
+  }
+
+  private traceAttrs(attrs: SpanAttributes = {}): SpanAttributes {
+    return {
+      'valet.session.id': this.sessionState?.sessionId || undefined,
+      'valet.user.id': this.sessionState?.userId || undefined,
+      ...attrs,
+    };
+  }
+
+  private lifecycleContext(): TraceContext | null {
+    const traceId = this.sessionState.lifecycleTraceId;
+    const spanId = this.sessionState.lifecycleSpanId;
+    return parseTraceparent(traceId && spanId ? `00-${traceId}-${spanId}-01` : undefined);
+  }
+
+  private storeLifecycleContext(span: SimpleSpan): void {
+    this.sessionState.lifecycleTraceId = span.context.traceId;
+    this.sessionState.lifecycleSpanId = span.context.spanId;
+  }
+
+  private injectTraceparentIntoSpawnRequest(
+    spawnRequest: Record<string, unknown>,
+    traceparent: string,
+  ): Record<string, unknown> {
+    const envVars = {
+      ...((spawnRequest.envVars as Record<string, string> | undefined) || {}),
+      TRACEPARENT: traceparent,
+    };
+    return { ...spawnRequest, envVars };
+  }
+
+  private flushTracing(): void {
+    this.ctx.waitUntil(this.tracer.flush());
+  }
+
+  private startPromptDispatchSpan(attrs: SpanAttributes): SimpleSpan {
+    const queuedAt = this.promptQueue.promptReceivedAt;
+    const waitMs = queuedAt > 0 ? Date.now() - queuedAt : 0;
+    return this.tracer.startSpan('valet.prompt.dispatch', {
+      parent: this.lifecycleContext(),
+      attributes: this.traceAttrs({
+        'valet.queue.wait_ms': waitMs,
+        'valet.queue.reason': this.promptQueue.promptQueueReason || 'immediate',
+        'valet.queue.mode': this.promptQueue.queueMode,
+        ...attrs,
+      }),
     });
   }
 
@@ -1865,6 +1926,9 @@ export class SessionAgentDO {
       const reason = runnerBusy ? 'runner busy'
         : !runnerConnected ? 'no runner connected'
         : 'runner not ready';
+      const queueReason = runnerBusy ? 'runner_busy'
+        : !runnerConnected ? 'runner_disconnected'
+        : 'runner_not_ready';
       console.log(`[SessionAgentDO] handlePrompt: QUEUING (${reason}) channel=${channelKey} messageId=${messageId}`);
 
       // Single-slot enforcement: withdraw existing pending user prompt
@@ -1893,7 +1957,7 @@ export class SessionAgentDO {
         replyChannelType: effectiveReplyTo?.channelType, replyChannelId: effectiveReplyTo?.channelId,
         priority: skipSingleSlot ? 1 : 0,
       });
-      this.promptQueue.stampPromptReceived();
+      this.promptQueue.stampPromptReceived(queueReason);
       this.emitAuditEvent(
         'prompt.queued',
         `Queued: ${reason} (status=${status || 'unknown'}, sandbox=${sandboxId ? 'yes' : 'no'}, queued=${this.promptQueue.length})`,
@@ -1973,7 +2037,7 @@ export class SessionAgentDO {
     );
 
     console.log(`[SessionAgentDO] handlePrompt: DISPATCHING DIRECTLY channel=${channelKey} messageId=${messageId}`);
-    this.promptQueue.stampPromptReceived();
+    this.promptQueue.stampPromptReceived('immediate');
     // Insert into prompt_queue as 'processing' so it can be recovered if the runner disconnects
     this.promptQueue.enqueue({
       id: messageId, content, attachments: serializedQueuedAttachments, model, status: 'processing',
@@ -2012,6 +2076,11 @@ export class SessionAgentDO {
       : content;
 
     const channelOcSessionId = this.getChannelOcSessionId(channelKey);
+    const dispatchSpan = this.startPromptDispatchSpan({
+      'valet.message.id': messageId,
+      'valet.channel.type': channelType,
+      'valet.channel.id': channelId,
+    });
     const dispatched = this.runnerLink.send({
       type: 'prompt',
       messageId,
@@ -2033,7 +2102,10 @@ export class SessionAgentDO {
       opencodeSessionId: channelOcSessionId,
       modelPreferences: resolvedModelPrefs,
       continuationContext,
+      traceparent: formatTraceparent(dispatchSpan.context),
     });
+    dispatchSpan.setAttribute('valet.dispatch.sent', dispatched);
+    dispatchSpan.end();
     if (!dispatched) {
       // Runner disappeared between the check and send — revert to queued for recovery
       this.promptQueue.revertProcessingToQueued(messageId);
@@ -2752,6 +2824,11 @@ export class SessionAgentDO {
               if (initialModel) {
                 this.sessionState.initialModel = undefined;
               }
+              this.promptQueue.stampPromptReceived('initial_prompt');
+              const dispatchSpan = this.startPromptDispatchSpan({
+                'valet.message.id': messageId,
+                'valet.prompt.source': 'initial',
+              });
               this.runnerLink.send({
                 type: 'prompt',
                 messageId,
@@ -2759,7 +2836,9 @@ export class SessionAgentDO {
                 model: initialModel || undefined,
                 opencodeSessionId: this.getChannelOcSessionId(this.channelKeyFrom(undefined, undefined)),
                 modelPreferences: ipModelPrefs,
+                traceparent: formatTraceparent(dispatchSpan.context),
               });
+              dispatchSpan.end();
               this.promptQueue.stampDispatched();
               console.log(`[SessionAgentDO] agentStatus idle: dispatched initial prompt ${messageId}`);
             }
@@ -4046,6 +4125,14 @@ export class SessionAgentDO {
     spawnRequest: Record<string, unknown>,
   ): Promise<void> {
     const sessionId = this.sessionState.sessionId;
+    const span = this.tracer.startSpan('valet.sandbox.spawn', {
+      attributes: this.traceAttrs({
+        'valet.sandbox.image': typeof spawnRequest.imageType === 'string' ? spawnRequest.imageType : undefined,
+      }),
+    });
+    this.storeLifecycleContext(span);
+    const tracedSpawnRequest = this.injectTraceparentIntoSpawnRequest(spawnRequest, formatTraceparent(span.context));
+    this.sessionState.spawnRequest = tracedSpawnRequest;
     try {
       this.sessionState.sandboxWakeStartedAt = Date.now();
 
@@ -4053,7 +4140,11 @@ export class SessionAgentDO {
       // detect if a newer recovery/refresh started while we were waiting.
       const expectedGeneration = this.sessionState.sandboxGeneration;
 
-      const result = await this.lifecycle.spawnSandbox(backendUrl, spawnRequest);
+      const result = await this.lifecycle.spawnSandbox(backendUrl, tracedSpawnRequest);
+      span.setAttributes({
+        'valet.sandbox.id': result.sandboxId,
+        'duration_ms': result.durationMs,
+      });
 
       // Guard against stale spawn — a newer recovery/refresh may have started
       // while this spawn was in flight. Discard the result to avoid overwriting
@@ -4137,6 +4228,10 @@ export class SessionAgentDO {
         contextSessionId: sessionId || undefined,
       });
       await this.notifyParentEvent(`Child session event: ${sessionId} errored (${errorText}).`, { wake: true, childStatus: 'error' });
+      span.recordException(err);
+    } finally {
+      span.end();
+      this.flushTracing();
     }
   }
 
@@ -4208,7 +4303,22 @@ export class SessionAgentDO {
 
     // Only terminate sandbox if it's actually running (not hibernated/hibernating)
     if (currentStatus !== 'hibernated' && currentStatus !== 'hibernating') {
-      await this.lifecycle.terminateSandbox();
+      const span = this.tracer.startSpan('valet.sandbox.terminate', {
+        parent: this.lifecycleContext(),
+        attributes: this.traceAttrs({
+          'valet.sandbox.id': sandboxId,
+          'valet.stop.reason': reason,
+        }),
+      });
+      try {
+        await this.lifecycle.terminateSandbox();
+      } catch (err) {
+        span.recordException(err);
+        throw err;
+      } finally {
+        span.end();
+        this.flushTracing();
+      }
     }
 
     // Clear idle alarm
@@ -4490,6 +4600,13 @@ export class SessionAgentDO {
             await this.ensureThreadOcSessionHydrated(threadId, sysChannelKey);
           }
           const sysOcSessionId = this.getChannelOcSessionId(sysChannelKey);
+          this.promptQueue.stampPromptReceived('system_message');
+          const dispatchSpan = this.startPromptDispatchSpan({
+            'valet.message.id': messageId,
+            'valet.prompt.source': 'system',
+            'valet.channel.type': sysChannelType,
+            'valet.channel.id': sysChannelId,
+          });
           const sysDispatched = this.runnerLink.send({
             type: 'prompt',
             messageId,
@@ -4499,7 +4616,10 @@ export class SessionAgentDO {
             threadId: threadId || undefined,
             opencodeSessionId: sysOcSessionId,
             modelPreferences: sysModelPrefs,
+            traceparent: formatTraceparent(dispatchSpan.context),
           });
+          dispatchSpan.setAttribute('valet.dispatch.sent', sysDispatched);
+          dispatchSpan.end();
           if (!sysDispatched) {
             this.promptQueue.revertProcessingToQueued(messageId);
             this.promptQueue.runnerBusy = false;
@@ -4576,12 +4696,19 @@ export class SessionAgentDO {
     const dispatchOwnerDetails = dispatchOwnerId ? await this.getUserDetails(dispatchOwnerId) : undefined;
     const dispatchModelPrefs = await this.resolveModelPreferences(dispatchOwnerDetails);
 
+    const dispatchSpan = this.startPromptDispatchSpan({
+      'valet.workflow.execution_id': executionId,
+      'valet.prompt.type': 'workflow_execute',
+    });
     const directWfDispatched = this.runnerLink.send({
       type: 'workflow-execute',
       executionId,
       payload: validPayload,
       modelPreferences: dispatchModelPrefs,
+      traceparent: formatTraceparent(dispatchSpan.context),
     });
+    dispatchSpan.setAttribute('valet.dispatch.sent', directWfDispatched);
+    dispatchSpan.end();
     if (!directWfDispatched) {
       this.promptQueue.runnerBusy = false;
       return queueWorkflowDispatch('runner_send_failed');
@@ -4744,12 +4871,19 @@ export class SessionAgentDO {
       const queueOwnerId = this.sessionState.userId;
       const queueOwnerDetails = queueOwnerId ? await this.getUserDetails(queueOwnerId) : undefined;
       const queueModelPrefs = await this.resolveModelPreferences(queueOwnerDetails);
+      const dispatchSpan = this.startPromptDispatchSpan({
+        'valet.workflow.execution_id': queuedExecutionId,
+        'valet.prompt.type': 'workflow_execute',
+      });
       const wfDispatched = this.runnerLink.send({
         type: 'workflow-execute',
         executionId: queuedExecutionId,
         payload: queuedPayload,
         modelPreferences: queueModelPrefs,
+        traceparent: formatTraceparent(dispatchSpan.context),
       });
+      dispatchSpan.setAttribute('valet.dispatch.sent', wfDispatched);
+      dispatchSpan.end();
       if (!wfDispatched) {
         this.promptQueue.revertProcessingToQueued(prompt.id);
         this.promptQueue.runnerBusy = false;
@@ -4813,6 +4947,11 @@ export class SessionAgentDO {
       ? `${prompt.contextPrefix}\n\n${prompt.content}`
       : prompt.content;
 
+    const dispatchSpan = this.startPromptDispatchSpan({
+      'valet.message.id': prompt.id,
+      'valet.channel.type': queueChannelType,
+      'valet.channel.id': queueChannelId,
+    });
     const queueDispatched = this.runnerLink.send({
       type: 'prompt',
       messageId: prompt.id,
@@ -4832,7 +4971,10 @@ export class SessionAgentDO {
       opencodeSessionId: queueOcSessionId,
       modelPreferences: queueModelPrefs,
       continuationContext: prompt.continuationContext || undefined,
+      traceparent: formatTraceparent(dispatchSpan.context),
     });
+    dispatchSpan.setAttribute('valet.dispatch.sent', queueDispatched);
+    dispatchSpan.end();
     if (!queueDispatched) {
       this.promptQueue.revertProcessingToQueued(prompt.id);
       this.emitAuditEvent('prompt.dispatch_failed', `Queue dispatch failed, reverted: ${prompt.id.slice(0, 8)}`);
@@ -5349,6 +5491,13 @@ export class SessionAgentDO {
 
   private async performHibernate(): Promise<void> {
     const sessionId = this.sessionState.sessionId;
+    const span = this.tracer.startSpan('valet.sandbox.hibernate', {
+      parent: this.lifecycleContext(),
+      attributes: this.traceAttrs({
+        'valet.sandbox.id': this.sessionState.sandboxId,
+      }),
+    });
+    this.storeLifecycleContext(span);
 
     // Concurrency guard — prevents duplicate hibernate calls from overlapping alarms.
     // The alarm handler sets status to 'hibernating' before ctx.waitUntil(performHibernate()),
@@ -5356,12 +5505,18 @@ export class SessionAgentDO {
     const currentStatus = this.sessionState.status;
     if (currentStatus !== 'hibernating') {
       console.log(`[SessionAgentDO] performHibernate skipped — status is ${currentStatus}`);
+      span.setAttribute('valet.skip_reason', `status:${currentStatus}`);
+      span.end();
+      this.flushTracing();
       return;
     }
 
     if (!this.sessionState.sandboxId || !this.sessionState.hibernateUrl) {
       console.error('[SessionAgentDO] Cannot hibernate: missing sandboxId or hibernateUrl');
       this.sessionState.status = 'running';
+      span.setAttribute('valet.skip_reason', 'missing_sandbox_or_hibernate_url');
+      span.end();
+      this.flushTracing();
       return;
     }
 
@@ -5387,6 +5542,7 @@ export class SessionAgentDO {
 
       // Snapshot via lifecycle (pure HTTP)
       const result = await this.lifecycle.snapshotSandbox();
+      span.setAttribute('valet.snapshot.image_id', result.snapshotImageId);
 
       // Stop runner AFTER snapshot — ordering enforced by call sequence
       this.runnerLink.send({ type: 'stop' });
@@ -5432,6 +5588,7 @@ export class SessionAgentDO {
         this.ctx.waitUntil(this.performWake());
       }
     } catch (err) {
+      span.recordException(err);
       // 409: sandbox already exited — route through proper termination
       if (err instanceof SandboxAlreadyExitedError) {
         console.log(`[SessionAgentDO] Session ${sessionId} sandbox already finished — routing to handleStop`);
@@ -5467,14 +5624,27 @@ export class SessionAgentDO {
       this.broadcastToClients({ type: 'status', data: { status: 'error' } });
       this.broadcastToClients({ type: 'error', messageId: errId, error: errorText });
       await this.notifyParentEvent(`Child session event: ${sessionId} errored (${errorText}).`, { wake: true, childStatus: 'error' });
+    } finally {
+      span.end();
+      this.flushTracing();
     }
   }
 
   private async performWake(): Promise<void> {
+    const span = this.tracer.startSpan('valet.sandbox.restore', {
+      parent: this.lifecycleContext(),
+      attributes: this.traceAttrs({
+        'valet.snapshot.image_id': this.sessionState.snapshotImageId,
+      }),
+    });
+    this.storeLifecycleContext(span);
     // Concurrency guard — prevents duplicate wake calls
     const currentStatus = this.sessionState.status;
     if (currentStatus === 'restoring' || currentStatus === 'running') {
       console.log(`[SessionAgentDO] performWake skipped — already ${currentStatus}`);
+      span.setAttribute('valet.skip_reason', `status:${currentStatus}`);
+      span.end();
+      this.flushTracing();
       return;
     }
 
@@ -5492,6 +5662,9 @@ export class SessionAgentDO {
       this.broadcastToClients({ type: 'status', data: { status: 'error' } });
       this.broadcastToClients({ type: 'error', error: errorText });
       await this.notifyParentEvent(`Child session event: ${sessionId} errored (${errorText}).`, { wake: true, childStatus: 'error' });
+      span.setAttribute('valet.skip_reason', 'missing_restore_inputs');
+      span.end();
+      this.flushTracing();
       return;
     }
 
@@ -5508,9 +5681,17 @@ export class SessionAgentDO {
       }
 
       this.sessionState.sandboxWakeStartedAt = Date.now();
+      this.sessionState.spawnRequest = this.injectTraceparentIntoSpawnRequest(
+        this.sessionState.spawnRequest!,
+        formatTraceparent(span.context),
+      );
 
       // Restore via lifecycle (pure HTTP)
       const result = await this.lifecycle.restoreSandbox();
+      span.setAttributes({
+        'valet.sandbox.id': result.sandboxId,
+        'duration_ms': result.durationMs,
+      });
 
       this.emitEvent('sandbox_restore', {
         durationMs: result.durationMs,
@@ -5547,6 +5728,7 @@ export class SessionAgentDO {
       this.emitAuditEvent('session.restored', 'Session restored from hibernation');
       console.log(`[SessionAgentDO] Session ${sessionId} restored, new sandbox: ${result.sandboxId}`);
     } catch (err) {
+      span.recordException(err);
       console.error(`[SessionAgentDO] Failed to restore session ${sessionId}:`, err);
       const errorText = `Failed to restore session: ${err instanceof Error ? err.message : String(err)}`;
       this.sessionState.status = 'error';
@@ -5564,6 +5746,9 @@ export class SessionAgentDO {
       this.broadcastToClients({ type: 'status', data: { status: 'error' } });
       this.broadcastToClients({ type: 'error', messageId: errId, error: errorText });
       await this.notifyParentEvent(`Child session event: ${sessionId} errored (${errorText}).`, { wake: true, childStatus: 'error' });
+    } finally {
+      span.end();
+      this.flushTracing();
     }
   }
 
@@ -7046,21 +7231,22 @@ export class SessionAgentDO {
     // promise promptly. If we bail early or credentials fail, send with no repoUrl
     // so the Runner knows no clone is coming and doesn't burn the full timeout.
     const sessionId = this.sessionState.sessionId;
+    const traceparent = this.lifecycleContext() ? formatTraceparent(this.lifecycleContext()!) : undefined;
     if (!sessionId) {
-      this.runnerLink.send({ type: 'repo-config', token: null, gitConfig: {} });
+      this.runnerLink.send({ type: 'repo-config', token: null, gitConfig: {}, traceparent });
       return;
     }
 
     const gitState = await getSessionGitState(this.appDb, sessionId);
     const repoUrl = gitState?.sourceRepoUrl;
     if (!repoUrl) {
-      this.runnerLink.send({ type: 'repo-config', token: null, gitConfig: {} });
+      this.runnerLink.send({ type: 'repo-config', token: null, gitConfig: {}, traceparent });
       return;
     }
 
     const userId = this.sessionState.userId;
     if (!userId) {
-      this.runnerLink.send({ type: 'repo-config', token: null, gitConfig: {} });
+      this.runnerLink.send({ type: 'repo-config', token: null, gitConfig: {}, traceparent });
       return;
     }
 
@@ -7075,7 +7261,7 @@ export class SessionAgentDO {
 
       if (repoEnv.error) {
         console.warn(`[SessionAgentDO] sendRepoConfig: ${repoEnv.error}`);
-        this.runnerLink.send({ type: 'repo-config', token: null, gitConfig: {} });
+        this.runnerLink.send({ type: 'repo-config', token: null, gitConfig: {}, traceparent });
         return;
       }
 
@@ -7088,14 +7274,15 @@ export class SessionAgentDO {
           repoUrl,
           branch: gitState.branch ?? undefined,
           ref: gitState.ref ?? undefined,
+          traceparent,
         });
         console.log(`[SessionAgentDO] Sent repo-config to runner for ${repoUrl}`);
       } else {
-        this.runnerLink.send({ type: 'repo-config', token: null, gitConfig: {} });
+        this.runnerLink.send({ type: 'repo-config', token: null, gitConfig: {}, traceparent });
       }
     } catch (err) {
       console.error('[SessionAgentDO] Failed to assemble repo config for runner:', err);
-      this.runnerLink.send({ type: 'repo-config', token: null, gitConfig: {} });
+      this.runnerLink.send({ type: 'repo-config', token: null, gitConfig: {}, traceparent });
     }
   }
 

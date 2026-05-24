@@ -5,7 +5,7 @@ import type { AppDb } from '../lib/drizzle.js';
 import { getDb } from '../lib/drizzle.js';
 import { deriveSandboxJwtSecret, signJWT } from '../lib/jwt.js';
 import { buildDoWebSocketUrl } from '../lib/do-ws-url.js';
-import { generateRunnerToken, assembleProviderEnv, assembleCredentialEnv, assembleCustomProviders, assembleBuiltInProviderModelConfigs, assembleRepoEnv } from '../lib/env-assembly.js';
+import { generateRunnerToken, assembleProviderEnv, assembleCredentialEnv, assembleCustomProviders, assembleBuiltInProviderModelConfigs, assembleRepoEnv, assembleTracingEnv } from '../lib/env-assembly.js';
 import { getCredential } from '../services/credentials.js';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
@@ -297,7 +297,7 @@ export async function createSession(
   // Build environment variables for the sandbox
   const providerVars = await assembleProviderEnv(appDb, env);
   const credentialVars = await assembleCredentialEnv(appDb, env, params.userId);
-  const envVars: Record<string, string> = { ...providerVars, ...credentialVars };
+  const envVars: Record<string, string> = { ...providerVars, ...credentialVars, ...assembleTracingEnv(env) };
 
   // Custom LLM providers
   const customProviders = await assembleCustomProviders(appDb, env.ENCRYPTION_KEY);

@@ -438,12 +438,18 @@ export class PromptQueue {
     return parseInt(this.getState('promptReceivedAt') || '0', 10);
   }
 
-  stampPromptReceived(): void {
+  stampPromptReceived(reason?: string): void {
     this.setState('promptReceivedAt', String(Date.now()));
+    if (reason) this.setState('promptQueueReason', reason);
   }
 
   clearPromptReceived(): void {
     this.setState('promptReceivedAt', '');
+    this.setState('promptQueueReason', '');
+  }
+
+  get promptQueueReason(): string | undefined {
+    return this.getState('promptQueueReason') || undefined;
   }
 
   get currentPromptAuthorId(): string | undefined {
