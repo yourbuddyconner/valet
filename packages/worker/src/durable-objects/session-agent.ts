@@ -2251,17 +2251,11 @@ export class SessionAgentDO {
         if (!content) return;
 
         const workflowMsgId = crypto.randomUUID();
-        const partsObj = msg.parts && typeof msg.parts === 'object' ? msg.parts as Record<string, unknown> : null;
-        const partsJson = partsObj ? JSON.stringify(partsObj) : null;
-        const workflowChannelType = typeof msg.channelType === 'string'
-          ? msg.channelType
-          : (partsObj && typeof partsObj.channelType === 'string' ? partsObj.channelType : null);
-        const workflowChannelId = typeof msg.channelId === 'string'
-          ? msg.channelId
-          : (partsObj && typeof partsObj.channelId === 'string' ? partsObj.channelId : null);
-        const workflowOcSessionId = typeof msg.opencodeSessionId === 'string'
-          ? msg.opencodeSessionId
-          : (partsObj && typeof partsObj.opencodeSessionId === 'string' ? partsObj.opencodeSessionId : null);
+        const parts = Array.isArray(msg.parts) ? msg.parts : null;
+        const partsJson = parts ? JSON.stringify(parts) : null;
+        const workflowChannelType = typeof msg.channelType === 'string' ? msg.channelType : null;
+        const workflowChannelId = typeof msg.channelId === 'string' ? msg.channelId : null;
+        const workflowOcSessionId = typeof msg.opencodeSessionId === 'string' ? msg.opencodeSessionId : null;
         this.messageStore.writeMessage({
           id: workflowMsgId,
           role,
@@ -2277,7 +2271,7 @@ export class SessionAgentDO {
             id: workflowMsgId,
             role,
             content,
-            ...(partsJson ? { parts: JSON.parse(partsJson) } : {}),
+            ...(parts ? { parts } : {}),
             ...(workflowChannelType && workflowChannelId ? { channelType: workflowChannelType, channelId: workflowChannelId } : {}),
             createdAt: Math.floor(Date.now() / 1000),
           },

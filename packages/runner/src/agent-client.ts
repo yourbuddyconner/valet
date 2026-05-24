@@ -267,14 +267,17 @@ export class AgentClient {
   sendWorkflowChatMessage(
     role: "user" | "assistant" | "system",
     content: string,
-    parts?: Record<string, unknown>,
+    metadata?: Record<string, unknown>,
     context?: { channelType?: string; channelId?: string; opencodeSessionId?: string },
   ): void {
+    // Always emit a real V2 parts array — the client's AssistantTurn renders parts[].
+    // Metadata (executionId, stepId, kind) goes in its own field, not packed into parts.
     this.send({
       type: "workflow-chat-message",
       role,
       content,
-      ...(parts ? { parts } : {}),
+      parts: [{ type: "text", text: content }],
+      ...(metadata ? { metadata } : {}),
       ...(context?.channelType ? { channelType: context.channelType } : {}),
       ...(context?.channelId ? { channelId: context.channelId } : {}),
       ...(context?.opencodeSessionId ? { opencodeSessionId: context.opencodeSessionId } : {}),

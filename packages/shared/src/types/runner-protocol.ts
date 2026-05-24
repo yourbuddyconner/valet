@@ -323,7 +323,12 @@ export type RunnerToDOMessage =
       type: 'workflow-chat-message';
       role: 'user' | 'assistant' | 'system';
       content: string;
-      parts?: Record<string, unknown>;
+      // V2 parts array — same shape the client's AssistantTurn renders for any
+      // assistant message. For workflow chat, this is typically a single text part.
+      parts?: Array<{ type: string; [k: string]: unknown }>;
+      // Optional out-of-band correlation metadata (workflowExecutionId, workflowStepId,
+      // kind). Not rendered as content; reserved for future "this came from workflow X" UI.
+      metadata?: Record<string, unknown>;
       channelType?: string;
       channelId?: string;
       opencodeSessionId?: string;
