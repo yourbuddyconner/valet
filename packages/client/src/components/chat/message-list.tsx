@@ -175,11 +175,16 @@ export function MessageList({ messages, isAgentThinking, agentStatus, agentStatu
 /** Renders an assistant turn: a single message with structured parts[]. */
 function AssistantTurn({ message }: { message: Message }) {
   const parts = (Array.isArray(message.parts) ? message.parts : []) as MessagePart[];
-  const copyText = parts
+  const textPartTexts = parts
     .filter((p): p is MessagePart & { type: 'text' } => p.type === 'text')
     .map((p) => (p as { text: string }).text?.trim())
-    .filter(Boolean)
-    .join('\n\n');
+    .filter(Boolean);
+  // Workflow agent_prompt replies arrive as a single assistant message with
+  // metadata-only `parts` ({ workflowExecutionId, workflowStepId, kind, ... })
+  // — NOT a V2 parts[] array. Without this fallback, AssistantTurn renders
+  // zero parts and the chat bubble shows up empty, hiding the agent's reply.
+  const fallbackContent = parts.length === 0 ? (message.content ?? '').trim() : '';
+  const copyText = textPartTexts.length > 0 ? textPartTexts.join('\n\n') : fallbackContent;
 
   return (
     <div className="group relative flex gap-3 py-3 animate-fade-in">
@@ -201,9 +206,11 @@ function AssistantTurn({ message }: { message: Message }) {
         </div>
 
         <div className="space-y-1.5 border-l-[1.5px] border-accent/15 pl-3 dark:border-accent/10">
-          {parts.map((part, i) => (
-            <V2PartRenderer key={i} part={part} />
-          ))}
+          {parts.length > 0
+            ? parts.map((part, i) => <V2PartRenderer key={i} part={part} />)
+            : fallbackContent.length > 0
+              ? <DeferredMarkdownContent content={fallbackContent} />
+              : null}
         </div>
       </div>
     </div>

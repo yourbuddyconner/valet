@@ -170,6 +170,54 @@ describe('workflow-engine', () => {
     expect(channelIds[0]).not.toBe(channelIds[1]);
   });
 
+  it('auto-publishes step output under step id when no outputVariable is set', async () => {
+    // Regression: a one-step `agent_prompt` workflow without an explicit
+    // `outputVariable` used to vanish from `execution.outputs`, making the
+    // UI show "No outputs captured" even though the step completed. The
+    // engine now falls back to publishing under `step.id` so users see the
+    // result by default.
+    const compiled = await compileWorkflowDefinition({
+      steps: [
+        { id: 'ask', type: 'agent_prompt', prompt: 'What do you do?' },
+      ],
+    });
+    if (!compiled.ok || !compiled.workflow) throw new Error('compile failed');
+
+    const result = await executeWorkflowRun(
+      'ex_no_output_var',
+      compiled.workflow,
+      { variables: {} },
+      {
+        onAgentStep: async () => ({ status: 'completed', output: 'I am a helpful agent.' }),
+      },
+    );
+
+    expect(result.status).toBe('ok');
+    expect(result.output.ask).toBe('I am a helpful agent.');
+  });
+
+  it('respects explicit outputVariable over auto step-id key', async () => {
+    const compiled = await compileWorkflowDefinition({
+      steps: [
+        { id: 'ask', type: 'agent_prompt', prompt: 'q', outputVariable: 'reply' },
+      ],
+    });
+    if (!compiled.ok || !compiled.workflow) throw new Error('compile failed');
+
+    const result = await executeWorkflowRun(
+      'ex_with_output_var',
+      compiled.workflow,
+      { variables: {} },
+      {
+        onAgentStep: async () => ({ status: 'completed', output: 'hello' }),
+      },
+    );
+
+    expect(result.status).toBe('ok');
+    expect(result.output.reply).toBe('hello');
+    expect(result.output.ask).toBeUndefined();
+  });
+
   it('surfaces structured-output object as agent_prompt step output', async () => {
     const compiled = await compileWorkflowDefinition({
       steps: [

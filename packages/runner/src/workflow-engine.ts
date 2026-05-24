@@ -567,6 +567,11 @@ async function executeSteps(
         const outputVar = stepOutputVariable(step);
         if (outputVar) {
           ctx.outputs[outputVar] = replayedOutput;
+        } else if (replayedOutput !== undefined && replayedOutput !== null) {
+          // Mirror the auto-publish-under-step.id fallback used on the live
+          // execution path so retry-from-step preserves the same outputs map
+          // shape that the original run produced.
+          ctx.outputs[step.id] = replayedOutput;
         }
         ctx.steps.push({
           stepId: step.id,
@@ -869,6 +874,16 @@ async function executeSteps(
       const outputVar = stepOutputVariable(step);
       if (outputVar) {
         ctx.outputs[outputVar] = stepOut.output ?? null;
+      } else if (stepOut.output !== undefined && stepOut.output !== null) {
+        // Steps without an explicit `outputVariable` would otherwise produce
+        // no entry in the execution's outputs map — making the UI show
+        // "No outputs captured" even when a step returned content (e.g. a
+        // single-step `agent_prompt` workflow). Publish under the step id so
+        // the result is at least visible. Explicit `outputVariable` still
+        // wins and keeps the existing downstream interpolation contract;
+        // these auto-keys are purely visibility helpers and shouldn't be
+        // relied on for `${outputs.*}` references in user-authored steps.
+        ctx.outputs[step.id] = stepOut.output;
       }
 
       emit(sink, { type: 'step.completed', executionId: ctx.executionId, stepId: step.id, attempt: ctx.attempt, ts: completedAt });
