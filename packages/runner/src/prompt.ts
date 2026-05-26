@@ -1421,13 +1421,14 @@ export class PromptHandler {
       const usageBeforeStep = new Set(channel.usageEntries.keys());
 
       this.agentClient.sendWorkflowChatMessage("user", content, {
-        workflowExecutionId: context.executionId,
-        workflowStepId: step.id,
         kind: "agent_message",
       }, {
         channelType: workflowChannelType,
         channelId: workflowChannelId,
         opencodeSessionId: channel.opencodeSessionId ?? undefined,
+        workflowExecutionId: context.executionId,
+        workflowStepId: step.id,
+        workflowIterationPath: context.iterationPath,
       });
 
       if (interrupt) {
@@ -1509,13 +1510,14 @@ export class PromptHandler {
             // user-facing text. The parsed object still flows through as step output.
             if (!outputSchema) {
               this.agentClient.sendWorkflowChatMessage("assistant", recoveredResponse, {
-                workflowExecutionId: context.executionId,
-                workflowStepId: step.id,
                 kind: "agent_message_response",
               }, {
                 channelType: workflowChannelType,
                 channelId: workflowChannelId,
                 opencodeSessionId: channel.opencodeSessionId ?? undefined,
+                workflowExecutionId: context.executionId,
+                workflowStepId: step.id,
+                workflowIterationPath: context.iterationPath,
               });
             }
 
