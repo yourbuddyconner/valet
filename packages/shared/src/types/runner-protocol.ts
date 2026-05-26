@@ -328,12 +328,18 @@ export type RunnerToDOMessage =
       // V2 parts array — same shape the client's AssistantTurn renders for any
       // assistant message. For workflow chat, this is typically a single text part.
       parts?: Array<{ type: string; [k: string]: unknown }>;
-      // Optional out-of-band correlation metadata (workflowExecutionId, workflowStepId,
-      // kind). Not rendered as content; reserved for future "this came from workflow X" UI.
+      // Optional metadata bag. Free-form, used for diagnostic info (kind tags etc.).
       metadata?: Record<string, unknown>;
       channelType?: string;
       channelId?: string;
       opencodeSessionId?: string;
+      // Typed workflow back-pointers. Persisted on the message row so the chat
+      // surface can attribute the message to its step and link to the execution.
+      // Validated by the DO handler against the user's executions before persist.
+      // See docs/specs/2026-05-23-workflow-ui-design.md (Phase D).
+      workflowExecutionId?: string;
+      workflowStepId?: string;
+      workflowIterationPath?: string;
     }
   | {
       type: 'workflow-step-event';

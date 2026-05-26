@@ -268,10 +268,19 @@ export class AgentClient {
     role: "user" | "assistant" | "system",
     content: string,
     metadata?: Record<string, unknown>,
-    context?: { channelType?: string; channelId?: string; opencodeSessionId?: string },
+    context?: {
+      channelType?: string;
+      channelId?: string;
+      opencodeSessionId?: string;
+      // Typed workflow back-pointers — persisted on the message row so the
+      // chat surface can attribute the message to its step. The DO validates
+      // workflowExecutionId belongs to the session's user before persisting.
+      workflowExecutionId?: string;
+      workflowStepId?: string;
+      workflowIterationPath?: string;
+    },
   ): void {
     // Always emit a real V2 parts array — the client's AssistantTurn renders parts[].
-    // Metadata (executionId, stepId, kind) goes in its own field, not packed into parts.
     this.send({
       type: "workflow-chat-message",
       role,
@@ -281,6 +290,9 @@ export class AgentClient {
       ...(context?.channelType ? { channelType: context.channelType } : {}),
       ...(context?.channelId ? { channelId: context.channelId } : {}),
       ...(context?.opencodeSessionId ? { opencodeSessionId: context.opencodeSessionId } : {}),
+      ...(context?.workflowExecutionId ? { workflowExecutionId: context.workflowExecutionId } : {}),
+      ...(context?.workflowStepId ? { workflowStepId: context.workflowStepId } : {}),
+      ...(context?.workflowIterationPath !== undefined ? { workflowIterationPath: context.workflowIterationPath } : {}),
     });
   }
 
