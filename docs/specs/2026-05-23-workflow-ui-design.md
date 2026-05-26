@@ -2,343 +2,411 @@
 
 > Design for the execution detail page and the session chat experience for workflow-driven sessions. Focuses on making workflow runs **inspectable, scannable, and idiomatic** instead of a wall of JSON.
 
-**Status:** Design accepted, codex completeness/correctness review applied. Ready for implementation plan.
+**Status:** Design accepted after two review rounds (completeness, then staff-engineer architecture). Ready for implementation plan.
 
-**Relationship to prior work:** Builds on the May 15 workflow UI MVP (`docs/specs/2026-05-15-workflow-ui-mvp-design.md` / `docs/plans/2026-05-15-workflow-ui-mvp.md`), which delivered the shared `WorkflowDiagram` component, real-time step events, and the workflow create/detail/edit pages. This design reuses those primitives and focuses specifically on the **execution detail page** and **session-chat rendering** layers, which the MVP left as minimum-viable.
+**Relationship to prior work:** Builds on the May 15 workflow UI MVP (`docs/specs/2026-05-15-workflow-ui-mvp-design.md`), which delivered `WorkflowDiagram`, live step events, and the create/detail/edit pages. This design adds the execution detail page experience and the workflow rendering in session chat.
 
 ## Problem
 
-Two related UX failures exist today:
+1. **Execution detail page** dedicates ~50% of the screen to the diagram and dumps step outputs as a stack of generic JSON blocks in a fixed right sidebar. No semantic per-type rendering, no per-iteration grouping inside loops, and "No active step" wastes the sidebar once a run is terminal.
 
-1. **Execution detail page** dedicates ~50% of the screen to the workflow diagram and dumps all step outputs as a long stack of generic JSON blocks in a fixed-width right sidebar. There is no semantic rendering per step type, no connection between the diagram and the outputs, no per-iteration grouping inside loops, and the live trace shows "No active step" once a run is terminal — wasting space precisely when results are most useful.
+2. **Session chat for workflow-driven sessions** shows workflow prompts as chat bubbles with a "via workflow" badge, with no visible link to which step they came from, no rendering at all for non-`agent_prompt` steps (bash, notify, …), and no at-a-glance progress.
 
-2. **Session chat for workflow-driven sessions** shows workflow prompts as user-bubble messages with a "via workflow" badge, but treats them like any other chat message. The relationship between a prompt and its response is invisible, non-chat step types (bash, notify) don't surface at all, and the user cannot see at a glance what workflow is running or how far along it is.
+The original session-chat bug (assistant responses not appearing) is fixed (`bedd58e`, `0fd8122`); this design assumes those fixes hold.
 
-The original session-chat bug (assistant responses not appearing) has been fixed in recent commits (`bedd58e`, `0fd8122`). This design assumes those fixes hold and focuses on what the chat *should show* for workflow runs going forward.
+## Architectural principle
+
+**Workflow steps are step rows; chat messages are chat messages.** The two are different domain objects, and the session view interleaves them by timestamp at the view-model layer. Workflow rendering does **not** require a new message schema, a paired-message protocol, or a regrouping pass over `messages`. This was a wrong turn in the previous draft and is excised here.
+
+Consequence: there is a single source of truth for "what happened during this workflow execution" — the `workflow_execution_steps` table — and both surfaces (execution page and session chat) consume it.
 
 ## Scope
 
 In scope:
 
 - Execution detail page at `/automation/executions/$executionId`
-- Session chat rendering when the session contains workflow-originated messages
-- New shared step-card component family for rendering workflow steps in both surfaces
-- Backend changes required to make the above renderable (engine outputs, persistence, wire protocol)
+- Session chat rendering for workflow-driven sessions: a workflow context bar plus interleaved step cards in chat
+- Shared step-card component family used by both surfaces
+- Backend changes that make per-instance identity (loop iteration / parallel branch / conditional branch) reconstructible end-to-end
 
-Out of scope (explicitly):
+Out of scope:
 
-- Workflow builder UI (`/workflows/$id/edit`)
+- Workflow builder UI
 - Triggers list, workflows list, executions list pages
-- Real-time *streaming* of `agent_prompt` responses into cards — v1 emits the response as a single message on completion. Streaming is captured as a v2 follow-up.
+- Mid-flight token streaming inside `agent_prompt` cards (v2)
+- Activating `pending_approvals` for richer approval metadata (separate prerequisite work — see [Approval card limitations](#approval-card-limitations))
+
+## Phasing
+
+Two phases behind two feature flags. The execution page is independently valuable and ships first.
+
+| Phase | Surface | Flag | Depends on |
+|--|--|--|--|
+| 1 | Execution detail page redesign | `workflow_ui_execution_v2` | iterationPath end-to-end (backend) |
+| 2 | Workflow rendering in session chat | `workflow_ui_chat_cards` | Phase 1 components; `workflow-chat-message` ownership validation |
+
+Phase 1 is the larger, higher-leverage slice. Phase 2 reuses the step-card components from Phase 1 and adds only the context bar and the chat-interleave logic.
 
 ## Backend changes
 
-The renderers below depend on data the engine doesn't persist or transmit today. These changes are required and part of this design.
+### 1. Per-instance step identity (`iterationPath`)
 
-### `workflow_execution_steps` — per-instance identity for nested children
+**Problem:** Steps inside a loop reuse the same `stepId`. The current unique key on `workflow_execution_steps` is `(executionId, stepId, attempt)`, so later iterations overwrite earlier ones. Parallel branches and conditional branches have the same problem.
 
-**Problem:** Steps inside a loop reuse the same `stepId`, and the unique key is `(executionId, stepId, attempt)`. Later iterations overwrite earlier ones, making iteration tabs, parallel branches, and conditional-branch attribution impossible to reconstruct.
+**Solution:** A `/`-joined path segment identifier on every step row, threaded end-to-end.
 
-**Change:** Add a per-execution-instance path identifier.
+#### Path grammar
 
-| New column | Type | Notes |
+`/`-joined segments. Empty string `''` for top-level steps.
+
+| Container | Segment shape | Example |
 |--|--|--|
-| `iterationPath` | text NOT NULL DEFAULT `''` | `/`-joined segments describing the dynamic execution path. Empty string for top-level steps. |
+| Loop | `<loopStepId>:i<index>` | `loopA:i0` |
+| Parallel | `<parallelStepId>:b<branchIndex>` | `parA:b1` |
+| Conditional | `<condStepId>:then` or `<condStepId>:else` | `condA:then` |
 
-Segment grammar: `<containerStepId>:<discriminator>`.
+Nested example: a step inside the first iteration of `loopA`, which is inside branch 1 of `parA` → `iterationPath = 'parA:b1/loopA:i0'`.
 
-- Loops: `<loopStepId>:i<index>` (zero-indexed).
-- Parallel: `<parallelStepId>:b<branchIndex>` (zero-indexed by branch order in the definition).
-- Conditional: `<condStepId>:then` or `<condStepId>:else`.
+Rationale (vs. opaque `stepInstanceId`): the path encodes hierarchy without parent pointers, which makes reconstruction in SQL and the client cheap (prefix matching). It also reads well in logs and debug tooling.
 
-Examples:
-- Top-level bash step: `iterationPath = ''`
-- First iter of a loop, inside an outer parallel branch 1: `iterationPath = 'outerPar:b1/loopA:i0'`
+#### Schema change
 
-**Index changes:**
-- Drop the existing unique on `(executionId, stepId, attempt)`.
-- Replace with unique on `(executionId, stepId, attempt, iterationPath)`.
-- Add a non-unique index on `(executionId, iterationPath)` for the timeline read path.
-
-**Runner change:** `packages/runner/src/workflow-engine.ts` tracks an `ExecContext` already; extend it with the current `iterationPath`. When entering a loop/parallel/conditional container, push the appropriate segment; pop on exit. Pass `iterationPath` through to every step trace write and every step event.
-
-**Migration:** existing rows backfill `iterationPath = ''`. Old loop iterations were already lossy; we don't try to reconstruct them.
-
-### `workflow.execution.step` event — carry `iterationPath`
-
-Add `iterationPath: string` to the step event payload (`packages/shared/src/types/runner-protocol.ts` and `packages/worker/src/services/executions.ts` event ingest). Client correlates the event to the right card by `(stepId, iterationPath)`.
-
-### Step output enrichment
-
-The per-type renderers need fields the engine isn't writing. For each, the runner extends the step's `outputJson` before the trace upsert. Schema is additive — fallback renderer continues to work on rows without the new fields.
-
-| Step type | Current `outputJson` | Add |
-|--|--|--|
-| `agent_prompt` | response payload (string or parsed object) | wrap as `{ response, model, inputTokens, outputTokens, durationMs }`. The response payload moves under `response`. |
-| `notify` | `{ type, target, delivered }` | `{ ..., channelType, channelId, error }`. `channelType`/`channelId` resolved from the target string at notify-handler dispatch time. `error` set when delivery skipped or failed. |
-| `approval` | nothing structured (status alone) | `{ decision: 'approved' \| 'denied' \| 'timed_out', approverId, approverEmail, reason, decidedAt }`. Sourced from `pending_approvals` rows on resume. |
-| `bash` | `{ stdout, stderr, exitCode }` | already present — verify and shape-lock. |
-
-**Backward compatibility:** the fallback card renderer reads raw `outputJson` for any row without the typed fields. No need to backfill old executions.
-
-### `messages` table — workflow message metadata
-
-Workflow chat messages are a different kind of thing than chat. The DO currently drops the runner's metadata bag on the floor. We need it persisted.
-
-**Add columns to `messages`** (single new migration):
+Single migration on `workflow_execution_steps`:
 
 | Column | Type | Notes |
 |--|--|--|
-| `workflowExecutionId` | text NULL | Set on messages emitted by a workflow run. |
-| `workflowStepId` | text NULL | The step that produced this message. |
-| `workflowStepType` | text NULL | `agent_prompt` / `tool` / `notify` etc. Denormalized so the client doesn't need to join. |
-| `workflowIterationPath` | text NULL | Matches the step trace's `iterationPath`. |
-| `messageGroupId` | text NULL | Stable across the prompt and response messages of a single `agent_prompt` step instance. Used by the client to merge them visually. |
+| `iterationPath` | text NOT NULL DEFAULT `''` | per-instance path |
 
-Index on `(workflowExecutionId)` for execution-page back-references.
+- Drop unique `(executionId, stepId, attempt)`.
+- Add unique `(executionId, stepId, attempt, iterationPath)`.
+- Add non-unique index `(executionId, iterationPath)` for the timeline read path.
 
-### `workflow-chat-message` runner→DO event
+Existing rows backfill `''`. Old loop iterations were already lossy — we do not attempt to reconstruct them.
 
-Add typed fields to the event in `packages/shared/src/types/runner-protocol.ts`:
+#### Runner change — ExecContext owns the path
 
-```typescript
-{
-  type: 'workflow-chat-message';
-  role: 'user' | 'assistant' | 'system';
-  content: string;
-  parts?: MessagePart[];
-  channelType?: string;
-  channelId?: string;
-  opencodeSessionId?: string;
-  // new
-  workflowExecutionId: string;
-  workflowStepId: string;
-  workflowStepType: string;
-  workflowIterationPath: string;
-  messageGroupId: string;
-}
-```
+`packages/runner/src/workflow-engine.ts` currently has no explicit nesting state outside `ctx.variables.loop`. Introduce `iterationPath: string` on the execution context, default `''`. Push a segment when entering a container, pop when exiting.
 
-The DO handler at `packages/worker/src/durable-objects/session-agent.ts` writes these columns into the message row and broadcasts them on the client `message` event.
+- Loop: at each iteration `i`, set the child context's `iterationPath = parent + '/' + loopStepId + ':i' + i` (or just the segment if parent is empty).
+- Parallel: each branch `b` gets `iterationPath = parent + '/' + parallelStepId + ':b' + b`.
+- Conditional: child context gets `iterationPath = parent + '/' + condStepId + ':' + ('then'|'else')`.
 
-### `agent_prompt` step — emit prompt + response as paired messages
+The path is passed through to every step trace write **and** included on `WorkflowStepResult`.
 
-The runner already emits the **prompt** as a `workflow-chat-message` before the agent runs (`packages/runner/src/prompt.ts`). After the agent completes, emit the **response** as a second `workflow-chat-message` with the same `messageGroupId` and `workflowStepId`. Both messages get the same `workflowIterationPath`.
+#### Identity contract — every write path must carry the path
 
-**No mid-flight streaming in v1.** The response message is sent once, when complete. Card shows a generic "thinking…" state in the response section while the underlying step status is `running`. Streaming is a follow-up (see v2 notes).
+This is where the previous draft fell short. There are **three** upsert sites and all must honor `iterationPath`:
 
-### Session → execution association
+1. `packages/worker/src/services/executions.ts:455` `upsertExecutionStepFromEvent` — live step events. Wire change: add `iterationPath` to the `workflow.execution.step` event payload (`packages/shared/src/types/runner-protocol.ts`). Event ingest writes it through to `upsertExecutionStep`.
+2. `packages/worker/src/services/session-workflows.ts:1337` — finalize after envelope returns. Add `iterationPath` to `WorkflowStepResult` in `packages/runner/src/workflow-engine.ts` so the envelope carries it; finalize writes it through to `upsertExecutionStep`.
+3. `packages/worker/src/services/executions.ts:231` — admin/test path; same treatment.
 
-This already exists: workflow sessions persist `metadata.executionId` at creation (`packages/worker/src/lib/workflow-runtime.ts:61`). The context bar reads `session.metadata.executionId`. **Retention:** the bar is visible for the entire life of the session — if the session was spawned by a workflow, it remains a workflow session forever. For terminal executions, the bar shows the final status; no auto-disappear.
+`upsertExecutionStep` (`packages/worker/src/lib/db/executions.ts:198`) takes `iterationPath` as a required field; the upsert `ON CONFLICT` clause matches on the new four-tuple.
+
+**Retry-from-step** (`packages/worker/src/services/session-workflows.ts:423`): the replayed step results passed back into the runner already carry `iterationPath` (because they came from the prior execution's persisted rows). The runner's resume seeds outputs from these rows; verify it can locate the right replay row by `(stepId, iterationPath)` and not just `stepId`. If retry-from-step targets a step inside a loop iteration, the targeted step's path is preserved in the retry directive.
+
+#### Validation
+
+If a runner emits a step trace with an `iterationPath` whose container segments don't match the static workflow definition (e.g., `iterationPath = 'unknownStep:i0'` for a step that doesn't exist), the ingest path drops the event with a structured warn and records a telemetry counter. We don't reject — we surface the row as orphaned and fall through to the fallback renderer.
+
+### 2. Step output enrichment
+
+Each step type's `outputJson` is shaped to make the per-type renderer's job trivial. Additive — the fallback renderer continues to work on rows without these fields.
+
+| Step type | Current `outputJson` | New shape |
+|--|--|--|
+| `agent_prompt` | string or parsed object | `{ response, model, inputTokens, outputTokens, durationMs }`. The response payload moves under `response`. |
+| `bash` | `{ stdout, stderr, exitCode }` | unchanged — shape-lock as a typed interface and write a test. |
+| `notify` | `{ type, target, delivered }` | `{ ..., channelType, channelId, error? }`. Channel meta resolved at notify-handler dispatch time. |
+| `approval` | nothing structured | `{ decision: 'approved' \| 'denied' \| 'timed_out', decidedAt }`. **Approver identity / reason are out of scope** until `pending_approvals` is activated; the card renders only what is available today. |
+| `loop` / `parallel` / `conditional` | unchanged | container steps; renderer reads children, not the container's `outputJson`. |
+
+### 3. `agent_prompt` chat messages
+
+This is the **only** workflow→chat data flow. Today the runner emits a `workflow-chat-message` for the prompt before the agent runs, and the assistant's reply comes back through the normal OpenCode session path. After this design:
+
+- Prompt: still a `workflow-chat-message` emitted by the runner before the agent runs.
+- Response: continues to flow through OpenCode's normal message path.
+- Both messages persist a small **back-pointer** to their step row: `workflowExecutionId`, `workflowStepId`, `workflowIterationPath`. **No new tables, no `messageGroupId`, no paired-message protocol.** Three nullable columns on `messages`, populated only for workflow-originated messages.
+
+The chat surface uses the back-pointer to (a) badge the message with its step type/persona/iteration, (b) link to the execution page, and (c) collapse the message into the step card when it's the chronological neighbor of its step row.
+
+**Trust boundary:** the DO handler at `packages/worker/src/durable-objects/session-agent.ts:2246` currently writes whatever `workflow-chat-message` says into the message row. Before persisting the new back-pointer fields, the DO must validate that the `workflowExecutionId` belongs to this session's user — parity with the step-event ingest at `session-agent.ts:3530` / `executions.ts:455`. Without this check, a compromised runner could attribute arbitrary messages to arbitrary executions.
+
+### 4. What we are *not* changing
+
+- No `messageGroupId`.
+- No new message table.
+- No regrouping pass over messages.
+- No streaming-into-card.
+- No paired emit-prompt/emit-response protocol.
+- No new approval table or `pending_approvals` activation.
 
 ## Frontend design
 
-### Execution page layout
+### Execution page (`/automation/executions/$executionId`)
 
 | | |
 |--|--|
 | Split | Timeline ~60% left, diagram ~40% right |
-| Primary | Vertical timeline of step cards |
-| Diagram | Slim scroll-synced rail; clicking a node jumps the timeline; selected step highlighted in graph |
-| Sidebar | Removed — `ExecutionStepPanel`, `ExecutionStepTracePanel`, `ExecutionVariablesPanel` are deleted |
+| Primary | Vertical timeline of step cards keyed by `(stepId, iterationPath)` |
+| Diagram | Slim scroll-synced rail (`mode="runtime"`); clicking a node opens the corresponding card |
 | Header | `ExecutionHeader` unchanged |
+| Deleted | `ExecutionStepPanel`, `ExecutionStepTracePanel`, `ExecutionVariablesPanel` |
 
 ### Step card behavior
 
-- Collapsed by default with a one-line summary preview (similar to existing `ToolCardShell`).
-- **Failures auto-expand.** A step with `status === 'failed'` always opens. After auto-expanding, focus moves to the card's header button so screen-readers and keyboard users land there.
-- The **last terminal step** in a completed run also auto-expands as a default focus.
-- Clicking the diagram node for a step scrolls the timeline to it and **opens the card** (controlled expansion — see ToolCardShell extension below).
+- Collapsed by default with a one-line summary.
+- **Failures auto-expand.** A step transitioning to `failed` opens; focus moves to its header so screen-readers and keyboard users land there.
+- **Last terminal step** in a completed run also auto-expands as a default focus.
+- Clicking a diagram node opens its card and scrolls to it (controlled expansion — see `ToolCardShell` extension).
+- **In-flight cards show elapsed time** (live ticker on `startedAt`), not a bare "thinking…". When the step transitions to `cancelled`, `failed`, or the execution is swept stuck, the card shows that terminal state. Cards never sit in unbounded "pending" — they key off step status.
 
 ### Per-step-type rendering
 
-Each step type gets a typed renderer. The card chrome (border, status dot, header row, expand chevron) comes from the shared `ToolCardShell` (extended — see below).
+Each step type gets a typed renderer; the chrome comes from extended `ToolCardShell`.
 
 | Type | Header summary | Expanded body |
 |--|--|--|
-| `agent_prompt` | step name, persona pill, iteration tag (if in a loop), `Nms · model · tokens` (from `outputJson.model` / `inputTokens` / `outputTokens`) | **prompt** section (italic quoted block, from inputJson) + **response** section. Structured outputs (when an `outputSchema` was used) render as a key/value table over `outputJson.response`. Plain-text/markdown responses render with the existing `DeferredMarkdownContent`. |
-| `bash` | `name · echo "..." → exit N` | **command** section (terminal-styled `<pre>`) + **stdout** section + **stderr** section if present. Exit-code pill in header (green for `0`, red otherwise). |
-| `notify` | `name · target · status` | **target** chip (renders `outputJson.channelType`/`channelId`) + **delivery** state + **error** block when `outputJson.error` is set. |
-| `tool` | `name · tool` | Re-uses the existing `chat/tool-cards/` renderer for that tool name where one exists; falls back to `generic-card` style. |
-| `conditional` | `name · condition · → then/else` | **condition** expression (from inputJson), indicator of which branch was taken (derived from child rows: any child step with `iterationPath` ending in `<condId>:then` means `then` was taken), child step cards rendered inline (indented) under the taken branch. |
-| `loop` | `name · over <expr> · N iterations` | **iteration tabs** at the head of the card (`iter 1`, `iter 2`, …, plus an "all" affordance); each tab shows that iteration's child step cards. Indented child cards. Iteration count = `max(iterationPath segment index) + 1` over child rows. |
-| `parallel` | `name · N branches` | Branches as collapsible stacked groups (one per `:b<n>` segment). Branch durations annotated. |
-| `approval` | `name · approved by/denied by/timed out` | Reads `outputJson.decision`, `approverEmail`, `reason`, `decidedAt`. |
-| _fallback_ | `name · type` | Generic JSON-tree renderer over `outputJson`. |
+| `agent_prompt` | step name, persona pill, iteration tag, `Nms · model · in/out tokens` | **prompt** section (from `inputJson`) + **response** section (from `outputJson.response`). Structured outputs render as a key/value table; plain text via `DeferredMarkdownContent`. |
+| `bash` | `name · echo "..." → exit N` | command + stdout + stderr (if present). Exit-code pill in header. |
+| `notify` | `name · channel · status` | channel chip (`channelType`/`channelId`), delivery state, error block when present. |
+| `tool` | `name · tool` | delegates to the existing `chat/tool-cards/` renderer for that tool name; falls back to `generic-card`. |
+| `conditional` | `name · → then/else` | condition expression (from `inputJson`), indicator of which branch was taken (derived from any child row whose `iterationPath` ends in `<condId>:then\|else`), child cards inline under the taken branch. |
+| `loop` | `name · over <expr> · N iterations` | iteration tabs at the card head (one per `:i<n>` segment found in children); only the active tab's children mount; "all iterations" affordance mounts everything. |
+| `parallel` | `name · N branches` | branches as stacked groups (one per `:b<n>` segment), with branch durations to expose the critical path. |
+| `approval` | `name · approved/denied/timed out` | reads `outputJson.decision` and `decidedAt`. No approver/reason in v1. |
+| _fallback_ | `name · type` | generic JSON-tree over `outputJson`. |
 
-### Loops, parallel, conditional — child reconstruction
+### Approval card limitations
 
-The timeline reconstructs nesting client-side by combining:
+Today's approval mechanism uses `resumeToken` on the execution row, not the `pending_approvals` table (per `docs/specs/workflows.md`). The v1 approval card therefore shows only the decision and timestamp. Rendering approver identity, decision reason, and timeout requires activating `pending_approvals` as a backend prerequisite — captured as a separate piece of work, not part of this design.
 
-1. The static workflow tree (from `useWorkflow` or `execution.workflowSnapshot`) — gives the container shape and step types.
-2. The step-trace rows — each row's `iterationPath` says where in the dynamic tree it lives.
+### Loops / parallel / conditional — child reconstruction
+
+Combine:
+
+1. Static workflow tree (from `useWorkflow` query or `execution.workflowSnapshot`) — container shape and step types.
+2. Step-trace rows — each row's `iterationPath` says where in the dynamic tree it lives.
 
 Algorithm:
 
 - Walk the static tree top-down.
 - For each container step, group child rows by their next `iterationPath` segment.
-- Render container cards with their children attached to the appropriate iteration/branch.
-- Steps with no row yet (pending) render as placeholder cards.
+- Render container cards with children attached to the right iteration/branch.
+- Steps with no row yet (pending) render as placeholders.
 
-Only the visible iteration's children are mounted at a time. The "all iterations" affordance mounts all.
+Only the active iteration's children are mounted; "all iterations" mounts everything.
+
+Computed via a `useMemo` keyed on `(stepsData, workflowDef)`. Result is a normalized timeline view-model that drives rendering.
 
 ### Diagram rail
 
-- Reuses `WorkflowDiagram` component in `mode="runtime"`.
-- Width: ~360px on desktop; collapses to a top strip on narrow viewports (<900px).
-- **Scroll-sync:** an `IntersectionObserver` on each timeline card updates the highlighted node in the diagram via store/state. Clicking a node calls `scrollIntoView({ block: 'center' })` on the corresponding timeline card and sets that card's controlled-open state to `true`.
-- The diagram shows top-level steps only; clicking a container node opens the container card and scrolls to it (the card's iteration tabs handle further navigation).
+- `WorkflowDiagram` in `mode="runtime"`, ~360px wide on desktop; collapses to a top strip below 900px viewport.
+- Scroll-sync: `IntersectionObserver` on each timeline card updates a shared `highlightedStepKey`. Diagram node clicks `scrollIntoView({ block: 'center' })` the card and set its controlled-open state.
+- Diagram shows top-level steps only; clicking a container scrolls to its card and the card's iteration tabs take over from there.
 
 ### Retry & recovery
 
-- Inline `↻ retry from here` button on any failed step's expanded card (calls existing `useRetryExecutionFromStep` mutation; navigates to the new execution on success).
-- Inline `↗ open in builder` button on any failed step's expanded card (deep-links to `/workflows/$id/edit?step=$stepId`).
-- The page-level "Retry" affordance in `ExecutionHeader` remains and retries the whole run.
+- Inline `↻ retry from here` on any failed step's expanded card (calls `useRetryExecutionFromStep`). Navigates to the new execution on success.
+- Inline `↗ open in builder` on any failed step's expanded card.
+- The page-level `ExecutionHeader` retry remains and retries the whole run.
 
-**Retry creates a new execution and a new workflow session.** `retryExecutionFromStep` in `packages/worker/src/services/session-workflows.ts` allocates a fresh `executionId` and a fresh `sessionId` bound to it. The UI navigates to the new execution detail page; the new session has its own chat (with its own context bar). The old session/execution remains accessible by its URL — there is no "same chat, new run" mode.
+**Retry creates a new execution and a new workflow session.** Navigation moves to the new execution detail page; the new session has its own chat (and its own context bar). The old session/execution stay accessible at their URLs.
 
-### Session chat for workflow-driven sessions
+A small "retry of …" affordance in the new execution's `ExecutionHeader` is captured as a v2 follow-up.
 
-#### Workflow context bar
+### Session chat — workflow context bar
 
-A slim bar sits between the chat header and the message list whenever `session.metadata.executionId` is set. Contents:
+A slim bar between the chat header and the message list, visible whenever `session.metadata.executionId` is set (workflow sessions persist this at creation in `packages/worker/src/lib/workflow-runtime.ts`).
 
+Contents:
 - Workflow name (from execution → workflow lookup)
 - Execution short id
-- Current step / total (derived from step trace + workflow definition)
-- Progress dots (one per top-level step, color-coded by status)
-- "execution ↗" link to `/automation/executions/$executionId`
+- Current step / total (derived from step trace + workflow def)
+- Progress dots (one per top-level step, color-coded)
+- "execution ↗" link
 
-The bar is sticky to the top of the chat scroll region. It persists for the life of the session (workflow sessions don't become non-workflow sessions). For terminal executions, the bar shows the final status.
+Lifecycle: persists for the life of the session. Workflow sessions don't become non-workflow sessions; for terminal executions, the bar shows the final status.
 
-Mounted at `routes/sessions/$sessionId.tsx`. Data source: `useSession(sessionId)` → `session.metadata.executionId` → `useExecution(executionId)`.
+`role="status"` so screen readers announce progress changes.
 
-#### Workflow steps as inline cards
+### Session chat — workflow steps as interleaved cards
 
-Message regrouping happens **at the `MessageList` level**, not `MessageItem`. The list runs a grouping pass:
+The session chat shows a **merged feed** of two streams, in timestamp order:
 
-- Messages with the same `messageGroupId` are merged into one "group" rendered as a single `WorkflowAgentPromptCard` (prompt + response combined).
-- Messages with `workflowExecutionId` but no group peer render as standalone `WorkflowStepCard` (bash, notify, tool, conditional, loop, parallel, approval).
-- Messages without `workflowExecutionId` render through the existing `MessageItem` / `AssistantTurn` paths.
+1. **Chat messages** — user/assistant/system rows from `messages`. Render through the existing `MessageItem` / `AssistantTurn` path. Unchanged.
+2. **Workflow step rows** — every row from `workflow_execution_steps` for the session's active execution, rendered with the same step-card components as the execution page.
 
-A new `MessageList` helper `groupWorkflowMessages(messages)` produces an ordered list of `{ kind: 'workflow-step' | 'chat-turn', ... }` items; the renderer dispatches on `kind`. This regrouping is the only point where workflow vs chat is decided.
+Composition lives in a new `useSessionFeed(sessionId)` hook that:
+- pulls messages via the existing chat query,
+- pulls step rows via `useExecutionSteps(session.metadata.executionId)`,
+- merges into an ordered list of `{ kind: 'message' | 'step', timestamp, ... }`,
+- memoizes the merge on `(messages, steps)` identity so it isn't recomputed on every render.
 
-- `agent_prompt` cards are **merged**: a single card contains both the prompt and the response as labeled sections.
-- During a live run, when only the prompt message has arrived, the response section shows a "thinking…" placeholder with the existing `RunningDots` animation.
-- Bash, notify, tool, conditional, loop, parallel, approval cards are fully self-contained.
-- The user can still chat normally between workflow steps. Their messages render as regular chat bubbles and interleave chronologically with the workflow cards.
+`MessageList` renders this list and dispatches per `kind`:
+- `kind === 'message'` → existing `MessageItem` / `AssistantTurn` flow.
+- `kind === 'step'` → `WorkflowStepCard` for that step row.
+
+The `agent_prompt` prompt and response are real chat messages and render normally — the user sees the prompt as a chat bubble, the response as a chat bubble. They are **also** linked via back-pointer to the same step row, but the chat doesn't merge them. The corresponding `agent_prompt` step card renders inline at the step row's timestamp, giving the persona/iteration/model/token framing. This is purposeful redundancy: chat reads as chat, and the step card surfaces the workflow-specific framing without breaking chronology.
+
+**Mid-step user messages** interleave naturally — they're separate timestamps in the feed; the merge has no awareness of step boundaries.
 
 ### Visual idiom
 
-- Match `ToolCardShell`: `w-fit max-w-[min(100%,70vw)]`, rounded border, monospace, compact header row, content sections via `ToolCardSection`/`ToolCodeBlock`.
-- Status colors reuse the existing tool-call palette (`completed` emerald, `error` red, `running` accent, `pending` neutral).
-- Step type icons live in a new `step-cards/icons.tsx` (one icon per type).
+- Match `ToolCardShell`: `w-fit max-w-[min(100%,70vw)]`, rounded, monospace, compact header row, sections via `ToolCardSection` / `ToolCodeBlock`.
+- Status colors reuse the tool-call palette.
+- Step type icons in a new `step-cards/icons.tsx`.
 
 ### `ToolCardShell` extension (additive)
 
-The current `ToolCardShell` has uncontrolled expansion (`defaultExpanded` only) and no ARIA wiring. Extend additively — no existing callers change:
+Add optional props; no existing callers change:
 
-- Add optional `open?: boolean` and `onOpenChange?: (next: boolean) => void` props. When `open` is provided, the shell is fully controlled.
-- Add `id?: string` prop; if supplied, the header button gets `aria-controls={id + '-body'}` and the body div gets that id.
+- `open?: boolean`, `onOpenChange?: (next: boolean) => void` — controlled expansion (needed for diagram-click and auto-expand-on-failure).
+- `id?: string` — when set, header button gets `aria-controls={id + '-body'}`, body div gets that id.
+- `headerRef?: Ref<HTMLButtonElement>` — for focus-on-auto-expand.
 - Always emit `aria-expanded` on the header button (currently absent).
-- Add `headerRef?: Ref<HTMLButtonElement>` so consumers can move focus to it on auto-expand.
 
-Workflow step cards consume the controlled API. Existing tool cards keep uncontrolled behavior.
+If review shows the controlled props don't fit naturally, extract a primitive `<CardShell>` and make both `ToolCardShell` and the workflow card a thin wrapper. Default: extend in place.
 
 ### Accessibility
 
-- All step cards expose `aria-expanded` / `aria-controls` (via the `ToolCardShell` extension).
-- On auto-expand of a failed step, focus moves to that card's header.
-- Clicking a diagram node sets a roving focus to the corresponding timeline card's header.
-- Iteration tabs on loop cards are a tablist (`role="tablist"`, `role="tab"`, `aria-selected`, arrow-key navigation).
-- The diagram rail is reachable via keyboard; nodes are buttons with `aria-label="step $name — $status"`.
-- The workflow context bar has `role="status"` so screen-readers announce step progress changes.
+- All step cards expose `aria-expanded` / `aria-controls`.
+- Auto-expand on failure moves focus to the card's header.
+- Diagram nodes are buttons with `aria-label="step <name> — <status>"`, reachable by keyboard; clicking sets a roving focus to the corresponding card's header.
+- Loop iteration tabs are a tablist (`role="tablist"`, `role="tab"`, `aria-selected`, arrow-key navigation).
+- The workflow context bar is `role="status"`.
 
 ## Components
 
-New components (all in `packages/client/src/components/workflows/step-cards/`):
+New (in `packages/client/src/components/workflows/step-cards/`):
 
 | File | Purpose |
 |--|--|
-| `agent-prompt-card.tsx` | Merged prompt+response card; reads `messageGroupId` group; integrates `DeferredMarkdownContent` for text responses, kv-table for structured output. |
-| `bash-card.tsx` | Terminal-style command/stdout/stderr renderer. |
-| `notify-card.tsx` | Channel chip + delivery state + error renderer. |
-| `tool-card.tsx` | Delegates to existing `chat/tool-cards` registry by tool name. |
-| `conditional-card.tsx` | Condition + branch indicator + child renderer. |
-| `loop-card.tsx` | Iteration tabs + child renderer. |
-| `parallel-card.tsx` | Branches + critical-path annotations. |
-| `approval-card.tsx` | Approver + decision + reason. |
-| `fallback-card.tsx` | Generic JSON-tree renderer. |
-| `index.tsx` | `byStepType` dispatcher (mirrors `chat/tool-cards/index.tsx`). Exports `WorkflowStepCard` (top-level entry point) and `groupWorkflowMessages` helper. |
+| `agent-prompt-card.tsx` | Prompt + response rendering for a step row. Reads from `inputJson`/`outputJson`. |
+| `bash-card.tsx` | Command + stdout + stderr. |
+| `notify-card.tsx` | Channel chip + state + error. |
+| `tool-card.tsx` | Delegates to existing `chat/tool-cards` registry. |
+| `conditional-card.tsx` | Condition + branch taken + children. |
+| `loop-card.tsx` | Iteration tabs + children. |
+| `parallel-card.tsx` | Branches + critical path. |
+| `approval-card.tsx` | Decision + decidedAt. |
+| `fallback-card.tsx` | Generic JSON tree. |
+| `index.tsx` | `byStepType` dispatcher; exports `WorkflowStepCard`. |
 | `icons.tsx` | One icon per step type. |
 
-New page-level components (in `packages/client/src/components/workflows/`):
+New page-level (in `packages/client/src/components/workflows/`):
 
 | File | Purpose |
 |--|--|
-| `execution-timeline.tsx` | Left-pane vertical timeline. Reconstructs nested children from `iterationPath`. Drives card mounting from `useExecutionSteps` + `useExecutionStepEvents`. Owns expanded-card state for diagram-click and auto-expand integration. |
-| `execution-diagram-rail.tsx` | Wrapper around `WorkflowDiagram` for the right rail with scroll-sync logic. |
-| `workflow-context-bar.tsx` | Slim bar at the top of session chat for workflow-driven sessions. |
+| `execution-timeline.tsx` | Left-pane vertical timeline. Owns the controlled-open map keyed by `(stepId, iterationPath)`. |
+| `execution-diagram-rail.tsx` | Right-rail `WorkflowDiagram` wrapper with scroll-sync. |
+| `workflow-context-bar.tsx` | Slim bar at the top of session chat. |
 
-Deleted components:
+New client hooks:
 
-- `execution-step-panel.tsx`
-- `execution-step-trace.tsx`
-- `execution-variables-panel.tsx`
+| File | Purpose |
+|--|--|
+| `hooks/use-session-feed.ts` | Memoized merge of messages and step rows for workflow sessions. |
+| `hooks/use-execution-timeline.ts` | Memoized merge of step rows and static workflow tree into the timeline view-model. |
 
-Modified components:
+Modified:
 
-- `routes/automation/executions/$executionId.tsx` — swap right sidebar for `ExecutionTimeline` (left) and `ExecutionDiagramRail` (right).
-- `components/chat/message-list.tsx` — add a `groupWorkflowMessages` pass before rendering; dispatch grouped workflow items to `WorkflowStepCard`, leave chat turns on the existing `AssistantTurn`/`MessageItem` path.
+- `routes/automation/executions/$executionId.tsx` — swap right sidebar for `ExecutionTimeline` + `ExecutionDiagramRail`.
+- `components/chat/message-list.tsx` — when the session has an associated execution, render `useSessionFeed(sessionId)` instead of the bare messages list.
 - `routes/sessions/$sessionId.tsx` — mount `WorkflowContextBar` when `session.metadata.executionId` is present.
-- `components/chat/tool-cards/tool-card-shell.tsx` — additive controlled-expansion and ARIA props (described above).
+- `components/chat/tool-cards/tool-card-shell.tsx` — additive controlled-expansion + ARIA props.
 
-## Data dependencies (client)
+Deleted: `execution-step-panel.tsx`, `execution-step-trace.tsx`, `execution-variables-panel.tsx`.
 
-Existing hooks, used as-is:
+## Client state model
 
-- `useExecution(executionId)` — execution record with `outputs`, `status`, etc.
-- `useExecutionSteps(executionId)` — per-step trace rows. Will gain `iterationPath` after the migration.
-- `useExecutionStepEvents(sessionId, executionId, status)` — live `workflow.execution.step` events. Will gain `iterationPath` after the protocol change.
-- `useSession(sessionId)` — for the context bar's `metadata.executionId`.
+- **Timeline expansion state** lives in `ExecutionTimeline` as a `Map<cardKey, boolean>` where `cardKey = stepId + '#' + iterationPath`. Local component state in v1.
+- **Failure auto-expand** is evaluated once per step transition to `failed`. Users may manually collapse afterward; we do not re-open on subsequent re-renders.
+- **Live step events** flow through `useExecutionStepEvents`. Out-of-order events (event arrives before the row exists) currently get dropped by the hook at `use-execution-step-events.ts:117`. Acceptable trade-off documented there; the next poll catches up. We do **not** change this for the redesign.
+- **`useWorkflow`** is a normal query, not push. Workflow definition is treated as immutable for the duration of a viewed execution (the snapshot is the source of truth anyway).
+- **Tab refresh / reconnect** rehydrates from step trace + message rows. Expansion state resets. Failure auto-expand re-fires for currently-failed steps.
 
-Not "live": `useWorkflow(workflowId)` is a regular query fetch with no push semantics. The workflow definition is treated as immutable for the duration of a viewed execution (the snapshot is the source of truth anyway).
+## Edge cases
 
-## State and lifecycle
+- **Workflow definition missing** (source deleted, no snapshot): show the existing banner; render step rows grouped by `iterationPath` prefix in flat order; skip the diagram rail.
+- **Step with no enriched `outputJson`** (executions before this change): fallback renderer.
+- **Loop with zero iterations**: container shows "0 iterations · condition not met".
+- **Conditional with no branch taken**: "skipped".
+- **Parallel branch failure**: branch group shows error; others continue.
+- **Long loops (>50 iters)**: iteration tabs collapse to a dropdown after 10; "all iterations" warns and chunks rendering with virtualization.
+- **Orphan step row** (iterationPath references a non-existent container): renders as a standalone fallback card; telemetry counter increments.
+- **In-flight `agent_prompt` with no response message yet**: card shows elapsed time on the response section.
+- **`agent_prompt` step transitions to `failed` / `cancelled` with no response**: card shows the terminal state, surface the step `error`. No infinite "thinking…".
+- **Stuck-execution sweep** (cron marks the execution `failed` after 2h): step cards still in `running` flip to a stuck-failed state when the execution status flips.
+- **Workflow message back-pointer with no matching step row**: render the message normally (no badge/link); telemetry counter increments. Don't error.
 
-- **Card expansion state** is owned by `ExecutionTimeline` (a `Map<cardKey, boolean>`), so that diagram clicks and auto-expand logic can drive it. Card key is `${stepId}#${iterationPath}`. Local component state in v1 — no URL persistence.
-- **Failure auto-expand** is evaluated once per step status transition to `failed`. Users may collapse failed cards manually after; we do not re-open them on subsequent re-renders.
-- **Live runs**: step events update step rows; new rows append to the timeline; running rows render with the accent pulse from `ToolCardShell`; completed/failed rows swap status and may auto-expand on failure.
-- **Streaming responses** (v2): see follow-up note. v1 emits the response as a single message on completion.
-- **Diagram scroll-sync**: an `IntersectionObserver` on each timeline card updates a shared `highlightedStepKey` state. Click handlers on diagram nodes look up the card by `stepKey` and set both the highlight and the controlled open state.
-- **Tab refresh / reconnect**: state rehydrates from the persistent step trace + message rows. Live events resume via `useExecutionStepEvents`. Card expansion state resets (no persistence). Failure auto-expand re-fires on rehydrate for currently-failed steps.
+## Feature flags & rollout
 
-## Error and edge cases
+Two GrowthBook-style flags, evaluated client-side:
 
-- **Workflow definition missing** (source workflow deleted, no snapshot): show the existing "source deleted" banner; render whatever step trace data exists in flat order grouped by `iterationPath` prefix; skip the diagram rail.
-- **Step with no enriched `outputJson` fields** (old executions before this change): fallback card renderer kicks in; no crash.
-- **Loop with zero iterations**: container card shows the empty state ("0 iterations · condition not met"); no children.
-- **Conditional with no branch taken** (early termination): container shows condition + "skipped".
-- **Parallel branch failure**: branch group shows error; other branches continue rendering normally.
-- **Very long loops (>50 iterations)**: iteration tabs collapse to a dropdown after the first 10; "all iterations" view warns and chunks rendering with virtualization.
-- **Mixed workflow + user chat**: workflow grouped items and chat turns render in chronological order by `createdAt` of the first message in the group. No cross-group merging.
-- **Retried execution**: navigation moves the user to the new execution detail page; the old execution stays at its URL. Old session and new session are independent. No automatic cross-linking in v1 (the new execution's `triggerMetadata.sourceExecutionId` could surface a "retry of …" badge in `ExecutionHeader` — captured as a follow-up).
-- **Message with `workflowExecutionId` but no matching step row** (events arrived out of order): render as a standalone fallback card; once the row arrives, the next render attaches it to its proper container.
+- `workflow_ui_execution_v2` — guards the execution detail page rewrite. Off → legacy page.
+- `workflow_ui_chat_cards` — guards `WorkflowContextBar` and `useSessionFeed` rendering in session chat. Off → status quo.
 
-## v2 follow-ups (not in this spec)
+Backend changes (iterationPath, output enrichment, message back-pointers, DO validation) ship un-flagged because they are additive and required by both phases.
 
-- **Streaming `agent_prompt` response into its card.** Requires either tagging OpenCode message chunks with workflow meta and routing them client-side, or buffering on the runner and emitting a stream of `workflow-chat-message` patches. Deferred so v1 ships.
-- **"Retry of …" badge in `ExecutionHeader`** for retried executions.
-- **URL-persisted card expansion** (`?step=<key>` to deep-link an open card).
-- **Collapsible diagram rail.**
+**Rollout:**
+- Backend migration + runner/worker changes deploy together; verify on existing executions (fallback renderer).
+- Phase 1 flag on for internal users only; dogfood (see below) for a week.
+- Flag on for all users.
+- Phase 2 follows with its own internal-only → all rollout.
+
+## Dogfood plan
+
+Before flipping `workflow_ui_execution_v2` to all users, exercise:
+
+1. A workflow with a loop of ≥3 iterations, each containing an `agent_prompt` with a persona.
+2. A workflow with a `parallel` of ≥2 branches, each containing a `bash` step.
+3. A workflow with a `conditional` where both `then` and `else` paths exist in the static tree; run both branches across two executions.
+4. A workflow with an `approval` step — approve, then deny, then time-out (separate runs).
+5. **Retry-from-step** targeting a step inside a loop iteration; verify the new execution preserves `iterationPath`.
+6. A workflow with a `notify` step that fails (interpolation error); verify the error renders.
+7. The stuck-execution sweep path: synthetically mark an execution stuck and verify cards render the terminal state.
+
+Each scenario validates a specific code path that the staged review found risky. Sign-off requires all seven.
+
+## Telemetry
+
+Add client-side counters (Cloudflare Analytics or existing usage events):
+
+| Counter | Why |
+|--|--|
+| `workflow_ui.step_instance_collision` | When the client receives two step rows with identical `(stepId, attempt, iterationPath)` — should never happen post-migration; warns if it does. |
+| `workflow_ui.orphan_step_row` | Step row's `iterationPath` references a container not in the static workflow tree. |
+| `workflow_ui.workflow_message_no_step` | Back-pointer on a message references a missing step row. |
+| `workflow_ui.agent_prompt_response_missing` | `agent_prompt` step is `completed` but no response message exists (broken pipeline). |
+| `workflow_ui.fallback_renderer_used` | Step row missing enriched `outputJson` — surfaces stale-execution rate. |
+| `workflow_ui.migration_irregularity` | Step rows with `iterationPath = ''` that were children of a container per the static def — backfill artifact. |
+
+Server-side: log + counter for `workflow-chat-message` ownership-check failures; this is the new trust boundary.
+
+## Performance
+
+- `useSessionFeed` and `useExecutionTimeline` are pure functions of their inputs; memoize on stable identities (`messages.length + lastMessageId`; `steps.length + lastUpdatedAt`).
+- The timeline view-model is computed once per data update, not per render.
+- Long executions (>200 steps): the timeline virtualizes after 100 visible cards (existing `react-virtuoso` is already in the bundle for sessions list).
+- Diagram → timeline scroll sync uses a single `IntersectionObserver` instance shared across all cards (not one per card).
+
+## v2 follow-ups
+
+- Mid-flight token streaming inside `agent_prompt` response sections.
+- "Retry of …" affordance in `ExecutionHeader` for retried executions.
+- URL-persisted card expansion (`?step=<key>`).
+- Collapsible diagram rail.
+- Approver identity, reason, timeout on approval cards (requires activating `pending_approvals` — separate prerequisite spec).
 
 ## Boundary rules
 
-- The new step-card components live under `packages/client/src/components/workflows/` and consume only the documented API contracts above.
-- Backend changes are confined to: a single new migration; runner engine changes for `iterationPath` and output enrichment; `workflow-chat-message` event payload extension; DO handler write of the new message columns.
-- This design does NOT change the workflow execution **algorithm** (engine semantics, retries, approval handling) — only what it persists and emits.
-- Non-workflow sessions are unaffected — the `MessageList` grouping pass skips messages with no `workflowExecutionId`.
+- Backend changes are confined to: a single migration (iterationPath + back-pointer columns); runner ExecContext + envelope changes; worker validation; output enrichment in three step handlers.
+- This design does NOT change workflow execution algorithm or semantics — only what is persisted and emitted.
+- Non-workflow sessions are unaffected — `useSessionFeed` is gated on `session.metadata.executionId`.
+- The new step-card components are client-only and consume the documented API.
 
 ## Open questions
 
-None. Implementation details (exact icons, exact pill colors, virtualization thresholds, ordering of additive migrations) can be made during the implementation pass.
+None. Implementation details (exact pill colors, virtualization thresholds, exact rollout dates, migration ordering) can be made during the implementation pass.
