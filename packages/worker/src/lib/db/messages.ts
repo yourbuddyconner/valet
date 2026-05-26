@@ -123,6 +123,9 @@ export async function batchUpsertMessages(
     messageFormat: string;
     threadId?: string | null;
     createdAt?: number;
+    workflowExecutionId?: string | null;
+    workflowStepId?: string | null;
+    workflowIterationPath?: string | null;
   }>,
 ): Promise<void> {
   if (msgs.length === 0) return;
@@ -132,8 +135,8 @@ export async function batchUpsertMessages(
   // columns (INSERT OR REPLACE deletes then re-inserts, destroying defaults).
   const stmts = msgs.map((msg) =>
     db.prepare(
-      `INSERT INTO messages (id, session_id, role, content, parts, author_id, author_email, author_name, author_avatar_url, channel_type, channel_id, opencode_session_id, message_format, thread_id, created_at_epoch)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `INSERT INTO messages (id, session_id, role, content, parts, author_id, author_email, author_name, author_avatar_url, channel_type, channel_id, opencode_session_id, message_format, thread_id, created_at_epoch, workflow_execution_id, workflow_step_id, workflow_iteration_path)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET
          role = excluded.role,
          content = excluded.content,
@@ -147,7 +150,10 @@ export async function batchUpsertMessages(
          opencode_session_id = excluded.opencode_session_id,
          message_format = excluded.message_format,
          thread_id = excluded.thread_id,
-         created_at_epoch = excluded.created_at_epoch`
+         created_at_epoch = excluded.created_at_epoch,
+         workflow_execution_id = excluded.workflow_execution_id,
+         workflow_step_id = excluded.workflow_step_id,
+         workflow_iteration_path = excluded.workflow_iteration_path`
     ).bind(
       msg.id,
       sessionId,
@@ -164,6 +170,9 @@ export async function batchUpsertMessages(
       msg.messageFormat || 'v2',
       msg.threadId || null,
       msg.createdAt || null,
+      msg.workflowExecutionId || null,
+      msg.workflowStepId || null,
+      msg.workflowIterationPath || null,
     )
   );
 

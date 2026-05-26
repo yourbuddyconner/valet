@@ -97,6 +97,9 @@ interface MessageSqlRow extends Record<string, SqlStorageValue> {
   message_format: string;
   thread_id: string | null;
   created_at: number;
+  workflow_execution_id: string | null;
+  workflow_step_id: string | null;
+  workflow_iteration_path: string | null;
 }
 
 /** Shape of a single active turn held in memory during streaming. */
@@ -124,7 +127,10 @@ CREATE TABLE IF NOT EXISTS messages (
   opencode_session_id TEXT,
   message_format TEXT NOT NULL DEFAULT 'v2',
   thread_id TEXT,
-  created_at INTEGER NOT NULL DEFAULT (unixepoch())
+  created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+  workflow_execution_id TEXT,
+  workflow_step_id TEXT,
+  workflow_iteration_path TEXT
 );
 `;
 
@@ -144,10 +150,13 @@ const MIGRATION_COLUMNS: Array<{ sql: string }> = [
   { sql: "ALTER TABLE messages ADD COLUMN message_format TEXT NOT NULL DEFAULT 'v2'" },
   { sql: 'ALTER TABLE messages ADD COLUMN thread_id TEXT' },
   { sql: 'ALTER TABLE messages ADD COLUMN opencode_session_id TEXT' },
+  { sql: 'ALTER TABLE messages ADD COLUMN workflow_execution_id TEXT' },
+  { sql: 'ALTER TABLE messages ADD COLUMN workflow_step_id TEXT' },
+  { sql: 'ALTER TABLE messages ADD COLUMN workflow_iteration_path TEXT' },
 ];
 
 /** All columns for a full message SELECT. */
-const MESSAGE_COLUMNS = 'id, seq, role, content, parts, author_id, author_email, author_name, author_avatar_url, channel_type, channel_id, opencode_session_id, message_format, thread_id, created_at';
+const MESSAGE_COLUMNS = 'id, seq, role, content, parts, author_id, author_email, author_name, author_avatar_url, channel_type, channel_id, opencode_session_id, message_format, thread_id, created_at, workflow_execution_id, workflow_step_id, workflow_iteration_path';
 
 // ─── MessageStore Class ──────────────────────────────────────────────────────
 
@@ -215,11 +224,14 @@ export class MessageStore {
     opencodeSessionId?: string | null;
     messageFormat?: string;
     threadId?: string | null;
+    workflowExecutionId?: string | null;
+    workflowStepId?: string | null;
+    workflowIterationPath?: string | null;
   }): number {
     const seq = this.bumpSeq();
     this.sql.exec(
-      `INSERT OR IGNORE INTO messages (id, seq, role, content, parts, author_id, author_email, author_name, author_avatar_url, channel_type, channel_id, opencode_session_id, message_format, thread_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT OR IGNORE INTO messages (id, seq, role, content, parts, author_id, author_email, author_name, author_avatar_url, channel_type, channel_id, opencode_session_id, message_format, thread_id, workflow_execution_id, workflow_step_id, workflow_iteration_path)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       params.id,
       seq,
       params.role,
@@ -234,6 +246,9 @@ export class MessageStore {
       params.opencodeSessionId ?? null,
       params.messageFormat ?? 'v2',
       params.threadId ?? null,
+      params.workflowExecutionId ?? null,
+      params.workflowStepId ?? null,
+      params.workflowIterationPath ?? null,
     );
     return seq;
   }
@@ -556,6 +571,9 @@ export class MessageStore {
       messageFormat: string;
       threadId: string | null;
       createdAt?: number;
+      workflowExecutionId: string | null;
+      workflowStepId: string | null;
+      workflowIterationPath: string | null;
     }>) => Promise<void>,
   ): Promise<number> {
     const rows = this.sql.exec<MessageSqlRow>(
@@ -580,6 +598,9 @@ export class MessageStore {
       messageFormat: row.message_format || 'v2',
       threadId: row.thread_id,
       createdAt: row.created_at,
+      workflowExecutionId: row.workflow_execution_id,
+      workflowStepId: row.workflow_step_id,
+      workflowIterationPath: row.workflow_iteration_path,
     }));
 
     await batchUpsert(db, sessionId, msgs);
