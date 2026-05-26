@@ -122,21 +122,20 @@ export function buildAuthorizationUrl(params: {
   /** MCP resource server URL (RFC 8707). Scopes the token to this resource. */
   resource?: string;
 }): string {
-  const query = new URLSearchParams({
-    client_id: params.clientId,
-    redirect_uri: params.redirectUri,
-    response_type: 'code',
-    code_challenge: params.codeChallenge,
-    code_challenge_method: 'S256',
-    state: params.state,
-  });
+  const url = new URL(params.authorizationEndpoint);
+  url.searchParams.set('client_id', params.clientId);
+  url.searchParams.set('redirect_uri', params.redirectUri);
+  url.searchParams.set('response_type', 'code');
+  url.searchParams.set('code_challenge', params.codeChallenge);
+  url.searchParams.set('code_challenge_method', 'S256');
+  url.searchParams.set('state', params.state);
   if (params.scopes?.length) {
-    query.set('scope', params.scopes.join(' '));
+    url.searchParams.set('scope', params.scopes.join(' '));
   }
   if (params.resource) {
-    query.set('resource', params.resource);
+    url.searchParams.set('resource', params.resource);
   }
-  return `${params.authorizationEndpoint}?${query}`;
+  return url.toString();
 }
 
 // ─── Token Exchange & Refresh (Public Client, PKCE) ─────────────────────────
