@@ -75,8 +75,9 @@
 - `packages/client/src/api/executions.ts` — surface `iterationPath` on step row type (A)
 - `packages/client/src/components/chat/tool-cards/tool-card-shell.tsx` — additive controlled-expansion + ARIA (C)
 - `packages/client/src/routes/automation/executions/$executionId.tsx` — flag-gated swap (C)
-- `packages/client/src/components/chat/message-list.tsx` — flag-gated session-feed integration (D)
-- `packages/client/src/routes/sessions/$sessionId.tsx` — mount context bar (D)
+- `packages/client/src/components/chat/chat-container.tsx` — flag-gated session-feed wiring + mount context bar (D)
+- `packages/client/src/components/chat/message-list.tsx` — accept optional `workflowFeed` prop (D)
+- `packages/client/src/durable-objects/message-store.ts` — DO-local SQLite schema + writeMessage + flush extension (D)
 
 ### Deleted files (after Phase C ships fully)
 - `packages/client/src/components/workflows/execution-step-panel.tsx`
@@ -422,6 +423,58 @@ git commit -m "feat(runner): ExecutionContext threads iterationPath through loop
 
 ---
 
+### Task A4.5: Thread `iterationPath` into `WorkflowStepExecutionContext`
+
+**Files:**
+- Modify: `packages/runner/src/workflow-engine.ts`
+
+**Why:** The `onAgentStep` / `onToolStep` / `onNotifyStep` hooks receive a `WorkflowStepExecutionContext` (defined around line 101). The runner uses these hooks in `packages/runner/src/prompt.ts` to send workflow chat messages — Task D4 needs `iterationPath` in that context to attribute back-pointers correctly. Adding it here is a 4-line change; missing this is a hard-to-debug prerequisite for Phase D.
+
+- [ ] **Step 1: Extend the hook context interface**
+
+```typescript
+export interface WorkflowStepExecutionContext {
+  executionId: string;
+  attempt: number;
+  variables: Record<string, unknown>;
+  outputs: Record<string, unknown>;
+  /** Per-instance path identity. Empty for top-level steps. */
+  iterationPath: string;
+}
+```
+
+- [ ] **Step 2: Populate it at the one construction site**
+
+Around line 336 (`const context: WorkflowStepExecutionContext = { ... }`):
+
+```typescript
+const context: WorkflowStepExecutionContext = {
+  executionId: ctx.executionId,
+  attempt: ctx.attempt,
+  variables: ctx.variables,
+  outputs: ctx.outputs,
+  iterationPath: ctx.iterationPath,
+};
+```
+
+- [ ] **Step 3: Typecheck + tests**
+
+```bash
+cd /Users/connerswann/code/valet && pnpm typecheck
+cd /Users/connerswann/code/valet/packages/runner && pnpm test
+```
+
+Expected: clean and green.
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add packages/runner/src/workflow-engine.ts
+git commit -m "feat(runner): WorkflowStepExecutionContext exposes iterationPath to hooks"
+```
+
+---
+
 ### Task A5: Add `iterationPath` to `WorkflowStepResult` envelope
 
 **Files:**
@@ -546,14 +599,16 @@ git commit -m "test(runner): loop iterations produce distinct envelope entries"
 
 ---
 
-### Task A7: `upsertExecutionStep` accepts `iterationPath`
+### Task A7: `upsertExecutionStep` requires `iterationPath`
 
 **Files:**
 - Modify: `packages/worker/src/lib/db/executions.ts`
 
+**Why required, not optional:** an `iterationPath?: string` defaulting to `''` would let any missed caller silently collapse loop iterations again — exactly the bug we're fixing. Required-with-no-default makes the compiler enforce that every callsite is updated.
+
 - [ ] **Step 1: Update the function signature and SQL**
 
-Find `upsertExecutionStep` around line 198. Add `iterationPath: string` to the input type, default to `''` if absent, and include it in the `INSERT` + `ON CONFLICT` clauses:
+Find `upsertExecutionStep` around line 198. Add `iterationPath: string` (required) to the input type, and include it in the `INSERT` + `ON CONFLICT` clauses:
 
 ```typescript
 export async function upsertExecutionStep(
@@ -562,7 +617,7 @@ export async function upsertExecutionStep(
   step: {
     stepId: string;
     attempt: number;
-    iterationPath?: string;
+    iterationPath: string;
     status: string;
     input?: string | null;
     output?: string | null;
@@ -572,7 +627,6 @@ export async function upsertExecutionStep(
   },
 ): Promise<void> {
   const id = crypto.randomUUID();
-  const iterationPath = step.iterationPath ?? '';
   await db
     .prepare(
       `INSERT INTO workflow_execution_steps
@@ -592,7 +646,7 @@ export async function upsertExecutionStep(
       executionId,
       step.stepId,
       step.attempt,
-      iterationPath,
+      step.iterationPath,
       step.status,
       step.input ?? null,
       step.output ?? null,
@@ -610,7 +664,7 @@ export async function upsertExecutionStep(
 cd /Users/connerswann/code/valet && pnpm typecheck
 ```
 
-Expected: clean. Callers still work because `iterationPath` is optional with a default.
+Expected: red — every caller (3 sites) needs to be updated in A8/A9/A10. This is intentional; that's how we enforce the contract.
 
 - [ ] **Step 3: Commit**
 
@@ -648,21 +702,21 @@ Find the `workflow.execution.step` payload type (likely a `step` sub-object). Ad
 
 - [ ] **Step 2: Forward through `upsertExecutionStepFromEvent`**
 
-In `packages/worker/src/services/executions.ts` around line 455 (`upsertExecutionStepFromEvent`), pass `iterationPath` into `upsertExecutionStep`:
+In `packages/worker/src/services/executions.ts` around line 455 (`upsertExecutionStepFromEvent`), pass `iterationPath` into `upsertExecutionStep`. Note: status comes from `event.kind` (existing pattern, around line 471 — e.g. `event.kind === 'step.completed' ? 'completed' : ...`), not directly from `ev.status`:
 
 ```typescript
 await upsertExecutionStep(db, executionId, {
   stepId: ev.stepId,
   attempt: ev.attempt,
   iterationPath: ev.iterationPath ?? '',
-  status: ev.status,
+  status: deriveStatusFromKind(event.kind), // existing helper / pattern in the file
   // ...
 });
 ```
 
 - [ ] **Step 3: Update the admin/test path**
 
-Around line 231 of the same file (`upsertExecutionStep(env.DB, executionId, { ... })`), pass `iterationPath: step.iterationPath ?? ''` from the inbound step.
+Around line 231 of the same file (`upsertExecutionStep(env.DB, executionId, { ... })`), pass `iterationPath: step.iterationPath ?? ''` from the inbound step. (The admin path's inbound `step` may not have the field yet — pass `''` as default since admin/test rows are typically top-level.)
 
 - [ ] **Step 4: Typecheck**
 
@@ -830,9 +884,23 @@ git commit -m "feat(api): step rows expose iterationPath end-to-end"
 grep -n "waiting_approval\|approvalNonce\|resumeToken" /Users/connerswann/code/valet/packages/worker/src/durable-objects/workflow-executor.ts | head -20
 ```
 
-- [ ] **Step 2: Include `iterationPath` and `attempt` in the persisted runtime state**
+- [ ] **Step 2: Add a NEW `awaitingApproval` field on `RuntimeState`**
 
-Wherever the executor stashes the awaiting step (e.g., `runtime_state.awaitingApproval = { stepId, ... }`), extend to `{ stepId, iterationPath, attempt }`. Read it back on resume.
+Today, `RuntimeState` (in `packages/worker/src/durable-objects/workflow-executor.ts` around line 38) does not have an `awaitingApproval` field — approval state today lives only on the execution row (`status === 'waiting_approval'` plus `resumeToken`), which loses the step identity. Add the field:
+
+```typescript
+interface RuntimeState {
+  // ... existing fields ...
+  /** Set while status='waiting_approval' so resume can match the exact step instance. */
+  awaitingApproval?: {
+    stepId: string;
+    iterationPath: string;
+    attempt: number;
+  };
+}
+```
+
+When transitioning to `waiting_approval`, populate it. On resume, read it back and pass to the runner's resume payload.
 
 - [ ] **Step 3: Runner resume matches on the triple**
 
@@ -891,23 +959,36 @@ git commit -m "feat(workflows): approval resume identifies by (stepId, iteration
 
 ---
 
-### Task A13: Retry-from-step preserves and matches `iterationPath`
+### Task A13: Retry-from-step preserves `iterationPath` for top-level targets
 
 **Files:**
 - Modify: `packages/worker/src/services/session-workflows.ts`
 - Modify: `packages/runner/src/workflow-engine.ts`
 
-- [ ] **Step 1: Replay context carries `iterationPath` on every step**
+**Scope decision:** Nested retry (targeting a step inside a loop iteration or parallel branch) is **out of scope for this design**. The current service at `session-workflows.ts:388` already rejects non-top-level targets, and we leave that rejection in place. This task only ensures that top-level retries don't regress when the replay seeds outputs from prior step rows.
 
-Around `session-workflows.ts:423` (`retryExecutionFromStep`), the `replayStepResults` object is built from the prior execution's step rows. Make sure each row in that object has `iterationPath` populated from the source row.
+The execution-page-level "retry" affordance (in `ExecutionHeader`) and any in-card retry button (added in Phase C) **always re-run the workflow from the top** — no "from here" semantics. This is a deliberate simplification.
 
-- [ ] **Step 2: The retry directive identifies the target step by `(stepId, iterationPath)`**
+- [ ] **Step 1: Replay context carries `iterationPath` on every prior step row**
 
-Around the same area, the `runtimeState.retry` object stores `{ startFromStepId, ... }`. Add `startFromIterationPath: targetStepIterationPath` (read from the source row when `targetStepId` was originally executed; if the source row's `iterationPath` is non-empty, the retry targets that specific instance).
+Around `session-workflows.ts:423` (`retryExecutionFromStep`), the `replayStepResults` map is built from the prior execution's `workflow_execution_steps` rows. Include `iterationPath` on every row in the map. Top-level rows have `iterationPath: ''`; nested rows are passed through but never targeted.
 
-- [ ] **Step 3: Runner resume locates the start step by the path-pair**
+- [ ] **Step 2: Runner replay lookup includes `iterationPath`**
 
-In `packages/runner/src/workflow-engine.ts`, the resume/replay logic uses `replayStepResults`. When seeding outputs from prior results, match on `(stepId, iterationPath)` — not just `stepId`. Update the lookup helper accordingly.
+In `packages/runner/src/workflow-engine.ts`, the replay-seed logic that hydrates `ctx.outputs` from prior step rows currently matches on `stepId` alone. Update the lookup to match on `(stepId, iterationPath)` so loop iterations' prior outputs don't clobber each other:
+
+```typescript
+// pseudocode for the replay seed:
+function findPriorRow(stepId: string, iterationPath: string) {
+  return replayStepResults.find(
+    (r) => r.stepId === stepId && (r.iterationPath ?? '') === iterationPath,
+  );
+}
+```
+
+- [ ] **Step 3: Confirm the existing rejection of non-top-level targets stays**
+
+Verify `session-workflows.ts:388` still rejects requests where the target step's `iterationPath !== ''`. Add a comment pointing to this design decision so a future reader doesn't accidentally enable it without doing the request-DTO + runtime-state work.
 
 - [ ] **Step 4: Typecheck + tests**
 
@@ -915,13 +996,13 @@ In `packages/runner/src/workflow-engine.ts`, the resume/replay logic uses `repla
 cd /Users/connerswann/code/valet && pnpm typecheck && pnpm test
 ```
 
-Expected: clean and green.
+Expected: clean and green. Existing top-level retry tests still pass; no new test for nested retry (it remains unsupported).
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add packages/worker/src/services/session-workflows.ts packages/runner/src/workflow-engine.ts
-git commit -m "feat(workflows): retry-from-step preserves iterationPath end-to-end"
+git commit -m "feat(workflows): top-level retry preserves iterationPath in replay seed (nested retry stays unsupported)"
 ```
 
 ---
@@ -986,58 +1067,76 @@ If any iteration is missing, halt and investigate before continuing. Almost cert
 grep -n "agent_prompt\|onAgentStep\|output:" /Users/connerswann/code/valet/packages/runner/src/prompt.ts | head -30
 ```
 
-The `onAgentStep` hook returns a `WorkflowStepExecutionResult` with an `output` field. Find where the response is collected — around lines 1500–1550 in `prompt.ts`.
+The `onAgentStep` hook returns a `WorkflowStepExecutionResult` with an `output` field. Find where the response is collected — around lines 1525–1538 in `prompt.ts` (`return { status: "completed", output: ... }`).
 
-- [ ] **Step 2: Shape the output**
+- [ ] **Step 2: Locate model + token metadata sources**
 
-Where the current code sets `output: parseResult.data` or `output: recoveredResponse`, replace with:
+The `Channel` class (defined around line 481 in the same file) tracks usage per agent call:
+
+- `channel.usageEntries: Map<string, { model: string; inputTokens: number; outputTokens: number }>` — keyed by OpenCode message id; entries are appended for each request.
+- `channel.lastUsedModel: string | null` — the model id of the most recent call.
+
+For a single `agent_prompt` step, snapshot these *before* the agent runs, then diff *after*:
 
 ```typescript
-output: {
-  response: parseResult.data, // or recoveredResponse, or the parsed string
-  model: ctx.modelId,         // pulled from the OpenCode response
-  inputTokens: ctx.usage?.inputTokens ?? 0,
-  outputTokens: ctx.usage?.outputTokens ?? 0,
-  durationMs: Date.now() - stepStartMs,
+// Before the agent runs (just before this.runAgent(...) or equivalent):
+const usageBefore = new Map(channel.usageEntries);
+const stepStartMs = Date.now();
+
+// ...agent runs...
+
+// After the response is recovered, before returning the output:
+let inputTokens = 0;
+let outputTokens = 0;
+for (const [msgId, entry] of channel.usageEntries) {
+  if (!usageBefore.has(msgId)) {
+    inputTokens += entry.inputTokens;
+    outputTokens += entry.outputTokens;
+  }
 }
+const model = channel.lastUsedModel ?? null;
+const durationMs = Date.now() - stepStartMs;
 ```
 
-You'll need access to the OpenCode response metadata. If `modelId` / `usage` aren't already plumbed where output is assembled, lift the `agent.run` return into a local variable and pull from it.
+- [ ] **Step 3: Shape the output at both return sites**
 
-- [ ] **Step 3: Write a vitest test**
-
-If there's a `prompt.test.ts` or similar, add a test that mocks `agent.run` and asserts the output shape. If not, append to `packages/runner/src/workflow-engine.test.ts` a test that uses the test harness with a mock `onAgentStep` hook and asserts the envelope's step output matches the shape.
+Around line 1525–1527 (`return { status: "completed", output: parseResult.value }`):
 
 ```typescript
-it('agent_prompt output is shaped as { response, model, inputTokens, outputTokens, durationMs }', async () => {
-  const workflow = compileForTest({
-    steps: [{ id: 'ask', type: 'agent_prompt', prompt: 'hi' }],
-  });
-  const envelope = await runWorkflowForTest(workflow, {
-    hooks: {
-      onAgentStep: async () => ({
-        status: 'completed',
-        output: {
-          response: 'world',
-          model: 'claude-opus-4-6',
-          inputTokens: 12,
-          outputTokens: 5,
-          durationMs: 42,
-        },
-      }),
-    },
-  });
-  const step = envelope.steps.find((s) => s.stepId === 'ask');
-  expect(step?.output).toMatchObject({
-    response: 'world',
-    model: 'claude-opus-4-6',
-    inputTokens: 12,
-    outputTokens: 5,
-  });
-});
+return {
+  status: "completed",
+  output: {
+    response: parseResult.value,
+    model,
+    inputTokens,
+    outputTokens,
+    durationMs,
+  },
+};
 ```
 
-- [ ] **Step 4: Run tests**
+Around line 1534–1537 (`return { status: "completed", output: recoveredResponse }`):
+
+```typescript
+return {
+  status: "completed",
+  output: {
+    response: recoveredResponse,
+    model,
+    inputTokens,
+    outputTokens,
+    durationMs,
+  },
+};
+```
+
+- [ ] **Step 4: Add a regression test against `prompt.ts` directly**
+
+Engine-level passthrough tests (mocking `onAgentStep`) don't prove `prompt.ts` actually enriches the output. Find or create a `prompt.test.ts` next to `prompt.ts`. The test approach: instantiate the agent runner with a stubbed `agent.run` that returns a known response and synthesizes `usageEntries`, run a one-step `agent_prompt` workflow through it, and assert the returned step output has all five fields.
+
+If the existing test infrastructure makes this hard, settle for a minimal browser/dev-instance smoke test: trigger a workflow with a single `agent_prompt` step against dev, then inspect the resulting step row in D1 — it should show `{response, model, inputTokens, outputTokens, durationMs}`.
+
+- [ ] **Step 5: Run tests**
 
 ```bash
 cd /Users/connerswann/code/valet/packages/runner && pnpm test
@@ -1045,23 +1144,25 @@ cd /Users/connerswann/code/valet/packages/runner && pnpm test
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
-git add packages/runner/src/prompt.ts packages/runner/src/workflow-engine.test.ts
+git add packages/runner/src/prompt.ts
 git commit -m "feat(runner): agent_prompt output is { response, model, tokens, durationMs }"
 ```
 
 ---
 
-### Task B2: `notify` output adds `channelType`, `channelId`, `error`
+### Task B2: `notify` output adds `error` (orchestrator-only for v1)
 
 **Files:**
-- Modify: `packages/runner/src/workflow-engine.ts` (look around line 374) or wherever the `notify` handler actually lives
+- Modify: `packages/runner/src/prompt.ts` (notify handler, around line 1255) — and/or `packages/runner/src/workflow-engine.ts:374` if a stub still lives there
+
+**Scope decision:** `notify` today only supports the `orchestrator` target. Channel routing (slack/telegram/etc.) is **out of scope** for this design and tracked separately. The renderer in Phase C only needs to surface success/failure for the orchestrator target — no `channelType`/`channelId` parsing. This keeps the renderer honest about what actually exists.
 
 - [ ] **Step 1: Find the notify result construction**
 
-Currently `notify` returns:
+Currently:
 ```typescript
 { type: 'notify', target: typeof step.target === 'string' ? step.target : 'orchestrator', delivered: false }
 ```
@@ -1071,48 +1172,20 @@ Currently `notify` returns:
 ```typescript
 {
   type: 'notify',
-  target: resolvedTarget,
-  channelType: resolvedChannelType,  // parsed from target, e.g. 'slack' from 'slack:#channel'
-  channelId: resolvedChannelId,      // parsed from target, e.g. '#channel'
-  delivered,                          // false until a real notify handler lands
+  target: typeof step.target === 'string' ? step.target : 'orchestrator',
+  delivered, // true if the orchestrator notify succeeded
   error: deliveryError ?? null,
 }
 ```
 
-The target-string parser belongs in this same file as a small helper:
+If `delivered` and `deliveryError` aren't already tracked at this site, the notify handler in `prompt.ts:1255` is where the actual dispatch happens — capture success/failure there and surface them.
 
-```typescript
-function parseNotifyTarget(target: string): { channelType: string; channelId: string } {
-  const idx = target.indexOf(':');
-  if (idx < 0) return { channelType: 'orchestrator', channelId: target };
-  return { channelType: target.slice(0, idx), channelId: target.slice(idx + 1) };
-}
-```
-
-- [ ] **Step 3: Write a vitest test for `parseNotifyTarget`**
-
-```typescript
-import { describe, it, expect } from 'vitest';
-import { parseNotifyTarget } from './workflow-engine.js';
-
-describe('parseNotifyTarget', () => {
-  it('splits on the first colon', () => {
-    expect(parseNotifyTarget('slack:#general')).toEqual({ channelType: 'slack', channelId: '#general' });
-  });
-  it('defaults to orchestrator for un-colon-delimited targets', () => {
-    expect(parseNotifyTarget('me')).toEqual({ channelType: 'orchestrator', channelId: 'me' });
-  });
-});
-```
-
-If `parseNotifyTarget` isn't exported, export it.
-
-- [ ] **Step 4: Run + commit**
+- [ ] **Step 3: Run + commit**
 
 ```bash
 cd /Users/connerswann/code/valet/packages/runner && pnpm test
-git add packages/runner/src/workflow-engine.ts packages/runner/src/workflow-engine.test.ts
-git commit -m "feat(runner): notify output exposes channelType, channelId, error"
+git add packages/runner/src/
+git commit -m "feat(runner): notify output exposes delivered + error (orchestrator-only)"
 ```
 
 ---
@@ -1298,7 +1371,7 @@ export function setFlag(name: FlagName, value: boolean | null): void {
 - [ ] **Step 3: Run tests**
 
 ```bash
-cd /Users/connerswann/code/valet/packages/client && pnpm test -- feature-flags
+cd /Users/connerswann/code/valet && pnpm vitest run packages/client/src/lib/feature-flags.test.ts
 ```
 
 Expected: PASS, all four tests.
@@ -1468,6 +1541,8 @@ git commit -m "feat(client): step-cards icon registry"
 **Files:**
 - Create: `packages/client/src/components/workflows/step-cards/fallback-card.tsx`
 
+**Reminder on data shape:** `ExecutionStepTrace` (in `packages/client/src/api/executions.ts:46`) exposes `input: unknown | null` and `output: unknown | null` — already parsed, not raw JSON strings. All cards read these directly; no `JSON.parse()` helpers.
+
 - [ ] **Step 1: Implement**
 
 ```typescript
@@ -1476,17 +1551,17 @@ import { ToolCardShell, ToolCardSection, ToolCodeBlock } from '@/components/chat
 import { StepIcon } from './icons';
 import type { WorkflowStepCardProps } from './index';
 
-export function FallbackCard({ step, open, onOpenChange }: WorkflowStepCardProps) {
-  const summary = `${step.stepId} · ${step.type}`;
+export function FallbackCard({ step, open, onOpenChange, stepType }: WorkflowStepCardProps) {
+  const summary = `${step.stepId} · ${stepType}`;
   const status = mapStatus(step.status);
-  const output = step.outputJson
-    ? safeStringify(step.outputJson)
+  const output = step.output != null
+    ? typeof step.output === 'string' ? step.output : JSON.stringify(step.output, null, 2)
     : null;
 
   return (
     <ToolCardShell
       icon={<StepIcon kind="fallback" />}
-      label={step.type}
+      label={stepType}
       status={status}
       summary={summary}
       open={open}
@@ -1507,14 +1582,6 @@ export function FallbackCard({ step, open, onOpenChange }: WorkflowStepCardProps
   );
 }
 
-function safeStringify(s: string): string {
-  try {
-    return JSON.stringify(JSON.parse(s), null, 2);
-  } catch {
-    return s;
-  }
-}
-
 function mapStatus(status: string): 'pending' | 'running' | 'completed' | 'error' {
   if (status === 'completed') return 'completed';
   if (status === 'failed' || status === 'cancelled') return 'error';
@@ -1523,7 +1590,7 @@ function mapStatus(status: string): 'pending' | 'running' | 'completed' | 'error
 }
 ```
 
-`WorkflowStepCardProps` is defined in Task C12 — the type already needs to exist by the time C4 compiles. For ordering convenience: define a stub in `index.tsx` first as part of this task (move the dispatcher implementation to C12):
+`WorkflowStepCardProps` is defined in Task C13 — define a stub in `index.tsx` first as part of this task. Note `stepType` is part of the props (the dispatcher resolves it once):
 
 ```typescript
 // packages/client/src/components/workflows/step-cards/index.tsx (stub for now)
@@ -1531,11 +1598,13 @@ import type { ExecutionStepTrace } from '@/api/executions';
 
 export interface WorkflowStepCardProps {
   step: ExecutionStepTrace;
+  /** Resolved by the dispatcher from the workflow def + step.input.type. */
+  stepType: string;
   /** Container child rows if this is a loop/parallel/conditional. */
   children?: ExecutionStepTrace[];
   open?: boolean;
   onOpenChange?: (next: boolean) => void;
-  workflowDef?: unknown; // tightened in C12
+  workflowDef?: unknown; // tightened in C13
 }
 ```
 
@@ -1580,11 +1649,10 @@ interface AgentPromptOutput {
 }
 
 export function AgentPromptCard({ step, open, onOpenChange }: WorkflowStepCardProps) {
-  const input = parse(step.inputJson);
-  const output = parse(step.outputJson) as AgentPromptOutput | null;
-  const persona = (input as { persona?: string } | null)?.persona;
-  const prompt = (input as { prompt?: string; content?: string; message?: string; goal?: string } | null);
-  const promptText = prompt?.prompt ?? prompt?.content ?? prompt?.message ?? prompt?.goal ?? '';
+  const input = step.input as Record<string, unknown> | null;
+  const output = step.output as AgentPromptOutput | null;
+  const persona = typeof input?.persona === 'string' ? input.persona : undefined;
+  const promptText = pickString(input, ['prompt', 'content', 'message', 'goal']) ?? '';
 
   const status = mapStatus(step.status);
   const isRunning = status === 'running' || status === 'pending';
@@ -1712,9 +1780,12 @@ function useElapsed(startedAt: string | null, paused: boolean): number {
   return Math.max(0, now - new Date(startedAt).getTime());
 }
 
-function parse(s: string | null): unknown {
-  if (!s) return null;
-  try { return JSON.parse(s); } catch { return null; }
+function pickString(obj: Record<string, unknown> | null, keys: string[]): string | undefined {
+  if (!obj) return undefined;
+  for (const k of keys) {
+    if (typeof obj[k] === 'string') return obj[k] as string;
+  }
+  return undefined;
 }
 
 function mapStatus(status: string): 'pending' | 'running' | 'completed' | 'error' {
@@ -1725,13 +1796,13 @@ function mapStatus(status: string): 'pending' | 'running' | 'completed' | 'error
 }
 ```
 
-- [ ] **Step 2: Typecheck + browser smoke**
+- [ ] **Step 2: Typecheck**
 
 ```bash
 cd /Users/connerswann/code/valet && pnpm typecheck
 ```
 
-Expected: clean. (The component isn't wired up yet; visual check waits for Task C13.)
+Expected: clean. (The component isn't wired up yet; visual check waits for Task C18.)
 
 - [ ] **Step 3: Commit**
 
@@ -1759,8 +1830,8 @@ interface BashInput { command?: string; }
 interface BashOutput { stdout?: string; stderr?: string; exitCode?: number; }
 
 export function BashCard({ step, open, onOpenChange }: WorkflowStepCardProps) {
-  const input = parse(step.inputJson) as BashInput | null;
-  const output = parse(step.outputJson) as BashOutput | null;
+  const input = step.input as BashInput | null;
+  const output = step.output as BashOutput | null;
   const exit = output?.exitCode ?? null;
   const status = mapStatus(step.status, exit);
 
@@ -1799,11 +1870,6 @@ export function BashCard({ step, open, onOpenChange }: WorkflowStepCardProps) {
   );
 }
 
-function parse(s: string | null): unknown {
-  if (!s) return null;
-  try { return JSON.parse(s); } catch { return null; }
-}
-
 function mapStatus(status: string, exit: number | null): 'pending' | 'running' | 'completed' | 'error' {
   if (status === 'failed' || status === 'cancelled') return 'error';
   if (status === 'completed') return exit !== null && exit !== 0 ? 'error' : 'completed';
@@ -1835,20 +1901,18 @@ import { ToolCardShell, ToolCardSection, ToolCodeBlock } from '@/components/chat
 import { StepIcon } from './icons';
 import type { WorkflowStepCardProps } from './index';
 
+// v1: notify only supports the orchestrator target. Channel routing is
+// out of scope — see Phase B Task B2.
 interface NotifyOutput {
   target?: string;
-  channelType?: string;
-  channelId?: string;
   delivered?: boolean;
   error?: string | null;
 }
 
 export function NotifyCard({ step, open, onOpenChange }: WorkflowStepCardProps) {
-  const output = parse(step.outputJson) as NotifyOutput | null;
+  const output = step.output as NotifyOutput | null;
   const status = mapStatus(step.status);
-  const target = output?.channelType && output?.channelId
-    ? `${output.channelType}:${output.channelId}`
-    : output?.target ?? '(unknown)';
+  const target = output?.target ?? 'orchestrator';
   const state = output?.delivered ? 'delivered' : output?.error ? 'failed' : 'pending';
 
   return (
@@ -1877,11 +1941,6 @@ export function NotifyCard({ step, open, onOpenChange }: WorkflowStepCardProps) 
       )}
     </ToolCardShell>
   );
-}
-
-function parse(s: string | null): unknown {
-  if (!s) return null;
-  try { return JSON.parse(s); } catch { return null; }
 }
 
 function mapStatus(status: string): 'pending' | 'running' | 'completed' | 'error' {
@@ -1921,7 +1980,7 @@ interface ApprovalOutput {
 }
 
 export function ApprovalCard({ step, open, onOpenChange }: WorkflowStepCardProps) {
-  const output = parse(step.outputJson) as ApprovalOutput | null;
+  const output = step.output as ApprovalOutput | null;
   const decision = output?.decision;
   const status = mapStatus(step.status, decision);
   const summary = decision
@@ -1949,11 +2008,6 @@ export function ApprovalCard({ step, open, onOpenChange }: WorkflowStepCardProps
   );
 }
 
-function parse(s: string | null): unknown {
-  if (!s) return null;
-  try { return JSON.parse(s); } catch { return null; }
-}
-
 function mapStatus(
   status: string,
   decision: ApprovalOutput['decision'],
@@ -1976,62 +2030,54 @@ git commit -m "feat(client): step-cards approval renderer (v1: decision + decide
 
 ---
 
-### Task C9: `step-cards/tool-card.tsx`
+### Task C9: `step-cards/tool-card.tsx` — delegate to the chat tool-card registry
 
 **Files:**
 - Create: `packages/client/src/components/workflows/step-cards/tool-card.tsx`
 
-- [ ] **Step 1: Implement — delegate to the existing chat tool-card registry**
+**What this does:** A workflow `tool` step is functionally a tool call. The existing `packages/client/src/components/chat/tool-cards/index.tsx` already has a `byToolName` dispatcher that picks the right renderer (read/write/grep/edit/bash/glob/list/lsp/webfetch/task/todo/etc.) for any tool by name. We pass the workflow step's tool call through that dispatcher so users see the same rendering they see in chat.
+
+- [ ] **Step 1: Locate the chat tool-card dispatcher entry point**
+
+```bash
+grep -n "export\|byToolName\|getToolCard\|renderToolCard" /Users/connerswann/code/valet/packages/client/src/components/chat/tool-cards/index.tsx | head -10
+```
+
+Confirm the export name (likely `DeferredToolCard` or `ToolCard` — see `packages/client/src/components/chat/deferred-tool-card.tsx` for how it's typically rendered). The shape of `ToolCallData` is defined in `packages/client/src/components/chat/tool-cards/types.ts`.
+
+- [ ] **Step 2: Implement — adapt the step shape to `ToolCallData`**
 
 ```typescript
 // packages/client/src/components/workflows/step-cards/tool-card.tsx
-import { ToolCardShell, ToolCardSection, ToolCodeBlock } from '@/components/chat/tool-cards/tool-card-shell';
-import { StepIcon } from './icons';
+import { DeferredToolCard } from '@/components/chat/deferred-tool-card';
+import type { ToolCallData, ToolCallStatus } from '@/components/chat/tool-cards/types';
 import type { WorkflowStepCardProps } from './index';
 
 interface ToolInput { tool?: string; arguments?: unknown; }
 
-export function ToolCard({ step, open, onOpenChange }: WorkflowStepCardProps) {
-  const input = parse(step.inputJson) as ToolInput | null;
-  const output = parse(step.outputJson);
+export function ToolCard({ step }: WorkflowStepCardProps) {
+  const input = step.input as ToolInput | null;
+  const toolName = input?.tool ?? 'unknown';
   const status = mapStatus(step.status);
 
-  return (
-    <ToolCardShell
-      icon={<StepIcon kind="tool" />}
-      label="tool"
-      status={status}
-      summary={`${step.stepId} · ${input?.tool ?? '(unknown)'}`}
-      open={open}
-      onOpenChange={onOpenChange}
-      id={`step-${step.stepId}-${step.iterationPath}`}
-      defaultExpanded={status === 'error'}
-    >
-      {input?.tool && (
-        <ToolCardSection label="tool">
-          <p className="font-mono text-[11px] text-neutral-700 dark:text-neutral-300">{input.tool}</p>
-        </ToolCardSection>
-      )}
-      {input?.arguments != null && (
-        <ToolCardSection label="arguments">
-          <ToolCodeBlock>{JSON.stringify(input.arguments, null, 2)}</ToolCodeBlock>
-        </ToolCardSection>
-      )}
-      {output != null && (
-        <ToolCardSection label="output">
-          <ToolCodeBlock>{typeof output === 'string' ? output : JSON.stringify(output, null, 2)}</ToolCodeBlock>
-        </ToolCardSection>
-      )}
-    </ToolCardShell>
-  );
+  // Adapt the workflow step row into the ToolCallData shape the chat
+  // tool-card dispatcher expects. Field names follow the existing
+  // ToolCallData interface — verify against types.ts before committing.
+  const toolCallData: ToolCallData = {
+    id: `${step.id}`,
+    name: toolName,
+    status,
+    arguments: input?.arguments,
+    result: step.output,
+    error: step.error ?? undefined,
+    startedAt: step.startedAt ?? undefined,
+    completedAt: step.completedAt ?? undefined,
+  };
+
+  return <DeferredToolCard data={toolCallData} />;
 }
 
-function parse(s: string | null): unknown {
-  if (!s) return null;
-  try { return JSON.parse(s); } catch { return null; }
-}
-
-function mapStatus(status: string): 'pending' | 'running' | 'completed' | 'error' {
+function mapStatus(status: string): ToolCallStatus {
   if (status === 'completed') return 'completed';
   if (status === 'failed' || status === 'cancelled') return 'error';
   if (status === 'running') return 'running';
@@ -2039,7 +2085,11 @@ function mapStatus(status: string): 'pending' | 'running' | 'completed' | 'error
 }
 ```
 
-A deeper tool-name dispatch into `chat/tool-cards/*` can come later — for v1 this generic shape is sufficient.
+If `ToolCallData` field names differ from what's shown above, conform to the existing interface — the principle is: workflow `tool` rendering goes through the same path as chat tool-card rendering, with whatever adapter shape the existing component expects.
+
+- [ ] **Step 3: Verify the rendered output in browser**
+
+After C13 wires the dispatcher and C18 wires the page, drag a workflow with a `tool` step (e.g., `read`) into a dev session. Confirm the tool step card looks the same as it would in chat.
 
 - [ ] **Step 2: Typecheck + commit**
 
@@ -2068,7 +2118,7 @@ import type { WorkflowStepCardProps } from './index';
 interface ConditionalInput { condition?: string; if?: string; }
 
 export function ConditionalCard({ step, children = [], open, onOpenChange, workflowDef }: WorkflowStepCardProps) {
-  const input = parse(step.inputJson) as ConditionalInput | null;
+  const input = step.input as ConditionalInput | null;
   const condition = input?.condition ?? input?.if ?? '(no condition)';
   const branchTaken = inferBranch(step.stepId, children);
   const status = mapStatus(step.status);
@@ -2113,11 +2163,6 @@ function inferBranch(stepId: string, children: WorkflowStepCardProps['children']
     if (c.iterationPath.includes(`${stepId}:else`)) return 'else';
   }
   return null;
-}
-
-function parse(s: string | null): unknown {
-  if (!s) return null;
-  try { return JSON.parse(s); } catch { return null; }
 }
 
 function mapStatus(status: string): 'pending' | 'running' | 'completed' | 'error' {
@@ -2378,8 +2423,19 @@ import { LoopCard } from './loop-card';
 import { ParallelCard } from './parallel-card';
 import { ToolCard } from './tool-card';
 import { FallbackCard } from './fallback-card';
+import { bump, WORKFLOW_TELEMETRY } from '@/lib/workflow-telemetry';
 
 export interface WorkflowStepCardProps {
+  step: ExecutionStepTrace;
+  /** Resolved by the dispatcher; renderers receive it pre-computed. */
+  stepType: string;
+  children?: ExecutionStepTrace[];
+  open?: boolean;
+  onOpenChange?: (next: boolean) => void;
+  workflowDef?: WorkflowData | null;
+}
+
+interface WorkflowStepCardEntryProps {
   step: ExecutionStepTrace;
   children?: ExecutionStepTrace[];
   open?: boolean;
@@ -2387,31 +2443,36 @@ export interface WorkflowStepCardProps {
   workflowDef?: WorkflowData | null;
 }
 
-export function WorkflowStepCard(props: WorkflowStepCardProps) {
-  const stepType = useMemo(() => resolveType(props.step, props.workflowDef), [props.step, props.workflowDef]);
+export function WorkflowStepCard(props: WorkflowStepCardEntryProps) {
+  const stepType = useMemo(
+    () => resolveType(props.step, props.workflowDef),
+    [props.step, props.workflowDef],
+  );
+  const enriched: WorkflowStepCardProps = { ...props, stepType };
   switch (stepType) {
-    case 'agent_prompt': return <AgentPromptCard {...props} />;
-    case 'bash':         return <BashCard {...props} />;
-    case 'notify':       return <NotifyCard {...props} />;
-    case 'approval':     return <ApprovalCard {...props} />;
-    case 'conditional':  return <ConditionalCard {...props} />;
-    case 'loop':         return <LoopCard {...props} />;
-    case 'parallel':     return <ParallelCard {...props} />;
-    case 'tool':         return <ToolCard {...props} />;
-    default:             return <FallbackCard {...props} />;
+    case 'agent_prompt': return <AgentPromptCard {...enriched} />;
+    case 'bash':         return <BashCard {...enriched} />;
+    case 'notify':       return <NotifyCard {...enriched} />;
+    case 'approval':     return <ApprovalCard {...enriched} />;
+    case 'conditional':  return <ConditionalCard {...enriched} />;
+    case 'loop':         return <LoopCard {...enriched} />;
+    case 'parallel':     return <ParallelCard {...enriched} />;
+    case 'tool':         return <ToolCard {...enriched} />;
+    default:
+      bump(WORKFLOW_TELEMETRY.FALLBACK_RENDERER_USED, { type: stepType });
+      return <FallbackCard {...enriched} />;
   }
 }
 
 function resolveType(step: ExecutionStepTrace, workflowDef?: WorkflowData | null): string {
-  // Prefer the static workflow definition; fall back to inputJson.type.
+  // Prefer the static workflow definition; fall back to step.input.type
+  // (already parsed unknown — no JSON.parse needed).
   const fromDef = workflowDef ? findStepType(workflowDef.steps, step.stepId) : null;
   if (fromDef) return fromDef;
-  try {
-    const input = step.inputJson ? JSON.parse(step.inputJson) : null;
-    if (input && typeof input === 'object' && typeof (input as { type?: unknown }).type === 'string') {
-      return (input as { type: string }).type;
-    }
-  } catch {}
+  if (step.input && typeof step.input === 'object' && !Array.isArray(step.input)) {
+    const t = (step.input as { type?: unknown }).type;
+    if (typeof t === 'string') return t;
+  }
   return 'fallback';
 }
 
@@ -2446,11 +2507,13 @@ git commit -m "feat(client): step-cards byStepType dispatcher"
 
 ---
 
-### Task C14: `useExecutionTimeline` — memoized view-model
+### Task C14: `useExecutionTimeline` — memoized view-model with full nested tree
 
 **Files:**
 - Create: `packages/client/src/hooks/use-execution-timeline.ts`
 - Create: `packages/client/src/hooks/use-execution-timeline.test.ts`
+
+**Why recursive:** A loop inside a parallel inside a loop is a real shape. A shallow flat-children model would not group iterations correctly past the outermost container, and would not surface pending children that exist in the static def but have no row yet. The container cards (`loop-card.tsx`, `parallel-card.tsx`, `conditional-card.tsx`) call `WorkflowStepCard` on each child — those calls expect a real `TimelineNode` whose grandchildren are already nested.
 
 - [ ] **Step 1: Write tests**
 
@@ -2459,33 +2522,88 @@ git commit -m "feat(client): step-cards byStepType dispatcher"
 import { describe, it, expect } from 'vitest';
 import { buildTimelineViewModel } from './use-execution-timeline';
 
+function mkRow(over: Partial<{
+  stepId: string; iterationPath: string; status: string; attempt: number;
+  startedAt: string | null; completedAt: string | null; input: unknown; output: unknown;
+  error: string | null; id: string; createdAt: string;
+}>): never {
+  return {
+    id: over.id ?? `r-${Math.random()}`,
+    executionId: 'ex',
+    stepId: over.stepId ?? 's',
+    attempt: over.attempt ?? 1,
+    iterationPath: over.iterationPath ?? '',
+    status: over.status ?? 'completed',
+    input: over.input ?? null,
+    output: over.output ?? null,
+    error: over.error ?? null,
+    startedAt: over.startedAt ?? '',
+    completedAt: over.completedAt ?? '',
+    createdAt: over.createdAt ?? '',
+    workflowStepIndex: null,
+    sequence: 0,
+  } as never;
+}
+
 const def = {
   steps: [
-    { id: 'A', type: 'bash', command: 'echo a' },
+    { id: 'A', type: 'bash' },
     {
-      id: 'L', type: 'loop', over: '{{ items }}',
-      steps: [{ id: 'inner', type: 'bash', command: 'echo {{ loop.item }}' }],
+      id: 'L', type: 'loop',
+      steps: [
+        { id: 'inner', type: 'bash' },
+        {
+          id: 'P', type: 'parallel',
+          steps: [
+            { id: 'leaf1', type: 'bash' },
+            { id: 'leaf2', type: 'bash' },
+          ],
+        },
+      ],
     },
   ],
 };
 
 describe('buildTimelineViewModel', () => {
-  it('places top-level steps in the order of the static definition', () => {
+  it('places top-level steps in static-definition order', () => {
     const vm = buildTimelineViewModel(def as never, [
-      { stepId: 'A', iterationPath: '', status: 'completed', attempt: 1, startedAt: '', completedAt: '', inputJson: null, outputJson: null, error: null, id: 'r1', createdAt: '' },
-      { stepId: 'L', iterationPath: '', status: 'completed', attempt: 1, startedAt: '', completedAt: '', inputJson: null, outputJson: null, error: null, id: 'r2', createdAt: '' },
+      mkRow({ stepId: 'A', iterationPath: '' }),
+      mkRow({ stepId: 'L', iterationPath: '' }),
     ]);
-    expect(vm.map((x) => x.step.stepId)).toEqual(['A', 'L']);
+    expect(vm.map((n) => n.step.stepId)).toEqual(['A', 'L']);
   });
 
-  it('attaches loop child rows to their parent under children', () => {
+  it('nests recursively: loop -> iter -> inner parallel -> branch -> leaf', () => {
     const vm = buildTimelineViewModel(def as never, [
-      { stepId: 'L', iterationPath: '', status: 'completed', attempt: 1, startedAt: '', completedAt: '', inputJson: null, outputJson: null, error: null, id: 'r2', createdAt: '' },
-      { stepId: 'inner', iterationPath: 'L:i0', status: 'completed', attempt: 1, startedAt: '', completedAt: '', inputJson: null, outputJson: null, error: null, id: 'r3', createdAt: '' },
-      { stepId: 'inner', iterationPath: 'L:i1', status: 'completed', attempt: 1, startedAt: '', completedAt: '', inputJson: null, outputJson: null, error: null, id: 'r4', createdAt: '' },
+      mkRow({ stepId: 'L', iterationPath: '' }),
+      mkRow({ stepId: 'inner', iterationPath: 'L:i0' }),
+      mkRow({ stepId: 'P', iterationPath: 'L:i0' }),
+      mkRow({ stepId: 'leaf1', iterationPath: 'L:i0/P:b0' }),
+      mkRow({ stepId: 'leaf2', iterationPath: 'L:i0/P:b1' }),
     ]);
-    const loop = vm.find((x) => x.step.stepId === 'L');
-    expect(loop?.children?.map((c) => c.iterationPath)).toEqual(['L:i0', 'L:i1']);
+    const loop = vm.find((n) => n.step.stepId === 'L')!;
+    expect(loop.children?.map((c) => c.step.stepId)).toContain('P');
+    const parallelNode = loop.children?.find((c) => c.step.stepId === 'P')!;
+    expect(parallelNode.children?.map((c) => c.step.stepId).sort()).toEqual(['leaf1', 'leaf2']);
+  });
+
+  it('emits a placeholder node for a static step with no row yet', () => {
+    const vm = buildTimelineViewModel(def as never, [
+      // Only 'A' has run; 'L' has not yet.
+      mkRow({ stepId: 'A', iterationPath: '' }),
+    ]);
+    const loop = vm.find((n) => n.step.stepId === 'L');
+    expect(loop).toBeTruthy();
+    expect(loop?.step.status).toBe('pending');
+    expect(loop?.placeholder).toBe(true);
+  });
+
+  it('falls back to flat createdAt order when workflowDef is null', () => {
+    const vm = buildTimelineViewModel(null, [
+      mkRow({ stepId: 'b', iterationPath: '', createdAt: '2026-01-02' }),
+      mkRow({ stepId: 'a', iterationPath: '', createdAt: '2026-01-01' }),
+    ]);
+    expect(vm.map((n) => n.step.stepId)).toEqual(['a', 'b']);
   });
 });
 ```
@@ -2493,7 +2611,7 @@ describe('buildTimelineViewModel', () => {
 - [ ] **Step 2: Run, verify fail**
 
 ```bash
-cd /Users/connerswann/code/valet/packages/client && pnpm test -- use-execution-timeline
+cd /Users/connerswann/code/valet && pnpm vitest run packages/client/src/hooks/use-execution-timeline.test.ts
 ```
 
 Expected: FAIL — module not found.
@@ -2505,10 +2623,13 @@ Expected: FAIL — module not found.
 import { useMemo } from 'react';
 import type { ExecutionStepTrace } from '@/api/executions';
 import type { WorkflowData, WorkflowStep } from '@/api/workflows';
+import { bump, WORKFLOW_TELEMETRY } from '@/lib/workflow-telemetry';
 
 export interface TimelineNode {
   step: ExecutionStepTrace;
-  children?: ExecutionStepTrace[];
+  children?: TimelineNode[];
+  /** True when the static def has this step but no row exists yet. */
+  placeholder?: boolean;
 }
 
 export function useExecutionTimeline(
@@ -2526,73 +2647,167 @@ export function buildTimelineViewModel(
   stepRows: ExecutionStepTrace[],
 ): TimelineNode[] {
   if (!workflowDef) {
-    // Source workflow deleted with no snapshot — render flat in createdAt order.
     return [...stepRows]
-      .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+      .sort((a, b) => (a.createdAt ?? '').localeCompare(b.createdAt ?? ''))
       .map((s) => ({ step: s }));
   }
 
-  const rowsByStepId = new Map<string, ExecutionStepTrace[]>();
+  const placedKeys = new Set<string>();
+  const nodes = buildLevel(workflowDef.steps, '', stepRows, placedKeys);
+
+  // Surface orphan rows via telemetry (events arrived for steps the static def doesn't know).
   for (const r of stepRows) {
-    const list = rowsByStepId.get(r.stepId);
-    if (list) list.push(r); else rowsByStepId.set(r.stepId, [r]);
+    if (!placedKeys.has(`${r.stepId}#${r.iterationPath}`)) {
+      bump(WORKFLOW_TELEMETRY.ORPHAN_STEP_ROW, {
+        stepId: r.stepId,
+        iterationPath: r.iterationPath,
+      });
+    }
   }
 
-  const allContainerStepIds = collectContainerStepIds(workflowDef.steps);
+  return nodes;
+}
 
-  // Top-level: for each top-level step in the static def, find its top-level row
-  // (iterationPath === ''). For container steps, attach all rows whose iterationPath
-  // begins with that step's id.
+function buildLevel(
+  defSteps: WorkflowStep[],
+  parentIterationPath: string,
+  allRows: ExecutionStepTrace[],
+  placedKeys: Set<string>,
+): TimelineNode[] {
   const out: TimelineNode[] = [];
-  for (const defStep of workflowDef.steps) {
-    const topRows = (rowsByStepId.get(defStep.id) ?? []).filter((r) => r.iterationPath === '');
-    const topRow = topRows[0];
-    if (!topRow) continue;
 
-    if (allContainerStepIds.has(defStep.id)) {
-      const children = stepRows.filter((r) =>
-        r.iterationPath.startsWith(`${defStep.id}:`) ||
-        r.iterationPath.startsWith(`${defStep.id}/`)
-      );
-      out.push({ step: topRow, children });
+  for (const defStep of defSteps) {
+    // Find the row for THIS def step at THIS iteration path.
+    const row = allRows.find(
+      (r) => r.stepId === defStep.id && r.iterationPath === parentIterationPath,
+    );
+
+    if (!row) {
+      // No row yet — emit a placeholder.
+      out.push({ step: makePlaceholderRow(defStep, parentIterationPath), placeholder: true });
+      continue;
+    }
+    placedKeys.add(`${row.stepId}#${row.iterationPath}`);
+
+    if (defStep.type === 'loop') {
+      // Discover iteration indexes from child rows under this loop instance.
+      const prefix = parentIterationPath
+        ? `${parentIterationPath}/${defStep.id}:i`
+        : `${defStep.id}:i`;
+      const iterIndexes = collectIndexes(allRows, prefix);
+      const children: TimelineNode[] = [];
+      for (const i of iterIndexes) {
+        const childParent = parentIterationPath
+          ? `${parentIterationPath}/${defStep.id}:i${i}`
+          : `${defStep.id}:i${i}`;
+        children.push(...buildLevel(defStep.steps ?? [], childParent, allRows, placedKeys));
+      }
+      out.push({ step: row, children });
+    } else if (defStep.type === 'parallel') {
+      const prefix = parentIterationPath
+        ? `${parentIterationPath}/${defStep.id}:b`
+        : `${defStep.id}:b`;
+      const branchIndexes = collectIndexes(allRows, prefix);
+      const children: TimelineNode[] = [];
+      for (const b of branchIndexes) {
+        const childParent = parentIterationPath
+          ? `${parentIterationPath}/${defStep.id}:b${b}`
+          : `${defStep.id}:b${b}`;
+        children.push(...buildLevel(defStep.steps ?? [], childParent, allRows, placedKeys));
+      }
+      out.push({ step: row, children });
+    } else if (defStep.type === 'conditional') {
+      const thenPrefix = parentIterationPath
+        ? `${parentIterationPath}/${defStep.id}:then`
+        : `${defStep.id}:then`;
+      const elsePrefix = parentIterationPath
+        ? `${parentIterationPath}/${defStep.id}:else`
+        : `${defStep.id}:else`;
+      const children: TimelineNode[] = [];
+      if (allRows.some((r) => r.iterationPath === thenPrefix || r.iterationPath.startsWith(`${thenPrefix}/`))) {
+        children.push(...buildLevel((defStep.then ?? []) as WorkflowStep[], thenPrefix, allRows, placedKeys));
+      } else if (allRows.some((r) => r.iterationPath === elsePrefix || r.iterationPath.startsWith(`${elsePrefix}/`))) {
+        children.push(...buildLevel((defStep.else ?? []) as WorkflowStep[], elsePrefix, allRows, placedKeys));
+      }
+      out.push({ step: row, children });
     } else {
-      out.push({ step: topRow });
+      out.push({ step: row });
     }
   }
+
   return out;
 }
 
-function collectContainerStepIds(steps: WorkflowStep[]): Set<string> {
-  const out = new Set<string>();
-  walk(steps, out);
-  return out;
-}
-
-function walk(steps: WorkflowStep[], acc: Set<string>): void {
-  for (const s of steps) {
-    if (s.type === 'loop' || s.type === 'parallel' || s.type === 'conditional') {
-      acc.add(s.id);
-    }
-    for (const sub of [s.then, s.else, s.steps]) {
-      if (Array.isArray(sub)) walk(sub as WorkflowStep[], acc);
-    }
+function collectIndexes(rows: ExecutionStepTrace[], prefix: string): number[] {
+  const seen = new Set<number>();
+  for (const r of rows) {
+    if (!r.iterationPath.startsWith(prefix)) continue;
+    const tail = r.iterationPath.slice(prefix.length);
+    const end = tail.indexOf('/');
+    const numStr = end >= 0 ? tail.slice(0, end) : tail;
+    const n = Number(numStr);
+    if (Number.isInteger(n) && n >= 0) seen.add(n);
   }
+  return [...seen].sort((a, b) => a - b);
+}
+
+function makePlaceholderRow(
+  defStep: WorkflowStep,
+  iterationPath: string,
+): ExecutionStepTrace {
+  return {
+    id: `placeholder-${defStep.id}-${iterationPath}`,
+    executionId: '',
+    stepId: defStep.id,
+    attempt: 0,
+    iterationPath,
+    status: 'pending',
+    input: { type: defStep.type, ...(defStep as unknown as object) },
+    output: null,
+    error: null,
+    startedAt: null,
+    completedAt: null,
+    createdAt: '',
+    workflowStepIndex: null,
+    sequence: 0,
+  } as unknown as ExecutionStepTrace;
 }
 ```
 
-- [ ] **Step 4: Run, verify pass**
+The `TimelineNode.children` is now `TimelineNode[]` (recursive), not `ExecutionStepTrace[]`. **Container cards consume `TimelineNode[]` and pass each child's `node.step` + `node.children` to `WorkflowStepCard`** — update C10/C11/C12 to receive `children: TimelineNode[]` and forward `c.step` + `c.children` into the recursive call.
 
-```bash
-cd /Users/connerswann/code/valet/packages/client && pnpm test -- use-execution-timeline
+- [ ] **Step 4: Update C10/C11/C12 prop usage**
+
+In each container card, change the `children` prop type and the `.map(c => <WorkflowStepCard step={c} />)` pattern to:
+
+```typescript
+children?: TimelineNode[];
+// ...
+children.map((c) => (
+  <WorkflowStepCard
+    key={`${c.step.stepId}#${c.step.iterationPath}`}
+    step={c.step}
+    children={c.children}
+    workflowDef={workflowDef}
+  />
+))
 ```
 
-Expected: PASS.
+(The `WorkflowStepCard` entry props gain `children?: TimelineNode[]` — propagate.)
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 5: Run, verify pass**
 
 ```bash
-git add packages/client/src/hooks/use-execution-timeline.ts packages/client/src/hooks/use-execution-timeline.test.ts
-git commit -m "feat(client): useExecutionTimeline view-model"
+cd /Users/connerswann/code/valet && pnpm vitest run packages/client/src/hooks/use-execution-timeline.test.ts
+```
+
+Expected: PASS, all four tests.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add packages/client/src/hooks/use-execution-timeline.ts packages/client/src/hooks/use-execution-timeline.test.ts packages/client/src/components/workflows/step-cards/
+git commit -m "feat(client): useExecutionTimeline with full nested tree + placeholders"
 ```
 
 ---
@@ -2820,41 +3035,13 @@ export function snapshot(): Record<string, number> {
 }
 ```
 
-- [ ] **Step 2: Wire orphan-row detection into the timeline view-model**
+- [ ] **Step 2: Orphan-row detection is wired in C14's view-model already**
 
-In `packages/client/src/hooks/use-execution-timeline.ts`, after `buildTimelineViewModel` runs in the hook, count rows that didn't land in any node:
+`buildTimelineViewModel` in C14 already calls `bump(WORKFLOW_TELEMETRY.ORPHAN_STEP_ROW, ...)` for any step row that the static def doesn't recognize. Confirm this is in place; nothing additional to do.
 
-```typescript
-import { bump, WORKFLOW_TELEMETRY } from '@/lib/workflow-telemetry';
+- [ ] **Step 3: `FALLBACK_RENDERER_USED` is wired in C13's dispatcher already**
 
-// inside useExecutionTimeline, after building the view-model:
-useMemo(() => {
-  const placedKeys = new Set<string>();
-  for (const node of vm) {
-    placedKeys.add(`${node.step.stepId}#${node.step.iterationPath}`);
-    for (const c of node.children ?? []) {
-      placedKeys.add(`${c.stepId}#${c.iterationPath}`);
-    }
-  }
-  for (const r of stepRows ?? []) {
-    if (!placedKeys.has(`${r.stepId}#${r.iterationPath}`)) {
-      bump(WORKFLOW_TELEMETRY.ORPHAN_STEP_ROW, { stepId: r.stepId, iterationPath: r.iterationPath });
-    }
-  }
-}, [vm, stepRows]);
-```
-
-- [ ] **Step 3: Wire fallback-renderer-used into the dispatcher**
-
-In `packages/client/src/components/workflows/step-cards/index.tsx`, in the `default:` arm of the switch:
-
-```typescript
-import { bump, WORKFLOW_TELEMETRY } from '@/lib/workflow-telemetry';
-// ...
-default:
-  bump(WORKFLOW_TELEMETRY.FALLBACK_RENDERER_USED, { type: stepType });
-  return <FallbackCard {...props} />;
-```
+If C13 was executed before C17, the dispatcher already calls `bump(WORKFLOW_TELEMETRY.FALLBACK_RENDERER_USED, ...)` in the `default:` arm. Confirm. If C13 hadn't been done yet, do it now per the C13 step.
 
 - [ ] **Step 4: Typecheck + commit**
 
@@ -2862,6 +3049,97 @@ default:
 cd /Users/connerswann/code/valet && pnpm typecheck
 git add packages/client/src/lib/workflow-telemetry.ts packages/client/src/hooks/use-execution-timeline.ts packages/client/src/components/workflows/step-cards/index.tsx
 git commit -m "obs(client): workflow UI telemetry counters"
+```
+
+---
+
+### Task C17.5: Retry-workflow footer on failed step cards
+
+**Files:**
+- Modify: `packages/client/src/components/workflows/step-cards/index.tsx`
+
+**Why this lives in the dispatcher:** every renderer already wraps `ToolCardShell`; adding the retry button at the dispatcher level means it appears uniformly under every failed card without each renderer having to thread the action. The button **re-runs the entire workflow** (no "from here" semantics — see Task A13 for the scope decision).
+
+- [ ] **Step 1: Look up the "run workflow" mutation**
+
+```bash
+grep -n "useRunWorkflow\|useTestFireWorkflow\|runWorkflow\b" /Users/connerswann/code/valet/packages/client/src/api/workflows.ts | head -5
+```
+
+There's an existing mutation that dispatches a workflow (used by the manual-trigger UI). Reuse it.
+
+- [ ] **Step 2: Wrap the dispatched card with a footer when status is failed**
+
+In `index.tsx`, change `WorkflowStepCard` to render a wrapper:
+
+```typescript
+import { useRunWorkflow } from '@/api/workflows';
+import { useNavigate } from '@tanstack/react-router';
+import { RotateCcw } from 'lucide-react';
+
+export function WorkflowStepCard(props: WorkflowStepCardEntryProps) {
+  const stepType = useMemo(() => resolveType(props.step, props.workflowDef), [props.step, props.workflowDef]);
+  const enriched: WorkflowStepCardProps = { ...props, stepType };
+  const card = dispatchCard(stepType, enriched);
+
+  if (props.step.status !== 'failed') return card;
+
+  return (
+    <div className="flex flex-col gap-1">
+      {card}
+      <RetryFooter workflowId={props.workflowDef?.id} />
+    </div>
+  );
+}
+
+function dispatchCard(stepType: string, props: WorkflowStepCardProps) {
+  switch (stepType) {
+    case 'agent_prompt': return <AgentPromptCard {...props} />;
+    // ... etc, identical to existing switch in C13
+  }
+}
+
+function RetryFooter({ workflowId }: { workflowId?: string }) {
+  const run = useRunWorkflow();
+  const navigate = useNavigate();
+  if (!workflowId) return null;
+  return (
+    <button
+      type="button"
+      onClick={async () => {
+        const res = await run.mutateAsync({ workflowId, variables: {} });
+        if (res?.execution?.executionId) {
+          navigate({
+            to: '/automation/executions/$executionId',
+            params: { executionId: res.execution.executionId },
+          });
+        }
+      }}
+      disabled={run.isPending}
+      className="self-start font-mono text-[10px] px-2 py-1 rounded border border-neutral-200 dark:border-neutral-800 hover:bg-neutral-50 dark:hover:bg-white/[0.02] inline-flex items-center gap-1"
+    >
+      <RotateCcw className="w-3 h-3" />
+      retry workflow
+    </button>
+  );
+}
+```
+
+(Conform `useRunWorkflow`'s actual mutation signature to whatever the api file exports — the hook name might be `useTestFireWorkflow` or `useDispatchWorkflow`. The point is: re-dispatch from the top, then navigate to the new execution.)
+
+- [ ] **Step 3: Typecheck + browser smoke**
+
+```bash
+cd /Users/connerswann/code/valet && pnpm typecheck
+```
+
+Open an execution detail page where a step has failed. Verify the retry button shows under the failed card and dispatches a new execution on click.
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add packages/client/src/components/workflows/step-cards/index.tsx
+git commit -m "feat(client): retry-workflow footer on failed step cards"
 ```
 
 ---
@@ -3052,7 +3330,7 @@ git commit -m "feat(worker): migration 0018 — workflow back-pointers on messag
 
 ---
 
-### Task D2: Drizzle schema update for messages
+### Task D2: Drizzle schema update for messages (D1 replication)
 
 **Files:**
 - Modify: the messages schema file (locate with: `grep -rn "messages.*sqliteTable\|export const messages" packages/worker/src/lib/schema/`)
@@ -3076,7 +3354,62 @@ index('idx_messages_workflow_execution').on(table.workflowExecutionId),
 ```bash
 cd /Users/connerswann/code/valet && pnpm typecheck
 git add packages/worker/src/lib/schema/
-git commit -m "feat(worker): drizzle schema for message workflow back-pointers"
+git commit -m "feat(worker): drizzle schema for message workflow back-pointers (D1)"
+```
+
+---
+
+### Task D2.5: `MessageStore` (DO-local SQLite) gets the same columns
+
+**Files:**
+- Modify: `packages/worker/src/durable-objects/message-store.ts`
+
+**Why this exists:** Workflow chat messages are written to DO-local SQLite first by `MessageStore.writeMessage` (around line 111), then flushed/replicated to D1 (around line 541). The D1 migration in D1 and the Drizzle schema in D2 do not cover the DO-local storage path; without this task, back-pointers would persist nowhere or only in D1, breaking immediate-read scenarios.
+
+- [ ] **Step 1: Find the DO-local table definition**
+
+```bash
+grep -n "CREATE TABLE\|writeMessage\|flush" /Users/connerswann/code/valet/packages/worker/src/durable-objects/message-store.ts | head -10
+```
+
+The class manages its own SQLite schema via `ctx.storage.sql.exec`. Find the schema definition and the `writeMessage` insert.
+
+- [ ] **Step 2: Add columns to the DO-local schema**
+
+The schema is created lazily in `MessageStore`. Add an idempotent migration:
+
+```typescript
+private ensureSchema() {
+  this.sql.exec(`CREATE TABLE IF NOT EXISTS messages (...)`);  // existing
+  // Additive: tolerate older deployments that already have the table.
+  try { this.sql.exec(`ALTER TABLE messages ADD COLUMN workflow_execution_id TEXT`); } catch {}
+  try { this.sql.exec(`ALTER TABLE messages ADD COLUMN workflow_step_id TEXT`); } catch {}
+  try { this.sql.exec(`ALTER TABLE messages ADD COLUMN workflow_iteration_path TEXT`); } catch {}
+}
+```
+
+- [ ] **Step 3: Extend `writeMessage` signature + insert**
+
+Accept the three new fields (all optional/nullable) on the `writeMessage` input. Add them to the `INSERT` column list and bound values.
+
+- [ ] **Step 4: Extend the flush-to-D1 path**
+
+Around line 541, the flush copies rows from DO-local SQLite to D1 via a prepared INSERT. Add the three new columns to both the `SELECT` and `INSERT` clauses so back-pointers survive replication.
+
+- [ ] **Step 5: Typecheck + worker tests**
+
+```bash
+cd /Users/connerswann/code/valet && pnpm typecheck
+cd /Users/connerswann/code/valet/packages/worker && pnpm test
+```
+
+Expected: clean and green.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add packages/worker/src/durable-objects/message-store.ts
+git commit -m "feat(worker): MessageStore persists + replicates workflow back-pointers"
 ```
 
 ---
@@ -3167,6 +3500,8 @@ git commit -m "feat(runner): workflow-chat-message gains typed back-pointer fiel
 **Files:**
 - Modify: `packages/runner/src/prompt.ts`
 
+**Prerequisite check:** This task reads `context.iterationPath` from `WorkflowStepExecutionContext`. That field is added in **Task A4.5**. If A4.5 hasn't been done, do it first.
+
 - [ ] **Step 1: Locate the two emit sites**
 
 Search:
@@ -3179,33 +3514,31 @@ Two hits: 1375 (prompt) and 1463 (assistant recovery response).
 
 - [ ] **Step 2: Update both calls to use the new context shape**
 
-The runner's prompt-execution path has access to `executionId`, the current step's `id`, and the engine's `iterationPath` via `ctx`. Wire them through:
+The `onAgentStep` hook receives a `WorkflowStepExecutionContext` named `context` (post-A4.5, this has `executionId`, `iterationPath`). Wire them through:
 
 ```typescript
 this.agentClient.sendWorkflowChatMessage("user", content, {
   channelType: ...,
   channelId: ...,
   opencodeSessionId: ...,
-  workflowExecutionId: ctx.executionId,
+  workflowExecutionId: context.executionId,
   workflowStepId: step.id,
-  workflowIterationPath: ctx.iterationPath,
+  workflowIterationPath: context.iterationPath,
 });
 ```
 
-And the recovery-response call:
+And the recovery-response call (find the closest enclosing scope where `context` is in scope — if it isn't at the inner callsite, lift it from the hook entry point):
 
 ```typescript
 this.agentClient.sendWorkflowChatMessage("assistant", recoveredResponse, {
   channelType: ...,
   channelId: ...,
   opencodeSessionId: ...,
-  workflowExecutionId: ctx.executionId,
+  workflowExecutionId: context.executionId,
   workflowStepId: step.id,
-  workflowIterationPath: ctx.iterationPath,
+  workflowIterationPath: context.iterationPath,
 });
 ```
-
-If `ctx` isn't in scope at the response-recovery callsite, plumb it through; this is a small lift and unblocks all the chat UI.
 
 - [ ] **Step 3: Typecheck + runner tests**
 
@@ -3455,7 +3788,10 @@ export function mergeFeed(messages: Message[], steps: ExecutionStepTrace[]): Fee
     items.push({ kind: 'message', timestamp: toMs(m.createdAt), message: m });
   }
   for (const s of steps) {
-    items.push({ kind: 'step', timestamp: toMs(s.createdAt), step: s });
+    // Prefer startedAt (workflow event time) over createdAt (DB insertion time).
+    // createdAt can lag startedAt during burst writes.
+    const ts = s.startedAt ?? s.createdAt;
+    items.push({ kind: 'step', timestamp: toMs(ts), step: s });
   }
   items.sort((a, b) => a.timestamp - b.timestamp);
   return items;
@@ -3470,7 +3806,7 @@ function toMs(t: number | string): number {
 - [ ] **Step 3: Run tests, verify pass**
 
 ```bash
-cd /Users/connerswann/code/valet/packages/client && pnpm test -- use-session-feed
+cd /Users/connerswann/code/valet && pnpm vitest run packages/client/src/hooks/use-session-feed.test.ts
 ```
 
 Expected: PASS, all three tests.
@@ -3484,47 +3820,84 @@ git commit -m "feat(client): useSessionFeed merges messages + step rows by times
 
 ---
 
-### Task D8: `MessageList` flag-gated workflow feed
+### Task D8: Workflow feed in chat behind `workflow_ui_chat_cards`
 
 **Files:**
-- Modify: `packages/client/src/components/chat/message-list.tsx`
+- Modify: `packages/client/src/components/chat/chat-container.tsx` (the `MessageList` mount lives here, ~line 475)
+- Modify: `packages/client/src/components/chat/message-list.tsx` (extend props to accept the feed)
 
-- [ ] **Step 1: Branch on the flag**
+**Why this seam:** `ChatContainer` already knows the `sessionId` and has access to `session` data — pulling executionId and step rows happens here, not deeper inside `MessageList`. We pass an optional `workflowFeed` down so `MessageList` doesn't need to know about workflows.
+
+`useExecutionSteps` does NOT have an `enabled` option (checked in `packages/client/src/api/executions.ts:155`). Pass an empty string as `executionId` when we don't want to fetch; the hook already short-circuits on falsy ids. Cleaner: only call the hook when `executionId` is set, gated by a conditional render at the parent component level — or use a `skipToken`/condition pattern matching this file's existing style.
+
+- [ ] **Step 1: In `chat-container.tsx`, compute the workflow feed when the flag is on**
 
 ```typescript
 import { useFeatureFlag } from '@/lib/feature-flags';
 import { useSessionFeed } from '@/hooks/use-session-feed';
 import { useExecutionSteps } from '@/api/executions';
+
+// ... inside ChatContainer:
+const useChatCards = useFeatureFlag('workflow_ui_chat_cards');
+const executionId =
+  useChatCards && session?.metadata?.executionId
+    ? session.metadata.executionId
+    : '';
+const isTerminal = false; // chat doesn't care about terminality for this hook
+const { data: stepsData } = useExecutionSteps(executionId, { isTerminal });
+const workflowFeed = useSessionFeed(messages, executionId ? stepsData?.steps : undefined);
+```
+
+(`session` is already in scope in `chat-container.tsx` — check the existing `session={{ id: sessionId, workspace: session.workspace, status: sessionStatus }}` line around 379 for the shape.)
+
+- [ ] **Step 2: Pass `workflowFeed` to `MessageList`**
+
+In the `<MessageList ... />` mount around line 475:
+
+```tsx
+<MessageList
+  messages={messages}
+  workflowFeed={executionId ? workflowFeed : undefined}
+  /* ...existing props... */
+/>
+```
+
+- [ ] **Step 3: `MessageList` renders the feed when provided**
+
+```typescript
+// packages/client/src/components/chat/message-list.tsx
 import { WorkflowStepCard } from '@/components/workflows/step-cards';
+import type { FeedItem } from '@/hooks/use-session-feed';
 
-export function MessageList({ messages, ...rest }: Props) {
-  const useChatCards = useFeatureFlag('workflow_ui_chat_cards');
-  const session = rest.session; // surface session from props if not already
-  const executionId = useChatCards ? session?.metadata?.executionId : undefined;
-  const { data: stepsData } = useExecutionSteps(executionId ?? '', { enabled: !!executionId });
-  const feed = useSessionFeed(messages, stepsData?.steps);
+interface Props {
+  messages: Message[];
+  workflowFeed?: FeedItem[];
+  // ... existing props
+}
 
-  if (!useChatCards || !executionId) {
-    return <LegacyMessageList messages={messages} {...rest} />;
+export function MessageList({ messages, workflowFeed, ...rest }: Props) {
+  if (!workflowFeed) {
+    // Existing rendering — unchanged.
+    return renderLegacy(messages, rest);
   }
-
-  // Render the merged feed; for kind === 'message', use the same per-message
-  // path as LegacyMessageList; for kind === 'step', render a WorkflowStepCard.
   return (
     <div className="flex flex-col gap-2">
-      {feed.map((item, i) =>
+      {workflowFeed.map((item) =>
         item.kind === 'message'
           ? <MessageItem key={item.message.id} message={item.message} />
-          : <WorkflowStepCard key={`${item.step.stepId}#${item.step.iterationPath}`} step={item.step} />
+          : <WorkflowStepCard
+              key={`${item.step.stepId}#${item.step.iterationPath}`}
+              step={item.step}
+            />
       )}
     </div>
   );
 }
 ```
 
-The legacy path stays so we can flip the flag off without code surgery.
+The "legacy" rendering is the existing function body — extract it into `renderLegacy` (or keep it inline behind the early `if`). The flag gate happens upstream in `ChatContainer`; `MessageList` just chooses which renderer based on whether the feed prop is present.
 
-- [ ] **Step 2: Typecheck**
+- [ ] **Step 4: Typecheck**
 
 ```bash
 cd /Users/connerswann/code/valet && pnpm typecheck
@@ -3532,7 +3905,7 @@ cd /Users/connerswann/code/valet && pnpm typecheck
 
 Expected: clean.
 
-- [ ] **Step 3: Browser smoke**
+- [ ] **Step 5: Browser smoke**
 
 ```bash
 cd /Users/connerswann/code/valet/packages/client && pnpm dev
@@ -3540,32 +3913,34 @@ cd /Users/connerswann/code/valet/packages/client && pnpm dev
 
 In console: `localStorage.setItem('flag:workflow_ui_chat_cards', 'on')`. Refresh a workflow session chat. Expected: workflow step cards interleave with chat messages by timestamp.
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
-git add packages/client/src/components/chat/message-list.tsx
+git add packages/client/src/components/chat/chat-container.tsx packages/client/src/components/chat/message-list.tsx
 git commit -m "feat(client): chat workflow feed behind workflow_ui_chat_cards"
 ```
 
 ---
 
-### Task D9: Mount `WorkflowContextBar` on session route
+### Task D9: Mount `WorkflowContextBar` in `ChatContainer`
 
 **Files:**
-- Modify: `packages/client/src/routes/sessions/$sessionId.tsx`
+- Modify: `packages/client/src/components/chat/chat-container.tsx`
 
-- [ ] **Step 1: Read the session's executionId and mount the bar**
+**Why here:** The context bar belongs immediately above the chat scroll region. `ChatContainer` already owns that layout. The session routes (`routes/sessions/$sessionId.tsx` and `routes/sessions/$sessionId/index.tsx`) mount `ChatContainer`; threading the bar through them would be a longer path.
 
-```typescript
+- [ ] **Step 1: Mount the bar conditionally**
+
+`ChatContainer` already has `executionId` in scope from D8 (or compute it here independently, same expression). Render the bar above the chat content:
+
+```tsx
 import { WorkflowContextBar } from '@/components/workflows/workflow-context-bar';
-import { useFeatureFlag } from '@/lib/feature-flags';
-// ...
-const useChatCards = useFeatureFlag('workflow_ui_chat_cards');
-const executionId = useChatCards ? session?.metadata?.executionId : undefined;
-// ...
+
+// ... in the JSX, immediately above the chat header / message list:
 {executionId && <WorkflowContextBar executionId={executionId} />}
-// ... above the chat
 ```
+
+The exact insertion point: find the `<MessageList ... />` mount near line 475 and place the bar above the chat's outer scroll container or above the header section that contains the message list.
 
 - [ ] **Step 2: Typecheck + browser smoke**
 
@@ -3573,13 +3948,13 @@ const executionId = useChatCards ? session?.metadata?.executionId : undefined;
 cd /Users/connerswann/code/valet && pnpm typecheck
 ```
 
-Open a workflow session in dev with the flag on. Expected: bar visible, progress dots reflect execution state.
+Open a workflow session in dev with the flag on. Expected: bar visible above the chat, progress dots reflect execution state.
 
 - [ ] **Step 3: Commit**
 
 ```bash
-git add packages/client/src/routes/sessions/\$sessionId.tsx
-git commit -m "feat(client): mount WorkflowContextBar on workflow sessions"
+git add packages/client/src/components/chat/chat-container.tsx
+git commit -m "feat(client): mount WorkflowContextBar in ChatContainer for workflow sessions"
 ```
 
 ---
@@ -3667,7 +4042,7 @@ Cross-referencing this plan against `docs/specs/2026-05-23-workflow-ui-design.md
 | Approval limitations note | C8 |
 | Loops/parallel/conditional reconstruction | C14, C10–C12 |
 | Diagram rail | C16 |
-| Retry & recovery affordances | (inherits from existing ExecutionHeader; inline buttons on failed cards left as a v1.1 follow-up — confirm w/ user) |
+| Retry & recovery affordances | C17.5 (retry-workflow footer on failed cards; nested retry remains unsupported per A13) |
 | Workflow context bar | D6, D9 |
 | Workflow steps as interleaved cards | D7, D8 |
 | ToolCardShell extension | C2 |
@@ -3677,12 +4052,7 @@ Cross-referencing this plan against `docs/specs/2026-05-23-workflow-ui-design.md
 | Telemetry | C17, D10 |
 | Performance: memoization | C14, D7 |
 
-**Note on inline retry buttons:** The spec calls for inline `↻ retry from here` and `↗ open in builder` on failed step cards. Adding these to each step-card renderer in v1 would require threading `useRetryExecutionFromStep` and route navigation into 9 components. Two choices for the implementer:
-
-1. Add them in a thin overlay rendered by `ExecutionTimeline` next to expanded failed cards (one component, one wiring point).
-2. Add them as a uniform footer in `WorkflowStepCard` (the dispatcher) when `step.status === 'failed'`.
-
-Option 2 is simpler. Add it as a new task here when implementing if the user prefers; otherwise the page-level `ExecutionHeader` retry remains the only path.
+**On inline retry:** Resolved via Task A13 (nested retry-from-step stays unsupported) + Task C17.5 (failed-card footer dispatches the whole workflow from the top). The "↗ open in builder" deep-link is dropped — adding it requires a query-param-aware builder route that doesn't yet exist; can be added in v1.1.
 
 ---
 
