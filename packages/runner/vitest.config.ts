@@ -8,6 +8,8 @@ export default defineConfig({
     include: [
       "src/opencode-manager.test.ts",
       "src/prompt.test.ts",
+      "src/iteration-path.test.ts",
+      "src/agent-prompt-output.test.ts",
     ],
     testTimeout: 10_000,
   },

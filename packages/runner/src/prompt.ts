@@ -18,6 +18,7 @@
 
 import { createTwoFilesPatch } from "diff";
 import { AgentClient, type PromptAuthor } from "./agent-client.js";
+import { assembleAgentPromptOutput } from "./agent-prompt-output.js";
 import type { AvailableModels, DiffFile, PromptAttachment, ReviewFileSummary, ReviewResultData } from "./types.js";
 import { compileWorkflowDefinition, type NormalizedWorkflowStep } from "./workflow-compiler.js";
 import {
@@ -581,6 +582,23 @@ export class ChannelSession {
 // resets the narrowing back to the declared type.
 function readChannelLastError(channel: ChannelSession): string | null {
   return channel.lastError;
+}
+
+/**
+ * Pluck only the usage entries added since the snapshot.
+ * Used by `executeWorkflowAgentStep` to attribute model/tokens per-step.
+ */
+function collectNewUsageEntries(
+  channel: ChannelSession,
+  before: Set<string>,
+): Array<{ inputTokens: number; outputTokens: number }> {
+  const out: Array<{ inputTokens: number; outputTokens: number }> = [];
+  for (const [id, entry] of channel.usageEntries) {
+    if (!before.has(id)) {
+      out.push({ inputTokens: entry.inputTokens, outputTokens: entry.outputTokens });
+    }
+  }
+  return out;
 }
 
 export class PromptHandler {
@@ -1353,6 +1371,7 @@ export class PromptHandler {
           : 120_000;
     const awaitTimeoutMs = Math.max(1_000, Math.min(awaitTimeoutRaw, 900_000));
     const previousChannel = this.currentPromptChannel;
+    const stepStartMs = Date.now();
     const modelChain = this.buildModelFailoverChain(
       this.workflowExecutionModel,
       this.workflowExecutionModelPreferences,
@@ -1374,6 +1393,9 @@ export class PromptHandler {
       }
       this.currentPromptChannel = channel;
       await this.ensureChannelOpenCodeSession(channel);
+      // Snapshot the channel's usage map BEFORE we run this step so that on
+      // completion we can diff and attribute only this step's tokens.
+      const usageBeforeStep = new Set(channel.usageEntries.keys());
 
       this.agentClient.sendWorkflowChatMessage("user", content, {
         workflowExecutionId: context.executionId,
@@ -1527,7 +1549,12 @@ export class PromptHandler {
 
               return {
                 status: "completed",
-                output: parseResult.value,
+                output: assembleAgentPromptOutput({
+                  response: parseResult.value,
+                  newUsageEntries: collectNewUsageEntries(channel, usageBeforeStep),
+                  model: channel.lastUsedModel,
+                  durationMs: Date.now() - stepStartMs,
+                }),
               };
             }
 
@@ -1536,7 +1563,12 @@ export class PromptHandler {
             // `${outputs.var}` interpolation.
             return {
               status: "completed",
-              output: recoveredResponse,
+              output: assembleAgentPromptOutput({
+                response: recoveredResponse,
+                newUsageEntries: collectNewUsageEntries(channel, usageBeforeStep),
+                model: channel.lastUsedModel,
+                durationMs: Date.now() - stepStartMs,
+              }),
             };
           }
 
