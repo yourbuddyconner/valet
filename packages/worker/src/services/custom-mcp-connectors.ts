@@ -23,6 +23,7 @@ import { customMcpConnectors, mcpToolCache } from '../lib/schema/index.js';
 import { integrationRegistry } from '../integrations/registry.js';
 import { validateOutboundUrl } from './outbound-url-policy.js';
 import { createSafeFetchOutbound } from './safe-fetch-outbound.js';
+import { discoverAuthServer } from '@valet/sdk';
 
 export interface ResolvedCustomMcpConnector {
   id: string;
@@ -368,7 +369,7 @@ async function buildCreateData(
   input: CreateCustomMcpConnectorRequest,
   options: ConnectorServiceOptions,
 ) {
-  const auth = await normalizeAuthFields(env, input.authType, input, null);
+  const auth = await normalizeAuthFields(env, input.authType, input, null, input.serverUrl);
   const encryptedAdditionalHeaders = await encryptAdditionalHeaders(env, input.additionalHeaders);
   return {
     orgId: options.orgId ?? 'default',
@@ -389,7 +390,8 @@ async function buildUpdateData(
   input: UpdateCustomMcpConnectorRequest,
 ) {
   const effectiveAuthType = input.authType ?? existing.authType;
-  const auth = await normalizeAuthFields(env, effectiveAuthType, input, existing);
+  const effectiveServerUrl = input.serverUrl ?? existing.serverUrl;
+  const auth = await normalizeAuthFields(env, effectiveAuthType, input, existing, effectiveServerUrl);
   const update: Record<string, unknown> = {
     displayName: input.displayName?.trim() ?? existing.displayName,
     serverUrl: input.serverUrl ?? existing.serverUrl,
@@ -413,6 +415,7 @@ async function normalizeAuthFields(
   authType: CustomMcpConnectorAuthType,
   input: CreateCustomMcpConnectorRequest | UpdateCustomMcpConnectorRequest,
   existing: ConnectorRow | null,
+  serverUrl: string,
 ) {
   if (authType === 'none') {
     return {
@@ -430,10 +433,22 @@ async function normalizeAuthFields(
 
   if (authType === 'oauth') {
     const clientId = input.oauthClientId ?? existing?.oauthClientId ?? null;
-    const authorizationEndpoint = input.oauthAuthorizationEndpoint ?? existing?.oauthAuthorizationEndpoint ?? null;
-    const tokenEndpoint = input.oauthTokenEndpoint ?? existing?.oauthTokenEndpoint ?? null;
-    if (!clientId || !authorizationEndpoint || !tokenEndpoint) {
-      throw new ValidationError('OAuth connectors require a client ID, authorization endpoint, and token endpoint.');
+    if (!clientId) {
+      throw new ValidationError('OAuth connectors require a client ID.');
+    }
+
+    let authorizationEndpoint = input.oauthAuthorizationEndpoint ?? existing?.oauthAuthorizationEndpoint ?? null;
+    let tokenEndpoint = input.oauthTokenEndpoint ?? existing?.oauthTokenEndpoint ?? null;
+    if (!authorizationEndpoint || !tokenEndpoint) {
+      try {
+        const metadata = await discoverAuthServer(serverUrl);
+        authorizationEndpoint = authorizationEndpoint ?? metadata.authorization_endpoint;
+        tokenEndpoint = tokenEndpoint ?? metadata.token_endpoint;
+      } catch {
+        throw new ValidationError(
+          'OAuth authorization and token endpoints are required when the MCP server does not support .well-known discovery.',
+        );
+      }
     }
 
     const replacingSecret = input.oauthClientSecret && input.oauthClientSecret.trim().length > 0;
