@@ -104,6 +104,8 @@ export interface WorkflowStepExecutionContext {
   attempt: number;
   variables: Record<string, unknown>;
   outputs: Record<string, unknown>;
+  /** Per-instance path identity. Empty for top-level steps. */
+  iterationPath: string;
 }
 
 export interface WorkflowStepExecutionResult {
@@ -341,6 +343,7 @@ async function executeStepAction(rawStep: NormalizedWorkflowStep, ctx: Execution
     attempt: ctx.attempt,
     variables: ctx.variables,
     outputs: ctx.outputs,
+    iterationPath: ctx.iterationPath,
   };
 
   // Resolve {{variables.x}} and {{outputs.y.z}} tokens in user-authored string fields
