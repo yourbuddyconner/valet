@@ -210,6 +210,90 @@ describe('resolveActionPolicy', () => {
     expect(result.tools.some((tool) => tool.id === 'salesforce:salesforce.query')).toBe(false);
   });
 
+  it('matches custom connector service filters by display slug substring', async () => {
+    const { db } = createTestDb();
+    const appDb: AppDb = db;
+    db.insert(users).values({ id: USER_ID, email: 'mcp-policy@example.com' }).run();
+    db.insert(customMcpConnectors).values({
+      id: 'connector-1',
+      orgId: 'default',
+      serviceSlug: 'salesforce-read-only',
+      displayName: 'Salesforce Read Only',
+      serverUrl: 'https://mcp.example.com',
+      authType: 'api_key',
+      encryptedApiKey: await encryptString('org-api-key', 'test-encryption-key'),
+      apiKeyHeaderName: 'X-API-Key',
+      status: 'active',
+    }).run();
+    stubMcpFetch();
+
+    const result = await listTools(appDb, mockD1(), envWithEncryption(), USER_ID, {
+      credentialCache: emptyCredentialCache(),
+      orgId: 'default',
+      service: 'salesforce',
+    });
+
+    expect(result.tools).toMatchObject([{
+      id: 'salesforce-read-only:salesforce-read-only.query',
+      riskLevel: 'low',
+    }]);
+  });
+
+  it('returns a warning when authenticated custom MCP discovery fails', async () => {
+    const { db } = createTestDb();
+    const appDb: AppDb = db;
+    db.insert(users).values({ id: USER_ID, email: 'mcp-policy@example.com' }).run();
+    db.insert(customMcpConnectors).values({
+      id: 'connector-1',
+      orgId: 'default',
+      serviceSlug: 'salesforce-read-only',
+      displayName: 'Salesforce Read Only',
+      serverUrl: 'https://mcp.example.com',
+      authType: 'oauth',
+      oauthClientId: 'sf-client-id',
+      oauthScopes: 'mcp_api refresh_token',
+      oauthAuthorizationEndpoint: 'https://login.salesforce.example.com/services/oauth2/authorize',
+      oauthTokenEndpoint: 'https://login.salesforce.example.com/services/oauth2/token',
+      status: 'active',
+    }).run();
+    db.insert(integrations).values({
+      id: 'integration-1',
+      userId: USER_ID,
+      service: 'salesforce-read-only',
+      config: { entities: ['mcp_api', 'refresh_token'] },
+      status: 'active',
+    }).run();
+    vi.spyOn(integrationRegistry, 'resolveCredentials').mockResolvedValue({
+      ok: true,
+      credential: {
+        accessToken: 'opaque-token',
+        credentialType: 'oauth2',
+        refreshed: false,
+      },
+    });
+    vi.stubGlobal('fetch', vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => (
+      new Response('{"errors":[{"message":"JWT Token is required"}]}', {
+        status: 401,
+        headers: { 'content-type': 'text/plain' },
+      })
+    )));
+
+    const result = await listTools(appDb, mockD1(), envWithEncryption(), USER_ID, {
+      credentialCache: emptyCredentialCache(),
+      orgId: 'default',
+      service: 'salesforce',
+    });
+
+    expect(result.tools).toEqual([]);
+    expect(result.warnings).toMatchObject([{
+      service: 'salesforce-read-only',
+      displayName: 'Salesforce Read Only',
+      reason: 'auth_failed',
+      integrationId: 'integration-1',
+    }]);
+    expect(result.warnings[0].message).toContain('JWT Token is required');
+  });
+
   it('allows active custom API-key connector policy resolution without an integration row', async () => {
     const { db } = createTestDb();
     const appDb: AppDb = db;

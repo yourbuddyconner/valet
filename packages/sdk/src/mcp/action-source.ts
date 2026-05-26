@@ -36,6 +36,7 @@ export class McpActionSource implements ActionSource {
   private serviceName: string;
   private defaultRiskLevel: RiskLevel;
   private noAuth: boolean;
+  private lastListError: string | null = null;
 
   constructor(opts: McpActionSourceOptions) {
     this.client = new McpClient({
@@ -52,6 +53,7 @@ export class McpActionSource implements ActionSource {
   }
 
   async listActions(ctx?: ActionListContext): Promise<ActionDefinition[]> {
+    this.lastListError = null;
     const token = ctx?.credentials?.access_token;
     if (!token && !this.noAuth) {
       // Without credentials we can't call the MCP server; return empty gracefully.
@@ -67,10 +69,15 @@ export class McpActionSource implements ActionSource {
         `[McpActionSource] ${this.serviceName} listTools failed:`,
         err instanceof Error ? err.message : String(err),
       );
+      this.lastListError = err instanceof Error ? err.message : String(err);
       return [];
     }
 
     return tools.map((tool) => this.mapToolToAction(tool));
+  }
+
+  getLastListError(): string | null {
+    return this.lastListError;
   }
 
   async execute(actionId: string, params: unknown, ctx: ActionContext): Promise<ActionResult> {

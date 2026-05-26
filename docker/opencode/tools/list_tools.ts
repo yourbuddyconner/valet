@@ -43,7 +43,8 @@ export default tool({
       // Build warning lines for integrations with auth failures
       const warningLines: string[] = []
       for (const w of warnings) {
-        warningLines.push(`⚠ ${w.displayName}: Authorization expired or failed (${w.reason}) — the user should reauthorize in Settings > Integrations or via the banner in the session UI.`)
+        const detail = w.message ? `: ${w.message}` : ""
+        warningLines.push(`⚠ ${w.displayName}: Authorization expired or failed (${w.reason})${detail} — the user should reauthorize in Settings > Integrations or via the banner in the session UI.`)
       }
 
       if (tools.length === 0 && warnings.length > 0) {

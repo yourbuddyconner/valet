@@ -188,14 +188,13 @@ export async function listTools(
   const discoveredRiskLevels = new Map<string, string>();
 
   for (const [service, sources] of serviceSourceMap) {
-    if (filterService && service !== filterService) continue;
+    const provider = integrationRegistry.getProvider(service, customContext);
+    if (filterService && !matchesServiceFilter(service, filterService, provider)) continue;
     if (disabledServiceSet.has(service)) continue;
     if (disabledPluginServices.has(service)) continue;
 
     const actionSource = integrationRegistry.getActions(service, customContext);
     if (!actionSource) continue;
-
-    const provider = integrationRegistry.getProvider(service, customContext);
 
     // MCP-backed sources need credentials for listing (they return different tools per user).
     // Static sources (no mcpServerUrl) skip credential resolution during listing.
@@ -243,6 +242,7 @@ export async function listTools(
     }
 
     let actions = await actionSource.listActions(credCtx);
+    let listError = getActionSourceListError(actionSource);
 
     // MCP sources may return [] when tokens are silently expired — force-refresh and retry
     if (actions.length === 0 && isMcpSource && credCtx && requiresUserCredential(provider)) {
@@ -254,7 +254,13 @@ export async function listTools(
         credentialCache?.set('user', userId, service, refreshed);
         credCtx = { credentials: { access_token: refreshed.credential.accessToken } };
         actions = await actionSource.listActions(credCtx);
+        listError = getActionSourceListError(actionSource);
       }
+    }
+
+    if (actions.length === 0 && listError) {
+      warnings.push(buildToolDiscoveryWarning(service, provider, sources[0]?.id, listError));
+      continue;
     }
 
     console.log(`[session-tools] list-tools: ${service} returned ${actions.length} actions`);
@@ -580,4 +586,46 @@ function requiresUserCredential(provider?: { authType?: string; isCustomConnecto
   if (provider.authType === 'none') return false;
   if (provider.isCustomConnector && provider.authType === 'api_key') return false;
   return true;
+}
+
+function matchesServiceFilter(
+  service: string,
+  filter: string,
+  provider?: { displayName?: string; isCustomConnector?: boolean },
+): boolean {
+  const normalizedFilter = filter.trim().toLowerCase();
+  if (!normalizedFilter) return true;
+  if (service.toLowerCase() === normalizedFilter) return true;
+
+  if (!provider?.isCustomConnector) return false;
+
+  return service.toLowerCase().includes(normalizedFilter)
+    || (provider.displayName ?? '').toLowerCase().includes(normalizedFilter);
+}
+
+function getActionSourceListError(actionSource: unknown): string | null {
+  const source = actionSource as { getLastListError?: () => string | null | undefined };
+  if (typeof source.getLastListError !== 'function') return null;
+  return source.getLastListError() ?? null;
+}
+
+function buildToolDiscoveryWarning(
+  service: string,
+  provider: { displayName?: string } | undefined,
+  integrationId: string | undefined,
+  message: string,
+): ToolWarning {
+  return {
+    service,
+    displayName: provider?.displayName || service,
+    reason: classifyToolDiscoveryFailure(message),
+    message,
+    integrationId: integrationId ?? `unknown:${service}`,
+  };
+}
+
+function classifyToolDiscoveryFailure(message: string): string {
+  return /\b(401|403|unauthorized|forbidden|invalid[_ -]?token|jwt token is required|token.*expired|token.*revoked)\b/i.test(message)
+    ? 'auth_failed'
+    : 'request_failed';
 }
