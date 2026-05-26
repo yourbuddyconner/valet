@@ -28,15 +28,45 @@ export interface TokenResponse {
 
 export type TokenEndpointAuthMethod = 'none' | 'client_secret_basic' | 'client_secret_post';
 
-// ─── RFC 8414: Authorization Server Metadata Discovery ──────────────────────
+// ─── RFC 9728 + RFC 8414: Authorization Server Metadata Discovery ───────────
 
-/** Discover authorization server metadata from an MCP server URL. */
+interface ProtectedResourceMetadata {
+  authorization_servers?: string[];
+}
+
+/**
+ * Discover authorization server metadata from an MCP server URL.
+ *
+ * Tries two strategies:
+ * 1. RFC 9728 — fetch protected resource metadata at the origin to find the
+ *    authorization server, then fetch its metadata.
+ * 2. RFC 8414 fallback — fetch oauth-authorization-server metadata directly
+ *    at the origin.
+ *
+ * Previous code appended .well-known to the full server URL path, which fails
+ * for servers like Salesforce where discovery lives at the origin.
+ */
 export async function discoverAuthServer(mcpServerUrl: string, opts?: { fetch?: typeof fetch }): Promise<AuthServerMetadata> {
-  const base = mcpServerUrl.replace(/\/+$/, '');
-  const url = `${base}/.well-known/oauth-authorization-server`;
-  const res = await (opts?.fetch ?? fetch)(url);
+  const origin = new URL(mcpServerUrl).origin;
+  const fetcher = opts?.fetch ?? fetch;
+
+  // RFC 9728: protected resource metadata → authorization server metadata
+  try {
+    const prmRes = await fetcher(`${origin}/.well-known/oauth-protected-resource`);
+    if (prmRes.ok) {
+      const prm = (await prmRes.json()) as ProtectedResourceMetadata;
+      const authServerUrl = prm.authorization_servers?.[0]?.replace(/\/+$/, '');
+      if (authServerUrl) {
+        const asRes = await fetcher(`${authServerUrl}/.well-known/oauth-authorization-server`);
+        if (asRes.ok) return (await asRes.json()) as AuthServerMetadata;
+      }
+    }
+  } catch { /* fall through to direct discovery */ }
+
+  // RFC 8414 fallback: direct auth server metadata at origin
+  const res = await fetcher(`${origin}/.well-known/oauth-authorization-server`);
   if (!res.ok) {
-    throw new Error(`MCP OAuth discovery failed: ${res.status} from ${url}`);
+    throw new Error(`MCP OAuth discovery failed: ${res.status} from ${origin}`);
   }
   return (await res.json()) as AuthServerMetadata;
 }
