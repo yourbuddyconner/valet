@@ -1,7 +1,8 @@
 import * as React from 'react';
 import { createFileRoute, useNavigate } from '@tanstack/react-router';
+import { useQueryClient } from '@tanstack/react-query';
 import { api } from '@/api/client';
-import { useConfigureIntegration } from '@/api/integrations';
+import { configureIntegration, integrationKeys } from '@/api/integrations';
 
 export const Route = createFileRoute('/integrations/callback')({
   component: OAuthCallbackPage,
@@ -24,7 +25,7 @@ const GOOGLE_API_LINKS: Record<string, { name: string; url: string }> = {
 
 function OAuthCallbackPage() {
   const navigate = useNavigate();
-  const configureIntegration = useConfigureIntegration();
+  const queryClient = useQueryClient();
   const [status, setStatus] = React.useState<'processing' | 'success' | 'error'>('processing');
   const [errorMessage, setErrorMessage] = React.useState<string | null>(null);
   const [failedService, setFailedService] = React.useState<string | null>(null);
@@ -38,11 +39,6 @@ function OAuthCallbackPage() {
   }, []);
 
   const handleCallback = async () => {
-    // Popup reauth uses localStorage (popups don't share sessionStorage);
-    // full-redirect connect dialog uses sessionStorage. Check both.
-    const isPopup = !!window.opener;
-    const storage = isPopup ? localStorage : sessionStorage;
-
     try {
       const url = new URL(window.location.href);
       const code = url.searchParams.get('code');
@@ -61,9 +57,11 @@ function OAuthCallbackPage() {
         return;
       }
 
-      // Verify state matches what we stored
-      const storedState = storage.getItem('oauth_state');
-      const storedService = storage.getItem('oauth_service');
+      // Both the connect dialog and the chat reauth banner store OAuth
+      // state in localStorage so it's accessible from popups and redirects.
+      const storedState = localStorage.getItem('oauth_state');
+      const storedService = localStorage.getItem('oauth_service');
+      const codeVerifier = localStorage.getItem('oauth_code_verifier');
 
       if (!storedService || !storedState) {
         setStatus('error');
@@ -79,30 +77,30 @@ function OAuthCallbackPage() {
 
       // Exchange code for credentials (include code_verifier for MCP OAuth PKCE)
       const redirectUri = `${window.location.origin}/integrations/callback`;
-      const codeVerifier = storage.getItem('oauth_code_verifier');
       const credentialsResponse = await api.post<{ credentials: Record<string, string> }>(
         `/integrations/${storedService}/oauth/callback`,
         { code, redirect_uri: redirectUri, ...(codeVerifier && { code_verifier: codeVerifier }) }
       );
 
       // Configure the integration with the obtained credentials
-      await configureIntegration.mutateAsync({
-        service: storedService as any,
+      await configureIntegration({
+        service: storedService,
         credentials: credentialsResponse.credentials,
         config: {
           entities: [],
         },
       });
+      await queryClient.invalidateQueries({ queryKey: integrationKeys.lists() });
 
-      // Clean up storage
-      storage.removeItem('oauth_state');
-      storage.removeItem('oauth_service');
-      storage.removeItem('oauth_code_verifier');
+      // Clean up
+      localStorage.removeItem('oauth_state');
+      localStorage.removeItem('oauth_service');
+      localStorage.removeItem('oauth_code_verifier');
 
       setStatus('success');
 
       // If opened as a popup, notify the opener and close
-      if (isPopup) {
+      if (window.opener) {
         window.opener.postMessage(
           { type: 'oauth-complete', service: storedService },
           window.location.origin
@@ -118,13 +116,13 @@ function OAuthCallbackPage() {
     } catch (error) {
       console.error('OAuth callback error:', error);
       setStatus('error');
-      setFailedService(storage.getItem('oauth_service'));
+      setFailedService(localStorage.getItem('oauth_service'));
       setErrorMessage(
         error instanceof Error ? error.message : 'Failed to complete authorization'
       );
-      storage.removeItem('oauth_state');
-      storage.removeItem('oauth_service');
-      storage.removeItem('oauth_code_verifier');
+      localStorage.removeItem('oauth_state');
+      localStorage.removeItem('oauth_service');
+      localStorage.removeItem('oauth_code_verifier');
     }
   };
 

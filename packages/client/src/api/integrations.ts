@@ -55,12 +55,22 @@ export function useIntegration(integrationId: string) {
   });
 }
 
+interface ConfigureIntegrationResponse {
+  integration: Integration;
+}
+
+export async function configureIntegration(
+  data: ConfigureIntegrationRequest
+): Promise<Integration> {
+  const response = await api.post<ConfigureIntegrationResponse>('/integrations', data);
+  return response.integration;
+}
+
 export function useConfigureIntegration() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: (data: ConfigureIntegrationRequest) =>
-      api.post<Integration>('/integrations', data),
+    mutationFn: configureIntegration,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: integrationKeys.lists() });
     },

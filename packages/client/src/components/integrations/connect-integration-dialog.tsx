@@ -240,10 +240,10 @@ export function ConnectIntegrationDialog({
       const response = await api.get<{ url: string; state: string; code_verifier?: string }>(
         `/integrations/${service.id}/oauth?redirect_uri=${encodeURIComponent(redirectUri)}`
       );
-      sessionStorage.setItem('oauth_state', response.state);
-      sessionStorage.setItem('oauth_service', service.id);
+      localStorage.setItem('oauth_state', response.state);
+      localStorage.setItem('oauth_service', service.id);
       if (response.code_verifier) {
-        sessionStorage.setItem('oauth_code_verifier', response.code_verifier);
+        localStorage.setItem('oauth_code_verifier', response.code_verifier);
       }
       window.location.href = response.url;
     } catch (error) {
