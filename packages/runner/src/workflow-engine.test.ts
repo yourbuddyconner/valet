@@ -86,6 +86,30 @@ describe('workflow-engine', () => {
     expect(output?.stdout).toContain('workflow-ok');
   });
 
+  it('bash output shape is { stdout, stderr, exitCode } (typed contract)', async () => {
+    const compiled = await compileWorkflowDefinition({
+      steps: [
+        {
+          id: 'b',
+          type: 'tool',
+          tool: 'bash',
+          arguments: { command: 'echo hi' },
+        },
+      ],
+    });
+    if (!compiled.ok || !compiled.workflow) {
+      throw new Error('compile failed');
+    }
+    const result = await executeWorkflowRun('ex_bash_shape', compiled.workflow, { variables: {} });
+    expect(result.status).toBe('ok');
+    const step = result.steps.find((s) => s.stepId === 'b');
+    const output = step?.output as { stdout: unknown; stderr: unknown; exitCode: unknown };
+    expect(typeof output.stdout).toBe('string');
+    expect(typeof output.stderr).toBe('string');
+    expect(typeof output.exitCode).toBe('number');
+    expect(output.exitCode).toBe(0);
+  });
+
   it('interpolates bash command tokens via env vars, not shell splice', async () => {
     const compiled = await compileWorkflowDefinition({
       steps: [
