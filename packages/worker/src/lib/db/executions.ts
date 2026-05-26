@@ -201,6 +201,10 @@ export async function upsertExecutionStep(
   step: {
     stepId: string;
     attempt: number;
+    // Required — '' for top-level, e.g. 'L1:i0' for first iteration of loop L1.
+    // Defaulting was a footgun: any missed caller would silently collapse loop
+    // iterations into a single row. See docs/specs/2026-05-23-workflow-ui-design.md.
+    iterationPath: string;
     status: string;
     input: string | null;
     output: string | null;
@@ -212,9 +216,9 @@ export async function upsertExecutionStep(
   // ON CONFLICT with COALESCE — keep as raw SQL
   await db.prepare(`
     INSERT INTO workflow_execution_steps
-      (id, execution_id, step_id, attempt, status, input_json, output_json, error, started_at, completed_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ON CONFLICT(execution_id, step_id, attempt) DO UPDATE SET
+      (id, execution_id, step_id, attempt, iteration_path, status, input_json, output_json, error, started_at, completed_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(execution_id, step_id, attempt, iteration_path) DO UPDATE SET
       status = excluded.status,
       input_json = COALESCE(excluded.input_json, workflow_execution_steps.input_json),
       output_json = COALESCE(excluded.output_json, workflow_execution_steps.output_json),
@@ -226,6 +230,7 @@ export async function upsertExecutionStep(
     executionId,
     step.stepId,
     step.attempt,
+    step.iterationPath,
     step.status,
     step.input,
     step.output,
