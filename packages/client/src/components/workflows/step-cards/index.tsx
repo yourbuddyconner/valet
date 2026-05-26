@@ -1,23 +1,27 @@
 /**
- * Step-cards entry point. The full byStepType dispatcher lives below in
- * `WorkflowStepCard`; this file also exports the shared
- * `WorkflowStepCardProps` interface that every typed renderer consumes.
+ * Step-cards entry point. Resolves a workflow step's type and dispatches to
+ * the typed renderer; falls back to a generic JSON-tree card for unknown
+ * types or rows from pre-Phase-B executions.
  *
  * Spec: docs/specs/2026-05-23-workflow-ui-design.md.
  */
 
+import { useMemo } from 'react';
+import { RotateCcw } from 'lucide-react';
 import type { ExecutionStepTrace } from '@/api/executions';
 import type { WorkflowData } from '@/api/workflows';
+import { useRunWorkflow } from '@/api/workflows';
+import { bump, WORKFLOW_TELEMETRY } from '@/lib/workflow-telemetry';
+import { AgentPromptCard } from './agent-prompt-card';
+import { ApprovalCard } from './approval-card';
+import { BashCard } from './bash-card';
+import { ConditionalCard } from './conditional-card';
 import { FallbackCard } from './fallback-card';
+import { LoopCard } from './loop-card';
+import { NotifyCard } from './notify-card';
+import { ParallelCard } from './parallel-card';
+import { ToolCard } from './tool-card';
 
-/**
- * A node in the recursive timeline tree. Containers (loop/parallel/conditional)
- * carry their iteration/branch children here so the renderer can walk down
- * without re-querying the flat step rows.
- *
- * Defined here so that container cards can reference TimelineNode in their
- * `children` prop without creating a circular import with use-execution-timeline.
- */
 export interface TimelineNode {
   step: ExecutionStepTrace;
   children?: TimelineNode[];
@@ -36,18 +40,66 @@ export interface WorkflowStepCardProps {
   workflowDef?: WorkflowData | null;
 }
 
-/**
- * Stub dispatcher. Real implementation lands in C13 once all per-type
- * renderers (C5-C12) are in place.
- */
-export function WorkflowStepCard(props: Omit<WorkflowStepCardProps, 'stepType'>) {
-  const stepType = resolveType(props.step, props.workflowDef);
-  return <FallbackCard {...props} stepType={stepType} />;
+interface WorkflowStepCardEntryProps {
+  step: ExecutionStepTrace;
+  children?: TimelineNode[];
+  open?: boolean;
+  onOpenChange?: (next: boolean) => void;
+  workflowDef?: WorkflowData | null;
 }
 
-function resolveType(step: ExecutionStepTrace, workflowDef?: WorkflowData | null): string {
-  // Prefer the static workflow definition; fall back to step.input.type
-  // (already parsed unknown — no JSON.parse needed).
+export function WorkflowStepCard(props: WorkflowStepCardEntryProps) {
+  const stepType = useMemo(
+    () => resolveType(props.step, props.workflowDef),
+    [props.step, props.workflowDef],
+  );
+  const enriched: WorkflowStepCardProps = { ...props, stepType };
+  const card = dispatchCard(stepType, enriched);
+
+  if (props.step.status !== 'failed') return card;
+  return (
+    <div className="flex flex-col gap-1">
+      {card}
+      <RetryFooter workflowId={props.workflowDef?.id} />
+    </div>
+  );
+}
+
+function dispatchCard(stepType: string, props: WorkflowStepCardProps) {
+  switch (stepType) {
+    case 'agent_prompt': return <AgentPromptCard {...props} />;
+    case 'bash':         return <BashCard {...props} />;
+    case 'notify':       return <NotifyCard {...props} />;
+    case 'approval':     return <ApprovalCard {...props} />;
+    case 'conditional':  return <ConditionalCard {...props} />;
+    case 'loop':         return <LoopCard {...props} />;
+    case 'parallel':     return <ParallelCard {...props} />;
+    case 'tool':         return <ToolCard {...props} />;
+    default:
+      bump(WORKFLOW_TELEMETRY.FALLBACK_RENDERER_USED, { type: stepType });
+      return <FallbackCard {...props} />;
+  }
+}
+
+function RetryFooter({ workflowId }: { workflowId: string | undefined }) {
+  // useRunWorkflow's onSuccess already navigates to the new execution, so we
+  // just need to fire the mutation here.
+  const run = useRunWorkflow();
+  if (!workflowId) return null;
+  return (
+    <button
+      type="button"
+      onClick={() => run.mutate({ workflowId, variables: {} })}
+      disabled={run.isPending}
+      className="self-start font-mono text-[10px] px-2 py-1 rounded border border-neutral-200 dark:border-neutral-800 hover:bg-neutral-50 dark:hover:bg-white/[0.02] inline-flex items-center gap-1 disabled:opacity-50"
+    >
+      <RotateCcw className="w-3 h-3" />
+      retry workflow
+    </button>
+  );
+}
+
+function resolveType(step: ExecutionStepTrace, workflowDef: WorkflowData | null | undefined): string {
   if (workflowDef) {
     const fromDef = findStepType(workflowDef.steps as Array<Record<string, unknown>>, step.stepId);
     if (fromDef) return fromDef;
