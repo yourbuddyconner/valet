@@ -142,7 +142,11 @@ function makePlaceholderRow(
     attempt: 0,
     iterationPath,
     status: 'pending',
-    input: { type: defStep.type, ...(defStep as unknown as Record<string, unknown>) },
+    // ExecutionStepTrace.input is `unknown | null`; assigning a WorkflowStep
+    // directly is fine — the renderer reads `input.type` and `input.persona`
+    // / `input.prompt` etc. via narrowing, and a WorkflowStep already has the
+    // same shape.
+    input: defStep,
     output: null,
     error: null,
     startedAt: null,

@@ -9,7 +9,7 @@
 import { useMemo } from 'react';
 import { RotateCcw } from 'lucide-react';
 import type { ExecutionStepTrace } from '@/api/executions';
-import type { WorkflowData } from '@/api/workflows';
+import type { WorkflowData, WorkflowStep } from '@/api/workflows';
 import { useRunWorkflow } from '@/api/workflows';
 import { bump, WORKFLOW_TELEMETRY } from '@/lib/workflow-telemetry';
 import { AgentPromptCard } from './agent-prompt-card';
@@ -101,7 +101,7 @@ function RetryFooter({ workflowId }: { workflowId: string | undefined }) {
 
 function resolveType(step: ExecutionStepTrace, workflowDef: WorkflowData | null | undefined): string {
   if (workflowDef) {
-    const fromDef = findStepType(workflowDef.steps as Array<Record<string, unknown>>, step.stepId);
+    const fromDef = findStepType(workflowDef.steps, step.stepId);
     if (fromDef) return fromDef;
   }
   if (step.input && typeof step.input === 'object' && !Array.isArray(step.input)) {
@@ -111,12 +111,12 @@ function resolveType(step: ExecutionStepTrace, workflowDef: WorkflowData | null 
   return 'fallback';
 }
 
-function findStepType(steps: Array<Record<string, unknown>>, id: string): string | null {
+function findStepType(steps: WorkflowStep[], id: string): string | null {
   for (const s of steps) {
-    if (s.id === id && typeof s.type === 'string') return s.type;
+    if (s.id === id) return s.type;
     for (const subList of [s.then, s.else, s.steps]) {
-      if (Array.isArray(subList)) {
-        const t = findStepType(subList as Array<Record<string, unknown>>, id);
+      if (subList) {
+        const t = findStepType(subList, id);
         if (t) return t;
       }
     }

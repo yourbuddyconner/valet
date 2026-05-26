@@ -23,6 +23,8 @@ function mkRow(over: Partial<ExecutionStepTrace> & { stepId: string }): Executio
 }
 
 const def: WorkflowData = {
+  id: 'def',
+  name: 'def',
   steps: [
     { id: 'A', name: 'A', type: 'bash' },
     {
@@ -39,7 +41,7 @@ const def: WorkflowData = {
       ],
     },
   ],
-} as unknown as WorkflowData;
+};
 
 describe('buildTimelineViewModel', () => {
   it('places top-level steps in static-definition order', () => {
