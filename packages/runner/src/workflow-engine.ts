@@ -1,6 +1,7 @@
 import type { NormalizedWorkflowDefinition, NormalizedWorkflowStep } from './workflow-compiler.js';
 import { evalConditionString } from './workflow-condition.js';
 import { resolveBashCommand, resolveInterpolation, resolveStepFields } from './workflow-interpolation.js';
+import { appendIterationSegment } from './iteration-path.js';
 
 export type WorkflowStatus = 'ok' | 'needs_approval' | 'cancelled' | 'failed';
 
@@ -150,6 +151,8 @@ type ExecutionContext = {
   steps: WorkflowStepResult[];
   maxSteps: number;
   visitedSteps: number;
+  /** Per-instance path identity. Empty for top-level steps. */
+  iterationPath: string;
   resume?: ResumeContext;
   hooks?: WorkflowExecutionHooks;
   replay?: ReplayContext;
@@ -718,6 +721,7 @@ async function executeSteps(
       // whichever iterations happened to run before the failure — predictable
       // strict semantics are preferable to surfacing partial state to retries.
       const loopOutputsBefore = { ...ctx.outputs };
+      const savedPath = ctx.iterationPath;
       let lastChildRun: ExecuteStepsResult = {};
       for (let i = 0; i < items.length; i++) {
         // Shadow user-named variables and publish a `loop` namespace so
@@ -729,12 +733,14 @@ async function executeSteps(
         ctx.variables[itemVar] = items[i];
         ctx.variables[indexVar] = i;
         ctx.variables['loop'] = { item: items[i], index: i };
+        ctx.iterationPath = appendIterationSegment(savedPath, step.id, `i${i}`);
         try {
           lastChildRun = await executeSteps(body, ctx, sink);
           if (lastChildRun.approval || lastChildRun.failed || lastChildRun.cancelled) {
             ctx.variables[itemVar] = savedItem;
             ctx.variables[indexVar] = savedIndex;
             ctx.variables['loop'] = savedLoop;
+            ctx.iterationPath = savedPath;
             if (lastChildRun.failed) {
               // Mutate in place so the same object reference held elsewhere
               // (e.g. returned as `output: context.outputs`) stays valid.
@@ -751,6 +757,7 @@ async function executeSteps(
           ctx.variables[itemVar] = savedItem;
           ctx.variables[indexVar] = savedIndex;
           ctx.variables['loop'] = savedLoop;
+          ctx.iterationPath = savedPath;
         }
       }
 
@@ -765,7 +772,14 @@ async function executeSteps(
     if (step.type === 'conditional') {
       const conditionResult = evaluateCondition(step, ctx);
       const branchSteps = conditionResult ? asStepArray(step.then) : asStepArray(step.else);
-      const branchRun = await executeSteps(branchSteps, ctx, sink);
+      const savedPath = ctx.iterationPath;
+      ctx.iterationPath = appendIterationSegment(savedPath, step.id, conditionResult ? 'then' : 'else');
+      let branchRun: ExecuteStepsResult;
+      try {
+        branchRun = await executeSteps(branchSteps, ctx, sink);
+      } finally {
+        ctx.iterationPath = savedPath;
+      }
 
       const completedAt = nowIso();
       result.status = 'completed';
@@ -792,11 +806,12 @@ async function executeSteps(
       const variablesAtEntry = { ...ctx.variables };
 
       const branchResults = await Promise.all(
-        branches.map(async (branchStep) => {
+        branches.map(async (branchStep, branchIndex) => {
           const branchCtx: ExecutionContext = {
             ...ctx,
             outputs: { ...outputsAtEntry },
             variables: { ...variablesAtEntry },
+            iterationPath: appendIterationSegment(ctx.iterationPath, step.id, `b${branchIndex}`),
             // Step records still flow into the shared list so the envelope's
             // `steps` array contains every executed step regardless of branch.
             steps: ctx.steps,
@@ -942,6 +957,7 @@ export async function executeWorkflowRun(
     steps: [],
     maxSteps,
     visitedSteps: 0,
+    iterationPath: '',
     hooks,
     approvalNonce: payload.runtime?.approvalNonce,
   };
@@ -1059,6 +1075,7 @@ export async function executeWorkflowResume(
     steps: [],
     maxSteps,
     visitedSteps: 0,
+    iterationPath: '',
     hooks,
     approvalNonce: payload.runtime?.approvalNonce,
     resume: {
