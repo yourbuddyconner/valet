@@ -74,6 +74,9 @@ export interface WorkflowRunEnvelope {
   steps: WorkflowStepResult[];
   requiresApproval: null | {
     stepId: string;
+    /** Per-instance path identity. '' for top-level approvals. */
+    iterationPath: string;
+    attempt: number;
     prompt: string;
     items: unknown[];
     resumeToken: string;
@@ -539,11 +542,15 @@ function createApprovalToken(
   executionId: string,
   stepId: string,
   attempt: number,
+  iterationPath: string,
   approvalNonce: string | undefined,
 ): Promise<string> {
+  // iterationPath must be part of the seed so two approval steps with the same
+  // (executionId, stepId, attempt) but different iteration paths (e.g. inside
+  // a loop) get distinct tokens.
   const seed = approvalNonce
-    ? `${executionId}:${stepId}:${attempt}:${approvalNonce}`
-    : `${executionId}:${stepId}:${attempt}`;
+    ? `${executionId}:${stepId}:${attempt}:${iterationPath}:${approvalNonce}`
+    : `${executionId}:${stepId}:${attempt}:${iterationPath}`;
   return sha256Hex(seed).then((digest) => `wrf_rt_${digest.slice(0, 24)}`);
 }
 
@@ -621,7 +628,7 @@ async function executeSteps(
       const prompt = typeof step.prompt === 'string' && step.prompt.trim()
         ? step.prompt.trim()
         : `Approval required for step ${step.id}`;
-      const resumeToken = await createApprovalToken(ctx.executionId, step.id, ctx.attempt, ctx.approvalNonce);
+      const resumeToken = await createApprovalToken(ctx.executionId, step.id, ctx.attempt, ctx.iterationPath, ctx.approvalNonce);
       const stepTs = nowIso();
 
       if (ctx.resume && !ctx.resume.matched) {
@@ -696,6 +703,8 @@ async function executeSteps(
       return {
         approval: {
           stepId: step.id,
+          iterationPath: ctx.iterationPath,
+          attempt: ctx.attempt,
           prompt,
           items: [],
           resumeToken,

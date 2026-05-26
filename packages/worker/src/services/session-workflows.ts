@@ -1304,6 +1304,37 @@ export async function processWorkflowExecutionResult(
       nextStatus = 'waiting_approval';
       error = null;
       completedAt = null;
+      // Persist the awaiting step instance so resume can match the exact
+      // (stepId, iterationPath, attempt) — approvals inside a loop iteration
+      // otherwise can't be disambiguated. See docs/specs/2026-05-23-workflow-ui-design.md.
+      const ra = envelope.requiresApproval as Record<string, unknown> | undefined;
+      const awaitingStepId = typeof ra?.stepId === 'string' ? ra.stepId : null;
+      if (awaitingStepId) {
+        const awaitingIterationPath = typeof ra?.iterationPath === 'string' ? ra.iterationPath : '';
+        const awaitingAttempt = typeof ra?.attempt === 'number' ? ra.attempt : 1;
+        let existingState: Record<string, unknown> = {};
+        try {
+          const row = await envDB
+            .prepare('SELECT runtime_state FROM workflow_executions WHERE id = ?')
+            .bind(executionId)
+            .first<{ runtime_state: string | null }>();
+          if (row?.runtime_state) {
+            const parsed = JSON.parse(row.runtime_state);
+            if (parsed && typeof parsed === 'object') existingState = parsed as Record<string, unknown>;
+          }
+        } catch {
+          // ignore parse / fetch failures — start from empty state
+        }
+        const nextState = {
+          ...existingState,
+          awaitingApproval: {
+            stepId: awaitingStepId,
+            iterationPath: awaitingIterationPath,
+            attempt: awaitingAttempt,
+          },
+        };
+        await updateExecutionRuntimeState(db, executionId, JSON.stringify(nextState), 'waiting_approval');
+      }
     }
   }
 

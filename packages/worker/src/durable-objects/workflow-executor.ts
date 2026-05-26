@@ -58,6 +58,17 @@ interface RuntimeState {
     replayOutputs: Record<string, unknown>;
     replayStepResults: Record<string, { output?: unknown; status?: string }>;
   };
+  /**
+   * Set while status='waiting_approval' so resume can match the exact step
+   * instance. Approval steps inside a loop iteration or parallel branch need
+   * the full (stepId, iterationPath, attempt) triple to disambiguate, not
+   * just stepId. See docs/specs/2026-05-23-workflow-ui-design.md.
+   */
+  awaitingApproval?: {
+    stepId: string;
+    iterationPath: string;
+    attempt: number;
+  };
 }
 
 type ExecutionRow = ExecutionWithWorkflowRow;
