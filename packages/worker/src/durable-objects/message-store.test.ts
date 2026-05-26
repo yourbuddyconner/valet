@@ -336,8 +336,9 @@ describe('MessageStore', () => {
       const alterCalls = sql.calls.filter((c) =>
         c.query.includes('ALTER TABLE'),
       );
-      // 4 migrations: seq, message_format, thread_id, opencode_session_id
-      expect(alterCalls.length).toBe(4);
+      // 7 migrations: seq, message_format, thread_id, opencode_session_id,
+      // workflow_execution_id, workflow_step_id, workflow_iteration_path
+      expect(alterCalls.length).toBe(7);
     });
 
     it('initializes nextSeq from empty DB (starts at 1)', () => {

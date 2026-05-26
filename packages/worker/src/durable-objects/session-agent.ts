@@ -2243,12 +2243,44 @@ export class SessionAgentDO {
         }
       },
 
-      'workflow-chat-message': (msg) => {
+      'workflow-chat-message': async (msg) => {
         const ALLOWED_ROLES = new Set(['user', 'assistant', 'system']);
         const rawRole = typeof msg.role === 'string' ? msg.role : 'user';
         const role = (ALLOWED_ROLES.has(rawRole) ? rawRole : 'user') as 'user' | 'assistant' | 'system';
         const content = (msg.content || '').trim();
         if (!content) return;
+
+        // Validate workflow back-pointers: the executionId must belong to this
+        // session's user before we persist it on the message row. Without this,
+        // a compromised runner could attribute messages to arbitrary executions.
+        // Mirrors the ownership check in upsertExecutionStepFromEvent.
+        let workflowExecutionId: string | null = null;
+        let workflowStepId: string | null = null;
+        let workflowIterationPath: string | null = null;
+        if (typeof msg.workflowExecutionId === 'string' && msg.workflowExecutionId.length > 0) {
+          const ownerUserId = this.sessionState.userId;
+          if (!ownerUserId) {
+            console.warn('[session-agent] dropping workflow-chat-message back-pointers: no session userId', {
+              sessionId: this.sessionState.sessionId,
+              executionId: msg.workflowExecutionId,
+            });
+          } else {
+            const row = await this.env.DB
+              .prepare('SELECT user_id FROM workflow_executions WHERE id = ? LIMIT 1')
+              .bind(msg.workflowExecutionId)
+              .first<{ user_id: string }>();
+            if (!row || row.user_id !== ownerUserId) {
+              console.warn('[session-agent] dropping workflow-chat-message back-pointers: execution not owned by user', {
+                sessionId: this.sessionState.sessionId,
+                executionId: msg.workflowExecutionId,
+              });
+            } else {
+              workflowExecutionId = msg.workflowExecutionId;
+              workflowStepId = typeof msg.workflowStepId === 'string' ? msg.workflowStepId : null;
+              workflowIterationPath = typeof msg.workflowIterationPath === 'string' ? msg.workflowIterationPath : '';
+            }
+          }
+        }
 
         const workflowMsgId = crypto.randomUUID();
         const parts = Array.isArray(msg.parts) ? msg.parts : null;
@@ -2264,6 +2296,9 @@ export class SessionAgentDO {
           channelType: workflowChannelType,
           channelId: workflowChannelId,
           opencodeSessionId: workflowOcSessionId,
+          workflowExecutionId,
+          workflowStepId,
+          workflowIterationPath,
         });
         this.broadcastToClients({
           type: 'message',
@@ -2273,6 +2308,9 @@ export class SessionAgentDO {
             content,
             ...(parts ? { parts } : {}),
             ...(workflowChannelType && workflowChannelId ? { channelType: workflowChannelType, channelId: workflowChannelId } : {}),
+            ...(workflowExecutionId ? { workflowExecutionId } : {}),
+            ...(workflowStepId ? { workflowStepId } : {}),
+            ...(workflowIterationPath !== null ? { workflowIterationPath } : {}),
             createdAt: Math.floor(Date.now() / 1000),
           },
         });
