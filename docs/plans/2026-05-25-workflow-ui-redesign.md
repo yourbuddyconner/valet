@@ -1130,11 +1130,11 @@ return {
 };
 ```
 
-- [ ] **Step 4: Add a regression test against `prompt.ts` directly**
+- [ ] **Step 4: Add an automated regression test against `prompt.ts` directly**
 
-Engine-level passthrough tests (mocking `onAgentStep`) don't prove `prompt.ts` actually enriches the output. Find or create a `prompt.test.ts` next to `prompt.ts`. The test approach: instantiate the agent runner with a stubbed `agent.run` that returns a known response and synthesizes `usageEntries`, run a one-step `agent_prompt` workflow through it, and assert the returned step output has all five fields.
+Engine-level passthrough tests (mocking `onAgentStep`) don't prove `prompt.ts` actually enriches the output. Required: create `packages/runner/src/prompt.test.ts` if it doesn't exist, and add a test that exercises the real `prompt.ts` `onAgentStep` path with a stubbed `agent.run` returning a known response and synthesized `usageEntries`. Assert the returned step output has all five fields populated.
 
-If the existing test infrastructure makes this hard, settle for a minimal browser/dev-instance smoke test: trigger a workflow with a single `agent_prompt` step against dev, then inspect the resulting step row in D1 — it should show `{response, model, inputTokens, outputTokens, durationMs}`.
+If the agent-runner construction is hard to fake, extract the output-assembly into a small pure helper (e.g. `assembleAgentPromptOutput(channel, stepStartMs, usageBefore, response)`) and test that helper directly — `prompt.ts` then calls the helper. This keeps the verification under unit-test control. No manual-smoke-only fallback — the contract is exact and a wrong shape silently breaks the agent_prompt card.
 
 - [ ] **Step 5: Run tests**
 
@@ -3823,79 +3823,145 @@ git commit -m "feat(client): useSessionFeed merges messages + step rows by times
 ### Task D8: Workflow feed in chat behind `workflow_ui_chat_cards`
 
 **Files:**
-- Modify: `packages/client/src/components/chat/chat-container.tsx` (the `MessageList` mount lives here, ~line 475)
-- Modify: `packages/client/src/components/chat/message-list.tsx` (extend props to accept the feed)
+- Modify: `packages/client/src/components/chat/chat-container.tsx` (pull step rows here; ~line 475 is where `MessageList` mounts)
+- Modify: `packages/client/src/components/chat/message-list.tsx` (interleave step cards inside the existing turn-rendering loop)
 
-**Why this seam:** `ChatContainer` already knows the `sessionId` and has access to `session` data — pulling executionId and step rows happens here, not deeper inside `MessageList`. We pass an optional `workflowFeed` down so `MessageList` doesn't need to know about workflows.
+**Non-negotiable: preserve all existing `MessageList` behavior.** The current `MessageList` (around `message-list.tsx:55`) groups messages into turns via `groupIntoTurns`, renders `AssistantTurn`s with `onRevert`/`connectedUsers`, handles `childSessionEvents`/`childSessions`/child-session cards, shows the thinking indicator and agent status, manages scroll position/auto-scroll, and renders an empty state. **All of that must continue to work.** We are inserting workflow step cards into the existing render, not replacing the renderer.
 
-`useExecutionSteps` does NOT have an `enabled` option (checked in `packages/client/src/api/executions.ts:155`). Pass an empty string as `executionId` when we don't want to fetch; the hook already short-circuits on falsy ids. Cleaner: only call the hook when `executionId` is set, gated by a conditional render at the parent component level — or use a `skipToken`/condition pattern matching this file's existing style.
+`useExecutionSteps` does NOT have an `enabled` option (`packages/client/src/api/executions.ts:155`). It already short-circuits on a falsy `executionId` — pass `''` when we don't want it to run.
 
-- [ ] **Step 1: In `chat-container.tsx`, compute the workflow feed when the flag is on**
+**Use `filteredMessages` (not `messages`)** as the source for the feed merge — the existing chat already drops messages outside the active thread for orchestrator sessions (`chat-container.tsx:205`). Step rows are not thread-scoped today and pass through as-is.
+
+- [ ] **Step 1: In `chat-container.tsx`, fetch step rows when the flag is on**
 
 ```typescript
 import { useFeatureFlag } from '@/lib/feature-flags';
-import { useSessionFeed } from '@/hooks/use-session-feed';
 import { useExecutionSteps } from '@/api/executions';
 
-// ... inside ChatContainer:
+// ... inside ChatContainer, near the existing data hooks:
 const useChatCards = useFeatureFlag('workflow_ui_chat_cards');
 const executionId =
   useChatCards && session?.metadata?.executionId
     ? session.metadata.executionId
     : '';
-const isTerminal = false; // chat doesn't care about terminality for this hook
-const { data: stepsData } = useExecutionSteps(executionId, { isTerminal });
-const workflowFeed = useSessionFeed(messages, executionId ? stepsData?.steps : undefined);
+const { data: stepsData } = useExecutionSteps(executionId, { isTerminal: false });
+const workflowSteps = executionId ? stepsData?.steps : undefined;
 ```
 
-(`session` is already in scope in `chat-container.tsx` — check the existing `session={{ id: sessionId, workspace: session.workspace, status: sessionStatus }}` line around 379 for the shape.)
+(`session` is already in scope in `chat-container.tsx` — see the `session={{ id: sessionId, workspace: session.workspace, status: sessionStatus }}` line around 379.)
 
-- [ ] **Step 2: Pass `workflowFeed` to `MessageList`**
+- [ ] **Step 2: Pass `workflowSteps` to `MessageList`**
 
-In the `<MessageList ... />` mount around line 475:
+In the `<MessageList ... />` mount around line 475, add the prop alongside the existing ones — do **not** replace existing props:
 
 ```tsx
 <MessageList
-  messages={messages}
-  workflowFeed={executionId ? workflowFeed : undefined}
-  /* ...existing props... */
+  messages={filteredMessages}
+  workflowSteps={workflowSteps}
+  isAgentThinking={...}
+  agentStatus={...}
+  agentStatusDetail={...}
+  onRevert={...}
+  childSessionEvents={...}
+  childSessions={...}
+  connectedUsers={...}
 />
 ```
 
-- [ ] **Step 3: `MessageList` renders the feed when provided**
+- [ ] **Step 3: `MessageList` interleaves step cards inside its existing render**
+
+The existing render path: `messages -> groupIntoTurns -> turns.map(turn => render turn)`. Extend it to: `(messages, workflowSteps) -> mergeFeed -> renderedItems`, where each item is either a turn or a step row. Reuse `useSessionFeed` from D7 to produce a timestamp-ordered list, then build a per-render plan that maps each feed item to either a turn (run `groupIntoTurns` over runs of consecutive messages) or a step card.
+
+Concretely:
 
 ```typescript
 // packages/client/src/components/chat/message-list.tsx
 import { WorkflowStepCard } from '@/components/workflows/step-cards';
-import type { FeedItem } from '@/hooks/use-session-feed';
+import { useSessionFeed, type FeedItem } from '@/hooks/use-session-feed';
+import type { ExecutionStepTrace } from '@/api/executions';
 
-interface Props {
+interface MessageListProps {
   messages: Message[];
-  workflowFeed?: FeedItem[];
-  // ... existing props
+  workflowSteps?: ExecutionStepTrace[]; // NEW
+  // ... all existing props unchanged
 }
 
-export function MessageList({ messages, workflowFeed, ...rest }: Props) {
-  if (!workflowFeed) {
-    // Existing rendering — unchanged.
-    return renderLegacy(messages, rest);
-  }
+export function MessageList({
+  messages,
+  workflowSteps,
+  isAgentThinking,
+  agentStatus,
+  agentStatusDetail,
+  onRevert,
+  childSessionEvents,
+  childSessions,
+  connectedUsers,
+}: MessageListProps) {
+  // ... existing scrollRef, isAtBottom, drawer hooks, etc. unchanged.
+
+  const feed = useSessionFeed(messages, workflowSteps);
+
+  // Build a render plan: split the feed into runs of contiguous messages
+  // (which get grouped into turns the existing way) and step items
+  // (which render as WorkflowStepCard inline).
+  const renderPlan = useMemo(() => buildRenderPlan(feed), [feed]);
+
+  // ... existing scroll/auto-scroll effects unchanged.
+  // Existing empty-state, thinking indicator, child-session cards all stay.
+
   return (
-    <div className="flex flex-col gap-2">
-      {workflowFeed.map((item) =>
-        item.kind === 'message'
-          ? <MessageItem key={item.message.id} message={item.message} />
+    <div ref={scrollRef} className="...">
+      {messages.length === 0 && !isAgentThinking && <EmptyState />}
+      {renderPlan.map((item, i) =>
+        item.kind === 'turns'
+          ? item.turns.map((turn, j) => (
+              <RenderTurn
+                key={`turn-${i}-${j}`}
+                turn={turn}
+                onRevert={onRevert}
+                connectedUsers={connectedUsers}
+                /* ...same as the existing turn render call site */
+              />
+            ))
           : <WorkflowStepCard
-              key={`${item.step.stepId}#${item.step.iterationPath}`}
+              key={`step-${item.step.stepId}#${item.step.iterationPath}`}
               step={item.step}
             />
       )}
+      {isAgentThinking && <ThinkingIndicator status={agentStatus} detail={agentStatusDetail} />}
+      {childSessionEvents?.length ? <ChildSessionCards events={childSessionEvents} sessions={childSessions} /> : null}
     </div>
   );
 }
+
+type RenderPlanItem =
+  | { kind: 'turns'; turns: MessageTurn[] }
+  | { kind: 'step'; step: ExecutionStepTrace };
+
+function buildRenderPlan(feed: FeedItem[]): RenderPlanItem[] {
+  const out: RenderPlanItem[] = [];
+  let runOfMessages: Message[] = [];
+  const flushMessages = () => {
+    if (runOfMessages.length === 0) return;
+    out.push({ kind: 'turns', turns: groupIntoTurns(runOfMessages) });
+    runOfMessages = [];
+  };
+  for (const item of feed) {
+    if (item.kind === 'message') {
+      runOfMessages.push(item.message);
+    } else {
+      flushMessages();
+      out.push({ kind: 'step', step: item.step });
+    }
+  }
+  flushMessages();
+  return out;
+}
 ```
 
-The "legacy" rendering is the existing function body — extract it into `renderLegacy` (or keep it inline behind the early `if`). The flag gate happens upstream in `ChatContainer`; `MessageList` just chooses which renderer based on whether the feed prop is present.
+`RenderTurn` here means the existing in-line code that renders an `assistant-turn` / `standalone` turn — pull it into a small inline component or keep the JSX inline. The key: every existing behavior continues to work; `WorkflowStepCard` items are simply additional render outputs interleaved at the right timestamps.
+
+When `workflowSteps` is undefined (non-workflow session, or flag off), `useSessionFeed` returns the messages-only feed, `buildRenderPlan` produces a single `{ kind: 'turns', turns }` item, and rendering is identical to today.
 
 - [ ] **Step 4: Typecheck**
 
@@ -3905,19 +3971,21 @@ cd /Users/connerswann/code/valet && pnpm typecheck
 
 Expected: clean.
 
-- [ ] **Step 5: Browser smoke**
+- [ ] **Step 5: Browser smoke — both paths**
 
 ```bash
 cd /Users/connerswann/code/valet/packages/client && pnpm dev
 ```
 
-In console: `localStorage.setItem('flag:workflow_ui_chat_cards', 'on')`. Refresh a workflow session chat. Expected: workflow step cards interleave with chat messages by timestamp.
+Smoke test 1 (regression): open a **non-workflow** session. Verify the chat looks and behaves identically — turns group, revert works, thinking indicator shows, child-session cards render, scroll-to-bottom works.
+
+Smoke test 2 (new path): `localStorage.setItem('flag:workflow_ui_chat_cards', 'on')`. Refresh a **workflow** session chat. Verify the same chat behaviors plus workflow step cards interleaved at the right timestamps.
 
 - [ ] **Step 6: Commit**
 
 ```bash
 git add packages/client/src/components/chat/chat-container.tsx packages/client/src/components/chat/message-list.tsx
-git commit -m "feat(client): chat workflow feed behind workflow_ui_chat_cards"
+git commit -m "feat(client): interleave workflow step cards in chat behind workflow_ui_chat_cards"
 ```
 
 ---
