@@ -48,6 +48,8 @@ export interface ExecutionStepTrace {
   executionId: string;
   stepId: string;
   attempt: number;
+  /** Per-instance path identity. '' for top-level steps. */
+  iterationPath: string;
   status: string;
   input: unknown | null;
   output: unknown | null;

@@ -155,7 +155,7 @@ export async function getExecutionSteps(db: D1Database, executionId: string) {
   // rowid — keep as raw SQL
   return db.prepare(`
     SELECT rowid AS insertion_order,
-           id, execution_id, step_id, attempt, status, input_json, output_json, error, started_at, completed_at, created_at
+           id, execution_id, step_id, attempt, iteration_path, status, input_json, output_json, error, started_at, completed_at, created_at
     FROM workflow_execution_steps
     WHERE execution_id = ?
     ORDER BY

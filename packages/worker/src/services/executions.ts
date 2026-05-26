@@ -345,6 +345,8 @@ export interface ExecutionStepView {
   executionId: string;
   stepId: string;
   attempt: number;
+  /** Per-instance path identity. '' for top-level steps. */
+  iterationPath: string;
   status: string;
   input: unknown;
   output: unknown;
@@ -380,6 +382,7 @@ export async function getExecutionStepsWithOrder(
       executionId: row.execution_id as string,
       stepId: String(row.step_id),
       attempt: Number(row.attempt || 1),
+      iterationPath: (row.iteration_path as string | null) ?? '',
       status: String(row.status),
       input: parseNullableJson((row.input_json as string | null) || null),
       output: parseNullableJson((row.output_json as string | null) || null),
@@ -409,6 +412,7 @@ export async function getExecutionStepsWithOrder(
       executionId: step.executionId,
       stepId: step.stepId,
       attempt: step.attempt,
+      iterationPath: step.iterationPath,
       status: step.status,
       input: step.input,
       output: step.output,
