@@ -25,6 +25,7 @@ export interface AvailableService {
   supportedEntities: string[];
   hasActions: boolean;
   hasTriggers: boolean;
+  isCustomConnector?: boolean;
 }
 
 interface AvailableServicesResponse {

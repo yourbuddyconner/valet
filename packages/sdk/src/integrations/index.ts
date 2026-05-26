@@ -101,6 +101,7 @@ export interface IntegrationProvider {
   /** Base URL of the MCP server (e.g. 'https://mcp.notion.com').
    *  When set, uses MCP OAuth (dynamic client registration + PKCE) instead of env-var OAuth. */
   readonly mcpServerUrl?: string;
+  readonly isCustomConnector?: boolean;
 
   validateCredentials(credentials: IntegrationCredentials): boolean;
   testConnection(credentials: IntegrationCredentials): Promise<boolean>;

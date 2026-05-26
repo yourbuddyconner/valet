@@ -31,6 +31,7 @@ import { handleSkillAction } from '../services/session-skills.js';
 import { handlePersonaAction, listPersonasForRunner } from '../services/session-personas.js';
 import { spawnChild, sendSessionMessage, getSessionMessages, forwardMessages, terminateChild, listChildSessions, getSessionStatus, listChannels } from '../services/session-cross.js';
 import { listTools as listToolsSvc, resolveActionPolicy, executeAction as executeActionSvc, type CredentialCache } from '../services/session-tools.js';
+import { loadCustomMcpConnectorContext } from '../services/custom-mcp-connectors.js';
 import {
   workflowList as workflowListSvc,
   workflowSync as workflowSyncSvc,
@@ -6075,10 +6076,12 @@ export class SessionAgentDO {
         return;
       }
 
+      const orgId = await this.resolveOrgId() ?? 'default';
       const result = await listToolsSvc(this.appDb, this.env.DB, this.env, userId, {
         service,
         query,
         credentialCache: this.credentialCacheAdapter,
+        orgId,
       });
 
       // Update DO-level caches from service result
@@ -6148,12 +6151,14 @@ export class SessionAgentDO {
         return;
       }
 
+      const orgId = await this.resolveOrgId() ?? 'default';
       // Resolve policy (validates toolId, checks disabled status, resolves risk level)
       const policyResult = await resolveActionPolicy(this.appDb, this.env.DB, this.env, userId, toolId, params, {
         sessionId: sessionId || '',
         discoveredToolRiskLevels: this.discoveredToolRiskLevels,
         credentialCache: this.credentialCacheAdapter,
         disabledPluginServicesCache: this.disabledPluginServicesCache,
+        orgId,
       });
 
       // Update the disabled plugin services cache from the policy resolution
@@ -6278,7 +6283,7 @@ export class SessionAgentDO {
       }
 
       // ─── Allow — execute immediately ───────────────────────────────────
-      await this.executeActionAndSend(requestId, toolId, service, actionId, params, userId, actionSource, invocationId);
+      await this.executeActionAndSend(requestId, toolId, service, actionId, params, userId, actionSource, invocationId, orgId);
     } catch (err) {
       const error = err instanceof Error ? err.message : String(err);
       if (shouldFailInvocationOnCatch && invocationIdForCleanup) {
@@ -6310,6 +6315,7 @@ export class SessionAgentDO {
     userId: string,
     actionSource: ReturnType<typeof integrationRegistry.getActions>,
     invocationId: string,
+    orgId?: string,
   ): Promise<{ success: boolean; error?: string }> {
     const spawnRequest = this.sessionState.spawnRequest;
     const spawnEnvVars = spawnRequest?.envVars as Record<string, string> | undefined;
@@ -6320,7 +6326,7 @@ export class SessionAgentDO {
       result = await executeActionSvc(
         this.appDb, this.env, userId, toolId, service, actionId, params,
         actionSource, invocationId,
-        { credentialCache: this.credentialCacheAdapter, spawnEnvVars, guardConfig },
+        { credentialCache: this.credentialCacheAdapter, spawnEnvVars, guardConfig, orgId: orgId ?? 'default' },
       );
     } catch (err) {
       const error = err instanceof Error ? err.message : String(err);
@@ -6673,11 +6679,13 @@ export class SessionAgentDO {
           }
         }
 
-        const actionSource = integrationRegistry.getActions(service);
+        const orgId = await this.resolveOrgId() ?? 'default';
+        const customContext = await loadCustomMcpConnectorContext(this.env, this.appDb, orgId);
+        const actionSource = integrationRegistry.getActions(service, customContext);
         let executionResult: { success: boolean; error?: string } = { success: true };
         if (requestId) {
           try {
-            executionResult = await this.executeActionAndSend(requestId, toolId, service, actionId, params, userId, actionSource, promptId);
+            executionResult = await this.executeActionAndSend(requestId, toolId, service, actionId, params, userId, actionSource, promptId, orgId);
           } catch (err) {
             const error = err instanceof Error ? err.message : String(err);
             await markFailed(this.appDb, promptId, error).catch((markErr) => {

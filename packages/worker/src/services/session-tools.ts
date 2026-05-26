@@ -8,6 +8,7 @@ import { getDisabledActionsIndex, isActionDisabled } from '../lib/db/disabled-ac
 import { listMcpToolCache, upsertMcpToolCache } from '../lib/db/mcp-tool-cache.js';
 import { getAutoEnabledServices, getDisabledPluginServices } from '../lib/db/plugins.js';
 import { getUserIdentityLinks, getOrchestratorIdentity } from '../lib/db.js';
+import { loadCustomMcpConnectorContext } from './custom-mcp-connectors.js';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -55,6 +56,7 @@ export interface ListToolsOpts {
   service?: string;
   query?: string;
   credentialCache: CredentialCache;
+  orgId?: string;
 }
 
 export type InvokeOutcome = 'denied' | 'pending_approval' | 'allowed';
@@ -140,15 +142,16 @@ export async function listTools(
   userId: string,
   opts?: ListToolsOpts,
 ): Promise<ListToolsResult> {
-  const { service: filterService, query, credentialCache } = opts ?? {} as ListToolsOpts;
+  const { service: filterService, query, credentialCache, orgId = 'default' } = opts ?? {} as ListToolsOpts;
 
-  const [userIntegrations, orgIntegrations, autoServices, { disabledActions: disabledActionSet, disabledServices: disabledServiceSet }, disabledPluginServices] =
+  const [userIntegrations, orgIntegrations, autoServices, { disabledActions: disabledActionSet, disabledServices: disabledServiceSet }, disabledPluginServices, customContext] =
     await Promise.all([
       getUserIntegrations(appDb, userId),
       getOrgIntegrations(appDb),
-      getAutoEnabledServices(envDB),
+      getAutoEnabledServices(envDB, orgId),
       getDisabledActionsIndex(appDb),
-      getDisabledPluginServices(envDB),
+      getDisabledPluginServices(envDB, orgId),
+      loadCustomMcpConnectorContext(env, appDb, orgId),
     ]);
 
   // Group all active integrations by service, deduplicate by ID
@@ -171,6 +174,15 @@ export async function listTools(
     }
   }
 
+  for (const connector of customContext.connectors.values()) {
+    if (connector.authType === 'oauth') {
+      continue;
+    }
+    if (!serviceSourceMap.has(connector.serviceSlug)) {
+      serviceSourceMap.set(connector.serviceSlug, [{ id: `custom:${connector.serviceSlug}`, scope: 'org' as const, userId }]);
+    }
+  }
+
   console.log(`[session-tools] list-tools: userId=${userId}, service=${filterService ?? 'all'}, services with sources: [${[...serviceSourceMap.keys()].join(', ')}]`);
 
   const tools: ToolDescriptor[] = [];
@@ -183,16 +195,16 @@ export async function listTools(
     if (disabledServiceSet.has(service)) continue;
     if (disabledPluginServices.has(service)) continue;
 
-    const actionSource = integrationRegistry.getActions(service);
+    const actionSource = integrationRegistry.getActions(service, customContext);
     if (!actionSource) continue;
 
-    const provider = integrationRegistry.getProvider(service);
+    const provider = integrationRegistry.getProvider(service, customContext);
 
     // MCP-backed sources need credentials for listing (they return different tools per user).
     // Static sources (no mcpServerUrl) skip credential resolution during listing.
     let credCtx: { credentials: { access_token: string } } | undefined;
     const isMcpSource = !!provider?.mcpServerUrl;
-    if (isMcpSource && provider?.authType !== 'none') {
+    if (isMcpSource && requiresUserCredential(provider)) {
       const firstSource = sources[0];
 
       // Check credential cache first
@@ -236,7 +248,7 @@ export async function listTools(
     let actions = await actionSource.listActions(credCtx);
 
     // MCP sources may return [] when tokens are silently expired — force-refresh and retry
-    if (actions.length === 0 && isMcpSource && credCtx && provider?.authType !== 'none') {
+    if (actions.length === 0 && isMcpSource && credCtx && requiresUserCredential(provider)) {
       credentialCache?.invalidate('user', userId, service);
       const refreshed = await integrationRegistry.resolveCredentials(service, env, userId, {
         forceRefresh: true,
@@ -312,6 +324,7 @@ export async function resolveActionPolicy(
     discoveredToolRiskLevels: Map<string, string>;
     credentialCache: CredentialCache;
     disabledPluginServicesCache: { services: Set<string>; expiresAt: number } | null;
+    orgId?: string;
   },
 ): Promise<PolicyResult & {
   service: string;
@@ -326,6 +339,9 @@ export async function resolveActionPolicy(
   }
   const service = toolId.slice(0, colonIndex);
   const actionId = toolId.slice(colonIndex + 1);
+  const orgId = opts.orgId ?? 'default';
+  const customContext = await loadCustomMcpConnectorContext(env, appDb, orgId);
+  const customConnector = customContext.connectors.get(service);
 
   // Safety net: reject disabled actions even if the tool ID was guessed
   if (await isActionDisabled(appDb, service, actionId)) {
@@ -336,7 +352,7 @@ export async function resolveActionPolicy(
   let disabledPluginServicesCache = opts.disabledPluginServicesCache;
   if (!disabledPluginServicesCache || Date.now() > disabledPluginServicesCache.expiresAt) {
     disabledPluginServicesCache = {
-      services: await getDisabledPluginServices(envDB),
+      services: await getDisabledPluginServices(envDB, orgId),
       expiresAt: Date.now() + 60 * 1000, // 1 minute TTL
     };
   }
@@ -350,16 +366,17 @@ export async function resolveActionPolicy(
   const hasActiveIntegration = [...userIntegrations, ...orgIntegrations].some(
     (i) => i.service === service && i.status === 'active',
   );
+  const customConnectorDoesNotNeedIntegration = !!customConnector && customConnector.authType !== 'oauth';
 
-  if (!hasActiveIntegration) {
-    const autoServices = await getAutoEnabledServices(envDB);
+  if (!hasActiveIntegration && !customConnectorDoesNotNeedIntegration) {
+    const autoServices = await getAutoEnabledServices(envDB, orgId);
     if (!autoServices.includes(service)) {
       throw new Error(`Integration "${service}" is not active. Configure it in Settings > Integrations.`);
     }
   }
 
   // Look up ActionSource
-  const actionSource = integrationRegistry.getActions(service);
+  const actionSource = integrationRegistry.getActions(service, customContext);
   if (!actionSource) {
     throw new Error(`No integration package found for service "${service}".`);
   }
@@ -373,9 +390,9 @@ export async function resolveActionPolicy(
     riskLevel = cachedRisk;
   } else {
     // Resolve list context for policy fallback — skip credential lookup for no-auth services
-    const fallbackProvider = integrationRegistry.getProvider(service);
+    const fallbackProvider = integrationRegistry.getProvider(service, customContext);
     let listCtx: { credentials: { access_token: string } } | undefined;
-    if (fallbackProvider?.authType !== 'none') {
+    if (requiresUserCredential(fallbackProvider)) {
       const listCredResult = await integrationRegistry.resolveCredentials(service, env, userId, {
         forceRefresh: false,
       });
@@ -418,6 +435,7 @@ export async function resolveActionPolicy(
 
 export interface ExecuteActionOpts {
   credentialCache: CredentialCache;
+  orgId?: string;
   /** Spawn request env vars, used to detect orchestrator sessions */
   spawnEnvVars?: Record<string, string>;
   /** Org-level guard configuration, threaded from the DO to action plugins. */
@@ -445,11 +463,13 @@ export async function executeAction(
     return { success: false, error: `No integration package found for service "${service}".`, analyticsEvents: [], durationMs: 0 };
   }
 
-  const provider = integrationRegistry.getProvider(service);
+  const orgId = opts.orgId ?? 'default';
+  const customContext = await loadCustomMcpConnectorContext(env, appDb, orgId);
+  const provider = integrationRegistry.getProvider(service, customContext);
   let credentials: Record<string, string>;
   let attribution: { name: string; email: string } | undefined;
 
-  if (provider?.authType === 'none') {
+  if (!requiresUserCredential(provider)) {
     credentials = {};
   } else {
     const credResult = await integrationRegistry.resolveCredentials(service, env, userId, {
@@ -491,7 +511,7 @@ export async function executeAction(
   const toolExecStart = Date.now();
   let actionResult;
   try {
-    actionResult = await actionSource.execute(actionId, params, { credentials, userId, attribution, callerIdentity, analytics: actionAnalytics, guardConfig: opts.guardConfig });
+    actionResult = await actionSource.execute(actionId, params, { credentials, userId, orgId, attribution, callerIdentity, analytics: actionAnalytics, guardConfig: opts.guardConfig });
 
     // Auth failure retry — force-refresh on 401 and retry once (simple token-expired retry)
     // Note: 403 is excluded — GitHub 403s are permission problems (missing App permissions),
@@ -499,7 +519,7 @@ export async function executeAction(
     const isAuthError = !actionResult.success && actionResult.error &&
       /\b(401|unauthorized|invalid.credentials|token.*expired|token.*revoked)\b/i.test(actionResult.error);
 
-    if (provider?.authType !== 'none' && provider?.authType !== 'bot_token' && isAuthError) {
+    if (requiresUserCredential(provider) && provider?.authType !== 'bot_token' && isAuthError) {
       console.log(`[session-tools] Tool "${toolId}" auth error, force-refreshing credential`);
       const refreshed = await integrationRegistry.resolveCredentials(service, env, userId, {
         params,
@@ -513,6 +533,7 @@ export async function executeAction(
         }
         actionResult = await actionSource.execute(actionId, params, {
           credentials: refreshedCredentials, userId, attribution, callerIdentity, analytics: actionAnalytics, guardConfig: opts.guardConfig,
+          orgId,
         });
       }
     }
@@ -555,4 +576,11 @@ function buildCredentials(credResult: CredentialResult & { ok: true }): Record<s
     credentials._credential_type = credResult.credential.credentialType;
   }
   return credentials;
+}
+
+function requiresUserCredential(provider?: { authType?: string; isCustomConnector?: boolean }): boolean {
+  if (!provider) return false;
+  if (provider.authType === 'none') return false;
+  if (provider.isCustomConnector && provider.authType === 'api_key') return false;
+  return true;
 }

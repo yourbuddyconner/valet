@@ -33,6 +33,7 @@ import type { ProviderModels } from '@/api/sessions';
 import { useSlackInstallStatus, useInstallSlack, useUninstallSlack } from '@/api/slack';
 import { GitHubConfigSection } from '@/components/settings/github-config';
 import { ActionPoliciesSection } from '@/components/settings/action-policies-section';
+import { CustomMcpConnectorsSection } from '@/components/settings/custom-mcp-connectors-section';
 import { usePlugins, usePluginDetail, usePluginSettings, useUpdatePluginStatus, useSyncPlugins, useUpdatePluginSettings } from '@/api/plugins';
 import { Badge } from '@/components/ui/badge';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
@@ -96,6 +97,7 @@ function AdminSettingsPage() {
         <GitHubConfigSection />
         <OrchestratorsSection />
         <ActionLogSection />
+        <CustomMcpConnectorsSection />
         <CustomProvidersSection />
         <AccessControlSection />
         <LoginProvidersSection />

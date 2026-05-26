@@ -7,6 +7,7 @@ import {
   DialogDescription,
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
 import { api } from '@/api/client';
 import { useAvailableIntegrations, useIntegrations, useConfigureIntegration, type AvailableService } from '@/api/integrations';
 import { useSetUserCredential } from '@/api/auth';
@@ -133,6 +134,7 @@ interface ResolvedService {
   fromRegistry?: boolean;
   /** Entities to configure when creating the integration (from registry). */
   supportedEntities?: string[];
+  isCustomConnector?: boolean;
 }
 
 function resolveService(svc: AvailableService): ResolvedService {
@@ -149,6 +151,7 @@ function resolveService(svc: AvailableService): ResolvedService {
     credentialProvider: meta.credentialProvider,
     fromRegistry: true,
     supportedEntities: svc.supportedEntities,
+    isCustomConnector: svc.isCustomConnector,
   };
 }
 
@@ -289,7 +292,10 @@ export function ConnectIntegrationDialog({
                       <service.icon className="h-5 w-5" />
                     </div>
                     <div className="flex-1">
-                      <p className="font-medium text-neutral-900 dark:text-neutral-100">{service.name}</p>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <p className="font-medium text-neutral-900 dark:text-neutral-100">{service.name}</p>
+                        {service.isCustomConnector && <Badge variant="secondary">Custom</Badge>}
+                      </div>
                       <p className="mt-0.5 text-sm text-neutral-500 dark:text-neutral-400">
                         {service.description}
                       </p>

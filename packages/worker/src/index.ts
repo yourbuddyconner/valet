@@ -51,6 +51,7 @@ import { avatarsRouter } from './routes/avatars.js';
 import { repoProviderRouter } from './routes/repo-providers.js';
 import { githubMeRouter } from './routes/github-me.js';
 import { githubAuthRouter } from './routes/github-auth.js';
+import { adminMcpConnectorsRouter } from './routes/admin-mcp-connectors.js';
 import {
   enqueueWorkflowApprovalNotificationIfMissing,
   markWorkflowApprovalNotificationsRead,
@@ -197,6 +198,7 @@ app.route('/api', channelsRouter);
 app.route('/api/me/telegram', telegramApiRouter);
 app.route('/api/admin/slack', slackAdminRouter);
 app.route('/api/admin/github', adminGitHubRouter);
+app.route('/api/admin/mcp-connectors', adminMcpConnectorsRouter);
 app.route('/api/admin/action-policies', actionPoliciesRouter);
 app.route('/api/action-policy-overrides', actionPolicyOverridesRouter);
 app.route('/api/admin/disabled-actions', disabledActionsRouter);
