@@ -20,9 +20,11 @@ export {
   generatePkceChallenge,
   buildAuthorizationUrl,
   exchangeCodePkce,
+  exchangeCodeWithClientCredentials,
   refreshTokenPkce,
+  refreshTokenWithClientCredentials,
 } from './mcp/oauth.js';
-export type { AuthServerMetadata, RegisteredClient, TokenResponse } from './mcp/oauth.js';
+export type { AuthServerMetadata, RegisteredClient, TokenResponse, TokenEndpointAuthMethod } from './mcp/oauth.js';
 
 // NOTE: React UI components are exported from '@valet/sdk/ui'
 // to avoid pulling React into backend bundles.

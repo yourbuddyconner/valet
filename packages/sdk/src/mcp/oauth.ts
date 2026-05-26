@@ -26,13 +26,15 @@ export interface TokenResponse {
   token_type?: string;
 }
 
+export type TokenEndpointAuthMethod = 'none' | 'client_secret_basic' | 'client_secret_post';
+
 // ─── RFC 8414: Authorization Server Metadata Discovery ──────────────────────
 
 /** Discover authorization server metadata from an MCP server URL. */
-export async function discoverAuthServer(mcpServerUrl: string): Promise<AuthServerMetadata> {
+export async function discoverAuthServer(mcpServerUrl: string, opts?: { fetch?: typeof fetch }): Promise<AuthServerMetadata> {
   const base = mcpServerUrl.replace(/\/+$/, '');
   const url = `${base}/.well-known/oauth-authorization-server`;
-  const res = await fetch(url);
+  const res = await (opts?.fetch ?? fetch)(url);
   if (!res.ok) {
     throw new Error(`MCP OAuth discovery failed: ${res.status} from ${url}`);
   }
@@ -44,9 +46,9 @@ export async function discoverAuthServer(mcpServerUrl: string): Promise<AuthServ
 /** Register a dynamic OAuth client with the authorization server. */
 export async function registerClient(
   registrationEndpoint: string,
-  params: { clientName: string; redirectUris: string[] },
+  params: { clientName: string; redirectUris: string[]; fetch?: typeof fetch },
 ): Promise<RegisteredClient> {
-  const res = await fetch(registrationEndpoint, {
+  const res = await (params.fetch ?? fetch)(registrationEndpoint, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -118,6 +120,7 @@ export async function exchangeCodePkce(params: {
   codeVerifier: string;
   /** MCP resource server URL (RFC 8707). Must match the value sent in the authorization request. */
   resource?: string;
+  fetch?: typeof fetch;
 }): Promise<TokenResponse> {
   const body = new URLSearchParams({
     grant_type: 'authorization_code',
@@ -129,7 +132,7 @@ export async function exchangeCodePkce(params: {
   if (params.resource) {
     body.set('resource', params.resource);
   }
-  const res = await fetch(params.tokenEndpoint, {
+  const res = await (params.fetch ?? fetch)(params.tokenEndpoint, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body,
@@ -141,13 +144,51 @@ export async function exchangeCodePkce(params: {
   return (await res.json()) as TokenResponse;
 }
 
+/** Exchange authorization code for tokens using PKCE and admin-provided client credentials. */
+export async function exchangeCodeWithClientCredentials(params: {
+  tokenEndpoint: string;
+  clientId: string;
+  clientSecret?: string;
+  tokenEndpointAuthMethod?: TokenEndpointAuthMethod;
+  code: string;
+  redirectUri: string;
+  codeVerifier: string;
+  /** MCP resource server URL (RFC 8707). Must match the value sent in the authorization request. */
+  resource?: string;
+  fetch?: typeof fetch;
+}): Promise<TokenResponse> {
+  const body = new URLSearchParams({
+    grant_type: 'authorization_code',
+    client_id: params.clientId,
+    code: params.code,
+    redirect_uri: params.redirectUri,
+    code_verifier: params.codeVerifier,
+  });
+  if (params.resource) {
+    body.set('resource', params.resource);
+  }
+
+  const headers = buildTokenRequestAuth(params.clientId, params.clientSecret, params.tokenEndpointAuthMethod ?? 'none', body);
+  const res = await (params.fetch ?? fetch)(params.tokenEndpoint, {
+    method: 'POST',
+    headers,
+    body,
+  });
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    throw new Error(`MCP client-credentials token exchange failed: ${res.status} ${body.slice(0, 200)}`);
+  }
+  return (await res.json()) as TokenResponse;
+}
+
 /** Refresh a token for a public client. */
 export async function refreshTokenPkce(params: {
   tokenEndpoint: string;
   clientId: string;
   refreshToken: string;
+  fetch?: typeof fetch;
 }): Promise<TokenResponse> {
-  const res = await fetch(params.tokenEndpoint, {
+  const res = await (params.fetch ?? fetch)(params.tokenEndpoint, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams({
@@ -163,7 +204,65 @@ export async function refreshTokenPkce(params: {
   return (await res.json()) as TokenResponse;
 }
 
+/** Refresh a token using admin-provided client credentials. */
+export async function refreshTokenWithClientCredentials(params: {
+  tokenEndpoint: string;
+  clientId: string;
+  clientSecret?: string;
+  tokenEndpointAuthMethod?: TokenEndpointAuthMethod;
+  refreshToken: string;
+  /** MCP resource server URL (RFC 8707). */
+  resource?: string;
+  fetch?: typeof fetch;
+}): Promise<TokenResponse> {
+  const body = new URLSearchParams({
+    grant_type: 'refresh_token',
+    client_id: params.clientId,
+    refresh_token: params.refreshToken,
+  });
+  if (params.resource) {
+    body.set('resource', params.resource);
+  }
+
+  const headers = buildTokenRequestAuth(params.clientId, params.clientSecret, params.tokenEndpointAuthMethod ?? 'none', body);
+  const res = await (params.fetch ?? fetch)(params.tokenEndpoint, {
+    method: 'POST',
+    headers,
+    body,
+  });
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    throw new Error(`MCP client-credentials token refresh failed: ${res.status} ${body.slice(0, 200)}`);
+  }
+  return (await res.json()) as TokenResponse;
+}
+
 // ─── Helpers ────────────────────────────────────────────────────────────────
+
+function buildTokenRequestAuth(
+  clientId: string,
+  clientSecret: string | undefined,
+  method: TokenEndpointAuthMethod,
+  body: URLSearchParams,
+): Record<string, string> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/x-www-form-urlencoded' };
+  if (!clientSecret || method === 'none') {
+    return headers;
+  }
+
+  if (method === 'client_secret_basic') {
+    headers.Authorization = `Basic ${btoa(`${formEncodeComponent(clientId)}:${formEncodeComponent(clientSecret)}`)}`;
+    return headers;
+  }
+
+  body.set('client_secret', clientSecret);
+  return headers;
+}
+
+function formEncodeComponent(value: string): string {
+  const params = new URLSearchParams([['value', value]]);
+  return params.toString().slice('value='.length);
+}
 
 function base64UrlEncode(bytes: Uint8Array): string {
   let binary = '';

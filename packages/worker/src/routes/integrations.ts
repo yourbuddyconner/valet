@@ -9,6 +9,7 @@ import {
   generatePkceChallenge,
   buildAuthorizationUrl,
   exchangeCodePkce,
+  exchangeCodeWithClientCredentials,
 } from '@valet/sdk';
 import { type Env, type Variables, getEnvString } from '../env.js';
 import * as db from '../lib/db.js';
@@ -19,6 +20,8 @@ import { revokeCredential } from '../services/credentials.js';
 import { getDb } from '../lib/drizzle.js';
 import { listMcpToolCache } from '../lib/db/mcp-tool-cache.js';
 import { getDisabledPluginServices } from '../lib/db/plugins.js';
+import { getCustomMcpOAuthConfig, loadCustomMcpConnectorContext } from '../services/custom-mcp-connectors.js';
+import { createSafeFetchOutbound } from '../services/safe-fetch-outbound.js';
 
 export const integrationsRouter = new Hono<{ Bindings: Env; Variables: Variables }>();
 
@@ -88,10 +91,7 @@ async function ensureMcpOAuthClient(
 
 // Validation schemas
 const configureIntegrationSchema = z.object({
-  service: z.string().min(1).refine(
-    (s) => integrationRegistry.getPackage(s) !== undefined,
-    (s) => ({ message: `Unknown integration service: ${s}` }),
-  ),
+  service: z.string().min(1),
   credentials: z.record(z.string()),
   config: z.object({
     entities: z.array(z.string()).default([]),
@@ -106,6 +106,7 @@ const configureIntegrationSchema = z.object({
 integrationsRouter.get('/', async (c) => {
   const user = c.get('user');
   const disabledPlugins = await getDisabledPluginServices(c.env.DB);
+  const customContext = await loadCustomMcpConnectorContext(c.env, c.get('db'), 'default');
 
   // Get user's own integrations
   const userIntegrations = await db.getUserIntegrations(c.get('db'), user.id);
@@ -135,7 +136,11 @@ integrationsRouter.get('/', async (c) => {
       },
       createdAt: i.createdAt,
     })),
-  ].filter((i) => !disabledPlugins.has(i.service));
+  ].filter((i) => {
+    if (disabledPlugins.has(i.service)) return false;
+    if (integrationRegistry.isBuiltinService(i.service)) return true;
+    return customContext.connectors.has(i.service);
+  });
 
   return c.json({ integrations: sanitized });
 });
@@ -148,8 +153,17 @@ integrationsRouter.get('/', async (c) => {
 integrationsRouter.get('/available', async (c) => {
   const packages = integrationRegistry.listPackages();
   const disabledPlugins = await getDisabledPluginServices(c.env.DB);
+  const customContext = await loadCustomMcpConnectorContext(c.env, c.get('db'), 'default');
 
-  const available = packages
+  const available: Array<{
+    service: string;
+    displayName: string;
+    authType: string;
+    supportedEntities: string[];
+    hasActions: boolean;
+    hasTriggers: boolean;
+    isCustomConnector?: boolean;
+  }> = packages
     .filter((pkg) => {
       // Skip plugins disabled by admin
       if (disabledPlugins.has(pkg.service)) return false;
@@ -174,6 +188,19 @@ integrationsRouter.get('/available', async (c) => {
       hasTriggers: !!pkg.triggers,
     }));
 
+  for (const connector of customContext.connectors.values()) {
+    if (connector.authType !== 'oauth') continue;
+    available.push({
+      service: connector.serviceSlug,
+      displayName: connector.displayName,
+      authType: 'oauth2',
+      supportedEntities: [],
+      hasActions: true,
+      hasTriggers: false,
+      isCustomConnector: true,
+    });
+  }
+
   return c.json({ services: available, disabledServices: [...disabledPlugins] });
 });
 
@@ -184,11 +211,15 @@ integrationsRouter.get('/available', async (c) => {
 integrationsRouter.get('/actions', async (c) => {
   const serviceFilter = c.req.query('service');
   const packages = integrationRegistry.listPackages();
+  const customContext = await loadCustomMcpConnectorContext(c.env, c.get('db'), 'default');
 
   // Build a lookup of provider display names by service for cache entries
   const displayNameMap = new Map<string, string>();
   for (const pkg of packages) {
     displayNameMap.set(pkg.service, pkg.provider.displayName);
+  }
+  for (const connector of customContext.connectors.values()) {
+    displayNameMap.set(connector.serviceSlug, connector.displayName);
   }
 
   const catalog: Array<{
@@ -225,9 +256,12 @@ integrationsRouter.get('/actions', async (c) => {
   // Merge cached MCP tool metadata (discovered at runtime by SessionAgentDO).
   // This surfaces MCP-backed tools that can't be listed without credentials.
   try {
-    const appDb = getDb(c.env.DB);
+    const appDb = c.get('db');
     const cached = await listMcpToolCache(appDb, serviceFilter ?? undefined);
     for (const entry of cached) {
+      if (!integrationRegistry.isBuiltinService(entry.service) && !customContext.connectors.has(entry.service)) {
+        continue;
+      }
       const key = `${entry.service}:${entry.actionId}`;
       if (seen.has(key)) continue; // static source already provided this tool
       seen.add(key);
@@ -425,7 +459,24 @@ integrationsRouter.get('/:service/oauth', async (c) => {
 
   const provider = integrationRegistry.getProvider(service);
   if (!provider) {
-    throw new ValidationError(`Unknown service: ${service}`);
+    const customOAuth = await getCustomMcpOAuthConfig(c.env, c.get('db'), service, 'default');
+    if (!customOAuth) {
+      throw new ValidationError(`Unknown service: ${service}`);
+    }
+
+    const { codeVerifier, codeChallenge } = await generatePkceChallenge();
+    const state = crypto.randomUUID();
+    const url = buildAuthorizationUrl({
+      authorizationEndpoint: customOAuth.authorizationEndpoint,
+      clientId: customOAuth.clientId,
+      redirectUri: redirect_uri,
+      codeChallenge,
+      state,
+      scopes: customOAuth.scopes,
+      resource: customOAuth.serverUrl,
+    });
+
+    return c.json({ url, state, code_verifier: codeVerifier });
   }
 
   if (provider.mcpServerUrl) {
@@ -474,7 +525,34 @@ integrationsRouter.post('/:service/oauth/callback', async (c) => {
 
   const provider = integrationRegistry.getProvider(service);
   if (!provider) {
-    throw new ValidationError(`Unknown service: ${service}`);
+    const customOAuth = await getCustomMcpOAuthConfig(c.env, c.get('db'), service, 'default');
+    if (!customOAuth) {
+      throw new ValidationError(`Unknown service: ${service}`);
+    }
+    if (!code_verifier) {
+      throw new ValidationError('code_verifier is required for MCP OAuth callback');
+    }
+
+    const tokens = await exchangeCodeWithClientCredentials({
+      tokenEndpoint: customOAuth.tokenEndpoint,
+      clientId: customOAuth.clientId,
+      clientSecret: customOAuth.clientSecret,
+      tokenEndpointAuthMethod: customOAuth.tokenEndpointAuthMethod,
+      code,
+      redirectUri: redirect_uri,
+      codeVerifier: code_verifier,
+      resource: customOAuth.serverUrl,
+      fetch: createSafeFetchOutbound({ mode: 'oauth-token' }),
+    });
+
+    const credentials: Record<string, string> = {
+      access_token: tokens.access_token,
+      token_type: tokens.token_type || 'bearer',
+    };
+    if (tokens.refresh_token) credentials.refresh_token = tokens.refresh_token;
+    if (tokens.expires_in) credentials.expires_in = String(tokens.expires_in);
+
+    return c.json({ credentials });
   }
 
   if (provider.mcpServerUrl) {

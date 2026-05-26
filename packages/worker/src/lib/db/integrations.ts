@@ -99,6 +99,30 @@ export async function updateIntegrationStatus(
     .where(eq(integrations.id, id));
 }
 
+export async function updateIntegration(
+  db: AppDb,
+  id: string,
+  updates: {
+    config?: Integration['config'];
+    status?: Integration['status'];
+    errorMessage?: string | null;
+  },
+): Promise<Integration | null> {
+  const setValues: Record<string, unknown> = {
+    updatedAt: sql`datetime('now')`,
+  };
+  if (updates.config !== undefined) setValues.config = updates.config;
+  if (updates.status !== undefined) setValues.status = updates.status;
+  if (updates.errorMessage !== undefined) setValues.errorMessage = updates.errorMessage;
+
+  await db
+    .update(integrations)
+    .set(setValues)
+    .where(eq(integrations.id, id));
+
+  return getIntegration(db, id);
+}
+
 export async function deleteIntegration(db: AppDb, id: string): Promise<void> {
   await db.delete(integrations).where(eq(integrations.id, id));
 }

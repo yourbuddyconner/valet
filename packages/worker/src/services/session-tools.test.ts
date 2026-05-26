@@ -1,11 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { resolveActionPolicy } from './session-tools.js';
+import { listTools, resolveActionPolicy } from './session-tools.js';
 import { createTestDb } from '../test-utils/db.js';
 import { upsertActionPolicy } from '../lib/db/actions.js';
 import { upsertMcpToolCache } from '../lib/db/mcp-tool-cache.js';
-import { integrations, sessions, users } from '../lib/schema/index.js';
+import { integrations, sessions, users, customMcpConnectors, disabledActions } from '../lib/schema/index.js';
+import { encryptString } from '../lib/crypto.js';
+import type { AppDb } from '../lib/drizzle.js';
 import { integrationRegistry } from '../integrations/registry.js';
 import type { Env } from '../env.js';
+import type { ActionSource, IntegrationProvider } from '@valet/sdk';
 
 const USER_ID = 'mcp-policy-user';
 const SESSION_ID = 'mcp-policy-session';
@@ -28,13 +31,59 @@ function emptyCredentialCache() {
   };
 }
 
+function envWithEncryption(): Env {
+  return { ENCRYPTION_KEY: 'test-encryption-key' } as Env;
+}
+
+function stubMcpFetch() {
+  const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+    const body = JSON.parse(String(init?.body));
+    if (body.method === 'initialize') {
+      return new Response(JSON.stringify({
+        jsonrpc: '2.0',
+        id: body.id,
+        result: {
+          protocolVersion: '2025-11-25',
+          capabilities: {},
+          serverInfo: { name: 'custom-mcp', version: '1.0.0' },
+        },
+      }), {
+        status: 200,
+        headers: { 'content-type': 'application/json', 'mcp-session-id': 'session-1' },
+      });
+    }
+    if (body.method === 'notifications/initialized') {
+      return new Response(null, { status: 202 });
+    }
+    return new Response(JSON.stringify({
+      jsonrpc: '2.0',
+      id: body.id,
+      result: {
+        tools: [{
+          name: 'query',
+          description: 'Query records',
+          inputSchema: { type: 'object' },
+          annotations: { readOnlyHint: true },
+        }],
+      },
+    }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    });
+  });
+  vi.stubGlobal('fetch', fetchMock);
+  return fetchMock;
+}
+
 describe('resolveActionPolicy', () => {
   beforeEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
   });
 
   it('uses cached MCP risk metadata when runtime listActions misses the tool', async () => {
     const { db } = createTestDb();
+    const appDb: AppDb = db;
     db.insert(users).values({ id: USER_ID, email: 'mcp-policy@example.com' }).run();
     db.insert(sessions).values({
       id: SESSION_ID,
@@ -49,27 +98,36 @@ describe('resolveActionPolicy', () => {
       config: { entities: [] },
       status: 'active',
     }).run();
-    await upsertActionPolicy(db as any, {
+    await upsertActionPolicy(appDb, {
       id: 'deny-critical',
       riskLevel: 'critical',
       mode: 'deny',
       createdBy: USER_ID,
     });
-    await upsertMcpToolCache(db as any, [{
+    await upsertMcpToolCache(appDb, [{
       service: 'mcp_service',
       actionId: 'dangerous_tool',
       name: 'Dangerous Tool',
       description: 'Known critical MCP tool',
       riskLevel: 'critical',
     }]);
-    vi.spyOn(integrationRegistry, 'getActions').mockReturnValue({
+    const emptyActionSource: ActionSource = {
       listActions: vi.fn(async () => []),
       execute: vi.fn(),
-    } as any);
-    vi.spyOn(integrationRegistry, 'getProvider').mockReturnValue({ authType: 'none' } as any);
+    };
+    const noAuthProvider: IntegrationProvider = {
+      service: 'mcp_service',
+      displayName: 'MCP Service',
+      authType: 'none',
+      supportedEntities: [],
+      validateCredentials: () => true,
+      testConnection: async () => true,
+    };
+    vi.spyOn(integrationRegistry, 'getActions').mockReturnValue(emptyActionSource);
+    vi.spyOn(integrationRegistry, 'getProvider').mockReturnValue(noAuthProvider);
 
     const result = await resolveActionPolicy(
-      db as any,
+      appDb,
       mockD1(),
       {} as Env,
       USER_ID,
@@ -86,6 +144,115 @@ describe('resolveActionPolicy', () => {
     expect(result).toMatchObject({
       outcome: 'denied',
       riskLevel: 'critical',
+    });
+  });
+
+  it('lists custom API-key connector tools without resolving user credentials', async () => {
+    const { db } = createTestDb();
+    const appDb: AppDb = db;
+    db.insert(users).values({ id: USER_ID, email: 'mcp-policy@example.com' }).run();
+    db.insert(customMcpConnectors).values({
+      id: 'connector-1',
+      orgId: 'default',
+      serviceSlug: 'salesforce',
+      displayName: 'Salesforce',
+      serverUrl: 'https://mcp.example.com',
+      authType: 'api_key',
+      encryptedApiKey: await encryptString('org-api-key', 'test-encryption-key'),
+      apiKeyHeaderName: 'X-API-Key',
+      apiKeyPrefix: null,
+      status: 'active',
+    }).run();
+    const fetchMock = stubMcpFetch();
+    const credentialCache = emptyCredentialCache();
+    const resolveSpy = vi.spyOn(integrationRegistry, 'resolveCredentials');
+
+    const result = await listTools(appDb, mockD1(), envWithEncryption(), USER_ID, {
+      credentialCache,
+      orgId: 'default',
+    });
+
+    expect(result.tools).toMatchObject([{ id: 'salesforce:salesforce.query', riskLevel: 'low' }]);
+    expect(resolveSpy).not.toHaveBeenCalledWith('salesforce', expect.anything(), expect.anything(), expect.anything());
+    const toolsListHeaders = new Headers((fetchMock.mock.calls.at(-1)?.[1] as RequestInit).headers);
+    expect(toolsListHeaders.get('X-API-Key')).toBe('org-api-key');
+  });
+
+  it('filters disabled actions for custom connector slugs', async () => {
+    const { db } = createTestDb();
+    const appDb: AppDb = db;
+    db.insert(users).values({ id: USER_ID, email: 'mcp-policy@example.com' }).run();
+    db.insert(customMcpConnectors).values({
+      id: 'connector-1',
+      orgId: 'default',
+      serviceSlug: 'salesforce',
+      displayName: 'Salesforce',
+      serverUrl: 'https://mcp.example.com',
+      authType: 'api_key',
+      encryptedApiKey: await encryptString('org-api-key', 'test-encryption-key'),
+      apiKeyHeaderName: 'X-API-Key',
+      status: 'active',
+    }).run();
+    db.insert(disabledActions).values({
+      id: 'disabled-salesforce-query',
+      service: 'salesforce',
+      actionId: 'salesforce.query',
+      disabledBy: USER_ID,
+    }).run();
+    stubMcpFetch();
+
+    const result = await listTools(appDb, mockD1(), envWithEncryption(), USER_ID, {
+      credentialCache: emptyCredentialCache(),
+      orgId: 'default',
+    });
+
+    expect(result.discoveredRiskLevels.get('salesforce:salesforce.query')).toBe('low');
+    expect(result.tools.some((tool) => tool.id === 'salesforce:salesforce.query')).toBe(false);
+  });
+
+  it('allows active custom API-key connector policy resolution without an integration row', async () => {
+    const { db } = createTestDb();
+    const appDb: AppDb = db;
+    db.insert(users).values({ id: USER_ID, email: 'mcp-policy@example.com' }).run();
+    db.insert(sessions).values({
+      id: SESSION_ID,
+      userId: USER_ID,
+      workspace: '/tmp/mcp-policy',
+      status: 'running',
+    }).run();
+    db.insert(customMcpConnectors).values({
+      id: 'connector-1',
+      orgId: 'default',
+      serviceSlug: 'salesforce',
+      displayName: 'Salesforce',
+      serverUrl: 'https://mcp.example.com',
+      authType: 'api_key',
+      encryptedApiKey: await encryptString('org-api-key', 'test-encryption-key'),
+      apiKeyHeaderName: 'X-API-Key',
+      status: 'active',
+    }).run();
+
+    const result = await resolveActionPolicy(
+      appDb,
+      mockD1(),
+      envWithEncryption(),
+      USER_ID,
+      'salesforce:salesforce.query',
+      {},
+      {
+        sessionId: SESSION_ID,
+        discoveredToolRiskLevels: new Map([['salesforce:salesforce.query', 'low']]),
+        credentialCache: emptyCredentialCache(),
+        disabledPluginServicesCache: null,
+        orgId: 'default',
+      },
+    );
+
+    expect(result).toMatchObject({
+      outcome: 'allowed',
+      service: 'salesforce',
+      actionId: 'salesforce.query',
+      riskLevel: 'low',
     });
   });
 });

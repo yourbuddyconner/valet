@@ -17,7 +17,7 @@ export type IntegrationService =
 export interface Integration {
   id: string;
   userId: string;
-  service: IntegrationService;
+  service: string;
   config: IntegrationConfig;
   status: 'active' | 'error' | 'pending' | 'disconnected';
   scope: 'user' | 'org';
@@ -475,9 +475,78 @@ export interface ListSessionsResponse {
 }
 
 export interface ConfigureIntegrationRequest {
-  service: IntegrationService;
+  service: string;
   credentials: Record<string, string>;
   config: IntegrationConfig;
+}
+
+export type CustomMcpConnectorAuthType = 'none' | 'oauth' | 'api_key' | 'bearer';
+
+export type CustomMcpConnectorTokenEndpointAuthMethod =
+  | 'none'
+  | 'client_secret_basic'
+  | 'client_secret_post';
+
+export interface CustomMcpConnector {
+  id: string;
+  orgId: string;
+  serviceSlug: string;
+  displayName: string;
+  serverUrl: string;
+  authType: CustomMcpConnectorAuthType;
+  oauthClientId: string | null;
+  oauthTokenEndpointAuthMethod: CustomMcpConnectorTokenEndpointAuthMethod;
+  oauthScopes: string | null;
+  oauthAuthorizationEndpoint: string | null;
+  oauthTokenEndpoint: string | null;
+  apiKeyHeaderName: string | null;
+  apiKeyPrefix: string | null;
+  status: 'active' | 'disabled' | 'error';
+  toolCount?: number;
+  lastDiscoveredAt: string | null;
+  lastError: string | null;
+  createdBy: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+  hasClientSecret: boolean;
+  hasApiKey: boolean;
+  hasAdditionalHeaders: boolean;
+}
+
+export interface CreateCustomMcpConnectorRequest {
+  displayName: string;
+  serverUrl: string;
+  authType: CustomMcpConnectorAuthType;
+  oauthClientId?: string | null;
+  oauthClientSecret?: string;
+  oauthTokenEndpointAuthMethod?: CustomMcpConnectorTokenEndpointAuthMethod | 'auto';
+  oauthScopes?: string | null;
+  oauthAuthorizationEndpoint?: string | null;
+  oauthTokenEndpoint?: string | null;
+  apiKey?: string;
+  apiKeyHeaderName?: string | null;
+  apiKeyPrefix?: string | null;
+  additionalHeaders?: Record<string, string>;
+  status?: 'active' | 'disabled';
+}
+
+export interface UpdateCustomMcpConnectorRequest {
+  displayName?: string;
+  serverUrl?: string;
+  authType: CustomMcpConnectorAuthType;
+  oauthClientId?: string | null;
+  oauthClientSecret?: string;
+  clearClientSecret?: boolean;
+  oauthTokenEndpointAuthMethod?: CustomMcpConnectorTokenEndpointAuthMethod | 'auto';
+  oauthScopes?: string | null;
+  oauthAuthorizationEndpoint?: string | null;
+  oauthTokenEndpoint?: string | null;
+  apiKey?: string;
+  apiKeyHeaderName?: string | null;
+  apiKeyPrefix?: string | null;
+  additionalHeaders?: Record<string, string>;
+  clearAdditionalHeaders?: boolean;
+  status?: 'active' | 'disabled' | 'error';
 }
 
 // Custom LLM provider types

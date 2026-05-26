@@ -18,6 +18,9 @@ export interface McpActionSourceOptions {
   noAuth?: boolean;
   /** When set, token is sent as this URL query parameter instead of Authorization header. */
   authQueryParam?: string;
+  additionalHeaders?: Record<string, string>;
+  staticAuthHeader?: { name: string; value: string };
+  fetch?: typeof fetch;
 }
 
 /**
@@ -35,7 +38,14 @@ export class McpActionSource implements ActionSource {
   private noAuth: boolean;
 
   constructor(opts: McpActionSourceOptions) {
-    this.client = new McpClient({ url: opts.mcpUrl, serviceName: opts.serviceName, authQueryParam: opts.authQueryParam });
+    this.client = new McpClient({
+      url: opts.mcpUrl,
+      serviceName: opts.serviceName,
+      authQueryParam: opts.authQueryParam,
+      additionalHeaders: opts.additionalHeaders,
+      staticAuthHeader: opts.staticAuthHeader,
+      fetch: opts.fetch,
+    });
     this.serviceName = opts.serviceName;
     this.defaultRiskLevel = opts.defaultRiskLevel ?? 'medium';
     this.noAuth = opts.noAuth ?? false;

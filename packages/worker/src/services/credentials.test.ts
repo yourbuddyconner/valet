@@ -8,6 +8,11 @@ vi.mock('../lib/db/credentials.js', () => ({
   deleteCredential: vi.fn(),
   listCredentialsByOwner: vi.fn(),
   hasCredential: vi.fn(),
+  getExpiringCredentials: vi.fn(),
+}));
+
+vi.mock('./custom-mcp-connectors.js', () => ({
+  getCustomMcpOAuthConfig: vi.fn(),
 }));
 
 // Mock the crypto layer
@@ -18,7 +23,7 @@ vi.mock('../lib/crypto.js', () => ({
 
 // Mock the drizzle layer so we can verify getDb() return value is threaded through
 const { fakeDrizzleDb } = vi.hoisted(() => {
-  const fakeDrizzleDb = { __drizzle: true } as any;
+  const fakeDrizzleDb = { __drizzle: true } as const;
   return { fakeDrizzleDb };
 });
 vi.mock('../lib/drizzle.js', () => ({
@@ -26,6 +31,7 @@ vi.mock('../lib/drizzle.js', () => ({
 }));
 
 import * as credentialDb from '../lib/db/credentials.js';
+import { getCustomMcpOAuthConfig } from './custom-mcp-connectors.js';
 import { encryptStringPBKDF2, decryptStringPBKDF2 } from '../lib/crypto.js';
 import {
   getCredential,
@@ -46,6 +52,7 @@ const mockDb = credentialDb as unknown as {
 };
 const mockEncrypt = encryptStringPBKDF2 as ReturnType<typeof vi.fn>;
 const mockDecrypt = decryptStringPBKDF2 as ReturnType<typeof vi.fn>;
+const mockGetCustomMcpOAuthConfig = getCustomMcpOAuthConfig as ReturnType<typeof vi.fn>;
 
 const fakeEnv = {
   DB: {} as unknown,
@@ -54,6 +61,7 @@ const fakeEnv = {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockGetCustomMcpOAuthConfig.mockResolvedValue(null);
 });
 
 describe('getCredential', () => {
@@ -169,6 +177,99 @@ describe('getCredential', () => {
     if (result.ok) {
       expect(result.credential.accessToken).toBe('sk-abc123');
     }
+  });
+
+  it('refreshes expired custom MCP OAuth credentials with stored client credentials and resource', async () => {
+    mockDb.getCredentialRow.mockResolvedValue({
+      id: 'cred-1',
+      ownerType: 'user',
+      ownerId: 'user-1',
+      provider: 'salesforce-mcp',
+      credentialType: 'oauth2',
+      encryptedData: 'encrypted-blob',
+      metadata: null,
+      scopes: 'mcp_api refresh_token',
+      expiresAt: new Date(Date.now() - 60_000).toISOString(),
+      createdAt: '2025-01-01T00:00:00Z',
+      updatedAt: '2025-01-01T00:00:00Z',
+    });
+    mockDecrypt.mockResolvedValue(JSON.stringify({
+      access_token: 'old-access',
+      refresh_token: 'old-refresh',
+    }));
+    mockGetCustomMcpOAuthConfig.mockResolvedValue({
+      serviceSlug: 'salesforce-mcp',
+      serverUrl: 'https://mcp.salesforce.example.com/platform/mcp',
+      tokenEndpoint: 'https://login.salesforce.example.com/token',
+      authorizationEndpoint: 'https://login.salesforce.example.com/auth',
+      clientId: 'client-id',
+      clientSecret: 'client-secret',
+      tokenEndpointAuthMethod: 'client_secret_post',
+      scopes: ['mcp_api', 'refresh_token'],
+    });
+    mockEncrypt.mockResolvedValue('encrypted-refreshed');
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const form = init?.body as URLSearchParams;
+      expect(form.get('grant_type')).toBe('refresh_token');
+      expect(form.get('client_id')).toBe('client-id');
+      expect(form.get('client_secret')).toBe('client-secret');
+      expect(form.get('refresh_token')).toBe('old-refresh');
+      expect(form.get('resource')).toBe('https://mcp.salesforce.example.com/platform/mcp');
+      return Response.json({ access_token: 'new-access', expires_in: 3600 });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await getCredential(fakeEnv, 'user', 'user-1', 'salesforce-mcp');
+
+    expect(result).toMatchObject({
+      ok: true,
+      credential: {
+        accessToken: 'new-access',
+        refreshToken: 'old-refresh',
+        refreshed: true,
+      },
+    });
+    expect(mockDb.upsertCredential).toHaveBeenCalledWith(
+      fakeDrizzleDb,
+      expect.objectContaining({
+        ownerType: 'user',
+        ownerId: 'user-1',
+        provider: 'salesforce-mcp',
+        credentialType: 'oauth2',
+        encryptedData: 'encrypted-refreshed',
+        expiresAt: expect.any(String),
+      }),
+    );
+  });
+
+  it('returns expired when an expired credential has no refresh token', async () => {
+    mockDb.getCredentialRow.mockResolvedValue({
+      id: 'cred-1',
+      ownerType: 'user',
+      ownerId: 'user-1',
+      provider: 'salesforce-mcp',
+      credentialType: 'oauth2',
+      encryptedData: 'encrypted-blob',
+      metadata: null,
+      scopes: 'mcp_api',
+      expiresAt: new Date(Date.now() - 60_000).toISOString(),
+      createdAt: '2025-01-01T00:00:00Z',
+      updatedAt: '2025-01-01T00:00:00Z',
+    });
+    mockDecrypt.mockResolvedValue(JSON.stringify({
+      access_token: 'expired-access',
+    }));
+
+    const result = await getCredential(fakeEnv, 'user', 'user-1', 'salesforce-mcp');
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        service: 'salesforce-mcp',
+        reason: 'expired',
+      },
+    });
+    expect(mockGetCustomMcpOAuthConfig).not.toHaveBeenCalled();
   });
 });
 
