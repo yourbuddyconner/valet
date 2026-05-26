@@ -237,10 +237,10 @@ export function AddMcpConnectorDialog({ open, onOpenChange, connector }: AddMcpC
                   </Field>
                   <div className="grid gap-4 sm:grid-cols-2">
                     <Field label="Authorization endpoint">
-                      <Input value={oauthAuthorizationEndpoint} onChange={(e) => setOauthAuthorizationEndpoint(e.target.value)} required />
+                      <Input value={oauthAuthorizationEndpoint} onChange={(e) => setOauthAuthorizationEndpoint(e.target.value)} />
                     </Field>
                     <Field label="Token endpoint">
-                      <Input value={oauthTokenEndpoint} onChange={(e) => setOauthTokenEndpoint(e.target.value)} required />
+                      <Input value={oauthTokenEndpoint} onChange={(e) => setOauthTokenEndpoint(e.target.value)} />
                     </Field>
                   </div>
                   {redirectOrigin && (
