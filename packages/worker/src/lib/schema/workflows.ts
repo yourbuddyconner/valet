@@ -91,6 +91,9 @@ export const workflowExecutionSteps = sqliteTable('workflow_execution_steps', {
   executionId: text().notNull().references(() => workflowExecutions.id, { onDelete: 'cascade' }),
   stepId: text().notNull(),
   attempt: integer().notNull(),
+  // Per-instance path identifier. Empty string for top-level steps.
+  // See docs/specs/2026-05-23-workflow-ui-design.md.
+  iterationPath: text().notNull().default(''),
   status: text().notNull(),
   // JSON-encoded text. All writes use raw SQL; all reads parse manually. Not mode:'json'
   // to keep schema honest about that and avoid any future Drizzle double-encoding.
@@ -101,9 +104,15 @@ export const workflowExecutionSteps = sqliteTable('workflow_execution_steps', {
   completedAt: text(),
   createdAt: text().notNull().default(sql`(datetime('now'))`),
 }, (table) => [
-  uniqueIndex('idx_execution_steps_unique').on(table.executionId, table.stepId, table.attempt),
+  uniqueIndex('idx_execution_steps_unique').on(
+    table.executionId,
+    table.stepId,
+    table.attempt,
+    table.iterationPath,
+  ),
   index('idx_workflow_execution_steps_execution').on(table.executionId),
   index('idx_workflow_execution_steps_status').on(table.status),
+  index('idx_workflow_execution_steps_iteration').on(table.executionId, table.iterationPath),
 ]);
 
 export const workflowMutationProposals = sqliteTable('workflow_mutation_proposals', {
