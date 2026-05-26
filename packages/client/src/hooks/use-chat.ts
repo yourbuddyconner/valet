@@ -98,6 +98,7 @@ export interface IntegrationAuthError {
   service: string;
   displayName: string;
   reason: string;
+  message?: string;
 }
 
 interface ChatState {
@@ -355,7 +356,7 @@ interface WebSocketToastMessage {
 
 interface WebSocketIntegrationAuthRequiredMessage {
   type: 'integration-auth-required';
-  services: Array<{ service: string; displayName: string; reason: string }>;
+  services: Array<{ service: string; displayName: string; reason: string; message?: string }>;
 }
 
 interface WebSocketModelsMessage {

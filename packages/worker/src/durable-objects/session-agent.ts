@@ -6110,6 +6110,7 @@ export class SessionAgentDO {
             service: w.service,
             displayName: w.displayName,
             reason: w.reason,
+            message: w.message,
           })),
         });
 

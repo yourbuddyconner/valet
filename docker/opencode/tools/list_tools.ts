@@ -1,12 +1,6 @@
 import { tool } from "@opencode-ai/plugin"
 import { formatOutput } from "./_format"
-
-interface ToolWarning {
-  service: string
-  displayName: string
-  reason: string
-  message: string
-}
+import { formatNoToolsWithWarningsMessage, formatToolWarningLines, type ToolWarning } from "./_tool_warnings"
 
 export default tool({
   description:
@@ -40,18 +34,13 @@ export default tool({
       const tools = Array.isArray(data.tools) ? data.tools : []
       const warnings = Array.isArray(data.warnings) ? data.warnings : []
 
-      // Build warning lines for integrations with auth failures
-      const warningLines: string[] = []
-      for (const w of warnings) {
-        const detail = w.message ? `: ${w.message}` : ""
-        warningLines.push(`⚠ ${w.displayName}: Authorization expired or failed (${w.reason})${detail} — the user should reauthorize in Settings > Integrations or via the banner in the session UI.`)
-      }
+      const warningLines = formatToolWarningLines(warnings)
 
       if (tools.length === 0 && warnings.length > 0) {
         return [
           ...warningLines,
           "",
-          "No tools available because all integrations have auth failures. Ask the user to reauthorize their integrations.",
+          formatNoToolsWithWarningsMessage(),
         ].join("\n")
       }
 

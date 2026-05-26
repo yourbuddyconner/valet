@@ -787,6 +787,7 @@ function IntegrationReauthBanner({
   onDismiss: (service: string) => void;
 }) {
   const queryClient = useQueryClient();
+  const hasDiscoveryFailure = errors.some((err) => !isIntegrationAuthReason(err.reason));
 
   const handleReauthorize = useCallback(async (service: string) => {
     try {
@@ -839,22 +840,43 @@ function IntegrationReauthBanner({
         <WarningIcon className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-600 dark:text-amber-400" />
         <div className="min-w-0 flex-1">
           <p className="font-mono text-[11px] font-medium text-amber-800 dark:text-amber-200">
-            Integration authorization expired
+            {hasDiscoveryFailure ? 'Integration tool discovery failed' : 'Integration authorization expired'}
           </p>
           <div className="mt-1 space-y-1">
             {errors.map((err) => (
-              <div key={err.service} className="flex items-center gap-2">
-                <span className="font-mono text-[11px] text-amber-700 dark:text-amber-300">
-                  {err.displayName}
-                </span>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => handleReauthorize(err.service)}
-                  className="h-5 px-1.5 font-mono text-[10px] font-semibold text-amber-700 hover:bg-amber-200/60 hover:text-amber-900 dark:text-amber-300 dark:hover:bg-amber-800/40 dark:hover:text-amber-100"
-                >
-                  Reauthorize
-                </Button>
+              <div key={err.service} className="flex items-start gap-2">
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="font-mono text-[11px] text-amber-700 dark:text-amber-300">
+                      {err.displayName}
+                    </span>
+                    <span className="font-mono text-[10px] text-amber-600/80 dark:text-amber-400/80">
+                      {err.reason}
+                    </span>
+                    {isIntegrationAuthReason(err.reason) ? (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => handleReauthorize(err.service)}
+                        className="h-5 px-1.5 font-mono text-[10px] font-semibold text-amber-700 hover:bg-amber-200/60 hover:text-amber-900 dark:text-amber-300 dark:hover:bg-amber-800/40 dark:hover:text-amber-100"
+                      >
+                        Reauthorize
+                      </Button>
+                    ) : (
+                      <a
+                        href="/integrations"
+                        className="rounded px-1.5 py-0.5 font-mono text-[10px] font-semibold text-amber-700 hover:bg-amber-200/60 hover:text-amber-900 dark:text-amber-300 dark:hover:bg-amber-800/40 dark:hover:text-amber-100"
+                      >
+                        Settings
+                      </a>
+                    )}
+                  </div>
+                  {err.message && (
+                    <p className="mt-0.5 break-words font-mono text-[10px] text-amber-700/80 dark:text-amber-300/80">
+                      {err.message}
+                    </p>
+                  )}
+                </div>
                 <button
                   type="button"
                   onClick={() => onDismiss(err.service)}
@@ -870,6 +892,10 @@ function IntegrationReauthBanner({
       </div>
     </div>
   );
+}
+
+function isIntegrationAuthReason(reason: string): boolean {
+  return ['auth_failed', 'decryption_failed', 'expired', 'not_found', 'refresh_failed', 'revoked'].includes(reason);
 }
 
 function WarningIcon({ className }: { className?: string }) {

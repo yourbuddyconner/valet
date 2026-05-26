@@ -7,6 +7,7 @@ export default defineConfig({
       'packages/shared',
       'packages/sdk',
       'packages/client',
+      'docker/opencode',
     ],
   },
 });

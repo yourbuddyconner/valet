@@ -1750,6 +1750,46 @@ describe('SessionAgentDO', () => {
       expect(ACTION_APPROVAL_EXPIRY_MS).toBeLessThan(255_000);
     });
 
+    it('broadcasts MCP tool discovery warning messages to clients', async () => {
+      const { agent, broadcasts } = await createTestAgent();
+      const listToolsSpy = vi.spyOn(sessionTools, 'listTools').mockResolvedValue({
+        tools: [],
+        warnings: [{
+          service: 'salesforce-read-only',
+          displayName: 'Salesforce (Read Only)',
+          reason: 'request_failed',
+          message: 'MCP salesforce-read-only initialize failed: HTTP 404 - Not Found',
+          integrationId: 'integration-1',
+        }],
+        mcpCacheEntries: [],
+        discoveredRiskLevels: new Map(),
+        disabledPluginServices: new Set(),
+      });
+      (agent as any).runnerLink.send = vi.fn().mockReturnValue(true);
+
+      await (agent as any).handleListTools('list-tools-request', 'salesforce');
+
+      expect(listToolsSpy).toHaveBeenCalledWith(expect.anything(), expect.anything(), expect.anything(), 'user-1', expect.objectContaining({
+        service: 'salesforce',
+      }));
+      expect((agent as any).runnerLink.send).toHaveBeenCalledWith(expect.objectContaining({
+        type: 'list-tools-result',
+        warnings: [expect.objectContaining({
+          service: 'salesforce-read-only',
+          reason: 'request_failed',
+          message: 'MCP salesforce-read-only initialize failed: HTTP 404 - Not Found',
+        })],
+      }));
+      expect(broadcasts).toContainEqual(expect.objectContaining({
+        type: 'integration-auth-required',
+        services: [expect.objectContaining({
+          service: 'salesforce-read-only',
+          reason: 'request_failed',
+          message: 'MCP salesforce-read-only initialize failed: HTTP 404 - Not Found',
+        })],
+      }));
+    });
+
     it('allow_session creates a session-scoped exact override and executes', async () => {
       const { agent, sql, appDb } = await setupApprovalPrompt('allow_session');
 
