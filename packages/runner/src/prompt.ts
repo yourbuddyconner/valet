@@ -1278,25 +1278,48 @@ export class PromptHandler {
     context: WorkflowStepExecutionContext,
   ): Promise<WorkflowStepExecutionResult | void> {
     if (step.type !== "notify") return;
+    // v1: notify only supports the orchestrator target. Channel routing
+    // (slack/telegram/etc.) is out of scope — see Phase B Task B2 in
+    // docs/specs/2026-05-23-workflow-ui-design.md. Output shape is the
+    // single source of truth the notify card renders against:
+    //   { type: 'notify', target, delivered, error? }
     const content = typeof step.content === "string" ? step.content.trim() : "";
+    const targetRaw = step.target === "orchestrator" || step.target === undefined ? "orchestrator" : null;
+
     if (!content) {
-      return { status: "failed", error: "notify_missing_content" };
+      return {
+        status: "failed",
+        error: "notify_missing_content",
+        output: { type: "notify", target: targetRaw ?? "orchestrator", delivered: false, error: "notify_missing_content" },
+      };
     }
-    const target = step.target === "orchestrator" || step.target === undefined ? "orchestrator" : null;
-    if (target === null) {
-      return { status: "failed", error: `notify_unsupported_target: ${String(step.target)}` };
+    if (targetRaw === null) {
+      const err = `notify_unsupported_target: ${String(step.target)}`;
+      return {
+        status: "failed",
+        error: err,
+        output: { type: "notify", target: String(step.target), delivered: false, error: err },
+      };
     }
     try {
       this.agentClient.sendNotify({
         executionId: context.executionId,
         stepId: step.id,
-        target,
+        target: targetRaw,
         content,
       });
-      return { status: "completed", output: { type: "notify", target, delivered: true } };
+      return {
+        status: "completed",
+        output: { type: "notify", target: targetRaw, delivered: true },
+      };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      return { status: "failed", error: `notify_send_failed: ${message}` };
+      const errStr = `notify_send_failed: ${message}`;
+      return {
+        status: "failed",
+        error: errStr,
+        output: { type: "notify", target: targetRaw, delivered: false, error: errStr },
+      };
     }
   }
 
