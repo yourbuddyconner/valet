@@ -533,7 +533,7 @@ export interface CreateCustomMcpConnectorRequest {
 export interface UpdateCustomMcpConnectorRequest {
   displayName?: string;
   serverUrl?: string;
-  authType: CustomMcpConnectorAuthType;
+  authType?: CustomMcpConnectorAuthType;
   oauthClientId?: string | null;
   oauthClientSecret?: string;
   clearClientSecret?: boolean;

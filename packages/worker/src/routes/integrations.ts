@@ -132,7 +132,7 @@ integrationsRouter.get('/', async (c) => {
       status: i.status,
       scope: i.scope,
       config: {
-        entities: (i.config as any).entities,
+        entities: Array.isArray(i.config.entities) ? i.config.entities as string[] : [],
       },
       createdAt: i.createdAt,
     })),
@@ -189,11 +189,11 @@ integrationsRouter.get('/available', async (c) => {
     }));
 
   for (const connector of customContext.connectors.values()) {
-    if (connector.authType !== 'oauth') continue;
+    if (connector.authType === 'none') continue;
     available.push({
       service: connector.serviceSlug,
       displayName: connector.displayName,
-      authType: 'oauth2',
+      authType: connector.authType === 'oauth' ? 'oauth2' : connector.authType,
       supportedEntities: [],
       hasActions: true,
       hasTriggers: false,

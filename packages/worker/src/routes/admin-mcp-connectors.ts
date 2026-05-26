@@ -46,7 +46,7 @@ const createConnectorSchema = z.object({
 const updateConnectorSchema = z.object({
   displayName: z.string().trim().min(1).optional(),
   serverUrl: z.string().trim().min(1).optional(),
-  authType: authTypeSchema,
+  authType: authTypeSchema.optional(),
   oauthClientId: z.string().trim().min(1).nullable().optional(),
   oauthClientSecret: z.string().optional(),
   clearClientSecret: z.boolean().optional(),

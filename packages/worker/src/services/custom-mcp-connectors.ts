@@ -210,7 +210,7 @@ export async function updateCustomMcpConnector(
   const existing = await getConnectorRow(db, id);
   if (!existing) return null;
 
-  const nextAuthType = input.authType;
+  const nextAuthType = input.authType ?? existing.authType;
   const nextServerUrl = input.serverUrl ?? existing.serverUrl;
   await validateConfiguredUrls({
     serverUrl: nextServerUrl,
@@ -388,11 +388,12 @@ async function buildUpdateData(
   existing: ConnectorRow,
   input: UpdateCustomMcpConnectorRequest,
 ) {
-  const auth = await normalizeAuthFields(env, input.authType, input, existing);
+  const effectiveAuthType = input.authType ?? existing.authType;
+  const auth = await normalizeAuthFields(env, effectiveAuthType, input, existing);
   const update: Record<string, unknown> = {
     displayName: input.displayName?.trim() ?? existing.displayName,
     serverUrl: input.serverUrl ?? existing.serverUrl,
-    authType: input.authType,
+    authType: effectiveAuthType,
     ...auth,
   };
 
