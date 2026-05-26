@@ -222,6 +222,12 @@ export interface Message {
   opencodeSessionId?: string;
   threadId?: string;
   createdAt: Date;
+  // Back-pointers populated only on workflow-originated messages. The chat
+  // surface uses them to badge the message with its step and link to the
+  // execution. See docs/specs/2026-05-23-workflow-ui-design.md (Phase D).
+  workflowExecutionId?: string;
+  workflowStepId?: string;
+  workflowIterationPath?: string;
 }
 
 // Thread types
