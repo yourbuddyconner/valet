@@ -638,7 +638,7 @@ async function executeSteps(
           ctx.resume.mismatchStepId ||= step.id;
           result.status = 'completed';
           result.completedAt = stepTs;
-          result.output = { prompt, decision: 'approve', replayed: true };
+          result.output = { prompt, decision: 'approved', decidedAt: stepTs, replayed: true };
           emit(sink, { type: 'step.completed', executionId: ctx.executionId, stepId: step.id, attempt: ctx.attempt, iterationPath: ctx.iterationPath, ts: stepTs });
           continue;
         }
@@ -648,7 +648,7 @@ async function executeSteps(
           result.status = 'cancelled';
           result.completedAt = stepTs;
           result.error = 'approval_denied';
-          result.output = { prompt, decision: 'deny' };
+          result.output = { prompt, decision: 'denied', decidedAt: stepTs };
 
           emit(sink, {
             type: 'approval.denied',
@@ -673,7 +673,7 @@ async function executeSteps(
 
         result.status = 'completed';
         result.completedAt = stepTs;
-        result.output = { prompt, decision: 'approve' };
+        result.output = { prompt, decision: 'approved', decidedAt: stepTs };
 
         emit(sink, {
           type: 'approval.approved',
