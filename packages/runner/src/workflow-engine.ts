@@ -57,6 +57,8 @@ export interface WorkflowStepResult {
   stepId: string;
   status: string;
   attempt: number;
+  /** Per-instance path identity. Empty for top-level steps. */
+  iterationPath: string;
   startedAt: string;
   completedAt?: string;
   input?: unknown;
@@ -583,6 +585,7 @@ async function executeSteps(
           stepId: step.id,
           status: 'skipped',
           attempt: ctx.attempt,
+          iterationPath: ctx.iterationPath,
           startedAt: ts,
           completedAt: ts,
           input: buildStepInput(step),
@@ -605,6 +608,7 @@ async function executeSteps(
       stepId: step.id,
       status: 'running',
       attempt: ctx.attempt,
+      iterationPath: ctx.iterationPath,
       startedAt,
       input: buildStepInput(step),
     };
