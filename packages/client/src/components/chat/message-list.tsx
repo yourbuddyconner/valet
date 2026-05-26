@@ -1,6 +1,7 @@
-import { useRef, useEffect, useState, useCallback } from 'react';
+import { useRef, useEffect, useState, useCallback, useMemo } from 'react';
 import type { Message } from '@/api/types';
 import type { MessagePart } from '@valet/shared';
+import type { ExecutionStepTrace } from '@/api/executions';
 import { MessageItem } from './message-item';
 import { ThinkingIndicator } from './thinking-indicator';
 import { DeferredMarkdownContent } from './markdown/deferred-markdown-content';
@@ -11,11 +12,14 @@ import { useDrawer } from '@/routes/sessions/$sessionId';
 import type { ChildSessionEvent, ConnectedUser } from '@/hooks/use-chat';
 import type { ChildSessionSummary } from '@/api/types';
 import { MessageCopyButton } from './message-copy-button';
+import { useSessionFeed, type FeedItem } from '@/hooks/use-session-feed';
+import { WorkflowStepCard } from '@/components/workflows/step-cards';
 
 type AgentStatus = 'idle' | 'thinking' | 'tool_calling' | 'streaming' | 'error' | 'queued';
 
 interface MessageListProps {
   messages: Message[];
+  workflowSteps?: ExecutionStepTrace[];
   isAgentThinking?: boolean;
   agentStatus?: AgentStatus;
   agentStatusDetail?: string;
@@ -52,7 +56,37 @@ function groupIntoTurns(messages: Message[]): MessageTurn[] {
   return turns;
 }
 
-export function MessageList({ messages, isAgentThinking, agentStatus, agentStatusDetail, onRevert, childSessionEvents, childSessions, connectedUsers }: MessageListProps) {
+/**
+ * The render plan interleaves chat turns and workflow step cards in
+ * timestamp order. Runs of consecutive chat messages get bundled into
+ * MessageTurn[] (so groupIntoTurns can keep its existing semantics);
+ * each step row becomes its own item.
+ */
+type RenderPlanItem =
+  | { kind: 'turns'; turns: MessageTurn[] }
+  | { kind: 'step'; step: ExecutionStepTrace };
+
+function buildRenderPlan(feed: FeedItem[]): RenderPlanItem[] {
+  const out: RenderPlanItem[] = [];
+  let run: Message[] = [];
+  const flushRun = () => {
+    if (run.length === 0) return;
+    out.push({ kind: 'turns', turns: groupIntoTurns(run) });
+    run = [];
+  };
+  for (const item of feed) {
+    if (item.kind === 'message') {
+      run.push(item.message);
+    } else {
+      flushRun();
+      out.push({ kind: 'step', step: item.step });
+    }
+  }
+  flushRun();
+  return out;
+}
+
+export function MessageList({ messages, workflowSteps, isAgentThinking, agentStatus, agentStatusDetail, onRevert, childSessionEvents, childSessions, connectedUsers }: MessageListProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const { activePanel } = useDrawer();
   const compact = activePanel !== null;
@@ -78,12 +112,18 @@ export function MessageList({ messages, isAgentThinking, agentStatus, agentStatu
     return () => el.removeEventListener('scroll', handleScroll);
   }, []);
 
-  // Initial load: scroll to bottom when messages first appear
+  const feed = useSessionFeed(messages, workflowSteps);
+  const renderPlan = useMemo(() => buildRenderPlan(feed), [feed]);
+  // Feed length drives initial-scroll and auto-scroll so workflow-only updates
+  // (no new chat message) still pin the latest card to the viewport.
+  const feedLength = feed.length;
+  const stepsLength = workflowSteps?.length ?? 0;
+
+  // Initial load: scroll to bottom when content first appears
   useEffect(() => {
     if (didInitialScrollRef.current) return;
-    if (messages.length > 0 && scrollRef.current) {
+    if (feedLength > 0 && scrollRef.current) {
       didInitialScrollRef.current = true;
-      // Use requestAnimationFrame to ensure DOM has rendered the messages
       requestAnimationFrame(() => {
         if (scrollRef.current) {
           scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
@@ -92,18 +132,18 @@ export function MessageList({ messages, isAgentThinking, agentStatus, agentStatu
         }
       });
     }
-  }, [messages.length]);
+  }, [feedLength]);
 
   // Streaming updates messages in-place (no length change),
   // so we track the last message's content length to trigger auto-scroll during streaming.
   const lastMsgLen = messages.length > 0 ? (messages[messages.length - 1].content?.length ?? 0) : 0;
 
-  // Auto-scroll on new messages / streaming content (only when already at bottom)
+  // Auto-scroll on new content / streaming (only when already at bottom)
   useEffect(() => {
     if (isAtBottomRef.current && scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
-  }, [messages.length, lastMsgLen]);
+  }, [feedLength, lastMsgLen]);
 
   const scrollToBottom = useCallback(() => {
     if (scrollRef.current) {
@@ -111,8 +151,8 @@ export function MessageList({ messages, isAgentThinking, agentStatus, agentStatu
     }
   }, []);
 
-  const isEmpty = messages.length === 0;
-  const turns = isEmpty ? [] : groupIntoTurns(messages);
+  // Empty when neither chat messages nor workflow step rows exist.
+  const isEmpty = messages.length === 0 && stepsLength === 0;
 
   return (
     <div className="relative flex-1 overflow-hidden">
@@ -132,18 +172,34 @@ export function MessageList({ messages, isAgentThinking, agentStatus, agentStatu
           </div>
         ) : (
           <div className={`space-y-0.5 ${compact ? 'px-3 py-3' : 'mx-auto max-w-3xl px-5 py-5'}`}>
-            {turns.map((turn) => {
-              if (turn.type === 'standalone') {
-                const msg = turn.messages[0];
-                return <MessageItem key={msg.id} message={msg} onRevert={onRevert} connectedUsers={connectedUsers} />;
+            {renderPlan.map((item, idx) => {
+              if (item.kind === 'step') {
+                return (
+                  <WorkflowStepCard
+                    key={`step-${item.step.stepId}#${item.step.iterationPath}`}
+                    step={item.step}
+                  />
+                );
               }
-
-              return (
-                <AssistantTurn
-                  key={turn.messages[0].id}
-                  message={turn.messages[0]}
-                />
-              );
+              return item.turns.map((turn) => {
+                if (turn.type === 'standalone') {
+                  const msg = turn.messages[0];
+                  return (
+                    <MessageItem
+                      key={msg.id}
+                      message={msg}
+                      onRevert={onRevert}
+                      connectedUsers={connectedUsers}
+                    />
+                  );
+                }
+                return (
+                  <AssistantTurn
+                    key={turn.messages[0].id}
+                    message={turn.messages[0]}
+                  />
+                );
+              }) ?? <span key={`empty-${idx}`} />;
             })}
             {/* Child session cards */}
             {childSessionEvents && childSessionEvents.length > 0 && (
