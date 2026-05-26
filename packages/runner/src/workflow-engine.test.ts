@@ -501,6 +501,42 @@ describe('workflow-engine', () => {
     expect(loopStep?.output).toEqual({ iterations: 3 });
   });
 
+  it('emits a distinct envelope entry per loop iteration with iterationPath', async () => {
+    const compiled = await compileWorkflowDefinition({
+      steps: [
+        {
+          id: 'L1',
+          type: 'loop',
+          over: 'variables.items',
+          steps: [
+            { id: 'inner', type: 'tool', tool: 'noop', arguments: { value: '{{loop.item}}' } },
+          ],
+        },
+      ],
+    });
+
+    if (!compiled.ok || !compiled.workflow) {
+      throw new Error('compile failed');
+    }
+
+    const result = await executeWorkflowRun(
+      'ex_loop_iterpath',
+      compiled.workflow,
+      { variables: { items: ['a', 'b', 'c'] } },
+      {
+        onToolStep: async () => ({ status: 'completed', output: { ok: true } }),
+      },
+    );
+
+    expect(result.status).toBe('ok');
+    // The loop itself is a top-level step.
+    expect(result.steps.find((s) => s.stepId === 'L1')?.iterationPath).toBe('');
+    // Each inner-step entry has its iteration's path.
+    const innerSteps = result.steps.filter((s) => s.stepId === 'inner');
+    expect(innerSteps).toHaveLength(3);
+    expect(innerSteps.map((s) => s.iterationPath)).toEqual(['L1:i0', 'L1:i1', 'L1:i2']);
+  });
+
   it('fails loop when "over" path resolves to a non-array', async () => {
     const compiled = await compileWorkflowDefinition({
       steps: [
