@@ -105,6 +105,8 @@ This is where the previous draft fell short. There are **three** upsert sites an
 
 **Retry-from-step** (`packages/worker/src/services/session-workflows.ts:423`): the replayed step results passed back into the runner already carry `iterationPath` (because they came from the prior execution's persisted rows). The runner's resume seeds outputs from these rows; verify it can locate the right replay row by `(stepId, iterationPath)` and not just `stepId`. If retry-from-step targets a step inside a loop iteration, the targeted step's path is preserved in the retry directive.
 
+**Approval wait/resume:** approval steps inside loops, parallel branches, or conditionals are real (`approval` is a regular step type and runs wherever the workflow places it). The current pause mechanism stashes the targeted step in the execution's runtime state and resumes on `resumeToken`; that resume must carry `iterationPath` so the resumed runner knows *which* instance of the approval step is unblocking. Concretely: the runtime-state payload written by the WorkflowExecutorDO when transitioning to `waiting_approval` records `{ stepId, iterationPath, attempt }`, not just `stepId`. On resume, the engine matches the resumed step by that triple. Without this, an approval step inside a loop iteration `i=2` would resume the wrong (or first matching) instance.
+
 #### Validation
 
 If a runner emits a step trace with an `iterationPath` whose container segments don't match the static workflow definition (e.g., `iterationPath = 'unknownStep:i0'` for a step that doesn't exist), the ingest path drops the event with a structured warn and records a telemetry counter. We don't reject — we surface the row as orphaned and fall through to the fallback renderer.
@@ -129,7 +131,7 @@ This is the **only** workflow→chat data flow. Today the runner emits a `workfl
 - Response: continues to flow through OpenCode's normal message path.
 - Both messages persist a small **back-pointer** to their step row: `workflowExecutionId`, `workflowStepId`, `workflowIterationPath`. **No new tables, no `messageGroupId`, no paired-message protocol.** Three nullable columns on `messages`, populated only for workflow-originated messages.
 
-The chat surface uses the back-pointer to (a) badge the message with its step type/persona/iteration, (b) link to the execution page, and (c) collapse the message into the step card when it's the chronological neighbor of its step row.
+The chat surface uses the back-pointer to (a) badge the message with its step type/persona/iteration and (b) link to the execution page. The message is **not** merged into the step card — see [interleaved cards](#session-chat--workflow-steps-as-interleaved-cards) for the chronology contract.
 
 **Trust boundary:** the DO handler at `packages/worker/src/durable-objects/session-agent.ts:2246` currently writes whatever `workflow-chat-message` says into the message row. Before persisting the new back-pointer fields, the DO must validate that the `workflowExecutionId` belongs to this session's user — parity with the step-event ingest at `session-agent.ts:3530` / `executions.ts:455`. Without this check, a compromised runner could attribute arbitrary messages to arbitrary executions.
 
