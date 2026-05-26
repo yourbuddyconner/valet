@@ -54,11 +54,18 @@ export const messages = sqliteTable('messages', {
   threadId: text().references(() => sessionThreads.id, { onDelete: 'set null' }),
   createdAt: text().default(sql`(datetime('now'))`),
   createdAtEpoch: integer(),
+  // Back-pointers for workflow-originated messages. Nullable everywhere except
+  // when the row was emitted by a workflow agent_prompt step. See
+  // docs/specs/2026-05-23-workflow-ui-design.md (Phase D).
+  workflowExecutionId: text(),
+  workflowStepId: text(),
+  workflowIterationPath: text(),
 }, (table) => [
   index('idx_messages_session').on(table.sessionId),
   index('idx_messages_thread').on(table.threadId),
   index('idx_messages_session_role').on(table.sessionId, table.role),
   index('idx_messages_created_at').on(table.createdAt),
+  index('idx_messages_workflow_execution').on(table.workflowExecutionId),
 ]);
 
 export const screenshots = sqliteTable('screenshots', {
