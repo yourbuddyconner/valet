@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, type ReactNode } from 'react';
+import { createContext, useContext, useState, type ReactNode, type Ref } from 'react';
 import { cn } from '@/lib/cn';
 import type { ToolCallStatus } from './types';
 import { ChevronIcon } from './icons';
@@ -14,7 +14,7 @@ interface ToolCardShellProps {
   summary?: ReactNode;
   /** Expanded content */
   children?: ReactNode;
-  /** Whether the card starts expanded */
+  /** Whether the card starts expanded (ignored when `open` is provided) */
   defaultExpanded?: boolean;
   /** Status accent color override */
   accentClass?: string;
@@ -22,6 +22,21 @@ interface ToolCardShellProps {
   expandable?: boolean;
   /** Optional callback for custom expansion behavior */
   onToggle?: () => void;
+  /**
+   * Controlled expansion. When provided, the shell is fully controlled — internal
+   * state is ignored, and clicks call `onOpenChange(!open)`. Use this when an
+   * external coordinator (e.g. a timeline driving open-on-diagram-click or
+   * open-on-failure) needs to set the open state.
+   */
+  open?: boolean;
+  onOpenChange?: (next: boolean) => void;
+  /**
+   * When set, the header button gets `aria-controls={id + "-body"}` and the body
+   * div gets that id. Pair this with `open` for proper screen-reader behavior.
+   */
+  id?: string;
+  /** Forwarded to the header button. Useful for focus-on-auto-expand patterns. */
+  headerRef?: Ref<HTMLButtonElement>;
 }
 
 export const ToolCardExpansionIntentContext = createContext<boolean | null>(null);
@@ -49,12 +64,19 @@ export function ToolCardShell({
   defaultExpanded = false,
   expandable,
   onToggle,
+  open,
+  onOpenChange,
+  id,
+  headerRef,
 }: ToolCardShellProps) {
   const expansionIntent = useContext(ToolCardExpansionIntentContext);
-  const [expanded, setExpanded] = useState(expansionIntent ?? defaultExpanded);
+  const [internalExpanded, setInternalExpanded] = useState(expansionIntent ?? defaultExpanded);
+  // Controlled when `open` is provided; otherwise tracked internally.
+  const expanded = open ?? internalExpanded;
   const isActive = status === 'pending' || status === 'running';
   const hasContent = !!children;
   const isExpandable = expandable ?? hasContent;
+  const bodyId = id ? `${id}-body` : undefined;
 
   return (
     <div
@@ -66,12 +88,17 @@ export function ToolCardShell({
     >
       {/* Header — always visible */}
       <button
+        ref={headerRef}
         type="button"
+        aria-expanded={isExpandable ? expanded : undefined}
+        aria-controls={bodyId}
         onClick={() => {
           if (!isExpandable) return;
-          if (hasContent) {
-            setExpanded(!expanded);
+          const next = !expanded;
+          if (open === undefined && hasContent) {
+            setInternalExpanded(next);
           }
+          onOpenChange?.(next);
           onToggle?.();
         }}
         disabled={!isExpandable}
@@ -133,7 +160,7 @@ export function ToolCardShell({
 
       {/* Expanded content */}
       {expanded && children && (
-        <div className="border-t border-neutral-100 dark:border-neutral-800">
+        <div id={bodyId} className="border-t border-neutral-100 dark:border-neutral-800">
           {children}
         </div>
       )}
