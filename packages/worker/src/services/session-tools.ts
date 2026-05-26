@@ -175,9 +175,6 @@ export async function listTools(
   }
 
   for (const connector of customContext.connectors.values()) {
-    if (connector.authType === 'oauth') {
-      continue;
-    }
     if (!serviceSourceMap.has(connector.serviceSlug)) {
       serviceSourceMap.set(connector.serviceSlug, [{ id: `custom:${connector.serviceSlug}`, scope: 'org' as const, userId }]);
     }
