@@ -389,7 +389,11 @@ export async function retryExecutionFromStep(
   const targetIndex = topLevelIds.indexOf(targetStepId);
   if (targetIndex < 0) {
     // Distinguish "nested step" from "unknown step" by scanning the full
-    // workflow tree. We reject nested-step retry at v1.
+    // workflow tree. We reject nested-step retry at v1 — supporting it
+    // requires (a) request-DTO carrying iterationPath, (b) a runtime-state
+    // directive that targets a specific instance, and (c) runner replay
+    // skipping containers correctly down to the target's iteration.
+    // See docs/specs/2026-05-23-workflow-ui-design.md.
     const orderMap = buildWorkflowStepOrderMap(source.workflow_snapshot);
     if (orderMap.has(targetStepId)) {
       return { error: 'retry_from_nested_step_not_supported' };
