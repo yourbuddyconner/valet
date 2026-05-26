@@ -3906,12 +3906,24 @@ export function MessageList({
   // (which render as WorkflowStepCard inline).
   const renderPlan = useMemo(() => buildRenderPlan(feed), [feed]);
 
-  // ... existing scroll/auto-scroll effects unchanged.
-  // Existing empty-state, thinking indicator, child-session cards all stay.
+  // Scroll/auto-scroll and empty-state must be FEED-aware, not messages-only.
+  // Today the initial-scroll effect (~line 81) and any auto-scroll effects
+  // depend on `messages.length`/`messages` identity. With workflow step rows
+  // also driving render output, those effects need to fire on feed changes
+  // too — otherwise a workflow-only update (no new chat message) won't scroll
+  // and a workflow session with no chat messages would show the empty state.
+  //
+  // Concretely:
+  // - Initial-scroll effect: change the dependency from `messages` to
+  //   `[messages, workflowSteps]`, and change the `if (messages.length > 0...)`
+  //   guard to `if (renderPlan.length > 0...)`.
+  // - Any auto-scroll-on-new-content effect: same — react to feed length / last
+  //   item identity, not just messages length.
+  // - Empty state: check `messages.length === 0 && (workflowSteps?.length ?? 0) === 0`.
 
   return (
     <div ref={scrollRef} className="...">
-      {messages.length === 0 && !isAgentThinking && <EmptyState />}
+      {messages.length === 0 && (workflowSteps?.length ?? 0) === 0 && !isAgentThinking && <EmptyState />}
       {renderPlan.map((item, i) =>
         item.kind === 'turns'
           ? item.turns.map((turn, j) => (
@@ -3980,6 +3992,10 @@ cd /Users/connerswann/code/valet/packages/client && pnpm dev
 Smoke test 1 (regression): open a **non-workflow** session. Verify the chat looks and behaves identically — turns group, revert works, thinking indicator shows, child-session cards render, scroll-to-bottom works.
 
 Smoke test 2 (new path): `localStorage.setItem('flag:workflow_ui_chat_cards', 'on')`. Refresh a **workflow** session chat. Verify the same chat behaviors plus workflow step cards interleaved at the right timestamps.
+
+Smoke test 3 (step-only updates auto-scroll): in a workflow session with the user scrolled to the bottom, trigger a step that emits only step rows (no chat messages — e.g. a `bash` step). Verify the timeline scrolls to keep the new card in view.
+
+Smoke test 4 (empty state suppressed during workflow-only): open a new workflow session that has emitted step rows but no chat messages yet. Verify the empty state does NOT appear.
 
 - [ ] **Step 6: Commit**
 
