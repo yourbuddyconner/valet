@@ -596,6 +596,7 @@ async function executeSteps(
           executionId: ctx.executionId,
           stepId: step.id,
           attempt: ctx.attempt,
+          iterationPath: ctx.iterationPath,
           output: replayedOutput,
           ts,
         });
@@ -614,7 +615,7 @@ async function executeSteps(
     };
 
     ctx.steps.push(result);
-    emit(sink, { type: 'step.started', executionId: ctx.executionId, stepId: step.id, attempt: ctx.attempt, ts: startedAt });
+    emit(sink, { type: 'step.started', executionId: ctx.executionId, stepId: step.id, attempt: ctx.attempt, iterationPath: ctx.iterationPath, ts: startedAt });
 
     if (step.type === 'approval') {
       const prompt = typeof step.prompt === 'string' && step.prompt.trim()
@@ -631,7 +632,7 @@ async function executeSteps(
           result.status = 'completed';
           result.completedAt = stepTs;
           result.output = { prompt, decision: 'approve', replayed: true };
-          emit(sink, { type: 'step.completed', executionId: ctx.executionId, stepId: step.id, attempt: ctx.attempt, ts: stepTs });
+          emit(sink, { type: 'step.completed', executionId: ctx.executionId, stepId: step.id, attempt: ctx.attempt, iterationPath: ctx.iterationPath, ts: stepTs });
           continue;
         }
 
@@ -655,6 +656,7 @@ async function executeSteps(
             executionId: ctx.executionId,
             stepId: step.id,
             attempt: ctx.attempt,
+            iterationPath: ctx.iterationPath,
             reason: 'approval_denied',
             ts: stepTs,
           });
@@ -674,7 +676,7 @@ async function executeSteps(
           resumeToken,
           ts: stepTs,
         });
-        emit(sink, { type: 'step.completed', executionId: ctx.executionId, stepId: step.id, attempt: ctx.attempt, ts: stepTs });
+        emit(sink, { type: 'step.completed', executionId: ctx.executionId, stepId: step.id, attempt: ctx.attempt, iterationPath: ctx.iterationPath, ts: stepTs });
         continue;
       }
 
@@ -707,7 +709,7 @@ async function executeSteps(
         result.status = 'failed';
         result.error = 'loop_missing_over';
         result.completedAt = nowIso();
-        emit(sink, { type: 'step.failed', executionId: ctx.executionId, stepId: step.id, attempt: ctx.attempt, ts: result.completedAt, error: result.error });
+        emit(sink, { type: 'step.failed', executionId: ctx.executionId, stepId: step.id, attempt: ctx.attempt, iterationPath: ctx.iterationPath, ts: result.completedAt, error: result.error });
         return { failed: result.error };
       }
       const items = resolveLoopArray(overPath, ctx);
@@ -715,7 +717,7 @@ async function executeSteps(
         result.status = 'failed';
         result.error = `loop_over_not_array: ${overPath}`;
         result.completedAt = nowIso();
-        emit(sink, { type: 'step.failed', executionId: ctx.executionId, stepId: step.id, attempt: ctx.attempt, ts: result.completedAt, error: result.error });
+        emit(sink, { type: 'step.failed', executionId: ctx.executionId, stepId: step.id, attempt: ctx.attempt, iterationPath: ctx.iterationPath, ts: result.completedAt, error: result.error });
         return { failed: result.error };
       }
       const itemVar = typeof step.itemVar === 'string' && step.itemVar ? step.itemVar : 'item';
@@ -772,7 +774,7 @@ async function executeSteps(
       result.status = 'completed';
       result.completedAt = completedAt;
       result.output = { iterations: items.length };
-      emit(sink, { type: 'step.completed', executionId: ctx.executionId, stepId: step.id, attempt: ctx.attempt, ts: completedAt });
+      emit(sink, { type: 'step.completed', executionId: ctx.executionId, stepId: step.id, attempt: ctx.attempt, iterationPath: ctx.iterationPath, ts: completedAt });
       continue;
     }
 
@@ -796,7 +798,7 @@ async function executeSteps(
         branch: conditionResult ? 'then' : 'else',
       };
 
-      emit(sink, { type: 'step.completed', executionId: ctx.executionId, stepId: step.id, attempt: ctx.attempt, ts: completedAt });
+      emit(sink, { type: 'step.completed', executionId: ctx.executionId, stepId: step.id, attempt: ctx.attempt, iterationPath: ctx.iterationPath, ts: completedAt });
 
       // Propagate cancelled in addition to approval/failed — previously dropped,
       // which let the parent walk continue past a cancelled child branch.
@@ -848,12 +850,12 @@ async function executeSteps(
       // we want the engine to stop walking siblings if any branch errored.
       const failed = branchResults.find((r) => r.branchRun.failed);
       if (failed) {
-        emit(sink, { type: 'step.failed', executionId: ctx.executionId, stepId: step.id, attempt: ctx.attempt, ts: completedAt, error: failed.branchRun.failed });
+        emit(sink, { type: 'step.failed', executionId: ctx.executionId, stepId: step.id, attempt: ctx.attempt, iterationPath: ctx.iterationPath, ts: completedAt, error: failed.branchRun.failed });
         return { failed: failed.branchRun.failed };
       }
       const cancelled = branchResults.find((r) => r.branchRun.cancelled);
       if (cancelled) {
-        emit(sink, { type: 'step.cancelled', executionId: ctx.executionId, stepId: step.id, attempt: ctx.attempt, ts: completedAt, reason: cancelled.branchRun.cancelled });
+        emit(sink, { type: 'step.cancelled', executionId: ctx.executionId, stepId: step.id, attempt: ctx.attempt, iterationPath: ctx.iterationPath, ts: completedAt, reason: cancelled.branchRun.cancelled });
         return { cancelled: cancelled.branchRun.cancelled };
       }
       const approval = branchResults.find((r) => r.branchRun.approval);
@@ -861,7 +863,7 @@ async function executeSteps(
         return { approval: approval.branchRun.approval };
       }
 
-      emit(sink, { type: 'step.completed', executionId: ctx.executionId, stepId: step.id, attempt: ctx.attempt, ts: completedAt });
+      emit(sink, { type: 'step.completed', executionId: ctx.executionId, stepId: step.id, attempt: ctx.attempt, iterationPath: ctx.iterationPath, ts: completedAt });
       continue;
     }
 
@@ -887,6 +889,7 @@ async function executeSteps(
           executionId: ctx.executionId,
           stepId: step.id,
           attempt: ctx.attempt,
+          iterationPath: ctx.iterationPath,
           reason: stepOut.error || 'cancelled',
           ts: completedAt,
         });
@@ -908,7 +911,7 @@ async function executeSteps(
         ctx.outputs[step.id] = stepOut.output;
       }
 
-      emit(sink, { type: 'step.completed', executionId: ctx.executionId, stepId: step.id, attempt: ctx.attempt, ts: completedAt });
+      emit(sink, { type: 'step.completed', executionId: ctx.executionId, stepId: step.id, attempt: ctx.attempt, iterationPath: ctx.iterationPath, ts: completedAt });
     } catch (error) {
       const completedAt = nowIso();
       const message = error instanceof Error ? error.message : String(error);
@@ -921,6 +924,7 @@ async function executeSteps(
         executionId: ctx.executionId,
         stepId: step.id,
         attempt: ctx.attempt,
+        iterationPath: ctx.iterationPath,
         error: message,
         ts: completedAt,
       });

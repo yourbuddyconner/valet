@@ -23,6 +23,8 @@ export interface WorkflowRunResultStep {
   stepId: string;
   status: string;
   attempt?: number;
+  /** Per-instance path identity. Empty for top-level steps. */
+  iterationPath?: string;
   startedAt?: string;
   completedAt?: string;
   input?: unknown;

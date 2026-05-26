@@ -228,9 +228,14 @@ export async function completeExecution(
   if (params.steps?.length) {
     for (const step of params.steps) {
       const attempt = step.attempt ?? 1;
+      // Admin/test path: rows from this path are typically top-level; if a
+      // request supplies an iterationPath we honor it, otherwise default to ''.
+      const rawIterationPath = (step as Record<string, unknown>).iterationPath;
+      const iterationPath = typeof rawIterationPath === 'string' ? rawIterationPath : '';
       await upsertExecutionStep(env.DB, executionId, {
         stepId: step.stepId,
         attempt,
+        iterationPath,
         status: step.status,
         input: step.input !== undefined ? JSON.stringify(step.input) : null,
         output: step.output !== undefined ? JSON.stringify(step.output) : null,
@@ -432,6 +437,8 @@ export interface WorkflowStepEventPayload {
   kind: WorkflowStepEventKindStr;
   stepId: string;
   attempt: number;
+  /** Per-instance path identity. Empty for top-level steps. */
+  iterationPath?: string;
   timestamp: string;
   input?: unknown;
   output?: unknown;
@@ -479,6 +486,7 @@ export async function upsertExecutionStepFromEvent(
   await upsertExecutionStep(db, executionId, {
     stepId: event.stepId,
     attempt: event.attempt,
+    iterationPath: event.iterationPath ?? '',
     status,
     input: event.input !== undefined ? JSON.stringify(event.input) : null,
     output: event.output !== undefined ? JSON.stringify(event.output) : null,

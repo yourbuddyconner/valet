@@ -1340,6 +1340,7 @@ export async function processWorkflowExecutionResult(
       await upsertExecutionStep(envDB, executionId, {
         stepId: step.stepId,
         attempt,
+        iterationPath: step.iterationPath ?? '',
         status: step.status,
         input: step.input !== undefined ? JSON.stringify(step.input) : null,
         output: step.output !== undefined ? JSON.stringify(step.output) : null,

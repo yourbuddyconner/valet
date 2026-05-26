@@ -1096,12 +1096,14 @@ export class PromptHandler {
         if (!isForwardedKind(event.type)) return;
         const stepId = typeof event.stepId === "string" ? event.stepId : "";
         const attempt = typeof event.attempt === "number" ? event.attempt : 1;
+        const iterationPath = typeof event.iterationPath === "string" ? event.iterationPath : "";
         const timestamp = typeof event.ts === "string" ? event.ts : new Date().toISOString();
         if (event.type === "step.started" || event.type === "step.completed" || event.type === "step.failed") {
           console.log(`[workflow-engine] ${event.type}`, {
             executionId,
             stepId,
             attempt,
+            iterationPath,
             deliveryId: triggerDeliveryId,
           });
         }
@@ -1109,6 +1111,7 @@ export class PromptHandler {
           kind: event.type,
           stepId,
           attempt,
+          iterationPath,
           timestamp,
           input: event.input,
           output: event.output,
