@@ -8,6 +8,9 @@ import { useActiveThread, useCreateThread } from '@/api/threads';
 import { useDrawer } from '@/routes/sessions/$sessionId';
 import { MessageList } from './message-list';
 import { ChatInput } from './chat-input';
+import { useExecutionSteps } from '@/api/executions';
+import { useFeatureFlag } from '@/lib/feature-flags';
+import { WorkflowContextBar } from '@/components/workflows/workflow-context-bar';
 import { shouldShowChatSkeleton } from './chat-loading';
 import { getDisplaySessionStatus } from './session-status';
 import { api } from '@/api/client';
@@ -210,6 +213,18 @@ export function ChatContainer({ sessionId, routeSessionId, initialThreadId, init
     }
     return filtered;
   }, [messages, activeThreadId, isResolvingThread]);
+
+  // Workflow chat integration (Phase D). When the session has an associated
+  // execution and the flag is on, fetch step rows so MessageList can interleave
+  // them with chat messages. useExecutionSteps short-circuits on empty
+  // executionId so passing '' when off is free.
+  const useChatCards = useFeatureFlag('workflow_ui_chat_cards');
+  const workflowExecutionId =
+    useChatCards && session && typeof session.metadata?.executionId === 'string'
+      ? (session.metadata.executionId as string)
+      : '';
+  const { data: workflowStepsData } = useExecutionSteps(workflowExecutionId, { isTerminal: false });
+  const workflowSteps = workflowExecutionId ? workflowStepsData?.steps : undefined;
 
   const handleSendMessage = useCallback(
     async (content: string, model?: string, attachments?: Parameters<typeof sendMessage>[2]) => {
@@ -471,9 +486,11 @@ export function ChatContainer({ sessionId, routeSessionId, initialThreadId, init
             </Suspense>
           )}
           <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+          {workflowExecutionId && <WorkflowContextBar executionId={workflowExecutionId} />}
           <div className="relative flex min-h-0 flex-1 flex-col">
             <MessageList
               messages={filteredMessages}
+              workflowSteps={workflowSteps}
               isAgentThinking={isAgentThinking}
               agentStatus={agentStatus}
               agentStatusDetail={agentStatusDetail}
