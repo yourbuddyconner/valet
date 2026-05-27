@@ -98,11 +98,11 @@ function renderResponse(
 }
 
 function summaryLine(
-  step: { iterationPath: string },
+  step: { stepId: string; iterationPath: string },
   persona: string | undefined,
   output: AgentPromptOutput | null,
 ): string {
-  const parts: string[] = [];
+  const parts: string[] = [step.stepId];
   if (persona) parts.push(persona);
   const iter = parseIterFromPath(step.iterationPath);
   if (iter) parts.push(iter);

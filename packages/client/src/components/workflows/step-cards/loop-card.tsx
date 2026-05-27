@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { ToolCardShell, ToolCardSection } from '@/components/chat/tool-cards/tool-card-shell';
+import { ToolCardShell, ToolCardSection, ToolCodeBlock } from '@/components/chat/tool-cards/tool-card-shell';
 import { StepIcon } from './icons';
 import { WorkflowStepCard } from './index';
 import type { TimelineNode, WorkflowStepCardProps } from './index';
@@ -26,6 +26,11 @@ export function LoopCard({ step, children = [], open, onOpenChange, workflowDef 
       id={`step-${step.stepId}-${step.iterationPath}`}
       defaultExpanded={status === 'error'}
     >
+      {step.error && (
+        <ToolCardSection label="error">
+          <ToolCodeBlock>{step.error}</ToolCodeBlock>
+        </ToolCardSection>
+      )}
       {iterNumbers.length > 0 && (
         <div
           role="tablist"
@@ -65,18 +70,20 @@ export function LoopCard({ step, children = [], open, onOpenChange, workflowDef 
           )}
         </div>
       )}
-      <ToolCardSection>
-        <div className="space-y-1 pl-2 border-l border-neutral-200 dark:border-neutral-800">
-          {renderedChildren.map((c) => (
-            <WorkflowStepCard
-              key={`${c.step.stepId}#${c.step.iterationPath}`}
-              step={c.step}
-              children={c.children}
-              workflowDef={workflowDef}
-            />
-          ))}
-        </div>
-      </ToolCardSection>
+      {renderedChildren.length > 0 && (
+        <ToolCardSection>
+          <div className="space-y-1 pl-2 border-l border-neutral-200 dark:border-neutral-800">
+            {renderedChildren.map((c) => (
+              <WorkflowStepCard
+                key={`${c.step.stepId}#${c.step.iterationPath}`}
+                step={c.step}
+                children={c.children}
+                workflowDef={workflowDef}
+              />
+            ))}
+          </div>
+        </ToolCardSection>
+      )}
     </ToolCardShell>
   );
 }

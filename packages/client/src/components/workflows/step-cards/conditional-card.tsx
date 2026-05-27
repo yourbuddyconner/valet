@@ -1,4 +1,4 @@
-import { ToolCardShell, ToolCardSection } from '@/components/chat/tool-cards/tool-card-shell';
+import { ToolCardShell, ToolCardSection, ToolCodeBlock } from '@/components/chat/tool-cards/tool-card-shell';
 import { StepIcon } from './icons';
 import { WorkflowStepCard } from './index';
 import type { TimelineNode, WorkflowStepCardProps } from './index';
@@ -28,6 +28,11 @@ export function ConditionalCard({ step, children = [], open, onOpenChange, workf
       <ToolCardSection label="condition">
         <code className="font-mono text-[11px] text-neutral-700 dark:text-neutral-300">{condition}</code>
       </ToolCardSection>
+      {step.error && (
+        <ToolCardSection label="error">
+          <ToolCodeBlock>{step.error}</ToolCodeBlock>
+        </ToolCardSection>
+      )}
       {branchTaken && children.length > 0 && (
         <ToolCardSection label={`taken branch · ${branchTaken}`}>
           <div className="space-y-1 pl-2 border-l border-neutral-200 dark:border-neutral-800">

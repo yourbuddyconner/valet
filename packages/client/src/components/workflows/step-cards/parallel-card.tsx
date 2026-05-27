@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import { ToolCardShell, ToolCardSection } from '@/components/chat/tool-cards/tool-card-shell';
+import { ToolCardShell, ToolCardSection, ToolCodeBlock } from '@/components/chat/tool-cards/tool-card-shell';
 import { StepIcon } from './icons';
 import { WorkflowStepCard } from './index';
 import type { TimelineNode, WorkflowStepCardProps } from './index';
@@ -20,6 +20,11 @@ export function ParallelCard({ step, children = [], open, onOpenChange, workflow
       id={`step-${step.stepId}-${step.iterationPath}`}
       defaultExpanded={status === 'error'}
     >
+      {step.error && (
+        <ToolCardSection label="error">
+          <ToolCodeBlock>{step.error}</ToolCodeBlock>
+        </ToolCardSection>
+      )}
       {branchNumbers.map((b) => {
         const dur = computeBranchDuration(branches[b] ?? []);
         return (
