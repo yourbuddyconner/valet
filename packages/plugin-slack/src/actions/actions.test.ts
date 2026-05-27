@@ -11,7 +11,7 @@ vi.mock('./api.js', () => ({
   slackFetch: mocks.slackFetch,
 }));
 
-import { slackActions } from './actions.js';
+import { slackActions, resolveToSlackTimestamp } from './actions.js';
 
 function slackResponse(data: Record<string, unknown>): Response {
   return new Response(JSON.stringify({ ok: true, ...data }), { status: 200 });
@@ -23,6 +23,39 @@ function actionContext(): ActionContext {
     userId: 'user-1',
   };
 }
+
+describe('resolveToSlackTimestamp', () => {
+  it('passes through Unix timestamps unchanged', () => {
+    expect(resolveToSlackTimestamp('1774000000')).toBe('1774000000');
+    expect(resolveToSlackTimestamp('1774000000.000000')).toBe('1774000000.000000');
+  });
+
+  it('converts ISO-8601 datetime to Unix seconds', () => {
+    const result = resolveToSlackTimestamp('2026-05-19T00:00:00Z');
+    const expected = (new Date('2026-05-19T00:00:00Z').getTime() / 1000).toFixed(6);
+    expect(result).toBe(expected);
+  });
+
+  it('converts date-only string to Unix seconds', () => {
+    const result = resolveToSlackTimestamp('2026-05-19');
+    const expected = (new Date('2026-05-19').getTime() / 1000).toFixed(6);
+    expect(result).toBe(expected);
+  });
+
+  it('converts ISO-8601 with timezone offset', () => {
+    const result = resolveToSlackTimestamp('2026-05-19T08:00:00-07:00');
+    const expected = (new Date('2026-05-19T08:00:00-07:00').getTime() / 1000).toFixed(6);
+    expect(result).toBe(expected);
+  });
+
+  it('trims whitespace', () => {
+    expect(resolveToSlackTimestamp('  1774000000  ')).toBe('1774000000');
+  });
+
+  it('throws on unparseable input', () => {
+    expect(() => resolveToSlackTimestamp('not-a-date')).toThrow('Cannot parse timestamp');
+  });
+});
 
 describe('slackActions list_users', () => {
   beforeEach(() => vi.clearAllMocks());

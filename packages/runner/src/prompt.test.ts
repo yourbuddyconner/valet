@@ -116,9 +116,9 @@ describe("PromptHandler thread resume", () => {
       "GET http://opencode.test/session/persisted-thread",
       "POST http://opencode.test/session/persisted-thread/message",
     ]);
-    expect(fetchCalls[1]?.body).toMatchObject({
-      parts: [{ type: "text", text: "actual user prompt" }],
-    });
+    // Adopted persisted sessions get refreshed date context (TKAI-79)
+    const adoptedBody = fetchCalls[1]?.body as { parts: { text: string }[] };
+    expect(adoptedBody.parts[0].text).toMatch(/^\[Today is .+\]\n\nactual user prompt$/);
     expect(agentClient.sendThreadCreated).not.toHaveBeenCalled();
     expect(agentClient.sendError).not.toHaveBeenCalled();
   });
@@ -186,9 +186,9 @@ describe("PromptHandler thread resume", () => {
         },
       ],
     });
-    expect(fetchCalls[3]?.body).toMatchObject({
-      parts: [{ type: "text", text: "resume this task" }],
-    });
+    // First user prompt on a new session gets date context prepended (TKAI-79)
+    const resumeBody = fetchCalls[3]?.body as { parts: { text: string }[] };
+    expect(resumeBody.parts[0].text).toMatch(/^\[Today is .+\]\n\nresume this task$/);
     expect(agentClient.sendThreadCreated).toHaveBeenCalledTimes(1);
     expect(agentClient.sendThreadCreated).toHaveBeenCalledWith("thread-2", "new-thread-session");
     expect(agentClient.sendError).not.toHaveBeenCalled();
@@ -266,9 +266,9 @@ describe("PromptHandler thread resume", () => {
         },
       ],
     });
-    expect(fetchCalls[promptIndex]?.body).toMatchObject({
-      parts: [{ type: "text", text: "continue the work" }],
-    });
+    // First prompt on recreated session gets date context (TKAI-79)
+    const transientBody = fetchCalls[promptIndex]?.body as { parts: { text: string }[] };
+    expect(transientBody.parts[0].text).toMatch(/^\[Today is .+\]\n\ncontinue the work$/);
     expect(agentClient.sendThreadCreated).toHaveBeenCalledWith("thread-3", "recreated-after-transient");
     expect(agentClient.sendError).not.toHaveBeenCalled();
   });
@@ -327,9 +327,9 @@ describe("PromptHandler thread resume", () => {
         },
       ],
     });
-    expect(fetchCalls[2]?.body).toMatchObject({
-      parts: [{ type: "text", text: "start from here" }],
-    });
+    // First user prompt on a new session gets date context prepended (TKAI-79)
+    const legacyBody = fetchCalls[2]?.body as { parts: { text: string }[] };
+    expect(legacyBody.parts[0].text).toMatch(/^\[Today is .+\]\n\nstart from here$/);
     expect(agentClient.sendThreadCreated).toHaveBeenCalledWith("thread-4", "new-session-without-persisted-id");
     expect(agentClient.sendError).not.toHaveBeenCalled();
   });

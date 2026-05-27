@@ -19,6 +19,25 @@ async function guardPrivateChannel(token: string, channelId: string, ctx: Action
   return null;
 }
 
+// ─── Timestamp Helpers ───────────────────────────────────────────────────────
+
+/**
+ * Convert an ISO-8601 datetime string or Unix timestamp to Slack's epoch format.
+ * Pass-through values that already look like Unix timestamps (digits with optional decimal).
+ * Throws on unparseable input so the caller can return an actionable error.
+ */
+export function resolveToSlackTimestamp(input: string): string {
+  const trimmed = input.trim();
+  // Already a Unix timestamp (e.g. "1774000000" or "1774000000.000000")
+  if (/^\d+(\.\d+)?$/.test(trimmed)) return trimmed;
+  // Try parsing as a date string (ISO-8601, date-only, etc.)
+  const date = new Date(trimmed);
+  if (isNaN(date.getTime())) {
+    throw new Error(`Cannot parse timestamp "${trimmed}" — use ISO-8601 (e.g. "2026-05-19T00:00:00Z") or Unix seconds`);
+  }
+  return (date.getTime() / 1000).toFixed(6);
+}
+
 // ─── Action Definitions ──────────────────────────────────────────────────────
 
 const dmOwner: ActionDefinition = {
@@ -74,8 +93,8 @@ const readHistory: ActionDefinition = {
     channel: z.string().describe('Channel ID (C...)'),
     limit: z.number().int().min(1).max(200).optional().describe('Max messages per page (default 100, max 200)'),
     cursor: z.string().optional().describe('Pagination cursor from a previous response\'s next_cursor'),
-    oldest: z.string().optional().describe('Only messages after this Unix ts (e.g. "1774000000.000000"). Inclusive.'),
-    latest: z.string().optional().describe('Only messages before this Unix ts. Inclusive. Defaults to now.'),
+    oldest: z.string().optional().describe('Only messages after this time. Accepts ISO-8601 datetime (e.g. "2026-05-19T00:00:00-07:00") or Unix timestamp (e.g. "1774000000.000000"). Include a timezone offset for date-boundary accuracy — bare dates like "2026-05-19" resolve to midnight UTC. Inclusive.'),
+    latest: z.string().optional().describe('Only messages before this time. Accepts ISO-8601 datetime (with timezone offset) or Unix timestamp. Inclusive. Defaults to now.'),
     filter: z.string().optional().describe('Case-insensitive keyword filter applied client-side. Only messages whose text contains this substring are returned. Pagination still advances through all messages — use has_more/next_cursor to continue.'),
     threads_only: z.boolean().optional().describe('When true, only return messages that have thread replies (reply_count > 0). Useful for finding discussions in noisy alert channels.'),
     include_subtypes: z.boolean().optional().describe(
@@ -494,8 +513,12 @@ async function executeAction(
           limit: p.limit || 100,
         };
         if (p.cursor) query.cursor = p.cursor;
-        if (p.oldest) query.oldest = p.oldest;
-        if (p.latest) query.latest = p.latest;
+        try {
+          if (p.oldest) query.oldest = resolveToSlackTimestamp(p.oldest);
+          if (p.latest) query.latest = resolveToSlackTimestamp(p.latest);
+        } catch (err) {
+          return { success: false, error: String(err instanceof Error ? err.message : err) };
+        }
         if (p.oldest || p.latest) query.inclusive = true;
         const res = await slackGet('conversations.history', token, query);
         if (!res.ok) return slackError(res);
