@@ -508,6 +508,29 @@ function stepOutputVariable(step: NormalizedWorkflowStep): string | null {
   return null;
 }
 
+/**
+ * agent_prompt steps persist a rich wrapper `{response, model, inputTokens,
+ * outputTokens, durationMs}` so the execution page can render model/token
+ * meta. But downstream interpolation (`{{outputs.var.field}}`) expects the
+ * response payload at the top level — anything else breaks every existing
+ * agent_prompt workflow. For variable publication (`ctx.outputs`), unwrap.
+ * For persisted step rows, keep the wrapper as-is.
+ */
+function unwrapAgentPromptOutput(
+  step: NormalizedWorkflowStep,
+  output: unknown,
+): unknown {
+  if (step.type !== 'agent_prompt') return output;
+  if (output == null || typeof output !== 'object' || Array.isArray(output)) return output;
+  const obj = output as Record<string, unknown>;
+  // Must look like our wrapper — has `response` plus at least one of the meta
+  // fields — to avoid unwrapping arbitrary objects whose top level happens to
+  // contain `response`.
+  if (!('response' in obj)) return output;
+  if (!('model' in obj) && !('inputTokens' in obj) && !('durationMs' in obj)) return output;
+  return obj.response;
+}
+
 function buildStepInput(step: NormalizedWorkflowStep): Record<string, unknown> {
   const input: Record<string, unknown> = {
     type: step.type,
@@ -578,15 +601,18 @@ async function executeSteps(
         const prior = replay.results[step.id];
         const replayedOutput = prior?.output ?? null;
         // Replicate `outputVariable` publication for skipped steps so downstream
-        // interpolation sees the same values as the original run.
+        // interpolation sees the same values as the original run. Apply the
+        // same agent_prompt wrapper-unwrap as the live path so prior-run rows
+        // (which carry the wrapper) publish the response payload to vars.
+        const publishableReplayed = unwrapAgentPromptOutput(step, replayedOutput);
         const outputVar = stepOutputVariable(step);
         if (outputVar) {
-          ctx.outputs[outputVar] = replayedOutput;
-        } else if (replayedOutput !== undefined && replayedOutput !== null) {
+          ctx.outputs[outputVar] = publishableReplayed;
+        } else if (publishableReplayed !== undefined && publishableReplayed !== null) {
           // Mirror the auto-publish-under-step.id fallback used on the live
           // execution path so retry-from-step preserves the same outputs map
           // shape that the original run produced.
-          ctx.outputs[step.id] = replayedOutput;
+          ctx.outputs[step.id] = publishableReplayed;
         }
         ctx.steps.push({
           stepId: step.id,
@@ -905,10 +931,18 @@ async function executeSteps(
         return { cancelled: stepOut.error || 'cancelled' };
       }
 
+      // For agent_prompt, the runner now returns a rich wrapper
+      // `{response, model, inputTokens, outputTokens, durationMs}` so the
+      // execution-page UI can render model + token meta. But downstream
+      // interpolation (`{{outputs.var.field}}`) expects to see the response
+      // payload at the top level — anything else breaks every existing
+      // agent_prompt workflow. Unwrap before publishing to the variable
+      // namespace; the persisted step row keeps the wrapper.
+      const publishableOutput = unwrapAgentPromptOutput(step, stepOut.output);
       const outputVar = stepOutputVariable(step);
       if (outputVar) {
-        ctx.outputs[outputVar] = stepOut.output ?? null;
-      } else if (stepOut.output !== undefined && stepOut.output !== null) {
+        ctx.outputs[outputVar] = publishableOutput ?? null;
+      } else if (publishableOutput !== undefined && publishableOutput !== null) {
         // Steps without an explicit `outputVariable` would otherwise produce
         // no entry in the execution's outputs map — making the UI show
         // "No outputs captured" even when a step returned content (e.g. a
@@ -917,7 +951,7 @@ async function executeSteps(
         // wins and keeps the existing downstream interpolation contract;
         // these auto-keys are purely visibility helpers and shouldn't be
         // relied on for `${outputs.*}` references in user-authored steps.
-        ctx.outputs[step.id] = stepOut.output;
+        ctx.outputs[step.id] = publishableOutput;
       }
 
       emit(sink, { type: 'step.completed', executionId: ctx.executionId, stepId: step.id, attempt: ctx.attempt, iterationPath: ctx.iterationPath, ts: completedAt });

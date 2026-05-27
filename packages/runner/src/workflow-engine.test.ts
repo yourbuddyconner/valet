@@ -525,6 +525,55 @@ describe('workflow-engine', () => {
     expect(loopStep?.output).toEqual({ iterations: 3 });
   });
 
+  it('unwraps agent_prompt {response, model, ...} when publishing to outputs for downstream interpolation', async () => {
+    // Regression: Phase B1 wrapped agent_prompt step output as
+    // {response, model, inputTokens, outputTokens, durationMs} so the
+    // execution page could render model/token meta. But the variable
+    // namespace must keep the response payload at the top level, otherwise
+    // {{outputs.var.field}} breaks every existing agent_prompt workflow.
+    const compiled = await compileWorkflowDefinition({
+      steps: [
+        {
+          id: 'ask',
+          type: 'agent_prompt',
+          prompt: 'hi',
+          outputVariable: 'reply',
+        },
+      ],
+    });
+    if (!compiled.ok || !compiled.workflow) throw new Error('compile failed');
+
+    const result = await executeWorkflowRun(
+      'ex_agent_unwrap',
+      compiled.workflow,
+      { variables: {} },
+      {
+        onAgentStep: async () => ({
+          status: 'completed',
+          output: {
+            response: { greeting: 'hi', capability: 'reads files' },
+            model: 'm',
+            inputTokens: 1,
+            outputTokens: 2,
+            durationMs: 3,
+          },
+        }),
+      },
+    );
+    expect(result.status).toBe('ok');
+    // Downstream interpolation contract: outputs.reply.capability resolves.
+    expect(result.output).toMatchObject({ reply: { greeting: 'hi', capability: 'reads files' } });
+    // But the persisted step row keeps the rich wrapper for the UI.
+    const askStep = result.steps.find((s) => s.stepId === 'ask');
+    expect(askStep?.output).toMatchObject({
+      response: { greeting: 'hi', capability: 'reads files' },
+      model: 'm',
+      inputTokens: 1,
+      outputTokens: 2,
+      durationMs: 3,
+    });
+  });
+
   it('emits a distinct envelope entry per loop iteration with iterationPath', async () => {
     const compiled = await compileWorkflowDefinition({
       steps: [
