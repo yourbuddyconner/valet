@@ -278,9 +278,10 @@ export class OpenCodeManager {
   }
 
   private spawn(): Subprocess {
-    console.log(`[OpenCodeManager] Spawning opencode serve --port ${this.port} (cwd: ${this.workspaceDir})`);
+    const cmd = ["opencode", "--print-logs", "--log-level", "INFO", "serve", "--port", String(this.port)];
+    console.log(`[OpenCodeManager] Spawning ${cmd.join(" ")} (cwd: ${this.workspaceDir})`);
     const opencodeDb = `${this.workspaceDir}/.opencode/state/opencode.db`;
-    const proc = this.spawnFn(["opencode", "serve", "--port", String(this.port)], {
+    const proc = this.spawnFn(cmd, {
       cwd: this.workspaceDir,
       env: {
         ...process.env,

@@ -182,6 +182,24 @@ describe("OpenCodeManager", () => {
     await manager.shutdown();
   });
 
+  it("spawns OpenCode with server logs printed to stderr", async () => {
+    const { manager, spawnCalls } = createTestManager({ killTriggersExit: true });
+
+    await manager.setDesiredConfig(testConfig);
+
+    expect(spawnCalls[0].cmd).toEqual([
+      "opencode",
+      "--print-logs",
+      "--log-level",
+      "INFO",
+      "serve",
+      "--port",
+      "4096",
+    ]);
+
+    await manager.shutdown();
+  });
+
   it("same config returns restarted: false", async () => {
     const { manager, spawnCalls } = createTestManager({ killTriggersExit: true });
 
