@@ -28,6 +28,30 @@ import {
   type WorkflowStepExecutionResult,
 } from "./workflow-engine.js";
 
+// ─── Date Context ────────────────────────────────────────────────────────────
+
+/**
+ * Build the date context prefix for agent prompts (TKAI-79). Returns both the
+ * date key (YYYY-MM-DD, for change detection) and the formatted prefix string.
+ * Uses a single clock read to avoid mismatches at midnight boundaries.
+ */
+function buildDateContext(): { date: string; prefix: string } {
+  const now = new Date();
+  const tz = process.env.TZ || 'UTC';
+  try {
+    const isoDate = new Intl.DateTimeFormat('en-CA', {
+      year: 'numeric', month: '2-digit', day: '2-digit', timeZone: tz,
+    }).format(now);
+    const dayOfWeek = new Intl.DateTimeFormat('en-US', {
+      weekday: 'long', timeZone: tz,
+    }).format(now);
+    return { date: isoDate, prefix: `[Today is ${dayOfWeek}, ${isoDate} (${tz})]` };
+  } catch {
+    const isoDate = now.toISOString().slice(0, 10);
+    return { date: isoDate, prefix: `[Today is ${isoDate} (UTC)]` };
+  }
+}
+
 // OpenCode ToolState status values
 type ToolStatus = "pending" | "running" | "completed" | "error";
 
@@ -429,6 +453,11 @@ export class ChannelSession {
   // True when session id was injected from DO persistence rather than created
   // in this runner process. We re-sync it before first prompt dispatch.
   adoptedPersistedSession = false;
+  // The date string last injected into this session's conversation (TKAI-79).
+  // Compared against the current date on each prompt — when it differs (new
+  // session, midnight rollover, hibernation restore) the date context is
+  // re-injected. null means no date has been injected yet.
+  lastInjectedDate: string | null = null;
 
   // Track current prompt so we can route events back to the DO
   activeMessageId: string | null = null;
@@ -822,6 +851,7 @@ export class PromptHandler {
       this.ocSessionToChannel.delete(channel.opencodeSessionId);
     }
     channel.opencodeSessionId = persisted;
+    channel.lastInjectedDate = null; // force date re-injection on restored session
     this.ocSessionToChannel.set(persisted, channel);
     channel.adoptedPersistedSession = true;
   }
@@ -917,6 +947,7 @@ export class PromptHandler {
       this.ocSessionToChannel.delete(oldId);
     }
     channel.opencodeSessionId = await this.createSession();
+    channel.lastInjectedDate = null; // force date re-injection on fresh conversation
     this.ocSessionToChannel.set(channel.opencodeSessionId, channel);
     this.agentClient.sendChannelSessionCreated(channel.channelKey, channel.opencodeSessionId);
     // Notify DO when a new OpenCode session is created for a thread channel
@@ -1505,8 +1536,15 @@ export class PromptHandler {
       // user preferences. This keeps failover anchored to the actual selected model.
       const failoverChain = this.buildModelFailoverChain(model, modelPreferences);
 
-      // Transcribe audio attachments before sending to OpenCode
+      // Inject date context when the date has changed or hasn't been injected
+      // yet (TKAI-79). Covers new sessions, midnight rollover, and hibernation
+      // restore — no separate mechanism needed for each case.
       let effectiveContent = content;
+      const { date, prefix } = buildDateContext();
+      if (channel.lastInjectedDate !== date) {
+        channel.lastInjectedDate = date;
+        effectiveContent = `${prefix}\n\n${effectiveContent}`;
+      }
       let effectiveAttachments = attachments ?? [];
       const hasAudio = effectiveAttachments.some(a => a.mime.startsWith('audio/'));
       if (hasAudio) {
@@ -2277,6 +2315,7 @@ export class PromptHandler {
 
     // Create fresh session
     channel.opencodeSessionId = await this.createSession();
+    channel.lastInjectedDate = null; // force date re-injection on fresh conversation
     this.ocSessionToChannel.set(channel.opencodeSessionId, channel);
     channel.resetPromptState();
 
@@ -2822,6 +2861,7 @@ export class PromptHandler {
       }
       // Null out session IDs — they won't survive the restart
       channel.opencodeSessionId = null;
+      channel.lastInjectedDate = null;
       channel.adoptedPersistedSession = false;
     }
 
