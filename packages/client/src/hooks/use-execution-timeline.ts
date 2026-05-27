@@ -59,6 +59,10 @@ function buildLevel(
   placedKeys: Set<string>,
 ): TimelineNode[] {
   const out: TimelineNode[] = [];
+  // Once a step at this level has failed/cancelled, subsequent steps with no
+  // row aren't pending — they'll never run. Suppress their placeholders so
+  // we don't show ghost "awaiting approval" cards after a real failure.
+  let halted = false;
 
   for (const defStep of defSteps) {
     const row = allRows.find(
@@ -66,10 +70,17 @@ function buildLevel(
     );
 
     if (!row) {
+      if (halted) continue;
       out.push({ step: makePlaceholderRow(defStep, parentIterationPath), placeholder: true });
       continue;
     }
     placedKeys.add(`${row.stepId}#${row.iterationPath}`);
+    // Halt-on-failure: failed/cancelled at this level means nothing downstream
+    // runs, so suppress later placeholders. `skipped` is intentionally NOT a
+    // halt — it's used by retry-from-step replay to mark prior-success steps.
+    if (row.status === 'failed' || row.status === 'cancelled') {
+      halted = true;
+    }
 
     if (defStep.type === 'loop') {
       const prefix = parentIterationPath

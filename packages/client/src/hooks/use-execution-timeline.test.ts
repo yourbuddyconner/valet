@@ -76,6 +76,41 @@ describe('buildTimelineViewModel', () => {
     expect(loop?.step.status).toBe('pending');
   });
 
+  it('suppresses placeholder cards for steps after a failed top-level step', () => {
+    const haltDef: WorkflowData = {
+      id: 'h', name: 'h',
+      steps: [
+        { id: 'A', name: 'A', type: 'bash' },
+        { id: 'B', name: 'B', type: 'bash' },
+        { id: 'C', name: 'C', type: 'approval' },
+        { id: 'D', name: 'D', type: 'bash' },
+      ],
+    };
+    const vm = buildTimelineViewModel(haltDef, [
+      mkRow({ stepId: 'A', status: 'completed' }),
+      mkRow({ stepId: 'B', status: 'failed', error: 'boom' }),
+      // No C, D rows — workflow halted.
+    ]);
+    // A and B render; C and D suppressed.
+    expect(vm.map((n) => n.step.stepId)).toEqual(['A', 'B']);
+  });
+
+  it('still renders steps after a skipped row (skipped = retry replay, not halt)', () => {
+    const replayDef: WorkflowData = {
+      id: 'r', name: 'r',
+      steps: [
+        { id: 'A', name: 'A', type: 'bash' },
+        { id: 'B', name: 'B', type: 'bash' },
+      ],
+    };
+    const vm = buildTimelineViewModel(replayDef, [
+      mkRow({ stepId: 'A', status: 'skipped' }),
+      // B has no row yet — should still emit placeholder, not be suppressed.
+    ]);
+    expect(vm.map((n) => n.step.stepId)).toEqual(['A', 'B']);
+    expect(vm[1]?.placeholder).toBe(true);
+  });
+
   it('falls back to flat createdAt order when workflowDef is null', () => {
     const vm = buildTimelineViewModel(null, [
       mkRow({ stepId: 'b', iterationPath: '', createdAt: '2026-01-02' }),
