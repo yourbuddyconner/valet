@@ -111,12 +111,12 @@ Data flows bidirectionally: user prompts go DO -> Runner -> OpenCode. Agent resp
 
 ```bash
 export DISPLAY=:99
-export HOME=/root
-export OPENCODE_DB=/workspace/.opencode/state/opencode.db
+export HOME=/workspace
+export OPENCODE_RUNTIME_DIR=/tmp/valet-opencode
+export VALET_PERSONA_DIR=/tmp/valet-opencode/persona
 ```
 
-Sets display for VNC and establishes port constants.
-`start.sh` also ensures `/workspace/.opencode/state` exists before the runner starts so OpenCode's SQLite database lives on the workspace volume instead of ephemeral home-directory storage.
+Sets display for VNC, keeps the terminal/user home on the durable workspace, and points runner-generated OpenCode/persona files at ephemeral sandbox storage. OpenCode itself is spawned later with XDG paths, `OPENCODE_CONFIG_DIR`, and `OPENCODE_DB` under `OPENCODE_RUNTIME_DIR`.
 
 ### Step 2 — VNC Stack
 
@@ -304,9 +304,9 @@ Dynamic tunnels allow tools inside the sandbox to expose arbitrary ports:
 Manages the OpenCode server process lifecycle.
 
 **`start()` sequence:**
-1. **writeConfigFiles()**: Write `auth.json` (provider keys, mode 0o600), merge base `opencode.json` with tool toggles, custom instructions, and custom providers, write to `{workspace}/.opencode/opencode.json`.
-2. **copyToolsAndSkills()**: Copy tools from `/opencode-config/tools/` to workspace `.opencode/tools/`. For orchestrators: remove `complete_session.ts` and `notify_parent.ts`. Copy skills directories recursively.
-3. **spawnProcess()**: `Bun.spawn(["opencode", "serve", "--port", "4096"], { cwd: workspaceDir, env: { ...process.env, OPENCODE_DB: "/workspace/.opencode/state/opencode.db" } })`. Monitors for unexpected exit.
+1. **writeConfigFiles()**: Write `auth.json` (provider keys, mode 0o600), merge base `opencode.json` with tool toggles, custom instructions, and custom providers, write to `${OPENCODE_RUNTIME_DIR}/config/opencode/opencode.json`.
+2. **copyToolsAndSkills()**: Copy tools, plugins, and skills from `/opencode-config/` to `${OPENCODE_RUNTIME_DIR}/config/opencode/`. For orchestrators: remove `complete_session.ts` and `notify_parent.ts`.
+3. **spawnProcess()**: `Bun.spawn(["opencode", "serve", "--port", "4096"], { cwd: workspaceDir, env: { ...process.env, OPENCODE_CONFIG_DIR, OPENCODE_DB, OPENCODE_DISABLE_PROJECT_CONFIG: "true" } })`. OpenCode still edits `/workspace`, but ignores stale generated config under `/workspace/.opencode`.
 4. **waitForHealth()**: Poll `http://localhost:4096/health` every 1s, up to 60 retries.
 
 **Config hot-reload (`applyConfig()`):** Serialized via promise chain. Compares new config via JSON stringify — only restarts if something changed. Restart: SIGTERM, 5s grace, SIGKILL, then fresh `start()`.
@@ -479,7 +479,7 @@ Uses `modal.Image.from_id(snapshot_image_id)` as base image, creates new sandbox
 
 ## OpenCode Configuration
 
-Base config at `docker/opencode/opencode.json`. The Runner merges this with runtime config (custom providers, tool toggles, instructions) and writes the final config to `{workspace}/.opencode/opencode.json`.
+Base config at `docker/opencode/opencode.json`. The Runner merges this with runtime config (custom providers, tool toggles, instructions) and writes the final config to `${OPENCODE_RUNTIME_DIR}/config/opencode/opencode.json`.
 
 ### Custom Tools (68 tools)
 
@@ -531,7 +531,7 @@ Messages sent by the runner while the WebSocket is disconnected are queued in an
 - Full internal API for OpenCode tool communication
 - Dynamic tunnel registration and proxying
 - Runner initialization with OpenCode management
-- OpenCode SQLite persistence on the workspace volume via `OPENCODE_DB`
+- Ephemeral OpenCode config/state under `OPENCODE_RUNTIME_DIR`, with thread continuation recovered through the DO when a sandbox restarts
 - V2 parts-based streaming protocol with hibernation recovery
 - Per-channel OpenCode session architecture
 - Persisted thread-session adoption with fallback-only continuation injection

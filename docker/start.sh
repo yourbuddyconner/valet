@@ -13,6 +13,10 @@ VSCODE_PORT=8765
 VNC_PORT=6080
 TTYD_PORT=7681
 GATEWAY_PORT=9000
+OPENCODE_RUNTIME_DIR="${OPENCODE_RUNTIME_DIR:-/tmp/valet-opencode}"
+VALET_PERSONA_DIR="${VALET_PERSONA_DIR:-${OPENCODE_RUNTIME_DIR}/persona}"
+export OPENCODE_RUNTIME_DIR
+export VALET_PERSONA_DIR
 
 echo "[start.sh] Starting Valet sandbox"
 echo "[start.sh] Session: ${SESSION_ID}"
@@ -55,13 +59,12 @@ git config --global core.excludesFile "$HOME/.gitignore_global"
 # Repo cloning is handled by the Runner process. start.sh just sets up
 # a minimal workspace directory and writes initial repo context if available.
 WORK_DIR=/workspace
-mkdir -p "${WORK_DIR}/.opencode/state"
-export OPENCODE_DB="${WORK_DIR}/.opencode/state/opencode.db"
+mkdir -p "${WORK_DIR}" "${VALET_PERSONA_DIR}"
 
 # Write minimal repo context so services starting before the Runner clones
 # have some awareness of the target repo.
 if [ -n "${REPO_URL:-}" ]; then
-  mkdir -p "${WORK_DIR}/.valet/persona"
+  mkdir -p "${VALET_PERSONA_DIR}"
   {
     echo "# Repository Context"
     echo ""
@@ -71,7 +74,7 @@ if [ -n "${REPO_URL:-}" ]; then
     fi
     echo ""
     echo "The Runner will clone the repo and update this context after startup."
-  } > "${WORK_DIR}/.valet/persona/00-repo-context.md"
+  } > "${VALET_PERSONA_DIR}/00-repo-context.md"
 fi
 
 

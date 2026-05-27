@@ -2,7 +2,7 @@
  * OpenCodeConfigWriter — handles all filesystem I/O for OpenCode configuration.
  *
  * Writes auth.json, opencode.json, and copies tools/skills/plugins from
- * the config source directory into the workspace .opencode directory.
+ * the config source directory into OpenCode's runtime config directory.
  */
 
 import {
@@ -23,15 +23,21 @@ export class OpenCodeConfigWriter {
   private readonly workspaceDir: string;
   private readonly configSourceDir: string;
   private readonly authJsonPath: string;
+  private readonly opencodeConfigDir: string;
+  private readonly personaDir: string;
 
   constructor(options: {
     workspaceDir: string;
     configSourceDir: string;
     authJsonPath: string;
+    opencodeConfigDir?: string;
+    personaDir?: string;
   }) {
     this.workspaceDir = options.workspaceDir;
     this.configSourceDir = options.configSourceDir;
     this.authJsonPath = options.authJsonPath;
+    this.opencodeConfigDir = options.opencodeConfigDir ?? join(this.workspaceDir, ".opencode");
+    this.personaDir = options.personaDir ?? join(this.workspaceDir, ".valet", "persona");
   }
 
   /**
@@ -69,7 +75,7 @@ export class OpenCodeConfigWriter {
     console.log(`[OpenCodeConfigWriter] Wrote auth.json with ${Object.keys(authJson).length} provider(s)`);
 
     // Write opencode.json
-    const opencodeDir = join(this.workspaceDir, ".opencode");
+    const opencodeDir = this.opencodeConfigDir;
     if (!existsSync(opencodeDir)) {
       mkdirSync(opencodeDir, { recursive: true });
     }
@@ -79,6 +85,7 @@ export class OpenCodeConfigWriter {
     if (existsSync(baseConfigPath)) {
       opencodeConfig = JSON.parse(readFileSync(baseConfigPath, "utf-8"));
     }
+    this.rewriteRuntimeInstructionPaths(opencodeConfig);
 
     // Merge tool enable/disable settings
     if (Object.keys(config.tools).length > 0) {
@@ -128,7 +135,7 @@ export class OpenCodeConfigWriter {
   }
 
   private copyToolsAndSkills(config: OpenCodeConfig): void {
-    const toolsDir = join(this.workspaceDir, ".opencode", "tools");
+    const toolsDir = join(this.opencodeConfigDir, "tools");
     if (!existsSync(toolsDir)) {
       mkdirSync(toolsDir, { recursive: true });
     }
@@ -166,8 +173,10 @@ export class OpenCodeConfigWriter {
       }
     }
 
-    // Copy skills to .agents/skills/ (cross-platform agent convention)
-    const skillsDir = join(this.workspaceDir, ".agents", "skills");
+    // Copy skills to the OpenCode runtime config dir. OpenCode is spawned
+    // with external skill discovery disabled, so generated skills must live
+    // under the explicit config directory instead of the persisted workspace.
+    const skillsDir = join(this.opencodeConfigDir, "skills");
     if (!existsSync(skillsDir)) {
       mkdirSync(skillsDir, { recursive: true });
     }
@@ -178,7 +187,7 @@ export class OpenCodeConfigWriter {
     }
 
     // Copy plugins
-    const pluginsDir = join(this.workspaceDir, ".opencode", "plugins");
+    const pluginsDir = join(this.opencodeConfigDir, "plugins");
     if (!existsSync(pluginsDir)) mkdirSync(pluginsDir, { recursive: true });
     const sourcePluginsDir = join(this.configSourceDir, "plugins");
     if (existsSync(sourcePluginsDir)) {
@@ -202,5 +211,16 @@ export class OpenCodeConfigWriter {
         copyFileSync(srcPath, destPath);
       }
     }
+  }
+
+  private rewriteRuntimeInstructionPaths(opencodeConfig: Record<string, unknown>): void {
+    if (!Array.isArray(opencodeConfig.instructions)) return;
+
+    opencodeConfig.instructions = opencodeConfig.instructions.map((instruction) => {
+      if (instruction === ".valet/persona/*.md") {
+        return join(this.personaDir, "*.md");
+      }
+      return instruction;
+    });
   }
 }

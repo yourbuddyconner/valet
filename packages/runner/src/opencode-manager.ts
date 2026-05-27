@@ -8,6 +8,7 @@
 
 import { Subprocess } from "bun";
 import { OpenCodeConfigWriter } from "./opencode-config-writer.js";
+import type { OpenCodeRuntimePaths } from "./opencode-runtime.js";
 
 function createDeferred(): { promise: Promise<void>; resolve: () => void } {
   let resolve!: () => void;
@@ -41,6 +42,7 @@ export interface OpenCodeManagerOptions {
   port: number;
   configSourceDir: string; // /opencode-config
   authJsonPath: string;    // $HOME/.local/share/opencode/auth.json
+  runtimePaths?: OpenCodeRuntimePaths;
   // Test injection points
   spawnFn?: (cmd: string[], opts: any) => Subprocess;
   spawnSyncFn?: (cmd: string[], opts: any) => { exitCode: number };
@@ -74,6 +76,7 @@ export class OpenCodeManager {
   private readonly configWriter: { write(config: OpenCodeConfig): void };
   private readonly port: number;
   private readonly workspaceDir: string;
+  private readonly runtimePaths?: OpenCodeRuntimePaths;
   private readonly spawnFn: (cmd: string[], opts: any) => Subprocess;
   private readonly spawnSyncFn: (cmd: string[], opts: any) => { exitCode: number };
   private readonly fetchFn: (url: string, opts?: RequestInit) => Promise<Response>;
@@ -84,6 +87,7 @@ export class OpenCodeManager {
 
   constructor(options: OpenCodeManagerOptions) {
     this.workspaceDir = options.workspaceDir;
+    this.runtimePaths = options.runtimePaths;
     this.port = options.port;
     this.spawnFn = options.spawnFn ?? ((cmd, opts) => Bun.spawn(cmd, opts));
     this.spawnSyncFn = options.spawnSyncFn ?? ((cmd, opts) => Bun.spawnSync(cmd, opts));
@@ -92,6 +96,8 @@ export class OpenCodeManager {
       workspaceDir: options.workspaceDir,
       configSourceDir: options.configSourceDir,
       authJsonPath: options.authJsonPath,
+      opencodeConfigDir: options.runtimePaths?.configDir,
+      personaDir: options.runtimePaths?.personaDir,
     });
   }
 
@@ -280,11 +286,25 @@ export class OpenCodeManager {
   private spawn(): Subprocess {
     const cmd = ["opencode", "--print-logs", "--log-level", "INFO", "serve", "--port", String(this.port)];
     console.log(`[OpenCodeManager] Spawning ${cmd.join(" ")} (cwd: ${this.workspaceDir})`);
-    const opencodeDb = `${this.workspaceDir}/.opencode/state/opencode.db`;
+    const opencodeDb = this.runtimePaths?.databasePath ?? `${this.workspaceDir}/.opencode/state/opencode.db`;
     const proc = this.spawnFn(cmd, {
       cwd: this.workspaceDir,
       env: {
         ...process.env,
+        ...(this.runtimePaths
+          ? {
+              XDG_CONFIG_HOME: this.runtimePaths.configHome,
+              XDG_DATA_HOME: this.runtimePaths.dataHome,
+              XDG_STATE_HOME: this.runtimePaths.stateHome,
+              XDG_CACHE_HOME: this.runtimePaths.cacheHome,
+              OPENCODE_CONFIG_DIR: this.runtimePaths.configDir,
+              OPENCODE_DISABLE_PROJECT_CONFIG: "true",
+              OPENCODE_DISABLE_EXTERNAL_SKILLS: "true",
+              // Keep shell commands on HOME=/workspace while preventing OpenCode
+              // itself from discovering stale ~/.opencode under the persisted volume.
+              OPENCODE_TEST_HOME: this.runtimePaths.homeDir,
+            }
+          : {}),
         OPENCODE_DB: opencodeDb,
       },
       stdout: "inherit",

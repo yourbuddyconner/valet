@@ -130,7 +130,7 @@ Copied into the image at `/opencode-config/`:
 - `tools/` — 63 custom TypeScript tool files
 - `skills/` — 3 skill directories (`browser/`, `workflows/`, `sandbox-tunnels/`)
 
-At runtime, the Runner's `OpenCodeManager` reads from `/opencode-config/`, merges with runtime config (custom providers, tool toggles, instructions), and writes the final config to `{workspace}/.opencode/opencode.json`.
+At runtime, the Runner's `OpenCodeManager` reads from `/opencode-config/`, merges with runtime config (custom providers, tool toggles, instructions), and writes the final config to `${OPENCODE_RUNTIME_DIR}/config/opencode/opencode.json`. Generated OpenCode config/state is ephemeral; `/workspace` remains reserved for the working tree and user-visible files.
 
 ### Baked-In Environment Variables
 
