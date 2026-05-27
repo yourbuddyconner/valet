@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { ToolCardShell, ToolCardSection } from '@/components/chat/tool-cards/tool-card-shell';
 import { DeferredMarkdownContent } from '@/components/chat/markdown/deferred-markdown-content';
 import { StepIcon } from './icons';
+import { bump, WORKFLOW_TELEMETRY } from '@/lib/workflow-telemetry';
 import type { WorkflowStepCardProps } from './index';
 
 interface AgentPromptOutput {
@@ -22,6 +23,17 @@ export function AgentPromptCard({ step, open, onOpenChange }: WorkflowStepCardPr
   const isRunning = status === 'running' || status === 'pending';
   const elapsed = useElapsed(step.startedAt, !isRunning);
   const meta = formatMeta(step, output, elapsed);
+
+  // A completed agent_prompt with no response is a broken pipeline (the
+  // runner should always emit output for completed steps post-Phase B).
+  useEffect(() => {
+    if (status === 'completed' && !output) {
+      bump(WORKFLOW_TELEMETRY.AGENT_PROMPT_RESPONSE_MISSING, {
+        stepId: step.stepId,
+        iterationPath: step.iterationPath,
+      });
+    }
+  }, [status, output, step.stepId, step.iterationPath]);
 
   return (
     <ToolCardShell
