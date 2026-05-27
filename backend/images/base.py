@@ -17,7 +17,7 @@ import modal
 
 from config import NODE_VERSION
 
-OPENCODE_VERSION = "1.15.0"
+OPENCODE_VERSION = "1.15.10"
 REVIEWS_CLI_VERSION = "cli-v0.0.1-alpha.0"
 
 
@@ -170,7 +170,7 @@ def get_base_image() -> modal.Image:
                 "DISPLAY": ":99",
                 "HOME": "/workspace",
                 # Force image rebuild on deploy (change this value to trigger rebuild)
-                "IMAGE_BUILD_VERSION": "2026-05-26-v39-mcp-discovery-errors",
+                "IMAGE_BUILD_VERSION": "2026-05-26-v40-bump-opencode",
                 "AGENT_BROWSER_EXECUTABLE_PATH": "/usr/bin/chromium",
                 "AGENT_BROWSER_PROFILE": "/workspace/.agent-browser-profile",
                 "PLAYWRIGHT_BROWSERS_PATH": "/ms-playwright",
