@@ -10,6 +10,21 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 const ALLOWED_OUTPUT_SCHEMA_TYPES = ['string', 'number', 'boolean', 'array', 'object'] as const;
 const FIELD_NAME_REGEX = /^[a-zA-Z_][a-zA-Z0-9_]*$/;
 
+// Canonical step taxonomy. MUST stay in sync with the runner's executor
+// (packages/runner/src/workflow-compiler.ts VALID_STEP_TYPES). Rejecting
+// unknown types here surfaces typos at save time instead of mid-execution.
+const VALID_STEP_TYPES = [
+  'agent_prompt', 'notify', 'tool', 'bash', 'conditional', 'loop', 'parallel', 'approval',
+] as const;
+const VALID_STEP_TYPE_SET = new Set<string>(VALID_STEP_TYPES);
+
+// Removed types and the message pointing authors at their replacement.
+const DEPRECATED_STEP_TYPES: Record<string, string> = {
+  agent: `is no longer supported. Use agent_prompt instead of agent; inline child steps instead of subworkflow.`,
+  subworkflow: `is no longer supported. Use agent_prompt instead of agent; inline child steps instead of subworkflow.`,
+  agent_message: `is no longer supported. Use 'agent_prompt' to capture an agent's reply, or 'notify' to send a prompt to the orchestrator.`,
+};
+
 function validateOutputSchema(value: unknown, path: string, errors: string[]): void {
   if (!isRecord(value)) {
     errors.push(`${path} must be an object`);
@@ -53,15 +68,11 @@ function validateStep(step: unknown, path: string, errors: string[]): void {
   }
   const normalizedType = typeof type === 'string' ? type.trim() : '';
 
-  if (normalizedType === 'agent' || normalizedType === 'subworkflow') {
+  if (normalizedType && DEPRECATED_STEP_TYPES[normalizedType]) {
+    errors.push(`${path}.type "${normalizedType}" ${DEPRECATED_STEP_TYPES[normalizedType]}`);
+  } else if (normalizedType && !VALID_STEP_TYPE_SET.has(normalizedType)) {
     errors.push(
-      `${path}.type "${normalizedType}" is no longer supported. Use agent_prompt instead of agent; inline child steps instead of subworkflow.`,
-    );
-  }
-
-  if (normalizedType === 'agent_message') {
-    errors.push(
-      `${path}.type "agent_message" is no longer supported. Use 'agent_prompt' to capture an agent's reply, or 'notify' to send a prompt to the orchestrator.`,
+      `${path}.type "${normalizedType}" is not valid. Valid types: ${VALID_STEP_TYPES.join(', ')}. For shell commands, use type: "bash" with a "command" field.`,
     );
   }
 

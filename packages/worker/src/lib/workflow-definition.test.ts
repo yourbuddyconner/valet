@@ -35,6 +35,52 @@ describe('validateWorkflowDefinition – agent_prompt.persona', () => {
   });
 });
 
+describe('validateWorkflowDefinition – step type allowlist', () => {
+  const wrap = (step: Record<string, unknown>) => ({ steps: [step] });
+
+  it('accepts agent_prompt', () => {
+    const result = validateWorkflowDefinition(
+      wrap({ id: 's1', type: 'agent_prompt', prompt: 'hi' }),
+    );
+    expect(result.valid).toBe(true);
+    expect(result.errors).toEqual([]);
+  });
+
+  it('accepts notify', () => {
+    const result = validateWorkflowDefinition(
+      wrap({ id: 's1', type: 'notify', content: 'done' }),
+    );
+    expect(result.valid).toBe(true);
+    expect(result.errors).toEqual([]);
+  });
+
+  it('rejects an unknown step type with a "Valid types" hint', () => {
+    const result = validateWorkflowDefinition(
+      wrap({ id: 's1', type: 'agnet_prompt', prompt: 'hi' }),
+    );
+    expect(result.valid).toBe(false);
+    expect(result.errors.some((e) => /Valid types:/.test(e))).toBe(true);
+  });
+
+  it('rejects deprecated `agent` with a migration hint (not the generic unknown-type error)', () => {
+    const result = validateWorkflowDefinition(
+      wrap({ id: 's1', type: 'agent', prompt: 'hi' }),
+    );
+    expect(result.valid).toBe(false);
+    expect(result.errors.some((e) => /no longer supported/.test(e))).toBe(true);
+    // deprecated types get the specific hint, not the generic "Valid types" list
+    expect(result.errors.some((e) => /Valid types:/.test(e))).toBe(false);
+  });
+
+  it('rejects deprecated `agent_message`', () => {
+    const result = validateWorkflowDefinition(
+      wrap({ id: 's1', type: 'agent_message', content: 'hi' }),
+    );
+    expect(result.valid).toBe(false);
+    expect(result.errors.some((e) => /no longer supported/.test(e))).toBe(true);
+  });
+});
+
 describe('validateWorkflowDefinition – loop.over', () => {
   function loopStep(overrides: Record<string, unknown> = {}) {
     return {
