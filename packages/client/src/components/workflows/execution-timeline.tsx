@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import type { ExecutionStepTrace } from '@/api/executions';
 import type { WorkflowData } from '@/api/workflows';
 import { useExecutionTimeline } from '@/hooks/use-execution-timeline';
+import { ToolCardExpansionIntentContext } from '@/components/chat/tool-cards/tool-card-shell';
 import { WorkflowStepCard } from './step-cards';
 
 interface Props {
@@ -53,32 +54,39 @@ export function ExecutionTimeline({ workflowDef, stepRows, onHighlightedStepChan
   }, []);
 
   return (
-    <div
-      className="flex flex-col gap-2 p-3 overflow-y-auto"
-      data-component="execution-timeline"
-    >
-      {timeline.length === 0 && (
-        <p className="font-mono text-[11px] text-neutral-500">No steps yet.</p>
-      )}
-      {timeline.map((node) => {
-        const key = cardKey(node.step);
-        return (
-          <div
-            key={key}
-            data-step-key={key}
-            ref={makeIntersectionRef(key, onHighlightedStepChange)}
-          >
-            <WorkflowStepCard
-              step={node.step}
-              children={node.children}
-              open={openMap.get(key) ?? false}
-              onOpenChange={(next) => setOpen(key, next)}
-              workflowDef={workflowDef}
-            />
-          </div>
-        );
-      })}
-    </div>
+    // Execution page: cards start expanded so results are visible without a
+    // click. Top-level cards are controlled (openMap default true); nested
+    // children are uncontrolled, so the expansion-intent context opens them.
+    // The session-chat surface renders these same cards WITHOUT this provider,
+    // so they stay collapsed there.
+    <ToolCardExpansionIntentContext.Provider value={true}>
+      <div
+        className="flex flex-col gap-2 p-3 overflow-y-auto"
+        data-component="execution-timeline"
+      >
+        {timeline.length === 0 && (
+          <p className="font-mono text-[11px] text-neutral-500">No steps yet.</p>
+        )}
+        {timeline.map((node) => {
+          const key = cardKey(node.step);
+          return (
+            <div
+              key={key}
+              data-step-key={key}
+              ref={makeIntersectionRef(key, onHighlightedStepChange)}
+            >
+              <WorkflowStepCard
+                step={node.step}
+                children={node.children}
+                open={openMap.get(key) ?? true}
+                onOpenChange={(next) => setOpen(key, next)}
+                workflowDef={workflowDef}
+              />
+            </div>
+          );
+        })}
+      </div>
+    </ToolCardExpansionIntentContext.Provider>
   );
 }
 
