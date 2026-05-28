@@ -171,6 +171,14 @@ export async function listTools(
     }
   }
 
+  // Inject internal providers (workflows, etc.) — always listable, no credentials.
+  for (const svc of integrationRegistry.listServices()) {
+    const prov = integrationRegistry.getProvider(svc);
+    if (prov?.internal && !serviceSourceMap.has(svc)) {
+      serviceSourceMap.set(svc, [{ id: `internal:${svc}`, scope: 'user' as const, userId }]);
+    }
+  }
+
   console.log(`[session-tools] list-tools: userId=${userId}, service=${filterService ?? 'all'}, services with sources: [${[...serviceSourceMap.keys()].join(', ')}]`);
 
   const tools: ToolDescriptor[] = [];
