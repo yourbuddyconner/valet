@@ -1850,13 +1850,27 @@ description: End-to-end Valet workflow operations. Use when creating, updating, 
 
 ## Use the workflow tools, not raw API calls
 
-Use these tools for lifecycle operations:
+Workflow tools are provided by the \`workflows\` service and are NOT always-loaded named tools. You must discover and invoke them via the integration tool pattern:
 
-- \`list_workflows\`, \`get_workflow\`, \`sync_workflow\`, \`update_workflow\`, \`delete_workflow\`
-- \`list_workflow_history\`, \`rollback_workflow\`
-- \`list_workflow_proposals\`, \`create_workflow_proposal\`, \`review_workflow_proposal\`, \`apply_workflow_proposal\`
-- \`run_workflow\`, \`list_workflow_executions\`, \`get_execution\`, \`get_execution_steps\`, \`debug_execution\`, \`approve_execution\`, \`cancel_execution\`
-- \`list_triggers\`, \`sync_trigger\`, \`run_trigger\`, \`delete_trigger\`
+1. **Discover** — call \`list_tools\` with \`service=workflows\` to enumerate the available tools before using them.
+2. **Invoke** — call \`call_tool\` with the namespaced tool id \`workflows:<action>\`.
+
+Examples:
+- \`call_tool\` with id \`workflows:list_workflows\`
+- \`call_tool\` with id \`workflows:sync_workflow\`
+- \`call_tool\` with id \`workflows:run_workflow\`
+- \`call_tool\` with id \`workflows:list_workflow_executions\`
+- \`call_tool\` with id \`workflows:sync_trigger\`
+
+Available lifecycle tools (all invoked via \`call_tool\` with the \`workflows:\` prefix):
+
+- \`workflows:list_workflows\`, \`workflows:get_workflow\`, \`workflows:sync_workflow\`, \`workflows:update_workflow\`, \`workflows:delete_workflow\`
+- \`workflows:list_workflow_history\`, \`workflows:rollback_workflow\`
+- \`workflows:list_workflow_proposals\`, \`workflows:create_workflow_proposal\`, \`workflows:review_workflow_proposal\`, \`workflows:apply_workflow_proposal\`
+- \`workflows:run_workflow\`, \`workflows:list_workflow_executions\`, \`workflows:get_execution\`, \`workflows:get_execution_steps\`, \`workflows:debug_execution\`, \`workflows:approve_execution\`, \`workflows:cancel_execution\`
+- \`workflows:list_triggers\`, \`workflows:sync_trigger\`, \`workflows:run_trigger\`, \`workflows:delete_trigger\`
+
+**Destructive operations** — \`workflows:delete_workflow\`, \`workflows:delete_trigger\`, and \`workflows:rollback_workflow\` are higher-risk and route through the action risk policy; they may require human approval before executing.
 
 ## Think in 4 layers
 
@@ -1867,52 +1881,52 @@ Use these tools for lifecycle operations:
 
 ## Choose the right lifecycle tool
 
-- Use \`sync_workflow\` for create or full-definition upsert.
-- Use \`update_workflow\` for partial metadata/definition patch (\`name\`, \`description\`, \`slug\`, \`version\`, \`enabled\`, \`tags\`, \`data\`).
-- Use \`delete_workflow\` to remove workflows (and linked triggers).
-- Use \`list_workflow_history\` before rollback or forensic comparison.
-- Use \`rollback_workflow\` with a \`target_workflow_hash\` from history.
+- Use \`workflows:sync_workflow\` for create or full-definition upsert.
+- Use \`workflows:update_workflow\` for partial metadata/definition patch (\`name\`, \`description\`, \`slug\`, \`version\`, \`enabled\`, \`tags\`, \`data\`).
+- Use \`workflows:delete_workflow\` to remove workflows (and linked triggers).
+- Use \`workflows:list_workflow_history\` before rollback or forensic comparison.
+- Use \`workflows:rollback_workflow\` with a \`target_workflow_hash\` from history.
 
 ## Use proposal flow for self-modifying workflows
 
 Follow this sequence:
 
-1. Use \`get_workflow\` and compute/use current workflow hash as \`base_workflow_hash\`.
-2. Use \`create_workflow_proposal\`.
-3. Use \`review_workflow_proposal\` (\`approve=true/false\`).
-4. Use \`apply_workflow_proposal\` after approval.
+1. Use \`workflows:get_workflow\` and compute/use current workflow hash as \`base_workflow_hash\`.
+2. Use \`workflows:create_workflow_proposal\`.
+3. Use \`workflows:review_workflow_proposal\` (\`approve=true/false\`).
+4. Use \`workflows:apply_workflow_proposal\` after approval.
 
 Notes:
 
 - Proposal creation enforces base-hash matching.
 - Workflow must allow self-modification (\`constraints.allowSelfModification === true\`).
-- Use \`list_workflow_proposals\` to inspect status transitions (\`pending\`, \`approved\`, \`rejected\`, \`applied\`, \`failed\`).
+- Use \`workflows:list_workflow_proposals\` to inspect status transitions (\`pending\`, \`approved\`, \`rejected\`, \`applied\`, \`failed\`).
 
 ## Run and operate executions
 
 Run:
 
-- Use \`run_workflow\` with \`workflow_id\`.
+- Use \`workflows:run_workflow\` with \`workflow_id\`.
 - Optionally pass \`variables_json\`.
 - Optionally pass repo context: \`repo_url\`, \`repo_branch\`, \`repo_ref\`, \`source_repo_full_name\`.
 
 Inspect:
 
-- Use \`list_workflow_executions\` for recent runs.
-- Use \`get_execution\` for authoritative status and current \`resumeToken\`.
-- Use \`get_execution_steps\` for ordered normalized step traces.
-- Use \`debug_execution\` first when a run stalls/fails.
+- Use \`workflows:list_workflow_executions\` for recent runs.
+- Use \`workflows:get_execution\` for authoritative status and current \`resumeToken\`.
+- Use \`workflows:get_execution_steps\` for ordered normalized step traces.
+- Use \`workflows:debug_execution\` first when a run stalls/fails.
 
 Approval/cancel:
 
-- Use \`approve_execution\` with the latest \`resume_token\` from \`get_execution\`.
-- Use \`cancel_execution\` for stuck/inconsistent runs.
+- Use \`workflows:approve_execution\` with the latest \`resume_token\` from \`workflows:get_execution\`.
+- Use \`workflows:cancel_execution\` for stuck/inconsistent runs.
 
 ## Configure triggers and scheduling
 
-Triggers are identified by name. \`sync_trigger\` is idempotent — calling with the same name updates the existing trigger, preserving its creation time and history. No need to look up trigger IDs first.
+Triggers are identified by name. \`workflows:sync_trigger\` is idempotent — calling with the same name updates the existing trigger, preserving its creation time and history. No need to look up trigger IDs first.
 
-Use \`sync_trigger\` for create/update:
+Use \`workflows:sync_trigger\` for create/update:
 
 - \`type=manual\`
 - \`type=webhook\` requires \`webhook_path\` (optional method/secret)
@@ -1925,9 +1939,9 @@ Schedule specifics:
 - \`schedule_target=orchestrator\`: dispatches \`schedule_prompt\` to orchestrator session.
 - \`schedule_prompt\` is required when \`schedule_target=orchestrator\`.
 
-Use \`run_trigger\` to test behavior immediately.
+Use \`workflows:run_trigger\` to test behavior immediately.
 
-Use \`delete_trigger\` to remove stale triggers (by ID or name).
+Use \`workflows:delete_trigger\` to remove stale triggers (by ID or name).
 
 Variable mapping note:
 
@@ -2149,13 +2163,14 @@ Output shape: \`{type: "notify", target, delivered, error?}\`. The notify card i
 
 ## Reliable operating playbook
 
-1. Use \`list_workflows\` before creating/updating to avoid duplicates. Triggers are idempotent by name — no need to list first.
-2. Use \`get_workflow\` before patching critical definitions.
-3. Use \`run_workflow\` or \`run_trigger\` for tests.
-4. Use \`debug_execution\` first for incidents.
-5. Use fresh \`resume_token\` from \`get_execution\` before \`approve_execution\`.
-6. Use \`cancel_execution\` when state is inconsistent, then rerun cleanly.
-7. Use \`list_workflow_history\` and \`rollback_workflow\` for safe recovery.
+1. Call \`list_tools\` with \`service=workflows\` before your first workflow operation to confirm available tools.
+2. Use \`workflows:list_workflows\` before creating/updating to avoid duplicates. Triggers are idempotent by name — no need to list first.
+3. Use \`workflows:get_workflow\` before patching critical definitions.
+4. Use \`workflows:run_workflow\` or \`workflows:run_trigger\` for tests.
+5. Use \`workflows:debug_execution\` first for incidents.
+6. Use fresh \`resume_token\` from \`workflows:get_execution\` before \`workflows:approve_execution\`.
+7. Use \`workflows:cancel_execution\` when state is inconsistent, then rerun cleanly.
+8. Use \`workflows:list_workflow_history\` and \`workflows:rollback_workflow\` for safe recovery.
 `, sortOrder: 0 },
     ],
   },
