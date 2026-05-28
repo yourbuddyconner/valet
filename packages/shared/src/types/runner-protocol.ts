@@ -671,6 +671,12 @@ export type RunnerToDOMessage =
       channelId?: string;
       opencodeSessionId?: string;
       threadId?: string;
+      // Workflow attribution for streamed agent_prompt turns. Lets the session
+      // chat group the streamed turn under its step container. Validated by the
+      // DO against the user's executions before persisting.
+      workflowExecutionId?: string;
+      workflowStepId?: string;
+      workflowIterationPath?: string;
     }
   | { type: 'message.part.text-delta'; turnId: string; delta: string }
   | {

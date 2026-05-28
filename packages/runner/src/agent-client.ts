@@ -367,7 +367,15 @@ export class AgentClient {
 
   // ─── V2 Parts-Based Message Protocol ──────────────────────────────
 
-  sendTurnCreate(turnId: string, context?: { channelType?: string; channelId?: string; opencodeSessionId?: string; threadId?: string }): void {
+  sendTurnCreate(turnId: string, context?: {
+    channelType?: string;
+    channelId?: string;
+    opencodeSessionId?: string;
+    threadId?: string;
+    workflowExecutionId?: string;
+    workflowStepId?: string;
+    workflowIterationPath?: string;
+  }): void {
     this.send({
       type: "message.create",
       turnId,
@@ -375,6 +383,9 @@ export class AgentClient {
       ...(context?.channelId ? { channelId: context.channelId } : {}),
       ...(context?.opencodeSessionId ? { opencodeSessionId: context.opencodeSessionId } : {}),
       ...(context?.threadId ? { threadId: context.threadId } : {}),
+      ...(context?.workflowExecutionId ? { workflowExecutionId: context.workflowExecutionId } : {}),
+      ...(context?.workflowStepId ? { workflowStepId: context.workflowStepId } : {}),
+      ...(context?.workflowIterationPath !== undefined ? { workflowIterationPath: context.workflowIterationPath } : {}),
     });
   }
 

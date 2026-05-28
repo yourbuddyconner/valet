@@ -428,6 +428,15 @@ export class ChannelSession {
   hasActivity = false;
   lastChunkTime = 0;
 
+  // Set while a workflow agent_prompt step is streaming on this channel, so the
+  // streamed assistant turn (message.create) can be attributed to its step and
+  // grouped into a per-step container in the session chat. Cleared after the step.
+  workflowStepContext: {
+    executionId: string;
+    stepId: string;
+    iterationPath: string;
+  } | null = null;
+
   // Track tool states to detect completion (pending/running → completed)
   toolStates = new Map<string, { status: ToolStatus; toolName: string }>();
   // Track last full text by part ID when SSE omits incremental `delta`
@@ -1411,14 +1420,30 @@ export class PromptHandler {
     const workflowChannelId = `${context.executionId}:${threadName}`;
     const isEphemeralThread = threadName.startsWith("__new_");
     let ephemeralChannelForCleanup: ChannelSession | null = null;
+    let activeWorkflowChannel: ChannelSession | null = null;
+    // Outcome for the kept (final) streamed turn, finalized in the outer finally.
+    // Flips to 'end_turn' right before a success return; stays 'error' otherwise.
+    let keptTurnReason: "end_turn" | "error" = "error";
 
     try {
       const channel = this.getOrCreateChannel(workflowChannelType, workflowChannelId);
+      activeWorkflowChannel = channel;
       if (isEphemeralThread) {
         ephemeralChannelForCleanup = channel;
       }
       this.currentPromptChannel = channel;
       await this.ensureChannelOpenCodeSession(channel);
+      // Attribute the streamed assistant turn to this workflow step so the
+      // session chat can group it into a per-step container. Setting
+      // activeMessageId engages the streaming machinery (ensureTurnCreated is
+      // gated on it); the ephemeral event branch routes this session's events
+      // to handlePartUpdated/handlePartDelta so text + tool calls stream live.
+      channel.workflowStepContext = {
+        executionId: context.executionId,
+        stepId: step.id,
+        iterationPath: context.iterationPath,
+      };
+      channel.activeMessageId = crypto.randomUUID();
       // Snapshot the channel's usage map BEFORE we run this step so that on
       // completion we can diff and attribute only this step's tokens.
       const usageBeforeStep = new Set(channel.usageEntries.keys());
@@ -1447,6 +1472,10 @@ export class PromptHandler {
         const candidates = modelChain.length > 0 ? modelChain : [undefined];
 
         for (const modelCandidate of candidates) {
+          // A prior model attempt's streamed turn (if any) is superseded by this
+          // failover — finalize it as 'canceled' before resetPromptState clears
+          // the turn state. No-op on the first attempt.
+          this.finalizeWorkflowTurn(channel, "canceled");
           channel.resetPromptState();
           channel.lastError = null;
           let sessionId = await this.ensureChannelOpenCodeSession(channel);
@@ -1508,21 +1537,11 @@ export class PromptHandler {
           }
 
           if (recoveredResponse) {
-            // When the agent is producing structured JSON for outputSchema, suppress
-            // the raw reply from the workflow channel — it's a machine payload, not
-            // user-facing text. The parsed object still flows through as step output.
-            if (!outputSchema) {
-              this.agentClient.sendWorkflowChatMessage("assistant", recoveredResponse, {
-                kind: "agent_message_response",
-              }, {
-                channelType: workflowChannelType,
-                channelId: workflowChannelId,
-                opencodeSessionId: channel.opencodeSessionId ?? undefined,
-                workflowExecutionId: context.executionId,
-                workflowStepId: step.id,
-                workflowIterationPath: context.iterationPath,
-              });
-            }
+            // The assistant reply is no longer sent as a separate
+            // workflow-chat-message — the live streamed turn (driven from the
+            // ephemeral event branch via handlePartUpdated → finalize) already
+            // carries the response into the session chat, attributed to this
+            // step. The parsed payload still flows through as the step output.
 
             // Structured-output path: parse + validate the reply against the
             // declared schema; on failure, send a fixup follow-up message to
@@ -1533,6 +1552,10 @@ export class PromptHandler {
               let attempt = 1;
               while (!parseResult.ok && attempt < STRUCTURED_OUTPUT_MAX_ATTEMPTS) {
                 const fixup = buildFixupPrompt(parseResult.error, lastResponse, outputSchema);
+                // The just-streamed turn produced invalid structured output and
+                // is about to be superseded by a fixup — finalize it 'canceled'
+                // so the client collapses it as a prior attempt.
+                this.finalizeWorkflowTurn(channel, "canceled");
                 channel.resetPromptState();
                 channel.lastError = null;
                 this.ephemeralContent.set(sessionId, "");
@@ -1575,6 +1598,9 @@ export class PromptHandler {
                 break;
               }
 
+              // This attempt's streamed turn is the keeper — finalize it as
+              // end_turn in the outer finally.
+              keptTurnReason = "end_turn";
               return {
                 status: "completed",
                 output: assembleAgentPromptOutput({
@@ -1592,6 +1618,7 @@ export class PromptHandler {
             // Without a schema, return the bare reply string so
             // `outputVariable` captures it directly for downstream
             // `${outputs.var}` interpolation.
+            keptTurnReason = "end_turn";
             return {
               status: "completed",
               output: assembleAgentPromptOutput({
@@ -1644,6 +1671,17 @@ export class PromptHandler {
         },
       };
     } finally {
+      // Finalize whatever streamed turn is still open: end_turn if the step
+      // succeeded, error otherwise. Intermediate (superseded) attempts were
+      // already finalized 'canceled' before their retry. No-op if no turn streamed.
+      if (activeWorkflowChannel) {
+        this.finalizeWorkflowTurn(activeWorkflowChannel, keptTurnReason);
+        // Clear workflow streaming attribution so a later interactive prompt on
+        // this channel (named/default threads persist) doesn't inherit it.
+        activeWorkflowChannel.workflowStepContext = null;
+        activeWorkflowChannel.activeMessageId = null;
+      }
+
       this.currentPromptChannel = previousChannel;
 
       // Ephemeral (`@new`) threads create a fresh channel + OpenCode session per call.
@@ -2780,6 +2818,38 @@ export class PromptHandler {
    *  `channel` MUST be the ChannelSession the triggering event belongs to — never
    *  `this.currentPromptChannel`, which can be stale under concurrent prompts
    *  (the original smoke-test bug). All per-prompt state is read from `channel`. */
+  /**
+   * Finalize the streamed turn for a workflow agent_prompt step and reset the
+   * per-turn streaming sub-state so a subsequent attempt starts fresh. No-op if
+   * no turn was created this attempt (tool-only/empty turn that never streamed).
+   *
+   * `reason` distinguishes the kept turn (`end_turn`) from intermediate
+   * attempts superseded by a structured-output fixup or model failover
+   * (`canceled`) and hard failures (`error`). The client collapses non-end_turn
+   * attempts behind a "previous attempt" affordance.
+   */
+  private finalizeWorkflowTurn(
+    channel: ChannelSession,
+    reason: "end_turn" | "canceled" | "error",
+    error?: string,
+  ): void {
+    if (!channel.turnCreated || !channel.turnId) return;
+    // Flush any tools still pending/running so the container doesn't show a
+    // forever-running tool when the turn closes. Mirrors finalizeResponse.
+    for (const [callID, { status, toolName }] of channel.toolStates) {
+      if (status === "pending" || status === "running") {
+        this.agentClient.sendToolUpdate(channel.turnId, callID, toolName, "completed");
+      }
+    }
+    const finalText = reason === "end_turn" ? (channel.streamedContent || undefined) : undefined;
+    this.agentClient.sendTurnFinalize(channel.turnId, reason, finalText, error);
+    channel.turnCreated = false;
+    channel.turnId = null;
+    channel.streamedContent = "";
+    channel.textPartSnapshots.clear();
+    channel.messageTextSnapshots.clear();
+  }
+
   private ensureTurnCreated(channel: ChannelSession): void {
     if (channel.turnCreated || !channel.activeMessageId) return;
     channel.turnCreated = true;
@@ -2798,6 +2868,13 @@ export class PromptHandler {
       channelId: channelContext.channelId,
       opencodeSessionId: channel.opencodeSessionId ?? undefined,
       threadId: channelContext.threadId,
+      ...(channel.workflowStepContext
+        ? {
+            workflowExecutionId: channel.workflowStepContext.executionId,
+            workflowStepId: channel.workflowStepContext.stepId,
+            workflowIterationPath: channel.workflowStepContext.iterationPath,
+          }
+        : {}),
     });
   }
 
@@ -3806,12 +3883,29 @@ export class PromptHandler {
         }
       }
 
+      // Workflow agent_prompt steps run on ephemeral sessions but should ALSO
+      // stream a live assistant turn into the session chat (text + tool calls),
+      // grouped under the step. Reuse the interactive streaming handlers
+      // (gated on channel.activeMessageId, set by executeWorkflowAgentStep).
+      if (mappedChannel?.workflowStepContext && mappedChannel.activeMessageId) {
+        if (event.type === "message.part.updated") {
+          this.handlePartUpdated(props, mappedChannel);
+        } else if (event.type === "message.part.delta") {
+          this.handlePartDelta(props, mappedChannel);
+        }
+      }
+
       const isIdle =
         event.type === "session.idle" ||
         (event.type === "session.status" && this.extractStatusType(props) === "idle");
       if (isIdle) {
         const content = this.ephemeralContent.get(eventSessionId) || "";
         console.log(`[PromptHandler] Ephemeral session ${eventSessionId} became idle (captured ${content.length} chars)`);
+        // NOTE: we do NOT finalize the streamed workflow turn here. At idle we
+        // don't yet know if this attempt is the keeper or will be superseded by
+        // a structured-output fixup / model failover. executeWorkflowAgentStep
+        // drives finalize: 'canceled' before each retry, 'end_turn'/'error' for
+        // the kept attempt in its finally.
         const resolve = this.idleWaiters.get(eventSessionId);
         if (resolve) {
           this.idleWaiters.delete(eventSessionId);
