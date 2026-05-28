@@ -551,23 +551,24 @@ Tools available to the orchestrator inside the sandbox, communicating via `http:
 
 ## Workflow Session Tool Policy
 
-Sandboxes spawned by the WorkflowExecutorDO are tagged with the env var `IS_WORKFLOW_SESSION=true` (see `buildSandboxEnvVars` in `packages/worker/src/durable-objects/workflow-executor.ts`). Several destructive workflow-management tools refuse to run in that context to prevent a workflow from deleting or mutating the very workflow that spawned it (or its triggers) mid-execution.
+Sandboxes spawned by the WorkflowExecutorDO are tagged with the env var `IS_WORKFLOW_SESSION=true` (see `buildSandboxEnvVars` in `packages/worker/src/durable-objects/workflow-executor.ts`). To prevent a workflow from modifying or deleting itself mid-run, exactly 8 self-mutation `workflows:*` actions are denied in this context.
 
-The shared guard lives at `docker/opencode/tools/_workflow_session_guard.ts` and is applied by:
+The guard is enforced in the worker at `SessionAgentDO.handleCallTool` (`packages/worker/src/durable-objects/session-agent.ts`). When the sandbox issues a `call_tool` request, the DO checks `IS_WORKFLOW_SESSION` in `spawnRequest.envVars` and rejects the 8 listed actions before they reach policy resolution. All other `workflows:*` tools (reads, list, run, execution-control) are unaffected.
 
-| Tool | Why it's blocked in workflow sessions |
-|------|---------------------------------------|
-| `delete_workflow` | A workflow deleting itself disappears mid-run; downstream steps lose snapshot integrity. |
-| `sync_trigger` | Mutating the trigger config during a delivery can race with the in-flight dispatcher. |
-| `delete_trigger` | Same race; also breaks delivery-log attribution. |
-| `update_workflow` | Surface for self-mutation goes through the **proposal** flow (see [workflows.md → Self-Modification Proposal](workflows.md#self-modification-proposal)) instead. |
-| `sync_workflow` | Replacing the workflow blob mid-run desynchronizes the executing engine. |
-| `rollback_workflow` | Same reasoning as `update_workflow`. |
-| `review_workflow_proposal` / `apply_workflow_proposal` | Reviewing or applying proposals belongs with the human reviewer's session, not the workflow that triggered the proposal. |
+| Tool (namespaced) | Why it's blocked in workflow sessions |
+|-------------------|---------------------------------------|
+| `workflows:delete_workflow` | A workflow deleting itself disappears mid-run; downstream steps lose snapshot integrity. |
+| `workflows:sync_trigger` | Mutating the trigger config during a delivery can race with the in-flight dispatcher. |
+| `workflows:delete_trigger` | Same race; also breaks delivery-log attribution. |
+| `workflows:update_workflow` | Self-mutation must go through the **proposal** flow (see [workflows.md → Self-Modification Proposal](workflows.md#self-modification-proposal)) instead. |
+| `workflows:sync_workflow` | Replacing the workflow blob mid-run desynchronizes the executing engine. |
+| `workflows:rollback_workflow` | Same reasoning as `update_workflow`. |
+| `workflows:review_workflow_proposal` | Reviewing proposals belongs with the human reviewer's session, not the running workflow. |
+| `workflows:apply_workflow_proposal` | Same as review; applying a proposal is a human-gated action. |
 
-When invoked inside a workflow session, these tools return a structured error string explaining the restriction and pointing the agent at the orchestrator. The intended escape hatch is for the workflow to `notify` the user's orchestrator (see [workflows.md → Notify step](workflows.md#notify-step)), and the orchestrator (running outside `IS_WORKFLOW_SESSION`) carries out the destructive change on the user's behalf.
+When a denied action is called inside a workflow session, the DO returns a structured error string explaining the restriction and pointing the agent at the orchestrator. The intended escape hatch is for the workflow to `notify` the user's orchestrator (see [workflows.md → Notify step](workflows.md#notify-step)); the orchestrator session (running outside `IS_WORKFLOW_SESSION`) carries out the change on the user's behalf.
 
-This policy is enforced **at the tool layer**, not by stripping tools from the OpenCode config — the tools remain registered (so the agent can list them and learn what they do) but refuse to execute.
+Tools not in the denied set — including `list_workflows`, `get_workflow`, `get_execution`, `get_execution_steps`, `debug_execution`, `list_workflow_executions`, `list_workflow_history`, `list_workflow_proposals`, `list_triggers`, `run_workflow`, `run_trigger`, `create_workflow_proposal`, `approve_execution`, and `cancel_execution` — remain fully available inside workflow sessions.
 
 ## Edge Cases & Failure Modes
 

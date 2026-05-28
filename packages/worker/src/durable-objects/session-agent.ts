@@ -53,6 +53,13 @@ const MAX_CHANNEL_FOLLOWUP_REMINDERS = 3;
 const PARENT_IDLE_DEBOUNCE_MS = 10_000;
 const ACTION_APPROVAL_EXPIRY_MS = 10 * 60 * 1000; // 10 minutes
 
+// Workflow-session self-mutation guard: exactly these 8 actions are denied in IS_WORKFLOW_SESSION
+// sandboxes. Read/list/run/execution-control tools are intentionally left available.
+const WORKFLOW_SESSION_DENIED_ACTIONS = new Set([
+  'sync_workflow', 'update_workflow', 'delete_workflow', 'rollback_workflow',
+  'sync_trigger', 'delete_trigger', 'review_workflow_proposal', 'apply_workflow_proposal',
+]);
+
 function buildThreadContinuationContext(rows: Array<{ role?: unknown; content?: unknown }>): string {
   return rows
     .map((row) => {
@@ -6212,15 +6219,16 @@ export class SessionAgentDO {
       }
 
       // ─── Workflow-session guard ────────────────────────────────────────
-      // Workflow sessions must not manage workflows or their triggers — doing so
-      // risks modifying or deleting the workflow that spawned the session mid-run.
-      // This mirrors the `denyInWorkflowSession` check in the baked opencode tool files.
+      // Workflow sessions must not self-mutate — they cannot modify or delete the
+      // workflow/triggers that spawned them mid-run. Read, list, run, and
+      // execution-control tools remain available; only the 8 mutation ops are denied.
       const colonIdx = toolId.indexOf(':');
       const toolService = colonIdx !== -1 ? toolId.slice(0, colonIdx) : '';
+      const toolAction = colonIdx !== -1 ? toolId.slice(colonIdx + 1) : '';
       const isWorkflowSession =
         (this.sessionState.spawnRequest as { envVars?: Record<string, string> } | undefined)
           ?.envVars?.IS_WORKFLOW_SESSION === 'true';
-      if (toolService === 'workflows' && isWorkflowSession) {
+      if (toolService === 'workflows' && isWorkflowSession && WORKFLOW_SESSION_DENIED_ACTIONS.has(toolAction)) {
         this.runnerLink.send({
           type: 'call-tool-result',
           requestId,

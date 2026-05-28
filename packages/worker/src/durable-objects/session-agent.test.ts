@@ -1799,5 +1799,35 @@ describe('SessionAgentDO', () => {
       );
       expect(guardFired).toBe(false);
     });
+
+    it('does NOT block allowed read/run actions (e.g. list_workflows) in a workflow session', async () => {
+      const { agent } = await createTestAgent();
+
+      // Mark the session as a workflow session
+      (agent as any).sessionState.set(
+        'spawnRequest',
+        JSON.stringify({ envVars: { IS_WORKFLOW_SESSION: 'true' } }),
+      );
+
+      const sent: unknown[] = [];
+      (agent as any).runnerLink.send = vi.fn((msg: unknown) => { sent.push(msg); return true; });
+
+      // This call will proceed past the guard (list_workflows is not in the denied set)
+      // and hit resolveActionPolicy which may fail with a DB error — that is fine.
+      try {
+        await (agent as any).handleCallTool('req-789', 'workflows:list_workflows', {});
+      } catch {
+        // Expected — no real DB
+      }
+
+      // The self-mutation guard must NOT have fired for this allowed action.
+      const guardFired = sent.some(
+        (m) =>
+          (m as Record<string, unknown>).type === 'call-tool-result' &&
+          typeof (m as Record<string, unknown>).error === 'string' &&
+          ((m as Record<string, unknown>).error as string).match(/workflow session/i),
+      );
+      expect(guardFired).toBe(false);
+    });
   });
 });
