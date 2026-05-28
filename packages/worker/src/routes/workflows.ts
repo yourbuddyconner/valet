@@ -201,11 +201,21 @@ workflowsRouter.post('/draft', zValidator('json', draftWorkflowSchema), async (c
 
   const maxAttempts = 3;
   let lastError: string | null = null;
+  let previousAttempt: { workflow: Record<string, unknown>; errors: string[] } | undefined;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    const { workflow } = await draftWorkflow({ apiKey, userPrompt: prompt, baseDraft });
+    const { workflow } = await draftWorkflow({
+      apiKey,
+      userPrompt: prompt,
+      baseDraft,
+      previousAttempt,
+    });
     if (!workflow) {
       lastError = 'LLM did not return valid JSON';
+      // No object to feed back; on the next loop iteration, the model will
+      // get the same prompt again. Acceptable for the "no JSON at all" case
+      // since there's nothing structural to point at.
+      previousAttempt = undefined;
       continue;
     }
     const validation = validateWorkflowDefinition(workflow);
@@ -213,6 +223,10 @@ workflowsRouter.post('/draft', zValidator('json', draftWorkflowSchema), async (c
       return c.json({ workflow, attempts: attempt });
     }
     lastError = validation.errors.join('; ');
+    previousAttempt = {
+      workflow: workflow as Record<string, unknown>,
+      errors: validation.errors,
+    };
   }
 
   return c.json({ error: lastError ?? 'failed to draft workflow', code: 'DRAFT_FAILED' }, 502);
@@ -244,15 +258,26 @@ workflowsRouter.post('/draft/step', zValidator('json', draftWorkflowStepSchema),
 
   const maxAttempts = 3;
   let lastError: string | null = null;
+  let previousAttempt: { workflow: Record<string, unknown>; errors: string[] } | undefined;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    const { workflow } = await draftWorkflow({ apiKey, userPrompt, baseDraft });
+    const { workflow } = await draftWorkflow({
+      apiKey,
+      userPrompt,
+      baseDraft,
+      previousAttempt,
+    });
     if (!workflow) {
       lastError = 'LLM did not return valid JSON';
+      previousAttempt = undefined;
       continue;
     }
     const validation = validateWorkflowDefinition(workflow);
     if (validation.valid) return c.json({ workflow, attempts: attempt });
     lastError = validation.errors.join('; ');
+    previousAttempt = {
+      workflow: workflow as Record<string, unknown>,
+      errors: validation.errors,
+    };
   }
 
   return c.json({ error: lastError ?? 'failed to draft step', code: 'DRAFT_FAILED' }, 502);

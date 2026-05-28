@@ -86,17 +86,60 @@ export function extractWorkflowFromResponse(text: string): WorkflowDraft | null 
   return null;
 }
 
+export interface PreviousAttempt {
+  workflow: Record<string, unknown>;
+  errors: string[];
+}
+
+/**
+ * Build the user message for the LLM. Exported for testability — the route's
+ * retry loop depends on the previous attempt + errors landing in the prompt
+ * in a way the model can actually act on.
+ */
+export function buildUserMessage(opts: {
+  userPrompt: string;
+  baseDraft?: Record<string, unknown>;
+  previousAttempt?: PreviousAttempt;
+}): string {
+  if (opts.previousAttempt) {
+    const errList = opts.previousAttempt.errors
+      .map((e, i) => `${i + 1}. ${e}`)
+      .join('\n');
+    return [
+      `Your previous attempt failed validation. Original instruction:`,
+      ``,
+      opts.userPrompt,
+      ``,
+      `Your previous draft:`,
+      '```json',
+      JSON.stringify(opts.previousAttempt.workflow, null, 2),
+      '```',
+      ``,
+      `Validation errors:`,
+      errList,
+      ``,
+      `Fix the errors and return the corrected workflow JSON.`,
+    ].join('\n');
+  }
+  if (opts.baseDraft) {
+    return `Current draft:\n\`\`\`json\n${JSON.stringify(opts.baseDraft, null, 2)}\n\`\`\`\n\nRefinement: ${opts.userPrompt}\n\nReturn the updated workflow JSON.`;
+  }
+  return opts.userPrompt;
+}
+
 export async function draftWorkflow(opts: {
   apiKey: string;
   userPrompt: string;
   // Accept any object shape — baseDraft is serialized into the LLM context as JSON,
   // and the caller validates the LLM's output rigorously via validateWorkflowDefinition.
   baseDraft?: Record<string, unknown>;
+  // Set on retry attempts to feed the previous (rejected) draft + validation
+  // errors back to the model. Without this, retries get an identical prompt
+  // and almost always produce identical output.
+  previousAttempt?: PreviousAttempt;
 }): Promise<{ workflow: WorkflowDraft | null; rawResponse: string }> {
   const anthropic = new Anthropic({ apiKey: opts.apiKey });
-  const userMessage = opts.baseDraft
-    ? `Current draft:\n\`\`\`json\n${JSON.stringify(opts.baseDraft, null, 2)}\n\`\`\`\n\nRefinement: ${opts.userPrompt}\n\nReturn the updated workflow JSON.`
-    : opts.userPrompt;
+  const userMessage = buildUserMessage(opts);
 
   const response = await anthropic.messages.create({
     model: 'claude-sonnet-4-6',
