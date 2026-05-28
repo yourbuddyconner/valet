@@ -574,6 +574,31 @@ describe('workflow-engine', () => {
     });
   });
 
+  it('emits input on step.started and input+output on step.completed', async () => {
+    const compiled = await compileWorkflowDefinition({
+      steps: [{ id: 'b', type: 'bash', command: 'echo hi' }],
+    });
+    if (!compiled.ok || !compiled.workflow) throw new Error('compile failed');
+
+    const events: Array<{ type: string; input?: unknown; output?: unknown }> = [];
+    await executeWorkflowRun(
+      'ex_event_payload',
+      compiled.workflow,
+      { variables: {} },
+      undefined,
+      (event) => events.push({ type: event.type, input: event.input, output: event.output }),
+    );
+
+    const started = events.find((e) => e.type === 'step.started');
+    const completed = events.find((e) => e.type === 'step.completed');
+    // step.started carries the step input so the UI renders it immediately.
+    expect(started?.input).toBeDefined();
+    // step.completed carries the output so the card fills in without waiting
+    // for the next poll cycle.
+    expect(completed?.output).toBeDefined();
+    expect((completed?.output as { stdout?: string }).stdout).toContain('hi');
+  });
+
   it('iterates loop over an inline array literal in `over`', async () => {
     const compiled = await compileWorkflowDefinition({
       steps: [

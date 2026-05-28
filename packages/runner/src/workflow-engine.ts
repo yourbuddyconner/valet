@@ -648,7 +648,10 @@ async function executeSteps(
     };
 
     ctx.steps.push(result);
-    emit(sink, { type: 'step.started', executionId: ctx.executionId, stepId: step.id, attempt: ctx.attempt, iterationPath: ctx.iterationPath, ts: startedAt });
+    // Include `input` on step.started so the client renders the step's input
+    // (e.g. the agent_prompt prompt, the bash command) the moment it begins,
+    // not one poll cycle later.
+    emit(sink, { type: 'step.started', executionId: ctx.executionId, stepId: step.id, attempt: ctx.attempt, iterationPath: ctx.iterationPath, input: result.input, ts: startedAt });
 
     if (step.type === 'approval') {
       const prompt = typeof step.prompt === 'string' && step.prompt.trim()
@@ -967,7 +970,10 @@ async function executeSteps(
         ctx.outputs[step.id] = publishableOutput;
       }
 
-      emit(sink, { type: 'step.completed', executionId: ctx.executionId, stepId: step.id, attempt: ctx.attempt, iterationPath: ctx.iterationPath, ts: completedAt });
+      // Include `output` (and `input`) on step.completed so the client renders
+      // the full result immediately instead of waiting ~2.5s for the next poll.
+      // The worker's live-event persistence path benefits too.
+      emit(sink, { type: 'step.completed', executionId: ctx.executionId, stepId: step.id, attempt: ctx.attempt, iterationPath: ctx.iterationPath, input: result.input, output: stepOut.output, ts: completedAt });
     } catch (error) {
       const completedAt = nowIso();
       const message = error instanceof Error ? error.message : String(error);
@@ -981,6 +987,7 @@ async function executeSteps(
         stepId: step.id,
         attempt: ctx.attempt,
         iterationPath: ctx.iterationPath,
+        input: result.input,
         error: message,
         ts: completedAt,
       });
