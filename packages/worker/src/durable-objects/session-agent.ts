@@ -550,13 +550,19 @@ export class SessionAgentDO {
         }
         // Route prompts through the selected queue mode. If none is provided,
         // fall back to the DO's configured default.
-        // Orchestrator sessions always steer when the runner is busy — user
-        // messages should interrupt running subtasks, not queue silently (TKAI-106).
+        // Orchestrator sessions steer when the *same* thread/channel is busy —
+        // user messages should interrupt that thread's running subtask, not queue
+        // silently (TKAI-106). Cross-thread messages queue normally so they don't
+        // abort unrelated work (e.g. an in-progress poem on another thread).
         const isOrchestrator = this.sessionState.sessionId?.startsWith('orchestrator:') ?? false;
+        const promptChannelType = body.threadId ? 'thread' : body.channelType;
+        const promptChannelId = body.threadId ? body.threadId : body.channelId;
+        const promptChannelKey = this.channelKeyFrom(promptChannelType, promptChannelId);
+        const sameChannelBusy = isOrchestrator && this.promptQueue.isChannelBusy(promptChannelKey);
         const effectiveMode = body.interrupt ? 'steer'
-          : (isOrchestrator && this.promptQueue.runnerBusy) ? 'steer'
+          : sameChannelBusy ? 'steer'
           : (body.queueMode || this.promptQueue.queueMode || 'followup');
-        console.log(`[SessionAgentDO] /prompt HTTP: effectiveMode=${effectiveMode} runnerBusy=${this.promptQueue.runnerBusy} runnerConnected=${this.runnerLink.isConnected}`);
+        console.log(`[SessionAgentDO] /prompt HTTP: effectiveMode=${effectiveMode} runnerBusy=${this.promptQueue.runnerBusy} channelBusy=${sameChannelBusy} channel=${promptChannelKey}`);
 
         const author = (body.authorId || body.authorEmail || body.authorName) ? {
           id: body.authorId || '',
@@ -1431,13 +1437,16 @@ export class SessionAgentDO {
           gitEmail: userDetails.gitEmail,
         } : userId ? { id: userId, email: '', name: undefined, avatarUrl: undefined, gitName: undefined, gitEmail: undefined } : undefined;
         // Route through queue mode (Phase D)
-        // Orchestrator sessions always steer when busy (TKAI-106).
+        // Orchestrator sessions steer only when the same thread/channel is busy (TKAI-106).
         const wsChannelType = (msg as any).channelType as string | undefined;
         const wsChannelId = (msg as any).channelId as string | undefined;
         const wsThreadId = msg.threadId;
         const wsContinuationContext = msg.continuationContext;
         const wsIsOrchestrator = this.sessionState.sessionId?.startsWith('orchestrator:') ?? false;
-        const wsQueueMode = (wsIsOrchestrator && this.promptQueue.runnerBusy) ? 'steer'
+        const wsPromptChType = wsThreadId ? 'thread' : wsChannelType;
+        const wsPromptChId = wsThreadId ? wsThreadId : wsChannelId;
+        const wsSameChannelBusy = wsIsOrchestrator && this.promptQueue.isChannelBusy(this.channelKeyFrom(wsPromptChType, wsPromptChId));
+        const wsQueueMode = wsSameChannelBusy ? 'steer'
           : ((msg as any).queueMode || this.promptQueue.queueMode || 'followup');
         switch (wsQueueMode) {
           case 'steer':
