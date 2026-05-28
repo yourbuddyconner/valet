@@ -2,6 +2,17 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { ActionContext } from '@valet/sdk';
 import { workflowsActions } from './actions.js';
 
+// Minimal valid ActionContext for internal actions.
+// credentials is Record<string, string> — empty object satisfies it.
+// internal is { db: unknown; env: unknown } — test stubs satisfy it.
+function makeCtx(overrides?: { env?: Record<string, unknown> }): ActionContext {
+  return {
+    credentials: {},
+    userId: 'u',
+    internal: { db: {}, env: overrides?.env ?? {} },
+  };
+}
+
 // Module mock for session-workflows — must be declared at top level
 vi.mock('../../../services/session-workflows.js', async (importOriginal) => {
   const original = await importOriginal<typeof import('../../../services/session-workflows.js')>();
@@ -28,11 +39,7 @@ describe('workflowsActions', () => {
   });
 
   it('rejects an unknown actionId', async () => {
-    const res = await workflowsActions.execute(
-      'nope',
-      {},
-      { credentials: {}, userId: 'u', internal: { db: {}, env: {} } } as unknown as ActionContext,
-    );
+    const res = await workflowsActions.execute('nope', {}, makeCtx());
     expect(res.success).toBe(false);
     expect(res.error).toMatch(/unknown/i);
   });
@@ -49,16 +56,14 @@ describe('workflowsActions', () => {
       const sentinelData = { executions: [{ id: 'exec-1' }] };
       vi.mocked(workflowExecutions).mockResolvedValue({ data: sentinelData });
 
-      const ctx = {
-        credentials: {},
-        userId: 'u1',
-        internal: { db: {}, env: { DB: {} } },
-      } as unknown as ActionContext;
+      const ctx = makeCtx({ env: { DB: {} } });
+      // Override userId for this test
+      const ctxWithUser: ActionContext = { ...ctx, userId: 'u1' };
 
       const res = await workflowsActions.execute(
         'list_workflow_executions',
         { workflow_id: 'wf1', limit: 10 },
-        ctx,
+        ctxWithUser,
       );
 
       // Must succeed and return the sentinel data from workflowExecutions

@@ -17,6 +17,7 @@ import {
   handleTriggerAction,
   handleExecutionAction,
   workflowExecutions,
+  normalizeWorkflowRow,
 } from '../../../services/session-workflows.js';
 
 // ─── Internal context narrowing ───────────────────────────────────────────────
@@ -35,21 +36,6 @@ function internalOf(ctx: ActionContext): Internal {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-function normalizeWorkflow(row: Record<string, unknown>) {
-  return {
-    id: row.id,
-    slug: row.slug,
-    name: row.name,
-    description: row.description,
-    version: row.version,
-    data: typeof row.data === 'string' ? JSON.parse(row.data) : row.data,
-    enabled: Boolean(row.enabled),
-    tags: row.tags ? (typeof row.tags === 'string' ? JSON.parse(row.tags) : row.tags) : [],
-    createdAt: row.created_at ?? row.createdAt,
-    updatedAt: row.updated_at ?? row.updatedAt,
-  };
-}
-
 function normalizeProposal(row: Record<string, unknown>) {
   return {
     id: row.id,
@@ -57,7 +43,7 @@ function normalizeProposal(row: Record<string, unknown>) {
     executionId: row.execution_id,
     proposedBySessionId: row.proposed_by_session_id,
     baseWorkflowHash: row.base_workflow_hash,
-    proposal: parseJsonObjectDb(row.proposal_json as string),
+    proposal: parseJsonObjectDb(typeof row.proposal_json === 'string' ? row.proposal_json : ''),
     diffText: row.diff_text,
     status: row.status,
     reviewNotes: row.review_notes,
@@ -438,15 +424,10 @@ function buildDebugDiagnosis(
     actions.push('If retrying, prefer starting a new run.');
   }
 
-  const blockingStep = waitingSteps[0] ?? runningSteps[0] ?? failedSteps[0] ?? null;
-
   return {
     diagnosis,
     actions: actions.concat([]), // keep as-is
   };
-
-  // unused in the branch above — extracted to separate field by caller
-  void blockingStep;
 }
 
 // ─── ActionSource ─────────────────────────────────────────────────────────────
@@ -466,7 +447,7 @@ export const workflowsActions: ActionSource = {
         case 'list_workflows': {
           const result = await listWorkflows(db, userId);
           const workflows = result.results.map((row) =>
-            normalizeWorkflow(row as Record<string, unknown>),
+            normalizeWorkflowRow(row as Record<string, unknown>),
           );
           return { success: true, data: { workflows } };
         }
@@ -476,7 +457,7 @@ export const workflowsActions: ActionSource = {
           const workflowId = String(p.workflow_id ?? '');
           const row = await getWorkflowByIdOrSlug(db, userId, workflowId);
           if (!row) return { success: false, error: `Workflow not found: ${workflowId}` };
-          return { success: true, data: { workflow: normalizeWorkflow(row as Record<string, unknown>) } };
+          return { success: true, data: { workflow: normalizeWorkflowRow(row as Record<string, unknown>) } };
         }
 
         // ── list_workflow_history ────────────────────────────────────────────
@@ -537,10 +518,18 @@ export const workflowsActions: ActionSource = {
           if (p.version !== undefined) body.version = p.version;
           if (p.enabled !== undefined) body.enabled = p.enabled;
           if (typeof p.tags_json === 'string' && p.tags_json.trim().length > 0) {
-            body.tags = JSON.parse(p.tags_json);
+            try {
+              body.tags = JSON.parse(p.tags_json);
+            } catch (e) {
+              return { success: false, error: `Invalid JSON in tags_json: ${e instanceof Error ? e.message : String(e)}` };
+            }
           }
           if (typeof p.data_json === 'string' && p.data_json.trim().length > 0) {
-            body.data = JSON.parse(p.data_json);
+            try {
+              body.data = JSON.parse(p.data_json);
+            } catch (e) {
+              return { success: false, error: `Invalid JSON in data_json: ${e instanceof Error ? e.message : String(e)}` };
+            }
           }
           const result = await workflowService.updateWorkflow(env, userId, workflowId, body);
           return { success: true, data: result };
@@ -551,7 +540,11 @@ export const workflowsActions: ActionSource = {
           const workflowId = String(p.workflow_id ?? '');
           let variables: Record<string, unknown> | undefined;
           if (typeof p.variables_json === 'string' && p.variables_json.trim().length > 0) {
-            variables = JSON.parse(p.variables_json) as Record<string, unknown>;
+            try {
+              variables = JSON.parse(p.variables_json) as Record<string, unknown>;
+            } catch (e) {
+              return { success: false, error: `Invalid JSON in variables_json: ${e instanceof Error ? e.message : String(e)}` };
+            }
           }
           const requestId = crypto.randomUUID();
           const result = await workflowRun(db, env.DB, env, userId, requestId, {
@@ -800,7 +793,11 @@ export const workflowsActions: ActionSource = {
 
           let variableMapping: Record<string, unknown> | undefined;
           if (typeof p.variable_mapping_json === 'string' && p.variable_mapping_json.trim().length > 0) {
-            variableMapping = JSON.parse(p.variable_mapping_json) as Record<string, unknown>;
+            try {
+              variableMapping = JSON.parse(p.variable_mapping_json) as Record<string, unknown>;
+            } catch (e) {
+              return { success: false, error: `Invalid JSON in variable_mapping_json: ${e instanceof Error ? e.message : String(e)}` };
+            }
           }
 
           // Determine if this is a create (sync) or update
@@ -835,7 +832,11 @@ export const workflowsActions: ActionSource = {
           const triggerId = String(p.trigger_id ?? '');
           let variables: Record<string, unknown> | undefined;
           if (typeof p.variables_json === 'string' && p.variables_json.trim().length > 0) {
-            variables = JSON.parse(p.variables_json) as Record<string, unknown>;
+            try {
+              variables = JSON.parse(p.variables_json) as Record<string, unknown>;
+            } catch (e) {
+              return { success: false, error: `Invalid JSON in variables_json: ${e instanceof Error ? e.message : String(e)}` };
+            }
           }
           const body = {
             variables,
