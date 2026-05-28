@@ -1,5 +1,5 @@
-import type { ReactNode } from 'react';
-import type { Message } from '@valet/shared';
+import { useState, type ReactNode } from 'react';
+import type { Message, MessagePart } from '@valet/shared';
 import type { ExecutionStepTrace } from '@/api/executions';
 import { StepIcon } from '@/components/workflows/step-cards/icons';
 
@@ -23,8 +23,17 @@ interface Props {
  * step in a per-step container, with a header carrying step metadata. The
  * execution detail page shows the step-card summary; this is the live forensic
  * view in the session chat.
+ *
+ * - Structured-output steps render the parsed result as a card; the raw
+ *   streamed JSON turn is tucked into a collapsible panel.
+ * - Superseded attempts (model failover / structured-output fixup) — assistant
+ *   turns the runner finalized 'canceled' — collapse behind a "previous
+ *   attempts" affordance so the latest attempt reads cleanly.
  */
 export function WorkflowStepContainer({ step, messages, renderMessages }: Props) {
+  const [showRaw, setShowRaw] = useState(false);
+  const [showAttempts, setShowAttempts] = useState(false);
+
   const input = (step?.input ?? null) as Record<string, unknown> | null;
   const output = (step?.output ?? null) as AgentPromptOutput | null;
   const name = pickString(input, ['name']) ?? step?.stepId ?? 'agent_prompt';
@@ -32,6 +41,16 @@ export function WorkflowStepContainer({ step, messages, renderMessages }: Props)
   const iter = step ? parseIterFromPath(step.iterationPath) : null;
   const status = mapStatus(step?.status);
   const meta = formatMeta(output);
+
+  const userMsgs = messages.filter((m) => m.role === 'user' || m.role === 'system');
+  const assistantMsgs = messages.filter((m) => m.role === 'assistant');
+  const canceledTurns = assistantMsgs.filter(isCanceledTurn);
+  const keptTurns = assistantMsgs.filter((m) => !isCanceledTurn(m));
+
+  const structured =
+    output?.response != null &&
+    typeof output.response === 'object' &&
+    !Array.isArray(output.response);
 
   return (
     <div
@@ -60,11 +79,98 @@ export function WorkflowStepContainer({ step, messages, renderMessages }: Props)
           {status === 'running' ? 'streaming…' : status}
         </span>
       </div>
+
       <div className="px-3 py-2">
-        {renderMessages(messages)}
+        {/* The prompt. */}
+        {userMsgs.length > 0 && renderMessages(userMsgs)}
+
+        {structured ? (
+          <>
+            {/* Parsed structured result as the primary view. */}
+            <StructuredResultTable data={output!.response as Record<string, unknown>} />
+            {/* Raw streamed JSON tucked away. */}
+            {keptTurns.length > 0 && (
+              <CollapsibleSection
+                label={showRaw ? 'Hide raw output' : 'Show raw output'}
+                open={showRaw}
+                onToggle={() => setShowRaw((v) => !v)}
+              >
+                {renderMessages(keptTurns)}
+              </CollapsibleSection>
+            )}
+          </>
+        ) : (
+          // Plain (non-structured) — render the kept assistant turn(s) directly.
+          keptTurns.length > 0 && renderMessages(keptTurns)
+        )}
+
+        {/* Superseded attempts (failover / fixup), collapsed. */}
+        {canceledTurns.length > 0 && (
+          <CollapsibleSection
+            label={
+              showAttempts
+                ? 'Hide previous attempts'
+                : `${canceledTurns.length} previous attempt${canceledTurns.length === 1 ? '' : 's'}`
+            }
+            open={showAttempts}
+            onToggle={() => setShowAttempts((v) => !v)}
+          >
+            {renderMessages(canceledTurns)}
+          </CollapsibleSection>
+        )}
       </div>
     </div>
   );
+}
+
+function CollapsibleSection({
+  label,
+  open,
+  onToggle,
+  children,
+}: {
+  label: string;
+  open: boolean;
+  onToggle: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <div className="mt-2">
+      <button
+        type="button"
+        onClick={onToggle}
+        className="font-mono text-[10px] text-neutral-400 hover:text-neutral-600 dark:text-neutral-500 dark:hover:text-neutral-300"
+      >
+        {open ? '▾ ' : '▸ '}
+        {label}
+      </button>
+      {open && (
+        <div className="mt-1 border-l border-neutral-200 pl-3 opacity-90 dark:border-neutral-800">
+          {children}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function StructuredResultTable({ data }: { data: Record<string, unknown> }) {
+  return (
+    <dl className="my-1 grid grid-cols-[max-content_1fr] gap-x-3 gap-y-1 font-mono text-[11px]">
+      {Object.entries(data).map(([k, v]) => (
+        <div key={k} className="contents">
+          <dt className="text-neutral-500 dark:text-neutral-400">{k}</dt>
+          <dd className="whitespace-pre-wrap break-words text-neutral-700 dark:text-neutral-300">
+            {typeof v === 'string' ? v : JSON.stringify(v)}
+          </dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
+function isCanceledTurn(m: Message): boolean {
+  const parts = Array.isArray(m.parts) ? (m.parts as MessagePart[]) : [];
+  return parts.some((p) => p.type === 'finish' && (p as { reason?: string }).reason === 'canceled');
 }
 
 const STATUS_BORDER: Record<string, string> = {
