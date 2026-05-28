@@ -27,22 +27,7 @@ export async function getSessionMessages(
     .orderBy(asc(messages.createdAtEpoch), asc(messages.createdAt))
     .limit(limit);
 
-  return rows.map((row): Message => ({
-    id: row.id,
-    sessionId: row.sessionId,
-    role: row.role as Message['role'],
-    content: row.content,
-    parts: row.parts as Message['parts'],
-    authorId: row.authorId || undefined,
-    authorEmail: row.authorEmail || undefined,
-    authorName: row.authorName || undefined,
-    authorAvatarUrl: row.authorAvatarUrl || undefined,
-    channelType: row.channelType || undefined,
-    channelId: row.channelId || undefined,
-    opencodeSessionId: row.opencodeSessionId || undefined,
-    threadId: row.threadId || undefined,
-    createdAt: toDate(row.createdAt),
-  }));
+  return rows.map(mapMessageRow);
 }
 
 export async function getThreadMessages(
@@ -80,6 +65,9 @@ export async function getThreadMessages(
       threadId: messages.threadId,
       createdAt: messages.createdAt,
       createdAtEpoch: messages.createdAtEpoch,
+      workflowExecutionId: messages.workflowExecutionId,
+      workflowStepId: messages.workflowStepId,
+      workflowIterationPath: messages.workflowIterationPath,
     })
     .from(messages)
     .innerJoin(sessions, eq(messages.sessionId, sessions.id))
@@ -87,7 +75,33 @@ export async function getThreadMessages(
     .orderBy(asc(messages.createdAtEpoch), asc(messages.createdAt))
     .limit(limit);
 
-  return rows.map((row): Message => ({
+  return rows.map(mapMessageRow);
+}
+
+/**
+ * Map a messages row to the shared Message type. Tolerates rows that lack the
+ * workflow back-pointer columns (older selects) via optional access.
+ */
+function mapMessageRow(row: {
+  id: string;
+  sessionId: string;
+  role: string;
+  content: string;
+  parts: unknown;
+  authorId: string | null;
+  authorEmail: string | null;
+  authorName: string | null;
+  authorAvatarUrl: string | null;
+  channelType: string | null;
+  channelId: string | null;
+  opencodeSessionId: string | null;
+  threadId: string | null;
+  createdAt: string | null;
+  workflowExecutionId?: string | null;
+  workflowStepId?: string | null;
+  workflowIterationPath?: string | null;
+}): Message {
+  return {
     id: row.id,
     sessionId: row.sessionId,
     role: row.role as Message['role'],
@@ -102,7 +116,10 @@ export async function getThreadMessages(
     opencodeSessionId: row.opencodeSessionId || undefined,
     threadId: row.threadId || undefined,
     createdAt: toDate(row.createdAt),
-  }));
+    workflowExecutionId: row.workflowExecutionId || undefined,
+    workflowStepId: row.workflowStepId || undefined,
+    workflowIterationPath: row.workflowIterationPath ?? undefined,
+  };
 }
 
 export async function batchUpsertMessages(

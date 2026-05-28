@@ -2218,6 +2218,47 @@ export class SessionAgentDO {
     return this._runnerHandlers;
   }
 
+  /**
+   * Validate runner-supplied workflow back-pointers before persisting them on a
+   * message/turn row. The executionId must belong to this session's user —
+   * otherwise a compromised runner could attribute messages to arbitrary
+   * executions. Returns all-null when absent or ownership fails (the message
+   * still persists, just without attribution).
+   */
+  private async resolveWorkflowBackpointers(
+    raw: { workflowExecutionId?: unknown; workflowStepId?: unknown; workflowIterationPath?: unknown },
+    context: string,
+  ): Promise<{ workflowExecutionId: string | null; workflowStepId: string | null; workflowIterationPath: string | null }> {
+    const none = { workflowExecutionId: null, workflowStepId: null, workflowIterationPath: null };
+    if (typeof raw.workflowExecutionId !== 'string' || raw.workflowExecutionId.length === 0) {
+      return none;
+    }
+    const ownerUserId = this.sessionState.userId;
+    if (!ownerUserId) {
+      console.warn(`[session-agent] dropping ${context} workflow back-pointers: no session userId`, {
+        sessionId: this.sessionState.sessionId,
+        executionId: raw.workflowExecutionId,
+      });
+      return none;
+    }
+    const row = await this.env.DB
+      .prepare('SELECT user_id FROM workflow_executions WHERE id = ? LIMIT 1')
+      .bind(raw.workflowExecutionId)
+      .first<{ user_id: string }>();
+    if (!row || row.user_id !== ownerUserId) {
+      console.warn(`[session-agent] dropping ${context} workflow back-pointers: execution not owned by user`, {
+        sessionId: this.sessionState.sessionId,
+        executionId: raw.workflowExecutionId,
+      });
+      return none;
+    }
+    return {
+      workflowExecutionId: raw.workflowExecutionId,
+      workflowStepId: typeof raw.workflowStepId === 'string' ? raw.workflowStepId : null,
+      workflowIterationPath: typeof raw.workflowIterationPath === 'string' ? raw.workflowIterationPath : '',
+    };
+  }
+
   private buildRunnerHandlers(): RunnerMessageHandlers {
     const handlers: RunnerMessageHandlers = {
       'usage-report': (msg) => {
@@ -2250,37 +2291,9 @@ export class SessionAgentDO {
         const content = (msg.content || '').trim();
         if (!content) return;
 
-        // Validate workflow back-pointers: the executionId must belong to this
-        // session's user before we persist it on the message row. Without this,
-        // a compromised runner could attribute messages to arbitrary executions.
-        // Mirrors the ownership check in upsertExecutionStepFromEvent.
-        let workflowExecutionId: string | null = null;
-        let workflowStepId: string | null = null;
-        let workflowIterationPath: string | null = null;
-        if (typeof msg.workflowExecutionId === 'string' && msg.workflowExecutionId.length > 0) {
-          const ownerUserId = this.sessionState.userId;
-          if (!ownerUserId) {
-            console.warn('[session-agent] dropping workflow-chat-message back-pointers: no session userId', {
-              sessionId: this.sessionState.sessionId,
-              executionId: msg.workflowExecutionId,
-            });
-          } else {
-            const row = await this.env.DB
-              .prepare('SELECT user_id FROM workflow_executions WHERE id = ? LIMIT 1')
-              .bind(msg.workflowExecutionId)
-              .first<{ user_id: string }>();
-            if (!row || row.user_id !== ownerUserId) {
-              console.warn('[session-agent] dropping workflow-chat-message back-pointers: execution not owned by user', {
-                sessionId: this.sessionState.sessionId,
-                executionId: msg.workflowExecutionId,
-              });
-            } else {
-              workflowExecutionId = msg.workflowExecutionId;
-              workflowStepId = typeof msg.workflowStepId === 'string' ? msg.workflowStepId : null;
-              workflowIterationPath = typeof msg.workflowIterationPath === 'string' ? msg.workflowIterationPath : '';
-            }
-          }
-        }
+        // Validate + resolve workflow back-pointers (ownership-checked).
+        const { workflowExecutionId, workflowStepId, workflowIterationPath } =
+          await this.resolveWorkflowBackpointers(msg, 'workflow-chat-message');
 
         const workflowMsgId = crypto.randomUUID();
         const parts = Array.isArray(msg.parts) ? msg.parts : null;
@@ -2531,19 +2544,26 @@ export class SessionAgentDO {
       },
 
       // ─── V2 Parts-Based Message Protocol ──────────────────────────────
-      'message.create': (msg) => {
+      'message.create': async (msg) => {
         const turnId = msg.turnId!;
         // threadId comes directly from the Runner via the message.create envelope —
         // no fallback. The Runner derives it from extractChannelContext(channel).threadId
         // for thread-channel prompts; non-thread channels (web/slack/telegram) don't
         // have a threadId, which is correct.
         const resolvedThreadId = msg.threadId || undefined;
-        console.log(`[SessionAgentDO] V2 message.create: turnId=${turnId} threadId=${resolvedThreadId || 'none'}`);
+        // Workflow agent_prompt turns carry back-pointers so the chat can group
+        // the streamed turn under its step container (ownership-validated).
+        const { workflowExecutionId, workflowStepId, workflowIterationPath } =
+          await this.resolveWorkflowBackpointers(msg, 'message.create');
+        console.log(`[SessionAgentDO] V2 message.create: turnId=${turnId} threadId=${resolvedThreadId || 'none'}${workflowExecutionId ? ` wfExec=${workflowExecutionId} step=${workflowStepId}` : ''}`);
         this.messageStore.createTurn(turnId, {
           channelType: msg.channelType || undefined,
           channelId: msg.channelId || undefined,
           opencodeSessionId: msg.opencodeSessionId || undefined,
           threadId: resolvedThreadId,
+          workflowExecutionId: workflowExecutionId ?? undefined,
+          workflowStepId: workflowStepId ?? undefined,
+          workflowIterationPath: workflowIterationPath ?? undefined,
         });
         // Broadcast message creation to clients
         this.broadcastToClients({
@@ -2557,6 +2577,9 @@ export class SessionAgentDO {
             ...(msg.channelType ? { channelType: msg.channelType } : {}),
             ...(msg.channelId ? { channelId: msg.channelId } : {}),
             ...(resolvedThreadId ? { threadId: resolvedThreadId } : {}),
+            ...(workflowExecutionId ? { workflowExecutionId } : {}),
+            ...(workflowStepId ? { workflowStepId } : {}),
+            ...(workflowIterationPath !== null ? { workflowIterationPath } : {}),
           },
         });
       },

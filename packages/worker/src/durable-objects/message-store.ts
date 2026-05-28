@@ -24,6 +24,11 @@ export interface TurnMetadata {
   channelId?: string;
   opencodeSessionId?: string;
   threadId?: string;
+  // Workflow attribution for streamed agent_prompt turns. Lets the session
+  // chat group the streamed turn under its step container.
+  workflowExecutionId?: string;
+  workflowStepId?: string;
+  workflowIterationPath?: string;
 }
 
 /** Discriminated union for message parts. */
@@ -263,14 +268,17 @@ export class MessageStore {
   createTurn(turnId: string, metadata: TurnMetadata): number {
     const seq = this.bumpSeq();
     this.sql.exec(
-      `INSERT OR IGNORE INTO messages (id, seq, role, content, parts, message_format, channel_type, channel_id, opencode_session_id, thread_id)
-       VALUES (?, ?, 'assistant', '', '[]', 'v2', ?, ?, ?, ?)`,
+      `INSERT OR IGNORE INTO messages (id, seq, role, content, parts, message_format, channel_type, channel_id, opencode_session_id, thread_id, workflow_execution_id, workflow_step_id, workflow_iteration_path)
+       VALUES (?, ?, 'assistant', '', '[]', 'v2', ?, ?, ?, ?, ?, ?, ?)`,
       turnId,
       seq,
       metadata.channelType ?? null,
       metadata.channelId ?? null,
       metadata.opencodeSessionId ?? null,
       metadata.threadId ?? null,
+      metadata.workflowExecutionId ?? null,
+      metadata.workflowStepId ?? null,
+      metadata.workflowIterationPath ?? null,
     );
     this.activeTurns.set(turnId, {
       text: '',
