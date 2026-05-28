@@ -16,6 +16,7 @@ import {
   workflowRun,
   handleTriggerAction,
   handleExecutionAction,
+  workflowExecutions,
 } from '../../../services/session-workflows.js';
 
 // ─── Internal context narrowing ───────────────────────────────────────────────
@@ -650,10 +651,7 @@ export const workflowsActions: ActionSource = {
         case 'list_workflow_executions': {
           const workflowId = typeof p.workflow_id === 'string' ? p.workflow_id : undefined;
           const limit = typeof p.limit === 'number' ? p.limit : undefined;
-          const result = await handleExecutionAction(db, env.DB, env, userId, 'list', {
-            workflowId,
-            limit,
-          } as Record<string, unknown>);
+          const result = await workflowExecutions(db, env.DB, userId, workflowId, limit);
           if (result.error) return { success: false, error: result.error };
           return { success: true, data: result.data };
         }
@@ -848,11 +846,8 @@ export const workflowsActions: ActionSource = {
           };
           // workerOrigin is only needed for rate-limit logging; pass empty string for internal calls
           const result = await triggerService.runTrigger(env, triggerId, userId, body, '');
-          if (!result.ok) {
-            const errMsg = result.reason === 'duplicate'
-              ? `Workflow execution already exists (executionId=${result.executionId})`
-              : result.error;
-            return { success: false, error: errMsg };
+          if (!result.ok && result.reason !== 'duplicate') {
+            return { success: false, error: result.error };
           }
           return { success: true, data: result };
         }
