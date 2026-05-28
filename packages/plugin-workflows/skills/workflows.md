@@ -165,7 +165,31 @@ Optional fields:
 
 ### `parallel` step
 
-Runs nested steps. Requires `steps` (array of steps).
+Runs each child in `steps` as its own concurrent branch (one branch per child, not all-children-per-branch). Each branch sees a snapshot of `outputs`/`variables` at parallel entry — siblings do not see each other's writes during execution. After all branches finish, new keys are merged back to the parent context (last writer wins on collision; use distinct `outputVariable` names across branches to avoid this).
+
+Required:
+- `steps` (array of steps): each element is one branch.
+
+Status: fails if any branch fails; cancels if any branch cancels.
+
+### `loop` step
+
+Iterates `steps` over a sequence. Each iteration runs the body once with `{{loop.item}}` and `{{loop.index}}` available for interpolation. Inside an iteration `outputVariable` writes are namespaced to the iteration so iterations don't clobber each other's downstream-visible state.
+
+Required (one of):
+- `over` as a string path: `"outputs.list"` or `"variables.items"`. Must resolve to an array.
+- `over` as an inline array literal: `["a", "b", "c"]`. Useful for small fixed iterations without a setup step.
+
+Optional fields:
+- `itemVar` (string identifier): name for the per-iteration value. Defaults to `item`. `{{loop.item}}` always works regardless.
+- `indexVar` (string identifier): name for the per-iteration index. Defaults to `index`. `{{loop.index}}` always works regardless.
+- `steps` (array of steps): body executed per iteration.
+
+Failure semantics: if an iteration fails, the loop fails and outputs published by completed iterations are rolled back to the snapshot taken at loop entry. Predictable strict semantics, no half-state.
+
+Common author bugs:
+- `over: outputs.someResult.field` where `field` is a string, not an array → `loop_over_not_array`. Either iterate over an array (build one upstream), or replace the loop with explicit per-item steps.
+- Forgetting that `outputVariable` writes inside the loop are per-iteration — referencing them after the loop won't pick up "the last iteration's value" as a simple top-level key.
 
 ### `agent` step
 

@@ -73,7 +73,9 @@ export interface WorkflowStep {
   then?: WorkflowStep[];
   else?: WorkflowStep[];
   steps?: WorkflowStep[];
-  over?: string;
+  // `loop.over` accepts either a path string (`outputs.x` / `variables.y`)
+  // or an inline array literal.
+  over?: string | unknown[];
   itemVar?: string;
   indexVar?: string;
 }

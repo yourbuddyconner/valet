@@ -93,9 +93,15 @@ function normalizeStep(stepValue: unknown, path: string, errors: WorkflowCompile
   }
 
   if (normalizedType === 'loop') {
-    if (typeof stepValue.over !== 'string' || !stepValue.over.trim()) {
+    // Accept two forms: an inline array literal (`over: [1,2,3]`) or a path
+    // string (`over: "outputs.list"` / `"variables.items"`).
+    const overIsArray = Array.isArray(stepValue.over);
+    const overIsNonEmptyString =
+      typeof stepValue.over === 'string' && stepValue.over.trim().length > 0;
+    if (!overIsArray && !overIsNonEmptyString) {
       errors.push({
-        message: 'loop step requires "over" (string path to an array, e.g. "outputs.list" or "variables.items")',
+        message:
+          'loop step requires "over" — either an inline array (e.g. [1,2,3]) or a string path to an array (e.g. "outputs.list" or "variables.items")',
         path: `${path}.over`,
       });
     }

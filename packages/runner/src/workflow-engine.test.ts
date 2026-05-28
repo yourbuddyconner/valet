@@ -574,6 +574,40 @@ describe('workflow-engine', () => {
     });
   });
 
+  it('iterates loop over an inline array literal in `over`', async () => {
+    const compiled = await compileWorkflowDefinition({
+      steps: [
+        {
+          id: 'each',
+          type: 'loop',
+          over: ['x', 'y', 'z'],
+          steps: [
+            { id: 'visit', type: 'tool', tool: 'noop', arguments: { value: '{{loop.item}}' } },
+          ],
+        },
+      ],
+    });
+    if (!compiled.ok || !compiled.workflow) throw new Error('compile failed');
+
+    const seen: unknown[] = [];
+    const result = await executeWorkflowRun(
+      'ex_loop_inline',
+      compiled.workflow,
+      { variables: {} },
+      {
+        onToolStep: async (step) => {
+          const args = step.arguments as { value?: unknown } | undefined;
+          seen.push(args?.value);
+          return { status: 'completed', output: { ok: true } };
+        },
+      },
+    );
+    expect(result.status).toBe('ok');
+    expect(seen).toEqual(['x', 'y', 'z']);
+    const innerSteps = result.steps.filter((s) => s.stepId === 'visit');
+    expect(innerSteps.map((s) => s.iterationPath)).toEqual(['each:i0', 'each:i1', 'each:i2']);
+  });
+
   it('emits a distinct envelope entry per loop iteration with iterationPath', async () => {
     const compiled = await compileWorkflowDefinition({
       steps: [

@@ -739,18 +739,31 @@ async function executeSteps(
     }
 
     if (step.type === 'loop') {
-      const overPath = typeof step.over === 'string' ? step.over.trim() : '';
-      if (!overPath) {
-        result.status = 'failed';
-        result.error = 'loop_missing_over';
-        result.completedAt = nowIso();
-        emit(sink, { type: 'step.failed', executionId: ctx.executionId, stepId: step.id, attempt: ctx.attempt, iterationPath: ctx.iterationPath, ts: result.completedAt, error: result.error });
-        return { failed: result.error };
+      // `over` accepts either an inline array literal (already an array
+      // post-interpolation by resolveStepFields) OR a `variables.x` /
+      // `outputs.y.z` path string. Inline form keeps the workflow self-
+      // contained for small literal iterations; path form is the original.
+      const overRaw = step.over;
+      let items: unknown;
+      let overDescription = '';
+      if (Array.isArray(overRaw)) {
+        items = overRaw;
+        overDescription = `<inline array of ${overRaw.length}>`;
+      } else {
+        const overPath = typeof overRaw === 'string' ? overRaw.trim() : '';
+        if (!overPath) {
+          result.status = 'failed';
+          result.error = 'loop_missing_over';
+          result.completedAt = nowIso();
+          emit(sink, { type: 'step.failed', executionId: ctx.executionId, stepId: step.id, attempt: ctx.attempt, iterationPath: ctx.iterationPath, ts: result.completedAt, error: result.error });
+          return { failed: result.error };
+        }
+        overDescription = overPath;
+        items = resolveLoopArray(overPath, ctx);
       }
-      const items = resolveLoopArray(overPath, ctx);
       if (!Array.isArray(items)) {
         result.status = 'failed';
-        result.error = `loop_over_not_array: ${overPath}`;
+        result.error = `loop_over_not_array: ${overDescription}`;
         result.completedAt = nowIso();
         emit(sink, { type: 'step.failed', executionId: ctx.executionId, stepId: step.id, attempt: ctx.attempt, iterationPath: ctx.iterationPath, ts: result.completedAt, error: result.error });
         return { failed: result.error };
