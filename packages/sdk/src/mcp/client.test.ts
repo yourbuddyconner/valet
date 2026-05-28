@@ -102,6 +102,47 @@ describe('McpClient', () => {
     expect(fakeFetch).toHaveBeenCalledTimes(1);
   });
 
+  it('calls the default global fetch with the globalThis receiver', async () => {
+    const calls: string[] = [];
+    const globalFetch = vi.fn(async function (this: unknown, _url: string | URL | Request, init?: RequestInit) {
+      if (this !== globalThis) {
+        throw new TypeError('Illegal invocation: function called with incorrect `this` reference');
+      }
+
+      const rpc = await readRpc(init ?? {});
+      calls.push(rpc.method);
+
+      if (rpc.method === 'initialize') {
+        return jsonResponse({
+          jsonrpc: '2.0',
+          id: 1,
+          result: {
+            protocolVersion: '2025-11-25',
+            capabilities: {},
+            serverInfo: { name: 'fake', version: '1.0.0' },
+          },
+        }, { headers: { 'mcp-session-id': 'session-1' } });
+      }
+
+      if (rpc.method === 'notifications/initialized') {
+        return new Response(null, { status: 202 });
+      }
+
+      return jsonResponse({
+        jsonrpc: '2.0',
+        id: 2,
+        result: { tools: [{ name: 'query', description: 'Query data', inputSchema: { type: 'object' } }] },
+      });
+    });
+    vi.stubGlobal('fetch', globalFetch);
+
+    const client = new McpClient({ url: 'https://mcp.example.com', serviceName: 'custom' });
+
+    await expect(client.listTools('token-1')).resolves.toHaveLength(1);
+    expect(globalFetch).toHaveBeenCalledTimes(3);
+    expect(calls).toEqual(['initialize', 'notifications/initialized', 'tools/list']);
+  });
+
   it('clears a stale session and retries once when a request returns 404', async () => {
     const calls: string[] = [];
     const fakeFetch = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {

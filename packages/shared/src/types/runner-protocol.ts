@@ -368,7 +368,7 @@ export type RunnerToDOMessage =
     }
   | { type: 'git-state'; branch?: string; baseBranch?: string; commitCount?: number }
   | { type: 'models'; models: AvailableModels }
-  | { type: 'aborted' }
+  | { type: 'aborted'; messageId?: string }
   | { type: 'wait-subscription'; reason?: string; sessionIds?: string[]; notifyOn?: string; statuses?: string[] }
   | { type: 'reverted'; messageIds: string[] }
   | { type: 'diff'; requestId: string; data: { files: DiffFile[] } }

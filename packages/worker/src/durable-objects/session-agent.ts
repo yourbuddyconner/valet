@@ -550,7 +550,12 @@ export class SessionAgentDO {
         }
         // Route prompts through the selected queue mode. If none is provided,
         // fall back to the DO's configured default.
-        const effectiveMode = body.interrupt ? 'steer' : (body.queueMode || this.promptQueue.queueMode || 'followup');
+        // Orchestrator sessions always steer when the runner is busy — user
+        // messages should interrupt running subtasks, not queue silently (TKAI-106).
+        const isOrchestrator = this.sessionState.sessionId?.startsWith('orchestrator:') ?? false;
+        const effectiveMode = body.interrupt ? 'steer'
+          : (isOrchestrator && this.promptQueue.runnerBusy) ? 'steer'
+          : (body.queueMode || this.promptQueue.queueMode || 'followup');
         console.log(`[SessionAgentDO] /prompt HTTP: effectiveMode=${effectiveMode} runnerBusy=${this.promptQueue.runnerBusy} runnerConnected=${this.runnerLink.isConnected}`);
 
         const author = (body.authorId || body.authorEmail || body.authorName) ? {
@@ -1426,11 +1431,14 @@ export class SessionAgentDO {
           gitEmail: userDetails.gitEmail,
         } : userId ? { id: userId, email: '', name: undefined, avatarUrl: undefined, gitName: undefined, gitEmail: undefined } : undefined;
         // Route through queue mode (Phase D)
+        // Orchestrator sessions always steer when busy (TKAI-106).
         const wsChannelType = (msg as any).channelType as string | undefined;
         const wsChannelId = (msg as any).channelId as string | undefined;
         const wsThreadId = msg.threadId;
         const wsContinuationContext = msg.continuationContext;
-        const wsQueueMode = (msg as any).queueMode || this.promptQueue.queueMode || 'followup';
+        const wsIsOrchestrator = this.sessionState.sessionId?.startsWith('orchestrator:') ?? false;
+        const wsQueueMode = (wsIsOrchestrator && this.promptQueue.runnerBusy) ? 'steer'
+          : ((msg as any).queueMode || this.promptQueue.queueMode || 'followup');
         switch (wsQueueMode) {
           case 'steer':
             await this.handleInterruptPrompt(msg.content || '', msg.model, author, attachments, wsChannelType, wsChannelId, wsThreadId);
@@ -1984,7 +1992,7 @@ export class SessionAgentDO {
     });
 
     // Forward directly to runner with author info + channel metadata
-    this.promptQueue.stampDispatched();
+    this.promptQueue.stampDispatched(channelKey);
     this.promptQueue.idleQueuedSince = 0;
     this.sessionState.lastParentIdleNotice = undefined;
     this.sessionState.parentIdleNotifyAt = 0;
@@ -2697,6 +2705,8 @@ export class SessionAgentDO {
               this.promptQueue.revertProcessingToQueued();
               this.promptQueue.runnerBusy = false;
             }
+            // Reset per-channel busy state from previous lifecycle
+            this.promptQueue.clearAllChannelBusy();
 
             // Emit runner_idle — full time from sandbox spawn/restore to agent ready
             const wakeStart = this.sessionState.sandboxWakeStartedAt;
@@ -2745,7 +2755,8 @@ export class SessionAgentDO {
                   createdAt: Math.floor(Date.now() / 1000),
                 },
               });
-              this.promptQueue.enqueue({ id: messageId, content: initialPrompt, status: 'processing' });
+              const ipChannelKey = this.channelKeyFrom(undefined, undefined);
+              this.promptQueue.enqueue({ id: messageId, content: initialPrompt, status: 'processing', channelKey: ipChannelKey });
               const ipOwnerId = this.sessionState.userId;
               const ipOwnerDetails = ipOwnerId ? await this.getUserDetails(ipOwnerId) : undefined;
               const ipModelPrefs = await this.resolveModelPreferences(ipOwnerDetails);
@@ -2761,7 +2772,7 @@ export class SessionAgentDO {
                 opencodeSessionId: this.getChannelOcSessionId(this.channelKeyFrom(undefined, undefined)),
                 modelPreferences: ipModelPrefs,
               });
-              this.promptQueue.stampDispatched();
+              this.promptQueue.stampDispatched(ipChannelKey);
               console.log(`[SessionAgentDO] agentStatus idle: dispatched initial prompt ${messageId}`);
             }
           }
@@ -2827,16 +2838,17 @@ export class SessionAgentDO {
         console.log(`[SessionAgentDO] Wait subscription registered: notifyOn=${msg.notifyOn || 'terminal'}, sessions=${msg.sessionIds?.join(',') || 'all'}`);
       },
 
-      'aborted': async (_msg) => {
+      'aborted': async (msg) => {
         // Runner confirmed abort — let handlePromptComplete clear runnerBusy
         // and broadcast status. Don't clear runnerBusy early — that creates a
         // race where a rapid new prompt can be dispatched then immediately
         // completed by markCompleted().
+        const abortedMessageId = (msg as { messageId?: string }).messageId;
         this.broadcastToClients({
           type: 'agentStatus',
           status: 'idle',
         });
-        await this.handlePromptComplete();
+        await this.handlePromptComplete(abortedMessageId);
       },
 
       'reverted': (msg) => {
@@ -3874,6 +3886,11 @@ export class SessionAgentDO {
       ? this.promptQueue.getChannelTargetById(messageId)
       : this.promptQueue.getProcessingChannelContext();
 
+    // Resolve per-channel busy key BEFORE the row is deleted.
+    const completedChannelKey = messageId
+      ? this.promptQueue.getChannelKeyById(messageId)
+      : this.promptQueue.getProcessingChannelKey();
+
     try {
       this.promptQueue.clearDispatchTimers();
 
@@ -3901,6 +3918,11 @@ export class SessionAgentDO {
 
       // Mark processing → completed, then prune
       const processingCount = this.promptQueue.markCompletedById(messageId);
+
+      // Clear per-channel busy state for the completed channel.
+      if (completedChannelKey) {
+        this.promptQueue.setChannelBusy(completedChannelKey, false);
+      }
 
       // If scoped messageId was already completed (e.g. dedup path sent a second
       // complete for the same prompt), skip the queue drain and idle transition —
@@ -3948,6 +3970,9 @@ export class SessionAgentDO {
       // Ensure runnerBusy is cleared even on error to prevent permanent stuck state
       console.error('[SessionAgentDO] handlePromptComplete error, forcing runnerBusy=false:', err);
       this.promptQueue.runnerBusy = false;
+      if (completedChannelKey) {
+        this.promptQueue.setChannelBusy(completedChannelKey, false);
+      }
       this.broadcastToClients({
         type: 'status',
         data: { runnerBusy: false },
@@ -3982,6 +4007,7 @@ export class SessionAgentDO {
     this.runnerLink.token = body.runnerToken;
     this.runnerLink.ready = false; // clear stale ready state from previous lifecycle
     this.promptQueue.runnerBusy = false;
+    this.promptQueue.clearAllChannelBusy();
     this.promptQueue.queueMode = body.queueMode || 'followup';
     this.promptQueue.collectDebounceMs = body.collectDebounceMs || 3000;
 
@@ -4463,30 +4489,31 @@ export class SessionAgentDO {
       // Extract child metadata for queue-level filtering
       const queueChildSessionId = (parts?.childSessionId as string) || undefined;
       const queueChildStatus = (parts?.childStatus as string) || undefined;
+      const sysQueueChannelKey = this.channelKeyFrom(sysChannelType, sysChannelId);
 
       const status = this.sessionState.status;
       if (status === 'hibernated') {
         // Queue the prompt so the runner picks it up after connecting.
-        this.promptQueue.enqueue({ id: messageId, content, threadId, channelType: sysChannelType, channelId: sysChannelId, childSessionId: queueChildSessionId, childStatus: queueChildStatus });
+        this.promptQueue.enqueue({ id: messageId, content, threadId, channelType: sysChannelType, channelId: sysChannelId, channelKey: sysQueueChannelKey, childSessionId: queueChildSessionId, childStatus: queueChildStatus });
         this.ctx.waitUntil(this.performWake());
       } else if (status === 'restoring') {
         // Wake already in progress — just queue the prompt for when the runner connects.
-        this.promptQueue.enqueue({ id: messageId, content, threadId, channelType: sysChannelType, channelId: sysChannelId, childSessionId: queueChildSessionId, childStatus: queueChildStatus });
+        this.promptQueue.enqueue({ id: messageId, content, threadId, channelType: sysChannelType, channelId: sysChannelId, channelKey: sysQueueChannelKey, childSessionId: queueChildSessionId, childStatus: queueChildStatus });
       } else if (status === 'running') {
         // Dispatch the system event as a prompt so the runner wakes up and can
         // decide whether to act on it (e.g. child session idle/completed events).
         const runnerBusy = this.promptQueue.runnerBusy;
         if (this.runnerLink.isConnected && this.runnerLink.isReady && !runnerBusy) {
           // Runner is connected and idle — insert as 'processing' for recoverability, then dispatch
-          this.promptQueue.enqueue({ id: messageId, content, threadId, channelType: sysChannelType, channelId: sysChannelId, status: 'processing', childSessionId: queueChildSessionId, childStatus: queueChildStatus });
-          this.promptQueue.stampDispatched();
+          const sysChannelKey = this.channelKeyFrom(sysChannelType, sysChannelId);
+          this.promptQueue.enqueue({ id: messageId, content, threadId, channelType: sysChannelType, channelId: sysChannelId, channelKey: sysChannelKey, status: 'processing', childSessionId: queueChildSessionId, childStatus: queueChildStatus });
+          this.promptQueue.stampDispatched(sysChannelKey);
           this.sessionState.lastParentIdleNotice = undefined;
           this.sessionState.parentIdleNotifyAt = 0;
           this.sessionState.waitSubscription = null;
           const ownerId = this.sessionState.userId;
           const ownerDetails = ownerId ? await this.getUserDetails(ownerId) : undefined;
           const sysModelPrefs = await this.resolveModelPreferences(ownerDetails);
-          const sysChannelKey = this.channelKeyFrom(sysChannelType, sysChannelId);
           if (threadId) {
             await this.ensureThreadOcSessionHydrated(threadId, sysChannelKey);
           }
@@ -4514,7 +4541,7 @@ export class SessionAgentDO {
           this.rescheduleIdleAlarm();
         } else {
           // Runner busy or not connected — queue the prompt
-          this.promptQueue.enqueue({ id: messageId, content, threadId, channelType: sysChannelType, channelId: sysChannelId, childSessionId: queueChildSessionId, childStatus: queueChildStatus });
+          this.promptQueue.enqueue({ id: messageId, content, threadId, channelType: sysChannelType, channelId: sysChannelId, channelKey: sysQueueChannelKey, childSessionId: queueChildSessionId, childStatus: queueChildStatus });
         }
       }
     }
@@ -4839,7 +4866,7 @@ export class SessionAgentDO {
       this.emitAuditEvent('prompt.dispatch_failed', `Queue dispatch failed, reverted: ${prompt.id.slice(0, 8)}`);
       return false;
     }
-    this.promptQueue.stampDispatched();
+    this.promptQueue.stampDispatched(prompt.channelKey || undefined);
     this.promptQueue.idleQueuedSince = 0;
     this.sessionState.lastParentIdleNotice = undefined;
     this.sessionState.parentIdleNotifyAt = 0;

@@ -320,8 +320,8 @@ export class AgentClient {
     this.send({ type: "workflow-execution-result", executionId, envelope });
   }
 
-  sendAborted(): void {
-    this.send({ type: "aborted" });
+  sendAborted(messageId?: string): void {
+    this.send({ type: "aborted", ...(messageId ? { messageId } : {}) });
   }
 
   sendWaitSubscription(subscription: {

@@ -73,7 +73,7 @@ export class McpClient {
     this.authQueryParam = opts.authQueryParam;
     this.additionalHeaders = opts.additionalHeaders;
     this.staticAuthHeader = opts.staticAuthHeader;
-    this.fetchFn = opts.fetch ?? fetch;
+    this.fetchFn = opts.fetch ?? ((input, init) => globalThis.fetch(input, init));
   }
 
   /** Build fetch URL and headers with auth + session. */

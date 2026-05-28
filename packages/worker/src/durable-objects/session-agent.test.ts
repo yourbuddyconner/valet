@@ -87,14 +87,33 @@ function createMockSql(): SqlStorage & {
 
       if (q.startsWith('INSERT INTO channel_state')) {
         const channelKey = String(params[0]);
-        const opencodeSessionId = params[1] === undefined || params[1] === null
-          ? null
-          : String(params[1]);
         const existing = channelState.get(channelKey);
-        channelState.set(channelKey, {
-          busy: existing?.busy ?? 0,
-          opencode_session_id: opencodeSessionId,
-        });
+        // Distinguish between the two INSERT patterns by checking the column list:
+        // 1. (channel_key, busy, opencode_session_id) — setChannelOcSessionId, params[1] = oc session id
+        // 2. (channel_key, busy) — setChannelBusy, params[1] = busy flag
+        if (q.includes('opencode_session_id')) {
+          const opencodeSessionId = params[1] === undefined || params[1] === null
+            ? null
+            : String(params[1]);
+          channelState.set(channelKey, {
+            busy: existing?.busy ?? 0,
+            opencode_session_id: opencodeSessionId,
+          });
+        } else {
+          const busy = Number(params[1]) || 0;
+          channelState.set(channelKey, {
+            busy,
+            opencode_session_id: existing?.opencode_session_id ?? null,
+          });
+        }
+        return cursor([]);
+      }
+
+      if (q.startsWith('UPDATE channel_state SET busy')) {
+        // clearAllChannelBusy — reset all channels to idle
+        for (const [key, val] of channelState) {
+          channelState.set(key, { ...val, busy: 0 });
+        }
         return cursor([]);
       }
 

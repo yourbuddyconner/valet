@@ -2272,6 +2272,11 @@ export class PromptHandler {
 
     console.log(`[PromptHandler] Aborting ${targetChannels.length} channel(s): ${targetChannels.map(c => c.channelKey).join(', ')}`);
 
+    // Capture the active messageId BEFORE resetForAbort clears it.
+    // For multi-channel aborts, pick the first non-null messageId for the
+    // aborted ack so the DO can resolve which channel was interrupted.
+    const abortedMessageId = targetChannels.find(ch => ch.activeMessageId)?.activeMessageId ?? undefined;
+
     // Clear prompt state BEFORE the fetch so the SSE handler stops
     // forwarding events immediately (handlePartUpdated checks activeMessageId)
     this.clearResponseTimeout();
@@ -2281,7 +2286,7 @@ export class PromptHandler {
     }
 
     // Tell DO first so clients get immediate feedback
-    this.agentClient.sendAborted();
+    this.agentClient.sendAborted(abortedMessageId);
     // TEMPORARY: Task 12 plumbs channel-bound messageId through SSE handlers
     this.agentClient.sendAgentStatus("idle", undefined, this.getActiveMessageId());
 

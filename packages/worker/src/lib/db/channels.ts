@@ -182,6 +182,7 @@ export async function ensureChannelBinding(
     /** Scope key computed via the channel transport's scopeKeyParts + channelScopeKey.
      *  Must match the format used by the inbound event handler's binding lookup. */
     scopeKey: string;
+    queueMode?: QueueMode;
   },
 ): Promise<void> {
   const scopeKey = data.scopeKey;
@@ -193,7 +194,7 @@ export async function ensureChannelBinding(
     scopeKey,
     userId: data.userId,
     orgId: data.orgId,
-    queueMode: 'followup',
+    queueMode: data.queueMode || 'followup',
     collectDebounceMs: 3000,
   }).onConflictDoUpdate({
     target: [channelBindings.channelType, channelBindings.channelId],
@@ -201,6 +202,7 @@ export async function ensureChannelBinding(
       sessionId: sql`excluded.session_id`,
       scopeKey: sql`excluded.scope_key`,
       userId: sql`excluded.user_id`,
+      queueMode: sql`excluded.queue_mode`,
     },
   });
 }

@@ -375,6 +375,22 @@ export class PromptQueue {
    *  Unlike getProcessingChannelContext, does NOT special-case 'web'/'thread' — those
    *  are valid emit targets in the explicit-routing contract.
    */
+  /** Get the stored channel_key for a prompt queue entry by message ID. */
+  getChannelKeyById(messageId: string): string | null {
+    const rows = this.sql
+      .exec('SELECT channel_key FROM prompt_queue WHERE id = ? LIMIT 1', messageId)
+      .toArray();
+    return rows.length > 0 ? (rows[0].channel_key as string | null) : null;
+  }
+
+  /** Get the channel_key of the currently processing prompt queue entry. */
+  getProcessingChannelKey(): string | null {
+    const rows = this.sql
+      .exec("SELECT channel_key FROM prompt_queue WHERE status = 'processing' LIMIT 1")
+      .toArray();
+    return rows.length > 0 ? (rows[0].channel_key as string | null) : null;
+  }
+
   getChannelTargetById(messageId: string): { channelType: string | null; channelId: string | null; threadId: string | null } | undefined {
     const rows = this.sql
       .exec("SELECT channel_type, channel_id, reply_channel_type, reply_channel_id, thread_id FROM prompt_queue WHERE id = ? LIMIT 1", messageId)
@@ -418,10 +434,14 @@ export class PromptQueue {
     this.setState('runnerBusy', busy ? 'true' : 'false');
   }
 
-  /** Record that a prompt was just dispatched to the runner. Sets runnerBusy + timestamp. */
-  stampDispatched(): void {
+  /** Record that a prompt was just dispatched to the runner. Sets runnerBusy + timestamp.
+   *  When channelKey is provided, also marks that channel as busy in the channel_state table. */
+  stampDispatched(channelKey?: string): void {
     this.setState('runnerBusy', 'true');
     this.setState('lastPromptDispatchedAt', String(Date.now()));
+    if (channelKey) {
+      this.setChannelBusy(channelKey, true);
+    }
   }
 
   /** Clear dispatch tracking state (on completion). */
@@ -492,6 +512,41 @@ export class PromptQueue {
 
   set idleQueuedSince(ms: number) {
     this.setState('idleQueuedSince', ms ? String(ms) : '');
+  }
+
+  // ─── Per-Channel Busy State ─────────────────────────────────────────────────
+  // Uses the `busy` column on the existing `channel_state` table (DO SQLite).
+  // With a sequential runner only one channel is busy at a time, but tracking
+  // per-channel lets us target aborts and broadcast per-thread status.
+
+  /** Check whether a specific channel is currently busy. */
+  isChannelBusy(channelKey: string): boolean {
+    const rows = this.sql
+      .exec('SELECT busy FROM channel_state WHERE channel_key = ?', channelKey)
+      .toArray();
+    return rows.length > 0 && (rows[0].busy as number) !== 0;
+  }
+
+  /** Mark a channel busy or idle. Upserts into channel_state. */
+  setChannelBusy(channelKey: string, busy: boolean): void {
+    this.sql.exec(
+      'INSERT INTO channel_state (channel_key, busy) VALUES (?, ?) ON CONFLICT(channel_key) DO UPDATE SET busy = excluded.busy',
+      channelKey,
+      busy ? 1 : 0,
+    );
+  }
+
+  /** Return the channel_key that is currently marked busy, or null if none. */
+  getBusyChannelKey(): string | null {
+    const rows = this.sql
+      .exec('SELECT channel_key FROM channel_state WHERE busy = 1 LIMIT 1')
+      .toArray();
+    return rows.length > 0 ? (rows[0].channel_key as string) : null;
+  }
+
+  /** Reset all channels to idle. Called on startup/recovery. */
+  clearAllChannelBusy(): void {
+    this.sql.exec('UPDATE channel_state SET busy = 0');
   }
 
   // ─── Collect Mode ──────────────────────────────────────────────────────────
