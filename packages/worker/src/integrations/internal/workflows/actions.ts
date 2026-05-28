@@ -395,21 +395,21 @@ function buildDebugDiagnosis(
       ? 'Execution is blocked on approval and has an active resume token.'
       : 'Execution is waiting for approval but has no resume token persisted.';
     if (execution.resumeToken) {
-      actions.push(`Use approve_execution with execution_id=${execution.id}, approve=true, resume_token=<execution.resumeToken>.`);
+      actions.push(`Use workflows:approve_execution with execution_id=${execution.id}, approve=true, resume_token=<execution.resumeToken>.`);
     }
   } else if (execution.status === 'failed' && mismatchStepId) {
     const hasDifferentWaitingApproval = waitingSteps.some((s) => s.stepId !== mismatchStepId);
     diagnosis = hasDifferentWaitingApproval
       ? `Execution failed with ${execution.error}. This usually indicates a stale resume token was used for an earlier approval checkpoint.`
       : `Execution failed with ${execution.error}. Resume token likely did not match the currently paused checkpoint.`;
-    actions.push('Re-run get_execution and use the latest execution.resumeToken.');
-    actions.push('If state is inconsistent, cancel_execution and start a fresh run.');
+    actions.push('Re-run workflows:get_execution and use the latest execution.resumeToken.');
+    actions.push('If state is inconsistent, use workflows:cancel_execution and start a fresh run.');
   } else if (execution.status === 'running') {
     diagnosis = 'Execution is currently running.';
-    actions.push('Use get_execution_steps again after a short delay to watch progress.');
+    actions.push('Use workflows:get_execution_steps again after a short delay to watch progress.');
   } else if (execution.status === 'pending') {
     diagnosis = 'Execution is queued/pending dispatch.';
-    actions.push('Wait briefly, then run get_execution again.');
+    actions.push('Wait briefly, then run workflows:get_execution again.');
   } else if (execution.status === 'completed') {
     diagnosis = 'Execution completed successfully.';
   } else if (execution.status === 'cancelled') {
@@ -770,6 +770,20 @@ export const workflowsActions: ActionSource = {
         case 'sync_trigger': {
           const triggerType = String(p.type ?? '');
           const scheduleTarget = typeof p.schedule_target === 'string' ? p.schedule_target : 'workflow';
+
+          // Validate required fields per trigger type — mirrors the route's Zod schema.
+          if (triggerType === 'webhook') {
+            if (!p.webhook_path || String(p.webhook_path).trim().length === 0) {
+              return { success: false, error: 'webhook trigger requires webhook_path' };
+            }
+          } else if (triggerType === 'schedule') {
+            if (!p.schedule_cron || String(p.schedule_cron).trim().length === 0) {
+              return { success: false, error: 'schedule trigger requires schedule_cron' };
+            }
+            if (scheduleTarget === 'orchestrator' && (!p.schedule_prompt || String(p.schedule_prompt).trim().length === 0)) {
+              return { success: false, error: 'schedule trigger targeting orchestrator requires schedule_prompt' };
+            }
+          }
 
           let config: Record<string, unknown>;
           if (triggerType === 'webhook') {

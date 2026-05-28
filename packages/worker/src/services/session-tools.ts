@@ -352,17 +352,24 @@ export async function resolveActionPolicy(
     throw new Error(`Action "${toolId}" is disabled by your organization.`);
   }
 
-  // Verify at least one active integration (or auto-enabled service) exists for this service
-  const userIntegrations = await getUserIntegrations(appDb, userId);
-  const orgIntegrations = await getOrgIntegrations(appDb);
-  const hasActiveIntegration = [...userIntegrations, ...orgIntegrations].some(
-    (i) => i.service === service && i.status === 'active',
-  );
+  // Hoist provider lookup so we can use it for both the activation gate and the policy fallback.
+  const provider = integrationRegistry.getProvider(service);
 
-  if (!hasActiveIntegration) {
-    const autoServices = await getAutoEnabledServices(envDB);
-    if (!autoServices.includes(service)) {
-      throw new Error(`Integration "${service}" is not active. Configure it in Settings > Integrations.`);
+  // Internal providers (e.g. the built-in `workflows` service) have no integration row and are
+  // never listed in autoServices. They are always available — skip the activation gate for them.
+  if (!provider?.internal) {
+    // Verify at least one active integration (or auto-enabled service) exists for this service
+    const userIntegrations = await getUserIntegrations(appDb, userId);
+    const orgIntegrations = await getOrgIntegrations(appDb);
+    const hasActiveIntegration = [...userIntegrations, ...orgIntegrations].some(
+      (i) => i.service === service && i.status === 'active',
+    );
+
+    if (!hasActiveIntegration) {
+      const autoServices = await getAutoEnabledServices(envDB);
+      if (!autoServices.includes(service)) {
+        throw new Error(`Integration "${service}" is not active. Configure it in Settings > Integrations.`);
+      }
     }
   }
 
@@ -381,9 +388,9 @@ export async function resolveActionPolicy(
     riskLevel = cachedRisk;
   } else {
     // Resolve list context for policy fallback — skip credential lookup for no-auth services
-    const fallbackProvider = integrationRegistry.getProvider(service);
+    // (reuse the provider already fetched above)
     let listCtx: { credentials: { access_token: string } } | undefined;
-    if (fallbackProvider?.authType !== 'none') {
+    if (provider?.authType !== 'none') {
       const listCredResult = await integrationRegistry.resolveCredentials(service, env, userId, {
         forceRefresh: false,
       });
