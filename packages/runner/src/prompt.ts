@@ -521,6 +521,11 @@ export class ChannelSession {
   providerRetryCount = 0;
   providerRetryStartedAt = 0;
 
+  // Per-prompt timing and reply routing (moved from PromptHandler for concurrency)
+  lastPromptSentAt = 0;
+  pendingReplyChannelType: string | undefined;
+  pendingReplyChannelId: string | undefined;
+
   // Per-message usage entries for the current turn (reset per prompt)
   usageEntries = new Map<string, { model: string; inputTokens: number; outputTokens: number }>();
 
@@ -1485,9 +1490,9 @@ export class PromptHandler {
     // flows through the `thread:<id>` channelKey resolved upstream in the DO.
     // The parameter remains in the signature for caller compatibility.
     void threadId;
-    // Store original channel info for [via ...] attribution prefix
-    this.pendingReplyChannelType = replyChannelType;
-    this.pendingReplyChannelId = replyChannelId;
+    // Store original channel info for [via ...] attribution prefix (per-channel for concurrency)
+    channel.pendingReplyChannelType = replyChannelType;
+    channel.pendingReplyChannelId = replyChannelId;
     this.applyPersistedOpenCodeSessionId(channel, opencodeSessionId);
 
     try {
@@ -1633,19 +1638,20 @@ export class PromptHandler {
         }
       }
 
-      // Store failover state (use post-transcription values so model failover doesn't re-transcribe)
-      this.currentModelPreferences = failoverChain.length > 0 ? failoverChain : undefined;
-      this.pendingRetryContent = effectiveContent;
-      this.pendingRetryAttachments = effectiveAttachments;
-      this.pendingRetryAuthor = author;
+      // Store failover state on the channel (not class-level) so concurrent
+      // prompts on different channels don't clobber each other's retry state.
+      channel.currentModelPreferences = failoverChain.length > 0 ? failoverChain : undefined;
+      channel.pendingRetryContent = effectiveContent;
+      channel.pendingRetryAttachments = effectiveAttachments;
+      channel.pendingRetryAuthor = author;
 
       // Determine which model to use: explicit model takes priority, then first preference
-      this.currentModelIndex = 0;
+      channel.currentModelIndex = 0;
 
       // Notify client that agent is thinking
       this.agentClient.sendAgentStatus("thinking", undefined, messageId);
-      this.awaitingAssistantForAttempt = true;
-      this.lastPromptSentAt = Date.now();
+      channel.awaitingAssistantForAttempt = true;
+      channel.lastPromptSentAt = Date.now();
 
       // Mark sync prompt in flight so SSE-side finalizeResponse is suppressed
       channel.syncPromptInFlight = true;
@@ -1667,20 +1673,20 @@ export class PromptHandler {
 
       for (let i = 0; i < modelsToTry.length; i++) {
         const currentModel = modelsToTry[i];
-        this.currentModelIndex = i;
+        channel.currentModelIndex = i;
 
         if (i > 0) {
           // Not first attempt — notify DO, reset, send thinking
           const fromModel = modelsToTry[i - 1] || "default";
           const toModel = currentModel || "default";
           console.log(`[PromptHandler] Failing over from ${fromModel} to ${toModel} due to: ${lastModelError}`);
-          if (this.activeMessageId) {
-            this.agentClient.sendModelSwitched(this.activeMessageId, fromModel, toModel, lastModelError || "Model failed");
+          if (channel.activeMessageId) {
+            this.agentClient.sendModelSwitched(channel.activeMessageId, fromModel, toModel, lastModelError || "Model failed");
           }
           channel.resetForRetry();
           channel.syncPromptInFlight = true; // Re-set after resetForRetry clears it
           this.agentClient.sendAgentStatus("thinking", undefined, messageId);
-          this.awaitingAssistantForAttempt = true;
+          channel.awaitingAssistantForAttempt = true;
         }
 
         // Create an AbortController with a resettable inactivity timeout.
@@ -1768,17 +1774,17 @@ export class PromptHandler {
             // drive further events and finalization via the normal idle path.
             return;
           }
-          const errorMsg = responseError || this.lastError;
+          const errorMsg = responseError || channel.lastError;
 
           console.log(
             `[PromptHandler] Sync response analysis for ${messageId}: ` +
             `responseText=${responseText ? responseText.length + ' chars' : 'null'} ` +
             `responseError=${responseError ?? 'null'} ` +
-            `lastError=${this.lastError ?? 'null'} ` +
-            `hasActivity=${this.hasActivity} ` +
-            `streamedContent=${this.streamedContent.length} chars ` +
-            `toolStates=${this.toolStates.size} ` +
-            `assistantMsgIds=${this.activeAssistantMessageIds.size}`
+            `lastError=${channel.lastError ?? 'null'} ` +
+            `hasActivity=${channel.hasActivity} ` +
+            `streamedContent=${channel.streamedContent.length} chars ` +
+            `toolStates=${channel.toolStates.size} ` +
+            `assistantMsgIds=${channel.activeAssistantMessageIds.size}`
           );
 
           if (errorMsg && isRetriableProviderError(errorMsg)) {
@@ -1788,7 +1794,7 @@ export class PromptHandler {
             continue;
           }
 
-          if (!responseText && !errorMsg && !this.hasActivity) {
+          if (!responseText && !errorMsg && !channel.hasActivity) {
             // Empty response with no SSE activity — continue to next model
             lastModelError = "Model returned an empty response";
             console.log(`[PromptHandler] Empty response for ${messageId} with no activity — trying next model`);
@@ -1858,7 +1864,7 @@ export class PromptHandler {
       const errorMsg = err instanceof Error ? err.message : String(err);
       console.error("[PromptHandler] Error processing prompt:", errorMsg);
       this.agentClient.sendError(messageId, errorMsg);
-      this.agentClient.sendComplete(this.activeMessageId ?? undefined);
+      this.agentClient.sendComplete(channel.activeMessageId ?? undefined);
       this.agentClient.sendAgentStatus("idle", undefined, messageId);
     }
   }
@@ -1942,8 +1948,8 @@ export class PromptHandler {
     console.log(`[PromptHandler] Sending complete`);
 
     // Emit llm_response timing with token counts for throughput analysis
-    if (this.lastPromptSentAt > 0) {
-      const durationMs = Date.now() - this.lastPromptSentAt;
+    if (channel.lastPromptSentAt > 0) {
+      const durationMs = Date.now() - channel.lastPromptSentAt;
       let inputTokens = 0;
       let outputTokens = 0;
       for (const entry of channel.usageEntries.values()) {
@@ -3231,8 +3237,9 @@ export class PromptHandler {
     // channel info is passed via replyChannelType/replyChannelId so the agent still
     // knows which external channel to reply to.
     let attributedContent = content;
-    const attrChannelType = this.pendingReplyChannelType || channelType;
-    const attrChannelId = this.pendingReplyChannelId || channelId;
+    const replyChannel = this.currentPromptChannel;
+    const attrChannelType = replyChannel?.pendingReplyChannelType || this.pendingReplyChannelType || channelType;
+    const attrChannelId = replyChannel?.pendingReplyChannelId || this.pendingReplyChannelId || channelId;
     if (attrChannelType && attrChannelId && attrChannelType !== "thread") {
       attributedContent = `[via ${attrChannelType} | chatId: ${attrChannelId}] ${attributedContent}`;
     }

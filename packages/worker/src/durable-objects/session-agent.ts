@@ -1874,13 +1874,21 @@ export class SessionAgentDO {
       `[SessionAgentDO] handlePrompt: channel=${channelKey} runnerConnected=${runnerConnected} runnerReady=${runnerReady} runnerBusy=${runnerBusy} status=${status} sandboxId=${sandboxId || 'none'} queued=${queuedCount}`
     );
 
-    // Queue when runner isn't ready. User messages are NOT blocked by an active
-    // wait_for_event subscription — the user explicitly sending a message should
-    // override the agent's yield. The direct dispatch path clears waitSubscription,
-    // and child events arriving later are dispatched normally via handleSystemMessage.
-    if (!runnerConnected || !runnerReady || runnerBusy) {
+    // Queue when runner isn't ready or the TARGET channel is busy. Cross-thread
+    // messages dispatch directly even when another channel is in-flight — the
+    // runner handles concurrent prompts on different OpenCode sessions (TKAI-65).
+    // When runnerBusy is set but no per-channel tracking exists (e.g. workflow
+    // dispatch, reconnect recovery), fall back to the global flag to be safe.
+    // User messages are NOT blocked by an active wait_for_event subscription —
+    // the direct dispatch path clears waitSubscription, and child events arriving
+    // later are dispatched normally via handleSystemMessage.
+    const channelBusy = this.promptQueue.isChannelBusy(channelKey);
+    const anyChannelTracked = this.promptQueue.getBusyChannelKey() !== null;
+    const shouldQueue = !runnerConnected || !runnerReady || channelBusy || (runnerBusy && !anyChannelTracked);
+    if (shouldQueue) {
       // ─── Enqueue path: defer message write to dispatch time ──────────
-      const reason = runnerBusy ? 'runner busy'
+      const reason = channelBusy ? 'channel busy'
+        : (runnerBusy && !anyChannelTracked) ? 'runner busy'
         : !runnerConnected ? 'no runner connected'
         : 'runner not ready';
       console.log(`[SessionAgentDO] handlePrompt: QUEUING (${reason}) channel=${channelKey} messageId=${messageId}`);
@@ -3967,14 +3975,21 @@ export class SessionAgentDO {
         this.promptQueue.idleQueuedSince = 0;
       }
 
-      // Runner is now idle
-      console.log(`[SessionAgentDO] handlePromptComplete: queue empty, setting runnerBusy=false`);
-      this.promptQueue.runnerBusy = false;
-      this.broadcastToClients({
-        type: 'status',
-        data: { runnerBusy: false },
-      });
-      this.notifyParentIfIdle();
+      // Only mark runner idle if no other channels are still processing.
+      // With concurrent per-thread dispatch, channel A completing doesn't
+      // mean channel B is done.
+      const stillBusyChannel = this.promptQueue.getBusyChannelKey();
+      if (stillBusyChannel) {
+        console.log(`[SessionAgentDO] handlePromptComplete: queue empty but channel ${stillBusyChannel} still busy`);
+      } else {
+        console.log(`[SessionAgentDO] handlePromptComplete: queue empty, setting runnerBusy=false`);
+        this.promptQueue.runnerBusy = false;
+        this.broadcastToClients({
+          type: 'status',
+          data: { runnerBusy: false },
+        });
+        this.notifyParentIfIdle();
+      }
     } catch (err) {
       // Ensure runnerBusy is cleared even on error to prevent permanent stuck state
       console.error('[SessionAgentDO] handlePromptComplete error, forcing runnerBusy=false:', err);
@@ -4694,6 +4709,16 @@ export class SessionAgentDO {
 
       if (shouldSkip) {
         this.promptQueue.dropEntry(prompt.id);
+        prompt = this.promptQueue.dequeueNext();
+        continue;
+      }
+
+      // Skip items whose target channel is already busy (concurrent dispatch).
+      // Don't drop — revert to queued so they dispatch when the channel completes.
+      const queuedChannelKey = prompt.channelKey || this.channelKeyFrom(prompt.channelType || undefined, prompt.channelId || undefined);
+      if (this.promptQueue.isChannelBusy(queuedChannelKey)) {
+        console.log(`[SessionAgentDO] sendNextQueuedPrompt: skipping item ${prompt.id} — channel ${queuedChannelKey} is busy`);
+        this.promptQueue.revertProcessingToQueued(prompt.id);
         prompt = this.promptQueue.dequeueNext();
         continue;
       }

@@ -1008,10 +1008,15 @@ export class AgentClient {
     try {
       switch (msg.type) {
         case "prompt": {
+          // Fire-and-forget: don't await so the WebSocket handler can process
+          // the next message immediately. This enables concurrent prompt dispatch
+          // to different channels/threads (TKAI-65). Each channel has its own
+          // OpenCode session, so prompts process in parallel via the SSE stream.
           const author: PromptAuthor | undefined = (msg.authorId || msg.gitName || msg.gitEmail || msg.authorName || msg.authorEmail)
             ? { authorId: msg.authorId, gitName: msg.gitName, gitEmail: msg.gitEmail, authorName: msg.authorName, authorEmail: msg.authorEmail }
             : undefined;
-          await this.promptHandler?.(msg.messageId, msg.content, msg.model, author, msg.modelPreferences, msg.attachments, msg.channelType, msg.channelId, msg.opencodeSessionId, msg.continuationContext, msg.threadId, msg.replyChannelType, msg.replyChannelId);
+          this.promptHandler?.(msg.messageId, msg.content, msg.model, author, msg.modelPreferences, msg.attachments, msg.channelType, msg.channelId, msg.opencodeSessionId, msg.continuationContext, msg.threadId, msg.replyChannelType, msg.replyChannelId)
+            .catch(err => console.error(`[AgentClient] Prompt handler error for ${msg.messageId}:`, err));
           break;
         }
         case "answer":
