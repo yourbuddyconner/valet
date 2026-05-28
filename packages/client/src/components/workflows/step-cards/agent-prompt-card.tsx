@@ -7,6 +7,7 @@ import type { WorkflowStepCardProps } from './index';
 
 interface AgentPromptOutput {
   response: unknown;
+  prompt?: string;
   model?: string | null;
   inputTokens?: number;
   outputTokens?: number;
@@ -17,7 +18,12 @@ export function AgentPromptCard({ step, open, onOpenChange }: WorkflowStepCardPr
   const input = step.input as Record<string, unknown> | null;
   const output = step.output as AgentPromptOutput | null;
   const persona = typeof input?.persona === 'string' ? input.persona : undefined;
-  const promptText = pickString(input, ['prompt', 'content', 'message', 'goal']) ?? '';
+  // Prefer the resolved prompt the agent actually received (output.prompt,
+  // interpolation applied) over the raw template captured in inputJson.
+  const promptText =
+    (typeof output?.prompt === 'string' && output.prompt) ||
+    pickString(input, ['prompt', 'content', 'message', 'goal']) ||
+    '';
 
   const status = mapStatus(step.status);
   const isRunning = status === 'running' || status === 'pending';

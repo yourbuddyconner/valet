@@ -1576,6 +1576,9 @@ export class PromptHandler {
                 status: "completed",
                 output: assembleAgentPromptOutput({
                   response: parseResult.value,
+                  // `content` is the resolved human prompt (interpolation applied);
+                  // not `promptToSend`, which appends schema-instruction noise.
+                  prompt: content,
                   newUsageEntries: collectNewUsageEntries(channel, usageBeforeStep),
                   model: channel.lastUsedModel,
                   durationMs: Date.now() - stepStartMs,
@@ -1590,6 +1593,7 @@ export class PromptHandler {
               status: "completed",
               output: assembleAgentPromptOutput({
                 response: recoveredResponse,
+                prompt: content,
                 newUsageEntries: collectNewUsageEntries(channel, usageBeforeStep),
                 model: channel.lastUsedModel,
                 durationMs: Date.now() - stepStartMs,

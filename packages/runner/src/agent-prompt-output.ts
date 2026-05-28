@@ -8,6 +8,13 @@
  */
 export interface AgentPromptOutput {
   response: unknown;
+  /**
+   * The RESOLVED prompt actually sent to the agent (interpolation applied,
+   * e.g. `{{loop.item}}` → `frontend`). The step's persisted `inputJson`
+   * carries the raw template; this carries what the model really saw, so the
+   * execution-page card can show the substituted text.
+   */
+  prompt: string;
   model: string | null;
   inputTokens: number;
   outputTokens: number;
@@ -23,6 +30,7 @@ export interface AgentPromptOutput {
  */
 export function assembleAgentPromptOutput(args: {
   response: unknown;
+  prompt: string;
   newUsageEntries: Iterable<{ inputTokens: number; outputTokens: number }>;
   model: string | null;
   durationMs: number;
@@ -35,6 +43,7 @@ export function assembleAgentPromptOutput(args: {
   }
   return {
     response: args.response,
+    prompt: args.prompt,
     model: args.model,
     inputTokens,
     outputTokens,
