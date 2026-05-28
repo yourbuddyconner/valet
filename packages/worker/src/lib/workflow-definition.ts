@@ -66,8 +66,15 @@ function validateStep(step: unknown, path: string, errors: string[]): void {
   }
 
   if (normalizedType === 'loop') {
-    if (typeof step.over !== 'string' || !step.over.trim()) {
-      errors.push(`${path}.over is required (string path to an array, e.g. "outputs.list")`);
+    // `over` accepts either an inline array literal OR a path string
+    // (`outputs.list` / `variables.items`). Keep in sync with the
+    // runner-side validation in packages/runner/src/workflow-compiler.ts.
+    const overIsArray = Array.isArray(step.over);
+    const overIsNonEmptyString = typeof step.over === 'string' && step.over.trim().length > 0;
+    if (!overIsArray && !overIsNonEmptyString) {
+      errors.push(
+        `${path}.over is required — either an inline array (e.g. [1,2,3]) or a string path to an array (e.g. "outputs.list" or "variables.items")`,
+      );
     }
     if (
       step.itemVar !== undefined &&

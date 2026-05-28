@@ -34,3 +34,36 @@ describe('validateWorkflowDefinition – agent_prompt.persona', () => {
     expect(result.valid).toBe(true);
   });
 });
+
+describe('validateWorkflowDefinition – loop.over', () => {
+  function loopStep(overrides: Record<string, unknown> = {}) {
+    return {
+      id: 'L',
+      type: 'loop',
+      steps: [{ id: 'inner', type: 'bash', command: 'echo hi' }],
+      ...overrides,
+    };
+  }
+  const wrap = (s: Record<string, unknown>) => ({ steps: [s] });
+
+  it('accepts an inline array as `over`', () => {
+    const result = validateWorkflowDefinition(wrap(loopStep({ over: ['a', 'b', 'c'] })));
+    expect(result.valid).toBe(true);
+    expect(result.errors).toEqual([]);
+  });
+
+  it('accepts a non-empty string path as `over`', () => {
+    const result = validateWorkflowDefinition(wrap(loopStep({ over: 'outputs.list' })));
+    expect(result.valid).toBe(true);
+  });
+
+  it('rejects an empty string `over`', () => {
+    const result = validateWorkflowDefinition(wrap(loopStep({ over: '   ' })));
+    expect(result.valid).toBe(false);
+  });
+
+  it('rejects a missing `over`', () => {
+    const result = validateWorkflowDefinition(wrap(loopStep()));
+    expect(result.valid).toBe(false);
+  });
+});
