@@ -7,6 +7,7 @@ import type {
 import type { Env } from '../env.js';
 import type { CredentialResult } from '../services/credentials.js';
 import { installedIntegrations } from './packages.js';
+import { internalIntegrations } from './internal/index.js';
 import { defaultCredentialResolver } from './resolvers/default.js';
 import { slackCredentialResolver } from './resolvers/slack.js';
 import { githubCredentialResolver } from './resolvers/github.js';
@@ -37,6 +38,9 @@ export class IntegrationRegistry {
 
   init(): void {
     for (const pkg of installedIntegrations) {
+      this.packages.set(pkg.service, pkg);
+    }
+    for (const pkg of internalIntegrations) {
       this.packages.set(pkg.service, pkg);
     }
 
