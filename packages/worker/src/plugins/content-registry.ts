@@ -1956,7 +1956,7 @@ Minimum requirement:
 - \`workflow.steps\` must be a non-empty array.
 - Each step must have \`id\` (string), \`name\` (string), and \`type\` (string).
 
-Valid step types: \`bash\`, \`tool\`, \`approval\`, \`conditional\`, \`parallel\`, \`agent\`, \`agent_message\`.
+Valid step types: \`bash\`, \`tool\`, \`agent_prompt\`, \`notify\`, \`approval\`, \`conditional\`, \`loop\`, \`parallel\`.
 
 ### \`bash\` step (preferred for shell commands)
 
@@ -1978,15 +1978,18 @@ Example:
   "name": "Run tests",
   "type": "bash",
   "command": "npm test",
-  "description": "Run the test suite"
+  "description": "Run the test suite",
+  "outputVariable": "test_results"
 }
 \`\`\`
+
+When \`outputVariable\` is set, the bash step publishes \`{stdout, stderr, exitCode, command, cwd, timeoutMs, durationMs}\` under that name. Downstream interpolation reaches into it with \`{{outputs.test_results.stdout}}\` / \`.exitCode\`.
 
 **Do NOT use \`type: "tool"\` with \`tool: "bash"\` for shell commands.** Use \`type: "bash"\` instead.
 
 ### \`tool\` step
 
-For non-bash tools only. Requires \`tool\` (string) and optionally \`arguments\` (object).
+For non-bash tools only. Requires \`tool\` (string) and optionally \`arguments\` (object). Output shape is tool-specific and persisted as-is.
 
 ### \`approval\` step
 
@@ -1997,41 +2000,110 @@ Optional fields:
 
 ### \`conditional\` step
 
-Evaluates a condition and runs \`then\` or \`else\` branch.
+Evaluates a condition and runs the \`then\` branch on truthy, \`else\` branch on falsy. The taken branch is recorded in step output as \`{condition, branch: "then"|"else"}\`.
 
-Required fields:
-- \`condition\`: Boolean value, or object like \`{ "variable": "varName", "equals": "value" }\`.
+Required:
+- \`condition\`: preferred form is a string expression. Supports comparisons (\`===\`, \`!==\`, \`==\`, \`!=\`, \`>\`, \`>=\`, \`<\`, \`<=\`), logical operators (\`&&\`, \`||\`, \`!\`), parentheses, string/number literals, and path references (\`variables.x\`, \`outputs.y.z\`, \`loop.item\`, \`loop.index\`). Tokens of the form \`{{variables.flag}}\` or \`{{outputs.x}}\` are interpolated first so authors can mix templated values with raw paths. A boolean literal is also accepted. A legacy \`{variable, equals}\` object shape is honored for backward compatibility but new workflows should use the expression form.
 
 Optional fields:
-- \`then\` (array of steps): Steps to run when condition is true.
-- \`else\` (array of steps): Steps to run when condition is false.
+- \`then\` (array of steps): Steps to run when condition is truthy.
+- \`else\` (array of steps): Steps to run when condition is falsy.
+
+Example:
+\`\`\`json
+{
+  "id": "check",
+  "name": "Tests passed?",
+  "type": "conditional",
+  "condition": "outputs.test_results.exitCode === 0",
+  "then": [{ "id": "deploy", "name": "Deploy", "type": "bash", "command": "npm run deploy" }],
+  "else": [{ "id": "notify-fail", "name": "Notify", "type": "notify", "content": "Tests failed" }]
+}
+\`\`\`
 
 ### \`parallel\` step
 
-Runs nested steps. Requires \`steps\` (array of steps).
+Runs each child in \`steps\` as its own concurrent branch (one branch per child, not all-children-per-branch). Each branch sees a snapshot of \`outputs\`/\`variables\` at parallel entry — siblings do not see each other's writes during execution. After all branches finish, new keys are merged back to the parent context (last writer wins on collision; use distinct \`outputVariable\` names across branches to avoid this).
 
-### \`agent\` step
+Required:
+- \`steps\` (array of steps): each element is one branch.
 
-Dispatches work to an AI agent.
+Status: fails if any branch fails; cancels if any branch cancels.
+
+### \`loop\` step
+
+Iterates \`steps\` over a sequence. Each iteration runs the body once with \`{{loop.item}}\` and \`{{loop.index}}\` available for interpolation. Inside an iteration \`outputVariable\` writes are namespaced to the iteration so iterations don't clobber each other's downstream-visible state.
+
+Required (one of):
+- \`over\` as a string path: \`"outputs.list"\` or \`"variables.items"\`. Must resolve to an array.
+- \`over\` as an inline array literal: \`["a", "b", "c"]\`. Useful for small fixed iterations without a setup step.
 
 Optional fields:
-- \`goal\` (string): What the agent should accomplish.
-- \`context\` (string): Additional context for the agent.
+- \`itemVar\` (string identifier): name for the per-iteration value. Defaults to \`item\`. \`{{loop.item}}\` always works regardless.
+- \`indexVar\` (string identifier): name for the per-iteration index. Defaults to \`index\`. \`{{loop.index}}\` always works regardless.
+- \`steps\` (array of steps): body executed per iteration.
 
-### \`agent_message\` step
+Failure semantics: if an iteration fails, the loop fails and outputs published by completed iterations are rolled back to the snapshot taken at loop entry. Predictable strict semantics, no half-state.
 
-Sends a message to the workflow session agent.
+Common author bugs:
+- \`over: outputs.someResult.field\` where \`field\` is a string, not an array → \`loop_over_not_array\`. Either iterate over an array (build one upstream), or replace the loop with explicit per-item steps.
+- Forgetting that \`outputVariable\` writes inside the loop are per-iteration — referencing them after the loop won't pick up "the last iteration's value" as a simple top-level key.
 
-Required: Provide message via \`content\` (preferred), or \`message\`, or \`goal\`.
+### \`agent_prompt\` step
+
+Dispatches a prompt to the workflow session's AI agent and waits for a reply. This is the primary way to call models from a workflow.
+
+**The agent has full tool access.** It runs against the sandbox's OpenCode session with the complete tool suite — read/edit files, run bash, grep, call MCP tools, invoke skills, etc. So an \`agent_prompt\` can do open-ended work, not just answer a question. A prompt like "invoke the deploy skill and follow its instructions" or "investigate the failing test and fix it" is valid and the agent will use tools to carry it out. Because the workflow session can be cloned to a repo (via repo context on the trigger/run), file and bash tools operate on that checkout.
+
+The one tool that does NOT work here is the interactive "question" tool — there's no UI for a workflow to answer. If the agent calls it, the step fails with \`agent_prompt_question_not_supported\`. Use \`outputSchema\` for structured data and \`approval\` steps for human checkpoints instead.
+
+Required (one of):
+- \`prompt\` (string), or
+- \`content\` (string), or
+- \`message\` (string), or
+- \`goal\` (string).
 
 Optional fields:
-- \`interrupt\` (boolean).
-- \`await_response\` (or \`awaitResponse\`) boolean.
-- \`await_timeout_ms\` (or \`awaitTimeoutMs\`) number, minimum 1000.
+- \`thread\` (string): named conversation thread. Multiple \`agent_prompt\` steps with the same \`thread\` share context across calls. Use \`@new\` to force a fresh, ephemeral thread that's torn down after the step (useful for loops).
+- \`persona\` (string): persona id to override the default system prompt for this single call. Fail-loud if the id doesn't resolve.
+- \`interrupt\` (boolean): aborts any in-flight OpenCode session on this thread before sending.
+- \`await_timeout_ms\` (or \`awaitTimeoutMs\`) (number): per-call timeout in ms (default 300000 = 5 min, clamped to [1000, 900000]). Bump it toward the 15-min cap for tool-heavy / open-ended prompts that legitimately run long.
+- \`outputSchema\` (object): structured-output schema. Field names map to \`{type, description}\`. When set, the agent's reply is parsed against the schema and the parsed object is the step's response payload. Without a schema, the bare reply string is the response.
+- \`outputVariable\` (string): variable name to publish the response under.
 
-Behavior:
-- Non-await mode sends a message to the current workflow session agent.
-- Await mode runs a temporary OpenCode session and returns response text in step output.
+Output shape:
+- Persisted on the step row as \`{response, model, inputTokens, outputTokens, durationMs}\`.
+- Variable publication unwraps to just the \`response\` payload, so \`{{outputs.var.field}}\` resolves directly against a structured response (e.g. \`outputs.review.verdict\`). With no schema, \`{{outputs.var}}\` is the raw string.
+
+Example with structured output:
+\`\`\`json
+{
+  "id": "review",
+  "name": "Review PR",
+  "type": "agent_prompt",
+  "prompt": "Review this PR. Return verdict + reason.",
+  "persona": "code-reviewer-v1",
+  "outputVariable": "review",
+  "outputSchema": {
+    "verdict": { "type": "string", "description": "approve | reject | needs_changes" },
+    "reason":  { "type": "string", "description": "one-line explanation" }
+  }
+}
+\`\`\`
+
+Then \`outputs.review.verdict\` and \`outputs.review.reason\` are available to downstream steps.
+
+### \`notify\` step
+
+Sends a notification message. v1 only supports the orchestrator target (delivery to the user's orchestrator session); channel routing (Slack, Telegram, etc.) is not yet implemented.
+
+Required:
+- \`content\` (string): message body. Supports \`{{...}}\` interpolation.
+
+Optional:
+- \`target\` (string): currently only \`"orchestrator"\` (the default) is supported. Other values fail with \`notify_unsupported_target\`.
+
+Output shape: \`{type: "notify", target, delivered, error?}\`. The notify card in the UI reads these fields.
 
 ### Complete workflow example
 
