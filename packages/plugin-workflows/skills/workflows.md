@@ -210,6 +210,10 @@ Common author bugs:
 
 Dispatches a prompt to the workflow session's AI agent and waits for a reply. This is the primary way to call models from a workflow.
 
+**The agent has full tool access.** It runs against the sandbox's OpenCode session with the complete tool suite — read/edit files, run bash, grep, call MCP tools, invoke skills, etc. So an `agent_prompt` can do open-ended work, not just answer a question. A prompt like "invoke the deploy skill and follow its instructions" or "investigate the failing test and fix it" is valid and the agent will use tools to carry it out. Because the workflow session can be cloned to a repo (via repo context on the trigger/run), file and bash tools operate on that checkout.
+
+The one tool that does NOT work here is the interactive "question" tool — there's no UI for a workflow to answer. If the agent calls it, the step fails with `agent_prompt_question_not_supported`. Use `outputSchema` for structured data and `approval` steps for human checkpoints instead.
+
 Required (one of):
 - `prompt` (string), or
 - `content` (string), or
@@ -220,7 +224,7 @@ Optional fields:
 - `thread` (string): named conversation thread. Multiple `agent_prompt` steps with the same `thread` share context across calls. Use `@new` to force a fresh, ephemeral thread that's torn down after the step (useful for loops).
 - `persona` (string): persona id to override the default system prompt for this single call. Fail-loud if the id doesn't resolve.
 - `interrupt` (boolean): aborts any in-flight OpenCode session on this thread before sending.
-- `await_timeout_ms` (or `awaitTimeoutMs`) (number): per-call timeout in ms (default 120000, clamped to [1000, 900000]).
+- `await_timeout_ms` (or `awaitTimeoutMs`) (number): per-call timeout in ms (default 300000 = 5 min, clamped to [1000, 900000]). Bump it toward the 15-min cap for tool-heavy / open-ended prompts that legitimately run long.
 - `outputSchema` (object): structured-output schema. Field names map to `{type, description}`. When set, the agent's reply is parsed against the schema and the parsed object is the step's response payload. Without a schema, the bare reply string is the response.
 - `outputVariable` (string): variable name to publish the response under.
 

@@ -38,6 +38,8 @@ Type-specific fields:
 - tool: { tool: string, arguments?: object }
 - agent_prompt: { prompt: string, awaitTimeoutMs?: number, interrupt?: boolean, outputSchema?: object, thread?: string }
     Use this when you want the Valet agent to do work and capture its reply. The workflow blocks until the agent responds (or awaitTimeoutMs is hit).
+    The agent has FULL TOOL ACCESS — it can read/edit files, run bash, grep, call MCP tools, and invoke skills. So agent_prompt can do open-ended work, not just answer questions. Prompts like "invoke the X skill and follow its instructions" or "investigate and fix the failing test" are valid; the agent will use tools to carry them out (against the repo checkout when repo context was provided).
+    awaitTimeoutMs defaults to 300000 (5 min) and is capped at 900000 (15 min). Raise it toward the cap for tool-heavy or open-ended prompts that legitimately run long; keep it modest for quick single-shot replies.
     Prefer outputSchema for structured output that later steps reference via \`outputs.<outputVariable>.<field>\`.
     outputSchema shape: { "<fieldName>": { "type": "string"|"number"|"boolean"|"array"|"object", "description": "what this field represents" } }
     The runner enforces the schema and retries the agent with the error if the response is invalid.

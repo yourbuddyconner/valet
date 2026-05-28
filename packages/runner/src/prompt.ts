@@ -1386,12 +1386,15 @@ export class PromptHandler {
     }
 
     const interrupt = step.interrupt === true;
+    // Default 5 minutes. agent_prompt steps can use tools and run open-ended
+    // work ("invoke this skill and follow instructions"), so a short default
+    // would cut those off. Authors can override per-step up to the 15-min cap.
     const awaitTimeoutRaw =
       typeof step.await_timeout_ms === "number"
         ? step.await_timeout_ms
         : typeof step.awaitTimeoutMs === "number"
           ? step.awaitTimeoutMs
-          : 120_000;
+          : 300_000;
     const awaitTimeoutMs = Math.max(1_000, Math.min(awaitTimeoutRaw, 900_000));
     const previousChannel = this.currentPromptChannel;
     const stepStartMs = Date.now();
