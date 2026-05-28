@@ -12,7 +12,8 @@ import { useDrawer } from '@/routes/sessions/$sessionId';
 import type { ChildSessionEvent, ConnectedUser } from '@/hooks/use-chat';
 import type { ChildSessionSummary } from '@/api/types';
 import { MessageCopyButton } from './message-copy-button';
-import { useSessionFeed, type FeedItem } from '@/hooks/use-session-feed';
+import { useSessionFeed, buildChatRenderPlan } from '@/hooks/use-session-feed';
+import { WorkflowStepContainer } from './workflow-step-container';
 import { WorkflowStepCard } from '@/components/workflows/step-cards';
 
 type AgentStatus = 'idle' | 'thinking' | 'tool_calling' | 'streaming' | 'error' | 'queued';
@@ -56,35 +57,6 @@ function groupIntoTurns(messages: Message[]): MessageTurn[] {
   return turns;
 }
 
-/**
- * The render plan interleaves chat turns and workflow step cards in
- * timestamp order. Runs of consecutive chat messages get bundled into
- * MessageTurn[] (so groupIntoTurns can keep its existing semantics);
- * each step row becomes its own item.
- */
-type RenderPlanItem =
-  | { kind: 'turns'; turns: MessageTurn[] }
-  | { kind: 'step'; step: ExecutionStepTrace };
-
-function buildRenderPlan(feed: FeedItem[]): RenderPlanItem[] {
-  const out: RenderPlanItem[] = [];
-  let run: Message[] = [];
-  const flushRun = () => {
-    if (run.length === 0) return;
-    out.push({ kind: 'turns', turns: groupIntoTurns(run) });
-    run = [];
-  };
-  for (const item of feed) {
-    if (item.kind === 'message') {
-      run.push(item.message);
-    } else {
-      flushRun();
-      out.push({ kind: 'step', step: item.step });
-    }
-  }
-  flushRun();
-  return out;
-}
 
 export function MessageList({ messages, workflowSteps, isAgentThinking, agentStatus, agentStatusDetail, onRevert, childSessionEvents, childSessions, connectedUsers }: MessageListProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -113,7 +85,27 @@ export function MessageList({ messages, workflowSteps, isAgentThinking, agentSta
   }, []);
 
   const feed = useSessionFeed(messages, workflowSteps);
-  const renderPlan = useMemo(() => buildRenderPlan(feed), [feed]);
+  const renderPlan = useMemo(() => buildChatRenderPlan(feed), [feed]);
+
+  // Render a run of messages via the existing turn grouping. Shared between
+  // plain chat runs and the body of a workflow step container, so both render
+  // user prompts and assistant turns identically.
+  const renderMessageRun = useCallback(
+    (msgs: Message[]) =>
+      groupIntoTurns(msgs).map((turn) =>
+        turn.type === 'standalone' ? (
+          <MessageItem
+            key={turn.messages[0].id}
+            message={turn.messages[0]}
+            onRevert={onRevert}
+            connectedUsers={connectedUsers}
+          />
+        ) : (
+          <AssistantTurn key={turn.messages[0].id} message={turn.messages[0]} />
+        ),
+      ),
+    [onRevert, connectedUsers],
+  );
   // Feed length drives initial-scroll and auto-scroll so workflow-only updates
   // (no new chat message) still pin the latest card to the viewport.
   const feedLength = feed.length;
@@ -181,25 +173,22 @@ export function MessageList({ messages, workflowSteps, isAgentThinking, agentSta
                   />
                 );
               }
-              return item.turns.map((turn) => {
-                if (turn.type === 'standalone') {
-                  const msg = turn.messages[0];
-                  return (
-                    <MessageItem
-                      key={msg.id}
-                      message={msg}
-                      onRevert={onRevert}
-                      connectedUsers={connectedUsers}
-                    />
-                  );
-                }
+              if (item.kind === 'step-container') {
                 return (
-                  <AssistantTurn
-                    key={turn.messages[0].id}
-                    message={turn.messages[0]}
+                  <WorkflowStepContainer
+                    key={`container-${item.stepKey}`}
+                    step={item.step}
+                    messages={item.messages}
+                    renderMessages={renderMessageRun}
                   />
                 );
-              }) ?? <span key={`empty-${idx}`} />;
+              }
+              // kind === 'messages': a run of plain chat messages.
+              return (
+                <div key={`messages-${idx}`} className="contents">
+                  {renderMessageRun(item.messages)}
+                </div>
+              );
             })}
             {/* Child session cards */}
             {childSessionEvents && childSessionEvents.length > 0 && (
