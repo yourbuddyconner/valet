@@ -57,10 +57,34 @@ export function useExecutionStepEvents(
       const parsed = parseStepEventMessage(msg);
       if (!parsed) return;
       if (parsed.executionId !== executionId) return;
+
+      const kind = parsed.event.kind;
+
+      // approval.* events change EXECUTION-level state (status -> waiting_approval,
+      // resumeToken set/cleared). useExecution polls every 2.5s as a backstop, but
+      // the approval gate is the one transition where latency is most visible —
+      // invalidate immediately so the approve/deny buttons appear without waiting
+      // for the next poll tick.
+      if (kind === 'approval.required' || kind === 'approval.approved' || kind === 'approval.denied') {
+        qc.invalidateQueries({ queryKey: executionKeys.detail(executionId) });
+      }
+
+      let applied = false;
       qc.setQueryData<GetExecutionStepsResponse | undefined>(
         executionKeys.steps(executionId),
-        (prev) => mergeStepEvent(prev, parsed.event),
+        (prev) => {
+          const result = mergeStepEvent(prev, parsed.event);
+          applied = result.applied;
+          return result.data;
+        },
       );
+
+      // The event referenced a step we don't have a row for yet. Rather than
+      // wait up to one 2.5s poll cycle (visible latency, especially for the
+      // approval gate), poke the steps query to refetch now.
+      if (!applied) {
+        qc.invalidateQueries({ queryKey: executionKeys.steps(executionId) });
+      }
     },
   });
 }
@@ -114,23 +138,25 @@ function parseStepEventMessage(
   };
 }
 
+interface MergeResult {
+  /** True when the event matched an existing row and was applied in-place. */
+  applied: boolean;
+  data: GetExecutionStepsResponse;
+}
+
 function mergeStepEvent(
   prev: GetExecutionStepsResponse | undefined,
   ev: StepEventMessage['event'],
-): GetExecutionStepsResponse {
+): MergeResult {
   const steps = prev?.steps ?? [];
   const idx = steps.findIndex(
     (s) => s.stepId === ev.stepId && s.attempt === ev.attempt,
   );
   if (idx < 0) {
-    // The server doesn't have a row for this (stepId, attempt) yet. We could
-    // fabricate an optimistic row, but the 2.5s useExecutionSteps poll would
-    // overwrite our optimistic data anyway — and any events that arrive while
-    // the poll is in flight would be silently dropped. Instead, wait for the
-    // server to acknowledge the step. Trade-off: a step event arriving before
-    // the server has persisted the row is delayed up to one poll cycle
-    // (~2.5s). Acceptable for the simpler, more predictable state.
-    return prev ?? { steps: [] };
+    // No row for this (stepId, attempt) yet. We don't fabricate an optimistic
+    // row (the poll would race it); instead the caller invalidates the steps
+    // query so it refetches promptly. Report applied=false.
+    return { applied: false, data: prev ?? { steps: [] } };
   }
 
   const existing = steps[idx];
@@ -152,7 +178,7 @@ function mergeStepEvent(
 
   const next = [...steps];
   next[idx] = updated;
-  return { steps: next };
+  return { applied: true, data: { steps: next } };
 }
 
 function mapKindToStatus(kind: StepEventMessage['event']['kind']): string {

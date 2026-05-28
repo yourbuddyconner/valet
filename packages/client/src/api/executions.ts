@@ -139,6 +139,17 @@ export function useExecution(executionId: string) {
     queryKey: executionKeys.detail(executionId),
     queryFn: () => api.get<GetExecutionResponse>(`/executions/${executionId}`),
     enabled: !!executionId,
+    // Poll while the run is in flight so the header (status, resumeToken for
+    // the approve/deny buttons) tracks state transitions — waiting_approval,
+    // resume, completion. Stop once terminal. The step-events WS also pokes
+    // an immediate invalidation on approval.* for low-latency approval UI;
+    // this poll is the backstop for every other transition.
+    refetchInterval: (query) => {
+      const status = query.state.data?.execution?.status;
+      const terminal = status === 'completed' || status === 'failed' || status === 'cancelled';
+      return terminal ? false : 2500;
+    },
+    refetchIntervalInBackground: false,
   });
 }
 
