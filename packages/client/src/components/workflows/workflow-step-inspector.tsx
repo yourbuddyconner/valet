@@ -209,10 +209,12 @@ function TypeSpecificFields({
       return (
         <>
           <TextField
-            label="Over (array path)"
-            value={step.over ?? ''}
-            placeholder="e.g. outputs.prs.failed or variables.targetUsers"
-            onChange={(v) => onChange({ over: v || undefined })}
+            label="Over (array path or inline array)"
+            value={
+              Array.isArray(step.over) ? JSON.stringify(step.over) : (step.over ?? '')
+            }
+            placeholder='e.g. outputs.prs.failed or ["a","b","c"]'
+            onChange={(v) => onChange({ over: parseOverField(v) })}
             mono
           />
           <TextField
@@ -783,4 +785,24 @@ function safeStringify(v: unknown): string {
   } catch {
     return String(v);
   }
+}
+
+/**
+ * Parse the loop `over` text field into the value stored on the step.
+ * Accepts both forms: a JSON array literal (`["a","b"]`) stored as an array,
+ * or a path string (`outputs.x`) stored as-is. Empty → undefined.
+ */
+function parseOverField(input: string): string | unknown[] | undefined {
+  const trimmed = input.trim();
+  if (!trimmed) return undefined;
+  if (trimmed.startsWith('[')) {
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (Array.isArray(parsed)) return parsed;
+    } catch {
+      // Not valid JSON yet (user mid-type) — fall through and store the raw
+      // string so the field stays editable. Validation catches a bad final value.
+    }
+  }
+  return trimmed;
 }

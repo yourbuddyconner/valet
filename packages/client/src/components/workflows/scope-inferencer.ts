@@ -62,6 +62,19 @@ function stepOutputField(step: WorkflowStep): ScopeField {
  * supported in v1 because template authors write `outputs.foo.bar`, not
  * `outputs.foo[0]`.
  */
+/** Map a literal JS value to a ScopeFieldType. Used for inline-array loop items. */
+function scopeTypeOf(value: unknown): ScopeFieldType {
+  if (value === null || value === undefined) return 'unknown';
+  if (Array.isArray(value)) return 'array';
+  switch (typeof value) {
+    case 'string': return 'string';
+    case 'number': return 'number';
+    case 'boolean': return 'boolean';
+    case 'object': return 'object';
+    default: return 'unknown';
+  }
+}
+
 function walkField(field: ScopeField, segments: string[]): ScopeField | null {
   let current: ScopeField = field;
   for (const seg of segments) {
@@ -203,11 +216,15 @@ function walkStep(
     if (ctx.loop) scopeAtLoop.loop = ctx.loop;
 
     let itemField: ScopeField = { type: 'unknown' };
-    if (step.over) {
+    if (typeof step.over === 'string' && step.over) {
+      // Path form: resolve against scope and read the array's element type.
       const resolved = resolveScopePath(scopeAtLoop, step.over);
       if (resolved && resolved.type === 'array' && resolved.item) {
         itemField = resolved.item;
       }
+    } else if (Array.isArray(step.over) && step.over.length > 0) {
+      // Inline-array form: infer the item type from the literal's first element.
+      itemField = { type: scopeTypeOf(step.over[0]) };
     }
     const indexField: ScopeField = { type: 'number' };
 
