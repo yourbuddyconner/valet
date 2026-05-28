@@ -6211,6 +6211,27 @@ export class SessionAgentDO {
         return;
       }
 
+      // ─── Workflow-session guard ────────────────────────────────────────
+      // Workflow sessions must not manage workflows or their triggers — doing so
+      // risks modifying or deleting the workflow that spawned the session mid-run.
+      // This mirrors the `denyInWorkflowSession` check in the baked opencode tool files.
+      const colonIdx = toolId.indexOf(':');
+      const toolService = colonIdx !== -1 ? toolId.slice(0, colonIdx) : '';
+      const isWorkflowSession =
+        (this.sessionState.spawnRequest as { envVars?: Record<string, string> } | undefined)
+          ?.envVars?.IS_WORKFLOW_SESSION === 'true';
+      if (toolService === 'workflows' && isWorkflowSession) {
+        this.runnerLink.send({
+          type: 'call-tool-result',
+          requestId,
+          error:
+            `Tool \`${toolId}\` is disabled inside workflow sessions. ` +
+            `Workflow sessions cannot modify the workflow that spawned them or its triggers. ` +
+            `Ask the user via the orchestrator session instead.`,
+        } as any);
+        return;
+      }
+
       // Resolve policy (validates toolId, checks disabled status, resolves risk level)
       const policyResult = await resolveActionPolicy(this.appDb, this.env.DB, this.env, userId, toolId, params, {
         sessionId: sessionId || '',

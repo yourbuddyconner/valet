@@ -1738,4 +1738,66 @@ describe('SessionAgentDO', () => {
     );
     expect(broadcasts.filter((m) => m.type === 'agentStatus')).toHaveLength(0);
   });
+
+  describe('handleCallTool — workflow-session guard', () => {
+    it('sends call-tool-result error and returns early when session is a workflow session and toolId is workflows:*', async () => {
+      const { agent } = await createTestAgent();
+
+      // Mark the session as a workflow session via spawnRequest envVars
+      (agent as any).sessionState.set(
+        'spawnRequest',
+        JSON.stringify({ envVars: { IS_WORKFLOW_SESSION: 'true' } }),
+      );
+
+      // Capture runnerLink.send calls
+      const sent: unknown[] = [];
+      (agent as any).runnerLink.send = vi.fn((msg: unknown) => { sent.push(msg); return true; });
+
+      // Also spy on resolveActionPolicy to confirm it is NOT called
+      const resolveActionPolicySpy = vi.fn();
+      // Patch it on the module level via the agent's prototype context — since
+      // the guard fires before the policy call, we just confirm sent has the error.
+
+      await (agent as any).handleCallTool('req-123', 'workflows:sync_workflow', {});
+
+      expect(sent).toHaveLength(1);
+      const result = sent[0] as Record<string, unknown>;
+      expect(result.type).toBe('call-tool-result');
+      expect(result.requestId).toBe('req-123');
+      expect(typeof result.error).toBe('string');
+      expect((result.error as string)).toMatch(/workflow session/i);
+    });
+
+    it('does NOT block workflows:* calls when the session is not a workflow session', async () => {
+      const { agent } = await createTestAgent();
+
+      // No IS_WORKFLOW_SESSION in spawnRequest (normal interactive session)
+      (agent as any).sessionState.set(
+        'spawnRequest',
+        JSON.stringify({ envVars: {} }),
+      );
+
+      const sent: unknown[] = [];
+      (agent as any).runnerLink.send = vi.fn((msg: unknown) => { sent.push(msg); return true; });
+
+      // This call will proceed past the guard and hit resolveActionPolicy which
+      // will fail with a DB error — that's fine; we only care that the guard
+      // did NOT fire a call-tool-result with a workflow-session error message.
+      try {
+        await (agent as any).handleCallTool('req-456', 'workflows:sync_workflow', {});
+      } catch {
+        // Expected — no real DB
+      }
+
+      // If the guard fired, sent[0].error would contain 'workflow session'.
+      // A non-guard error (from policy resolution) is acceptable here.
+      const guardFired = sent.some(
+        (m) =>
+          (m as Record<string, unknown>).type === 'call-tool-result' &&
+          typeof (m as Record<string, unknown>).error === 'string' &&
+          ((m as Record<string, unknown>).error as string).match(/workflow session/i),
+      );
+      expect(guardFired).toBe(false);
+    });
+  });
 });
