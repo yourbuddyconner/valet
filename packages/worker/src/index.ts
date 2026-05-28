@@ -79,6 +79,12 @@ import {
   sha256Hex,
 } from './lib/workflow-runtime.js';
 import { syncPluginsOnce } from './services/plugin-sync.js';
+import { integrationRegistry } from './integrations/registry.js';
+import { registerInternalIntegrations } from './integrations/internal/index.js';
+
+// Register worker-internal integration packages (workflows, etc.). Done here at the
+// composition root so registry.ts doesn't import worker services (avoids an import cycle).
+registerInternalIntegrations(integrationRegistry);
 
 // Durable Object exports
 export { SessionAgentDO } from './durable-objects/session-agent.js';

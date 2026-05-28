@@ -2,40 +2,23 @@ import { z } from 'zod';
 import type { ActionDefinition, ActionSource, ActionContext, ActionResult } from '@valet/sdk';
 import type { AppDb } from '../../../lib/drizzle.js';
 import type { Env } from '../../../env.js';
-
-// All worker-service imports are deferred to avoid circular dependencies:
-// lib/db.js → db/workflows.ts → workflow-runtime.ts → services/orchestrator.ts
-//   → env-assembly.ts → services/credentials.ts → integrations/registry.ts → (here)
-// During registry module initialization, this file must not trigger that chain.
-type DbModule = typeof import('../../../lib/db.js');
-type WorkflowService = typeof import('../../../services/workflows.js');
-type TriggerService = typeof import('../../../services/triggers.js');
-type SessionWorkflows = typeof import('../../../services/session-workflows.js');
-
-async function getDb(): Promise<DbModule> {
-  return import('../../../lib/db.js');
-}
-async function getWorkflowService(): Promise<WorkflowService> {
-  return import('../../../services/workflows.js');
-}
-async function getTriggerService(): Promise<TriggerService> {
-  return import('../../../services/triggers.js');
-}
-async function getSessionWorkflows(): Promise<SessionWorkflows> {
-  return import('../../../services/session-workflows.js');
-}
-
-// ─── Pure local helpers ───────────────────────────────────────────────────────
-
-/** Inline copy of parseJsonObject from lib/db/workflows.ts (avoids the static import chain). */
-function parseJsonSafe(raw: string): Record<string, unknown> {
-  try {
-    const parsed = JSON.parse(raw) as Record<string, unknown>;
-    return parsed && typeof parsed === 'object' ? parsed : {};
-  } catch {
-    return {};
-  }
-}
+import {
+  listWorkflows,
+  getWorkflowByIdOrSlug,
+  getWorkflowOwnerCheck,
+  listWorkflowProposals,
+  parseJsonObject as parseJsonObjectDb,
+} from '../../../lib/db.js';
+import * as workflowService from '../../../services/workflows.js';
+import * as triggerService from '../../../services/triggers.js';
+import * as executionService from '../../../services/executions.js';
+import {
+  workflowRun,
+  handleTriggerAction,
+  handleExecutionAction,
+  workflowExecutions,
+  normalizeWorkflowRow,
+} from '../../../services/session-workflows.js';
 
 // ─── Internal context narrowing ───────────────────────────────────────────────
 
@@ -60,7 +43,7 @@ function normalizeProposal(row: Record<string, unknown>) {
     executionId: row.execution_id,
     proposedBySessionId: row.proposed_by_session_id,
     baseWorkflowHash: row.base_workflow_hash,
-    proposal: parseJsonSafe(typeof row.proposal_json === 'string' ? row.proposal_json : ''),
+    proposal: parseJsonObjectDb(typeof row.proposal_json === 'string' ? row.proposal_json : ''),
     diffText: row.diff_text,
     status: row.status,
     reviewNotes: row.review_notes,
@@ -456,18 +439,6 @@ export const workflowsActions: ActionSource = {
     const { db, env } = internalOf(ctx);
     const userId = ctx.userId;
     const p = params as Record<string, unknown>;
-
-    // Resolve all worker-service modules lazily to avoid the circular import chain:
-    // lib/db.js → db/workflows.ts → workflow-runtime.ts → services/orchestrator.ts
-    //   → env-assembly.ts → services/credentials.ts → integrations/registry.ts → (this file)
-    const [dbMod, workflowService, triggerService, sessionWorkflows] = await Promise.all([
-      getDb(),
-      getWorkflowService(),
-      getTriggerService(),
-      getSessionWorkflows(),
-    ]);
-    const { listWorkflows, getWorkflowByIdOrSlug, getWorkflowOwnerCheck, listWorkflowProposals } = dbMod;
-    const { workflowRun, handleTriggerAction, handleExecutionAction, workflowExecutions, normalizeWorkflowRow } = sessionWorkflows;
 
     try {
       switch (actionId) {
