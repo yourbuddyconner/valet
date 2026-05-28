@@ -48,6 +48,9 @@ export interface ActionContext {
   attribution?: { name: string; email: string };
   /** Org-level guard configuration, passed by the worker at execution time. */
   guardConfig?: Record<string, unknown>;
+  /** Present only for internal providers. Opaque worker-side data handle
+   *  ({ db, env }); cast to concrete types inside the worker action source. */
+  internal?: { db: unknown; env: unknown };
 }
 
 /** Result of executing an action. */
@@ -101,6 +104,9 @@ export interface IntegrationProvider {
   /** Base URL of the MCP server (e.g. 'https://mcp.notion.com').
    *  When set, uses MCP OAuth (dynamic client registration + PKCE) instead of env-var OAuth. */
   readonly mcpServerUrl?: string;
+  /** Worker-internal provider: no credentials; receives a worker-side data handle.
+   *  Internal services are always listable and skip credential resolution. */
+  readonly internal?: boolean;
 
   validateCredentials(credentials: IntegrationCredentials): boolean;
   testConnection(credentials: IntegrationCredentials): Promise<boolean>;
