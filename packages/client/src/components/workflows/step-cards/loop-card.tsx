@@ -7,7 +7,12 @@ import type { TimelineNode, WorkflowStepCardProps } from './index';
 export function LoopCard({ step, children = [], open, onOpenChange, workflowDef }: WorkflowStepCardProps) {
   const iterations = useMemo(() => groupByIteration(step.stepId, children), [step.stepId, children]);
   const iterNumbers = Object.keys(iterations).map(Number).sort((a, b) => a - b);
-  const [activeIter, setActiveIter] = useState<number | 'all'>(iterNumbers[0] ?? 0);
+  // Default to the "all" tab (when there's more than one iteration) so every
+  // iteration's steps are visible without clicking through tabs. Single-
+  // iteration loops just show that one.
+  const [activeIter, setActiveIter] = useState<number | 'all'>(
+    iterNumbers.length > 1 ? 'all' : (iterNumbers[0] ?? 0),
+  );
   const status = mapStatus(step.status);
 
   const renderedChildren =
