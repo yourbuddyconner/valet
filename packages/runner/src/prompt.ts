@@ -3883,11 +3883,24 @@ export class PromptHandler {
         }
       }
 
-      // Workflow agent_prompt steps run on ephemeral sessions but should ALSO
-      // stream a live assistant turn into the session chat (text + tool calls),
-      // grouped under the step. Reuse the interactive streaming handlers
-      // (gated on channel.activeMessageId, set by executeWorkflowAgentStep).
-      if (mappedChannel?.workflowStepContext && mappedChannel.activeMessageId) {
+      // Workflow agent_prompt steps should stream a live assistant turn into the
+      // session chat (text + tool calls), grouped under the step. Reuse the
+      // interactive streaming handlers (gated on activeMessageId, set by
+      // executeWorkflowAgentStep).
+      //
+      // CRITICAL: only do this for genuinely-ephemeral sessions
+      // (eventSessionId !== this.sessionId). When a workflow thread adopted the
+      // MAIN session, the `eventSessionId !== this.sessionId` early-return below
+      // does NOT fire, so the event also flows through the main switch — which
+      // already streams the turn. Streaming here too would double-process the
+      // event (garbled / interleaved text). ensureTurnCreated reads
+      // workflowStepContext regardless of which path calls it, so the main-switch
+      // path still carries the back-pointers.
+      if (
+        eventSessionId !== this.sessionId &&
+        mappedChannel?.workflowStepContext &&
+        mappedChannel.activeMessageId
+      ) {
         if (event.type === "message.part.updated") {
           this.handlePartUpdated(props, mappedChannel);
         } else if (event.type === "message.part.delta") {
