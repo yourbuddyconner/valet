@@ -13,6 +13,11 @@ export function FilesDrawer({ sessionId }: FilesDrawerProps) {
   const { data: session } = useSession(sessionId);
   const initialFilePath = pendingFilePath;
   const isHibernated = session?.status === 'hibernated';
+  const isRestoring = session?.status === 'restoring' || session?.status === 'waiting_runner';
+  const showPlaceholder = isHibernated || isRestoring;
+  const placeholderText = isHibernated
+    ? 'Session is hibernated — send a message to wake'
+    : 'Session is waking up...';
 
   return (
     <div className="flex h-full min-w-0 flex-col overflow-hidden bg-neutral-50 dark:bg-neutral-900">
@@ -32,11 +37,11 @@ export function FilesDrawer({ sessionId }: FilesDrawerProps) {
       </div>
       {!isMobile && <div className="flex h-8 shrink-0 items-center border-b border-neutral-100 dark:border-neutral-800/50" />}
 
-      {/* File browser or hibernate message */}
-      {isHibernated ? (
+      {/* File browser or status message */}
+      {showPlaceholder ? (
         <div className="flex flex-1 items-center justify-center">
           <p className="font-mono text-[11px] text-neutral-500 dark:text-neutral-400">
-            Session is hibernated — send a message to wake
+            {placeholderText}
           </p>
         </div>
       ) : (

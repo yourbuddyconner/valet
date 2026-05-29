@@ -3,7 +3,7 @@ import { useNavigate, useRouter } from '@tanstack/react-router';
 import { useQueryClient } from '@tanstack/react-query';
 import { useChat } from '@/hooks/use-chat';
 import type { IntegrationAuthError } from '@/hooks/use-chat';
-import { useSession, useSessionGitState, useUpdateSessionTitle, useSessionChildren } from '@/api/sessions';
+import { useSession, useSessionGitState, useUpdateSessionTitle, useSessionChildren, useWakeSession } from '@/api/sessions';
 import { useActiveThread, useCreateThread } from '@/api/threads';
 import { useDrawer } from '@/hooks/use-drawer';
 import { MessageList } from './message-list';
@@ -82,6 +82,7 @@ export function ChatContainer({ sessionId, routeSessionId, initialThreadId, init
   const { data: gitState } = useSessionGitState(sessionId);
   const { data: childSessions } = useSessionChildren(sessionId);
   const updateTitle = useUpdateSessionTitle();
+  const wakeMutation = useWakeSession();
   const drawer = useDrawer();
   const authUser = useAuthStore((s) => s.user);
   const {
@@ -191,6 +192,10 @@ export function ChatContainer({ sessionId, routeSessionId, initialThreadId, init
   );
 
   const handleNewThread = useCallback(async () => {
+    // Wake session if hibernated — user clearly intends to interact
+    if (sessionId && sessionStatus === 'hibernated' && !wakeMutation.isPending) {
+      wakeMutation.mutate(sessionId);
+    }
     try {
       const thread = await createThread.mutateAsync();
       selectThread(thread.id);
@@ -198,7 +203,7 @@ export function ChatContainer({ sessionId, routeSessionId, initialThreadId, init
     } catch (err) {
       console.error('[ChatContainer] Failed to create thread:', err);
     }
-  }, [createThread, selectThread]);
+  }, [createThread, selectThread, sessionId, sessionStatus, wakeMutation]);
 
   // When switching to a thread, eagerly load its messages from the server.
   // This handles past threads whose messages were purged from the DO after restart.

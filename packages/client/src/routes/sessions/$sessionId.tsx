@@ -3,6 +3,7 @@ import { createFileRoute, Outlet } from '@tanstack/react-router';
 import { Panel, Group as PanelGroup, Separator as PanelResizeHandle } from 'react-resizable-panels';
 import { useSession } from '@/api/sessions';
 import { useIsMobile } from '@/hooks/use-is-mobile';
+import { useSessionWakeIntent } from '@/hooks/use-session-wake-intent';
 import { DrawerCtx } from '@/hooks/use-drawer';
 import type { DrawerPanel, DrawerContextValue, SessionOverlay } from '@/hooks/use-drawer';
 import type { LogEntry, ConnectedUser } from '@/hooks/use-chat';
@@ -72,6 +73,8 @@ function SessionLayout() {
   const { sessionId } = Route.useParams();
   const { data: session } = useSession(sessionId);
   const isMobile = useIsMobile();
+  // Wake hibernated session on mount, visibility return, and panel interactions
+  const signalWakeIntent = useSessionWakeIntent(sessionId, session?.status);
   const [activePanel, setActivePanel] = useState<DrawerPanel>(loadDrawerState);
   const [logEntries, setLogEntries] = useState<LogEntry[]>([]);
   const [overlay, setOverlay] = useState<SessionOverlay>(null);
@@ -87,34 +90,40 @@ function SessionLayout() {
   });
 
   const openVscode = useCallback(() => {
+    signalWakeIntent();
     setActivePanel('vscode');
     saveDrawerState('vscode');
-  }, []);
+  }, [signalWakeIntent]);
 
   const openDesktop = useCallback(() => {
+    signalWakeIntent();
     setActivePanel('desktop');
     saveDrawerState('desktop');
-  }, []);
+  }, [signalWakeIntent]);
 
   const openTerminal = useCallback(() => {
+    signalWakeIntent();
     setActivePanel('terminal');
     saveDrawerState('terminal');
-  }, []);
+  }, [signalWakeIntent]);
 
   const openFiles = useCallback(() => {
+    signalWakeIntent();
     setActivePanel('files');
     saveDrawerState('files');
-  }, []);
+  }, [signalWakeIntent]);
 
   const openReview = useCallback(() => {
+    signalWakeIntent();
     setActivePanel('review');
     saveDrawerState('review');
-  }, []);
+  }, [signalWakeIntent]);
 
   const openLogs = useCallback(() => {
+    signalWakeIntent();
     setActivePanel('logs');
     saveDrawerState('logs');
-  }, []);
+  }, [signalWakeIntent]);
 
   const closeDrawer = useCallback(() => {
     setActivePanel(null);
@@ -122,52 +131,58 @@ function SessionLayout() {
   }, []);
 
   const toggleVscode = useCallback(() => {
+    signalWakeIntent();
     setActivePanel((prev) => {
       const next = prev === 'vscode' ? null : 'vscode';
       saveDrawerState(next);
       return next;
     });
-  }, []);
+  }, [signalWakeIntent]);
 
   const toggleDesktop = useCallback(() => {
+    signalWakeIntent();
     setActivePanel((prev) => {
       const next = prev === 'desktop' ? null : 'desktop';
       saveDrawerState(next);
       return next;
     });
-  }, []);
+  }, [signalWakeIntent]);
 
   const toggleTerminal = useCallback(() => {
+    signalWakeIntent();
     setActivePanel((prev) => {
       const next = prev === 'terminal' ? null : 'terminal';
       saveDrawerState(next);
       return next;
     });
-  }, []);
+  }, [signalWakeIntent]);
 
   const toggleFiles = useCallback(() => {
+    signalWakeIntent();
     setActivePanel((prev) => {
       const next = prev === 'files' ? null : 'files';
       saveDrawerState(next);
       return next;
     });
-  }, []);
+  }, [signalWakeIntent]);
 
   const toggleReview = useCallback(() => {
+    signalWakeIntent();
     setActivePanel((prev) => {
       const next = prev === 'review' ? null : 'review';
       saveDrawerState(next);
       return next;
     });
-  }, []);
+  }, [signalWakeIntent]);
 
   const toggleLogs = useCallback(() => {
+    signalWakeIntent();
     setActivePanel((prev) => {
       const next = prev === 'logs' ? null : 'logs';
       saveDrawerState(next);
       return next;
     });
-  }, []);
+  }, [signalWakeIntent]);
 
   const toggleSidebar = useCallback(() => {
     if (isMobile) {

@@ -25,7 +25,12 @@ export function EditorDrawer({ sessionId, activeTab }: EditorDrawerProps) {
   const token = tokenData?.token;
   const panelsLoading = sessionLoading || tokenLoading;
   const isHibernated = session?.status === 'hibernated';
-  const hibernateMessage = isHibernated ? 'Session is hibernated — send a message to wake' : undefined;
+  const isRestoring = session?.status === 'restoring' || session?.status === 'waiting_runner';
+  const hibernateMessage = isHibernated
+    ? 'Session is hibernated — send a message to wake'
+    : isRestoring
+      ? 'Session is waking up...'
+      : undefined;
 
   return (
     <div className="flex h-full flex-col">

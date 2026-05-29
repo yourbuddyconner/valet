@@ -123,13 +123,24 @@ export interface ChildSessionSummaryWithRuntime extends ChildSessionSummary {
   tunnels?: Array<{ name: string; url?: string; path?: string; port?: number; protocol?: string }>;
 }
 
+/** Statuses where the session is mid-transition and we should poll aggressively. */
+const TRANSITIONAL_STATUSES = new Set([
+  'initializing', 'restoring', 'waiting_runner', 'recovering', 'hibernating',
+]);
+
+function sessionRefetchInterval(query: { state: { data?: SessionDetailResponse } }): number {
+  const status = query.state.data?.session?.status;
+  if (status && TRANSITIONAL_STATUSES.has(status)) return 3_000;
+  return 15_000;
+}
+
 export function useSession(sessionId: string) {
   return useQuery({
     queryKey: sessionKeys.detail(sessionId),
     queryFn: () => api.get<SessionDetailResponse>(`/sessions/${sessionId}`),
     enabled: !!sessionId,
     select: (data) => data.session,
-    refetchInterval: 15_000,
+    refetchInterval: sessionRefetchInterval,
   });
 }
 
@@ -139,7 +150,7 @@ export function useSessionDoStatus(sessionId: string) {
     queryFn: () => api.get<SessionDetailResponse>(`/sessions/${sessionId}`),
     enabled: !!sessionId,
     select: (data) => data.doStatus,
-    refetchInterval: 15_000,
+    refetchInterval: sessionRefetchInterval,
   });
 }
 
@@ -188,7 +199,7 @@ export function useDeleteSession() {
 
 export function useSessionToken(sessionId: string) {
   const { data: session } = useSession(sessionId);
-  const isStarting = !session || session.status === 'initializing' || session.status === 'waiting_runner' || session.status === 'recovering';
+  const isStarting = !session || session.status === 'initializing' || session.status === 'waiting_runner' || session.status === 'recovering' || session.status === 'restoring';
 
   return useQuery({
     queryKey: [...sessionKeys.detail(sessionId), 'token'] as const,
@@ -265,7 +276,22 @@ export function useWakeSession() {
     mutationFn: (sessionId: string) =>
       api.post<{ status: string; message: string }>(`/sessions/${sessionId}/wake`),
     onSuccess: (_, sessionId) => {
-      queryClient.invalidateQueries({ queryKey: sessionKeys.detail(sessionId) });
+      // Optimistically update the cached session status to 'restoring' so that
+      // drawer components (Files, Terminal, VS Code) immediately stop showing
+      // the "hibernated" message. The transitional status also triggers fast
+      // polling (3s) on useSession, ensuring we pick up the real status quickly.
+      queryClient.setQueryData(
+        sessionKeys.detail(sessionId),
+        (old: { session: Record<string, unknown>; doStatus: Record<string, unknown> } | undefined) => {
+          if (!old) return old;
+          return { ...old, session: { ...old.session, status: 'restoring' } };
+        },
+      );
+      // Invalidate the sandbox token — old token/tunnel URLs are from the
+      // pre-hibernation sandbox and won't work for the new one.
+      queryClient.invalidateQueries({
+        queryKey: [...sessionKeys.detail(sessionId), 'token'],
+      });
     },
   });
 }
