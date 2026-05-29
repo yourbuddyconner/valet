@@ -213,7 +213,10 @@ export class McpClient {
   /**
    * Ensure the session is initialized for this token.
    * MCP Streamable HTTP spec requires initialize before other methods.
-   * Falls back to no-session mode if initialize fails (some servers don't require it).
+   * Falls back to no-session mode only when the server clearly does not
+   * support the initialize handshake (404, 501, or JSON-RPC method-not-found).
+   * All other initialization errors are propagated so the caller sees the real
+   * failure instead of a confusing "Session Key missing" from a later request.
    */
   private async ensureInitialized(token?: string): Promise<string | null> {
     // Key on service name — sessions are server-side and survive token rotation.
@@ -258,13 +261,19 @@ export class McpClient {
         throw err;
       }
 
-      console.warn(
-        `[McpClient] ${this.serviceName} initialize failed, falling back to no-session mode:`,
-        err instanceof Error ? err.message : String(err),
-      );
-      // Cache null so we don't retry initialization on every call
-      this.sessions.set(cacheKey, null);
-      return null;
+      // Only fall back to no-session mode when the server clearly doesn't
+      // support the initialize method. For all other errors (auth, network,
+      // server errors), propagate so the caller sees the real failure.
+      if (isInitializeNotSupported(err)) {
+        console.warn(
+          `[McpClient] ${this.serviceName} initialize not supported, falling back to no-session mode:`,
+          err instanceof Error ? err.message : String(err),
+        );
+        this.sessions.set(cacheKey, null);
+        return null;
+      }
+
+      throw err;
     }
   }
 
@@ -326,4 +335,21 @@ export class McpClient {
       throw new Error(`MCP ${this.serviceName}: invalid value for header "${name}"`);
     }
   }
+}
+
+/**
+ * Detect errors that indicate the server does not support the MCP initialize
+ * handshake at all (pre-session servers).  Only these should trigger the
+ * no-session fallback; everything else is a real failure.
+ */
+function isInitializeNotSupported(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  const msg = err.message;
+  // HTTP 404 — server has no initialize endpoint
+  if (/HTTP 404\b/.test(msg)) return true;
+  // HTTP 501 — server explicitly says "not implemented"
+  if (/HTTP 501\b/.test(msg)) return true;
+  // JSON-RPC method-not-found error code (-32601)
+  if (/\[-32601]/.test(msg) || /method not found/i.test(msg)) return true;
+  return false;
 }

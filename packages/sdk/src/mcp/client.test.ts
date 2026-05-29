@@ -196,4 +196,76 @@ describe('McpClient', () => {
 
     await expect(client.listTools()).rejects.toThrow(/protected header/i);
   });
+
+  it('propagates initialize errors instead of falling back to no-session mode', async () => {
+    const fakeFetch = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      const rpc = await readRpc(init ?? {});
+      if (rpc.method === 'initialize') {
+        return new Response('{"error":{"code":400,"message":"Session Key missing"}}', { status: 400 });
+      }
+      throw new Error('should not reach tools/list');
+    });
+
+    const client = new McpClient({ url: 'https://mcp.example.com', serviceName: 'custom', fetch: fakeFetch });
+
+    await expect(client.listTools()).rejects.toThrow(/HTTP 400/);
+    // Should NOT have called tools/list — the initialize error should propagate
+    expect(fakeFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('falls back to no-session mode when server returns 404 for initialize', async () => {
+    const calls: string[] = [];
+    const fakeFetch = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      const rpc = await readRpc(init ?? {});
+      calls.push(rpc.method);
+
+      if (rpc.method === 'initialize') {
+        return new Response('Not Found', { status: 404 });
+      }
+
+      // Server that doesn't require sessions accepts tools/list without Mcp-Session-Id
+      return jsonResponse({ jsonrpc: '2.0', id: 99, result: { tools: [{ name: 'ping', description: 'Ping', inputSchema: { type: 'object' } }] } });
+    });
+
+    const client = new McpClient({ url: 'https://mcp.example.com', serviceName: 'custom', fetch: fakeFetch });
+
+    const tools = await client.listTools();
+    expect(tools).toHaveLength(1);
+    expect(calls).toEqual(['initialize', 'tools/list']);
+  });
+
+  it('falls back to no-session mode when server returns JSON-RPC method-not-found for initialize', async () => {
+    const calls: string[] = [];
+    const fakeFetch = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      const rpc = await readRpc(init ?? {});
+      calls.push(rpc.method);
+
+      if (rpc.method === 'initialize') {
+        return jsonResponse({ jsonrpc: '2.0', id: 1, error: { code: -32601, message: 'Method not found' } });
+      }
+
+      return jsonResponse({ jsonrpc: '2.0', id: 2, result: { tools: [] } });
+    });
+
+    const client = new McpClient({ url: 'https://mcp.example.com', serviceName: 'custom', fetch: fakeFetch });
+
+    const tools = await client.listTools();
+    expect(tools).toEqual([]);
+    expect(calls).toEqual(['initialize', 'tools/list']);
+  });
+
+  it('propagates server errors (500) from initialize instead of swallowing them', async () => {
+    const fakeFetch = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      const rpc = await readRpc(init ?? {});
+      if (rpc.method === 'initialize') {
+        return new Response('Internal Server Error', { status: 500 });
+      }
+      throw new Error('should not reach tools/list');
+    });
+
+    const client = new McpClient({ url: 'https://mcp.example.com', serviceName: 'custom', fetch: fakeFetch });
+
+    await expect(client.listTools()).rejects.toThrow(/HTTP 500/);
+    expect(fakeFetch).toHaveBeenCalledTimes(1);
+  });
 });
