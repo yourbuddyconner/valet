@@ -31,6 +31,11 @@ set -a; source "$DEPLOY_CONFIG"; set +a
 # Derived names (all overridable via config file)
 CF_WORKER_NAME="${CF_WORKER_NAME:-$PROJECT_NAME}"
 PAGES_PROJECT_NAME="${PAGES_PROJECT_NAME:-${PROJECT_NAME}-client}"
+# Pages treats deploys from its configured production branch as production (stable
+# domain) and all others as previews (per-branch subdomain). A preview URL breaks
+# OAuth callbacks/origins pinned to the stable domain, so default to the production
+# branch regardless of the local git branch we're deploying from.
+PAGES_BRANCH="${PAGES_BRANCH:-main}"
 D1_DATABASE_NAME="${D1_DATABASE_NAME:-${PROJECT_NAME}-db}"
 R2_BUCKET_NAME="${R2_BUCKET_NAME:-${PROJECT_NAME}-storage}"
 MODAL_APP_NAME="${MODAL_APP_NAME:-${PROJECT_NAME}-backend}"
@@ -203,7 +208,7 @@ cmd_client() {
         echo -e "${YELLOW}Building client in development mode (ENVIRONMENT=${ENVIRONMENT})${NC}"
     fi
     (cd packages/client && VITE_API_URL="${WORKER_URL}/api" pnpm run build ${VITE_MODE_FLAG})
-    (cd packages/client && wrangler pages deploy dist --project-name="$PAGES_PROJECT_NAME")
+    (cd packages/client && wrangler pages deploy dist --project-name="$PAGES_PROJECT_NAME" --branch="$PAGES_BRANCH")
     echo -e "${GREEN}✓ Client deployed: https://${PAGES_PROJECT_NAME}.pages.dev${NC}"
 }
 
@@ -275,7 +280,7 @@ cmd_all() {
         echo -e "${YELLOW}Building client in development mode (ENVIRONMENT=${ENVIRONMENT})${NC}"
     fi
     (cd packages/client && VITE_API_URL="${WORKER_URL}/api" pnpm run build ${VITE_MODE_FLAG})
-    (cd packages/client && wrangler pages deploy dist --project-name="$PAGES_PROJECT_NAME")
+    (cd packages/client && wrangler pages deploy dist --project-name="$PAGES_PROJECT_NAME" --branch="$PAGES_BRANCH")
     echo -e "${GREEN}✓ Client deployed${NC}"
 
     # --- Summary ---
