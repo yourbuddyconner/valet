@@ -17,13 +17,14 @@ import modal
 
 from config import NODE_VERSION
 
-OPENCODE_VERSION = "1.15.0"
+OPENCODE_VERSION = "1.15.10"
+REVIEWS_CLI_VERSION = "cli-v0.0.1-alpha.0"
 
 
 def get_base_image() -> modal.Image:
     """Build the full sandbox image with all dev environment services."""
     return (
-        modal.Image.from_registry("debian:bookworm-slim", add_python="3.12")
+        modal.Image.from_registry("debian:trixie-slim", add_python="3.12")
         # ─── Single apt layer: all system packages ──────────────────────
         # Merging apt_install calls avoids redundant apt-get update runs.
         .apt_install(
@@ -59,7 +60,6 @@ def get_base_image() -> modal.Image:
         .run_commands(
             f"curl -fsSL https://deb.nodesource.com/setup_{NODE_VERSION}.x | bash -",
             "apt-get install -y nodejs",
-            "npm install -g npm@latest",
         )
         # Install Bun
         .run_commands(
@@ -87,6 +87,9 @@ def get_base_image() -> modal.Image:
             "chmod +x /usr/local/bin/cloudflared",
             # code-server (VS Code in browser)
             "curl -fsSL https://code-server.dev/install.sh | sh",
+            # Reviews CLI (code review tool) — install to /usr/local/bin (image-baked, not HOME-relative)
+            # Skills go to /opencode-config/skills so they get copied to the workspace at runtime
+            f"curl -fsSL https://raw.githubusercontent.com/figitaki/reviews/cli-v0.0.1-alpha.0/install.sh | INSTALL_DIR=/usr/local/bin REVIEWS_SKILLS_DIR=/opencode-config/skills sh -s -- --with-skills --yes",
         )
         # ─── OpenCode + Playwright (changes when OPENCODE_VERSION bumps) ─
         .run_commands(
@@ -113,7 +116,8 @@ def get_base_image() -> modal.Image:
             "echo 'alias ls=\"ls --color=auto\"' >> /root/.bashrc",
             "echo 'alias ll=\"ls -la\"' >> /root/.bashrc",
             "echo 'export BUN_INSTALL=\"/root/.bun\"' >> /root/.bashrc",
-            "echo 'export PATH=\"$BUN_INSTALL/bin:$PATH\"' >> /root/.bashrc",
+            "echo 'export PATH=\"/workspace/.local/bin:$BUN_INSTALL/bin:$PATH\"' >> /root/.bashrc",
+            "echo 'export REVIEWS_SKILLS_DIR=\"/workspace/.agents/skills\"' >> /root/.bashrc",
             "cp /root/.bashrc /etc/bash.bashrc",
         )
         # ─── Frequently-changing layers (last for cache efficiency) ─────
@@ -162,14 +166,17 @@ def get_base_image() -> modal.Image:
         .env(
             {
                 "BUN_INSTALL": "/root/.bun",
-                "PATH": "/root/.bun/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+                "PATH": "/workspace/.local/bin:/root/.bun/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
                 "DISPLAY": ":99",
-                "HOME": "/root",
+                "HOME": "/workspace",
+                "OPENCODE_RUNTIME_DIR": "/tmp/valet-opencode",
+                "VALET_PERSONA_DIR": "/tmp/valet-opencode/persona",
                 # Force image rebuild on deploy (change this value to trigger rebuild)
-                "IMAGE_BUILD_VERSION": "2026-05-28-v30-remote-workflow-tools",
+                "IMAGE_BUILD_VERSION": "2026-05-28-v44-reconcile-main",
                 "AGENT_BROWSER_EXECUTABLE_PATH": "/usr/bin/chromium",
-                "AGENT_BROWSER_PROFILE": "/root/.agent-browser-profile",
+                "AGENT_BROWSER_PROFILE": "/workspace/.agent-browser-profile",
                 "PLAYWRIGHT_BROWSERS_PATH": "/ms-playwright",
+                "REVIEWS_SKILLS_DIR": "/workspace/.agents/skills",
                 # 6 min default bash timeout (OpenCode default is 2 min)
                 "OPENCODE_EXPERIMENTAL_BASH_DEFAULT_TIMEOUT_MS": "360000",
             }

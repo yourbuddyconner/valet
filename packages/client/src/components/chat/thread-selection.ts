@@ -6,3 +6,15 @@ export function getEffectiveActiveThreadId(
   if (serverActiveThreadId) return serverActiveThreadId;
   return null;
 }
+
+export interface ThreadScopedChildSessionEvent {
+  threadId?: string;
+}
+
+export function filterChildSessionEventsForThread<T extends ThreadScopedChildSessionEvent>(
+  events: T[],
+  activeThreadId: string | null
+): T[] {
+  if (!activeThreadId) return events;
+  return events.filter((event) => event.threadId === activeThreadId);
+}

@@ -1,5 +1,5 @@
 import { useSession, useSessionToken } from '@/api/sessions';
-import { useDrawer } from '@/routes/sessions/$sessionId';
+import { useDrawer } from '@/hooks/use-drawer';
 import { VSCodePanel, VNCPanel, TerminalPanel } from '@/components/panels';
 import { cn } from '@/lib/cn';
 

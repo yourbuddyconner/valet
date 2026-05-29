@@ -39,6 +39,7 @@ import { adminGitHubRouter, githubAppSetupCallbackRouter } from './routes/admin-
 import { slackEventsRouter } from './routes/slack-events.js';
 import { channelWebhooksRouter } from './routes/channel-webhooks.js';
 import { actionPoliciesRouter } from './routes/action-policies.js';
+import { actionPolicyOverridesRouter } from './routes/action-policy-overrides.js';
 import { disabledActionsRouter } from './routes/disabled-actions.js';
 import { actionInvocationsRouter } from './routes/action-invocations.js';
 import { usageRouter } from './routes/usage.js';
@@ -50,6 +51,7 @@ import { avatarsRouter } from './routes/avatars.js';
 import { repoProviderRouter } from './routes/repo-providers.js';
 import { githubMeRouter } from './routes/github-me.js';
 import { githubAuthRouter } from './routes/github-auth.js';
+import { adminMcpConnectorsRouter } from './routes/admin-mcp-connectors.js';
 import {
   enqueueWorkflowApprovalNotificationIfMissing,
   markWorkflowApprovalNotificationsRead,
@@ -63,6 +65,7 @@ import {
   getActiveScheduleTriggers,
   insertScheduleTick,
   updateTriggerLastRun,
+  type TriggerConfig,
   getArchivableSessions,
   markSessionsArchived,
   getTrackedGitHubResources,
@@ -81,6 +84,7 @@ import {
 import { syncPluginsOnce } from './services/plugin-sync.js';
 import { integrationRegistry } from './integrations/registry.js';
 import { registerInternalIntegrations } from './integrations/internal/index.js';
+import { matchesCronField, getZonedDateParts, cronMatchesNow, findMissedCronTicks } from './lib/cron.js';
 
 // Register worker-internal integration packages (workflows, etc.). Done here at the
 // composition root so registry.ts doesn't import worker services (avoids an import cycle).
@@ -203,7 +207,9 @@ app.route('/api', channelsRouter);
 app.route('/api/me/telegram', telegramApiRouter);
 app.route('/api/admin/slack', slackAdminRouter);
 app.route('/api/admin/github', adminGitHubRouter);
+app.route('/api/admin/mcp-connectors', adminMcpConnectorsRouter);
 app.route('/api/admin/action-policies', actionPoliciesRouter);
+app.route('/api/action-policy-overrides', actionPolicyOverridesRouter);
 app.route('/api/admin/disabled-actions', disabledActionsRouter);
 app.route('/api/admin/default-skills', orgDefaultSkillsRouter);
 app.route('/api/action-invocations', actionInvocationsRouter);
@@ -306,6 +312,25 @@ const scheduled: ExportedHandlerScheduledHandler<Env> = async (event, env, ctx) 
       }
     } catch (error) {
       console.error('Workflow execution retention error:', error);
+    }
+
+    // Prune schedule tick dedup rows older than 7 days (only needed for ~4h catch-up window, batched to avoid D1 timeout)
+    try {
+      const tickCutoff = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+      let totalTicksDeleted = 0;
+      let ticksDeleted: number;
+      do {
+        const tickResult = await env.DB.prepare(
+          'DELETE FROM workflow_schedule_ticks WHERE id IN (SELECT id FROM workflow_schedule_ticks WHERE created_at < ? LIMIT 1000)'
+        ).bind(tickCutoff).run();
+        ticksDeleted = tickResult.meta.changes ?? 0;
+        totalTicksDeleted += ticksDeleted;
+      } while (ticksDeleted >= 1000);
+      if (totalTicksDeleted > 0) {
+        console.log(`Schedule tick retention: deleted ${totalTicksDeleted} rows older than 7 days`);
+      }
+    } catch (error) {
+      console.error('Schedule tick retention error:', error);
     }
   }
 
@@ -832,111 +857,9 @@ async function reconcileWorkflowExecutions(env: Env): Promise<void> {
   }
 }
 
-function matchesCronField(field: string, value: number, min: number, max: number, sundayAlias = false): boolean {
-  const normalizedValue = sundayAlias && value === 0 ? 7 : value;
-  const parts = field.split(',');
+type ScheduleTriggerConfig = Extract<TriggerConfig, { type: 'schedule' }>;
 
-  for (const partRaw of parts) {
-    const part = partRaw.trim();
-    if (!part) continue;
-
-    if (part === '*') return true;
-
-    if (part.startsWith('*/')) {
-      const step = Number.parseInt(part.slice(2), 10);
-      if (Number.isInteger(step) && step > 0 && value % step === 0) return true;
-      continue;
-    }
-
-    const [base, stepPart] = part.split('/');
-    const step = stepPart ? Number.parseInt(stepPart, 10) : 1;
-    if (!Number.isInteger(step) || step <= 0) continue;
-
-    if (base.includes('-')) {
-      const [startRaw, endRaw] = base.split('-');
-      const start = Number.parseInt(startRaw, 10);
-      const end = Number.parseInt(endRaw, 10);
-      if (!Number.isInteger(start) || !Number.isInteger(end)) continue;
-      if (start < min || end > max || start > end) continue;
-      const target = sundayAlias ? normalizedValue : value;
-      if (target >= start && target <= end && (target - start) % step === 0) return true;
-      continue;
-    }
-
-    const exact = Number.parseInt(base, 10);
-    if (!Number.isInteger(exact)) continue;
-    if (exact < min || exact > max) continue;
-    const target = sundayAlias ? normalizedValue : value;
-    if (target === exact) return true;
-  }
-
-  return false;
-}
-
-function getZonedDateParts(now: Date, timeZone: string): {
-  minute: number;
-  hour: number;
-  day: number;
-  month: number;
-  dayOfWeek: number;
-} | null {
-  try {
-    const formatter = new Intl.DateTimeFormat('en-US', {
-      timeZone,
-      minute: 'numeric',
-      hour: 'numeric',
-      day: 'numeric',
-      month: 'numeric',
-      weekday: 'short',
-      hour12: false,
-    });
-
-    const parts = formatter.formatToParts(now);
-    const valueFor = (type: string): string | null =>
-      parts.find((part) => part.type === type)?.value ?? null;
-
-    const weekdayMap: Record<string, number> = {
-      Sun: 0,
-      Mon: 1,
-      Tue: 2,
-      Wed: 3,
-      Thu: 4,
-      Fri: 5,
-      Sat: 6,
-    };
-
-    const minute = Number.parseInt(valueFor('minute') || '', 10);
-    const hour = Number.parseInt(valueFor('hour') || '', 10);
-    const day = Number.parseInt(valueFor('day') || '', 10);
-    const month = Number.parseInt(valueFor('month') || '', 10);
-    const dayOfWeek = weekdayMap[valueFor('weekday') || ''];
-
-    if (!Number.isInteger(minute) || !Number.isInteger(hour) || !Number.isInteger(day) || !Number.isInteger(month) || dayOfWeek === undefined) {
-      return null;
-    }
-
-    return { minute, hour, day, month, dayOfWeek };
-  } catch {
-    return null;
-  }
-}
-
-function cronMatchesNow(cron: string, now: Date, timeZone: string = 'UTC'): boolean {
-  const parts = cron.trim().split(/\s+/);
-  if (parts.length !== 5) return false;
-
-  const [minute, hour, dayOfMonth, month, dayOfWeek] = parts;
-  const zoned = getZonedDateParts(now, timeZone);
-  if (!zoned) return false;
-
-  return (
-    matchesCronField(minute, zoned.minute, 0, 59) &&
-    matchesCronField(hour, zoned.hour, 0, 23) &&
-    matchesCronField(dayOfMonth, zoned.day, 1, 31) &&
-    matchesCronField(month, zoned.month, 1, 12) &&
-    (matchesCronField(dayOfWeek, zoned.dayOfWeek, 0, 7) || matchesCronField(dayOfWeek, zoned.dayOfWeek, 0, 7, true))
-  );
-}
+type TriggerRow = Awaited<ReturnType<typeof getActiveScheduleTriggers>>[number];
 
 async function dispatchScheduledWorkflows(event: ScheduledController, env: Env): Promise<void> {
   const db = getDb(env.DB);
@@ -950,66 +873,64 @@ async function dispatchScheduledWorkflows(event: ScheduledController, env: Env):
   const globalActive = await countActiveExecutionsGlobal(db);
 
   let dispatched = 0;
+  let catchupDispatched = 0;
 
-  for (const row of activeTriggers) {
-    let config: {
-      cron?: string;
-      timezone?: string;
-      target?: 'workflow' | 'orchestrator';
-      prompt?: string;
-      variables?: Record<string, unknown>;
-    };
-    try {
-      config = JSON.parse(row.config);
-    } catch {
-      continue;
-    }
-
+  // Dispatch helper shared by normal and catch-up paths. Returns true if dispatched.
+  // Records a trigger_deliveries row for each meaningful outcome; the `duplicate`
+  // outcome is suppressed during catch-up to avoid flooding the table with the many
+  // already-processed buckets the catch-up scan re-checks every tick.
+  async function dispatchTrigger(
+    row: TriggerRow,
+    config: ScheduleTriggerConfig,
+    bucket: string,
+    dispatchTime: Date,
+    catchup: boolean,
+  ): Promise<boolean> {
     const timezone = config.timezone || 'UTC';
-    if (!config.cron || !cronMatchesNow(config.cron, now, timezone)) {
-      continue;
-    }
-
     const target = config.target === 'orchestrator' ? 'orchestrator' : 'workflow';
+    const label = catchup ? '[catchup] ' : '';
 
     if (target === 'workflow') {
       if (!row.workflow_id || !row.workflow_data || !row.workflow_enabled) {
         await safeRecordScheduleDelivery(db, {
           triggerId: row.trigger_id,
           userId: row.user_id,
-          deliveryId: tickBucket,
+          deliveryId: bucket,
           outcome: 'workflow_deleted',
           reason: 'Linked workflow is missing or disabled',
         });
-        continue;
+        return false;
       }
 
       const concurrency = await checkWorkflowConcurrency(db, row.user_id, {}, globalActive);
       if (!concurrency.allowed) {
         console.warn(
-          `Skipping scheduled workflow dispatch for trigger ${row.trigger_id}: ${concurrency.reason} (activeUser=${concurrency.activeUser}, activeGlobal=${concurrency.activeGlobal})`,
+          `${label}Skipping scheduled workflow dispatch for trigger ${row.trigger_id}: ${concurrency.reason} (activeUser=${concurrency.activeUser}, activeGlobal=${concurrency.activeGlobal})`,
         );
         await safeRecordScheduleDelivery(db, {
           triggerId: row.trigger_id,
           userId: row.user_id,
-          deliveryId: tickBucket,
+          deliveryId: bucket,
           outcome: 'concurrency_cap',
           reason: `${concurrency.reason ?? 'concurrency limit'} (activeUser=${concurrency.activeUser}, activeGlobal=${concurrency.activeGlobal})`,
         });
-        continue;
+        return false;
       }
 
-      const tickInserted = await insertScheduleTick(env.DB, row.trigger_id, tickBucket);
+      const tickInserted = await insertScheduleTick(env.DB, row.trigger_id, bucket);
       if (!tickInserted) {
-        // Tick already recorded for this bucket — another isolate beat us to it.
-        await safeRecordScheduleDelivery(db, {
-          triggerId: row.trigger_id,
-          userId: row.user_id,
-          deliveryId: tickBucket,
-          outcome: 'duplicate',
-          reason: `Schedule tick bucket ${tickBucket} already processed`,
-        });
-        continue;
+        // Tick already recorded for this bucket — another isolate beat us to it (or, in
+        // catch-up, the tick was already handled).
+        if (!catchup) {
+          await safeRecordScheduleDelivery(db, {
+            triggerId: row.trigger_id,
+            userId: row.user_id,
+            deliveryId: bucket,
+            outcome: 'duplicate',
+            reason: `Schedule tick bucket ${bucket} already processed`,
+          });
+        }
+        return false;
       }
 
       const executionId = crypto.randomUUID();
@@ -1030,12 +951,12 @@ async function dispatchScheduledWorkflows(event: ScheduledController, env: Env):
           cron: config.cron,
           timezone,
           eventCron: event.cron,
-          tickBucket,
-          timestamp: now.toISOString(),
+          tickBucket: bucket,
+          timestamp: dispatchTime.toISOString(),
         },
       };
 
-      const idempotencyKey = `schedule:${row.trigger_id}:${tickBucket}`;
+      const idempotencyKey = `schedule:${row.trigger_id}:${bucket}`;
       await env.DB.prepare(`
         INSERT INTO workflow_executions
           (id, workflow_id, user_id, trigger_id, status, trigger_type, trigger_metadata, variables, started_at,
@@ -1048,9 +969,9 @@ async function dispatchScheduledWorkflows(event: ScheduledController, env: Env):
         row.trigger_id,
         'pending',
         'schedule',
-        JSON.stringify({ cron: config.cron, timezone, tickBucket, deliveryId: tickBucket }),
+        JSON.stringify({ cron: config.cron, timezone, tickBucket: bucket, deliveryId: bucket }),
         JSON.stringify(variables),
-        now.toISOString(),
+        dispatchTime.toISOString(),
         row.workflow_version || null,
         workflowHash,
         row.workflow_data,
@@ -1060,7 +981,7 @@ async function dispatchScheduledWorkflows(event: ScheduledController, env: Env):
         row.user_id
       ).run();
 
-      await updateTriggerLastRun(db, row.trigger_id, now.toISOString());
+      await updateTriggerLastRun(db, row.trigger_id, dispatchTime.toISOString());
 
       const enqueued = await enqueueWorkflowExecution(env, {
         executionId,
@@ -1073,49 +994,53 @@ async function dispatchScheduledWorkflows(event: ScheduledController, env: Env):
       await safeRecordScheduleDelivery(db, {
         triggerId: row.trigger_id,
         userId: row.user_id,
-        deliveryId: tickBucket,
+        deliveryId: bucket,
         outcome: 'matched',
         executionId,
         reason: enqueued ? null : 'Execution created but dispatch enqueue failed',
       });
 
-      dispatched++;
-      continue;
+      return true;
     }
 
+    // Orchestrator target
     const prompt = config.prompt?.trim();
     if (!prompt) {
       await safeRecordScheduleDelivery(db, {
         triggerId: row.trigger_id,
         userId: row.user_id,
-        deliveryId: tickBucket,
+        deliveryId: bucket,
         outcome: 'error',
         reason: 'Orchestrator-target schedule trigger has no prompt configured',
       });
-      continue;
+      return false;
     }
 
-    const orchTickInserted = await insertScheduleTick(env.DB, row.trigger_id, tickBucket);
+    // Claim the tick BEFORE dispatch to prevent concurrent cron invocations from
+    // both dispatching the same prompt (the DO prompt queue has no dedup).
+    const orchTickInserted = await insertScheduleTick(env.DB, row.trigger_id, bucket);
     if (!orchTickInserted) {
-      await safeRecordScheduleDelivery(db, {
-        triggerId: row.trigger_id,
-        userId: row.user_id,
-        deliveryId: tickBucket,
-        outcome: 'duplicate',
-        reason: `Schedule tick bucket ${tickBucket} already processed`,
-      });
-      continue;
+      if (!catchup) {
+        await safeRecordScheduleDelivery(db, {
+          triggerId: row.trigger_id,
+          userId: row.user_id,
+          deliveryId: bucket,
+          outcome: 'duplicate',
+          reason: `Schedule tick bucket ${bucket} already processed`,
+        });
+      }
+      return false;
     }
 
     let scheduledDate: string;
     try {
       scheduledDate = new Intl.DateTimeFormat('en-US', {
         weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', timeZone: timezone,
-      }).format(now);
+      }).format(dispatchTime);
     } catch {
       scheduledDate = new Intl.DateTimeFormat('en-US', {
         weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', timeZone: 'UTC',
-      }).format(now);
+      }).format(dispatchTime);
     }
     const dispatch = await dispatchOrchestratorPrompt(env, {
       userId: row.user_id,
@@ -1126,33 +1051,105 @@ async function dispatchScheduledWorkflows(event: ScheduledController, env: Env):
     });
 
     if (!dispatch.dispatched) {
+      // Dispatch failed with a retriable reason (backoff, not configured, etc.) —
+      // release the tick so catch-up can retry on the next cron invocation.
+      // If this delete fails, the tick stays burned (safer than risking duplicate dispatch).
+      try {
+        await env.DB.prepare(
+          'DELETE FROM workflow_schedule_ticks WHERE trigger_id = ? AND tick_bucket = ?'
+        ).bind(row.trigger_id, bucket).run();
+      } catch {
+        // Best-effort release — if it fails, the tick is burned for this bucket
+      }
       console.warn(
-        `Skipping scheduled orchestrator prompt for trigger ${row.trigger_id}: ${dispatch.reason || 'unknown_reason'}`,
+        `${label}Skipping scheduled orchestrator prompt for trigger ${row.trigger_id}: ${dispatch.reason || 'unknown_reason'}`,
       );
       await safeRecordScheduleDelivery(db, {
         triggerId: row.trigger_id,
         userId: row.user_id,
-        deliveryId: tickBucket,
+        deliveryId: bucket,
         outcome: 'error',
         reason: `Failed to dispatch orchestrator prompt: ${dispatch.reason || 'unknown_reason'}`,
       });
-      continue;
+      return false;
     }
 
-    await updateTriggerLastRun(db, row.trigger_id, now.toISOString());
+    await updateTriggerLastRun(db, row.trigger_id, dispatchTime.toISOString());
 
     await safeRecordScheduleDelivery(db, {
       triggerId: row.trigger_id,
       userId: row.user_id,
-      deliveryId: tickBucket,
+      deliveryId: bucket,
       outcome: 'matched',
       reason: 'Orchestrator prompt dispatched',
     });
 
-    dispatched++;
+    return true;
   }
 
-  console.log(`Scheduled dispatch complete: ${dispatched} trigger(s) processed`);
+  // --- Parse configs once for both passes ---
+  const parsedTriggers: Array<{ row: TriggerRow; config: ScheduleTriggerConfig }> = [];
+  for (const row of activeTriggers) {
+    let config: TriggerConfig;
+    try {
+      config = JSON.parse(row.config);
+    } catch {
+      continue;
+    }
+    if (config.type !== 'schedule' || !config.cron) continue;
+    parsedTriggers.push({ row, config });
+  }
+
+  // --- Pass 1: dispatch triggers whose cron matches the current minute ---
+  for (const { row, config } of parsedTriggers) {
+    const timezone = config.timezone || 'UTC';
+    if (!cronMatchesNow(config.cron, now, timezone)) {
+      continue;
+    }
+
+    try {
+      if (await dispatchTrigger(row, config, tickBucket, now, false)) {
+        dispatched++;
+      }
+    } catch (err) {
+      console.error(`Failed to dispatch trigger ${row.trigger_id}:`, err);
+    }
+  }
+
+  // --- Pass 2: catch up triggers that missed their tick (e.g. Cloudflare skipped a cron invocation) ---
+  // Look back from last_run_at up to a max window. The schedule_ticks dedup table prevents
+  // double-dispatching if the tick was already handled (including ticks just dispatched in
+  // Pass 1). Cap iterations to avoid burning CPU on very frequent crons.
+  // Returns all missed ticks (oldest first) so consecutive misses are fully recovered.
+  const CATCHUP_MAX_WINDOW_MS = 4 * 60 * 60 * 1000; // 4 hours max lookback
+  const CATCHUP_MAX_MINUTES = 240; // hard cap on backward scan iterations
+
+  for (const { row, config } of parsedTriggers) {
+    const timezone = config.timezone || 'UTC';
+    const lastRun = row.last_run_at ? new Date(row.last_run_at) : null;
+    if (!lastRun || isNaN(lastRun.getTime())) continue; // Never ran or corrupted — skip catch-up
+
+    const windowStart = new Date(Math.max(lastRun.getTime(), now.getTime() - CATCHUP_MAX_WINDOW_MS));
+    const missedBuckets = findMissedCronTicks(config.cron, timezone, windowStart, now, CATCHUP_MAX_MINUTES);
+
+    for (const missedBucket of missedBuckets) {
+      try {
+        const missedTime = new Date(missedBucket + ':00.000Z');
+        if (await dispatchTrigger(row, config, missedBucket, missedTime, true)) {
+          catchupDispatched++;
+          console.log(
+            `[catchup] Dispatched missed trigger ${row.trigger_id} for bucket ${missedBucket} (last_run=${row.last_run_at})`,
+          );
+        }
+      } catch (err) {
+        console.error(`[catchup] Failed to dispatch trigger ${row.trigger_id} for bucket ${missedBucket}:`, err);
+      }
+    }
+  }
+
+  const parts = [`${dispatched} trigger(s) processed`];
+  if (catchupDispatched > 0) parts.push(`${catchupDispatched} catch-up`);
+  console.log(`Scheduled dispatch complete: ${parts.join(', ')}`);
 }
 
 // Best-effort schedule-delivery log; never let a logging failure break dispatch.

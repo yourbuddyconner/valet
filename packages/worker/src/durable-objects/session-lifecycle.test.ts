@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { SessionLifecycle, SandboxAlreadyExitedError } from './session-lifecycle.js';
+import { SessionLifecycle, SandboxAlreadyExitedError, SandboxSnapshotFailedError } from './session-lifecycle.js';
 
 const mockFetch = vi.fn();
 vi.stubGlobal('fetch', mockFetch);
@@ -35,6 +35,22 @@ describe('SessionLifecycle.snapshotSandbox', () => {
 
     await expect(makeLifecycle().snapshotSandbox()).rejects.toThrow(
       'Snapshot failed: Failed to create image',
+    );
+  });
+
+  it('maps Modal snapshot timeout 500 responses to snapshot failures', async () => {
+    mockFetch.mockResolvedValueOnce(
+      new Response(
+        "modal-http: internal error: status Failure: ExecutionError('Timed out waiting for image to be created')\n",
+        { status: 500, headers: { 'Content-Type': 'text/plain' } },
+      ),
+    );
+
+    const snapshot = makeLifecycle().snapshotSandbox();
+
+    await expect(snapshot).rejects.toBeInstanceOf(SandboxSnapshotFailedError);
+    await expect(snapshot).rejects.toThrow(
+      'Snapshot failed: Timed out waiting for image to be created',
     );
   });
 });

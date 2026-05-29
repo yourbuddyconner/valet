@@ -5,7 +5,7 @@ import { useChat } from '@/hooks/use-chat';
 import type { IntegrationAuthError } from '@/hooks/use-chat';
 import { useSession, useSessionGitState, useUpdateSessionTitle, useSessionChildren } from '@/api/sessions';
 import { useActiveThread, useCreateThread } from '@/api/threads';
-import { useDrawer } from '@/routes/sessions/$sessionId';
+import { useDrawer } from '@/hooks/use-drawer';
 import { MessageList } from './message-list';
 import { ChatInput } from './chat-input';
 import { useExecutionSteps } from '@/api/executions';
@@ -21,7 +21,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { useAuthStore } from '@/stores/auth';
 import { useIsMobile } from '@/hooks/use-is-mobile';
 import { useAutoRestartOrchestrator } from '@/hooks/use-auto-restart-orchestrator';
-import { getEffectiveActiveThreadId } from './thread-selection';
+import { filterChildSessionEventsForThread, getEffectiveActiveThreadId } from './thread-selection';
 
 const InteractivePromptCard = lazy(async () => {
   const mod = await import('@/components/session/interactive-prompt-card');
@@ -110,13 +110,17 @@ export function ChatContainer({ sessionId, routeSessionId, initialThreadId, init
     sessionTitle,
     childSessionEvents,
     connectedUsers,
-    executeCommand,
-    approveActionWs,
-    denyActionWs,
-    integrationAuthErrors,
+	    executeCommand,
+	    resolveApprovalWs,
+	    approveActionWs,
+	    denyActionWs,
+	    resolveApprovalLocally,
+	    expireApprovalLocally,
+	    integrationAuthErrors,
     dismissIntegrationAuth,
     loadThreadMessages,
     pendingFollowup,
+    agentStatusThreadId,
     queueWithdraw,
     queuePromote,
     queueReplace,
@@ -168,6 +172,11 @@ export function ChatContainer({ sessionId, routeSessionId, initialThreadId, init
     ? (localThreadId ?? serverActiveThread?.id ?? null)
     : getEffectiveActiveThreadId(initialThreadId, serverActiveThread?.id);
 
+  // Scope pending followup & thinking indicator to the active thread
+  const pendingIsForOtherThread = !!pendingFollowup?.threadId && pendingFollowup.threadId !== activeThreadId;
+  const pendingIsForThisThread = !!pendingFollowup && !pendingIsForOtherThread;
+  const isAgentThinkingInThread = isAgentThinking && (!agentStatusThreadId || agentStatusThreadId === activeThreadId);
+
   const selectThread = useCallback(
     (threadId: string) => {
       if (isOrchestrator) {
@@ -188,6 +197,7 @@ export function ChatContainer({ sessionId, routeSessionId, initialThreadId, init
     try {
       const thread = await createThread.mutateAsync();
       selectThread(thread.id);
+      requestAnimationFrame(() => chatInputRef.current?.focus());
     } catch (err) {
       console.error('[ChatContainer] Failed to create thread:', err);
     }
@@ -226,6 +236,11 @@ export function ChatContainer({ sessionId, routeSessionId, initialThreadId, init
   const { data: workflowStepsData } = useExecutionSteps(workflowExecutionId, { isTerminal: false });
   const workflowSteps = workflowExecutionId ? workflowStepsData?.steps : undefined;
 
+  const filteredChildSessionEvents = useMemo(() => {
+    if (isResolvingThread) return [];
+    return filterChildSessionEventsForThread(childSessionEvents, activeThreadId);
+  }, [childSessionEvents, activeThreadId, isResolvingThread]);
+
   const handleSendMessage = useCallback(
     async (content: string, model?: string, attachments?: Parameters<typeof sendMessage>[2]) => {
       // If no content but pending exists and busy, promote
@@ -261,17 +276,25 @@ export function ChatContainer({ sessionId, routeSessionId, initialThreadId, init
   // Promote pending followup (dispatch immediately as steer)
   const handlePromotePending = useCallback(() => {
     if (!pendingFollowup) return;
+    if (pendingFollowup.threadId && pendingFollowup.threadId !== activeThreadId) return;
     queuePromote();
-  }, [pendingFollowup, queuePromote]);
+  }, [pendingFollowup, queuePromote, activeThreadId]);
 
   // Edit pending followup — withdraw and populate text box
   const [editingWithdrawnContent, setEditingWithdrawnContent] = useState<string | null>(null);
   const handleEditPending = useCallback(() => {
     if (!pendingFollowup) return;
+    if (pendingFollowup.threadId && pendingFollowup.threadId !== activeThreadId) return;
     // Save content before withdrawing so we can populate the text box
     setEditingWithdrawnContent(pendingFollowup.content);
     queueWithdraw();
-  }, [pendingFollowup, queueWithdraw]);
+  }, [pendingFollowup, queueWithdraw, activeThreadId]);
+
+  const handleCancelPending = useCallback(() => {
+    if (!pendingFollowup) return;
+    if (pendingFollowup.threadId && pendingFollowup.threadId !== activeThreadId) return;
+    queueWithdraw();
+  }, [pendingFollowup, queueWithdraw, activeThreadId]);
 
   // Share dialog state
   const [shareOpen, setShareOpen] = useState(false);
@@ -284,6 +307,7 @@ export function ChatContainer({ sessionId, routeSessionId, initialThreadId, init
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [editTitleValue, setEditTitleValue] = useState('');
   const titleInputRef = useRef<HTMLInputElement>(null);
+  const chatInputRef = useRef<HTMLTextAreaElement>(null);
 
   const displayTitle = sessionTitle || session?.title || session?.workspace || sessionId.slice(0, 8);
 
@@ -491,11 +515,11 @@ export function ChatContainer({ sessionId, routeSessionId, initialThreadId, init
             <MessageList
               messages={filteredMessages}
               workflowSteps={workflowSteps}
-              isAgentThinking={isAgentThinking}
+              isAgentThinking={isAgentThinkingInThread}
               agentStatus={agentStatus}
               agentStatusDetail={agentStatusDetail}
               onRevert={revertMessage}
-              childSessionEvents={childSessionEvents}
+              childSessionEvents={filteredChildSessionEvents}
               childSessions={childSessions}
               connectedUsers={connectedUsers}
             />
@@ -517,9 +541,12 @@ export function ChatContainer({ sessionId, routeSessionId, initialThreadId, init
                       prompt={prompt}
                       onAnswer={answerQuestion}
                       onDismiss={dismissQuestion}
-                      onApproveWs={approveActionWs}
-                      onDenyWs={denyActionWs}
-                    />
+	                      onResolveApprovalWs={resolveApprovalWs}
+	                      onApproveWs={approveActionWs}
+	                      onDenyWs={denyActionWs}
+	                      onResolveLocal={resolveApprovalLocally}
+	                      onExpireLocal={expireApprovalLocally}
+	                    />
                   </Suspense>
                 ))}
                 {queuedCount > 0 && (
@@ -536,7 +563,7 @@ export function ChatContainer({ sessionId, routeSessionId, initialThreadId, init
               onDismiss={dismissIntegrationAuth}
             />
           )}
-          {pendingFollowup && (
+          {pendingIsForThisThread && pendingFollowup && (
             <div className="border-t border-neutral-100 bg-surface-0 px-3 py-2 dark:border-neutral-800/50 dark:bg-surface-0">
               <div className="mb-1 flex items-center justify-between">
                 <span className="font-mono text-[10px] text-amber-700 dark:text-amber-300">
@@ -552,7 +579,7 @@ export function ChatContainer({ sessionId, routeSessionId, initialThreadId, init
                   </button>
                   <button
                     type="button"
-                    onClick={() => queueWithdraw()}
+                    onClick={handleCancelPending}
                     className="rounded px-1.5 py-0.5 font-mono text-[10px] text-neutral-500 transition-colors hover:bg-neutral-100 hover:text-neutral-700 dark:text-neutral-400 dark:hover:bg-neutral-800 dark:hover:text-neutral-200"
                   >
                     cancel
@@ -569,7 +596,7 @@ export function ChatContainer({ sessionId, routeSessionId, initialThreadId, init
           <ChatInput
             onSend={handleSendMessage}
             onPromotePending={handlePromotePending}
-            hasPendingFollowup={!!pendingFollowup}
+            hasPendingFollowup={pendingIsForThisThread}
             disabled={isDisabled}
             sendDisabled={false}
             placeholder={
@@ -591,6 +618,7 @@ export function ChatContainer({ sessionId, routeSessionId, initialThreadId, init
             onCommand={handleCommand}
             externalValue={editingWithdrawnContent}
             onExternalValueConsumed={() => setEditingWithdrawnContent(null)}
+            inputRef={chatInputRef}
           />
           {isMobile && (
             mobileActionsOpen ? (
@@ -776,6 +804,7 @@ function IntegrationReauthBanner({
   onDismiss: (service: string) => void;
 }) {
   const queryClient = useQueryClient();
+  const hasDiscoveryFailure = errors.some((err) => !isIntegrationAuthReason(err.reason));
 
   const handleReauthorize = useCallback(async (service: string) => {
     try {
@@ -828,22 +857,43 @@ function IntegrationReauthBanner({
         <WarningIcon className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-600 dark:text-amber-400" />
         <div className="min-w-0 flex-1">
           <p className="font-mono text-[11px] font-medium text-amber-800 dark:text-amber-200">
-            Integration authorization expired
+            {hasDiscoveryFailure ? 'Integration tool discovery failed' : 'Integration authorization expired'}
           </p>
           <div className="mt-1 space-y-1">
             {errors.map((err) => (
-              <div key={err.service} className="flex items-center gap-2">
-                <span className="font-mono text-[11px] text-amber-700 dark:text-amber-300">
-                  {err.displayName}
-                </span>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => handleReauthorize(err.service)}
-                  className="h-5 px-1.5 font-mono text-[10px] font-semibold text-amber-700 hover:bg-amber-200/60 hover:text-amber-900 dark:text-amber-300 dark:hover:bg-amber-800/40 dark:hover:text-amber-100"
-                >
-                  Reauthorize
-                </Button>
+              <div key={err.service} className="flex items-start gap-2">
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="font-mono text-[11px] text-amber-700 dark:text-amber-300">
+                      {err.displayName}
+                    </span>
+                    <span className="font-mono text-[10px] text-amber-600/80 dark:text-amber-400/80">
+                      {err.reason}
+                    </span>
+                    {isIntegrationAuthReason(err.reason) ? (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => handleReauthorize(err.service)}
+                        className="h-5 px-1.5 font-mono text-[10px] font-semibold text-amber-700 hover:bg-amber-200/60 hover:text-amber-900 dark:text-amber-300 dark:hover:bg-amber-800/40 dark:hover:text-amber-100"
+                      >
+                        Reauthorize
+                      </Button>
+                    ) : (
+                      <a
+                        href="/integrations"
+                        className="rounded px-1.5 py-0.5 font-mono text-[10px] font-semibold text-amber-700 hover:bg-amber-200/60 hover:text-amber-900 dark:text-amber-300 dark:hover:bg-amber-800/40 dark:hover:text-amber-100"
+                      >
+                        Settings
+                      </a>
+                    )}
+                  </div>
+                  {err.message && (
+                    <p className="mt-0.5 break-words font-mono text-[10px] text-amber-700/80 dark:text-amber-300/80">
+                      {err.message}
+                    </p>
+                  )}
+                </div>
                 <button
                   type="button"
                   onClick={() => onDismiss(err.service)}
@@ -859,6 +909,10 @@ function IntegrationReauthBanner({
       </div>
     </div>
   );
+}
+
+function isIntegrationAuthReason(reason: string): boolean {
+  return ['auth_failed', 'decryption_failed', 'expired', 'not_found', 'refresh_failed', 'revoked'].includes(reason);
 }
 
 function WarningIcon({ className }: { className?: string }) {

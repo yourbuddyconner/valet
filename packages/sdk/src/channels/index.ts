@@ -84,6 +84,7 @@ export interface InteractivePrompt {
 export interface InteractiveAction {
   id: string;
   label: string;
+  description?: string;
   style?: 'primary' | 'danger';
 }
 

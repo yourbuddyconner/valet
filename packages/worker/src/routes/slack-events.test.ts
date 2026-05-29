@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Hono } from 'hono';
 
 const {
@@ -151,6 +151,10 @@ function buildMentionEventRequest(channelId: string, channelType: string, userId
 }
 
 describe('slackEventsRouter /slack/interactive', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
     getOrgSlackInstallMock.mockResolvedValue({
@@ -252,6 +256,121 @@ describe('slackEventsRouter /slack/interactive', () => {
       actionId: 'approve',
       resolvedBy: 'user-1',
     });
+  });
+
+  it('replaces Slack processing state with an error when the session DO rejects the click', async () => {
+    resolveUserByExternalIdMock.mockResolvedValue('user-1');
+    getSessionMock.mockResolvedValue({ id: 'orchestrator:user-1', userId: 'user-1' });
+
+    const responseUrlFetch = vi.fn(async (_url: string, _init: RequestInit) => Response.json({ ok: true }));
+    vi.stubGlobal('fetch', responseUrlFetch);
+
+    const doFetchMock = vi.fn().mockResolvedValue(new Response(
+      JSON.stringify({ error: 'This prompt has expired.' }),
+      { status: 410, headers: { 'content-type': 'application/json' } },
+    ));
+    const app = buildApp();
+    const waitUntilPromises: Array<Promise<unknown>> = [];
+    const waitUntil = vi.fn((promise: Promise<unknown>) => {
+      waitUntilPromises.push(promise);
+    });
+
+    const res = await app.fetch(
+      buildInteractiveRequest({
+        type: 'block_actions',
+        team: { id: 'T123' },
+        user: { id: 'U123' },
+        response_url: 'https://hooks.slack.com/actions/response',
+        message: {
+          text: 'Action requires approval',
+          blocks: [
+            { type: 'section', text: { type: 'mrkdwn', text: 'Approve?' } },
+            { type: 'actions', elements: [{ type: 'button', text: { type: 'plain_text', text: 'Allow' } }] },
+          ],
+        },
+        actions: [
+          { action_id: 'allow_session', value: 'orchestrator:user-1:prompt-1' },
+        ],
+      }),
+      {
+        DB: {},
+        ENCRYPTION_KEY: 'test-key',
+        SLACK_SIGNING_SECRET: 'fallback-secret',
+        SESSIONS: {
+          idFromName: vi.fn((name: string) => `do:${name}`),
+          get: vi.fn(() => ({ fetch: doFetchMock })),
+        },
+      } as any,
+      { waitUntil } as any,
+    );
+
+    await Promise.all(waitUntilPromises);
+
+    expect(res.status).toBe(200);
+    expect(responseUrlFetch).toHaveBeenCalledTimes(2);
+    const processingBody = JSON.parse((responseUrlFetch.mock.calls[0][1]).body as string);
+    const rejectedBody = JSON.parse((responseUrlFetch.mock.calls[1][1]).body as string);
+    expect(processingBody.blocks).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: 'context' }),
+    ]));
+    expect(rejectedBody.replace_original).toBe(true);
+    expect(JSON.stringify(rejectedBody.blocks)).toContain('This prompt has expired.');
+  });
+
+  it('replaces Slack processing state with an error when the session DO is unreachable', async () => {
+    resolveUserByExternalIdMock.mockResolvedValue('user-1');
+    getSessionMock.mockResolvedValue({ id: 'orchestrator:user-1', userId: 'user-1' });
+
+    const responseUrlFetch = vi.fn(async (_url: string, _init: RequestInit) => Response.json({ ok: true }));
+    vi.stubGlobal('fetch', responseUrlFetch);
+
+    const doFetchMock = vi.fn().mockRejectedValue(new Error('DO unreachable'));
+    const app = buildApp();
+    const waitUntilPromises: Array<Promise<unknown>> = [];
+    const waitUntil = vi.fn((promise: Promise<unknown>) => {
+      waitUntilPromises.push(promise);
+    });
+
+    const res = await app.fetch(
+      buildInteractiveRequest({
+        type: 'block_actions',
+        team: { id: 'T123' },
+        user: { id: 'U123' },
+        response_url: 'https://hooks.slack.com/actions/response',
+        message: {
+          text: 'Action requires approval',
+          blocks: [
+            { type: 'section', text: { type: 'mrkdwn', text: 'Approve?' } },
+            { type: 'actions', elements: [{ type: 'button', text: { type: 'plain_text', text: 'Allow' } }] },
+          ],
+        },
+        actions: [
+          { action_id: 'allow_session', value: 'orchestrator:user-1:prompt-1' },
+        ],
+      }),
+      {
+        DB: {},
+        ENCRYPTION_KEY: 'test-key',
+        SLACK_SIGNING_SECRET: 'fallback-secret',
+        SESSIONS: {
+          idFromName: vi.fn((name: string) => `do:${name}`),
+          get: vi.fn(() => ({ fetch: doFetchMock })),
+        },
+      } as any,
+      { waitUntil } as any,
+    );
+
+    await Promise.all(waitUntilPromises);
+
+    expect(res.status).toBe(200);
+    expect(responseUrlFetch).toHaveBeenCalledTimes(2);
+    const processingBody = JSON.parse((responseUrlFetch.mock.calls[0][1]).body as string);
+    const rejectedBody = JSON.parse((responseUrlFetch.mock.calls[1][1]).body as string);
+    expect(processingBody.blocks).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: 'context' }),
+    ]));
+    expect(rejectedBody.replace_original).toBe(true);
+    expect(JSON.stringify(rejectedBody.blocks)).toContain('The session could not be reached.');
   });
 });
 

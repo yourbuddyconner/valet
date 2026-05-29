@@ -288,7 +288,7 @@ The DO's `handleSpawnChild()`:
 8. **Injects GitHub token** from OAuth tokens if missing.
 9. **Injects git user identity** from user profile if missing.
 10. Initializes child SessionAgent DO via `POST http://do/start`.
-11. Returns `spawn-child-result` with `childSessionId`.
+11. Returns `spawn-child-result` with `childSessionId` and, when available, the parent `threadId` that spawned it. The runner forwards that thread ID in the `child-session` UI event so child cards render only in the originating thread.
 
 ### Recursive Spawning Prevention
 

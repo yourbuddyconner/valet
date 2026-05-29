@@ -1,10 +1,12 @@
-import { type OAuthConfig, refreshTokenPkce } from '@valet/sdk';
+import { type OAuthConfig, refreshTokenPkce, refreshTokenWithClientCredentials } from '@valet/sdk';
 import { type Env, getEnvString } from '../env.js';
 import { encryptStringPBKDF2, decryptStringPBKDF2 } from '../lib/crypto.js';
 import * as credentialDb from '../lib/db/credentials.js';
 import * as mcpOAuthDb from '../lib/db/mcp-oauth.js';
 import { getDb } from '../lib/drizzle.js';
 import { integrationRegistry } from '../integrations/registry.js';
+import { getCustomMcpOAuthConfig } from './custom-mcp-connectors.js';
+import { createSafeFetchOutbound } from './safe-fetch-outbound.js';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -287,6 +289,58 @@ async function attemptRefresh(
     }
   }
 
+  const db = getDb(env.DB);
+  const customOAuth = await getCustomMcpOAuthConfig(env, db, provider, 'default');
+  if (customOAuth) {
+    try {
+      const tokens = await refreshTokenWithClientCredentials({
+        tokenEndpoint: customOAuth.tokenEndpoint,
+        clientId: customOAuth.clientId,
+        clientSecret: customOAuth.clientSecret,
+        tokenEndpointAuthMethod: customOAuth.tokenEndpointAuthMethod,
+        refreshToken: data.refresh_token,
+        resource: customOAuth.serverUrl,
+        fetch: createSafeFetchOutbound({ mode: 'oauth-token' }),
+      });
+      const newData: CredentialData = {
+        access_token: tokens.access_token,
+        refresh_token: tokens.refresh_token || data.refresh_token,
+      };
+      const expiresAt = tokens.expires_in
+        ? new Date(Date.now() + tokens.expires_in * 1000).toISOString()
+        : undefined;
+      const encrypted = await encryptCredentialData(newData, env.ENCRYPTION_KEY);
+      await credentialDb.upsertCredential(db, {
+        id: crypto.randomUUID(),
+        ownerType,
+        ownerId,
+        provider,
+        credentialType: 'oauth2',
+        encryptedData: encrypted,
+        expiresAt,
+      });
+      return {
+        ok: true,
+        credential: {
+          accessToken: tokens.access_token,
+          refreshToken: tokens.refresh_token || data.refresh_token,
+          expiresAt: expiresAt ? new Date(expiresAt) : undefined,
+          credentialType: 'oauth2',
+          refreshed: true,
+        },
+      };
+    } catch (err) {
+      return {
+        ok: false,
+        error: {
+          service: provider,
+          reason: 'refresh_failed',
+          message: `Custom MCP OAuth refresh failed: ${err instanceof Error ? err.message : String(err)}`,
+        },
+      };
+    }
+  }
+
   if (!integrationProvider?.refreshOAuthTokens) {
     return {
       ok: false,
@@ -390,23 +444,35 @@ export async function getCredential(
     };
   }
 
-  // Force refresh if requested (e.g. after a 401 from the API indicates the token is invalid)
-  if (options?.forceRefresh && data.refresh_token) {
-    const refreshed = await attemptRefresh(env, ownerType, ownerId, provider, data);
-    if (refreshed.ok) return refreshed;
-    return {
-      ok: false,
-      error: { service: provider, reason: 'refresh_failed', message: 'Force refresh failed' },
-    };
-  }
+  const expiresSoon = row.expiresAt && new Date(row.expiresAt).getTime() - Date.now() < 60_000;
 
-  // Check expiration (with 60-second buffer)
-  if (row.expiresAt && new Date(row.expiresAt).getTime() - Date.now() < 60_000) {
+  // Force refresh if requested (e.g. after a 401 from the API indicates the token is invalid)
+  if (options?.forceRefresh) {
     if (data.refresh_token) {
       const refreshed = await attemptRefresh(env, ownerType, ownerId, provider, data);
       if (refreshed.ok) return refreshed;
     }
-    // Return potentially expired credential — caller can decide
+    return {
+      ok: false,
+      error: {
+        service: provider,
+        reason: expiresSoon ? 'expired' : 'refresh_failed',
+        message: data.refresh_token ? 'Force refresh failed' : `Credential for ${provider} cannot be refreshed because it has no refresh token`,
+      },
+    };
+  }
+
+  // Check expiration (with 60-second buffer)
+  if (expiresSoon) {
+    if (data.refresh_token) {
+      const refreshed = await attemptRefresh(env, ownerType, ownerId, provider, data);
+      if (refreshed.ok) return refreshed;
+      return refreshed;
+    }
+    return {
+      ok: false,
+      error: { service: provider, reason: 'expired', message: `Credential for ${provider} has expired and cannot be refreshed` },
+    };
   }
 
   const accessToken = extractAccessToken(data);

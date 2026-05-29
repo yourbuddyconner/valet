@@ -3,7 +3,7 @@ import react from '@vitejs/plugin-react';
 import { TanStackRouterVite } from '@tanstack/router-plugin/vite';
 import path from 'path';
 
-export default defineConfig({
+export default defineConfig(({ mode }) => ({
   plugins: [
     TanStackRouterVite({
       autoCodeSplitting: true,
@@ -16,6 +16,10 @@ export default defineConfig({
     },
   },
   build: {
+    // Development builds: skip minification to preserve component names,
+    // readable stack traces, and React DevTools support.
+    minify: mode === 'development' ? false : 'esbuild',
+    sourcemap: mode === 'development' ? true : false,
     rollupOptions: {
       output: {
         manualChunks: {
@@ -42,4 +46,4 @@ export default defineConfig({
       },
     },
   },
-});
+}));

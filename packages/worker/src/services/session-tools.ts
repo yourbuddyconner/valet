@@ -5,9 +5,10 @@ import { integrationRegistry } from '../integrations/registry.js';
 import { getUserIntegrations, getOrgIntegrations } from '../lib/db/integrations.js';
 import { invokeAction, markExecuted, markFailed } from '../services/actions.js';
 import { getDisabledActionsIndex, isActionDisabled } from '../lib/db/disabled-actions.js';
-import { upsertMcpToolCache } from '../lib/db/mcp-tool-cache.js';
+import { listMcpToolCache, upsertMcpToolCache } from '../lib/db/mcp-tool-cache.js';
 import { getAutoEnabledServices, getDisabledPluginServices } from '../lib/db/plugins.js';
 import { getUserIdentityLinks, getOrchestratorIdentity } from '../lib/db.js';
+import { loadCustomMcpConnectorContext } from './custom-mcp-connectors.js';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -55,6 +56,7 @@ export interface ListToolsOpts {
   service?: string;
   query?: string;
   credentialCache: CredentialCache;
+  orgId?: string;
 }
 
 export type InvokeOutcome = 'denied' | 'pending_approval' | 'allowed';
@@ -140,15 +142,16 @@ export async function listTools(
   userId: string,
   opts?: ListToolsOpts,
 ): Promise<ListToolsResult> {
-  const { service: filterService, query, credentialCache } = opts ?? {} as ListToolsOpts;
+  const { service: filterService, query, credentialCache, orgId = 'default' } = opts ?? {} as ListToolsOpts;
 
-  const [userIntegrations, orgIntegrations, autoServices, { disabledActions: disabledActionSet, disabledServices: disabledServiceSet }, disabledPluginServices] =
+  const [userIntegrations, orgIntegrations, autoServices, { disabledActions: disabledActionSet, disabledServices: disabledServiceSet }, disabledPluginServices, customContext] =
     await Promise.all([
       getUserIntegrations(appDb, userId),
       getOrgIntegrations(appDb),
-      getAutoEnabledServices(envDB),
+      getAutoEnabledServices(envDB, orgId),
       getDisabledActionsIndex(appDb),
-      getDisabledPluginServices(envDB),
+      getDisabledPluginServices(envDB, orgId),
+      loadCustomMcpConnectorContext(env, appDb, orgId),
     ]);
 
   // Group all active integrations by service, deduplicate by ID
@@ -179,6 +182,12 @@ export async function listTools(
     }
   }
 
+  for (const connector of customContext.connectors.values()) {
+    if (!serviceSourceMap.has(connector.serviceSlug)) {
+      serviceSourceMap.set(connector.serviceSlug, [{ id: `custom:${connector.serviceSlug}`, scope: 'org' as const, userId }]);
+    }
+  }
+
   console.log(`[session-tools] list-tools: userId=${userId}, service=${filterService ?? 'all'}, services with sources: [${[...serviceSourceMap.keys()].join(', ')}]`);
 
   const tools: ToolDescriptor[] = [];
@@ -187,20 +196,19 @@ export async function listTools(
   const discoveredRiskLevels = new Map<string, string>();
 
   for (const [service, sources] of serviceSourceMap) {
-    if (filterService && service !== filterService) continue;
+    const provider = integrationRegistry.getProvider(service, customContext);
+    if (filterService && !matchesServiceFilter(service, filterService, provider)) continue;
     if (disabledServiceSet.has(service)) continue;
     if (disabledPluginServices.has(service)) continue;
 
-    const actionSource = integrationRegistry.getActions(service);
+    const actionSource = integrationRegistry.getActions(service, customContext);
     if (!actionSource) continue;
-
-    const provider = integrationRegistry.getProvider(service);
 
     // MCP-backed sources need credentials for listing (they return different tools per user).
     // Static sources (no mcpServerUrl) skip credential resolution during listing.
     let credCtx: { credentials: { access_token: string } } | undefined;
     const isMcpSource = !!provider?.mcpServerUrl;
-    if (isMcpSource && provider?.authType !== 'none') {
+    if (isMcpSource && requiresUserCredential(provider)) {
       const firstSource = sources[0];
 
       // Check credential cache first
@@ -242,9 +250,10 @@ export async function listTools(
     }
 
     let actions = await actionSource.listActions(credCtx);
+    let listError = getActionSourceListError(actionSource);
 
     // MCP sources may return [] when tokens are silently expired — force-refresh and retry
-    if (actions.length === 0 && isMcpSource && credCtx && provider?.authType !== 'none') {
+    if (actions.length === 0 && isMcpSource && credCtx && requiresUserCredential(provider)) {
       credentialCache?.invalidate('user', userId, service);
       const refreshed = await integrationRegistry.resolveCredentials(service, env, userId, {
         forceRefresh: true,
@@ -253,7 +262,13 @@ export async function listTools(
         credentialCache?.set('user', userId, service, refreshed);
         credCtx = { credentials: { access_token: refreshed.credential.accessToken } };
         actions = await actionSource.listActions(credCtx);
+        listError = getActionSourceListError(actionSource);
       }
+    }
+
+    if (actions.length === 0 && listError) {
+      warnings.push(buildToolDiscoveryWarning(service, provider, sources[0]?.id, listError));
+      continue;
     }
 
     console.log(`[session-tools] list-tools: ${service} returned ${actions.length} actions`);
@@ -320,6 +335,7 @@ export async function resolveActionPolicy(
     discoveredToolRiskLevels: Map<string, string>;
     credentialCache: CredentialCache;
     disabledPluginServicesCache: { services: Set<string>; expiresAt: number } | null;
+    orgId?: string;
   },
 ): Promise<PolicyResult & {
   service: string;
@@ -334,6 +350,9 @@ export async function resolveActionPolicy(
   }
   const service = toolId.slice(0, colonIndex);
   const actionId = toolId.slice(colonIndex + 1);
+  const orgId = opts.orgId ?? 'default';
+  const customContext = await loadCustomMcpConnectorContext(env, appDb, orgId);
+  const customConnector = customContext.connectors.get(service);
 
   // Safety net: reject disabled actions even if the tool ID was guessed
   if (await isActionDisabled(appDb, service, actionId)) {
@@ -344,7 +363,7 @@ export async function resolveActionPolicy(
   let disabledPluginServicesCache = opts.disabledPluginServicesCache;
   if (!disabledPluginServicesCache || Date.now() > disabledPluginServicesCache.expiresAt) {
     disabledPluginServicesCache = {
-      services: await getDisabledPluginServices(envDB),
+      services: await getDisabledPluginServices(envDB, orgId),
       expiresAt: Date.now() + 60 * 1000, // 1 minute TTL
     };
   }
@@ -352,8 +371,9 @@ export async function resolveActionPolicy(
     throw new Error(`Action "${toolId}" is disabled by your organization.`);
   }
 
-  // Hoist provider lookup so we can use it for both the activation gate and the policy fallback.
-  const provider = integrationRegistry.getProvider(service);
+  // Hoist provider lookup (custom-connector aware) so we can use it for both the
+  // activation gate and the policy fallback below.
+  const provider = integrationRegistry.getProvider(service, customContext);
 
   // Internal providers (e.g. the built-in `workflows` service) have no integration row and are
   // never listed in autoServices. They are always available — skip the activation gate for them.
@@ -364,9 +384,10 @@ export async function resolveActionPolicy(
     const hasActiveIntegration = [...userIntegrations, ...orgIntegrations].some(
       (i) => i.service === service && i.status === 'active',
     );
+    const customConnectorDoesNotNeedIntegration = !!customConnector && customConnector.authType !== 'oauth';
 
-    if (!hasActiveIntegration) {
-      const autoServices = await getAutoEnabledServices(envDB);
+    if (!hasActiveIntegration && !customConnectorDoesNotNeedIntegration) {
+      const autoServices = await getAutoEnabledServices(envDB, orgId);
       if (!autoServices.includes(service)) {
         throw new Error(`Integration "${service}" is not active. Configure it in Settings > Integrations.`);
       }
@@ -374,7 +395,7 @@ export async function resolveActionPolicy(
   }
 
   // Look up ActionSource
-  const actionSource = integrationRegistry.getActions(service);
+  const actionSource = integrationRegistry.getActions(service, customContext);
   if (!actionSource) {
     throw new Error(`No integration package found for service "${service}".`);
   }
@@ -387,10 +408,10 @@ export async function resolveActionPolicy(
   if (cachedRisk) {
     riskLevel = cachedRisk;
   } else {
-    // Resolve list context for policy fallback — skip credential lookup for no-auth services
-    // (reuse the provider already fetched above)
+    // Resolve list context for policy fallback — skip credential lookup for services
+    // that don't need user creds (reuse the provider already fetched above).
     let listCtx: { credentials: { access_token: string } } | undefined;
-    if (provider?.authType !== 'none') {
+    if (requiresUserCredential(provider)) {
       const listCredResult = await integrationRegistry.resolveCredentials(service, env, userId, {
         forceRefresh: false,
       });
@@ -399,7 +420,13 @@ export async function resolveActionPolicy(
       }
     }
     const actionDef = (await actionSource.listActions(listCtx)).find(a => a.id === actionId);
-    riskLevel = actionDef?.riskLevel || 'medium';
+    if (actionDef?.riskLevel) {
+      riskLevel = actionDef.riskLevel;
+    } else {
+      const cachedTool = (await listMcpToolCache(appDb, service))
+        .find((entry) => entry.actionId === actionId);
+      riskLevel = cachedTool?.riskLevel || 'medium';
+    }
   }
 
   // Resolve policy mode
@@ -427,6 +454,7 @@ export async function resolveActionPolicy(
 
 export interface ExecuteActionOpts {
   credentialCache: CredentialCache;
+  orgId?: string;
   /** Spawn request env vars, used to detect orchestrator sessions */
   spawnEnvVars?: Record<string, string>;
   /** Org-level guard configuration, threaded from the DO to action plugins. */
@@ -454,11 +482,13 @@ export async function executeAction(
     return { success: false, error: `No integration package found for service "${service}".`, analyticsEvents: [], durationMs: 0 };
   }
 
-  const provider = integrationRegistry.getProvider(service);
+  const orgId = opts.orgId ?? 'default';
+  const customContext = await loadCustomMcpConnectorContext(env, appDb, orgId);
+  const provider = integrationRegistry.getProvider(service, customContext);
   let credentials: Record<string, string>;
   let attribution: { name: string; email: string } | undefined;
 
-  if (provider?.authType === 'none') {
+  if (!requiresUserCredential(provider)) {
     credentials = {};
   } else {
     const credResult = await integrationRegistry.resolveCredentials(service, env, userId, {
@@ -500,30 +530,42 @@ export async function executeAction(
   const internalHandle = provider?.internal ? { db: appDb, env } : undefined;
 
   const toolExecStart = Date.now();
-  let actionResult = await actionSource.execute(actionId, params, { credentials, userId, attribution, callerIdentity, analytics: actionAnalytics, guardConfig: opts.guardConfig, internal: internalHandle });
+  let actionResult;
+  try {
+    actionResult = await actionSource.execute(actionId, params, { credentials, userId, orgId, attribution, callerIdentity, analytics: actionAnalytics, guardConfig: opts.guardConfig, internal: internalHandle });
 
-  // Auth failure retry — force-refresh on 401 and retry once (simple token-expired retry)
-  // Note: 403 is excluded — GitHub 403s are permission problems (missing App permissions),
-  // not credential problems. Retrying with a different token won't help.
-  const isAuthError = !actionResult.success && actionResult.error &&
-    /\b(401|unauthorized|invalid.credentials|token.*expired|token.*revoked)\b/i.test(actionResult.error);
+    // Auth failure retry — force-refresh on 401 and retry once (simple token-expired retry)
+    // Note: 403 is excluded — GitHub 403s are permission problems (missing App permissions),
+    // not credential problems. Retrying with a different token won't help.
+    const isAuthError = !actionResult.success && actionResult.error &&
+      /\b(401|unauthorized|invalid.credentials|token.*expired|token.*revoked)\b/i.test(actionResult.error);
 
-  if (provider?.authType !== 'none' && provider?.authType !== 'bot_token' && isAuthError) {
-    console.log(`[session-tools] Tool "${toolId}" auth error, force-refreshing credential`);
-    const refreshed = await integrationRegistry.resolveCredentials(service, env, userId, {
-      params,
-      forceRefresh: true,
-    });
-    if (refreshed.ok) {
-      const refreshedCredentials = buildCredentials(refreshed);
-      attribution = refreshed.credential.attribution;
-      if (service === 'slack' && credentials.owner_slack_user_id) {
-        refreshedCredentials.owner_slack_user_id = credentials.owner_slack_user_id;
-      }
-      actionResult = await actionSource.execute(actionId, params, {
-        credentials: refreshedCredentials, userId, attribution, callerIdentity, analytics: actionAnalytics, guardConfig: opts.guardConfig, internal: internalHandle,
+    if (requiresUserCredential(provider) && provider?.authType !== 'bot_token' && isAuthError) {
+      console.log(`[session-tools] Tool "${toolId}" auth error, force-refreshing credential`);
+      const refreshed = await integrationRegistry.resolveCredentials(service, env, userId, {
+        params,
+        forceRefresh: true,
       });
+      if (refreshed.ok) {
+        const refreshedCredentials = buildCredentials(refreshed);
+        attribution = refreshed.credential.attribution;
+        if (service === 'slack' && credentials.owner_slack_user_id) {
+          refreshedCredentials.owner_slack_user_id = credentials.owner_slack_user_id;
+        }
+        actionResult = await actionSource.execute(actionId, params, {
+          credentials: refreshedCredentials, userId, orgId, attribution, callerIdentity, analytics: actionAnalytics, guardConfig: opts.guardConfig, internal: internalHandle,
+        });
+      }
     }
+  } catch (err) {
+    const error = err instanceof Error ? err.message : String(err);
+    await markFailed(appDb, invocationId, error);
+    return {
+      success: false,
+      error,
+      analyticsEvents: collectedEvents,
+      durationMs: Date.now() - toolExecStart,
+    };
   }
 
   const durationMs = Date.now() - toolExecStart;
@@ -554,4 +596,53 @@ function buildCredentials(credResult: CredentialResult & { ok: true }): Record<s
     credentials._credential_type = credResult.credential.credentialType;
   }
   return credentials;
+}
+
+function requiresUserCredential(provider?: { authType?: string; isCustomConnector?: boolean }): boolean {
+  if (!provider) return false;
+  if (provider.authType === 'none') return false;
+  if (provider.isCustomConnector && provider.authType === 'api_key') return false;
+  return true;
+}
+
+function matchesServiceFilter(
+  service: string,
+  filter: string,
+  provider?: { displayName?: string; isCustomConnector?: boolean },
+): boolean {
+  const normalizedFilter = filter.trim().toLowerCase();
+  if (!normalizedFilter) return true;
+  if (service.toLowerCase() === normalizedFilter) return true;
+
+  if (!provider?.isCustomConnector) return false;
+
+  return service.toLowerCase().includes(normalizedFilter)
+    || (provider.displayName ?? '').toLowerCase().includes(normalizedFilter);
+}
+
+function getActionSourceListError(actionSource: unknown): string | null {
+  const source = actionSource as { getLastListError?: () => string | null | undefined };
+  if (typeof source.getLastListError !== 'function') return null;
+  return source.getLastListError() ?? null;
+}
+
+function buildToolDiscoveryWarning(
+  service: string,
+  provider: { displayName?: string } | undefined,
+  integrationId: string | undefined,
+  message: string,
+): ToolWarning {
+  return {
+    service,
+    displayName: provider?.displayName || service,
+    reason: classifyToolDiscoveryFailure(message),
+    message,
+    integrationId: integrationId ?? `unknown:${service}`,
+  };
+}
+
+function classifyToolDiscoveryFailure(message: string): string {
+  return /\b(401|403|unauthorized|forbidden|invalid[_ -]?token|jwt token is required|token.*expired|token.*revoked)\b/i.test(message)
+    ? 'auth_failed'
+    : 'request_failed';
 }

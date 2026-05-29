@@ -50,22 +50,36 @@ export function FilePreview({ sessionId, path, showHeader = true }: FilePreviewP
 
   if (isBinary) {
     return (
-      <div className="flex h-full items-center justify-center p-4">
+      <div className="flex h-full flex-col items-center justify-center gap-3 p-4">
         <p className="text-sm text-neutral-500 dark:text-neutral-400">
           Binary file cannot be displayed
         </p>
+        <button
+          onClick={() => {
+            const blob = new Blob([data.content], { type: 'application/octet-stream' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = path.split('/').pop() || 'file';
+            a.click();
+            URL.revokeObjectURL(url);
+          }}
+          className="rounded border border-neutral-300 px-3 py-1 text-xs text-neutral-600 transition-colors hover:bg-neutral-200 dark:border-neutral-600 dark:text-neutral-400 dark:hover:bg-neutral-700"
+        >
+          Download
+        </button>
       </div>
     );
   }
 
   return (
-    <div className="h-full overflow-auto">
+    <div className="flex h-full min-w-0 flex-col overflow-hidden">
       {showHeader && (
-        <div className="sticky top-0 flex items-center justify-between border-b border-neutral-200 bg-neutral-100 px-4 py-2 dark:border-neutral-700 dark:bg-neutral-800">
-          <span className="text-sm font-medium text-neutral-700 dark:text-neutral-300">
+        <div className="flex shrink-0 items-center justify-between border-b border-neutral-200 bg-neutral-100 px-4 py-2 dark:border-neutral-700 dark:bg-neutral-800">
+          <span className="min-w-0 truncate text-sm font-medium text-neutral-700 dark:text-neutral-300">
             {path}
           </span>
-          <div className="flex items-center gap-2">
+          <div className="flex shrink-0 items-center gap-2">
             {isMarkdown && (
               <button
                 onClick={() => setRenderMarkdown((v) => !v)}
@@ -74,6 +88,21 @@ export function FilePreview({ sessionId, path, showHeader = true }: FilePreviewP
                 {renderMarkdown ? 'Raw' : 'Preview'}
               </button>
             )}
+            <button
+              onClick={() => {
+                const blob = new Blob([data.content], { type: 'text/plain' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = path.split('/').pop() || 'file.txt';
+                a.click();
+                URL.revokeObjectURL(url);
+              }}
+              className="rounded border border-neutral-300 px-2 py-0.5 text-xs text-neutral-600 transition-colors hover:bg-neutral-200 dark:border-neutral-600 dark:text-neutral-400 dark:hover:bg-neutral-700"
+              title="Download file"
+            >
+              Download
+            </button>
             <span className="text-xs text-neutral-500 dark:text-neutral-400">
               {language}
             </span>
@@ -81,14 +110,18 @@ export function FilePreview({ sessionId, path, showHeader = true }: FilePreviewP
         </div>
       )}
       {isMarkdown && renderMarkdown ? (
-        <div className="p-4">
+        <div className="min-h-0 flex-1 overflow-auto p-4">
           <MarkdownContent content={data.content} />
         </div>
       ) : (
-        <File
-          file={{ name: path.split('/').pop() || 'file.txt', contents: data.content }}
-          options={{ theme, overflow: 'scroll' }}
-        />
+        <div className="min-h-0 min-w-0 flex-1 overflow-auto">
+          <File
+            className="block min-w-0 max-w-full overflow-hidden"
+            file={{ name: path.split('/').pop() || 'file.txt', contents: data.content }}
+            options={{ theme, overflow: 'scroll' }}
+            style={{ contain: 'inline-size' }}
+          />
+        </div>
       )}
     </div>
   );

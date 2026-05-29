@@ -143,7 +143,6 @@ export async function restartOrchestratorSession(
   // Fetch user preferences (idle timeout, queue mode, model preferences)
   const userRow = await db.getUserById(appDb, userId);
   const idleTimeoutSeconds = userRow?.idleTimeoutSeconds ?? 900;
-  const uiQueueMode = userRow?.uiQueueMode ?? 'followup';
   const idleTimeoutMs = idleTimeoutSeconds * 1000;
 
   // Inject user timezone into sandbox env
@@ -197,7 +196,7 @@ export async function restartOrchestratorSession(
         hibernateUrl: env.MODAL_BACKEND_URL.replace('{label}', 'hibernate-session'),
         restoreUrl: env.MODAL_BACKEND_URL.replace('{label}', 'restore-session'),
         idleTimeoutMs,
-        queueMode: uiQueueMode,
+        queueMode: 'steer',
         spawnRequest,
         initialModel,
       }),
@@ -471,6 +470,7 @@ export async function dispatchOrchestratorPrompt(
         userId: params.userId,
         orgId: 'default',
         scopeKey: params.scopeKey,
+        queueMode: 'steer',
       });
     } catch (err) {
       // Best-effort — don't block message dispatch

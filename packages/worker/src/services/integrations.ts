@@ -4,6 +4,7 @@ import * as db from '../lib/db.js';
 import { getDb } from '../lib/drizzle.js';
 import { integrationRegistry } from '../integrations/registry.js';
 import { storeCredential } from '../services/credentials.js';
+import { loadCustomMcpConnectorContext } from './custom-mcp-connectors.js';
 
 // ─── Configure Integration ──────────────────────────────────────────────────
 
@@ -33,15 +34,13 @@ export async function configureIntegration(
   const appDb = getDb(env.DB);
   // Check if integration already exists
   const existing = await db.getUserIntegrations(appDb, userId);
-  if (existing.some((i) => i.service === params.service)) {
-    throw new IntegrationError(
-      `Integration for ${params.service} already exists`,
-      ErrorCodes.INTEGRATION_ALREADY_EXISTS
-    );
-  }
+  const existingIntegration = existing.find((i) => i.service === params.service);
 
   // Get the integration provider
-  const provider = integrationRegistry.getProvider(params.service);
+  const customContext = integrationRegistry.isBuiltinService(params.service)
+    ? undefined
+    : await loadCustomMcpConnectorContext(env, appDb, 'default');
+  const provider = integrationRegistry.getProvider(params.service, customContext);
   if (!provider) {
     throw new ValidationError(`Unsupported integration: ${params.service}`);
   }
@@ -102,7 +101,27 @@ export async function configureIntegration(
     expiresAt,
   });
 
-  // Create integration record (without credentials)
+  if (existingIntegration) {
+    const updated = await db.updateIntegration(appDb, existingIntegration.id, {
+      config: params.config,
+      status: 'active',
+      errorMessage: null,
+    });
+    if (!updated) {
+      throw new IntegrationError(
+        `Integration for ${params.service} disappeared during update`,
+        ErrorCodes.INTEGRATION_NOT_FOUND,
+      );
+    }
+    return {
+      id: updated.id,
+      service: updated.service,
+      status: 'active',
+      config: updated.config as unknown as Record<string, unknown>,
+      createdAt: updated.createdAt,
+    };
+  }
+
   const integrationId = crypto.randomUUID();
   const created = await db.createIntegration(appDb, {
     id: integrationId,
@@ -111,7 +130,6 @@ export async function configureIntegration(
     config: params.config,
   });
 
-  // Update status to active
   await db.updateIntegrationStatus(appDb, integrationId, 'active');
 
   return {

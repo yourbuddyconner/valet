@@ -128,7 +128,7 @@ export type DOToRunnerMessage =
   | { type: 'diff'; requestId: string }
   | { type: 'review'; requestId: string }
   | { type: 'pong' }
-  | { type: 'spawn-child-result'; requestId: string; childSessionId?: string; error?: string }
+  | { type: 'spawn-child-result'; requestId: string; childSessionId?: string; parentThreadId?: string; error?: string }
   | { type: 'session-message-result'; requestId: string; success?: boolean; error?: string }
   | {
       type: 'session-messages-result';
@@ -414,7 +414,7 @@ export type RunnerToDOMessage =
     }
   | { type: 'git-state'; branch?: string; baseBranch?: string; commitCount?: number }
   | { type: 'models'; models: AvailableModels }
-  | { type: 'aborted' }
+  | { type: 'aborted'; messageId?: string }
   | { type: 'wait-subscription'; reason?: string; sessionIds?: string[]; notifyOn?: string; statuses?: string[] }
   | { type: 'reverted'; messageIds: string[] }
   | { type: 'diff'; requestId: string; data: { files: DiffFile[] } }
@@ -640,7 +640,7 @@ export type RunnerToDOMessage =
       action: string;
       payload?: Record<string, unknown>;
     }
-  | { type: 'child-session'; childSessionId: string; title?: string }
+  | { type: 'child-session'; childSessionId: string; title?: string; threadId?: string }
   | { type: 'title'; title: string }
   | { type: 'audio-transcript'; messageId: string; transcript: string }
   | {

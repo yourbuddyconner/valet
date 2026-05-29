@@ -308,6 +308,7 @@ export interface ActiveScheduleTriggerRow {
   user_id: string;
   workflow_id: string | null;
   config: string;
+  last_run_at: string | null;
   workflow_enabled: number | null;
   workflow_name: string | null;
   workflow_version: string | null;
@@ -331,6 +332,7 @@ export async function getActiveScheduleTriggers(
       t.user_id,
       t.workflow_id,
       t.config,
+      t.last_run_at,
       w.enabled as workflow_enabled,
       w.name as workflow_name,
       w.version as workflow_version,

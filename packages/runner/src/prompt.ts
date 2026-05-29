@@ -40,6 +40,30 @@ import {
 } from "./workflow-engine.js";
 import type { WorkflowStepEventKind } from "./workflow-step-events.js";
 
+// ─── Date Context ────────────────────────────────────────────────────────────
+
+/**
+ * Build the date context prefix for agent prompts (TKAI-79). Returns both the
+ * date key (YYYY-MM-DD, for change detection) and the formatted prefix string.
+ * Uses a single clock read to avoid mismatches at midnight boundaries.
+ */
+function buildDateContext(): { date: string; prefix: string } {
+  const now = new Date();
+  const tz = process.env.TZ || 'UTC';
+  try {
+    const isoDate = new Intl.DateTimeFormat('en-CA', {
+      year: 'numeric', month: '2-digit', day: '2-digit', timeZone: tz,
+    }).format(now);
+    const dayOfWeek = new Intl.DateTimeFormat('en-US', {
+      weekday: 'long', timeZone: tz,
+    }).format(now);
+    return { date: isoDate, prefix: `[Today is ${dayOfWeek}, ${isoDate} (${tz})]` };
+  } catch {
+    const isoDate = now.toISOString().slice(0, 10);
+    return { date: isoDate, prefix: `[Today is ${isoDate} (UTC)]` };
+  }
+}
+
 // OpenCode ToolState status values
 type ToolStatus = "pending" | "running" | "completed" | "error";
 
@@ -207,6 +231,22 @@ function openCodeErrorToMessage(raw: unknown): string | null {
   return fallback && fallback !== "{}" ? fallback : null;
 }
 
+function retryStatusToMessage(rawStatus: unknown): string | null {
+  if (!isRecord(rawStatus)) return null;
+
+  const directMessage =
+    (typeof rawStatus.message === "string" ? rawStatus.message : undefined) ??
+    (typeof rawStatus.reason === "string" ? rawStatus.reason : undefined) ??
+    (typeof rawStatus.description === "string" ? rawStatus.description : undefined);
+  if (directMessage?.trim()) return directMessage.trim();
+
+  return (
+    openCodeErrorToMessage(rawStatus.error) ??
+    openCodeErrorToMessage(rawStatus.cause) ??
+    openCodeErrorToMessage(rawStatus.data)
+  );
+}
+
 /** Max characters to inject from a single text file into the prompt. */
 const MAX_TEXT_FILE_CHARS = 512_000; // 500KB
 
@@ -231,6 +271,10 @@ const FIRST_RESPONSE_TIMEOUT_MS = 90_000;
 // Hard ceiling on a single sync prompt attempt. Prevents the sync fetch from blocking
 // forever when OpenCode enters an internal provider retry loop (e.g. repeated 429/5xx).
 const SYNC_PROMPT_TIMEOUT_MS = 300_000; // 5 minutes
+
+// Repeated zero-output retry status events mean OpenCode is retrying the same
+// provider internally without returning a usable response to the runner.
+const PROVIDER_RETRY_LOOP_ABORT_RETRIES = 4;
 
 // Review polling configuration
 const REVIEW_POLL_INTERVAL_MS = 500;
@@ -421,6 +465,11 @@ export class ChannelSession {
   // True when session id was injected from DO persistence rather than created
   // in this runner process. We re-sync it before first prompt dispatch.
   adoptedPersistedSession = false;
+  // The date string last injected into this session's conversation (TKAI-79).
+  // Compared against the current date on each prompt — when it differs (new
+  // session, midnight rollover, hibernation restore) the date context is
+  // re-injected. null means no date has been injected yet.
+  lastInjectedDate: string | null = null;
 
   // Track current prompt so we can route events back to the DO
   activeMessageId: string | null = null;
@@ -486,6 +535,17 @@ export class ChannelSession {
   // Callback to reset the sync prompt timeout on SSE activity.
   // Set by the failover loop, cleared when the sync fetch completes.
   resetSyncTimeout: (() => void) | null = null;
+  // Callback to abort the current sync prompt attempt when OpenCode gets stuck
+  // retrying a provider without returning a response.
+  abortSyncAttempt: ((reason: string) => void) | null = null;
+  syncAbortReason: string | null = null;
+  providerRetryCount = 0;
+  providerRetryStartedAt = 0;
+
+  // Per-prompt timing and reply routing (moved from PromptHandler for concurrency)
+  lastPromptSentAt = 0;
+  pendingReplyChannelType: string | undefined;
+  pendingReplyChannelId: string | undefined;
 
   // Per-message usage entries for the current turn (reset per prompt)
   usageEntries = new Map<string, { model: string; inputTokens: number; outputTokens: number }>();
@@ -526,6 +586,10 @@ export class ChannelSession {
     this.turnCreated = false;
     this.turnId = null;
     this.resetSyncTimeout = null;
+    this.abortSyncAttempt = null;
+    this.syncAbortReason = null;
+    this.providerRetryCount = 0;
+    this.providerRetryStartedAt = 0;
     this.usageEntries.clear();
   }
 
@@ -548,6 +612,10 @@ export class ChannelSession {
     this.turnCreated = false;
     this.turnId = null;
     this.resetSyncTimeout = null;
+    this.abortSyncAttempt = null;
+    this.syncAbortReason = null;
+    this.providerRetryCount = 0;
+    this.providerRetryStartedAt = 0;
     // Note: usageEntries NOT cleared on retry — entries from failed attempt
     // are still valid usage that was billed by the provider
   }
@@ -572,6 +640,10 @@ export class ChannelSession {
     this.turnCreated = false;
     this.turnId = null;
     this.resetSyncTimeout = null;
+    this.abortSyncAttempt = null;
+    this.syncAbortReason = null;
+    this.providerRetryCount = 0;
+    this.providerRetryStartedAt = 0;
     // Tokens consumed during aborted turns are still billed by the provider
     // but we drop them here since turnId is cleared and we can't attribute them.
     // This causes minor underreporting of actual provider cost on aborted turns.
@@ -851,6 +923,7 @@ export class PromptHandler {
       this.ocSessionToChannel.delete(channel.opencodeSessionId);
     }
     channel.opencodeSessionId = persisted;
+    channel.lastInjectedDate = null; // force date re-injection on restored session
     this.ocSessionToChannel.set(persisted, channel);
     channel.adoptedPersistedSession = true;
   }
@@ -946,6 +1019,7 @@ export class PromptHandler {
       this.ocSessionToChannel.delete(oldId);
     }
     channel.opencodeSessionId = await this.createSession();
+    channel.lastInjectedDate = null; // force date re-injection on fresh conversation
     this.ocSessionToChannel.set(channel.opencodeSessionId, channel);
     this.agentClient.sendChannelSessionCreated(channel.channelKey, channel.opencodeSessionId);
     // Notify DO when a new OpenCode session is created for a thread channel
@@ -1766,9 +1840,9 @@ export class PromptHandler {
     // flows through the `thread:<id>` channelKey resolved upstream in the DO.
     // The parameter remains in the signature for caller compatibility.
     void threadId;
-    // Store original channel info for [via ...] attribution prefix
-    this.pendingReplyChannelType = replyChannelType;
-    this.pendingReplyChannelId = replyChannelId;
+    // Store original channel info for [via ...] attribution prefix (per-channel for concurrency)
+    channel.pendingReplyChannelType = replyChannelType;
+    channel.pendingReplyChannelId = replyChannelId;
     this.applyPersistedOpenCodeSessionId(channel, opencodeSessionId);
 
     try {
@@ -1817,8 +1891,15 @@ export class PromptHandler {
       // user preferences. This keeps failover anchored to the actual selected model.
       const failoverChain = this.buildModelFailoverChain(model, modelPreferences);
 
-      // Transcribe audio attachments before sending to OpenCode
+      // Inject date context when the date has changed or hasn't been injected
+      // yet (TKAI-79). Covers new sessions, midnight rollover, and hibernation
+      // restore — no separate mechanism needed for each case.
       let effectiveContent = content;
+      const { date, prefix } = buildDateContext();
+      if (channel.lastInjectedDate !== date) {
+        channel.lastInjectedDate = date;
+        effectiveContent = `${prefix}\n\n${effectiveContent}`;
+      }
       let effectiveAttachments = attachments ?? [];
       const hasAudio = effectiveAttachments.some(a => a.mime.startsWith('audio/'));
       if (hasAudio) {
@@ -1907,19 +1988,20 @@ export class PromptHandler {
         }
       }
 
-      // Store failover state (use post-transcription values so model failover doesn't re-transcribe)
-      this.currentModelPreferences = failoverChain.length > 0 ? failoverChain : undefined;
-      this.pendingRetryContent = effectiveContent;
-      this.pendingRetryAttachments = effectiveAttachments;
-      this.pendingRetryAuthor = author;
+      // Store failover state on the channel (not class-level) so concurrent
+      // prompts on different channels don't clobber each other's retry state.
+      channel.currentModelPreferences = failoverChain.length > 0 ? failoverChain : undefined;
+      channel.pendingRetryContent = effectiveContent;
+      channel.pendingRetryAttachments = effectiveAttachments;
+      channel.pendingRetryAuthor = author;
 
       // Determine which model to use: explicit model takes priority, then first preference
-      this.currentModelIndex = 0;
+      channel.currentModelIndex = 0;
 
       // Notify client that agent is thinking
       this.agentClient.sendAgentStatus("thinking", undefined, messageId);
-      this.awaitingAssistantForAttempt = true;
-      this.lastPromptSentAt = Date.now();
+      channel.awaitingAssistantForAttempt = true;
+      channel.lastPromptSentAt = Date.now();
 
       // Mark sync prompt in flight so SSE-side finalizeResponse is suppressed
       channel.syncPromptInFlight = true;
@@ -1941,43 +2023,59 @@ export class PromptHandler {
 
       for (let i = 0; i < modelsToTry.length; i++) {
         const currentModel = modelsToTry[i];
-        this.currentModelIndex = i;
+        channel.currentModelIndex = i;
 
         if (i > 0) {
           // Not first attempt — notify DO, reset, send thinking
           const fromModel = modelsToTry[i - 1] || "default";
           const toModel = currentModel || "default";
           console.log(`[PromptHandler] Failing over from ${fromModel} to ${toModel} due to: ${lastModelError}`);
-          if (this.activeMessageId) {
-            this.agentClient.sendModelSwitched(this.activeMessageId, fromModel, toModel, lastModelError || "Model failed");
+          if (channel.activeMessageId) {
+            this.agentClient.sendModelSwitched(channel.activeMessageId, fromModel, toModel, lastModelError || "Model failed");
           }
           channel.resetForRetry();
           channel.syncPromptInFlight = true; // Re-set after resetForRetry clears it
           this.agentClient.sendAgentStatus("thinking", undefined, messageId);
-          this.awaitingAssistantForAttempt = true;
+          channel.awaitingAssistantForAttempt = true;
         }
 
         // Create an AbortController with a resettable inactivity timeout.
         // The timeout resets whenever SSE events indicate the model is actively
-        // working (text streaming, tool calls, step events). This prevents
+        // working (text streaming, tool calls, reasoning). This prevents
         // aborting long-running but actively-progressing prompts.
         const syncAbort = new AbortController();
         const sessionId = channel.opencodeSessionId;
         let syncTimeoutId: ReturnType<typeof setTimeout> | undefined;
+        const abortSyncAttempt = (reason: string) => {
+          if (syncAbort.signal.aborted) return;
+          channel.syncAbortReason = reason;
+          console.warn(`[PromptHandler] Aborting sync prompt attempt: ${reason}`);
+          syncAbort.abort();
+          if (sessionId) {
+            fetch(`${this.opencodeUrl}/session/${sessionId}/abort`, { method: "POST" }).catch(() => undefined);
+          }
+        };
         const startSyncTimeout = () => {
           clearTimeout(syncTimeoutId);
           syncTimeoutId = setTimeout(() => {
-            console.log(`[PromptHandler] Sync prompt inactivity timeout (${SYNC_PROMPT_TIMEOUT_MS}ms) — aborting fetch and OpenCode session`);
-            syncAbort.abort();
-            // Abort the OpenCode session to stop its internal retry loop
-            if (sessionId) {
-              fetch(`${this.opencodeUrl}/session/${sessionId}/abort`, { method: "POST" }).catch(() => undefined);
+            // If any tools are still running (e.g. task/Agent subagents),
+            // the model is blocked waiting for tool results — not hung.
+            // Restart the timeout instead of aborting.
+            const hasRunningTools = Array.from(channel.toolStates.values()).some(
+              (t) => t.status === "running" || t.status === "pending"
+            );
+            if (hasRunningTools) {
+              console.log(`[PromptHandler] Sync timeout fired but tools still running — extending timeout`);
+              startSyncTimeout();
+              return;
             }
+            abortSyncAttempt(`Model did not respond (sync prompt timed out after ${SYNC_PROMPT_TIMEOUT_MS}ms)`);
           }, SYNC_PROMPT_TIMEOUT_MS);
         };
         startSyncTimeout();
         // Expose to SSE handlers so activity resets the timeout
         channel.resetSyncTimeout = startSyncTimeout;
+        channel.abortSyncAttempt = abortSyncAttempt;
 
         try {
           console.log(`[PromptHandler] Sending sync prompt ${messageId} (channel: ${channel.channelKey})${currentModel ? ` (model: ${currentModel})` : ''}`);
@@ -2009,6 +2107,13 @@ export class PromptHandler {
             channel.pendingVisionAttachments = [];
             channel.abortedForVision = false;
             channel.resetPromptState();
+            // Suppress idle-based finalization until the async re-send
+            // makes the session busy. Without this, trailing idle events
+            // from the abort ripple (e.g. other pending tools erroring out)
+            // trigger premature finalization before the re-send is picked up.
+            // retryPending is cleared by handleSessionStatus when session
+            // transitions to "busy".
+            channel.retryPending = true;
             await this.sendPromptAsync(
               channel.opencodeSessionId!,
               'The requested image(s) are attached. Describe what you see and continue with your task.',
@@ -2019,17 +2124,17 @@ export class PromptHandler {
             // drive further events and finalization via the normal idle path.
             return;
           }
-          const errorMsg = responseError || this.lastError;
+          const errorMsg = responseError || channel.lastError;
 
           console.log(
             `[PromptHandler] Sync response analysis for ${messageId}: ` +
             `responseText=${responseText ? responseText.length + ' chars' : 'null'} ` +
             `responseError=${responseError ?? 'null'} ` +
-            `lastError=${this.lastError ?? 'null'} ` +
-            `hasActivity=${this.hasActivity} ` +
-            `streamedContent=${this.streamedContent.length} chars ` +
-            `toolStates=${this.toolStates.size} ` +
-            `assistantMsgIds=${this.activeAssistantMessageIds.size}`
+            `lastError=${channel.lastError ?? 'null'} ` +
+            `hasActivity=${channel.hasActivity} ` +
+            `streamedContent=${channel.streamedContent.length} chars ` +
+            `toolStates=${channel.toolStates.size} ` +
+            `assistantMsgIds=${channel.activeAssistantMessageIds.size}`
           );
 
           if (errorMsg && isRetriableProviderError(errorMsg)) {
@@ -2039,7 +2144,7 @@ export class PromptHandler {
             continue;
           }
 
-          if (!responseText && !errorMsg && !this.hasActivity) {
+          if (!responseText && !errorMsg && !channel.hasActivity) {
             // Empty response with no SSE activity — continue to next model
             lastModelError = "Model returned an empty response";
             console.log(`[PromptHandler] Empty response for ${messageId} with no activity — trying next model`);
@@ -2053,8 +2158,8 @@ export class PromptHandler {
           const errMsg = err instanceof Error ? err.message : String(err);
           // Treat sync timeout abort as a retriable error for failover
           if (syncAbort.signal.aborted) {
-            lastModelError = "Model did not respond (sync prompt timed out)";
-            console.log(`[PromptHandler] Sync prompt timed out for ${messageId} — trying next model`);
+            lastModelError = channel.syncAbortReason || "Model did not respond (sync prompt timed out)";
+            console.log(`[PromptHandler] Sync prompt aborted for ${messageId}: ${lastModelError} — trying next model`);
             continue;
           }
           // Suppress abort exceptions from a wait_for_event yield-abort —
@@ -2072,6 +2177,9 @@ export class PromptHandler {
             channel.pendingVisionAttachments = [];
             channel.abortedForVision = false;
             channel.resetPromptState();
+            // Suppress trailing idle events from the abort — see comment in
+            // the response-error vision abort path above.
+            channel.retryPending = true;
             await this.sendPromptAsync(
               channel.opencodeSessionId!,
               'The requested image(s) are attached. Describe what you see and continue with your task.',
@@ -2091,6 +2199,8 @@ export class PromptHandler {
         } finally {
           clearTimeout(syncTimeoutId);
           channel.resetSyncTimeout = null;
+          channel.abortSyncAttempt = null;
+          channel.syncAbortReason = null;
         }
       }
 
@@ -2104,7 +2214,7 @@ export class PromptHandler {
       const errorMsg = err instanceof Error ? err.message : String(err);
       console.error("[PromptHandler] Error processing prompt:", errorMsg);
       this.agentClient.sendError(messageId, errorMsg);
-      this.agentClient.sendComplete(this.activeMessageId ?? undefined);
+      this.agentClient.sendComplete(channel.activeMessageId ?? undefined);
       this.agentClient.sendAgentStatus("idle", undefined, messageId);
     }
   }
@@ -2188,8 +2298,8 @@ export class PromptHandler {
     console.log(`[PromptHandler] Sending complete`);
 
     // Emit llm_response timing with token counts for throughput analysis
-    if (this.lastPromptSentAt > 0) {
-      const durationMs = Date.now() - this.lastPromptSentAt;
+    if (channel.lastPromptSentAt > 0) {
+      const durationMs = Date.now() - channel.lastPromptSentAt;
       let inputTokens = 0;
       let outputTokens = 0;
       for (const entry of channel.usageEntries.values()) {
@@ -2271,6 +2381,11 @@ export class PromptHandler {
     channel.retryPending = false;
     channel.finalizeInFlight = false;
     channel.syncPromptInFlight = false;
+    channel.resetSyncTimeout = null;
+    channel.abortSyncAttempt = null;
+    channel.syncAbortReason = null;
+    channel.providerRetryCount = 0;
+    channel.providerRetryStartedAt = 0;
     console.log(`[PromptHandler] Response finalized (channelKey=${channel.channelKey})`);
   }
 
@@ -2527,6 +2642,11 @@ export class PromptHandler {
 
     console.log(`[PromptHandler] Aborting ${targetChannels.length} channel(s): ${targetChannels.map(c => c.channelKey).join(', ')}`);
 
+    // Capture the active messageId BEFORE resetForAbort clears it.
+    // For multi-channel aborts, pick the first non-null messageId for the
+    // aborted ack so the DO can resolve which channel was interrupted.
+    const abortedMessageId = targetChannels.find(ch => ch.activeMessageId)?.activeMessageId ?? undefined;
+
     // Clear prompt state BEFORE the fetch so the SSE handler stops
     // forwarding events immediately (handlePartUpdated checks activeMessageId)
     this.clearResponseTimeout();
@@ -2536,7 +2656,7 @@ export class PromptHandler {
     }
 
     // Tell DO first so clients get immediate feedback
-    this.agentClient.sendAborted();
+    this.agentClient.sendAborted(abortedMessageId);
     // TEMPORARY: Task 12 plumbs channel-bound messageId through SSE handlers
     this.agentClient.sendAgentStatus("idle", undefined, this.getActiveMessageId());
 
@@ -2570,6 +2690,7 @@ export class PromptHandler {
 
     // Create fresh session
     channel.opencodeSessionId = await this.createSession();
+    channel.lastInjectedDate = null; // force date re-injection on fresh conversation
     this.ocSessionToChannel.set(channel.opencodeSessionId, channel);
     channel.resetPromptState();
 
@@ -3154,6 +3275,7 @@ export class PromptHandler {
       }
       // Null out session IDs — they won't survive the restart
       channel.opencodeSessionId = null;
+      channel.lastInjectedDate = null;
       channel.adoptedPersistedSession = false;
     }
 
@@ -3519,8 +3641,9 @@ export class PromptHandler {
     // channel info is passed via replyChannelType/replyChannelId so the agent still
     // knows which external channel to reply to.
     let attributedContent = content;
-    const attrChannelType = this.pendingReplyChannelType || channelType;
-    const attrChannelId = this.pendingReplyChannelId || channelId;
+    const replyChannel = this.currentPromptChannel;
+    const attrChannelType = replyChannel?.pendingReplyChannelType || this.pendingReplyChannelType || channelType;
+    const attrChannelId = replyChannel?.pendingReplyChannelId || this.pendingReplyChannelId || channelId;
     if (attrChannelType && attrChannelId && attrChannelType !== "thread") {
       attributedContent = `[via ${attrChannelType} | chatId: ${attrChannelId}] ${attributedContent}`;
     }
@@ -3824,6 +3947,23 @@ export class PromptHandler {
     const props = event.properties;
     if (!props) return;
 
+    // Heartbeats arrive every ~10s from OpenCode with no sessionID.
+    // When tools are actively running (e.g. a task/Agent subagent), the parent
+    // session produces no other SSE events. Use heartbeats to keep the sync
+    // prompt timeout alive so long-running tools don't trigger a spurious abort.
+    if (event.type === "server.heartbeat") {
+      for (const channel of this.ocSessionToChannel.values()) {
+        if (!channel.syncPromptInFlight) continue;
+        const hasRunningTools = Array.from(channel.toolStates.values()).some(
+          (t) => t.status === "running" || t.status === "pending"
+        );
+        if (hasRunningTools) {
+          channel.resetSyncTimeout?.();
+        }
+      }
+      return;
+    }
+
     // Check for ephemeral session events before filtering
     // Session ID can be at top level or nested inside part/info objects
     const part = props.part as Record<string, unknown> | undefined;
@@ -4093,7 +4233,6 @@ export class PromptHandler {
       }
 
       case "server.connected":
-      case "server.heartbeat":
       case "session.created":
       case "session.deleted":
       case "session.diff":
@@ -4486,6 +4625,60 @@ export class PromptHandler {
     }
   }
 
+  private hasUsefulProviderOutput(channel: ChannelSession): boolean {
+    return (
+      channel.streamedContent.trim().length > 0 ||
+      channel.latestAssistantTextSnapshot.trim().length > 0 ||
+      channel.toolStates.size > 0
+    );
+  }
+
+  private handleProviderRetryStatus(
+    channel: ChannelSession,
+    rawStatus: unknown,
+    props: Record<string, unknown>,
+  ): void {
+    if (!channel.activeMessageId || !channel.syncPromptInFlight || !channel.abortSyncAttempt) {
+      return;
+    }
+
+    if (this.hasUsefulProviderOutput(channel)) {
+      return;
+    }
+
+    const now = Date.now();
+    if (channel.providerRetryCount === 0) {
+      channel.providerRetryStartedAt = now;
+    }
+    channel.providerRetryCount++;
+
+    const retryReason =
+      retryStatusToMessage(rawStatus) ??
+      retryStatusToMessage(props) ??
+      "OpenCode entered provider retry state without exposing the provider error";
+
+    channel.recentEventTrace.push(`status.retry:${retryReason.slice(0, 120)}`);
+    if (channel.recentEventTrace.length > 40) {
+      channel.recentEventTrace.shift();
+    }
+
+    console.warn(
+      `[PromptHandler] session.status=retry (${channel.providerRetryCount}/${PROVIDER_RETRY_LOOP_ABORT_RETRIES}) ` +
+      `with no provider output: ${retryReason}`
+    );
+
+    if (channel.providerRetryCount < PROVIDER_RETRY_LOOP_ABORT_RETRIES) {
+      return;
+    }
+
+    const elapsedMs = channel.providerRetryStartedAt > 0 ? now - channel.providerRetryStartedAt : 0;
+    const abortReason =
+      `OpenCode entered a provider retry loop with no output after ` +
+      `${channel.providerRetryCount} retries over ${elapsedMs}ms. ${retryReason}`;
+    channel.lastError = abortReason;
+    channel.abortSyncAttempt(abortReason);
+  }
+
   private handleSessionStatus(props: Record<string, unknown>, channel: ChannelSession): void {
     // SessionStatus is an object: { type: "idle" | "busy" | "retry" }
     const rawStatus = props.status;
@@ -4526,6 +4719,8 @@ export class PromptHandler {
         channel.retryPending = false;
       }
       channel.idleNotified = false;
+    } else if (statusType === "retry") {
+      this.handleProviderRetryStatus(channel, rawStatus, props);
     }
   }
 

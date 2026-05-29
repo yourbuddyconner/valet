@@ -5,7 +5,7 @@ import { formatTime } from '@/lib/format';
 import { DeferredMarkdownContent } from './markdown/deferred-markdown-content';
 import { DeferredToolCard } from './deferred-tool-card';
 import type { ToolCallData, ToolCallStatus } from './tool-cards/types';
-import { useDrawer } from '@/routes/sessions/$sessionId';
+import { useDrawer } from '@/hooks/use-drawer';
 import { Avatar, AvatarImage, AvatarFallback } from '@/components/ui/avatar';
 import { MessageCopyButton } from './message-copy-button';
 import { ChannelBadge } from '@valet/sdk/ui';

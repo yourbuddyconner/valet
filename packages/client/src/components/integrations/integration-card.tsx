@@ -20,6 +20,7 @@ const serviceLabels: Record<string, string> = {
   discord: 'Discord',
   slack: 'Slack',
   xero: 'Xero',
+  grafana: 'Grafana Cloud',
 };
 
 const statusText: Record<Integration['status'], { label: string; className: string }> = {

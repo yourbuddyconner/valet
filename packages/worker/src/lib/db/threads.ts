@@ -8,7 +8,7 @@ function rowToThread(row: any): SessionThread {
     id: row.id,
     sessionId: row.session_id,
     opencodeSessionId: row.opencode_session_id || undefined,
-    title: row.title || undefined,
+    title: row.title ?? undefined,
     summaryAdditions: row.summary_additions ?? 0,
     summaryDeletions: row.summary_deletions ?? 0,
     summaryFiles: row.summary_files ?? 0,

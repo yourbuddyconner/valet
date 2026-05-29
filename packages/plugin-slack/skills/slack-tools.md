@@ -44,6 +44,8 @@ First time reading a channel, use `slack.get_channel_info` to understand its top
 
 Messages include `user_display` (e.g., `@conner <Conner Swann> (U123)`) and `bot_display` fields. These tell you who said what without needing to call `slack.list_users`.
 
+Use `slack.list_users` with `filter` when you need to find a Slack user ID by name, handle, or email. The tool searches the whole workspace and includes deactivated human users with `deleted: true`, which is useful when resolving historical messages or references.
+
 Use `slack.get_reactions` when you need to know **who specifically** agreed or acknowledged something, not just the count.
 
 ## Private Channels

@@ -25,3 +25,4 @@ export * from './channel-threads.js';
 export * from './mcp-tool-cache.js';
 export * from './service-configs.js';
 export * from './github-installations.js';
+export * from './custom-mcp-connectors.js';

@@ -17,7 +17,7 @@ export type IntegrationService =
 export interface Integration {
   id: string;
   userId: string;
-  service: IntegrationService;
+  service: string;
   config: IntegrationConfig;
   status: 'active' | 'error' | 'pending' | 'disconnected';
   scope: 'user' | 'org';
@@ -483,9 +483,78 @@ export interface ListSessionsResponse {
 }
 
 export interface ConfigureIntegrationRequest {
-  service: IntegrationService;
+  service: string;
   credentials: Record<string, string>;
   config: IntegrationConfig;
+}
+
+export type CustomMcpConnectorAuthType = 'none' | 'oauth' | 'api_key' | 'bearer';
+
+export type CustomMcpConnectorTokenEndpointAuthMethod =
+  | 'none'
+  | 'client_secret_basic'
+  | 'client_secret_post';
+
+export interface CustomMcpConnector {
+  id: string;
+  orgId: string;
+  serviceSlug: string;
+  displayName: string;
+  serverUrl: string;
+  authType: CustomMcpConnectorAuthType;
+  oauthClientId: string | null;
+  oauthTokenEndpointAuthMethod: CustomMcpConnectorTokenEndpointAuthMethod;
+  oauthScopes: string | null;
+  oauthAuthorizationEndpoint: string | null;
+  oauthTokenEndpoint: string | null;
+  apiKeyHeaderName: string | null;
+  apiKeyPrefix: string | null;
+  status: 'active' | 'disabled' | 'error';
+  toolCount?: number;
+  lastDiscoveredAt: string | null;
+  lastError: string | null;
+  createdBy: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+  hasClientSecret: boolean;
+  hasApiKey: boolean;
+  hasAdditionalHeaders: boolean;
+}
+
+export interface CreateCustomMcpConnectorRequest {
+  displayName: string;
+  serverUrl: string;
+  authType: CustomMcpConnectorAuthType;
+  oauthClientId?: string | null;
+  oauthClientSecret?: string;
+  oauthTokenEndpointAuthMethod?: CustomMcpConnectorTokenEndpointAuthMethod | 'auto';
+  oauthScopes?: string | null;
+  oauthAuthorizationEndpoint?: string | null;
+  oauthTokenEndpoint?: string | null;
+  apiKey?: string;
+  apiKeyHeaderName?: string | null;
+  apiKeyPrefix?: string | null;
+  additionalHeaders?: Record<string, string>;
+  status?: 'active' | 'disabled';
+}
+
+export interface UpdateCustomMcpConnectorRequest {
+  displayName?: string;
+  serverUrl?: string;
+  authType?: CustomMcpConnectorAuthType;
+  oauthClientId?: string | null;
+  oauthClientSecret?: string;
+  clearClientSecret?: boolean;
+  oauthTokenEndpointAuthMethod?: CustomMcpConnectorTokenEndpointAuthMethod | 'auto';
+  oauthScopes?: string | null;
+  oauthAuthorizationEndpoint?: string | null;
+  oauthTokenEndpoint?: string | null;
+  apiKey?: string;
+  apiKeyHeaderName?: string | null;
+  apiKeyPrefix?: string | null;
+  additionalHeaders?: Record<string, string>;
+  clearAdditionalHeaders?: boolean;
+  status?: 'active' | 'disabled' | 'error';
 }
 
 // Custom LLM provider types
@@ -955,21 +1024,44 @@ export type AvailableModels = ProviderModels[];
 
 export type ActionMode = 'allow' | 'require_approval' | 'deny';
 export type ActionInvocationStatus = 'pending' | 'approved' | 'denied' | 'executed' | 'failed' | 'expired';
+export type ActionRiskLevel = 'low' | 'medium' | 'high' | 'critical';
+// Registry-backed IntegrationPackage.service id, e.g. "gmail" or "linear".
+export type ActionServiceId = string;
+export type ActionPolicyLifetime = 'persistent' | 'session' | 'timed';
+export type ActionPolicySource = 'settings' | 'approval_prompt';
+export type EffectivePolicySource = 'system_default' | 'org_policy' | 'user_override' | 'session_override';
+export type ActionPolicyScope = 'action' | 'service' | 'risk_level' | 'none';
 
 export interface ActionPolicy {
   id: string;
-  service?: string;
+  service?: ActionServiceId;
   actionId?: string;
-  riskLevel?: string;
+  riskLevel?: ActionRiskLevel;
   mode: ActionMode;
   createdBy: string | null;
   createdAt: string;
   updatedAt: string;
 }
 
+export interface ActionPolicyOverride {
+  id: string;
+  userId: string;
+  service?: ActionServiceId | null;
+  actionId?: string | null;
+  riskLevel?: ActionRiskLevel | null;
+  mode: ActionMode;
+  lifetime: ActionPolicyLifetime;
+  sessionId?: string | null;
+  expiresAt?: string | null;
+  source: ActionPolicySource;
+  sourceInvocationId?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface DisabledAction {
   id: string;
-  service: string;
+  service: ActionServiceId;
   actionId?: string | null;
   disabledBy: string | null;
   createdAt: string;
@@ -979,9 +1071,9 @@ export interface ActionInvocation {
   id: string;
   sessionId: string;
   userId: string;
-  service: string;
+  service: ActionServiceId;
   actionId: string;
-  riskLevel: string;
+  riskLevel: ActionRiskLevel;
   resolvedMode: ActionMode;
   status: ActionInvocationStatus;
   params?: string;
@@ -992,6 +1084,13 @@ export interface ActionInvocation {
   executedAt?: string;
   expiresAt?: string;
   policyId?: string;
+  orgPolicyId?: string | null;
+  baseMode?: ActionMode | null;
+  baseSource?: 'org_policy' | 'system_default' | null;
+  userOverrideId?: string | null;
+  policySource?: EffectivePolicySource | null;
+  policyLifetime?: ActionPolicyLifetime | null;
+  policyScope?: ActionPolicyScope | null;
   createdAt: string;
   updatedAt: string;
 }

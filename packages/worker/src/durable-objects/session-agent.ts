@@ -10,8 +10,8 @@ import { assembleCustomProviders, assembleBuiltInProviderModelConfigs, assembleR
 import { resolveAvailableModels } from '../services/model-catalog.js';
 import { integrationRegistry } from '../integrations/registry.js';
 import { updateIntegrationStatus } from '../lib/db/integrations.js';
-import { approveInvocation, denyInvocation } from '../services/actions.js';
-import { updateInvocationStatus } from '../lib/db/actions.js';
+import { approveInvocation, denyInvocation, markFailed } from '../services/actions.js';
+import { resolveOrgPolicyMatch, updateInvocationStatus, upsertUserActionPolicyOverride, deleteSessionActionPolicyOverrides } from '../lib/db/actions.js';
 import { getActivePluginArtifacts, getPluginSettings } from '../lib/db/plugins.js';
 import { getPersonaSkills, getOrgDefaultSkills, getPersonaToolWhitelist } from '../lib/db.js';
 import { listPersonas, getPersonaWithFiles } from '../lib/db/personas.js';
@@ -32,6 +32,7 @@ import { handleSkillAction } from '../services/session-skills.js';
 import { handlePersonaAction, listPersonasForRunner } from '../services/session-personas.js';
 import { spawnChild, sendSessionMessage, getSessionMessages, forwardMessages, terminateChild, listChildSessions, getSessionStatus, listChannels } from '../services/session-cross.js';
 import { listTools as listToolsSvc, resolveActionPolicy, executeAction as executeActionSvc, type CredentialCache } from '../services/session-tools.js';
+import { loadCustomMcpConnectorContext } from '../services/custom-mcp-connectors.js';
 import {
   workflowList as workflowListSvc,
   workflowSync as workflowSyncSvc,
@@ -51,7 +52,46 @@ import { parseQueuedWorkflowPayload, deriveRuntimeStates } from '../lib/utils/ru
 
 const MAX_CHANNEL_FOLLOWUP_REMINDERS = 3;
 const PARENT_IDLE_DEBOUNCE_MS = 10_000;
-const ACTION_APPROVAL_EXPIRY_MS = 10 * 60 * 1000; // 10 minutes
+export const ACTION_APPROVAL_EXPIRY_MS = 240 * 1000;
+
+export function buildActionApprovalPromptActions(): InteractiveAction[] {
+  return [
+    { id: 'allow_once', label: 'Allow', description: 'Run the tool once and continue.', style: 'primary' },
+    { id: 'allow_session', label: 'Allow for Session', description: 'Run the tool and remember this choice for this session.' },
+    { id: 'allow_always', label: 'Always Allow', description: 'Run the tool and remember this choice for future tool calls.' },
+    { id: 'cancel', label: 'Cancel', description: 'Cancel this tool call.', style: 'danger' },
+  ];
+}
+
+function normalizeApprovalAction(actionId?: string): 'allow_once' | 'allow_session' | 'allow_always' | 'cancel' | null {
+  switch (actionId) {
+    case 'approve':
+    case 'allow_once':
+      return 'allow_once';
+    case 'allow_session':
+      return 'allow_session';
+    case 'allow_always':
+      return 'allow_always';
+    case 'deny':
+    case 'cancel':
+      return 'cancel';
+    default:
+      return null;
+  }
+}
+
+function isApprovalTransportAction(actionId: string): boolean {
+  const normalized = normalizeApprovalAction(actionId);
+  return normalized !== null && normalized !== 'cancel';
+}
+
+function isCancelTransportAction(actionId: string): boolean {
+  return normalizeApprovalAction(actionId) === 'cancel';
+}
+
+type PromptResolutionResult =
+  | { ok: true }
+  | { ok: false; status: number; error: string };
 
 // Workflow-session self-mutation guard: exactly these 8 actions are denied in IS_WORKFLOW_SESSION
 // sandboxes. Read/list/run/execution-control tools are intentionally left available.
@@ -127,6 +167,7 @@ interface ClientMessage {
   threadId?: string;
   continuationContext?: string;
   invocationId?: string;
+  actionId?: string;
   reason?: string;
 }
 
@@ -280,6 +321,9 @@ export class SessionAgentDO {
   private lifecycle!: SessionLifecycle;
 
   private static readonly RUNNER_GRACE_PERIOD_MS = 60_000;
+  private static readonly MODAL_SANDBOX_MAX_LIFETIME_MS = 24 * 60 * 60 * 1000;
+  private static readonly MODAL_SANDBOX_TIMEOUT_EDGE_THRESHOLD_MS =
+    SessionAgentDO.MODAL_SANDBOX_MAX_LIFETIME_MS - 5 * 60 * 1000;
 
   private readonly healthMonitor = new SessionHealthMonitor();
 
@@ -515,8 +559,19 @@ export class SessionAgentDO {
         }
         // Route prompts through the selected queue mode. If none is provided,
         // fall back to the DO's configured default.
-        const effectiveMode = body.interrupt ? 'steer' : (body.queueMode || this.promptQueue.queueMode || 'followup');
-        console.log(`[SessionAgentDO] /prompt HTTP: effectiveMode=${effectiveMode} runnerBusy=${this.promptQueue.runnerBusy} runnerConnected=${this.runnerLink.isConnected}`);
+        // Orchestrator sessions steer when the *same* thread/channel is busy —
+        // user messages should interrupt that thread's running subtask, not queue
+        // silently (TKAI-106). Cross-thread messages queue normally so they don't
+        // abort unrelated work (e.g. an in-progress poem on another thread).
+        const isOrchestrator = this.sessionState.sessionId?.startsWith('orchestrator:') ?? false;
+        const promptChannelType = body.threadId ? 'thread' : body.channelType;
+        const promptChannelId = body.threadId ? body.threadId : body.channelId;
+        const promptChannelKey = this.channelKeyFrom(promptChannelType, promptChannelId);
+        const sameChannelBusy = isOrchestrator && this.promptQueue.isChannelBusy(promptChannelKey);
+        const effectiveMode = body.interrupt ? 'steer'
+          : sameChannelBusy ? 'steer'
+          : (body.queueMode || this.promptQueue.queueMode || 'followup');
+        console.log(`[SessionAgentDO] /prompt HTTP: effectiveMode=${effectiveMode} runnerBusy=${this.promptQueue.runnerBusy} channelBusy=${sameChannelBusy} channel=${promptChannelKey}`);
 
         const author = (body.authorId || body.authorEmail || body.authorName) ? {
           id: body.authorId || '',
@@ -584,11 +639,14 @@ export class SessionAgentDO {
         if (!body.resolvedBy || !ownerUserId || body.resolvedBy !== ownerUserId) {
           return new Response(JSON.stringify({ error: 'Only the session owner can resolve this prompt' }), { status: 403 });
         }
-        await this.handlePromptResolved(body.promptId, {
+        const result = await this.handlePromptResolved(body.promptId, {
           actionId: body.actionId,
           value: body.value,
           resolvedBy: body.resolvedBy,
         });
+        if (!result.ok) {
+          return new Response(JSON.stringify({ error: result.error }), { status: result.status });
+        }
         return Response.json({ success: true });
       }
     }
@@ -1150,64 +1208,13 @@ export class SessionAgentDO {
     // ─── Interactive Prompt Expiry ──────────────────────────────────
     const expiredPrompts = this.ctx.storage.sql
       .exec(
-        'SELECT id, type, request_id, context, channel_refs FROM interactive_prompts WHERE expires_at IS NOT NULL AND expires_at <= ?',
+        "SELECT id, type, request_id, context, channel_refs FROM interactive_prompts WHERE status = 'pending' AND expires_at IS NOT NULL AND expires_at <= ?",
         nowSecs
       )
       .toArray();
 
     for (const ep of expiredPrompts) {
-      const epId = ep.id as string;
-      const epType = ep.type as string;
-      const epRequestId = ep.request_id as string | null;
-      const epContext = ep.context ? JSON.parse(ep.context as string) : {};
-      const epChannelRefs = (ep.channel_refs as string) || null;
-
-      // Delete from local SQLite
-      this.ctx.storage.sql.exec('DELETE FROM interactive_prompts WHERE id = ?', epId);
-
-      if (epType === 'approval') {
-        const toolId = epContext.toolId || '';
-
-        // Update D1 status to expired (use invocationId from context, falls back to prompt ID)
-        const invocationId = epContext.invocationId || epId;
-        this.ctx.waitUntil(
-          updateInvocationStatus(this.appDb, invocationId, {
-            status: 'expired',
-          }).catch((err) => console.error('[SessionAgentDO] Failed to mark invocation expired:', err))
-        );
-
-        // Send error to runner to unblock the pending request
-        if (epRequestId) {
-          this.runnerLink.send({ type: 'call-tool-result', requestId: epRequestId, error: `Action "${toolId}" approval expired after 10 minutes` } as any);
-        } else {
-          console.warn(`[SessionAgentDO] Approval prompt ${epId} expired with no request_id — runner may be stuck`);
-        }
-
-        this.emitAuditEvent('agent.tool_call', `Action ${toolId} approval expired`, undefined, { invocationId: epId });
-      } else if (epType === 'question') {
-        this.runnerLink.send({
-          type: 'answer',
-          questionId: epId,
-          answer: '__expired__',
-        });
-
-        this.emitAuditEvent('agent.question', `Question ${epId} expired`, undefined, { questionId: epId });
-      }
-
-      // Broadcast expiry to clients
-      this.broadcastToClients({
-        type: 'interactive_prompt_expired',
-        promptId: epId,
-        promptType: epType,
-        context: epContext,
-      });
-
-      // Update channel messages with expired status
-      if (epChannelRefs) {
-        this.ctx.waitUntil(
-          this.updateChannelInteractivePrompts(epChannelRefs, { actionId: '__expired__', resolvedBy: 'system' })
-        );
-      }
+      await this.expireInteractivePromptRow(ep as Record<string, unknown>);
     }
 
     // Metrics flush removed from alarm handler — flushed at lifecycle
@@ -1398,6 +1405,11 @@ export class SessionAgentDO {
 
   // ─── Client Message Handling ───────────────────────────────────────────
 
+  private getClientUserId(ws: WebSocket): string | undefined {
+    const clientTag = this.ctx.getTags(ws).find((tag: string) => tag.startsWith('client:'));
+    return clientTag?.replace('client:', '') || undefined;
+  }
+
   private async handleClientMessage(ws: WebSocket, msg: ClientMessage) {
     switch (msg.type) {
       case 'prompt': {
@@ -1434,11 +1446,17 @@ export class SessionAgentDO {
           gitEmail: userDetails.gitEmail,
         } : userId ? { id: userId, email: '', name: undefined, avatarUrl: undefined, gitName: undefined, gitEmail: undefined } : undefined;
         // Route through queue mode (Phase D)
+        // Orchestrator sessions steer only when the same thread/channel is busy (TKAI-106).
         const wsChannelType = (msg as any).channelType as string | undefined;
         const wsChannelId = (msg as any).channelId as string | undefined;
         const wsThreadId = msg.threadId;
         const wsContinuationContext = msg.continuationContext;
-        const wsQueueMode = (msg as any).queueMode || this.promptQueue.queueMode || 'followup';
+        const wsIsOrchestrator = this.sessionState.sessionId?.startsWith('orchestrator:') ?? false;
+        const wsPromptChType = wsThreadId ? 'thread' : wsChannelType;
+        const wsPromptChId = wsThreadId ? wsThreadId : wsChannelId;
+        const wsSameChannelBusy = wsIsOrchestrator && this.promptQueue.isChannelBusy(this.channelKeyFrom(wsPromptChType, wsPromptChId));
+        const wsQueueMode = wsSameChannelBusy ? 'steer'
+          : ((msg as any).queueMode || this.promptQueue.queueMode || 'followup');
         switch (wsQueueMode) {
           case 'steer':
             await this.handleInterruptPrompt(msg.content || '', msg.model, author, attachments, wsChannelType, wsChannelId, wsThreadId);
@@ -1492,10 +1510,27 @@ export class SessionAgentDO {
           ws.send(JSON.stringify({ type: 'error', message: 'Missing invocationId' }));
           return;
         }
-        await this.handlePromptResolved(msg.invocationId, {
-          actionId: 'approve',
-          resolvedBy: this.sessionState.userId || 'user',
+        const actionId = msg.actionId || 'approve';
+        if (!isApprovalTransportAction(actionId)) {
+          ws.send(JSON.stringify({
+            type: 'error',
+            error: `approve-action transport does not accept cancel action: ${actionId}`,
+            promptId: msg.invocationId,
+          }));
+          return;
+        }
+        const resolvedBy = this.getClientUserId(ws);
+        if (!resolvedBy) {
+          ws.send(JSON.stringify({ type: 'error', message: 'Missing authenticated client user' }));
+          return;
+        }
+        const result = await this.handlePromptResolved(msg.invocationId, {
+          actionId,
+          resolvedBy,
         });
+        if (!result.ok) {
+          ws.send(JSON.stringify({ type: 'error', error: result.error, promptId: msg.invocationId }));
+        }
         break;
       }
 
@@ -1504,11 +1539,28 @@ export class SessionAgentDO {
           ws.send(JSON.stringify({ type: 'error', message: 'Missing invocationId' }));
           return;
         }
-        await this.handlePromptResolved(msg.invocationId, {
-          actionId: 'deny',
+        const actionId = msg.actionId || 'deny';
+        if (!isCancelTransportAction(actionId)) {
+          ws.send(JSON.stringify({
+            type: 'error',
+            error: `deny-action transport does not accept approval action: ${actionId}`,
+            promptId: msg.invocationId,
+          }));
+          return;
+        }
+        const resolvedBy = this.getClientUserId(ws);
+        if (!resolvedBy) {
+          ws.send(JSON.stringify({ type: 'error', message: 'Missing authenticated client user' }));
+          return;
+        }
+        const result = await this.handlePromptResolved(msg.invocationId, {
+          actionId,
           value: msg.reason,
-          resolvedBy: this.sessionState.userId || 'user',
+          resolvedBy,
         });
+        if (!result.ok) {
+          ws.send(JSON.stringify({ type: 'error', error: result.error, promptId: msg.invocationId }));
+        }
         break;
       }
 
@@ -1831,13 +1883,21 @@ export class SessionAgentDO {
       `[SessionAgentDO] handlePrompt: channel=${channelKey} runnerConnected=${runnerConnected} runnerReady=${runnerReady} runnerBusy=${runnerBusy} status=${status} sandboxId=${sandboxId || 'none'} queued=${queuedCount}`
     );
 
-    // Queue when runner isn't ready. User messages are NOT blocked by an active
-    // wait_for_event subscription — the user explicitly sending a message should
-    // override the agent's yield. The direct dispatch path clears waitSubscription,
-    // and child events arriving later are dispatched normally via handleSystemMessage.
-    if (!runnerConnected || !runnerReady || runnerBusy) {
+    // Queue when runner isn't ready or the TARGET channel is busy. Cross-thread
+    // messages dispatch directly even when another channel is in-flight — the
+    // runner handles concurrent prompts on different OpenCode sessions (TKAI-65).
+    // When runnerBusy is set but no per-channel tracking exists (e.g. workflow
+    // dispatch, reconnect recovery), fall back to the global flag to be safe.
+    // User messages are NOT blocked by an active wait_for_event subscription —
+    // the direct dispatch path clears waitSubscription, and child events arriving
+    // later are dispatched normally via handleSystemMessage.
+    const channelBusy = this.promptQueue.isChannelBusy(channelKey);
+    const anyChannelTracked = this.promptQueue.getBusyChannelKey() !== null;
+    const shouldQueue = !runnerConnected || !runnerReady || channelBusy || (runnerBusy && !anyChannelTracked);
+    if (shouldQueue) {
       // ─── Enqueue path: defer message write to dispatch time ──────────
-      const reason = runnerBusy ? 'runner busy'
+      const reason = channelBusy ? 'channel busy'
+        : (runnerBusy && !anyChannelTracked) ? 'runner busy'
         : !runnerConnected ? 'no runner connected'
         : 'runner not ready';
       console.log(`[SessionAgentDO] handlePrompt: QUEUING (${reason}) channel=${channelKey} messageId=${messageId}`);
@@ -1958,7 +2018,7 @@ export class SessionAgentDO {
     });
 
     // Forward directly to runner with author info + channel metadata
-    this.promptQueue.stampDispatched();
+    this.promptQueue.stampDispatched(channelKey);
     this.promptQueue.idleQueuedSince = 0;
     this.sessionState.lastParentIdleNotice = undefined;
     this.sessionState.parentIdleNotifyAt = 0;
@@ -2675,19 +2735,24 @@ export class SessionAgentDO {
         // If messageId is absent (startup/reconnect idle signals), broadcast without
         // channel attribution — this is legitimate session-wide status, not a drop.
         let statusCh: { channelType: string; channelId: string } | null = null;
+        let statusThreadId: string | null = null;
         if (msg.messageId) {
-          const statusLookup = this.getChannelForMessage(msg.messageId);
-          if (!statusLookup.found) {
-            dropEmission(statusLookup.reason, { eventType: 'agentStatus', messageId: msg.messageId, status: msg.status });
+          const row = this.promptQueue.getChannelTargetById(msg.messageId);
+          if (!row) {
+            dropEmission('no_prompt_row', { eventType: 'agentStatus', messageId: msg.messageId, status: msg.status });
             return;
           }
-          statusCh = statusLookup.target;
+          if (row.channelType && row.channelId) {
+            statusCh = { channelType: row.channelType, channelId: row.channelId };
+          }
+          statusThreadId = row.threadId;
         }
         this.broadcastToClients({
           type: 'agentStatus',
           status: msg.status,
           detail: msg.detail,
           ...(statusCh ? { channelType: statusCh.channelType, channelId: statusCh.channelId } : {}),
+          ...(statusThreadId ? { threadId: statusThreadId } : {}),
         });
         if (msg.status === 'idle') {
           // If runner was initializing (not yet ready), mark it ready now.
@@ -2721,6 +2786,8 @@ export class SessionAgentDO {
               this.promptQueue.revertProcessingToQueued();
               this.promptQueue.runnerBusy = false;
             }
+            // Reset per-channel busy state from previous lifecycle
+            this.promptQueue.clearAllChannelBusy();
 
             // Emit runner_idle — full time from sandbox spawn/restore to agent ready
             const wakeStart = this.sessionState.sandboxWakeStartedAt;
@@ -2769,7 +2836,8 @@ export class SessionAgentDO {
                   createdAt: Math.floor(Date.now() / 1000),
                 },
               });
-              this.promptQueue.enqueue({ id: messageId, content: initialPrompt, status: 'processing' });
+              const ipChannelKey = this.channelKeyFrom(undefined, undefined);
+              this.promptQueue.enqueue({ id: messageId, content: initialPrompt, status: 'processing', channelKey: ipChannelKey });
               const ipOwnerId = this.sessionState.userId;
               const ipOwnerDetails = ipOwnerId ? await this.getUserDetails(ipOwnerId) : undefined;
               const ipModelPrefs = await this.resolveModelPreferences(ipOwnerDetails);
@@ -2785,7 +2853,7 @@ export class SessionAgentDO {
                 opencodeSessionId: this.getChannelOcSessionId(this.channelKeyFrom(undefined, undefined)),
                 modelPreferences: ipModelPrefs,
               });
-              this.promptQueue.stampDispatched();
+              this.promptQueue.stampDispatched(ipChannelKey);
               console.log(`[SessionAgentDO] agentStatus idle: dispatched initial prompt ${messageId}`);
             }
           }
@@ -2851,16 +2919,17 @@ export class SessionAgentDO {
         console.log(`[SessionAgentDO] Wait subscription registered: notifyOn=${msg.notifyOn || 'terminal'}, sessions=${msg.sessionIds?.join(',') || 'all'}`);
       },
 
-      'aborted': async (_msg) => {
+      'aborted': async (msg) => {
         // Runner confirmed abort — let handlePromptComplete clear runnerBusy
         // and broadcast status. Don't clear runnerBusy early — that creates a
         // race where a rapid new prompt can be dispatched then immediately
         // completed by markCompleted().
+        const abortedMessageId = (msg as { messageId?: string }).messageId;
         this.broadcastToClients({
           type: 'agentStatus',
           status: 'idle',
         });
-        await this.handlePromptComplete();
+        await this.handlePromptComplete(abortedMessageId);
       },
 
       'reverted': (msg) => {
@@ -2951,6 +3020,7 @@ export class SessionAgentDO {
           type: 'child-session',
           childSessionId: (msg as any).childSessionId,
           title: msg.title,
+          threadId: (msg as any).threadId,
         } as any);
       },
 
@@ -3015,7 +3085,7 @@ export class SessionAgentDO {
           if (result.error) {
             this.runnerLink.send({ type: 'spawn-child-result', requestId, error: result.error });
           } else {
-            this.runnerLink.send({ type: 'spawn-child-result', requestId, childSessionId: result.childSessionId });
+            this.runnerLink.send({ type: 'spawn-child-result', requestId, childSessionId: result.childSessionId, parentThreadId: resolvedParentThreadId });
           }
         } catch (err) {
           console.error('[SessionAgentDO] Failed to spawn child:', err);
@@ -4002,6 +4072,11 @@ export class SessionAgentDO {
       ? this.promptQueue.getChannelTargetById(messageId)
       : this.promptQueue.getProcessingChannelContext();
 
+    // Resolve per-channel busy key BEFORE the row is deleted.
+    const completedChannelKey = messageId
+      ? this.promptQueue.getChannelKeyById(messageId)
+      : this.promptQueue.getProcessingChannelKey();
+
     try {
       this.promptQueue.clearDispatchTimers();
 
@@ -4029,6 +4104,11 @@ export class SessionAgentDO {
 
       // Mark processing → completed, then prune
       const processingCount = this.promptQueue.markCompletedById(messageId);
+
+      // Clear per-channel busy state for the completed channel.
+      if (completedChannelKey) {
+        this.promptQueue.setChannelBusy(completedChannelKey, false);
+      }
 
       // If scoped messageId was already completed (e.g. dedup path sent a second
       // complete for the same prompt), skip the queue drain and idle transition —
@@ -4064,18 +4144,28 @@ export class SessionAgentDO {
         this.promptQueue.idleQueuedSince = 0;
       }
 
-      // Runner is now idle
-      console.log(`[SessionAgentDO] handlePromptComplete: queue empty, setting runnerBusy=false`);
-      this.promptQueue.runnerBusy = false;
-      this.broadcastToClients({
-        type: 'status',
-        data: { runnerBusy: false },
-      });
-      this.notifyParentIfIdle();
+      // Only mark runner idle if no other channels are still processing.
+      // With concurrent per-thread dispatch, channel A completing doesn't
+      // mean channel B is done.
+      const stillBusyChannel = this.promptQueue.getBusyChannelKey();
+      if (stillBusyChannel) {
+        console.log(`[SessionAgentDO] handlePromptComplete: queue empty but channel ${stillBusyChannel} still busy`);
+      } else {
+        console.log(`[SessionAgentDO] handlePromptComplete: queue empty, setting runnerBusy=false`);
+        this.promptQueue.runnerBusy = false;
+        this.broadcastToClients({
+          type: 'status',
+          data: { runnerBusy: false },
+        });
+        this.notifyParentIfIdle();
+      }
     } catch (err) {
       // Ensure runnerBusy is cleared even on error to prevent permanent stuck state
       console.error('[SessionAgentDO] handlePromptComplete error, forcing runnerBusy=false:', err);
       this.promptQueue.runnerBusy = false;
+      if (completedChannelKey) {
+        this.promptQueue.setChannelBusy(completedChannelKey, false);
+      }
       this.broadcastToClients({
         type: 'status',
         data: { runnerBusy: false },
@@ -4110,12 +4200,14 @@ export class SessionAgentDO {
     this.runnerLink.token = body.runnerToken;
     this.runnerLink.ready = false; // clear stale ready state from previous lifecycle
     this.promptQueue.runnerBusy = false;
+    this.promptQueue.clearAllChannelBusy();
     this.promptQueue.queueMode = body.queueMode || 'followup';
     this.promptQueue.collectDebounceMs = body.collectDebounceMs || 3000;
 
     // If sandbox info was provided directly, we're already running
     if (body.sandboxId && body.tunnelUrls) {
       this.sessionState.status = 'running';
+      this.sessionState.sandboxStartedAt = Date.now();
       this.lifecycle.markRunningStarted();
       updateSessionStatus(this.appDb, body.sessionId, 'running', body.sandboxId).catch((err) =>
         console.error('[SessionAgentDO] Failed to sync status to D1:', err),
@@ -4198,6 +4290,7 @@ export class SessionAgentDO {
       // Store sandbox info — transition to waiting_runner until Runner connects
       // and signals readiness via agentStatus: idle.
       this.sessionState.sandboxId = result.sandboxId;
+      this.sessionState.sandboxStartedAt = Date.now();
       this.sessionState.tunnelUrls = result.tunnelUrls;
       this.sessionState.status = 'waiting_runner';
       this.lifecycle.markRunningStarted();
@@ -4286,6 +4379,12 @@ export class SessionAgentDO {
     await this.flushMetrics();
     await this.flushMessagesToD1();
 
+    // Expire session-scoped action policy overrides before stopping the runner
+    // so no in-flight tool call can sneak through with a stale auto-allow.
+    if (sessionId) {
+      await deleteSessionActionPolicyOverrides(this.appDb, sessionId);
+    }
+
     // Tell runner to stop
     this.runnerLink.send({ type: 'stop' });
 
@@ -4338,6 +4437,7 @@ export class SessionAgentDO {
     // Update state
     this.sessionState.status = 'terminated';
     this.sessionState.sandboxId = undefined;
+    this.sessionState.sandboxStartedAt = 0;
     this.sessionState.tunnelUrls = null;
     this.sessionState.tunnels = [];
     this.sessionState.snapshotImageId = undefined;
@@ -4582,30 +4682,31 @@ export class SessionAgentDO {
       // Extract child metadata for queue-level filtering
       const queueChildSessionId = (parts?.childSessionId as string) || undefined;
       const queueChildStatus = (parts?.childStatus as string) || undefined;
+      const sysQueueChannelKey = this.channelKeyFrom(sysChannelType, sysChannelId);
 
       const status = this.sessionState.status;
       if (status === 'hibernated') {
         // Queue the prompt so the runner picks it up after connecting.
-        this.promptQueue.enqueue({ id: messageId, content, threadId, channelType: sysChannelType, channelId: sysChannelId, childSessionId: queueChildSessionId, childStatus: queueChildStatus });
+        this.promptQueue.enqueue({ id: messageId, content, threadId, channelType: sysChannelType, channelId: sysChannelId, channelKey: sysQueueChannelKey, childSessionId: queueChildSessionId, childStatus: queueChildStatus });
         this.ctx.waitUntil(this.performWake());
       } else if (status === 'restoring') {
         // Wake already in progress — just queue the prompt for when the runner connects.
-        this.promptQueue.enqueue({ id: messageId, content, threadId, channelType: sysChannelType, channelId: sysChannelId, childSessionId: queueChildSessionId, childStatus: queueChildStatus });
+        this.promptQueue.enqueue({ id: messageId, content, threadId, channelType: sysChannelType, channelId: sysChannelId, channelKey: sysQueueChannelKey, childSessionId: queueChildSessionId, childStatus: queueChildStatus });
       } else if (status === 'running') {
         // Dispatch the system event as a prompt so the runner wakes up and can
         // decide whether to act on it (e.g. child session idle/completed events).
         const runnerBusy = this.promptQueue.runnerBusy;
         if (this.runnerLink.isConnected && this.runnerLink.isReady && !runnerBusy) {
           // Runner is connected and idle — insert as 'processing' for recoverability, then dispatch
-          this.promptQueue.enqueue({ id: messageId, content, threadId, channelType: sysChannelType, channelId: sysChannelId, status: 'processing', childSessionId: queueChildSessionId, childStatus: queueChildStatus });
-          this.promptQueue.stampDispatched();
+          const sysChannelKey = this.channelKeyFrom(sysChannelType, sysChannelId);
+          this.promptQueue.enqueue({ id: messageId, content, threadId, channelType: sysChannelType, channelId: sysChannelId, channelKey: sysChannelKey, status: 'processing', childSessionId: queueChildSessionId, childStatus: queueChildStatus });
+          this.promptQueue.stampDispatched(sysChannelKey);
           this.sessionState.lastParentIdleNotice = undefined;
           this.sessionState.parentIdleNotifyAt = 0;
           this.sessionState.waitSubscription = null;
           const ownerId = this.sessionState.userId;
           const ownerDetails = ownerId ? await this.getUserDetails(ownerId) : undefined;
           const sysModelPrefs = await this.resolveModelPreferences(ownerDetails);
-          const sysChannelKey = this.channelKeyFrom(sysChannelType, sysChannelId);
           if (threadId) {
             await this.ensureThreadOcSessionHydrated(threadId, sysChannelKey);
           }
@@ -4633,7 +4734,7 @@ export class SessionAgentDO {
           this.rescheduleIdleAlarm();
         } else {
           // Runner busy or not connected — queue the prompt
-          this.promptQueue.enqueue({ id: messageId, content, threadId, channelType: sysChannelType, channelId: sysChannelId, childSessionId: queueChildSessionId, childStatus: queueChildStatus });
+          this.promptQueue.enqueue({ id: messageId, content, threadId, channelType: sysChannelType, channelId: sysChannelId, channelKey: sysQueueChannelKey, childSessionId: queueChildSessionId, childStatus: queueChildStatus });
         }
       }
     }
@@ -4777,6 +4878,16 @@ export class SessionAgentDO {
 
       if (shouldSkip) {
         this.promptQueue.dropEntry(prompt.id);
+        prompt = this.promptQueue.dequeueNext();
+        continue;
+      }
+
+      // Skip items whose target channel is already busy (concurrent dispatch).
+      // Don't drop — revert to queued so they dispatch when the channel completes.
+      const queuedChannelKey = prompt.channelKey || this.channelKeyFrom(prompt.channelType || undefined, prompt.channelId || undefined);
+      if (this.promptQueue.isChannelBusy(queuedChannelKey)) {
+        console.log(`[SessionAgentDO] sendNextQueuedPrompt: skipping item ${prompt.id} — channel ${queuedChannelKey} is busy`);
+        this.promptQueue.revertProcessingToQueued(prompt.id);
         prompt = this.promptQueue.dequeueNext();
         continue;
       }
@@ -4958,7 +5069,7 @@ export class SessionAgentDO {
       this.emitAuditEvent('prompt.dispatch_failed', `Queue dispatch failed, reverted: ${prompt.id.slice(0, 8)}`);
       return false;
     }
-    this.promptQueue.stampDispatched();
+    this.promptQueue.stampDispatched(prompt.channelKey || undefined);
     this.promptQueue.idleQueuedSince = 0;
     this.sessionState.lastParentIdleNotice = undefined;
     this.sessionState.parentIdleNotifyAt = 0;
@@ -5251,6 +5362,7 @@ export class SessionAgentDO {
 
     // Clear state for fresh start
     this.sessionState.sandboxId = undefined;
+    this.sessionState.sandboxStartedAt = 0;
     this.sessionState.tunnelUrls = null;
     this.sessionState.tunnels = [];
     this.sessionState.snapshotImageId = undefined;
@@ -5265,6 +5377,13 @@ export class SessionAgentDO {
       );
     }
 
+    // Expire session-scoped action policy overrides — the sandbox is being
+    // replaced, so ephemeral "allow for this session" approvals should not
+    // carry over to the fresh OpenCode instance.
+    if (sessionId) {
+      await deleteSessionActionPolicyOverrides(this.appDb, sessionId);
+    }
+
     // Explicit refresh — reset circuit breaker so the user can force a restart
     this.sessionState.resetRecoveryState();
 
@@ -5272,6 +5391,36 @@ export class SessionAgentDO {
     await this.performRecovery('refresh');
 
     return Response.json({ status: 'recovering' }, { status: 202 });
+  }
+
+  private logModalHardTimeoutEdgeIfNeeded(reason: string, now: number): void {
+    if (reason !== 'sandbox_lost') return;
+
+    const sandboxStartedAt = this.sessionState.sandboxStartedAt;
+    if (!sandboxStartedAt) return;
+
+    const sandboxAgeMs = now - sandboxStartedAt;
+    if (sandboxAgeMs < SessionAgentDO.MODAL_SANDBOX_TIMEOUT_EDGE_THRESHOLD_MS) return;
+
+    const sandboxId = this.sessionState.sandboxId;
+    const sessionId = this.sessionState.sessionId;
+    const modalTimeoutMs = SessionAgentDO.MODAL_SANDBOX_MAX_LIFETIME_MS;
+
+    console.error(
+      `[SessionAgentDO] Modal sandbox hard timeout edge: sandbox_lost after ${Math.round(sandboxAgeMs / 60_000)}m (session=${sessionId || 'unknown'}, sandbox=${sandboxId || 'unknown'})`,
+    );
+
+    this.emitEvent('session.recovery', {
+      summary: 'modal_sandbox_hard_timeout_edge',
+      properties: {
+        reason,
+        sandboxId,
+        sandboxStartedAt,
+        sandboxAgeMs,
+        modalTimeoutMs,
+        sessionId,
+      },
+    });
   }
 
   /**
@@ -5290,6 +5439,7 @@ export class SessionAgentDO {
     const now = Date.now();
 
     console.log(`[SessionAgentDO] performRecovery(${reason}) for session ${sessionId}`);
+    this.logModalHardTimeoutEdgeIfNeeded(reason, now);
 
     // ─── 1. Transition to recovering ────────────────────────────────
     this.sessionState.status = 'recovering';
@@ -5460,6 +5610,12 @@ export class SessionAgentDO {
         );
       }
 
+      // Expire session-scoped action policy overrides before snapshot/stop
+      // so no in-flight tool call can sneak through with a stale auto-allow.
+      if (sessionId) {
+        await deleteSessionActionPolicyOverrides(this.appDb, sessionId);
+      }
+
       // Snapshot via lifecycle (pure HTTP)
       const result = await this.lifecycle.snapshotSandbox();
 
@@ -5473,6 +5629,7 @@ export class SessionAgentDO {
       // State writes from result
       this.sessionState.snapshotImageId = result.snapshotImageId;
       this.sessionState.sandboxId = undefined;
+      this.sessionState.sandboxStartedAt = 0;
       this.sessionState.tunnelUrls = null;
       this.sessionState.tunnels = [];
       this.promptQueue.runnerBusy = false;
@@ -5594,6 +5751,7 @@ export class SessionAgentDO {
       // State writes from result — transition to waiting_runner until Runner reconnects
       // and signals readiness via agentStatus: idle.
       this.sessionState.sandboxId = result.sandboxId;
+      this.sessionState.sandboxStartedAt = Date.now();
       this.sessionState.tunnelUrls = result.tunnelUrls;
       this.sessionState.snapshotImageId = undefined;
       this.sessionState.status = 'waiting_runner';
@@ -6148,10 +6306,12 @@ export class SessionAgentDO {
         return;
       }
 
+      const orgId = await this.resolveOrgId() ?? 'default';
       const result = await listToolsSvc(this.appDb, this.env.DB, this.env, userId, {
         service,
         query,
         credentialCache: this.credentialCacheAdapter,
+        orgId,
       });
 
       // Update DO-level caches from service result
@@ -6180,6 +6340,7 @@ export class SessionAgentDO {
             service: w.service,
             displayName: w.displayName,
             reason: w.reason,
+            message: w.message,
           })),
         });
 
@@ -6210,6 +6371,9 @@ export class SessionAgentDO {
   }
 
   private async handleCallTool(requestId: string, toolId: string, params: Record<string, unknown>, summary?: string) {
+    let invocationIdForCleanup: string | null = null;
+    let promptInsertedForCleanup = false;
+    let shouldFailInvocationOnCatch = false;
     try {
       const userId = this.sessionState.userId;
       const sessionId = this.sessionState.sessionId;
@@ -6240,18 +6404,22 @@ export class SessionAgentDO {
         return;
       }
 
+      const orgId = await this.resolveOrgId() ?? 'default';
+
       // Resolve policy (validates toolId, checks disabled status, resolves risk level)
       const policyResult = await resolveActionPolicy(this.appDb, this.env.DB, this.env, userId, toolId, params, {
         sessionId: sessionId || '',
         discoveredToolRiskLevels: this.discoveredToolRiskLevels,
         credentialCache: this.credentialCacheAdapter,
         disabledPluginServicesCache: this.disabledPluginServicesCache,
+        orgId,
       });
 
       // Update the disabled plugin services cache from the policy resolution
       this.disabledPluginServicesCache = policyResult.disabledPluginServicesCache;
 
       const { outcome, invocationId, riskLevel, service, actionId, actionSource } = policyResult;
+      invocationIdForCleanup = invocationId;
 
       // ─── Deny ──────────────────────────────────────────────────────────
       if (outcome === 'denied') {
@@ -6262,11 +6430,16 @@ export class SessionAgentDO {
 
       // ─── Require Approval ──────────────────────────────────────────────
       if (outcome === 'pending_approval') {
+        shouldFailInvocationOnCatch = true;
         if (!summary) {
+          const error = `Action "${toolId}" requires approval but no summary was provided. The call_tool summary parameter is required.`;
+          await markFailed(this.appDb, invocationId, error).catch((err) => {
+            console.error('[SessionAgentDO] Failed to mark invocation failed after missing approval summary:', err);
+          });
           this.runnerLink.send({
             type: 'call-tool-result',
             requestId,
-            error: `Action "${toolId}" requires approval but no summary was provided. The call_tool summary parameter is required.`,
+            error,
           } as any);
           return;
         }
@@ -6295,6 +6468,7 @@ export class SessionAgentDO {
 
         // Use model-provided summary as the approval body
         const approvalBody = summary;
+        const approvalActions = buildActionApprovalPromptActions();
 
         // Store in interactive_prompts for alarm-based expiry and later execution
         this.ctx.storage.sql.exec(
@@ -6305,13 +6479,11 @@ export class SessionAgentDO {
           requestId,
           'Action requires approval',
           approvalBody,
-          JSON.stringify([
-            { id: 'approve', label: 'Approve', style: 'primary' },
-            { id: 'deny', label: 'Deny', style: 'danger' },
-          ]),
+          JSON.stringify(approvalActions),
           JSON.stringify(approvalContext),
           expiresAt,
         );
+        promptInsertedForCleanup = true;
 
         // Notify runner to extend its timeout
         this.runnerLink.send({
@@ -6327,10 +6499,7 @@ export class SessionAgentDO {
           type: 'approval',
           title: 'Action requires approval',
           body: approvalBody,
-          actions: [
-            { id: 'approve', label: 'Approve', style: 'primary' },
-            { id: 'deny', label: 'Deny', style: 'danger' },
-          ],
+          actions: approvalActions,
           expiresAt: expiresAt * 1000,
           context: approvalContext,
         };
@@ -6358,24 +6527,31 @@ export class SessionAgentDO {
 
         this.emitAuditEvent('agent.tool_call', `Action ${toolId} requires approval (${riskLevel})`, undefined, { invocationId: invocationId, riskLevel });
 
-        // Fire-and-forget: send interactive prompts to all bound channels
-        this.ctx.waitUntil(
-          this.sendChannelInteractivePrompts(invocationId, prompt)
-        );
+        await this.sendChannelInteractivePrompts(invocationId, prompt);
 
         // Schedule alarm for expiry
         await this.ensureActionExpiryAlarm(expiresAt * 1000);
 
+        shouldFailInvocationOnCatch = false;
         return; // Don't send call-tool-result — the runner will wait
       }
 
       // ─── Allow — execute immediately ───────────────────────────────────
-      await this.executeActionAndSend(requestId, toolId, service, actionId, params, userId, actionSource, invocationId);
+      await this.executeActionAndSend(requestId, toolId, service, actionId, params, userId, actionSource, invocationId, orgId);
     } catch (err) {
+      const error = err instanceof Error ? err.message : String(err);
+      if (shouldFailInvocationOnCatch && invocationIdForCleanup) {
+        await markFailed(this.appDb, invocationIdForCleanup, error).catch((markErr) => {
+          console.error('[SessionAgentDO] Failed to mark invocation failed after approval setup error:', markErr);
+        });
+      }
+      if (promptInsertedForCleanup && invocationIdForCleanup) {
+        this.ctx.storage.sql.exec('DELETE FROM interactive_prompts WHERE id = ?', invocationIdForCleanup);
+      }
       this.runnerLink.send({
         type: 'call-tool-result',
         requestId,
-        error: err instanceof Error ? err.message : String(err),
+        error,
       } as any);
     }
   }
@@ -6393,16 +6569,31 @@ export class SessionAgentDO {
     userId: string,
     actionSource: ReturnType<typeof integrationRegistry.getActions>,
     invocationId: string,
-  ) {
+    orgId?: string,
+  ): Promise<{ success: boolean; error?: string }> {
     const spawnRequest = this.sessionState.spawnRequest;
     const spawnEnvVars = spawnRequest?.envVars as Record<string, string> | undefined;
     const guardConfig = await this.getGuardConfig();
 
-    const result = await executeActionSvc(
-      this.appDb, this.env, userId, toolId, service, actionId, params,
-      actionSource, invocationId,
-      { credentialCache: this.credentialCacheAdapter, spawnEnvVars, guardConfig },
-    );
+    let result;
+    try {
+      result = await executeActionSvc(
+        this.appDb, this.env, userId, toolId, service, actionId, params,
+        actionSource, invocationId,
+        { credentialCache: this.credentialCacheAdapter, spawnEnvVars, guardConfig, orgId: orgId ?? 'default' },
+      );
+    } catch (err) {
+      const error = err instanceof Error ? err.message : String(err);
+      await markFailed(this.appDb, invocationId, error).catch((markErr) => {
+        console.error('[SessionAgentDO] Failed to mark invocation failed after action execution throw:', markErr);
+      });
+      this.runnerLink.send({ type: 'call-tool-result', requestId, error } as any);
+      this.emitEvent('tool_exec', {
+        toolName: toolId,
+        errorCode: 'action_failed',
+      });
+      return { success: false, error };
+    }
 
     // Emit tool_exec timing event
     this.emitEvent('tool_exec', {
@@ -6469,12 +6660,67 @@ export class SessionAgentDO {
       }
       this.runnerLink.send(msg as any);
     }
+
+    return { success: result.success, error: result.error };
+  }
+
+  private async expireInteractivePromptRow(row: Record<string, unknown>) {
+    const promptId = String(row.id);
+    const promptType = String(row.type);
+    const requestId = (row.request_id as string | null) ?? null;
+    const context = row.context ? JSON.parse(String(row.context)) : {};
+    const channelRefs = (row.channel_refs as string) || null;
+
+    this.ctx.storage.sql.exec('DELETE FROM interactive_prompts WHERE id = ?', promptId);
+
+    if (promptType === 'approval') {
+      const toolId = String(context.toolId || '');
+      const invocationId = String(context.invocationId || promptId);
+
+      try {
+        await updateInvocationStatus(this.appDb, invocationId, {
+          status: 'expired',
+          expectedStatus: 'pending',
+        });
+      } catch (err) {
+        console.error('[SessionAgentDO] Failed to mark invocation expired:', err);
+      }
+
+      if (requestId) {
+        this.runnerLink.send({ type: 'call-tool-result', requestId, error: `Action "${toolId}" approval expired` } as any);
+      } else {
+        console.warn(`[SessionAgentDO] Approval prompt ${promptId} expired with no request_id — runner may be stuck`);
+      }
+
+      this.emitAuditEvent('agent.tool_call', `Action ${toolId} approval expired`, undefined, { invocationId });
+    } else if (promptType === 'question') {
+      this.runnerLink.send({
+        type: 'answer',
+        questionId: promptId,
+        answer: '__expired__',
+      });
+
+      this.emitAuditEvent('agent.question', `Question ${promptId} expired`, undefined, { questionId: promptId });
+    }
+
+    this.broadcastToClients({
+      type: 'interactive_prompt_expired',
+      promptId,
+      promptType,
+      context,
+    });
+
+    if (channelRefs) {
+      this.ctx.waitUntil(
+        this.updateChannelInteractivePrompts(channelRefs, { actionId: '__expired__', resolvedBy: 'system' })
+      );
+    }
   }
 
   /**
    * Unified handler for resolving any interactive prompt (approval or question).
    */
-  private async handlePromptResolved(promptId: string, resolution: InteractiveResolution) {
+  private async handlePromptResolved(promptId: string, resolution: InteractiveResolution): Promise<PromptResolutionResult> {
     // Read from interactive_prompts
     const rows = this.ctx.storage.sql
       .exec("SELECT * FROM interactive_prompts WHERE id = ? AND status = 'pending'", promptId)
@@ -6482,15 +6728,94 @@ export class SessionAgentDO {
 
     if (rows.length === 0) {
       console.warn(`[SessionAgentDO] handlePromptResolved: no pending prompt found for ${promptId}`);
-      return;
+      return { ok: false, status: 404, error: 'No pending prompt found' };
     }
 
     const row = rows[0];
+    const rawExpiresAt = row.expires_at;
+    const rowExpiresAt = typeof rawExpiresAt === 'number'
+      ? rawExpiresAt
+      : typeof rawExpiresAt === 'string'
+        ? Number(rawExpiresAt)
+        : Number.NaN;
+    if (Number.isFinite(rowExpiresAt) && rowExpiresAt <= Math.floor(Date.now() / 1000)) {
+      await this.expireInteractivePromptRow(row as Record<string, unknown>);
+      return { ok: false, status: 410, error: 'This prompt has expired.' };
+    }
+
     const promptType = row.type as string;
     const promptTitle = (row.title as string) || '';
     const requestId = row.request_id as string | null;
     const context = row.context ? JSON.parse(row.context as string) : {};
     const channelRefsJson = (row.channel_refs as string) || null;
+    const claimedRows = this.ctx.storage.sql.exec(
+      "UPDATE interactive_prompts SET status = 'resolving' WHERE id = ? AND status = 'pending' RETURNING id",
+      promptId,
+    ).toArray();
+    if (claimedRows.length === 0) {
+      return { ok: false, status: 409, error: 'This prompt is no longer pending.' };
+    }
+    const restorePrompt = () => {
+      this.ctx.storage.sql.exec(
+        "UPDATE interactive_prompts SET status = 'pending' WHERE id = ? AND status = 'resolving'",
+        promptId,
+      );
+    };
+    const deletePrompt = () => {
+      this.ctx.storage.sql.exec('DELETE FROM interactive_prompts WHERE id = ?', promptId);
+    };
+    const broadcastPromptExpired = () => {
+      this.broadcastToClients({
+        type: 'interactive_prompt_expired',
+        promptId,
+        promptType,
+        context,
+      });
+      if (channelRefsJson) {
+        this.ctx.waitUntil(
+          this.updateChannelInteractivePrompts(channelRefsJson, { actionId: '__expired__', resolvedBy: 'system' })
+        );
+      }
+    };
+    const broadcastPromptFailed = (error: string) => {
+      const failedResolution: InteractiveResolution = {
+        actionId: '__failed__',
+        value: error,
+        resolvedBy: 'system',
+        ...(promptTitle ? { promptTitle } : {}),
+      };
+      this.broadcastToClients({
+        type: 'interactive_prompt_resolved',
+        promptId,
+        promptType,
+        resolution: failedResolution,
+        context,
+      });
+      if (channelRefsJson) {
+        this.ctx.waitUntil(
+          this.updateChannelInteractivePrompts(channelRefsJson, failedResolution)
+        );
+      }
+    };
+    const failAndDeletePrompt = async (error: string, status: number): Promise<PromptResolutionResult> => {
+      await markFailed(this.appDb, promptId, error).catch((markErr) => {
+        console.error('[session-agent] Failed to mark invocation failed while terminalizing prompt:', markErr);
+      });
+      if (requestId) {
+        this.runnerLink.send({ type: 'call-tool-result', requestId, error } as any);
+      }
+      broadcastPromptFailed(error);
+      deletePrompt();
+      return { ok: false, status, error };
+    };
+    const deleteNoLongerPendingPrompt = (message = 'This action approval is no longer pending.') => {
+      deletePrompt();
+      if (requestId) {
+        this.runnerLink.send({ type: 'call-tool-result', requestId, error: message } as any);
+      }
+      broadcastPromptExpired();
+    };
+    let effectiveResolution = resolution;
 
     // Resolve actionId → human-readable label from the stored actions list
     let actionLabel: string | undefined;
@@ -6502,9 +6827,6 @@ export class SessionAgentDO {
       } catch { /* best-effort */ }
     }
 
-    // Delete the row
-    this.ctx.storage.sql.exec('DELETE FROM interactive_prompts WHERE id = ?', promptId);
-
     const userId = this.sessionState.userId;
     const sessionId = this.sessionState.sessionId;
 
@@ -6513,37 +6835,119 @@ export class SessionAgentDO {
       const service = context.service || '';
       const actionId = context.actionId || '';
       const params = context.params || {};
+      const resolutionAction = normalizeApprovalAction(resolution.actionId);
+      if (!resolutionAction) {
+        restorePrompt();
+        const error = `Unknown approval action: ${resolution.actionId || 'missing'}`;
+        return { ok: false, status: 400, error };
+      }
+      effectiveResolution = { ...resolution, actionId: resolutionAction };
+
+      if (row.actions) {
+        try {
+          const actions = JSON.parse(row.actions as string) as Array<{ id: string; label: string }>;
+          const match = actions.find(a => a.id === resolutionAction);
+          if (match) actionLabel = match.label;
+        } catch { /* best-effort */ }
+      }
+
+      if (!userId) {
+        const error = 'No userId on session';
+        return failAndDeletePrompt(error, 409);
+      }
+
+      if (!resolution.resolvedBy || resolution.resolvedBy !== userId) {
+        const error = 'Only the session owner can resolve this prompt';
+        restorePrompt();
+        return { ok: false, status: 403, error };
+      }
 
       if ('credentialSources' in context || 'isOrgScoped' in context) {
         // Approval was created before the unified-auth migration; context is stale.
         // Credentials are now resolved fresh at execution time.
+        const error = 'This action approval expired during a system update. Please retry the action.';
         console.warn(`[session-agent] Stale approval context (pre-unified-auth), skipping`);
+        await markFailed(this.appDb, promptId, error).catch((markErr) => {
+          console.error('[session-agent] Failed to mark invocation failed after stale approval context:', markErr);
+        });
         if (requestId) {
-          this.runnerLink.send({ type: 'call-tool-result', requestId, error: 'This action approval expired during a system update. Please retry the action.' } as any);
+          this.runnerLink.send({ type: 'call-tool-result', requestId, error } as any);
         }
-        return;
+        broadcastPromptExpired();
+        deletePrompt();
+        return { ok: false, status: 409, error };
       }
 
-      if (resolution.actionId === 'approve') {
-        if (!userId) {
-          if (requestId) {
-            this.runnerLink.send({ type: 'call-tool-result', requestId, error: 'No userId on session' } as any);
+      if (resolutionAction !== 'cancel') {
+        try {
+          const orgPolicy = await resolveOrgPolicyMatch(this.appDb, String(service), String(actionId), String(context.riskLevel || 'medium'));
+          if (orgPolicy?.mode === 'deny') {
+            const error = `Action "${toolId}" is denied by organization policy and cannot be allowed.`;
+            return failAndDeletePrompt(error, 403);
           }
-          // Still update channel messages before returning
-          if (channelRefsJson) {
-            this.ctx.waitUntil(
-              this.updateChannelInteractivePrompts(channelRefsJson, { ...resolution, resolvedBy: 'system' })
-            );
-          }
-          return;
+        } catch (err) {
+          const error = `Failed to check organization policy: ${err instanceof Error ? err.message : String(err)}`;
+          restorePrompt();
+          return { ok: false, status: 500, error };
         }
 
-        // Update D1 status to approved
-        await approveInvocation(this.appDb, promptId, userId);
+        let approval;
+        try {
+          approval = await approveInvocation(this.appDb, promptId, userId);
+        } catch (err) {
+          const error = err instanceof Error ? err.message : String(err);
+          restorePrompt();
+          return { ok: false, status: 500, error };
+        }
+        if (!approval.ok) {
+          const error = 'This action approval is no longer pending.';
+          deleteNoLongerPendingPrompt(error);
+          return { ok: false, status: 409, error };
+        }
 
-        const actionSource = integrationRegistry.getActions(service);
+        if (resolutionAction === 'allow_session' || resolutionAction === 'allow_always') {
+          try {
+            const lifetime = resolutionAction === 'allow_session' ? 'session' : 'persistent';
+            await upsertUserActionPolicyOverride(this.appDb, {
+              id: `${promptId}:${lifetime}`,
+              userId,
+              service: String(service),
+              actionId: String(actionId),
+              mode: 'allow',
+              lifetime,
+              sessionId: lifetime === 'session' ? sessionId : null,
+              source: 'approval_prompt',
+              sourceInvocationId: promptId,
+            });
+          } catch (err) {
+            const error = `Failed to save approval override: ${err instanceof Error ? err.message : String(err)}`;
+            await markFailed(this.appDb, promptId, error).catch((markErr) => {
+              console.error('[session-agent] Failed to mark invocation failed after override save error:', markErr);
+            });
+            if (requestId) {
+              this.runnerLink.send({ type: 'call-tool-result', requestId, error } as any);
+            }
+            broadcastPromptExpired();
+            deletePrompt();
+            return { ok: false, status: 500, error };
+          }
+        }
+
+        const orgId = await this.resolveOrgId() ?? 'default';
+        const customContext = await loadCustomMcpConnectorContext(this.env, this.appDb, orgId);
+        const actionSource = integrationRegistry.getActions(service, customContext);
+        let executionResult: { success: boolean; error?: string } = { success: true };
         if (requestId) {
-          await this.executeActionAndSend(requestId, toolId, service, actionId, params, userId, actionSource, promptId);
+          try {
+            executionResult = await this.executeActionAndSend(requestId, toolId, service, actionId, params, userId, actionSource, promptId, orgId);
+          } catch (err) {
+            const error = err instanceof Error ? err.message : String(err);
+            await markFailed(this.appDb, promptId, error).catch((markErr) => {
+              console.error('[session-agent] Failed to mark invocation failed after action execution throw:', markErr);
+            });
+            this.runnerLink.send({ type: 'call-tool-result', requestId, error } as any);
+            executionResult = { success: false, error };
+          }
         }
 
         // Broadcast approval to clients
@@ -6551,7 +6955,7 @@ export class SessionAgentDO {
           type: 'interactive_prompt_resolved',
           promptId,
           promptType,
-          resolution,
+          resolution: effectiveResolution,
           context,
         });
 
@@ -6560,20 +6964,47 @@ export class SessionAgentDO {
           type: 'action.approved',
           sessionId,
           userId,
-          data: { invocationId: promptId, toolId, service, actionId },
+          data: {
+            invocationId: promptId,
+            toolId,
+            service,
+            actionId,
+            executionStatus: executionResult.success ? 'executed' : 'failed',
+            ...(executionResult.error ? { error: executionResult.error } : {}),
+          },
           timestamp: new Date().toISOString(),
         });
 
-        this.emitAuditEvent('agent.tool_call', `Action ${toolId} approved and executed`, undefined, { invocationId: promptId });
+        this.emitAuditEvent(
+          'agent.tool_call',
+          executionResult.success
+            ? `Action ${toolId} approved and executed`
+            : `Action ${toolId} approved but execution failed: ${executionResult.error || 'Action failed'}`,
+          undefined,
+          { invocationId: promptId },
+        );
+        deletePrompt();
       } else {
-        // Deny
+        // Cancel
         const reason = resolution.value;
-        await denyInvocation(this.appDb, promptId, userId || 'system', reason);
+        let denial;
+        try {
+          denial = await denyInvocation(this.appDb, promptId, userId, reason);
+        } catch (err) {
+          const error = err instanceof Error ? err.message : String(err);
+          restorePrompt();
+          return { ok: false, status: 500, error };
+        }
+        if (!denial.ok) {
+          const error = 'This action approval is no longer pending.';
+          deleteNoLongerPendingPrompt(error);
+          return { ok: false, status: 409, error };
+        }
 
         // Send error to runner
         const errorMsg = reason
-          ? `Action "${toolId}" was denied: ${reason}`
-          : `Action "${toolId}" was denied by a reviewer`;
+          ? `Action "${toolId}" was cancelled: ${reason}`
+          : `Action "${toolId}" was cancelled`;
         if (requestId) {
           this.runnerLink.send({ type: 'call-tool-result', requestId, error: errorMsg } as any);
         }
@@ -6583,7 +7014,7 @@ export class SessionAgentDO {
           type: 'interactive_prompt_resolved',
           promptId,
           promptType,
-          resolution,
+          resolution: effectiveResolution,
           context,
         });
 
@@ -6596,7 +7027,8 @@ export class SessionAgentDO {
           timestamp: new Date().toISOString(),
         });
 
-        this.emitAuditEvent('agent.tool_call', `Action ${toolId} denied${reason ? `: ${reason}` : ''}`, undefined, { invocationId: promptId });
+        this.emitAuditEvent('agent.tool_call', `Action ${toolId} cancelled${reason ? `: ${reason}` : ''}`, undefined, { invocationId: promptId });
+        deletePrompt();
       }
     } else if (promptType === 'question') {
       // Send answer to runner — use the human-readable label when available
@@ -6624,19 +7056,20 @@ export class SessionAgentDO {
         data: { questionId: promptId, answer: String(answer) },
         timestamp: new Date().toISOString(),
       });
+      deletePrompt();
     }
 
     // Resolve display name and update channel messages
     if (channelRefsJson) {
       // Enrich resolution with label, title, and display name
       let displayResolution: InteractiveResolution = {
-        ...resolution,
+        ...effectiveResolution,
         ...(actionLabel ? { actionLabel } : {}),
         ...(promptTitle ? { promptTitle } : {}),
       };
-      if (resolution.resolvedBy && userId) {
+      if (effectiveResolution.resolvedBy && userId) {
         try {
-          const user = await getUserById(this.appDb, resolution.resolvedBy);
+          const user = await getUserById(this.appDb, effectiveResolution.resolvedBy);
           if (user?.name) {
             displayResolution = { ...displayResolution, resolvedBy: user.name };
           } else if (user?.email) {
@@ -6649,6 +7082,7 @@ export class SessionAgentDO {
         this.updateChannelInteractivePrompts(channelRefsJson, displayResolution)
       );
     }
+    return { ok: true };
   }
 
   private async sendChannelInteractivePrompts(promptId: string, prompt: InteractivePrompt) {
@@ -6698,10 +7132,8 @@ export class SessionAgentDO {
           );
           this.broadcastToClients({
             type: 'error',
-            data: {
-              message: 'Approval could not be delivered to Slack: no origin channel context. Please approve via the web dashboard.',
-              promptId,
-            },
+            error: 'Approval could not be delivered to Slack: no origin channel context. Please approve via the web dashboard.',
+            promptId,
           });
         }
         return;

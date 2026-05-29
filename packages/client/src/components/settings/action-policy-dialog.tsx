@@ -9,12 +9,21 @@ import {
 } from '@/components/ui/dialog';
 import { cn } from '@/lib/cn';
 import { useActionCatalog } from '@/api/action-catalog';
-import type { ActionPolicy, ActionMode } from '@valet/shared';
+import type { ActionMode } from '@valet/shared';
+
+export interface EditableActionPolicy {
+  id: string;
+  service?: string | null;
+  actionId?: string | null;
+  riskLevel?: string | null;
+  mode: ActionMode;
+}
 
 interface ActionPolicyDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  policy?: ActionPolicy | null;
+  policy?: EditableActionPolicy | null;
+  noun?: string;
   onSave: (data: {
     id: string;
     service?: string | null;
@@ -27,7 +36,7 @@ interface ActionPolicyDialogProps {
 
 type PolicyScope = 'action' | 'service' | 'risk_level';
 
-function inferScope(policy: ActionPolicy): PolicyScope {
+function inferScope(policy: EditableActionPolicy): PolicyScope {
   if (policy.actionId) return 'action';
   if (policy.service) return 'service';
   return 'risk_level';
@@ -469,7 +478,7 @@ function PolicyJsonView({
 
 // ─── Main Dialog ─────────────────────────────────────────────────────────────
 
-export function ActionPolicyDialog({ open, onOpenChange, policy, onSave, isPending }: ActionPolicyDialogProps) {
+export function ActionPolicyDialog({ open, onOpenChange, policy, noun = 'Policy', onSave, isPending }: ActionPolicyDialogProps) {
   const [scope, setScope] = React.useState<PolicyScope>('action');
   const [service, setService] = React.useState('');
   const [actionId, setActionId] = React.useState('');
@@ -594,7 +603,7 @@ export function ActionPolicyDialog({ open, onOpenChange, policy, onSave, isPendi
       <DialogContent className="max-w-lg">
         <DialogHeader>
           <div className="flex items-center justify-between pr-6">
-            <DialogTitle>{policy ? 'Edit Policy' : 'Add Policy'}</DialogTitle>
+            <DialogTitle>{policy ? `Edit ${noun}` : `Add ${noun}`}</DialogTitle>
             <button
               type="button"
               onClick={() => setShowJson((v) => !v)}

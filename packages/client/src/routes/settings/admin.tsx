@@ -33,12 +33,14 @@ import type { ProviderModels } from '@/api/sessions';
 import { useSlackInstallStatus, useInstallSlack, useUninstallSlack } from '@/api/slack';
 import { GitHubConfigSection } from '@/components/settings/github-config';
 import { ActionPoliciesSection } from '@/components/settings/action-policies-section';
+import { CustomMcpConnectorsSection } from '@/components/settings/custom-mcp-connectors-section';
 import { usePlugins, usePluginDetail, usePluginSettings, useUpdatePluginStatus, useSyncPlugins, useUpdatePluginSettings } from '@/api/plugins';
 import { Badge } from '@/components/ui/badge';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { useActionCatalog } from '@/api/action-catalog';
 import type { ActionCatalogEntry } from '@/api/action-catalog';
 import { useDisabledActions, useSetServiceDisabledState } from '@/api/disabled-actions';
+import { useCustomMcpConnectors } from '@/api/custom-mcp-connectors';
 import type { DisabledAction } from '@valet/shared';
 import { useOrgDefaultSkills, useUpdateOrgDefaultSkills } from '@/api/org-default-skills';
 import { SkillPicker } from '@/components/skills/skill-picker';
@@ -96,6 +98,7 @@ function AdminSettingsPage() {
         <GitHubConfigSection />
         <OrchestratorsSection />
         <ActionLogSection />
+        <CustomMcpConnectorsSection />
         <CustomProvidersSection />
         <AccessControlSection />
         <LoginProvidersSection />
@@ -2220,6 +2223,7 @@ function DefaultSkillsSection() {
 
 function PluginsSection() {
   const { data: plugins, isLoading } = usePlugins();
+  const { data: connectors, isLoading: connectorsLoading } = useCustomMcpConnectors();
   const { data: settings, isLoading: settingsLoading } = usePluginSettings();
   const { data: catalog, isLoading: catalogLoading } = useActionCatalog();
   const { data: disabledRows, isLoading: disabledLoading } = useDisabledActions();
@@ -2228,6 +2232,28 @@ function PluginsSection() {
   const updateSettingsMutation = useUpdatePluginSettings();
   const setStateMutation = useSetServiceDisabledState();
   const [expandedId, setExpandedId] = React.useState<string | null>(null);
+
+  // Merge built-in plugins with custom MCP connectors into a unified list
+  const allPlugins = React.useMemo(() => {
+    const builtIn = plugins ?? [];
+    const custom = (connectors ?? []).map((c) => ({
+      id: `custom:${c.id}`,
+      orgId: c.orgId,
+      name: c.serviceSlug,
+      version: '',
+      description: c.displayName,
+      icon: undefined,
+      actionType: 'mcp' as const,
+      authRequired: c.authType !== 'none',
+      source: 'custom-mcp',
+      capabilities: ['actions'] as string[],
+      status: c.status === 'active' ? 'active' : 'disabled',
+      installedBy: '',
+      installedAt: c.createdAt,
+      updatedAt: c.updatedAt,
+    }));
+    return [...builtIn, ...custom];
+  }, [plugins, connectors]);
 
   // Index action catalog by service (plugin name)
   const actionsByService = React.useMemo(() => {
@@ -2276,12 +2302,12 @@ function PluginsSection() {
     setStateMutation.mutate({ service, serviceDisabled: false, disabledActionIds: newDisabled });
   }
 
-  const anyLoading = isLoading || catalogLoading || disabledLoading;
+  const anyLoading = isLoading || connectorsLoading || catalogLoading || disabledLoading;
 
   return (
-    <Section title="Plugins">
+    <Section title="Plugins & Connectors">
       <p className="mt-1 mb-4 text-sm text-neutral-500 dark:text-neutral-400">
-        Manage installed plugins. Toggle individual plugins or their actions on/off.
+        Manage installed plugins and custom MCP connectors. Toggle individual plugins or their actions on/off.
       </p>
       <div className="space-y-4">
         {/* Settings row */}
@@ -2318,11 +2344,11 @@ function PluginsSection() {
               <div key={i} className="h-12 animate-pulse rounded bg-neutral-100 dark:bg-neutral-700" />
             ))}
           </div>
-        ) : !plugins?.length ? (
+        ) : !allPlugins.length ? (
           <div className="py-8 text-center text-sm text-neutral-400">No plugins installed</div>
         ) : (
           <div className="divide-y divide-neutral-200 rounded-md border border-neutral-200 dark:divide-neutral-700 dark:border-neutral-700">
-            {plugins.map((plugin) => {
+            {allPlugins.map((plugin) => {
               const isExpanded = expandedId === plugin.id;
               const isActive = plugin.status === 'active';
               const isMcp = plugin.actionType === 'mcp';
@@ -2339,6 +2365,8 @@ function PluginsSection() {
               const allActionsEnabled = !isServiceDisabled && disabledActionCount === 0;
               const someActionsDisabled = !isServiceDisabled && disabledActionCount > 0;
 
+              const isCustomConnector = plugin.source === 'custom-mcp';
+
               return (
                 <div key={plugin.id}>
                   {/* Plugin row */}
@@ -2346,9 +2374,12 @@ function PluginsSection() {
                     {/* Plugin enable/disable checkbox */}
                     <input
                       type="checkbox"
-                      checked={isActive}
-                      onChange={() => handlePluginToggle(plugin.name, isActive)}
-                      disabled={updateStatusMutation.isPending}
+                      checked={isCustomConnector ? !isServiceDisabled : isActive}
+                      onChange={() => isCustomConnector
+                        ? handleServiceToggle(plugin.name, !isServiceDisabled, false)
+                        : handlePluginToggle(plugin.name, isActive)
+                      }
+                      disabled={isCustomConnector ? setStateMutation.isPending : updateStatusMutation.isPending}
                       className="h-4 w-4 rounded border-neutral-300 text-blue-600 focus:ring-blue-500 disabled:opacity-40 dark:border-neutral-600"
                     />
 
@@ -2362,14 +2393,18 @@ function PluginsSection() {
                     >
                       <div className="flex items-center gap-2 min-w-0">
                         {plugin.icon && <span className="text-base">{plugin.icon}</span>}
-                        <span className={`text-sm font-medium ${isActive ? 'text-neutral-900 dark:text-neutral-100' : 'text-neutral-400 dark:text-neutral-500'}`}>
-                          {plugin.name}
+                        <span className={`text-sm font-medium ${isActive && !isServiceDisabled ? 'text-neutral-900 dark:text-neutral-100' : 'text-neutral-400 dark:text-neutral-500'}`}>
+                          {isCustomConnector ? plugin.description || plugin.name : plugin.name}
                         </span>
-                        {plugin.description && (
+                        {isCustomConnector ? (
+                          <span className="text-xs text-neutral-400 dark:text-neutral-500 truncate max-w-xs">
+                            {plugin.name}
+                          </span>
+                        ) : plugin.description ? (
                           <span className="text-xs text-neutral-400 dark:text-neutral-500 truncate max-w-xs">
                             {plugin.description}
                           </span>
-                        )}
+                        ) : null}
                       </div>
 
                       <div className="flex items-center gap-2 ml-auto">
@@ -2381,6 +2416,11 @@ function PluginsSection() {
                             </Badge>
                           ))}
                         </div>
+
+                        {/* Custom connector badge */}
+                        {isCustomConnector && (
+                          <Badge variant="secondary">Custom</Badge>
+                        )}
 
                         {/* MCP badge */}
                         {isMcp && (

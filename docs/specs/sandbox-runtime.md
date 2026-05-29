@@ -48,7 +48,6 @@ Orchestrator workspace volumes use a stable name across session ID rotations: `w
 
 ```python
 DEFAULT_IDLE_TIMEOUT_SECONDS = 15 * 60   # 15 minutes
-MODAL_IDLE_TIMEOUT_BUFFER_SECONDS = 30 * 60  # 30-minute safety buffer
 MAX_TIMEOUT_SECONDS = 24 * 60 * 60  # 24 hours
 OPENCODE_PORT = 4096
 GATEWAY_PORT = 9000
@@ -112,12 +111,12 @@ Data flows bidirectionally: user prompts go DO -> Runner -> OpenCode. Agent resp
 
 ```bash
 export DISPLAY=:99
-export HOME=/root
-export OPENCODE_DB=/workspace/.opencode/state/opencode.db
+export HOME=/workspace
+export OPENCODE_RUNTIME_DIR=/tmp/valet-opencode
+export VALET_PERSONA_DIR=/tmp/valet-opencode/persona
 ```
 
-Sets display for VNC and establishes port constants.
-`start.sh` also ensures `/workspace/.opencode/state` exists before the runner starts so OpenCode's SQLite database lives on the workspace volume instead of ephemeral home-directory storage.
+Sets display for VNC, keeps the terminal/user home on the durable workspace, and points runner-generated OpenCode/persona files at ephemeral sandbox storage. OpenCode itself is spawned later with XDG paths, `OPENCODE_CONFIG_DIR`, and `OPENCODE_DB` under `OPENCODE_RUNTIME_DIR`.
 
 ### Step 2 — VNC Stack
 
@@ -305,9 +304,9 @@ Dynamic tunnels allow tools inside the sandbox to expose arbitrary ports:
 Manages the OpenCode server process lifecycle.
 
 **`start()` sequence:**
-1. **writeConfigFiles()**: Write `auth.json` (provider keys, mode 0o600), merge base `opencode.json` with tool toggles, custom instructions, and custom providers, write to `{workspace}/.opencode/opencode.json`.
-2. **copyToolsAndSkills()**: Copy tools from `/opencode-config/tools/` to workspace `.opencode/tools/`. For orchestrators: remove `complete_session.ts` and `notify_parent.ts`. Copy skills directories recursively.
-3. **spawnProcess()**: `Bun.spawn(["opencode", "serve", "--port", "4096"], { cwd: workspaceDir, env: { ...process.env, OPENCODE_DB: "/workspace/.opencode/state/opencode.db" } })`. Monitors for unexpected exit.
+1. **writeConfigFiles()**: Write `auth.json` (provider keys, mode 0o600), merge base `opencode.json` with tool toggles, custom instructions, and custom providers, write to `${OPENCODE_RUNTIME_DIR}/config/opencode/opencode.json`.
+2. **copyToolsAndSkills()**: Copy tools, plugins, and skills from `/opencode-config/` to `${OPENCODE_RUNTIME_DIR}/config/opencode/`. For orchestrators: remove `complete_session.ts` and `notify_parent.ts`.
+3. **spawnProcess()**: `Bun.spawn(["opencode", "serve", "--port", "4096"], { cwd: workspaceDir, env: { ...process.env, OPENCODE_CONFIG_DIR, OPENCODE_DB, OPENCODE_DISABLE_PROJECT_CONFIG: "true" } })`. OpenCode still edits `/workspace`, but ignores stale generated config under `/workspace/.opencode`.
 4. **waitForHealth()**: Poll `http://localhost:4096/health` every 1s, up to 60 retries.
 
 **Config hot-reload (`applyConfig()`):** Serialized via promise chain. Compares new config via JSON stringify — only restarts if something changed. Restart: SIGTERM, 5s grace, SIGKILL, then fresh `start()`.
@@ -326,8 +325,8 @@ Thread channels (`"thread:<threadId>"`) additionally reuse the persisted `sessio
 4. Build model failover chain from `modelPreferences`.
 5. Transcribe audio attachments via whisper.cpp if present.
 6. Send `agentStatus: thinking` to DO.
-7. POST `prompt_async` to OpenCode with attributed content and model selection.
-8. Return immediately — response arrives via SSE.
+7. POST `/session/:id/message` to OpenCode with attributed content and model selection.
+8. Finalize the turn from the sync response, supplemented by SSE deltas that arrived while the request was in flight.
 
 **SSE event consumption (`consumeEventStream()`):**
 - Connects to `/global/event` (fallback: `/event`).
@@ -337,9 +336,10 @@ Thread channels (`"thread:<threadId>"`) additionally reuse the persisted `sessio
   - `message.part.updated` (tool): sends `message.part.tool-update` with status changes.
   - `session.idle`: finalizes the response turn.
   - `session.error`: detects retriable provider errors, attempts model failover.
+  - `session.status=retry`: if OpenCode repeatedly retries with no assistant output, tool activity, or provider error, the runner aborts the stuck sync request and advances the model failover chain.
   - `permission.asked`: auto-approves all permissions (headless agent).
 
-**Model failover:** When a provider error is detected (rate limit, auth, billing), `attemptModelFailover()` tries the next model in the preferences chain. Resets channel state, sends `model-switched` notification, re-dispatches prompt.
+**Model failover:** When a provider error is detected (rate limit, auth, billing), a sync prompt times out, or OpenCode enters a zero-output provider retry loop, the prompt handler tries the next model in the preferences chain. It resets channel state, sends a `model-switched` notification, and re-dispatches the prompt. If no fallback model remains, the runner finalizes the turn with a user-visible error instead of leaving the session stuck in `WAITING_RUNNER`.
 
 ## WebSocket Protocol (Runner ↔ DO)
 
@@ -394,7 +394,7 @@ Thread channels (`"thread:<threadId>"`) additionally reuse the persisted `sessio
 | `self-terminate` | Self-terminate session |
 | `memory-read/write/delete` | Memory operations |
 | `create-pr` / `update-pr` | GitHub PR operations |
-| `pr-created` / `files-changed` / `child-session` / `title` | State update broadcasts |
+| `pr-created` / `files-changed` / `child-session` / `title` | State update broadcasts; `child-session` carries `threadId` when the spawn originated from an orchestrator thread |
 | `workflow-list/run/sync/update/delete` | Workflow operations |
 | `channel-reply` | Reply to external channel |
 | `task-create/list/update` | Task operations |
@@ -442,9 +442,11 @@ Supports hibernation recovery — if DO hibernates mid-turn, `recoverTurnFromSQL
    - Command: `/bin/bash /start.sh`
    - Encrypted ports: `[4096, 9000]`
    - Timeout: 24 hours max
-   - Idle timeout: user timeout + 30-minute buffer
+   - No Modal `idle_timeout`: Valet owns idle hibernation in the SessionAgent DO. Modal's sandbox idle detection does not count the runner's outbound WebSocket or OpenCode work, so setting `idle_timeout` can kill active agents.
    - Volumes: workspace (`/workspace`), whisper models (`/models/whisper`)
 5. Retrieve tunnel URLs from `sandbox.tunnels`.
+
+SessionAgent DO records when each live sandbox starts. If the runner disappears with `sandbox_lost` near the 24-hour Modal hard timeout, the DO emits a loud `console.error` and a `session.recovery` analytics event with summary `modal_sandbox_hard_timeout_edge`.
 
 ### Tunnel URL Structure
 
@@ -468,7 +470,8 @@ await sandbox.terminate.aio()
 return image.object_id
 ```
 
-Raises `SandboxAlreadyFinishedError` if sandbox already exited (e.g., Modal idle timeout).
+Raises `SandboxAlreadyFinishedError` if sandbox already exited before the snapshot call.
+Recognized Modal snapshot failures, including image creation timeouts and "failed to create image" errors, are surfaced as `SandboxSnapshotFailedError` so the Worker can terminate the session cleanly instead of leaving it in `error`.
 
 ### Restore
 
@@ -476,7 +479,7 @@ Uses `modal.Image.from_id(snapshot_image_id)` as base image, creates new sandbox
 
 ## OpenCode Configuration
 
-Base config at `docker/opencode/opencode.json`. The Runner merges this with runtime config (custom providers, tool toggles, instructions) and writes the final config to `{workspace}/.opencode/opencode.json`.
+Base config at `docker/opencode/opencode.json`. The Runner merges this with runtime config (custom providers, tool toggles, instructions) and writes the final config to `${OPENCODE_RUNTIME_DIR}/config/opencode/opencode.json`.
 
 ### Custom Tools (68 tools)
 
@@ -528,7 +531,7 @@ Messages sent by the runner while the WebSocket is disconnected are queued in an
 - Full internal API for OpenCode tool communication
 - Dynamic tunnel registration and proxying
 - Runner initialization with OpenCode management
-- OpenCode SQLite persistence on the workspace volume via `OPENCODE_DB`
+- Ephemeral OpenCode config/state under `OPENCODE_RUNTIME_DIR`, with thread continuation recovered through the DO when a sandbox restarts
 - V2 parts-based streaming protocol with hibernation recovery
 - Per-channel OpenCode session architecture
 - Persisted thread-session adoption with fallback-only continuation injection

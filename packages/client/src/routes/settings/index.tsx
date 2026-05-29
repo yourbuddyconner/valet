@@ -10,6 +10,7 @@ import type { QueueMode } from '@valet/shared';
 import { Button } from '@/components/ui/button';
 import { APIKeyList } from '@/components/settings/api-key-list';
 import { useTheme } from '@/hooks/use-theme';
+import { ActionPolicyOverridesSection } from '@/components/settings/action-policy-overrides-section';
 
 const TABS = [
   { id: 'general', label: 'General' },
@@ -177,6 +178,7 @@ function AgentTab() {
       </div>
 
       <ModelPreferencesSection />
+      <ActionPolicyOverridesSection />
       <TimezoneSection />
       <IdleTimeoutSection />
       <SandboxResourcesSection />

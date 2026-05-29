@@ -21,6 +21,7 @@ import type {
 import { gitCredentials } from "./git-credentials.js";
 import { setupGitConfig, cloneRepo } from "./git-setup.js";
 import type { WorkflowStepEvent } from "./workflow-step-events.js";
+import { APPROVAL_TIMEOUT_MS } from "./timeouts.js";
 
 export interface PromptAuthor {
   authorId?: string;
@@ -37,7 +38,6 @@ const SPAWN_CHILD_TIMEOUT_MS = 60_000;
 const TERMINATE_CHILD_TIMEOUT_MS = 30_000;
 const MESSAGE_OP_TIMEOUT_MS = 15_000;
 const TOOL_OP_TIMEOUT_MS = 30_000;
-const APPROVAL_TIMEOUT_MS = 11 * 60 * 1000; // 11 min — slightly longer than DO's 10 min expiry
 // If the server rejects the WebSocket upgrade N times in a row (e.g. 401 due to
 // rotated token), stop retrying and exit — the sandbox has been replaced.
 const MAX_CONSECUTIVE_UPGRADE_FAILURES = 5;
@@ -336,8 +336,8 @@ export class AgentClient {
     this.send({ type: "workflow-execution-result", executionId, envelope });
   }
 
-  sendAborted(): void {
-    this.send({ type: "aborted" });
+  sendAborted(messageId?: string): void {
+    this.send({ type: "aborted", ...(messageId ? { messageId } : {}) });
   }
 
   sendWaitSubscription(subscription: {
@@ -417,8 +417,8 @@ export class AgentClient {
     this.send({ type: "review-result", requestId, data, diffFiles, error });
   }
 
-  sendChildSession(childSessionId: string, title?: string): void {
-    this.send({ type: "child-session", childSessionId, title });
+  sendChildSession(childSessionId: string, title?: string, threadId?: string): void {
+    this.send({ type: "child-session", childSessionId, title, threadId } as any);
   }
 
   sendAudioTranscript(messageId: string, transcript: string): void {
@@ -470,7 +470,7 @@ export class AgentClient {
     sourceRepoFullName?: string;
     model?: string;
     personaId?: string;
-  }): Promise<{ childSessionId: string }> {
+  }): Promise<{ childSessionId: string; parentThreadId?: string }> {
     const requestId = crypto.randomUUID();
     return this.createPendingRequest(requestId, SPAWN_CHILD_TIMEOUT_MS, () => {
       this.send({ type: "spawn-child", requestId, ...params });
@@ -1043,10 +1043,15 @@ export class AgentClient {
     try {
       switch (msg.type) {
         case "prompt": {
+          // Fire-and-forget: don't await so the WebSocket handler can process
+          // the next message immediately. This enables concurrent prompt dispatch
+          // to different channels/threads (TKAI-65). Each channel has its own
+          // OpenCode session, so prompts process in parallel via the SSE stream.
           const author: PromptAuthor | undefined = (msg.authorId || msg.gitName || msg.gitEmail || msg.authorName || msg.authorEmail)
             ? { authorId: msg.authorId, gitName: msg.gitName, gitEmail: msg.gitEmail, authorName: msg.authorName, authorEmail: msg.authorEmail }
             : undefined;
-          await this.promptHandler?.(msg.messageId, msg.content, msg.model, author, msg.modelPreferences, msg.attachments, msg.channelType, msg.channelId, msg.opencodeSessionId, msg.continuationContext, msg.threadId, msg.replyChannelType, msg.replyChannelId);
+          this.promptHandler?.(msg.messageId, msg.content, msg.model, author, msg.modelPreferences, msg.attachments, msg.channelType, msg.channelId, msg.opencodeSessionId, msg.continuationContext, msg.threadId, msg.replyChannelType, msg.replyChannelId)
+            .catch(err => console.error(`[AgentClient] Prompt handler error for ${msg.messageId}:`, err));
           break;
         }
         case "answer":
@@ -1099,7 +1104,7 @@ export class AgentClient {
           if (msg.error) {
             this.rejectPendingRequest(msg.requestId, msg.error);
           } else {
-            this.resolvePendingRequest(msg.requestId, { childSessionId: msg.childSessionId });
+            this.resolvePendingRequest(msg.requestId, { childSessionId: msg.childSessionId, parentThreadId: msg.parentThreadId });
           }
           break;
 

@@ -22,6 +22,14 @@ vi.mock('../lib/db/integrations.js', () => ({
   getOrgIntegrations: vi.fn().mockResolvedValue([]),
 }));
 
+vi.mock('./custom-mcp-connectors.js', () => ({
+  loadCustomMcpConnectorContext: vi.fn().mockResolvedValue({
+    orgId: 'default',
+    connectors: new Map(),
+    fetch,
+  }),
+}));
+
 describe('resolveActionPolicy — internal provider bypass', () => {
   it('does not throw the activation gate error for an internal provider with no active integration', async () => {
     // Mock getProvider to return an internal provider

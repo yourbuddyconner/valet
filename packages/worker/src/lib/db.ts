@@ -37,3 +37,4 @@ export * from './db/channel-threads.js';
 export * from './db/mcp-tool-cache.js';
 export * from './db/service-configs.js';
 export * from './db/github-installations.js';
+export * from './db/custom-mcp-connectors.js';

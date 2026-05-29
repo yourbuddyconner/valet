@@ -9,6 +9,30 @@ interface WebSocketMessage {
   [key: string]: unknown;
 }
 
+const WS_OPEN = 1;
+
+export function sendWebSocketMessage(
+  socket: Pick<WebSocket, 'readyState' | 'send'> | null,
+  message: WebSocketMessage,
+): boolean {
+  if (socket?.readyState !== WS_OPEN) {
+    return false;
+  }
+
+  const payload = JSON.stringify(message);
+  if (payload.length > 30_000_000) {
+    console.warn(`[ws] payload very large: ${(payload.length / 1_000_000).toFixed(1)} MB`);
+  }
+
+  try {
+    socket.send(payload);
+    return true;
+  } catch (err) {
+    console.error('[ws] send failed:', err);
+    return false;
+  }
+}
+
 interface UseWebSocketOptions {
   onMessage?: (message: WebSocketMessage) => void;
   onConnect?: () => void;
@@ -115,17 +139,7 @@ export function useWebSocket(url: string | null, options: UseWebSocketOptions = 
   }, [maxReconnectAttempts]);
 
   const send = useCallback((message: WebSocketMessage) => {
-    if (wsRef.current?.readyState === WebSocket.OPEN) {
-      const payload = JSON.stringify(message);
-      if (payload.length > 30_000_000) {
-        console.warn(`[ws] payload very large: ${(payload.length / 1_000_000).toFixed(1)} MB`);
-      }
-      try {
-        wsRef.current.send(payload);
-      } catch (err) {
-        console.error('[ws] send failed:', err);
-      }
-    }
+    return sendWebSocketMessage(wsRef.current, message);
   }, []);
 
   useEffect(() => {

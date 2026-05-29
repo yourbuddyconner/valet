@@ -24,7 +24,6 @@ from config import (
     DEFAULT_IDLE_TIMEOUT_SECONDS,
     GATEWAY_PORT,
     MAX_TIMEOUT_SECONDS,
-    MODAL_IDLE_TIMEOUT_BUFFER_SECONDS,
     OPENCODE_PORT,
     SANDBOX_DEFAULT_CPU_CORES,
     SANDBOX_DEFAULT_MEMORY_MIB,
@@ -80,6 +79,23 @@ class SandboxManager:
         self.app = app
 
     @staticmethod
+    def _is_already_finished_error(exc: Exception) -> bool:
+        if _ConflictError is not None and isinstance(exc, _ConflictError):
+            return True
+        exc_type = type(exc).__name__
+        message = str(exc).lower()
+        return exc_type in ("GRPCError", "ConflictError") and "already finished" in message
+
+    @staticmethod
+    def _snapshot_failure_message(exc: Exception) -> str | None:
+        message = str(exc).lower()
+        if "timed out waiting for image to be created" in message:
+            return "Timed out waiting for image to be created"
+        if "failed to create image" in message:
+            return "Failed to create image"
+        return None
+
+    @staticmethod
     def workspace_volume_name(session_id: str) -> str:
         """Return the Modal volume name used for a session workspace.
 
@@ -119,7 +135,6 @@ class SandboxManager:
             memory=config.memory_mib,
             encrypted_ports=[OPENCODE_PORT, GATEWAY_PORT],
             timeout=MAX_TIMEOUT_SECONDS,
-            idle_timeout=config.idle_timeout_seconds + MODAL_IDLE_TIMEOUT_BUFFER_SECONDS,
             secrets=[modal.Secret.from_dict(secrets_dict)],
             volumes={
                 "/workspace": modal.Volume.from_name(
@@ -177,7 +192,19 @@ class SandboxManager:
 
     async def snapshot_and_terminate(self, sandbox_id: str) -> str:
         """Snapshot a sandbox's filesystem and terminate it. Returns the snapshot image ID."""
-        sandbox = await modal.Sandbox.from_id.aio(sandbox_id)
+        try:
+            sandbox = await modal.Sandbox.from_id.aio(sandbox_id)
+        except Exception as exc:
+            if self._is_already_finished_error(exc):
+                raise SandboxAlreadyFinishedError(sandbox_id)
+            snapshot_message = self._snapshot_failure_message(exc)
+            if snapshot_message:
+                raise SandboxSnapshotFailedError(sandbox_id, snapshot_message)
+            logger.warning(
+                "snapshot_and_terminate: lookup failed with %s for sandbox %s: %s",
+                type(exc).__name__, sandbox_id, exc,
+            )
+            raise
         try:
             image = await sandbox.snapshot_filesystem.aio(timeout=55)
         except Exception as exc:
@@ -185,16 +212,14 @@ class SandboxManager:
             # Use the resolved _ConflictError type when available, otherwise
             # fall back to duck-typing the exception for resilience across
             # Modal runtime SDK versions.
-            if _ConflictError is not None and isinstance(exc, _ConflictError):
+            if self._is_already_finished_error(exc):
                 raise SandboxAlreadyFinishedError(sandbox_id)
-            exc_type = type(exc).__name__
-            if exc_type in ("GRPCError", "ConflictError") and "already finished" in str(exc).lower():
-                raise SandboxAlreadyFinishedError(sandbox_id)
-            if exc_type == "ExecutionError" and "failed to create image" in str(exc).lower():
-                raise SandboxSnapshotFailedError(sandbox_id, "Failed to create image")
+            snapshot_message = self._snapshot_failure_message(exc)
+            if snapshot_message:
+                raise SandboxSnapshotFailedError(sandbox_id, snapshot_message)
             logger.warning(
                 "snapshot_and_terminate: unhandled %s for sandbox %s: %s",
-                exc_type, sandbox_id, exc,
+                type(exc).__name__, sandbox_id, exc,
             )
             raise
         await sandbox.terminate.aio()
@@ -224,7 +249,6 @@ class SandboxManager:
             memory=config.memory_mib,
             encrypted_ports=[OPENCODE_PORT, GATEWAY_PORT],
             timeout=MAX_TIMEOUT_SECONDS,
-            idle_timeout=config.idle_timeout_seconds + MODAL_IDLE_TIMEOUT_BUFFER_SECONDS,
             secrets=[modal.Secret.from_dict(secrets_dict)],
             volumes={
                 "/workspace": modal.Volume.from_name(

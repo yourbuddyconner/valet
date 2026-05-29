@@ -4,6 +4,10 @@
 # Claude Code
 .claude/worktrees/
 
+# Sandbox-injected agent directories
+.opencode/
+.agents/
+
 # Dependencies
 node_modules/
 

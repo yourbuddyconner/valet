@@ -18,6 +18,7 @@ import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { SearchInput } from '@/components/ui/search-input';
 import type { Integration } from '@/api/types';
+import { getIntegrationListDisplayState } from './integration-list-display';
 
 type StatusFilter = Integration['status'] | 'all';
 
@@ -29,7 +30,12 @@ const STATUS_OPTIONS: { value: StatusFilter; label: string }[] = [
   { value: 'disconnected', label: 'Disconnected' },
 ];
 
-export function IntegrationList() {
+interface IntegrationListProps {
+  onAddIntegration?: () => void;
+  addIntegrationLabel?: string;
+}
+
+export function IntegrationList({ onAddIntegration, addIntegrationLabel = 'Connect Integration' }: IntegrationListProps = {}) {
   const [search, setSearch] = React.useState('');
   const [statusFilter, setStatusFilter] = React.useState<StatusFilter>('all');
   const { data, isLoading: integrationsLoading, error } = useIntegrations();
@@ -111,6 +117,11 @@ export function IntegrationList() {
       return true;
     });
   }, [allItems, search, statusFilter]);
+  const displayState = getIntegrationListDisplayState({
+    totalItems: allItems.length,
+    visibleItems: filteredItems.length,
+    canAddIntegration: !!onAddIntegration,
+  });
 
   if (isLoading) {
     return <IntegrationListSkeleton />;
@@ -153,13 +164,13 @@ export function IntegrationList() {
         </div>
       </div>
 
-      {allItems.length === 0 ? (
+      {displayState === 'empty' ? (
         <div className="rounded-lg border border-neutral-200 bg-white p-8 text-center dark:border-neutral-700 dark:bg-neutral-800">
           <p className="text-sm text-neutral-500 text-pretty dark:text-neutral-400">
             No integrations configured. Connect your first service to get started.
           </p>
         </div>
-      ) : filteredItems.length === 0 ? (
+      ) : displayState === 'no-matches' ? (
         <div className="rounded-lg border border-neutral-200 bg-white p-8 text-center dark:border-neutral-700 dark:bg-neutral-800">
           <p className="text-sm text-neutral-500 text-pretty dark:text-neutral-400">
             No integrations match your filters.
@@ -185,9 +196,39 @@ export function IntegrationList() {
             }
             return <IntegrationCard key={item.key} integration={item.integration!} />;
           })}
+          {onAddIntegration && (
+            <AddIntegrationCard label={addIntegrationLabel} onClick={onAddIntegration} />
+          )}
         </div>
       )}
     </div>
+  );
+}
+
+// ─── Add Integration Card ───────────────────────────────────────────────
+
+function AddIntegrationCard({ label, onClick }: { label: string; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="group flex min-h-[148px] flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed border-neutral-300 bg-white p-6 text-neutral-500 transition-colors hover:border-neutral-400 hover:bg-neutral-50 hover:text-neutral-700 focus:outline-none focus:ring-2 focus:ring-neutral-400 focus:ring-offset-2 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-400 dark:hover:border-neutral-600 dark:hover:bg-neutral-750 dark:hover:text-neutral-200"
+    >
+      <svg
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth={1.5}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        className="h-12 w-12 transition-transform group-hover:scale-110"
+        aria-hidden="true"
+      >
+        <line x1="12" y1="5" x2="12" y2="19" />
+        <line x1="5" y1="12" x2="19" y2="12" />
+      </svg>
+      <span className="text-sm font-medium">{label}</span>
+    </button>
   );
 }
 

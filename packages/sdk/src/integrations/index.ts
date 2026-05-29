@@ -107,6 +107,7 @@ export interface IntegrationProvider {
   /** Worker-internal provider: no credentials; receives a worker-side data handle.
    *  Internal services are always listable and skip credential resolution. */
   readonly internal?: boolean;
+  readonly isCustomConnector?: boolean;
 
   validateCredentials(credentials: IntegrationCredentials): boolean;
   testConnection(credentials: IntegrationCredentials): Promise<boolean>;

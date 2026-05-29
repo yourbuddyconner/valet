@@ -9,16 +9,26 @@ import type { Message, SessionStatus } from '@/api/types';
 import type { MessagePart } from '@valet/shared';
 import { useAuthStore } from '@/stores/auth';
 import { SLASH_COMMANDS, type QueueMode } from '@valet/shared';
+import {
+  buildApprovalResolutionSocketMessage,
+  getWebSocketErrorPromptId,
+  getWebSocketErrorText,
+  markInteractivePromptError,
+  markInteractivePromptTerminal,
+  pruneTerminalInteractivePrompt,
+  upsertInteractivePrompt,
+} from '@/lib/approval-prompts';
 export interface InteractivePromptState {
   id: string;
   sessionId: string;
   type: string;
   title: string;
   body?: string;
-  actions: Array<{ id: string; label: string; style?: 'primary' | 'danger' }>;
+  actions: Array<{ id: string; label: string; style?: 'primary' | 'danger'; description?: string }>;
   expiresAt?: number;
   context?: Record<string, unknown>;
   status: 'pending' | 'resolved' | 'expired';
+  error?: string;
 }
 
 export interface LogEntry {
@@ -51,6 +61,7 @@ export interface ChildSessionEvent {
   childSessionId: string;
   title?: string;
   timestamp: number;
+  threadId?: string;
 }
 
 export interface ConnectedUser {
@@ -87,6 +98,7 @@ export interface IntegrationAuthError {
   service: string;
   displayName: string;
   reason: string;
+  message?: string;
 }
 
 interface ChatState {
@@ -111,6 +123,7 @@ interface ChatState {
   reviewDiffFiles: DiffFile[] | null;
   agentStatusChannelType?: string;
   agentStatusChannelId?: string;
+  agentStatusThreadId?: string;
   integrationAuthErrors: IntegrationAuthError[];
   pendingFollowup: { messageId: string; content: string; attachments?: unknown; threadId?: string } | null;
 }
@@ -193,7 +206,7 @@ interface WebSocketInteractivePromptMessage {
     type: string;
     title: string;
     body?: string;
-    actions: Array<{ id: string; label: string; style?: 'primary' | 'danger' }>;
+    actions: Array<{ id: string; label: string; style?: 'primary' | 'danger'; description?: string }>;
     expiresAt?: number;
     context?: Record<string, unknown>;
   };
@@ -215,6 +228,7 @@ interface WebSocketAgentStatusMessage {
   detail?: string;
   channelType?: string;
   channelId?: string;
+  threadId?: string;
 }
 
 interface WebSocketMessageUpdatedMessage {
@@ -235,6 +249,12 @@ interface WebSocketErrorMessage {
   messageId: string;
   error?: string;
   content?: string;
+  message?: string;
+  promptId?: string;
+  data?: {
+    message?: string;
+    promptId?: string;
+  };
   channelType?: string;
   channelId?: string;
 }
@@ -282,6 +302,7 @@ interface WebSocketChildSessionMessage {
   type: 'child-session';
   childSessionId: string;
   title?: string;
+  threadId?: string;
 }
 
 interface WebSocketReviewResultMessage {
@@ -335,7 +356,7 @@ interface WebSocketToastMessage {
 
 interface WebSocketIntegrationAuthRequiredMessage {
   type: 'integration-auth-required';
-  services: Array<{ service: string; displayName: string; reason: string }>;
+  services: Array<{ service: string; displayName: string; reason: string; message?: string }>;
 }
 
 interface WebSocketModelsMessage {
@@ -418,6 +439,19 @@ export function useChat(sessionId: string) {
   sessionIdRef.current = sessionId;
 
   const [state, setState] = useState<ChatState>(() => createInitialState());
+
+  const markPromptTerminal = useCallback((promptId: string, status: 'resolved' | 'expired') => {
+    setState((prev) => ({
+      ...prev,
+      interactivePrompts: markInteractivePromptTerminal(prev.interactivePrompts, promptId, status),
+    }));
+    setTimeout(() => {
+      setState((prev) => ({
+        ...prev,
+        interactivePrompts: pruneTerminalInteractivePrompt(prev.interactivePrompts, promptId),
+      }));
+    }, 5000);
+  }, []);
 
   const [selectedModel, setSelectedModel] = useState<string>(() => {
     try {
@@ -595,6 +629,7 @@ export function useChat(sessionId: string) {
             args: unknown,
             result: unknown,
             timestamp: number,
+            threadId?: string,
           ) => {
             if (toolName !== 'spawn_session' || typeof result !== 'string') return;
             const match = result.match(/Child session spawned:\s*(\S+)/) || result.match(UUID_RE);
@@ -605,6 +640,7 @@ export function useChat(sessionId: string) {
               childSessionId: childId,
               title: (argsObj.title as string) || (argsObj.workspace as string) || undefined,
               timestamp,
+              threadId,
             });
           };
           for (const m of sortedMessages) {
@@ -612,7 +648,7 @@ export function useChat(sessionId: string) {
             // V1 legacy format
             if (m.role === 'tool' && m.parts && typeof m.parts === 'object' && !Array.isArray(m.parts)) {
               const p = m.parts as unknown as Record<string, unknown>;
-              recordSpawn(p.toolName, p.args, p.result, ts);
+              recordSpawn(p.toolName, p.args, p.result, ts, m.threadId);
               continue;
             }
             // V2 turn format — scan assistant turn parts for tool-call parts
@@ -620,7 +656,7 @@ export function useChat(sessionId: string) {
               for (const part of m.parts as unknown as Record<string, unknown>[]) {
                 if (!part || typeof part !== 'object') continue;
                 if (part.type === 'tool-call') {
-                  recordSpawn(part.toolName, part.args, part.result, ts);
+                  recordSpawn(part.toolName, part.args, part.result, ts, m.threadId);
                 }
               }
             }
@@ -845,20 +881,17 @@ export function useChat(sessionId: string) {
         const prompt = ipMsg.prompt;
         setState((prev) => ({
           ...prev,
-          interactivePrompts: [
-            ...prev.interactivePrompts,
-            {
-              id: prompt.id,
-              sessionId: prompt.sessionId,
-              type: prompt.type,
-              title: prompt.title,
-              body: prompt.body,
-              actions: prompt.actions,
-              expiresAt: prompt.expiresAt,
-              context: prompt.context,
-              status: 'pending' as const,
-            },
-          ],
+          interactivePrompts: upsertInteractivePrompt(prev.interactivePrompts, {
+            id: prompt.id,
+            sessionId: prompt.sessionId,
+            type: prompt.type,
+            title: prompt.title,
+            body: prompt.body,
+            actions: prompt.actions,
+            expiresAt: prompt.expiresAt,
+            context: prompt.context,
+            status: 'pending' as const,
+          }),
         }));
         break;
       }
@@ -875,6 +908,7 @@ export function useChat(sessionId: string) {
             agentStatusDetail: statusMsg.detail,
             agentStatusChannelType: statusMsg.channelType,
             agentStatusChannelId: statusMsg.channelId,
+            agentStatusThreadId: statusMsg.threadId,
             // Also update isAgentThinking for backward compatibility
             isAgentThinking: statusMsg.status !== 'idle' && !isTerminalSessionStatus(prev.status),
           };
@@ -884,11 +918,8 @@ export function useChat(sessionId: string) {
 
       case 'error': {
         const errorMsg = message as WebSocketErrorMessage;
-        const rawError = errorMsg.error || errorMsg.content || 'Unknown error';
-        // Guard against object-type errors that slipped through serialization
-        const errorText = typeof rawError === 'string' ? rawError
-          : typeof rawError === 'object' ? (rawError as Record<string, unknown>).message as string || JSON.stringify(rawError)
-          : String(rawError);
+        const errorText = getWebSocketErrorText(errorMsg);
+        const promptId = getWebSocketErrorPromptId(errorMsg);
         const errorMessage: Message = {
           id: errorMsg.messageId || crypto.randomUUID(),
           sessionId: sessionIdRef.current,
@@ -901,6 +932,9 @@ export function useChat(sessionId: string) {
         setState((prev) => ({
           ...prev,
           messages: [...prev.messages, errorMessage],
+          interactivePrompts: promptId
+            ? markInteractivePromptError(prev.interactivePrompts, promptId, errorText)
+            : prev.interactivePrompts,
           isAgentThinking: false,
           agentStatus: 'error',
           agentStatusDetail: errorText,
@@ -993,6 +1027,7 @@ export function useChat(sessionId: string) {
               childSessionId: childMsg.childSessionId,
               title: childMsg.title,
               timestamp: Date.now(),
+              threadId: childMsg.threadId,
             },
           ],
         }));
@@ -1101,41 +1136,13 @@ export function useChat(sessionId: string) {
 
       case 'interactive_prompt_resolved': {
         const rMsg = message as WebSocketInteractivePromptResolvedMessage;
-        setState((prev) => ({
-          ...prev,
-          interactivePrompts: prev.interactivePrompts.map((p) =>
-            p.id === rMsg.promptId ? { ...p, status: 'resolved' as const } : p
-          ),
-        }));
-        // Prune resolved prompt from state after a short delay
-        setTimeout(() => {
-          setState((prev) => ({
-            ...prev,
-            interactivePrompts: prev.interactivePrompts.filter(
-              (p) => p.id !== rMsg.promptId || p.status === 'pending'
-            ),
-          }));
-        }, 5000);
+        markPromptTerminal(rMsg.promptId, 'resolved');
         break;
       }
 
       case 'interactive_prompt_expired': {
         const eMsg = message as WebSocketInteractivePromptExpiredMessage;
-        setState((prev) => ({
-          ...prev,
-          interactivePrompts: prev.interactivePrompts.map((p) =>
-            p.id === eMsg.promptId ? { ...p, status: 'expired' as const } : p
-          ),
-        }));
-        // Prune expired prompt from state after a short delay
-        setTimeout(() => {
-          setState((prev) => ({
-            ...prev,
-            interactivePrompts: prev.interactivePrompts.filter(
-              (p) => p.id !== eMsg.promptId || p.status === 'pending'
-            ),
-          }));
-        }, 5000);
+        markPromptTerminal(eMsg.promptId, 'expired');
         break;
       }
 
@@ -1272,22 +1279,9 @@ export function useChat(sessionId: string) {
       send({ type: 'answer', questionId: promptId, answer });
 
       // Mark as resolved (matches approval behavior — removed after 5s delay)
-      setState((prev) => ({
-        ...prev,
-        interactivePrompts: prev.interactivePrompts.map(
-          (p) => p.id === promptId ? { ...p, status: 'resolved' as const } : p
-        ),
-      }));
-      setTimeout(() => {
-        setState((prev) => ({
-          ...prev,
-          interactivePrompts: prev.interactivePrompts.filter(
-            (p) => p.id !== promptId || p.status === 'pending'
-          ),
-        }));
-      }, 5000);
+      markPromptTerminal(promptId, 'resolved');
     },
-    [isConnected, send]
+    [isConnected, markPromptTerminal, send]
   );
 
   const dismissQuestion = useCallback(
@@ -1297,22 +1291,9 @@ export function useChat(sessionId: string) {
       // Send a real text answer so OpenCode continues its turn (empty answers cause errors)
       send({ type: 'answer', questionId: promptId, answer: 'Skipped — no answer provided. Proceed without this information or make a reasonable default choice.' });
 
-      setState((prev) => ({
-        ...prev,
-        interactivePrompts: prev.interactivePrompts.map(
-          (p) => p.id === promptId ? { ...p, status: 'expired' as const } : p
-        ),
-      }));
-      setTimeout(() => {
-        setState((prev) => ({
-          ...prev,
-          interactivePrompts: prev.interactivePrompts.filter(
-            (p) => p.id !== promptId || p.status === 'pending'
-          ),
-        }));
-      }, 5000);
+      markPromptTerminal(promptId, 'expired');
     },
-    [isConnected, send]
+    [isConnected, markPromptTerminal, send]
   );
 
   // Sync WebSocket session status changes back to React Query cache
@@ -1557,6 +1538,7 @@ export function useChat(sessionId: string) {
     agentStatusDetail: state.agentStatusDetail,
     agentStatusChannelType: state.agentStatusChannelType,
     agentStatusChannelId: state.agentStatusChannelId,
+    agentStatusThreadId: state.agentStatusThreadId,
     availableModels: state.availableModels,
     selectedModel,
     setSelectedModel: handleModelChange,
@@ -1581,15 +1563,23 @@ export function useChat(sessionId: string) {
     executeCommand,
     integrationAuthErrors: state.integrationAuthErrors,
     dismissIntegrationAuth,
-    approveActionWs: useCallback((invocationId: string) => {
-      if (isConnected) {
-        send({ type: 'approve-action', invocationId } as any);
-      }
+    resolveApprovalLocally: useCallback((promptId: string) => {
+      markPromptTerminal(promptId, 'resolved');
+    }, [markPromptTerminal]),
+    expireApprovalLocally: useCallback((promptId: string) => {
+      markPromptTerminal(promptId, 'expired');
+    }, [markPromptTerminal]),
+    resolveApprovalWs: useCallback((invocationId: string, actionId: string) => {
+      if (!isConnected) return false;
+      return send(buildApprovalResolutionSocketMessage(invocationId, actionId) as any);
     }, [isConnected, send]),
-    denyActionWs: useCallback((invocationId: string) => {
-      if (isConnected) {
-        send({ type: 'deny-action', invocationId } as any);
-      }
+    approveActionWs: useCallback((invocationId: string, actionId = 'approve') => {
+      if (!isConnected) return false;
+      return send({ type: 'approve-action', invocationId, actionId } as any);
+    }, [isConnected, send]),
+    denyActionWs: useCallback((invocationId: string, actionId = 'deny') => {
+      if (!isConnected) return false;
+      return send({ type: 'deny-action', invocationId, actionId } as any);
     }, [isConnected, send]),
     loadThreadMessages,
     pendingFollowup: state.pendingFollowup,

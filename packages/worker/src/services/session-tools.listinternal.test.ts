@@ -34,6 +34,14 @@ vi.mock('../services/actions.js', () => ({
   markFailed: vi.fn().mockResolvedValue(undefined),
 }));
 
+vi.mock('./custom-mcp-connectors.js', () => ({
+  loadCustomMcpConnectorContext: vi.fn().mockResolvedValue({
+    orgId: 'default',
+    connectors: new Map(),
+    fetch,
+  }),
+}));
+
 describe('listTools internal providers', () => {
   it('lists an internal service with no connected integration', async () => {
     vi.spyOn(integrationRegistry, 'listServices').mockReturnValue(['workflows']);

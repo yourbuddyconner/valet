@@ -162,7 +162,7 @@ export function PersonaToolPicker({ tools, onChange }: PersonaToolPickerProps) {
           <>
             {!hasEnabledServices && (
               <p className="mb-3 text-sm text-neutral-500 dark:text-neutral-400">
-                No tools enabled. This persona will only have built-in coding tools.
+                No tools selected — this persona can use all available integration tools. Select specific tools below to restrict access to only those.
               </p>
             )}
             <div className="divide-y divide-neutral-200 rounded-md border border-neutral-200 dark:divide-neutral-700 dark:border-neutral-700">

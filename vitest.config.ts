@@ -6,6 +6,8 @@ export default defineConfig({
       'packages/worker',
       'packages/shared',
       'packages/sdk',
+      'packages/client',
+      'docker/opencode',
     ],
   },
 });

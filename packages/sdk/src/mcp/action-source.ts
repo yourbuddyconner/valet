@@ -18,6 +18,9 @@ export interface McpActionSourceOptions {
   noAuth?: boolean;
   /** When set, token is sent as this URL query parameter instead of Authorization header. */
   authQueryParam?: string;
+  additionalHeaders?: Record<string, string>;
+  staticAuthHeader?: { name: string; value: string };
+  fetch?: typeof fetch;
 }
 
 /**
@@ -33,15 +36,24 @@ export class McpActionSource implements ActionSource {
   private serviceName: string;
   private defaultRiskLevel: RiskLevel;
   private noAuth: boolean;
+  private lastListError: string | null = null;
 
   constructor(opts: McpActionSourceOptions) {
-    this.client = new McpClient({ url: opts.mcpUrl, serviceName: opts.serviceName, authQueryParam: opts.authQueryParam });
+    this.client = new McpClient({
+      url: opts.mcpUrl,
+      serviceName: opts.serviceName,
+      authQueryParam: opts.authQueryParam,
+      additionalHeaders: opts.additionalHeaders,
+      staticAuthHeader: opts.staticAuthHeader,
+      fetch: opts.fetch,
+    });
     this.serviceName = opts.serviceName;
     this.defaultRiskLevel = opts.defaultRiskLevel ?? 'medium';
     this.noAuth = opts.noAuth ?? false;
   }
 
   async listActions(ctx?: ActionListContext): Promise<ActionDefinition[]> {
+    this.lastListError = null;
     const token = ctx?.credentials?.access_token;
     if (!token && !this.noAuth) {
       // Without credentials we can't call the MCP server; return empty gracefully.
@@ -57,10 +69,15 @@ export class McpActionSource implements ActionSource {
         `[McpActionSource] ${this.serviceName} listTools failed:`,
         err instanceof Error ? err.message : String(err),
       );
+      this.lastListError = err instanceof Error ? err.message : String(err);
       return [];
     }
 
     return tools.map((tool) => this.mapToolToAction(tool));
+  }
+
+  getLastListError(): string | null {
+    return this.lastListError;
   }
 
   async execute(actionId: string, params: unknown, ctx: ActionContext): Promise<ActionResult> {

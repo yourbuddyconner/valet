@@ -205,7 +205,7 @@ threadsRouter.post('/:sessionId/threads/:threadId/continue', async (c) => {
 
 /**
  * PATCH /api/sessions/:sessionId/threads/:threadId
- * Update thread status (active/archived).
+ * Update thread status or title.
  *
  * For orchestrator sessions, allows updating threads from any of the
  * user's orchestrator sessions.
@@ -224,13 +224,21 @@ threadsRouter.patch('/:sessionId/threads/:threadId', async (c) => {
 
   await assertOrchestratorThreadAccess(c.get('db'), session, thread, user.id, 'collaborator');
 
-  const body = await c.req.json<{ status?: 'active' | 'archived' }>();
+  const body = await c.req.json<{ status?: 'active' | 'archived'; title?: string | null }>();
   if (body.status && !['active', 'archived'].includes(body.status)) {
     return c.json({ error: 'Invalid status' }, 400);
   }
 
   if (body.status) {
     await db.updateThreadStatus(c.env.DB, threadId, body.status);
+  }
+
+  if (body.title !== undefined) {
+    if (body.title !== null && (typeof body.title !== 'string' || body.title.length > 200)) {
+      return c.json({ error: 'Title must be a string of max 200 characters' }, 400);
+    }
+    const titleValue = body.title === null ? '' : body.title;
+    await db.updateThread(c.env.DB, threadId, { title: titleValue });
   }
 
   const updated = await db.getThread(c.env.DB, threadId);

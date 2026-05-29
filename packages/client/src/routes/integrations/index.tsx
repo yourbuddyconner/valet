@@ -4,7 +4,6 @@ import { useQueryClient } from '@tanstack/react-query';
 import { PageContainer, PageHeader } from '@/components/layout/page-container';
 import { IntegrationList } from '@/components/integrations/integration-list';
 import { ConnectIntegrationDialog } from '@/components/integrations/connect-integration-dialog';
-import { Button } from '@/components/ui/button';
 import { toastSuccess, toastError } from '@/hooks/use-toast';
 import { githubKeys } from '@/api/github';
 
@@ -49,14 +48,12 @@ function IntegrationsPage() {
       <PageHeader
         title="Integrations"
         description="Connect your tools and services"
-        actions={
-          <Button onClick={() => setConnectDialogOpen(true)}>
-            Connect Integration
-          </Button>
-        }
       />
 
-      <IntegrationList />
+      <IntegrationList
+        onAddIntegration={() => setConnectDialogOpen(true)}
+        addIntegrationLabel="Connect Integration"
+      />
 
       <ConnectIntegrationDialog
         open={connectDialogOpen}

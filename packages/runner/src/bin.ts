@@ -15,6 +15,7 @@ import { AgentClient } from "./agent-client.js";
 import { PromptHandler } from "./prompt.js";
 import { startGateway, cleanupAllCloudflared } from "./gateway.js";
 import { OpenCodeManager, type OpenCodeConfig } from "./opencode-manager.js";
+import { getOpenCodeRuntimePaths } from "./opencode-runtime.js";
 
 function mergeOpenCodeConfig(
   current: OpenCodeConfig,
@@ -154,14 +155,18 @@ async function main() {
   const opencodePort = new URL(opencodeUrl!).port || "4096";
   const workspaceDir = process.env.WORK_DIR || "/workspace";
   const configSourceDir = "/opencode-config";
-  const authJsonPath = "/root/.local/share/opencode/auth.json";
+  const runtimePaths = getOpenCodeRuntimePaths();
+  process.env.OPENCODE_RUNTIME_DIR = runtimePaths.runtimeDir;
+  process.env.OPENCODE_CONFIG_DIR = runtimePaths.configDir;
+  process.env.VALET_PERSONA_DIR = runtimePaths.personaDir;
 
   // ─── Create OpenCode Manager (defer start until DO sends config) ────
   const openCodeManager = new OpenCodeManager({
     workspaceDir,
     port: parseInt(opencodePort, 10),
     configSourceDir,
-    authJsonPath,
+    authJsonPath: runtimePaths.authJsonPath,
+    runtimePaths,
   });
 
   // Promise that resolves when the first opencode-config message arrives from the DO
@@ -205,7 +210,7 @@ async function main() {
     onSpawnChild: async (params) => {
       const result = await agentClient.requestSpawnChild(params);
       // Notify clients of the new child session for UI updates
-      agentClient.sendChildSession(result.childSessionId, params.title || params.workspace);
+      agentClient.sendChildSession(result.childSessionId, params.title || params.workspace, result.parentThreadId);
       return result;
     },
     onTerminateChild: async (childSessionId) => {
@@ -501,12 +506,12 @@ async function main() {
     activeToolWhitelist = content.toolWhitelist ?? null;
 
     const { mkdirSync } = await import('node:fs');
-    const baseDir = '/root/.opencode';
+    const opencodeDir = process.env.OPENCODE_CONFIG_DIR || `${process.env.HOME || '/workspace'}/.opencode`;
+    const personaDir = process.env.VALET_PERSONA_DIR || '/workspace/.valet/persona';
 
-    // Write persona files to .valet/persona/ — OpenCode watches this glob
-    // via opencode.json instructions, so changes are picked up automatically.
+    // Write persona files to the ephemeral persona dir. OpenCode watches this
+    // glob via opencode.json instructions, so changes are picked up automatically.
     if (content.personas.length > 0) {
-      const personaDir = '/workspace/.valet/persona';
       mkdirSync(personaDir, { recursive: true });
       for (const persona of content.personas) {
         await Bun.write(`${personaDir}/${persona.filename}`, persona.content);
@@ -518,9 +523,9 @@ async function main() {
     // plugin-content artifacts without an id are not selectable from the UI.
     promptHandler.setPersonas(content.personas);
 
-    // Write skill files
+    // Write skill files to OpenCode's explicit runtime config directory.
     if (content.skills.length > 0) {
-      const dir = `${baseDir}/skills`;
+      const dir = `${opencodeDir}/skills`;
       mkdirSync(dir, { recursive: true });
       for (const skill of content.skills) {
         await Bun.write(`${dir}/${skill.filename}`, skill.content);
@@ -529,7 +534,7 @@ async function main() {
 
     // Write tool/plugin files
     if (content.tools.length > 0) {
-      const dir = `${baseDir}/plugins/valet`;
+      const dir = `${opencodeDir}/plugins/valet`;
       mkdirSync(dir, { recursive: true });
       for (const tool of content.tools) {
         await Bun.write(`${dir}/${tool.filename}`, tool.content);

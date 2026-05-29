@@ -6,6 +6,10 @@ NOTE: Do NOT add "Co-Authored-by" trailers mentioning AI models (e.g., Opus, Cla
 
 Valet is a hosted background coding agent platform. Users interact with an AI coworker through a web UI, Slack, or Telegram. Each session runs in an isolated Modal sandbox with a full dev environment (VS Code, browser via VNC, terminal, and an OpenCode agent with 73 custom tools). A per-user orchestrator ("Jarvis") manages sessions, routes messages across channels, and maintains long-term memory. The architecture is modeled after Ramp's Inspect system.
 
+## OpenCode Source Reference
+
+When you need context on OpenCode internals (agent behavior, tools, SDK, server protocol), check `~/code/opencode` first — there may be a local checkout. If it doesn't exist, you may do a shallow clone: `git clone --depth=1 https://github.com/anomalyco/opencode.git /tmp/opencode`.
+
 ## Project Structure
 
 ```
@@ -180,7 +184,7 @@ make deploy-modal
 
 **Forcing image rebuilds:**
 
-The sandbox image is cached. To force a rebuild after changing `docker/start.sh` or `packages/runner/`:
+The sandbox image is cached. To force a rebuild after changing `docker/start.sh`, `packages/runner/`, or `docker/opencode/`:
 
 1. Bump the version in `backend/images/base.py`:
    ```python
@@ -188,6 +192,8 @@ The sandbox image is cached. To force a rebuild after changing `docker/start.sh`
    ```
 2. Redeploy: `make deploy-modal`
 3. Create a new session (existing sandboxes won't update)
+
+**Important:** Any changes to `packages/runner/` or `docker/` run inside the sandbox, not the worker. Always bump `IMAGE_BUILD_VERSION` when modifying these paths — without it the deploy will ship the old image and your changes won't take effect.
 
 ## Developing Inside a Sandbox
 

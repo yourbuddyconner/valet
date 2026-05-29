@@ -1,9 +1,11 @@
-import { createContext, lazy, Suspense, useCallback, useContext, useState } from 'react';
+import { lazy, Suspense, useCallback, useState } from 'react';
 import { createFileRoute, Outlet } from '@tanstack/react-router';
 import { Panel, Group as PanelGroup, Separator as PanelResizeHandle } from 'react-resizable-panels';
 import { useSession } from '@/api/sessions';
-import type { LogEntry, ConnectedUser } from '@/hooks/use-chat';
 import { useIsMobile } from '@/hooks/use-is-mobile';
+import { DrawerCtx } from '@/hooks/use-drawer';
+import type { DrawerPanel, DrawerContextValue, SessionOverlay } from '@/hooks/use-drawer';
+import type { LogEntry, ConnectedUser } from '@/hooks/use-chat';
 
 // Lazy-load drawer panels — only rendered when user opens a specific panel
 const EditorDrawer = lazy(() => import('@/components/session/editor-drawer').then((m) => ({ default: m.EditorDrawer })));
@@ -13,8 +15,6 @@ const LogsPanel = lazy(() => import('@/components/panels/logs-panel').then((m) =
 const SessionMetadataSidebar = lazy(() => import('@/components/session/session-metadata-sidebar').then((m) => ({ default: m.SessionMetadataSidebar })));
 const OrchestratorMetadataSidebar = lazy(() => import('@/components/session/orchestrator-metadata-sidebar').then((m) => ({ default: m.OrchestratorMetadataSidebar })));
 const SessionMetadataModal = lazy(() => import('@/components/session/session-metadata-modal').then((m) => ({ default: m.SessionMetadataModal })));
-
-type DrawerPanel = 'vscode' | 'desktop' | 'terminal' | 'files' | 'review' | 'logs' | null;
 
 const DRAWER_STORAGE_KEY = 'valet:drawer-panel';
 const LAYOUT_STORAGE_KEY = 'valet:editor-layout';
@@ -63,73 +63,6 @@ function saveLayout(layout: Record<string, number>) {
   }
 }
 
-export type SessionOverlay =
-  | { type: 'transition'; message: string }
-  | null;
-
-export interface DrawerContextValue {
-  activePanel: DrawerPanel;
-  openVscode: () => void;
-  openDesktop: () => void;
-  openTerminal: () => void;
-  openFiles: () => void;
-  openReview: () => void;
-  openLogs: () => void;
-  closeDrawer: () => void;
-  toggleVscode: () => void;
-  toggleDesktop: () => void;
-  toggleTerminal: () => void;
-  toggleFiles: () => void;
-  toggleReview: () => void;
-  toggleLogs: () => void;
-  logEntries: LogEntry[];
-  setLogEntries: (entries: LogEntry[]) => void;
-  overlay: SessionOverlay;
-  setOverlay: (overlay: SessionOverlay) => void;
-  sidebarOpen: boolean;
-  toggleSidebar: () => void;
-  connectedUsers: ConnectedUser[];
-  setConnectedUsers: (users: ConnectedUser[]) => void;
-  selectedModel: string | undefined;
-  setSelectedModel: (model: string | undefined) => void;
-  openFile: (path: string) => void;
-  pendingFilePath: string | null;
-  clearPendingFile: () => void;
-}
-
-const DrawerCtx = createContext<DrawerContextValue>({
-  activePanel: null,
-  openVscode: () => {},
-  openDesktop: () => {},
-  openTerminal: () => {},
-  openFiles: () => {},
-  openReview: () => {},
-  openLogs: () => {},
-  closeDrawer: () => {},
-  toggleVscode: () => {},
-  toggleDesktop: () => {},
-  toggleTerminal: () => {},
-  toggleFiles: () => {},
-  toggleReview: () => {},
-  toggleLogs: () => {},
-  logEntries: [],
-  setLogEntries: () => {},
-  overlay: null,
-  setOverlay: () => {},
-  sidebarOpen: true,
-  toggleSidebar: () => {},
-  connectedUsers: [],
-  setConnectedUsers: () => {},
-  selectedModel: undefined,
-  setSelectedModel: () => {},
-  openFile: () => {},
-  pendingFilePath: null,
-  clearPendingFile: () => {},
-});
-
-export function useDrawer() {
-  return useContext(DrawerCtx);
-}
 
 export const Route = createFileRoute('/sessions/$sessionId')({
   component: SessionLayout,
@@ -308,8 +241,8 @@ function SessionLayout() {
             <PanelResizeHandle className="group relative w-px bg-neutral-200 transition-colors hover:bg-accent/40 active:bg-accent dark:bg-neutral-800 dark:hover:bg-accent/40">
               <div className="absolute inset-y-0 -left-1 -right-1" />
             </PanelResizeHandle>
-            <Panel defaultSize={75} minSize={30}>
-              <div className="flex h-full">
+            <Panel defaultSize={75} minSize={30} className="!overflow-hidden">
+              <div className="flex h-full min-w-0 overflow-hidden">
                 <Suspense>
                   {sidebarOpen && (
                     session?.isOrchestrator

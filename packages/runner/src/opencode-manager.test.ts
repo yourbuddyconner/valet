@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { OpenCodeManager, type OpenCodeConfig } from "./opencode-manager.js";
+import { getOpenCodeRuntimePaths } from "./opencode-runtime.js";
 
 // ─── Mock Subprocess ──────────────────────────────────────────────────────────
 
@@ -61,12 +62,14 @@ function createTestManager(
   let currentMock: ReturnType<typeof createMockProcess> | null = null;
   const spawnCalls: any[] = [];
   let spawned = false;
+  const runtimePaths = getOpenCodeRuntimePaths("/tmp/valet-opencode-test");
 
   const manager = new OpenCodeManager({
     workspaceDir: "/workspace",
     port: 4096,
     configSourceDir: "/opencode-config",
-    authJsonPath: "/root/.local/share/opencode/auth.json",
+    authJsonPath: runtimePaths.authJsonPath,
+    runtimePaths,
     configWriter: { write: vi.fn() },
     spawnFn: (_cmd: string[], _opts: any) => {
       currentMock = createMockProcess();
@@ -172,12 +175,36 @@ describe("OpenCodeManager", () => {
     await manager.shutdown();
   });
 
-  it("spawns OpenCode with a workspace-pinned OPENCODE_DB", async () => {
+  it("spawns OpenCode with ephemeral runtime config and state", async () => {
     const { manager, spawnCalls } = createTestManager({ killTriggersExit: true });
 
     await manager.setDesiredConfig(testConfig);
 
-    expect(spawnCalls[0].opts.env.OPENCODE_DB).toBe("/workspace/.opencode/state/opencode.db");
+    expect(spawnCalls[0].opts.env.OPENCODE_DB).toBe("/tmp/valet-opencode-test/data/opencode/opencode.db");
+    expect(spawnCalls[0].opts.env.OPENCODE_CONFIG_DIR).toBe("/tmp/valet-opencode-test/config/opencode");
+    expect(spawnCalls[0].opts.env.XDG_DATA_HOME).toBe("/tmp/valet-opencode-test/data");
+    expect(spawnCalls[0].opts.env.XDG_CONFIG_HOME).toBe("/tmp/valet-opencode-test/config");
+    expect(spawnCalls[0].opts.env.OPENCODE_DISABLE_PROJECT_CONFIG).toBe("true");
+    expect(spawnCalls[0].opts.env.OPENCODE_DISABLE_EXTERNAL_SKILLS).toBe("true");
+    expect(spawnCalls[0].opts.env.OPENCODE_TEST_HOME).toBe("/tmp/valet-opencode-test/home");
+
+    await manager.shutdown();
+  });
+
+  it("spawns OpenCode with server logs printed to stderr", async () => {
+    const { manager, spawnCalls } = createTestManager({ killTriggersExit: true });
+
+    await manager.setDesiredConfig(testConfig);
+
+    expect(spawnCalls[0].cmd).toEqual([
+      "opencode",
+      "--print-logs",
+      "--log-level",
+      "INFO",
+      "serve",
+      "--port",
+      "4096",
+    ]);
 
     await manager.shutdown();
   });
@@ -266,7 +293,7 @@ describe("OpenCodeManager", () => {
       workspaceDir: "/workspace",
       port: 4096,
       configSourceDir: "/opencode-config",
-      authJsonPath: "/root/.local/share/opencode/auth.json",
+      authJsonPath: "/workspace/.local/share/opencode/auth.json",
       configWriter: { write: vi.fn() },
       spawnFn: (_cmd: string[], _opts: any) => {
         spawnCount++;
