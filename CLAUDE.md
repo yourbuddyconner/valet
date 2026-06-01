@@ -261,6 +261,87 @@ VITE_API_URL=<your-worker-url>/api pnpm dev
 
 You can also `curl` the deployed API directly for testing routes.
 
+## Debugging with Cloudflare Observability
+
+The Cloudflare MCP gives Claude direct access to historical Worker logs, D1 queries, and the observability telemetry API — useful for diagnosing production issues where `wrangler tail` (live-only) isn't enough.
+
+### Setup
+
+Inside Claude Code, run once:
+
+```
+/plugin marketplace add cloudflare/skills
+/plugin install cloudflare@cloudflare
+```
+
+Then `/mcp` → connect to Cloudflare via OAuth. The token needs **Workers Logs Read** scope for observability queries. Account ID for this workspace: `2da0915cafe077551f978d4b0908bd43`.
+
+### Querying historical logs
+
+Use `mcp__cloudflare__execute` to run JavaScript against the CF API. Timestamps are Unix milliseconds.
+
+**Search DO logs for a session or error pattern:**
+
+```javascript
+async () => {
+  const from = new Date('2026-06-01T14:00:00Z').getTime();
+  const to   = new Date('2026-06-01T16:00:00Z').getTime();
+  return cloudflare.request({
+    method: 'POST',
+    path: `/accounts/${accountId}/workers/observability/telemetry/query`,
+    body: {
+      queryId: 'debug',
+      view: 'events',
+      limit: 200,
+      timeframe: { from, to },
+      parameters: {
+        needle: { value: 'SessionAgentDO|performWake|Failed to restore', isRegex: true },
+        datasets: [],
+        filters: [{ key: '$metadata.service', operation: 'eq', type: 'string', value: 'dev-valet-turnkey' }],
+      },
+    },
+  }).then(r => (r.result?.events?.events ?? []).map(e => ({ ts: new Date(e.timestamp).toISOString(), msg: e.source?.message })));
+}
+```
+
+**Filter out noisy WS/ping logs** — the DO emits a lot of `WebSocket message` and `type=ping` lines. Filter them out to see state transitions:
+
+```javascript
+.filter(e => {
+  const msg = e.source?.message ?? '';
+  return !msg.includes('type=ping') && !msg.includes('type=message.part')
+    && !msg.includes('type=agentStatus') && !msg.startsWith('-->') && !msg.startsWith('<--');
+})
+```
+
+**Query D1 directly:**
+
+```javascript
+async () => cloudflare.request({
+  method: 'POST',
+  path: `/accounts/${accountId}/d1/database/669ab22d-b9e7-4f32-96c9-caecfc74e6b9/query`,
+  body: { sql: "SELECT id, status, last_active_at FROM sessions WHERE is_orchestrator = 1 ORDER BY last_active_at DESC LIMIT 10" },
+});
+```
+
+### Key log patterns to search for
+
+| Pattern | What it tells you |
+|---|---|
+| `performWake starting` | When a wake was initiated and from which snapshot |
+| `restoreSandbox: fetching` | When the Modal restore HTTP call was made — last log before a potential hang |
+| `performHibernate starting` | When the session went to sleep |
+| `SessionAgentDO.*status=restoring.*sandboxId=none` | Session stuck mid-restore (fetch is in flight or hung) |
+| `performRecovery` | Auto-recovery triggered — includes the reason |
+| `sandbox_wake_timeout` | Health monitor fired after 3min stuck in restoring/waiting_runner |
+| `Failed to restore session` | Restore fetch failed (pre-fix: terminal; post-fix: routes to recovery) |
+
+### What the tools can and can't do
+
+- **Can**: query historical logs (up to CF's retention window), run D1 SQL, list/inspect workers and containers
+- **Can't**: access Modal container logs historically (live-stream only via `modal container logs <id>`), query logs older than CF's retention period
+- **Tip**: `modal container list --json` shows all currently running sandbox containers with full IDs; cross-reference timestamps with CF logs to correlate DO events with sandbox lifecycle
+
 ## Code Conventions
 
 ### Worker (Hono)

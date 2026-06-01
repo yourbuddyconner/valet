@@ -5427,6 +5427,8 @@ export class SessionAgentDO {
       return;
     }
 
+    console.log(`[SessionAgentDO] performHibernate starting for session ${sessionId}`);
+
     if (!this.sessionState.sandboxId || !this.sessionState.hibernateUrl) {
       console.error('[SessionAgentDO] Cannot hibernate: missing sandboxId or hibernateUrl');
       this.sessionState.status = 'running';
@@ -5547,6 +5549,7 @@ export class SessionAgentDO {
     }
 
     const sessionId = this.sessionState.sessionId;
+    console.log(`[SessionAgentDO] performWake starting for session ${sessionId} (snapshotId=${this.sessionState.snapshotImageId ?? 'none'})`);
 
     if (!this.sessionState.snapshotImageId || !this.sessionState.restoreUrl || !this.sessionState.spawnRequest) {
       const errorText = 'Cannot wake: missing snapshotImageId, restoreUrl, or spawnRequest';

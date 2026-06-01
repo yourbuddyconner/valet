@@ -183,6 +183,7 @@ export class SessionLifecycle {
     }
 
     const start = Date.now();
+    console.log(`[SessionLifecycle] restoreSandbox: fetching ${restoreUrl} (snapshotId=${snapshotImageId})`);
     const response = await fetch(restoreUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

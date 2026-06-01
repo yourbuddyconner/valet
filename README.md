@@ -144,6 +144,21 @@ make deploy-modal         # Modal backend
 make deploy-client        # Cloudflare Pages
 ```
 
+## Cloudflare MCP for Claude Code
+
+Claude Code can query historical Worker logs, D1, and the observability API directly via the Cloudflare MCP plugin — useful for debugging production issues.
+
+**Setup** (run once inside Claude Code):
+
+```
+/plugin marketplace add cloudflare/skills
+/plugin install cloudflare@cloudflare
+```
+
+Then `/mcp` → connect via OAuth. Requires **Workers Logs Read** scope for observability. Full setup guide: [developers.cloudflare.com/agent-setup/claude-code](https://developers.cloudflare.com/agent-setup/claude-code/).
+
+See `CLAUDE.md` → *Debugging with Cloudflare Observability* for query patterns and examples.
+
 ## Documentation
 
 - **[OAuth Setup](docs/oauth-setup.md)** — GitHub and Google OAuth configuration for dev and production
