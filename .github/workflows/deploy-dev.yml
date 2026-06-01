@@ -54,16 +54,20 @@ jobs:
           EOF
 
       - name: Deploy
+        id: deploy
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
           MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
-        run: ENVIRONMENT=dev make deploy
+        run: |
+          ENVIRONMENT=dev make deploy 2>&1 | tee /tmp/deploy.log
+          WORKER_URL=$(grep -o 'https://[^ ]*\.workers\.dev' /tmp/deploy.log | tail -1)
+          echo "worker_url=$WORKER_URL" >> $GITHUB_OUTPUT
 
       - name: Smoke test
         run: |
-          WORKER_URL="https://${{ secrets.PROJECT_NAME }}.workers.dev"
+          WORKER_URL="${{ steps.deploy.outputs.worker_url }}"
           echo "Checking $WORKER_URL/health ..."
           curl --fail --silent --max-time 15 "$WORKER_URL/health" | grep '"status":"ok"'
           echo "Worker is healthy."
