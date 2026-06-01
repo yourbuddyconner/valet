@@ -213,10 +213,10 @@ Both workflows call `make deploy` (the full `scripts/deploy.sh cmd_all` path: wo
 | `CLOUDFLARE_API_TOKEN` | Secret | Scoped to Workers Scripts:Edit, D1:Edit, Pages:Edit |
 | `MODAL_TOKEN_ID` | Secret | Modal service token |
 | `MODAL_TOKEN_SECRET` | Secret | Modal service token |
-| `PROJECT_NAME` | Variable | Cloudflare resource name prefix (e.g. `dev-valet-turnkey`) |
-| `CLOUDFLARE_ACCOUNT_ID` | Variable | Your Cloudflare account ID (find it in the dashboard URL or `wrangler whoami`) |
-| `ALLOWED_EMAILS` | Variable | Comma-separated email allowlist; empty = no restriction |
-| `D1_DATABASE_ID` | Variable | Optional — auto-discovered from `wrangler d1 list` if omitted |
+| `PROJECT_NAME` | Secret | Cloudflare resource name prefix (e.g. `dev-valet-turnkey`) |
+| `CLOUDFLARE_ACCOUNT_ID` | Secret | Your Cloudflare account ID (find it in the dashboard URL or `wrangler whoami`) |
+| `ALLOWED_EMAILS` | Secret | Comma-separated email allowlist; empty = no restriction |
+| `D1_DATABASE_ID` | Secret | Optional — auto-discovered from `wrangler d1 list` if omitted |
 
 **Prod environment protection:** Add required reviewers to the `prod` GitHub Actions environment so every `v*` tag push triggers a manual approval gate before secrets are exposed.
 
