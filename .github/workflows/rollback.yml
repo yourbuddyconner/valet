@@ -37,12 +37,14 @@ jobs:
       - uses: oven-sh/setup-bun@v2
 
       - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
 
       - run: pnpm install --frozen-lockfile
 
-      - run: uv tool install modal
+      - run: echo "$GITHUB_WORKSPACE/packages/worker/node_modules/.bin" >> $GITHUB_PATH
 
-      - run: npm install -g wrangler
+      - run: uv tool install modal
 
       - name: Create deploy config
         env:
