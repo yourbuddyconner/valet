@@ -33,21 +33,21 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
+      # Install modal globally so `modal profile current` is available to deploy.sh.
+      # MODAL_TOKEN_ID + MODAL_TOKEN_SECRET (set in the Deploy step) authenticate it.
+      - run: uv tool install modal
+
       # Reconstruct the .env.deploy.dev file from GitHub Actions variables/secrets.
       # PROJECT_NAME drives all Cloudflare resource names (worker, D1, R2, Pages).
-      # MODAL_BACKEND_URL must be set explicitly so the deploy script bypasses the
-      # modal CLI workspace check (which assumes an interactive login).
       - name: Create deploy config
         env:
           PROJECT_NAME: ${{ vars.PROJECT_NAME }}
           ALLOWED_EMAILS: ${{ vars.ALLOWED_EMAILS }}
-          MODAL_BACKEND_URL: ${{ vars.MODAL_BACKEND_URL }}
           D1_DATABASE_ID: ${{ vars.D1_DATABASE_ID }}
         run: |
           cat > .env.deploy.dev <<EOF
           PROJECT_NAME=${PROJECT_NAME}
           ALLOWED_EMAILS=${ALLOWED_EMAILS}
-          MODAL_BACKEND_URL=${MODAL_BACKEND_URL}
           D1_DATABASE_ID=${D1_DATABASE_ID}
           EOF
 

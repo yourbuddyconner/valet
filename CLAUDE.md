@@ -215,11 +215,8 @@ Both workflows call `make deploy` (the full `scripts/deploy.sh cmd_all` path: wo
 | `MODAL_TOKEN_SECRET` | Secret | Modal service token |
 | `PROJECT_NAME` | Variable | Cloudflare resource name prefix (e.g. `dev-valet-turnkey`) |
 | `CLOUDFLARE_ACCOUNT_ID` | Variable | Your Cloudflare account ID (find it in the dashboard URL or `wrangler whoami`) |
-| `MODAL_BACKEND_URL` | Variable | Full Modal URL template (bypasses interactive `modal profile` check) |
 | `ALLOWED_EMAILS` | Variable | Comma-separated email allowlist; empty = no restriction |
 | `D1_DATABASE_ID` | Variable | Optional — auto-discovered from `wrangler d1 list` if omitted |
-
-**`MODAL_BACKEND_URL` is required in CI.** The deploy script normally discovers the Modal workspace URL by running `modal profile current`, which assumes an interactive login. Setting this variable explicitly bypasses that check. Format: `https://<workspace>--<prefix>{label}.modal.run`.
 
 **Prod environment protection:** Add required reviewers to the `prod` GitHub Actions environment so every `v*` tag push triggers a manual approval gate before secrets are exposed.
 
