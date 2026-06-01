@@ -114,6 +114,7 @@ export interface SessionDoStatus {
   connectedClients?: number;
   connectedUsers?: string[];
   runningStartedAt?: number | null;
+  sandboxWakeStartedAt?: number | null;
   [key: string]: unknown;
 }
 

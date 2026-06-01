@@ -15,6 +15,7 @@ function baseSnapshot(overrides: Partial<HealthSnapshot> = {}): HealthSnapshot {
     sessionStatus: 'running',
     runnerDisconnectedAt: null,
     runnerConnectedAt: Date.now() - 10_000,
+    sandboxWakeStartedAt: 0,
     ...overrides,
   };
 }
@@ -172,6 +173,71 @@ describe('SessionHealthMonitor', () => {
       const result = monitor.check(baseSnapshot({ now, runnerConnected: true, runnerReady: true, runnerConnectedAt: now - 3 * 60 * 1000 }));
       const readyEvents = result.events.filter(e => e.cause === 'ready_timeout');
       expect(readyEvents).toHaveLength(0);
+    });
+  });
+
+  describe('sandbox wake timeout', () => {
+    it('triggers recovery when restoring for >3min', () => {
+      const now = Date.now();
+      const result = monitor.check(baseSnapshot({
+        now,
+        sessionStatus: 'restoring',
+        sandboxWakeStartedAt: now - 4 * 60 * 1000,
+        runnerConnected: false,
+        runnerReady: false,
+      }));
+      expect(result.actions).toEqual([{ type: 'perform_recovery', reason: expect.stringContaining('Sandbox wake stuck') }]);
+      expect(result.events[0].cause).toBe('sandbox_wake_timeout');
+    });
+
+    it('triggers recovery when waiting_runner for >3min', () => {
+      const now = Date.now();
+      const result = monitor.check(baseSnapshot({
+        now,
+        sessionStatus: 'waiting_runner',
+        sandboxWakeStartedAt: now - 4 * 60 * 1000,
+        runnerConnected: false,
+        runnerReady: false,
+      }));
+      expect(result.actions).toEqual([{ type: 'perform_recovery', reason: expect.stringContaining('Sandbox wake stuck') }]);
+      expect(result.events[0].cause).toBe('sandbox_wake_timeout');
+    });
+
+    it('does not fire before 3min', () => {
+      const now = Date.now();
+      const result = monitor.check(baseSnapshot({
+        now,
+        sessionStatus: 'restoring',
+        sandboxWakeStartedAt: now - 60_000,
+        runnerConnected: false,
+        runnerReady: false,
+      }));
+      const restoreActions = result.actions.filter(a => a.type === 'perform_recovery');
+      expect(restoreActions).toHaveLength(0);
+    });
+
+    it('does not fire when session is running', () => {
+      const now = Date.now();
+      const result = monitor.check(baseSnapshot({
+        now,
+        sessionStatus: 'running',
+        sandboxWakeStartedAt: now - 4 * 60 * 1000,
+      }));
+      const restoreActions = result.actions.filter(a => a.type === 'perform_recovery');
+      expect(restoreActions).toHaveLength(0);
+    });
+
+    it('does not fire when sandboxWakeStartedAt is 0', () => {
+      const now = Date.now();
+      const result = monitor.check(baseSnapshot({
+        now,
+        sessionStatus: 'restoring',
+        sandboxWakeStartedAt: 0,
+        runnerConnected: false,
+        runnerReady: false,
+      }));
+      const restoreActions = result.actions.filter(a => a.type === 'perform_recovery');
+      expect(restoreActions).toHaveLength(0);
     });
   });
 });

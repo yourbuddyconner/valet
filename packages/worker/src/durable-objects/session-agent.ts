@@ -22,7 +22,7 @@ import { PromptQueue } from './prompt-queue.js';
 import { RunnerLink, type RunnerToDOMessage, type DOToRunnerMessage, type PromptAttachment, type RunnerMessageHandlers, type WorkflowExecutionDispatchPayload, type DOMessageOf } from './runner-link.js';
 import { SessionState, type SessionStartParams } from './session-state.js';
 import { SessionLifecycle, SandboxAlreadyExitedError, SandboxSnapshotFailedError } from './session-lifecycle.js';
-import { SessionHealthMonitor, DISCONNECT_GRACE_MS, type HealthSnapshot } from './session-health-monitor.js';
+import { SessionHealthMonitor, DISCONNECT_GRACE_MS, SANDBOX_WAKE_TIMEOUT_MS, type HealthSnapshot } from './session-health-monitor.js';
 import { resolveOrchestratorPersona } from '../services/persona.js';
 import { mailboxSend, mailboxCheck } from '../services/session-mailbox.js';
 import { taskCreate, taskList, taskUpdate, taskMy } from '../services/session-tasks.js';
@@ -1066,6 +1066,7 @@ export class SessionAgentDO {
       sessionStatus: this.sessionState.status,
       runnerDisconnectedAt: this.sessionState.runnerDisconnectedAt,
       runnerConnectedAt: this.runnerLink.connectedAt,
+      sandboxWakeStartedAt: this.sessionState.sandboxWakeStartedAt,
     };
   }
 
@@ -1166,6 +1167,10 @@ export class SessionAgentDO {
             break;
           case 'clear_safety_net':
             this.promptQueue.errorSafetyNetAt = 0;
+            break;
+          case 'perform_recovery':
+            this.sessionState.sandboxWakeStartedAt = 0;
+            await this.performRecovery(action.reason);
             break;
         }
         this.broadcastToClients({
@@ -4380,6 +4385,7 @@ export class SessionAgentDO {
       backoffUntil: this.sessionState.backoffUntil > 0 ? this.sessionState.backoffUntil : null,
       lastFailureReason: this.sessionState.lastFailureReason || null,
       sandboxGeneration: this.sessionState.sandboxGeneration,
+      sandboxWakeStartedAt: this.sessionState.sandboxWakeStartedAt || null,
     });
   }
 
@@ -5611,21 +5617,8 @@ export class SessionAgentDO {
     } catch (err) {
       console.error(`[SessionAgentDO] Failed to restore session ${sessionId}:`, err);
       const errorText = `Failed to restore session: ${err instanceof Error ? err.message : String(err)}`;
-      this.sessionState.status = 'error';
-      if (sessionId) {
-        updateSessionStatus(this.appDb, sessionId, 'error', undefined, errorText).catch((e) =>
-          console.error('[SessionAgentDO] Failed to sync error status to D1:', e),
-        );
-      }
-      const errId = crypto.randomUUID();
-      this.messageStore.writeMessage({
-        id: errId,
-        role: 'system',
-        content: `Error: ${errorText}`,
-      });
-      this.broadcastToClients({ type: 'status', data: { status: 'error' } });
-      this.broadcastToClients({ type: 'error', messageId: errId, error: errorText });
-      await this.notifyParentEvent(`Child session event: ${sessionId} errored (${errorText}).`, { wake: true, childStatus: 'error' });
+      this.sessionState.sandboxWakeStartedAt = 0;
+      await this.performRecovery(`restore_failed: ${errorText}`);
     }
   }
 
@@ -5692,7 +5685,14 @@ export class SessionAgentDO {
       ? backoffUntil
       : null;
 
-    return [promptExpiry, followupMs, watchdog, safetyNet, parentIdle, gracePeriod, idleQueueDeadline, readyDeadline, backoffDeadline];
+    // Sandbox wake timeout — wake after sandbox wake started to check for stuck restores/spawns
+    const wakeStarted = this.sessionState.sandboxWakeStartedAt;
+    const wakeStatus = this.sessionState.status;
+    const wakeDeadline = wakeStarted > 0 && (wakeStatus === 'restoring' || wakeStatus === 'waiting_runner')
+      ? wakeStarted + SANDBOX_WAKE_TIMEOUT_MS
+      : null;
+
+    return [promptExpiry, followupMs, watchdog, safetyNet, parentIdle, gracePeriod, idleQueueDeadline, readyDeadline, backoffDeadline, wakeDeadline];
   }
 
   private rescheduleIdleAlarm(): void {

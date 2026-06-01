@@ -3,7 +3,8 @@ import { useNavigate, useRouter } from '@tanstack/react-router';
 import { useQueryClient } from '@tanstack/react-query';
 import { useChat } from '@/hooks/use-chat';
 import type { IntegrationAuthError } from '@/hooks/use-chat';
-import { useSession, useSessionGitState, useUpdateSessionTitle, useSessionChildren, useWakeSession } from '@/api/sessions';
+import { useSession, useSessionDoStatus, useSessionGitState, useUpdateSessionTitle, useSessionChildren, useWakeSession, useTerminateSession } from '@/api/sessions';
+import { useOrchestratorInfo, useCreateOrchestrator } from '@/api/orchestrator';
 import { useActiveThread, useCreateThread } from '@/api/threads';
 import { useDrawer } from '@/hooks/use-drawer';
 import { MessageList } from './message-list';
@@ -389,6 +390,9 @@ export function ChatContainer({ sessionId, routeSessionId, initialThreadId, init
               errorMessage={session?.errorMessage}
             />
             <SessionStatusIndicator sessionStatus={displaySessionStatus} connectionStatus={connectionStatus} />
+            {isOrchestrator && (displaySessionStatus === 'restoring' || displaySessionStatus === 'waiting_runner') && (
+              <StuckWakingRestart sessionId={sessionId} />
+            )}
           </div>
           <div className="flex items-center gap-0.5">
             {canShareSession && (
@@ -722,6 +726,65 @@ function SessionStatusIndicator({ sessionStatus, connectionStatus }: { sessionSt
         </div>
       )}
     </div>
+  );
+}
+
+const STUCK_WAKING_THRESHOLD_MS = 60_000;
+
+function StuckWakingRestart({ sessionId }: { sessionId: string }) {
+  const { data: doStatus } = useSessionDoStatus(sessionId);
+  const { data: orchInfo } = useOrchestratorInfo();
+  const terminateSession = useTerminateSession();
+  const createOrchestrator = useCreateOrchestrator();
+  const [showButton, setShowButton] = useState(false);
+
+  const wakeStartedAt = typeof doStatus?.sandboxWakeStartedAt === 'number' ? doStatus.sandboxWakeStartedAt : 0;
+
+  useEffect(() => {
+    if (!wakeStartedAt) {
+      setShowButton(false);
+      return;
+    }
+    const elapsed = Date.now() - wakeStartedAt;
+    if (elapsed >= STUCK_WAKING_THRESHOLD_MS) {
+      setShowButton(true);
+      return;
+    }
+    // New wake cycle — hide until threshold elapsed
+    setShowButton(false);
+    const timer = setTimeout(() => setShowButton(true), STUCK_WAKING_THRESHOLD_MS - elapsed);
+    return () => clearTimeout(timer);
+  }, [wakeStartedAt]);
+
+  if (!showButton) return null;
+
+  const isPending = terminateSession.isPending || createOrchestrator.isPending;
+
+  const handleRestart = async () => {
+    if (!orchInfo?.identity) return;
+    try {
+      await terminateSession.mutateAsync(sessionId);
+      await createOrchestrator.mutateAsync({
+        name: orchInfo.identity.name,
+        handle: orchInfo.identity.handle,
+        customInstructions: orchInfo.identity.customInstructions ?? undefined,
+      });
+      window.location.href = '/sessions/orchestrator';
+    } catch {
+      // Errors handled by mutations
+    }
+  };
+
+  return (
+    <Button
+      variant="ghost"
+      size="sm"
+      onClick={handleRestart}
+      disabled={isPending}
+      className="h-5 px-1.5 text-[10px] font-medium text-amber-600 hover:text-amber-700 dark:text-amber-400 dark:hover:text-amber-300"
+    >
+      {isPending ? 'Restarting...' : 'Restart'}
+    </Button>
   );
 }
 

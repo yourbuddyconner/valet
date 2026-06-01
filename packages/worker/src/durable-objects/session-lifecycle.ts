@@ -190,6 +190,7 @@ export class SessionLifecycle {
         ...spawnRequest,
         snapshotImageId,
       }),
+      signal: AbortSignal.timeout(60_000),
     });
 
     if (!response.ok) {

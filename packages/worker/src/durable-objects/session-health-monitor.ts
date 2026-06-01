@@ -22,6 +22,7 @@ export interface HealthSnapshot {
   sessionStatus: string;
   runnerDisconnectedAt: number | null;
   runnerConnectedAt: number | null;
+  sandboxWakeStartedAt: number;
 }
 
 export type RecoveryAction =
@@ -30,6 +31,7 @@ export type RecoveryAction =
   | { type: 'force_complete'; reason: string }
   | { type: 'mark_not_busy'; reason: string }
   | { type: 'clear_safety_net'; reason: string }
+  | { type: 'perform_recovery'; reason: string }
 
 export interface RecoveryEvent {
   eventType: 'session.recovery';
@@ -46,6 +48,7 @@ export const DISCONNECT_GRACE_MS = 5_000;
 const STUCK_PROCESSING_TIMEOUT_MS = 5 * 60 * 1000;
 const IDLE_QUEUE_STUCK_TIMEOUT_MS = 60 * 1000;
 const READY_TIMEOUT_MS = 2 * 60 * 1000;
+export const SANDBOX_WAKE_TIMEOUT_MS = 3 * 60 * 1000;
 
 export class SessionHealthMonitor {
   check(snapshot: HealthSnapshot): RecoveryResult {
@@ -64,6 +67,7 @@ export class SessionHealthMonitor {
     this.checkErrorSafetyNet(snapshot, actions, events);
     this.checkIdleQueueStuck(snapshot, actions, events);
     this.checkReadyTimeout(snapshot, events);
+    this.checkSandboxWakeTimeout(snapshot, actions, events);
 
     return { actions, events };
   }
@@ -145,5 +149,16 @@ export class SessionHealthMonitor {
     if (elapsed < READY_TIMEOUT_MS) return;
 
     events.push({ eventType: 'session.recovery', cause: 'ready_timeout', properties: this.buildProperties(s, { staleDurationMs: elapsed, runnerConnectedAt: s.runnerConnectedAt }) });
+  }
+
+  private checkSandboxWakeTimeout(s: HealthSnapshot, actions: RecoveryAction[], events: RecoveryEvent[]): void {
+    if (s.sessionStatus !== 'restoring' && s.sessionStatus !== 'waiting_runner') return;
+    if (!s.sandboxWakeStartedAt) return;
+    const elapsed = s.now - s.sandboxWakeStartedAt;
+    if (elapsed < SANDBOX_WAKE_TIMEOUT_MS) return;
+
+    const reason = `Sandbox wake stuck for ${Math.round(elapsed / 1000)}s in ${s.sessionStatus}`;
+    actions.push({ type: 'perform_recovery', reason });
+    events.push({ eventType: 'session.recovery', cause: 'sandbox_wake_timeout', properties: this.buildProperties(s, { staleDurationMs: elapsed, sandboxWakeStartedAt: s.sandboxWakeStartedAt }) });
   }
 }
