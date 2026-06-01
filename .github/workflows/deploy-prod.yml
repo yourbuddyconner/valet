@@ -1,0 +1,62 @@
+name: Deploy (prod)
+
+on:
+  push:
+    tags: ['v*']
+
+# Never cancel a prod deploy in flight.
+concurrency:
+  group: deploy-prod
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy to prod
+    runs-on: ubuntu-latest
+    # The prod GitHub Actions environment should have required reviewers set
+    # so every tag push triggers a manual approval gate before secrets are exposed.
+    environment: prod
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - uses: oven-sh/setup-bun@v2
+
+      - uses: astral-sh/setup-uv@v5
+
+      - run: pnpm install --frozen-lockfile
+
+      # Reconstruct the .env.deploy.prod file from GitHub Actions variables/secrets.
+      # PROJECT_NAME drives all Cloudflare resource names (worker, D1, R2, Pages).
+      # MODAL_BACKEND_URL must be set explicitly so the deploy script bypasses the
+      # modal CLI workspace check (which assumes an interactive login).
+      - name: Create deploy config
+        env:
+          PROJECT_NAME: ${{ vars.PROJECT_NAME }}
+          ALLOWED_EMAILS: ${{ vars.ALLOWED_EMAILS }}
+          MODAL_BACKEND_URL: ${{ vars.MODAL_BACKEND_URL }}
+          D1_DATABASE_ID: ${{ vars.D1_DATABASE_ID }}
+        run: |
+          cat > .env.deploy.prod <<EOF
+          PROJECT_NAME=${PROJECT_NAME}
+          ALLOWED_EMAILS=${ALLOWED_EMAILS}
+          MODAL_BACKEND_URL=${MODAL_BACKEND_URL}
+          D1_DATABASE_ID=${D1_DATABASE_ID}
+          EOF
+
+      - name: Deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+          MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+        run: ENVIRONMENT=prod make deploy
