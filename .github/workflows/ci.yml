@@ -34,5 +34,8 @@ jobs:
       - name: Typecheck client
         run: cd packages/client && npx tsc --noEmit
 
+      - name: Build client
+        run: cd packages/client && pnpm build
+
       - name: Test
         run: pnpm test

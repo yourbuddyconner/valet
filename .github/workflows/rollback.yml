@@ -1,0 +1,70 @@
+name: Rollback
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version tag to roll back to (e.g. v1.2.3)'
+        required: true
+        type: string
+      environment:
+        description: 'Environment to roll back'
+        required: true
+        type: choice
+        options: [prod, dev]
+
+jobs:
+  rollback:
+    name: Rollback ${{ inputs.environment }} to ${{ inputs.version }}
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.version }}
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - uses: oven-sh/setup-bun@v2
+
+      - uses: astral-sh/setup-uv@v5
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: uv tool install modal
+
+      - name: Create deploy config
+        env:
+          PROJECT_NAME: ${{ vars.PROJECT_NAME }}
+          ALLOWED_EMAILS: ${{ vars.ALLOWED_EMAILS }}
+          D1_DATABASE_ID: ${{ vars.D1_DATABASE_ID }}
+        run: |
+          cat > .env.deploy.${{ inputs.environment }} <<EOF
+          PROJECT_NAME=${PROJECT_NAME}
+          ALLOWED_EMAILS=${ALLOWED_EMAILS}
+          D1_DATABASE_ID=${D1_DATABASE_ID}
+          EOF
+
+      - name: Deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+          MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+        run: ENVIRONMENT=${{ inputs.environment }} make deploy
+
+      - name: Smoke test
+        run: |
+          WORKER_URL="https://${{ vars.PROJECT_NAME }}.workers.dev"
+          echo "Checking $WORKER_URL/health ..."
+          curl --fail --silent --max-time 15 "$WORKER_URL/health" | grep '"status":"ok"'
+          echo "Rollback to ${{ inputs.version }} successful."

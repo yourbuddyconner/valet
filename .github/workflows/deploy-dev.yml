@@ -1,0 +1,67 @@
+name: Deploy (dev)
+
+on:
+  push:
+    branches: [main]
+
+# Prevent concurrent dev deploys — queue rather than cancel so no push is lost.
+concurrency:
+  group: deploy-dev
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy to dev
+    runs-on: ubuntu-latest
+    environment: dev
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - uses: oven-sh/setup-bun@v2
+
+      - uses: astral-sh/setup-uv@v5
+
+      - run: pnpm install --frozen-lockfile
+
+      # Install modal globally so `modal profile current` is available to deploy.sh.
+      # MODAL_TOKEN_ID + MODAL_TOKEN_SECRET (set in the Deploy step) authenticate it.
+      - run: uv tool install modal
+
+      # Reconstruct the .env.deploy.dev file from GitHub Actions variables/secrets.
+      # PROJECT_NAME drives all Cloudflare resource names (worker, D1, R2, Pages).
+      - name: Create deploy config
+        env:
+          PROJECT_NAME: ${{ vars.PROJECT_NAME }}
+          ALLOWED_EMAILS: ${{ vars.ALLOWED_EMAILS }}
+          D1_DATABASE_ID: ${{ vars.D1_DATABASE_ID }}
+        run: |
+          cat > .env.deploy.dev <<EOF
+          PROJECT_NAME=${PROJECT_NAME}
+          ALLOWED_EMAILS=${ALLOWED_EMAILS}
+          D1_DATABASE_ID=${D1_DATABASE_ID}
+          EOF
+
+      - name: Deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+          MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+        run: ENVIRONMENT=dev make deploy
+
+      - name: Smoke test
+        run: |
+          WORKER_URL="https://${{ vars.PROJECT_NAME }}.workers.dev"
+          echo "Checking $WORKER_URL/health ..."
+          curl --fail --silent --max-time 15 "$WORKER_URL/health" | grep '"status":"ok"'
+          echo "Worker is healthy."

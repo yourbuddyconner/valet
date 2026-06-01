@@ -1,0 +1,17 @@
+# Default owner for everything not matched below
+* @yourbuddyconner
+
+# Durable Objects and session lifecycle — highest blast radius
+packages/worker/src/durable-objects/ @yourbuddyconner
+packages/worker/migrations/ @yourbuddyconner
+
+# Auth and security-sensitive middleware
+packages/worker/src/middleware/auth.ts @yourbuddyconner
+packages/worker/src/middleware/admin.ts @yourbuddyconner
+
+# Modal backend and sandbox image
+backend/ @yourbuddyconner
+docker/ @yourbuddyconner
+
+# CI/CD workflows
+.github/ @yourbuddyconner
