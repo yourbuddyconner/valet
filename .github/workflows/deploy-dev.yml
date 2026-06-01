@@ -63,7 +63,7 @@ jobs:
 
       - name: Smoke test
         run: |
-          WORKER_URL="https://${{ vars.PROJECT_NAME }}.workers.dev"
+          WORKER_URL="https://${{ secrets.PROJECT_NAME }}.workers.dev"
           echo "Checking $WORKER_URL/health ..."
           curl --fail --silent --max-time 15 "$WORKER_URL/health" | grep '"status":"ok"'
           echo "Worker is healthy."
