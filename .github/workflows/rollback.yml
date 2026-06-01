@@ -1,24 +1,29 @@
-name: Deploy (prod)
+name: Rollback
 
 on:
-  push:
-    tags: ['v*']
-
-# Never cancel a prod deploy in flight.
-concurrency:
-  group: deploy-prod
-  cancel-in-progress: false
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version tag to roll back to (e.g. v1.2.3)'
+        required: true
+        type: string
+      environment:
+        description: 'Environment to roll back'
+        required: true
+        type: choice
+        options: [prod, dev]
 
 jobs:
-  deploy:
-    name: Deploy to prod
+  rollback:
+    name: Rollback ${{ inputs.environment }} to ${{ inputs.version }}
     runs-on: ubuntu-latest
-    # The prod GitHub Actions environment should have required reviewers set
-    # so every tag push triggers a manual approval gate before secrets are exposed.
-    environment: prod
+    environment: ${{ inputs.environment }}
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.version }}
+          fetch-depth: 0
 
       - uses: pnpm/action-setup@v4
         with:
@@ -35,19 +40,15 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      # Install modal globally so `modal profile current` is available to deploy.sh.
-      # MODAL_TOKEN_ID + MODAL_TOKEN_SECRET (set in the Deploy step) authenticate it.
       - run: uv tool install modal
 
-      # Reconstruct the .env.deploy.prod file from GitHub Actions variables/secrets.
-      # PROJECT_NAME drives all Cloudflare resource names (worker, D1, R2, Pages).
       - name: Create deploy config
         env:
           PROJECT_NAME: ${{ vars.PROJECT_NAME }}
           ALLOWED_EMAILS: ${{ vars.ALLOWED_EMAILS }}
           D1_DATABASE_ID: ${{ vars.D1_DATABASE_ID }}
         run: |
-          cat > .env.deploy.prod <<EOF
+          cat > .env.deploy.${{ inputs.environment }} <<EOF
           PROJECT_NAME=${PROJECT_NAME}
           ALLOWED_EMAILS=${ALLOWED_EMAILS}
           D1_DATABASE_ID=${D1_DATABASE_ID}
@@ -59,11 +60,11 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
           MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
           MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
-        run: ENVIRONMENT=prod make deploy
+        run: ENVIRONMENT=${{ inputs.environment }} make deploy
 
       - name: Smoke test
         run: |
           WORKER_URL="https://${{ vars.PROJECT_NAME }}.workers.dev"
           echo "Checking $WORKER_URL/health ..."
           curl --fail --silent --max-time 15 "$WORKER_URL/health" | grep '"status":"ok"'
-          echo "Worker is healthy."
+          echo "Rollback to ${{ inputs.version }} successful."

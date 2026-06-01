@@ -58,3 +58,10 @@ jobs:
           MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
           MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
         run: ENVIRONMENT=dev make deploy
+
+      - name: Smoke test
+        run: |
+          WORKER_URL="https://${{ vars.PROJECT_NAME }}.workers.dev"
+          echo "Checking $WORKER_URL/health ..."
+          curl --fail --silent --max-time 15 "$WORKER_URL/health" | grep '"status":"ok"'
+          echo "Worker is healthy."
