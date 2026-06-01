@@ -214,7 +214,7 @@ Both workflows call `make deploy` (the full `scripts/deploy.sh cmd_all` path: wo
 | `MODAL_TOKEN_ID` | Secret | Modal service token |
 | `MODAL_TOKEN_SECRET` | Secret | Modal service token |
 | `PROJECT_NAME` | Variable | Cloudflare resource name prefix (e.g. `dev-valet-turnkey`) |
-| `CLOUDFLARE_ACCOUNT_ID` | Variable | `2da0915cafe077551f978d4b0908bd43` |
+| `CLOUDFLARE_ACCOUNT_ID` | Variable | Your Cloudflare account ID (find it in the dashboard URL or `wrangler whoami`) |
 | `MODAL_BACKEND_URL` | Variable | Full Modal URL template (bypasses interactive `modal profile` check) |
 | `ALLOWED_EMAILS` | Variable | Comma-separated email allowlist; empty = no restriction |
 | `D1_DATABASE_ID` | Variable | Optional — auto-discovered from `wrangler d1 list` if omitted |
@@ -302,7 +302,7 @@ Inside Claude Code, run once:
 /plugin install cloudflare@cloudflare
 ```
 
-Then `/mcp` → connect to Cloudflare via OAuth. The token needs **Workers Logs Read** scope for observability queries. Account ID for this workspace: `2da0915cafe077551f978d4b0908bd43`.
+Then `/mcp` → connect to Cloudflare via OAuth. The token needs **Workers Logs Read** scope for observability queries. Account ID: check the Cloudflare dashboard URL or run `wrangler whoami`.
 
 ### Querying historical logs
 
