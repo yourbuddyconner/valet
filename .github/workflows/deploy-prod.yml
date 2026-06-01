@@ -39,6 +39,8 @@ jobs:
       # MODAL_TOKEN_ID + MODAL_TOKEN_SECRET (set in the Deploy step) authenticate it.
       - run: uv tool install modal
 
+      - run: npm install -g wrangler
+
       # Reconstruct the .env.deploy.prod file from GitHub Actions variables/secrets.
       # PROJECT_NAME drives all Cloudflare resource names (worker, D1, R2, Pages).
       - name: Create deploy config
