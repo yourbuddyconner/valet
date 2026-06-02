@@ -20,7 +20,12 @@ import { revokeCredential } from '../services/credentials.js';
 import { getDb } from '../lib/drizzle.js';
 import { listMcpToolCache } from '../lib/db/mcp-tool-cache.js';
 import { getDisabledPluginServices } from '../lib/db/plugins.js';
-import { getCustomMcpOAuthConfig, loadCustomMcpConnectorContext } from '../services/custom-mcp-connectors.js';
+import {
+  getCustomMcpOAuthConfig,
+  getCustomMcpOAuthConnector,
+  loadCustomMcpConnectorContext,
+} from '../services/custom-mcp-connectors.js';
+import { validateOutboundUrl } from '../services/outbound-url-policy.js';
 import { createSafeFetchOutbound } from '../services/safe-fetch-outbound.js';
 
 export const integrationsRouter = new Hono<{ Bindings: Env; Variables: Variables }>();
@@ -54,13 +59,24 @@ async function ensureMcpOAuthClient(
 ) {
   const d1 = getDb(env.DB);
   const existing = await mcpOAuthDb.getMcpOAuthClient(d1, service);
-  if (existing) return existing;
+  if (existing) {
+    await validateOutboundUrl(existing.authorizationEndpoint);
+    await validateOutboundUrl(existing.tokenEndpoint);
+    if (existing.registrationEndpoint) await validateOutboundUrl(existing.registrationEndpoint);
+    return existing;
+  }
+
+  const discoveryFetch = createSafeFetchOutbound({ mode: 'discovery' });
+  const oauthFetch = createSafeFetchOutbound({ mode: 'oauth-token' });
 
   // Discover authorization server metadata
-  const metadata = await discoverAuthServer(mcpServerUrl);
+  const metadata = await discoverAuthServer(mcpServerUrl, { fetch: discoveryFetch });
   if (!metadata.registration_endpoint) {
     throw new ValidationError(`MCP server ${mcpServerUrl} does not support dynamic client registration`);
   }
+  await validateOutboundUrl(metadata.authorization_endpoint);
+  await validateOutboundUrl(metadata.token_endpoint);
+  await validateOutboundUrl(metadata.registration_endpoint);
 
   // Register a new client
   let registered;
@@ -68,6 +84,7 @@ async function ensureMcpOAuthClient(
     registered = await registerClient(metadata.registration_endpoint, {
       clientName: 'Valet',
       redirectUris: [redirectUri],
+      fetch: oauthFetch,
     });
   } catch (err) {
     throw new ValidationError(
@@ -87,6 +104,37 @@ async function ensureMcpOAuthClient(
   };
 
   return mcpOAuthDb.insertMcpOAuthClientIfNotExists(d1, row);
+}
+
+function credentialsFromTokenResponse(tokens: {
+  access_token: string;
+  refresh_token?: string;
+  expires_in?: number;
+  token_type?: string;
+}): Record<string, string> {
+  const credentials: Record<string, string> = {
+    access_token: tokens.access_token,
+    token_type: tokens.token_type || 'bearer',
+  };
+  if (tokens.refresh_token) credentials.refresh_token = tokens.refresh_token;
+  if (tokens.expires_in) credentials.expires_in = String(tokens.expires_in);
+  return credentials;
+}
+
+function validateIntegrationRedirectUri(env: Env, redirectUri: string): string {
+  let actual: URL;
+  try {
+    actual = new URL(redirectUri);
+  } catch {
+    throw new ValidationError('redirect_uri is invalid');
+  }
+
+  const frontendUrl = (env.FRONTEND_URL || 'http://localhost:5173').replace(/\/+$/, '');
+  const expected = new URL('/integrations/callback', `${frontendUrl}/`);
+  if (actual.href !== expected.href) {
+    throw new ValidationError('redirect_uri must match the configured integration callback URL.');
+  }
+  return actual.href;
 }
 
 // Validation schemas
@@ -450,6 +498,7 @@ integrationsRouter.get('/:service/oauth', async (c) => {
   if (!redirect_uri) {
     throw new ValidationError('redirect_uri is required');
   }
+  const redirectUri = validateIntegrationRedirectUri(c.env, redirect_uri);
 
   // Block OAuth flows for disabled plugins
   const disabledPlugins = await getDisabledPluginServices(c.env.DB);
@@ -459,6 +508,28 @@ integrationsRouter.get('/:service/oauth', async (c) => {
 
   const provider = integrationRegistry.getProvider(service);
   if (!provider) {
+    const customConnector = await getCustomMcpOAuthConnector(c.env, c.get('db'), service, 'default');
+    if (!customConnector) {
+      throw new ValidationError(`Unknown service: ${service}`);
+    }
+
+    if (!customConnector.oauthClientId) {
+      const client = await ensureMcpOAuthClient(c.env, service, customConnector.serverUrl, redirectUri);
+      const { codeVerifier, codeChallenge } = await generatePkceChallenge();
+      const state = crypto.randomUUID();
+      const url = buildAuthorizationUrl({
+        authorizationEndpoint: client.authorizationEndpoint,
+        clientId: client.clientId,
+        redirectUri,
+        codeChallenge,
+        state,
+        scopes: customConnector.oauthScopes?.split(/\s+/).filter(Boolean) ?? undefined,
+        resource: customConnector.serverUrl,
+      });
+
+      return c.json({ url, state, code_verifier: codeVerifier });
+    }
+
     const customOAuth = await getCustomMcpOAuthConfig(c.env, c.get('db'), service, 'default');
     if (!customOAuth) {
       throw new ValidationError(`Unknown service: ${service}`);
@@ -469,7 +540,7 @@ integrationsRouter.get('/:service/oauth', async (c) => {
     const url = buildAuthorizationUrl({
       authorizationEndpoint: customOAuth.authorizationEndpoint,
       clientId: customOAuth.clientId,
-      redirectUri: redirect_uri,
+      redirectUri,
       codeChallenge,
       state,
       scopes: customOAuth.scopes,
@@ -481,14 +552,14 @@ integrationsRouter.get('/:service/oauth', async (c) => {
 
   if (provider.mcpServerUrl) {
     // ── MCP OAuth path ──
-    const client = await ensureMcpOAuthClient(c.env, service, provider.mcpServerUrl, redirect_uri);
+    const client = await ensureMcpOAuthClient(c.env, service, provider.mcpServerUrl, redirectUri);
     const { codeVerifier, codeChallenge } = await generatePkceChallenge();
     const state = crypto.randomUUID();
 
     const url = buildAuthorizationUrl({
       authorizationEndpoint: client.authorizationEndpoint,
       clientId: client.clientId,
-      redirectUri: redirect_uri,
+      redirectUri,
       codeChallenge,
       state,
       scopes: provider.oauthScopes,
@@ -505,7 +576,7 @@ integrationsRouter.get('/:service/oauth', async (c) => {
 
   const oauth = resolveOAuthConfig(service, c.env);
   const state = crypto.randomUUID();
-  const url = provider.getOAuthUrl(oauth, redirect_uri, state);
+  const url = provider.getOAuthUrl(oauth, redirectUri, state);
 
   return c.json({ url, state });
 });
@@ -522,15 +593,41 @@ integrationsRouter.post('/:service/oauth/callback', async (c) => {
   if (!code || !redirect_uri) {
     throw new ValidationError('code and redirect_uri are required');
   }
+  const redirectUri = validateIntegrationRedirectUri(c.env, redirect_uri);
 
   const provider = integrationRegistry.getProvider(service);
   if (!provider) {
-    const customOAuth = await getCustomMcpOAuthConfig(c.env, c.get('db'), service, 'default');
-    if (!customOAuth) {
+    const customConnector = await getCustomMcpOAuthConnector(c.env, c.get('db'), service, 'default');
+    if (!customConnector) {
       throw new ValidationError(`Unknown service: ${service}`);
     }
     if (!code_verifier) {
       throw new ValidationError('code_verifier is required for MCP OAuth callback');
+    }
+
+    if (!customConnector.oauthClientId) {
+      const d1 = getDb(c.env.DB);
+      const client = await mcpOAuthDb.getMcpOAuthClient(d1, service);
+      if (!client) {
+        throw new ValidationError(`No registered MCP OAuth client for ${service}. Initiate OAuth first.`);
+      }
+
+      const tokens = await exchangeCodePkce({
+        tokenEndpoint: client.tokenEndpoint,
+        clientId: client.clientId,
+        code,
+        redirectUri,
+        codeVerifier: code_verifier,
+        resource: customConnector.serverUrl,
+        fetch: createSafeFetchOutbound({ mode: 'oauth-token' }),
+      });
+
+      return c.json({ credentials: credentialsFromTokenResponse(tokens) });
+    }
+
+    const customOAuth = await getCustomMcpOAuthConfig(c.env, c.get('db'), service, 'default');
+    if (!customOAuth) {
+      throw new ValidationError(`Unknown service: ${service}`);
     }
 
     const tokens = await exchangeCodeWithClientCredentials({
@@ -539,20 +636,13 @@ integrationsRouter.post('/:service/oauth/callback', async (c) => {
       clientSecret: customOAuth.clientSecret,
       tokenEndpointAuthMethod: customOAuth.tokenEndpointAuthMethod,
       code,
-      redirectUri: redirect_uri,
+      redirectUri,
       codeVerifier: code_verifier,
       resource: customOAuth.serverUrl,
       fetch: createSafeFetchOutbound({ mode: 'oauth-token' }),
     });
 
-    const credentials: Record<string, string> = {
-      access_token: tokens.access_token,
-      token_type: tokens.token_type || 'bearer',
-    };
-    if (tokens.refresh_token) credentials.refresh_token = tokens.refresh_token;
-    if (tokens.expires_in) credentials.expires_in = String(tokens.expires_in);
-
-    return c.json({ credentials });
+    return c.json({ credentials: credentialsFromTokenResponse(tokens) });
   }
 
   if (provider.mcpServerUrl) {
@@ -571,19 +661,13 @@ integrationsRouter.post('/:service/oauth/callback', async (c) => {
       tokenEndpoint: client.tokenEndpoint,
       clientId: client.clientId,
       code,
-      redirectUri: redirect_uri,
+      redirectUri,
       codeVerifier: code_verifier,
       resource: provider.mcpServerUrl,
+      fetch: createSafeFetchOutbound({ mode: 'oauth-token' }),
     });
 
-    const credentials: Record<string, string> = {
-      access_token: tokens.access_token,
-      token_type: tokens.token_type || 'bearer',
-    };
-    if (tokens.refresh_token) credentials.refresh_token = tokens.refresh_token;
-    if (tokens.expires_in) credentials.expires_in = String(tokens.expires_in);
-
-    return c.json({ credentials });
+    return c.json({ credentials: credentialsFromTokenResponse(tokens) });
   }
 
   // ── Traditional OAuth path ──
@@ -592,7 +676,7 @@ integrationsRouter.post('/:service/oauth/callback', async (c) => {
   }
 
   const oauth = resolveOAuthConfig(service, c.env);
-  const credentials = await provider.exchangeOAuthCode(oauth, code, redirect_uri);
+  const credentials = await provider.exchangeOAuthCode(oauth, code, redirectUri);
 
   return c.json({ credentials });
 });

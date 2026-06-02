@@ -367,7 +367,14 @@ Each user's Telegram bot has its own webhook URL (`/telegram/webhook/:userId`). 
 
 ### Integration OAuth vs Login OAuth
 
-The integration routes (`GET /api/integrations/:service/oauth`) provide OAuth URLs for connecting services *within* the integration framework. These are distinct from the login OAuth routes (`GET /auth/github`, `GET /auth/google`). The integration OAuth callback returns raw credentials to the client but does not automatically create the integration record.
+The integration routes (`GET /api/integrations/:service/oauth`) provide OAuth URLs for connecting services *within* the integration framework. These are distinct from the login OAuth routes (`GET /auth/github`, `GET /auth/google`). The integration OAuth callback returns raw credentials to the client but does not automatically create the integration record. Integration OAuth `redirect_uri` values must exactly match `${FRONTEND_URL}/integrations/callback` before authorization starts or callback exchange runs.
+
+Custom MCP connectors configured with OAuth support two client modes:
+
+- **Admin-provided OAuth client:** `oauthClientId` is set. The worker uses the connector's stored authorization/token endpoints, optional client secret, PKCE, and the MCP server URL as the OAuth `resource`.
+- **Dynamic MCP OAuth client:** `oauthClientId` is `null`. The admin form must allow saving this state. The worker discovers the MCP server's authorization server metadata through the outbound URL policy, validates discovered authorization/token/registration endpoints, performs dynamic client registration, caches the resulting client in `mcp_oauth_clients`, and uses that cached client for authorization-code exchange and token refresh. Dynamic token exchange and refresh include the MCP server URL as the OAuth `resource`.
+
+Dynamic client cache rows are connector-owned runtime state. They must be deleted when a custom connector's server/auth identity changes and as part of connector deletion, so a recreated or retargeted connector cannot reuse stale authorization/token endpoints. Non-identity edits such as status, scopes, and additional headers must not delete dynamic client rows, because existing refresh tokens depend on the cached client.
 
 ### Client-Side Update Hook Mismatch
 
