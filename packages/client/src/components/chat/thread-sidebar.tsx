@@ -121,7 +121,7 @@ function ThreadItem({
   onDismiss,
   isDismissed,
   sessionId,
-  requiresApproval,
+  requiresResponse,
 }: {
   thread: SessionThread;
   isActive: boolean;
@@ -129,7 +129,7 @@ function ThreadItem({
   onDismiss?: () => void;
   isDismissed?: boolean;
   sessionId: string;
-  requiresApproval?: boolean;
+  requiresResponse?: boolean;
 }) {
   const [isEditing, setIsEditing] = useState(false);
   const [editValue, setEditValue] = useState('');
@@ -193,13 +193,13 @@ function ThreadItem({
       <span className="flex-1 truncate">
         {thread.title || thread.firstMessagePreview || 'New thread'}
       </span>
-      {requiresApproval && !isDismissed && (
+      {requiresResponse && !isDismissed && (
         <span
           className="inline-flex h-3 w-3 shrink-0 items-center justify-center text-amber-500 dark:text-amber-400"
-          title="Approval required"
+          title="Response required"
         >
           <BellIcon className="h-2.5 w-2.5" />
-          <span className="sr-only">Approval required</span>
+          <span className="sr-only">Response required</span>
         </span>
       )}
       {hasUnread && !isDismissed && (
@@ -245,7 +245,7 @@ function ThreadGroupHeader({ group }: { group: ThreadGroup }) {
 interface ThreadSidebarProps {
   sessionId: string;
   activeThreadId: string | null;
-  approvalRequiredThreadIds?: ReadonlySet<string>;
+  responseRequiredThreadIds?: ReadonlySet<string>;
   onSelectThread: (threadId: string) => void;
   onNewThread: () => void;
 }
@@ -253,7 +253,7 @@ interface ThreadSidebarProps {
 export function ThreadSidebar({
   sessionId,
   activeThreadId,
-  approvalRequiredThreadIds,
+  responseRequiredThreadIds,
   onSelectThread,
   onNewThread,
 }: ThreadSidebarProps) {
@@ -354,7 +354,7 @@ export function ThreadSidebar({
                 key={thread.id}
                 thread={thread}
                 isActive={thread.id === activeThreadId}
-                requiresApproval={approvalRequiredThreadIds?.has(thread.id)}
+                requiresResponse={responseRequiredThreadIds?.has(thread.id)}
                 onSelect={() => onSelectThread(thread.id)}
                 onDismiss={() => handleDismiss(thread.id)}
                 sessionId={sessionId}
