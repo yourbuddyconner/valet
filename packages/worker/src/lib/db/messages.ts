@@ -130,9 +130,7 @@ export async function batchUpsertMessages(
   // db.batch() must use raw D1 — Drizzle doesn't wrap batch.
   // Use ON CONFLICT ... DO UPDATE to preserve existing created_at and tool_calls
   // columns (INSERT OR REPLACE deletes then re-inserts, destroying defaults).
-  const stmts = msgs.map((msg) =>
-    db.prepare(
-      `INSERT INTO messages (id, session_id, role, content, parts, author_id, author_email, author_name, author_avatar_url, channel_type, channel_id, opencode_session_id, message_format, thread_id, created_at_epoch)
+  const SQL = `INSERT INTO messages (id, session_id, role, content, parts, author_id, author_email, author_name, author_avatar_url, channel_type, channel_id, opencode_session_id, message_format, thread_id, created_at_epoch)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET
          role = excluded.role,
@@ -147,25 +145,48 @@ export async function batchUpsertMessages(
          opencode_session_id = excluded.opencode_session_id,
          message_format = excluded.message_format,
          thread_id = excluded.thread_id,
-         created_at_epoch = excluded.created_at_epoch`
-    ).bind(
-      msg.id,
-      sessionId,
-      msg.role,
-      msg.content,
-      msg.parts,
-      msg.authorId,
-      msg.authorEmail,
-      msg.authorName,
-      msg.authorAvatarUrl,
-      msg.channelType,
-      msg.channelId,
-      msg.opencodeSessionId,
-      msg.messageFormat || 'v2',
-      msg.threadId || null,
-      msg.createdAt || null,
-    )
-  );
+         created_at_epoch = excluded.created_at_epoch`;
 
-  await db.batch(stmts);
+  const bindArgs = (msg: (typeof msgs)[number]) => [
+    msg.id,
+    sessionId,
+    msg.role,
+    msg.content,
+    msg.parts,
+    msg.authorId,
+    msg.authorEmail,
+    msg.authorName,
+    msg.authorAvatarUrl,
+    msg.channelType,
+    msg.channelId,
+    msg.opencodeSessionId,
+    msg.messageFormat || 'v2',
+    msg.threadId || null,
+    msg.createdAt || null,
+  ] as const;
+
+  const stmts = msgs.map((msg) => db.prepare(SQL).bind(...bindArgs(msg)));
+
+  try {
+    await db.batch(stmts);
+  } catch (batchErr) {
+    // If the whole batch fails with a FK constraint error, one bad message reference
+    // (e.g. a thread_id or author_id pointing to a since-deleted row) poisons the batch
+    // forever since the watermark never advances. Fall back to inserting one at a time
+    // so good messages land in D1 and the bad one is logged and skipped.
+    if (!String(batchErr).includes('FOREIGN KEY')) throw batchErr;
+    console.error('[batchUpsertMessages] Batch FK failure — falling back to individual inserts:', batchErr);
+    for (const msg of msgs) {
+      try {
+        await db.prepare(SQL).bind(...bindArgs(msg)).run();
+      } catch (singleErr) {
+        if (!String(singleErr).includes('FOREIGN KEY')) throw singleErr;
+        console.error(
+          `[batchUpsertMessages] Skipping message ${msg.id} (session=${sessionId}) — FK violation: ` +
+          `thread_id=${msg.threadId ?? 'null'} author_id=${msg.authorId ?? 'null'} role=${msg.role}`,
+          singleErr,
+        );
+      }
+    }
+  }
 }
