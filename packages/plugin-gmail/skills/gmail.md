@@ -10,7 +10,11 @@ The email is sent as `multipart/alternative` with the markdown source as the pla
 
 Write paragraphs as single lines separated by blank lines. Do not hard-wrap inside a paragraph.
 
-Raw HTML in the body is escaped, not interpreted, so it is safe to include `<` and `>` in code or examples. Images are not supported in v1; use a publicly accessible URL and reference it as a link.
+Raw HTML in the body is escaped, not interpreted. Do not write HTML tags like `<p>` or `<strong>` for formatting; use markdown instead. It is safe to include `<` and `>` in code or examples.
+
+Escape markdown markers with a backslash when they should be literal prose, especially at the start of a line: `\#`, `\-`, `\1.`, and `\>`.
+
+Tables and code blocks are lightly styled for readability in email clients. Images are not supported in v1; use a publicly accessible URL and reference it as a link.
 
 ## Messages
 
@@ -98,7 +102,7 @@ Risk: **high**.
 ## Drafts
 
 ### `gmail.create_draft`
-Create a draft without sending. Prefer this over `send_email` when the user should review before sending. Supports threading via `replyToMessageId`.
+Create a markdown-formatted draft without sending. Prefer this over `send_email` when the user should review before sending. Supports threading via `replyToMessageId`.
 
 ```json
 {
@@ -136,7 +140,7 @@ Risk: **low**.
 ---
 
 ### `gmail.update_draft`
-Fully replace a draft's contents (subject, body, recipients). This is a full overwrite, not a patch.
+Fully replace a draft's markdown-formatted contents (subject, body, recipients). This is a full overwrite, not a patch.
 
 ```json
 {

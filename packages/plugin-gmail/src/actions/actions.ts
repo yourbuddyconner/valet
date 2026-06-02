@@ -240,7 +240,7 @@ function truncate(text: string, max: number): string {
 // ─── Action Definitions ───────────────────────────────────────────────────────
 
 const markdownBodyDescription =
-  'Markdown body. Rendered as formatted HTML; the markdown source is sent as the plain-text fallback. Supports headings, lists, bold/italic, links, code blocks, blockquotes, and tables. See the gmail skill for details.';
+  'Markdown body. Rendered as formatted HTML; the markdown source is sent as the plain-text fallback. Supports headings, lists, bold/italic, links, code blocks, blockquotes, and tables. Do not write raw HTML; tags like <p> are escaped. See the gmail skill for details.';
 
 const sendEmailDef: ActionDefinition = {
   id: 'gmail.send_email',
@@ -363,7 +363,7 @@ const createDraftDef: ActionDefinition = {
   id: 'gmail.create_draft',
   name: 'Create Draft',
   description:
-    'Creates a Gmail draft (does NOT send). Use this for AI-composed emails that the user should review before sending. The draft appears in the Gmail Drafts folder and can be sent later with send_draft, edited with update_draft, or deleted with delete_draft. Supports threading via replyToMessageId.',
+    'Creates a markdown-formatted Gmail draft (does NOT send). Use this for AI-composed emails that the user should review before sending. The draft appears in the Gmail Drafts folder and can be sent later with send_draft, edited with update_draft, or deleted with delete_draft. Supports threading via replyToMessageId.',
   riskLevel: 'medium',
   params: z.object({
     to: z
@@ -419,7 +419,7 @@ const updateDraftDef: ActionDefinition = {
   id: 'gmail.update_draft',
   name: 'Update Draft',
   description:
-    'Replaces the contents of an existing Gmail draft. The new contents fully overwrite the old draft (this is a full replace, not a patch). Use this when iterating on an AI-composed draft before sending.',
+    'Replaces the contents of an existing Gmail draft with markdown-formatted content. The new contents fully overwrite the old draft (this is a full replace, not a patch). Use this when iterating on an AI-composed draft before sending.',
   riskLevel: 'medium',
   params: z.object({
     draftId: z.string().describe('The Gmail draft ID to update.'),

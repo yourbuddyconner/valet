@@ -18,7 +18,7 @@ describe('renderMarkdownToHtml', () => {
     expect(html).toContain('<h1>Status</h1>');
     expect(html).toContain('<strong>bold</strong>');
     expect(html).toContain('<em>italic</em>');
-    expect(html).toContain('<code>inline code</code>');
+    expect(html).toContain('>inline code</code>');
     expect(html).toContain('<ul>');
     expect(html).toContain('<li>Nested</li>');
     expect(html).toContain('<blockquote>');
@@ -36,11 +36,34 @@ describe('renderMarkdownToHtml', () => {
       '```',
     ].join('\n'));
 
-    expect(html).toContain('<table>');
-    expect(html).toContain('<th>Name</th>');
-    expect(html).toContain('<td>Ship</td>');
-    expect(html).toContain('<pre><code class="language-ts">');
+    expect(html).toContain('<table border="1" cellpadding="6" cellspacing="0"');
+    expect(html).toContain('>Name</th>');
+    expect(html).toContain('>Ship</td>');
+    expect(html).toContain('<pre style="background-color: #f6f8fa;');
+    expect(html).toContain('<code class="language-ts" style="font-family: monospace;">');
     expect(html).toContain("const tag = '&lt;p&gt;';");
+  });
+
+  it('adds email-safe presentation attributes for tables and code', () => {
+    const html = renderMarkdownToHtml([
+      '| Name | Value |',
+      '| --- | --- |',
+      '| Plan | Ship |',
+      '',
+      'Use `code` inline.',
+      '',
+      '```ts',
+      'const ok = true;',
+      '```',
+    ].join('\n'));
+
+    expect(html).toContain('<table border="1" cellpadding="6" cellspacing="0"');
+    expect(html).toContain('border-collapse: collapse;');
+    expect(html).toContain('<th style="border: 1px solid #d0d7de;');
+    expect(html).toContain('<td style="border: 1px solid #d0d7de;');
+    expect(html).toContain('<pre style="background-color: #f6f8fa;');
+    expect(html).toContain('<code style="font-family: monospace;');
+    expect(html).toContain('<code class="language-ts" style="font-family: monospace;');
   });
 
   it('linkifies bare URLs', () => {
