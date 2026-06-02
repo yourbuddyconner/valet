@@ -231,10 +231,16 @@ importers:
       '@valet/shared':
         specifier: workspace:*
         version: link:../shared
+      markdown-it:
+        specifier: ^14.1.0
+        version: 14.1.1
       zod:
         specifier: ^3.22.4
         version: 3.25.76
     devDependencies:
+      '@types/markdown-it':
+        specifier: ^14.1.2
+        version: 14.1.2
       typescript:
         specifier: ^5.3.3
         version: 5.9.3

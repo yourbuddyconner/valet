@@ -179,7 +179,8 @@ The registry creates **fresh instances** each time — credentials must be set b
 - Entities: `messages`, `threads`, `labels`, `drafts`.
 - Full email operations: send, reply, draft, labels, attachments.
 - Auto token refresh via `gmailFetch()` (checks `expires_at`, refreshes if within 1 minute).
-- MIME email construction with multipart support.
+- Write actions (`send_email`, `create_draft`, `update_draft`) accept markdown in `body`, render it to semantic HTML, and send `multipart/alternative` with the original markdown as the plain-text fallback.
+- MIME email construction uses outer reply headers plus plain-text and HTML body parts.
 - OAuth scopes: `gmail.readonly`, `gmail.send`, `gmail.compose`, `gmail.modify`, `gmail.labels`.
 
 **GoogleCalendarIntegration:**
