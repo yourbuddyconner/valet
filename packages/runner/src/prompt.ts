@@ -249,6 +249,22 @@ function isTextMime(mime: string): boolean {
   return mime.startsWith('text/') || TEXT_APPLICATION_MIMES.has(mime);
 }
 
+function errorReason(err: unknown): string {
+  if (err instanceof Error) return err.message || err.name;
+  return String(err);
+}
+
+function safeAttachmentName(filename: string | undefined, fallback: string): string {
+  return (filename || fallback).replace(/["\n\r]/g, '_');
+}
+
+function attachmentSummary(attachments: PromptAttachment[]): string {
+  if (attachments.length === 0) return 'none';
+  return attachments
+    .map((attachment) => `${attachment.mime}${attachment.filename ? `:${attachment.filename}` : ''}`)
+    .join(',');
+}
+
 // Emergency fallback timeout — only fires if no idle/completion event arrives
 const EMERGENCY_TIMEOUT_MS = 60_000;
 
@@ -1583,27 +1599,39 @@ export class PromptHandler {
       // Extract text from PDF attachments before sending to OpenCode
       const hasPdf = effectiveAttachments.some(a => a.mime === 'application/pdf');
       if (hasPdf) {
-        let pdfExtracted = false;
+        let pdfFailureNotes: string[] = [];
         try {
-          const { extractions, remaining } = await this.extractPdfText(effectiveAttachments);
+          const { extractions, failures, remaining } = await this.extractPdfText(effectiveAttachments);
           effectiveAttachments = remaining; // remaining already excludes successfully processed PDFs
           if (extractions.length > 0) {
-            pdfExtracted = true;
             const pdfBlock = extractions
-              .map(e => `<attached-file name="${(e.filename || 'document.pdf').replace(/"/g, '_')}" type="application/pdf">\n${e.text}\n</attached-file>`)
+              .map(e => `<attached-file name="${safeAttachmentName(e.filename, 'document.pdf')}" type="application/pdf">\n${e.text}\n</attached-file>`)
               .join('\n\n');
             effectiveContent = effectiveContent
               ? `${effectiveContent}\n\n${pdfBlock}`
               : pdfBlock;
           }
+          pdfFailureNotes = failures.map((failure) => {
+            const name = safeAttachmentName(failure.filename, 'document.pdf');
+            return `[The user attached a PDF named "${name}", but text extraction failed${failure.reason ? `: ${failure.reason}` : ''}. Please ask them to share the content as text or provide an OCR-readable PDF.]`;
+          });
         } catch (err) {
           console.error('[PromptHandler] Failed to extract PDF text:', err);
+          pdfFailureNotes = effectiveAttachments
+            .filter(a => a.mime === 'application/pdf')
+            .map((attachment) => {
+              const name = safeAttachmentName(attachment.filename, 'document.pdf');
+              return `[The user attached a PDF named "${name}", but text extraction failed: ${errorReason(err)}. Please ask them to share the content as text or provide an OCR-readable PDF.]`;
+            });
+        }
+        if (pdfFailureNotes.length > 0) {
+          const pdfFailureBlock = pdfFailureNotes.join('\n\n');
+          effectiveContent = effectiveContent
+            ? `${effectiveContent}\n\n${pdfFailureBlock}`
+            : pdfFailureBlock;
         }
         // Strip any remaining PDFs — OpenCode can't process raw PDF files
         effectiveAttachments = effectiveAttachments.filter(a => a.mime !== 'application/pdf');
-        if (!pdfExtracted && !effectiveContent?.trim()) {
-          effectiveContent = '[The user sent a PDF but text extraction failed. Please ask them to share the content as text instead.]';
-        }
       }
 
       // Extract text from text file attachments before sending to OpenCode
@@ -1637,6 +1665,11 @@ export class PromptHandler {
           effectiveContent = '[The user sent a text file but extraction failed. Please ask them to paste the content instead.]';
         }
       }
+
+      console.log(
+        `[PromptHandler] Prepared prompt payload for ${messageId}: content=${effectiveContent.length} chars ` +
+        `attachments=${effectiveAttachments.length} [${attachmentSummary(effectiveAttachments)}]`,
+      );
 
       // Store failover state on the channel (not class-level) so concurrent
       // prompts on different channels don't clobber each other's retry state.
@@ -3105,10 +3138,15 @@ export class PromptHandler {
    */
   private async extractPdfText(
     attachments: PromptAttachment[],
-  ): Promise<{ extractions: Array<{ text: string; filename?: string }>; remaining: PromptAttachment[] }> {
+  ): Promise<{
+    extractions: Array<{ text: string; filename?: string }>;
+    failures: Array<{ filename?: string; reason: string }>;
+    remaining: PromptAttachment[];
+  }> {
     const { LiteParse } = await import('@llamaindex/liteparse');
     const parser = new LiteParse({ ocrEnabled: false, outputFormat: 'text', maxPages: 100 });
     const extractions: Array<{ text: string; filename?: string }> = [];
+    const failures: Array<{ filename?: string; reason: string }> = [];
     const remaining: PromptAttachment[] = [];
 
     for (const attachment of attachments) {
@@ -3122,11 +3160,13 @@ export class PromptHandler {
         const commaIdx = attachment.url.indexOf(',');
         if (commaIdx === -1) {
           console.error('[PromptHandler] PDF attachment has invalid data URL');
+          failures.push({ filename: attachment.filename, reason: 'invalid data URL' });
           remaining.push(attachment);
           continue;
         }
         const base64Data = attachment.url.slice(commaIdx + 1);
         const buffer = Buffer.from(base64Data, 'base64');
+        console.log(`[PromptHandler] Parsing PDF (${attachment.filename || 'document.pdf'}): ${buffer.length} bytes`);
 
         // Parse with timeout to guard against malicious PDFs
         const parsePromise = parser.parse(buffer);
@@ -3141,15 +3181,18 @@ export class PromptHandler {
           console.log(`[PromptHandler] Extracted PDF text (${attachment.filename || 'document.pdf'}): ${text.length} chars`);
         } else {
           console.warn(`[PromptHandler] PDF extraction returned empty text for ${attachment.filename || 'document.pdf'}`);
+          failures.push({ filename: attachment.filename, reason: 'no extractable text' });
           remaining.push(attachment);
         }
       } catch (err) {
-        console.error('[PromptHandler] PDF text extraction error:', err);
+        const reason = errorReason(err);
+        console.error(`[PromptHandler] PDF text extraction error (${attachment.filename || 'document.pdf'}): ${reason}`, err);
+        failures.push({ filename: attachment.filename, reason });
         remaining.push(attachment);
       }
     }
 
-    return { extractions, remaining };
+    return { extractions, failures, remaining };
   }
 
   /**

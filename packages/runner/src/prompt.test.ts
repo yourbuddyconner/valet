@@ -884,4 +884,52 @@ describe("PromptHandler text file extraction", () => {
     expect(textPart.text).toContain('<attached-file name="code.txt" type="text/plain">');
     expect(textPart.text).toContain(textContent);
   });
+
+  it("keeps a visible PDF failure note when extraction fails and date context is present", async () => {
+    const agentClient = createAgentClientMock();
+    const handler = createHandler(agentClient);
+
+    const invalidPdfDataUrl = `data:application/pdf;base64,${Buffer.from("%PDF-1.4\nnot a real pdf").toString("base64")}`;
+
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      const body = typeof init?.body === "string" ? JSON.parse(init.body) : undefined;
+      fetchCalls.push({ url, method, body });
+
+      if (url === "http://opencode.test/session" && method === "POST") {
+        return jsonResponse({ id: "pdf-failure-session" });
+      }
+
+      if (url === "http://opencode.test/session/pdf-failure-session/message" && method === "POST") {
+        return jsonResponse({ info: { role: "assistant", content: "ok" }, parts: [] });
+      }
+
+      throw new Error(`Unexpected fetch: ${method} ${url}`);
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    await handler.handlePrompt(
+      "msg-pdf-failure-1",
+      "",
+      undefined,
+      undefined,
+      undefined,
+      [{ type: "file", mime: "application/pdf", url: invalidPdfDataUrl, filename: "broken.pdf" }],
+      "thread",
+      "ch-pdf-failure",
+    );
+
+    const syncCall = fetchCalls.find(
+      (c) => c.url === "http://opencode.test/session/pdf-failure-session/message" && c.method === "POST",
+    );
+    expect(syncCall).toBeDefined();
+    const body = syncCall!.body as { parts: Array<{ type: string; text?: string }> };
+    const textPart = body.parts.find((p) => p.type === "text");
+    expect(textPart).toBeDefined();
+    expect(textPart?.text).toContain("The user attached a PDF named \"broken.pdf\", but text extraction failed");
+    const fileParts = body.parts.filter((p) => p.type === "file");
+    expect(fileParts).toHaveLength(0);
+  });
 });
