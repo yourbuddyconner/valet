@@ -534,10 +534,47 @@ describe('TelegramTransport', () => {
         sessionId: 'session1',
         type: 'approval',
         title: 'Test',
-        actions: [{ id: 'ok', label: 'OK' }],
+        actions: [],
       }, ctx);
 
       expect(result).toBeNull();
+    });
+
+    it('falls back to a text prompt when Telegram rejects inline buttons', async () => {
+      mockFetch
+        .mockResolvedValueOnce(new Response('inline keyboard rejected', { status: 400 }))
+        .mockResolvedValueOnce(jsonResponse({ ok: true, result: { message_id: 44 } }));
+
+      const result = await transport.sendInteractivePrompt!(target, {
+        id: 'prompt4',
+        sessionId: 'session1',
+        type: 'question',
+        title: 'Pick one',
+        actions: [{ id: 'ok', label: 'OK' }],
+      }, ctx);
+
+      expect(result).toEqual({ messageId: '44', channelId: '123' });
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+      const [, fallbackOpts] = mockFetch.mock.calls[1];
+      const fallbackBody = JSON.parse(fallbackOpts.body);
+      expect(fallbackBody.reply_markup).toBeUndefined();
+      expect(fallbackBody.text).toContain('Reply with your answer');
+      expect(fallbackBody.text).toContain('OK');
+    });
+
+    it('does not fall back to text for approval prompts when inline buttons fail', async () => {
+      mockFetch.mockResolvedValueOnce(new Response('inline keyboard rejected', { status: 400 }));
+
+      const result = await transport.sendInteractivePrompt!(target, {
+        id: 'prompt5',
+        sessionId: 'session1',
+        type: 'approval',
+        title: 'Approve this action?',
+        actions: [{ id: 'allow_once', label: 'Allow' }],
+      }, ctx);
+
+      expect(result).toBeNull();
+      expect(mockFetch).toHaveBeenCalledTimes(1);
     });
   });
 

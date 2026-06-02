@@ -249,13 +249,16 @@ Per-user webhook endpoint called by Telegram. For each incoming message:
 - Media: downloads file, converts to base64 data URL, creates attachment payload.
 - **Routing:** checks for channel binding by `telegramScopeKey(userId, chatId)`. If found → bound session. If not → orchestrator via `dispatchOrchestratorPrompt()`.
 
-**Inline callback buttons:** approval callbacks resolve via the D1 invocation record. Question callbacks do not have D1 records, so the webhook uses the callback message's chat ID to check the same channel binding first, then falls back to the user's orchestrator session.
+**Inline callback buttons:** approval callbacks resolve via the D1 invocation record. Question callbacks do not have D1 records, so the webhook uses the callback message's chat ID to check the same channel binding first, then falls back to the user's orchestrator session. If Telegram rejects an inline-button question message, the transport falls back to a text question listing the options so the user can answer by reply.
+
+**Question replies:** bound Telegram webhook dispatches include the Valet `userId` as `authorId`. Session question-answer capture checks the original external channel (`telegram:<chatId>`) before the normalized orchestrator thread (`thread:<uuid>`), so typed replies from Telegram answer pending Telegram questions instead of aborting or queueing a new prompt.
 
 ### Utilities
 
 - `markdownToTelegramHtml()` — converts Markdown to Telegram-compatible HTML (code blocks, bold, italic, links with entity escaping).
 - `sendTelegramMessage()` — sends text with HTML parse mode.
 - `sendTelegramPhoto()` — sends photos via multipart upload with optional caption.
+- `sendInteractivePrompt()` — sends Telegram inline-keyboard prompts when possible and falls back to a text prompt when Telegram rejects the inline buttons.
 
 ### Disconnect
 

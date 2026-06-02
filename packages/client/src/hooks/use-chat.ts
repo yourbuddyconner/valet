@@ -27,6 +27,9 @@ export interface InteractivePromptState {
   actions: Array<{ id: string; label: string; style?: 'primary' | 'danger'; description?: string }>;
   expiresAt?: number;
   context?: Record<string, unknown>;
+  channelType?: string;
+  channelId?: string;
+  threadId?: string;
   status: 'pending' | 'resolved' | 'expired';
   error?: string;
 }
@@ -200,6 +203,9 @@ interface WebSocketChunkMessage {
 
 interface WebSocketInteractivePromptMessage {
   type: 'interactive_prompt';
+  channelType?: string;
+  channelId?: string;
+  threadId?: string;
   prompt: {
     id: string;
     sessionId: string;
@@ -890,6 +896,9 @@ export function useChat(sessionId: string) {
             actions: prompt.actions,
             expiresAt: prompt.expiresAt,
             context: prompt.context,
+            channelType: ipMsg.channelType ?? (typeof prompt.context?.channelType === 'string' ? prompt.context.channelType : undefined),
+            channelId: ipMsg.channelId ?? (typeof prompt.context?.channelId === 'string' ? prompt.context.channelId : undefined),
+            threadId: ipMsg.threadId ?? (typeof prompt.context?.threadId === 'string' ? prompt.context.threadId : undefined),
             status: 'pending' as const,
           }),
         }));

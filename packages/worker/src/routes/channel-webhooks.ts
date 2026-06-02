@@ -286,6 +286,7 @@ channelWebhooksRouter.post('/:channelType/webhook/:userId', async (c) => {
             channelType,
             channelId: message.channelId,
             threadId: orchestratorThreadId,
+            authorId: userId,
             authorName: message.senderName,
             replyTo: { channelType, channelId: message.channelId },
           }),

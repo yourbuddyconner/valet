@@ -65,6 +65,39 @@ export function upsertInteractivePrompt<T extends { id: string }>(prompts: T[], 
   return next;
 }
 
+export interface InteractivePromptVisibility {
+  status: 'pending' | 'resolved' | 'expired';
+  channelType?: string;
+  channelId?: string;
+  threadId?: string;
+  context?: Record<string, unknown>;
+}
+
+function getPromptThreadId(prompt: InteractivePromptVisibility): string | undefined {
+  if (prompt.threadId) return prompt.threadId;
+  if (typeof prompt.context?.threadId === 'string') return prompt.context.threadId;
+  if (prompt.channelType === 'thread' && prompt.channelId) return prompt.channelId;
+  if (prompt.context?.channelType === 'thread' && typeof prompt.context.channelId === 'string') {
+    return prompt.context.channelId;
+  }
+  return undefined;
+}
+
+export function selectVisibleInteractivePrompts<T extends InteractivePromptVisibility>(
+  prompts: T[],
+  activeThreadId?: string | null,
+): { visible: T[]; queuedCount: number } {
+  const resolved = prompts.filter((prompt) => prompt.status !== 'pending');
+  const pending = prompts.filter((prompt) => prompt.status === 'pending');
+  const scopedPending = activeThreadId
+    ? pending.filter((prompt) => getPromptThreadId(prompt) === activeThreadId)
+    : pending;
+  const firstPending = scopedPending[0];
+  const queuedCount = scopedPending.length - (firstPending ? 1 : 0);
+  const visible = firstPending ? [...resolved, firstPending] : resolved;
+  return { visible, queuedCount };
+}
+
 export function markInteractivePromptTerminal<
   T extends { id: string; status: 'pending' | 'resolved' | 'expired' },
 >(

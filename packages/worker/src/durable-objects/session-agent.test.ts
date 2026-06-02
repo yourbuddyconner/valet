@@ -1686,6 +1686,36 @@ describe('SessionAgentDO', () => {
     });
   });
 
+  it('broadcasts question prompt thread metadata from the originating queue row', async () => {
+    const { agent, broadcasts } = await createTestAgent();
+    (agent as any).promptQueue.enqueue({
+      id: 'msg-telegram',
+      content: 'hi',
+      status: 'processing',
+      channelType: 'thread',
+      channelId: 'thread-telegram',
+      threadId: 'thread-telegram',
+      replyChannelType: 'telegram',
+      replyChannelId: 'chat-123',
+    });
+
+    await (agent as any).runnerHandlers.question({
+      type: 'question',
+      messageId: 'msg-telegram',
+      questionId: 'q-telegram',
+      text: 'pick?',
+      options: ['a', 'b'],
+    });
+
+    const promptBroadcast = broadcasts.find((m) => m.type === 'interactive_prompt');
+    expect(promptBroadcast).toMatchObject({
+      type: 'interactive_prompt',
+      channelType: 'telegram',
+      channelId: 'chat-123',
+      threadId: 'thread-telegram',
+    });
+  });
+
   it('resolves same-channel web messages as pending question answers', async () => {
     const { agent, sql, broadcasts } = await createTestAgent();
     (agent as any).runnerLink.send = vi.fn().mockReturnValue(true);
@@ -1767,6 +1797,52 @@ describe('SessionAgentDO', () => {
       promptId: 'q-thread',
     }));
     expect(sql.interactivePrompts.has('q-thread')).toBe(false);
+  });
+
+  it('resolves Telegram thread messages against the original Telegram question channel before interrupting', async () => {
+    const { agent, sql, broadcasts } = await createTestAgent();
+    (agent as any).runnerLink.send = vi.fn().mockReturnValue(true);
+    (agent as any).promptQueue.runnerBusy = true;
+
+    sql.interactivePrompts.set('q-telegram', {
+      id: 'q-telegram',
+      type: 'question',
+      request_id: null,
+      title: 'Need a decision',
+      actions: JSON.stringify([{ id: 'option_0', label: 'Telegram' }]),
+      context: JSON.stringify({
+        options: ['Telegram'],
+        channelType: 'telegram',
+        channelId: 'chat-123',
+        threadId: 'thread-telegram',
+      }),
+      status: 'pending',
+      expires_at: Math.floor(Date.now() / 1000) + 300,
+      channel_refs: null,
+    });
+
+    await (agent as any).handleInterruptPrompt(
+      'Telegram',
+      undefined,
+      { id: 'user-1', email: 'user-1@example.com' },
+      undefined,
+      'telegram',
+      'chat-123',
+      'thread-telegram',
+    );
+
+    expect((agent as any).runnerLink.send).toHaveBeenCalledWith({
+      type: 'answer',
+      questionId: 'q-telegram',
+      answer: 'Telegram',
+    });
+    expect((agent as any).runnerLink.send).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'abort' }));
+    expect(sql.queue.size).toBe(0);
+    expect(broadcasts).toContainEqual(expect.objectContaining({
+      type: 'interactive_prompt_resolved',
+      promptId: 'q-telegram',
+    }));
+    expect(sql.interactivePrompts.has('q-telegram')).toBe(false);
   });
 
   describe('action approval prompts', () => {

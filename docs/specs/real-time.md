@@ -170,7 +170,9 @@ This replaces any stale client state with the authoritative server state. Pendin
 | `chunk` | Streaming text delta | All clients |
 | `status` | Session/runner state changes | All clients |
 | `agentStatus` | Agent activity indicator | All clients |
-| `question` | Agent asking for input | All clients |
+| `interactive_prompt` | Agent/user approval or question prompt; includes `threadId` when known so the client can show the active thread's pending prompt without being blocked by another thread | All clients |
+| `interactive_prompt_resolved` / `interactive_prompt_expired` | Interactive prompt terminal state | All clients |
+| `question` | Legacy agent question message | All clients |
 | `error` | Error message | All clients |
 | `models` | Available model list | All clients |
 | `user.joined` / `user.left` | Presence changes | All clients |
