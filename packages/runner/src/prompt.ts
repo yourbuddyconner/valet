@@ -2090,9 +2090,9 @@ export class PromptHandler {
   }
 
   async handleAnswer(questionId: string, answer: string | boolean): Promise<void> {
-    if (!this.sessionId) return;
     if (await this.handleQuestionReply(questionId, answer)) return;
 
+    if (!this.sessionId) return;
     const response =
       answer === false || answer === "__expired__"
         ? "reject"

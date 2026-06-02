@@ -12,6 +12,7 @@ type AgentClientMock = {
   sendAgentStatus: ReturnType<typeof vi.fn>;
   sendComplete: ReturnType<typeof vi.fn>;
   sendError: ReturnType<typeof vi.fn>;
+  sendQuestion: ReturnType<typeof vi.fn>;
   sendTurnCreate: ReturnType<typeof vi.fn>;
   sendTurnFinalize: ReturnType<typeof vi.fn>;
   sendAnalyticsEvents: ReturnType<typeof vi.fn>;
@@ -39,6 +40,7 @@ function createAgentClientMock(): AgentClientMock & AgentClient {
     sendAgentStatus: vi.fn(),
     sendComplete: vi.fn(),
     sendError: vi.fn(),
+    sendQuestion: vi.fn(),
     sendTurnCreate: vi.fn(),
     sendTurnFinalize: vi.fn(),
     sendAnalyticsEvents: vi.fn(),
@@ -59,6 +61,54 @@ function createHandler(agentClient: AgentClientMock & AgentClient): PromptHandle
   (handler as any).reportFilesChanged = vi.fn().mockResolvedValue(undefined);
   return handler;
 }
+
+describe("PromptHandler question answers", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it("replies to a pending question even when no prompt channel is current", async () => {
+    const agentClient = createAgentClientMock();
+    const handler = createHandler(agentClient);
+
+    const channel = (handler as any).getOrCreateChannel("thread", "thread-question");
+    channel.activeMessageId = "msg-question";
+    (handler as any).handleQuestionAsked(
+      {
+        id: "question-request",
+        questions: [
+          {
+            question: "Pick one",
+            options: [{ label: "Yes" }, { label: "No" }],
+          },
+        ],
+      },
+      channel,
+    );
+
+    expect(agentClient.sendQuestion).toHaveBeenCalledWith(
+      "msg-question",
+      "question-request",
+      "Pick one",
+      ["Yes", "No"],
+    );
+
+    const fetchMock = vi.fn(async () => new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", fetchMock);
+    (handler as any).currentPromptChannel = null;
+
+    await handler.handleAnswer("question-request", "Yes");
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://opencode.test/question/question-request/reply",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ answers: [["Yes"]] }),
+      }),
+    );
+  });
+});
 
 describe("PromptHandler thread resume", () => {
   let fetchCalls: FetchCall[];

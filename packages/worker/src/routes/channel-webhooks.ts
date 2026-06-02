@@ -109,9 +109,21 @@ channelWebhooksRouter.post('/:channelType/webhook/:userId', async (c) => {
                   }
                   targetSessionId = inv.sessionId;
                 } else {
-                  // Question prompts don't have D1 records — fall back to orchestrator session
-                  const orchSession = await db.getOrchestratorSession(c.env.DB, userId);
-                  targetSessionId = orchSession?.id;
+                  // Question prompts don't have D1 records. Prefer the bound
+                  // chat session when the callback came from a bound Telegram
+                  // channel, then fall back to the user's orchestrator.
+                  const callbackMessage = callbackQuery.message as Record<string, unknown> | undefined;
+                  const callbackChat = callbackMessage?.chat as Record<string, unknown> | undefined;
+                  const callbackChatId = callbackChat?.id ? String(callbackChat.id) : '';
+                  if (callbackChatId) {
+                    const scopeKey = channelScopeKey(userId, 'telegram', callbackChatId);
+                    const binding = await db.getChannelBindingByScopeKey(c.get('db'), scopeKey);
+                    targetSessionId = binding?.sessionId;
+                  }
+                  if (!targetSessionId) {
+                    const orchSession = await db.getOrchestratorSession(c.env.DB, userId);
+                    targetSessionId = orchSession?.id;
+                  }
                 }
 
                 if (!targetSessionId) {

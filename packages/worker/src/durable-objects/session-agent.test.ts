@@ -1647,6 +1647,89 @@ describe('SessionAgentDO', () => {
     });
   });
 
+  it('resolves same-channel web messages as pending question answers', async () => {
+    const { agent, sql, broadcasts } = await createTestAgent();
+    (agent as any).runnerLink.send = vi.fn().mockReturnValue(true);
+
+    sql.interactivePrompts.set('q-web', {
+      id: 'q-web',
+      type: 'question',
+      request_id: null,
+      title: 'Need a decision',
+      actions: JSON.stringify([{ id: 'option_0', label: 'Regenerate options' }]),
+      context: JSON.stringify({
+        options: ['Regenerate options'],
+        channelType: 'web',
+        channelId: 'default',
+      }),
+      status: 'pending',
+      expires_at: Math.floor(Date.now() / 1000) + 300,
+      channel_refs: null,
+    });
+
+    const resolved = await (agent as any).tryResolveChannelQuestion(
+      'Regenerate options',
+      { id: 'user-1', email: 'user-1@example.com' },
+      'web',
+      'default',
+    );
+
+    expect(resolved).toBe(true);
+    expect((agent as any).runnerLink.send).toHaveBeenCalledWith({
+      type: 'answer',
+      questionId: 'q-web',
+      answer: 'Regenerate options',
+    });
+    expect(broadcasts).toContainEqual(expect.objectContaining({
+      type: 'interactive_prompt_resolved',
+      promptId: 'q-web',
+    }));
+    expect(sql.interactivePrompts.has('q-web')).toBe(false);
+  });
+
+  it('resolves web thread messages as pending question answers before queueing', async () => {
+    const { agent, sql, broadcasts } = await createTestAgent();
+    (agent as any).runnerLink.send = vi.fn().mockReturnValue(true);
+
+    sql.interactivePrompts.set('q-thread', {
+      id: 'q-thread',
+      type: 'question',
+      request_id: null,
+      title: 'Need a decision',
+      actions: JSON.stringify([{ id: 'option_0', label: 'Regenerate options' }]),
+      context: JSON.stringify({
+        options: ['Regenerate options'],
+        channelType: 'thread',
+        channelId: 'thread-123',
+      }),
+      status: 'pending',
+      expires_at: Math.floor(Date.now() / 1000) + 300,
+      channel_refs: null,
+    });
+
+    await (agent as any).handlePrompt(
+      'Regenerate options',
+      undefined,
+      { id: 'user-1', email: 'user-1@example.com' },
+      undefined,
+      undefined,
+      undefined,
+      'thread-123',
+    );
+
+    expect((agent as any).runnerLink.send).toHaveBeenCalledWith({
+      type: 'answer',
+      questionId: 'q-thread',
+      answer: 'Regenerate options',
+    });
+    expect(sql.queue.size).toBe(0);
+    expect(broadcasts).toContainEqual(expect.objectContaining({
+      type: 'interactive_prompt_resolved',
+      promptId: 'q-thread',
+    }));
+    expect(sql.interactivePrompts.has('q-thread')).toBe(false);
+  });
+
   describe('action approval prompts', () => {
     async function setupApprovalPrompt(
       actionId = 'allow_session',

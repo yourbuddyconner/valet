@@ -248,6 +248,8 @@ Per-user webhook endpoint called by Telegram. For each incoming message:
 - Media: downloads file, converts to base64 data URL, creates attachment payload.
 - **Routing:** checks for channel binding by `telegramScopeKey(userId, chatId)`. If found → bound session. If not → orchestrator via `dispatchOrchestratorPrompt()`.
 
+**Inline callback buttons:** approval callbacks resolve via the D1 invocation record. Question callbacks do not have D1 records, so the webhook uses the callback message's chat ID to check the same channel binding first, then falls back to the user's orchestrator session.
+
 ### Utilities
 
 - `markdownToTelegramHtml()` — converts Markdown to Telegram-compatible HTML (code blocks, bold, italic, links with entity escaping).

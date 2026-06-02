@@ -1750,7 +1750,7 @@ export class SessionAgentDO {
     channelId: string | undefined,
   ): Promise<boolean> {
     const sessionOwnerId = this.sessionState.userId;
-    if (!channelType || channelType === 'web' || !author?.id || author.id !== sessionOwnerId) {
+    if (!channelType || !author?.id || author.id !== sessionOwnerId) {
       return false;
     }
 
@@ -1795,9 +1795,11 @@ export class SessionAgentDO {
     skipSingleSlot?: boolean,
   ) {
     // ─── Thread-reply capture for pending questions ─────────────────────
-    // If there's a pending question and this message came from a channel
-    // (not web UI) by the session owner, treat it as the answer.
-    if (await this.tryResolveChannelQuestion(content, author, channelType, channelId)) {
+    // If there's a pending question and this message came from the same
+    // channel by the session owner, treat it as the answer.
+    const questionChannelType = threadId ? 'thread' : channelType;
+    const questionChannelId = threadId ? threadId : channelId;
+    if (await this.tryResolveChannelQuestion(content, author, questionChannelType, questionChannelId)) {
       return;
     }
 
@@ -2117,13 +2119,12 @@ export class SessionAgentDO {
     // If the agent is waiting on a question and the user replies in the same
     // channel, resolve the question instead of aborting. Without this, the
     // abort kills the OpenCode session before the answer can reach it.
-    if (await this.tryResolveChannelQuestion(content, author, channelType, channelId)) {
-      return;
-    }
-
     // Normalize threadId to channel routing for abort targeting
     const abortChannelType = threadId ? 'thread' : channelType;
     const abortChannelId = threadId ? threadId : channelId;
+    if (await this.tryResolveChannelQuestion(content, author, abortChannelType, abortChannelId)) {
+      return;
+    }
 
     const runnerBusy = this.promptQueue.runnerBusy;
     if (runnerBusy) {
@@ -2151,7 +2152,9 @@ export class SessionAgentDO {
     // If the agent is waiting on a question and the user replies in the same
     // channel, resolve the question instead of buffering. Without this, the
     // reply gets collected and the question times out after 5 minutes.
-    if (await this.tryResolveChannelQuestion(content, author, channelType, channelId)) {
+    const collectChannelType = threadId ? 'thread' : channelType;
+    const collectChannelId = threadId ? threadId : channelId;
+    if (await this.tryResolveChannelQuestion(content, author, collectChannelType, collectChannelId)) {
       return;
     }
 
