@@ -215,16 +215,23 @@ export async function refreshTokenPkce(params: {
   tokenEndpoint: string;
   clientId: string;
   refreshToken: string;
+  /** MCP resource server URL (RFC 8707). */
+  resource?: string;
   fetch?: typeof fetch;
 }): Promise<TokenResponse> {
+  const body = new URLSearchParams({
+    grant_type: 'refresh_token',
+    client_id: params.clientId,
+    refresh_token: params.refreshToken,
+  });
+  if (params.resource) {
+    body.set('resource', params.resource);
+  }
+
   const res = await (params.fetch ?? fetch)(params.tokenEndpoint, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({
-      grant_type: 'refresh_token',
-      client_id: params.clientId,
-      refresh_token: params.refreshToken,
-    }),
+    body,
   });
   if (!res.ok) {
     const body = await res.text().catch(() => '');

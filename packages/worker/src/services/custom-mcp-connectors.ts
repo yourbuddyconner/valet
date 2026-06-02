@@ -19,7 +19,7 @@ import {
   updateConnector,
 } from '../lib/db/custom-mcp-connectors.js';
 import { listMcpToolCache } from '../lib/db/mcp-tool-cache.js';
-import { customMcpConnectors, mcpToolCache } from '../lib/schema/index.js';
+import { customMcpConnectors, mcpOauthClients, mcpToolCache } from '../lib/schema/index.js';
 import { integrationRegistry } from '../integrations/registry.js';
 import { validateOutboundUrl } from './outbound-url-policy.js';
 import { createSafeFetchOutbound } from './safe-fetch-outbound.js';
@@ -149,6 +149,25 @@ export async function getCustomMcpConnectorBySlug(
   return connector;
 }
 
+export async function getCustomMcpOAuthConnector(
+  env: Pick<Env, 'ENCRYPTION_KEY'>,
+  db: AppDb,
+  slug: string,
+  orgId = 'default',
+): Promise<ResolvedCustomMcpConnector | null> {
+  const row = await getConnectorRowBySlug(db, slug);
+  if (!row || row.orgId !== orgId || row.status !== 'active') return null;
+  if (row.authType !== 'oauth') {
+    throw new ValidationError(`Custom connector "${slug}" is not configured for OAuth.`);
+  }
+
+  await validateOutboundUrl(row.serverUrl);
+  if (row.oauthAuthorizationEndpoint) await validateOutboundUrl(row.oauthAuthorizationEndpoint);
+  if (row.oauthTokenEndpoint) await validateOutboundUrl(row.oauthTokenEndpoint);
+
+  return resolveConnectorRow(env, row);
+}
+
 export async function getCustomMcpOAuthConfig(
   env: Pick<Env, 'ENCRYPTION_KEY'>,
   db: AppDb,
@@ -160,7 +179,10 @@ export async function getCustomMcpOAuthConfig(
   if (row.authType !== 'oauth') {
     throw new ValidationError(`Custom connector "${slug}" is not configured for OAuth.`);
   }
-  if (!row.oauthClientId || !row.oauthAuthorizationEndpoint || !row.oauthTokenEndpoint) {
+  if (!row.oauthClientId) {
+    return null;
+  }
+  if (!row.oauthAuthorizationEndpoint || !row.oauthTokenEndpoint) {
     throw new ValidationError(`Custom connector "${slug}" is missing OAuth configuration.`);
   }
 
@@ -221,18 +243,30 @@ export async function updateCustomMcpConnector(
   });
 
   const update = await buildUpdateData(env, existing, input);
-  const shouldInvalidateCache = existing.serverUrl !== nextServerUrl
+  const nextOauthClientId = typeof update.oauthClientId === 'string' ? update.oauthClientId : null;
+  const shouldInvalidateToolCache = existing.serverUrl !== nextServerUrl
     || existing.authType !== nextAuthType
     || input.status !== undefined
     || input.additionalHeaders !== undefined
     || input.clearAdditionalHeaders === true
     || input.apiKey !== undefined
+    || input.oauthClientId !== undefined
     || input.oauthClientSecret !== undefined
-    || input.clearClientSecret === true;
+    || input.clearClientSecret === true
+    || input.oauthAuthorizationEndpoint !== undefined
+    || input.oauthTokenEndpoint !== undefined
+    || input.oauthScopes !== undefined
+    || input.oauthTokenEndpointAuthMethod !== undefined;
+  const shouldInvalidateOAuthClient = existing.serverUrl !== nextServerUrl
+    || existing.authType !== nextAuthType
+    || existing.oauthClientId !== nextOauthClientId;
 
   const connector = await updateConnector(db, id, update);
-  if (shouldInvalidateCache) {
+  if (shouldInvalidateToolCache) {
     await deleteMcpToolCacheForService(db, existing.serviceSlug);
+  }
+  if (shouldInvalidateOAuthClient) {
+    await deleteMcpOAuthClientForService(db, existing.serviceSlug);
   }
   return connector;
 }
@@ -250,6 +284,7 @@ export async function deleteCustomMcpConnectorCascade(
     d1.prepare('DELETE FROM mcp_tool_cache WHERE service = ?').bind(service),
     d1.prepare('DELETE FROM integrations WHERE service = ?').bind(service),
     d1.prepare('DELETE FROM credentials WHERE provider = ?').bind(service),
+    d1.prepare('DELETE FROM mcp_oauth_clients WHERE service = ?').bind(service),
     d1.prepare('DELETE FROM disabled_actions WHERE service = ?').bind(service),
     d1.prepare('DELETE FROM action_policies WHERE service = ?').bind(service),
     d1.prepare('DELETE FROM user_action_policy_overrides WHERE service = ?').bind(service),
@@ -432,16 +467,38 @@ async function normalizeAuthFields(
   }
 
   if (authType === 'oauth') {
-    const clientId = input.oauthClientId ?? existing?.oauthClientId ?? null;
+    const clientId = hasInputField(input, 'oauthClientId')
+      ? normalizeNullableString(input.oauthClientId)
+      : existing?.oauthClientId ?? null;
+    const scopes = hasInputField(input, 'oauthScopes')
+      ? normalizeNullableString(input.oauthScopes)
+      : existing?.oauthScopes ?? null;
+
     if (!clientId) {
-      throw new ValidationError('OAuth connectors require a client ID.');
+      return {
+        oauthClientId: null,
+        encryptedOauthClientSecret: null,
+        oauthTokenEndpointAuthMethod: 'none' as const,
+        oauthScopes: scopes,
+        oauthAuthorizationEndpoint: null,
+        oauthTokenEndpoint: null,
+        encryptedApiKey: null,
+        apiKeyHeaderName: null,
+        apiKeyPrefix: null,
+      };
     }
 
-    let authorizationEndpoint = input.oauthAuthorizationEndpoint ?? existing?.oauthAuthorizationEndpoint ?? null;
-    let tokenEndpoint = input.oauthTokenEndpoint ?? existing?.oauthTokenEndpoint ?? null;
+    let authorizationEndpoint = hasInputField(input, 'oauthAuthorizationEndpoint')
+      ? normalizeNullableString(input.oauthAuthorizationEndpoint)
+      : existing?.oauthAuthorizationEndpoint ?? null;
+    let tokenEndpoint = hasInputField(input, 'oauthTokenEndpoint')
+      ? normalizeNullableString(input.oauthTokenEndpoint)
+      : existing?.oauthTokenEndpoint ?? null;
     if (!authorizationEndpoint || !tokenEndpoint) {
       try {
-        const metadata = await discoverAuthServer(serverUrl);
+        const metadata = await discoverAuthServer(serverUrl, {
+          fetch: createSafeFetchOutbound({ mode: 'discovery' }),
+        });
         authorizationEndpoint = authorizationEndpoint ?? metadata.authorization_endpoint;
         tokenEndpoint = tokenEndpoint ?? metadata.token_endpoint;
       } catch {
@@ -450,6 +507,13 @@ async function normalizeAuthFields(
         );
       }
     }
+    if (!authorizationEndpoint || !tokenEndpoint) {
+      throw new ValidationError(
+        'OAuth authorization and token endpoints are required when the MCP server does not support .well-known discovery.',
+      );
+    }
+    await validateOutboundUrl(authorizationEndpoint);
+    await validateOutboundUrl(tokenEndpoint);
 
     const replacingSecret = input.oauthClientSecret && input.oauthClientSecret.trim().length > 0;
     const clearSecret = 'clearClientSecret' in input && input.clearClientSecret === true;
@@ -469,7 +533,7 @@ async function normalizeAuthFields(
         input.oauthTokenEndpointAuthMethod ?? existing?.oauthTokenEndpointAuthMethod ?? 'none',
         !!encryptedOauthClientSecret,
       ),
-      oauthScopes: input.oauthScopes ?? existing?.oauthScopes ?? null,
+      oauthScopes: scopes,
       oauthAuthorizationEndpoint: authorizationEndpoint,
       oauthTokenEndpoint: tokenEndpoint,
       encryptedApiKey: null,
@@ -516,6 +580,17 @@ function normalizeTokenEndpointAuthMethod(
   return method;
 }
 
+function hasInputField<
+  T extends CreateCustomMcpConnectorRequest | UpdateCustomMcpConnectorRequest,
+  K extends keyof T,
+>(input: T, field: K): boolean {
+  return Object.prototype.hasOwnProperty.call(input, field);
+}
+
+function normalizeNullableString(value: string | null | undefined): string | null {
+  return value?.trim() || null;
+}
+
 async function encryptAdditionalHeaders(
   env: Pick<Env, 'ENCRYPTION_KEY'>,
   headers: Record<string, string> | undefined,
@@ -554,4 +629,8 @@ async function getConnectorRowBySlug(db: AppDb, slug: string): Promise<Connector
 
 async function deleteMcpToolCacheForService(db: AppDb, service: string): Promise<void> {
   await db.delete(mcpToolCache).where(eq(mcpToolCache.service, service));
+}
+
+async function deleteMcpOAuthClientForService(db: AppDb, service: string): Promise<void> {
+  await db.delete(mcpOauthClients).where(eq(mcpOauthClients.service, service));
 }
