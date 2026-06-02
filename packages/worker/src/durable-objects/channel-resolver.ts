@@ -15,6 +15,7 @@ import type { PromptQueue } from './prompt-queue.js';
 export interface ChannelTarget {
   channelType: string;
   channelId: string;
+  threadId?: string | null;
 }
 
 export type DropReason =
@@ -43,7 +44,7 @@ export function getChannelForMessage(
   const row = promptQueue.getChannelTargetById(messageId);
   if (!row) return { found: false, reason: 'no_prompt_row' };
   if (!row.channelType || !row.channelId) return { found: false, reason: 'row_without_channel' };
-  return { found: true, target: { channelType: row.channelType, channelId: row.channelId } };
+  return { found: true, target: { channelType: row.channelType, channelId: row.channelId, threadId: row.threadId } };
 }
 
 /** Log a structured warning when an emission is dropped due to missing routing. */

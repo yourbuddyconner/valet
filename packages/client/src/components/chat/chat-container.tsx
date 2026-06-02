@@ -20,6 +20,7 @@ import { useAuthStore } from '@/stores/auth';
 import { useIsMobile } from '@/hooks/use-is-mobile';
 import { useAutoRestartOrchestrator } from '@/hooks/use-auto-restart-orchestrator';
 import { filterChildSessionEventsForThread, getEffectiveActiveThreadId } from './thread-selection';
+import { selectVisibleInteractivePrompts } from '@/lib/approval-prompts';
 
 const InteractivePromptCard = lazy(async () => {
   const mod = await import('@/components/session/interactive-prompt-card');
@@ -517,14 +518,10 @@ export function ChatContainer({ sessionId, routeSessionId, initialThreadId, init
             />
           </div>
           {(() => {
-            // Show one pending prompt at a time (FIFO) to prevent out-of-order
-            // execution of order-dependent tool calls (e.g. sequential doc edits).
-            // Also show any recently-resolved/expired prompts so the user sees feedback.
-            const pending = interactivePrompts.filter((p) => p.status === 'pending');
-            const resolved = interactivePrompts.filter((p) => p.status !== 'pending');
-            const firstPending = pending[0];
-            const queuedCount = pending.length - (firstPending ? 1 : 0);
-            const visible = firstPending ? [...resolved, firstPending] : resolved;
+            // Show one pending prompt at a time for the active thread. This
+            // preserves FIFO within a thread without letting another thread's
+            // pending question hide the current thread's prompt.
+            const { visible, queuedCount } = selectVisibleInteractivePrompts(interactivePrompts, activeThreadId);
             return (
               <>
                 {visible.map((prompt) => (

@@ -1799,9 +1799,12 @@ export class SessionAgentDO {
     // ─── Thread-reply capture for pending questions ─────────────────────
     // If there's a pending question and this message came from the same
     // channel by the session owner, treat it as the answer.
-    const questionChannelType = threadId ? 'thread' : channelType;
-    const questionChannelId = threadId ? threadId : channelId;
-    if (await this.tryResolveChannelQuestion(content, author, questionChannelType, questionChannelId)) {
+    const replyQuestionChannelType = replyTo?.channelType ?? channelType;
+    const replyQuestionChannelId = replyTo?.channelId ?? channelId;
+    if (await this.tryResolveChannelQuestion(content, author, replyQuestionChannelType, replyQuestionChannelId)) {
+      return;
+    }
+    if (threadId && await this.tryResolveChannelQuestion(content, author, 'thread', threadId)) {
       return;
     }
 
@@ -2124,7 +2127,10 @@ export class SessionAgentDO {
     // Normalize threadId to channel routing for abort targeting
     const abortChannelType = threadId ? 'thread' : channelType;
     const abortChannelId = threadId ? threadId : channelId;
-    if (await this.tryResolveChannelQuestion(content, author, abortChannelType, abortChannelId)) {
+    if (await this.tryResolveChannelQuestion(content, author, channelType, channelId)) {
+      return;
+    }
+    if (threadId && await this.tryResolveChannelQuestion(content, author, 'thread', threadId)) {
       return;
     }
 
@@ -2154,9 +2160,10 @@ export class SessionAgentDO {
     // If the agent is waiting on a question and the user replies in the same
     // channel, resolve the question instead of buffering. Without this, the
     // reply gets collected and the question times out after 5 minutes.
-    const collectChannelType = threadId ? 'thread' : channelType;
-    const collectChannelId = threadId ? threadId : channelId;
-    if (await this.tryResolveChannelQuestion(content, author, collectChannelType, collectChannelId)) {
+    if (await this.tryResolveChannelQuestion(content, author, channelType, channelId)) {
+      return;
+    }
+    if (threadId && await this.tryResolveChannelQuestion(content, author, 'thread', threadId)) {
       return;
     }
 
@@ -2379,6 +2386,9 @@ export class SessionAgentDO {
         const context: Record<string, unknown> = msg.options ? { options: msg.options } : {};
         context.channelType = questionCh.channelType;
         context.channelId = questionCh.channelId;
+        if (questionCh.threadId) {
+          context.threadId = questionCh.threadId;
+        }
 
         this.ctx.storage.sql.exec(
           `INSERT INTO interactive_prompts (id, type, request_id, title, actions, context, status, expires_at)
@@ -2406,6 +2416,7 @@ export class SessionAgentDO {
           prompt,
           channelType: questionCh.channelType,
           channelId: questionCh.channelId,
+          threadId: questionCh.threadId || undefined,
         });
 
         // Schedule an alarm to expire the question if unanswered
