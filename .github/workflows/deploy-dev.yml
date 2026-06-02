@@ -44,16 +44,20 @@ jobs:
 
       # Reconstruct the .env.deploy.dev file from GitHub Actions variables/secrets.
       # PROJECT_NAME drives all Cloudflare resource names (worker, D1, R2, Pages).
+      # MODAL_BACKEND_URL must be set explicitly — modal profile current returns the
+      # profile name ("default"), not the workspace slug used in URLs ("conner-61702").
       - name: Create deploy config
         env:
           PROJECT_NAME: ${{ secrets.PROJECT_NAME }}
           ALLOWED_EMAILS: ${{ secrets.ALLOWED_EMAILS }}
           D1_DATABASE_ID: ${{ secrets.D1_DATABASE_ID }}
+          MODAL_BACKEND_URL: ${{ secrets.MODAL_BACKEND_URL }}
         run: |
           cat > .env.deploy.dev <<EOF
           PROJECT_NAME=${PROJECT_NAME}
           ALLOWED_EMAILS=${ALLOWED_EMAILS}
           D1_DATABASE_ID=${D1_DATABASE_ID}
+          MODAL_BACKEND_URL=${MODAL_BACKEND_URL}
           EOF
 
       - name: Deploy

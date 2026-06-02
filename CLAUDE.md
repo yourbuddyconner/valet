@@ -213,6 +213,7 @@ Both workflows call `make deploy` (the full `scripts/deploy.sh cmd_all` path: wo
 | `CLOUDFLARE_API_TOKEN` | Secret | Scoped to Workers Scripts:Edit, D1:Edit, Pages:Edit |
 | `MODAL_TOKEN_ID` | Secret | Modal service token |
 | `MODAL_TOKEN_SECRET` | Secret | Modal service token |
+| `MODAL_BACKEND_URL` | Secret | Full Modal URL template — **required**; `modal profile current` returns the profile name, not the workspace slug, so auto-discovery produces the wrong URL in CI. Format: `https://<workspace>--<prefix>{label}.modal.run` (e.g. `https://conner-61702--dev-{label}.modal.run`) |
 | `PROJECT_NAME` | Secret | Cloudflare resource name prefix (e.g. `dev-valet-turnkey`) |
 | `CLOUDFLARE_ACCOUNT_ID` | Secret | Your Cloudflare account ID (find it in the dashboard URL or `wrangler whoami`) |
 | `ALLOWED_EMAILS` | Secret | Comma-separated email allowlist; empty = no restriction |
