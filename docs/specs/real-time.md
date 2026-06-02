@@ -367,6 +367,8 @@ interface ChatState {
 | `status` | Handles question lifecycle, connected users, runner state, terminal detection. |
 | `user.joined` / `user.left` | Updates `connectedUsers` array. |
 
+`useChat` stores `interactive_prompt` events as client-side prompt state. The chat UI filters pending prompts by the active thread before rendering a prompt card, and the orchestrator thread sidebar derives its approval-required bell from pending `approval` prompts with a resolvable `threadId`.
+
 **React Query cache sync:** when WebSocket reports a status change, the hook writes it directly to React Query cache and invalidates session lists. This keeps list views fresh without polling.
 
 **Session navigation:** when `sessionId` changes, state resets to `createInitialState()` before the new connection's `init` arrives.
