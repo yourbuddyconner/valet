@@ -559,9 +559,11 @@ export class SessionAgentDO {
         const promptChannelId = body.threadId ? body.threadId : body.channelId;
         const promptChannelKey = this.channelKeyFrom(promptChannelType, promptChannelId);
         const sameChannelBusy = isOrchestrator && this.promptQueue.isChannelBusy(promptChannelKey);
+        const requestedMode = body.queueMode || this.promptQueue.queueMode || 'followup';
         const effectiveMode = body.interrupt ? 'steer'
           : sameChannelBusy ? 'steer'
-          : (body.queueMode || this.promptQueue.queueMode || 'followup');
+          : isOrchestrator && requestedMode === 'steer' ? 'followup'
+          : requestedMode;
         console.log(`[SessionAgentDO] /prompt HTTP: effectiveMode=${effectiveMode} runnerBusy=${this.promptQueue.runnerBusy} channelBusy=${sameChannelBusy} channel=${promptChannelKey}`);
 
         const author = (body.authorId || body.authorEmail || body.authorName) ? {
