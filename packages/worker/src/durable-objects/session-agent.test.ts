@@ -118,6 +118,10 @@ function createMockSql(): SqlStorage & {
       }
 
       if (q.startsWith('SELECT') && q.includes('FROM channel_state')) {
+        if (q.includes('WHERE busy = 1')) {
+          const busy = Array.from(channelState.entries()).find(([, row]) => row.busy === 1);
+          return busy === undefined ? cursor([]) : cursor([{ channel_key: busy[0] }]);
+        }
         const channelKey = String(params[0]);
         const row = channelState.get(channelKey);
         return row === undefined ? cursor([]) : cursor([row]);
@@ -1389,6 +1393,41 @@ describe('SessionAgentDO', () => {
     expect(allQueued.length).toBe(2);
     expect(allQueued[0].content).toBe('web user work');
     expect(allQueued[1].content).toBe('telegram urgent');
+  });
+
+  it('does not steer-abort an unrelated orchestrator thread when channel prompt requests steer', async () => {
+    const runnerSocket = { send: vi.fn() };
+    const { agent } = await createTestAgent({ sockets: [runnerSocket] });
+
+    (agent as any).promptQueue.runnerBusy = true;
+    (agent as any).promptQueue.setChannelBusy('thread:web-thread', true);
+    (agent as any).promptQueue.setChannelBusy('thread:slack-thread', true);
+
+    const response = await agent.fetch(new Request('http://do/prompt', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        content: 'telegram test prompt',
+        queueMode: 'steer',
+        channelType: 'telegram',
+        channelId: 'chat-123',
+        threadId: 'telegram-thread',
+        authorName: 'Telegram User',
+      }),
+    }));
+
+    expect(response.status).toBe(200);
+    const sent = runnerSocket.send.mock.calls.map((call: unknown[]) => JSON.parse(call[0] as string));
+    expect(sent).not.toContainEqual(expect.objectContaining({ type: 'abort' }));
+    expect(sent).toContainEqual(expect.objectContaining({
+      type: 'prompt',
+      content: 'telegram test prompt',
+      channelType: 'thread',
+      channelId: 'telegram-thread',
+      threadId: 'telegram-thread',
+      replyChannelType: 'telegram',
+      replyChannelId: 'chat-123',
+    }));
   });
 
   it('withdraw → re-send flow preserves content', async () => {

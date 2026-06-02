@@ -387,6 +387,8 @@ Three queue modes determine how prompts are processed:
 1. Abort current work — clear queued prompts, send abort to runner.
 2. Then handle as `followup`.
 
+For orchestrator sessions, steer is scoped by thread/channel. A requested `steer` mode only aborts when the target `thread:<threadId>` or channel is already busy. If another web, Slack, or Telegram thread is busy or waiting on a question, the new prompt is treated as `followup` so parallel thread dispatch is not clobbered by an unrelated channel-scoped abort.
+
 **`collect` (batching):**
 1. Accumulate messages into a collect buffer.
 2. Debounce timer (default 3000ms) flushes buffer as single combined prompt.
