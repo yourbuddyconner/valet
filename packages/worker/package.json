@@ -44,8 +44,8 @@
     "@valet/plugin-typefully": "workspace:*",
     "@valet/sdk": "workspace:*",
     "@valet/shared": "workspace:*",
-    "drizzle-orm": "^0.45.1",
-    "hono": "^4.3.0",
+    "drizzle-orm": "^0.45.2",
+    "hono": "^4.12.23",
     "octokit": "^5.0.5",
     "zod": "^3.22.4"
   },
@@ -55,7 +55,7 @@
     "better-sqlite3": "^11.0.0",
     "drizzle-kit": "^0.31.9",
     "typescript": "^5.3.3",
-    "vitest": "^4.0.18",
+    "vitest": "^4.1.8",
     "wrangler": "^3.28.0"
   }
 }
