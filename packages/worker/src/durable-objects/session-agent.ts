@@ -43,7 +43,13 @@ import {
   processWorkflowExecutionResult as processWorkflowExecutionResultSvc,
   buildWorkflowDispatch,
 } from '../services/session-workflows.js';
-import { sanitizePromptAttachments, attachmentPartsForMessage, parseQueuedPromptAttachments, SUPPORTED_FILE_TYPES_DESCRIPTION } from '../lib/utils/prompt-validation.js';
+import {
+  sanitizePromptAttachments,
+  attachmentPartsForDisplay,
+  attachmentsForClientState,
+  parseQueuedPromptAttachments,
+  SUPPORTED_FILE_TYPES_DESCRIPTION,
+} from '../lib/utils/prompt-validation.js';
 import { parseQueuedWorkflowPayload, deriveRuntimeStates } from '../lib/utils/runtime.js';
 
 // ─── WebSocket Message Types ───────────────────────────────────────────────
@@ -698,7 +704,7 @@ export class SessionAgentDO {
     const pendingPrompt = pendingEntry ? {
       messageId: pendingEntry.id,
       content: pendingEntry.content,
-      attachments: pendingEntry.attachments ? JSON.parse(pendingEntry.attachments) : undefined,
+      attachments: pendingEntry.attachments ? attachmentsForClientState(JSON.parse(pendingEntry.attachments)) : undefined,
       threadId: pendingEntry.threadId || undefined,
     } : null;
 
@@ -1605,7 +1611,7 @@ export class SessionAgentDO {
             data: {
               messageId: withdrawn.id,
               content: withdrawn.content,
-              attachments: withdrawn.attachments ? JSON.parse(withdrawn.attachments) : undefined,
+              attachments: withdrawn.attachments ? attachmentsForClientState(JSON.parse(withdrawn.attachments)) : undefined,
               threadId: withdrawn.threadId,
             },
           });
@@ -1700,7 +1706,7 @@ export class SessionAgentDO {
             data: {
               messageId: existing.id,
               content: existing.content,
-              attachments: existing.attachments ? JSON.parse(existing.attachments) : undefined,
+              attachments: existing.attachments ? attachmentsForClientState(JSON.parse(existing.attachments)) : undefined,
               threadId: existing.threadId,
             },
           });
@@ -1859,7 +1865,7 @@ export class SessionAgentDO {
     // and auto-wakes if needed.
 
     const { attachments: normalizedAttachments } = sanitizePromptAttachments(attachments);
-    const attachmentParts = attachmentPartsForMessage(normalizedAttachments);
+    const attachmentParts = attachmentPartsForDisplay(normalizedAttachments);
     const serializedAttachmentParts = attachmentParts.length > 0 ? JSON.stringify(attachmentParts) : null;
     const serializedQueuedAttachments = normalizedAttachments.length > 0 ? JSON.stringify(normalizedAttachments) : null;
 
@@ -1915,7 +1921,7 @@ export class SessionAgentDO {
             data: {
               messageId: existingPending.id,
               content: existingPending.content,
-              attachments: existingPending.attachments ? JSON.parse(existingPending.attachments) : undefined,
+              attachments: existingPending.attachments ? attachmentsForClientState(JSON.parse(existingPending.attachments)) : undefined,
               threadId: existingPending.threadId,
             },
           });
@@ -1951,7 +1957,7 @@ export class SessionAgentDO {
           pending: {
             messageId,
             content,
-            attachments: normalizedAttachments.length > 0 ? normalizedAttachments : undefined,
+            attachments: normalizedAttachments.length > 0 ? attachmentsForClientState(normalizedAttachments) : undefined,
             threadId,
           },
         },
@@ -2175,7 +2181,7 @@ export class SessionAgentDO {
     if (rejectedTypes.length > 0) {
       console.warn(`[SessionAgentDO] Channel prompt: rejected file types: ${rejectedTypes.join(', ')}`);
     }
-    const attachmentParts = attachmentPartsForMessage(normalizedAttachments);
+    const attachmentParts = attachmentPartsForDisplay(normalizedAttachments);
     const serializedAttachmentParts = attachmentParts.length > 0 ? JSON.stringify(attachmentParts) : null;
 
     // Store user message immediately for display (including channel metadata)
@@ -4763,7 +4769,7 @@ export class SessionAgentDO {
 
       if (!alreadyWritten) {
         const queuedAttachments = prompt.attachments ? JSON.parse(prompt.attachments) : [];
-        const attachmentParts = attachmentPartsForMessage(queuedAttachments);
+        const attachmentParts = attachmentPartsForDisplay(queuedAttachments);
 
         this.messageStore.writeMessage({
           id: prompt.id,
@@ -5003,7 +5009,7 @@ export class SessionAgentDO {
         data: {
           messageId: pending.id,
           content: pending.content,
-          attachments: pending.attachments ? JSON.parse(pending.attachments) : undefined,
+          attachments: pending.attachments ? attachmentsForClientState(JSON.parse(pending.attachments)) : undefined,
           threadId: pending.threadId,
         },
       });

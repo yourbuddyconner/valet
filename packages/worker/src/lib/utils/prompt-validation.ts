@@ -262,6 +262,27 @@ export function attachmentPartsForMessage(attachments: PromptAttachment[]): Arra
   return parts;
 }
 
+export function attachmentPartsForDisplay(attachments: PromptAttachment[]): Array<Record<string, unknown>> {
+  return attachmentPartsForMessage(attachments).map((part) => {
+    if (part.type !== 'file') return part;
+    const { data: _data, ...displayPart } = part;
+    return displayPart;
+  });
+}
+
+export function attachmentsForClientState(attachments: PromptAttachment[]): Array<Record<string, unknown>> {
+  return attachments.map((attachment) => {
+    const clientAttachment: Record<string, unknown> = {
+      type: attachment.type,
+      mime: attachment.mime,
+    };
+    if (attachment.filename !== undefined) {
+      clientAttachment.filename = attachment.filename;
+    }
+    return clientAttachment;
+  });
+}
+
 export function parseQueuedPromptAttachments(raw: unknown): SanitizeResult {
   if (typeof raw !== 'string' || !raw) return { attachments: [], rejectedTypes: [] };
   try {

@@ -2,6 +2,8 @@ import { describe, it, expect } from 'vitest';
 import {
   sanitizePromptAttachments,
   attachmentPartsForMessage,
+  attachmentPartsForDisplay,
+  attachmentsForClientState,
 } from './prompt-validation.js';
 
 function fakeAttachment(mime: string, filename?: string) {
@@ -151,5 +153,49 @@ describe('attachmentPartsForMessage', () => {
     const parts = attachmentPartsForMessage(attachments);
     expect(parts).toHaveLength(1);
     expect(parts[0].type).toBe('image');
+  });
+});
+
+// ─── attachmentPartsForDisplay ─────────────────────────────────────────────
+
+describe('attachmentPartsForDisplay', () => {
+  it('omits raw data for file attachments used only as chips', () => {
+    const attachments = [
+      { type: 'file' as const, mime: 'application/pdf', url: 'data:application/pdf;base64,aGVsbG8=', filename: 'paper.pdf' },
+      { type: 'file' as const, mime: 'text/plain', url: 'data:text/plain;base64,aGVsbG8=', filename: 'notes.txt' },
+    ];
+
+    const parts = attachmentPartsForDisplay(attachments);
+
+    expect(parts).toEqual([
+      { type: 'file', mimeType: 'application/pdf', filename: 'paper.pdf' },
+      { type: 'file', mimeType: 'text/plain', filename: 'notes.txt' },
+    ]);
+  });
+
+  it('keeps raw data for previewable image and audio attachments', () => {
+    const attachments = [
+      { type: 'file' as const, mime: 'image/png', url: 'data:image/png;base64,aGVsbG8=', filename: 'photo.png' },
+      { type: 'file' as const, mime: 'audio/webm', url: 'data:audio/webm;base64,aGVsbG8=', filename: 'voice.webm' },
+    ];
+
+    const parts = attachmentPartsForDisplay(attachments);
+
+    expect(parts[0]).toMatchObject({ type: 'image', data: 'aGVsbG8=', mimeType: 'image/png' });
+    expect(parts[1]).toMatchObject({ type: 'audio', data: 'aGVsbG8=', mimeType: 'audio/webm' });
+  });
+});
+
+// ─── attachmentsForClientState ─────────────────────────────────────────────
+
+describe('attachmentsForClientState', () => {
+  it('omits data URLs from queued prompt state', () => {
+    const attachments = [
+      { type: 'file' as const, mime: 'application/pdf', url: 'data:application/pdf;base64,aGVsbG8=', filename: 'paper.pdf' },
+    ];
+
+    expect(attachmentsForClientState(attachments)).toEqual([
+      { type: 'file', mime: 'application/pdf', filename: 'paper.pdf' },
+    ]);
   });
 });
