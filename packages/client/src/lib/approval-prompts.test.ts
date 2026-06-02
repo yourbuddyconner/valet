@@ -4,7 +4,7 @@ import {
   getDefaultApprovalActionId,
   getNextApprovalActionId,
   getApprovalActionDescription,
-  getPendingApprovalThreadIds,
+  getPendingResponseRequiredThreadIds,
   getWebSocketErrorText,
   isApprovalPromptExpired,
   markInteractivePromptError,
@@ -101,7 +101,7 @@ describe('approval prompt helpers', () => {
     expect(selectVisibleInteractivePrompts(prompts, 'thread-1').visible).toEqual(prompts);
   });
 
-  it('collects only pending approval prompt thread ids for thread-list indicators', () => {
+  it('collects pending question and approval thread ids for thread-list indicators', () => {
     const prompts = [
       { id: 'approval-1', type: 'approval', status: 'pending' as const, threadId: 'web-thread' },
       { id: 'question-1', type: 'question', status: 'pending' as const, threadId: 'question-thread' },
@@ -110,7 +110,7 @@ describe('approval prompt helpers', () => {
       { id: 'approval-4', type: 'approval', status: 'pending' as const, channelType: 'slack', channelId: 'slack-dm' },
     ];
 
-    expect(getPendingApprovalThreadIds(prompts)).toEqual(new Set(['web-thread', 'telegram-thread']));
+    expect(getPendingResponseRequiredThreadIds(prompts)).toEqual(new Set(['web-thread', 'question-thread', 'telegram-thread']));
   });
 
   it('extracts websocket error text from the worker message field', () => {

@@ -99,12 +99,16 @@ export function selectVisibleInteractivePrompts<T extends InteractivePromptVisib
   return { visible, queuedCount };
 }
 
-export function getPendingApprovalThreadIds<T extends InteractivePromptVisibility>(
+function requiresUserResponse(prompt: InteractivePromptVisibility): boolean {
+  return prompt.type === 'approval' || prompt.type === 'question';
+}
+
+export function getPendingResponseRequiredThreadIds<T extends InteractivePromptVisibility>(
   prompts: T[],
 ): Set<string> {
   const threadIds = new Set<string>();
   for (const prompt of prompts) {
-    if (prompt.status !== 'pending' || prompt.type !== 'approval') continue;
+    if (prompt.status !== 'pending' || !requiresUserResponse(prompt)) continue;
     const threadId = getInteractivePromptThreadId(prompt);
     if (threadId) threadIds.add(threadId);
   }
