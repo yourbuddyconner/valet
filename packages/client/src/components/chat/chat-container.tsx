@@ -20,7 +20,7 @@ import { useAuthStore } from '@/stores/auth';
 import { useIsMobile } from '@/hooks/use-is-mobile';
 import { useAutoRestartOrchestrator } from '@/hooks/use-auto-restart-orchestrator';
 import { filterChildSessionEventsForThread, getEffectiveActiveThreadId } from './thread-selection';
-import { selectVisibleInteractivePrompts } from '@/lib/approval-prompts';
+import { getPendingApprovalThreadIds, selectVisibleInteractivePrompts } from '@/lib/approval-prompts';
 
 const InteractivePromptCard = lazy(async () => {
   const mod = await import('@/components/session/interactive-prompt-card');
@@ -232,6 +232,11 @@ export function ChatContainer({ sessionId, routeSessionId, initialThreadId, init
     if (isResolvingThread) return [];
     return filterChildSessionEventsForThread(childSessionEvents, activeThreadId);
   }, [childSessionEvents, activeThreadId, isResolvingThread]);
+
+  const approvalRequiredThreadIds = useMemo(
+    () => getPendingApprovalThreadIds(interactivePrompts),
+    [interactivePrompts],
+  );
 
   const handleSendMessage = useCallback(
     async (content: string, model?: string, attachments?: Parameters<typeof sendMessage>[2]) => {
@@ -499,6 +504,7 @@ export function ChatContainer({ sessionId, routeSessionId, initialThreadId, init
               <ThreadSidebar
                 sessionId={sessionId}
                 activeThreadId={activeThreadId}
+                approvalRequiredThreadIds={approvalRequiredThreadIds}
                 onSelectThread={selectThread}
                 onNewThread={handleNewThread}
               />
