@@ -1,11 +1,16 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import type BetterSqlite3 from 'better-sqlite3';
+import { readFileSync } from 'node:fs';
 import { createTestDb } from '../../test-utils/db.js';
-import { batchUpsertMessages } from './messages.js';
+import { batchUpsertMessages, getSessionMessages, getThreadMessages } from './messages.js';
 
 const SESSION_ID = 'session-msgs-test';
 const USER_ID = 'user-msgs-test';
 const THREAD_ID = 'thread-msgs-test';
+const MESSAGE_CREATED_AT_MIGRATION = readFileSync(
+  decodeURIComponent(new URL('../../../migrations/0016_message_created_at_from_epoch.sql', import.meta.url).pathname),
+  'utf8',
+);
 
 // ─── Minimal D1Database adapter over better-sqlite3 ─────────────────────────
 //
@@ -77,6 +82,20 @@ describe('batchUpsertMessages', () => {
     expect(ids).toEqual(expect.arrayContaining(['msg-1', 'msg-2']));
   });
 
+  it('stores D1 created_at from the DO message timestamp when available', async () => {
+    const d1 = createD1Mock(sqlite);
+    const createdAt = Date.parse('2026-05-13T16:30:53Z') / 1000;
+
+    await batchUpsertMessages(d1 as any, SESSION_ID, [makeMsg('msg-event-time', { createdAt })]);
+
+    const row = sqlite.prepare('SELECT created_at, created_at_epoch FROM messages WHERE id = ?')
+      .get('msg-event-time') as { created_at: string; created_at_epoch: number };
+    expect(row).toEqual({
+      created_at: '2026-05-13 16:30:53',
+      created_at_epoch: createdAt,
+    });
+  });
+
   it('falls back to individual inserts on batch FK failure, skipping only the bad row', async () => {
     const d1 = createD1Mock(sqlite);
     const msgs = [
@@ -120,5 +139,201 @@ describe('batchUpsertMessages', () => {
       batch() { throw new Error('D1_ERROR: FOREIGN KEY constraint failed: SQLITE_CONSTRAINT'); },
     };
     await expect(batchUpsertMessages(d1 as any, SESSION_ID, [makeMsg('msg-1')])).rejects.toThrow('disk I/O error');
+  });
+});
+
+describe('message readers', () => {
+  let sqlite: BetterSqlite3.Database;
+  let db: ReturnType<typeof createTestDb>['db'];
+
+  beforeEach(() => {
+    ({ db, sqlite } = createTestDb());
+    sqlite.prepare('INSERT INTO users (id, email) VALUES (?, ?)').run(USER_ID, 'test@example.com');
+    sqlite.prepare('INSERT INTO sessions (id, user_id, workspace, status) VALUES (?, ?, ?, ?)').run(SESSION_ID, USER_ID, '/tmp/test', 'running');
+    sqlite.prepare('INSERT INTO session_threads (id, session_id) VALUES (?, ?)').run(THREAD_ID, SESSION_ID);
+  });
+
+  it('returns message createdAt from created_at_epoch instead of D1 insertion time', async () => {
+    const eventEpoch = Date.parse('2026-05-13T16:30:53Z') / 1000;
+    sqlite.prepare(`
+      INSERT INTO messages
+        (id, session_id, role, content, message_format, thread_id, created_at, created_at_epoch)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      'msg-backfilled',
+      SESSION_ID,
+      'user',
+      'old local message',
+      'v2',
+      THREAD_ID,
+      '2026-06-02 15:45:52',
+      eventEpoch,
+    );
+
+    const sessionMessages = await getSessionMessages(db, SESSION_ID);
+    const threadMessages = await getThreadMessages(db, THREAD_ID);
+
+    expect(sessionMessages[0]?.createdAt.toISOString()).toBe('2026-05-13T16:30:53.000Z');
+    expect(threadMessages[0]?.createdAt.toISOString()).toBe('2026-05-13T16:30:53.000Z');
+  });
+
+  it('filters after cursors using actual message time, not D1 insertion time', async () => {
+    sqlite.prepare(`
+      INSERT INTO messages
+        (id, session_id, role, content, message_format, thread_id, created_at, created_at_epoch)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      'msg-historical-backfill',
+      SESSION_ID,
+      'user',
+      'historical backfill',
+      'v2',
+      THREAD_ID,
+      '2026-06-02 15:45:52',
+      Date.parse('2026-05-13T16:30:53Z') / 1000,
+    );
+    sqlite.prepare(`
+      INSERT INTO messages
+        (id, session_id, role, content, message_format, thread_id, created_at, created_at_epoch)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      'msg-current',
+      SESSION_ID,
+      'user',
+      'current message',
+      'v2',
+      THREAD_ID,
+      '2026-06-02 15:45:52',
+      Date.parse('2026-06-02T15:45:52Z') / 1000,
+    );
+
+    const messages = await getSessionMessages(db, SESSION_ID, {
+      after: '2026-06-02T15:00:00.000Z',
+    });
+
+    expect(messages.map((m) => m.id)).toEqual(['msg-current']);
+  });
+
+  it('orders mixed legacy and epoch messages by actual message time', async () => {
+    sqlite.prepare(`
+      INSERT INTO messages
+        (id, session_id, role, content, message_format, thread_id, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      'msg-legacy-later',
+      SESSION_ID,
+      'user',
+      'legacy later message',
+      'v1',
+      THREAD_ID,
+      '2026-06-02 15:46:00',
+    );
+    sqlite.prepare(`
+      INSERT INTO messages
+        (id, session_id, role, content, message_format, thread_id, created_at, created_at_epoch)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      'msg-epoch-earlier',
+      SESSION_ID,
+      'user',
+      'epoch earlier message',
+      'v2',
+      THREAD_ID,
+      '2026-06-02 15:50:00',
+      Date.parse('2026-06-02T15:45:00Z') / 1000,
+    );
+
+    const sessionMessages = await getSessionMessages(db, SESSION_ID);
+    const threadMessages = await getThreadMessages(db, THREAD_ID);
+
+    expect(sessionMessages.map((m) => m.id)).toEqual(['msg-epoch-earlier', 'msg-legacy-later']);
+    expect(threadMessages.map((m) => m.id)).toEqual(['msg-epoch-earlier', 'msg-legacy-later']);
+  });
+
+  it('filters thread after cursors using actual message time', async () => {
+    sqlite.prepare(`
+      INSERT INTO messages
+        (id, session_id, role, content, message_format, thread_id, created_at, created_at_epoch)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      'msg-thread-historical-backfill',
+      SESSION_ID,
+      'user',
+      'historical thread backfill',
+      'v2',
+      THREAD_ID,
+      '2026-06-02 15:45:52',
+      Date.parse('2026-05-13T16:30:53Z') / 1000,
+    );
+    sqlite.prepare(`
+      INSERT INTO messages
+        (id, session_id, role, content, message_format, thread_id, created_at, created_at_epoch)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      'msg-thread-current',
+      SESSION_ID,
+      'user',
+      'current thread message',
+      'v2',
+      THREAD_ID,
+      '2026-06-02 15:45:52',
+      Date.parse('2026-06-02T15:45:52Z') / 1000,
+    );
+
+    const messages = await getThreadMessages(db, THREAD_ID, {
+      after: '2026-06-02T15:00:00.000Z',
+    });
+
+    expect(messages.map((m) => m.id)).toEqual(['msg-thread-current']);
+  });
+});
+
+describe('message created_at migration', () => {
+  let sqlite: BetterSqlite3.Database;
+
+  beforeEach(() => {
+    ({ sqlite } = createTestDb());
+    sqlite.prepare('INSERT INTO users (id, email) VALUES (?, ?)').run(USER_ID, 'test@example.com');
+    sqlite.prepare('INSERT INTO sessions (id, user_id, workspace, status) VALUES (?, ?, ?, ?)').run(SESSION_ID, USER_ID, '/tmp/test', 'running');
+    sqlite.prepare('INSERT INTO session_threads (id, session_id) VALUES (?, ?)').run(THREAD_ID, SESSION_ID);
+  });
+
+  it('updates created_at from valid epochs without nulling malformed rows', () => {
+    sqlite.prepare(`
+      INSERT INTO messages
+        (id, session_id, role, content, message_format, thread_id, created_at, created_at_epoch)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      'msg-valid-epoch',
+      SESSION_ID,
+      'user',
+      'historical backfill',
+      'v2',
+      THREAD_ID,
+      '2026-06-02 15:45:52',
+      Date.parse('2026-05-13T16:30:53Z') / 1000,
+    );
+    sqlite.prepare(`
+      INSERT INTO messages
+        (id, session_id, role, content, message_format, thread_id, created_at, created_at_epoch)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      'msg-malformed-epoch',
+      SESSION_ID,
+      'user',
+      'bad epoch should not null created_at',
+      'v2',
+      THREAD_ID,
+      '2026-06-02 15:45:52',
+      999999999999999,
+    );
+
+    sqlite.exec(MESSAGE_CREATED_AT_MIGRATION);
+
+    const rows = sqlite.prepare('SELECT id, created_at FROM messages ORDER BY id').all() as Array<{ id: string; created_at: string | null }>;
+    expect(rows).toEqual([
+      { id: 'msg-malformed-epoch', created_at: '2026-06-02 15:45:52' },
+      { id: 'msg-valid-epoch', created_at: '2026-05-13 16:30:53' },
+    ]);
   });
 });
