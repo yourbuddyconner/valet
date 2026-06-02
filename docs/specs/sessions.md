@@ -467,12 +467,12 @@ Implemented via the DO's alarm handler:
 ### Question/Answer Flow
 
 1. Runner sends `question` message with `questionId`, `text`, optional `options`.
-2. DO stores in `questions` table with status `pending`.
-3. DO broadcasts `question` event to all clients, optionally sets expiry alarm.
-4. Client sends `answer` with `questionId` and `answer` text.
-5. DO validates question is still `pending`, updates to `answered`.
-6. DO forwards answer to runner, broadcasts `questionAnswered` status.
-7. Expired questions: alarm marks as `expired`, sends `'__expired__'` to runner.
+2. DO resolves the originating prompt channel from `prompt_queue`, stores the prompt in `interactive_prompts` with status `pending`, and persists the origin in `context.channelType` / `context.channelId`.
+3. DO broadcasts an `interactive_prompt` event to clients, sends channel-native prompts where supported, and sets the expiry alarm.
+4. Client sends `answer` with `questionId` and `answer` text, or the session owner sends a normal message in the same origin channel while the question is pending. Same-channel messages include `web:default`; they resolve the pending question instead of dispatching a fresh prompt.
+5. DO validates the prompt is still `pending`, claims it as `resolving`, forwards `{ type: 'answer', questionId, answer }` to the runner, broadcasts `interactive_prompt_resolved`, and deletes the prompt row.
+6. Runner matches `questionId` to the OpenCode question request and posts the answer to OpenCode. Question answers do not depend on the runner's current prompt cursor; permission answers still use the active OpenCode session.
+7. Expired questions: alarm deletes the prompt, broadcasts `interactive_prompt_expired`, and sends `'__expired__'` to runner.
 
 ## Edge Cases & Failure Modes
 
