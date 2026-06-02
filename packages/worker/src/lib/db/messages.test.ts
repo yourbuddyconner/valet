@@ -208,4 +208,77 @@ describe('message readers', () => {
 
     expect(messages.map((m) => m.id)).toEqual(['msg-current']);
   });
+
+  it('orders mixed legacy and epoch messages by actual message time', async () => {
+    sqlite.prepare(`
+      INSERT INTO messages
+        (id, session_id, role, content, message_format, thread_id, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      'msg-legacy-later',
+      SESSION_ID,
+      'user',
+      'legacy later message',
+      'v1',
+      THREAD_ID,
+      '2026-06-02 15:46:00',
+    );
+    sqlite.prepare(`
+      INSERT INTO messages
+        (id, session_id, role, content, message_format, thread_id, created_at, created_at_epoch)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      'msg-epoch-earlier',
+      SESSION_ID,
+      'user',
+      'epoch earlier message',
+      'v2',
+      THREAD_ID,
+      '2026-06-02 15:50:00',
+      Date.parse('2026-06-02T15:45:00Z') / 1000,
+    );
+
+    const sessionMessages = await getSessionMessages(db, SESSION_ID);
+    const threadMessages = await getThreadMessages(db, THREAD_ID);
+
+    expect(sessionMessages.map((m) => m.id)).toEqual(['msg-epoch-earlier', 'msg-legacy-later']);
+    expect(threadMessages.map((m) => m.id)).toEqual(['msg-epoch-earlier', 'msg-legacy-later']);
+  });
+
+  it('filters thread after cursors using actual message time', async () => {
+    sqlite.prepare(`
+      INSERT INTO messages
+        (id, session_id, role, content, message_format, thread_id, created_at, created_at_epoch)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      'msg-thread-historical-backfill',
+      SESSION_ID,
+      'user',
+      'historical thread backfill',
+      'v2',
+      THREAD_ID,
+      '2026-06-02 15:45:52',
+      Date.parse('2026-05-13T16:30:53Z') / 1000,
+    );
+    sqlite.prepare(`
+      INSERT INTO messages
+        (id, session_id, role, content, message_format, thread_id, created_at, created_at_epoch)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      'msg-thread-current',
+      SESSION_ID,
+      'user',
+      'current thread message',
+      'v2',
+      THREAD_ID,
+      '2026-06-02 15:45:52',
+      Date.parse('2026-06-02T15:45:52Z') / 1000,
+    );
+
+    const messages = await getThreadMessages(db, THREAD_ID, {
+      after: '2026-06-02T15:00:00.000Z',
+    });
+
+    expect(messages.map((m) => m.id)).toEqual(['msg-thread-current']);
+  });
 });

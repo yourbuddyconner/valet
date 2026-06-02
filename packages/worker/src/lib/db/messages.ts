@@ -1,6 +1,6 @@
 import type { D1Database } from '@cloudflare/workers-types';
 import type { Message } from '@valet/shared';
-import { eq, and, gt, asc, isNull, or } from 'drizzle-orm';
+import { eq, and, gt, asc, isNull, sql } from 'drizzle-orm';
 import type { AppDb } from '../drizzle.js';
 import { toDate } from '../drizzle.js';
 import { messages, sessions } from '../schema/index.js';
@@ -27,17 +27,17 @@ function messageCreatedAt(createdAt: string | null | undefined, createdAtEpoch: 
   return toDate(createdAt);
 }
 
+function messageCreatedAtEpochExpr() {
+  return sql<number>`COALESCE(${messages.createdAtEpoch}, CAST(strftime('%s', ${messages.createdAt}) AS INTEGER))`;
+}
+
 function afterMessageCreatedAtCondition(after: string) {
   const afterEpoch = parseCursorEpochSeconds(after);
   if (afterEpoch === null) {
     return gt(messages.createdAt, after);
   }
 
-  const fallbackAfter = formatEpochSecondsForSqlite(afterEpoch);
-  return or(
-    gt(messages.createdAtEpoch, afterEpoch),
-    and(isNull(messages.createdAtEpoch), gt(messages.createdAt, fallbackAfter ?? after)),
-  );
+  return gt(messageCreatedAtEpochExpr(), afterEpoch);
 }
 
 export async function getSessionMessages(
@@ -60,7 +60,7 @@ export async function getSessionMessages(
     .select()
     .from(messages)
     .where(and(...conditions))
-    .orderBy(asc(messages.createdAtEpoch), asc(messages.createdAt))
+    .orderBy(asc(messageCreatedAtEpochExpr()), asc(messages.createdAt), asc(messages.id))
     .limit(limit);
 
   return rows.map((row): Message => ({
@@ -121,7 +121,7 @@ export async function getThreadMessages(
     .from(messages)
     .innerJoin(sessions, eq(messages.sessionId, sessions.id))
     .where(and(...conditions))
-    .orderBy(asc(messages.createdAtEpoch), asc(messages.createdAt))
+    .orderBy(asc(messageCreatedAtEpochExpr()), asc(messages.createdAt), asc(messages.id))
     .limit(limit);
 
   return rows.map((row): Message => ({
@@ -203,7 +203,7 @@ export async function batchUpsertMessages(
     msg.opencodeSessionId,
     msg.messageFormat || 'v2',
     msg.threadId || null,
-    msg.createdAt || null,
+    msg.createdAt ?? null,
     formatEpochSecondsForSqlite(msg.createdAt),
   ] as const;
 
