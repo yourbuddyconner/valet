@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import type { ActionDefinition, ActionSource, ActionContext, ActionResult } from '@valet/sdk';
 import { gmailFetch, decodeBase64Url, encodeBase64Url } from './api.js';
+import { renderMarkdownToHtml } from './markdown.js';
 
 // ─── Internal Types ──────────────────────────────────────────────────────────
 
@@ -64,7 +65,26 @@ function encodeHeader(value: string): string {
   return `=?UTF-8?B?${btoa(binary)}?=`;
 }
 
-function buildMimeMessage(opts: {
+function buildHtmlBody(markdownBody: string): string {
+  return [
+    '<!DOCTYPE html>',
+    '<html>',
+    '<body>',
+    renderMarkdownToHtml(markdownBody),
+    '</body>',
+    '</html>',
+  ].join('\n');
+}
+
+function createMimeBoundary(parts: string[]): string {
+  let boundary = '';
+  do {
+    boundary = `b1_${globalThis.crypto.randomUUID()}`;
+  } while (parts.some((part) => part.includes(boundary)));
+  return boundary;
+}
+
+export function buildMimeMessage(opts: {
   to: string[];
   cc?: string[];
   bcc?: string[];
@@ -73,18 +93,29 @@ function buildMimeMessage(opts: {
   inReplyTo?: string | null;
   references?: string | null;
 }): string {
+  const htmlBody = buildHtmlBody(opts.body);
+  const boundary = createMimeBoundary([opts.body, htmlBody]);
   const lines: string[] = [];
   lines.push(`To: ${opts.to.join(', ')}`);
   if (opts.cc && opts.cc.length > 0) lines.push(`Cc: ${opts.cc.join(', ')}`);
   if (opts.bcc && opts.bcc.length > 0) lines.push(`Bcc: ${opts.bcc.join(', ')}`);
   lines.push(`Subject: ${encodeHeader(opts.subject)}`);
   lines.push('MIME-Version: 1.0');
-  lines.push('Content-Type: text/plain; charset="UTF-8"');
-  lines.push('Content-Transfer-Encoding: 8bit');
   if (opts.inReplyTo) lines.push(`In-Reply-To: ${opts.inReplyTo}`);
   if (opts.references) lines.push(`References: ${opts.references}`);
+  lines.push(`Content-Type: multipart/alternative; boundary="${boundary}"`);
+  lines.push('');
+  lines.push(`--${boundary}`);
+  lines.push('Content-Type: text/plain; charset="UTF-8"');
+  lines.push('Content-Transfer-Encoding: 8bit');
   lines.push('');
   lines.push(opts.body);
+  lines.push(`--${boundary}`);
+  lines.push('Content-Type: text/html; charset="UTF-8"');
+  lines.push('Content-Transfer-Encoding: 8bit');
+  lines.push('');
+  lines.push(htmlBody);
+  lines.push(`--${boundary}--`);
   return lines.join('\r\n');
 }
 
@@ -208,18 +239,21 @@ function truncate(text: string, max: number): string {
 
 // ─── Action Definitions ───────────────────────────────────────────────────────
 
+const markdownBodyDescription =
+  'Markdown body. Rendered as formatted HTML; the markdown source is sent as the plain-text fallback. Supports headings, lists, bold/italic, links, code blocks, blockquotes, and tables. Do not write raw HTML; tags like <p> are escaped. See the gmail skill for details.';
+
 const sendEmailDef: ActionDefinition = {
   id: 'gmail.send_email',
   name: 'Send Email',
   description:
-    'Sends a plain-text email from the authenticated Gmail account. Supports cc/bcc and optional threading by passing replyToMessageId (which copies threadId and sets In-Reply-To/References so the reply lands in the same thread).',
+    'Sends a markdown-formatted email from the authenticated Gmail account. Supports cc/bcc and optional threading by passing replyToMessageId (which copies threadId and sets In-Reply-To/References so the reply lands in the same thread).',
   riskLevel: 'high',
   params: z.object({
     to: z
       .union([z.string(), z.array(z.string()).min(1)])
       .describe('Recipient email address, or an array of recipient email addresses.'),
     subject: z.string().describe('Email subject line.'),
-    body: z.string().describe('Plain-text body of the email.'),
+    body: z.string().describe(markdownBodyDescription),
     cc: z.array(z.string()).optional().describe('Optional list of Cc recipients.'),
     bcc: z.array(z.string()).optional().describe('Optional list of Bcc recipients.'),
     replyToMessageId: z
@@ -329,14 +363,14 @@ const createDraftDef: ActionDefinition = {
   id: 'gmail.create_draft',
   name: 'Create Draft',
   description:
-    'Creates a Gmail draft (does NOT send). Use this for AI-composed emails that the user should review before sending. The draft appears in the Gmail Drafts folder and can be sent later with send_draft, edited with update_draft, or deleted with delete_draft. Supports threading via replyToMessageId.',
+    'Creates a markdown-formatted Gmail draft (does NOT send). Use this for AI-composed emails that the user should review before sending. The draft appears in the Gmail Drafts folder and can be sent later with send_draft, edited with update_draft, or deleted with delete_draft. Supports threading via replyToMessageId.',
   riskLevel: 'medium',
   params: z.object({
     to: z
       .union([z.string(), z.array(z.string()).min(1)])
       .describe('Recipient email address, or an array of recipient email addresses.'),
     subject: z.string().describe('Email subject line.'),
-    body: z.string().describe('Plain-text body of the draft.'),
+    body: z.string().describe(markdownBodyDescription),
     cc: z.array(z.string()).optional().describe('Optional list of Cc recipients.'),
     bcc: z.array(z.string()).optional().describe('Optional list of Bcc recipients.'),
     replyToMessageId: z
@@ -385,7 +419,7 @@ const updateDraftDef: ActionDefinition = {
   id: 'gmail.update_draft',
   name: 'Update Draft',
   description:
-    'Replaces the contents of an existing Gmail draft. The new contents fully overwrite the old draft (this is a full replace, not a patch). Use this when iterating on an AI-composed draft before sending.',
+    'Replaces the contents of an existing Gmail draft with markdown-formatted content. The new contents fully overwrite the old draft (this is a full replace, not a patch). Use this when iterating on an AI-composed draft before sending.',
   riskLevel: 'medium',
   params: z.object({
     draftId: z.string().describe('The Gmail draft ID to update.'),
@@ -393,7 +427,7 @@ const updateDraftDef: ActionDefinition = {
       .union([z.string(), z.array(z.string()).min(1)])
       .describe('Recipient email address, or an array of recipient email addresses.'),
     subject: z.string().describe('Email subject line.'),
-    body: z.string().describe('New plain-text body of the draft.'),
+    body: z.string().describe(markdownBodyDescription),
     cc: z.array(z.string()).optional().describe('Optional list of Cc recipients.'),
     bcc: z.array(z.string()).optional().describe('Optional list of Bcc recipients.'),
     replyToMessageId: z
