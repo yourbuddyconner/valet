@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import type BetterSqlite3 from 'better-sqlite3';
 import { createTestDb } from '../../test-utils/db.js';
-import { batchUpsertMessages } from './messages.js';
+import { batchUpsertMessages, getSessionMessages, getThreadMessages } from './messages.js';
 
 const SESSION_ID = 'session-msgs-test';
 const USER_ID = 'user-msgs-test';
@@ -77,6 +77,20 @@ describe('batchUpsertMessages', () => {
     expect(ids).toEqual(expect.arrayContaining(['msg-1', 'msg-2']));
   });
 
+  it('stores D1 created_at from the DO message timestamp when available', async () => {
+    const d1 = createD1Mock(sqlite);
+    const createdAt = Date.parse('2026-05-13T16:30:53Z') / 1000;
+
+    await batchUpsertMessages(d1 as any, SESSION_ID, [makeMsg('msg-event-time', { createdAt })]);
+
+    const row = sqlite.prepare('SELECT created_at, created_at_epoch FROM messages WHERE id = ?')
+      .get('msg-event-time') as { created_at: string; created_at_epoch: number };
+    expect(row).toEqual({
+      created_at: '2026-05-13 16:30:53',
+      created_at_epoch: createdAt,
+    });
+  });
+
   it('falls back to individual inserts on batch FK failure, skipping only the bad row', async () => {
     const d1 = createD1Mock(sqlite);
     const msgs = [
@@ -120,5 +134,78 @@ describe('batchUpsertMessages', () => {
       batch() { throw new Error('D1_ERROR: FOREIGN KEY constraint failed: SQLITE_CONSTRAINT'); },
     };
     await expect(batchUpsertMessages(d1 as any, SESSION_ID, [makeMsg('msg-1')])).rejects.toThrow('disk I/O error');
+  });
+});
+
+describe('message readers', () => {
+  let sqlite: BetterSqlite3.Database;
+  let db: ReturnType<typeof createTestDb>['db'];
+
+  beforeEach(() => {
+    ({ db, sqlite } = createTestDb());
+    sqlite.prepare('INSERT INTO users (id, email) VALUES (?, ?)').run(USER_ID, 'test@example.com');
+    sqlite.prepare('INSERT INTO sessions (id, user_id, workspace, status) VALUES (?, ?, ?, ?)').run(SESSION_ID, USER_ID, '/tmp/test', 'running');
+    sqlite.prepare('INSERT INTO session_threads (id, session_id) VALUES (?, ?)').run(THREAD_ID, SESSION_ID);
+  });
+
+  it('returns message createdAt from created_at_epoch instead of D1 insertion time', async () => {
+    const eventEpoch = Date.parse('2026-05-13T16:30:53Z') / 1000;
+    sqlite.prepare(`
+      INSERT INTO messages
+        (id, session_id, role, content, message_format, thread_id, created_at, created_at_epoch)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      'msg-backfilled',
+      SESSION_ID,
+      'user',
+      'old local message',
+      'v2',
+      THREAD_ID,
+      '2026-06-02 15:45:52',
+      eventEpoch,
+    );
+
+    const sessionMessages = await getSessionMessages(db, SESSION_ID);
+    const threadMessages = await getThreadMessages(db, THREAD_ID);
+
+    expect(sessionMessages[0]?.createdAt.toISOString()).toBe('2026-05-13T16:30:53.000Z');
+    expect(threadMessages[0]?.createdAt.toISOString()).toBe('2026-05-13T16:30:53.000Z');
+  });
+
+  it('filters after cursors using actual message time, not D1 insertion time', async () => {
+    sqlite.prepare(`
+      INSERT INTO messages
+        (id, session_id, role, content, message_format, thread_id, created_at, created_at_epoch)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      'msg-historical-backfill',
+      SESSION_ID,
+      'user',
+      'historical backfill',
+      'v2',
+      THREAD_ID,
+      '2026-06-02 15:45:52',
+      Date.parse('2026-05-13T16:30:53Z') / 1000,
+    );
+    sqlite.prepare(`
+      INSERT INTO messages
+        (id, session_id, role, content, message_format, thread_id, created_at, created_at_epoch)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      'msg-current',
+      SESSION_ID,
+      'user',
+      'current message',
+      'v2',
+      THREAD_ID,
+      '2026-06-02 15:45:52',
+      Date.parse('2026-06-02T15:45:52Z') / 1000,
+    );
+
+    const messages = await getSessionMessages(db, SESSION_ID, {
+      after: '2026-06-02T15:00:00.000Z',
+    });
+
+    expect(messages.map((m) => m.id)).toEqual(['msg-current']);
   });
 });

@@ -71,7 +71,10 @@ This spec covers:
 | `channelId` | text | Channel-specific identifier |
 | `opencodeSessionId` | text | OpenCode session that produced this message |
 | `messageFormat` | text | Format identifier |
-| `createdAt` | text | ISO datetime |
+| `createdAt` | text | ISO datetime for when the message happened |
+| `createdAtEpoch` | integer | Unix seconds from the SessionAgentDO local message store |
+
+`createdAt` is the semantic message timestamp, not D1 ingestion time. D1 replication must preserve the DO-local event time by writing `createdAt` from `createdAtEpoch` when present. Readers and pagination cursors compare against the same event time so delayed D1 backfills do not appear as new messages.
 
 ### `session_threads` table
 
@@ -420,7 +423,7 @@ For orchestrator sessions, both modes read across all of the user's orchestrator
 1. Runner sends `complete` message.
 2. DO marks all `processing` entries as `completed`, prunes them.
 3. `sendNextQueuedPrompt()`: if more queued work, dispatch next (FIFO); otherwise set `runnerBusy=false`.
-4. Flush messages to D1 in background.
+4. Flush messages to D1 in background, preserving each DO-local message timestamp (`createdAtEpoch`) as the D1 message `createdAt`.
 
 ### Hibernation
 
