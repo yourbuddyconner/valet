@@ -3,27 +3,25 @@ title: Operations
 description: Use Valet for scheduled checks, channel-driven requests, internal workflows, and operational handoffs.
 ---
 
-# Operations
-
-Valet can handle recurring operational work when it has the right integrations, workflow definition, and approval policy. A user or organization orchestrator can receive requests, keep context, start sessions, and route the result back to the right channel.
+Valet can handle recurring operational work when it has the right connected tools, instructions, and approval rules. It can receive requests, gather information, run checklists, and send the result back to the right channel.
 
 Typical work includes:
 
 - Running scheduled checks and posting summaries.
 - Responding to Slack or Telegram requests.
-- Pulling context from connected tools before taking action.
+- Gathering information from connected tools before taking action.
 - Preparing drafts, reports, or follow-up tasks.
 - Waiting for approval before actions that change external systems.
 - Preserving memory about preferences and recurring procedures.
 
 ## Product surfaces involved
 
-- [Triggers and workflows](/product/triggers-and-workflows) define recurring or event-driven work.
+- [Workflows](/product/workflows) define recurring or event-driven work.
 - [Channels](/product/channels) decide where requests and replies happen.
-- [Orchestrators and memory](/product/orchestrators-and-memory) coordinate work over time.
-- [Policies and approvals](/product/policies-and-approvals) keep control explicit.
-- [Integrations](/product/integrations) define the tool surface Valet can reach.
+- [Memory](/product/memory) keeps useful team instructions available over time.
+- [Approvals](/product/approvals) keep control explicit.
+- [Connect tools](/product/tools) defines what Valet can reach.
 
 <Note>
-  Operations use cases are usually less about code and more about durable context, channel routing, and safe tool access.
+  Operations use cases are usually less about code and more about remembered procedures, clear channels, and safe tool use.
 </Note>

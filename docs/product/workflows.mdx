@@ -1,0 +1,104 @@
+---
+title: Create Workflows
+description: Create repeatable Valet workflows for scheduled work, manual runs, and events from connected systems.
+---
+
+import { FeatureCard } from '/snippets/feature-card.mdx';
+import { MascotNote } from '/snippets/mascot-note.mdx';
+
+A workflow is a repeatable way to ask Valet to do work. Use one when the same kind of task should happen more than once, follow a consistent process, or start automatically.
+
+<MascotNote
+  title="Reference"
+  image="/images/characters/writing.png"
+  alt="Valet writing notes"
+>
+  Write a workflow like a checklist for a coworker: what starts it, what information to gather, what to produce, and when to stop for review.
+</MascotNote>
+
+## When to create a workflow
+
+Create a workflow for recurring work such as:
+
+- Daily queue triage.
+- Weekly team summaries.
+- Customer follow-up after a form or support event.
+- Release-prep checklists.
+- Issue or pull-request review.
+- Research that always needs the same inputs.
+
+If the task is one-off or still unclear, start with a normal [task](/product/tasks). Turn it into a workflow after the pattern repeats.
+
+## Create a workflow
+
+<Steps>
+  <Step title="Name the job">
+    Use a name that describes the outcome, such as "Weekly support summary" or "Triage new pull requests."
+  </Step>
+  <Step title="Choose how it starts">
+    Decide whether a person runs it, a schedule runs it, or another system sends Valet an event.
+  </Step>
+  <Step title="Write the instructions">
+    Tell Valet what to check, which tools to use, what good output looks like, and what should be ignored.
+  </Step>
+  <Step title="Add review points">
+    Mark the steps that need approval before Valet writes, sends, deletes, merges, or changes something important.
+  </Step>
+  <Step title="Run it once">
+    Test the workflow on a small, real example. Review what Valet did and adjust the instructions.
+  </Step>
+</Steps>
+
+## Ways a workflow can start
+
+<div className="valet-doc-grid">
+  <FeatureCard
+    eyebrow="Manual"
+    title="Run when needed"
+    description="A person chooses when Valet should run the workflow."
+    href="/product/tasks"
+  />
+  <FeatureCard
+    eyebrow="Schedule"
+    title="Run on a cadence"
+    description="Use schedules for daily checks, weekly summaries, and other recurring work."
+    href="/use-cases/operations"
+  />
+  <FeatureCard
+    eyebrow="Event"
+    title="Run when something happens"
+    description="A connected system can hand Valet work after a form, message, issue, or similar update."
+    href="/product/tools"
+  />
+  <FeatureCard
+    eyebrow="Approval"
+    title="Pause for review"
+    description="Sensitive steps wait for a person before Valet continues."
+    href="/product/approvals"
+  />
+</div>
+
+## A simple example
+
+```text
+Workflow: Weekly customer follow-up
+
+Start: every Friday morning
+
+Instructions:
+- Review open customer issues in Linear.
+- Find accounts with stale follow-up.
+- Draft a short update for each account.
+- Ask for approval before sending anything externally.
+- Post a summary in Slack when finished.
+```
+
+## Improve the workflow
+
+After a few runs, review:
+
+- Which steps were unclear.
+- Which approvals were useful or noisy.
+- Which connected tools were missing.
+- Whether the output was easy to use.
+- Whether the workflow should be split into smaller workflows.

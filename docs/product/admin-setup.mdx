@@ -1,52 +1,55 @@
 ---
 title: Admin Setup
-description: The core organization-level decisions admins make before teams use Valet.
+description: Prepare Valet for a team by setting access, tools, approvals, channels, skills, and workflows.
 ---
 
-# Admin Setup
-
-Admins make the decisions that let Valet work safely for a team: who can join, which tools are connected, where messages can route, and which actions require approval.
+Admins prepare Valet so a team can use it safely.
 
 ## Setup checklist
 
 <Steps>
-  <Step title="Configure access">
-    Decide who can sign in, which domains or invites are allowed, and who should have admin privileges.
+  <Step title="Choose who can join">
+    Decide which teammates can use Valet and who should be an admin.
   </Step>
-  <Step title="Connect integrations">
-    Enable the systems Valet should use, such as GitHub, Slack, Google Workspace, Linear, Notion, Stripe, or custom MCP services.
+  <Step title="Connect the first tools">
+    Start with the systems needed for the team's first real use case, such as Slack, GitHub, Linear, Gmail, Google Workspace, or Notion.
   </Step>
-  <Step title="Set approval defaults">
-    Decide which services, actions, or risk levels can run automatically, which require approval, and which are denied.
+  <Step title="Set approval rules">
+    Decide which actions Valet can do on its own and which actions should ask first.
   </Step>
   <Step title="Choose channels">
-    Decide where users can talk to Valet and which surfaces can route into personal or organization context.
+    Decide where people can talk to Valet and where Valet should send updates.
   </Step>
-  <Step title="Define shared behavior">
-    Create shared personas, skills, workflows, and memory guidance for recurring team work.
+  <Step title="Create shared skills and workflows">
+    Capture repeated work as skills and workflows so the team does not reinvent the same process.
   </Step>
 </Steps>
 
-## Recommended starting point
+## Start narrow
 
-Start narrow:
+For the first rollout:
 
-- Enable one or two integrations.
+- Enable one or two tools.
 - Require approval for write actions.
-- Use the web app for early sessions.
-- Add Slack or Telegram once routing rules are clear.
-- Create one shared workflow only after the team has repeated the work manually.
+- Start in the web app.
+- Add Slack or Telegram once the team knows where updates should go.
+- Create one workflow only after the team has done the work manually.
 
-## What to revisit
+## Review after real use
 
-After teams start using Valet, review:
+After a few tasks, review:
 
-- Which approvals are noisy.
-- Which actions should be blocked.
-- Which workflows are worth standardizing.
-- Which memories or personas should be shared.
-- Which channels need tighter routing rules.
+- Which approvals were helpful.
+- Which approvals were noisy.
+- Which tools Valet was missing.
+- Which repeated tasks should become workflows.
+- Which instructions should become shared skills.
+- Which channels need tighter rules.
 
-## For engineers
+## Useful next pages
 
-Implementation details live in [Auth and access internals](/engineering/auth-access-internals), [Policy engine](/engineering/policy-engine), and [Plugin system](/engineering/plugin-system).
+- [Connect tools](/product/tools)
+- [Approvals](/product/approvals)
+- [Channels](/product/channels)
+- [Create skills and personas](/product/skills-and-personas)
+- [Create workflows](/product/workflows)

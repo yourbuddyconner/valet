@@ -1,56 +1,123 @@
 ---
 title: What is Valet?
-description: Valet is an AI coworker with its own hosted workspace, persistent memory, connected tools, workflows, channels, and approval-aware execution.
+description: Valet is an AI coworker with its own workspace, memory, connected tools, workflows, channels, and approvals.
 ---
 
-# What is Valet?
+import { FeatureCard } from '/snippets/feature-card.mdx';
+import { MascotNote } from '/snippets/mascot-note.mdx';
+import { UseCaseCard } from '/snippets/use-case-card.mdx';
 
 Valet is an AI coworker with its own workspace. You can ask it to take on work, connect it to the tools your team already uses, and let it continue in the background while you stay in control.
 
-Valet is not just a chatbot. It has a place to work, context it can remember, tools it can use, and rules that decide when it must ask before acting.
+<MascotNote
+  title="Welcome"
+  image="/images/characters/wave.png"
+  alt="Valet waving hello"
+>
+  Valet should feel like a capable coworker: friendly at the edges, serious about the work, and careful when an action needs approval.
+</MascotNote>
 
-<Frame caption="Valet should feel competent, friendly, and ready to guide the next step.">
-  <img src="/images/characters/wave.png" alt="Valet mascot waving hello" />
-</Frame>
+Valet is not just a chatbot. It has a place to work, useful details it can remember, tools it can use, and rules that decide when it must ask before acting.
 
 ## What Valet can do
 
-Valet can help with work that crosses tools, messages, and follow-up steps:
+<div className="valet-doc-grid">
+  <FeatureCard
+    eyebrow="Memory"
+    title="Answer with memory"
+    description="Use remembered preferences, projects, and procedures from earlier work."
+    href="/product/memory"
+  />
+  <FeatureCard
+    eyebrow="Work"
+    title="Run focused tasks"
+    description="Keep the conversation, progress, approvals, drafts, and result together."
+    href="/product/tasks"
+  />
+  <FeatureCard
+    eyebrow="Automation"
+    title="Use workflows"
+    description="Run repeatable work manually, from schedules, or from external events."
+    href="/product/workflows"
+  />
+  <FeatureCard
+    eyebrow="Control"
+    title="Ask before sensitive actions"
+    description="Route writes, sends, deletes, and other risky work through approval."
+    href="/product/approvals"
+  />
+</div>
 
-- Answer questions with durable context from earlier work.
-- Start and manage tasks from the web, Slack, Telegram, schedules, or webhooks.
-- Use connected tools such as GitHub, Linear, Gmail, Google Workspace, Notion, Slack, Stripe, Sentry, and other integrations.
-- Run repeatable workflows with human approval points.
-- Remember preferences, procedures, and recurring context.
-- Report progress back in the channel where the work started.
-
-For engineering teams, Valet can also work inside a development workspace. Those details live in the [Engineering reference](/architecture).
+For engineering teams, Valet can also work inside a development workspace. Those details live in the [Engineering](/architecture) tab.
 
 ## The product model
 
-Valet has a few concepts that matter to every reader:
-
-| Concept | What it means |
-| --- | --- |
-| Workspace | The hosted place where Valet does the work for a task. |
-| Task session | A focused unit of work with its own conversation, context, participants, files, approvals, and activity. |
-| Orchestrator | A persistent coordinator that remembers context and routes work over time. |
-| Workflow | A repeatable process that can run manually, on a schedule, or from an external event. |
-| Integration | A connected tool or system Valet can use when policy allows it. |
-| Approval | A human decision point before Valet performs sensitive actions. |
+<div className="valet-doc-grid">
+  <FeatureCard
+    eyebrow="Workspace"
+    title="A place to work"
+    description="The hosted place where Valet does the work for a task."
+    href="/product/workspaces"
+  />
+  <FeatureCard
+    eyebrow="Session"
+    title="A focused work thread"
+    description="One task with its own conversation, details, participants, approvals, and activity."
+    href="/product/tasks"
+  />
+  <FeatureCard
+    eyebrow="Memory"
+    title="Useful memory"
+    description="Preferences, procedures, and notes Valet can use in future work."
+    href="/product/memory"
+  />
+  <FeatureCard
+    eyebrow="Integration"
+    title="A connected system"
+    description="A tool Valet can use when it is connected and allowed."
+    href="/product/tools"
+  />
+</div>
 
 ## Who uses Valet
 
-Different teams can use the same product model in different ways:
-
-- **Operators** can ask Valet to run checks, triage messages, prepare summaries, and handle internal handoffs.
-- **Engineering teams** can delegate repository work, PR review, issue triage, and QA loops.
-- **Customer-facing teams** can gather account context, draft follow-ups, and create tasks across connected systems.
-- **Admins** can configure access, integrations, policies, channels, and approval defaults.
+<div className="valet-doc-grid">
+  <UseCaseCard
+    title="Operators"
+    description="Run checks, triage messages, prepare summaries, and handle internal handoffs."
+    href="/use-cases/operations"
+  />
+  <UseCaseCard
+    title="Engineering teams"
+    description="Delegate repository work, PR review, issue triage, QA loops, and release follow-up."
+    href="/use-cases/software-engineering"
+  />
+  <UseCaseCard
+    title="Customer-facing teams"
+    description="Gather account details, draft follow-ups, and create tasks across connected systems."
+    href="/use-cases/customer-workflows"
+  />
+  <UseCaseCard
+    title="Admins"
+    description="Set access, connected tools, approvals, channels, workflows, and team defaults."
+    href="/product/admin-setup"
+  />
+</div>
 
 ## Where to go next
 
-- [How Valet works](/product/how-valet-works) explains the flow from request to result.
-- [Tasks and sessions](/product/sessions) explains how work is organized.
-- [Approvals and controls](/product/policies-and-approvals) explains how Valet stays under human control.
-- [Integrations](/product/integrations) explains the tools Valet can reach.
+<div className="valet-doc-grid">
+  <FeatureCard
+    eyebrow="Start"
+    title="Quickstart"
+    description="Get to a first useful Valet task."
+    href="/product/quickstart"
+    mark
+  />
+  <FeatureCard
+    eyebrow="Concept"
+    title="How Valet works"
+    description="Follow the flow from request to workspace, tools, approval, and result."
+    href="/product/how-valet-works"
+  />
+</div>

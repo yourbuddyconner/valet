@@ -1,0 +1,56 @@
+---
+title: Approvals
+description: Control when Valet can act automatically and when it must ask first.
+---
+
+Approvals keep people in control. Valet can gather information and prepare work, but important actions can pause until someone reviews them.
+
+## When Valet should ask
+
+Require approval before actions such as:
+
+- Sending an external message.
+- Editing or deleting a record.
+- Changing customer-facing information.
+- Merging or posting code changes.
+- Running a risky operational action.
+- Using a tool that exposes sensitive information.
+
+## Approval choices
+
+When Valet asks, you may be able to:
+
+| Choice | Meaning |
+| --- | --- |
+| Allow | Run this one action. |
+| Allow for this task | Allow the same action while this task continues. |
+| Always allow | Remember this exact action as safe. |
+| Cancel | Do not run the action. |
+
+The options you see depend on your organization's settings.
+
+## What admins decide
+
+Admins can decide:
+
+- Which tools Valet can use.
+- Which actions always need approval.
+- Which actions should never run.
+- Whether users can create their own approval preferences.
+- Where approval prompts can appear.
+
+## How to tune approvals
+
+Start stricter than you think you need. After teams use Valet for real work, review:
+
+- Which approvals were helpful.
+- Which approvals were noisy.
+- Which actions should always be blocked.
+- Which low-risk actions can run automatically.
+
+## Good approval habits
+
+- Read the action before approving it.
+- Use "always allow" only for narrow, repeatable actions.
+- Cancel when Valet lacks the information it needs.
+- Ask Valet to explain what it is about to do if the prompt is unclear.

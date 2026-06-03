@@ -19,7 +19,7 @@ Current pose names:
 - `no.png`
 - `laptop.png`
 - `laying.png`
-- `sandboxes.png`
+- `workspace.png`
 - `child-sessions.png`
 - `personas.png`
 
