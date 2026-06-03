@@ -12,9 +12,13 @@ export const authMiddleware: MiddlewareHandler<{ Bindings: Env; Variables: Varia
   c,
   next
 ) => {
-  // Runner WebSocket connections authenticate via token validated by the DO itself
+  // Runner WebSocket connections and large attachment fetches authenticate via
+  // tokens validated by the DO itself.
   const url = new URL(c.req.url);
   if (url.searchParams.get('role') === 'runner' && url.pathname.endsWith('/ws')) {
+    return next();
+  }
+  if (/^\/api\/sessions\/[^/]+\/runner-attachment$/.test(url.pathname)) {
     return next();
   }
 

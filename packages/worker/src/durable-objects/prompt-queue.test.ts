@@ -290,6 +290,19 @@ describe('PromptQueue', () => {
       expect(entry.replyChannelId).toBe('C123:ts');
       expect(entry.attachments).toBe('[{"type":"file"}]');
     });
+
+    it('retrieves stored attachments by prompt id', () => {
+      const attachments = [{ type: 'file', mime: 'application/pdf', url: 'data:application/pdf;base64,abc' }];
+      pq.enqueue({
+        id: 'p1',
+        content: '',
+        attachments: JSON.stringify(attachments),
+        status: 'processing',
+      });
+
+      expect(pq.getAttachmentsById('p1')).toEqual(attachments);
+      expect(pq.getAttachmentsById('missing')).toBeNull();
+    });
   });
 
   describe('markCompleted', () => {

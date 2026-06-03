@@ -265,6 +265,37 @@ describe('sessionsRouter GET /:id/messages', () => {
   });
 });
 
+describe('sessionsRouter GET /:id/runner-attachment', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('proxies runner attachment fetches to the DO with the token query intact', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      Response.json({ type: 'file', mime: 'application/pdf', url: 'data:application/pdf;base64,abc' }),
+    );
+    const idFromName = vi.fn((name: string) => `do:${name}`);
+
+    const app = buildApp();
+    const res = await app.fetch(
+      new Request('http://localhost/session-1/runner-attachment?messageId=msg-1&index=0&token=runner-token'),
+      {
+        DB: {},
+        SESSIONS: {
+          idFromName,
+          get: vi.fn(() => ({ fetch: fetchMock })),
+        },
+      } as any,
+    );
+
+    expect(res.status).toBe(200);
+    expect(idFromName).toHaveBeenCalledWith('session-1');
+    const forwarded = fetchMock.mock.calls[0][0] as Request;
+    expect(forwarded.url).toBe('http://do/prompt-attachment?messageId=msg-1&index=0&token=runner-token');
+    expect(forwarded.method).toBe('GET');
+  });
+});
+
 describe('sessionsRouter orchestrator alias routing', () => {
   beforeEach(() => {
     vi.clearAllMocks();
