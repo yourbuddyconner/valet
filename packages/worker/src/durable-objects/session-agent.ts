@@ -48,6 +48,7 @@ import {
   attachmentPartsForDisplay,
   attachmentsForClientState,
   parseQueuedPromptAttachments,
+  parsePromptAttachmentBlobUrl,
   SUPPORTED_FILE_TYPES_DESCRIPTION,
 } from '../lib/utils/prompt-validation.js';
 import { parseQueuedWorkflowPayload, deriveRuntimeStates } from '../lib/utils/runtime.js';
@@ -56,6 +57,7 @@ import { parseQueuedWorkflowPayload, deriveRuntimeStates } from '../lib/utils/ru
 
 const MAX_CHANNEL_FOLLOWUP_REMINDERS = 3;
 const PARENT_IDLE_DEBOUNCE_MS = 10_000;
+const PROMPT_ATTACHMENT_R2_PREFIX = 'prompt-attachments';
 export const ACTION_APPROVAL_EXPIRY_MS = 240 * 1000;
 
 function promptAttachmentSummary(attachments: PromptAttachment[] | undefined): string {
@@ -2138,7 +2140,7 @@ export class SessionAgentDO {
     });
   }
 
-  private handlePromptAttachmentEndpoint(url: URL): Response {
+  private async handlePromptAttachmentEndpoint(url: URL): Promise<Response> {
     const token = url.searchParams.get('token');
     if (!token || token !== this.runnerLink.token) {
       console.warn(
@@ -2146,6 +2148,48 @@ export class SessionAgentDO {
         `expectedPresent=${this.runnerLink.token ? 'yes' : 'no'}`,
       );
       return new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401 });
+    }
+
+    const blobSessionId = url.searchParams.get('blobSessionId');
+    const blobId = url.searchParams.get('blobId');
+    if (blobSessionId || blobId) {
+      const expectedSessionId = this.sessionState.sessionId;
+      const blobUrl = blobSessionId && blobId
+        ? `valet-prompt-blob://attachment/${encodeURIComponent(blobSessionId)}/${encodeURIComponent(blobId)}`
+        : '';
+      const parsedBlob = blobUrl ? parsePromptAttachmentBlobUrl(blobUrl) : null;
+      if (!parsedBlob) {
+        console.warn(
+          `[SessionAgentDO] prompt-attachment invalid blob reference: ` +
+          `blobSessionId=${blobSessionId || 'none'} blobId=${blobId || 'none'}`,
+        );
+        return new Response(JSON.stringify({ error: 'Missing or invalid attachment blob reference' }), { status: 400 });
+      }
+      if (parsedBlob.sessionId !== expectedSessionId) {
+        console.warn(
+          `[SessionAgentDO] prompt-attachment blob session mismatch: ` +
+          `requested=${parsedBlob.sessionId} expected=${expectedSessionId || 'none'}`,
+        );
+        return new Response(JSON.stringify({ error: 'Attachment not found' }), { status: 404 });
+      }
+
+      const key = `${PROMPT_ATTACHMENT_R2_PREFIX}/${parsedBlob.sessionId}/${parsedBlob.blobId}`;
+      const object = await this.env.STORAGE.get(key);
+      if (!object) {
+        console.warn(`[SessionAgentDO] prompt-attachment blob not found: key=${key}`);
+        return new Response(JSON.stringify({ error: 'Attachment not found' }), { status: 404 });
+      }
+
+      const headers = new Headers();
+      object.writeHttpMetadata(headers);
+      if (!headers.has('content-type')) {
+        headers.set('content-type', object.customMetadata?.mime || 'application/octet-stream');
+      }
+      console.log(
+        `[SessionAgentDO] prompt-attachment returning blob: session=${parsedBlob.sessionId} ` +
+        `blobId=${parsedBlob.blobId} size=${object.size ?? 'unknown'}`,
+      );
+      return new Response(object.body, { headers });
     }
 
     const messageId = url.searchParams.get('messageId');

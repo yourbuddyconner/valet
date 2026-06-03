@@ -4,6 +4,7 @@ export const MAX_PROMPT_ATTACHMENTS = 8;
 export const MAX_PROMPT_ATTACHMENT_URL_LENGTH = 90_000_000;
 /** Total base64 across all attachments. */
 export const MAX_TOTAL_ATTACHMENT_BYTES = 90_000_000;
+export const PROMPT_ATTACHMENT_BLOB_URL_PREFIX = 'valet-prompt-blob://attachment/';
 
 /** MIME type prefixes that are accepted for prompt attachments. */
 const SUPPORTED_MIME_PREFIXES = ['image/', 'audio/', 'text/'] as const;
@@ -48,7 +49,8 @@ const MAGIC_SIGNATURES: MagicSignature[] = [
 
 // ─── Extension → MIME resolution for octet-stream / unknown types ──────────
 
-const TEXT_FILE_EXTENSIONS: Record<string, string> = {
+const FILENAME_MIME_EXTENSIONS: Record<string, string> = {
+  pdf: 'application/pdf',
   txt: 'text/plain', md: 'text/markdown', csv: 'text/csv',
   log: 'text/plain', env: 'text/plain', cfg: 'text/plain',
   ini: 'text/plain', conf: 'text/plain',
@@ -83,10 +85,10 @@ function resolveTextMimeFromFilename(filename: string | undefined): string | nul
   const dot = filename.lastIndexOf('.');
   if (dot === -1) {
     const lower = filename.toLowerCase();
-    return TEXT_FILE_EXTENSIONS[lower] ?? null;
+    return FILENAME_MIME_EXTENSIONS[lower] ?? null;
   }
   const ext = filename.slice(dot + 1).toLowerCase();
-  return TEXT_FILE_EXTENSIONS[ext] ?? null;
+  return FILENAME_MIME_EXTENSIONS[ext] ?? null;
 }
 
 /**
@@ -140,6 +142,26 @@ function isSupportedMime(mime: string): boolean {
 
 // ─── Public API ─────────────────────────────────────────────────────────────
 
+export function buildPromptAttachmentBlobUrl(sessionId: string, blobId: string): string {
+  return `${PROMPT_ATTACHMENT_BLOB_URL_PREFIX}${encodeURIComponent(sessionId)}/${encodeURIComponent(blobId)}`;
+}
+
+export function parsePromptAttachmentBlobUrl(raw: string): { sessionId: string; blobId: string } | null {
+  if (!raw.startsWith(PROMPT_ATTACHMENT_BLOB_URL_PREFIX)) return null;
+  try {
+    const parsed = new URL(raw);
+    if (parsed.protocol !== 'valet-prompt-blob:' || parsed.hostname !== 'attachment') return null;
+    const parts = parsed.pathname.split('/').filter((part) => part.length > 0);
+    if (parts.length !== 2) return null;
+    const sessionId = decodeURIComponent(parts[0]);
+    const blobId = decodeURIComponent(parts[1]);
+    if (!sessionId || !blobId) return null;
+    return { sessionId, blobId };
+  } catch {
+    return null;
+  }
+}
+
 export function parseBase64DataUrl(url: string): string | null {
   const commaIndex = url.indexOf(',');
   if (commaIndex === -1) return null;
@@ -171,13 +193,14 @@ export function sanitizePromptAttachments(input: unknown): SanitizeResult {
 
     let mime = record.mime.trim().toLowerCase();
     const url = record.url.trim();
-    if (!url.startsWith('data:') || !url.includes(';base64,')) continue;
+    const blobRef = parsePromptAttachmentBlobUrl(url);
+    if (!blobRef && (!url.startsWith('data:') || !url.includes(';base64,'))) continue;
     if (url.length > MAX_PROMPT_ATTACHMENT_URL_LENGTH) continue;
 
     // Sniff actual MIME from file bytes — overrides declared MIME if detected
     let mimeWasCorrected = false;
-    const base64Data = parseBase64DataUrl(url);
-    if (base64Data) {
+    const base64Data = blobRef ? null : parseBase64DataUrl(url);
+    if (!blobRef && base64Data) {
       const detected = detectMimeFromBytes(base64Data);
       if (detected && detected !== mime) {
         console.log(`[prompt-validation] MIME corrected: declared=${mime} actual=${detected}`);
@@ -206,7 +229,7 @@ export function sanitizePromptAttachments(input: unknown): SanitizeResult {
     }
 
     const filename = typeof record.filename === 'string' ? record.filename.slice(0, 255) : undefined;
-    const finalUrl = mimeWasCorrected ? `data:${mime};base64,${base64Data}` : url;
+    const finalUrl = !blobRef && mimeWasCorrected && base64Data ? `data:${mime};base64,${base64Data}` : url;
     result.push({ type: 'file', mime, url: finalUrl, filename });
     if (result.length >= MAX_PROMPT_ATTACHMENTS) break;
   }
@@ -263,11 +286,34 @@ export function attachmentPartsForMessage(attachments: PromptAttachment[]): Arra
 }
 
 export function attachmentPartsForDisplay(attachments: PromptAttachment[]): Array<Record<string, unknown>> {
-  return attachmentPartsForMessage(attachments).map((part) => {
-    if (part.type !== 'file') return part;
-    const { data: _data, ...displayPart } = part;
-    return displayPart;
-  });
+  const parts: Array<Record<string, unknown>> = [];
+  for (const attachment of attachments) {
+    const data = parseBase64DataUrl(attachment.url);
+    if (data && attachment.mime.startsWith('image/')) {
+      parts.push({
+        type: 'image',
+        data,
+        mimeType: attachment.mime,
+        ...(attachment.filename ? { filename: attachment.filename } : {}),
+      });
+      continue;
+    }
+    if (data && attachment.mime.startsWith('audio/')) {
+      parts.push({
+        type: 'audio',
+        data,
+        mimeType: attachment.mime,
+        ...(attachment.filename ? { filename: attachment.filename } : {}),
+      });
+      continue;
+    }
+    parts.push({
+      type: 'file',
+      mimeType: attachment.mime,
+      ...(attachment.filename ? { filename: attachment.filename } : {}),
+    });
+  }
+  return parts;
 }
 
 export function attachmentsForClientState(attachments: PromptAttachment[]): Array<Record<string, unknown>> {

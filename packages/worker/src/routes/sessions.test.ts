@@ -296,6 +296,69 @@ describe('sessionsRouter GET /:id/runner-attachment', () => {
   });
 });
 
+describe('sessionsRouter POST /:id/prompt', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    getCurrentOrchestratorSessionMock.mockResolvedValue(null);
+    assertSessionAccessMock.mockResolvedValue({ id: 'session-1', userId: 'user-1' });
+  });
+
+  it('offloads oversized data URL attachments to R2 before forwarding to the DO', async () => {
+    const putMock = vi.fn().mockResolvedValue(undefined);
+    const fetchMock = vi.fn().mockResolvedValue(Response.json({ success: true }));
+    const idFromName = vi.fn((name: string) => `do:${name}`);
+    const largePdf = `data:application/pdf;base64,${'a'.repeat(900_000)}`;
+
+    const app = buildApp();
+    const res = await app.fetch(
+      new Request('http://localhost/session-1/prompt', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          content: 'please inspect this',
+          attachments: [
+            { type: 'file', mime: 'application/pdf', url: largePdf, filename: 'large.pdf' },
+          ],
+        }),
+      }),
+      {
+        DB: {},
+        STORAGE: { put: putMock },
+        SESSIONS: {
+          idFromName,
+          get: vi.fn(() => ({ fetch: fetchMock })),
+        },
+      } as any,
+    );
+
+    expect(res.status).toBe(200);
+    expect(putMock).toHaveBeenCalledTimes(1);
+    const [r2Key, storedBody, putOptions] = putMock.mock.calls[0];
+    expect(r2Key).toMatch(/^prompt-attachments\/session-1\//);
+    expect(storedBody).toBeInstanceOf(Uint8Array);
+    expect(putOptions).toMatchObject({
+      httpMetadata: { contentType: 'application/pdf' },
+      customMetadata: {
+        sessionId: 'session-1',
+        filename: 'large.pdf',
+        mime: 'application/pdf',
+      },
+    });
+
+    const forwarded = fetchMock.mock.calls[0][0] as Request;
+    const forwardedBody = await forwarded.json() as {
+      attachments: Array<{ mime: string; url: string; filename?: string }>;
+    };
+    expect(forwardedBody.attachments[0]).toEqual({
+      type: 'file',
+      mime: 'application/pdf',
+      url: expect.stringMatching(/^valet-prompt-blob:\/\/attachment\/session-1\/[0-9a-f-]+$/),
+      filename: 'large.pdf',
+    });
+    expect(JSON.stringify(forwardedBody)).not.toContain('a'.repeat(100));
+  });
+});
+
 describe('sessionsRouter orchestrator alias routing', () => {
   beforeEach(() => {
     vi.clearAllMocks();

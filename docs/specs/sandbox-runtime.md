@@ -320,7 +320,9 @@ Thread channels (`"thread:<threadId>"`) additionally reuse the persisted `sessio
 
 **Prompt flow:**
 1. Receive prompt from DO (messageId, content, model, author, attachments, channel context).
-2. Resolve any `valet-prompt-attachment://<messageId>/<index>` attachment references by fetching `/api/sessions/:id/runner-attachment` with the runner token. The DO uses this fallback when the prompt payload would exceed the safe DO→Runner WebSocket frame size.
+2. Resolve attachment references by fetching `/api/sessions/:id/runner-attachment` with the runner token:
+   - `valet-prompt-blob://attachment/<sessionId>/<blobId>` streams a large HTTP-uploaded prompt attachment from R2. The Worker creates these refs before forwarding `/prompt` to the DO so `prompt_queue` never stores multi-MB base64 strings.
+   - `valet-prompt-attachment://<messageId>/<index>` fetches an attachment from the DO prompt queue. The DO uses this fallback when the prompt payload would exceed the safe DO→Runner WebSocket frame size but is still small enough to remain inline in DO storage.
 3. Finalize any pending response on the channel.
 4. Ensure channel has an OpenCode session (create via `POST /session` if needed).
 5. Build model failover chain from `modelPreferences`.
@@ -356,7 +358,7 @@ Thread channels (`"thread:<threadId>"`) additionally reuse the persisted `sessio
 
 | Type | Purpose | Key Fields |
 |------|---------|-----------|
-| `prompt` | New user prompt | `messageId`, `content`, `model?`, `attachments?`, `modelPreferences?`, `channelType?`, `channelId?`, `opencodeSessionId?`, `threadId?`, `continuationContext?`, author fields. Large attachment `url` values may be `valet-prompt-attachment://<messageId>/<index>` references instead of data URLs. |
+| `prompt` | New user prompt | `messageId`, `content`, `model?`, `attachments?`, `modelPreferences?`, `channelType?`, `channelId?`, `opencodeSessionId?`, `threadId?`, `continuationContext?`, author fields. Large attachment `url` values may be `valet-prompt-blob://attachment/<sessionId>/<blobId>` or `valet-prompt-attachment://<messageId>/<index>` references instead of data URLs. |
 | `answer` | Answer to question | `questionId`, `answer` |
 | `stop` | Shutdown signal | — |
 | `abort` | Cancel current operation | `channelType?`, `channelId?` |
