@@ -7,6 +7,8 @@ description: Technical reference for Valet plugin packages, actions, channels, s
 
 Valet uses a unified plugin system. Plugins can provide actions, channel transports, skills, personas, tools, or a combination of those capabilities.
 
+The current implementation is package-based: every shipped plugin lives under `packages/plugin-*` with a `plugin.yaml` manifest. Code capabilities are compiled into the Worker through generated registries. Content capabilities are embedded into a generated content registry, synced to D1, then sent to the Runner over the session WebSocket.
+
 ## Capability types
 
 | Capability | Location | Runtime |
@@ -15,9 +17,400 @@ Valet uses a unified plugin system. Plugins can provide actions, channel transpo
 | Channels | `src/channels/` | Compiled into the Worker for inbound/outbound transport. |
 | Skills | `skills/*.md` | Synced to persisted storage and delivered to sandboxes. |
 | Personas | `personas/*.md` | Synced and used when building persona context. |
-| Tools | `tools/*.ts` | Synced and delivered as sandbox-local tools. |
+| Tools | `tools/*.ts`, `tools/*.json` | Synced and delivered as sandbox-local OpenCode plugins/tools. |
 
 Code plugins need package exports and registry generation. Content-only plugins need a manifest and content files.
+
+## Package shape
+
+Every plugin starts with `plugin.yaml`:
+
+```yaml
+name: acme
+version: 0.0.1
+description: Acme integration for reading and updating widgets
+icon: "\U0001F527"
+```
+
+The generator currently parses top-level scalar keys only. The supported manifest fields used by the Worker are:
+
+| Field | Purpose |
+| --- | --- |
+| `name` | Plugin name in `org_plugins`; hyphens normalize to underscores for service names in some DB helpers. |
+| `version` | Synced plugin version. Defaults to `0.0.1` when omitted. |
+| `description` | Admin/catalog description. |
+| `icon` | Admin/catalog icon. Unicode escapes such as `\U0001F527` are supported. |
+| `actionType` | UI hint. MCP-backed plugins commonly set `actionType: mcp`. |
+| `authRequired` | Defaults to true. Set `authRequired: false` for no-auth plugins such as public documentation MCPs. |
+| `enabled` | Set `enabled: false` to skip the plugin entirely during generation. |
+
+Code plugins also need `package.json` and `tsconfig.json`. The Worker imports code plugins by package export, so `package.json` must expose `./actions` and/or `./channels`:
+
+```json
+{
+  "name": "@valet/plugin-acme",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    "./actions": "./src/actions/index.ts",
+    "./channels": "./src/channels/index.ts"
+  },
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@valet/sdk": "workspace:*",
+    "zod": "^3.22.4"
+  },
+  "devDependencies": {
+    "typescript": "^5.3.3",
+    "vitest": "^4.1.8"
+  }
+}
+```
+
+Use the same TypeScript project shape as the existing packages:
+
+```json
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "outDir": "./dist",
+    "rootDir": "./src",
+    "types": []
+  },
+  "include": ["src/**/*"],
+  "references": [{ "path": "../sdk" }]
+}
+```
+
+When adding a code plugin, also add it to:
+
+- root `tsconfig.json` references
+- `packages/worker/tsconfig.json` references
+- `packages/worker/package.json` dependencies as `"@valet/plugin-acme": "workspace:*"`
+
+Content-only plugins do not need `package.json` or `tsconfig.json`.
+
+## Implement an action plugin
+
+Action plugins export a default `IntegrationPackage` from `src/actions/index.ts`. Direct API-backed plugins implement `IntegrationProvider` and `ActionSource` themselves. GitHub, Gmail, Slack actions, Google Calendar, and Google Workspace follow this pattern.
+
+```text
+packages/plugin-acme/
+  plugin.yaml
+  package.json
+  tsconfig.json
+  src/actions/
+    index.ts
+    provider.ts
+    actions.ts
+```
+
+`src/actions/provider.ts`:
+
+```ts
+import type { IntegrationProvider, IntegrationCredentials, OAuthConfig } from '@valet/sdk';
+
+const ACME_SCOPES = ['widgets:read', 'widgets:write'];
+
+export const acmeProvider: IntegrationProvider = {
+  service: 'acme',
+  displayName: 'Acme',
+  authType: 'oauth2',
+  supportedEntities: ['widgets'],
+  oauthScopes: ACME_SCOPES,
+  oauthEnvKeys: { clientId: 'ACME_CLIENT_ID', clientSecret: 'ACME_CLIENT_SECRET' },
+
+  validateCredentials(credentials: IntegrationCredentials): boolean {
+    return !!credentials.access_token;
+  },
+
+  async testConnection(credentials: IntegrationCredentials): Promise<boolean> {
+    const res = await fetch('https://api.acme.example/v1/me', {
+      headers: { Authorization: `Bearer ${credentials.access_token}` },
+    });
+    return res.ok;
+  },
+
+  getOAuthUrl(oauth: OAuthConfig, redirectUri: string, state: string): string {
+    const params = new URLSearchParams({
+      client_id: oauth.clientId,
+      redirect_uri: redirectUri,
+      response_type: 'code',
+      scope: ACME_SCOPES.join(' '),
+      state,
+    });
+    return `https://acme.example/oauth/authorize?${params}`;
+  },
+
+  async exchangeOAuthCode(
+    oauth: OAuthConfig,
+    code: string,
+    redirectUri: string,
+  ): Promise<IntegrationCredentials> {
+    const res = await fetch('https://acme.example/oauth/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        client_id: oauth.clientId,
+        client_secret: oauth.clientSecret,
+        code,
+        grant_type: 'authorization_code',
+        redirect_uri: redirectUri,
+      }),
+    });
+    if (!res.ok) throw new Error('Failed to exchange OAuth code');
+    return await res.json() as IntegrationCredentials;
+  },
+};
+```
+
+`src/actions/actions.ts`:
+
+```ts
+import { z } from 'zod';
+import type { ActionDefinition, ActionSource, ActionContext, ActionResult } from '@valet/sdk';
+
+const getWidget: ActionDefinition = {
+  id: 'acme.get_widget',
+  name: 'Get Widget',
+  description: 'Get one Acme widget by ID',
+  riskLevel: 'low',
+  params: z.object({
+    widgetId: z.string().describe('Acme widget ID'),
+  }),
+};
+
+const allActions: ActionDefinition[] = [getWidget];
+
+async function executeAction(
+  actionId: string,
+  params: unknown,
+  ctx: ActionContext,
+): Promise<ActionResult> {
+  switch (actionId) {
+    case 'acme.get_widget': {
+      const { widgetId } = getWidget.params.parse(params);
+      const res = await fetch(`https://api.acme.example/v1/widgets/${widgetId}`, {
+        headers: { Authorization: `Bearer ${ctx.credentials.access_token}` },
+      });
+      if (!res.ok) return { success: false, error: `Acme returned HTTP ${res.status}` };
+      return { success: true, data: await res.json() };
+    }
+    default:
+      return { success: false, error: `Unknown action: ${actionId}` };
+  }
+}
+
+export const acmeActions: ActionSource = {
+  listActions: () => allActions,
+  execute: executeAction,
+};
+```
+
+`src/actions/index.ts`:
+
+```ts
+import type { IntegrationPackage } from '@valet/sdk';
+import { acmeProvider } from './provider.js';
+import { acmeActions } from './actions.js';
+
+export { acmeProvider } from './provider.js';
+export { acmeActions } from './actions.js';
+
+const acmePackage: IntegrationPackage = {
+  name: '@valet/actions-acme',
+  version: '0.0.1',
+  service: 'acme',
+  provider: acmeProvider,
+  actions: acmeActions,
+};
+
+export default acmePackage;
+```
+
+Action IDs should be stable and service-prefixed (`service.action_name`). `params` should be a Zod schema unless the action source is MCP-backed and provides raw JSON Schema through `inputSchema`. Risk levels are `low`, `medium`, `high`, or `critical`; policy resolution uses these values during tool discovery and execution.
+
+Action packages may also export triggers. GitHub exposes `githubTriggers` and includes it in the package:
+
+```ts
+const githubPackage: IntegrationPackage = {
+  name: '@valet/actions-github',
+  version: '0.0.1',
+  service: 'github',
+  provider: githubProvider,
+  actions: githubActions,
+  triggers: githubTriggers,
+};
+```
+
+Triggers implement:
+
+```ts
+import type { TriggerSource, ParsedWebhookEvent } from '@valet/sdk';
+
+export const acmeTriggers: TriggerSource = {
+  service: 'acme',
+  listEventTypes: () => ['widget.created'],
+  async verifySignature(rawHeaders, rawBody, secret) {
+    return Boolean(rawHeaders['x-acme-signature'] && rawBody && secret);
+  },
+  parseWebhook(rawHeaders, rawBody): ParsedWebhookEvent {
+    return {
+      eventType: rawHeaders['x-acme-event'] ?? 'unknown',
+      payload: JSON.parse(rawBody),
+    };
+  },
+};
+```
+
+## Implement a channel plugin
+
+Channel plugins export a default `ChannelPackage` from `src/channels/index.ts`. Slack and Telegram are the current channel plugins.
+
+```text
+packages/plugin-acme-chat/
+  plugin.yaml
+  package.json
+  tsconfig.json
+  src/channels/
+    index.ts
+    provider.ts
+    transport.ts
+    format.ts
+```
+
+`src/channels/provider.ts` can reuse the integration provider contract. Telegram uses `authType: 'bot_token'`; Slack uses `authType: 'oauth2'`.
+
+```ts
+import type { IntegrationProvider, IntegrationCredentials } from '@valet/sdk';
+
+export const acmeChatProvider: IntegrationProvider = {
+  service: 'acme_chat',
+  displayName: 'Acme Chat',
+  authType: 'bot_token',
+  supportedEntities: [],
+
+  validateCredentials(credentials: IntegrationCredentials): boolean {
+    return !!credentials.bot_token;
+  },
+
+  async testConnection(credentials: IntegrationCredentials): Promise<boolean> {
+    const res = await fetch('https://chat.acme.example/api/me', {
+      headers: { Authorization: `Bearer ${credentials.bot_token}` },
+    });
+    return res.ok;
+  },
+};
+```
+
+`src/channels/transport.ts`:
+
+```ts
+import type {
+  ChannelContext,
+  ChannelTarget,
+  ChannelTransport,
+  InboundMessage,
+  OutboundMessage,
+  RoutingMetadata,
+  SendResult,
+} from '@valet/sdk';
+
+export class AcmeChatTransport implements ChannelTransport {
+  readonly channelType = 'acme_chat';
+
+  verifySignature(rawHeaders: Record<string, string>, _rawBody: string, secret?: string): boolean {
+    return !!secret && rawHeaders['x-acme-secret'] === secret;
+  }
+
+  async parseInbound(
+    _rawHeaders: Record<string, string>,
+    rawBody: string,
+    _routing: RoutingMetadata,
+  ): Promise<InboundMessage | null> {
+    const event = JSON.parse(rawBody) as {
+      channel_id?: string;
+      user_id?: string;
+      user_name?: string;
+      text?: string;
+      message_id?: string;
+    };
+    if (!event.channel_id || !event.user_id) return null;
+
+    return {
+      channelType: 'acme_chat',
+      channelId: event.channel_id,
+      senderId: event.user_id,
+      senderName: event.user_name ?? '',
+      text: event.text ?? '',
+      attachments: [],
+      messageId: event.message_id,
+    };
+  }
+
+  scopeKeyParts(message: InboundMessage, userId: string) {
+    return {
+      channelType: this.channelType,
+      channelId: `${userId}:${message.channelId}`,
+    };
+  }
+
+  formatMarkdown(markdown: string): string {
+    return markdown;
+  }
+
+  async sendMessage(
+    target: ChannelTarget,
+    message: OutboundMessage,
+    ctx: ChannelContext,
+  ): Promise<SendResult> {
+    const res = await fetch('https://chat.acme.example/api/messages', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${ctx.token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        channel_id: target.channelId,
+        text: message.text ?? message.markdown ?? '',
+      }),
+    });
+    if (!res.ok) return { success: false, error: `Acme Chat returned HTTP ${res.status}` };
+    const data = await res.json() as { message_id?: string };
+    return { success: true, messageId: data.message_id };
+  }
+}
+```
+
+`src/channels/index.ts`:
+
+```ts
+import type { ChannelPackage } from '@valet/sdk';
+import { AcmeChatTransport } from './transport.js';
+import { acmeChatProvider } from './provider.js';
+
+export { AcmeChatTransport } from './transport.js';
+export { acmeChatProvider } from './provider.js';
+
+const acmeChatChannelPackage: ChannelPackage = {
+  name: '@valet/channel-acme-chat',
+  version: '0.0.1',
+  channelType: 'acme_chat',
+  createTransport: () => new AcmeChatTransport(),
+  provider: acmeChatProvider,
+};
+
+export default acmeChatChannelPackage;
+```
+
+The channel registry instantiates one transport per installed channel package at Worker startup. Inbound webhook routes call `verifySignature`, `parseInbound`, and `scopeKeyParts`; outbound delivery uses `sendMessage` and optional methods such as `editMessage`, `deleteMessage`, `sendTypingIndicator`, `sendInteractivePrompt`, and `parseTarget`.
 
 ## Action model
 
@@ -25,25 +418,183 @@ Agents discover and call integration actions through a controlled action model. 
 
 Action plugins can implement first-party behavior directly in the Worker. MCP-backed plugins proxy remote MCP services and expose remote tools as Valet actions.
 
+## Implement an MCP-backed plugin
+
+MCP-backed plugins still export an `IntegrationPackage`, but their action source is usually just `new McpActionSource(...)`. Linear, Sentry, Cloudflare, Notion, Stripe, Socket, Grafana, Pylon, Typefully, DeepWiki, and Turnkey Docs follow this pattern.
+
+Authenticated MCP provider example:
+
+```yaml
+name: sentry
+version: 0.0.1
+description: Sentry integration for error tracking and monitoring
+icon: "\U0001F41B"
+actionType: mcp
+```
+
+```ts
+import type { IntegrationProvider, IntegrationCredentials } from '@valet/sdk';
+
+export const sentryProvider: IntegrationProvider = {
+  service: 'sentry',
+  displayName: 'Sentry',
+  authType: 'oauth2',
+  supportedEntities: ['issues', 'projects', 'events'],
+  oauthScopes: [],
+  mcpServerUrl: 'https://mcp.sentry.dev',
+
+  validateCredentials(credentials: IntegrationCredentials): boolean {
+    return !!credentials.access_token;
+  },
+
+  async testConnection(credentials: IntegrationCredentials): Promise<boolean> {
+    return !!credentials.access_token;
+  },
+};
+```
+
+```ts
+import { McpActionSource } from '@valet/sdk';
+
+export const sentryActions = new McpActionSource({
+  mcpUrl: 'https://mcp.sentry.dev/mcp',
+  serviceName: 'sentry',
+  defaultRiskLevel: 'medium',
+});
+```
+
+Public no-auth MCP provider example:
+
+```yaml
+name: turnkey-docs
+version: 0.0.1
+description: Turnkey documentation search and knowledge base
+icon: "\U0001F511"
+authRequired: false
+```
+
+```ts
+import type { IntegrationProvider, IntegrationCredentials } from '@valet/sdk';
+
+export const turnkeyDocsProvider: IntegrationProvider = {
+  service: 'turnkey_docs',
+  displayName: 'Turnkey Docs',
+  authType: 'none',
+  supportedEntities: ['documentation'],
+  oauthScopes: [],
+
+  validateCredentials(_credentials: IntegrationCredentials): boolean {
+    return true;
+  },
+
+  async testConnection(_credentials: IntegrationCredentials): Promise<boolean> {
+    return true;
+  },
+};
+```
+
+```ts
+import { McpActionSource } from '@valet/sdk';
+
+export const turnkeyDocsActions = new McpActionSource({
+  mcpUrl: 'https://docs.turnkey.com/mcp',
+  serviceName: 'turnkey_docs',
+  defaultRiskLevel: 'low',
+  noAuth: true,
+});
+```
+
+`McpActionSource` behavior:
+
+- `listActions(ctx)` calls MCP `tools/list`. Without credentials it returns `[]` unless `noAuth: true`.
+- Each MCP tool becomes an action ID of `${serviceName}.${tool.name}`.
+- MCP `inputSchema` is passed through as `ActionDefinition.inputSchema`; `params` is a permissive `z.record(z.unknown())`.
+- `readOnlyHint` maps to `low`; `destructiveHint` maps to `critical`; otherwise `defaultRiskLevel` is used.
+- `execute(actionId, params, ctx)` strips the service prefix and calls MCP `tools/call`.
+
+For OAuth-backed MCP services, set `provider.mcpServerUrl` to the server origin. The integrations route uses MCP OAuth dynamic client registration and PKCE instead of `oauthEnvKeys`.
+
+Custom MCP connectors are not package plugins. They are org-configured rows managed by `/api/admin/mcp-connectors`; the integration registry builds a runtime `McpActionSource` for them when no built-in package matches the requested service.
+
 ## Content model
 
 Skills and personas are Markdown instructions. They are indexed for search, attached to personas, and delivered into sandbox sessions as runtime context.
 
 Sandbox-local tools can expose helper behavior such as memory management, workflow management, session orchestration, mailbox operations, channel replies, browser screenshots, persona management, and tunnel registration.
 
+## Implement a content-only plugin
+
+Content-only plugins need only `plugin.yaml` and content files:
+
+```text
+packages/plugin-acme-help/
+  plugin.yaml
+  skills/acme-help.md
+  personas/acme-reviewer.md
+  tools/acme-tool.ts
+```
+
+Skill files are Markdown with OpenCode-style frontmatter:
+
+```md
+---
+name: acme-help
+description: Use when working with Acme widgets, releases, or support tickets.
+---
+
+# Acme Help
+
+Use the Acme integration actions before making raw API calls.
+```
+
+Persona files are Markdown and are delivered as persona instructions when active plugin artifacts are sent to a session. Tool files are copied to the Runner's OpenCode plugin directory. The memory compaction plugin is the current tool-only example:
+
+```ts
+export default async () => {
+  return {
+    "experimental.session.compacting": async (_input: unknown, output: { context: string[] }) => {
+      output.context.push("Compaction instructions...");
+    },
+  };
+};
+```
+
+Content sync flow:
+
+1. `make generate-registries` embeds `skills/*.md`, `personas/*.md`, and `tools/*.{ts,json}` into `packages/worker/src/plugins/content-registry.ts`.
+2. Worker cold-start middleware calls `syncPluginsOnce(c.env.DB)` in `ctx.waitUntil` for non-public routes.
+3. `syncPluginsOnce` upserts `org_plugins`.
+4. Skill artifacts are routed to the unified skills table through `upsertSkillFromSync`. The `browser`, `workflows`, and `sandbox-tunnels` plugins sync as `source: builtin`; other plugin skills sync as `source: plugin`.
+5. Persona and tool artifacts are upserted into `org_plugin_artifacts`.
+6. `SessionAgentDO.sendPluginContent()` loads active plugin artifacts and resolved persona/org-default skills, then sends a `plugin-content` Runner message.
+7. The Runner writes skills to `${OPENCODE_CONFIG_DIR}/skills`, personas to `/workspace/.valet/persona`, and tools to `${OPENCODE_CONFIG_DIR}/plugins/valet`.
+
 ## Registries
 
-The Worker uses generated registries:
+The Worker uses generated registries. Do not edit generated files by hand.
 
-- `packages/worker/src/integrations/packages.ts`
-- `packages/worker/src/channels/packages.ts`
-- `packages/worker/src/plugins/content-registry.ts`
+| Generated file | Source detection | Export |
+| --- | --- | --- |
+| `packages/worker/src/integrations/packages.ts` | `package.json` plus `src/actions/index.ts` | `installedIntegrations` |
+| `packages/worker/src/channels/packages.ts` | `package.json` plus `src/channels/index.ts` | `installedChannels` |
+| `packages/worker/src/plugins/content-registry.ts` | `plugin.yaml`, `skills/*.md`, `personas/*.md`, `tools/*.{ts,json}` | `pluginContentRegistry` |
+| `packages/worker/src/identity/packages.ts` | `src/identity.ts` exporting an `IdentityProvider` const | `installedIdentityProviders` |
+| `packages/worker/src/repos/packages.ts` | `src/repo.ts` exporting or re-exporting `RepoProvider` consts | `installedRepoProviders` |
 
-Run `make generate-registries` after adding or removing plugin content.
+The generator is `packages/worker/scripts/generate-plugin-registry.ts`. It scans `packages/plugin-*` directories, skips manifests with `enabled: false`, and writes all registry files.
 
-## MCP-backed plugins
+Run registry generation after adding, removing, or renaming plugin packages, exports, or content:
 
-MCP-backed plugins initialize remote MCP sessions, list tools, and call tools through Valet's MCP client. OAuth-backed MCP services use MCP-scoped tokens, so token validation and refresh differ from traditional provider APIs.
+```bash
+make generate-registries
+```
+
+Equivalent package-local command:
+
+```bash
+cd packages/worker
+pnpm generate-registry
+```
 
 ## Integration sync
 
@@ -54,3 +605,27 @@ Some integrations also implement sync behavior:
 - Concrete integration classes implement credential validation, connection tests, sync, fetch, push, and webhook methods.
 
 Dedicated production integrations can use custom routes and services even when a generic integration class exists.
+
+## Validation checklist
+
+Use `rg` first to confirm the generator can discover what you expect:
+
+```bash
+rg -n "const .*Package: IntegrationPackage|const .*ChannelPackage: ChannelPackage|new McpActionSource|actionType: mcp|authRequired: false" packages/plugin-*
+rg -n "src/actions/index.ts|src/channels/index.ts|pluginContentRegistry|installedIntegrations|installedChannels" packages/worker/scripts packages/worker/src
+```
+
+Regenerate and typecheck:
+
+```bash
+make generate-registries
+pnpm --filter @valet/plugin-acme typecheck
+cd packages/worker && pnpm typecheck
+pnpm typecheck
+```
+
+For docs-only changes, at minimum check the edited file for whitespace errors:
+
+```bash
+git diff --check -- docs/engineering/plugin-system.mdx
+```
