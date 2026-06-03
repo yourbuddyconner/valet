@@ -22,6 +22,10 @@ OAuth 2.0 — the user connects this integration through Valet's connection scre
 
 See [OAuth setup](/oauth-setup) for environment variables and connection flow.
 
+## Upstream documentation
+
+This integration proxies the Stripe MCP server. For the full, current list of available actions, see the [Stripe MCP documentation](https://docs.stripe.com/mcp).
+
 ## Actions
 
 Actions for Stripe are proxied through a remote [Model Context Protocol](https://modelcontextprotocol.io) server at `https://mcp.stripe.com/mcp`. The exact list of actions, their parameters, and behavior are owned by the upstream MCP server — Valet enumerates them at runtime when the integration is connected.

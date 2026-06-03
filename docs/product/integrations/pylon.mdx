@@ -23,6 +23,10 @@ OAuth 2.0 — the user connects this integration through Valet's connection scre
 
 See [OAuth setup](/oauth-setup) for environment variables and connection flow.
 
+## Upstream documentation
+
+This integration proxies the Pylon MCP server. For the full, current list of available actions, see the [Pylon documentation](https://docs.usepylon.com/).
+
 ## Actions
 
 Actions for Pylon are proxied through a remote [Model Context Protocol](https://modelcontextprotocol.io) server at `https://mcp.usepylon.com`. The exact list of actions, their parameters, and behavior are owned by the upstream MCP server — Valet enumerates them at runtime when the integration is connected.
