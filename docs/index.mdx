@@ -1,38 +1,141 @@
 ---
-title: Overview
-description: Start here for the Valet product model: an AI coworker with its own hosted workstation, persistent memory, channels, integrations, workflows, and technical execution environment.
+title: Valet Docs
+description: Start here for Valet, an AI coworker with its own hosted workspace, persistent memory, workflows, integrations, and approval-aware execution.
+mode: "custom"
 ---
 
-# Valet
+import { FeatureCard } from '/snippets/feature-card.mdx';
+import { UseCaseCard } from '/snippets/use-case-card.mdx';
 
-Valet is a calm, confident AI coworker with its own hosted workstation. It can work in the background, use connected tools, remember preferences, coordinate tasks, ask for approvals, and meet users where they already work.
+<div className="valet-page not-prose">
+  <section className="valet-hero">
+    <div className="valet-hero-grid" aria-hidden="true" />
 
-For engineering work, that workstation includes a repository checkout, VS Code, a browser, a terminal, and an agent runtime. For broader operational work, the same model gives Valet a place to use integrations, follow workflows, handle channel messages, and keep durable context across tasks.
+    <div className="valet-hero-copy">
+      <p className="valet-eyebrow">Valet Docs</p>
+      <h1 className="valet-hero-title">An AI coworker with its own workspace.</h1>
+      <p className="valet-hero-body">
+        Valet works in the background, uses connected tools, remembers context, and asks for
+        approval before sensitive actions. For engineering tasks, that workspace includes a repo,
+        terminal, browser, VS Code, and agent runtime. For broader work, it becomes a durable place
+        to run workflows across your systems.
+      </p>
 
-<Frame caption="A Valet session with the agent, terminal, and sandbox UI available together.">
-  <img src="/valet.png" alt="Valet session interface" />
-</Frame>
+      <div className="valet-hero-actions">
+        <a className="valet-button valet-button-primary" href="/product/what-is-valet">
+          Start with the product model
+        </a>
+        <a className="valet-button valet-button-secondary" href="/use-cases/overview">
+          Browse use cases
+        </a>
+      </div>
 
-## Product model
+      <button
+        className="valet-search"
+        type="button"
+        onClick={() => {
+          if (typeof window !== "undefined") {
+            document.dispatchEvent(
+              new KeyboardEvent("keydown", { key: "k", metaKey: true, bubbles: true }),
+            );
+          }
+        }}
+      >
+        <span>Search sessions, workflows, policies, MCP, and integrations</span>
+      </button>
+    </div>
 
-Valet has three core layers:
+    <div className="valet-hero-art" aria-label="Valet mascot">
+      <div className="valet-hero-disc">
+        <img src="/images/characters/wave.png" alt="Valet waving hello" noZoom />
+      </div>
+      <div className="valet-status-card">
+        <p className="valet-status-label">Workspace ready</p>
+        <p className="valet-status-title">Session, memory, tools, and approvals in one place.</p>
+      </div>
+    </div>
+  </section>
 
-- **Sessions** are the units of agent work. A session owns the live workspace for a task, including message history, runtime state, participants, access controls, and any technical sandbox state.
-- **Orchestrators** are persistent coordinator agents. Each user gets an orchestrator that can answer questions, remember preferences, route channel messages, manage task context, and spawn child sessions.
-- **Plugins** provide integrations, channels, skills, personas, and sandbox tools. Some plugins expose first-party actions, while others proxy remote MCP services.
+  <hr className="valet-divider" />
 
-## What to read
+  <section className="valet-section">
+    <div className="valet-section-heading">
+      <p className="valet-eyebrow">Choose a path</p>
+      <h2>Find the right level of detail.</h2>
+      <p>
+        The root docs stay approachable. Product docs explain the system model. Engineering
+        reference pages can go as deep as needed.
+      </p>
+    </div>
 
-- [What is Valet?](/product/what-is-valet) explains the product model in general terms.
-- [Sessions](/product/sessions) covers manual, scheduled, triggered, child, and workflow sessions.
-- [Workstations and sandboxes](/product/workstations-and-sandboxes) covers the hosted execution environment.
-- [Triggers and workflows](/product/triggers-and-workflows) covers schedule, webhook, and manual automation.
-- [Orchestrators and memory](/product/orchestrators-and-memory) covers the persistent agent, memory system, mailbox, and task board.
-- [Skills and personas](/product/skills-and-personas) covers how agent capabilities are packaged and attached.
-- [Auth and access](/product/auth-and-access) covers users, org gates, tokens, roles, and session access.
-- [Policies and approvals](/product/policies-and-approvals) covers tool risk, org policy, user overrides, and approval prompts.
-- [Channels](/product/channels) covers web, Slack, Telegram, GitHub/API routing, and channel bindings.
-- [Integrations](/product/integrations) covers the action catalog and current integration packages.
-- [MCP endpoint](/product/mcp-endpoint) covers how Mintlify exposes these docs to MCP-capable agents.
-- [Design language](/product/design-language) captures the docs site's brand rules.
-- [Character assets](/product/character-assets) explains where the Valet mascot images live and how to use them.
+    <div className="valet-card-grid">
+      <FeatureCard
+        eyebrow="Start here"
+        title="What Valet is"
+        description="A general-audience explanation of Valet as an AI coworker with a hosted workspace."
+        href="/product/what-is-valet"
+      />
+      <FeatureCard
+        eyebrow="Product model"
+        title="Sessions and workspaces"
+        description="How live work, hibernation, restore, sandboxes, participants, and access fit together."
+        href="/product/sessions"
+      />
+      <FeatureCard
+        eyebrow="Automation"
+        title="Triggers and workflows"
+        description="Manual, scheduled, and webhook-triggered work with approval gates and durable state."
+        href="/product/triggers-and-workflows"
+      />
+      <FeatureCard
+        eyebrow="Reference"
+        title="MCP endpoint"
+        description="How agents can read these docs as structured product knowledge through Mintlify."
+        href="/product/mcp-endpoint"
+      />
+    </div>
+  </section>
+
+  <section className="valet-section valet-section-split">
+    <div className="valet-section-heading">
+      <p className="valet-eyebrow">Use cases</p>
+      <h2>Start from the work Valet should own.</h2>
+      <p>
+        These pages are placeholders for the final positioning pass. They give the docs a public
+        product shape before the final brand kit lands.
+      </p>
+    </div>
+
+    <div className="valet-use-case-grid">
+      <UseCaseCard
+        title="Software engineering"
+        description="PR review, issue triage, repo work, QA, release prep, and follow-up tasks."
+        href="/use-cases/software-engineering"
+      />
+      <UseCaseCard
+        title="Operations"
+        description="Scheduled checks, Slack requests, inbox triage, internal workflows, and handoffs."
+        href="/use-cases/operations"
+      />
+      <UseCaseCard
+        title="Customer workflows"
+        description="Research, support follow-up, account context, and tool-assisted task execution."
+        href="/use-cases/customer-workflows"
+      />
+    </div>
+  </section>
+
+  <section className="valet-section valet-blueprint">
+    <div>
+      <p className="valet-eyebrow valet-eyebrow-gold">Under the hood</p>
+      <h2>Technical pages can stay technical.</h2>
+      <p>
+        The engineering reference tab keeps architecture, deployment, security, integration, and
+        API material close at hand without making the homepage feel like an implementation manual.
+      </p>
+    </div>
+    <a className="valet-button valet-button-on-blue" href="/architecture">
+      Open engineering reference
+    </a>
+  </section>
+</div>

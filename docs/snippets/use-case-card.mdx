@@ -1,0 +1,9 @@
+export const UseCaseCard = ({ title, description, href }) => {
+  return (
+    <a className="valet-use-case-card" href={href}>
+      <span className="valet-use-case-card-title">{title}</span>
+      <span className="valet-use-case-card-description">{description}</span>
+      <span className="valet-use-case-card-link">Read the guide</span>
+    </a>
+  );
+};

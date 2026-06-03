@@ -1,13 +1,33 @@
 ---
 title: Design Language
-description: Valet docs use the Mintlify Mint theme, Signal Blue, Star Gold accents, warm neutral backgrounds, Geist typography, a restrained mascot system, and plain-spoken technical copy.
+description: Valet docs use the Mintlify Mint theme, a custom homepage shell, Signal Blue, Star Gold accents, warm neutral backgrounds, a restrained mascot system, and plain-spoken technical copy.
 ---
 
 # Design Language
 
 Valet should read as trustworthy infrastructure with a little personality. The docs site is calm, capable, and plain-spoken: serious work first, friendly valet second.
 
-The implementation rule is simple: express the brand through `docs.json`, Mintlify components, and consistent content patterns before reaching for custom CSS.
+The implementation rule is simple: use Mintlify for the docs system, then add custom structure only where it creates real product polish.
+
+## Theme
+
+Use `mint` as the docs theme. Turnkey's docs prove the theme is not the main source of polish; the effect comes from information architecture, a custom homepage, reusable MDX snippets, deliberate assets, and restrained CSS.
+
+Keep the theme choice boring and durable. Use `docs.json` for site-wide configuration, `styles.css` for scoped custom homepage and card styles, and Mintlify built-ins for normal documentation pages.
+
+## Structure
+
+The docs should have five top-level tabs:
+
+| Tab | Purpose |
+| --- | --- |
+| Home | A custom, general-audience landing page. |
+| Use cases | Public positioning organized by the work Valet can own. |
+| Product docs | Concepts for sessions, workspaces, orchestrators, memory, workflows, policies, channels, and integrations. |
+| Engineering reference | Technical architecture, setup, API, MCP, security, and deployment pages. |
+| Brand system | Internal docs-site guidance, character assets, and future brand-kit notes. |
+
+Use `docs/index.mdx` with `mode: "custom"` for the homepage. Use `docs/styles.css` for `valet-*` classes only. Use `docs/snippets/` for reusable cards and page building blocks.
 
 ## Color
 
@@ -27,7 +47,7 @@ Aim for mostly neutral surfaces, a small amount of blue for direction, and gold 
 
 ## Typography
 
-Use Geist for headings, body, and interface copy. Use the platform code face for code blocks unless a future Mintlify setting cleanly supports Geist Mono.
+Use the approved brand font when the final kit lands. Until then, rely on Mintlify's theme typography and keep custom CSS focused on layout rather than font overrides.
 
 Use short mono-style labels for eyebrows and metadata:
 
@@ -99,4 +119,21 @@ Prefer Mintlify built-ins:
 - Use `CodeGroup` for language examples.
 - Use `ParamField` and `ResponseField` for API reference pages.
 
-Keep custom CSS as a last resort. If the Mint theme can express the design with `docs.json`, use that path.
+Use custom CSS for:
+
+- The homepage shell in `docs/index.mdx`.
+- Shared card snippets in `docs/snippets/`.
+- Light/dark image switching when the final brand kit includes paired assets.
+
+Do not use custom CSS to restyle every docs page. If a built-in Mintlify component can express the page, use it.
+
+## Asset folders
+
+Use these locations for the final brand kit:
+
+| Folder | Use |
+| --- | --- |
+| `docs/images/brand/` | Logo alternates, social image, palette references, and final brand-kit notes. |
+| `docs/images/home/` | Hero art, grid artwork, and homepage-only illustrations. |
+| `docs/images/icons/` | Tab, feature, and use-case icons. |
+| `docs/images/characters/` | Mascot poses and character cut-outs. |
