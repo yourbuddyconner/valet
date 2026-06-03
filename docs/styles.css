@@ -204,6 +204,10 @@ body {
   color: var(--valet-ink);
 }
 
+.valet-search-short {
+  display: none;
+}
+
 .dark .valet-search,
 .dark .valet-button-secondary {
   background: rgba(255, 255, 255, 0.08);
@@ -214,6 +218,7 @@ body {
 .valet-hero-art {
   align-items: center;
   display: grid;
+  gap: 0.9rem;
   justify-items: center;
 }
 
@@ -239,6 +244,69 @@ body {
   max-height: 26rem;
   max-width: 100%;
   object-fit: contain;
+}
+
+.valet-hero-cues {
+  display: grid;
+  gap: 0.75rem;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  width: min(100%, 24rem);
+}
+
+.valet-hero-cue {
+  background: var(--valet-paper);
+  border: 1px solid var(--valet-line);
+  border-radius: 8px;
+  color: var(--valet-ink);
+  display: flex;
+  flex-direction: column;
+  gap: 0.24rem;
+  min-height: 6.7rem;
+  padding: 0.85rem;
+  text-decoration: none;
+  transition: border-color 160ms ease, transform 160ms ease;
+}
+
+.valet-hero-cue:hover {
+  border-color: var(--valet-blue);
+  color: var(--valet-ink);
+  transform: translateY(-2px);
+}
+
+.valet-hero-cue-label {
+  color: var(--valet-blue);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.68rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.valet-hero-cue-title {
+  color: inherit;
+  font-size: 0.98rem;
+  font-weight: 760;
+  line-height: 1.2;
+}
+
+.valet-hero-cue-description {
+  color: var(--valet-muted);
+  font-size: 0.82rem;
+  line-height: 1.35;
+}
+
+.dark .valet-hero-cue {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.18);
+  color: var(--valet-white);
+}
+
+.dark .valet-hero-cue:hover {
+  border-color: rgba(91, 127, 245, 0.8);
+  color: var(--valet-white);
+}
+
+.dark .valet-hero-cue-description {
+  color: rgba(255, 255, 255, 0.68);
 }
 
 .valet-divider {
@@ -409,35 +477,197 @@ body {
 }
 
 .valet-mascot-note {
-  align-items: center;
+  --valet-note-accent: var(--valet-blue);
+  --valet-note-disc: rgba(23, 71, 230, 0.12);
   background: var(--valet-paper);
   border: 1px solid var(--valet-line);
-  border-radius: 8px;
-  display: grid;
-  gap: 1rem;
-  grid-template-columns: minmax(0, 1fr) 8.5rem;
+  border-left: 4px solid var(--valet-note-accent);
+  border-radius: 12px;
+  display: block;
   margin: 1.5rem 0;
+  min-height: 104px;
   overflow: hidden;
-  padding: 1rem 0.5rem 1rem 1rem;
+  padding: 18px 120px 18px 20px;
+  position: relative;
+  width: 100%;
+}
+
+.valet-mascot-note-copy {
+  max-width: 42rem;
+  padding: 0;
+  position: relative;
+  z-index: 1;
+}
+
+.valet-mascot-note-heading {
+  align-items: center;
+  display: flex;
+  gap: 7px;
+  margin-bottom: 7px;
+}
+
+.valet-mascot-note-icon {
+  align-items: center;
+  background: var(--valet-note-accent);
+  border-radius: 999px;
+  color: var(--valet-white);
+  display: inline-flex;
+  flex: 0 0 auto;
+  height: 18px;
+  justify-content: center;
+  width: 18px;
+}
+
+.valet-mascot-note-icon::before {
+  background: currentColor;
+  clip-path: polygon(50% 0%, 61% 35%, 98% 35%, 68% 57%, 79% 91%, 50% 70%, 21% 91%, 32% 57%, 2% 35%, 39% 35%);
+  content: "";
+  height: 11px;
+  width: 11px;
+}
+
+.valet-mascot-note .valet-card-eyebrow {
+  color: var(--valet-note-accent);
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  margin: 0;
+}
+
+.valet-mascot-note h3 {
+  color: var(--valet-ink);
+  font-size: 15px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  line-height: 1.2;
+  margin: 0 0 5px;
+}
+
+.valet-mascot-note-art {
+  bottom: -6px;
+  height: 116px;
+  pointer-events: none;
+  position: absolute;
+  right: 8px;
+  width: 104px;
+  z-index: 1;
+}
+
+.valet-mascot-note-disc {
+  background: var(--valet-note-disc);
+  border-radius: 999px;
+  bottom: 10px;
+  height: 78px;
+  left: 50%;
+  position: absolute;
+  transform: translateX(-50%);
+  width: 78px;
 }
 
 .valet-mascot-note-body {
-  color: var(--valet-ink);
-  font-size: 0.96rem;
-  line-height: 1.55;
+  color: var(--valet-muted);
+  font-size: 12.5px;
+  line-height: 1.45;
 }
 
 .valet-mascot-note-body p {
   margin: 0;
 }
 
-.valet-mascot-note-image {
-  align-self: end;
+.valet-mascot-note .valet-mascot-note-image {
+  bottom: -24px !important;
   display: block;
-  max-height: 9rem;
-  object-fit: contain;
-  object-position: bottom center;
-  width: 100%;
+  height: 116px !important;
+  left: 50% !important;
+  max-width: none !important;
+  position: absolute !important;
+  top: auto !important;
+  transform: translateX(-50%) !important;
+  width: auto !important;
+}
+
+.valet-mascot-note-dismiss {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: 5px;
+  color: var(--valet-muted);
+  cursor: pointer;
+  display: inline-flex;
+  font-size: 15px;
+  height: 20px;
+  justify-content: center;
+  line-height: 1;
+  padding: 0;
+  position: absolute;
+  right: 12px;
+  top: 12px;
+  width: 20px;
+  z-index: 3;
+}
+
+.valet-mascot-note-dismiss:hover {
+  background: var(--valet-cream);
+  color: var(--valet-ink);
+}
+
+.valet-mascot-note-success {
+  --valet-note-accent: #22966d;
+  --valet-note-disc: rgba(34, 150, 109, 0.13);
+}
+
+.valet-mascot-note-success .valet-mascot-note-icon::before {
+  background: none;
+  clip-path: none;
+  color: var(--valet-white);
+  content: "✓";
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 11px;
+  font-weight: 800;
+  height: auto;
+  line-height: 1;
+  width: auto;
+}
+
+.valet-mascot-note-note {
+  --valet-note-accent: var(--valet-muted);
+  --valet-note-disc: rgba(106, 110, 133, 0.14);
+}
+
+.valet-mascot-note-note .valet-mascot-note-icon::before,
+.valet-mascot-note-warning .valet-mascot-note-icon::before,
+.valet-mascot-note-danger .valet-mascot-note-icon::before {
+  background: none;
+  clip-path: none;
+  color: var(--valet-white);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 11px;
+  font-weight: 800;
+  height: auto;
+  line-height: 1;
+  width: auto;
+}
+
+.valet-mascot-note-note .valet-mascot-note-icon::before {
+  content: "i";
+}
+
+.valet-mascot-note-warning {
+  --valet-note-accent: #d48600;
+  --valet-note-disc: rgba(212, 134, 0, 0.14);
+}
+
+.valet-mascot-note-warning .valet-mascot-note-icon::before {
+  content: "!";
+}
+
+.valet-mascot-note-danger {
+  --valet-note-accent: #c7372f;
+  --valet-note-disc: rgba(199, 55, 47, 0.14);
+}
+
+.valet-mascot-note-danger .valet-mascot-note-icon::before {
+  content: "x";
 }
 
 .dark .valet-mascot-note {
@@ -542,24 +772,103 @@ body {
 
 @media (max-width: 760px) {
   .valet-page {
-    padding: 1.25rem 1rem 3rem;
+    padding: 1rem 0.8rem 3rem;
   }
 
   .valet-hero {
+    gap: 1rem;
     min-height: 0;
-    padding: 1.25rem;
+    padding: 1.1rem;
+  }
+
+  .valet-hero-grid {
+    display: none;
+  }
+
+  .valet-eyebrow {
+    font-size: 0.7rem;
+    margin-bottom: 0.6rem;
   }
 
   .valet-hero-title {
-    font-size: 2.7rem;
+    font-size: 2.38rem;
+    letter-spacing: 0;
   }
 
   .valet-hero-body {
     font-size: 1rem;
+    line-height: 1.5;
+    margin-top: 1rem;
+  }
+
+  .valet-hero-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.65rem;
+    margin-top: 1.25rem;
+  }
+
+  .valet-button {
+    flex: 1 1 9rem;
+    min-height: 2.8rem;
+  }
+
+  .valet-search {
+    font-size: 0.92rem;
+    line-height: 1.35;
+    margin-top: 0.75rem;
+    min-height: 2.8rem;
+    padding: 0.62rem 0.8rem;
+    width: 100%;
+  }
+
+  .valet-search-full {
+    display: none;
+  }
+
+  .valet-search-short {
+    display: inline;
+  }
+
+  .valet-hero-art {
+    align-items: stretch;
+    justify-items: stretch;
   }
 
   .valet-hero-disc {
-    height: 18rem;
+    align-items: end;
+    height: 9.5rem;
+    justify-content: flex-end;
+    padding: 0 0.9rem;
+    width: 100%;
+  }
+
+  .valet-hero-disc img {
+    max-height: 11.35rem;
+    max-width: 10.5rem;
+    object-position: bottom right;
+  }
+
+  .valet-hero-cues {
+    gap: 0.6rem;
+    width: 100%;
+  }
+
+  .valet-hero-cue {
+    min-height: 5.7rem;
+    padding: 0.72rem;
+  }
+
+  .valet-hero-cue-label {
+    font-size: 0.62rem;
+  }
+
+  .valet-hero-cue-title {
+    font-size: 0.92rem;
+  }
+
+  .valet-hero-cue-description {
+    font-size: 0.78rem;
   }
 
   .valet-section-heading h2,
@@ -574,15 +883,68 @@ body {
   }
 
   .valet-mascot-note {
-    grid-template-columns: minmax(0, 1fr) 6rem;
+    margin: 1.25rem 0;
+    min-height: 0;
+    padding: 14px 16px 14px 16px;
   }
 
-  .valet-mascot-note-image {
-    max-height: 7rem;
+  .valet-mascot-note-copy {
+    max-width: none;
+  }
+
+  .valet-mascot-note-heading {
+    gap: 6px;
+    margin-bottom: 6px;
+  }
+
+  .valet-mascot-note-icon {
+    height: 16px;
+    width: 16px;
+  }
+
+  .valet-mascot-note-icon::before {
+    height: 9px;
+    width: 9px;
+  }
+
+  .valet-mascot-note .valet-card-eyebrow {
+    font-size: 9px;
+  }
+
+  .valet-mascot-note-body {
+    font-size: 12px;
+    line-height: 1.45;
+  }
+
+  .valet-mascot-note-art {
+    display: none;
   }
 
   .valet-blueprint {
     align-items: flex-start;
     flex-direction: column;
   }
+}
+
+@media (max-width: 420px) {
+  .valet-hero-title {
+    font-size: 2.18rem;
+  }
+
+  .valet-hero-cues {
+    grid-template-columns: 1fr;
+  }
+
+  .valet-hero-cue {
+    min-height: 0;
+  }
+
+  .valet-mascot-note {
+    padding-left: 0.9rem;
+  }
+
+  .valet-mascot-note-body {
+    font-size: 0.86rem;
+  }
+
 }

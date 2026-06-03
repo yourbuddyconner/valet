@@ -5,61 +5,363 @@ description: Technical reference for Valet session WebSockets, client and runner
 
 # Real-time Streaming
 
-Valet streams session state through the live session coordinator. Browser clients and sandbox runners connect to the same session endpoint with different roles.
+Valet session WebSockets terminate in `SessionAgentDO`. Browser clients and sandbox runners use the same public route with different roles, but they have different authentication and different message contracts.
 
-## Connection roles
+## Endpoint and authentication
 
-| Role | Purpose |
+The session WebSocket endpoint is:
+
+```text
+GET /api/sessions/:id/ws?role=client
+GET /api/sessions/:id/ws?role=runner&token=<runnerToken>
+```
+
+Browser clients connect with `role=client`. The Worker authenticates the request through the normal `/api/*` auth middleware before forwarding it to the Durable Object, asserts at least `viewer` access, rewrites `userId` from the authenticated user, and strips any runner token. Browser auth may be supplied by a bearer `Authorization` header or by the WebSocket subprotocol form `valet, bearer.<token>`. The DO responds with the `valet` subprotocol.
+
+Sandbox runners connect with `role=runner&token=<runnerToken>`. Runner WebSocket requests bypass normal API auth and are validated by the DO against the per-session runner token created at session start. If the DO does not yet have a runner token, the upgrade returns `503`. If the token is missing or wrong, it returns `401`. Only one runner socket is active; a new accepted runner closes any existing runner socket with code `1000` and reason `Replaced by new runner connection`.
+
+Missing or invalid `role` returns `400`. Invalid JSON after upgrade is answered on that socket with:
+
+```json
+{ "type": "error", "message": "Invalid JSON" }
+```
+
+## Browser client role
+
+The browser socket is for UI state and user commands. It is not the source of transcript history; the initial transcript is loaded through the REST message-history endpoint. The WebSocket `init` payload is intentionally lightweight.
+
+### Client init
+
+On connect the DO sends:
+
+```json
+{
+  "type": "init",
+  "session": {
+    "id": "session-id",
+    "status": "running",
+    "workspace": "repo-name",
+    "title": "Fix auth bug"
+  },
+  "data": {
+    "sandboxRunning": true,
+    "runnerConnected": true,
+    "runnerBusy": false,
+    "promptsQueued": 0,
+    "connectedClients": 1,
+    "connectedUsers": ["user-id"],
+    "pendingPrompt": null
+  }
+}
+```
+
+After `init`, the DO may send deferred `models`, historical `audit_log` entries, pending `interactive_prompt` records, `user.joined`, and a corrective `status` message if session state changed during init assembly.
+
+### Client to DO messages
+
+Browser clients send a small command set:
+
+```json
+{
+  "type": "prompt",
+  "content": "Please inspect the failing test",
+  "model": "anthropic/claude-sonnet-4-5",
+  "queueMode": "followup",
+  "attachments": [
+    { "type": "file", "mime": "text/plain", "url": "data:text/plain;base64,...", "filename": "log.txt" }
+  ],
+  "channelType": "web",
+  "channelId": "session-id",
+  "threadId": "thread-id",
+  "continuationContext": "..."
+}
+```
+
+Supported client message types are:
+
+| Type | Purpose |
 | --- | --- |
-| `client` | Web app session UI, including messages, approvals, presence, and status. |
-| `runner` | Sandbox Runner connection that sends agent events and receives prompts. |
+| `prompt` | Queue or dispatch user text and attachments. `queueMode` is `followup`, `collect`, or `steer`. |
+| `answer` | Resolve a pending runner question with `{ questionId, answer }`. |
+| `approve-action` / `deny-action` | Resolve a pending tool approval with `{ invocationId, actionId, reason? }`. Approval resolution requires the session owner. |
+| `ping` | Returns `pong`. |
+| `abort` | Aborts current runner work. |
+| `revert` | Requests runner revert for `{ messageId }`. |
+| `diff` / `review` | Requests runner diff or review work. |
+| `command` | Supports `undo`, `redo`, `compact`, and `new-session`. |
+| `queue.withdraw` / `queue.promote` / `queue.replace` | Mutates the single pending queue slot used by the web UI. |
 
-Channels such as Slack and Telegram usually enter through Worker routes, then route prompts into the session rather than opening the same browser WebSocket.
+### DO to client messages
 
-## Client init
+The client outbound union currently includes:
 
-On reconnect, the coordinator sends an `init` payload with complete current state. The client should replace stale local state rather than merge blindly.
+```text
+message, message.updated, messages.removed, chunk, interactive_prompt,
+interactive_prompt_resolved, interactive_prompt_expired, status, pong, error,
+user.joined, user.left, agentStatus, models, diff, review-result,
+command-result, git-state, pr-created, files-changed, child-session, title,
+audit_log, model-switched, toast, integration-auth-required, thread.created,
+thread.updated, queue.state, queue.withdrawn
+```
 
-The init payload includes current messages, pending approvals, session status, runner status, presence, git state, and any queued work needed by the UI.
+The parts-based assistant stream is delivered as a created assistant message, text chunks, tool-call updates, then a finalized message update:
 
-## Streamed events
+```json
+{ "type": "message", "data": { "id": "turn-id", "role": "assistant", "content": "", "parts": [] } }
+```
 
-The coordinator broadcasts:
+```json
+{ "type": "chunk", "messageId": "turn-id", "content": "I found " }
+```
 
-- Message creation and updates.
-- Streaming text chunks.
-- Tool-call lifecycle updates.
-- Agent status.
-- Session status.
-- Questions and approval prompts.
-- Presence changes.
-- Git state and file-change summaries.
-- Abort and completion events.
+```json
+{
+  "type": "message.updated",
+  "data": {
+    "id": "turn-id",
+    "role": "assistant",
+    "content": "I found the issue.",
+    "parts": [
+      { "type": "tool", "callId": "call-1", "toolName": "bash", "status": "completed" }
+    ]
+  }
+}
+```
 
-## Prompt routing
+Questions and approvals use `interactive_prompt` records:
 
-Inbound prompts can come from:
+```json
+{
+  "type": "interactive_prompt",
+  "prompt": {
+    "id": "prompt-id",
+    "sessionId": "session-id",
+    "type": "question",
+    "title": "Which branch should I use?",
+    "actions": [{ "id": "option_0", "label": "main" }],
+    "expiresAt": 1760000000000,
+    "context": { "channelType": "web", "channelId": "session-id" }
+  }
+}
+```
 
-- Web chat.
-- Channel bindings.
-- Orchestrator delegation.
-- Workflow steps.
-- API routes.
+Resolution and expiry are broadcast as `interactive_prompt_resolved` and `interactive_prompt_expired`.
 
-Prompt routing chooses a queue mode: follow-up, steer, or collect.
+## Sandbox runner role
 
-## Channel binding behavior
+The runner receives `doUrl` and `runnerToken` from the session spawn request. `AgentClient` appends `?role=runner&token=<runnerToken>` to `doUrl`, opens the WebSocket, buffers runner-to-DO messages while disconnected, and sends a runner `ping` every 30 seconds.
 
-A channel binding maps an external conversation to a Valet session. It stores channel type, channel ID, scope key, owner, queue behavior, and provider-specific context such as Slack thread IDs or GitHub PR metadata.
+### Runner handshake
 
-Inbound channel prompts generally follow this order:
+After accepting a runner, the DO sends:
 
-1. Normalize the external channel into a scope key.
-2. Look for an existing binding by scope key.
-3. Route to the bound session when found.
-4. Fall back to an orchestrator when allowed.
-5. Acknowledge without dispatch when the surface is not allowed.
+```json
+{ "type": "init" }
+```
+
+It then sends current runtime inputs:
+
+```json
+{ "type": "opencode-config", "config": { "providerKeys": {}, "instructions": [] } }
+```
+
+```json
+{
+  "type": "plugin-content",
+  "pluginContent": {
+    "personas": [],
+    "skills": [],
+    "tools": [],
+    "allowRepoContent": false,
+    "toolWhitelist": null
+  }
+}
+```
+
+```json
+{
+  "type": "repo-config",
+  "token": "github-token-or-null",
+  "expiresAt": "2026-06-03T12:00:00.000Z",
+  "gitConfig": {},
+  "repoUrl": "https://github.com/org/repo",
+  "branch": "main"
+}
+```
+
+The runner waits up to 30 seconds for the first `opencode-config`, starts OpenCode, sends `opencode-config-applied`, waits for repo clone and plugin-content readiness up to 120 seconds, then signals readiness:
+
+```json
+{ "type": "agentStatus", "status": "idle" }
+```
+
+The DO treats the first runner `agentStatus: idle` after connect as the readiness signal. Only then does it drain queued prompts or dispatch the session's initial prompt.
+
+### DO to runner messages
+
+Core DO-to-runner messages are:
+
+| Type | Purpose |
+| --- | --- |
+| `prompt` | Dispatch user or system work to OpenCode. |
+| `answer` | Deliver a resolved question answer back to the runner. |
+| `abort` / `stop` / `revert` | Control current runner work or runner lifecycle. |
+| `diff` / `review` | Ask runner for repo diff or structured review. |
+| `opencode-command` / `new-session` | Execute OpenCode UI commands or create a new OpenCode channel session. |
+| `workflow-execute` | Dispatch workflow run or resume payloads. |
+| `tunnel-delete` | Ask runner gateway to delete a named tunnel. |
+| `repo-config`, `repo-token-refreshed`, `opencode-config`, `plugin-content` | Runtime configuration and credential refresh. |
+| `*-result`, `call-tool-result`, `call-tool-pending` | Responses or pending notices for runner-originated RPCs. |
+| `pong` | Keepalive response. |
+
+A dispatched prompt looks like:
+
+```json
+{
+  "type": "prompt",
+  "messageId": "user-message-id",
+  "content": "Please inspect the failing test",
+  "model": "anthropic/claude-sonnet-4-5",
+  "attachments": [{ "type": "file", "mime": "text/plain", "url": "data:text/plain;base64,...", "filename": "log.txt" }],
+  "channelType": "thread",
+  "channelId": "thread-id",
+  "threadId": "thread-id",
+  "replyChannelType": "slack",
+  "replyChannelId": "C123:1700000000.000000",
+  "authorId": "user-id",
+  "authorEmail": "user@example.com",
+  "authorName": "User",
+  "gitName": "User",
+  "gitEmail": "user@example.com",
+  "opencodeSessionId": "oc-session-id",
+  "modelPreferences": ["anthropic/claude-sonnet-4-5"],
+  "continuationContext": "..."
+}
+```
+
+Large prompt attachments may be replaced before runner dispatch with `valet-prompt-attachment://...` references. The runner resolves those through:
+
+```text
+GET /api/sessions/:id/runner-attachment?...&token=<runnerToken>
+```
+
+The DO validates the same runner token for that fetch path.
+
+### Runner to DO messages
+
+Core runner-to-DO streaming messages are:
+
+| Type | Purpose |
+| --- | --- |
+| `agentStatus` | Runner state: `idle`, `thinking`, `tool_calling`, `streaming`, or `error`. Non-idle marks the runner busy; `idle` drains deferred queue work but does not by itself complete a prompt. |
+| `message.create` | Creates an assistant turn in the DO message store and broadcasts an empty assistant message. |
+| `message.part.text-delta` | Appends assistant text and broadcasts a client `chunk`. |
+| `message.part.tool-update` | Upserts tool-call state and broadcasts `message.updated`. |
+| `message.finalize` | Finalizes the assistant turn with `reason: end_turn`, `error`, or `canceled`. |
+| `complete` | Authoritative prompt completion signal; clears runner busy state and advances queue handling. |
+| `question` | Creates a pending interactive question. |
+| `error` | Emits a system error message and starts a 60-second safety net waiting for `complete`. |
+| `diff`, `review-result`, `git-state`, `files-changed`, `title`, `child-session`, `thread.created`, `thread.updated` | Session metadata and UI events. |
+| `workflow-execution-result` | Returns workflow run or resume result. |
+| `ping` | Keepalive request; DO returns `pong`. |
+| `call-tool`, `list-tools`, `spawn-child`, `session-message`, `workflow-*`, `mailbox-*`, `task-*`, `channel-reply`, `skill-api`, `persona-api`, `identity-api`, `mem-*` | Runner-originated request/response RPCs that carry `requestId`. |
+
+Example assistant turn:
+
+```json
+{ "type": "agentStatus", "messageId": "user-message-id", "status": "thinking" }
+```
+
+```json
+{ "type": "message.create", "turnId": "turn-id", "channelType": "thread", "channelId": "thread-id", "threadId": "thread-id" }
+```
+
+```json
+{ "type": "message.part.text-delta", "turnId": "turn-id", "delta": "The failing test is " }
+```
+
+```json
+{
+  "type": "message.part.tool-update",
+  "turnId": "turn-id",
+  "callId": "tool-call-id",
+  "toolName": "bash",
+  "status": "running",
+  "args": { "cmd": "pnpm test" }
+}
+```
+
+```json
+{ "type": "message.finalize", "turnId": "turn-id", "reason": "end_turn", "finalText": "The failing test is fixed." }
+```
+
+```json
+{ "type": "complete", "messageId": "user-message-id" }
+```
+
+## Questions and approvals
+
+Runner questions are initiated by:
+
+```json
+{
+  "type": "question",
+  "messageId": "user-message-id",
+  "questionId": "question-id",
+  "text": "Which branch should I use?",
+  "options": ["main", "develop"]
+}
+```
+
+The DO resolves the prompt channel from the originating prompt row, stores the question in `interactive_prompts`, broadcasts it to clients, and expires it after 5 minutes. Browser `answer` messages and same-channel external replies resolve the question. Resolution sends this to the runner:
+
+```json
+{ "type": "answer", "questionId": "question-id", "answer": "main" }
+```
+
+Approvals are created when the runner calls an integration tool that policy marks as requiring approval. The runner sends:
+
+```json
+{
+  "type": "call-tool",
+  "requestId": "request-id",
+  "toolId": "github.create_pr",
+  "params": { "title": "Fix auth bug" },
+  "summary": "Create a pull request"
+}
+```
+
+The DO may immediately return `call-tool-result`, deny by policy, or create an approval prompt and send:
+
+```json
+{
+  "type": "call-tool-pending",
+  "requestId": "request-id",
+  "invocationId": "approval-id",
+  "message": "Approval required"
+}
+```
+
+When the owner approves, the DO executes the action and sends `call-tool-result` to the runner. When the owner cancels, the result is an error explaining that the action was cancelled. Stale, expired, or unauthorized approval resolutions are returned to the client as `error` messages and do not mutate D1 unless the DO successfully claims the prompt.
+
+## Prompt dispatch and queueing
+
+The DO writes user prompts to the message store before dispatch. If the runner is missing, not ready, globally busy, or the target channel is busy, the prompt is queued. Direct dispatch stores the prompt row as `processing` first so disconnect recovery can revert it to queued.
+
+`queueMode` controls how web prompts interact with in-flight work:
+
+| Mode | Behavior |
+| --- | --- |
+| `followup` | Default queue behavior. |
+| `collect` | Collects messages before a flush. |
+| `steer` | Interrupts current work and dispatches the new prompt. |
+
+The runner can process prompts concurrently across distinct channel/OpenCode sessions. The DO still serializes work for the same channel key.
 
 ## Reliability notes
 
-Streaming code should tolerate reconnects, duplicate events, and stale clients. Terminal persisted states should override live state when a session has already been ended.
+Browser clients should treat reconnect as a fresh state sync: load transcript history through REST, accept the WebSocket `init`, then apply subsequent events. There is no sequence-number replay protocol in the WebSocket stream, and clients should tolerate duplicated or stale live events. Terminal persisted session states override live DO state when they differ.
+
+Runner reconnect is automatic after an opened connection drops. The reconnect delay starts at 1 second and backs off to 30 seconds. Messages sent by the runner while disconnected are buffered in memory and flushed on reconnect. On initial startup, the runner retries the first connection up to 30 times with exponential backoff capped at 30 seconds.
+
+If a runner disconnects, the DO marks it not ready, broadcasts `runnerConnected: false`, and starts recovery timers. Processing prompts are reverted to queued after a short disconnect grace window if no runner reconnects. If no runner reconnects within 60 seconds, the DO attempts sandbox recovery. A replaced runner socket exits instead of reconnecting after it receives close code `1000` with reason `Replaced by new runner connection`.

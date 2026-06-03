@@ -1,11 +1,19 @@
-export const MascotNote = ({ title = "Tip from Valet", image, alt, children }) => {
+export const MascotNote = ({ title = "Tip from Valet", heading, tone = "tip", image, alt, dismissible = false, children }) => {
   return (
-    <div className="valet-mascot-note">
+    <div className={`valet-mascot-note valet-mascot-note-${tone}`}>
+      {dismissible && <button className="valet-mascot-note-dismiss" aria-label="Dismiss" type="button">x</button>}
       <div className="valet-mascot-note-copy">
-        <span className="valet-card-eyebrow">{title}</span>
+        <div className="valet-mascot-note-heading">
+          <span className="valet-mascot-note-icon" aria-hidden="true" />
+          <span className="valet-card-eyebrow">{title}</span>
+        </div>
+        {heading && <h3>{heading}</h3>}
         <div className="valet-mascot-note-body">{children}</div>
       </div>
-      <img className="valet-mascot-note-image" src={image} alt={alt} noZoom />
+      <div className="valet-mascot-note-art">
+        <span className="valet-mascot-note-disc" aria-hidden="true" />
+        <img className="valet-mascot-note-image" src={image} alt={alt} noZoom />
+      </div>
     </div>
   );
 };
