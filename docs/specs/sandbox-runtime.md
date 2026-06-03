@@ -305,7 +305,7 @@ Manages the OpenCode server process lifecycle.
 
 **`start()` sequence:**
 1. **writeConfigFiles()**: Write `auth.json` (provider keys, mode 0o600), merge base `opencode.json` with tool toggles, custom instructions, and custom providers, write to `${OPENCODE_RUNTIME_DIR}/config/opencode/opencode.json`.
-2. **copyToolsAndSkills()**: Copy tools, plugins, and skills from `/opencode-config/` to `${OPENCODE_RUNTIME_DIR}/config/opencode/`. For orchestrators: remove `complete_session.ts` and `notify_parent.ts`.
+2. **copyToolsAndSkills()**: Copy tools, plugins, and skills from `/opencode-config/` to `${OPENCODE_RUNTIME_DIR}/config/opencode/`. For orchestrators: remove `complete_session.ts` and `notify_parent.ts`. Non-orchestrator sessions keep `complete_session`, but the tool prompt requires a clean working tree, pushed commits, and a PR for code changes before use.
 3. **spawnProcess()**: `Bun.spawn(["opencode", "serve", "--port", "4096"], { cwd: workspaceDir, env: { ...process.env, OPENCODE_CONFIG_DIR, OPENCODE_DB, OPENCODE_DISABLE_PROJECT_CONFIG: "true" } })`. OpenCode still edits `/workspace`, but ignores stale generated config under `/workspace/.opencode`.
 4. **waitForHealth()**: Poll `http://localhost:4096/health` every 1s, up to 60 retries.
 

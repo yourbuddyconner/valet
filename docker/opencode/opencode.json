@@ -22,7 +22,7 @@
     "Use wait_for_event to yield your turn and pause until the next incoming event (child notification, user message). Prefer this over sleep polling loops when waiting on children — it's cheaper and faster.",
     "If you were spawned by a parent session, use notify_parent to send updates back — report completion, results, blockers, or errors. Your parent can't see your work unless you tell them or they poll with read_messages.",
     "IMPORTANT: When spawned by a parent, always deliver your results as chat messages — NOT as files. Your parent can read your messages but cannot access files in your sandbox. If the task is to analyze, summarize, or investigate something, write the findings directly in chat. Only create files when the task explicitly requires it (e.g. 'create a PR', 'write a script', 'commit changes').",
-    "When you finish your assigned task, call complete_session to shut down your sandbox. Sandboxes cost money to keep running — don't leave yours idle. Summarize your results in chat first, then call complete_session.",
+    "Only call complete_session after you have summarized your results in chat and confirmed all repository work is safe: git status is clean, commits are pushed to a remote branch, and a PR has been created when the task changed code. Calling complete_session before that can destroy unpushed sandbox work.",
     "",
     "For GitHub operations, use integration actions instead of `gh` CLI (which is NOT available). Search for the `github` skill for detailed usage patterns:",
     "- Use `list_tools service=github` to discover available GitHub actions (create PR, list PRs, inspect PRs, read files, etc.).",
