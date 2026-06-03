@@ -38,6 +38,18 @@ function attachmentFetchErrorUrl(messageId: string, index: number, reason: strin
   return url.toString();
 }
 
+function redactedFetchUrl(fetchUrl: string): string {
+  try {
+    const url = new URL(fetchUrl);
+    if (url.searchParams.has("token")) {
+      url.searchParams.set("token", "[redacted]");
+    }
+    return url.toString();
+  } catch {
+    return "[invalid-url]";
+  }
+}
+
 export async function resolvePromptAttachmentReferences(
   attachments: PromptAttachment[] | undefined,
   doUrl: string,
@@ -45,12 +57,18 @@ export async function resolvePromptAttachmentReferences(
 ): Promise<PromptAttachment[] | undefined> {
   if (!attachments?.length) return attachments;
 
+  const refCount = attachments.filter((attachment) => parseAttachmentRef(attachment.url)).length;
+  if (refCount > 0) {
+    console.log(`[AgentClient] Resolving ${refCount}/${attachments.length} prompt attachment reference(s)`);
+  }
+
   return Promise.all(attachments.map(async (attachment) => {
     const ref = parseAttachmentRef(attachment.url);
     if (!ref) return attachment;
 
     try {
       const fetchUrl = buildAttachmentFetchUrl(doUrl, runnerToken, ref.messageId, ref.index);
+      console.log(`[AgentClient] Fetching prompt attachment ${ref.messageId}/${ref.index}: ${redactedFetchUrl(fetchUrl)}`);
       const res = await fetch(fetchUrl);
       if (!res.ok) {
         throw new Error(`${res.status} ${res.statusText}`);
@@ -59,6 +77,10 @@ export async function resolvePromptAttachmentReferences(
       if (fetched?.type !== "file" || typeof fetched.mime !== "string" || typeof fetched.url !== "string") {
         throw new Error("invalid attachment payload");
       }
+      console.log(
+        `[AgentClient] Fetched prompt attachment ${ref.messageId}/${ref.index}: ` +
+        `mime=${fetched.mime} filename=${fetched.filename || "unnamed"} urlChars=${fetched.url.length}`,
+      );
       return fetched;
     } catch (err) {
       const reason = errorReason(err);

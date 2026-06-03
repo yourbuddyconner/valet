@@ -83,6 +83,12 @@ function promptAttachmentRef(messageId: string, index: number): string {
 
 function serializeForRunner(message: DOToRunnerMessage): string {
   const payload = JSON.stringify(message);
+  if (message.type === 'prompt') {
+    console.log(
+      `[RunnerLink] prompt payload: messageId=${message.messageId} ` +
+      `attachments=${message.attachments?.length ?? 0} payloadChars=${payload.length}`,
+    );
+  }
   if (message.type !== 'prompt' || !message.attachments?.length || payload.length <= MAX_RUNNER_WS_PAYLOAD_CHARS) {
     return payload;
   }

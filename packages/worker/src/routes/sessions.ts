@@ -328,6 +328,12 @@ sessionsRouter.post('/:id/prompt', async (c) => {
   // Read raw body and inject author info without full re-serialization.
   // This avoids double-parsing multi-MB payloads (PDF base64 data URLs).
   const rawBody = await c.req.text();
+  const contentLength = c.req.header('content-length') || 'unknown';
+  const fileMarkerCount = rawBody.match(/"type"\s*:\s*"file"/g)?.length ?? 0;
+  console.log(
+    `[sessions] /prompt forwarding: session=${resolvedId} rawChars=${rawBody.length} ` +
+    `contentLength=${contentLength} fileMarkers=${fileMarkerCount}`,
+  );
   const injected = rawBody.replace(
     /^\{/,
     `{"authorId":${JSON.stringify(user.id)},"authorEmail":${JSON.stringify(user.email)},`,

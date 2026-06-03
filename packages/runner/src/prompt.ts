@@ -1649,6 +1649,11 @@ export class PromptHandler {
       const hasPdf = effectiveAttachments.some(a => a.mime === 'application/pdf');
       if (hasPdf) {
         let pdfNotes: string[] = [];
+        console.log(
+          `[PromptHandler] Materializing PDF attachments for ${messageId}: ` +
+          `${effectiveAttachments.filter(a => a.mime === 'application/pdf').length} PDF(s) ` +
+          `[${attachmentSummary(effectiveAttachments.filter(a => a.mime === 'application/pdf'))}]`,
+        );
         try {
           const { notes, remaining } = await this.materializePdfAttachments(messageId, effectiveAttachments);
           effectiveAttachments = remaining;
