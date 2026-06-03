@@ -8,31 +8,16 @@
     "light": "#5B7FF5",
     "dark": "#0E2DB3"
   },
+  "contextual": {
+    "options": [
+      "copy",
+      "view",
+      "chatgpt",
+      "claude"
+    ]
+  },
   "appearance": {
     "default": "light"
-  },
-  "background": {
-    "color": {
-      "light": "#F4EFE2",
-      "dark": "#0A1340"
-    }
-  },
-  "fonts": {
-    "heading": {
-      "family": "Geist",
-      "weight": 600
-    },
-    "body": {
-      "family": "Geist",
-      "weight": 400
-    }
-  },
-  "icons": {
-    "library": "lucide"
-  },
-  "styling": {
-    "eyebrows": "section",
-    "codeblocks": "dark"
   },
   "logo": {
     "light": "/logo/valet-light.svg",
@@ -41,39 +26,106 @@
   },
   "favicon": "/logo/favicon.svg",
   "navigation": {
-    "groups": [
+    "tabs": [
       {
-        "group": "Start Here",
-        "pages": [
-          "index",
-          "product/what-is-valet"
+        "tab": "Home",
+        "groups": [
+          {
+            "group": "Welcome",
+            "pages": [
+              "index"
+            ]
+          }
         ]
       },
       {
-        "group": "Product Surface",
-        "pages": [
-          "product/sessions",
-          "product/workstations-and-sandboxes",
-          "product/triggers-and-workflows",
-          "product/orchestrators-and-memory",
-          "product/skills-and-personas",
-          "product/auth-and-access",
-          "product/policies-and-approvals",
-          "product/channels",
-          "product/integrations"
+        "tab": "Use cases",
+        "groups": [
+          {
+            "group": "Overview",
+            "pages": [
+              "use-cases/overview"
+            ]
+          },
+          {
+            "group": "By team",
+            "pages": [
+              "use-cases/software-engineering",
+              "use-cases/operations",
+              "use-cases/customer-workflows"
+            ]
+          }
         ]
       },
       {
-        "group": "Agent Access",
-        "pages": [
-          "product/mcp-endpoint"
+        "tab": "Product docs",
+        "groups": [
+          {
+            "group": "Start here",
+            "pages": [
+              "product/what-is-valet"
+            ]
+          },
+          {
+            "group": "Core model",
+            "pages": [
+              "product/sessions",
+              "product/workstations-and-sandboxes",
+              "product/triggers-and-workflows",
+              "product/orchestrators-and-memory",
+              "product/skills-and-personas"
+            ]
+          },
+          {
+            "group": "Trust and control",
+            "pages": [
+              "product/auth-and-access",
+              "product/policies-and-approvals",
+              "product/channels",
+              "product/integrations"
+            ]
+          }
         ]
       },
       {
-        "group": "Docs System",
-        "pages": [
-          "product/design-language",
-          "product/character-assets"
+        "tab": "Engineering reference",
+        "groups": [
+          {
+            "group": "Agent access",
+            "pages": [
+              "product/mcp-endpoint",
+              "api-reference"
+            ]
+          },
+          {
+            "group": "Architecture",
+            "pages": [
+              "architecture",
+              "security-model",
+              "deployment",
+              "environment-variables",
+              "project-structure"
+            ]
+          },
+          {
+            "group": "Setup",
+            "pages": [
+              "oauth-setup",
+              "slack-setup"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Brand system",
+        "groups": [
+          {
+            "group": "Docs design",
+            "pages": [
+              "product/design-language",
+              "product/character-assets"
+            ]
+          }
         ]
       }
     ]
