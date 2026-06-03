@@ -1,0 +1,93 @@
+---
+title: Telegram setup
+description: Connect a Telegram bot so you can talk to your orchestrator from your phone.
+---
+
+Telegram lets you reach Valet from a mobile chat. Each person connects their own bot, so messages route directly to that person's orchestrator.
+
+## How it works
+
+Telegram is different from Slack in one important way. Slack is installed once per organization, and people link their accounts to it. Telegram is connected per user — you create your own bot through Telegram's @BotFather, and Valet uses that bot to talk to you. Nothing is shared with the rest of your team.
+
+When the bot is connected, Valet registers a webhook with Telegram so any message you send to your bot is delivered to your orchestrator. Replies come back through the same bot.
+
+## Step 1: Create a Telegram bot
+
+<Steps>
+  <Step title="Open BotFather in Telegram">
+    Search for **@BotFather** in Telegram, or open [t.me/BotFather](https://t.me/BotFather). BotFather is Telegram's official bot for managing other bots.
+  </Step>
+  <Step title="Create a new bot">
+    Send `/newbot` to BotFather and follow the prompts to pick a display name and a username for your bot.
+  </Step>
+  <Step title="Copy the bot token">
+    BotFather will give you an HTTP API token that looks like `123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11`. Keep this private — anyone with this token can act as your bot.
+  </Step>
+</Steps>
+
+## Step 2: Connect the bot to Valet
+
+<Steps>
+  <Step title="Open the Integrations page">
+    In Valet, go to **Integrations** in the sidebar.
+  </Step>
+  <Step title="Choose Telegram">
+    Find the **Telegram** card and click **Connect**.
+  </Step>
+  <Step title="Paste your bot token">
+    Paste the token you copied from BotFather and submit.
+  </Step>
+</Steps>
+
+Valet validates the token by calling Telegram's `getMe` endpoint, stores the token securely, and registers a webhook so your bot can receive messages. Once that succeeds, the integration shows as connected.
+
+## Step 3: Talk to your bot
+
+Open a chat with your bot in Telegram and send a message. The message is delivered to your orchestrator and answered in the same chat.
+
+You can send:
+
+- Text messages.
+- Photos with captions.
+- Voice notes.
+- Audio files.
+- Documents and other file attachments.
+
+Slash commands set up by Valet (such as common shortcuts) appear in Telegram's command menu after the bot is connected.
+
+## Approvals in Telegram
+
+When Valet needs your approval to run a sensitive action, the approval prompt is sent to your Telegram chat with inline buttons. Common choices include:
+
+| Button | Meaning |
+| --- | --- |
+| Allow | Run this one action. |
+| Allow for this task | Allow the same action while this task continues. |
+| Always allow | Remember this exact action as safe. |
+| Cancel / Deny | Do not run the action. |
+
+The exact set of buttons depends on what the action is and what your organization's policy permits. After you tap a button, the message updates in place to show how the prompt was resolved.
+
+See [Approvals](/product/approvals) for how the choices behave.
+
+## Optional: lock the bot to your Telegram account
+
+If you want to make sure only your Telegram account can drive the bot, you can set an **owner Telegram user ID** on the integration. When this is set, messages from other Telegram users are ignored.
+
+This is useful if your bot is in a group chat or if you ever share the bot link with someone else. If you only ever DM the bot from your own account, you can skip this step.
+
+## Disconnecting
+
+To remove the integration, open the Telegram card on the **Integrations** page and disconnect it. Valet deletes the webhook from Telegram and removes the stored bot token. You can also delete the bot itself through BotFather if you no longer need it.
+
+## Troubleshooting
+
+**Bot doesn't respond.** Make sure you connected the bot through **Integrations** in Valet and the integration shows as connected. If it shows an error, reconnect with a fresh token from BotFather.
+
+**"Invalid bot token" when connecting.** The token must come from BotFather and start with a numeric ID followed by a colon (for example `123456:...`). Tokens are revoked if you ask BotFather to regenerate them — use the most recent one.
+
+**Approval buttons don't do anything.** Approvals are tied to the live session. If the session has hibernated or expired, the prompt may no longer be actionable. Start a fresh task and try again.
+
+**Messages from a group chat are ignored.** If you set an owner Telegram user ID, only that user can drive the bot. Either send the message from the owner account or remove the owner restriction.
+
+For more help, see [Troubleshooting](/product/troubleshooting).

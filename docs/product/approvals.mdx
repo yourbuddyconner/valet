@@ -29,6 +29,51 @@ When Valet asks, you may be able to:
 
 The options you see depend on your organization's settings.
 
+## How long each choice lasts
+
+The three "allow" choices look similar, but they last for very different amounts of time. This matters when you are deciding whether to make Valet quieter or keep it strict.
+
+| Choice | Scope | Expires |
+| --- | --- | --- |
+| Allow | This single action only. | Immediately after the action runs. |
+| Allow for this task | The same action, for as long as the task is alive. | When the task's sandbox refreshes, hibernates, or ends. |
+| Always allow | The same action, every time, until you remove it. | Only when you delete the rule from settings. |
+
+"Allow for this task" is good for the moment — for example, you are watching Valet draft three Linear tickets and don't want to approve each one, but you do want the rule to disappear when the task is done.
+
+"Always allow" is good for repeat work you trust — for example, Valet always reads your inbox to triage email. Use it for narrow, specific actions, not for a whole service.
+
+## Auto-approve recipes
+
+These are concrete examples of how to tune approvals so common work flows more smoothly without giving up control over the parts that matter.
+
+### Draft Gmail messages without prompting (but keep sending gated)
+
+You want Valet to be able to create email drafts in Gmail without asking — drafts are safe because nothing leaves your account until you send them. But you still want to approve every actual send.
+
+1. The first time Valet asks to create a draft, choose **Always allow** on that specific action (creating a Gmail draft).
+2. Leave Gmail's send action as it is. The next time Valet wants to send a message, it will still prompt you.
+
+The result: drafting is automatic, sending stays manual.
+
+This pattern works for any service with a clear safe action and a clear risky action: create a calendar event vs. invite attendees, open a pull request vs. merge it, file a Linear ticket vs. close one as resolved.
+
+### Let a workflow run end-to-end without prompts
+
+You have a workflow that runs the same way every week — for example, generating a status summary from a fixed set of read-only data sources.
+
+1. Run the workflow once and approve each step as it asks.
+2. For each prompt, choose **Always allow** if the action is safe and identical every run.
+3. After one or two clean runs, the workflow should run without prompting at all.
+
+Review the rules in settings every so often. If the workflow changes shape, the old rules may no longer match — that is good, because Valet will start asking again.
+
+### Quiet a noisy session, but only for now
+
+You're working through a long task and approving the same action over and over is slowing you down — but you do not want to make a permanent rule.
+
+Choose **Allow for this task** the next time Valet asks. The rule applies for the rest of that task and disappears when the task ends. The next task will start clean.
+
 ## What admins decide
 
 Admins can decide:
@@ -39,6 +84,10 @@ Admins can decide:
 - Whether users can create their own approval preferences.
 - Where approval prompts can appear.
 
+**An organization rule always wins.** If your admin has decided a specific action must be denied or must always require approval, your personal "Always allow" will not override it. The strictest rule wins.
+
+This matters when you are tuning approvals: if a rule you set does not seem to take effect, an admin policy is likely overriding it. Check with your admin or look at the action in your settings.
+
 ## How to tune approvals
 
 Start stricter than you think you need. After teams use Valet for real work, review:
@@ -48,9 +97,14 @@ Start stricter than you think you need. After teams use Valet for real work, rev
 - Which actions should always be blocked.
 - Which low-risk actions can run automatically.
 
+You can review and remove your own "Always allow" rules at any time in settings.
+
 ## Good approval habits
 
 - Read the action before approving it.
 - Use "always allow" only for narrow, repeatable actions.
+- Use "allow for this task" when you want quiet now but strict later.
 - Cancel when Valet lacks the information it needs.
 - Ask Valet to explain what it is about to do if the prompt is unclear.
+
+For help when an approval is stuck or behaving unexpectedly, see [Troubleshooting](/product/troubleshooting).
