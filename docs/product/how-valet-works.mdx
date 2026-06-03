@@ -1,55 +1,57 @@
 ---
 title: How Valet Works
-description: A plain-language view of how a request becomes useful work in Valet.
+description: A simple view of how Valet turns a request into useful work.
 ---
 
-# How Valet Works
-
-Valet turns a request into useful work through a simple product flow: receive the request, understand the context, choose the right workspace and tools, do the work, ask for approval when needed, and report back.
+Valet turns a request into useful work by following a clear path: understand the job, gather what it needs, do the work, ask before sensitive actions, and return the result.
 
 ## The flow
 
 <Steps>
-  <Step title="A request arrives">
-    A user starts a task from the web app, a channel message, a schedule, a webhook, or a workflow.
+  <Step title="You ask for work">
+    Start from the web app, Slack, Telegram, a schedule, or a saved workflow.
   </Step>
-  <Step title="Valet gathers context">
-    Valet uses the conversation, connected account context, memory, persona, and any workflow inputs to understand what should happen.
+  <Step title="Valet gathers what it needs">
+    Valet uses the conversation, connected tools, remembered preferences, and any details you provide.
   </Step>
-  <Step title="A workspace is prepared">
-    Valet gets a dedicated place to work for that task. The workspace may be used for engineering work, tool-assisted operations, workflow execution, or research.
+  <Step title="Valet works in a workspace">
+    The task gets a place where Valet can keep notes, drafts, files, tool results, and progress together.
   </Step>
-  <Step title="Valet uses tools">
-    If integrations are connected, Valet can read from or write to those systems according to the policies configured by the organization and user.
+  <Step title="Valet uses connected tools">
+    If you have connected the right systems, Valet can read from them or prepare changes in them.
   </Step>
-  <Step title="Approvals protect sensitive actions">
-    When an action needs review, Valet pauses and asks an authorized user to approve, approve for the session, always allow, or cancel.
+  <Step title="Valet asks before sensitive actions">
+    Sending, writing, deleting, merging, or changing important information can require approval.
   </Step>
-  <Step title="The result returns to the right place">
-    Valet reports progress and results in the web app or the channel where the work started.
+  <Step title="You get the result">
+    Valet returns a summary, draft, update, file, task, or next step in the place where the work belongs.
   </Step>
 </Steps>
 
 ## What stays visible
 
-Users should be able to see:
+You should be able to see:
 
 - What Valet is working on.
+- What it has found so far.
+- What it needs from you.
 - Which tools it used.
-- What decisions or approvals are waiting.
-- What changed in connected systems.
-- Where to continue or stop the work.
+- What changed.
+- Where to continue the work.
 
-## What admins control
+## What you control
 
-Admins can decide:
+You can control:
 
-- Which users can access Valet.
-- Which integrations are available.
-- Which actions require approval or are denied.
-- Which channels route messages to Valet.
-- Which workflows are enabled for the organization.
+- Which tools Valet can use.
+- Which actions need approval.
+- Where Valet replies.
+- Who can see or join a task.
+- Which instructions, skills, or workflows Valet should follow.
 
-## For technical readers
+## Useful next pages
 
-The engineering implementation covers session lifecycle, sandbox startup, runner behavior, workflow execution, streaming, and policy resolution. Start with [Architecture](/architecture) or [Session lifecycle](/engineering/session-lifecycle).
+- [Run tasks](/product/tasks) to understand task threads.
+- [Workspaces](/product/workspaces) to understand where work happens.
+- [Create workflows](/product/workflows) to repeat a process.
+- [Create skills and personas](/product/skills-and-personas) to teach Valet how to work.

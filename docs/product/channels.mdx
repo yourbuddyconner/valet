@@ -1,51 +1,51 @@
 ---
 title: Channels
-description: Channels let people work with Valet from the web app, Slack, Telegram, and other connected surfaces.
+description: Work with Valet from the web app, Slack, Telegram, and other connected places.
 ---
 
-# Channels
-
-Channels are the places where people talk to Valet. A task can start in the web app, Slack, Telegram, a workflow, or another connected surface, then return updates in the right place.
+Channels are the places where people talk to Valet. A task can start in one place and return updates in the same place.
 
 ## Web app
 
-The web app is the primary place to inspect work. It shows sessions, progress, approvals, files, workflows, integrations, and settings.
+Use the web app when you want the clearest view of the work.
 
-Start in the web app when a task is new, sensitive, or needs close review.
+The web app is best for:
+
+- Starting a new task.
+- Watching progress.
+- Reviewing approvals.
+- Inspecting files, drafts, and results.
+- Managing settings.
 
 ## Slack
 
-Slack is useful for lightweight delegation and updates. A user can ask Valet to help from a direct message or another supported Slack surface, depending on how the organization configures routing.
+Use Slack for quick requests and updates.
 
-Use Slack for:
+Slack is best for:
 
-- Quick requests.
-- Status checks.
-- Approval prompts.
-- Follow-up from workflows.
+- Asking Valet to check something.
+- Getting a status update.
+- Receiving approval prompts.
+- Posting summaries after workflows.
 
 ## Telegram
 
-Telegram can be useful for personal or mobile workflows. It can send text and supported media into Valet and receive replies or approval prompts.
+Use Telegram when you want a lightweight mobile channel for personal tasks, quick updates, or approvals.
 
-## Channel routing
+## Choosing the right channel
 
-Valet should route a channel message to the right place:
-
-- A bound session if the conversation already belongs to a task.
-- The user's orchestrator if it is a new personal request.
-- An organization orchestrator or workflow when configured.
-- No action if the surface is not allowed.
+| Use this | When |
+| --- | --- |
+| Web app | The task is new, sensitive, or needs close review. |
+| Slack | The request belongs in team chat or needs a quick follow-up. |
+| Telegram | You want a personal mobile place to work with Valet. |
+| Workflow | The work should run on a schedule or after a repeated event. |
 
 ## Channel safety
 
-Channels can carry sensitive context. Admins should decide:
+Channels can include sensitive information. Admins should decide:
 
 - Which channels are enabled.
-- Which surfaces can reach personal memory.
-- Which messages can start sessions.
-- Which approval prompts can be resolved outside the web app.
-
-## For engineers
-
-Implementation details live in [Real-time streaming](/engineering/real-time-streaming), [Plugin system](/engineering/plugin-system), and [Auth and access internals](/engineering/auth-access-internals).
+- Which channels can start tasks.
+- Which channels can show approval prompts.
+- Which channels can reach personal or team memory.

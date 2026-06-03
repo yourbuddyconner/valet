@@ -1,52 +1,98 @@
 ---
-title: Personas and Skills
-description: Personas shape how Valet behaves, while skills describe specialized ways of working.
+title: Create Skills and Personas
+description: Teach Valet how to do repeatable work with skills, and shape its behavior with personas.
 ---
 
-# Personas and Skills
+import { MascotNote } from '/snippets/mascot-note.mdx';
+import { PersonaCard } from '/snippets/persona-card.mdx';
 
-Personas and skills shape how Valet behaves for a task.
+Skills and personas help Valet behave consistently.
 
-A **persona** is a behavior preset. A **skill** is a specialized way of working. Together, they help Valet act consistently across sessions and workflows.
+- A **skill** teaches Valet how to do a specific kind of work.
+- A **persona** shapes how Valet should behave for a role.
 
-## Personas
+<MascotNote
+  title="Note / tip"
+  image="/images/characters/personas.png"
+  alt="Valet with persona cards"
+>
+  Start with the work, not the label. If a task has a repeatable process, write a skill. If a task needs a consistent role or tone, create a persona.
+</MascotNote>
 
-Use personas when different work needs different behavior:
+## Create a skill
 
-- A PR reviewer should be precise, skeptical, and code-focused.
-- A customer workflow assistant should be careful, concise, and approval-aware.
-- An operations assistant should summarize clearly and surface risks early.
-- An incident scribe should preserve timelines and decisions.
+Use a skill when you want Valet to follow the same approach every time.
 
-Personas can include instructions, tone, expected outputs, preferred tools, and attached skills.
+<Steps>
+  <Step title="Name the work">
+    Choose a specific name, such as "Review a pull request", "Prepare customer follow-up", or "Summarize a weekly queue."
+  </Step>
+  <Step title="Write the steps">
+    Describe what Valet should check first, what tools it should use, what output it should produce, and what it should avoid.
+  </Step>
+  <Step title="Add quality rules">
+    Include the standards that make the work good: tone, evidence, formatting, approval points, or review criteria.
+  </Step>
+  <Step title="Attach it where it belongs">
+    Add the skill to the persona, workflow, or team setup that should use it.
+  </Step>
+  <Step title="Test it on real work">
+    Run a small task and revise the skill when Valet misses a step or asks for unclear details.
+  </Step>
+</Steps>
 
-## Skills
+## What a good skill includes
 
-Skills describe how Valet should do a kind of work. A skill might cover:
+```text
+Skill: Review a pull request
 
-- How to use a browser.
-- How to work with GitHub.
-- How to prepare a workflow.
-- How to search memory.
-- How to draft customer follow-up.
-- How to use a specific connected system.
+Use when:
+- A user asks Valet to review a PR before merge.
 
-Skills should be concrete. They are most useful when they describe steps, constraints, and quality bars.
+Steps:
+- Read the PR summary and changed files.
+- Check for correctness, missing tests, risky behavior, and unclear code.
+- Prioritize bugs and regressions over style comments.
+- Write concise findings with file references.
 
-## Choosing the right behavior
+Approval:
+- Ask before posting comments publicly.
+```
 
-Start with the default persona for general work. Add or create a persona when:
+Good skills are short, concrete, and tied to real work. If a skill becomes long or vague, split it.
 
-- The task has a repeatable role.
-- The output format matters.
-- The agent needs a consistent tone.
-- The task needs a specialized tool sequence.
-- A team wants shared behavior across many users.
+## Create a persona
 
-## Admin guidance
+Use a persona when Valet needs to act in a recognizable role.
 
-Admins should keep shared personas and skills small, named clearly, and tied to real work. A long list of overlapping presets makes Valet harder to operate.
+<div className="valet-doc-grid">
+  <PersonaCard
+    title="PR Reviewer"
+    description="Precise, skeptical, code-focused, and careful about behavioral regressions."
+  />
+  <PersonaCard
+    title="Operations Assistant"
+    description="Clear summaries, risk flags, handoffs, and recurring checks."
+  />
+  <PersonaCard
+    title="Customer Follow-up"
+    description="Careful with customer details, drafts concise responses, and asks before sending."
+  />
+  <PersonaCard
+    title="Incident Scribe"
+    description="Tracks timelines, decisions, owners, and follow-up work."
+  />
+</div>
 
-## For engineers
+## What a persona should define
 
-Implementation details live in [Plugin system](/engineering/plugin-system) and [Orchestrator runtime](/engineering/orchestrator-runtime).
+Include:
+
+- The role Valet is playing.
+- The tone it should use.
+- The kinds of tasks it should accept.
+- The skills it should use.
+- What it should ask before doing.
+- What a good final answer looks like.
+
+Avoid creating many overlapping personas. A small set of clear roles is easier for users to choose and easier for admins to maintain.

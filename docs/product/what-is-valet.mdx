@@ -1,6 +1,6 @@
 ---
 title: What is Valet?
-description: Valet is an AI coworker with its own hosted workspace, persistent memory, connected tools, workflows, channels, and approval-aware execution.
+description: Valet is an AI coworker with its own workspace, memory, connected tools, workflows, channels, and approvals.
 ---
 
 import { FeatureCard } from '/snippets/feature-card.mdx';
@@ -17,34 +17,34 @@ Valet is an AI coworker with its own workspace. You can ask it to take on work, 
   Valet should feel like a capable coworker: friendly at the edges, serious about the work, and careful when an action needs approval.
 </MascotNote>
 
-Valet is not just a chatbot. It has a place to work, context it can remember, tools it can use, and rules that decide when it must ask before acting.
+Valet is not just a chatbot. It has a place to work, useful details it can remember, tools it can use, and rules that decide when it must ask before acting.
 
 ## What Valet can do
 
 <div className="valet-doc-grid">
   <FeatureCard
-    eyebrow="Context"
+    eyebrow="Memory"
     title="Answer with memory"
-    description="Use durable context from earlier work, preferences, projects, and procedures."
-    href="/product/orchestrators-and-memory"
+    description="Use remembered preferences, projects, and procedures from earlier work."
+    href="/product/memory"
   />
   <FeatureCard
     eyebrow="Work"
-    title="Run tasks in sessions"
-    description="Keep the conversation, status, approvals, artifacts, and result together."
-    href="/product/sessions"
+    title="Run focused tasks"
+    description="Keep the conversation, progress, approvals, drafts, and result together."
+    href="/product/tasks"
   />
   <FeatureCard
     eyebrow="Automation"
     title="Use workflows"
     description="Run repeatable work manually, from schedules, or from external events."
-    href="/product/triggers-and-workflows"
+    href="/product/workflows"
   />
   <FeatureCard
     eyebrow="Control"
     title="Ask before sensitive actions"
     description="Route writes, sends, deletes, and other risky work through approval."
-    href="/product/policies-and-approvals"
+    href="/product/approvals"
   />
 </div>
 
@@ -57,25 +57,25 @@ For engineering teams, Valet can also work inside a development workspace. Those
     eyebrow="Workspace"
     title="A place to work"
     description="The hosted place where Valet does the work for a task."
-    href="/product/workstations-and-sandboxes"
+    href="/product/workspaces"
   />
   <FeatureCard
     eyebrow="Session"
     title="A focused work thread"
-    description="One task with its own conversation, context, participants, approvals, and activity."
-    href="/product/sessions"
+    description="One task with its own conversation, details, participants, approvals, and activity."
+    href="/product/tasks"
   />
   <FeatureCard
-    eyebrow="Orchestrator"
-    title="A persistent coordinator"
-    description="The coworker that remembers context and routes work over time."
-    href="/product/orchestrators-and-memory"
+    eyebrow="Memory"
+    title="Useful memory"
+    description="Preferences, procedures, and notes Valet can use in future work."
+    href="/product/memory"
   />
   <FeatureCard
     eyebrow="Integration"
     title="A connected system"
-    description="A tool Valet can use when credentials, access, and policy allow it."
-    href="/product/integrations"
+    description="A tool Valet can use when it is connected and allowed."
+    href="/product/tools"
   />
 </div>
 
@@ -94,12 +94,12 @@ For engineering teams, Valet can also work inside a development workspace. Those
   />
   <UseCaseCard
     title="Customer-facing teams"
-    description="Gather account context, draft follow-ups, and create tasks across connected systems."
+    description="Gather account details, draft follow-ups, and create tasks across connected systems."
     href="/use-cases/customer-workflows"
   />
   <UseCaseCard
     title="Admins"
-    description="Configure access, integrations, policies, channels, workflows, and approval defaults."
+    description="Set access, connected tools, approvals, channels, workflows, and team defaults."
     href="/product/admin-setup"
   />
 </div>
@@ -110,14 +110,14 @@ For engineering teams, Valet can also work inside a development workspace. Those
   <FeatureCard
     eyebrow="Start"
     title="Quickstart"
-    description="Get to a first useful Valet session without needing the internals."
+    description="Get to a first useful Valet task."
     href="/product/quickstart"
     mark
   />
   <FeatureCard
     eyebrow="Concept"
     title="How Valet works"
-    description="Follow the flow from request to context, workspace, tools, approval, and result."
+    description="Follow the flow from request to workspace, tools, approval, and result."
     href="/product/how-valet-works"
   />
 </div>

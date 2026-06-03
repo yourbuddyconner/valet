@@ -2,7 +2,7 @@
   "$schema": "https://mintlify.com/docs.json",
   "theme": "mint",
   "name": "Valet",
-  "description": "Product documentation for Valet, an AI coworker with its own hosted workstation, persistent memory, channels, integrations, workflows, policies, and technical execution environment.",
+  "description": "Product documentation for Valet, an AI coworker with its own workspace, memory, connected tools, channels, workflows, and approvals.",
   "colors": {
     "primary": "#1747E6",
     "light": "#5B7FF5",
@@ -79,22 +79,22 @@
             ]
           },
           {
-            "group": "Everyday use",
+            "group": "Work in Valet",
             "pages": [
-              "product/sessions",
-              "product/workstations-and-sandboxes",
-              "product/triggers-and-workflows",
-              "product/orchestrators-and-memory",
+              "product/tasks",
+              "product/workspaces",
+              "product/workflows",
+              "product/memory",
               "product/skills-and-personas"
             ]
           },
           {
-            "group": "Trust and control",
+            "group": "Setup and control",
             "pages": [
-              "product/auth-and-access",
-              "product/policies-and-approvals",
+              "product/access",
+              "product/approvals",
               "product/channels",
-              "product/integrations",
+              "product/tools",
               "product/admin-setup"
             ]
           }
@@ -161,6 +161,6 @@
     "indexing": "navigable"
   },
   "search": {
-    "prompt": "Search Valet docs for product concepts, use cases, sessions, workspaces, workflows, approvals, channels, integrations, engineering internals, API routes, and MCP access."
+    "prompt": "Search Valet docs for product concepts, use cases, tasks, workspaces, workflows, skills, approvals, channels, integrations, engineering details, API reference, and MCP access."
   }
 }
