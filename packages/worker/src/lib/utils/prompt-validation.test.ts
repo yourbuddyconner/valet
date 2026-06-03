@@ -2,6 +2,8 @@ import { describe, it, expect } from 'vitest';
 import {
   sanitizePromptAttachments,
   attachmentPartsForMessage,
+  attachmentPartsForDisplay,
+  attachmentsForClientState,
 } from './prompt-validation.js';
 
 function fakeAttachment(mime: string, filename?: string) {
@@ -82,6 +84,42 @@ describe('sanitizePromptAttachments', () => {
     expect(rejectedTypes).toHaveLength(1);
   });
 
+  it('accepts internal prompt blob references for supported file types', () => {
+    const { attachments, rejectedTypes } = sanitizePromptAttachments([
+      {
+        type: 'file',
+        mime: 'application/pdf',
+        url: 'valet-prompt-blob://attachment/session-1/blob-1',
+        filename: 'large.pdf',
+      },
+    ]);
+
+    expect(attachments).toEqual([
+      {
+        type: 'file',
+        mime: 'application/pdf',
+        url: 'valet-prompt-blob://attachment/session-1/blob-1',
+        filename: 'large.pdf',
+      },
+    ]);
+    expect(rejectedTypes).toHaveLength(0);
+  });
+
+  it('resolves internal prompt blob PDF references from filename when MIME is generic', () => {
+    const { attachments, rejectedTypes } = sanitizePromptAttachments([
+      {
+        type: 'file',
+        mime: 'application/octet-stream',
+        url: 'valet-prompt-blob://attachment/session-1/blob-1',
+        filename: 'large.pdf',
+      },
+    ]);
+
+    expect(attachments).toHaveLength(1);
+    expect(attachments[0].mime).toBe('application/pdf');
+    expect(rejectedTypes).toHaveLength(0);
+  });
+
   it('resolves empty MIME with known extension to correct MIME', () => {
     const { attachments, rejectedTypes } = sanitizePromptAttachments([
       fakeAttachment('', 'README.md'),
@@ -151,5 +189,64 @@ describe('attachmentPartsForMessage', () => {
     const parts = attachmentPartsForMessage(attachments);
     expect(parts).toHaveLength(1);
     expect(parts[0].type).toBe('image');
+  });
+});
+
+// ─── attachmentPartsForDisplay ─────────────────────────────────────────────
+
+describe('attachmentPartsForDisplay', () => {
+  it('omits raw data for file attachments used only as chips', () => {
+    const attachments = [
+      { type: 'file' as const, mime: 'application/pdf', url: 'data:application/pdf;base64,aGVsbG8=', filename: 'paper.pdf' },
+      { type: 'file' as const, mime: 'text/plain', url: 'data:text/plain;base64,aGVsbG8=', filename: 'notes.txt' },
+    ];
+
+    const parts = attachmentPartsForDisplay(attachments);
+
+    expect(parts).toEqual([
+      { type: 'file', mimeType: 'application/pdf', filename: 'paper.pdf' },
+      { type: 'file', mimeType: 'text/plain', filename: 'notes.txt' },
+    ]);
+  });
+
+  it('keeps raw data for previewable image and audio attachments', () => {
+    const attachments = [
+      { type: 'file' as const, mime: 'image/png', url: 'data:image/png;base64,aGVsbG8=', filename: 'photo.png' },
+      { type: 'file' as const, mime: 'audio/webm', url: 'data:audio/webm;base64,aGVsbG8=', filename: 'voice.webm' },
+    ];
+
+    const parts = attachmentPartsForDisplay(attachments);
+
+    expect(parts[0]).toMatchObject({ type: 'image', data: 'aGVsbG8=', mimeType: 'image/png' });
+    expect(parts[1]).toMatchObject({ type: 'audio', data: 'aGVsbG8=', mimeType: 'audio/webm' });
+  });
+
+  it('keeps a file chip for internal prompt blob references', () => {
+    const attachments = [
+      {
+        type: 'file' as const,
+        mime: 'application/pdf',
+        url: 'valet-prompt-blob://attachment/session-1/blob-1',
+        filename: 'large.pdf',
+      },
+    ];
+
+    expect(attachmentPartsForDisplay(attachments)).toEqual([
+      { type: 'file', mimeType: 'application/pdf', filename: 'large.pdf' },
+    ]);
+  });
+});
+
+// ─── attachmentsForClientState ─────────────────────────────────────────────
+
+describe('attachmentsForClientState', () => {
+  it('omits data URLs from queued prompt state', () => {
+    const attachments = [
+      { type: 'file' as const, mime: 'application/pdf', url: 'data:application/pdf;base64,aGVsbG8=', filename: 'paper.pdf' },
+    ];
+
+    expect(attachmentsForClientState(attachments)).toEqual([
+      { type: 'file', mime: 'application/pdf', filename: 'paper.pdf' },
+    ]);
   });
 });

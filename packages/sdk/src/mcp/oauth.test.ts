@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   buildAuthorizationUrl,
   exchangeCodeWithClientCredentials,
+  refreshTokenPkce,
   refreshTokenWithClientCredentials,
 } from './oauth.js';
 
@@ -141,6 +142,28 @@ describe('MCP OAuth helpers', () => {
       tokenEndpointAuthMethod: 'none',
       refreshToken: 'refresh-123',
       resource: 'https://mcp.example.com',
+    });
+  });
+
+  it('includes matching resource for public PKCE refreshes', async () => {
+    const fetchMock = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      const form = await readForm(init);
+      expect(form.get('grant_type')).toBe('refresh_token');
+      expect(form.get('client_id')).toBe('client-123');
+      expect(form.get('refresh_token')).toBe('refresh-123');
+      expect(form.get('resource')).toBe('https://mcp.example.com/mcp');
+      return new Response(JSON.stringify({ access_token: 'access' }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    });
+
+    await refreshTokenPkce({
+      tokenEndpoint: 'https://example.com/token',
+      clientId: 'client-123',
+      refreshToken: 'refresh-123',
+      resource: 'https://mcp.example.com/mcp',
+      fetch: fetchMock,
     });
   });
 

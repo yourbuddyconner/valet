@@ -11,8 +11,13 @@ vi.mock('../lib/db/credentials.js', () => ({
   getExpiringCredentials: vi.fn(),
 }));
 
+vi.mock('../lib/db/mcp-oauth.js', () => ({
+  getMcpOAuthClient: vi.fn(),
+}));
+
 vi.mock('./custom-mcp-connectors.js', () => ({
   getCustomMcpOAuthConfig: vi.fn(),
+  getCustomMcpOAuthConnector: vi.fn(),
 }));
 
 // Mock the crypto layer
@@ -31,7 +36,8 @@ vi.mock('../lib/drizzle.js', () => ({
 }));
 
 import * as credentialDb from '../lib/db/credentials.js';
-import { getCustomMcpOAuthConfig } from './custom-mcp-connectors.js';
+import * as mcpOAuthDb from '../lib/db/mcp-oauth.js';
+import { getCustomMcpOAuthConfig, getCustomMcpOAuthConnector } from './custom-mcp-connectors.js';
 import { encryptStringPBKDF2, decryptStringPBKDF2 } from '../lib/crypto.js';
 import {
   getCredential,
@@ -50,9 +56,11 @@ const mockDb = credentialDb as unknown as {
   hasCredential: ReturnType<typeof vi.fn>;
   getExpiringCredentials: ReturnType<typeof vi.fn>;
 };
+const mockGetMcpOAuthClient = vi.mocked(mcpOAuthDb.getMcpOAuthClient);
 const mockEncrypt = encryptStringPBKDF2 as ReturnType<typeof vi.fn>;
 const mockDecrypt = decryptStringPBKDF2 as ReturnType<typeof vi.fn>;
 const mockGetCustomMcpOAuthConfig = getCustomMcpOAuthConfig as ReturnType<typeof vi.fn>;
+const mockGetCustomMcpOAuthConnector = getCustomMcpOAuthConnector as ReturnType<typeof vi.fn>;
 
 const fakeEnv = {
   DB: {} as unknown,
@@ -62,6 +70,8 @@ const fakeEnv = {
 beforeEach(() => {
   vi.clearAllMocks();
   mockGetCustomMcpOAuthConfig.mockResolvedValue(null);
+  mockGetCustomMcpOAuthConnector.mockResolvedValue(null);
+  mockGetMcpOAuthClient.mockResolvedValue(null);
 });
 
 describe('getCredential', () => {
@@ -235,6 +245,81 @@ describe('getCredential', () => {
         ownerType: 'user',
         ownerId: 'user-1',
         provider: 'salesforce-mcp',
+        credentialType: 'oauth2',
+        encryptedData: 'encrypted-refreshed',
+        expiresAt: expect.any(String),
+      }),
+    );
+  });
+
+  it('refreshes expired custom MCP OAuth credentials with a dynamically registered client', async () => {
+    mockDb.getCredentialRow.mockResolvedValue({
+      id: 'cred-1',
+      ownerType: 'user',
+      ownerId: 'user-1',
+      provider: 'ramp',
+      credentialType: 'oauth2',
+      encryptedData: 'encrypted-blob',
+      metadata: null,
+      scopes: 'openid profile offline_access',
+      expiresAt: new Date(Date.now() - 60_000).toISOString(),
+      createdAt: '2025-01-01T00:00:00Z',
+      updatedAt: '2025-01-01T00:00:00Z',
+    });
+    mockDecrypt.mockResolvedValue(JSON.stringify({
+      access_token: 'old-access',
+      refresh_token: 'old-refresh',
+    }));
+    mockGetCustomMcpOAuthConnector.mockResolvedValue({
+      id: 'ramp-connector',
+      orgId: 'default',
+      serviceSlug: 'ramp',
+      displayName: 'Ramp',
+      serverUrl: 'https://mcp.ramp.com/mcp',
+      authType: 'oauth',
+      oauthClientId: null,
+      oauthTokenEndpointAuthMethod: 'none',
+      oauthScopes: 'openid profile offline_access',
+      oauthAuthorizationEndpoint: null,
+      oauthTokenEndpoint: null,
+    });
+    mockGetMcpOAuthClient.mockResolvedValue({
+      service: 'ramp',
+      clientId: 'ramp-dynamic-client',
+      clientSecret: null,
+      authorizationEndpoint: 'https://auth.ramp.com/oauth/authorize',
+      tokenEndpoint: 'https://auth.ramp.com/oauth/token',
+      registrationEndpoint: 'https://auth.ramp.com/oauth/register',
+      scopesSupported: null,
+      metadataJson: null,
+    });
+    mockEncrypt.mockResolvedValue('encrypted-refreshed');
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const form = init?.body as URLSearchParams;
+      expect(form.get('grant_type')).toBe('refresh_token');
+      expect(form.get('client_id')).toBe('ramp-dynamic-client');
+      expect(form.get('refresh_token')).toBe('old-refresh');
+      expect(form.get('resource')).toBe('https://mcp.ramp.com/mcp');
+      return Response.json({ access_token: 'new-access', expires_in: 3600 });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await getCredential(fakeEnv, 'user', 'user-1', 'ramp');
+
+    expect(result).toMatchObject({
+      ok: true,
+      credential: {
+        accessToken: 'new-access',
+        refreshToken: 'old-refresh',
+        refreshed: true,
+      },
+    });
+    expect(mockDb.upsertCredential).toHaveBeenCalledWith(
+      fakeDrizzleDb,
+      expect.objectContaining({
+        ownerType: 'user',
+        ownerId: 'user-1',
+        provider: 'ramp',
         credentialType: 'oauth2',
         encryptedData: 'encrypted-refreshed',
         expiresAt: expect.any(String),

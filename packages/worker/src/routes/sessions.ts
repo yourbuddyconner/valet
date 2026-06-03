@@ -7,8 +7,12 @@ import * as db from '../lib/db.js';
 import * as sessionService from '../services/sessions.js';
 import { resolveAvailableModels } from '../services/model-catalog.js';
 import { NotFoundError, type AgentSession, type Message } from '@valet/shared';
+import { buildPromptAttachmentBlobUrl, parseBase64DataUrl } from '../lib/utils/prompt-validation.js';
 
 export const sessionsRouter = new Hono<{ Bindings: Env; Variables: Variables }>();
+
+const PROMPT_ATTACHMENT_OFFLOAD_BODY_CHARS = 800_000;
+const PROMPT_ATTACHMENT_R2_PREFIX = 'prompt-attachments';
 
 function isOrchestratorSession(session: AgentSession): boolean {
   return !!session.isOrchestrator || session.purpose === 'orchestrator';
@@ -68,6 +72,97 @@ function mergeMessagesPreferDo(doMessages: unknown[] | undefined, persistedMessa
   return Array.from(merged.values()).sort(
     (a, b) => a.createdAt.getTime() - b.createdAt.getTime()
   );
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+function decodeBase64ToBytes(base64: string): Uint8Array {
+  const cleaned = base64.replace(/\s+/g, '');
+  const chunks: string[] = [];
+  for (let i = 0; i < cleaned.length; i += 32_768) {
+    chunks.push(atob(cleaned.slice(i, i + 32_768)));
+  }
+  const byteLength = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
+  const bytes = new Uint8Array(byteLength);
+  let offset = 0;
+  for (const chunk of chunks) {
+    for (let i = 0; i < chunk.length; i++) {
+      bytes[offset + i] = chunk.charCodeAt(i);
+    }
+    offset += chunk.length;
+  }
+  return bytes;
+}
+
+async function offloadLargePromptAttachments(
+  env: Env,
+  sessionId: string,
+  rawBody: string,
+): Promise<{ body: string; offloadedCount: number }> {
+  if (rawBody.length <= PROMPT_ATTACHMENT_OFFLOAD_BODY_CHARS || !rawBody.includes('"attachments"')) {
+    return { body: rawBody, offloadedCount: 0 };
+  }
+
+  const parsed = JSON.parse(rawBody) as unknown;
+  if (!isRecord(parsed) || !Array.isArray(parsed.attachments)) {
+    return { body: rawBody, offloadedCount: 0 };
+  }
+
+  let offloadedCount = 0;
+  const attachments: unknown[] = [];
+
+  for (const item of parsed.attachments) {
+    if (!isRecord(item)) {
+      attachments.push(item);
+      continue;
+    }
+
+    const url = typeof item.url === 'string' ? item.url : '';
+    if (!url.startsWith('data:') || !url.includes(';base64,')) {
+      attachments.push(item);
+      continue;
+    }
+
+    const base64Data = parseBase64DataUrl(url);
+    if (!base64Data) {
+      attachments.push(item);
+      continue;
+    }
+
+    const blobId = crypto.randomUUID();
+    const mime = typeof item.mime === 'string' && item.mime.trim()
+      ? item.mime.trim().toLowerCase()
+      : 'application/octet-stream';
+    const filename = typeof item.filename === 'string' ? item.filename.slice(0, 255) : '';
+    const key = `${PROMPT_ATTACHMENT_R2_PREFIX}/${sessionId}/${blobId}`;
+
+    await env.STORAGE.put(key, decodeBase64ToBytes(base64Data), {
+      httpMetadata: { contentType: mime },
+      customMetadata: {
+        sessionId,
+        blobId,
+        mime,
+        filename,
+      },
+    });
+
+    attachments.push({
+      ...item,
+      url: buildPromptAttachmentBlobUrl(sessionId, blobId),
+    });
+    offloadedCount += 1;
+  }
+
+  if (offloadedCount === 0) {
+    return { body: rawBody, offloadedCount: 0 };
+  }
+
+  return {
+    body: JSON.stringify({ ...parsed, attachments }),
+    offloadedCount,
+  };
 }
 
 // Validation schemas
@@ -328,7 +423,20 @@ sessionsRouter.post('/:id/prompt', async (c) => {
   // Read raw body and inject author info without full re-serialization.
   // This avoids double-parsing multi-MB payloads (PDF base64 data URLs).
   const rawBody = await c.req.text();
-  const injected = rawBody.replace(
+  const contentLength = c.req.header('content-length') || 'unknown';
+  const fileMarkerCount = rawBody.match(/"type"\s*:\s*"file"/g)?.length ?? 0;
+  console.log(
+    `[sessions] /prompt forwarding: session=${resolvedId} rawChars=${rawBody.length} ` +
+    `contentLength=${contentLength} fileMarkers=${fileMarkerCount}`,
+  );
+  const { body: offloadedBody, offloadedCount } = await offloadLargePromptAttachments(c.env, resolvedId, rawBody);
+  if (offloadedCount > 0) {
+    console.log(
+      `[sessions] /prompt offloaded ${offloadedCount} attachment(s) to R2: ` +
+      `${rawBody.length} chars → ${offloadedBody.length} chars`,
+    );
+  }
+  const injected = offloadedBody.replace(
     /^\{/,
     `{"authorId":${JSON.stringify(user.id)},"authorEmail":${JSON.stringify(user.email)},`,
   );
@@ -429,6 +537,22 @@ sessionsRouter.get('/:id/messages', async (c) => {
   }
 
   return c.json(data);
+});
+
+/**
+ * GET /api/sessions/:id/runner-attachment
+ * Runner-only attachment fetch used when prompt attachments are too large for
+ * the DO→runner WebSocket frame. The DO validates the runner token.
+ */
+sessionsRouter.get('/:id/runner-attachment', async (c) => {
+  const { id } = c.req.param();
+  const doId = c.env.SESSIONS.idFromName(id);
+  const sessionDO = c.env.SESSIONS.get(doId);
+  const url = new URL(c.req.url);
+
+  return sessionDO.fetch(new Request(`http://do/prompt-attachment${url.search}`, {
+    method: 'GET',
+  }));
 });
 
 /**

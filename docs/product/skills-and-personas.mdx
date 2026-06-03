@@ -1,0 +1,85 @@
+---
+title: Skills and Personas
+description: Skills, personas, tools, and plugin content define what Valet agents know how to do and how they should behave in sessions.
+---
+
+# Skills and Personas
+
+Valet packages agent capabilities through plugins. A plugin can contribute code actions, channel transports, skills, personas, tools, or a combination of those surfaces.
+
+## Plugin capability types
+
+Plugin packages live under `packages/plugin-*`. They can provide:
+
+| Capability | Location | Runtime |
+| --- | --- | --- |
+| Actions | `src/actions/` | Compiled into the Worker and exposed through `list_tools` / `call_tool`. |
+| Channels | `src/channels/` | Compiled into the Worker for inbound/outbound channel transport. |
+| Skills | `skills/*.md` | Synced to D1 and delivered to sandboxes as OpenCode skills. |
+| Personas | `personas/*.md` | Synced to D1 and used when building session persona context. |
+| Tools | `tools/*.ts` | Synced to D1 and delivered as sandbox-local OpenCode tools. |
+
+Code plugins need package exports and registry generation. Content-only plugins need a manifest and content files.
+
+## Skills
+
+Skills are Markdown instructions delivered to OpenCode inside a session. They describe how an agent should perform a specific kind of work, such as using browser control, GitHub, Gmail, Google Calendar, Google Workspace, Slack tools, sandbox tunnels, personas, or workflows.
+
+The current content skill packages include:
+
+- Browser control.
+- GitHub.
+- Gmail.
+- Google Calendar.
+- Google Docs.
+- Google Drive.
+- Google Sheets.
+- Personas.
+- Sandbox tunnels.
+- Slack tools.
+- Workflows.
+
+Skills are indexed with FTS so users and agents can search them. A persona can have ordered skill attachments, and org defaults can attach shared skills automatically.
+
+## Personas
+
+Personas shape agent behavior. Orchestrator persona files are generated during orchestrator startup and include identity, coordination rules, memory behavior, child-session behavior, and available tools.
+
+Personas can be attached to sessions so a user can run different kinds of agents for different tasks.
+
+Persona-related tools include:
+
+- `list_personas`
+- `get_my_persona`
+- `save_persona`
+- `delete_persona`
+- `list_persona_skills`
+- `attach_skill_to_persona`
+- `detach_skill_from_persona`
+- `update_my_instructions`
+
+## Built-in, managed, and plugin content
+
+Valet's unified plugin system supports:
+
+- **Built-in content** delivered with the platform.
+- **Managed content** that can be configured by admins or users.
+- **Plugin content** discovered from `packages/plugin-*`.
+
+Content plugins do not need to compile into the Worker. Their skills, personas, and tools are synced to D1 and delivered to sandboxes through the Runner WebSocket.
+
+## Tools
+
+Tools are executable OpenCode capabilities. Content plugins can provide sandbox-local tools, while action plugins expose integration actions through Valet's `list_tools` and `call_tool` model.
+
+Sandbox-local tools include memory tools, workflow tools, session orchestration tools, mailbox tools, channel reply tools, tunnel tools, browser screenshot tools, persona/skill management tools, and secret-management helpers.
+
+## Registry generation
+
+The Worker uses generated registries for plugin packages:
+
+- `packages/worker/src/integrations/packages.ts` for action plugins.
+- `packages/worker/src/channels/packages.ts` for channel plugins.
+- `packages/worker/src/plugins/content-registry.ts` for skills, personas, and tools.
+
+Run `make generate-registries` after adding or removing plugin content so the Worker can discover it.

@@ -1,0 +1,38 @@
+---
+title: Overview
+description: Start here for the Valet product model: an AI coworker with its own hosted workstation, persistent memory, channels, integrations, workflows, and technical execution environment.
+---
+
+# Valet
+
+Valet is a calm, confident AI coworker with its own hosted workstation. It can work in the background, use connected tools, remember preferences, coordinate tasks, ask for approvals, and meet users where they already work.
+
+For engineering work, that workstation includes a repository checkout, VS Code, a browser, a terminal, and an agent runtime. For broader operational work, the same model gives Valet a place to use integrations, follow workflows, handle channel messages, and keep durable context across tasks.
+
+<Frame caption="A Valet session with the agent, terminal, and sandbox UI available together.">
+  <img src="/valet.png" alt="Valet session interface" />
+</Frame>
+
+## Product model
+
+Valet has three core layers:
+
+- **Sessions** are the units of agent work. A session owns the live workspace for a task, including message history, runtime state, participants, access controls, and any technical sandbox state.
+- **Orchestrators** are persistent coordinator agents. Each user gets an orchestrator that can answer questions, remember preferences, route channel messages, manage task context, and spawn child sessions.
+- **Plugins** provide integrations, channels, skills, personas, and sandbox tools. Some plugins expose first-party actions, while others proxy remote MCP services.
+
+## What to read
+
+- [What is Valet?](/product/what-is-valet) explains the product model in general terms.
+- [Sessions](/product/sessions) covers manual, scheduled, triggered, child, and workflow sessions.
+- [Workstations and sandboxes](/product/workstations-and-sandboxes) covers the hosted execution environment.
+- [Triggers and workflows](/product/triggers-and-workflows) covers schedule, webhook, and manual automation.
+- [Orchestrators and memory](/product/orchestrators-and-memory) covers the persistent agent, memory system, mailbox, and task board.
+- [Skills and personas](/product/skills-and-personas) covers how agent capabilities are packaged and attached.
+- [Auth and access](/product/auth-and-access) covers users, org gates, tokens, roles, and session access.
+- [Policies and approvals](/product/policies-and-approvals) covers tool risk, org policy, user overrides, and approval prompts.
+- [Channels](/product/channels) covers web, Slack, Telegram, GitHub/API routing, and channel bindings.
+- [Integrations](/product/integrations) covers the action catalog and current integration packages.
+- [MCP endpoint](/product/mcp-endpoint) covers how Mintlify exposes these docs to MCP-capable agents.
+- [Design language](/product/design-language) captures the docs site's brand rules.
+- [Character assets](/product/character-assets) explains where the Valet mascot images live and how to use them.

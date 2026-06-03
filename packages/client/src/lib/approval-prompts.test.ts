@@ -4,11 +4,13 @@ import {
   getDefaultApprovalActionId,
   getNextApprovalActionId,
   getApprovalActionDescription,
+  getPendingResponseRequiredThreadIds,
   getWebSocketErrorText,
   isApprovalPromptExpired,
   markInteractivePromptError,
   markInteractivePromptTerminal,
   pruneTerminalInteractivePrompt,
+  selectVisibleInteractivePrompts,
   upsertInteractivePrompt,
 } from './approval-prompts';
 
@@ -77,6 +79,38 @@ describe('approval prompt helpers', () => {
     const replayed = { id: 'prompt-1', title: 'Fresh title', status: 'pending' };
 
     expect(upsertInteractivePrompt([existing], replayed)).toEqual([replayed]);
+  });
+
+  it('shows the pending prompt for the active thread before older pending prompts from other threads', () => {
+    const prompts = [
+      { id: 'web-question', status: 'pending' as const, threadId: 'web-thread' },
+      { id: 'telegram-question', status: 'pending' as const, threadId: 'telegram-thread' },
+    ];
+
+    expect(selectVisibleInteractivePrompts(prompts, 'telegram-thread')).toEqual({
+      visible: [{ id: 'telegram-question', status: 'pending', threadId: 'telegram-thread' }],
+      queuedCount: 0,
+    });
+  });
+
+  it('treats thread channel context as active-thread prompt metadata', () => {
+    const prompts = [
+      { id: 'approval-1', status: 'pending' as const, context: { channelType: 'thread', channelId: 'thread-1' } },
+    ];
+
+    expect(selectVisibleInteractivePrompts(prompts, 'thread-1').visible).toEqual(prompts);
+  });
+
+  it('collects pending question and approval thread ids for thread-list indicators', () => {
+    const prompts = [
+      { id: 'approval-1', type: 'approval', status: 'pending' as const, threadId: 'web-thread' },
+      { id: 'question-1', type: 'question', status: 'pending' as const, threadId: 'question-thread' },
+      { id: 'approval-2', type: 'approval', status: 'resolved' as const, threadId: 'resolved-thread' },
+      { id: 'approval-3', type: 'approval', status: 'pending' as const, context: { channelType: 'thread', channelId: 'telegram-thread' } },
+      { id: 'approval-4', type: 'approval', status: 'pending' as const, channelType: 'slack', channelId: 'slack-dm' },
+    ];
+
+    expect(getPendingResponseRequiredThreadIds(prompts)).toEqual(new Set(['web-thread', 'question-thread', 'telegram-thread']));
   });
 
   it('extracts websocket error text from the worker message field', () => {

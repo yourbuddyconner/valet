@@ -1,0 +1,138 @@
+---
+title: Sessions
+description: Sessions are Valet's unit of agent work, with sandbox lifecycle management, prompt queues, message streaming, git state, hibernation, restoration, participants, and audit logs.
+---
+
+# Sessions
+
+A session is one agent workspace. It owns the workstation for a task, the message stream, prompt queue, runtime status, git state, participants, share links, files changed, and audit log.
+
+For engineering work, the session's workstation is a Modal sandbox with repository checkout, VS Code, browser/VNC, terminal, Runner, and OpenCode. For non-engineering work, the same session model still gives Valet durable conversation state, approvals, connected tools, and channel routing.
+
+## Session types
+
+- **Manual sessions** are started directly by a user from the web UI, API, or a routed channel message.
+- **Scheduled sessions** are started indirectly by schedule triggers. A schedule can run a workflow or send a prompt to the orchestrator.
+- **Triggered sessions** are created by webhook or manual automation paths that enqueue work into Valet.
+- **Child sessions** are spawned by an orchestrator to delegate focused work while preserving parent context.
+- **Workflow sessions** run workflow steps inside a dedicated sandbox-backed session.
+- **Orchestrator sessions** are persistent coordinator sessions for a user or org context.
+
+The `purpose` field distinguishes `interactive`, `workflow`, and `orchestrator` sessions. Child sessions use `parentSessionId` to connect back to the orchestrator or parent task.
+
+## Lifecycle
+
+Sessions move through a sandbox-backed state machine:
+
+1. `initializing`: the Worker creates the session record and asks the SessionAgent Durable Object to start.
+2. `running`: the Modal sandbox exists, the Runner is connected, and the user can interact with the agent.
+3. `hibernating`: Valet flushes metrics, snapshots the sandbox filesystem, and shuts down compute.
+4. `hibernated`: the session is asleep with a stored snapshot image.
+5. `restoring`: Valet creates a new sandbox from the stored snapshot.
+6. `terminated`, `archived`, or `error`: terminal states used for cleanup and list views.
+
+Messages sent to a hibernated session are queued and trigger an automatic wake. Once the Runner reconnects, the SessionAgent Durable Object drains the prompt queue.
+
+## Creation flow
+
+Session creation is intentionally asynchronous:
+
+1. The client calls `POST /api/sessions`.
+2. The Worker creates the D1 session row, runner token, and Durable Object start request.
+3. The SessionAgent Durable Object stores initial state and returns quickly.
+4. In the background, the Durable Object asks the Modal backend to create a sandbox.
+5. Modal returns sandbox ID and tunnel URLs.
+6. The Durable Object marks the session `running`, syncs status to D1, and broadcasts the update to connected clients.
+
+This lets the UI show an initializing session immediately while sandbox startup continues.
+
+## Live state authority
+
+Session state exists in two places:
+
+- **D1** is authoritative for list views, access checks, terminal states, and persisted history.
+- **SessionAgent Durable Object SQLite** is authoritative for live state, prompt queue, connected users, message history, and runner connection status.
+
+The Durable Object syncs important transitions back to D1. Reads that combine D1 and live state treat terminal D1 states as authoritative.
+
+## Prompt queue modes
+
+Valet supports three queue modes:
+
+- **Followup** queues user prompts after the current agent turn.
+- **Steer** lets a user interrupt and steer ongoing work.
+- **Collect** batches rapid channel messages with a debounce before sending them to the agent.
+
+The user's UI queue mode and any channel binding settings determine how inbound prompts enter the queue.
+
+## Real-time streaming
+
+Clients connect to the SessionAgent Durable Object with `role=client`. The Runner connects with `role=runner`. The Durable Object broadcasts:
+
+- Message creation and message updates.
+- Streaming text chunks.
+- Tool-call updates.
+- Agent status.
+- Session status.
+- Questions and interactive approval prompts.
+- Presence changes.
+- Git state and file-change summaries.
+
+On client reconnect, the Durable Object sends an `init` payload with complete current state, replacing stale client state.
+
+## Git state
+
+Engineering sessions can track:
+
+- Source type: pull request, issue, branch, or manual.
+- Source repository URL, base branch, and checked-out branch.
+- Working branch and PR number.
+- PR state and URL.
+- Commit count and files changed.
+
+The Runner reports git state back through the gateway so the UI can show branch, PR, diff, and file-change context.
+
+## Collaboration and access
+
+Session access is role-based:
+
+- **Owner** can update and terminate the session.
+- **Collaborator** can participate in the session.
+- **Viewer** can inspect the session.
+
+Participants can be added directly or through share links. Org visibility settings can make sessions private, org-visible, or org-joinable depending on deployment configuration.
+
+## Child sessions
+
+An orchestrator can spawn child sessions when a task is better handled in isolation. Child sessions:
+
+- Point back to the parent with `parentSessionId`.
+- Can bypass the user's active-session concurrency limit when spawned by the orchestrator.
+- Can send mailbox messages and status back to the parent context.
+- Are cascade-terminated when the parent is terminated.
+
+## Runtime surfaces
+
+When a session is running, users can open:
+
+- Agent chat and streaming messages.
+- VS Code through the sandbox auth gateway.
+- Browser/VNC through the sandbox auth gateway.
+- Terminal through the sandbox auth gateway.
+
+Sandbox iframe access uses short-lived JWTs issued by the Worker and validated by the Runner gateway.
+
+## API surface
+
+Common session routes include:
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/api/sessions` | List sessions. |
+| `POST` | `/api/sessions` | Create a session. |
+| `GET` | `/api/sessions/:id` | Read session detail with live status. |
+| `PATCH` | `/api/sessions/:id` | Update session title. |
+| `DELETE` | `/api/sessions/:id` | Terminate a session. |
+| `GET` | `/api/sessions/:id/git-state` | Read git state. |
+| `GET` | `/api/sessions/:id/sandbox-token` | Issue a 15-minute gateway JWT. |
+| `GET` | `/api/sessions/:id/ws` | Open the session WebSocket. |

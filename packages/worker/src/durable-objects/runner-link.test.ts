@@ -147,6 +147,30 @@ describe('RunnerLink', () => {
       expect(spy).toHaveBeenCalledWith(expect.stringContaining('messageId=msg-1'));
       spy.mockRestore();
     });
+
+    it('replaces large prompt attachment data URLs with runner-fetch references', () => {
+      deps.addSocket();
+      const largePdf = `data:application/pdf;base64,${'a'.repeat(900_000)}`;
+
+      const result = link.send({
+        type: 'prompt',
+        messageId: 'msg-large',
+        content: '',
+        attachments: [
+          { type: 'file', mime: 'application/pdf', url: largePdf, filename: 'paper.pdf' },
+        ],
+      });
+
+      expect(result).toBe(true);
+      const sent = JSON.parse(deps.sockets[0].send.mock.calls[0][0]);
+      expect(sent.attachments[0]).toEqual({
+        type: 'file',
+        mime: 'application/pdf',
+        url: 'valet-prompt-attachment://msg-large/0',
+        filename: 'paper.pdf',
+      });
+      expect(deps.sockets[0].send.mock.calls[0][0].length).toBeLessThan(10_000);
+    });
   });
 
   // ─── Message Dispatch ─────────────────────────────────────────────

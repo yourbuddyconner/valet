@@ -1,0 +1,101 @@
+---
+title: Triggers and Workflows
+description: Valet workflows define reusable automations that can run manually, from webhooks, or from schedules, including approval gates, agent message steps, proposals, and version history.
+---
+
+# Triggers and Workflows
+
+Workflows are reusable automations that Valet can run inside agent sessions. A workflow definition stores its name, slug, version, tags, variables, constraints, and ordered step data. Each run creates an execution record with status, inputs, outputs, step traces, and a workflow snapshot.
+
+## Core objects
+
+Valet stores workflow automation in four main records:
+
+| Record | Purpose |
+| --- | --- |
+| `workflows` | User-owned workflow definitions with slug, version, metadata, tags, enabled flag, and JSON step data. |
+| `triggers` | Manual, webhook, or schedule entry points that run workflows or route prompts. |
+| `workflow_executions` | Run instances with status, input variables, output variables, workflow snapshot, runtime state, and resume token. |
+| `workflow_execution_steps` | Normalized per-step traces with input, output, status, attempt, and error data. |
+
+Execution records keep a workflow snapshot and hash so historical runs remain explainable even after the workflow definition changes.
+
+## Trigger types
+
+Valet supports three trigger types:
+
+- **Manual** triggers run a workflow directly from the UI or API.
+- **Webhook** triggers receive external HTTP events, validate configured method/header/secret rules, and map request data into workflow variables.
+- **Schedule** triggers evaluate cron expressions and enqueue work at the configured time.
+
+Schedule triggers can target either:
+
+- `workflow`: run the linked workflow.
+- `orchestrator`: send a prompt to the user's orchestrator instead of running a workflow. These triggers do not require a workflow ID.
+
+The `schedule_target=orchestrator` path is useful when the automation should be interpreted by the user's persistent coworker, not by a fixed workflow definition.
+
+## Execution lifecycle
+
+Workflow executions move through:
+
+1. `pending`: queued for a WorkflowExecutor Durable Object.
+2. `running`: actively executing steps in a session.
+3. `waiting_approval`: paused at an approval gate.
+4. `completed`, `failed`, or `cancelled`: terminal states.
+
+Valet applies per-user and global concurrency limits to active executions so automation cannot overwhelm the platform.
+
+## Step behavior
+
+Workflow steps can include shell commands, tool calls, agent work, approval gates, conditionals, parallel branches, and follow-on operations. Runner-side workflow execution compiles the definition, runs the steps, records normalized traces, and reports completion back to the Worker.
+
+Supported runtime step concepts include:
+
+- `bash`: run a command in the workflow session.
+- `tool`: call a Valet integration tool through the normal action policy path.
+- `approval`: pause for human review.
+- `conditional`: branch based on runtime data.
+- `parallel`: run multiple branches.
+- `agent`: ask an agent to perform work.
+- `agent_message`: send a message to the workflow session agent.
+
+Tool steps are still subject to action policy, user overrides, and approvals. Workflow approval gates are separate from integration tool approvals.
+
+## Approvals inside workflows
+
+An approval step pauses the execution and stores a resume token. A user can approve or deny the execution. Approval resumes the WorkflowExecutor Durable Object; denial cancels the run.
+
+If the execution is waiting on approval, Valet can surface the approval through the web UI and notification paths. The execution remains active until it is approved, denied, cancelled, or otherwise resolved.
+
+## Self-modification proposals
+
+Workflows can produce mutation proposals. A proposal stores:
+
+- The base workflow hash at proposal time.
+- The proposed new workflow JSON.
+- A human-readable diff.
+- Review status and notes.
+
+Approved proposals can be applied if the base hash is still current. Valet also records immutable workflow version history for updates, proposal applies, rollbacks, and syncs.
+
+## Schedule deduplication
+
+Cron schedules use minute buckets to avoid duplicate runs. Each schedule tick records a `(triggerId, tickBucket)` pair. If the same tick is evaluated more than once, the unique key prevents a second execution for the same minute.
+
+## API surface
+
+Workflow routes include:
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/api/workflows` | List workflows. |
+| `GET` | `/api/workflows/:id` | Read a workflow by ID or slug. |
+| `POST` | `/api/workflows/sync` | Upsert a full workflow definition. |
+| `PUT` | `/api/workflows/:id` | Update workflow metadata or definition. |
+| `DELETE` | `/api/workflows/:id` | Delete a workflow and linked triggers. |
+| `GET` | `/api/workflows/:id/executions` | List execution history. |
+| `GET` | `/api/workflows/:id/history` | List immutable version snapshots. |
+| `POST` | `/api/workflows/:id/rollback` | Restore a historical definition. |
+
+Trigger routes include `GET /api/triggers`, `POST /api/triggers`, `POST /api/triggers/manual/run`, and webhook endpoints generated from trigger configuration.

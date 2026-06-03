@@ -1,8 +1,8 @@
 # Valet
 
-**Self-hosted background coding agents with full dev environments.**
+**An AI coworker with its own hosted workstation.**
 
-Give your AI coworker its own sandbox — complete with VS Code, a browser, and a terminal — and let it work in the background while you do something else. Watch it think, intervene when needed, or check back when it's done.
+Give your AI coworker a persistent workspace with connected tools, memory, channels, and approvals. For engineering tasks, that workspace includes a full development environment with VS Code, a browser, a terminal, and repository access. Watch it work, intervene when needed, or check back when it's done.
 
 <p align="center">
   <img src="docs/valet.png" alt="Valet session" />
@@ -10,8 +10,8 @@ Give your AI coworker its own sandbox — complete with VS Code, a browser, and 
 
 ## Features
 
-- **Isolated sandboxes** — Every session gets its own container with a full dev environment. No local machine risk, no shared state between tasks.
-- **Full dev environment** — VS Code, browser (via VNC), and terminal accessible directly in the web UI. The agent has the same tools a human developer would.
+- **Hosted workstation** — Every session gets its own isolated workspace with the tools it needs for the task. No local machine risk, no shared state between tasks.
+- **Full engineering environment** — VS Code, browser (via VNC), and terminal are accessible directly in the web UI. The agent has the same development tools a human engineer would.
 - **Watch or walk away** — Stream the agent's work in real-time, or let it run in the background. Pick up where it left off anytime.
 - **Repo-aware** — Connect your GitHub repos. The agent clones, branches, codes, and opens PRs — using your OAuth credentials, scoped to each sandbox.
 - **Team-ready** — Invite your team, manage roles, share sessions. Built for collaborative use from day one.

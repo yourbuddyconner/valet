@@ -2,16 +2,30 @@
 
 Use these actions to read, compose, and manage Gmail messages and drafts on behalf of the authenticated user.
 
+## Body formatting
+
+The `body` field on `gmail.send_email`, `gmail.create_draft`, and `gmail.update_draft` accepts **markdown**. Supported formatting includes headings (`#`, `##`, `###`), bullet and numbered lists with nesting, **bold**, *italic*, `inline code`, fenced code blocks, links (`[text](url)`), blockquotes (`> `), and tables.
+
+The email is sent as `multipart/alternative` with the markdown source as the plain-text part and rendered HTML as the HTML part. Recipients with HTML support see formatted output; plain-text clients see the raw markdown fallback.
+
+Write paragraphs as single lines separated by blank lines. Do not hard-wrap inside a paragraph.
+
+Raw HTML in the body is escaped, not interpreted. Do not write HTML tags like `<p>` or `<strong>` for formatting; use markdown instead. It is safe to include `<` and `>` in code or examples.
+
+Escape markdown markers with a backslash when they should be literal prose, especially at the start of a line: `\#`, `\-`, `\1.`, and `\>`.
+
+Tables and code blocks are lightly styled for readability in email clients. Images are not supported in v1; use a publicly accessible URL and reference it as a link.
+
 ## Messages
 
 ### `gmail.send_email`
-Send a plain-text email. Supports `cc`, `bcc`, and threading via `replyToMessageId` (which sets `In-Reply-To`/`References` and places the reply in the original thread).
+Send a markdown-formatted email. Supports `cc`, `bcc`, and threading via `replyToMessageId` (which sets `In-Reply-To`/`References` and places the reply in the original thread).
 
 ```json
 {
   "to": "alice@example.com",
   "subject": "Hello",
-  "body": "Hi Alice, ...",
+  "body": "Hi Alice,\n\n**Here is the update:** ...",
   "cc": ["bob@example.com"],
   "replyToMessageId": "<optional gmail message id>"
 }
@@ -88,13 +102,13 @@ Risk: **high**.
 ## Drafts
 
 ### `gmail.create_draft`
-Create a draft without sending. Prefer this over `send_email` when the user should review before sending. Supports threading via `replyToMessageId`.
+Create a markdown-formatted draft without sending. Prefer this over `send_email` when the user should review before sending. Supports threading via `replyToMessageId`.
 
 ```json
 {
   "to": "alice@example.com",
   "subject": "Proposal",
-  "body": "Dear Alice, ...",
+  "body": "Dear Alice,\n\n## Proposal\n\n- Scope\n- Timeline",
   "replyToMessageId": "<optional>"
 }
 ```
@@ -126,14 +140,14 @@ Risk: **low**.
 ---
 
 ### `gmail.update_draft`
-Fully replace a draft's contents (subject, body, recipients). This is a full overwrite, not a patch.
+Fully replace a draft's markdown-formatted contents (subject, body, recipients). This is a full overwrite, not a patch.
 
 ```json
 {
   "draftId": "r8765432109",
   "to": "alice@example.com",
   "subject": "Updated Proposal",
-  "body": "Dear Alice, revised text..."
+  "body": "Dear Alice,\n\n**Revised text:** ..."
 }
 ```
 

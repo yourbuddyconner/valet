@@ -121,6 +121,7 @@ function ThreadItem({
   onDismiss,
   isDismissed,
   sessionId,
+  requiresResponse,
 }: {
   thread: SessionThread;
   isActive: boolean;
@@ -128,6 +129,7 @@ function ThreadItem({
   onDismiss?: () => void;
   isDismissed?: boolean;
   sessionId: string;
+  requiresResponse?: boolean;
 }) {
   const [isEditing, setIsEditing] = useState(false);
   const [editValue, setEditValue] = useState('');
@@ -191,6 +193,15 @@ function ThreadItem({
       <span className="flex-1 truncate">
         {thread.title || thread.firstMessagePreview || 'New thread'}
       </span>
+      {requiresResponse && !isDismissed && (
+        <span
+          className="inline-flex h-3 w-3 shrink-0 items-center justify-center text-amber-500 dark:text-amber-400"
+          title="Response required"
+        >
+          <BellIcon className="h-2.5 w-2.5" />
+          <span className="sr-only">Response required</span>
+        </span>
+      )}
       {hasUnread && !isDismissed && (
         <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-violet-500" />
       )}
@@ -234,6 +245,7 @@ function ThreadGroupHeader({ group }: { group: ThreadGroup }) {
 interface ThreadSidebarProps {
   sessionId: string;
   activeThreadId: string | null;
+  responseRequiredThreadIds?: ReadonlySet<string>;
   onSelectThread: (threadId: string) => void;
   onNewThread: () => void;
 }
@@ -241,6 +253,7 @@ interface ThreadSidebarProps {
 export function ThreadSidebar({
   sessionId,
   activeThreadId,
+  responseRequiredThreadIds,
   onSelectThread,
   onNewThread,
 }: ThreadSidebarProps) {
@@ -341,6 +354,7 @@ export function ThreadSidebar({
                 key={thread.id}
                 thread={thread}
                 isActive={thread.id === activeThreadId}
+                requiresResponse={responseRequiredThreadIds?.has(thread.id)}
                 onSelect={() => onSelectThread(thread.id)}
                 onDismiss={() => handleDismiss(thread.id)}
                 sessionId={sessionId}
@@ -423,6 +437,15 @@ function PencilIcon({ className }: { className?: string }) {
   return (
     <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
       <path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z" /><path d="m15 5 4 4" />
+    </svg>
+  );
+}
+
+function BellIcon({ className }: { className?: string }) {
+  return (
+    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+      <path d="M10.268 21a2 2 0 0 0 3.464 0" />
+      <path d="M3.262 15.326A1 1 0 0 0 4 17h16a1 1 0 0 0 .74-1.673C19.41 13.956 18 12.499 18 8A6 6 0 0 0 6 8c0 4.499-1.411 5.956-2.738 7.326" />
     </svg>
   );
 }

@@ -71,7 +71,10 @@ This spec covers:
 | `channelId` | text | Channel-specific identifier |
 | `opencodeSessionId` | text | OpenCode session that produced this message |
 | `messageFormat` | text | Format identifier |
-| `createdAt` | text | ISO datetime |
+| `createdAt` | text | ISO datetime for when the message happened |
+| `createdAtEpoch` | integer | Unix seconds from the SessionAgentDO local message store |
+
+`createdAt` is the semantic message timestamp, not D1 ingestion time. D1 replication must preserve the DO-local event time by writing `createdAt` from `createdAtEpoch` when present. Readers and pagination cursors compare against the same event time so delayed D1 backfills do not appear as new messages.
 
 ### `session_threads` table
 
@@ -384,6 +387,8 @@ Three queue modes determine how prompts are processed:
 1. Abort current work — clear queued prompts, send abort to runner.
 2. Then handle as `followup`.
 
+For orchestrator sessions, steer is scoped by thread/channel. A requested `steer` mode only aborts when the target `thread:<threadId>` or channel is already busy. If another web, Slack, or Telegram thread is busy or waiting on a question, the new prompt is treated as `followup` so parallel thread dispatch is not clobbered by an unrelated channel-scoped abort.
+
 **`collect` (batching):**
 1. Accumulate messages into a collect buffer.
 2. Debounce timer (default 3000ms) flushes buffer as single combined prompt.
@@ -420,7 +425,7 @@ For orchestrator sessions, both modes read across all of the user's orchestrator
 1. Runner sends `complete` message.
 2. DO marks all `processing` entries as `completed`, prunes them.
 3. `sendNextQueuedPrompt()`: if more queued work, dispatch next (FIFO); otherwise set `runnerBusy=false`.
-4. Flush messages to D1 in background.
+4. Flush messages to D1 in background, preserving each DO-local message timestamp (`createdAtEpoch`) as the D1 message `createdAt`.
 
 ### Hibernation
 
@@ -464,12 +469,12 @@ Implemented via the DO's alarm handler:
 ### Question/Answer Flow
 
 1. Runner sends `question` message with `questionId`, `text`, optional `options`.
-2. DO stores in `questions` table with status `pending`.
-3. DO broadcasts `question` event to all clients, optionally sets expiry alarm.
-4. Client sends `answer` with `questionId` and `answer` text.
-5. DO validates question is still `pending`, updates to `answered`.
-6. DO forwards answer to runner, broadcasts `questionAnswered` status.
-7. Expired questions: alarm marks as `expired`, sends `'__expired__'` to runner.
+2. DO resolves the originating prompt channel from `prompt_queue`, stores the prompt in `interactive_prompts` with status `pending`, and persists the origin in `context.channelType` / `context.channelId`.
+3. DO broadcasts an `interactive_prompt` event to clients, sends channel-native prompts where supported, and sets the expiry alarm.
+4. Client sends `answer` with `questionId` and `answer` text, or the session owner sends a normal message in the same origin channel while the question is pending. Same-channel messages include `web:default`; they resolve the pending question instead of dispatching a fresh prompt.
+5. DO validates the prompt is still `pending`, claims it as `resolving`, forwards `{ type: 'answer', questionId, answer }` to the runner, broadcasts `interactive_prompt_resolved`, and deletes the prompt row.
+6. Runner matches `questionId` to the OpenCode question request and posts the answer to OpenCode. Question answers do not depend on the runner's current prompt cursor; permission answers still use the active OpenCode session.
+7. Expired questions: alarm deletes the prompt, broadcasts `interactive_prompt_expired`, and sends `'__expired__'` to runner.
 
 ## Edge Cases & Failure Modes
 

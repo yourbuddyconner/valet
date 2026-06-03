@@ -21,6 +21,7 @@ import type {
 import { gitCredentials } from "./git-credentials.js";
 import { setupGitConfig, cloneRepo } from "./git-setup.js";
 import { APPROVAL_TIMEOUT_MS } from "./timeouts.js";
+import { resolvePromptAttachmentReferences } from "./attachment-refs.js";
 
 export interface PromptAuthor {
   authorId?: string;
@@ -1015,8 +1016,10 @@ export class AgentClient {
           const author: PromptAuthor | undefined = (msg.authorId || msg.gitName || msg.gitEmail || msg.authorName || msg.authorEmail)
             ? { authorId: msg.authorId, gitName: msg.gitName, gitEmail: msg.gitEmail, authorName: msg.authorName, authorEmail: msg.authorEmail }
             : undefined;
-          this.promptHandler?.(msg.messageId, msg.content, msg.model, author, msg.modelPreferences, msg.attachments, msg.channelType, msg.channelId, msg.opencodeSessionId, msg.continuationContext, msg.threadId, msg.replyChannelType, msg.replyChannelId)
-            .catch(err => console.error(`[AgentClient] Prompt handler error for ${msg.messageId}:`, err));
+          Promise.resolve((async () => {
+            const attachments = await resolvePromptAttachmentReferences(msg.attachments, this.doUrl, this.runnerToken);
+            await this.promptHandler?.(msg.messageId, msg.content, msg.model, author, msg.modelPreferences, attachments, msg.channelType, msg.channelId, msg.opencodeSessionId, msg.continuationContext, msg.threadId, msg.replyChannelType, msg.replyChannelId);
+          })()).catch((err: unknown) => console.error(`[AgentClient] Prompt handler error for ${msg.messageId}:`, err));
           break;
         }
         case "answer":

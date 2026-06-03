@@ -1,0 +1,69 @@
+---
+title: Character Assets
+description: Valet mascot images live under /images/characters so Mintlify can serve them as static assets and agents can reference each pose consistently.
+---
+
+# Character Assets
+
+Valet mascot images live in:
+
+```text
+docs/images/characters/
+```
+
+Because Mintlify will be configured with `/docs` as the monorepo documentation path, files in that directory are served from:
+
+```text
+/images/characters/<filename>
+```
+
+For example:
+
+```mdx
+![Valet waving hello](/images/characters/wave.png)
+```
+
+## Pose reference
+
+| Welcome | Tip | Success | Stop |
+| --- | --- | --- | --- |
+| ![Valet waving hello](/images/characters/wave.png) | ![Valet thinking](/images/characters/thinking.png) | ![Valet giving a thumbs up](/images/characters/thumbs-up.png) | ![Valet holding a stop pose](/images/characters/stop.png) |
+
+## Available poses
+
+Current assets:
+
+- `wave.png`: welcome and first-run orientation.
+- `pointing-right.png`: next step or "this way" guidance.
+- `thinking.png`: notes, tips, questions, or explanation.
+- `writing.png`: docs, memory, and workflow authoring.
+- `thumbs-up.png`: success and completion.
+- `stop.png`: approval-sensitive or stop-before-you-run moments.
+- `no.png`: denied, unavailable, or do-not guidance.
+- `laptop.png`: focused work.
+- `laying.png`: casual pause or empty state.
+- `sandboxes.png`: workstations and sandbox runtime.
+- `child-sessions.png`: delegation and spawned sessions.
+- `personas.png`: personas, skills, and agent configuration.
+
+## Usage rules
+
+Do:
+
+- Match the pose to the page intent.
+- Use one mascot per page or major callout.
+- Keep the mascot on cream, paper, or a simple blue disc.
+- Add specific alt text.
+- Keep the uniform blue and the cap star intact.
+
+Do not:
+
+- Crowd a page with multiple mascot images.
+- Recolor the uniform.
+- Stretch, rotate, crop awkwardly, or distort the figure.
+- Place the mascot over busy screenshots or live text.
+- Use the mascot where a diagram, screenshot, or code example carries the information better.
+
+## Adding more images
+
+Use descriptive, lowercase filenames with hyphens. Prefer PNG or WebP for raster art. Keep individual files under Mintlify's image-size limit and update this page when adding a new pose.

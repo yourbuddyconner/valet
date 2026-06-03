@@ -407,8 +407,20 @@ export class TelegramTransport implements ChannelTransport {
   ): Promise<InteractivePromptRef | null> {
     // No actions → text-only prompt, ask user to reply
     const summary = (prompt.context?.summary as string) || prompt.body || '';
+    const textPrompt = () => {
+      const options = prompt.actions && prompt.actions.length > 0
+        ? `\n\nOptions:\n${prompt.actions.map((action) => `- ${action.label}`).join('\n')}`
+        : '';
+      return `*${prompt.title}*\n${summary}${options}\n\n_Reply with your answer._`;
+    };
+    const sendQuestionTextFallback = async () => {
+      if (prompt.type !== 'question') return null;
+      const fallback = await this.sendMessage(target, { markdown: textPrompt() }, ctx);
+      if (!fallback.success || !fallback.messageId) return null;
+      return { messageId: fallback.messageId, channelId: target.channelId };
+    };
     if (!prompt.actions || prompt.actions.length === 0) {
-      const text = `*${prompt.title}*\n${summary}\n\n_Reply with your answer._`;
+      const text = textPrompt();
       const result = await this.sendMessage(target, { markdown: text }, ctx);
       if (!result.success || !result.messageId) return null;
       return { messageId: result.messageId, channelId: target.channelId };
@@ -455,11 +467,13 @@ export class TelegramTransport implements ChannelTransport {
     if (!resp.ok) {
       const body = await resp.text().catch(() => '');
       console.error(`[TelegramTransport] sendInteractivePrompt error: ${resp.status}: ${body.slice(0, 200)}`);
-      return null;
+      return await sendQuestionTextFallback();
     }
 
     const result = (await resp.json()) as { ok: boolean; result?: { message_id?: number } };
-    if (!result.ok || !result.result?.message_id) return null;
+    if (!result.ok || !result.result?.message_id) {
+      return await sendQuestionTextFallback();
+    }
     return { messageId: String(result.result.message_id), channelId: target.channelId };
   }
 

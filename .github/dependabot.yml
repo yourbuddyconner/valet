@@ -1,0 +1,38 @@
+version: 2
+updates:
+  # pnpm monorepo — group security updates to reduce PR noise
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      security-updates:
+        applies-to: security-updates
+        patterns: ['*']
+      non-security-updates:
+        applies-to: version-updates
+        patterns: ['*']
+    open-pull-requests-limit: 5
+
+  # Python backend (Modal)
+  - package-ecosystem: pip
+    directory: /backend
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      python-deps:
+        patterns: ['*']
+    open-pull-requests-limit: 3
+
+  # GitHub Actions
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      actions:
+        patterns: ['*']
+    open-pull-requests-limit: 3

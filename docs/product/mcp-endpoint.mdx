@@ -1,0 +1,44 @@
+---
+title: MCP Endpoint
+description: Mintlify exposes Valet's published docs through a search MCP server so agents can search and retrieve current product documentation.
+---
+
+# MCP Endpoint
+
+Publishing these docs on Mintlify gives Valet a search MCP server generated from the same pages humans read. MCP-capable clients can search the docs and retrieve full page content instead of relying on stale training data.
+
+## URL shape
+
+After Mintlify is connected to this repository and configured with the `/docs` monorepo path, the docs site exposes:
+
+- `https://<docs-domain>/mcp` for the public search MCP endpoint.
+- `https://<docs-domain>/authed/mcp` if authenticated MCP is enabled.
+- `https://<docs-domain>/.well-known/mcp` for discovery.
+- `https://<docs-domain>/llms.txt` and `https://<docs-domain>/llms-full.txt` for static AI ingestion.
+
+Use the actual Mintlify docs domain once the project is created.
+
+## Dashboard settings to decide
+
+Before launch, choose:
+
+- **Docs domain**: turnkey-wide docs domain or a Valet-specific subdomain.
+- **Auth model**: public, fully authenticated, or partially authenticated.
+- **MCP access**: public MCP for public docs, or authenticated MCP with allowed redirect domains and optional client credentials.
+
+If the site is authenticated, add redirect domains for tools that users should connect from, such as Claude, Cursor, VS Code, or another MCP-capable client.
+
+## What agents should search
+
+Agents should search these docs for questions about:
+
+- Valet product concepts.
+- Sessions and lifecycle.
+- Triggers and workflows.
+- Orchestrator behavior and memory.
+- Skills, personas, and tools.
+- Policies and approvals.
+- Channels and channel bindings.
+- Integrations and MCP-backed services.
+
+The docs navigation intentionally focuses on product behavior. Internal design specs and implementation plans are excluded from Mintlify processing with `.mintignore`.

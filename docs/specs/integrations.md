@@ -179,7 +179,8 @@ The registry creates **fresh instances** each time — credentials must be set b
 - Entities: `messages`, `threads`, `labels`, `drafts`.
 - Full email operations: send, reply, draft, labels, attachments.
 - Auto token refresh via `gmailFetch()` (checks `expires_at`, refreshes if within 1 minute).
-- MIME email construction with multipart support.
+- Write actions (`send_email`, `create_draft`, `update_draft`) accept markdown in `body`, render it to semantic HTML, and send `multipart/alternative` with the original markdown as the plain-text fallback.
+- MIME email construction uses outer reply headers plus plain-text and HTML body parts.
 - OAuth scopes: `gmail.readonly`, `gmail.send`, `gmail.compose`, `gmail.modify`, `gmail.labels`.
 
 **GoogleCalendarIntegration:**
@@ -248,11 +249,16 @@ Per-user webhook endpoint called by Telegram. For each incoming message:
 - Media: downloads file, converts to base64 data URL, creates attachment payload.
 - **Routing:** checks for channel binding by `telegramScopeKey(userId, chatId)`. If found → bound session. If not → orchestrator via `dispatchOrchestratorPrompt()`.
 
+**Inline callback buttons:** approval callbacks resolve via the D1 invocation record. Question callbacks do not have D1 records, so the webhook uses the callback message's chat ID to check the same channel binding first, then falls back to the user's orchestrator session. If Telegram rejects an inline-button question message, the transport falls back to a text question listing the options so the user can answer by reply.
+
+**Question replies:** bound Telegram webhook dispatches include the Valet `userId` as `authorId`. Session question-answer capture checks the original external channel (`telegram:<chatId>`) before the normalized orchestrator thread (`thread:<uuid>`), so typed replies from Telegram answer pending Telegram questions instead of aborting or queueing a new prompt.
+
 ### Utilities
 
 - `markdownToTelegramHtml()` — converts Markdown to Telegram-compatible HTML (code blocks, bold, italic, links with entity escaping).
 - `sendTelegramMessage()` — sends text with HTML parse mode.
 - `sendTelegramPhoto()` — sends photos via multipart upload with optional caption.
+- `sendInteractivePrompt()` — sends Telegram inline-keyboard prompts when possible and falls back to a text prompt when Telegram rejects the inline buttons.
 
 ### Disconnect
 
@@ -367,7 +373,14 @@ Each user's Telegram bot has its own webhook URL (`/telegram/webhook/:userId`). 
 
 ### Integration OAuth vs Login OAuth
 
-The integration routes (`GET /api/integrations/:service/oauth`) provide OAuth URLs for connecting services *within* the integration framework. These are distinct from the login OAuth routes (`GET /auth/github`, `GET /auth/google`). The integration OAuth callback returns raw credentials to the client but does not automatically create the integration record.
+The integration routes (`GET /api/integrations/:service/oauth`) provide OAuth URLs for connecting services *within* the integration framework. These are distinct from the login OAuth routes (`GET /auth/github`, `GET /auth/google`). The integration OAuth callback returns raw credentials to the client but does not automatically create the integration record. Integration OAuth `redirect_uri` values must exactly match `${FRONTEND_URL}/integrations/callback` before authorization starts or callback exchange runs.
+
+Custom MCP connectors configured with OAuth support two client modes:
+
+- **Admin-provided OAuth client:** `oauthClientId` is set. The worker uses the connector's stored authorization/token endpoints, optional client secret, PKCE, and the MCP server URL as the OAuth `resource`.
+- **Dynamic MCP OAuth client:** `oauthClientId` is `null`. The admin form must allow saving this state. The worker discovers the MCP server's authorization server metadata through the outbound URL policy, validates discovered authorization/token/registration endpoints, performs dynamic client registration, caches the resulting client in `mcp_oauth_clients`, and uses that cached client for authorization-code exchange and token refresh. Dynamic token exchange and refresh include the MCP server URL as the OAuth `resource`.
+
+Dynamic client cache rows are connector-owned runtime state. They must be deleted when a custom connector's server/auth identity changes and as part of connector deletion, so a recreated or retargeted connector cannot reuse stale authorization/token endpoints. Non-identity edits such as status, scopes, and additional headers must not delete dynamic client rows, because existing refresh tokens depend on the cached client.
 
 ### Client-Side Update Hook Mismatch
 

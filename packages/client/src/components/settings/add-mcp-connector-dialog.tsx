@@ -207,7 +207,7 @@ export function AddMcpConnectorDialog({ open, onOpenChange, connector }: AddMcpC
                 <div className="space-y-4 border-t border-neutral-200 pt-4 dark:border-neutral-700">
                   <div className="grid gap-4 sm:grid-cols-2">
                     <Field label="Client ID">
-                      <Input value={oauthClientId} onChange={(e) => setOauthClientId(e.target.value)} required />
+                      <Input value={oauthClientId} onChange={(e) => setOauthClientId(e.target.value)} />
                     </Field>
                     <Field label="Client secret">
                       <Input

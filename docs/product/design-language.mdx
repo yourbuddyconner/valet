@@ -1,0 +1,102 @@
+---
+title: Design Language
+description: Valet docs use the Mintlify Mint theme, Signal Blue, Star Gold accents, warm neutral backgrounds, Geist typography, a restrained mascot system, and plain-spoken technical copy.
+---
+
+# Design Language
+
+Valet should read as trustworthy infrastructure with a little personality. The docs site is calm, capable, and plain-spoken: serious work first, friendly valet second.
+
+The implementation rule is simple: express the brand through `docs.json`, Mintlify components, and consistent content patterns before reaching for custom CSS.
+
+## Color
+
+| Token | Hex | Use |
+| --- | --- | --- |
+| Signal Blue | `#1747E6` | Primary links, key actions, selected states, and the uniform. |
+| Deep Blue | `#0E2DB3` | Hover and pressed states. |
+| Navy | `#0A1340` | Dark code surfaces and deep backgrounds. |
+| Star Gold | `#F2C84A` | Accent only: star, tips, highlights. |
+| Cream | `#F4EFE2` | Main canvas. Never use pure white as the dominant page background. |
+| Paper | `#FAF7EC` | Raised content surfaces. |
+| Ink | `#0D1226` | Primary text. |
+| Muted | `#6A6E85` | Secondary text and metadata. |
+| Line | `#D6CFB9` | Hairline borders and dividers. |
+
+Aim for mostly neutral surfaces, a small amount of blue for direction, and gold only as seasoning.
+
+## Typography
+
+Use Geist for headings, body, and interface copy. Use the platform code face for code blocks unless a future Mintlify setting cleanly supports Geist Mono.
+
+Use short mono-style labels for eyebrows and metadata:
+
+```text
+SESSIONS
+WORKSTATIONS
+POLICY
+MCP
+```
+
+Use an italic serif flourish rarely. It can humanize a headline, but it should not become a second voice.
+
+## Motifs
+
+Use these motifs consistently:
+
+- **Gold star**: the lookup mark and accent. Do not scatter it through every card.
+- **Blueprint grid**: only on blue fields or technical diagrams, and only when it helps suggest "under the hood".
+- **Mono eyebrows**: short, uppercase labels for sections and metadata.
+- **Hairline cards**: paper-fill cards with quiet borders and compact content.
+- **Pill chips**: tags, channels, capabilities, and selected state.
+- **Dark code surface**: one navy code surface with clear syntax contrast.
+
+## Mascot
+
+The Valet mascot is a friendly uniformed guide. He should feel competent and eager, never goofy. Use him as a small contextual cue, not a decorative pattern.
+
+Recommended mapping:
+
+| Asset | Intent |
+| --- | --- |
+| `wave.png` | Welcome or first-run orientation. |
+| `pointing-right.png` | "This way" navigation or next step. |
+| `thinking.png` | Notes, tips, or questions. |
+| `writing.png` | Documentation, memory, or workflow authoring. |
+| `thumbs-up.png` | Success or completion. |
+| `stop.png` / `no.png` | Warnings, denials, or do-not guidance. |
+| `sandboxes.png` | Workstations and sandbox runtime. |
+| `child-sessions.png` | Delegation and orchestrator child sessions. |
+| `personas.png` | Persona and skill configuration. |
+
+Use one mascot image per page or callout. Do not recolor, stretch, rotate, or place the mascot on busy imagery.
+
+## Voice
+
+Valet copy should be clear, concise, helpful, and unhurried.
+
+Do:
+
+- Lead with the answer, then give the detail.
+- Use short sentences and active voice.
+- Keep technical pages precise.
+- Let the mascot carry personality in visual moments.
+
+Do not:
+
+- Over-explain simple workflows.
+- Turn every note into a joke.
+- Hide important technical constraints behind marketing copy.
+- Make destructive or approval-sensitive actions sound casual.
+
+## Mintlify usage
+
+Prefer Mintlify built-ins:
+
+- Use `Note`, `Tip`, `Check`, `Warning`, and `Danger` for semantic callouts.
+- Use `CardGroup` and `Card` for wayfinding.
+- Use `Steps` for setup flows.
+- Use `CodeGroup` for language examples.
+- Use `ParamField` and `ResponseField` for API reference pages.
+
+Keep custom CSS as a last resort. If the Mint theme can express the design with `docs.json`, use that path.

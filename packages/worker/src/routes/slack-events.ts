@@ -329,6 +329,7 @@ slackEventsRouter.post('/slack/events', async (c) => {
             channelType: 'slack',
             channelId: dispatchChannelId,
             threadId: orchestratorThreadId,
+            authorId: userId,
             authorName: message.senderName,
             replyTo: { channelType: 'slack', channelId: dispatchChannelId },
           }),

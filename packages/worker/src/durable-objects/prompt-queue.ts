@@ -402,6 +402,21 @@ export class PromptQueue {
     return { channelType, channelId, threadId };
   }
 
+  getAttachmentsById(messageId: string): unknown[] | null {
+    const rows = this.sql
+      .exec("SELECT attachments FROM prompt_queue WHERE id = ? LIMIT 1", messageId)
+      .toArray();
+    if (rows.length === 0 || typeof rows[0].attachments !== 'string' || !rows[0].attachments) {
+      return null;
+    }
+    try {
+      const parsed = JSON.parse(rows[0].attachments);
+      return Array.isArray(parsed) ? parsed : null;
+    } catch {
+      return null;
+    }
+  }
+
   /**
    * Get external channel context from the processing entry.
    * Used for hibernation recovery of active external-channel state.

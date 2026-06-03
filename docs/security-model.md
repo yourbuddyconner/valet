@@ -336,7 +336,7 @@ These are acceptable tradeoffs for a hosted platform where the security and obse
 | Runner connections per session | 1 | DO closes previous on new connect |
 | Sandbox idle timeout | 45 minutes | Modal infrastructure |
 | Sandbox hard timeout | 24 hours | Modal infrastructure |
-| Prompt attachment size | 12 MB | Validation in DO |
+| Prompt attachment size | 25 MB per non-image file upload | Client/channel validation; large HTTP prompt payloads are offloaded to R2 before DO queue storage |
 | Session token expiry | 7 days | D1 `auth_sessions.expires_at` |
 | API token expiry | Configurable | D1 `api_tokens.expires_at` |
 | Sandbox JWT expiry | 15 minutes | JWT `exp` claim |

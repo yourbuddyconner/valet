@@ -195,6 +195,32 @@ The sandbox image is cached. To force a rebuild after changing `docker/start.sh`
 
 **Important:** Any changes to `packages/runner/` or `docker/` run inside the sandbox, not the worker. Always bump `IMAGE_BUILD_VERSION` when modifying these paths — without it the deploy will ship the old image and your changes won't take effect.
 
+### GitHub Actions CD
+
+Two workflows live in `.github/workflows/`:
+
+| Workflow | Trigger | Target |
+|---|---|---|
+| `deploy-dev.yml` | Push to `main` | dev environment |
+| `deploy-prod.yml` | Push of a `v*` tag | prod environment |
+
+Both workflows call `make deploy` (the full `scripts/deploy.sh cmd_all` path: worker → migrations → modal → client). They reconstruct `.env.deploy.<env>` from GitHub Actions variables and secrets at runtime rather than committing environment config to the repo.
+
+**Required GitHub Actions configuration** (set under *Settings → Environments → dev / prod*):
+
+| Name | Type | Notes |
+|---|---|---|
+| `CLOUDFLARE_API_TOKEN` | Secret | Scoped to Workers Scripts:Edit, D1:Edit, Pages:Edit |
+| `MODAL_TOKEN_ID` | Secret | Modal service token |
+| `MODAL_TOKEN_SECRET` | Secret | Modal service token |
+| `MODAL_BACKEND_URL` | Secret | Full Modal URL template — **required**; `modal profile current` returns the profile name, not the workspace slug, so auto-discovery produces the wrong URL in CI. Format: `https://<workspace>--<prefix>{label}.modal.run` (e.g. `https://conner-61702--dev-{label}.modal.run`) |
+| `PROJECT_NAME` | Secret | Cloudflare resource name prefix (e.g. `dev-valet-turnkey`) |
+| `CLOUDFLARE_ACCOUNT_ID` | Secret | Your Cloudflare account ID (find it in the dashboard URL or `wrangler whoami`) |
+| `ALLOWED_EMAILS` | Secret | Comma-separated email allowlist; empty = no restriction |
+| `D1_DATABASE_ID` | Secret | Optional — auto-discovered from `wrangler d1 list` if omitted |
+
+**Prod environment protection:** Add required reviewers to the `prod` GitHub Actions environment so every `v*` tag push triggers a manual approval gate before secrets are exposed.
+
 ## Developing Inside a Sandbox
 
 When working on the valet codebase from inside a Modal sandbox (e.g. via an Valet session), the environment has specific constraints. The sandbox is a Debian container (Trixie/13, GLIBC 2.40) — not a full VM — so some tools are unavailable.
@@ -274,7 +300,7 @@ Inside Claude Code, run once:
 /plugin install cloudflare@cloudflare
 ```
 
-Then `/mcp` → connect to Cloudflare via OAuth. The token needs **Workers Logs Read** scope for observability queries. Account ID for this workspace: `2da0915cafe077551f978d4b0908bd43`.
+Then `/mcp` → connect to Cloudflare via OAuth. The token needs **Workers Logs Read** scope for observability queries. Account ID: check the Cloudflare dashboard URL or run `wrangler whoami`.
 
 ### Querying historical logs
 

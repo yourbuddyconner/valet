@@ -118,6 +118,10 @@ function createMockSql(): SqlStorage & {
       }
 
       if (q.startsWith('SELECT') && q.includes('FROM channel_state')) {
+        if (q.includes('WHERE busy = 1')) {
+          const busy = Array.from(channelState.entries()).find(([, row]) => row.busy === 1);
+          return busy === undefined ? cursor([]) : cursor([{ channel_key: busy[0] }]);
+        }
         const channelKey = String(params[0]);
         const row = channelState.get(channelKey);
         return row === undefined ? cursor([]) : cursor([row]);
@@ -1391,6 +1395,41 @@ describe('SessionAgentDO', () => {
     expect(allQueued[1].content).toBe('telegram urgent');
   });
 
+  it('does not steer-abort an unrelated orchestrator thread when channel prompt requests steer', async () => {
+    const runnerSocket = { send: vi.fn() };
+    const { agent } = await createTestAgent({ sockets: [runnerSocket] });
+
+    (agent as any).promptQueue.runnerBusy = true;
+    (agent as any).promptQueue.setChannelBusy('thread:web-thread', true);
+    (agent as any).promptQueue.setChannelBusy('thread:slack-thread', true);
+
+    const response = await agent.fetch(new Request('http://do/prompt', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        content: 'telegram test prompt',
+        queueMode: 'steer',
+        channelType: 'telegram',
+        channelId: 'chat-123',
+        threadId: 'telegram-thread',
+        authorName: 'Telegram User',
+      }),
+    }));
+
+    expect(response.status).toBe(200);
+    const sent = runnerSocket.send.mock.calls.map((call: unknown[]) => JSON.parse(call[0] as string));
+    expect(sent).not.toContainEqual(expect.objectContaining({ type: 'abort' }));
+    expect(sent).toContainEqual(expect.objectContaining({
+      type: 'prompt',
+      content: 'telegram test prompt',
+      channelType: 'thread',
+      channelId: 'telegram-thread',
+      threadId: 'telegram-thread',
+      replyChannelType: 'telegram',
+      replyChannelId: 'chat-123',
+    }));
+  });
+
   it('withdraw → re-send flow preserves content', async () => {
     const runnerSocket = { send: vi.fn() };
     const { agent, broadcasts } = await createTestAgent({ sockets: [runnerSocket] });
@@ -1645,6 +1684,165 @@ describe('SessionAgentDO', () => {
       channelType: 'slack',
       channelId: 'C123',
     });
+  });
+
+  it('broadcasts question prompt thread metadata from the originating queue row', async () => {
+    const { agent, broadcasts } = await createTestAgent();
+    (agent as any).promptQueue.enqueue({
+      id: 'msg-telegram',
+      content: 'hi',
+      status: 'processing',
+      channelType: 'thread',
+      channelId: 'thread-telegram',
+      threadId: 'thread-telegram',
+      replyChannelType: 'telegram',
+      replyChannelId: 'chat-123',
+    });
+
+    await (agent as any).runnerHandlers.question({
+      type: 'question',
+      messageId: 'msg-telegram',
+      questionId: 'q-telegram',
+      text: 'pick?',
+      options: ['a', 'b'],
+    });
+
+    const promptBroadcast = broadcasts.find((m) => m.type === 'interactive_prompt');
+    expect(promptBroadcast).toMatchObject({
+      type: 'interactive_prompt',
+      channelType: 'telegram',
+      channelId: 'chat-123',
+      threadId: 'thread-telegram',
+    });
+  });
+
+  it('resolves same-channel web messages as pending question answers', async () => {
+    const { agent, sql, broadcasts } = await createTestAgent();
+    (agent as any).runnerLink.send = vi.fn().mockReturnValue(true);
+
+    sql.interactivePrompts.set('q-web', {
+      id: 'q-web',
+      type: 'question',
+      request_id: null,
+      title: 'Need a decision',
+      actions: JSON.stringify([{ id: 'option_0', label: 'Regenerate options' }]),
+      context: JSON.stringify({
+        options: ['Regenerate options'],
+        channelType: 'web',
+        channelId: 'default',
+      }),
+      status: 'pending',
+      expires_at: Math.floor(Date.now() / 1000) + 300,
+      channel_refs: null,
+    });
+
+    const resolved = await (agent as any).tryResolveChannelQuestion(
+      'Regenerate options',
+      { id: 'user-1', email: 'user-1@example.com' },
+      'web',
+      'default',
+    );
+
+    expect(resolved).toBe(true);
+    expect((agent as any).runnerLink.send).toHaveBeenCalledWith({
+      type: 'answer',
+      questionId: 'q-web',
+      answer: 'Regenerate options',
+    });
+    expect(broadcasts).toContainEqual(expect.objectContaining({
+      type: 'interactive_prompt_resolved',
+      promptId: 'q-web',
+    }));
+    expect(sql.interactivePrompts.has('q-web')).toBe(false);
+  });
+
+  it('resolves web thread messages as pending question answers before queueing', async () => {
+    const { agent, sql, broadcasts } = await createTestAgent();
+    (agent as any).runnerLink.send = vi.fn().mockReturnValue(true);
+
+    sql.interactivePrompts.set('q-thread', {
+      id: 'q-thread',
+      type: 'question',
+      request_id: null,
+      title: 'Need a decision',
+      actions: JSON.stringify([{ id: 'option_0', label: 'Regenerate options' }]),
+      context: JSON.stringify({
+        options: ['Regenerate options'],
+        channelType: 'thread',
+        channelId: 'thread-123',
+      }),
+      status: 'pending',
+      expires_at: Math.floor(Date.now() / 1000) + 300,
+      channel_refs: null,
+    });
+
+    await (agent as any).handlePrompt(
+      'Regenerate options',
+      undefined,
+      { id: 'user-1', email: 'user-1@example.com' },
+      undefined,
+      undefined,
+      undefined,
+      'thread-123',
+    );
+
+    expect((agent as any).runnerLink.send).toHaveBeenCalledWith({
+      type: 'answer',
+      questionId: 'q-thread',
+      answer: 'Regenerate options',
+    });
+    expect(sql.queue.size).toBe(0);
+    expect(broadcasts).toContainEqual(expect.objectContaining({
+      type: 'interactive_prompt_resolved',
+      promptId: 'q-thread',
+    }));
+    expect(sql.interactivePrompts.has('q-thread')).toBe(false);
+  });
+
+  it('resolves Telegram thread messages against the original Telegram question channel before interrupting', async () => {
+    const { agent, sql, broadcasts } = await createTestAgent();
+    (agent as any).runnerLink.send = vi.fn().mockReturnValue(true);
+    (agent as any).promptQueue.runnerBusy = true;
+
+    sql.interactivePrompts.set('q-telegram', {
+      id: 'q-telegram',
+      type: 'question',
+      request_id: null,
+      title: 'Need a decision',
+      actions: JSON.stringify([{ id: 'option_0', label: 'Telegram' }]),
+      context: JSON.stringify({
+        options: ['Telegram'],
+        channelType: 'telegram',
+        channelId: 'chat-123',
+        threadId: 'thread-telegram',
+      }),
+      status: 'pending',
+      expires_at: Math.floor(Date.now() / 1000) + 300,
+      channel_refs: null,
+    });
+
+    await (agent as any).handleInterruptPrompt(
+      'Telegram',
+      undefined,
+      { id: 'user-1', email: 'user-1@example.com' },
+      undefined,
+      'telegram',
+      'chat-123',
+      'thread-telegram',
+    );
+
+    expect((agent as any).runnerLink.send).toHaveBeenCalledWith({
+      type: 'answer',
+      questionId: 'q-telegram',
+      answer: 'Telegram',
+    });
+    expect((agent as any).runnerLink.send).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'abort' }));
+    expect(sql.queue.size).toBe(0);
+    expect(broadcasts).toContainEqual(expect.objectContaining({
+      type: 'interactive_prompt_resolved',
+      promptId: 'q-telegram',
+    }));
+    expect(sql.interactivePrompts.has('q-telegram')).toBe(false);
   });
 
   describe('action approval prompts', () => {

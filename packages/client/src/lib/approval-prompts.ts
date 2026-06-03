@@ -65,6 +65,56 @@ export function upsertInteractivePrompt<T extends { id: string }>(prompts: T[], 
   return next;
 }
 
+export interface InteractivePromptVisibility {
+  status: 'pending' | 'resolved' | 'expired';
+  type?: string;
+  channelType?: string;
+  channelId?: string;
+  threadId?: string;
+  context?: Record<string, unknown>;
+}
+
+export function getInteractivePromptThreadId(prompt: InteractivePromptVisibility): string | undefined {
+  if (prompt.threadId) return prompt.threadId;
+  if (typeof prompt.context?.threadId === 'string') return prompt.context.threadId;
+  if (prompt.channelType === 'thread' && prompt.channelId) return prompt.channelId;
+  if (prompt.context?.channelType === 'thread' && typeof prompt.context.channelId === 'string') {
+    return prompt.context.channelId;
+  }
+  return undefined;
+}
+
+export function selectVisibleInteractivePrompts<T extends InteractivePromptVisibility>(
+  prompts: T[],
+  activeThreadId?: string | null,
+): { visible: T[]; queuedCount: number } {
+  const resolved = prompts.filter((prompt) => prompt.status !== 'pending');
+  const pending = prompts.filter((prompt) => prompt.status === 'pending');
+  const scopedPending = activeThreadId
+    ? pending.filter((prompt) => getInteractivePromptThreadId(prompt) === activeThreadId)
+    : pending;
+  const firstPending = scopedPending[0];
+  const queuedCount = scopedPending.length - (firstPending ? 1 : 0);
+  const visible = firstPending ? [...resolved, firstPending] : resolved;
+  return { visible, queuedCount };
+}
+
+function requiresUserResponse(prompt: InteractivePromptVisibility): boolean {
+  return prompt.type === 'approval' || prompt.type === 'question';
+}
+
+export function getPendingResponseRequiredThreadIds<T extends InteractivePromptVisibility>(
+  prompts: T[],
+): Set<string> {
+  const threadIds = new Set<string>();
+  for (const prompt of prompts) {
+    if (prompt.status !== 'pending' || !requiresUserResponse(prompt)) continue;
+    const threadId = getInteractivePromptThreadId(prompt);
+    if (threadId) threadIds.add(threadId);
+  }
+  return threadIds;
+}
+
 export function markInteractivePromptTerminal<
   T extends { id: string; status: 'pending' | 'resolved' | 'expired' },
 >(

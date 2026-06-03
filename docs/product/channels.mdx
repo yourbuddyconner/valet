@@ -1,0 +1,81 @@
+---
+title: Channels
+description: Valet can receive and send agent messages through the web UI, Slack, Telegram, GitHub/API contexts, and channel bindings that route external conversations to sessions.
+---
+
+# Channels
+
+Channels let users interact with Valet outside the web UI. A channel message can route to a bound session or fall back to the user's orchestrator.
+
+The channel layer is deliberately separate from integrations. A service can provide action tools, channel transport, or both.
+
+## Web
+
+The web UI is the primary channel. It supports session chat, real-time streaming, sandbox iframes, participant access, settings, approvals, workflow management, and integration configuration.
+
+Web session chat uses a per-session WebSocket to the SessionAgent Durable Object. The WebSocket carries prompt messages, answers, approval resolutions, aborts, diff/review commands, keepalives, and streamed output.
+
+## Slack
+
+The Slack plugin provides action tools and channel transport. Personal orchestrators are currently limited to private user-controlled Slack surfaces:
+
+- Slack direct messages are in scope.
+- Public channels, private channels, group chats, and threads attached to shared surfaces are out of scope for personal orchestrators.
+
+Inbound events from shared Slack surfaces should acknowledge the event without routing prompts to personal memory-backed orchestrators. This protects personal context until org orchestrator permissions are available.
+
+Slack action callbacks can also resolve tool approvals. Approval handling preserves the same policy resolution rules as the web UI.
+
+## Telegram
+
+Each user can configure a Telegram bot. Telegram supports:
+
+- Slash commands such as status, stop, clear, refresh, and sessions.
+- Text, photo, voice, and audio messages.
+- Inline callback buttons for approvals and questions.
+- Routing through channel bindings or fallback to the orchestrator.
+
+Telegram messages include attribution and channel context so answers and questions route back to the right conversation.
+
+For media messages, Valet downloads the Telegram file, converts it into an attachment payload, and forwards it to the target session or orchestrator.
+
+## Channel bindings
+
+A channel binding maps an external conversation to a Valet session. It stores:
+
+- Channel type and channel ID.
+- Scope key for routing.
+- Owning user and org.
+- Queue mode and collect debounce settings.
+- Provider-specific fields, such as Slack thread IDs or GitHub PR metadata.
+
+Bindings are how Valet keeps a Slack thread, Telegram chat, GitHub context, or API route connected to the correct session.
+
+## Routing order
+
+For inbound channel prompts, Valet generally follows this order:
+
+1. Normalize the external channel into a scope key.
+2. Look for an existing channel binding by scope key.
+3. If found, route to the bound session using that binding's queue mode.
+4. If not found and the surface is allowed, route to the user's orchestrator.
+5. If the surface is not allowed for personal orchestrators, acknowledge without dispatch.
+
+## Queue behavior
+
+Bindings can set prompt queue behavior:
+
+- `followup`: append after the current turn.
+- `steer`: steer current work.
+- `collect`: debounce multiple messages before dispatch.
+
+This is important for chatty channels, where users may send several short messages that should become one coherent prompt.
+
+## Channel tool catalog
+
+The sandbox tool catalog includes channel helpers:
+
+- `list_channels` to inspect available channel bindings.
+- `channel_reply` to respond through the current channel.
+- `send_image` for image replies when supported.
+- `emit_notification` for user-visible notifications.

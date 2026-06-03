@@ -16,6 +16,15 @@
   },
   "devDependencies": {
     "typescript": "^5.3.3",
-    "vitest": "^4.0.18"
+    "vitest": "^4.1.8"
+  },
+  "pnpm": {
+    "overrides": {
+      "axios": "^1.16.1",
+      "defu": "^6.1.5",
+      "lodash-es": "^4.18.1",
+      "picomatch@2": "2.3.2",
+      "rollup": "^4.61.0"
+    }
   }
 }

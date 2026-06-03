@@ -43,14 +43,30 @@ import {
   processWorkflowExecutionResult as processWorkflowExecutionResultSvc,
   buildWorkflowDispatch,
 } from '../services/session-workflows.js';
-import { sanitizePromptAttachments, attachmentPartsForMessage, parseQueuedPromptAttachments, SUPPORTED_FILE_TYPES_DESCRIPTION } from '../lib/utils/prompt-validation.js';
+import {
+  sanitizePromptAttachments,
+  attachmentPartsForDisplay,
+  attachmentsForClientState,
+  parseQueuedPromptAttachments,
+  parsePromptAttachmentBlobUrl,
+  SUPPORTED_FILE_TYPES_DESCRIPTION,
+} from '../lib/utils/prompt-validation.js';
 import { parseQueuedWorkflowPayload, deriveRuntimeStates } from '../lib/utils/runtime.js';
 
 // ─── WebSocket Message Types ───────────────────────────────────────────────
 
 const MAX_CHANNEL_FOLLOWUP_REMINDERS = 3;
 const PARENT_IDLE_DEBOUNCE_MS = 10_000;
+const PROMPT_ATTACHMENT_R2_PREFIX = 'prompt-attachments';
 export const ACTION_APPROVAL_EXPIRY_MS = 240 * 1000;
+
+function promptAttachmentSummary(attachments: PromptAttachment[] | undefined): string {
+  if (!attachments?.length) return 'none';
+  return attachments.map((attachment, index) => {
+    const filename = attachment.filename || 'unnamed';
+    return `${index}:${attachment.mime || 'unknown'}:${filename}:urlChars=${attachment.url?.length ?? 0}`;
+  }).join(', ');
+}
 
 export function buildActionApprovalPromptActions(): InteractiveAction[] {
   return [
@@ -500,6 +516,8 @@ export class SessionAgentDO {
         return this.handleFlushMetrics();
       case '/messages':
         return this.handleMessagesEndpoint(url);
+      case '/prompt-attachment':
+        return this.handlePromptAttachmentEndpoint(url);
       case '/gc':
         return this.handleGarbageCollect();
       case '/webhook-update':
@@ -535,7 +553,13 @@ export class SessionAgentDO {
         if (rejectedTypes.length > 0) {
           console.warn(`[SessionAgentDO] /prompt HTTP: rejected file types: ${rejectedTypes.join(', ')}`);
         }
-        console.log(`[SessionAgentDO] /prompt HTTP: content="${content.slice(0, 60)}" channelType=${body.channelType || 'none'} channelId=${body.channelId || 'none'} queueMode=${body.queueMode || 'default'} authorName=${body.authorName || 'none'} authorId=${body.authorId || 'none'}`);
+        console.log(
+          `[SessionAgentDO] /prompt HTTP: content="${content.slice(0, 60)}" ` +
+          `channelType=${body.channelType || 'none'} channelId=${body.channelId || 'none'} ` +
+          `queueMode=${body.queueMode || 'default'} authorName=${body.authorName || 'none'} ` +
+          `authorId=${body.authorId || 'none'} attachments=${attachments.length} ` +
+          `[${promptAttachmentSummary(attachments)}]`,
+        );
 
         // Handle interrupt-only (no content) — e.g., /stop command
         if (body.interrupt && !content && attachments.length === 0) {
@@ -559,9 +583,11 @@ export class SessionAgentDO {
         const promptChannelId = body.threadId ? body.threadId : body.channelId;
         const promptChannelKey = this.channelKeyFrom(promptChannelType, promptChannelId);
         const sameChannelBusy = isOrchestrator && this.promptQueue.isChannelBusy(promptChannelKey);
+        const requestedMode = body.queueMode || this.promptQueue.queueMode || 'followup';
         const effectiveMode = body.interrupt ? 'steer'
           : sameChannelBusy ? 'steer'
-          : (body.queueMode || this.promptQueue.queueMode || 'followup');
+          : isOrchestrator && requestedMode === 'steer' ? 'followup'
+          : requestedMode;
         console.log(`[SessionAgentDO] /prompt HTTP: effectiveMode=${effectiveMode} runnerBusy=${this.promptQueue.runnerBusy} channelBusy=${sameChannelBusy} channel=${promptChannelKey}`);
 
         const author = (body.authorId || body.authorEmail || body.authorName) ? {
@@ -696,7 +722,7 @@ export class SessionAgentDO {
     const pendingPrompt = pendingEntry ? {
       messageId: pendingEntry.id,
       content: pendingEntry.content,
-      attachments: pendingEntry.attachments ? JSON.parse(pendingEntry.attachments) : undefined,
+      attachments: pendingEntry.attachments ? attachmentsForClientState(JSON.parse(pendingEntry.attachments)) : undefined,
       threadId: pendingEntry.threadId || undefined,
     } : null;
 
@@ -1603,7 +1629,7 @@ export class SessionAgentDO {
             data: {
               messageId: withdrawn.id,
               content: withdrawn.content,
-              attachments: withdrawn.attachments ? JSON.parse(withdrawn.attachments) : undefined,
+              attachments: withdrawn.attachments ? attachmentsForClientState(JSON.parse(withdrawn.attachments)) : undefined,
               threadId: withdrawn.threadId,
             },
           });
@@ -1698,7 +1724,7 @@ export class SessionAgentDO {
             data: {
               messageId: existing.id,
               content: existing.content,
-              attachments: existing.attachments ? JSON.parse(existing.attachments) : undefined,
+              attachments: existing.attachments ? attachmentsForClientState(JSON.parse(existing.attachments)) : undefined,
               threadId: existing.threadId,
             },
           });
@@ -1750,7 +1776,7 @@ export class SessionAgentDO {
     channelId: string | undefined,
   ): Promise<boolean> {
     const sessionOwnerId = this.sessionState.userId;
-    if (!channelType || channelType === 'web' || !author?.id || author.id !== sessionOwnerId) {
+    if (!channelType || !author?.id || author.id !== sessionOwnerId) {
       return false;
     }
 
@@ -1795,9 +1821,28 @@ export class SessionAgentDO {
     skipSingleSlot?: boolean,
   ) {
     // ─── Thread-reply capture for pending questions ─────────────────────
-    // If there's a pending question and this message came from a channel
-    // (not web UI) by the session owner, treat it as the answer.
-    if (await this.tryResolveChannelQuestion(content, author, channelType, channelId)) {
+    // If there's a pending question and this message came from the same
+    // channel by the session owner, treat it as the answer.
+    const replyQuestionChannelType = replyTo?.channelType ?? channelType;
+    const replyQuestionChannelId = replyTo?.channelId ?? channelId;
+    const incomingAttachmentCount = attachments?.length ?? 0;
+    if (await this.tryResolveChannelQuestion(content, author, replyQuestionChannelType, replyQuestionChannelId)) {
+      if (incomingAttachmentCount > 0) {
+        console.warn(
+          `[SessionAgentDO] handlePrompt: attachment-bearing prompt resolved pending question ` +
+          `without runner dispatch; channelType=${replyQuestionChannelType || 'none'} ` +
+          `channelId=${replyQuestionChannelId || 'none'} attachments=${incomingAttachmentCount}`,
+        );
+      }
+      return;
+    }
+    if (threadId && await this.tryResolveChannelQuestion(content, author, 'thread', threadId)) {
+      if (incomingAttachmentCount > 0) {
+        console.warn(
+          `[SessionAgentDO] handlePrompt: attachment-bearing thread prompt resolved pending question ` +
+          `without runner dispatch; threadId=${threadId} attachments=${incomingAttachmentCount}`,
+        );
+      }
       return;
     }
 
@@ -1852,11 +1897,16 @@ export class SessionAgentDO {
     // and auto-wakes if needed.
 
     const { attachments: normalizedAttachments } = sanitizePromptAttachments(attachments);
-    const attachmentParts = attachmentPartsForMessage(normalizedAttachments);
+    const attachmentParts = attachmentPartsForDisplay(normalizedAttachments);
     const serializedAttachmentParts = attachmentParts.length > 0 ? JSON.stringify(attachmentParts) : null;
     const serializedQueuedAttachments = normalizedAttachments.length > 0 ? JSON.stringify(normalizedAttachments) : null;
 
     const messageId = crypto.randomUUID();
+    console.log(
+      `[SessionAgentDO] handlePrompt attachments: messageId=${messageId} ` +
+      `incoming=${incomingAttachmentCount} accepted=${normalizedAttachments.length} ` +
+      `displayParts=${attachmentParts.length} [${promptAttachmentSummary(normalizedAttachments)}]`,
+    );
 
     // Check if runner is busy / ready
     const runnerBusy = this.promptQueue.runnerBusy;
@@ -1896,7 +1946,10 @@ export class SessionAgentDO {
         : (runnerBusy && !anyChannelTracked) ? 'runner busy'
         : !runnerConnected ? 'no runner connected'
         : 'runner not ready';
-      console.log(`[SessionAgentDO] handlePrompt: QUEUING (${reason}) channel=${channelKey} messageId=${messageId}`);
+      console.log(
+        `[SessionAgentDO] handlePrompt: QUEUING (${reason}) channel=${channelKey} ` +
+        `messageId=${messageId} attachments=${normalizedAttachments.length}`,
+      );
 
       // Single-slot enforcement: withdraw existing pending user prompt
       // Skipped for steer prompts so the existing pending followup is preserved
@@ -1908,7 +1961,7 @@ export class SessionAgentDO {
             data: {
               messageId: existingPending.id,
               content: existingPending.content,
-              attachments: existingPending.attachments ? JSON.parse(existingPending.attachments) : undefined,
+              attachments: existingPending.attachments ? attachmentsForClientState(JSON.parse(existingPending.attachments)) : undefined,
               threadId: existingPending.threadId,
             },
           });
@@ -1944,7 +1997,7 @@ export class SessionAgentDO {
           pending: {
             messageId,
             content,
-            attachments: normalizedAttachments.length > 0 ? normalizedAttachments : undefined,
+            attachments: normalizedAttachments.length > 0 ? attachmentsForClientState(normalizedAttachments) : undefined,
             threadId,
           },
         },
@@ -2003,7 +2056,10 @@ export class SessionAgentDO {
       author?.id
     );
 
-    console.log(`[SessionAgentDO] handlePrompt: DISPATCHING DIRECTLY channel=${channelKey} messageId=${messageId}`);
+    console.log(
+      `[SessionAgentDO] handlePrompt: DISPATCHING DIRECTLY channel=${channelKey} ` +
+      `messageId=${messageId} attachments=${normalizedAttachments.length}`,
+    );
     this.promptQueue.stampPromptReceived();
     // Insert into prompt_queue as 'processing' so it can be recovered if the runner disconnects
     this.promptQueue.enqueue({
@@ -2084,6 +2140,90 @@ export class SessionAgentDO {
     });
   }
 
+  private async handlePromptAttachmentEndpoint(url: URL): Promise<Response> {
+    const token = url.searchParams.get('token');
+    if (!token || token !== this.runnerLink.token) {
+      console.warn(
+        `[SessionAgentDO] prompt-attachment unauthorized: tokenPresent=${token ? 'yes' : 'no'} ` +
+        `expectedPresent=${this.runnerLink.token ? 'yes' : 'no'}`,
+      );
+      return new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401 });
+    }
+
+    const blobSessionId = url.searchParams.get('blobSessionId');
+    const blobId = url.searchParams.get('blobId');
+    if (blobSessionId || blobId) {
+      const expectedSessionId = this.sessionState.sessionId;
+      const blobUrl = blobSessionId && blobId
+        ? `valet-prompt-blob://attachment/${encodeURIComponent(blobSessionId)}/${encodeURIComponent(blobId)}`
+        : '';
+      const parsedBlob = blobUrl ? parsePromptAttachmentBlobUrl(blobUrl) : null;
+      if (!parsedBlob) {
+        console.warn(
+          `[SessionAgentDO] prompt-attachment invalid blob reference: ` +
+          `blobSessionId=${blobSessionId || 'none'} blobId=${blobId || 'none'}`,
+        );
+        return new Response(JSON.stringify({ error: 'Missing or invalid attachment blob reference' }), { status: 400 });
+      }
+      if (parsedBlob.sessionId !== expectedSessionId) {
+        console.warn(
+          `[SessionAgentDO] prompt-attachment blob session mismatch: ` +
+          `requested=${parsedBlob.sessionId} expected=${expectedSessionId || 'none'}`,
+        );
+        return new Response(JSON.stringify({ error: 'Attachment not found' }), { status: 404 });
+      }
+
+      const key = `${PROMPT_ATTACHMENT_R2_PREFIX}/${parsedBlob.sessionId}/${parsedBlob.blobId}`;
+      const object = await this.env.STORAGE.get(key);
+      if (!object) {
+        console.warn(`[SessionAgentDO] prompt-attachment blob not found: key=${key}`);
+        return new Response(JSON.stringify({ error: 'Attachment not found' }), { status: 404 });
+      }
+
+      const headers = new Headers();
+      object.writeHttpMetadata(headers);
+      if (!headers.has('content-type')) {
+        headers.set('content-type', object.customMetadata?.mime || 'application/octet-stream');
+      }
+      console.log(
+        `[SessionAgentDO] prompt-attachment returning blob: session=${parsedBlob.sessionId} ` +
+        `blobId=${parsedBlob.blobId} size=${object.size ?? 'unknown'}`,
+      );
+      return new Response(object.body, { headers });
+    }
+
+    const messageId = url.searchParams.get('messageId');
+    const indexText = url.searchParams.get('index');
+    const index = indexText ? Number.parseInt(indexText, 10) : -1;
+    if (!messageId || !Number.isInteger(index) || index < 0) {
+      console.warn(
+        `[SessionAgentDO] prompt-attachment invalid reference: ` +
+        `messageId=${messageId || 'none'} index=${indexText || 'none'}`,
+      );
+      return new Response(JSON.stringify({ error: 'Missing or invalid attachment reference' }), { status: 400 });
+    }
+
+    const attachments = this.promptQueue.getAttachmentsById(messageId);
+    const attachment = attachments?.[index];
+    if (!attachment || typeof attachment !== 'object') {
+      console.warn(
+        `[SessionAgentDO] prompt-attachment not found: messageId=${messageId} index=${index} ` +
+        `storedAttachments=${attachments?.length ?? 0}`,
+      );
+      return new Response(JSON.stringify({ error: 'Attachment not found' }), { status: 404 });
+    }
+
+    const record = attachment as Record<string, unknown>;
+    console.log(
+      `[SessionAgentDO] prompt-attachment returning: messageId=${messageId} index=${index} ` +
+      `mime=${typeof record.mime === 'string' ? record.mime : 'unknown'} ` +
+      `filename=${typeof record.filename === 'string' ? record.filename : 'unnamed'} ` +
+      `urlChars=${typeof record.url === 'string' ? record.url.length : 0}`,
+    );
+
+    return Response.json(attachment);
+  }
+
   private async handleAbort(channelType?: string, channelId?: string) {
     if (channelType && channelId) {
       this.runnerLink.send({ type: 'abort', channelType, channelId });
@@ -2117,13 +2257,29 @@ export class SessionAgentDO {
     // If the agent is waiting on a question and the user replies in the same
     // channel, resolve the question instead of aborting. Without this, the
     // abort kills the OpenCode session before the answer can reach it.
-    if (await this.tryResolveChannelQuestion(content, author, channelType, channelId)) {
-      return;
-    }
-
     // Normalize threadId to channel routing for abort targeting
     const abortChannelType = threadId ? 'thread' : channelType;
     const abortChannelId = threadId ? threadId : channelId;
+    const incomingAttachmentCount = attachments?.length ?? 0;
+    if (await this.tryResolveChannelQuestion(content, author, channelType, channelId)) {
+      if (incomingAttachmentCount > 0) {
+        console.warn(
+          `[SessionAgentDO] handleInterruptPrompt: attachment-bearing prompt resolved pending question ` +
+          `without runner dispatch; channelType=${channelType || 'none'} channelId=${channelId || 'none'} ` +
+          `attachments=${incomingAttachmentCount}`,
+        );
+      }
+      return;
+    }
+    if (threadId && await this.tryResolveChannelQuestion(content, author, 'thread', threadId)) {
+      if (incomingAttachmentCount > 0) {
+        console.warn(
+          `[SessionAgentDO] handleInterruptPrompt: attachment-bearing thread prompt resolved pending question ` +
+          `without runner dispatch; threadId=${threadId} attachments=${incomingAttachmentCount}`,
+        );
+      }
+      return;
+    }
 
     const runnerBusy = this.promptQueue.runnerBusy;
     if (runnerBusy) {
@@ -2151,7 +2307,24 @@ export class SessionAgentDO {
     // If the agent is waiting on a question and the user replies in the same
     // channel, resolve the question instead of buffering. Without this, the
     // reply gets collected and the question times out after 5 minutes.
+    const incomingAttachmentCount = attachments?.length ?? 0;
     if (await this.tryResolveChannelQuestion(content, author, channelType, channelId)) {
+      if (incomingAttachmentCount > 0) {
+        console.warn(
+          `[SessionAgentDO] handleCollectPrompt: attachment-bearing prompt resolved pending question ` +
+          `without runner dispatch; channelType=${channelType || 'none'} channelId=${channelId || 'none'} ` +
+          `attachments=${incomingAttachmentCount}`,
+        );
+      }
+      return;
+    }
+    if (threadId && await this.tryResolveChannelQuestion(content, author, 'thread', threadId)) {
+      if (incomingAttachmentCount > 0) {
+        console.warn(
+          `[SessionAgentDO] handleCollectPrompt: attachment-bearing thread prompt resolved pending question ` +
+          `without runner dispatch; threadId=${threadId} attachments=${incomingAttachmentCount}`,
+        );
+      }
       return;
     }
 
@@ -2163,7 +2336,7 @@ export class SessionAgentDO {
     if (rejectedTypes.length > 0) {
       console.warn(`[SessionAgentDO] Channel prompt: rejected file types: ${rejectedTypes.join(', ')}`);
     }
-    const attachmentParts = attachmentPartsForMessage(normalizedAttachments);
+    const attachmentParts = attachmentPartsForDisplay(normalizedAttachments);
     const serializedAttachmentParts = attachmentParts.length > 0 ? JSON.stringify(attachmentParts) : null;
 
     // Store user message immediately for display (including channel metadata)
@@ -2374,6 +2547,9 @@ export class SessionAgentDO {
         const context: Record<string, unknown> = msg.options ? { options: msg.options } : {};
         context.channelType = questionCh.channelType;
         context.channelId = questionCh.channelId;
+        if (questionCh.threadId) {
+          context.threadId = questionCh.threadId;
+        }
 
         this.ctx.storage.sql.exec(
           `INSERT INTO interactive_prompts (id, type, request_id, title, actions, context, status, expires_at)
@@ -2401,6 +2577,7 @@ export class SessionAgentDO {
           prompt,
           channelType: questionCh.channelType,
           channelId: questionCh.channelId,
+          threadId: questionCh.threadId || undefined,
         });
 
         // Schedule an alarm to expire the question if unanswered
@@ -4747,7 +4924,7 @@ export class SessionAgentDO {
 
       if (!alreadyWritten) {
         const queuedAttachments = prompt.attachments ? JSON.parse(prompt.attachments) : [];
-        const attachmentParts = attachmentPartsForMessage(queuedAttachments);
+        const attachmentParts = attachmentPartsForDisplay(queuedAttachments);
 
         this.messageStore.writeMessage({
           id: prompt.id,
@@ -4987,7 +5164,7 @@ export class SessionAgentDO {
         data: {
           messageId: pending.id,
           content: pending.content,
-          attachments: pending.attachments ? JSON.parse(pending.attachments) : undefined,
+          attachments: pending.attachments ? attachmentsForClientState(JSON.parse(pending.attachments)) : undefined,
           threadId: pending.threadId,
         },
       });

@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { eq } from 'drizzle-orm';
 import { createTestDb } from '../test-utils/db.js';
 import { users } from '../lib/schema/users.js';
-import { credentials, integrations, mcpToolCache, customMcpConnectors } from '../lib/schema/index.js';
+import { credentials, integrations, mcpOauthClients, mcpToolCache, customMcpConnectors } from '../lib/schema/index.js';
 import { actionPolicies, userActionPolicyOverrides } from '../lib/schema/actions.js';
 import { disabledActions } from '../lib/schema/disabled-actions.js';
 import { encryptString } from '../lib/crypto.js';
@@ -137,6 +137,65 @@ describe('custom MCP connector service', () => {
     expect(db.select().from(mcpToolCache).where(eq(mcpToolCache.service, created.serviceSlug)).all()).toEqual([]);
   });
 
+  it('invalidates dynamic MCP OAuth clients when OAuth connector identity changes', async () => {
+    const { db } = createTestDb();
+    const appDb: AppDb = db;
+    const connector = await createCustomMcpConnector(makeEnv(), appDb, {
+      displayName: 'Ramp',
+      serverUrl: 'https://mcp.ramp.com/mcp',
+      authType: 'oauth',
+      oauthClientId: null,
+    }, { orgId: 'default', createdBy: null });
+
+    db.insert(mcpOauthClients).values({
+      service: connector.serviceSlug,
+      clientId: 'stale-client',
+      authorizationEndpoint: 'https://auth.ramp.com/oauth/authorize',
+      tokenEndpoint: 'https://auth.ramp.com/oauth/token',
+      registrationEndpoint: 'https://auth.ramp.com/oauth/register',
+    }).run();
+
+    await updateCustomMcpConnector(makeEnv(), appDb, connector.id, {
+      serverUrl: 'https://mcp.ramp.com/new-mcp',
+    });
+
+    expect(db.select().from(mcpOauthClients).where(eq(mcpOauthClients.service, connector.serviceSlug)).all()).toEqual([]);
+  });
+
+  it('preserves dynamic MCP OAuth clients when unchanged no-client OAuth fields are submitted', async () => {
+    const { db } = createTestDb();
+    const appDb: AppDb = db;
+    const connector = await createCustomMcpConnector(makeEnv(), appDb, {
+      displayName: 'Ramp',
+      serverUrl: 'https://mcp.ramp.com/mcp',
+      authType: 'oauth',
+      oauthClientId: null,
+    }, { orgId: 'default', createdBy: null });
+
+    db.insert(mcpOauthClients).values({
+      service: connector.serviceSlug,
+      clientId: 'dynamic-client',
+      authorizationEndpoint: 'https://auth.ramp.com/oauth/authorize',
+      tokenEndpoint: 'https://auth.ramp.com/oauth/token',
+      registrationEndpoint: 'https://auth.ramp.com/oauth/register',
+    }).run();
+
+    await updateCustomMcpConnector(makeEnv(), appDb, connector.id, {
+      status: 'disabled',
+      oauthScopes: 'openid profile offline_access',
+      oauthClientId: null,
+      oauthAuthorizationEndpoint: null,
+      oauthTokenEndpoint: null,
+    });
+
+    expect(db.select().from(mcpOauthClients).where(eq(mcpOauthClients.service, connector.serviceSlug)).all()).toEqual([
+      expect.objectContaining({
+        service: connector.serviceSlug,
+        clientId: 'dynamic-client',
+      }),
+    ]);
+  });
+
   it('rejects service slugs that collide with built-in integrations', async () => {
     const { db } = createTestDb();
     const appDb: AppDb = db;
@@ -198,6 +257,84 @@ describe('custom MCP connector service', () => {
     });
   });
 
+  it('does not fetch unsafe authorization servers during admin-provided OAuth discovery', async () => {
+    const { db } = createTestDb();
+    const appDb: AppDb = db;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === 'https://mcp.safe-discovery.example.com/.well-known/oauth-protected-resource') {
+        return Response.json({ authorization_servers: ['http://localhost'] });
+      }
+      if (url.startsWith('http://localhost')) {
+        throw new Error('unsafe authorization server should not be fetched');
+      }
+      return new Response('not found', { status: 404 });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(createCustomMcpConnector(makeEnv(), appDb, {
+      displayName: 'Safe Discovery MCP',
+      serverUrl: 'https://mcp.safe-discovery.example.com/mcp',
+      authType: 'oauth',
+      oauthClientId: 'client-id',
+    }, { orgId: 'default', createdBy: null })).rejects.toThrow(/discovery|not allowed|https/i);
+
+    expect(fetchMock.mock.calls.map((call) => String(call[0]))).not.toContain(
+      'http://localhost/.well-known/oauth-authorization-server',
+    );
+  });
+
+  it('rejects unsafe OAuth endpoints returned by admin-provided discovery before storage', async () => {
+    const { db } = createTestDb();
+    const appDb: AppDb = db;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === 'https://mcp.unsafe-endpoints.example.com/.well-known/oauth-protected-resource') {
+        return new Response('not found', { status: 404 });
+      }
+      if (url === 'https://mcp.unsafe-endpoints.example.com/.well-known/oauth-authorization-server') {
+        return Response.json({
+          authorization_endpoint: 'http://localhost/oauth/authorize',
+          token_endpoint: 'http://localhost/oauth/token',
+        });
+      }
+      return new Response('not found', { status: 404 });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(createCustomMcpConnector(makeEnv(), appDb, {
+      displayName: 'Unsafe Endpoint Discovery MCP',
+      serverUrl: 'https://mcp.unsafe-endpoints.example.com/mcp',
+      authType: 'oauth',
+      oauthClientId: 'client-id',
+    }, { orgId: 'default', createdBy: null })).rejects.toThrow(/not allowed|https|localhost/i);
+
+    expect(db.select().from(customMcpConnectors).all()).toHaveLength(0);
+  });
+
+  it('creates OAuth connectors without a preconfigured client ID for dynamic MCP OAuth', async () => {
+    const { db } = createTestDb();
+    const appDb: AppDb = db;
+
+    const connector = await createCustomMcpConnector(makeEnv(), appDb, {
+      displayName: 'Ramp',
+      serverUrl: 'https://mcp.ramp.com/mcp',
+      authType: 'oauth',
+      oauthClientId: null,
+      oauthScopes: 'openid profile offline_access',
+    }, { orgId: 'default', createdBy: null });
+
+    expect(connector).toMatchObject({
+      serviceSlug: 'ramp',
+      authType: 'oauth',
+      oauthClientId: null,
+      oauthScopes: 'openid profile offline_access',
+      oauthAuthorizationEndpoint: null,
+      oauthTokenEndpoint: null,
+      hasClientSecret: false,
+    });
+  });
+
   it('returns connector summaries with cached tool counts', async () => {
     const { db } = createTestDb();
     const appDb: AppDb = db;
@@ -252,6 +389,13 @@ describe('custom MCP connector service', () => {
       description: '',
       riskLevel: 'low',
     }).run();
+    db.insert(mcpOauthClients).values({
+      service: connector.serviceSlug,
+      clientId: 'dynamic-client',
+      authorizationEndpoint: 'https://login.example.com/auth',
+      tokenEndpoint: 'https://login.example.com/token',
+      registrationEndpoint: 'https://login.example.com/register',
+    }).run();
     db.insert(disabledActions).values({
       id: 'disabled-1',
       service: connector.serviceSlug,
@@ -281,6 +425,7 @@ describe('custom MCP connector service', () => {
     expect(db.select().from(integrations).all()).toHaveLength(0);
     expect(db.select().from(credentials).all()).toHaveLength(0);
     expect(db.select().from(mcpToolCache).all()).toHaveLength(0);
+    expect(db.select().from(mcpOauthClients).all()).toHaveLength(0);
     expect(db.select().from(disabledActions).all()).toHaveLength(0);
     expect(db.select().from(actionPolicies).all()).toHaveLength(0);
     expect(db.select().from(userActionPolicyOverrides).all()).toHaveLength(0);

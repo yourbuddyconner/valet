@@ -5,7 +5,7 @@ import * as credentialDb from '../lib/db/credentials.js';
 import * as mcpOAuthDb from '../lib/db/mcp-oauth.js';
 import { getDb } from '../lib/drizzle.js';
 import { integrationRegistry } from '../integrations/registry.js';
-import { getCustomMcpOAuthConfig } from './custom-mcp-connectors.js';
+import { getCustomMcpOAuthConfig, getCustomMcpOAuthConnector } from './custom-mcp-connectors.js';
 import { createSafeFetchOutbound } from './safe-fetch-outbound.js';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
@@ -248,6 +248,8 @@ async function attemptRefresh(
           tokenEndpoint: client.tokenEndpoint,
           clientId: client.clientId,
           refreshToken: data.refresh_token,
+          resource: integrationProvider.mcpServerUrl,
+          fetch: createSafeFetchOutbound({ mode: 'oauth-token' }),
         });
         const newData: CredentialData = {
           access_token: tokens.access_token,
@@ -290,6 +292,58 @@ async function attemptRefresh(
   }
 
   const db = getDb(env.DB);
+  const customOAuthConnector = await getCustomMcpOAuthConnector(env, db, provider, 'default');
+  if (customOAuthConnector && !customOAuthConnector.oauthClientId) {
+    const client = await mcpOAuthDb.getMcpOAuthClient(db, provider);
+    if (client) {
+      try {
+        const tokens = await refreshTokenPkce({
+          tokenEndpoint: client.tokenEndpoint,
+          clientId: client.clientId,
+          refreshToken: data.refresh_token,
+          resource: customOAuthConnector.serverUrl,
+          fetch: createSafeFetchOutbound({ mode: 'oauth-token' }),
+        });
+        const newData: CredentialData = {
+          access_token: tokens.access_token,
+          refresh_token: tokens.refresh_token || data.refresh_token,
+        };
+        const expiresAt = tokens.expires_in
+          ? new Date(Date.now() + tokens.expires_in * 1000).toISOString()
+          : undefined;
+        const encrypted = await encryptCredentialData(newData, env.ENCRYPTION_KEY);
+        await credentialDb.upsertCredential(db, {
+          id: crypto.randomUUID(),
+          ownerType,
+          ownerId,
+          provider,
+          credentialType: 'oauth2',
+          encryptedData: encrypted,
+          expiresAt,
+        });
+        return {
+          ok: true,
+          credential: {
+            accessToken: tokens.access_token,
+            refreshToken: tokens.refresh_token || data.refresh_token,
+            expiresAt: expiresAt ? new Date(expiresAt) : undefined,
+            credentialType: 'oauth2',
+            refreshed: true,
+          },
+        };
+      } catch (err) {
+        return {
+          ok: false,
+          error: {
+            service: provider,
+            reason: 'refresh_failed',
+            message: `Custom MCP PKCE refresh failed: ${err instanceof Error ? err.message : String(err)}`,
+          },
+        };
+      }
+    }
+  }
+
   const customOAuth = await getCustomMcpOAuthConfig(env, db, provider, 'default');
   if (customOAuth) {
     try {

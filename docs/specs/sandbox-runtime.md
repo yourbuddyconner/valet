@@ -320,13 +320,17 @@ Thread channels (`"thread:<threadId>"`) additionally reuse the persisted `sessio
 
 **Prompt flow:**
 1. Receive prompt from DO (messageId, content, model, author, attachments, channel context).
-2. Finalize any pending response on the channel.
-3. Ensure channel has an OpenCode session (create via `POST /session` if needed).
-4. Build model failover chain from `modelPreferences`.
-5. Transcribe audio attachments via whisper.cpp if present.
-6. Send `agentStatus: thinking` to DO.
-7. POST `/session/:id/message` to OpenCode with attributed content and model selection.
-8. Finalize the turn from the sync response, supplemented by SSE deltas that arrived while the request was in flight.
+2. Resolve attachment references by fetching `/api/sessions/:id/runner-attachment` with the runner token:
+   - `valet-prompt-blob://attachment/<sessionId>/<blobId>` streams a large HTTP-uploaded prompt attachment from R2. The Worker creates these refs before forwarding `/prompt` to the DO so `prompt_queue` never stores multi-MB base64 strings.
+   - `valet-prompt-attachment://<messageId>/<index>` fetches an attachment from the DO prompt queue. The DO uses this fallback when the prompt payload would exceed the safe DO→Runner WebSocket frame size but is still small enough to remain inline in DO storage.
+3. Finalize any pending response on the channel.
+4. Ensure channel has an OpenCode session (create via `POST /session` if needed).
+5. Build model failover chain from `modelPreferences`.
+6. Transcribe audio attachments via whisper.cpp if present.
+7. Materialize PDF attachments to `/workspace/.valet/attachments` by default (or `VALET_PROMPT_ATTACHMENT_DIR` when set): the runner writes the original `.pdf`, parses text with LiteParse, writes a sibling `.txt` when parsing succeeds, strips the raw PDF attachment, and appends a concise note telling the agent it can read the parsed text file from disk.
+8. Send `agentStatus: thinking` to DO.
+9. POST `/session/:id/message` to OpenCode with attributed content and model selection.
+10. Finalize the turn from the sync response, supplemented by SSE deltas that arrived while the request was in flight.
 
 **SSE event consumption (`consumeEventStream()`):**
 - Connects to `/global/event` (fallback: `/event`).
@@ -354,7 +358,7 @@ Thread channels (`"thread:<threadId>"`) additionally reuse the persisted `sessio
 
 | Type | Purpose | Key Fields |
 |------|---------|-----------|
-| `prompt` | New user prompt | `messageId`, `content`, `model?`, `attachments?`, `modelPreferences?`, `channelType?`, `channelId?`, `opencodeSessionId?`, `threadId?`, `continuationContext?`, author fields |
+| `prompt` | New user prompt | `messageId`, `content`, `model?`, `attachments?`, `modelPreferences?`, `channelType?`, `channelId?`, `opencodeSessionId?`, `threadId?`, `continuationContext?`, author fields. Large attachment `url` values may be `valet-prompt-blob://attachment/<sessionId>/<blobId>` or `valet-prompt-attachment://<messageId>/<index>` references instead of data URLs. |
 | `answer` | Answer to question | `questionId`, `answer` |
 | `stop` | Shutdown signal | — |
 | `abort` | Cancel current operation | `channelType?`, `channelId?` |
