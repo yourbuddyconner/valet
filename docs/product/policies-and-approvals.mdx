@@ -1,0 +1,86 @@
+---
+title: Policies and Approvals
+description: Valet resolves every integration tool call through org policy, user overrides, system defaults, and approval prompts before allowing, prompting, or denying execution.
+---
+
+# Policies and Approvals
+
+Every integration tool call is resolved through a policy stack before it runs. This gives admins control over org risk while still letting users customize their own approval experience.
+
+Policy resolution applies to integration actions invoked through `call_tool`. Workflow approval steps are a separate workflow control, although they can appear in the same user experience.
+
+## Resolution order
+
+Valet evaluates policies in this order:
+
+1. **Org policy**: admin rules for exact tools, whole services, or risk levels.
+2. **User override**: personal rules at the same specificity levels.
+3. **System default**: low-risk tools auto-allow, medium and high risk require approval, and critical risk denies.
+
+An explicit org deny always wins. Users cannot bypass it with personal overrides.
+
+## Modes
+
+Every resolved policy produces one of three modes:
+
+| Mode | Effect |
+| --- | --- |
+| `allow` | Execute without prompting. |
+| `require_approval` | Create an interactive approval prompt and wait. |
+| `deny` | Block the invocation. |
+
+System defaults depend on tool risk: low risk allows, medium and high risk require approval, and critical risk denies.
+
+## Specificity
+
+When multiple rules match, the most specific rule wins:
+
+1. Exact tool, such as `gmail` plus `draft.create`.
+2. Service, such as all Gmail tools.
+3. Risk level, such as all medium-risk tools.
+
+For ties at the same specificity, persistent overrides outrank session overrides, then most-recently-updated wins.
+
+## Override lifetimes
+
+User overrides can have three lifetimes:
+
+| Lifetime | Source | Expiry |
+| --- | --- | --- |
+| `persistent` | Settings UI or "Always Allow" | Manual deletion only. |
+| `session` | "Allow for Session" | Sandbox hibernation, refresh, or termination. |
+| `timed` | Reserved for future use | Explicit `expiresAt`. |
+
+Session overrides are tied to the live sandbox lifecycle, not just the logical session row. When the workstation recycles, temporary trust expires.
+
+## Approval prompt choices
+
+When a tool call requires approval, the user can choose:
+
+- **Allow**: run this one call.
+- **Allow for Session**: run this call and future identical calls until the sandbox recycles.
+- **Always Allow**: create a persistent exact-tool override.
+- **Cancel**: deny this call.
+
+Session-scoped overrides expire when the sandbox hibernates, refreshes, or terminates.
+
+Only the session owner can resolve a session owner's tool approval. Collaborators and viewers can see session activity according to their access, but they cannot approve someone else's tool invocation.
+
+Approval prompt shortcuts create exact-tool overrides only. Broad service or risk-level overrides are managed from settings.
+
+## Audit trail
+
+Valet records the full policy resolution chain for tool invocations: matching org rule, base mode, user override, lifetime, scope, and final resolved mode. This supports later review of why a tool ran, prompted, or was denied.
+
+The audit record preserves:
+
+- Service and action ID.
+- Risk level.
+- Matching org rule, if any.
+- Base mode before user overrides.
+- Matching user override, if any.
+- Final outcome: allowed, pending approval, denied, failed, or cancelled.
+
+## Failure behavior
+
+Valet treats approval resolution as a stateful operation. If an override write fails after a user selected "Allow for Session" or "Always Allow", the invocation should fail instead of running without the requested override. Stale approvals are marked terminal and removed from the UI.

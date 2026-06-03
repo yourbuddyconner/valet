@@ -1,0 +1,87 @@
+{
+  "$schema": "https://mintlify.com/docs.json",
+  "theme": "mint",
+  "name": "Valet",
+  "description": "Product documentation for Valet, an AI coworker with its own hosted workstation, persistent memory, channels, integrations, workflows, policies, and technical execution environment.",
+  "colors": {
+    "primary": "#1747E6",
+    "light": "#5B7FF5",
+    "dark": "#0E2DB3"
+  },
+  "appearance": {
+    "default": "light"
+  },
+  "background": {
+    "color": {
+      "light": "#F4EFE2",
+      "dark": "#0A1340"
+    }
+  },
+  "fonts": {
+    "heading": {
+      "family": "Geist",
+      "weight": 600
+    },
+    "body": {
+      "family": "Geist",
+      "weight": 400
+    }
+  },
+  "icons": {
+    "library": "lucide"
+  },
+  "styling": {
+    "eyebrows": "section",
+    "codeblocks": "dark"
+  },
+  "logo": {
+    "light": "/logo/valet-light.svg",
+    "dark": "/logo/valet-dark.svg",
+    "href": "/"
+  },
+  "favicon": "/logo/favicon.svg",
+  "navigation": {
+    "groups": [
+      {
+        "group": "Start Here",
+        "pages": [
+          "index",
+          "product/what-is-valet"
+        ]
+      },
+      {
+        "group": "Product Surface",
+        "pages": [
+          "product/sessions",
+          "product/workstations-and-sandboxes",
+          "product/triggers-and-workflows",
+          "product/orchestrators-and-memory",
+          "product/skills-and-personas",
+          "product/auth-and-access",
+          "product/policies-and-approvals",
+          "product/channels",
+          "product/integrations"
+        ]
+      },
+      {
+        "group": "Agent Access",
+        "pages": [
+          "product/mcp-endpoint"
+        ]
+      },
+      {
+        "group": "Docs System",
+        "pages": [
+          "product/design-language",
+          "product/character-assets"
+        ]
+      }
+    ]
+  },
+  "seo": {
+    "indexing": "navigable"
+  },
+  "search": {
+    "prompt": "Search Valet product docs for sessions, workstations, orchestrators, memory, workflows, policies, channels, integrations, MCP access, and docs design guidance."
+  }
+}
