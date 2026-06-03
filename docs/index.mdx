@@ -17,9 +17,8 @@ import { UseCaseCard } from '/snippets/use-case-card.mdx';
         Your AI coworker, <span className="valet-serif">documented.</span>
       </h1>
       <p className="valet-hero-body">
-        Everything you need to put Valet to work, from your first session to full API and MCP
-        reference. Product docs stay plain-language. Engineering docs go deep when you need the
-        machinery.
+        Learn what Valet can do, connect it to the tools your team already uses, and give it work
+        that runs with context, memory, and approvals.
       </p>
 
       <div className="valet-hero-actions">
@@ -42,13 +41,28 @@ import { UseCaseCard } from '/snippets/use-case-card.mdx';
           }
         }}
       >
-        <span>Search or ask about sessions, workflows, approvals, API, and MCP</span>
+        <span className="valet-search-full">
+          Search or ask about sessions, workflows, approvals, API, and MCP
+        </span>
+        <span className="valet-search-short">Search or ask Valet docs</span>
       </button>
     </div>
 
     <div className="valet-hero-art" aria-label="Valet mascot">
       <div className="valet-hero-disc">
         <img src="/images/characters/wave.png" alt="Valet waving hello" noZoom />
+      </div>
+      <div className="valet-hero-cues" aria-label="Recommended starting points">
+        <a className="valet-hero-cue" href="/product/what-is-valet">
+          <span className="valet-hero-cue-label">Valet 101</span>
+          <span className="valet-hero-cue-title">Product concepts</span>
+          <span className="valet-hero-cue-description">Plain-language basics first.</span>
+        </a>
+        <a className="valet-hero-cue" href="/engineering/sandbox-lifecycle">
+          <span className="valet-hero-cue-label">Engineering</span>
+          <span className="valet-hero-cue-title">System internals</span>
+          <span className="valet-hero-cue-description">Sandbox, runner, API, MCP.</span>
+        </a>
       </div>
     </div>
   </section>
