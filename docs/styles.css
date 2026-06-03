@@ -396,6 +396,59 @@ body {
   padding: 0.45rem 0.8rem;
 }
 
+.valet-doc-grid {
+  display: grid;
+  gap: 0.9rem;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin: 1rem 0 1.5rem;
+}
+
+.valet-doc-grid .valet-feature-card,
+.valet-doc-grid .valet-use-case-card {
+  min-height: 8.5rem;
+}
+
+.valet-mascot-note {
+  align-items: center;
+  background: var(--valet-paper);
+  border: 1px solid var(--valet-line);
+  border-radius: 8px;
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: minmax(0, 1fr) 8.5rem;
+  margin: 1.5rem 0;
+  overflow: hidden;
+  padding: 1rem 0.5rem 1rem 1rem;
+}
+
+.valet-mascot-note-body {
+  color: var(--valet-ink);
+  font-size: 0.96rem;
+  line-height: 1.55;
+}
+
+.valet-mascot-note-body p {
+  margin: 0;
+}
+
+.valet-mascot-note-image {
+  align-self: end;
+  display: block;
+  max-height: 9rem;
+  object-fit: contain;
+  object-position: bottom center;
+  width: 100%;
+}
+
+.dark .valet-mascot-note {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.16);
+}
+
+.dark .valet-mascot-note-body {
+  color: rgba(255, 255, 255, 0.82);
+}
+
 .valet-persona-card,
 .valet-integration-card,
 .valet-reference-card,
@@ -515,8 +568,17 @@ body {
   }
 
   .valet-card-grid,
-  .valet-use-case-grid {
+  .valet-use-case-grid,
+  .valet-doc-grid {
     grid-template-columns: 1fr;
+  }
+
+  .valet-mascot-note {
+    grid-template-columns: minmax(0, 1fr) 6rem;
+  }
+
+  .valet-mascot-note-image {
+    max-height: 7rem;
   }
 
   .valet-blueprint {

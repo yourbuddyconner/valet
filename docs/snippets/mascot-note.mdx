@@ -1,0 +1,11 @@
+export const MascotNote = ({ title = "Tip from Valet", image, alt, children }) => {
+  return (
+    <div className="valet-mascot-note">
+      <div className="valet-mascot-note-copy">
+        <span className="valet-card-eyebrow">{title}</span>
+        <div className="valet-mascot-note-body">{children}</div>
+      </div>
+      <img className="valet-mascot-note-image" src={image} alt={alt} noZoom />
+    </div>
+  );
+};
