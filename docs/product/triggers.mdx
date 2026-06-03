@@ -1,0 +1,89 @@
+---
+title: Triggers and schedules
+description: Set up recurring work, manual runs, and event-driven automations in Valet.
+---
+
+A trigger is what causes a workflow or an orchestrator prompt to run. Triggers turn Valet from "ask it something" into "Valet handles this automatically."
+
+Common requests that become triggers:
+
+- "Send me my calendar and open PRs every morning at 7am."
+- "Every Monday, summarize last week's commits."
+- "When someone files a support ticket matching X, draft a reply."
+
+## Trigger types
+
+Valet supports three trigger types:
+
+| Type | When it runs | Good for |
+| --- | --- | --- |
+| Manual | Someone clicks Run, or asks Valet to run it. | Reusable jobs you start by hand. |
+| Schedule | On a cron schedule. | Daily digests, weekly summaries, periodic checks. |
+| Webhook | When an external system sends an HTTP request. | Reacting to tickets, forms, GitHub events, or other systems. |
+
+See [workflow execution](/engineering/workflow-execution) for the underlying record model.
+
+## Schedules: workflow vs orchestrator prompt
+
+A schedule trigger can do one of two things on each tick:
+
+- **Run a workflow.** The cron tick executes a defined workflow with its steps and approvals.
+- **Send a prompt to the orchestrator.** The cron tick wakes up your orchestrator with a prompt, and the orchestrator decides what to do at runtime — read calendars, send messages, spawn child sessions, whatever the prompt asks for.
+
+Scheduled prompts to the orchestrator are the simpler option for most "remind me / digest me / check on X" use cases. You write the prompt once, and the orchestrator gets it on every tick.
+
+Use a scheduled workflow when the steps are well-defined and you want strict, repeatable execution (especially when you need approval gates or strict tool calls). Use a scheduled orchestrator prompt when the work is conversational or judgment-based.
+
+## How to set one up
+
+Ask Valet to set up the trigger for you. Examples:
+
+```text
+Set up a daily digest at 7am Pacific that sends me my calendar
+and open GitHub PRs over Slack DM.
+```
+
+```text
+Every Monday morning, look at the last 7 days of commits on
+yourbuddyconner/valet and post a changelog draft in #proj-valet.
+```
+
+```text
+Trigger a workflow whenever someone opens an issue in tkhq/valet
+with the label "needs-triage".
+```
+
+Be specific about:
+
+- **When it should run** — a clear cadence ("daily at 7am Pacific", "Mondays 8am") and timezone.
+- **Where the output goes** — a Slack DM, a channel, an email, the orchestrator's chat.
+- **What it should produce** — "a summary of X", "a draft reply", "a Linear issue suggestion."
+- **What it should not do** — "do not auto-send", "always ask before posting publicly."
+
+Valet will create the trigger and link it to either a workflow or an orchestrator prompt.
+
+## Manual triggers
+
+Manual triggers are workflows you run on demand. Use them when:
+
+- The work is well-defined and you do not want to re-explain it every time.
+- Multiple people on a team need to run the same job.
+- You want a clean execution record for each run.
+
+## Webhook triggers
+
+Webhook triggers let outside systems hand work to Valet. The trigger validates the request (method, header, secret) and maps the request data into variables that the workflow can use.
+
+Common uses:
+
+- A support form fires a webhook → Valet drafts a reply.
+- A GitHub event fires a webhook → Valet triages the PR.
+- A monitoring alert fires a webhook → Valet posts a summary in Slack.
+
+Setting up webhooks usually requires admin help to register the URL on the external system.
+
+## When a scheduled run does not run
+
+See [troubleshooting](/product/troubleshooting#my-scheduled-automation-did-not-run) for the common causes. The most frequent ones are a disabled trigger and an unanswered approval prompt.
+
+For complex automations, also see [workflows](/product/workflows) — workflows define the steps that triggers run.
