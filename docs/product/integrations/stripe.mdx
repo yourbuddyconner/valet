@@ -1,0 +1,35 @@
+---
+title: Stripe
+description: Read and act on Stripe customers, payments, subscriptions, invoices, and products.
+---
+
+Read and act on Stripe customers, payments, subscriptions, invoices, and products.
+
+## Connection summary
+
+| Field | Value |
+| --- | --- |
+| Service slug | `stripe` |
+| Display name | Stripe |
+| Auth type | `oauth2` |
+| Supported entities | `customers`, `payments`, `subscriptions`, `invoices`, `products` |
+| MCP server URL | `https://mcp.stripe.com/mcp` |
+| Default action risk | `medium` |
+
+## Setup
+
+OAuth 2.0 — the user connects this integration through Valet's connection screen, which redirects to the provider's OAuth consent flow and stores the resulting access token in the per-user credential store.
+
+See [OAuth setup](/oauth-setup) for environment variables and connection flow.
+
+## Upstream documentation
+
+This integration proxies the Stripe MCP server. For the full, current list of available actions, see the [Stripe MCP documentation](https://docs.stripe.com/mcp).
+
+## Actions
+
+Actions for Stripe are proxied through a remote [Model Context Protocol](https://modelcontextprotocol.io) server at `https://mcp.stripe.com/mcp`. The exact list of actions, their parameters, and behavior are owned by the upstream MCP server — Valet enumerates them at runtime when the integration is connected.
+
+Default risk level applied to Stripe actions: `medium`. Individual actions may carry their own risk level from the upstream server.
+
+Use `list_tools` with `service: stripe` from an agent session to see the live action list, parameter schemas, and per-action risk levels.

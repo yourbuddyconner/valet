@@ -1,0 +1,43 @@
+---
+title: Integrations
+description: Reference for every external integration shipped with Valet, including auth type, actions, and triggers.
+---
+
+Valet ships first-class integrations as plugins under `packages/plugin-*`. Each plugin contributes one or more actions an agent can call, an optional trigger source for inbound events, and a provider definition that controls how credentials are stored.
+
+Two integration shapes are in use today:
+
+- **Inline action plugins** — actions are defined in Valet's own source with explicit names, parameters, and risk levels. The pages below list every action and its params.
+- **MCP-proxied plugins** — actions are forwarded to a remote [Model Context Protocol](https://modelcontextprotocol.io) server. The plugin owns auth and the default risk level; the upstream MCP server owns the live action catalog. Agents can enumerate the live actions with `list_tools`.
+
+All actions, regardless of shape, are subject to the same [approvals](/product/approvals) and [policy](/engineering/policy-engine) layers.
+
+## Catalog
+
+| Integration | What it does | Action shape | Inline actions | Triggers |
+| --- | --- | --- | --- | --- |
+| [Cloudflare](/product/integrations/cloudflare) | Manage Cloudflare zones, DNS records, Workers, and Pages from a Valet session. | MCP-proxied | — | — |
+| [DeepWiki](/product/integrations/deepwiki) | Read repository-level documentation and knowledge bases hosted on DeepWiki. | MCP-proxied | — | — |
+| [Figma](/product/integrations/figma) | Pull Figma files, projects, and component metadata for design context. | MCP-proxied | — | — |
+| [GitHub](/product/integrations/github) | Manage repositories, branches, pull requests, issues, comments, checks, and webhooks. | Inline actions | 29 | 12 event types |
+| [Gmail](/product/integrations/gmail) | Read, search, send, and manage Gmail messages, threads, labels, and drafts. | Inline actions | 13 | — |
+| [Google Calendar](/product/integrations/google-calendar) | Read and write Google Calendar events across the user's calendars. | Inline actions | 5 | — |
+| [Google Workspace](/product/integrations/google-workspace) | Browse, read, create, and modify Drive files, Docs, and Sheets, gated by Drive labels. | Inline actions | 78 | — |
+| [Grafana Cloud](/product/integrations/grafana) | Query Grafana Cloud dashboards, Prometheus, Loki, alerts, incidents, and on-call data. | MCP-proxied | — | — |
+| [Granola](/product/integrations/granola) | Pull Granola meeting notes and recent meeting context into a session. | MCP-proxied | — | — |
+| [Linear](/product/integrations/linear) | Read and modify Linear issues, projects, teams, and comments. | MCP-proxied | — | — |
+| [Notion](/product/integrations/notion) | Read and modify Notion pages, databases, and blocks. | MCP-proxied | — | — |
+| [Pylon](/product/integrations/pylon) | Read and manage Pylon customer support issues, accounts, and contacts. | MCP-proxied | — | — |
+| [Sentry](/product/integrations/sentry) | Read Sentry issues, projects, and events for error tracking workflows. | MCP-proxied | — | — |
+| [Slack](/product/integrations/slack) | Read channels, post messages, look up users, and route Slack-channel conversations. | Inline actions | 11 | — |
+| [Socket.dev](/product/integrations/socket) | Scan packages for supply-chain risks, vulnerabilities, and malware via Socket.dev. | MCP-proxied | — | — |
+| [Stripe](/product/integrations/stripe) | Read and act on Stripe customers, payments, subscriptions, invoices, and products. | MCP-proxied | — | — |
+| [Turnkey Docs](/product/integrations/turnkey-docs) | Search the Turnkey product documentation and knowledge base. | MCP-proxied | — | — |
+| [Typefully](/product/integrations/typefully) | Manage Typefully drafts, posts, and accounts for social-media content workflows. | MCP-proxied | — | — |
+
+## See also
+
+- [Connect Tools](/product/tools) — the product-level concept.
+- [Built-in tools](/product/built-in-tools) — sandbox and orchestrator tools that are not external integrations.
+- [Plugin system](/engineering/plugin-system) — how plugins are built and loaded.
+- [OAuth setup](/oauth-setup) — provider credentials for OAuth-based integrations.

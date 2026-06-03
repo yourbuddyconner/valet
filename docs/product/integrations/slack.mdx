@@ -1,0 +1,144 @@
+---
+title: Slack
+description: Read channels, post messages, look up users, and route Slack-channel conversations.
+---
+
+Read channels, post messages, look up users, and route Slack-channel conversations.
+
+## Connection summary
+
+| Field | Value |
+| --- | --- |
+| Service slug | `slack` |
+| Display name | Slack |
+| Auth type | `bot_token` |
+| Supported entities | `channels`, `messages`, `users` |
+
+## Setup
+
+Bot token — an admin pastes a bot token issued by the provider during connection setup. The token is stored in the per-org credential store and reused across users.
+
+
+
+## Actions
+
+11 actions are defined for Slack. Risk levels determine approval behavior — see [Approvals](/product/approvals) for what `low`, `medium`, `high`, and `critical` mean at run time.
+
+| Action ID | What it does | Key params | Risk |
+| --- | --- | --- | --- |
+| `slack.dm_owner` | Send a direct message to the session owner on Slack. No user lookup needed. | `text` | low |
+| `slack.dm_user` | Send a direct message to a Slack user by their user ID (U...). Use list_users to find IDs. | `user`, `text` | low |
+| `slack.add_reaction` | Add an emoji reaction to a message | `channel`, `timestamp`, `name` | low |
+| `slack.list_channels` | List Slack channels. By default lists only channels the bot has joined. Set scope to "all" to discover all public channels in the workspace. Use prefix to filter by channel name prefix (e.g. "eng-" or "team-"). | `scope`?, `prefix`? | low |
+| `slack.read_history` | Read recent messages from a Slack channel the bot has joined. Use list_channels to get channel IDs. Each message ts can be used as thread_ts for replies. Use oldest/latest to narrow to a time window. | `channel`, `limit`?, `cursor`?, `oldest`?, `latest`?, `filter`?, `threads_only`?, `include_subtypes`? | low |
+| `slack.read_thread` | Read replies in a Slack thread. Bot must be a member of the channel. | `channel`, `thread_ts`, `limit`?, `cursor`? | low |
+| `slack.list_users` | List human users in the Slack workspace. Returns user IDs needed for dm_user. Use filter to search by ID, handle, real name, display name, or email. | `filter`? | low |
+| `slack.fetch_file` | Download a file from Slack. For images, the content is returned visually so you can see it. For text files, the content is returned as text. Use the url from the files array in message data. IMPORTANT: Call this tool one at a time, not in parallel — each image fetch interrupts the session to deliver the image to your vision. | `url` | low |
+| `slack.get_pins` | Get pinned messages in a channel. Returns messages in the same format as read_history. Useful for understanding what a channel considers important. | `channel` | low |
+| `slack.get_channel_info` | Get detailed information about a channel: topic, purpose, member count, creation date, creator. Useful when reading a channel for the first time — save the context to memory so you do not re-fetch. | `channel` | low |
+| `slack.get_reactions` | Get reactions on a specific message with who reacted. Note: Slack may not return all reactors — count is always accurate but the users list can be truncated on popular messages. | `channel`, `timestamp` | low |
+
+## Action parameters
+
+### `slack.dm_owner`
+
+Send a direct message to the session owner on Slack. No user lookup needed.
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `text` | string | Yes | Message text |
+
+### `slack.dm_user`
+
+Send a direct message to a Slack user by their user ID (U...). Use list_users to find IDs.
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `user` | string | Yes | User ID (U...) |
+| `text` | string | Yes | Message text |
+
+### `slack.add_reaction`
+
+Add an emoji reaction to a message
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `channel` | string | Yes | Channel ID (C...) |
+| `timestamp` | string | Yes | Message timestamp |
+| `name` | string | Yes | Emoji name without colons (e.g. "thumbsup") |
+
+### `slack.list_channels`
+
+List Slack channels. By default lists only channels the bot has joined. Set scope to "all" to discover all public channels in the workspace. Use prefix to filter by channel name prefix (e.g. "eng-" or "team-").
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `scope` | enum(joined,all) | No | Which channels to list: "joined" (default) = bot member channels, "all" = all public channels |
+| `prefix` | string | No | Filter channels whose name starts with this prefix |
+
+### `slack.read_history`
+
+Read recent messages from a Slack channel the bot has joined. Use list_channels to get channel IDs. Each message ts can be used as thread_ts for replies. Use oldest/latest to narrow to a time window.
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `channel` | string | Yes | Channel ID (C...) |
+| `limit` | number | No | Max messages per page (default 100, max 200) |
+| `cursor` | string | No | Pagination cursor from a previous response's next_cursor |
+| `oldest` | string | No | Only messages after this time. Accepts ISO-8601 datetime (e.g. "2026-05-19T00:00:00-07:00") or Unix timestamp (e.g. "1774000000.000000"). Include a timezone offset for date-boundary accuracy — bare dates like "2026-05-19" resolve to midnight UTC. Inclusive. |
+| `latest` | string | No | Only messages before this time. Accepts ISO-8601 datetime (with timezone offset) or Unix timestamp. Inclusive. Defaults to now. |
+| `filter` | string | No | Case-insensitive keyword filter applied client-side. Only messages whose text contains this substring are returned. Pagination still advances through all messages — use has_more/next_cursor to continue. |
+| `threads_only` | boolean | No | When true, only return messages that have thread replies (reply_count > 0). Useful for finding discussions in noisy alert channels. |
+| `include_subtypes` | boolean | No | When true, include system messages (joins, topic changes, etc.). Default false — only human/bot conversation. |
+
+### `slack.read_thread`
+
+Read replies in a Slack thread. Bot must be a member of the channel.
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `channel` | string | Yes | Channel ID (C...) |
+| `thread_ts` | string | Yes | Timestamp of the parent message |
+| `limit` | number | No | Max replies per page (default 100, max 200) |
+| `cursor` | string | No | Pagination cursor from a previous response's next_cursor |
+
+### `slack.list_users`
+
+List human users in the Slack workspace. Returns user IDs needed for dm_user. Use filter to search by ID, handle, real name, display name, or email.
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `filter` | string | No | Case-insensitive search over user ID, handle, real name, display name, and email. Use this to avoid dumping the full user list. |
+
+### `slack.fetch_file`
+
+Download a file from Slack. For images, the content is returned visually so you can see it. For text files, the content is returned as text. Use the url from the files array in message data. IMPORTANT: Call this tool one at a time, not in parallel — each image fetch interrupts the session to deliver the image to your vision.
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `url` | string | Yes | Slack file URL (from the files array in message data) |
+
+### `slack.get_pins`
+
+Get pinned messages in a channel. Returns messages in the same format as read_history. Useful for understanding what a channel considers important.
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `channel` | string | Yes | Channel ID (C...) |
+
+### `slack.get_channel_info`
+
+Get detailed information about a channel: topic, purpose, member count, creation date, creator. Useful when reading a channel for the first time — save the context to memory so you do not re-fetch.
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `channel` | string | Yes | Channel ID (C...) |
+
+### `slack.get_reactions`
+
+Get reactions on a specific message with who reacted. Note: Slack may not return all reactors — count is always accurate but the users list can be truncated on popular messages.
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `channel` | string | Yes | Channel ID (C...) |
+| `timestamp` | string | Yes | Message timestamp |
