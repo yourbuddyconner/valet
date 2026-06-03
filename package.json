@@ -15,7 +15,7 @@
     "test:unit": "vitest run"
   },
   "devDependencies": {
-    "typescript": "^5.3.3",
+    "typescript": "^6.0.3",
     "vitest": "^4.1.8"
   },
   "pnpm": {

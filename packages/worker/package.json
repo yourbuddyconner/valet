@@ -18,9 +18,9 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@cf-wasm/resvg": "^0.3.3",
-    "@cf-wasm/satori": "^0.3.3",
-    "@hono/zod-validator": "^0.2.1",
+    "@cf-wasm/resvg": "^0.3.4",
+    "@cf-wasm/satori": "^0.3.6",
+    "@hono/zod-validator": "^0.8.0",
     "@valet/plugin-cloudflare": "workspace:*",
     "@valet/plugin-deepwiki": "workspace:*",
     "@valet/plugin-turnkey-docs": "workspace:*",
@@ -47,15 +47,15 @@
     "drizzle-orm": "^0.45.2",
     "hono": "^4.12.23",
     "octokit": "^5.0.5",
-    "zod": "^3.22.4"
+    "zod": "^4.4.3"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "^4.20240117.0",
+    "@cloudflare/workers-types": "^4.20260603.1",
     "@types/better-sqlite3": "^7.6.8",
-    "better-sqlite3": "^11.0.0",
-    "drizzle-kit": "^0.31.9",
-    "typescript": "^5.3.3",
+    "better-sqlite3": "^12.10.0",
+    "drizzle-kit": "^0.31.10",
+    "typescript": "^6.0.3",
     "vitest": "^4.1.8",
-    "wrangler": "^3.28.0"
+    "wrangler": "^4.97.0"
   }
 }
