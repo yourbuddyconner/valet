@@ -1,0 +1,32 @@
+---
+title: Socket.dev
+description: Scan packages for supply-chain risks, vulnerabilities, and malware via Socket.dev.
+---
+
+Scan packages for supply-chain risks, vulnerabilities, and malware via Socket.dev.
+
+## Connection summary
+
+| Field | Value |
+| --- | --- |
+| Service slug | `socket` |
+| Display name | Socket.dev |
+| Auth type | `none` |
+| Supported entities | `packages`, `vulnerabilities` |
+| MCP server URL | `https://mcp.socket.dev/` |
+| Default action risk | `low` |
+| MCP auth | No auth (public MCP) |
+
+## Setup
+
+No authentication — this integration calls a public service and does not require credentials.
+
+
+
+## Actions
+
+Actions for Socket.dev are proxied through a remote [Model Context Protocol](https://modelcontextprotocol.io) server at `https://mcp.socket.dev/`. The exact list of actions, their parameters, and behavior are owned by the upstream MCP server — Valet enumerates them at runtime when the integration is connected.
+
+Default risk level applied to Socket.dev actions: `low`. Individual actions may carry their own risk level from the upstream server.
+
+Use `list_tools` with `service: socket` from an agent session to see the live action list, parameter schemas, and per-action risk levels.

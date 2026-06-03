@@ -1,0 +1,31 @@
+---
+title: Notion
+description: Read and modify Notion pages, databases, and blocks.
+---
+
+Read and modify Notion pages, databases, and blocks.
+
+## Connection summary
+
+| Field | Value |
+| --- | --- |
+| Service slug | `notion` |
+| Display name | Notion |
+| Auth type | `oauth2` |
+| Supported entities | `pages`, `databases`, `blocks` |
+| MCP server URL | `https://mcp.notion.com/mcp` |
+| Default action risk | `medium` |
+
+## Setup
+
+OAuth 2.0 — the user connects this integration through Valet's connection screen, which redirects to the provider's OAuth consent flow and stores the resulting access token in the per-user credential store.
+
+See [OAuth setup](/oauth-setup) for environment variables and connection flow.
+
+## Actions
+
+Actions for Notion are proxied through a remote [Model Context Protocol](https://modelcontextprotocol.io) server at `https://mcp.notion.com/mcp`. The exact list of actions, their parameters, and behavior are owned by the upstream MCP server — Valet enumerates them at runtime when the integration is connected.
+
+Default risk level applied to Notion actions: `medium`. Individual actions may carry their own risk level from the upstream server.
+
+Use `list_tools` with `service: notion` from an agent session to see the live action list, parameter schemas, and per-action risk levels.

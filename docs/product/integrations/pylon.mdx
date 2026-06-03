@@ -1,0 +1,32 @@
+---
+title: Pylon
+description: Read and manage Pylon customer support issues, accounts, and contacts.
+---
+
+Read and manage Pylon customer support issues, accounts, and contacts.
+
+## Connection summary
+
+| Field | Value |
+| --- | --- |
+| Service slug | `pylon` |
+| Display name | Pylon |
+| Auth type | `oauth2` |
+| Supported entities | `issues`, `accounts`, `contacts` |
+| OAuth scopes | `openid`, `profile`, `email`, `offline_access` |
+| MCP server URL | `https://mcp.usepylon.com` |
+| Default action risk | `low` |
+
+## Setup
+
+OAuth 2.0 — the user connects this integration through Valet's connection screen, which redirects to the provider's OAuth consent flow and stores the resulting access token in the per-user credential store.
+
+See [OAuth setup](/oauth-setup) for environment variables and connection flow.
+
+## Actions
+
+Actions for Pylon are proxied through a remote [Model Context Protocol](https://modelcontextprotocol.io) server at `https://mcp.usepylon.com`. The exact list of actions, their parameters, and behavior are owned by the upstream MCP server — Valet enumerates them at runtime when the integration is connected.
+
+Default risk level applied to Pylon actions: `low`. Individual actions may carry their own risk level from the upstream server.
+
+Use `list_tools` with `service: pylon` from an agent session to see the live action list, parameter schemas, and per-action risk levels.

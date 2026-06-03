@@ -97,6 +97,36 @@
               "product/tools",
               "product/admin-setup"
             ]
+          },
+          {
+            "group": "Integrations",
+            "pages": [
+              "product/integrations/overview",
+              "product/integrations/cloudflare",
+              "product/integrations/deepwiki",
+              "product/integrations/figma",
+              "product/integrations/github",
+              "product/integrations/gmail",
+              "product/integrations/google-calendar",
+              "product/integrations/google-workspace",
+              "product/integrations/grafana",
+              "product/integrations/granola",
+              "product/integrations/linear",
+              "product/integrations/notion",
+              "product/integrations/pylon",
+              "product/integrations/sentry",
+              "product/integrations/slack",
+              "product/integrations/socket",
+              "product/integrations/stripe",
+              "product/integrations/turnkey-docs",
+              "product/integrations/typefully"
+            ]
+          },
+          {
+            "group": "Built-in tools",
+            "pages": [
+              "product/built-in-tools"
+            ]
           }
         ]
       },

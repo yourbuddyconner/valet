@@ -1,0 +1,972 @@
+---
+title: Built-in tools
+description: Reference for the sandbox and orchestrator tools every Valet session has access to before any integration is connected.
+---
+
+Every Valet session loads a fixed set of built-in tools alongside whatever [integration actions](/product/integrations/overview) are connected. These tools cover memory, task tracking, session orchestration, channel replies, workflow management, persona and skill management, secrets, browser control, and tunnels.
+
+Built-in tools talk to the Valet platform directly through the [internal API](/engineering/runner-and-opencode#internal-api) — they do not require a connected integration. They are loaded from `/opencode-config/tools/` inside each sandbox at startup.
+
+## Risk and approvals
+
+Most built-in tools are low-risk reads and writes that happen against the user's own session state, memory, or task board. They do not currently flow through the same per-action approval prompt as integration actions; instead they are governed by:
+
+- Which tools are enabled for the persona and session type. The orchestrator strips a small set of child-only tools (`complete_session`, `notify_parent`) at startup.
+- The internal-API surface, which is scoped to the session's own user and org.
+- Tool-level guards (for example, `spawn_session` refuses to run from a child session).
+
+The columns below capture the call shape from code. They do **not** indicate a risk level in the sense used by [integration actions](/product/integrations/overview).
+
+## Memory
+
+| Tool | What it does | Key params |
+| --- | --- | --- |
+| `mem_read` | Read a memory file or list a directory. If the path ends with '/' or is empty, returns a directory listing. If the path is a file (e.g. 'projects/valet/repo.md'), returns its content. Use this to recall user preferences, project context, and past decisions. | `path`? |
+| `mem_write` | Create or overwrite a memory file. Memories persist across conversations and sandbox restarts. Use paths to organize: preferences/, projects/<name>/, workflows/, journal/, notes/. Files under preferences/ are auto-pinned (never pruned). Writing to an existing path replaces the content and bumps the version. | `path`, `content` |
+| `mem_patch` | Surgically edit a memory file without reading it first. Supports append, prepend, find-and-replace, insert_after, and delete_section. Ideal for journal entries (append), fact updates (replace), and section management. If the file doesn't exist, append/prepend will create it; other ops are skipped. | `path`, `operations` |
+| `mem_search` | Search memory files using full-text search with optional LLM re-ranking. Returns the most relevant files for the query, with match-aware snippets. Use this before responding to any new request that may involve known projects, preferences, workflows, or past decisions. | `query`, `path`?, `rerank`?, `limit`? |
+| `mem_rm` | Delete a memory file or all files under a directory. Use a path ending with '/' to delete all files under that prefix. Use an exact file path to delete a single file. | `path` |
+
+### `mem_read`
+
+Read a memory file or list a directory. If the path ends with '/' or is empty, returns a directory listing. If the path is a file (e.g. 'projects/valet/repo.md'), returns its content. Use this to recall user preferences, project context, and past decisions.
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `path` | string | No | Path to read. Examples: '' (root listing), 'preferences/' (list preferences), 'projects/valet/repo.md' (read file). Omit leading slash. |
+
+### `mem_write`
+
+Create or overwrite a memory file. Memories persist across conversations and sandbox restarts. Use paths to organize: preferences/, projects/<name>/, workflows/, journal/, notes/. Files under preferences/ are auto-pinned (never pruned). Writing to an existing path replaces the content and bumps the version.
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `path` | string | Yes | File path (no leading slash). Examples: 'preferences/coding-style.md', 'projects/valet/repo.md', 'notes/team.md' |
+| `content` | string | Yes | The file content (markdown recommended). |
+
+### `mem_patch`
+
+Surgically edit a memory file without reading it first. Supports append, prepend, find-and-replace, insert_after, and delete_section. Ideal for journal entries (append), fact updates (replace), and section management. If the file doesn't exist, append/prepend will create it; other ops are skipped.
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `path` | string | Yes | File path to patch. |
+| `operations` | array | Yes | Operations to apply in order. |
+
+### `mem_search`
+
+Search memory files using full-text search with optional LLM re-ranking. Returns the most relevant files for the query, with match-aware snippets. Use this before responding to any new request that may involve known projects, preferences, workflows, or past decisions.
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `query` | string | Yes | Search query. Examples: 'valet deployment', 'auth cloudflare', 'coding preferences' |
+| `path` | string | No | Optional path prefix to scope the search. Example: 'projects/valet/' |
+| `rerank` | boolean | No | Whether to re-rank results with LLM (default true, set false for speed) |
+| `limit` | number | No | Max results to return after re-ranking (default 5) |
+
+### `mem_rm`
+
+Delete a memory file or all files under a directory. Use a path ending with '/' to delete all files under that prefix. Use an exact file path to delete a single file.
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `path` | string | Yes | Path to delete. 'notes/outdated.md' deletes one file. 'journal/' deletes all journal files. |
+
+## Task board
+
+| Tool | What it does | Key params |
+| --- | --- | --- |
+| `task_create` | Create a task on the shared task board. Tasks are scoped to the orchestrator and visible to all sessions in the hierarchy. Use this to track work items, coordinate between sessions, and maintain a shared view of what needs to be done. | `title`, `description`?, `session_id`?, `parent_task_id`?, `blocked_by`? |
+| `task_list` | List tasks on the shared task board (orchestrator view). Shows all tasks across the session hierarchy, with their status and dependencies. Optionally filter by status. | `status`?, `limit`? |
+| `task_update` | Update a task on the shared task board. Use this to change status, record results, reassign to a session, or update the description. | `task_id`, `status`?, `result`?, `description`?, `session_id`?, `title`? |
+| `my_tasks` | List tasks assigned to this session. This is the child session's view of the task board — only shows tasks where session_id matches this session. Useful for checking what work has been delegated to you. | `status`? |
+
+### `task_create`
+
+Create a task on the shared task board. Tasks are scoped to the orchestrator and visible to all sessions in the hierarchy. Use this to track work items, coordinate between sessions, and maintain a shared view of what needs to be done.
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `title` | string | Yes | Short title for the task |
+| `description` | string | No | Detailed description of what needs to be done |
+| `session_id` | string | No | Session ID to assign this task to (optional) |
+| `parent_task_id` | string | No | Parent task ID for subtask hierarchy |
+| `blocked_by` | array | No | Array of task IDs that must complete before this task can start |
+
+### `task_list`
+
+List tasks on the shared task board (orchestrator view). Shows all tasks across the session hierarchy, with their status and dependencies. Optionally filter by status.
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `status` | enum(pending,in_progress,completed,failed,blocked) | No | Filter by task status |
+| `limit` | number | No | Maximum number of tasks to return (default: 100) |
+
+### `task_update`
+
+Update a task on the shared task board. Use this to change status, record results, reassign to a session, or update the description.
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `task_id` | string | Yes | ID of the task to update |
+| `status` | enum(pending,in_progress,completed,failed,blocked) | No | New status for the task |
+| `result` | string | No | Result or output of the task (for completed/failed tasks) |
+| `description` | string | No | Updated description |
+| `session_id` | string | No | Reassign the task to a different session |
+| `title` | string | No | Updated title |
+
+### `my_tasks`
+
+List tasks assigned to this session. This is the child session's view of the task board — only shows tasks where session_id matches this session. Useful for checking what work has been delegated to you.
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `status` | enum(pending,in_progress,completed,failed,blocked) | No | Filter by task status |
+
+## Session orchestration
+
+| Tool | What it does | Key params |
+| --- | --- | --- |
+| `spawn_session` | Spawn a new autonomous child agent session. The child runs in its own sandbox with the given task as its initial prompt. Use this for parallel work: delegating subtasks, working on multiple repos, or fire-and-forget operations. The child inherits your environment (API keys, GitHub token, git config). Returns the child session ID which you can use with send_message and read_messages to communicate with it. | `task`, `workspace`, `repo_url`?, `branch`?, `ref`?, `title`?, `source_type`?, `source_pr_number`?, `source_issue_number`?, `source_repo_full_name`?, `model`?, `persona_id`? |
+| `send_message` | Send a message or prompt to another agent session. The message is queued as a user prompt in the target session. Use this to give follow-up instructions to child sessions you spawned, or to communicate with sibling sessions. Only works with sessions belonging to the same user. | `session_id`, `message`, `interrupt`? |
+| `read_messages` | Read messages from another agent session's conversation. By default returns the most recent messages (newest first, in chronological order). Use this to check on a child session's progress, read its results, or monitor what it's working on. Pass 'after' to paginate forward from a specific timestamp. Only works with sessions belonging to the same user. | `session_id`, `limit`?, `after`? |
+| `forward_messages` | Forward messages from another session into your current chat. This copies the messages directly into your conversation so the user can see them — without you having to read and retype them. Use this after read_messages when you want to share a child session's output with the user. The messages appear as quoted blocks attributed to the source session. | `session_id`, `limit`?, `after`? |
+| `get_session_status` | Get the current status of another agent session, including its recent messages. Use this to check on child sessions' progress, see what they're working on, or determine if they're done. Key statuses: running (active), idle (sandbox alive but agent idle), hibernated (sandbox stopped — not running, no processes alive), terminated (ended permanently). If runnerConnected is false, the sandbox is not running. Only works with sessions belonging to the same user. | `session_id` |
+| `list_sessions` | List child sessions spawned by the current session. Returns each session's ID, title, status, workspace, and PR info. Use this to see what sessions you've spawned, check their statuses, and find session IDs for further inspection with get_session_status or read_messages. | `_placeholder`? |
+| `terminate_session` | Terminate a child session that you previously spawned. Use this to stop a child agent that is no longer needed, stuck, or has gone off track. You can only terminate sessions that are direct children of your own session. | `session_id` |
+| `wait_for_event` | Yield control and wait for the next incoming event. Call this when you have finished your current work and are waiting for something external — a child session's notify_parent, a user message, or any other prompt. Your turn ends immediately after this tool returns. The next message you receive will be from whoever wakes you (child notification, user, etc.). Prefer this over sleep loops when the wait time is unknown or when you expect a child to notify you proactively. | `reason`?, `session_ids`?, `notify_on`?, `statuses`? |
+| `sleep` | Pause execution for a specified duration. Use this when you need to wait before checking on a child session's progress, poll for results, or give a task time to complete. This keeps the agent loop alive (preventing idle timeout) while waiting. | `seconds`, `reason`? |
+| `notify_parent` | Send a message to your parent session (the orchestrator or session that spawned you). Use this to report progress, deliver results, ask for clarification, or flag blockers. The message is queued as a user prompt in the parent session. Only available in child sessions — orchestrators and top-level sessions do not have a parent. | `message`, `interrupt`? |
+| `complete_session` | Signal that your assigned task is fully complete and shut down this session. Call this when you have finished all work, committed your changes, and have nothing left to do. This will terminate your sandbox — only call it when you are truly done. | `_placeholder`? |
+
+### `spawn_session`
+
+Spawn a new autonomous child agent session. The child runs in its own sandbox with the given task as its initial prompt. Use this for parallel work: delegating subtasks, working on multiple repos, or fire-and-forget operations. The child inherits your environment (API keys, GitHub token, git config). Returns the child session ID which you can use with send_message and read_messages to communicate with it.
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `task` | string | Yes | The task/prompt for the child agent to work on autonomously |
+| `workspace` | string | Yes | Short human-readable workspace name for the child session. Use a simple identifier like the repo name (e.g. 'my-app', 'frontend', 'api-server'). Do NOT use file paths, URLs, or Modal volume paths — just a short name. |
+| `repo_url` | string | No | Git repository URL for the child to clone (optional, inherits parent's repo if not specified) |
+| `branch` | string | No | Git branch for the child to check out (required for PR work) |
+| `ref` | string | No | Git ref (commit SHA or tag) for the child to check out (optional). If provided, takes precedence over branch. |
+| `title` | string | No | Human-readable title for the child session (defaults to workspace name) |
+| `source_type` | enum(pr,issue,branch,manual) | No | Source type for the child session (defaults to parent's source type) |
+| `source_pr_number` | number | No | PR number when the child works on a pull request |
+| `source_issue_number` | number | No | Issue number when the child works on an issue |
+| `source_repo_full_name` | string | No | Repository full name as owner/repo (e.g. 'octocat/hello-world') |
+| `model` | string | No | Model ID for the child session to use (e.g. 'anthropic/claude-sonnet-4-5-20250929'). If not specified, inherits parent's model preferences. |
+| `persona_id` | string | No | Persona ID to use for the child session. The persona's instructions and attached skills will be loaded at session start. |
+
+### `send_message`
+
+Send a message or prompt to another agent session. The message is queued as a user prompt in the target session. Use this to give follow-up instructions to child sessions you spawned, or to communicate with sibling sessions. Only works with sessions belonging to the same user.
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `session_id` | string | Yes | The target session ID to send the message to |
+| `message` | string | Yes | The message content to send as a prompt to the target session |
+| `interrupt` | boolean | No | If true, abort the target session's current work before delivering this message. Default: false (message is queued). |
+
+### `read_messages`
+
+Read messages from another agent session's conversation. By default returns the most recent messages (newest first, in chronological order). Use this to check on a child session's progress, read its results, or monitor what it's working on. Pass 'after' to paginate forward from a specific timestamp. Only works with sessions belonging to the same user.
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `session_id` | string | Yes | The target session ID to read messages from |
+| `limit` | number | No | Maximum number of messages to return (default 20) |
+| `after` | string | No | ISO timestamp cursor — only return messages after this time (for pagination) |
+
+### `forward_messages`
+
+Forward messages from another session into your current chat. This copies the messages directly into your conversation so the user can see them — without you having to read and retype them. Use this after read_messages when you want to share a child session's output with the user. The messages appear as quoted blocks attributed to the source session.
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `session_id` | string | Yes | The source session ID to forward messages from |
+| `limit` | number | No | Maximum number of messages to forward (default 20) |
+| `after` | string | No | ISO timestamp cursor — only forward messages after this time (for pagination) |
+
+### `get_session_status`
+
+Get the current status of another agent session, including its recent messages. Use this to check on child sessions' progress, see what they're working on, or determine if they're done. Key statuses: running (active), idle (sandbox alive but agent idle), hibernated (sandbox stopped — not running, no processes alive), terminated (ended permanently). If runnerConnected is false, the sandbox is not running. Only works with sessions belonging to the same user.
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `session_id` | string | Yes | The target session ID to get status for |
+
+### `list_sessions`
+
+List child sessions spawned by the current session. Returns each session's ID, title, status, workspace, and PR info. Use this to see what sessions you've spawned, check their statuses, and find session IDs for further inspection with get_session_status or read_messages.
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `_placeholder` | string | No | Unused |
+
+### `terminate_session`
+
+Terminate a child session that you previously spawned. Use this to stop a child agent that is no longer needed, stuck, or has gone off track. You can only terminate sessions that are direct children of your own session.
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `session_id` | string | Yes | The session ID of the child session to terminate (returned by spawn_session) |
+
+### `wait_for_event`
+
+Yield control and wait for the next incoming event. Call this when you have finished your current work and are waiting for something external — a child session's notify_parent, a user message, or any other prompt. Your turn ends immediately after this tool returns. The next message you receive will be from whoever wakes you (child notification, user, etc.). Prefer this over sleep loops when the wait time is unknown or when you expect a child to notify you proactively.
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `reason` | string | No | Brief note about what you're waiting for (e.g. 'Waiting for child session to complete') |
+| `session_ids` | array | No | Optional list of child session IDs to monitor. If omitted, all child sessions are monitored. |
+| `notify_on` | enum(terminal,status_change) | No | Which events should wake you. 'terminal' (default) only fires when a child reaches a terminal status. 'status_change' fires on any child status transition. |
+| `statuses` | array | No | Optional list of statuses to trigger on (e.g. ['terminated','error']). Overrides notify_on. |
+
+### `sleep`
+
+Pause execution for a specified duration. Use this when you need to wait before checking on a child session's progress, poll for results, or give a task time to complete. This keeps the agent loop alive (preventing idle timeout) while waiting.
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `seconds` | number | Yes | Number of seconds to sleep (1-300) |
+| `reason` | string | No | Why you are sleeping (shown to the user while waiting) |
+
+### `notify_parent`
+
+Send a message to your parent session (the orchestrator or session that spawned you). Use this to report progress, deliver results, ask for clarification, or flag blockers. The message is queued as a user prompt in the parent session. Only available in child sessions — orchestrators and top-level sessions do not have a parent.
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `message` | string | Yes | The message to send to your parent session |
+| `interrupt` | boolean | No | If true, abort the parent's current work before delivering. Default: false (message is queued). |
+
+### `complete_session`
+
+Signal that your assigned task is fully complete and shut down this session. Call this when you have finished all work, committed your changes, and have nothing left to do. This will terminate your sandbox — only call it when you are truly done.
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `_placeholder` | string | No | Unused |
+
+## Mailbox
+
+| Tool | What it does | Key params |
+| --- | --- | --- |
+| `mailbox_send` | Send a persistent message to another session or user via the notification queue. Unlike send_message (which injects a real-time prompt), notifications are stored durably and appear even if recipients are offline. Use this for escalations, questions, and async coordination. You can address by session ID, user ID, or @handle. | `to_session_id`?, `to_user_id`?, `to_handle`?, `message_type`?, `content`, `context_session_id`?, `context_task_id`?, `reply_to_id`? |
+| `mailbox_check` | Check unread notifications sent to this session. Returns persistent cross-session queue items (distinct from session chat history). Items are automatically marked as read after retrieval. Use this to check for async updates from other agents, the orchestrator, or users. | `limit`?, `after`? |
+| `emit_notification` | Emit a persistent notification into the notification queue for a session or user. Use this for important async updates such as completions, escalations, or decisions needed while recipients may be offline. | `to_session_id`?, `to_user_id`?, `to_handle`?, `message_type`?, `content`, `context_session_id`?, `context_task_id`?, `reply_to_id`? |
+
+### `mailbox_send`
+
+Send a persistent message to another session or user via the notification queue. Unlike send_message (which injects a real-time prompt), notifications are stored durably and appear even if recipients are offline. Use this for escalations, questions, and async coordination. You can address by session ID, user ID, or @handle.
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `to_session_id` | string | No | Target session ID to send the message to |
+| `to_user_id` | string | No | Target user ID to send the message to |
+| `to_handle` | string | No | Target @handle to send the message to (resolved to user ID) |
+| `message_type` | enum(message,notification,question,escalation,approval) | No | Type of message (default: 'message'). Use 'escalation' for urgent items, 'question' for things needing a human decision. |
+| `content` | string | Yes | The message content |
+| `context_session_id` | string | No | Session ID for context (e.g. the session this message is about) |
+| `context_task_id` | string | No | Task ID for context (e.g. the task this message relates to) |
+| `reply_to_id` | string | No | Message ID this is a reply to |
+
+### `mailbox_check`
+
+Check unread notifications sent to this session. Returns persistent cross-session queue items (distinct from session chat history). Items are automatically marked as read after retrieval. Use this to check for async updates from other agents, the orchestrator, or users.
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `limit` | number | No | Maximum number of messages to return (default: 50) |
+| `after` | string | No | Only return messages created after this ISO timestamp |
+
+### `emit_notification`
+
+Emit a persistent notification into the notification queue for a session or user. Use this for important async updates such as completions, escalations, or decisions needed while recipients may be offline.
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `to_session_id` | string | No | Target session ID |
+| `to_user_id` | string | No | Target user ID |
+| `to_handle` | string | No | Target orchestrator handle (resolved to a user) |
+| `message_type` | enum(notification,question,escalation,approval) | No | Notification type (default: notification) |
+| `content` | string | Yes | Notification body |
+| `context_session_id` | string | No | Optional related session ID |
+| `context_task_id` | string | No | Optional related task ID |
+| `reply_to_id` | string | No | Optional root notification/thread ID |
+
+## Channels
+
+| Tool | What it does | Key params |
+| --- | --- | --- |
+| `channel_reply` | Send a reply to a specific channel (e.g. Telegram, Slack). Use this when a user's message came from an external channel (indicated by [via <channelType> \| chatId: <id>] prefix) and you want to respond on that same channel. The response will be delivered directly to the user on the originating platform. You can optionally attach an image or file. | `channel_type`, `channel_id`, `message`, `image_path`?, `file_path`?, `file_name`?, `follow_up`? |
+| `list_channels` | List available channel destinations that this user/session can send replies to (Telegram, Slack, etc.). Use this before channel_reply when you are not sure which channel_id to target. | `channel_type`?, `include_web`? |
+| `send_image` | Send an image to the user's chat UI. The image will be displayed inline in the conversation. Accepts a local file path (e.g. /tmp/screenshot.png, /workspace/diagram.png) or a URL (http/https). Use this whenever you want the user to see an image — screenshots, generated charts, downloaded images, etc. | `source`, `caption`? |
+| `transcribe_audio` | Transcribe an audio file to text using whisper.cpp (local speech-to-text). Accepts common audio formats: wav, mp3, ogg, webm, flac, m4a, mp4. Use the 'base' model (default) for fast transcription (~3-5s for 30s audio) or 'large' for higher accuracy. | `file_path`, `model`?, `language`? |
+
+### `channel_reply`
+
+Send a reply to a specific channel (e.g. Telegram, Slack). Use this when a user's message came from an external channel (indicated by [via <channelType> \| chatId: <id>] prefix) and you want to respond on that same channel. The response will be delivered directly to the user on the originating platform. You can optionally attach an image or file.
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `channel_type` | enum(telegram,slack) | Yes | The channel type to reply on (e.g. 'telegram') |
+| `channel_id` | string | Yes | The channel/chat identifier (e.g. Telegram chatId from the message prefix) |
+| `message` | string | Yes | The message text to send back on the channel (can be empty when sending an image) |
+| `image_path` | string | No | Absolute path to an image file to send (PNG, JPEG, GIF, WebP) |
+| `file_path` | string | No | Absolute path to a file to attach (any type: PDF, CSV, ZIP, etc.) |
+| `file_name` | string | No | Override the filename shown to the recipient (defaults to the basename of file_path) |
+| `follow_up` | boolean | No | Controls whether this reply clears the follow-up reminder timer. Defaults to true. IMPORTANT: For most replies, you do NOT need to set this — just omit it and the default (true) will mark the conversation as handled. Only set follow_up=false when you are sending a brief acknowledgment AND you plan to do async/deferred work (spawning a child session, long research, etc.) before sending a real answer later. If your reply IS the answer (even a short one like 'Hey, how can I help?'), leave follow_up unset or set it to true so the reminder timer is cleared. |
+
+### `list_channels`
+
+List available channel destinations that this user/session can send replies to (Telegram, Slack, etc.). Use this before channel_reply when you are not sure which channel_id to target.
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `channel_type` | enum(telegram,slack,github,api,web) | No | Optional channel type filter |
+| `include_web` | boolean | No | Include web channels in results (default false) |
+
+### `send_image`
+
+Send an image to the user's chat UI. The image will be displayed inline in the conversation. Accepts a local file path (e.g. /tmp/screenshot.png, /workspace/diagram.png) or a URL (http/https). Use this whenever you want the user to see an image — screenshots, generated charts, downloaded images, etc.
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `source` | string | Yes | Path to a local image file (e.g. /tmp/screenshot.png) or an HTTP/HTTPS URL to fetch |
+| `caption` | string | No | Optional caption to display with the image |
+
+### `transcribe_audio`
+
+Transcribe an audio file to text using whisper.cpp (local speech-to-text). Accepts common audio formats: wav, mp3, ogg, webm, flac, m4a, mp4. Use the 'base' model (default) for fast transcription (~3-5s for 30s audio) or 'large' for higher accuracy.
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `file_path` | string | Yes | Path to the audio file to transcribe (e.g. /workspace/recording.wav, meeting.mp3) |
+| `model` | enum(base,large) | No | Whisper model to use: 'base' (fast, English) or 'large' (accurate, multilingual). Default: base |
+| `language` | string | No | Language code for transcription (e.g. 'en', 'es', 'fr'). Only used with 'large' model. Default: auto-detect |
+
+## Workflows
+
+| Tool | What it does | Key params |
+| --- | --- | --- |
+| `list_workflows` | List workflows available to the current user in Valet. Use this before creating new workflows to avoid duplicates. | `_placeholder`? |
+| `sync_workflow` | Create or update a workflow in Valet. This immediately syncs the workflow to the backend so it appears on the Workflows page. Step types: bash (requires command field), approval, conditional, parallel, agent, agent_message. For shell commands use type: "bash" with a "command" field — NOT type: "tool" with tool: "bash". | `id`?, `slug`?, `name`, `description`?, `version`?, `data_json`?, `workflow_json`? |
+| `update_workflow` | Update workflow metadata or definition by ID/slug. Supports name, description, slug, version, enabled, tags, and full data. | `workflow_id`, `name`?, `description`?, `clear_description`?, `slug`?, `clear_slug`?, `version`?, `enabled`?, `tags_json`?, `data_json`? |
+| `delete_workflow` | Delete a workflow by ID or slug. | `workflow_id` |
+| `get_workflow` | Get a workflow by ID or slug. | `workflow_id` |
+| `run_workflow` | Run a workflow immediately by workflow ID or slug. Returns execution details that can be checked in the Workflows UI. | `workflow_id`, `variables_json`?, `repo_url`?, `repo_branch`?, `repo_ref`?, `source_repo_full_name`? |
+| `list_workflow_executions` | List recent workflow executions for the current user, optionally filtered by workflow. | `workflow_id`?, `limit`? |
+| `get_execution` | Fetch a single workflow execution by ID. Use this to inspect status, error, resume token, trigger metadata, and outputs. | `execution_id` |
+| `get_execution_steps` | Fetch normalized per-step trace entries for a workflow execution. Useful for debugging out-of-order display, approval gates, and step failures. | `execution_id`, `limit`? |
+| `cancel_execution` | Cancel a workflow execution. Useful for stopping stuck runs or resetting after a failed approval/resume path. | `execution_id`, `reason`? |
+| `approve_execution` | Approve or deny a waiting workflow approval checkpoint for an execution. Requires the current resume token from get_execution. | `execution_id`, `approve`, `resume_token`, `reason`? |
+| `debug_execution` | Diagnose a workflow execution by combining execution metadata and normalized step traces. Returns likely root cause plus concrete next actions. | `execution_id`, `step_limit`? |
+| `list_workflow_history` | List immutable workflow history snapshots for rollback and auditing. | `workflow_id`, `limit`?, `offset`? |
+| `rollback_workflow` | Roll back a workflow definition to a historical hash from list_workflow_history. Optionally override version and add notes. | `workflow_id`, `target_workflow_hash`, `version`?, `notes`? |
+| `list_workflow_proposals` | List workflow mutation proposals for a workflow. | `workflow_id`, `status`?, `limit`?, `offset`? |
+| `create_workflow_proposal` | Create a workflow mutation proposal for self-modifying workflows. Requires the current base workflow hash and proposal JSON payload. | `workflow_id`, `base_workflow_hash`, `proposal_json`, `execution_id`?, `proposed_by_session_id`?, `diff_text`?, `expires_at`? |
+| `review_workflow_proposal` | Approve or reject a workflow proposal before apply. | `workflow_id`, `proposal_id`, `approve`, `notes`? |
+| `apply_workflow_proposal` | Apply an approved workflow proposal to update the workflow definition. | `workflow_id`, `proposal_id`, `review_notes`?, `version`? |
+
+### `list_workflows`
+
+List workflows available to the current user in Valet. Use this before creating new workflows to avoid duplicates.
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `_placeholder` | string | No | Unused |
+
+### `sync_workflow`
+
+Create or update a workflow in Valet. This immediately syncs the workflow to the backend so it appears on the Workflows page. Step types: bash (requires command field), approval, conditional, parallel, agent, agent_message. For shell commands use type: "bash" with a "command" field — NOT type: "tool" with tool: "bash".
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `id` | string | No | Optional stable workflow ID |
+| `slug` | string | No | Optional workflow slug |
+| `name` | string | Yes | Workflow name |
+| `description` | string | No | Workflow description |
+| `version` | string | No | Workflow version (default 1.0.0) |
+| `data_json` | string | No | Workflow definition JSON string with a non-empty "steps" array. Each step needs id, name, type. Bash steps: {"id":"1","name":"Run tests","type":"bash","command":"npm test"}. Do NOT use type:"tool" with tool:"bash" — use type:"bash" with command field instead. |
+| `workflow_json` | string | No | Alias for data_json |
+
+### `update_workflow`
+
+Update workflow metadata or definition by ID/slug. Supports name, description, slug, version, enabled, tags, and full data.
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `workflow_id` | string | Yes | Workflow ID or slug |
+| `name` | string | No | Updated workflow name |
+| `description` | string | No | Updated workflow description |
+| `clear_description` | boolean | No | Set description to null |
+| `slug` | string | No | Updated slug |
+| `clear_slug` | boolean | No | Set slug to null |
+| `version` | string | No | Updated version |
+| `enabled` | boolean | No | Enabled state |
+| `tags_json` | string | No | JSON array of string tags |
+| `data_json` | string | No | Full workflow data JSON object |
+
+### `delete_workflow`
+
+Delete a workflow by ID or slug.
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `workflow_id` | string | Yes | Workflow ID or slug |
+
+### `get_workflow`
+
+Get a workflow by ID or slug.
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `workflow_id` | string | Yes | Workflow ID or slug |
+
+### `run_workflow`
+
+Run a workflow immediately by workflow ID or slug. Returns execution details that can be checked in the Workflows UI.
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `workflow_id` | string | Yes | Workflow ID or slug |
+| `variables_json` | string | No | Optional JSON object string for runtime variables, e.g. {"env":"prod","dryRun":true} |
+| `repo_url` | string | No | Optional git repository URL to clone into the workflow session |
+| `repo_branch` | string | No | Optional branch to checkout when repo_url is provided |
+| `repo_ref` | string | No | Optional git ref to checkout when repo_url is provided |
+| `source_repo_full_name` | string | No | Optional owner/repo hint (derived from repo_url when omitted) |
+
+### `list_workflow_executions`
+
+List recent workflow executions for the current user, optionally filtered by workflow.
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `workflow_id` | string | No | Optional workflow ID or slug filter |
+| `limit` | number | No | Max executions to return (default 20) |
+
+### `get_execution`
+
+Fetch a single workflow execution by ID. Use this to inspect status, error, resume token, trigger metadata, and outputs.
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `execution_id` | string | Yes | Workflow execution ID |
+
+### `get_execution_steps`
+
+Fetch normalized per-step trace entries for a workflow execution. Useful for debugging out-of-order display, approval gates, and step failures.
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `execution_id` | string | Yes | Workflow execution ID |
+| `limit` | number | No | Optional max number of steps to return (default 200) |
+
+### `cancel_execution`
+
+Cancel a workflow execution. Useful for stopping stuck runs or resetting after a failed approval/resume path.
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `execution_id` | string | Yes | Workflow execution ID |
+| `reason` | string | No | Optional cancellation reason |
+
+### `approve_execution`
+
+Approve or deny a waiting workflow approval checkpoint for an execution. Requires the current resume token from get_execution.
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `execution_id` | string | Yes | Workflow execution ID |
+| `approve` | boolean | Yes | Set true to approve, false to deny |
+| `resume_token` | string | Yes | Current resume token from execution.resumeToken |
+| `reason` | string | No | Optional reason when denying approval |
+
+### `debug_execution`
+
+Diagnose a workflow execution by combining execution metadata and normalized step traces. Returns likely root cause plus concrete next actions.
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `execution_id` | string | Yes | Workflow execution ID |
+| `step_limit` | number | No | Optional maximum step rows to include in output (default 200) |
+
+### `list_workflow_history`
+
+List immutable workflow history snapshots for rollback and auditing.
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `workflow_id` | string | Yes | Workflow ID or slug |
+| `limit` | number | No | Max history entries to return (default 50) |
+| `offset` | number | No | Offset for pagination (default 0) |
+
+### `rollback_workflow`
+
+Roll back a workflow definition to a historical hash from list_workflow_history. Optionally override version and add notes.
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `workflow_id` | string | Yes | Workflow ID or slug |
+| `target_workflow_hash` | string | Yes | Target workflow hash to restore |
+| `version` | string | No | Optional version override after rollback |
+| `notes` | string | No | Optional rollback note |
+
+### `list_workflow_proposals`
+
+List workflow mutation proposals for a workflow.
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `workflow_id` | string | Yes | Workflow ID or slug |
+| `status` | enum(pending,approved,rejected,applied,failed) | No | Optional status filter |
+| `limit` | number | No | Max proposals to return (default 50) |
+| `offset` | number | No | Offset for pagination (default 0) |
+
+### `create_workflow_proposal`
+
+Create a workflow mutation proposal for self-modifying workflows. Requires the current base workflow hash and proposal JSON payload.
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `workflow_id` | string | Yes | Workflow ID or slug |
+| `base_workflow_hash` | string | Yes | Current workflow hash |
+| `proposal_json` | string | Yes | Proposal JSON object string |
+| `execution_id` | string | No | Optional source execution ID |
+| `proposed_by_session_id` | string | No | Optional source session ID |
+| `diff_text` | string | No | Optional human-readable diff text |
+| `expires_at` | string | No | Optional ISO-8601 expiry timestamp |
+
+### `review_workflow_proposal`
+
+Approve or reject a workflow proposal before apply.
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `workflow_id` | string | Yes | Workflow ID or slug |
+| `proposal_id` | string | Yes | Workflow proposal ID |
+| `approve` | boolean | Yes | Set true to approve, false to reject |
+| `notes` | string | No | Optional review notes |
+
+### `apply_workflow_proposal`
+
+Apply an approved workflow proposal to update the workflow definition.
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `workflow_id` | string | Yes | Workflow ID or slug |
+| `proposal_id` | string | Yes | Workflow proposal ID |
+| `review_notes` | string | No | Optional apply notes |
+| `version` | string | No | Optional explicit version after apply |
+
+## Triggers
+
+| Tool | What it does | Key params |
+| --- | --- | --- |
+| `list_triggers` | List workflow triggers for the current user. | `workflow_id`?, `type`?, `enabled`? |
+| `sync_trigger` | Create or update a trigger by name. Idempotent — calling with the same name updates the existing trigger rather than creating a duplicate. Supports manual, webhook, and schedule triggers (including schedule target=orchestrator with prompt). | `trigger_id`?, `workflow_id`?, `clear_workflow_link`?, `name`, `enabled`?, `type`, `webhook_path`?, `webhook_method`?, `webhook_secret`?, `schedule_cron`?, `schedule_timezone`?, `schedule_target`?, `schedule_prompt`?, `variable_mapping_json`? |
+| `delete_trigger` | Delete a trigger by ID or name. | `trigger_id`?, `name`? |
+| `run_trigger` | Run a trigger immediately by trigger ID. For schedule target=orchestrator triggers, this dispatches the configured prompt to orchestrator. | `trigger_id`, `variables_json`?, `repo_url`?, `repo_branch`?, `repo_ref`?, `source_repo_full_name`? |
+
+### `list_triggers`
+
+List workflow triggers for the current user.
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `workflow_id` | string | No | Optional workflow ID/slug filter |
+| `type` | enum(webhook,schedule,manual) | No | Optional trigger type filter |
+| `enabled` | boolean | No | Optional enabled state filter |
+
+### `sync_trigger`
+
+Create or update a trigger by name. Idempotent — calling with the same name updates the existing trigger rather than creating a duplicate. Supports manual, webhook, and schedule triggers (including schedule target=orchestrator with prompt).
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `trigger_id` | string | No | Optional. Use only for renaming a trigger or explicit UUID-based update |
+| `workflow_id` | string | No | Workflow ID/slug. Required for webhook/manual and schedule target=workflow |
+| `clear_workflow_link` | boolean | No | For updates only, set workflowId to null |
+| `name` | string | Yes | Trigger name |
+| `enabled` | boolean | No | Trigger enabled state |
+| `type` | enum(webhook,schedule,manual) | Yes | Trigger type |
+| `webhook_path` | string | No | Webhook path (required for webhook type) |
+| `webhook_method` | enum(GET,POST) | No | Webhook method (default POST) |
+| `webhook_secret` | string | No | Optional webhook secret |
+| `schedule_cron` | string | No | Cron expression (required for schedule type) |
+| `schedule_timezone` | string | No | IANA timezone for schedule triggers |
+| `schedule_target` | enum(workflow,orchestrator) | No | Schedule target (default workflow) |
+| `schedule_prompt` | string | No | Prompt required when schedule_target=orchestrator |
+| `variable_mapping_json` | string | No | Optional JSON object mapping variable names to extraction paths |
+
+### `delete_trigger`
+
+Delete a trigger by ID or name.
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `trigger_id` | string | No | Trigger ID (UUID) |
+| `name` | string | No | Trigger name (alternative to trigger_id) |
+
+### `run_trigger`
+
+Run a trigger immediately by trigger ID. For schedule target=orchestrator triggers, this dispatches the configured prompt to orchestrator.
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `trigger_id` | string | Yes | Trigger ID |
+| `variables_json` | string | No | Optional JSON object for manual runtime variables |
+| `repo_url` | string | No | Optional git repository URL for the workflow session |
+| `repo_branch` | string | No | Optional branch to checkout |
+| `repo_ref` | string | No | Optional git ref to checkout |
+| `source_repo_full_name` | string | No | Optional owner/repo hint |
+
+## Personas and skills
+
+| Tool | What it does | Key params |
+| --- | --- | --- |
+| `get_my_persona` | Get your own orchestrator identity and persona. Returns your name, handle, custom instructions, and linked persona ID. Use the persona ID with list_persona_skills / attach_skill_to_persona / detach_skill_from_persona to manage your own skills. | `_placeholder`? |
+| `update_my_instructions` | Update your own custom instructions. These instructions shape your personality, communication style, and behavior. Changes take effect immediately. Pass the full instructions text — this replaces the current custom instructions entirely. | `instructions` |
+| `list_personas` | List all available agent personas. Personas are instruction sets that customize agent behavior for specific tasks or repos. Use this to choose a persona when spawning child sessions. | `_placeholder`? |
+| `save_persona` | Create or update an agent persona by name. Idempotent — calling with the same name updates the existing persona rather than creating a duplicate. Personas are instruction sets that customize agent behavior for specific tasks, repos, or workflows. | `name`, `description`?, `icon`?, `instructions`?, `visibility`? |
+| `delete_persona` | Delete an agent persona by ID or name. Only personas you created can be deleted (unless you are an admin). This also removes all associated files, skill attachments, and tool configurations. | `id`?, `name`? |
+| `list_persona_skills` | List all skills attached to a persona. Shows which skills will be automatically loaded when a session starts with this persona. | `personaId` |
+| `attach_skill_to_persona` | Attach a skill to a persona. When a session starts with this persona, the attached skills are automatically loaded into the agent's context. Only the persona creator can modify attachments. | `personaId`, `skillId`, `sortOrder`? |
+| `detach_skill_from_persona` | Detach a skill from a persona. The skill will no longer be loaded when sessions start with this persona. Only the persona creator can modify attachments. | `personaId`, `skillId` |
+| `search_skills` | Search the skill library for skills by keyword. Returns skill summaries (name, description, source, tags) but not full content. Use read_skill to fetch the full content of a skill you want to use. Skills teach you how to perform specific tasks, follow processes, or use tools effectively. | `query`, `source`? |
+| `read_skill` | Read the full content of a skill by ID or slug. Use search_skills first to find the skill you need, then read_skill to load its full instructions into your context. | `id`?, `slug`? |
+| `create_skill` | Create a new managed skill in the skill library. Skills are markdown documents that teach you how to perform specific tasks. Created skills are private to your user by default. Use YAML frontmatter for structured metadata (tags, version). | `name`, `slug`?, `description`?, `content`, `visibility`? |
+| `update_skill` | Update an existing managed skill. Only skills you created (source: managed) can be edited. You can update the name, description, content, or visibility. | `id`, `name`?, `description`?, `content`?, `visibility`? |
+| `delete_skill` | Delete a managed skill from the skill library. Only skills you created (source: managed) can be deleted. This also removes the skill from any persona attachments and org defaults. | `id` |
+
+### `get_my_persona`
+
+Get your own orchestrator identity and persona. Returns your name, handle, custom instructions, and linked persona ID. Use the persona ID with list_persona_skills / attach_skill_to_persona / detach_skill_from_persona to manage your own skills.
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `_placeholder` | string | No | Unused |
+
+### `update_my_instructions`
+
+Update your own custom instructions. These instructions shape your personality, communication style, and behavior. Changes take effect immediately. Pass the full instructions text — this replaces the current custom instructions entirely.
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `instructions` | string | Yes | The new custom instructions markdown content (replaces existing) |
+
+### `list_personas`
+
+List all available agent personas. Personas are instruction sets that customize agent behavior for specific tasks or repos. Use this to choose a persona when spawning child sessions.
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `_placeholder` | string | No | Unused |
+
+### `save_persona`
+
+Create or update an agent persona by name. Idempotent — calling with the same name updates the existing persona rather than creating a duplicate. Personas are instruction sets that customize agent behavior for specific tasks, repos, or workflows.
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `name` | string | Yes | Persona name (used as the unique identifier) |
+| `description` | string | No | Brief description of what this persona does |
+| `icon` | string | No | Emoji icon for the persona |
+| `instructions` | string | No | System prompt / instructions markdown content (saved as instructions.md) |
+| `visibility` | enum(private,shared) | No | Visibility: 'private' (only you) or 'shared' (default, whole org) |
+
+### `delete_persona`
+
+Delete an agent persona by ID or name. Only personas you created can be deleted (unless you are an admin). This also removes all associated files, skill attachments, and tool configurations.
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `id` | string | No | Persona ID to delete |
+| `name` | string | No | Persona name to delete (used if id not provided) |
+
+### `list_persona_skills`
+
+List all skills attached to a persona. Shows which skills will be automatically loaded when a session starts with this persona.
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `personaId` | string | Yes | Persona ID to list skills for |
+
+### `attach_skill_to_persona`
+
+Attach a skill to a persona. When a session starts with this persona, the attached skills are automatically loaded into the agent's context. Only the persona creator can modify attachments.
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `personaId` | string | Yes | Persona ID to attach the skill to |
+| `skillId` | string | Yes | Skill ID to attach (from search_skills or create_skill) |
+| `sortOrder` | number | No | Sort order for the skill within the persona (default: 0, lower = loaded first) |
+
+### `detach_skill_from_persona`
+
+Detach a skill from a persona. The skill will no longer be loaded when sessions start with this persona. Only the persona creator can modify attachments.
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `personaId` | string | Yes | Persona ID to detach the skill from |
+| `skillId` | string | Yes | Skill ID to detach |
+
+### `search_skills`
+
+Search the skill library for skills by keyword. Returns skill summaries (name, description, source, tags) but not full content. Use read_skill to fetch the full content of a skill you want to use. Skills teach you how to perform specific tasks, follow processes, or use tools effectively.
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `query` | string | Yes | Search query — matches against skill name, description, and content |
+| `source` | enum(builtin,plugin,managed) | No | Filter by skill source type |
+
+### `read_skill`
+
+Read the full content of a skill by ID or slug. Use search_skills first to find the skill you need, then read_skill to load its full instructions into your context.
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `id` | string | No | Skill ID (from search_skills results) |
+| `slug` | string | No | Skill slug (URL-safe name) |
+
+### `create_skill`
+
+Create a new managed skill in the skill library. Skills are markdown documents that teach you how to perform specific tasks. Created skills are private to your user by default. Use YAML frontmatter for structured metadata (tags, version).
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `name` | string | Yes | Human-readable skill name |
+| `slug` | string | No | URL-safe identifier (auto-generated from name if omitted) |
+| `description` | string | No | Brief description of what this skill teaches |
+| `content` | string | Yes | Full markdown content of the skill. Can include YAML frontmatter with tags and version. |
+| `visibility` | enum(private,shared) | No | Visibility: 'private' (default, only you) or 'shared' (whole org) |
+
+### `update_skill`
+
+Update an existing managed skill. Only skills you created (source: managed) can be edited. You can update the name, description, content, or visibility.
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `id` | string | Yes | Skill ID to update |
+| `name` | string | No | New skill name |
+| `description` | string | No | New description |
+| `content` | string | No | New markdown content |
+| `visibility` | enum(private,shared) | No | New visibility setting |
+
+### `delete_skill`
+
+Delete a managed skill from the skill library. Only skills you created (source: managed) can be deleted. This also removes the skill from any persona attachments and org defaults.
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `id` | string | Yes | Skill ID to delete |
+
+## Integration tools
+
+| Tool | What it does | Key params |
+| --- | --- | --- |
+| `list_tools` | List available tools from connected integrations. Optionally filter by service name or search query. Returns tool IDs, descriptions, risk levels, and parameter schemas. Use call_tool to invoke a tool by its ID. | `service`?, `query`? |
+| `call_tool` | Call a tool by its ID with the given parameters. Use list_tools first to discover available tools and their required parameters. | `tool_id`, `params`?, `summary` |
+
+### `list_tools`
+
+List available tools from connected integrations. Optionally filter by service name or search query. Returns tool IDs, descriptions, risk levels, and parameter schemas. Use call_tool to invoke a tool by its ID.
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `service` | string | No | Filter by service name (e.g. 'gmail', 'github', 'google_calendar') |
+| `query` | string | No | Search tools by name or description |
+
+### `call_tool`
+
+Call a tool by its ID with the given parameters. Use list_tools first to discover available tools and their required parameters.
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `tool_id` | string | Yes | The fully-qualified tool ID (e.g. 'gmail:send_email', 'github:create_issue') |
+| `params` | string | No | JSON object of parameters for the tool. Must match the schema from list_tools. |
+| `summary` | string | Yes | A brief, human-readable summary of what this tool call will do and why. This is shown to the user for approval. Example: 'Send a Slack message to #engineering with the deployment status update' |
+
+## Browser and media
+
+| Tool | What it does | Key params |
+| --- | --- | --- |
+| `browser_screenshot` | Take a screenshot of the current virtual display (what's visible in VNC). The screenshot will be sent to the user's chat UI. | `filename`? |
+
+### `browser_screenshot`
+
+Take a screenshot of the current virtual display (what's visible in VNC). The screenshot will be sent to the user's chat UI.
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `filename` | string | No | Optional filename for the screenshot. Defaults to /tmp/screenshot.png |
+
+## Secrets
+
+| Tool | What it does | Key params |
+| --- | --- | --- |
+| `secret_list` | List available secrets from configured secret providers (e.g. 1Password). Returns vault items with their reference URIs (e.g. op://vault/item/field). No secret values are exposed — only names and references for use with secret_inject or secret_run. | `vault_id`? |
+| `secret_inject` | Inject secrets into a template file. Write a file containing secret references (e.g. op://vault/item/field), then call this tool to produce an output file with references replaced by actual secret values. The output file is created with restricted permissions (chmod 600). IMPORTANT: Do NOT read the output file — it contains plaintext secrets. | `template_path`, `output_path` |
+| `secret_run` | Run a shell command with secrets injected as environment variables. Provide a command and a JSON object mapping env var names to secret references (e.g. {"DB_PASSWORD": "op://vault/db/password"}). The secrets are resolved, passed as env vars to the command, and any secret values in stdout/stderr are automatically redacted before being returned. | `command`, `env_json`, `cwd`?, `timeout`? |
+| `secret_fill` | Fill a browser form field with a secret value without exposing it in the conversation. First take a browser snapshot (`agent-browser --headed snapshot -i -c`) to identify the target field's selector (e.g. @e7 or a CSS selector), then call this tool with the selector and a secret reference (e.g. op://vault/login/password). The secret is typed into the field server-side and never appears in chat. | `selector`, `secret_ref`, `timeout`? |
+
+### `secret_list`
+
+List available secrets from configured secret providers (e.g. 1Password). Returns vault items with their reference URIs (e.g. op://vault/item/field). No secret values are exposed — only names and references for use with secret_inject or secret_run.
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `vault_id` | string | No | Filter to a specific vault ID |
+
+### `secret_inject`
+
+Inject secrets into a template file. Write a file containing secret references (e.g. op://vault/item/field), then call this tool to produce an output file with references replaced by actual secret values. The output file is created with restricted permissions (chmod 600). IMPORTANT: Do NOT read the output file — it contains plaintext secrets.
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `template_path` | string | Yes | Absolute path to the template file containing secret references |
+| `output_path` | string | Yes | Absolute path where the resolved file should be written |
+
+### `secret_run`
+
+Run a shell command with secrets injected as environment variables. Provide a command and a JSON object mapping env var names to secret references (e.g. {"DB_PASSWORD": "op://vault/db/password"}). The secrets are resolved, passed as env vars to the command, and any secret values in stdout/stderr are automatically redacted before being returned.
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `command` | string | Yes | The shell command to execute |
+| `env_json` | string | Yes | JSON string mapping environment variable names to secret references. Example: '{"DB_PASSWORD": "op://vault/db/password", "API_KEY": "op://vault/api/key"}' |
+| `cwd` | string | No | Working directory for the command |
+| `timeout` | number | No | Timeout in milliseconds (default: 60000) |
+
+### `secret_fill`
+
+Fill a browser form field with a secret value without exposing it in the conversation. First take a browser snapshot (`agent-browser --headed snapshot -i -c`) to identify the target field's selector (e.g. @e7 or a CSS selector), then call this tool with the selector and a secret reference (e.g. op://vault/login/password). The secret is typed into the field server-side and never appears in chat.
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `selector` | string | Yes | Browser element selector for the target field. Use an @-ref from a snapshot (e.g. @e7) or a CSS selector (e.g. input[type=password]) |
+| `secret_ref` | string | Yes | Secret reference URI (e.g. op://vault/item/field). Use secret_list to discover available references. |
+| `timeout` | number | No | Timeout in milliseconds (default: 30000) |
+
+## Tunnels
+
+| Tool | What it does | Key params |
+| --- | --- | --- |
+| `register_tunnel` | Register a tunnel for a local service running in the sandbox. This creates a public URL (via Cloudflare Quick Tunnel) with its own unique hostname — no base path or prefix needed. Apps served through the tunnel work as if hosted at /. | `name`, `port`, `protocol`? |
+| `unregister_tunnel` | Unregister a previously registered tunnel by name. | `name` |
+| `list_tunnels` | List active tunnels registered in the sandbox gateway. | `_placeholder`? |
+| `write_tunnel_env` | Fetch the current session's tunnel URLs and write them to an env file for local app configuration. | `file_path`?, `prefix`?, `token`?, `token_env`?, `include_token`?, `set_api_url_from`?, `set_frontend_url_from`?, `set_backend_url_from`?, `include_gateway`?, `session_id`? |
+
+### `register_tunnel`
+
+Register a tunnel for a local service running in the sandbox. This creates a public URL (via Cloudflare Quick Tunnel) with its own unique hostname — no base path or prefix needed. Apps served through the tunnel work as if hosted at /.
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `name` | string | Yes | Tunnel name (1-32 chars: a-z A-Z 0-9 _ -) |
+| `port` | number | Yes | Local port of the service inside the sandbox |
+| `protocol` | string | No | Protocol hint: http \| ws \| auto (default: http) |
+
+### `unregister_tunnel`
+
+Unregister a previously registered tunnel by name.
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `name` | string | Yes | Tunnel name to remove |
+
+### `list_tunnels`
+
+List active tunnels registered in the sandbox gateway.
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `_placeholder` | string | No | Unused |
+
+### `write_tunnel_env`
+
+Fetch the current session's tunnel URLs and write them to an env file for local app configuration.
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `file_path` | string | No | Path to write env file (default: .env.tunnels) |
+| `prefix` | string | No | Env var prefix for tunnel URLs (default: TUNNEL_) |
+| `token` | string | No | Optional JWT token to append to tunnel URLs |
+| `token_env` | string | No | Env var name to read token from (default: SANDBOX_TOKEN) |
+| `include_token` | boolean | No | Append token to URLs when available (default: false) |
+| `set_api_url_from` | string | No | If provided, set API_URL from this tunnel name (default: api) |
+| `set_frontend_url_from` | string | No | If provided, set FRONTEND_URL from this tunnel name (default: frontend) |
+| `set_backend_url_from` | string | No | If provided, set BACKEND_URL from this tunnel name (default: backend) |
+| `include_gateway` | boolean | No | Include GATEWAY_URL from tunnelUrls.gateway if present (default: true) |
+| `session_id` | string | No | Override session ID (defaults to SESSION_ID env var) |
+
+## Git and sandbox
+
+| Tool | What it does | Key params |
+| --- | --- | --- |
+| `report_git_state` | Report the current git state (branch, base branch, commit count) to the platform. Call this after checking out a new branch, making commits, or any significant git operation so the session UI stays up to date. | `branch`?, `base_branch`?, `commit_count`? |
+
+### `report_git_state`
+
+Report the current git state (branch, base branch, commit count) to the platform. Call this after checking out a new branch, making commits, or any significant git operation so the session UI stays up to date.
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `branch` | string | No | The current git branch name |
+| `base_branch` | string | No | The base branch this branch was created from (e.g. 'main') |
+| `commit_count` | number | No | Number of commits ahead of the base branch |
+
+## Parallel AI research
+
+| Tool | What it does | Key params |
+| --- | --- | --- |
+| `parallel_web_search` | Search the web using Parallel AI. Returns relevant search results with snippets and URLs. Use this when you need current information from the internet — news, documentation, APIs, product info, or any factual question that may benefit from live web data. | `objective`, `queries`, `max_results`?, `mode`? |
+| `parallel_web_extract` | Extract content from web pages using Parallel AI. Fetches and parses one or more URLs, returning clean text content. Use this when you have specific URLs and need their content — articles, documentation pages, blog posts, etc. | `urls`, `objective`?, `full_content`? |
+| `parallel_deep_research` | Run a deep research task using Parallel AI. This is an async operation that performs multi-step web research, synthesizes findings, and returns a comprehensive report. Use this for complex research questions that require analyzing multiple sources — competitive analysis, technical deep dives, market research, etc. This tool may take several minutes to complete. | `input`, `processor`?, `timeout_minutes`? |
+| `parallel_data_enrichment` | Enrich data using Parallel AI. This is an async operation that takes structured or unstructured input, researches it on the web, and returns enriched data matching your specified output schema. Use this for enriching company profiles, contact info, product data, or any entity that benefits from web-sourced supplementary data. | `input`, `output_schema`, `input_schema`?, `processor`?, `timeout_minutes`? |
+
+### `parallel_web_search`
+
+Search the web using Parallel AI. Returns relevant search results with snippets and URLs. Use this when you need current information from the internet — news, documentation, APIs, product info, or any factual question that may benefit from live web data.
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `objective` | string | Yes | What you're trying to find or accomplish with this search |
+| `queries` | array | Yes | One or more search queries to execute |
+| `max_results` | number | No | Maximum number of results per query (default varies by mode) |
+| `mode` | enum(fast,one-shot,agentic) | No | Search mode: 'fast' for quick lookups, 'one-shot' for balanced results, 'agentic' for deep multi-step research (default: one-shot) |
+
+### `parallel_web_extract`
+
+Extract content from web pages using Parallel AI. Fetches and parses one or more URLs, returning clean text content. Use this when you have specific URLs and need their content — articles, documentation pages, blog posts, etc.
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `urls` | array | Yes | URLs to extract content from |
+| `objective` | string | No | What specific information to focus on when extracting |
+| `full_content` | boolean | No | If true, return the full page content instead of a focused extraction |
+
+### `parallel_deep_research`
+
+Run a deep research task using Parallel AI. This is an async operation that performs multi-step web research, synthesizes findings, and returns a comprehensive report. Use this for complex research questions that require analyzing multiple sources — competitive analysis, technical deep dives, market research, etc. This tool may take several minutes to complete.
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `input` | string | Yes | The research question or topic to investigate |
+| `processor` | enum(pro,ultra) | No | Research depth: 'pro' for standard research, 'ultra' for exhaustive analysis (default: pro) |
+| `timeout_minutes` | number | No | Timeout in minutes (default: ${DEFAULT_TIMEOUT_MINUTES}, max: ${MAX_TIMEOUT_MINUTES}) |
+
+### `parallel_data_enrichment`
+
+Enrich data using Parallel AI. This is an async operation that takes structured or unstructured input, researches it on the web, and returns enriched data matching your specified output schema. Use this for enriching company profiles, contact info, product data, or any entity that benefits from web-sourced supplementary data.
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `input` | string | Yes | The data to enrich (entity name, URL, description, or structured JSON) |
+| `output_schema` | string | Yes | JSON schema or natural language description of the desired output format. Example: '{"company_name": "string", "founded": "number", "description": "string"}' |
+| `input_schema` | string | No | Optional JSON schema describing the input format |
+| `processor` | enum(base,core) | No | Processing tier: 'base' for simple enrichment, 'core' for deeper research (default: base) |
+| `timeout_minutes` | number | No | Timeout in minutes (default: ${DEFAULT_TIMEOUT_MINUTES}, max: ${MAX_TIMEOUT_MINUTES}) |
+

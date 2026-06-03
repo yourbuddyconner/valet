@@ -1,0 +1,170 @@
+---
+title: Gmail
+description: Read, search, send, and manage Gmail messages, threads, labels, and drafts.
+---
+
+Read, search, send, and manage Gmail messages, threads, labels, and drafts.
+
+## Connection summary
+
+| Field | Value |
+| --- | --- |
+| Service slug | `gmail` |
+| Display name | Gmail |
+| Auth type | `oauth2` |
+| Supported entities | `messages`, `threads`, `labels`, `drafts` |
+
+## Setup
+
+OAuth 2.0 — the user connects this integration through Valet's connection screen, which redirects to the provider's OAuth consent flow and stores the resulting access token in the per-user credential store.
+
+See [OAuth setup](/oauth-setup) for environment variables and connection flow.
+
+## Actions
+
+13 actions are defined for Gmail. Risk levels determine approval behavior — see [Approvals](/product/approvals) for what `low`, `medium`, `high`, and `critical` mean at run time.
+
+| Action ID | What it does | Key params | Risk |
+| --- | --- | --- | --- |
+| `gmail.send_email` | Sends a markdown-formatted email from the authenticated Gmail account. Supports cc/bcc and optional threading by passing replyToMessageId (which copies threadId and sets In-Reply-To/References so the reply lands in the same thread). | `to`, `subject`, `body`, `cc`?, `bcc`?, `replyToMessageId`? | high |
+| `gmail.list_messages` | Lists Gmail messages for the authenticated user. Supports the full Gmail search syntax via the q parameter (e.g. "is:unread", "from:alice@example.com", "subject:invoice newer_than:7d"). Returns message IDs with sender, subject, date, and snippet for each result. | `maxResults`?, `q`?, `labelIds`?, `includeSpamTrash`? | low |
+| `gmail.get_message` | Fetches a single Gmail message by ID with headers, decoded plain-text body, HTML body, and a list of attachments (metadata only). Use list_messages to discover message IDs. | `messageId`, `format`? | low |
+| `gmail.modify_labels` | Adds and/or removes labels on a Gmail message. Use this to star (add STARRED), archive (remove INBOX), mark read (remove UNREAD), or apply custom labels. Discover label IDs with list_labels. At least one of addLabelIds or removeLabelIds must be provided. | `messageId`, `addLabelIds`?, `removeLabelIds`? | medium |
+| `gmail.trash_message` | Moves a Gmail message to Trash. This is the same as clicking Delete in the Gmail UI — reversible from the Trash folder for 30 days. Not a permanent delete. | `messageId` | high |
+| `gmail.create_draft` | Creates a markdown-formatted Gmail draft (does NOT send). Use this for AI-composed emails that the user should review before sending. The draft appears in the Gmail Drafts folder and can be sent later with send_draft, edited with update_draft, or deleted with delete_draft. Supports threading via replyToMessageId. | `to`, `subject`, `body`, `cc`?, `bcc`?, `replyToMessageId`? | medium |
+| `gmail.list_drafts` | Lists Gmail drafts for the authenticated user. Returns draft IDs along with the recipient, subject, snippet, and date for each. Use send_draft, update_draft, or delete_draft to act on a returned draft. | `maxResults`?, `q`? | low |
+| `gmail.get_draft` | Fetches a single Gmail draft by ID with full headers and body. Use list_drafts to discover draft IDs. | `draftId` | low |
+| `gmail.update_draft` | Replaces the contents of an existing Gmail draft with markdown-formatted content. The new contents fully overwrite the old draft (this is a full replace, not a patch). Use this when iterating on an AI-composed draft before sending. | `draftId`, `to`, `subject`, `body`, `cc`?, `bcc`?, `replyToMessageId`? | medium |
+| `gmail.send_draft` | Sends an existing Gmail draft. After sending, the draft is removed and the message appears in Sent. This is the second half of the compose-review-send flow that pairs with create_draft. | `draftId` | high |
+| `gmail.delete_draft` | Permanently deletes a Gmail draft. This is irreversible — the draft is removed entirely, not moved to Trash. Use when an AI-composed draft was rejected or replaced. | `draftId` | high |
+| `gmail.list_labels` | Lists all Gmail labels for the authenticated user, including system labels (INBOX, SENT, STARRED, UNREAD, etc.) and custom user-created labels. Use the returned IDs with modify_labels or list_messages labelIds filter. | — | low |
+| `gmail.triage_inbox` | Composite action: fetches the user's most recent unread Gmail messages with full content and heuristic categorization in a single call. Returns headers, body excerpts, labels, plus per-message signals (newsletter, meeting reference, contains question, action requested) AND aggregate stats (total unread, top senders, breakdown by category). Designed for AI inbox triage workflows — use the returned data to decide which messages need a reply, can be archived, or warrant a draft response. Pairs naturally with create_draft, modify_labels, and trash_message. | `maxResults`?, `additionalQuery`?, `bodyExcerptLength`? | medium |
+
+## Action parameters
+
+### `gmail.send_email`
+
+Sends a markdown-formatted email from the authenticated Gmail account. Supports cc/bcc and optional threading by passing replyToMessageId (which copies threadId and sets In-Reply-To/References so the reply lands in the same thread).
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `to` | union | Yes | Recipient email address, or an array of recipient email addresses. |
+| `subject` | string | Yes | Email subject line. |
+| `body` | string | Yes | — |
+| `cc` | array | No | Optional list of Cc recipients. |
+| `bcc` | array | No | Optional list of Bcc recipients. |
+| `replyToMessageId` | string | No | Optional Gmail message ID to reply to. When set, the new email is threaded with the original and uses In-Reply-To/References headers. |
+
+### `gmail.list_messages`
+
+Lists Gmail messages for the authenticated user. Supports the full Gmail search syntax via the q parameter (e.g. "is:unread", "from:alice@example.com", "subject:invoice newer_than:7d"). Returns message IDs with sender, subject, date, and snippet for each result.
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `maxResults` | number | No | Maximum number of messages to return (1-100). Defaults to 10. |
+| `q` | string | No | Gmail search query using the same syntax as the Gmail search box. Examples: "is:unread", "from:boss@acme.com", "has:attachment newer_than:3d". |
+| `labelIds` | array | No | Only return messages with these label IDs (e.g. ["INBOX"], ["STARRED"]). Use list_labels to discover custom label IDs. |
+| `includeSpamTrash` | boolean | No | If true, also include messages from SPAM and TRASH. |
+
+### `gmail.get_message`
+
+Fetches a single Gmail message by ID with headers, decoded plain-text body, HTML body, and a list of attachments (metadata only). Use list_messages to discover message IDs.
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `messageId` | string | Yes | The Gmail message ID, typically from list_messages results. |
+| `format` | enum(full,metadata,minimal) | No | "full" returns headers + body + attachments; "metadata" returns headers only; "minimal" returns just labels/snippet. |
+
+### `gmail.modify_labels`
+
+Adds and/or removes labels on a Gmail message. Use this to star (add STARRED), archive (remove INBOX), mark read (remove UNREAD), or apply custom labels. Discover label IDs with list_labels. At least one of addLabelIds or removeLabelIds must be provided.
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `messageId` | string | Yes | The Gmail message ID to modify. |
+| `addLabelIds` | array | No | Label IDs to add (e.g. ["STARRED"], ["IMPORTANT"], or a custom label ID from list_labels). |
+| `removeLabelIds` | array | No | Label IDs to remove (e.g. ["INBOX"] to archive, ["UNREAD"] to mark as read). |
+
+### `gmail.trash_message`
+
+Moves a Gmail message to Trash. This is the same as clicking Delete in the Gmail UI — reversible from the Trash folder for 30 days. Not a permanent delete.
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `messageId` | string | Yes | The Gmail message ID to move to Trash. |
+
+### `gmail.create_draft`
+
+Creates a markdown-formatted Gmail draft (does NOT send). Use this for AI-composed emails that the user should review before sending. The draft appears in the Gmail Drafts folder and can be sent later with send_draft, edited with update_draft, or deleted with delete_draft. Supports threading via replyToMessageId.
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `to` | union | Yes | Recipient email address, or an array of recipient email addresses. |
+| `subject` | string | Yes | Email subject line. |
+| `body` | string | Yes | — |
+| `cc` | array | No | Optional list of Cc recipients. |
+| `bcc` | array | No | Optional list of Bcc recipients. |
+| `replyToMessageId` | string | No | Optional Gmail message ID to draft a reply to. The draft is threaded with the original. |
+
+### `gmail.list_drafts`
+
+Lists Gmail drafts for the authenticated user. Returns draft IDs along with the recipient, subject, snippet, and date for each. Use send_draft, update_draft, or delete_draft to act on a returned draft.
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `maxResults` | number | No | Maximum number of drafts to return (1-100). Defaults to 25. |
+| `q` | string | No | Optional Gmail search query to filter drafts (e.g. "subject:proposal"). |
+
+### `gmail.get_draft`
+
+Fetches a single Gmail draft by ID with full headers and body. Use list_drafts to discover draft IDs.
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `draftId` | string | Yes | The Gmail draft ID, typically from list_drafts results. |
+
+### `gmail.update_draft`
+
+Replaces the contents of an existing Gmail draft with markdown-formatted content. The new contents fully overwrite the old draft (this is a full replace, not a patch). Use this when iterating on an AI-composed draft before sending.
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `draftId` | string | Yes | The Gmail draft ID to update. |
+| `to` | union | Yes | Recipient email address, or an array of recipient email addresses. |
+| `subject` | string | Yes | Email subject line. |
+| `body` | string | Yes | — |
+| `cc` | array | No | Optional list of Cc recipients. |
+| `bcc` | array | No | Optional list of Bcc recipients. |
+| `replyToMessageId` | string | No | Optional Gmail message ID to thread the draft with. |
+
+### `gmail.send_draft`
+
+Sends an existing Gmail draft. After sending, the draft is removed and the message appears in Sent. This is the second half of the compose-review-send flow that pairs with create_draft.
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `draftId` | string | Yes | The Gmail draft ID to send (from create_draft or list_drafts). |
+
+### `gmail.delete_draft`
+
+Permanently deletes a Gmail draft. This is irreversible — the draft is removed entirely, not moved to Trash. Use when an AI-composed draft was rejected or replaced.
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `draftId` | string | Yes | The Gmail draft ID to delete (from create_draft or list_drafts). |
+
+### `gmail.list_labels`
+
+Lists all Gmail labels for the authenticated user, including system labels (INBOX, SENT, STARRED, UNREAD, etc.) and custom user-created labels. Use the returned IDs with modify_labels or list_messages labelIds filter.
+
+_No parameters._
+
+### `gmail.triage_inbox`
+
+Composite action: fetches the user's most recent unread Gmail messages with full content and heuristic categorization in a single call. Returns headers, body excerpts, labels, plus per-message signals (newsletter, meeting reference, contains question, action requested) AND aggregate stats (total unread, top senders, breakdown by category). Designed for AI inbox triage workflows — use the returned data to decide which messages need a reply, can be archived, or warrant a draft response. Pairs naturally with create_draft, modify_labels, and trash_message.
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `maxResults` | number | No | How many unread messages to triage in one pass (1-50). Defaults to 20. |
+| `additionalQuery` | string | No | Optional Gmail query appended to "is:unread", e.g. "newer_than:2d" or "-from:notifications@". |
+| `bodyExcerptLength` | number | No | Max characters of body text to include per message (0 to skip bodies). |

@@ -1,0 +1,31 @@
+---
+title: Sentry
+description: Read Sentry issues, projects, and events for error tracking workflows.
+---
+
+Read Sentry issues, projects, and events for error tracking workflows.
+
+## Connection summary
+
+| Field | Value |
+| --- | --- |
+| Service slug | `sentry` |
+| Display name | Sentry |
+| Auth type | `oauth2` |
+| Supported entities | `issues`, `projects`, `events` |
+| MCP server URL | `https://mcp.sentry.dev/mcp` |
+| Default action risk | `medium` |
+
+## Setup
+
+OAuth 2.0 — the user connects this integration through Valet's connection screen, which redirects to the provider's OAuth consent flow and stores the resulting access token in the per-user credential store.
+
+See [OAuth setup](/oauth-setup) for environment variables and connection flow.
+
+## Actions
+
+Actions for Sentry are proxied through a remote [Model Context Protocol](https://modelcontextprotocol.io) server at `https://mcp.sentry.dev/mcp`. The exact list of actions, their parameters, and behavior are owned by the upstream MCP server — Valet enumerates them at runtime when the integration is connected.
+
+Default risk level applied to Sentry actions: `medium`. Individual actions may carry their own risk level from the upstream server.
+
+Use `list_tools` with `service: sentry` from an agent session to see the live action list, parameter schemas, and per-action risk levels.

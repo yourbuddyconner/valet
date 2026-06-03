@@ -1,0 +1,415 @@
+---
+title: GitHub
+description: Manage repositories, branches, pull requests, issues, comments, checks, and webhooks.
+---
+
+Manage repositories, branches, pull requests, issues, comments, checks, and webhooks.
+
+## Connection summary
+
+| Field | Value |
+| --- | --- |
+| Service slug | `github` |
+| Display name | GitHub |
+| Auth type | `oauth2` |
+| Supported entities | `repositories`, `issues`, `pull_requests`, `commits` |
+
+## Setup
+
+OAuth 2.0 — the user connects this integration through Valet's connection screen, which redirects to the provider's OAuth consent flow and stores the resulting access token in the per-user credential store.
+
+See [OAuth setup](/oauth-setup) for environment variables and connection flow.
+
+## Actions
+
+29 actions are defined for GitHub. Risk levels determine approval behavior — see [Approvals](/product/approvals) for what `low`, `medium`, `high`, and `critical` mean at run time.
+
+| Action ID | What it does | Key params | Risk |
+| --- | --- | --- | --- |
+| `github.get_repository` | Get details of a GitHub repository by owner/name | `owner`, `repo` | low |
+| `github.list_repos` | List repositories accessible to the authenticated credential. | `sort`?, `perPage`?, `page`? | low |
+| `github.get_issue` | Get a specific issue by number | `owner`, `repo`, `issueNumber` | low |
+| `github.create_issue` | Create a new issue in a repository | `owner`, `repo`, `title`, `body`? | medium |
+| `github.get_pull_request` | Get a specific pull request by number | `owner`, `repo`, `pullNumber` | low |
+| `github.create_comment` | Create a comment on an issue or pull request | `owner`, `repo`, `issueNumber`, `body` | medium |
+| `github.list_pull_requests` | List pull requests for a repository with optional state filter | `owner`, `repo`, `state`?, `limit`? | low |
+| `github.inspect_pull_request` | Get detailed PR info including files changed, review comments, and check status | `owner`, `repo`, `pullNumber`, `filesLimit`?, `commentsLimit`? | low |
+| `github.update_pull_request` | Update a pull request title, body, state, or labels | `owner`, `repo`, `pullNumber`, `title`?, `body`?, `state`?, `labels`? | medium |
+| `github.create_repository` | Create a new GitHub repository for the authenticated user | `name`, `description`?, `private`?, `autoInit`?, `gitignoreTemplate`?, `licenseTemplate`? | high |
+| `github.list_issues` | List issues for a repository with optional filters | `owner`, `repo`, `state`?, `labels`?, `assignee`?, `sort`?, `direction`?, `limit`? | low |
+| `github.update_issue` | Update an issue title, body, state, labels, or assignees | `owner`, `repo`, `issueNumber`, `title`?, `body`?, `state`?, `labels`?, `assignees`? | medium |
+| `github.create_pull_request` | Create a new pull request | `owner`, `repo`, `title`, `head`, `base`, `body`?, `draft`? | medium |
+| `github.merge_pull_request` | Merge a pull request | `owner`, `repo`, `pullNumber`, `mergeMethod`?, `commitTitle`?, `commitMessage`? | high |
+| `github.create_branch` | Create a new branch from a ref | `owner`, `repo`, `branch`, `fromRef`? | medium |
+| `github.delete_branch` | Delete a branch from a repository | `owner`, `repo`, `branch` | high |
+| `github.list_commits` | List commits on a branch or path | `owner`, `repo`, `sha`?, `path`?, `author`?, `limit`? | low |
+| `github.search_code` | Search for code across GitHub repositories | `q`, `limit`? | low |
+| `github.search_issues` | Search issues and pull requests across GitHub | `q`, `sort`?, `order`?, `limit`? | low |
+| `github.create_release` | Create a new release (and optionally a tag) | `owner`, `repo`, `tagName`, `name`?, `body`?, `targetCommitish`?, `draft`?, `prerelease`?, `generateReleaseNotes`? | high |
+| `github.fork_repository` | Fork a repository to the authenticated user or an organization | `owner`, `repo`, `organization`?, `name`? | high |
+| `github.list_workflow_runs` | List GitHub Actions workflow runs for a repository | `owner`, `repo`, `branch`?, `status`?, `event`?, `limit`? | low |
+| `github.get_workflow_run` | Get details of a workflow run including jobs, steps, and check annotations. Use this to triage failures before fetching logs. | `owner`, `repo`, `run_id` | low |
+| `github.get_job_logs` | Get log output from a specific workflow job. Parses logs into steps, filters to failed steps by default, strips noise, and truncates. Use after get_workflow_run to read failure details. | `owner`, `repo`, `job_id`, `failed_only`?, `step_name`?, `tail_lines`?, `include_timestamps`? | low |
+| `github.rerun_workflow` | Re-run a workflow run. Can re-run all jobs or only failed jobs. | `owner`, `repo`, `run_id`, `failed_only`? | medium |
+| `github.cancel_workflow_run` | Cancel an in-progress workflow run. | `owner`, `repo`, `run_id` | medium |
+| `github.list_workflows` | List workflow definitions in a repository. Returns workflow names, file paths, and states. | `owner`, `repo` | low |
+| `github.trigger_workflow` | Manually trigger a workflow via workflow_dispatch event. The workflow must have a workflow_dispatch trigger configured. | `owner`, `repo`, `workflow_id`, `ref`, `inputs`? | medium |
+| `github.read_repo_file` | Read a file from a GitHub repository without cloning it | `owner`, `repo`, `path`, `ref`? | low |
+
+## Action parameters
+
+### `github.get_repository`
+
+Get details of a GitHub repository by owner/name
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `owner` | string | Yes | Repository owner |
+| `repo` | string | Yes | Repository name |
+
+### `github.list_repos`
+
+List repositories accessible to the authenticated credential.
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `sort` | enum(created,updated,pushed,full_name) | No | Sort field |
+| `perPage` | number | No | Results per page |
+| `page` | number | No | Page number |
+
+### `github.get_issue`
+
+Get a specific issue by number
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `owner` | string | Yes | — |
+| `repo` | string | Yes | — |
+| `issueNumber` | number | Yes | — |
+
+### `github.create_issue`
+
+Create a new issue in a repository
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `owner` | string | Yes | — |
+| `repo` | string | Yes | — |
+| `title` | string | Yes | — |
+| `body` | string | No | — |
+
+### `github.get_pull_request`
+
+Get a specific pull request by number
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `owner` | string | Yes | — |
+| `repo` | string | Yes | — |
+| `pullNumber` | number | Yes | — |
+
+### `github.create_comment`
+
+Create a comment on an issue or pull request
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `owner` | string | Yes | — |
+| `repo` | string | Yes | — |
+| `issueNumber` | number | Yes | — |
+| `body` | string | Yes | — |
+
+### `github.list_pull_requests`
+
+List pull requests for a repository with optional state filter
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `owner` | string | Yes | Repository owner |
+| `repo` | string | Yes | Repository name |
+| `state` | enum(open,closed,all) | No | PR state filter (default: open) |
+| `limit` | number | No | Max results (default: 30, max 100) |
+
+### `github.inspect_pull_request`
+
+Get detailed PR info including files changed, review comments, and check status
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `owner` | string | Yes | Repository owner |
+| `repo` | string | Yes | Repository name |
+| `pullNumber` | number | Yes | Pull request number |
+| `filesLimit` | number | No | Max files to return (default: 100) |
+| `commentsLimit` | number | No | Max review comments (default: 100) |
+
+### `github.update_pull_request`
+
+Update a pull request title, body, state, or labels
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `owner` | string | Yes | Repository owner |
+| `repo` | string | Yes | Repository name |
+| `pullNumber` | number | Yes | Pull request number |
+| `title` | string | No | New title |
+| `body` | string | No | New body (markdown) |
+| `state` | enum(open,closed) | No | Set PR state |
+| `labels` | array | No | Labels to set (replaces existing) |
+
+### `github.create_repository`
+
+Create a new GitHub repository for the authenticated user
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `name` | string | Yes | Repository name |
+| `description` | string | No | Repository description |
+| `private` | boolean | No | Whether the repository is private (default: false) |
+| `autoInit` | boolean | No | Initialize with a README (default: false) |
+| `gitignoreTemplate` | string | No | Gitignore template (e.g. "Node", "Python") |
+| `licenseTemplate` | string | No | License keyword (e.g. "mit", "apache-2.0") |
+
+### `github.list_issues`
+
+List issues for a repository with optional filters
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `owner` | string | Yes | Repository owner |
+| `repo` | string | Yes | Repository name |
+| `state` | enum(open,closed,all) | No | Issue state filter (default: open) |
+| `labels` | string | No | Comma-separated label names |
+| `assignee` | string | No | Filter by assignee username, or "none"/"*" |
+| `sort` | enum(created,updated,comments) | No | Sort field |
+| `direction` | enum(asc,desc) | No | Sort direction |
+| `limit` | number | No | Max results (default: 30) |
+
+### `github.update_issue`
+
+Update an issue title, body, state, labels, or assignees
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `owner` | string | Yes | Repository owner |
+| `repo` | string | Yes | Repository name |
+| `issueNumber` | number | Yes | Issue number |
+| `title` | string | No | New title |
+| `body` | string | No | New body (markdown) |
+| `state` | enum(open,closed) | No | Set issue state |
+| `labels` | array | No | Labels to set (replaces existing) |
+| `assignees` | array | No | Assignee usernames (replaces existing) |
+
+### `github.create_pull_request`
+
+Create a new pull request
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `owner` | string | Yes | Repository owner |
+| `repo` | string | Yes | Repository name |
+| `title` | string | Yes | PR title |
+| `head` | string | Yes | Branch containing changes (or "user:branch" for cross-repo) |
+| `base` | string | Yes | Branch to merge into |
+| `body` | string | No | PR description (markdown) |
+| `draft` | boolean | No | Create as draft PR |
+
+### `github.merge_pull_request`
+
+Merge a pull request
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `owner` | string | Yes | Repository owner |
+| `repo` | string | Yes | Repository name |
+| `pullNumber` | number | Yes | Pull request number |
+| `mergeMethod` | enum(merge,squash,rebase) | No | Merge method (default: merge) |
+| `commitTitle` | string | No | Custom merge commit title |
+| `commitMessage` | string | No | Custom merge commit message |
+
+### `github.create_branch`
+
+Create a new branch from a ref
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `owner` | string | Yes | Repository owner |
+| `repo` | string | Yes | Repository name |
+| `branch` | string | Yes | New branch name |
+| `fromRef` | string | No | Source ref — branch, tag, or SHA (default: repo default branch) |
+
+### `github.delete_branch`
+
+Delete a branch from a repository
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `owner` | string | Yes | Repository owner |
+| `repo` | string | Yes | Repository name |
+| `branch` | string | Yes | Branch name to delete |
+
+### `github.list_commits`
+
+List commits on a branch or path
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `owner` | string | Yes | Repository owner |
+| `repo` | string | Yes | Repository name |
+| `sha` | string | No | Branch name or commit SHA to list from |
+| `path` | string | No | Only commits containing this file path |
+| `author` | string | No | GitHub username or email to filter by |
+| `limit` | number | No | Max results (default: 30) |
+
+### `github.search_code`
+
+Search for code across GitHub repositories
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `q` | string | Yes | Search query (supports GitHub code search qualifiers like "repo:", "language:", "path:") |
+| `limit` | number | No | Max results (default: 30) |
+
+### `github.search_issues`
+
+Search issues and pull requests across GitHub
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `q` | string | Yes | Search query (supports qualifiers like "repo:", "is:issue", "is:pr", "label:", "state:") |
+| `sort` | enum(created,updated,comments) | No | Sort field |
+| `order` | enum(asc,desc) | No | Sort order |
+| `limit` | number | No | Max results (default: 30) |
+
+### `github.create_release`
+
+Create a new release (and optionally a tag)
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `owner` | string | Yes | Repository owner |
+| `repo` | string | Yes | Repository name |
+| `tagName` | string | Yes | Tag name for the release |
+| `name` | string | No | Release title |
+| `body` | string | No | Release notes (markdown) |
+| `targetCommitish` | string | No | Branch or commit SHA to tag (default: default branch) |
+| `draft` | boolean | No | Create as draft release |
+| `prerelease` | boolean | No | Mark as pre-release |
+| `generateReleaseNotes` | boolean | No | Auto-generate release notes |
+
+### `github.fork_repository`
+
+Fork a repository to the authenticated user or an organization
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `owner` | string | Yes | Repository owner |
+| `repo` | string | Yes | Repository name |
+| `organization` | string | No | Organization to fork to (default: authenticated user) |
+| `name` | string | No | Custom name for the fork |
+
+### `github.list_workflow_runs`
+
+List GitHub Actions workflow runs for a repository
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `owner` | string | Yes | Repository owner |
+| `repo` | string | Yes | Repository name |
+| `branch` | string | No | Filter by branch |
+| `status` | enum(completed,action_required,cancelled,failure,neutral,skipped,stale,success,timed_out,in_progress,queued,requested,waiting,pending) | No | Filter by status |
+| `event` | string | No | Filter by event type (e.g. "push", "pull_request") |
+| `limit` | number | No | Max results (default: 30) |
+
+### `github.get_workflow_run`
+
+Get details of a workflow run including jobs, steps, and check annotations. Use this to triage failures before fetching logs.
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `owner` | string | Yes | Repository owner |
+| `repo` | string | Yes | Repository name |
+| `run_id` | number | Yes | Workflow run ID |
+
+### `github.get_job_logs`
+
+Get log output from a specific workflow job. Parses logs into steps, filters to failed steps by default, strips noise, and truncates. Use after get_workflow_run to read failure details.
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `owner` | string | Yes | Repository owner |
+| `repo` | string | Yes | Repository name |
+| `job_id` | number | Yes | Job ID (from get_workflow_run response) |
+| `failed_only` | boolean | No | Only return failed step output (default: true) |
+| `step_name` | string | No | Filter to a specific step by name (partial match) |
+| `tail_lines` | number | No | Max lines per step, tail-biased (default: 500) |
+| `include_timestamps` | boolean | No | Include ISO timestamp prefixes (default: false) |
+
+### `github.rerun_workflow`
+
+Re-run a workflow run. Can re-run all jobs or only failed jobs.
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `owner` | string | Yes | Repository owner |
+| `repo` | string | Yes | Repository name |
+| `run_id` | number | Yes | Workflow run ID to re-run |
+| `failed_only` | boolean | No | Only re-run failed jobs (default: false) |
+
+### `github.cancel_workflow_run`
+
+Cancel an in-progress workflow run.
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `owner` | string | Yes | Repository owner |
+| `repo` | string | Yes | Repository name |
+| `run_id` | number | Yes | Workflow run ID to cancel |
+
+### `github.list_workflows`
+
+List workflow definitions in a repository. Returns workflow names, file paths, and states.
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `owner` | string | Yes | Repository owner |
+| `repo` | string | Yes | Repository name |
+
+### `github.trigger_workflow`
+
+Manually trigger a workflow via workflow_dispatch event. The workflow must have a workflow_dispatch trigger configured.
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `owner` | string | Yes | Repository owner |
+| `repo` | string | Yes | Repository name |
+| `workflow_id` | union | Yes | Workflow filename (e.g. "ci.yml") or numeric ID |
+| `ref` | string | Yes | Branch or tag to run the workflow on |
+| `inputs` | record | No | Workflow dispatch input values (key-value pairs) |
+
+### `github.read_repo_file`
+
+Read a file from a GitHub repository without cloning it
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `owner` | string | Yes | Repository owner |
+| `repo` | string | Yes | Repository name |
+| `path` | string | Yes | File path in the repository |
+| `ref` | string | No | Git ref (branch, tag, or commit SHA) |
+
+## Triggers
+
+GitHub ships an event trigger source that can fan webhook events into Valet workflows. Supported event types:
+
+- `push`
+- `pull_request`
+- `issues`
+- `issue_comment`
+- `create`
+- `delete`
+- `release`
+- `workflow_run`
+- `check_run`
+- `check_suite`
+- `status`
+- `ping`
