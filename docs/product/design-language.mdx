@@ -15,19 +15,21 @@ Use `mint` as the docs theme. Turnkey's docs prove the theme is not the main sou
 
 Keep the theme choice boring and durable. Use `docs.json` for site-wide configuration, `styles.css` for scoped custom homepage and card styles, and Mintlify built-ins for normal documentation pages.
 
-## Structure
+## Information architecture
 
 The docs should have five top-level tabs:
 
 | Tab | Purpose |
 | --- | --- |
 | Home | A custom, general-audience landing page. |
-| Use cases | Public positioning organized by the work Valet can own. |
-| Product docs | Concepts for sessions, workspaces, orchestrators, memory, workflows, policies, channels, and integrations. |
-| Engineering reference | Technical architecture, setup, API, MCP, security, and deployment pages. |
-| Brand system | Internal docs-site guidance, character assets, and future brand-kit notes. |
+| Use cases | What Valet does, organized by job to be done. |
+| Product docs | Concepts, quickstart, and guides for all users. |
+| Engineering | Sandboxes, sessions, policies, orchestration, security, setup, and deployment. |
+| API & MCP | Endpoints, SDKs, and the MCP server. |
 
 Use `docs/index.mdx` with `mode: "custom"` for the homepage. Use `docs/styles.css` for `valet-*` classes only. Use `docs/snippets/` for reusable cards and page building blocks.
+
+The root stays conceptual. Depth lives one level down. An operator should never hit a sandbox policy schema on an overview page.
 
 ## Color
 
@@ -47,7 +49,7 @@ Aim for mostly neutral surfaces, a small amount of blue for direction, and gold 
 
 ## Typography
 
-Use the approved brand font when the final kit lands. Until then, rely on Mintlify's theme typography and keep custom CSS focused on layout rather than font overrides.
+Use Geist for display, body, and interface copy when the final font assets are available. Use Geist Mono for labels, metadata, and code. Use Instrument Serif Italic as a rare accent phrase in headlines.
 
 Use short mono-style labels for eyebrows and metadata:
 
@@ -58,7 +60,7 @@ POLICY
 MCP
 ```
 
-Use an italic serif flourish rarely. It can humanize a headline, but it should not become a second voice.
+Use one italic serif flourish per headline at most. Set it in Signal Blue.
 
 ## Motifs
 
@@ -108,6 +110,56 @@ Do not:
 - Turn every note into a joke.
 - Hide important technical constraints behind marketing copy.
 - Make destructive or approval-sensitive actions sound casual.
+
+## Homepage
+
+The homepage is a custom product surface, not a stock themed index.
+
+Required sections:
+
+1. Hero: headline, CTAs, search, waving mascot.
+2. Use-case grid: three or four jobs to be done.
+3. How Valet works: request, context, workspace, tools, approval, result.
+4. Integrations: connected tools.
+5. Start building: CTA into the quickstart.
+
+Hero rules:
+
+- Headline: "Your AI coworker, documented." with one blue serif accent.
+- Primary CTA: product quickstart.
+- Secondary CTA: concepts.
+- Search: prominent "search or ask" affordance.
+- Mascot: waving, right of hero, on a blue disc.
+- Asset direction: grid field plus mascot cut-out. No photos.
+
+## Reusable snippets
+
+The snippet kit should cover:
+
+| Snippet | Use |
+| --- | --- |
+| Feature card | One capability in a line. |
+| Use-case card | A job to be done. |
+| Persona card | Behavior and tools preset. |
+| Integration card | A connected service. |
+| Reference card | Jump to an endpoint or deep technical page. |
+| Spotlight card | Featured guide or accent variant. |
+
+Keep snippets small and consistent. Do not build one-off cards on individual pages.
+
+## Page templates
+
+Every page should map to one of these templates:
+
+| Template | Use |
+| --- | --- |
+| Overview | Concept plus links out. Buyer's entry. |
+| Concept | Prose-first explanation. |
+| Quickstart | Numbered steps to first value. |
+| Integration guide | Setup plus behavior and safety notes. |
+| API / MCP reference | Params, examples, responses, connection details. |
+| Troubleshooting | Symptom, cause, fix. |
+| Use case | Story-led, outcome-first, cards. |
 
 ## Mintlify usage
 

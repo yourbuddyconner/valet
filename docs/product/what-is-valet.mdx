@@ -1,51 +1,56 @@
 ---
 title: What is Valet?
-description: Valet is an AI coworker with its own hosted workstation, persistent coordinator, connected tools, channels, workflows, memory, approvals, and technical execution environment.
+description: Valet is an AI coworker with its own hosted workspace, persistent memory, connected tools, workflows, channels, and approval-aware execution.
 ---
 
 # What is Valet?
 
-Valet lets a user delegate work to an AI coworker that has its own hosted workstation. The coworker can keep context, use connected tools, coordinate follow-up work, ask for approvals, and report progress through the web UI or connected channels.
+Valet is an AI coworker with its own workspace. You can ask it to take on work, connect it to the tools your team already uses, and let it continue in the background while you stay in control.
 
-When the task is engineering work, the workstation becomes a full development environment: the agent can clone repositories, inspect code, run commands, use browser and terminal access, and open pull requests. When the task is operational work, the same workstation model lets the agent use integrations, workflows, and channel context without pretending everything is a coding session.
+Valet is not just a chatbot. It has a place to work, context it can remember, tools it can use, and rules that decide when it must ask before acting.
 
-<Frame caption="The Valet mascot should feel competent, friendly, and ready to guide the next step.">
+<Frame caption="Valet should feel competent, friendly, and ready to guide the next step.">
   <img src="/images/characters/wave.png" alt="Valet mascot waving hello" />
 </Frame>
 
-## Product model
+## What Valet can do
 
-Valet is organized around a few product concepts:
+Valet can help with work that crosses tools, messages, and follow-up steps:
 
-- **Workstations** are hosted environments where agents do work. For coding, this includes editor, browser, terminal, repository, and runtime access.
-- **Sessions** are individual units of work. They hold conversation, participants, runtime state, approvals, and task-specific context.
-- **Orchestrators** are persistent coordinator agents. They remember preferences, route messages, manage task context, and decide when to spawn child sessions.
-- **Workflows** are repeatable automations that can run manually, on a schedule, or from a webhook.
-- **Plugins** connect Valet to tools, channels, skills, personas, and external services.
+- Answer questions with durable context from earlier work.
+- Start and manage tasks from the web, Slack, Telegram, schedules, or webhooks.
+- Use connected tools such as GitHub, Linear, Gmail, Google Workspace, Notion, Slack, Stripe, Sentry, and other integrations.
+- Run repeatable workflows with human approval points.
+- Remember preferences, procedures, and recurring context.
+- Report progress back in the channel where the work started.
 
-## Technical architecture
+For engineering teams, Valet can also work inside a development workspace. Those details live in the [Engineering reference](/architecture).
 
-For technical readers, each session is coordinated by Cloudflare infrastructure and executed inside Modal:
+## The product model
 
-- The **React web app** lets users create sessions, chat with agents, watch streaming output, open workspace iframes, and manage settings.
-- The **Cloudflare Worker** handles API routes, auth, integration configuration, webhooks, and Durable Object entry points.
-- A **SessionAgent Durable Object** owns live session state, WebSocket connections, prompt queues, message streaming, hibernation, restoration, and participant access.
-- The **Modal backend** creates, restores, hibernates, and terminates sandboxes.
-- The **Runner** inside each sandbox bridges the Durable Object to OpenCode, manages workflow execution, and exposes the sandbox auth gateway.
-- **Plugins** supply action catalogs, channel transports, skills, personas, and sandbox tools.
+Valet has a few concepts that matter to every reader:
 
-## The user experience
+| Concept | What it means |
+| --- | --- |
+| Workspace | The hosted place where Valet does the work for a task. |
+| Task session | A focused unit of work with its own conversation, context, participants, files, approvals, and activity. |
+| Orchestrator | A persistent coordinator that remembers context and routes work over time. |
+| Workflow | A repeatable process that can run manually, on a schedule, or from an external event. |
+| Integration | A connected tool or system Valet can use when policy allows it. |
+| Approval | A human decision point before Valet performs sensitive actions. |
 
-A user can:
+## Who uses Valet
 
-- Start a manual session from the web UI.
-- Ask their orchestrator to plan, answer, or spawn child sessions.
-- Connect Slack or Telegram and route messages into Valet.
-- Configure GitHub and other integrations so agents can work with external systems.
-- Define workflows that run manually, on a schedule, or from webhooks.
-- Approve or deny risky tool calls, with optional session or persistent overrides.
-- Hibernate sessions to save resources and restore them later.
+Different teams can use the same product model in different ways:
 
-## One source of product truth
+- **Operators** can ask Valet to run checks, triage messages, prepare summaries, and handle internal handoffs.
+- **Engineering teams** can delegate repository work, PR review, issue triage, and QA loops.
+- **Customer-facing teams** can gather account context, draft follow-ups, and create tasks across connected systems.
+- **Admins** can configure access, integrations, policies, channels, and approval defaults.
 
-These docs are meant for both people and agents. The published Mintlify site gives humans a navigable reference, while Mintlify's search MCP server lets MCP-capable agents search and retrieve the same pages.
+## Where to go next
+
+- [How Valet works](/product/how-valet-works) explains the flow from request to result.
+- [Tasks and sessions](/product/sessions) explains how work is organized.
+- [Approvals and controls](/product/policies-and-approvals) explains how Valet stays under human control.
+- [Integrations](/product/integrations) explains the tools Valet can reach.

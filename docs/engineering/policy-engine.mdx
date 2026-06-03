@@ -1,0 +1,76 @@
+---
+title: Policy Engine
+description: Technical reference for Valet policy resolution, approval prompts, user overrides, specificity, audit records, and failure behavior.
+---
+
+# Policy Engine
+
+Every integration action call resolves through a policy stack before it runs. Workflow approval steps are separate workflow controls, though they can appear in the same UI.
+
+## Resolution order
+
+Valet evaluates:
+
+1. Org policy: admin rules for exact tools, services, or risk levels.
+2. User override: personal rules at the same specificity levels.
+3. System default: low-risk tools auto-allow, medium and high risk require approval, critical risk denies.
+
+An explicit org deny wins. Users cannot bypass it with personal overrides.
+
+## Modes
+
+| Mode | Effect |
+| --- | --- |
+| `allow` | Execute without prompting. |
+| `require_approval` | Create an approval prompt and wait. |
+| `deny` | Block the invocation. |
+
+## Specificity
+
+When multiple rules match, the most specific rule wins:
+
+1. Exact tool, such as `gmail` plus `draft.create`.
+2. Service, such as all Gmail tools.
+3. Risk level, such as all medium-risk tools.
+
+For ties at the same specificity, persistent overrides outrank session overrides, then most-recently-updated wins.
+
+## Override lifetimes
+
+| Lifetime | Source | Expiry |
+| --- | --- | --- |
+| `persistent` | Settings UI or "Always Allow" | Manual deletion only. |
+| `session` | "Allow for Session" | Sandbox hibernation, refresh, or termination. |
+| `timed` | Reserved for future use | Explicit `expiresAt`. |
+
+Session overrides are tied to the live sandbox lifecycle, not just the logical session row.
+
+## Approval choices
+
+Approval prompts can offer:
+
+- Allow this call.
+- Allow identical calls for the session.
+- Always allow this exact action.
+- Cancel this call.
+
+Only the session owner should resolve owner-scoped tool approvals. Broad service or risk-level overrides belong in settings, not prompt shortcuts.
+
+## Audit trail
+
+Valet records the policy resolution chain:
+
+- Service and action ID.
+- Risk level.
+- Matching org rule.
+- Base mode before user overrides.
+- Matching user override.
+- Final outcome.
+
+This supports later review of why a tool ran, prompted, or was denied.
+
+## Failure behavior
+
+Approval resolution is stateful. If an override write fails after a user selected "Allow for Session" or "Always Allow", the invocation should fail instead of running without the requested override.
+
+Stale approvals should be marked terminal and removed from active UI surfaces.

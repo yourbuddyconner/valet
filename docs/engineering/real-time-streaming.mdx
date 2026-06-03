@@ -1,0 +1,65 @@
+---
+title: Real-time Streaming
+description: Technical reference for Valet session WebSockets, client and runner roles, streamed events, reconnect behavior, and channel routing.
+---
+
+# Real-time Streaming
+
+Valet streams session state through the live session coordinator. Browser clients and sandbox runners connect to the same session endpoint with different roles.
+
+## Connection roles
+
+| Role | Purpose |
+| --- | --- |
+| `client` | Web app session UI, including messages, approvals, presence, and status. |
+| `runner` | Sandbox Runner connection that sends agent events and receives prompts. |
+
+Channels such as Slack and Telegram usually enter through Worker routes, then route prompts into the session rather than opening the same browser WebSocket.
+
+## Client init
+
+On reconnect, the coordinator sends an `init` payload with complete current state. The client should replace stale local state rather than merge blindly.
+
+The init payload includes current messages, pending approvals, session status, runner status, presence, git state, and any queued work needed by the UI.
+
+## Streamed events
+
+The coordinator broadcasts:
+
+- Message creation and updates.
+- Streaming text chunks.
+- Tool-call lifecycle updates.
+- Agent status.
+- Session status.
+- Questions and approval prompts.
+- Presence changes.
+- Git state and file-change summaries.
+- Abort and completion events.
+
+## Prompt routing
+
+Inbound prompts can come from:
+
+- Web chat.
+- Channel bindings.
+- Orchestrator delegation.
+- Workflow steps.
+- API routes.
+
+Prompt routing chooses a queue mode: follow-up, steer, or collect.
+
+## Channel binding behavior
+
+A channel binding maps an external conversation to a Valet session. It stores channel type, channel ID, scope key, owner, queue behavior, and provider-specific context such as Slack thread IDs or GitHub PR metadata.
+
+Inbound channel prompts generally follow this order:
+
+1. Normalize the external channel into a scope key.
+2. Look for an existing binding by scope key.
+3. Route to the bound session when found.
+4. Fall back to an orchestrator when allowed.
+5. Acknowledge without dispatch when the surface is not allowed.
+
+## Reliability notes
+
+Streaming code should tolerate reconnects, duplicate events, and stale clients. Terminal persisted states should override live state when a session has already been ended.

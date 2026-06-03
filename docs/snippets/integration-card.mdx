@@ -1,0 +1,11 @@
+export const IntegrationCard = ({ title, description, href }) => {
+  const body = (
+    <>
+      <span className="valet-card-eyebrow">Integration</span>
+      <span className="valet-integration-card-title">{title}</span>
+      <span className="valet-integration-card-description">{description}</span>
+    </>
+  );
+
+  return href ? <a className="valet-integration-card" href={href}>{body}</a> : <div className="valet-integration-card">{body}</div>;
+};

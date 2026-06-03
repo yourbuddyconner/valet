@@ -1,0 +1,55 @@
+---
+title: How Valet Works
+description: A plain-language view of how a request becomes useful work in Valet.
+---
+
+# How Valet Works
+
+Valet turns a request into useful work through a simple product flow: receive the request, understand the context, choose the right workspace and tools, do the work, ask for approval when needed, and report back.
+
+## The flow
+
+<Steps>
+  <Step title="A request arrives">
+    A user starts a task from the web app, a channel message, a schedule, a webhook, or a workflow.
+  </Step>
+  <Step title="Valet gathers context">
+    Valet uses the conversation, connected account context, memory, persona, and any workflow inputs to understand what should happen.
+  </Step>
+  <Step title="A workspace is prepared">
+    Valet gets a dedicated place to work for that task. The workspace may be used for engineering work, tool-assisted operations, workflow execution, or research.
+  </Step>
+  <Step title="Valet uses tools">
+    If integrations are connected, Valet can read from or write to those systems according to the policies configured by the organization and user.
+  </Step>
+  <Step title="Approvals protect sensitive actions">
+    When an action needs review, Valet pauses and asks an authorized user to approve, approve for the session, always allow, or cancel.
+  </Step>
+  <Step title="The result returns to the right place">
+    Valet reports progress and results in the web app or the channel where the work started.
+  </Step>
+</Steps>
+
+## What stays visible
+
+Users should be able to see:
+
+- What Valet is working on.
+- Which tools it used.
+- What decisions or approvals are waiting.
+- What changed in connected systems.
+- Where to continue or stop the work.
+
+## What admins control
+
+Admins can decide:
+
+- Which users can access Valet.
+- Which integrations are available.
+- Which actions require approval or are denied.
+- Which channels route messages to Valet.
+- Which workflows are enabled for the organization.
+
+## For technical readers
+
+The engineering implementation covers session lifecycle, sandbox startup, runner behavior, workflow execution, streaming, and policy resolution. Start with [Architecture](/architecture) or [Session lifecycle](/engineering/session-lifecycle).

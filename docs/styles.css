@@ -11,6 +11,14 @@
   --valet-white: #ffffff;
 }
 
+body {
+  background-color: var(--valet-cream);
+}
+
+.dark body {
+  background-color: var(--valet-navy);
+}
+
 #content-container:has(.valet-page) > .flex.flex-row-reverse {
   display: block;
   width: 100%;
@@ -42,7 +50,7 @@
   background:
     linear-gradient(rgba(23, 71, 230, 0.05) 1px, transparent 1px),
     linear-gradient(90deg, rgba(23, 71, 230, 0.05) 1px, transparent 1px),
-    var(--valet-paper);
+    var(--valet-cream);
   background-size: 36px 36px;
   border: 1px solid var(--valet-line);
   border-radius: 8px;
@@ -64,10 +72,15 @@
 }
 
 .valet-hero-grid {
-  background: linear-gradient(135deg, rgba(242, 200, 74, 0.14), transparent 42%);
+  background: var(--valet-paper);
+  border-left: 1px solid var(--valet-line);
+  height: 100%;
   inset: 0;
+  left: auto;
+  opacity: 0.66;
   pointer-events: none;
   position: absolute;
+  width: 34%;
 }
 
 .valet-hero-copy,
@@ -99,6 +112,13 @@
   line-height: 1;
   margin: 0;
   max-width: 48rem;
+}
+
+.valet-serif {
+  color: var(--valet-blue);
+  font-family: Georgia, "Times New Roman", serif;
+  font-style: italic;
+  font-weight: 400;
 }
 
 .dark .valet-hero-title {
@@ -152,7 +172,7 @@
 }
 
 .valet-button-secondary {
-  background: rgba(255, 255, 255, 0.68);
+  background: var(--valet-paper);
   border: 1px solid var(--valet-line);
   color: var(--valet-ink);
 }
@@ -164,7 +184,7 @@
 
 .valet-search {
   align-items: center;
-  background: rgba(255, 255, 255, 0.78);
+  background: var(--valet-paper);
   border: 1px solid var(--valet-line);
   border-radius: 8px;
   color: var(--valet-muted);
@@ -199,7 +219,11 @@
 
 .valet-hero-disc {
   align-items: end;
-  background: linear-gradient(180deg, var(--valet-blue), var(--valet-blue-deep));
+  background:
+    linear-gradient(rgba(255, 255, 255, 0.12) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.12) 1px, transparent 1px),
+    var(--valet-blue);
+  background-size: 28px 28px;
   border: 1px solid rgba(255, 255, 255, 0.24);
   border-radius: 8px;
   display: flex;
@@ -215,33 +239,6 @@
   max-height: 26rem;
   max-width: 100%;
   object-fit: contain;
-}
-
-.valet-status-card {
-  background: rgba(250, 247, 236, 0.94);
-  border: 1px solid var(--valet-line);
-  border-radius: 8px;
-  box-shadow: 0 18px 48px rgba(10, 19, 64, 0.12);
-  margin-top: -2.2rem;
-  max-width: 22rem;
-  padding: 1rem;
-}
-
-.dark .valet-status-card {
-  background: rgba(10, 19, 64, 0.94);
-  border-color: rgba(255, 255, 255, 0.18);
-}
-
-.valet-status-title {
-  color: var(--valet-ink);
-  font-size: 0.98rem;
-  font-weight: 700;
-  line-height: 1.45;
-  margin: 0;
-}
-
-.dark .valet-status-title {
-  color: var(--valet-white);
 }
 
 .valet-divider {
@@ -297,7 +294,7 @@
 
 .valet-feature-card,
 .valet-use-case-card {
-  background: rgba(255, 255, 255, 0.74);
+  background: var(--valet-paper);
   border: 1px solid var(--valet-line);
   border-radius: 8px;
   color: var(--valet-ink);
@@ -375,6 +372,76 @@
   font-size: 0.9rem;
   font-weight: 700;
   margin-top: auto;
+}
+
+.valet-logo-strip {
+  background: var(--valet-paper);
+  border: 1px solid var(--valet-line);
+  border-radius: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  padding: 1rem;
+}
+
+.valet-logo-strip span {
+  border: 1px solid var(--valet-line);
+  border-radius: 999px;
+  color: var(--valet-muted);
+  display: inline-flex;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.8rem;
+  font-weight: 700;
+  min-height: 2.25rem;
+  padding: 0.45rem 0.8rem;
+}
+
+.valet-persona-card,
+.valet-integration-card,
+.valet-reference-card,
+.valet-spotlight-card {
+  background: var(--valet-paper);
+  border: 1px solid var(--valet-line);
+  border-radius: 8px;
+  color: var(--valet-ink);
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  min-height: 10rem;
+  padding: 1rem;
+  text-decoration: none;
+}
+
+.valet-spotlight-card {
+  background:
+    linear-gradient(rgba(255, 255, 255, 0.12) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.12) 1px, transparent 1px),
+    var(--valet-blue);
+  background-size: 28px 28px;
+  border-color: var(--valet-blue);
+  color: var(--valet-white);
+}
+
+.valet-persona-card-title,
+.valet-integration-card-title,
+.valet-reference-card-title,
+.valet-spotlight-card-title {
+  color: inherit;
+  font-size: 1rem;
+  font-weight: 750;
+}
+
+.valet-persona-card-description,
+.valet-integration-card-description,
+.valet-reference-card-description,
+.valet-spotlight-card-description {
+  color: var(--valet-muted);
+  font-size: 0.92rem;
+  line-height: 1.5;
+}
+
+.valet-spotlight-card-description {
+  color: rgba(255, 255, 255, 0.78);
 }
 
 .valet-blueprint {

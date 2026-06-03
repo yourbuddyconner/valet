@@ -1,0 +1,11 @@
+export const ReferenceCard = ({ label, title, description, href }) => {
+  const body = (
+    <>
+      {label && <span className="valet-card-eyebrow">{label}</span>}
+      <span className="valet-reference-card-title">{title}</span>
+      <span className="valet-reference-card-description">{description}</span>
+    </>
+  );
+
+  return href ? <a className="valet-reference-card" href={href}>{body}</a> : <div className="valet-reference-card">{body}</div>;
+};

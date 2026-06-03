@@ -1,7 +1,7 @@
-export const FeatureCard = ({ eyebrow, title, description, href }) => {
+export const FeatureCard = ({ eyebrow, title, description, href, mark = false }) => {
   return (
     <a className="valet-feature-card" href={href}>
-      <span className="valet-card-mark" aria-hidden="true" />
+      {mark && <span className="valet-card-mark" aria-hidden="true" />}
       <span className="valet-card-copy">
         {eyebrow && <span className="valet-card-eyebrow">{eyebrow}</span>}
         <span className="valet-card-title">{title}</span>
