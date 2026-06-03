@@ -1,0 +1,65 @@
+---
+title: Sandbox Lifecycle
+description: Technical reference for Valet sandbox topology, boot sequence, auth gateway, persistence, hibernation, restore, and image composition.
+---
+
+# Sandbox Lifecycle
+
+Engineering workspaces run in isolated Modal sandboxes. Each sandbox contains a durable workspace volume, Valet Runner, OpenCode, browser-accessible tools, and an auth gateway.
+
+## Runtime topology
+
+The sandbox exposes two encrypted tunnels:
+
+- `4096`: OpenCode server.
+- `9000`: Valet auth gateway.
+
+User-facing tools are bound internally and proxied through the gateway.
+
+| Service | Port | Access path | Notes |
+| --- | --- | --- | --- |
+| VS Code | `8765` | `/vscode/*` | Bound to localhost, proxied by gateway. |
+| noVNC | `6080` | `/vnc/*` | Browser view of the virtual display. |
+| TTYD | `7681` | `/ttyd/*` | Web terminal rooted in the workspace. |
+| Raw VNC | `5900` | Internal only | Used by websockify/noVNC. |
+| Custom tunnels | Dynamic | `/t/:name/*` | Registered by sandbox tunnel tooling. |
+
+## Boot sequence
+
+When a sandbox starts, `docker/start.sh`:
+
+1. Sets display and runtime environment variables.
+2. Starts Xvfb, fluxbox, x11vnc, and noVNC.
+3. Configures git identity and GitHub credentials when available.
+4. Clones the requested repository into `/workspace/<repo-name>` when `REPO_URL` is set.
+5. Writes repo context and persona files under `.valet/persona/`.
+6. Starts code-server and TTYD.
+7. Replaces PID 1 with the Bun Runner.
+
+The startup path is idempotent enough for snapshot restore: existing repos and workspace files are reused.
+
+## Persistence
+
+Workspaces combine three storage layers:
+
+- The running sandbox filesystem.
+- A durable workspace volume mounted at `/workspace`.
+- Snapshot images created during hibernation.
+
+Orchestrator workspaces use stable volume names derived from user ID so they survive orchestrator session ID rotation.
+
+## Hibernation and restore
+
+On hibernation, Valet snapshots the sandbox filesystem and terminates compute. On restore, the backend creates a new sandbox from the snapshot. Runner reconnects to the live session coordinator, and queued prompts continue.
+
+Session-scoped trust should expire when the sandbox hibernates, refreshes, or terminates.
+
+## Image composition
+
+Production sandboxes are built with Modal's Python image API from `backend/images/base.py`. The image includes Debian, Python, Node.js, Bun, OpenCode, agent-browser, Playwright Chromium, code-server, noVNC, TTYD, whisper.cpp, Runner source, workflow CLI wrappers, start script, and OpenCode config/tools.
+
+The Dockerfile under `docker/` is a reference/local artifact. Production uses the Modal image definition.
+
+## Cache busting
+
+Image cache busting is manual. Changes to Runner, `docker/start.sh`, or `docker/opencode/` require bumping the image build version before deployment.

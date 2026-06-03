@@ -1,129 +1,48 @@
 ---
 title: Orchestrators and Memory
-description: A Valet orchestrator is a persistent coordinator agent with identity, memory, channel routing, mailbox messages, task board state, and child session spawning.
+description: Valet orchestrators are persistent coordinators that remember preferences, route work, and delegate tasks over time.
 ---
 
 # Orchestrators and Memory
 
-An orchestrator is a persistent AI coordinator for a user. It is implemented as a real Valet session with an orchestrator persona, its own sandbox volume, tools, channel bindings, memory access, and the ability to spawn child sessions.
+An orchestrator is Valet's persistent coordinator. It remembers useful context, routes incoming work, and decides when a task should become its own session.
 
-The product idea is simple: the user has one persistent coworker that understands their preferences, keeps a working notebook, and can delegate execution to isolated task sessions.
+Think of it as the coworker you come back to between tasks.
 
 ## What an orchestrator does
 
 An orchestrator can:
 
-- Answer product or project questions directly.
-- Decide when to spawn a child session.
-- Route inbound messages from channels.
-- Keep a task board for delegated work.
-- Receive mailbox messages from child sessions.
-- Use stored memories to apply user preferences and prior context.
+- Answer questions using remembered context.
+- Receive work from channels or schedules.
+- Decide whether to respond directly or start a focused session.
+- Keep track of delegated work.
+- Receive updates from child sessions.
+- Apply your preferences to future tasks.
 
-The canonical web route for the current user's orchestrator is `/sessions/orchestrator`. Internally, concrete orchestrator session IDs rotate across restarts.
+## What memory is for
 
-## Session and volume model
+Memory should store durable information that helps Valet work better over time:
 
-Concrete orchestrator session IDs include a rotation suffix:
+- Communication preferences.
+- Recurring procedures.
+- Project or account context.
+- Tool choices and operating norms.
+- Decisions that should be remembered.
+- Notes about workflows or repeated tasks.
 
-```text
-orchestrator:{userId}:{uuid}
-```
+Memory is not for every transient status update. Routine progress belongs in the session conversation.
 
-Each restart creates a fresh Durable Object, which avoids stale live state. The workspace volume uses a stable name derived from the user ID, so the orchestrator keeps its filesystem across restarts.
+## User and organization context
 
-The authenticated user's canonical UI route stays stable:
+Valet can have personal context and organization context. Personal context helps with your preferences and work. Organization context helps teams share procedures, tools, and workflows.
 
-```text
-/sessions/orchestrator
-```
+Admins should decide what can be shared, what stays personal, and which channel surfaces can route into personal or organizational orchestrators.
 
-Worker routes resolve that alias to the newest non-terminal orchestrator session before access checks and Durable Object routing.
+## Delegating work
 
-## Identity
+When a larger request needs focused execution, the orchestrator can delegate part of the work into a child session. This keeps the main conversation clear while the focused task has its own workspace, status, and result.
 
-Each orchestrator has an identity with:
+## For engineers
 
-- Name.
-- Handle.
-- Avatar URL.
-- Custom instructions.
-- User and org scope.
-
-The identity is stable even when the backing session restarts.
-
-## Memory
-
-Orchestrator memory is stored as user-scoped files, not as one giant prompt blob. The active file store is `orchestrator_memory_files`, with an FTS5 companion table for search.
-
-Common paths are:
-
-| Path | Use |
-| --- | --- |
-| `preferences/` | User style, tool choices, communication preferences. Auto-pinned and auto-loaded. |
-| `projects/<name>/` | Project-specific facts, repos, architecture, conventions, and decisions. |
-| `workflows/` | Reusable automation notes and workflow behavior. |
-| `journal/YYYY-MM-DD.md` | Daily working notes and recent events. |
-| `notes/` | General scratch notes that do not fit elsewhere. |
-
-Files under `preferences/` are pinned and never pruned. Non-pinned files count toward a 200-file cap and low-relevance files are pruned automatically when the cap is exceeded.
-
-## Auto-loaded context
-
-At orchestrator startup, Valet builds a memory snapshot:
-
-- Pinned preference files are loaded first.
-- Today's journal is included when present.
-- Yesterday's journal is included if it fits.
-- Journals are truncated or omitted before pinned preferences when the token budget is tight.
-
-Valet also ensures today's journal file exists. Empty old journal stubs can be pruned by scheduled maintenance.
-
-## Memory tools
-
-Orchestrators and agents use `mem_*` tools to manage memory files:
-
-- `mem_read(path)`: read a file or list a directory.
-- `mem_write(path, content)`: create or replace a full file.
-- `mem_patch(path, operations)`: append, replace, or edit part of a file.
-- `mem_rm(path)`: delete a file or folder subtree.
-- `mem_search(query, pathPrefix?)`: full-text search memory files, optionally scoped to a path prefix.
-
-Agents should use memory for durable facts, preferences, project context, workflow notes, and notable outcomes. Routine status checks should not become memory.
-
-## Mailbox and tasks
-
-The mailbox lets sessions and users send messages, notifications, questions, escalations, and approval requests across session boundaries. The task board gives the orchestrator a hierarchical view of work, task status, dependencies, and assigned child sessions.
-
-Task records can be nested and can depend on other tasks. A task can also point to the child session assigned to do the work.
-
-## Channel routing
-
-Inbound channel messages follow the binding system first. If a channel conversation is bound to a session, Valet routes the prompt to that session. If no binding exists and the surface is allowed for personal orchestrators, Valet routes the message to the user's orchestrator.
-
-For scheduled orchestrator prompts, Valet adds a reminder that the scheduled task starts in a fresh thread and should use memory search/read tools to recover needed context.
-
-## Restart behavior
-
-Valet keeps orchestrators alive through three restart paths:
-
-- Worker cron restarts dead orchestrators.
-- The web client restarts when the current orchestrator needs recovery.
-- Users can manually refresh the orchestrator.
-
-Each restart gets a fresh Durable Object ID, while the orchestrator workspace volume persists across restarts.
-
-## Orchestrator tools
-
-The sandbox tool catalog includes orchestrator-oriented tools for:
-
-- Spawning and terminating sessions.
-- Sending and reading session messages.
-- Managing tasks.
-- Checking mailbox messages and sending mailbox notifications.
-- Reading, writing, patching, deleting, and searching memory.
-- Listing channels and replying through channels.
-- Managing workflows, triggers, executions, and proposals.
-- Managing personas, skills, and attached skills.
-- Registering sandbox tunnels.
-- Calling integration tools through `list_tools` and `call_tool`.
+Implementation details live in [Orchestrator runtime](/engineering/orchestrator-runtime), [Session lifecycle](/engineering/session-lifecycle), and [Plugin system](/engineering/plugin-system).

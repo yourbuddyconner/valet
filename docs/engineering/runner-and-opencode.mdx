@@ -1,0 +1,66 @@
+---
+title: Runner and OpenCode
+description: Technical reference for the sandbox Runner, OpenCode supervision, runtime config, gateway, and event bridge.
+---
+
+# Runner and OpenCode
+
+The Runner is the process inside each sandbox that connects Valet's live session coordinator to OpenCode and the local workspace.
+
+## Runner responsibilities
+
+Runner:
+
+- Connects to the session WebSocket with a runner token.
+- Starts and supervises OpenCode.
+- Writes runtime OpenCode config.
+- Injects provider keys, personas, tools, custom providers, and content plugin artifacts.
+- Sends user prompts into OpenCode.
+- Consumes OpenCode's event stream.
+- Converts OpenCode events into Valet's message protocol.
+- Hosts the auth gateway and local internal API.
+- Runs workflow steps in workflow sessions.
+
+## OpenCode bridge
+
+OpenCode handles the agent runtime. Runner translates between OpenCode's event stream and Valet's session model so the web app and channels can receive structured message parts, tool-call updates, status, and errors.
+
+## Auth gateway
+
+The gateway validates a short-lived workspace JWT on first browser access, then sets a short-lived gateway session cookie.
+
+Gateway routes include:
+
+- Authenticated proxy routes for VS Code, VNC, TTYD, and custom tunnels.
+- Local routes for health checks.
+- Internal API routes used by sandbox tools and OpenCode.
+
+## Internal API
+
+Sandbox tools call the internal API to ask the live session coordinator to:
+
+- Spawn and terminate child sessions.
+- Send inter-session messages.
+- Update git state.
+- Create pull requests.
+- Read and write orchestrator memory.
+- Manage mailbox messages and tasks.
+- Manage workflow definitions, triggers, executions, and proposals.
+- Register sandbox tunnels.
+- Call integration tools through the controlled action path.
+
+## Runtime config
+
+Runner assembles runtime config from:
+
+- Session metadata.
+- Persona and skill attachments.
+- Content plugin artifacts.
+- Provider keys and custom providers.
+- Tool manifests.
+- Repository context.
+- Workflow context when the session is running workflow steps.
+
+## Failure handling
+
+Runner should report connection, startup, OpenCode, gateway, and workflow errors back to the session so the UI and channels can show the failure instead of silently dropping work.

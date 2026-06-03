@@ -1,106 +1,63 @@
 ---
 title: Integrations
-description: Valet integrations expose external systems as agent-callable actions through first-party plugin packages and MCP-backed action sources.
+description: Integrations let Valet read from and act in the systems your team already uses.
 ---
 
 # Integrations
 
-Integrations let agents work with external systems. The agent discovers actions with `list_tools` and invokes them with `call_tool`. Each call still passes through Valet's policy and approval system.
+Integrations are the tools Valet can use. They let Valet gather context, create drafts, update records, send messages, and complete work across systems.
 
-## Integration model
+Valet should only use an integration when a user or admin has connected it and policy allows the action.
 
-Valet has two integration paths:
+## What integrations are for
 
-- **First-party action plugins** compile into the Worker and implement actions directly.
-- **MCP-backed plugins** proxy remote MCP services and expose their tools through Valet.
+Use integrations when Valet needs to:
 
-Credentials are stored encrypted and resolved at request time. OAuth-backed integrations can refresh tokens when supported by the provider path.
+- Read context from another system.
+- Create or update work items.
+- Draft or send messages.
+- Inspect repository or issue state.
+- Coordinate with calendars, documents, sheets, or notes.
+- Run customer, operations, or engineering workflows.
 
-## Agent invocation flow
+## Current integration areas
 
-Agents should use the integration model like this:
+Valet can be connected to systems such as:
 
-1. Call `list_tools` to discover available services and actions.
-2. Choose the action by service and action ID.
-3. Call `call_tool` with the action input.
-4. Let Valet resolve action policy before execution.
-5. Handle approval, denial, or execution result.
-
-Useful tools discovered with `list_tools` should be written to memory so future sessions do not need to rediscover the same catalog from scratch.
-
-## Credential model
-
-Credential storage depends on the provider path:
-
-- Login OAuth tokens for providers such as GitHub and Google live in encrypted D1 rows.
-- Integration credentials are encrypted and resolved by service at request time.
-- Custom MCP connectors can use no auth, OAuth, API key, or bearer token configuration.
-- 1Password credentials can be injected into sandbox sessions through the configured user credential path.
-
-Agents do not receive raw credentials directly. They call actions, and Valet resolves credentials server-side or through sandbox environment assembly where appropriate.
-
-## Current catalog
-
-The repository currently includes plugin packages for:
-
-- 1Password secret management.
-- Browser control.
-- Cloudflare.
-- DeepWiki.
-- Email authentication.
-- Figma.
 - GitHub.
-- Gmail.
-- Google authentication.
-- Google Calendar.
-- Google Workspace: Drive, Docs, and Sheets.
-- Grafana Cloud.
-- Granola.
-- Linear.
-- Memory compaction.
-- Notion.
-- Personas.
-- Pylon.
-- Sandbox tunnels.
-- Sentry.
 - Slack.
-- Socket.dev.
-- Stripe.
 - Telegram.
-- Turnkey documentation.
+- Gmail.
+- Google Calendar.
+- Google Drive, Docs, and Sheets.
+- Linear.
+- Notion.
+- Stripe.
+- Sentry.
+- Cloudflare.
+- Figma.
+- Grafana Cloud.
+- Pylon.
 - Typefully.
-- Workflows.
+- Custom MCP services.
 
-MCP-backed packages include Cloudflare, Figma, Grafana Cloud, Granola, Linear, Notion, Pylon, Sentry, Stripe, and Typefully.
+The exact catalog depends on what is enabled in the deployment.
 
-## GitHub
+## Credentials and safety
 
-GitHub has a dedicated production path in addition to the generic integration framework. It supports OAuth login, repository listing and validation, issue and PR lookup, PR creation, org repository management, and webhook handling for pull request and push events.
+Users and admins connect accounts so Valet can act through approved paths. Valet should not expose raw credentials to the agent. It should perform actions through controlled integration calls, policy checks, and audit records.
 
-GitHub session state tracks source repository, source branch, working branch, PR number, PR state, PR URL, and commit count. The sandbox can also receive `GITHUB_TOKEN`, git identity, repo URL, branch, and ref through environment assembly.
+## How to think about access
 
-## Google Workspace
+For each integration, decide:
 
-Google Workspace actions cover Gmail, Calendar, Drive, Docs, and Sheets. Gmail and Calendar include token refresh behavior and full read/write action sets. Workspace document and spreadsheet tools are packaged under the Google Workspace plugin.
+- Who can connect it?
+- Is it personal, team-wide, or organization-wide?
+- Which actions are read-only?
+- Which actions require approval?
+- Which actions should be denied?
+- Where should results be reported?
 
-Gmail write actions accept Markdown bodies, render semantic HTML, and send multipart email with the original Markdown as the plain-text fallback.
+## For engineers
 
-## Custom MCP connectors
-
-Admins can configure custom remote MCP connectors. These can use no auth, OAuth with admin-provided client credentials, API keys, or bearer tokens depending on connector configuration.
-
-The Worker validates outbound connector URLs, builds request-scoped connector context, and clears cached tool entries when connector URL, auth, status, or header configuration changes.
-
-## MCP-backed plugins
-
-MCP-backed plugins use Valet's MCP client to initialize a remote MCP session, list tools, and call tools. OAuth-backed MCP services use MCP-scoped tokens, so token validation and refresh are handled differently from traditional provider APIs.
-
-## Sync framework
-
-Some first-party integrations also have a generic sync framework:
-
-- A D1 `integrations` row records user, service, status, config, and sync metadata.
-- A sync log records each sync attempt.
-- Concrete integration classes implement credential validation, connection test, sync, fetch, push, and webhook methods.
-
-The production GitHub path uses dedicated routes and services for repository and PR behavior even though a generic GitHub integration class also exists.
+Implementation details live in [Plugin system](/engineering/plugin-system), [Policy engine](/engineering/policy-engine), and [API & MCP](/api-reference).

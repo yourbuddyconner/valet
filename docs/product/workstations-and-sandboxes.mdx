@@ -1,84 +1,56 @@
 ---
-title: Workstations and Sandboxes
-description: Valet workstations run as isolated Modal sandboxes with VS Code, browser/VNC, terminal, OpenCode, Runner, auth gateway, durable workspace volumes, and hibernate/restore support.
+title: Workspaces
+description: Valet gets a hosted workspace for the task so work can happen with context, tools, files, and reviewable progress.
 ---
 
-# Workstations and Sandboxes
+# Workspaces
 
-A Valet workstation is the hosted environment where an agent does work. Technically, each workstation is a Modal sandbox with a durable `/workspace` volume, a Runner process, OpenCode, and browser-accessible tools behind an auth gateway.
+Valet has a workspace for the work it does. That workspace gives the agent a durable place to gather context, use tools, keep files, run workflow steps, and show progress.
 
-<Frame caption="Use the sandbox pose for pages about hosted workstations and technical runtime.">
-  <img src="/images/characters/sandboxes.png" alt="Valet mascot with sandboxed workstation elements" />
+For engineering tasks, the workspace can include development tools. For operations and customer workflows, it is still useful as a focused place where Valet can keep task context and interact with connected systems.
+
+<Frame caption="Use the workspace pose for pages about Valet's hosted place to work.">
+  <img src="/images/characters/sandboxes.png" alt="Valet mascot with workspace elements" />
 </Frame>
 
-## Runtime topology
+## Why workspaces matter
 
-The sandbox exposes two Modal encrypted tunnels:
+Workspaces make Valet more useful than a stateless assistant:
 
-- `4096`: OpenCode server.
-- `9000`: Valet auth gateway.
+- The work has a place to continue from.
+- Context can survive between messages.
+- Actions can be reviewed in one session.
+- Files, drafts, logs, and tool output can stay attached to the task.
+- Long-running work can pause and resume.
 
-Everything users open in the web UI goes through the gateway:
+## What users see
 
-| Service | Port | Access path | Notes |
-| --- | --- | --- | --- |
-| VS Code | `8765` | `/vscode/*` | Bound to localhost; proxied by gateway. |
-| noVNC | `6080` | `/vnc/*` | Browser view of the virtual display. |
-| TTYD | `7681` | `/ttyd/*` | Web terminal rooted in the workspace. |
-| Raw VNC | `5900` | Internal only | Used by websockify/noVNC. |
-| Custom tunnels | dynamic | `/t/:name/*` | Registered by sandbox tunnel tooling. |
+Depending on the task and permissions, users may see:
 
-## Boot sequence
+- The session conversation.
+- Status and progress updates.
+- Approval prompts.
+- Files or drafts produced by the task.
+- Development surfaces for engineering work.
+- Tool output and summaries.
 
-When a sandbox starts, `docker/start.sh`:
+## What admins decide
 
-1. Sets display and runtime environment variables.
-2. Starts Xvfb, fluxbox, x11vnc, and noVNC.
-3. Configures git identity and GitHub HTTPS credentials when available.
-4. Clones the requested repository into `/workspace/<repo-name>` when `REPO_URL` is set.
-5. Writes repo context and persona files under `.valet/persona/`.
-6. Starts code-server and TTYD.
-7. Replaces PID 1 with the Bun Runner.
+Admins and team owners decide what workspaces can access:
 
-The startup path is idempotent enough for snapshot restore: existing cloned repositories and workspace files are reused.
+- Which integrations are available.
+- Which repositories or external systems are in scope.
+- Which actions require approval.
+- Which users can view or collaborate on sessions.
+- Whether a workflow can run automatically or must wait for review.
 
-## Runner responsibilities
+## Good workspace habits
 
-The Runner is the sandbox bridge. It:
+- Give Valet enough context to know what success looks like.
+- Connect the tools it needs before asking for a multi-system task.
+- Keep sensitive work in private sessions unless collaboration is required.
+- Use approvals for actions that write to external systems.
 
-- Connects to the SessionAgent Durable Object over WebSocket with a runner token.
-- Starts and supervises OpenCode.
-- Writes runtime OpenCode config, including provider keys, personas, tools, custom providers, and content plugin artifacts.
-- Sends user prompts into OpenCode and consumes OpenCode's event stream.
-- Converts OpenCode events into Valet's parts-based message protocol.
-- Hosts the auth gateway and its internal API.
-- Runs workflow steps in workflow sessions.
+## For engineers
 
-## Auth gateway
-
-The gateway validates a short-lived sandbox JWT on first browser access, then sets a 15-minute `gateway_session` cookie. The JWT is signed with a per-session secret derived from the worker encryption key and session ID; the raw encryption key is not sent to the sandbox.
-
-Gateway routes are split into:
-
-- **Authenticated proxy routes** for VS Code, VNC, TTYD, and custom tunnels.
-- **Unauthenticated local routes** for health checks, OpenCode proxying, and the internal API used by OpenCode tools.
-
-The internal API lets tools ask the Durable Object to spawn child sessions, send inter-session messages, update git state, create pull requests, read/write orchestrator memory, and manage workflow resources.
-
-## Persistence and hibernation
-
-Workstations combine three storage layers:
-
-- The running Modal sandbox filesystem.
-- A durable Modal workspace volume mounted at `/workspace`.
-- Snapshot images created during hibernation.
-
-On hibernation, Valet snapshots the sandbox filesystem and terminates compute. On restore, Modal creates a new sandbox from the snapshot, Runner reconnects to the Durable Object, and queued prompts continue.
-
-Orchestrator workstations use stable volume names derived from user ID so they survive orchestrator session ID rotation.
-
-## Image composition
-
-Production sandboxes are built with Modal's Python image API from `backend/images/base.py`. The image includes Debian, Python, Node.js, Bun, OpenCode, agent-browser, Playwright Chromium, code-server, noVNC, TTYD, whisper.cpp, Runner source, workflow CLI wrappers, start script, and OpenCode config/tools.
-
-The Dockerfile under `docker/` is a reference/local artifact; production uses the Modal image definition. Image cache busting is manual, so changes to Runner, `docker/start.sh`, or `docker/opencode/` require bumping the image version before deployment.
+Implementation details live in [Sandbox lifecycle](/engineering/sandbox-lifecycle) and [Runner and OpenCode](/engineering/runner-and-opencode).

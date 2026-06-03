@@ -1,0 +1,87 @@
+---
+title: Orchestrator Runtime
+description: Technical reference for Valet orchestrator sessions, identity, memory files, mailbox, task board, channel routing, restart behavior, and tools.
+---
+
+# Orchestrator Runtime
+
+An orchestrator is implemented as a real Valet session with an orchestrator persona, workspace volume, tools, channel bindings, memory access, and child-session spawning.
+
+## Session identity
+
+Concrete orchestrator session IDs include a rotation suffix:
+
+```text
+orchestrator:{userId}:{uuid}
+```
+
+Each restart creates a fresh live coordinator, avoiding stale live state. The workspace volume uses a stable name derived from user ID so filesystem state survives session ID rotation.
+
+The canonical UI route stays stable:
+
+```text
+/sessions/orchestrator
+```
+
+Worker routes resolve that alias to the newest non-terminal orchestrator session.
+
+## Identity fields
+
+An orchestrator identity includes:
+
+- Name.
+- Handle.
+- Avatar URL.
+- Custom instructions.
+- User and org scope.
+
+The identity remains stable even when the backing session restarts.
+
+## Memory files
+
+Orchestrator memory is stored as user-scoped files with full-text search. Common paths include:
+
+| Path | Use |
+| --- | --- |
+| `preferences/` | User style, tool choices, and communication preferences. |
+| `projects/<name>/` | Project-specific facts, repos, architecture, and decisions. |
+| `workflows/` | Reusable automation notes. |
+| `journal/YYYY-MM-DD.md` | Daily notes and recent events. |
+| `notes/` | General scratch notes. |
+
+Preference files are pinned. Non-pinned files count toward memory caps and may be pruned when low relevance.
+
+## Startup context
+
+At startup, Valet builds a memory snapshot:
+
+- Pinned preferences first.
+- Today's journal when present.
+- Yesterday's journal when it fits.
+- Journals are truncated or omitted before pinned preferences.
+
+Valet also ensures today's journal exists.
+
+## Memory tools
+
+Agents use memory tools such as:
+
+- `mem_read(path)`
+- `mem_write(path, content)`
+- `mem_patch(path, operations)`
+- `mem_rm(path)`
+- `mem_search(query, pathPrefix?)`
+
+Memory is for durable facts, preferences, project context, workflow notes, and notable outcomes. Routine status should stay in session messages.
+
+## Mailbox and task board
+
+The mailbox carries messages, notifications, questions, escalations, and approval requests across session boundaries. The task board tracks hierarchical work, status, dependencies, and assigned child sessions.
+
+## Restart behavior
+
+Orchestrators can restart through cron recovery, web-client recovery, or manual refresh. Each restart gets fresh live state while preserving identity and workspace volume.
+
+## Tool catalog
+
+Orchestrator-oriented tools include session spawning, mailbox, tasks, memory, channel replies, workflow management, personas, skills, tunnels, and controlled integration calls.

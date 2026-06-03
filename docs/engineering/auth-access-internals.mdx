@@ -1,0 +1,77 @@
+---
+title: Auth and Access Internals
+description: Technical reference for OAuth login, auth sessions, API tokens, organization gates, roles, session access, share links, and workspace JWTs.
+---
+
+# Auth and Access Internals
+
+Valet separates account authentication, organization gates, session access, and workspace iframe access.
+
+## OAuth login
+
+Valet supports OAuth login through GitHub and Google:
+
+1. Browser starts `GET /auth/{provider}`.
+2. Worker creates a short-lived state JWT.
+3. Provider redirects back with `code` and `state`.
+4. Worker verifies state, exchanges the code, fetches the provider profile, and creates or updates the Valet user.
+5. Worker stores a hashed session token and redirects the browser with the plaintext token once.
+
+The first user created in an empty deployment is automatically promoted to admin.
+
+## App tokens
+
+Valet accepts bearer tokens from:
+
+- `auth_sessions`: browser login tokens with expiry.
+- `api_tokens`: personal programmatic tokens with optional expiry and soft revocation.
+
+The auth middleware checks browser sessions first, then API tokens. Successful routes receive authenticated user ID, email, and role.
+
+## Organization gates
+
+Signup can be restricted by:
+
+- Existing user status.
+- Invite code.
+- Allowed email domain.
+- Explicit email allowlist.
+- Email-specific invite.
+- Deployment-specific environment allowlist.
+
+If no gate is configured, any authenticated provider account can be allowed.
+
+## Roles
+
+Users have `admin` or `member` role. Admin-only routes check role after authentication.
+
+Admins manage organization repositories, settings, provider keys, custom providers, custom MCP connectors, and org-level policies.
+
+## Session access
+
+Session participation uses:
+
+- Owner.
+- Collaborator.
+- Viewer.
+
+Access can come from ownership, participant rows, organization visibility, or share-link redemption.
+
+Share links carry token, granted role, optional expiry, optional use limit, and active flag.
+
+## Workspace access
+
+Opening VS Code, VNC, terminal, or custom tunnel routes requires a short-lived workspace JWT from:
+
+```text
+GET /api/sessions/:id/sandbox-token
+```
+
+The token is validated by the Runner gateway before the gateway sets its own short-lived session cookie.
+
+## Security notes
+
+- Raw encryption keys should not be sent to sandboxes.
+- Workspace access should remain tied to session permissions.
+- Session-scoped overrides should expire when sandbox trust resets.
+- Shared channel surfaces should not route into personal memory unless policy allows it.

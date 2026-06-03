@@ -1,0 +1,11 @@
+export const PersonaCard = ({ title, description, href }) => {
+  const body = (
+    <>
+      <span className="valet-card-eyebrow">Persona</span>
+      <span className="valet-persona-card-title">{title}</span>
+      <span className="valet-persona-card-description">{description}</span>
+    </>
+  );
+
+  return href ? <a className="valet-persona-card" href={href}>{body}</a> : <div className="valet-persona-card">{body}</div>;
+};

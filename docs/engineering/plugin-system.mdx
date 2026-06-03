@@ -1,0 +1,56 @@
+---
+title: Plugin System
+description: Technical reference for Valet plugin packages, actions, channels, skills, personas, tools, registries, MCP-backed plugins, and sync.
+---
+
+# Plugin System
+
+Valet uses a unified plugin system. Plugins can provide actions, channel transports, skills, personas, tools, or a combination of those capabilities.
+
+## Capability types
+
+| Capability | Location | Runtime |
+| --- | --- | --- |
+| Actions | `src/actions/` | Compiled into the Worker and exposed through integration calls. |
+| Channels | `src/channels/` | Compiled into the Worker for inbound/outbound transport. |
+| Skills | `skills/*.md` | Synced to persisted storage and delivered to sandboxes. |
+| Personas | `personas/*.md` | Synced and used when building persona context. |
+| Tools | `tools/*.ts` | Synced and delivered as sandbox-local tools. |
+
+Code plugins need package exports and registry generation. Content-only plugins need a manifest and content files.
+
+## Action model
+
+Agents discover and call integration actions through a controlled action model. Every action call runs through policy resolution before execution.
+
+Action plugins can implement first-party behavior directly in the Worker. MCP-backed plugins proxy remote MCP services and expose remote tools as Valet actions.
+
+## Content model
+
+Skills and personas are Markdown instructions. They are indexed for search, attached to personas, and delivered into sandbox sessions as runtime context.
+
+Sandbox-local tools can expose helper behavior such as memory management, workflow management, session orchestration, mailbox operations, channel replies, browser screenshots, persona management, and tunnel registration.
+
+## Registries
+
+The Worker uses generated registries:
+
+- `packages/worker/src/integrations/packages.ts`
+- `packages/worker/src/channels/packages.ts`
+- `packages/worker/src/plugins/content-registry.ts`
+
+Run `make generate-registries` after adding or removing plugin content.
+
+## MCP-backed plugins
+
+MCP-backed plugins initialize remote MCP sessions, list tools, and call tools through Valet's MCP client. OAuth-backed MCP services use MCP-scoped tokens, so token validation and refresh differ from traditional provider APIs.
+
+## Integration sync
+
+Some integrations also implement sync behavior:
+
+- A persisted integration row records user, service, status, config, and sync metadata.
+- Sync logs record attempts.
+- Concrete integration classes implement credential validation, connection tests, sync, fetch, push, and webhook methods.
+
+Dedicated production integrations can use custom routes and services even when a generic integration class exists.

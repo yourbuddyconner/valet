@@ -1,0 +1,11 @@
+export const SpotlightCard = ({ eyebrow = "Featured guide", title, description, href }) => {
+  const body = (
+    <>
+      <span className="valet-card-eyebrow">{eyebrow}</span>
+      <span className="valet-spotlight-card-title">{title}</span>
+      <span className="valet-spotlight-card-description">{description}</span>
+    </>
+  );
+
+  return href ? <a className="valet-spotlight-card" href={href}>{body}</a> : <div className="valet-spotlight-card">{body}</div>;
+};

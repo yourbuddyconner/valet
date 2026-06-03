@@ -19,6 +19,16 @@
   "appearance": {
     "default": "light"
   },
+  "fonts": {
+    "heading": {
+      "family": "Geist",
+      "weight": 600
+    },
+    "body": {
+      "family": "Geist",
+      "weight": 400
+    }
+  },
   "logo": {
     "light": "/logo/valet-light.svg",
     "dark": "/logo/valet-dark.svg",
@@ -63,11 +73,13 @@
           {
             "group": "Start here",
             "pages": [
-              "product/what-is-valet"
+              "product/what-is-valet",
+              "product/quickstart",
+              "product/how-valet-works"
             ]
           },
           {
-            "group": "Core model",
+            "group": "Everyday use",
             "pages": [
               "product/sessions",
               "product/workstations-and-sandboxes",
@@ -82,25 +94,33 @@
               "product/auth-and-access",
               "product/policies-and-approvals",
               "product/channels",
-              "product/integrations"
+              "product/integrations",
+              "product/admin-setup"
             ]
           }
         ]
       },
       {
-        "tab": "Engineering reference",
+        "tab": "Engineering",
         "groups": [
           {
-            "group": "Agent access",
+            "group": "System internals",
             "pages": [
-              "product/mcp-endpoint",
-              "api-reference"
+              "architecture",
+              "engineering/session-lifecycle",
+              "engineering/sandbox-lifecycle",
+              "engineering/runner-and-opencode",
+              "engineering/real-time-streaming",
+              "engineering/workflow-execution",
+              "engineering/orchestrator-runtime",
+              "engineering/plugin-system",
+              "engineering/policy-engine",
+              "engineering/auth-access-internals"
             ]
           },
           {
-            "group": "Architecture",
+            "group": "Operations",
             "pages": [
-              "architecture",
               "security-model",
               "deployment",
               "environment-variables",
@@ -113,17 +133,24 @@
               "oauth-setup",
               "slack-setup"
             ]
+          },
+          {
+            "group": "Docs system",
+            "pages": [
+              "product/design-language",
+              "product/character-assets"
+            ]
           }
         ]
       },
       {
-        "tab": "Brand system",
+        "tab": "API & MCP",
         "groups": [
           {
-            "group": "Docs design",
+            "group": "Reference",
             "pages": [
-              "product/design-language",
-              "product/character-assets"
+              "api-reference",
+              "product/mcp-endpoint"
             ]
           }
         ]
@@ -134,6 +161,6 @@
     "indexing": "navigable"
   },
   "search": {
-    "prompt": "Search Valet product docs for sessions, workstations, orchestrators, memory, workflows, policies, channels, integrations, MCP access, and docs design guidance."
+    "prompt": "Search Valet docs for product concepts, use cases, sessions, workspaces, workflows, approvals, channels, integrations, engineering internals, API routes, and MCP access."
   }
 }

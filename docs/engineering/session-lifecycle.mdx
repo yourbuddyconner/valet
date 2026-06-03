@@ -1,0 +1,80 @@
+---
+title: Session Lifecycle
+description: Technical reference for Valet session creation, live state authority, hibernation, restore, prompt queues, access, and API routes.
+---
+
+# Session Lifecycle
+
+A session is Valet's unit of agent work. It owns the live task state, prompt queue, participants, message stream, git state, audit trail, and workspace attachment.
+
+## Session types
+
+- `interactive`: user-driven work.
+- `workflow`: workflow execution session.
+- `orchestrator`: persistent coordinator session.
+
+Child sessions use `parentSessionId` to connect delegated work back to a parent or orchestrator.
+
+## State machine
+
+Sessions move through a sandbox-backed lifecycle:
+
+1. `initializing`: the Worker creates the session record and asks the live session coordinator to start.
+2. `running`: the workspace exists, the runner is connected, and users can interact.
+3. `hibernating`: Valet flushes state, snapshots the workspace, and shuts down compute.
+4. `hibernated`: the session is asleep with a stored snapshot.
+5. `restoring`: Valet creates a fresh workspace from the stored snapshot.
+6. `terminated`, `archived`, or `error`: terminal states used for cleanup and list views.
+
+Messages sent to a hibernated session queue a wake. Once the runner reconnects, the queue drains.
+
+## Creation flow
+
+Session creation is asynchronous:
+
+1. The client calls `POST /api/sessions`.
+2. The Worker creates the persisted session row and runner token.
+3. The live session coordinator stores initial state and returns quickly.
+4. Workspace creation happens in the background.
+5. The backend returns workspace ID and access URLs.
+6. The session is marked `running` and connected clients receive a status update.
+
+## Live state authority
+
+Valet keeps state in two places:
+
+- Durable persisted storage is authoritative for list views, access checks, terminal states, and historical records.
+- The live session coordinator is authoritative for prompt queues, connected users, runner status, message streaming, and transient work state.
+
+Terminal persisted states win when combining persisted and live reads.
+
+## Prompt queue modes
+
+Valet supports three queue behaviors:
+
+- `followup`: append after the current agent turn.
+- `steer`: interrupt or steer ongoing work.
+- `collect`: debounce short channel messages before dispatching one prompt.
+
+## Runtime surfaces
+
+Running engineering sessions may expose:
+
+- Agent chat and streamed messages.
+- VS Code.
+- Browser/VNC.
+- Terminal.
+- Git state and file-change summaries.
+
+## Common API routes
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/api/sessions` | List sessions. |
+| `POST` | `/api/sessions` | Create a session. |
+| `GET` | `/api/sessions/:id` | Read session detail. |
+| `PATCH` | `/api/sessions/:id` | Update session metadata. |
+| `DELETE` | `/api/sessions/:id` | Terminate a session. |
+| `GET` | `/api/sessions/:id/git-state` | Read git state. |
+| `GET` | `/api/sessions/:id/sandbox-token` | Issue a short-lived workspace gateway token. |
+| `GET` | `/api/sessions/:id/ws` | Open the session WebSocket. |

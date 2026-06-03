@@ -1,60 +1,54 @@
 ---
 title: Auth and Access
-description: Valet authentication and access control cover OAuth login, session tokens, API tokens, email gating, org settings, roles, session participants, share links, and sandbox access JWTs.
+description: How users sign in, admins control access, and teams share Valet sessions safely.
 ---
 
 # Auth and Access
 
-Valet separates account authentication, organization gates, session access, and sandbox iframe access. A user can be allowed into the app, but still need session-level permissions and short-lived sandbox tokens to open specific workstations.
+Valet separates three questions:
 
-## Login
+- Who can sign in?
+- What can they administer?
+- Which sessions and workspaces can they access?
 
-Valet supports OAuth login through GitHub and Google. The flow is:
+This lets teams invite users, connect tools, and share work without making every session visible to everyone.
 
-1. The browser starts `GET /auth/{provider}`.
-2. The Worker creates a short-lived state JWT.
-3. The provider redirects back with `code` and `state`.
-4. The Worker verifies state, exchanges the code, fetches the provider profile, and creates or updates the Valet user.
-5. The Worker stores a hashed session token in `auth_sessions` and redirects the browser with the plaintext token once.
+## Sign-in
 
-The first user created in an empty deployment is automatically promoted to admin.
+Users sign in with supported identity providers such as GitHub or Google. Organization settings can restrict who is allowed to join.
 
-## App tokens
+Common access gates include:
 
-Valet accepts bearer tokens from:
+- Approved email domains.
+- Explicit invite lists.
+- Email-specific invites.
+- Admin-created users.
+- Deployment-specific allowlists.
 
-- `auth_sessions`: browser login tokens with a seven-day expiry.
-- `api_tokens`: personal programmatic tokens with optional expiry and soft revocation.
+## Roles
 
-The auth middleware checks session tokens first, then API tokens. On success, routes receive the authenticated user ID, email, and role.
+Valet has normal users and admins.
 
-## Organization gates
-
-Signup can be restricted by:
-
-- Existing user status.
-- Invite code.
-- Allowed email domain.
-- Explicit email allowlist.
-- Email-specific invite.
-- Legacy `ALLOWED_EMAILS` environment variable.
-
-If no gate is configured, any authenticated provider account can be allowed.
-
-## Roles and admin access
-
-Users have `admin` or `member` role. Admin-only routes use a simple role check after authentication. Admins manage org repositories, org settings, provider keys, custom providers, custom MCP connectors, and org-level policies.
+Admins can manage organization-level settings such as integrations, provider keys, repositories, MCP connectors, and policy defaults. Normal users can work in sessions and connect personal tools according to the organization's configuration.
 
 ## Session access
 
-Session participation uses three roles:
+Sessions can have owners, collaborators, and viewers.
 
-- **Owner** can update and terminate the session.
-- **Collaborator** can participate.
-- **Viewer** can inspect.
+| Role | Meaning |
+| --- | --- |
+| Owner | Controls the session and can resolve owner-scoped approvals. |
+| Collaborator | Participates in the work. |
+| Viewer | Can inspect the session without driving it. |
 
-Access can come from ownership, participant rows, org visibility settings, or share-link redemption. Share links carry a token, granted role, optional expiry, optional use limit, and active flag.
+Share links and organization visibility settings can extend access when collaboration is needed.
 
-## Sandbox access
+## Workspace access
 
-Opening VS Code, VNC, terminal, or custom tunnel routes requires a sandbox JWT from `GET /api/sessions/:id/sandbox-token`. The token lasts 15 minutes and is validated by the Runner gateway before the gateway sets its own short-lived session cookie.
+Some sessions expose additional workspace surfaces, such as development tools or task artifacts. Access to those surfaces should be short-lived and tied to session permissions.
+
+Users should only open workspaces they are allowed to inspect.
+
+## For engineers
+
+Implementation details live in [Auth and access internals](/engineering/auth-access-internals) and [Policy engine](/engineering/policy-engine).

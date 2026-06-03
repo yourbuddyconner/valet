@@ -1,0 +1,84 @@
+---
+title: Workflow Execution
+description: Technical reference for workflow definitions, triggers, execution records, step traces, approvals, proposals, schedules, and API routes.
+---
+
+# Workflow Execution
+
+Workflows are reusable automations that run inside Valet sessions. A workflow definition stores metadata, variables, constraints, and ordered step data. Each run creates execution records and normalized step traces.
+
+## Core records
+
+| Record | Purpose |
+| --- | --- |
+| `workflows` | User-owned workflow definitions with slug, version, metadata, tags, enabled flag, and JSON step data. |
+| `triggers` | Manual, webhook, or schedule entry points. |
+| `workflow_executions` | Run instances with status, variables, workflow snapshot, runtime state, and resume token. |
+| `workflow_execution_steps` | Per-step traces with input, output, status, attempt, and error data. |
+
+Execution records keep a workflow snapshot and hash so historical runs remain explainable after the definition changes.
+
+## Trigger types
+
+- `manual`: run directly from the UI or API.
+- `webhook`: receive external HTTP events, validate configured method/header/secret rules, and map request data into variables.
+- `schedule`: evaluate cron expressions and enqueue work.
+
+Schedule triggers can target a workflow or send a prompt to an orchestrator.
+
+## Execution lifecycle
+
+Workflow executions move through:
+
+1. `pending`: queued for execution.
+2. `running`: actively executing steps in a session.
+3. `waiting_approval`: paused at an approval gate.
+4. `completed`, `failed`, or `cancelled`: terminal states.
+
+Valet applies per-user and global concurrency limits to active executions.
+
+## Step behavior
+
+Workflow steps can include:
+
+- `bash`: run a command.
+- `tool`: call a Valet integration action through policy resolution.
+- `approval`: pause for human review.
+- `conditional`: branch based on runtime data.
+- `parallel`: run multiple branches.
+- `agent`: ask an agent to perform work.
+- `agent_message`: send a message to the session agent.
+
+Tool steps remain subject to integration policy and approvals. Workflow approval gates are separate controls, though they may appear in the same UI.
+
+## Approval resume
+
+An approval step stores a resume token. Approval resumes execution. Denial cancels the run. The execution remains active until approved, denied, cancelled, failed, or otherwise resolved.
+
+## Self-modification proposals
+
+Workflows can produce mutation proposals. A proposal stores:
+
+- Base workflow hash.
+- Proposed workflow JSON.
+- Human-readable diff.
+- Review status and notes.
+
+Approved proposals can apply only if the base hash is still current. Valet also records immutable workflow version history for updates, proposal applies, rollbacks, and syncs.
+
+## Schedule deduplication
+
+Cron schedules use minute buckets to avoid duplicate runs. Each tick records a `(triggerId, tickBucket)` pair. The unique key prevents a second execution for the same minute.
+
+## API routes
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/api/workflows` | List workflows. |
+| `GET` | `/api/workflows/:id` | Read a workflow by ID or slug. |
+| `POST` | `/api/workflows/sync` | Upsert a full definition. |
+| `PUT` | `/api/workflows/:id` | Update metadata or definition. |
+| `DELETE` | `/api/workflows/:id` | Delete a workflow and linked triggers. |
+| `GET` | `/api/workflows/:id/executions` | List execution history. |
+| `GET` | `/api/workflows/:id/history` | List immutable version snapshots. |
+| `POST` | `/api/workflows/:id/rollback` | Restore a historical definition. |
