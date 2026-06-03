@@ -1,4 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { AgentClient } from "./agent-client.js";
 import { ChannelSession, PromptHandler } from "./prompt.js";
 
@@ -714,13 +717,32 @@ describe("PromptHandler.extractChannelContext", () => {
 
 describe("PromptHandler text file extraction", () => {
   let fetchCalls: FetchCall[];
+  let attachmentTempDir: string | undefined;
+  const originalAttachmentDir = process.env.VALET_PROMPT_ATTACHMENT_DIR;
+  const originalWorkDir = process.env.WORK_DIR;
+
+  const tinyPdfBase64 =
+    "JVBERi0xLjQKMSAwIG9iago8PCAvVHlwZSAvQ2F0YWxvZyAvUGFnZXMgMiAwIFIgPj4KZW5kb2JqCjIgMCBvYmoKPDwgL1R5cGUgL1BhZ2VzIC9LaWRzIFszIDAgUl0gL0NvdW50IDEgPj4KZW5kb2JqCjMgMCBvYmoKPDwgL1R5cGUgL1BhZ2UgL1BhcmVudCAyIDAgUiAvTWVkaWFCb3ggWzAgMCA2MTIgNzkyXSAvUmVzb3VyY2VzIDw8IC9Gb250IDw8IC9GMSA0IDAgUiA+PiA+PiAvQ29udGVudHMgNSAwIFIgPj4KZW5kb2JqCjQgMCBvYmoKPDwgL0ZvbnQgL1N1YnR5cGUgL1R5cGUxIC9CYXNlRm9udCAvSGVsdmV0aWNhID4+CmVuZG9iago1IDAgb2JqCjw8IC9MZW5ndGggNDUgPj4Kc3RyZWFtCkJUIC9GMSAyNCBUZiAxMDAgNzAwIFRkIChIZWxsbyBQREYpIFRqIEVUCmVuZHN0cmVhbQplbmRvYmoKeHJlZgowIDYKMDAwMDAwMDAwMCA2NTUzNSBmIAowMDAwMDAwMDA5IDAwMDAwIG4gCjAwMDAwMDAwNTggMDAwMDAgbiAKMDAwMDAwMDExNSAwMDAwMCBuIAowMDAwMDAwMjQxIDAwMDAwIG4gCjAwMDAwMDAzMTEgMDAwMDAgbiAKdHJhaWxlcgo8PCAvU2l6ZSA2IC9Sb290IDEgMCBSID4+CnN0YXJ0eHJlZgo0MDIKJSVFT0YK";
 
   beforeEach(() => {
     fetchCalls = [];
+    attachmentTempDir = mkdtempSync(join(tmpdir(), "valet-pdf-test-"));
+    process.env.VALET_PROMPT_ATTACHMENT_DIR = attachmentTempDir;
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
+    if (attachmentTempDir) rmSync(attachmentTempDir, { recursive: true, force: true });
+    if (originalAttachmentDir === undefined) {
+      delete process.env.VALET_PROMPT_ATTACHMENT_DIR;
+    } else {
+      process.env.VALET_PROMPT_ATTACHMENT_DIR = originalAttachmentDir;
+    }
+    if (originalWorkDir === undefined) {
+      delete process.env.WORK_DIR;
+    } else {
+      process.env.WORK_DIR = originalWorkDir;
+    }
   });
 
   it("extracts text file content and prepends it to the prompt", async () => {
@@ -885,7 +907,231 @@ describe("PromptHandler text file extraction", () => {
     expect(textPart.text).toContain(textContent);
   });
 
-  it("keeps a visible PDF failure note when extraction fails and date context is present", async () => {
+  it("materializes PDFs and parsed text to disk instead of embedding PDF text in context", async () => {
+    const agentClient = createAgentClientMock();
+    const handler = createHandler(agentClient);
+
+    const dataUrl = `data:application/pdf;base64,${tinyPdfBase64}`;
+
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      const body = typeof init?.body === "string" ? JSON.parse(init.body) : undefined;
+      fetchCalls.push({ url, method, body });
+
+      if (url === "http://opencode.test/session" && method === "POST") {
+        return jsonResponse({ id: "pdf-materialize-session" });
+      }
+
+      if (url === "http://opencode.test/session/pdf-materialize-session/message" && method === "POST") {
+        return jsonResponse({ info: { role: "assistant", content: "ok" }, parts: [] });
+      }
+
+      throw new Error(`Unexpected fetch: ${method} ${url}`);
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    await handler.handlePrompt(
+      "msg-pdf-materialize-1",
+      "please inspect this PDF",
+      undefined,
+      undefined,
+      undefined,
+      [{ type: "file", mime: "application/pdf", url: dataUrl, filename: "paper.pdf" }],
+      "thread",
+      "ch-pdf-materialize",
+    );
+
+    const syncCall = fetchCalls.find(
+      (c) => c.url === "http://opencode.test/session/pdf-materialize-session/message" && c.method === "POST",
+    );
+    expect(syncCall).toBeDefined();
+    const body = syncCall!.body as { parts: Array<{ type: string; text?: string }> };
+    const textPart = body.parts.find((p) => p.type === "text");
+    expect(textPart?.text).toContain('The user attached a PDF named "paper.pdf"');
+    expect(textPart?.text).toContain("read the parsed text file");
+    expect(textPart?.text).not.toContain('<attached-file name="paper.pdf" type="application/pdf">');
+
+    const pdfPath = textPart?.text?.match(/Original PDF: ([^\n]+\.pdf)/)?.[1];
+    const textPath = textPart?.text?.match(/Parsed text: ([^\n]+\.txt)/)?.[1];
+    expect(pdfPath).toBeDefined();
+    expect(textPath).toBeDefined();
+    expect(existsSync(pdfPath!)).toBe(true);
+    expect(existsSync(textPath!)).toBe(true);
+    expect(readFileSync(pdfPath!).equals(Buffer.from(tinyPdfBase64, "base64"))).toBe(true);
+    expect(readFileSync(textPath!, "utf8")).toContain("Hello PDF");
+    expect(textPart?.text).not.toContain("Hello PDF");
+
+    const fileParts = body.parts.filter((p) => p.type === "file");
+    expect(fileParts).toHaveLength(0);
+  });
+
+  it("defaults PDF materialization to the workspace attachments directory", async () => {
+    const workspaceDir = mkdtempSync(join(tmpdir(), "valet-workspace-test-"));
+    delete process.env.VALET_PROMPT_ATTACHMENT_DIR;
+    process.env.WORK_DIR = workspaceDir;
+
+    try {
+      const agentClient = createAgentClientMock();
+      const handler = createHandler(agentClient);
+      const dataUrl = `data:application/pdf;base64,${tinyPdfBase64}`;
+
+      const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const method = init?.method ?? "GET";
+        const body = typeof init?.body === "string" ? JSON.parse(init.body) : undefined;
+        fetchCalls.push({ url, method, body });
+
+        if (url === "http://opencode.test/session" && method === "POST") {
+          return jsonResponse({ id: "pdf-workspace-session" });
+        }
+
+        if (url === "http://opencode.test/session/pdf-workspace-session/message" && method === "POST") {
+          return jsonResponse({ info: { role: "assistant", content: "ok" }, parts: [] });
+        }
+
+        throw new Error(`Unexpected fetch: ${method} ${url}`);
+      });
+
+      vi.stubGlobal("fetch", fetchMock);
+
+      await handler.handlePrompt(
+        "msg-pdf-workspace-1",
+        "please inspect this PDF",
+        undefined,
+        undefined,
+        undefined,
+        [{ type: "file", mime: "application/pdf", url: dataUrl, filename: "paper.pdf" }],
+        "thread",
+        "ch-pdf-workspace",
+      );
+
+      const syncCall = fetchCalls.find(
+        (c) => c.url === "http://opencode.test/session/pdf-workspace-session/message" && c.method === "POST",
+      );
+      const body = syncCall!.body as { parts: Array<{ type: string; text?: string }> };
+      const textPart = body.parts.find((p) => p.type === "text");
+      const pdfPath = textPart?.text?.match(/Original PDF: ([^\n]+\.pdf)/)?.[1];
+      const textPath = textPart?.text?.match(/Parsed text: ([^\n]+\.txt)/)?.[1];
+
+      expect(pdfPath).toContain(join(workspaceDir, ".valet", "attachments"));
+      expect(textPath).toContain(join(workspaceDir, ".valet", "attachments"));
+      expect(existsSync(pdfPath!)).toBe(true);
+      expect(existsSync(textPath!)).toBe(true);
+    } finally {
+      rmSync(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  it("clamps long materialized PDF filenames and logs the truncation", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const agentClient = createAgentClientMock();
+    const handler = createHandler(agentClient);
+    const longFilename = `${"a".repeat(251)}.pdf`;
+    const dataUrl = `data:application/pdf;base64,${tinyPdfBase64}`;
+
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      const body = typeof init?.body === "string" ? JSON.parse(init.body) : undefined;
+      fetchCalls.push({ url, method, body });
+
+      if (url === "http://opencode.test/session" && method === "POST") {
+        return jsonResponse({ id: "pdf-long-name-session" });
+      }
+
+      if (url === "http://opencode.test/session/pdf-long-name-session/message" && method === "POST") {
+        return jsonResponse({ info: { role: "assistant", content: "ok" }, parts: [] });
+      }
+
+      throw new Error(`Unexpected fetch: ${method} ${url}`);
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    await handler.handlePrompt(
+      "msg-pdf-long-name-1",
+      "please inspect this PDF",
+      undefined,
+      undefined,
+      undefined,
+      [{ type: "file", mime: "application/pdf", url: dataUrl, filename: longFilename }],
+      "thread",
+      "ch-pdf-long-name",
+    );
+
+    const syncCall = fetchCalls.find(
+      (c) => c.url === "http://opencode.test/session/pdf-long-name-session/message" && c.method === "POST",
+    );
+    const body = syncCall!.body as { parts: Array<{ type: string; text?: string }> };
+    const textPart = body.parts.find((p) => p.type === "text");
+    const pdfPath = textPart?.text?.match(/Original PDF: ([^\n]+\.pdf)/)?.[1];
+    const textPath = textPart?.text?.match(/Parsed text: ([^\n]+\.txt)/)?.[1];
+
+    expect(pdfPath).toBeDefined();
+    expect(textPath).toBeDefined();
+    expect(pdfPath!.split("/").at(-1)!.length).toBeLessThanOrEqual(240);
+    expect(textPath!.split("/").at(-1)!.length).toBeLessThanOrEqual(240);
+    expect(existsSync(pdfPath!)).toBe(true);
+    expect(existsSync(textPath!)).toBe(true);
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("Truncated PDF attachment filename"));
+  });
+
+  it("surfaces runner attachment fetch failures instead of reporting an invalid data URL", async () => {
+    const agentClient = createAgentClientMock();
+    const handler = createHandler(agentClient);
+
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      const body = typeof init?.body === "string" ? JSON.parse(init.body) : undefined;
+      fetchCalls.push({ url, method, body });
+
+      if (url === "http://opencode.test/session" && method === "POST") {
+        return jsonResponse({ id: "pdf-fetch-failure-session" });
+      }
+
+      if (url === "http://opencode.test/session/pdf-fetch-failure-session/message" && method === "POST") {
+        return jsonResponse({ info: { role: "assistant", content: "ok" }, parts: [] });
+      }
+
+      throw new Error(`Unexpected fetch: ${method} ${url}`);
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    await handler.handlePrompt(
+      "msg-pdf-fetch-failure-1",
+      "",
+      undefined,
+      undefined,
+      undefined,
+      [
+        {
+          type: "file",
+          mime: "application/pdf",
+          url: "valet-prompt-attachment-error://msg-missing/0?reason=404%20Not%20Found",
+          filename: "missing.pdf",
+        },
+      ],
+      "thread",
+      "ch-pdf-fetch-failure",
+    );
+
+    const syncCall = fetchCalls.find(
+      (c) => c.url === "http://opencode.test/session/pdf-fetch-failure-session/message" && c.method === "POST",
+    );
+    const body = syncCall!.body as { parts: Array<{ type: string; text?: string }> };
+    const textPart = body.parts.find((p) => p.type === "text");
+
+    expect(textPart?.text).toContain('The user attached a PDF named "missing.pdf"');
+    expect(textPart?.text).toContain("could not fetch the attachment payload");
+    expect(textPart?.text).toContain("404 Not Found");
+    expect(textPart?.text).not.toContain("invalid data URL");
+  });
+
+  it("keeps a visible PDF path when parsed text cannot be produced", async () => {
     const agentClient = createAgentClientMock();
     const handler = createHandler(agentClient);
 
@@ -928,7 +1174,13 @@ describe("PromptHandler text file extraction", () => {
     const body = syncCall!.body as { parts: Array<{ type: string; text?: string }> };
     const textPart = body.parts.find((p) => p.type === "text");
     expect(textPart).toBeDefined();
-    expect(textPart?.text).toContain("The user attached a PDF named \"broken.pdf\", but text extraction failed");
+    expect(textPart?.text).toContain('The user attached a PDF named "broken.pdf"');
+    expect(textPart?.text).toContain("Original PDF:");
+    expect(textPart?.text).toContain("Parsed text could not be produced");
+    const pdfPath = textPart?.text?.match(/Original PDF: ([^\n]+\.pdf)/)?.[1];
+    expect(pdfPath).toBeDefined();
+    expect(existsSync(pdfPath!)).toBe(true);
+    expect(readFileSync(pdfPath!, "utf8")).toContain("%PDF-1.4");
     const fileParts = body.parts.filter((p) => p.type === "file");
     expect(fileParts).toHaveLength(0);
   });

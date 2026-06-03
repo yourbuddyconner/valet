@@ -506,6 +506,8 @@ export class SessionAgentDO {
         return this.handleFlushMetrics();
       case '/messages':
         return this.handleMessagesEndpoint(url);
+      case '/prompt-attachment':
+        return this.handlePromptAttachmentEndpoint(url);
       case '/gc':
         return this.handleGarbageCollect();
       case '/webhook-update':
@@ -2095,6 +2097,28 @@ export class SessionAgentDO {
       value: String(answer),
       resolvedBy: this.sessionState.userId || 'user',
     });
+  }
+
+  private handlePromptAttachmentEndpoint(url: URL): Response {
+    const token = url.searchParams.get('token');
+    if (!token || token !== this.runnerLink.token) {
+      return new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401 });
+    }
+
+    const messageId = url.searchParams.get('messageId');
+    const indexText = url.searchParams.get('index');
+    const index = indexText ? Number.parseInt(indexText, 10) : -1;
+    if (!messageId || !Number.isInteger(index) || index < 0) {
+      return new Response(JSON.stringify({ error: 'Missing or invalid attachment reference' }), { status: 400 });
+    }
+
+    const attachments = this.promptQueue.getAttachmentsById(messageId);
+    const attachment = attachments?.[index];
+    if (!attachment || typeof attachment !== 'object') {
+      return new Response(JSON.stringify({ error: 'Attachment not found' }), { status: 404 });
+    }
+
+    return Response.json(attachment);
   }
 
   private async handleAbort(channelType?: string, channelId?: string) {

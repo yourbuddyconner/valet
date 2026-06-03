@@ -432,6 +432,22 @@ sessionsRouter.get('/:id/messages', async (c) => {
 });
 
 /**
+ * GET /api/sessions/:id/runner-attachment
+ * Runner-only attachment fetch used when prompt attachments are too large for
+ * the DO→runner WebSocket frame. The DO validates the runner token.
+ */
+sessionsRouter.get('/:id/runner-attachment', async (c) => {
+  const { id } = c.req.param();
+  const doId = c.env.SESSIONS.idFromName(id);
+  const sessionDO = c.env.SESSIONS.get(doId);
+  const url = new URL(c.req.url);
+
+  return sessionDO.fetch(new Request(`http://do/prompt-attachment${url.search}`, {
+    method: 'GET',
+  }));
+});
+
+/**
  * GET /api/sessions/:id/ws
  * WebSocket upgrade — proxies to SessionAgentDO.
  */

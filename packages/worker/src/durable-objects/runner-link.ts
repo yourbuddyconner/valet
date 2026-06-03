@@ -73,6 +73,35 @@ const ACTIVITY_TYPES: ReadonlySet<string> = new Set([
   'message.finalize',
 ]);
 
+// Match the client large-payload cutoff: above this, avoid sending base64
+// attachment data through another WebSocket frame to the sandbox runner.
+const MAX_RUNNER_WS_PAYLOAD_CHARS = 800_000;
+
+function promptAttachmentRef(messageId: string, index: number): string {
+  return `valet-prompt-attachment://${encodeURIComponent(messageId)}/${index}`;
+}
+
+function serializeForRunner(message: DOToRunnerMessage): string {
+  const payload = JSON.stringify(message);
+  if (message.type !== 'prompt' || !message.attachments?.length || payload.length <= MAX_RUNNER_WS_PAYLOAD_CHARS) {
+    return payload;
+  }
+
+  const referencedMessage: DOMessageOf<'prompt'> = {
+    ...message,
+    attachments: message.attachments.map((attachment, index) => ({
+      ...attachment,
+      url: promptAttachmentRef(message.messageId, index),
+    })),
+  };
+  const referencedPayload = JSON.stringify(referencedMessage);
+  console.log(
+    `[RunnerLink] Replaced ${message.attachments.length} attachment payload(s) with runner-fetch refs ` +
+    `for prompt ${message.messageId}: ${payload.length} chars → ${referencedPayload.length} chars`,
+  );
+  return referencedPayload;
+}
+
 // ─── RunnerLink Class ─────────────────────────────────────────────────────────
 
 export interface RunnerLinkDeps {
@@ -144,7 +173,7 @@ export class RunnerLink {
       console.warn(`[RunnerLink] sendToRunner: no runner sockets available for type=${message.type}`);
       return false;
     }
-    const payload = JSON.stringify(message);
+    const payload = serializeForRunner(message);
     let sent = false;
     for (const ws of runners) {
       try {

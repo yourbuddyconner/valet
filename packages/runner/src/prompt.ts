@@ -258,6 +258,55 @@ function safeAttachmentName(filename: string | undefined, fallback: string): str
   return (filename || fallback).replace(/["\n\r]/g, '_');
 }
 
+const ATTACHMENT_FETCH_ERROR_PREFIX = 'valet-prompt-attachment-error://';
+const ATTACHMENT_REF_PREFIX = 'valet-prompt-attachment://';
+const MAX_MATERIALIZED_ATTACHMENT_BASENAME_CHARS = 240;
+
+function safePathSegment(value: string | undefined, fallback: string): string {
+  const cleaned = (value || fallback)
+    .replace(/[\\/:\0\n\r\t]/g, '_')
+    .replace(/[^a-zA-Z0-9._ -]/g, '_')
+    .replace(/^\.+$/, '_')
+    .trim();
+  return cleaned || fallback;
+}
+
+function parseAttachmentFetchFailure(url: string): { messageId: string; index: number; reason: string } | null {
+  if (!url.startsWith(ATTACHMENT_FETCH_ERROR_PREFIX)) return null;
+  try {
+    const parsed = new URL(url);
+    const indexText = parsed.pathname.replace(/^\//, '');
+    const index = Number.parseInt(indexText, 10);
+    if (!parsed.hostname || !Number.isInteger(index) || index < 0) return null;
+    return {
+      messageId: decodeURIComponent(parsed.hostname),
+      index,
+      reason: parsed.searchParams.get('reason') || 'unknown fetch error',
+    };
+  } catch {
+    return null;
+  }
+}
+
+function materializedPdfBasenames(prefix: string, filename: string): { pdfBasename: string; txtBasename: string } {
+  const pdfFilename = filename.toLowerCase().endsWith('.pdf') ? filename : `${filename}.pdf`;
+  const originalStem = pdfFilename.replace(/\.pdf$/i, '') || 'document';
+  const maxStemLength = MAX_MATERIALIZED_ATTACHMENT_BASENAME_CHARS - prefix.length - 1 - '.pdf'.length;
+  const stem = originalStem.length > maxStemLength
+    ? originalStem.slice(0, Math.max(1, maxStemLength))
+    : originalStem;
+  const pdfBasename = `${prefix}-${stem}.pdf`;
+  const txtBasename = `${prefix}-${stem}.txt`;
+  const originalPdfBasename = `${prefix}-${pdfFilename}`;
+  if (pdfBasename !== originalPdfBasename) {
+    console.warn(
+      `[PromptHandler] Truncated PDF attachment filename: original="${originalPdfBasename}" ` +
+      `pdf="${pdfBasename}" text="${txtBasename}"`,
+    );
+  }
+  return { pdfBasename, txtBasename };
+}
+
 function attachmentSummary(attachments: PromptAttachment[]): string {
   if (attachments.length === 0) return 'none';
   return attachments
@@ -1596,36 +1645,25 @@ export class PromptHandler {
         }
       }
 
-      // Extract text from PDF attachments before sending to OpenCode
+      // Materialize PDFs to disk instead of stuffing full parsed text into context.
       const hasPdf = effectiveAttachments.some(a => a.mime === 'application/pdf');
       if (hasPdf) {
-        let pdfFailureNotes: string[] = [];
+        let pdfNotes: string[] = [];
         try {
-          const { extractions, failures, remaining } = await this.extractPdfText(effectiveAttachments);
-          effectiveAttachments = remaining; // remaining already excludes successfully processed PDFs
-          if (extractions.length > 0) {
-            const pdfBlock = extractions
-              .map(e => `<attached-file name="${safeAttachmentName(e.filename, 'document.pdf')}" type="application/pdf">\n${e.text}\n</attached-file>`)
-              .join('\n\n');
-            effectiveContent = effectiveContent
-              ? `${effectiveContent}\n\n${pdfBlock}`
-              : pdfBlock;
-          }
-          pdfFailureNotes = failures.map((failure) => {
-            const name = safeAttachmentName(failure.filename, 'document.pdf');
-            return `[The user attached a PDF named "${name}", but text extraction failed${failure.reason ? `: ${failure.reason}` : ''}. Please ask them to share the content as text or provide an OCR-readable PDF.]`;
-          });
+          const { notes, remaining } = await this.materializePdfAttachments(messageId, effectiveAttachments);
+          effectiveAttachments = remaining;
+          pdfNotes = notes;
         } catch (err) {
-          console.error('[PromptHandler] Failed to extract PDF text:', err);
-          pdfFailureNotes = effectiveAttachments
+          console.error('[PromptHandler] Failed to materialize PDF attachments:', err);
+          pdfNotes = effectiveAttachments
             .filter(a => a.mime === 'application/pdf')
             .map((attachment) => {
               const name = safeAttachmentName(attachment.filename, 'document.pdf');
-              return `[The user attached a PDF named "${name}", but text extraction failed: ${errorReason(err)}. Please ask them to share the content as text or provide an OCR-readable PDF.]`;
+              return `[The user attached a PDF named "${name}", but the runner could not save it to disk: ${errorReason(err)}. Ask the user to re-upload it or provide a reachable link.]`;
             });
         }
-        if (pdfFailureNotes.length > 0) {
-          const pdfFailureBlock = pdfFailureNotes.join('\n\n');
+        if (pdfNotes.length > 0) {
+          const pdfFailureBlock = pdfNotes.join('\n\n');
           effectiveContent = effectiveContent
             ? `${effectiveContent}\n\n${pdfFailureBlock}`
             : pdfFailureBlock;
@@ -3133,21 +3171,29 @@ export class PromptHandler {
   }
 
   /**
-   * Extract text from PDF attachments using LiteParse.
-   * Returns extracted text and remaining non-PDF attachments.
+   * Write PDF attachments and their parsed text to disk.
+   * Returns user-visible notes and remaining non-PDF attachments.
    */
-  private async extractPdfText(
+  private async materializePdfAttachments(
+    messageId: string,
     attachments: PromptAttachment[],
   ): Promise<{
-    extractions: Array<{ text: string; filename?: string }>;
-    failures: Array<{ filename?: string; reason: string }>;
+    notes: string[];
     remaining: PromptAttachment[];
   }> {
     const { LiteParse } = await import('@llamaindex/liteparse');
+    const { mkdir, writeFile } = await import('fs/promises');
+    const { join } = await import('path');
     const parser = new LiteParse({ ocrEnabled: false, outputFormat: 'text', maxPages: 100 });
-    const extractions: Array<{ text: string; filename?: string }> = [];
-    const failures: Array<{ filename?: string; reason: string }> = [];
+    const notes: string[] = [];
     const remaining: PromptAttachment[] = [];
+    const workspaceDir = process.env.WORK_DIR || '/workspace';
+    const baseDir = process.env.VALET_PROMPT_ATTACHMENT_DIR || join(workspaceDir, '.valet', 'attachments');
+    const promptDir = join(
+      baseDir,
+      `${safePathSegment(messageId, 'message')}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    );
+    let pdfIndex = 0;
 
     for (const attachment of attachments) {
       if (attachment.mime !== 'application/pdf') {
@@ -3155,20 +3201,52 @@ export class PromptHandler {
         continue;
       }
 
+      let savedPdfPath: string | undefined;
+      let savedPdfBytes: number | undefined;
       try {
-        // Decode base64 data URL to buffer
+        const name = safeAttachmentName(attachment.filename, 'document.pdf');
+        const fetchFailure = parseAttachmentFetchFailure(attachment.url);
+        if (fetchFailure) {
+          console.warn(
+            `[PromptHandler] PDF attachment fetch failed (${name}): ` +
+            `messageId=${fetchFailure.messageId} index=${fetchFailure.index} reason=${fetchFailure.reason}`,
+          );
+          notes.push(
+            `[The user attached a PDF named "${name}", but the runner could not fetch the attachment payload from Valet: ${fetchFailure.reason}. Ask the user to re-upload it or provide a reachable link.]`,
+          );
+          continue;
+        }
+
+        if (attachment.url.startsWith(ATTACHMENT_REF_PREFIX)) {
+          console.warn(`[PromptHandler] PDF attachment still has unresolved runner reference (${name}): ${attachment.url}`);
+          notes.push(`[The user attached a PDF named "${name}", but the runner received an unresolved attachment reference. Ask the user to re-upload it or provide a reachable link.]`);
+          continue;
+        }
+
         const commaIdx = attachment.url.indexOf(',');
         if (commaIdx === -1) {
           console.error('[PromptHandler] PDF attachment has invalid data URL');
-          failures.push({ filename: attachment.filename, reason: 'invalid data URL' });
-          remaining.push(attachment);
+          notes.push(`[The user attached a PDF named "${name}", but the runner could not save it because the attachment data URL was invalid. Ask them to re-upload it or provide a reachable link.]`);
           continue;
         }
+
+        pdfIndex += 1;
         const base64Data = attachment.url.slice(commaIdx + 1);
         const buffer = Buffer.from(base64Data, 'base64');
+        await mkdir(promptDir, { recursive: true });
+
+        const filename = safePathSegment(attachment.filename, 'document.pdf');
+        const prefix = String(pdfIndex).padStart(2, '0');
+        const { pdfBasename, txtBasename } = materializedPdfBasenames(prefix, filename);
+        const pdfPath = join(promptDir, pdfBasename);
+        const txtPath = join(promptDir, txtBasename);
+
+        await writeFile(pdfPath, buffer);
+        savedPdfPath = pdfPath;
+        savedPdfBytes = buffer.length;
+        console.log(`[PromptHandler] Wrote PDF attachment (${attachment.filename || 'document.pdf'}): ${pdfPath} (${buffer.length} bytes)`);
         console.log(`[PromptHandler] Parsing PDF (${attachment.filename || 'document.pdf'}): ${buffer.length} bytes`);
 
-        // Parse with timeout to guard against malicious PDFs
         const parsePromise = parser.parse(buffer);
         const timeoutPromise = new Promise<never>((_, reject) =>
           setTimeout(() => reject(new Error('PDF parse timeout after 30s')), 30_000),
@@ -3177,22 +3255,39 @@ export class PromptHandler {
         const text = result.text?.trim();
 
         if (text) {
-          extractions.push({ text, filename: attachment.filename });
-          console.log(`[PromptHandler] Extracted PDF text (${attachment.filename || 'document.pdf'}): ${text.length} chars`);
+          await writeFile(txtPath, `${text}\n`);
+          notes.push(
+            `[The user attached a PDF named "${name}" (${buffer.length} bytes). ` +
+            `Original PDF: ${pdfPath}\n` +
+            `Parsed text: ${txtPath}\n` +
+            `The full PDF text is not embedded in this prompt. You can read the parsed text file from disk when needed.]`,
+          );
+          console.log(`[PromptHandler] Extracted PDF text (${attachment.filename || 'document.pdf'}): ${text.length} chars → ${txtPath}`);
         } else {
           console.warn(`[PromptHandler] PDF extraction returned empty text for ${attachment.filename || 'document.pdf'}`);
-          failures.push({ filename: attachment.filename, reason: 'no extractable text' });
-          remaining.push(attachment);
+          notes.push(
+            `[The user attached a PDF named "${name}" (${buffer.length} bytes). ` +
+            `Original PDF: ${pdfPath}\n` +
+            `Parsed text could not be produced because the PDF had no extractable text. Ask the user for an OCR-readable PDF or inspect the original file from disk if needed.]`,
+          );
         }
       } catch (err) {
         const reason = errorReason(err);
         console.error(`[PromptHandler] PDF text extraction error (${attachment.filename || 'document.pdf'}): ${reason}`, err);
-        failures.push({ filename: attachment.filename, reason });
-        remaining.push(attachment);
+        const name = safeAttachmentName(attachment.filename, 'document.pdf');
+        if (savedPdfPath) {
+          notes.push(
+            `[The user attached a PDF named "${name}"${savedPdfBytes !== undefined ? ` (${savedPdfBytes} bytes)` : ''}. ` +
+            `Original PDF: ${savedPdfPath}\n` +
+            `Parsed text could not be produced because PDF text extraction failed: ${reason}. Ask the user for an OCR-readable PDF or inspect the original file from disk if needed.]`,
+          );
+        } else {
+          notes.push(`[The user attached a PDF named "${name}", but PDF text extraction failed before the runner could save it: ${reason}. Ask them for an OCR-readable PDF or provide a reachable link.]`);
+        }
       }
     }
 
-    return { extractions, failures, remaining };
+    return { notes, remaining };
   }
 
   /**
