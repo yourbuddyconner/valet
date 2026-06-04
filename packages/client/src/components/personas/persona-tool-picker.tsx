@@ -14,6 +14,7 @@ interface ToolEntry {
 export interface PersonaToolPickerProps {
   tools: ToolEntry[];
   onChange: (tools: ToolEntry[]) => void;
+  readOnly?: boolean;
 }
 
 interface ServiceGroup {
@@ -71,7 +72,7 @@ function buildOrgDisabledIndex(rows: DisabledAction[]) {
  * - Action toggled OFF within enabled service: adds `{ service, actionId, enabled: false }`
  * - Action toggled back ON: removes the `{ service, actionId, enabled: false }` entry
  */
-export function PersonaToolPicker({ tools, onChange }: PersonaToolPickerProps) {
+export function PersonaToolPicker({ tools, onChange, readOnly = false }: PersonaToolPickerProps) {
   const { data: catalog, isLoading: catalogLoading } = useActionCatalog();
   const { data: disabledRows, isLoading: disabledLoading } = useDisabledActions();
   const [expandedServices, setExpandedServices] = React.useState<Set<string>>(new Set());
@@ -119,6 +120,7 @@ export function PersonaToolPicker({ tools, onChange }: PersonaToolPickerProps) {
   }
 
   function handleServiceToggle(service: string) {
+    if (readOnly) return;
     const isCurrentlyEnabled = enabledServices.has(service);
     if (isCurrentlyEnabled) {
       // Toggling OFF: remove all entries for this service
@@ -131,6 +133,7 @@ export function PersonaToolPicker({ tools, onChange }: PersonaToolPickerProps) {
   }
 
   function handleActionToggle(service: string, actionId: string) {
+    if (readOnly) return;
     const compositeKey = `${service}:${actionId}`;
     const isCurrentlyDisabled = disabledActionOverrides.has(compositeKey);
 
@@ -183,6 +186,7 @@ export function PersonaToolPicker({ tools, onChange }: PersonaToolPickerProps) {
                       <input
                         type="checkbox"
                         checked={isServiceEnabled}
+                        disabled={readOnly}
                         ref={(el) => {
                           if (el) el.indeterminate = someActionsDisabled;
                         }}
@@ -246,7 +250,7 @@ export function PersonaToolPicker({ tools, onChange }: PersonaToolPickerProps) {
                                     <input
                                       type="checkbox"
                                       checked={actionEnabled}
-                                      disabled={!isServiceEnabled}
+                                      disabled={readOnly || !isServiceEnabled}
                                       onChange={() => handleActionToggle(group.service, action.actionId)}
                                       className="h-4 w-4 rounded border-neutral-300 text-blue-600 focus:ring-blue-500 disabled:opacity-40 dark:border-neutral-600"
                                     />

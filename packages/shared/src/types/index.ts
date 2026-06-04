@@ -1234,6 +1234,9 @@ export interface Skill {
   id: string;
   orgId: string;
   ownerId: string | null;
+  ownerName?: string | null;
+  ownerEmail?: string | null;
+  ownerAvatarUrl?: string | null;
   source: SkillSource;
   name: string;
   slug: string;
@@ -1253,6 +1256,9 @@ export interface SkillSummary {
   source: SkillSource;
   visibility: SkillVisibility;
   ownerId: string | null;
+  ownerName?: string | null;
+  ownerEmail?: string | null;
+  ownerAvatarUrl?: string | null;
   updatedAt: string;
 }
 
