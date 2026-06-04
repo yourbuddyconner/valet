@@ -12,17 +12,22 @@ interface MarkdownEditorProps {
   minHeightClassName?: string;
 }
 
-const toolbarItems: Array<{
-  format: MarkdownFormat;
-  label: string;
-  icon: React.ReactNode;
-}> = [
-  { format: 'heading', label: 'Heading', icon: <span className="text-[11px] font-semibold">H2</span> },
-  { format: 'bulletList', label: 'Bulleted list', icon: <ListIcon ordered={false} /> },
-  { format: 'numberedList', label: 'Numbered list', icon: <ListIcon ordered /> },
-  { format: 'codeBlock', label: 'Code block', icon: <CodeBlockIcon /> },
-  { format: 'link', label: 'Link', icon: <LinkIcon /> },
-  { format: 'inlineCode', label: 'Inline code', icon: <span className="font-mono text-sm">`</span> },
+type ToolbarItem = { format: MarkdownFormat; label: string; icon: React.ReactNode };
+type ToolbarGroup = ToolbarItem[];
+
+const toolbarGroups: ToolbarGroup[] = [
+  [
+    { format: 'heading', label: 'Heading', icon: <span className="text-[11px] font-semibold">H2</span> },
+  ],
+  [
+    { format: 'bulletList', label: 'Bulleted list', icon: <ListIcon ordered={false} /> },
+    { format: 'numberedList', label: 'Numbered list', icon: <ListIcon ordered /> },
+  ],
+  [
+    { format: 'codeBlock', label: 'Code block', icon: <CodeBlockIcon /> },
+    { format: 'link', label: 'Link', icon: <LinkIcon /> },
+    { format: 'inlineCode', label: 'Inline code', icon: <span className="font-mono text-sm">`</span> },
+  ],
 ];
 
 export function MarkdownEditor({
@@ -66,18 +71,25 @@ export function MarkdownEditor({
 
   return (
     <div className="overflow-hidden rounded-lg border border-neutral-200 bg-white dark:border-neutral-700 dark:bg-neutral-900">
-      <div className="flex flex-wrap items-center gap-1 border-b border-neutral-200 bg-neutral-50 p-2 dark:border-neutral-700 dark:bg-neutral-800/80">
-        {toolbarItems.map((item) => (
-          <button
-            key={item.format}
-            type="button"
-            title={item.label}
-            aria-label={item.label}
-            onClick={() => applyFormat(item.format)}
-            className="flex h-8 w-8 items-center justify-center rounded-md text-neutral-500 transition-colors hover:bg-white hover:text-neutral-900 focus:outline-none focus:ring-2 focus:ring-accent/40 dark:text-neutral-400 dark:hover:bg-neutral-700 dark:hover:text-neutral-100"
-          >
-            {item.icon}
-          </button>
+      <div className="flex flex-wrap items-center gap-0.5 border-b border-neutral-200 bg-neutral-50 px-2 py-1.5 dark:border-neutral-700 dark:bg-neutral-800/80">
+        {toolbarGroups.map((group, groupIndex) => (
+          <React.Fragment key={groupIndex}>
+            {groupIndex > 0 && (
+              <div className="mx-1 h-4 w-px shrink-0 bg-neutral-200 dark:bg-neutral-700" aria-hidden="true" />
+            )}
+            {group.map((item) => (
+              <button
+                key={item.format}
+                type="button"
+                title={item.label}
+                aria-label={item.label}
+                onClick={() => applyFormat(item.format)}
+                className="flex h-7 w-7 items-center justify-center rounded text-neutral-500 transition-colors hover:bg-neutral-200 hover:text-neutral-900 focus:outline-none focus:ring-2 focus:ring-accent/40 dark:text-neutral-400 dark:hover:bg-neutral-700 dark:hover:text-neutral-100"
+              >
+                {item.icon}
+              </button>
+            ))}
+          </React.Fragment>
         ))}
       </div>
 

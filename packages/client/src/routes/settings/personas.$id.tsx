@@ -1,7 +1,7 @@
 import * as React from 'react';
 import { createFileRoute, useNavigate } from '@tanstack/react-router';
 import type { User } from '@valet/shared';
-import { Avatar, AvatarFallback } from '@/components/ui/avatar';
+import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -16,6 +16,7 @@ import { SkillPicker } from '@/components/skills/skill-picker';
 import { PersonaToolPicker } from '@/components/personas/persona-tool-picker';
 import {
   canEditPersona,
+  getOwnerDisplayName,
   getOwnerInitials,
 } from '@/components/content/resource-detail-utils';
 import {
@@ -203,7 +204,8 @@ function PersonaEditorPage() {
     return <PersonaDetailSkeleton />;
   }
 
-  const ownerLabel = getPersonaOwnerLabel(persona, user, isNew);
+  const owner = getPersonaOwnerInfo(persona, user, isNew);
+  const ownerLabel = getOwnerDisplayName(owner);
 
   return (
     <form onSubmit={handleSave}>
@@ -289,12 +291,16 @@ function PersonaEditorPage() {
               <MetadataRow label="Owner">
                 <div className="flex items-center gap-3">
                   <Avatar className="h-8 w-8">
+                    {owner.ownerAvatarUrl && <AvatarImage src={owner.ownerAvatarUrl} alt={ownerLabel} />}
                     <AvatarFallback>{getOwnerInitials(ownerLabel)}</AvatarFallback>
                   </Avatar>
                   <div className="min-w-0">
                     <p className="truncate text-sm font-medium text-neutral-900 dark:text-neutral-100">
                       {isNew ? 'You' : ownerLabel}
                     </p>
+                    {owner.ownerEmail && (
+                      <p className="truncate text-xs text-neutral-400">{owner.ownerEmail}</p>
+                    )}
                   </div>
                 </div>
               </MetadataRow>
@@ -406,7 +412,7 @@ function PersonaEditorPage() {
                   <div className="space-y-4">
                     {files.map((file, index) => (
                       <div
-                        key={`${file.filename}-${index}`}
+                        key={index}
                         className="rounded-lg border border-neutral-200 p-3 dark:border-neutral-700"
                       >
                         <div className="mb-3 grid gap-2 sm:grid-cols-[minmax(0,1fr)_88px_auto]">
@@ -490,11 +496,21 @@ function PersonaVisibilityControl({
   );
 }
 
-function getPersonaOwnerLabel(persona: AgentPersona | undefined, user: User | null, isNew: boolean) {
+function getPersonaOwnerInfo(persona: AgentPersona | undefined, user: User | null, isNew: boolean) {
   if (isNew) {
-    return user?.name || user?.email || 'You';
+    return {
+      ownerId: user?.id ?? null,
+      ownerName: user?.name ?? null,
+      ownerEmail: user?.email ?? null,
+      ownerAvatarUrl: user?.avatarUrl ?? null,
+    };
   }
-  return persona?.creatorName || persona?.createdBy || 'Workspace';
+  return {
+    ownerId: persona?.createdBy ?? null,
+    ownerName: persona?.creatorName ?? null,
+    ownerEmail: null,
+    ownerAvatarUrl: null,
+  };
 }
 
 function EmptyTabMessage({ children }: { children: React.ReactNode }) {
@@ -506,20 +522,38 @@ function EmptyTabMessage({ children }: { children: React.ReactNode }) {
 }
 
 function PersonaDetailSkeleton() {
+  const pulse = 'animate-pulse rounded bg-neutral-100 dark:bg-neutral-700';
   return (
     <SplitDetailLayout
       backTo="/settings/personas"
       backLabel="Back to Personas"
-      title="Loading Persona"
+      title="Loading…"
       metadata={
-        <div className="space-y-4">
-          <div className="h-10 animate-pulse rounded bg-neutral-100 dark:bg-neutral-700" />
-          <div className="h-10 animate-pulse rounded bg-neutral-100 dark:bg-neutral-700" />
-          <div className="h-24 animate-pulse rounded bg-neutral-100 dark:bg-neutral-700" />
+        <div className="space-y-6">
+          <div className="space-y-3">
+            <div className={`h-3 w-20 ${pulse}`} />
+            <div className="grid grid-cols-[72px_minmax(0,1fr)] gap-3">
+              <div className={`h-9 ${pulse}`} />
+              <div className={`h-9 ${pulse}`} />
+            </div>
+            <div className={`h-24 ${pulse}`} />
+            <div className={`h-9 ${pulse}`} />
+            <div className={`h-9 ${pulse}`} />
+          </div>
+          <div className="space-y-3">
+            <div className={`h-3 w-20 ${pulse}`} />
+            <div className="flex items-center gap-3">
+              <div className={`h-8 w-8 rounded-full ${pulse}`} />
+              <div className={`h-4 w-32 ${pulse}`} />
+            </div>
+          </div>
         </div>
       }
     >
-      <div className="h-[34rem] animate-pulse rounded bg-neutral-100 dark:bg-neutral-700" />
+      <div className="space-y-3">
+        <div className={`h-9 w-48 ${pulse}`} />
+        <div className={`h-[30rem] ${pulse}`} />
+      </div>
     </SplitDetailLayout>
   );
 }

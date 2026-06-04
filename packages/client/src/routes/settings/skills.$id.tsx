@@ -322,20 +322,41 @@ function getSkillOwner(skill: Skill | undefined, user: ReturnType<typeof useAuth
 }
 
 function SkillDetailSkeleton() {
+  const pulse = 'animate-pulse rounded bg-neutral-100 dark:bg-neutral-700';
   return (
     <SplitDetailLayout
       backTo="/settings/skills"
       backLabel="Back to Skills"
-      title="Loading Skill"
+      title="Loading…"
       metadata={
-        <div className="space-y-4">
-          <div className="h-10 animate-pulse rounded bg-neutral-100 dark:bg-neutral-700" />
-          <div className="h-10 animate-pulse rounded bg-neutral-100 dark:bg-neutral-700" />
-          <div className="h-24 animate-pulse rounded bg-neutral-100 dark:bg-neutral-700" />
+        <div className="space-y-6">
+          <div className="space-y-3">
+            <div className={`h-3 w-20 ${pulse}`} />
+            <div className={`h-9 ${pulse}`} />
+            <div className={`h-9 ${pulse}`} />
+            <div className={`h-24 ${pulse}`} />
+          </div>
+          <div className="space-y-3">
+            <div className={`h-3 w-20 ${pulse}`} />
+            <div className="flex items-center gap-3">
+              <div className={`h-8 w-8 rounded-full ${pulse}`} />
+              <div className={`h-4 w-32 ${pulse}`} />
+            </div>
+            <div className={`h-9 ${pulse}`} />
+          </div>
+          <div className="space-y-3">
+            <div className={`h-3 w-20 ${pulse}`} />
+            <div className={`h-5 w-16 ${pulse}`} />
+            <div className={`h-4 w-24 ${pulse}`} />
+          </div>
         </div>
       }
     >
-      <div className="h-[34rem] animate-pulse rounded bg-neutral-100 dark:bg-neutral-700" />
+      <div className="space-y-3">
+        <div className={`h-3 w-16 ${pulse}`} />
+        <div className={`h-10 ${pulse}`} />
+        <div className={`h-[32rem] ${pulse}`} />
+      </div>
     </SplitDetailLayout>
   );
 }
