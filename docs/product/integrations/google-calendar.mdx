@@ -1,0 +1,96 @@
+---
+title: Google Calendar
+description: Read and write Google Calendar events across the user's calendars.
+---
+
+Read and write Google Calendar events across the user's calendars.
+
+## Connection summary
+
+| Field | Value |
+| --- | --- |
+| Service slug | `google_calendar` |
+| Display name | Google Calendar |
+| Auth type | `oauth2` |
+| Supported entities | `calendars`, `events` |
+
+## Setup
+
+OAuth 2.0 — the user connects this integration through Valet's connection screen, which redirects to the provider's OAuth consent flow and stores the resulting access token in the per-user credential store.
+
+See [OAuth setup](/oauth-setup) for environment variables and connection flow.
+
+## Actions
+
+5 actions are defined for Google Calendar. Risk levels determine approval behavior — see [Approvals](/product/approvals) for what `low`, `medium`, `high`, and `critical` mean at run time.
+
+| Action ID | What it does | Key params | Risk |
+| --- | --- | --- | --- |
+| `calendar.list_events` | Lists or searches Google Calendar events. Defaults to the user's primary calendar starting now. Use timeMin/timeMax (RFC3339 timestamps) to bound the window, q for free-text search, and maxResults to cap the count. Returns event IDs needed for updateEvent and deleteEvent. | `calendarId`?, `q`?, `timeMin`?, `timeMax`?, `maxResults`?, `singleEvents`? | low |
+| `calendar.create_event` | Creates a new event on a Google Calendar. Supports timed events (start/end with dateTime) and all-day events (start/end with date). Set sendUpdates to email invitations to attendees. | `calendarId`?, `summary`, `description`?, `location`?, `attendees`?, `sendUpdates`?, `conferenceData`? | medium |
+| `calendar.update_event` | Updates an existing Google Calendar event with PATCH semantics — only the fields you provide are changed; everything else stays the same. Common uses: reschedule (set start+end), retitle (set summary), add/remove attendees (set attendees array which fully replaces). | `calendarId`?, `eventId`, `summary`?, `description`?, `location`?, `attendees`?, `sendUpdates`? | medium |
+| `calendar.delete_event` | Deletes an event from a Google Calendar. This is permanent — the event is removed, not trashed. Use sendUpdates to email cancellations to attendees. | `calendarId`?, `eventId`, `sendUpdates`? | high |
+| `calendar.quick_add` | Creates a calendar event from a natural-language string using Google Calendar's quick-add parser. Examples: "Lunch with Sarah tomorrow at 12pm", "Dentist appointment next Tuesday 3-4pm", "Team standup every weekday 9am". Faster than create_event when you don't need attendees, descriptions, or precise control over fields. | `calendarId`?, `text`, `sendUpdates`? | medium |
+
+## Action parameters
+
+### `calendar.list_events`
+
+Lists or searches Google Calendar events. Defaults to the user's primary calendar starting now. Use timeMin/timeMax (RFC3339 timestamps) to bound the window, q for free-text search, and maxResults to cap the count. Returns event IDs needed for updateEvent and deleteEvent.
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `calendarId` | string | No | Calendar ID. Defaults to "primary" (the user's main calendar). |
+| `q` | string | No | Free-text search across summary, description, location, and attendees. |
+| `timeMin` | string | No | Lower bound (inclusive) as RFC3339 timestamp, e.g. "2026-04-10T00:00:00-08:00". Defaults to now. |
+| `timeMax` | string | No | Upper bound (exclusive) as RFC3339 timestamp. |
+| `maxResults` | number | No | Maximum number of events to return (1-2500). Defaults to 25. |
+| `singleEvents` | boolean | No | If true (default), expands recurring events into individual instances. Set false to receive recurring events as a single record. |
+
+### `calendar.create_event`
+
+Creates a new event on a Google Calendar. Supports timed events (start/end with dateTime) and all-day events (start/end with date). Set sendUpdates to email invitations to attendees.
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `calendarId` | string | No | Calendar ID. Defaults to "primary". |
+| `summary` | string | Yes | Event title. |
+| `description` | string | No | Event description / notes. |
+| `location` | string | No | Physical address or location string. |
+| `attendees` | array | No | List of attendees to invite. |
+| `sendUpdates` | enum(all,externalOnly,none) | No | Whether to send email invitations: "all" sends to everyone, "externalOnly" only to non-domain attendees, "none" sends nothing (default). |
+| `conferenceData` | boolean | No | If true, attaches an automatically generated Google Meet link to the event. |
+
+### `calendar.update_event`
+
+Updates an existing Google Calendar event with PATCH semantics — only the fields you provide are changed; everything else stays the same. Common uses: reschedule (set start+end), retitle (set summary), add/remove attendees (set attendees array which fully replaces).
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `calendarId` | string | No | Calendar ID. Defaults to "primary". |
+| `eventId` | string | Yes | The event ID to update (from list_events). |
+| `summary` | string | No | New event title. |
+| `description` | string | No | New event description. |
+| `location` | string | No | New location. |
+| `attendees` | array | No | Replaces the entire attendee list. To add one, fetch the event first. |
+| `sendUpdates` | enum(all,externalOnly,none) | No | Whether to email attendees about the change. |
+
+### `calendar.delete_event`
+
+Deletes an event from a Google Calendar. This is permanent — the event is removed, not trashed. Use sendUpdates to email cancellations to attendees.
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `calendarId` | string | No | Calendar ID. Defaults to "primary". |
+| `eventId` | string | Yes | The event ID to delete (from list_events). |
+| `sendUpdates` | enum(all,externalOnly,none) | No | Whether to email cancellation notices to attendees. |
+
+### `calendar.quick_add`
+
+Creates a calendar event from a natural-language string using Google Calendar's quick-add parser. Examples: "Lunch with Sarah tomorrow at 12pm", "Dentist appointment next Tuesday 3-4pm", "Team standup every weekday 9am". Faster than create_event when you don't need attendees, descriptions, or precise control over fields.
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `calendarId` | string | No | Calendar ID. Defaults to "primary". |
+| `text` | string | Yes | Natural-language description of the event. Google parses the title and time from this string. |
+| `sendUpdates` | enum(all,externalOnly,none) | No | Whether to email invitations (rarely useful for quick add). |

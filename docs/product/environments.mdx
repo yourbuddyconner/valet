@@ -1,0 +1,40 @@
+---
+title: Dev and prod
+description: Valet runs in two environments. Use prod for daily work and dev for testing new features.
+---
+
+Valet is typically deployed as two separate environments — **dev** and **prod**. They are independent installations: separate orchestrators, separate sessions, separate data, separate channels.
+
+## Which one should I use?
+
+For day-to-day work, **use prod**. It is the stable environment your team relies on.
+
+Use dev only when:
+
+- You are testing new Valet features before they reach prod.
+- Your admin or a Valet maintainer specifically asks you to.
+- You are reproducing a bug that needs to be investigated against a known build.
+
+If you are not sure which to use, prod is the right answer.
+
+## How they differ
+
+| | Dev | Prod |
+| --- | --- | --- |
+| Purpose | Testing new features and changes | Daily use |
+| Stability | May be unstable or break temporarily | Stable |
+| Orchestrator and sessions | Separate from prod | Separate from dev |
+| Data and memory | Separate from prod | Separate from dev |
+| Channels (Slack, Telegram) | Often a separate bot or chat | The real production channels |
+
+Because the environments are fully independent, work you do in dev does not appear in prod, and memory you save in one environment is not visible in the other.
+
+## How to tell which one you are in
+
+The URL is usually the giveaway. Dev typically runs at a different subdomain or worker route than prod. Your admin can confirm which URL is which. The orchestrator in each environment is also a separate session, so a "missing" memory or task is often just a sign you are in the other environment.
+
+## When to switch
+
+- **A new feature you want to try is in dev** — open the dev URL, do your testing there, then go back to prod for real work.
+- **You hit a bug in prod and want to confirm it is environment-specific** — try to reproduce it in dev.
+- **Otherwise** — stay in prod. There is rarely a reason to do real work in dev.

@@ -3,8 +3,9 @@ import { tool } from "@opencode-ai/plugin"
 export default tool({
   description:
     "Signal that your assigned task is fully complete and shut down this session. " +
-    "Call this when you have finished all work, committed your changes, and have nothing left to do. " +
-    "This will terminate your sandbox — only call it when you are truly done.",
+    "Only call this after git status is clean, commits are pushed to a remote branch, and a PR has been created when the task changed code. " +
+    "Calling this with uncommitted or unpushed work can destroy sandbox-only changes. " +
+    "This will terminate your sandbox -- only call it when you are truly done.",
   args: {
     _placeholder: tool.schema.string().optional().describe("Unused"),
   },

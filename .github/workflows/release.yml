@@ -17,6 +17,9 @@ jobs:
   release:
     name: Tag release
     runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: write
     steps:
       - uses: actions/checkout@v4
         with:
@@ -53,4 +56,9 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git tag ${{ steps.version.outputs.next }}
           git push origin ${{ steps.version.outputs.next }}
-          echo "Tagged ${{ steps.version.outputs.next }} → triggers deploy-prod"
+          echo "Tagged ${{ steps.version.outputs.next }}"
+
+      - name: Trigger prod deploy
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run deploy-prod.yml --ref "${{ steps.version.outputs.next }}"

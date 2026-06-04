@@ -1,0 +1,35 @@
+---
+title: Cloudflare
+description: Manage Cloudflare zones, DNS records, Workers, and Pages from a Valet session.
+---
+
+Manage Cloudflare zones, DNS records, Workers, and Pages from a Valet session.
+
+## Connection summary
+
+| Field | Value |
+| --- | --- |
+| Service slug | `cloudflare` |
+| Display name | Cloudflare |
+| Auth type | `oauth2` |
+| Supported entities | `zones`, `dns`, `workers`, `pages` |
+| MCP server URL | `https://mcp.cloudflare.com/mcp` |
+| Default action risk | `medium` |
+
+## Setup
+
+OAuth 2.0 — the user connects this integration through Valet's connection screen, which redirects to the provider's OAuth consent flow and stores the resulting access token in the per-user credential store.
+
+See [OAuth setup](/oauth-setup) for environment variables and connection flow.
+
+## Upstream documentation
+
+This integration proxies the Cloudflare MCP server. For the full, current list of available actions, see the [Cloudflare MCP server documentation](https://github.com/cloudflare/mcp).
+
+## Actions
+
+Actions for Cloudflare are proxied through a remote [Model Context Protocol](https://modelcontextprotocol.io) server at `https://mcp.cloudflare.com/mcp`. The exact list of actions, their parameters, and behavior are owned by the upstream MCP server — Valet enumerates them at runtime when the integration is connected.
+
+Default risk level applied to Cloudflare actions: `medium`. Individual actions may carry their own risk level from the upstream server.
+
+Use `list_tools` with `service: cloudflare` from an agent session to see the live action list, parameter schemas, and per-action risk levels.

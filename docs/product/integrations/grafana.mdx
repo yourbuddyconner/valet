@@ -1,0 +1,35 @@
+---
+title: Grafana Cloud
+description: Query Grafana Cloud dashboards, Prometheus, Loki, alerts, incidents, and on-call data.
+---
+
+Query Grafana Cloud dashboards, Prometheus, Loki, alerts, incidents, and on-call data.
+
+## Connection summary
+
+| Field | Value |
+| --- | --- |
+| Service slug | `grafana` |
+| Display name | Grafana Cloud |
+| Auth type | `oauth2` |
+| Supported entities | `dashboards`, `prometheus`, `loki`, `alerts`, `incidents`, `oncall` |
+| MCP server URL | `https://mcp.grafana.com/mcp` |
+| Default action risk | `low` |
+
+## Setup
+
+OAuth 2.0 — the user connects this integration through Valet's connection screen, which redirects to the provider's OAuth consent flow and stores the resulting access token in the per-user credential store.
+
+See [OAuth setup](/oauth-setup) for environment variables and connection flow.
+
+## Upstream documentation
+
+This integration proxies the Grafana MCP server. For the full, current list of available actions, see the [Grafana MCP server documentation](https://grafana.com/docs/grafana-cloud/machine-learning/mcp/).
+
+## Actions
+
+Actions for Grafana Cloud are proxied through a remote [Model Context Protocol](https://modelcontextprotocol.io) server at `https://mcp.grafana.com/mcp`. The exact list of actions, their parameters, and behavior are owned by the upstream MCP server — Valet enumerates them at runtime when the integration is connected.
+
+Default risk level applied to Grafana Cloud actions: `low`. Individual actions may carry their own risk level from the upstream server.
+
+Use `list_tools` with `service: grafana` from an agent session to see the live action list, parameter schemas, and per-action risk levels.

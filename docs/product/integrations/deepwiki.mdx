@@ -1,0 +1,34 @@
+---
+title: DeepWiki
+description: Read repository-level documentation and knowledge bases hosted on DeepWiki.
+---
+
+Read repository-level documentation and knowledge bases hosted on DeepWiki.
+
+## Connection summary
+
+| Field | Value |
+| --- | --- |
+| Service slug | `deepwiki` |
+| Display name | DeepWiki |
+| Auth type | `none` |
+| Supported entities | `repositories`, `documentation` |
+| MCP server URL | `https://mcp.deepwiki.com/mcp` |
+| Default action risk | `low` |
+| MCP auth | No auth (public MCP) |
+
+## Setup
+
+No authentication — this integration calls a public service and does not require credentials.
+
+## Upstream documentation
+
+This integration proxies the DeepWiki MCP server. For the full, current list of available actions, see the [DeepWiki MCP documentation](https://docs.devin.ai/work-with-devin/deepwiki-mcp).
+
+## Actions
+
+Actions for DeepWiki are proxied through a remote [Model Context Protocol](https://modelcontextprotocol.io) server at `https://mcp.deepwiki.com/mcp`. The exact list of actions, their parameters, and behavior are owned by the upstream MCP server — Valet enumerates them at runtime when the integration is connected.
+
+Default risk level applied to DeepWiki actions: `low`. Individual actions may carry their own risk level from the upstream server.
+
+Use `list_tools` with `service: deepwiki` from an agent session to see the live action list, parameter schemas, and per-action risk levels.

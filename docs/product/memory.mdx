@@ -18,16 +18,50 @@ Ask Valet to remember things that should affect future work:
 
 Do not use memory for every routine status update. If it only matters inside one task, keep it in that task.
 
-## How to add memory
+## Where memory lives
 
-You can tell Valet directly:
+Valet organizes what it remembers into a few areas. You do not need to manage these by hand, but it helps to know what they are:
+
+| Area | What goes there |
+| --- | --- |
+| Preferences | How you like Valet to write, which tools you prefer, how you want it to behave. These are always loaded at the start of each session. |
+| Projects | Notes about specific projects — names, links, conventions, key decisions. |
+| Workflows | Recurring processes the team uses, such as how a release is cut or how a ticket is triaged. |
+| Journal | Day-to-day notes about what Valet did and what happened. The current and previous day's notes are surfaced automatically. |
+| Notes | Anything else worth remembering that does not fit the categories above. |
+
+**Preferences are pinned.** They are not pruned and they are always loaded into the next session, so they are the right home for anything Valet should never forget about you or your team.
+
+**Other notes can age out.** When memory gets large, less-used notes may be removed to make room. Anything that should be permanent — a team procedure, a hard rule, a strong preference — belongs in preferences or as a clearly named project note, not as a one-off scratch note.
+
+## How to tell Valet to remember something
+
+Just ask in chat. You do not need a special syntax.
 
 ```text
 Remember that weekly support summaries should include open customer issues,
 stale follow-ups, and any accounts waiting on engineering.
 ```
 
-Valet may also suggest saving something when it looks broadly useful.
+```text
+Remember that our Linear team prefix is ACME and our default project is "Platform".
+```
+
+Valet may also suggest saving something on its own when it looks broadly useful — for example, after you correct it on the same thing twice.
+
+## How to tell Valet to forget something
+
+Ask in chat. Be specific about what should go away.
+
+```text
+Forget the note about including stale follow-ups in the weekly support summary.
+```
+
+```text
+Remove my preference about avoiding emoji in summaries — I changed my mind.
+```
+
+Valet confirms what it removed. If the same detail still lives somewhere else (such as a project note and a preference), say so and Valet will remove both.
 
 ## Keep memory useful
 
@@ -40,6 +74,8 @@ Good saved memory is:
 - Updated when the process changes.
 
 Bad memory is vague, temporary, or too broad.
+
+If Valet starts getting things wrong because of an old note, ask it to update or remove the note. Memory is meant to help — when it stops helping, replace it.
 
 ## Split larger work
 
@@ -54,6 +90,6 @@ Split work when:
 
 ## Personal and team memory
 
-Some memory is personal, such as your writing preferences. Some memory belongs to a team, such as a shared customer follow-up process.
+Some memory is personal, such as your writing preferences. Some memory belongs to a team, such as a shared customer follow-up process. Personal preferences travel with you across sessions. Shared instructions and processes are better captured as [skills and personas](/product/skills-and-personas) so the whole team picks them up.
 
 Admins should decide which shared instructions, workflows, and skills belong to the team.
