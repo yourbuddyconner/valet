@@ -18,6 +18,8 @@ jobs:
     name: Rollback ${{ inputs.environment }} to ${{ inputs.version }}
     runs-on: ubuntu-latest
     environment: ${{ inputs.environment }}
+    permissions:
+      contents: read
 
     steps:
       - uses: actions/checkout@v4
