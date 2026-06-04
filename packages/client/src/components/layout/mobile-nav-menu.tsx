@@ -10,6 +10,8 @@ const navItems = [
   { href: '/automation', label: 'Automation', icon: AutomationIcon },
   { href: '/sessions', label: 'Sessions', icon: SessionsIcon },
   { href: '/integrations', label: 'Integrations', icon: IntegrationsIcon },
+  { href: '/settings/skills', label: 'Skills', icon: SkillsIcon },
+  { href: '/settings/personas', label: 'Personas', icon: PersonasIcon },
   { href: '/settings', label: 'Settings', icon: SettingsIcon },
 ];
 
@@ -100,10 +102,17 @@ export function MobileNavMenu({ className }: MobileNavMenuProps) {
           <nav className="px-3 py-4">
             <ul className="space-y-1">
               {navItems.map((item, index) => {
-                const isActive =
+                const matchesThis =
                   item.href === '/'
                     ? currentPath === '/'
-                    : currentPath.startsWith(item.href);
+                    : currentPath === item.href || currentPath.startsWith(item.href + '/');
+                const hasMoreSpecificMatch = matchesThis && navItems.some(
+                  (other) =>
+                    other.href !== item.href &&
+                    other.href.startsWith(item.href + '/') &&
+                    (currentPath === other.href || currentPath.startsWith(other.href + '/'))
+                );
+                const isActive = matchesThis && !hasMoreSpecificMatch;
 
                 return (
                   <li
@@ -267,6 +276,25 @@ function InboxIcon({ className }: { className?: string }) {
     <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" className={className}>
       <polyline points="22 12 16 12 14 15 10 15 8 12 2 12" />
       <path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z" />
+    </svg>
+  );
+}
+
+function SkillsIcon({ className }: { className?: string }) {
+  return (
+    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" className={className}>
+      <path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1 0-5H20" />
+    </svg>
+  );
+}
+
+function PersonasIcon({ className }: { className?: string }) {
+  return (
+    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" className={className}>
+      <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
+      <circle cx="9" cy="7" r="4" />
+      <path d="M22 21v-2a4 4 0 0 0-3-3.87" />
+      <path d="M16 3.13a4 4 0 0 1 0 7.75" />
     </svg>
   );
 }

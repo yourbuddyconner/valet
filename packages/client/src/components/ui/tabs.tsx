@@ -100,10 +100,11 @@ function TabsContent({ value, children, className }: TabsContentProps) {
 
   return (
     <div
+      key={value}
       role="tabpanel"
       id={`tabpanel-${value}`}
       tabIndex={0}
-      className={cn('mt-4 focus-visible:outline-none', className)}
+      className={cn('mt-4 animate-fade-in focus-visible:outline-none', className)}
     >
       {children}
     </div>

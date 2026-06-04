@@ -1,6 +1,6 @@
 import { eq, and, or, sql, asc, inArray } from 'drizzle-orm';
 import type { AppDb } from '../drizzle.js';
-import { skills, personaSkills, orgDefaultSkills } from '../schema/index.js';
+import { skills, personaSkills, orgDefaultSkills, users } from '../schema/index.js';
 import type { Skill, SkillSummary, SkillSource, SkillVisibility } from '@valet/shared';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
@@ -8,6 +8,11 @@ import type { Skill, SkillSummary, SkillSource, SkillVisibility } from '@valet/s
 export type SkillRecord = typeof skills.$inferSelect;
 export type PersonaSkillRecord = typeof personaSkills.$inferSelect;
 export type OrgDefaultSkillRecord = typeof orgDefaultSkills.$inferSelect;
+type SkillWithOwnerRow = SkillRecord & {
+  ownerName?: string | null;
+  ownerEmail?: string | null;
+  ownerAvatarUrl?: string | null;
+};
 
 export type SkillDeliveryItem = { filename: string; content: string };
 
@@ -161,7 +166,28 @@ export async function deleteSkill(db: AppDb, id: string): Promise<void> {
 }
 
 export async function getSkill(db: AppDb, id: string): Promise<Skill | null> {
-  const row = await db.select().from(skills).where(eq(skills.id, id)).get();
+  const row = await db
+    .select({
+      id: skills.id,
+      orgId: skills.orgId,
+      ownerId: skills.ownerId,
+      ownerName: users.name,
+      ownerEmail: users.email,
+      ownerAvatarUrl: users.avatarUrl,
+      source: skills.source,
+      name: skills.name,
+      slug: skills.slug,
+      description: skills.description,
+      content: skills.content,
+      visibility: skills.visibility,
+      status: skills.status,
+      createdAt: skills.createdAt,
+      updatedAt: skills.updatedAt,
+    })
+    .from(skills)
+    .leftJoin(users, eq(users.id, skills.ownerId))
+    .where(eq(skills.id, id))
+    .get();
   if (!row) return null;
   return rowToSkill(row);
 }
@@ -177,8 +203,25 @@ export async function getSkillBySlug(
   if (userId !== undefined) {
     // Return skills the user can see: their own private skills OR shared skills
     const row = await db
-      .select()
+      .select({
+        id: skills.id,
+        orgId: skills.orgId,
+        ownerId: skills.ownerId,
+        ownerName: users.name,
+        ownerEmail: users.email,
+        ownerAvatarUrl: users.avatarUrl,
+        source: skills.source,
+        name: skills.name,
+        slug: skills.slug,
+        description: skills.description,
+        content: skills.content,
+        visibility: skills.visibility,
+        status: skills.status,
+        createdAt: skills.createdAt,
+        updatedAt: skills.updatedAt,
+      })
       .from(skills)
+      .leftJoin(users, eq(users.id, skills.ownerId))
       .where(and(
         ...baseConditions,
         or(eq(skills.ownerId, userId), eq(skills.visibility, 'shared')),
@@ -189,7 +232,28 @@ export async function getSkillBySlug(
   }
 
   // No userId hint — return any matching skill (legacy behavior)
-  const row = await db.select().from(skills).where(and(...baseConditions)).get();
+  const row = await db
+    .select({
+      id: skills.id,
+      orgId: skills.orgId,
+      ownerId: skills.ownerId,
+      ownerName: users.name,
+      ownerEmail: users.email,
+      ownerAvatarUrl: users.avatarUrl,
+      source: skills.source,
+      name: skills.name,
+      slug: skills.slug,
+      description: skills.description,
+      content: skills.content,
+      visibility: skills.visibility,
+      status: skills.status,
+      createdAt: skills.createdAt,
+      updatedAt: skills.updatedAt,
+    })
+    .from(skills)
+    .leftJoin(users, eq(users.id, skills.ownerId))
+    .where(and(...baseConditions))
+    .get();
   if (!row) return null;
   return rowToSkill(row);
 }
@@ -206,9 +270,12 @@ export async function searchSkills(
   const limit = options?.limit ?? 20;
 
   let q = sql`
-    SELECT s.id, s.name, s.slug, s.description, s.source, s.visibility, s.owner_id as "ownerId", s.updated_at as "updatedAt"
+    SELECT s.id, s.name, s.slug, s.description, s.source, s.visibility, s.owner_id as "ownerId",
+           u.name as "ownerName", u.email as "ownerEmail", u.avatar_url as "ownerAvatarUrl",
+           s.updated_at as "updatedAt"
     FROM skills s
     INNER JOIN skills_fts f ON f.rowid = s.rowid
+    LEFT JOIN users u ON u.id = s.owner_id
     WHERE f.skills_fts MATCH ${query}
       AND s.org_id = ${orgId}
       AND s.status = 'active'
@@ -235,8 +302,11 @@ export async function listSkills(
 
   // Base query with visibility check
   let query = sql`
-    SELECT s.id, s.name, s.slug, s.description, s.source, s.visibility, s.owner_id as "ownerId", s.updated_at as "updatedAt"
+    SELECT s.id, s.name, s.slug, s.description, s.source, s.visibility, s.owner_id as "ownerId",
+           u.name as "ownerName", u.email as "ownerEmail", u.avatar_url as "ownerAvatarUrl",
+           s.updated_at as "updatedAt"
     FROM skills s
+    LEFT JOIN users u ON u.id = s.owner_id
     WHERE s.org_id = ${orgId}
       AND s.status = ${status}
       AND (s.visibility = 'shared' OR s.owner_id = ${userId})
@@ -443,10 +513,14 @@ export async function getOrgDefaultSkillsRich(
       description: skills.description,
       visibility: skills.visibility,
       ownerId: skills.ownerId,
+      ownerName: users.name,
+      ownerEmail: users.email,
+      ownerAvatarUrl: users.avatarUrl,
       updatedAt: skills.updatedAt,
     })
     .from(orgDefaultSkills)
     .innerJoin(skills, eq(skills.id, orgDefaultSkills.skillId))
+    .leftJoin(users, eq(users.id, skills.ownerId))
     .where(and(
       eq(orgDefaultSkills.orgId, orgId),
       eq(skills.status, 'active'),
@@ -490,11 +564,14 @@ export async function validateSkillIds(db: AppDb, ids: string[]): Promise<Set<st
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
-function rowToSkill(row: SkillRecord): Skill {
+function rowToSkill(row: SkillWithOwnerRow): Skill {
   return {
     id: row.id,
     orgId: row.orgId,
     ownerId: row.ownerId,
+    ownerName: row.ownerName ?? null,
+    ownerEmail: row.ownerEmail ?? null,
+    ownerAvatarUrl: row.ownerAvatarUrl ?? null,
     source: row.source as SkillSource,
     name: row.name,
     slug: row.slug,
