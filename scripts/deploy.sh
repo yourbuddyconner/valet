@@ -126,6 +126,39 @@ preflight() {
     echo -e "${GREEN}✓ Cloudflare${NC}"
 }
 
+build_client() {
+    local worker_url="$1"
+    local build_commit_hash
+    local build_version_tag=""
+    local build_args=()
+
+    build_commit_hash=$(git rev-parse --short=12 HEAD 2>/dev/null || echo "unknown")
+
+    if [ "${ENVIRONMENT}" = "prod" ]; then
+        build_version_tag=$(git describe --tags --exact-match HEAD 2>/dev/null || true)
+        if [ -z "${build_version_tag}" ] && [ "${GITHUB_REF_TYPE:-}" = "tag" ]; then
+            build_version_tag="${GITHUB_REF_NAME:-}"
+        fi
+    else
+        build_args=(-- --mode development)
+        echo -e "${YELLOW}Building client in development mode (ENVIRONMENT=${ENVIRONMENT})${NC}"
+    fi
+
+    echo -e "${GREEN}✓ Build metadata: env=${ENVIRONMENT}, commit=${build_commit_hash}${NC}"
+    if [ -n "${build_version_tag}" ]; then
+        echo -e "${GREEN}✓ Build version: ${build_version_tag}${NC}"
+    fi
+
+    (
+        cd packages/client
+        VITE_API_URL="${worker_url}/api" \
+        VITE_DEPLOY_ENVIRONMENT="${ENVIRONMENT}" \
+        VITE_BUILD_COMMIT_HASH="${build_commit_hash}" \
+        VITE_BUILD_VERSION_TAG="${build_version_tag}" \
+        pnpm run build "${build_args[@]}"
+    )
+}
+
 # ─── Subcommands ─────────────────────────────────────────────────────────────
 
 cmd_worker() {
@@ -195,14 +228,7 @@ cmd_client() {
     echo -e "${GREEN}✓ Using API URL: ${WORKER_URL}/api${NC}"
     echo ""
 
-    # Build in development mode for non-prod environments — preserves component
-    # names, React DevTools support, and readable stack traces.
-    local VITE_MODE_FLAG=""
-    if [ "${ENVIRONMENT}" != "prod" ]; then
-        VITE_MODE_FLAG="-- --mode development"
-        echo -e "${YELLOW}Building client in development mode (ENVIRONMENT=${ENVIRONMENT})${NC}"
-    fi
-    (cd packages/client && VITE_API_URL="${WORKER_URL}/api" pnpm run build ${VITE_MODE_FLAG})
+    build_client "${WORKER_URL}"
     (cd packages/client && wrangler pages deploy dist --project-name="$PAGES_PROJECT_NAME")
     echo -e "${GREEN}✓ Client deployed: https://${PAGES_PROJECT_NAME}.pages.dev${NC}"
 }
@@ -269,12 +295,7 @@ cmd_all() {
     # --- Step 7: Build and deploy client ---
     echo ""
     echo "Step 7/7: Building and deploying client..."
-    local VITE_MODE_FLAG=""
-    if [ "${ENVIRONMENT}" != "prod" ]; then
-        VITE_MODE_FLAG="-- --mode development"
-        echo -e "${YELLOW}Building client in development mode (ENVIRONMENT=${ENVIRONMENT})${NC}"
-    fi
-    (cd packages/client && VITE_API_URL="${WORKER_URL}/api" pnpm run build ${VITE_MODE_FLAG})
+    build_client "${WORKER_URL}"
     (cd packages/client && wrangler pages deploy dist --project-name="$PAGES_PROJECT_NAME")
     echo -e "${GREEN}✓ Client deployed${NC}"
 

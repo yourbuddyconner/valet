@@ -21,6 +21,9 @@ import { useIsMobile } from '@/hooks/use-is-mobile';
 import { useAutoRestartOrchestrator } from '@/hooks/use-auto-restart-orchestrator';
 import { filterChildSessionEventsForThread, getEffectiveActiveThreadId } from './thread-selection';
 import { getPendingResponseRequiredThreadIds, selectVisibleInteractivePrompts } from '@/lib/approval-prompts';
+import { getBuildChrome } from '@/lib/build-info';
+import { cn } from '@/lib/cn';
+import { BuildBadge } from '@/components/layout/build-badge';
 
 const InteractivePromptCard = lazy(async () => {
   const mod = await import('@/components/session/interactive-prompt-card');
@@ -77,6 +80,7 @@ export function ChatContainer({ sessionId, routeSessionId, initialThreadId, init
   const router = useRouter();
   const navigate = useNavigate();
   const isMobile = useIsMobile();
+  const buildChrome = getBuildChrome();
   // Use the route-level param for navigations so the URL stays stable
   // (e.g. "/sessions/orchestrator" instead of "/sessions/orchestrator:user-1:abc").
   const navSessionId = routeSessionId ?? sessionId;
@@ -359,7 +363,13 @@ export function ChatContainer({ sessionId, routeSessionId, initialThreadId, init
     <div className="flex h-full flex-col">
       {/* Header — Title bar */}
       {!hideChrome && (
-        <header className="flex h-10 shrink-0 items-center justify-between border-b border-border bg-surface-0 px-3 dark:bg-surface-0">
+        <header
+          className={cn(
+            'relative flex h-10 shrink-0 items-center justify-between border-b px-3',
+            buildChrome.headerClassName
+          )}
+        >
+          <span className={cn('absolute inset-x-0 top-0 h-0.5', buildChrome.topBarClassName)} />
           <div className="flex min-w-0 items-center gap-2">
             <Button variant="ghost" size="sm" className="h-6 px-1.5 text-neutral-400 hover:text-neutral-700 dark:text-neutral-500 dark:hover:text-neutral-200" onClick={() => session?.isOrchestrator ? navigate({ to: '/orchestrator' }) : router.history.back()}>
               <BackIcon className="h-3.5 w-3.5" />
@@ -400,7 +410,8 @@ export function ChatContainer({ sessionId, routeSessionId, initialThreadId, init
               <StuckWakingRestart sessionId={sessionId} />
             )}
           </div>
-          <div className="flex items-center gap-0.5">
+          <div className="flex shrink-0 items-center gap-1">
+            <BuildBadge compact className="max-w-[7.25rem] sm:max-w-none" />
             {canShareSession && (
               <Button
                 variant="ghost"

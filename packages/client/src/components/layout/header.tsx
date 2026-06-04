@@ -2,6 +2,9 @@ import * as React from 'react';
 import { useNavigate } from '@tanstack/react-router';
 import { useAuthStore } from '@/stores/auth';
 import { useTheme } from '@/hooks/use-theme';
+import { getBuildChrome } from '@/lib/build-info';
+import { cn } from '@/lib/cn';
+import { BuildBadge } from './build-badge';
 import {
   useMarkNonActionableNotificationsRead,
   useNotificationCount,
@@ -28,6 +31,7 @@ export function Header() {
   const markNonActionableRead = useMarkNonActionableNotificationsRead();
   const [notificationsOpen, setNotificationsOpen] = React.useState(false);
   const clearAttemptedRef = React.useRef(false);
+  const buildChrome = getBuildChrome();
 
   React.useEffect(() => {
     if (!notificationsOpen) {
@@ -57,9 +61,19 @@ export function Header() {
     : user?.email?.[0]?.toUpperCase() ?? '?';
 
   return (
-    <header className="flex h-12 items-center justify-between border-b border-neutral-200 bg-surface-0 px-4 dark:border-neutral-800 dark:bg-surface-0">
-      <div className="flex items-center md:hidden">
-        <MobileNavMenu />
+    <header
+      className={cn(
+        'relative flex h-12 items-center justify-between border-b px-4',
+        buildChrome.headerClassName
+      )}
+    >
+      <span className={cn('absolute inset-x-0 top-0 h-0.5', buildChrome.topBarClassName)} />
+
+      <div className="flex min-w-0 items-center gap-3">
+        <div className="flex items-center md:hidden">
+          <MobileNavMenu />
+        </div>
+        <BuildBadge />
       </div>
 
       <div className="ml-auto flex items-center gap-2">
