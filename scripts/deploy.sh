@@ -31,6 +31,7 @@ set -a; source "$DEPLOY_CONFIG"; set +a
 # Derived names (all overridable via config file)
 CF_WORKER_NAME="${CF_WORKER_NAME:-$PROJECT_NAME}"
 PAGES_PROJECT_NAME="${PAGES_PROJECT_NAME:-${PROJECT_NAME}-client}"
+PAGES_DEPLOY_BRANCH="${PAGES_DEPLOY_BRANCH:-main}"
 D1_DATABASE_NAME="${D1_DATABASE_NAME:-${PROJECT_NAME}-db}"
 R2_BUCKET_NAME="${R2_BUCKET_NAME:-${PROJECT_NAME}-storage}"
 MODAL_APP_NAME="${MODAL_APP_NAME:-${PROJECT_NAME}-backend}"
@@ -159,6 +160,16 @@ build_client() {
     )
 }
 
+deploy_client_pages() {
+    echo -e "${GREEN}✓ Deploying Pages branch: ${PAGES_DEPLOY_BRANCH}${NC}"
+    (
+        cd packages/client
+        wrangler pages deploy dist \
+            --project-name="$PAGES_PROJECT_NAME" \
+            --branch="$PAGES_DEPLOY_BRANCH"
+    )
+}
+
 # ─── Subcommands ─────────────────────────────────────────────────────────────
 
 cmd_worker() {
@@ -229,7 +240,7 @@ cmd_client() {
     echo ""
 
     build_client "${WORKER_URL}"
-    (cd packages/client && wrangler pages deploy dist --project-name="$PAGES_PROJECT_NAME")
+    deploy_client_pages
     echo -e "${GREEN}✓ Client deployed: https://${PAGES_PROJECT_NAME}.pages.dev${NC}"
 }
 
@@ -296,7 +307,7 @@ cmd_all() {
     echo ""
     echo "Step 7/7: Building and deploying client..."
     build_client "${WORKER_URL}"
-    (cd packages/client && wrangler pages deploy dist --project-name="$PAGES_PROJECT_NAME")
+    deploy_client_pages
     echo -e "${GREEN}✓ Client deployed${NC}"
 
     # --- Summary ---
