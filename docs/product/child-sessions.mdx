@@ -1,0 +1,95 @@
+---
+title: Child sessions
+description: Understand when Valet starts a separate sandbox for code, files, or long-running work, and why repo work runs there by design.
+---
+
+import { FeatureCard } from '/snippets/feature-card.mdx';
+import { MascotNote } from '/snippets/mascot-note.mdx';
+
+A child session is a separate workspace Valet starts when a task needs stronger isolation than the main conversation can offer. Code changes, files, a terminal, a browser, or a long-running subtask run in a child session so they do not mix with the orchestrator task thread.
+
+You stay in the task thread. The child does the work in the background and reports results back.
+
+<MascotNote
+  title="Two places"
+  heading="One conversation, one workspace"
+  image="/images/characters/laptop.png"
+  alt="Valet working at a laptop"
+>
+  Keep talking to Valet in the task thread. The child session is where the actual files, commits, and long-running tools live. You should rarely need to open it directly.
+</MascotNote>
+
+## Why Valet starts a child
+
+The orchestrator task thread is your main conversation — quick to read, easy to share, and good for planning and review. It is not the right place to hold a checked-out repository, run a build, or keep a browser open for an hour.
+
+Valet starts a child session when the work needs:
+
+- A repository checked out on disk.
+- A terminal, a build, or a test run.
+- File creation, editing, or generation that should not clutter the conversation.
+- A browser session for sign-in or scraping.
+- A long task that should keep running while you do other things.
+- A focused subtask that should not interrupt the main thread.
+
+| Where | What lives there |
+| --- | --- |
+| Orchestrator task thread | The conversation, your follow-ups, approvals, progress updates, and the final result. |
+| Child session | A workspace, the repo checkout, files, the terminal, the browser, and any running tools. |
+
+## Why repo work runs in a child by design
+
+A common question: "Why can't Valet just edit my repo from the main conversation?" The short answer is isolation.
+
+Repository work needs a real checked-out copy of the code, a git environment, credentials scoped to that repo, and a place to run builds and tests. Doing that inside the orchestrator's main conversation would:
+
+- Mix files and shell state into a thread meant for talking with you.
+- Share one set of credentials across every conversation at once.
+- Make it impossible to safely cancel or replace one piece of work without affecting the rest.
+
+A child session gets its own sandbox, its own scoped credentials, and its own working directory. If something goes wrong, that one workspace is the only thing affected. When the work is done, the result comes back into the task thread.
+
+## When children are reused vs. ended
+
+Children are not permanent. Valet creates them when a task needs one and ends them when the work is finished. If you keep asking for related changes on the same repository in the same thread, Valet can keep working in the same child so it does not have to re-clone or re-set-up every time.
+
+In general:
+
+- A child is created when a task needs a sandbox.
+- The same child is reused while you keep iterating on the same piece of work.
+- The child is ended once the work is done and reported back.
+- A stuck or off-track child can be cancelled and replaced by a new one.
+
+## What you see in the task thread
+
+Even when a child is doing the real work, the task thread should still answer:
+
+- Why a child session was started.
+- What it is currently doing.
+- Whether anything is waiting on you (questions, approvals).
+- What changed, with links to the result (a PR, a file, a draft).
+
+If the task thread does not tell you those things, ask Valet to summarize what the child is doing.
+
+## Persistence and recovery
+
+A child session is a live workspace, not a long-term store. Anything that should outlive the task needs to leave the child — a commit pushed to GitHub, a doc saved in Drive, a draft delivered to the task thread.
+
+If a child session ends or is recovered before un-pushed work is saved, that work may not be recoverable. For coding work in particular, the rule of thumb is to push early and often. The [software engineering workflow](/product/software-workflow) page covers this in more detail.
+
+## Related
+
+<div className="valet-doc-grid">
+  <FeatureCard
+    eyebrow="Tasks"
+    title="The conversation"
+    description="The task thread owns the request, approvals, and final result. Child sessions report back here."
+    href="/product/tasks"
+  />
+  <FeatureCard
+    eyebrow="Engineering"
+    title="Software workflow"
+    description="How Valet works on a repo, why it lives in a child session, and how to recover from interruptions."
+    href="/product/software-workflow"
+  />
+</div>

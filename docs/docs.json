@@ -99,6 +99,25 @@
             ]
           },
           {
+            "group": "Integrations and channels",
+            "pages": [
+              "product/google-workspace",
+              "product/telegram-setup"
+            ]
+          },
+          {
+            "group": "Help and reference",
+            "pages": [
+              "product/troubleshooting",
+              "product/environments",
+              "product/triggers",
+              "product/models",
+              "product/child-sessions",
+              "product/software-workflow",
+              "product/billing"
+            ]
+          },
+          {
             "group": "Integrations",
             "pages": [
               "product/integrations/overview",

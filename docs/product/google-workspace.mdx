@@ -1,0 +1,110 @@
+---
+title: Google Workspace behavior
+description: How Valet works with Drive, Docs, Sheets, Gmail, and Calendar — access, labels, ownership, and common surprises.
+---
+
+import { MascotNote } from '/snippets/mascot-note.mdx';
+
+Valet can read and edit content across Google Workspace — files in Drive, content in Docs and Sheets, messages in Gmail, and events in Calendar. This page explains how Valet decides what it is allowed to touch, how ownership works, and a few behaviors that catch people off guard.
+
+<MascotNote
+  title="One tip"
+  heading="Point Valet at the file"
+  image="/images/characters/pointing-right.png"
+  alt="Valet pointing at a doc"
+>
+  The single most reliable way to get good results is to paste the Google Docs, Sheets, or Drive URL directly into the task. Valet treats that as the target and works from there.
+</MascotNote>
+
+## How Valet connects to Google
+
+Valet uses standard Google OAuth. Each user connects their own Google account, and Valet acts as that user when it makes API calls. Valet does not impersonate other users or share a single account across the team.
+
+This means:
+
+- Valet only sees what your own Google account can see.
+- Permissions are governed by Google's normal sharing model.
+- Revoking access at `myaccount.google.com` revokes it for Valet immediately.
+
+## Access to Drive, Docs, and Sheets
+
+For Drive, Docs, and Sheets, Valet uses a **labels-based access guard** when your admin has enabled it. The guard works on top of normal Google sharing:
+
+1. Your admin defines one or more Google Drive labels that mark files as available to Valet.
+2. When Valet tries to read, list, modify, or copy a file, it first checks whether the file has one of those labels.
+3. Files without a required label behave as if they do not exist — Valet cannot list them, search for them, or open them.
+4. When Valet creates a new file, the same label is applied automatically so subsequent access works.
+
+If the guard is not enabled, Valet falls back to standard Google permissions: anything your account can see, Valet can see.
+
+In either case, link sharing matters. If you share a file with Valet's user (your account) through normal Drive sharing, that file becomes reachable through the OAuth token. Combined with the labels guard, the rule of thumb is: a file is touchable when your account can see it **and** (if the guard is on) it has the required label.
+
+## Files Valet creates vs. files you own
+
+Some operations create a new file (a new doc, a new sheet, a copy of an existing file). Some operations modify a file you already own. The distinction matters:
+
+| Operation | Who owns the result | What happens to the original |
+| --- | --- | --- |
+| Create new doc/sheet | Valet's account (your connected Google account) | No original — this is a fresh file. |
+| Copy a file | The user the copy is made for | Original is untouched. |
+| Edit, append, or replace content in your file | You (unchanged) | Original is modified in place. |
+| Apply formatting, rename, or restructure | You (unchanged) | Original is modified in place. |
+
+When Valet creates a file, it lives in the Drive of the account Valet is connected to. If you want it in a specific shared drive or folder, tell Valet where to put it, or move it after the fact.
+
+## Common surprises
+
+These are behaviors users hit often. Setting expectations up front avoids most of the frustration.
+
+### "Copy and reformat this doc" can become a rewrite
+
+When you ask Valet to take an existing doc and produce a reformatted version, the most reliable path is usually to generate a new doc with the desired structure and content rather than mutating the original in place. That means the "copy" may end up looking less like a Google Docs "Make a copy" and more like a regenerated document.
+
+If preserving the exact original (revision history, comments, sharing) matters, say so explicitly — for example, "make a Google Drive copy of this doc first, then edit the copy." Otherwise, expect Valet to interpret "copy and edit" as "produce an edited version."
+
+### Formatting fidelity is not perfect
+
+Docs and Sheets have rich formatting (styles, layouts, embedded charts, complex tables). Valet can read and write a lot of it, but exotic formatting may not round-trip exactly. For high-stakes documents, ask Valet to do the content work and do the final polish yourself.
+
+### Comments and resolved discussions
+
+Valet can add, reply to, resolve, and delete comments. Resolved or deleted comments are gone from the doc's main view just like a manual resolve, so be deliberate when asking Valet to clean up comment threads.
+
+### Search and listing follow the same access rules
+
+When Valet searches Drive or lists files, the same access rules apply: it only sees files your account can see, and (if the labels guard is on) only files with the required label. A doc you expect to be there may not appear in a list because it is not labeled, even though Valet could open it directly if you pasted its URL.
+
+## How to point Valet at a specific file
+
+The most reliable handoff is a URL:
+
+- **Docs and Sheets** — paste the full URL from your browser.
+- **Drive files and folders** — paste the URL from the Drive UI.
+- **Multiple files** — paste each URL, or describe them by name in the same folder.
+
+Valet pulls the file ID from the URL and works from there. This avoids ambiguous searches and bypasses the cases where listing would not surface the file.
+
+## Gmail and Calendar
+
+Gmail and Calendar use the same per-user OAuth model. Valet acts as your account, so it sees your inbox and your calendar — not the team's.
+
+Common patterns:
+
+- **Gmail** — read, search, draft, send. Sending typically requires [approval](/product/approvals).
+- **Calendar** — read events, draft event descriptions, create or update events. Schedule changes typically require approval.
+
+Like Drive, the rule is that Valet's reach is your reach. If you want Valet to look at a specific thread or event, paste the link or describe it precisely.
+
+## Disconnecting
+
+You can disconnect Google Workspace at any time:
+
+- From inside Valet by removing the Google integration.
+- From Google by revoking Valet's access at `myaccount.google.com` under "Third-party apps with account access."
+
+Either action immediately stops Valet from making new calls on your behalf. Past activity (files created, messages sent) is not undone.
+
+## Related
+
+- [Connect tools](/product/tools) — connect Google Workspace and other integrations.
+- [Approvals](/product/approvals) — control which Gmail, Calendar, and Drive actions need a human in the loop.

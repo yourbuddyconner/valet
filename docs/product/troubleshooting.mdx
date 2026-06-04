@@ -1,0 +1,103 @@
+---
+title: Troubleshooting
+description: Common issues with Valet sessions, schedules, approvals, and channels — and how to fix them.
+---
+
+This page covers the most common things that go wrong in Valet day-to-day. If something here does not match what you are seeing, ask your admin or check the [status of your orchestrator](/product/how-valet-works).
+
+## Sessions and the orchestrator
+
+### My orchestrator is stuck on "restoring" or "connecting"
+
+"Restoring" means Valet is bringing a hibernated session back online — the workspace is being recreated from a snapshot, and the runner needs to reconnect before you can interact. This is normal after the orchestrator has been idle for a while.
+
+A restore usually completes in a few seconds. If it has been a minute or more:
+
+- Refresh the orchestrator from the session menu. This creates a fresh live coordinator and almost always clears a stuck restore.
+- If refreshing repeatedly does not help, the underlying sandbox image or backend may be unavailable. Ask your admin.
+
+See [session lifecycle](/engineering/session-lifecycle) for the full set of states.
+
+### My session was terminated — can I recover my work?
+
+It depends on what was saved:
+
+- **Pushed to git** — safe. The branch and commits are on the remote and you can pick them up in a new session.
+- **Committed but not pushed** — gone. A terminated sandbox's filesystem is not recoverable.
+- **Uncommitted changes in the workspace** — gone.
+
+Treat sandboxes as ephemeral. Commit and push early, especially before long pauses or before ending the day. Hibernated sessions keep a snapshot and can be restored; terminated sessions cannot.
+
+### Valet is not responding, or my message is stuck
+
+If you sent a message and nothing happens for more than a few seconds:
+
+1. Check the session status indicator. If it says "hibernated" or "restoring," your message is queued and will dispatch when the session wakes.
+2. If the session shows "running" but Valet is silent, refresh the orchestrator. This rebuilds the live connection without losing your conversation.
+3. If the session is in `error`, ask your admin to look at the worker logs.
+
+### Is Valet down?
+
+Valet has several moving parts (the web app, the worker API, the sandbox backend, model providers). A few quick checks:
+
+- Try refreshing the orchestrator. Most "Valet is broken" reports are a single live-state issue that a refresh fixes.
+- Try a brand-new session. If new sessions work but an old one does not, the problem is that session's sandbox, not Valet itself.
+- If neither works, the worker or backend may be down. Ask your admin or check your team's status channel.
+
+## Scheduled work
+
+### My scheduled automation did not run
+
+The most common causes, in rough order:
+
+| Cause | What to check |
+| --- | --- |
+| Trigger is disabled | Open the trigger and confirm it is enabled. |
+| The schedule targets an orchestrator that is unreachable | Refresh the orchestrator and run the trigger manually to verify. |
+| An approval prompt timed out | Scheduled runs that hit a sensitive action wait for approval. If no one answered, the run is paused or failed. |
+| Cron expression does not match what you expected | Re-check the cron and timezone. Run it manually first to confirm the behavior. |
+| The workflow itself errored on its first step | Open the latest execution and read the step trace. |
+
+See [triggers and schedules](/product/triggers) for how scheduled work is set up.
+
+### My approval prompt timed out
+
+Sensitive actions pause until someone approves them. If the approval was never answered, the action does not run and the surrounding work either pauses or fails depending on the step type.
+
+To recover:
+
+- For an interactive task: re-send the request. Valet will ask again.
+- For a scheduled run: open the execution, read what was about to happen, and re-run the workflow manually if you still want the action to occur.
+
+If you want a recurring action to stop asking, see [approvals](/product/approvals) for how to widen what is allowed.
+
+## Models, dates, and other oddities
+
+### Valet got the date or day of the week wrong
+
+Language models do not have a built-in clock and sometimes guess the current date wrong, especially after long pauses or when starting fresh sessions. If a date-sensitive answer looks off:
+
+- Tell Valet the actual date. The orchestrator will use it for the rest of the conversation.
+- For scheduled work that needs accurate dates, prefer asking for "today" or "this week" relative to a known anchor (for example, the date a digest was sent) rather than letting the model guess.
+
+### Valet picked the wrong model, or gave a low-quality answer
+
+Different models have different strengths. If a response is shorter, lower quality, or missing reasoning you expected:
+
+- Use the `/model` picker in the chat input to switch models for the next message.
+- Set [model preferences](/product/models) in your user settings so the right model is used by default.
+
+### "Credit balance too low" or "quota exceeded"
+
+Valet uses external model providers (such as Anthropic or OpenAI). When their account-level credit or quota is exhausted, prompts fail with a provider error.
+
+- This is not something you can fix yourself in the session. Contact your org admin or whoever owns billing.
+- See [billing](/product/billing) for who pays for what.
+- As a workaround, the [model picker](/product/models) can switch to a provider whose quota is still available.
+
+## When in doubt
+
+- **Refresh the orchestrator.** Most live-state problems are fixed by it.
+- **Start a fresh session.** Isolates the problem to one session vs Valet overall.
+- **Read the latest execution or step trace** for scheduled work — the step trace usually says exactly what failed.
+- **Push your work often.** Sandboxes are ephemeral; git is not.
