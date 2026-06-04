@@ -40,6 +40,13 @@ export function MarkdownEditor({
 }: MarkdownEditorProps) {
   const textareaRef = React.useRef<HTMLTextAreaElement>(null);
 
+  React.useLayoutEffect(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = `${el.scrollHeight}px`;
+  }, [value]);
+
   const applyFormat = (format: MarkdownFormat) => {
     const textarea = textareaRef.current;
     if (!textarea || !onChange) return;
@@ -70,7 +77,7 @@ export function MarkdownEditor({
   }
 
   return (
-    <div className="overflow-hidden rounded-lg border border-neutral-200 bg-white dark:border-neutral-700 dark:bg-neutral-900">
+    <div className={cn('rounded-lg border border-neutral-200 bg-white dark:border-neutral-700 dark:bg-neutral-900', minHeightClassName)}>
       <div className="flex flex-wrap items-center gap-0.5 border-b border-neutral-200 bg-neutral-50 px-2 py-1.5 dark:border-neutral-700 dark:bg-neutral-800/80">
         {toolbarGroups.map((group, groupIndex) => (
           <React.Fragment key={groupIndex}>
@@ -101,13 +108,10 @@ export function MarkdownEditor({
             onChange={(e) => onChange?.(e.target.value)}
             placeholder={placeholder}
             required={required}
-            className={cn(
-              'block w-full resize-none border-0 bg-white p-4 font-mono text-sm leading-6 text-neutral-900 placeholder:text-neutral-400 focus:outline-none dark:bg-neutral-900 dark:text-neutral-100 dark:placeholder:text-neutral-500',
-              minHeightClassName,
-            )}
+            className="block w-full resize-none border-0 bg-white p-4 font-mono text-sm leading-6 text-neutral-900 placeholder:text-neutral-400 focus:outline-none dark:bg-neutral-900 dark:text-neutral-100 dark:placeholder:text-neutral-500"
           />
         </div>
-        <div className={cn('bg-neutral-50 p-4 dark:bg-neutral-950/40', minHeightClassName)}>
+        <div className="bg-neutral-50 p-4 dark:bg-neutral-950/40">
           {value.trim() ? (
             <MarkdownContent content={value} />
           ) : (

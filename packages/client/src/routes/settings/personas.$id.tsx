@@ -40,7 +40,7 @@ export const Route = createFileRoute('/settings/personas/$id')({
 });
 
 type PersonaFileDraft = { filename: string; content: string; sortOrder: number };
-type PersonaDetailTab = 'skills' | 'files' | 'tools';
+type PersonaDetailTab = 'files' | 'skills' | 'tools';
 
 const visibilityBadgeVariant = {
   shared: 'default',
@@ -67,7 +67,7 @@ function PersonaEditorPage() {
   const { data: personaTools } = usePersonaTools(isNew ? '' : id);
   const updatePersonaTools = useUpdatePersonaTools();
 
-  const [activeTab, setActiveTab] = React.useState<PersonaDetailTab>('skills');
+  const [activeTab, setActiveTab] = React.useState<PersonaDetailTab>('files');
   const [name, setName] = React.useState('');
   const [description, setDescription] = React.useState('');
   const [icon, setIcon] = React.useState('');
@@ -359,23 +359,10 @@ function PersonaEditorPage() {
       >
         <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as PersonaDetailTab)}>
           <TabsList>
+            <TabsTrigger value="files">Files</TabsTrigger>
             <TabsTrigger value="skills">Skills</TabsTrigger>
-            <TabsTrigger value="files">Additional Files</TabsTrigger>
             <TabsTrigger value="tools">Tools</TabsTrigger>
           </TabsList>
-
-          <TabsContent value="skills">
-            {isNew ? (
-              <EmptyTabMessage>Save the persona first to attach skills.</EmptyTabMessage>
-            ) : (
-              <SkillPicker
-                attachedSkills={attachedSkills}
-                onAttach={(skillId) => attachSkill.mutate({ personaId: id, skillId })}
-                onDetach={(skillId) => detachSkill.mutate({ personaId: id, skillId })}
-                readOnly={!canEdit}
-              />
-            )}
-          </TabsContent>
 
           <TabsContent value="files">
             <div className="space-y-5">
@@ -451,6 +438,19 @@ function PersonaEditorPage() {
                 )}
               </section>
             </div>
+          </TabsContent>
+
+          <TabsContent value="skills">
+            {isNew ? (
+              <EmptyTabMessage>Save the persona first to attach skills.</EmptyTabMessage>
+            ) : (
+              <SkillPicker
+                attachedSkills={attachedSkills}
+                onAttach={(skillId) => attachSkill.mutate({ personaId: id, skillId })}
+                onDetach={(skillId) => detachSkill.mutate({ personaId: id, skillId })}
+                readOnly={!canEdit}
+              />
+            )}
           </TabsContent>
 
           <TabsContent value="tools">
