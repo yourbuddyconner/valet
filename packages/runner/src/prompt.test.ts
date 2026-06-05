@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentClient } from "./agent-client.js";
@@ -589,6 +589,7 @@ describe("PromptHandler provider retry loop failover", () => {
 describe("PromptHandler audio transcription", () => {
   const originalFfmpegTimeout = process.env.VALET_AUDIO_FFMPEG_TIMEOUT_MS;
   const originalWhisperTimeout = process.env.VALET_AUDIO_WHISPER_TIMEOUT_MS;
+  const originalWhisperModelPath = process.env.VALET_WHISPER_MODEL_PATH;
 
   afterEach(() => {
     if (originalFfmpegTimeout === undefined) {
@@ -601,12 +602,21 @@ describe("PromptHandler audio transcription", () => {
     } else {
       process.env.VALET_AUDIO_WHISPER_TIMEOUT_MS = originalWhisperTimeout;
     }
+    if (originalWhisperModelPath === undefined) {
+      delete process.env.VALET_WHISPER_MODEL_PATH;
+    } else {
+      process.env.VALET_WHISPER_MODEL_PATH = originalWhisperModelPath;
+    }
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });
 
   it("times out hung ffmpeg conversion so the prompt can continue", async () => {
     process.env.VALET_AUDIO_FFMPEG_TIMEOUT_MS = "5";
+    const modelDir = mkdtempSync(join(tmpdir(), "whisper-model-"));
+    const modelPath = join(modelDir, "ggml-base.en.bin");
+    writeFileSync(modelPath, "");
+    process.env.VALET_WHISPER_MODEL_PATH = modelPath;
     const agentClient = createAgentClientMock();
     const handler = createHandler(agentClient);
     const killed: string[] = [];
@@ -629,18 +639,70 @@ describe("PromptHandler audio transcription", () => {
       filename: "voice.oga",
     };
 
-    const resultPromise = (handler as any).transcribeAudioAttachments([attachment]);
-    const result = await Promise.race([
-      resultPromise,
-      new Promise<"stuck">((resolve) => setTimeout(() => resolve("stuck"), 50)),
-    ]);
+    try {
+      const resultPromise = (handler as any).transcribeAudioAttachments([attachment]);
+      const result = await Promise.race([
+        resultPromise,
+        new Promise<"stuck">((resolve) => setTimeout(() => resolve("stuck"), 50)),
+      ]);
 
-    expect(result).not.toBe("stuck");
-    expect(result).toEqual({ transcriptions: [], remaining: [attachment] });
-    expect(killed).toContain("SIGKILL");
+      expect(result).not.toBe("stuck");
+      expect(result).toEqual({
+        transcriptions: [],
+        remaining: [attachment],
+        failures: [
+          expect.objectContaining({
+            reason: "ffmpeg-timeout",
+            filename: "voice.oga",
+            mime: "audio/ogg",
+          }),
+        ],
+      });
+      expect(killed).toContain("SIGKILL");
+    } finally {
+      rmSync(modelDir, { recursive: true, force: true });
+    }
   });
 
-  it("adds an explicit unavailable-transcription note when voice transcription fails", async () => {
+  it("reports a missing whisper model before writing or converting audio", async () => {
+    process.env.VALET_WHISPER_MODEL_PATH = join(tmpdir(), "missing-whisper-model.bin");
+    const agentClient = createAgentClientMock();
+    const handler = createHandler(agentClient);
+    const attachment = {
+      type: "file" as const,
+      mime: "audio/ogg",
+      url: `data:audio/ogg;base64,${Buffer.from("ogg data").toString("base64")}`,
+      filename: "voice.oga",
+    };
+    const writeMock = vi.fn().mockResolvedValue(undefined);
+    const spawnMock = vi.fn(() => {
+      throw new Error("transcription should stop before spawning subprocesses");
+    });
+
+    vi.stubGlobal("Bun", {
+      write: writeMock,
+      spawn: spawnMock,
+    });
+
+    const result = await (handler as any).transcribeAudioAttachments([attachment]);
+
+    expect(writeMock).not.toHaveBeenCalled();
+    expect(spawnMock).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      transcriptions: [],
+      remaining: [attachment],
+      failures: [
+        expect.objectContaining({
+          reason: "missing-whisper-model",
+          filename: "voice.oga",
+          mime: "audio/ogg",
+          detail: expect.stringContaining(process.env.VALET_WHISPER_MODEL_PATH),
+        }),
+      ],
+    });
+  });
+
+  it("adds a diagnostic note when the whisper model is missing", async () => {
     const agentClient = createAgentClientMock();
     const handler = createHandler(agentClient);
     const attachment = {
@@ -652,6 +714,14 @@ describe("PromptHandler audio transcription", () => {
     (handler as any).transcribeAudioAttachments = vi.fn().mockResolvedValue({
       transcriptions: [],
       remaining: [attachment],
+      failures: [
+        {
+          reason: "missing-whisper-model",
+          filename: "voice.oga",
+          mime: "audio/ogg",
+          detail: "Whisper model not found at /models/whisper/ggml-base.en.bin. Run modal run backend/app.py::setup_whisper_models.",
+        },
+      ],
     });
 
     let promptBody: any;
@@ -686,7 +756,9 @@ describe("PromptHandler audio transcription", () => {
 
     expect(promptBody?.parts).toHaveLength(1);
     expect(promptBody.parts[0].text).toContain("[Voice note, 2s]");
-    expect(promptBody.parts[0].text).toContain("transcription is unavailable");
+    expect(promptBody.parts[0].text).toContain("audio reached the runner");
+    expect(promptBody.parts[0].text).toContain("Whisper model not found at /models/whisper/ggml-base.en.bin");
+    expect(promptBody.parts[0].text).not.toContain("Telegram adapter");
   });
 });
 

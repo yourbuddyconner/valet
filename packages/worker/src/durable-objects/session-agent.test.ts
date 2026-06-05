@@ -816,7 +816,7 @@ describe('SessionAgentDO', () => {
     }
   });
 
-  it('mirrors text channel replies into the web UI', async () => {
+  it('does not mirror text channel replies into the web UI', async () => {
     const { agent, broadcasts } = await createTestAgent();
     const runnerSend = vi.fn();
     (agent as any).runnerLink.send = runnerSend;
@@ -858,13 +858,7 @@ describe('SessionAgentDO', () => {
       const data = message.data as Record<string, unknown> | undefined;
       return message.type === 'message' && data?.content === 'No voice note came through on my end.';
     });
-    expect((mirrored?.data as Record<string, unknown> | undefined)).toMatchObject({
-      role: 'system',
-      content: 'No voice note came through on my end.',
-      channelType: 'telegram',
-      channelId: 'chat-123',
-      threadId: 'thread-telegram',
-    });
+    expect(mirrored).toBeUndefined();
   });
 
   it('does not leak thread ID from a Telegram turn into a subsequent web-UI turn', async () => {

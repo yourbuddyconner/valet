@@ -368,6 +368,51 @@ const SYNC_PROMPT_TIMEOUT_MS = 300_000; // 5 minutes
 // subprocess needs its own ceiling to avoid pinning a channel busy forever.
 const AUDIO_FFMPEG_TIMEOUT_MS = 60_000;
 const AUDIO_WHISPER_TIMEOUT_MS = 120_000;
+const DEFAULT_WHISPER_MODEL_PATH = '/models/whisper/ggml-base.en.bin';
+
+type AudioTranscriptionFailureReason =
+  | 'invalid-data-url'
+  | 'missing-whisper-model'
+  | 'ffmpeg-timeout'
+  | 'ffmpeg-failed'
+  | 'whisper-timeout'
+  | 'whisper-failed'
+  | 'missing-output'
+  | 'empty-transcript'
+  | 'transcription-error';
+
+interface AudioTranscriptionFailure {
+  reason: AudioTranscriptionFailureReason;
+  mime: string;
+  filename?: string;
+  detail?: string;
+}
+
+interface AudioTranscriptionResult {
+  transcriptions: string[];
+  remaining: PromptAttachment[];
+  failures: AudioTranscriptionFailure[];
+}
+
+function whisperModelPath(): string {
+  return process.env.VALET_WHISPER_MODEL_PATH || DEFAULT_WHISPER_MODEL_PATH;
+}
+
+function audioTranscriptionFallback(failures: AudioTranscriptionFailure[]): string {
+  const missingModel = failures.find((failure) => failure.reason === 'missing-whisper-model');
+  if (missingModel) {
+    const detail = missingModel.detail ? ` ${missingModel.detail}` : '';
+    return `[The user sent a voice note/audio attachment. The audio reached the runner, but local transcription could not run because the Whisper model is missing.${detail} Ask an operator to provision the Whisper model volume, or ask the user to type the message.]`;
+  }
+
+  const firstFailure = failures[0];
+  if (firstFailure) {
+    const detail = firstFailure.detail ? `${firstFailure.reason}: ${firstFailure.detail}` : firstFailure.reason;
+    return `[The user sent a voice note/audio attachment. The audio reached the runner, but local transcription failed (${detail}). Ask the user to type the message if the transcript is needed.]`;
+  }
+
+  return '[The user sent a voice note/audio attachment, but transcription is unavailable. Please ask them to type their message instead.]';
+}
 
 // Repeated zero-output retry status events mean OpenCode is retrying the same
 // provider internally without returning a usable response to the runner.
@@ -1663,8 +1708,10 @@ export class PromptHandler {
       const hasAudio = effectiveAttachments.some(a => a.mime.startsWith('audio/'));
       if (hasAudio) {
         let transcribed = false;
+        let transcriptionFailures: AudioTranscriptionFailure[] = [];
         try {
-          const { transcriptions, remaining } = await this.transcribeAudioAttachments(effectiveAttachments);
+          const { transcriptions, remaining, failures } = await this.transcribeAudioAttachments(effectiveAttachments);
+          transcriptionFailures = failures;
           if (transcriptions.length > 0) {
             transcribed = true;
             const transcriptText = transcriptions.join('\n\n');
@@ -1680,9 +1727,14 @@ export class PromptHandler {
           effectiveAttachments = remaining;
         } catch (err) {
           console.error('[PromptHandler] Failed to transcribe audio:', err);
+          transcriptionFailures = [{
+            reason: 'transcription-error',
+            mime: 'audio/*',
+            detail: errorReason(err),
+          }];
         }
         if (!transcribed) {
-          const audioFallback = '[The user sent a voice note/audio attachment, but transcription is unavailable. Please ask them to type their message instead.]';
+          const audioFallback = audioTranscriptionFallback(transcriptionFailures);
           effectiveContent = effectiveContent?.trim()
             ? `${effectiveContent}\n\n${audioFallback}`
             : audioFallback;
@@ -3123,16 +3175,30 @@ export class PromptHandler {
 
   private async transcribeAudioAttachments(
     attachments: PromptAttachment[],
-  ): Promise<{ transcriptions: string[]; remaining: PromptAttachment[] }> {
+  ): Promise<AudioTranscriptionResult> {
     const fs = await import('fs/promises');
     const transcriptions: string[] = [];
     const remaining: PromptAttachment[] = [];
+    const failures: AudioTranscriptionFailure[] = [];
 
     for (const attachment of attachments) {
       if (!attachment.mime.startsWith('audio/')) {
         remaining.push(attachment);
         continue;
       }
+
+      const recordFailure = (
+        reason: AudioTranscriptionFailureReason,
+        detail?: string,
+      ) => {
+        remaining.push(attachment);
+        failures.push({
+          reason,
+          mime: attachment.mime,
+          filename: attachment.filename,
+          detail,
+        });
+      };
 
       const uid = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
       const ext = PromptHandler.AUDIO_EXTENSIONS[attachment.mime] || 'ogg';
@@ -3146,7 +3212,16 @@ export class PromptHandler {
         const commaIdx = attachment.url.indexOf(',');
         if (commaIdx === -1) {
           console.warn('[PromptHandler] Invalid audio data URL, skipping');
-          remaining.push(attachment);
+          recordFailure('invalid-data-url', 'Audio attachment URL was not a data URL.');
+          continue;
+        }
+        const modelPath = whisperModelPath();
+        try {
+          await fs.access(modelPath);
+        } catch {
+          const detail = `Whisper model not found at ${modelPath}. Run modal run backend/app.py::setup_whisper_models.`;
+          console.error(`[PromptHandler] ${detail}`);
+          recordFailure('missing-whisper-model', detail);
           continue;
         }
         const b64 = attachment.url.slice(commaIdx + 1);
@@ -3168,13 +3243,13 @@ export class PromptHandler {
           const ffmpegResult = await waitForSubprocess(ffmpegProc, ffmpegTimeoutMs);
           if (ffmpegResult.timedOut) {
             console.error(`[PromptHandler] ffmpeg conversion timed out after ${ffmpegTimeoutMs}ms`);
-            remaining.push(attachment);
+            recordFailure('ffmpeg-timeout', `ffmpeg exceeded ${ffmpegTimeoutMs}ms while converting audio.`);
             continue;
           }
           if (ffmpegResult.exitCode !== 0) {
             const stderr = ffmpegResult.stderr;
             console.error(`[PromptHandler] ffmpeg conversion failed (exit ${ffmpegResult.exitCode}): ${stderr.slice(-500)}`);
-            remaining.push(attachment);
+            recordFailure('ffmpeg-failed', `exit ${ffmpegResult.exitCode}: ${stderr.slice(-500)}`);
             continue;
           }
           console.log(`[PromptHandler] Converted ${ext} → WAV: ${wavPath}`);
@@ -3183,7 +3258,7 @@ export class PromptHandler {
         // Run whisper-cli
         const whisperProc = Bun.spawn([
           'whisper-cli',
-          '--model', '/models/whisper/ggml-base.en.bin',
+          '--model', modelPath,
           '--file', whisperInput,
           '--output-txt',
           '--output-file', outBase,
@@ -3195,19 +3270,19 @@ export class PromptHandler {
         const stderr = whisperResult.stderr;
         if (whisperResult.timedOut) {
           console.error(`[PromptHandler] whisper-cli timed out after ${whisperTimeoutMs}ms`);
-          remaining.push(attachment);
+          recordFailure('whisper-timeout', `whisper-cli exceeded ${whisperTimeoutMs}ms while transcribing audio.`);
           continue;
         }
         if (whisperResult.exitCode !== 0) {
           console.error(`[PromptHandler] whisper-cli failed (exit ${whisperResult.exitCode}): ${stderr.slice(-500)}`);
-          remaining.push(attachment);
+          recordFailure('whisper-failed', `exit ${whisperResult.exitCode}: ${stderr.slice(-500)}`);
           continue;
         }
 
         // Read transcript
         if (!await Bun.file(txtPath).exists()) {
           console.error(`[PromptHandler] whisper-cli produced no output file at ${txtPath}. stderr: ${stderr.slice(-500)}`);
-          remaining.push(attachment);
+          recordFailure('missing-output', `whisper-cli produced no transcript file at ${txtPath}.`);
           continue;
         }
 
@@ -3217,11 +3292,11 @@ export class PromptHandler {
           console.log(`[PromptHandler] Transcribed audio (${attachment.filename || 'voice'}): "${transcript.slice(0, 100)}..."`);
         } else {
           console.warn(`[PromptHandler] whisper-cli produced empty transcript`);
-          remaining.push(attachment);
+          recordFailure('empty-transcript', 'whisper-cli produced an empty transcript.');
         }
       } catch (err) {
         console.error('[PromptHandler] Audio transcription error:', err);
-        remaining.push(attachment);
+        recordFailure('transcription-error', errorReason(err));
       } finally {
         // Clean up all temp files
         for (const p of [srcPath, wavPath, txtPath]) {
@@ -3230,7 +3305,7 @@ export class PromptHandler {
       }
     }
 
-    return { transcriptions, remaining };
+    return { transcriptions, remaining, failures };
   }
 
   /**
