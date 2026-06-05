@@ -6236,7 +6236,9 @@ export class SessionAgentDO {
       }
 
       // Restore thread_ts when the agent drops it from a Slack reply.
-      const storedReplyId = this.promptQueue.getProcessingChannelContext()?.channelId;
+      const processingChannelContext = this.promptQueue.getProcessingChannelContext();
+      const storedReplyId = processingChannelContext?.channelId;
+      const mirrorThreadId = processingChannelContext?.threadId;
       const effectiveChannelId = resolveSlackChannelId(channelType, channelId, storedReplyId);
       if (effectiveChannelId !== channelId) {
         console.log(`[SessionAgentDO] handleChannelReply: restored thread_ts from prompt context (${channelId} -> ${effectiveChannelId})`);
@@ -6262,19 +6264,37 @@ export class SessionAgentDO {
 
       this.runnerLink.send({ type: 'channel-reply-result', requestId, success: true } as any);
 
-      // Store image as a system message for web UI visibility.
+      // Store outbound channel replies as system messages for web UI visibility.
       // TODO: Treat web UI as a channel. This is the primary remaining coupling
       // between channel dispatch and the DO's message/broadcast layer.
-      if (imageBase64) {
+      if (message || imageBase64 || fileBase64) {
         const msgId = crypto.randomUUID();
-        const channelLabel = `Sent image to ${channelType}`;
+        const channelLabel = fileBase64
+          ? `Sent file to ${channelType}`
+          : imageBase64
+            ? `Sent image to ${channelType}`
+            : `Sent message to ${channelType}`;
+        const parts: Array<Record<string, unknown>> = [];
+        if (imageBase64) {
+          parts.push({ type: 'image', data: imageBase64, mimeType: imageMimeType || 'image/jpeg' });
+        }
+        if (fileBase64) {
+          parts.push({ type: 'file', mimeType: fileMimeType || 'application/octet-stream', filename: fileName || 'file' });
+        }
+        const serializedParts = parts.length === 0
+          ? undefined
+          : JSON.stringify(parts.length === 1 ? parts[0] : parts);
+        const broadcastParts = parts.length === 0
+          ? undefined
+          : parts.length === 1 ? parts[0] : parts;
         this.messageStore.writeMessage({
           id: msgId,
           role: 'system',
           content: message || channelLabel,
-          parts: JSON.stringify({ type: 'image', data: imageBase64, mimeType: imageMimeType || 'image/jpeg' }),
+          parts: serializedParts,
           channelType,
-          channelId,
+          channelId: effectiveChannelId,
+          threadId: mirrorThreadId,
         });
         this.broadcastToClients({
           type: 'message',
@@ -6282,10 +6302,11 @@ export class SessionAgentDO {
             id: msgId,
             role: 'system',
             content: message || channelLabel,
-            parts: { type: 'image', data: imageBase64, mimeType: imageMimeType || 'image/jpeg' },
+            ...(broadcastParts ? { parts: broadcastParts } : {}),
             createdAt: Math.floor(Date.now() / 1000),
             channelType,
-            channelId,
+            channelId: effectiveChannelId,
+            ...(mirrorThreadId ? { threadId: mirrorThreadId } : {}),
           },
         });
       }

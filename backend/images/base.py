@@ -172,7 +172,7 @@ def get_base_image() -> modal.Image:
                 "OPENCODE_RUNTIME_DIR": "/tmp/valet-opencode",
                 "VALET_PERSONA_DIR": "/tmp/valet-opencode/persona",
                 # Force image rebuild on deploy (change this value to trigger rebuild)
-                "IMAGE_BUILD_VERSION": "2026-06-03-v47-r2-prompt-attachments",
+                "IMAGE_BUILD_VERSION": "2026-06-05-v48-audio-timeouts",
                 "AGENT_BROWSER_EXECUTABLE_PATH": "/usr/bin/chromium",
                 "AGENT_BROWSER_PROFILE": "/workspace/.agent-browser-profile",
                 "PLAYWRIGHT_BROWSERS_PATH": "/ms-playwright",

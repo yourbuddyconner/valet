@@ -314,6 +314,45 @@ function attachmentSummary(attachments: PromptAttachment[]): string {
     .join(',');
 }
 
+function timeoutFromEnv(name: string, fallbackMs: number): number {
+  const raw = process.env[name];
+  if (!raw) return fallbackMs;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallbackMs;
+}
+
+function readProcessStream(stream: unknown): Promise<string> {
+  if (!stream || typeof stream !== 'object') return Promise.resolve('');
+  return new Response(stream as ReadableStream<Uint8Array>).text().catch(() => '');
+}
+
+async function waitForSubprocess(
+  proc: ReturnType<typeof Bun.spawn>,
+  timeoutMs: number,
+): Promise<{ timedOut: true; exitCode: null; stderr: string } | { timedOut: false; exitCode: number; stderr: string }> {
+  const stdoutPromise = readProcessStream(proc.stdout);
+  const stderrPromise = readProcessStream(proc.stderr);
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const outcome = await Promise.race([
+      proc.exited.then((exitCode) => ({ type: 'exit' as const, exitCode })),
+      new Promise<{ type: 'timeout' }>((resolve) => {
+        timeoutId = setTimeout(() => resolve({ type: 'timeout' }), timeoutMs);
+      }),
+    ]);
+
+    if (outcome.type === 'timeout') {
+      try { proc.kill('SIGKILL'); } catch { /* already exited */ }
+      return { timedOut: true, exitCode: null, stderr: '' };
+    }
+
+    const [, stderr] = await Promise.all([stdoutPromise, stderrPromise]);
+    return { timedOut: false, exitCode: outcome.exitCode, stderr };
+  } finally {
+    if (timeoutId) clearTimeout(timeoutId);
+  }
+}
+
 // Emergency fallback timeout — only fires if no idle/completion event arrives
 const EMERGENCY_TIMEOUT_MS = 60_000;
 
@@ -324,6 +363,11 @@ const FIRST_RESPONSE_TIMEOUT_MS = 90_000;
 // Hard ceiling on a single sync prompt attempt. Prevents the sync fetch from blocking
 // forever when OpenCode enters an internal provider retry loop (e.g. repeated 429/5xx).
 const SYNC_PROMPT_TIMEOUT_MS = 300_000; // 5 minutes
+
+// Audio preprocessing runs before the sync prompt timeout starts, so each
+// subprocess needs its own ceiling to avoid pinning a channel busy forever.
+const AUDIO_FFMPEG_TIMEOUT_MS = 60_000;
+const AUDIO_WHISPER_TIMEOUT_MS = 120_000;
 
 // Repeated zero-output retry status events mean OpenCode is retrying the same
 // provider internally without returning a usable response to the runner.
@@ -1637,12 +1681,14 @@ export class PromptHandler {
         } catch (err) {
           console.error('[PromptHandler] Failed to transcribe audio:', err);
         }
+        if (!transcribed) {
+          const audioFallback = '[The user sent a voice note/audio attachment, but transcription is unavailable. Please ask them to type their message instead.]';
+          effectiveContent = effectiveContent?.trim()
+            ? `${effectiveContent}\n\n${audioFallback}`
+            : audioFallback;
+        }
         // Strip audio from what goes to OpenCode — it can't process audio files
         effectiveAttachments = effectiveAttachments.filter(a => !a.mime.startsWith('audio/'));
-        // If transcription failed and content is empty, provide a fallback so the prompt isn't empty
-        if (!transcribed && !effectiveContent?.trim()) {
-          effectiveContent = '[The user sent a voice note but transcription is unavailable. Please ask them to type their message instead.]';
-        }
       }
 
       // Materialize PDFs to disk instead of stuffing full parsed text into context.
@@ -3118,10 +3164,16 @@ export class PromptHandler {
             '-ar', '16000', '-ac', '1', '-c:a', 'pcm_s16le',
             '-y', wavPath,
           ], { stdout: 'pipe', stderr: 'pipe' });
-          const ffmpegExit = await ffmpegProc.exited;
-          if (ffmpegExit !== 0) {
-            const stderr = await new Response(ffmpegProc.stderr).text();
-            console.error(`[PromptHandler] ffmpeg conversion failed (exit ${ffmpegExit}): ${stderr.slice(-500)}`);
+          const ffmpegTimeoutMs = timeoutFromEnv('VALET_AUDIO_FFMPEG_TIMEOUT_MS', AUDIO_FFMPEG_TIMEOUT_MS);
+          const ffmpegResult = await waitForSubprocess(ffmpegProc, ffmpegTimeoutMs);
+          if (ffmpegResult.timedOut) {
+            console.error(`[PromptHandler] ffmpeg conversion timed out after ${ffmpegTimeoutMs}ms`);
+            remaining.push(attachment);
+            continue;
+          }
+          if (ffmpegResult.exitCode !== 0) {
+            const stderr = ffmpegResult.stderr;
+            console.error(`[PromptHandler] ffmpeg conversion failed (exit ${ffmpegResult.exitCode}): ${stderr.slice(-500)}`);
             remaining.push(attachment);
             continue;
           }
@@ -3138,10 +3190,16 @@ export class PromptHandler {
           '--no-timestamps',
         ], { stdout: 'pipe', stderr: 'pipe' });
 
-        const exitCode = await whisperProc.exited;
-        const stderr = await new Response(whisperProc.stderr).text();
-        if (exitCode !== 0) {
-          console.error(`[PromptHandler] whisper-cli failed (exit ${exitCode}): ${stderr.slice(-500)}`);
+        const whisperTimeoutMs = timeoutFromEnv('VALET_AUDIO_WHISPER_TIMEOUT_MS', AUDIO_WHISPER_TIMEOUT_MS);
+        const whisperResult = await waitForSubprocess(whisperProc, whisperTimeoutMs);
+        const stderr = whisperResult.stderr;
+        if (whisperResult.timedOut) {
+          console.error(`[PromptHandler] whisper-cli timed out after ${whisperTimeoutMs}ms`);
+          remaining.push(attachment);
+          continue;
+        }
+        if (whisperResult.exitCode !== 0) {
+          console.error(`[PromptHandler] whisper-cli failed (exit ${whisperResult.exitCode}): ${stderr.slice(-500)}`);
           remaining.push(attachment);
           continue;
         }

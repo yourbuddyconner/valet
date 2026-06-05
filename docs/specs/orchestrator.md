@@ -361,7 +361,9 @@ Orchestrator sessions do NOT get auto-created web bindings through this path.
 
 ### Channel Reply
 
-The `channel_reply` tool allows the orchestrator (or any session) to reply on external channels. Supports text and images. Routes through the gateway to the DO, which dispatches to the appropriate channel handler (Telegram, Slack, etc.).
+The `channel_reply` tool allows the orchestrator (or any session) to reply on external channels. Supports text, images, and files. Routes through the gateway to the DO, which dispatches to the appropriate channel handler (Telegram, Slack, etc.).
+
+Successful external replies are also mirrored into the web UI as system messages so the browser transcript reflects channel side effects. Image replies include the image preview data; file replies include a file chip with MIME type and filename, but not the raw file payload.
 
 ## Memory System
 

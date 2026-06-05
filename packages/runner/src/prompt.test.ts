@@ -586,6 +586,110 @@ describe("PromptHandler provider retry loop failover", () => {
   });
 });
 
+describe("PromptHandler audio transcription", () => {
+  const originalFfmpegTimeout = process.env.VALET_AUDIO_FFMPEG_TIMEOUT_MS;
+  const originalWhisperTimeout = process.env.VALET_AUDIO_WHISPER_TIMEOUT_MS;
+
+  afterEach(() => {
+    if (originalFfmpegTimeout === undefined) {
+      delete process.env.VALET_AUDIO_FFMPEG_TIMEOUT_MS;
+    } else {
+      process.env.VALET_AUDIO_FFMPEG_TIMEOUT_MS = originalFfmpegTimeout;
+    }
+    if (originalWhisperTimeout === undefined) {
+      delete process.env.VALET_AUDIO_WHISPER_TIMEOUT_MS;
+    } else {
+      process.env.VALET_AUDIO_WHISPER_TIMEOUT_MS = originalWhisperTimeout;
+    }
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it("times out hung ffmpeg conversion so the prompt can continue", async () => {
+    process.env.VALET_AUDIO_FFMPEG_TIMEOUT_MS = "5";
+    const agentClient = createAgentClientMock();
+    const handler = createHandler(agentClient);
+    const killed: string[] = [];
+
+    vi.stubGlobal("Bun", {
+      write: vi.fn().mockResolvedValue(undefined),
+      spawn: vi.fn(() => ({
+        exited: new Promise<number>(() => undefined),
+        stderr: new ReadableStream<Uint8Array>(),
+        kill: vi.fn((signal?: string) => {
+          killed.push(signal || "SIGTERM");
+        }),
+      })),
+    });
+
+    const attachment = {
+      type: "file" as const,
+      mime: "audio/ogg",
+      url: `data:audio/ogg;base64,${Buffer.from("ogg data").toString("base64")}`,
+      filename: "voice.oga",
+    };
+
+    const resultPromise = (handler as any).transcribeAudioAttachments([attachment]);
+    const result = await Promise.race([
+      resultPromise,
+      new Promise<"stuck">((resolve) => setTimeout(() => resolve("stuck"), 50)),
+    ]);
+
+    expect(result).not.toBe("stuck");
+    expect(result).toEqual({ transcriptions: [], remaining: [attachment] });
+    expect(killed).toContain("SIGKILL");
+  });
+
+  it("adds an explicit unavailable-transcription note when voice transcription fails", async () => {
+    const agentClient = createAgentClientMock();
+    const handler = createHandler(agentClient);
+    const attachment = {
+      type: "file" as const,
+      mime: "audio/ogg",
+      url: `data:audio/ogg;base64,${Buffer.from("ogg data").toString("base64")}`,
+      filename: "voice.oga",
+    };
+    (handler as any).transcribeAudioAttachments = vi.fn().mockResolvedValue({
+      transcriptions: [],
+      remaining: [attachment],
+    });
+
+    let promptBody: any;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+
+      if (url === "http://opencode.test/session" && method === "POST") {
+        return jsonResponse({ id: "audio-session" });
+      }
+
+      if (url === "http://opencode.test/session/audio-session/message" && method === "POST") {
+        promptBody = typeof init?.body === "string" ? JSON.parse(init.body) : undefined;
+        return jsonResponse({ info: { role: "assistant", content: "ok" }, parts: [] });
+      }
+
+      throw new Error(`Unexpected fetch: ${method} ${url}`);
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    await handler.handlePrompt(
+      "msg-audio-unavailable",
+      "[Voice note, 2s]",
+      undefined,
+      undefined,
+      undefined,
+      [attachment],
+      "thread",
+      "audio-thread",
+    );
+
+    expect(promptBody?.parts).toHaveLength(1);
+    expect(promptBody.parts[0].text).toContain("[Voice note, 2s]");
+    expect(promptBody.parts[0].text).toContain("transcription is unavailable");
+  });
+});
+
 describe("PromptHandler idle suppression", () => {
   afterEach(() => {
     vi.restoreAllMocks();

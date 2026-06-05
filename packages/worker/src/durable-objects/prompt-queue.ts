@@ -422,18 +422,19 @@ export class PromptQueue {
    * Used for hibernation recovery of active external-channel state.
    * Prefers reply_channel_type/reply_channel_id over channel_type/channel_id.
    */
-  getProcessingChannelContext(): { channelType: string; channelId: string } | null {
+  getProcessingChannelContext(): { channelType: string; channelId: string; threadId?: string } | null {
     const rows = this.sql
-      .exec("SELECT channel_type, channel_id, reply_channel_type, reply_channel_id FROM prompt_queue WHERE status = 'processing' LIMIT 1")
+      .exec("SELECT channel_type, channel_id, reply_channel_type, reply_channel_id, thread_id FROM prompt_queue WHERE status = 'processing' ORDER BY created_at DESC LIMIT 1")
       .toArray();
     if (rows.length === 0) return null;
 
     const channelType = (rows[0].reply_channel_type as string) || (rows[0].channel_type as string) || null;
     const channelId = (rows[0].reply_channel_id as string) || (rows[0].channel_id as string) || null;
+    const threadId = (rows[0].thread_id as string) || undefined;
     if (!channelType || !channelId) return null;
     if (channelType === 'web' || channelType === 'thread') return null;
 
-    return { channelType, channelId };
+    return threadId ? { channelType, channelId, threadId } : { channelType, channelId };
   }
 
   // ─── Queue Dispatch State ──────────────────────────────────────────────────
