@@ -816,6 +816,57 @@ describe('SessionAgentDO', () => {
     }
   });
 
+  it('mirrors text channel replies into the web UI', async () => {
+    const { agent, broadcasts } = await createTestAgent();
+    const runnerSend = vi.fn();
+    (agent as any).runnerLink.send = runnerSend;
+    (agent as any).channelRouter = {
+      sendReply: vi.fn().mockResolvedValue({ success: true }),
+    };
+    (agent as any).promptQueue.enqueue({
+      id: 'prompt-channel-reply',
+      content: 'threaded Telegram prompt',
+      status: 'processing',
+      channelType: 'thread',
+      channelId: 'thread-telegram',
+      channelKey: 'thread:thread-telegram',
+      threadId: 'thread-telegram',
+      replyChannelType: 'telegram',
+      replyChannelId: 'chat-123',
+    });
+
+    await (agent as any).handleChannelReply(
+      'reply-request-1',
+      'telegram',
+      'chat-123',
+      'No voice note came through on my end.',
+      undefined,
+      undefined,
+      true,
+    );
+
+    expect((agent as any).channelRouter.sendReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: 'user-1',
+        channelType: 'telegram',
+        channelId: 'chat-123',
+        message: 'No voice note came through on my end.',
+      }),
+    );
+    expect(runnerSend).toHaveBeenCalledWith({ type: 'channel-reply-result', requestId: 'reply-request-1', success: true });
+    const mirrored = broadcasts.find((message) => {
+      const data = message.data as Record<string, unknown> | undefined;
+      return message.type === 'message' && data?.content === 'No voice note came through on my end.';
+    });
+    expect((mirrored?.data as Record<string, unknown> | undefined)).toMatchObject({
+      role: 'system',
+      content: 'No voice note came through on my end.',
+      channelType: 'telegram',
+      channelId: 'chat-123',
+      threadId: 'thread-telegram',
+    });
+  });
+
   it('does not leak thread ID from a Telegram turn into a subsequent web-UI turn', async () => {
     const runnerSocket = { send: vi.fn() };
     const { agent, broadcasts } = await createTestAgent({ sockets: [runnerSocket] });
