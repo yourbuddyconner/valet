@@ -3,7 +3,10 @@ import { ACTION_APPROVAL_EXPIRY_MS, SessionAgentDO, buildActionApprovalPromptAct
 import { createTestDb } from '../test-utils/db.js';
 import { sessions } from '../lib/schema/sessions.js';
 import { users } from '../lib/schema/users.js';
+import { userIdentityLinks } from '../lib/schema/channels.js';
+import { workflows, workflowExecutions } from '../lib/schema/workflows.js';
 import { createInvocation, getInvocation, getUserActionPolicyOverride, upsertActionPolicy } from '../lib/db/actions.js';
+import type { InteractivePrompt } from '@valet/sdk';
 import * as sessionTools from '../services/session-tools.js';
 
 interface QueueRow {
@@ -165,32 +168,64 @@ function createMockSql(): SqlStorage & {
 
       if (q.startsWith('INSERT INTO prompt_queue')) {
         insertCounter += 1;
-        const row: QueueRow = {
-          id: String(params[0] ?? ''),
-          content: String(params[1] ?? ''),
-          attachments: (params[2] as string) || null,
-          model: (params[3] as string) || null,
-          queue_type: 'prompt',
-          workflow_execution_id: null,
-          workflow_payload: null,
-          status: String(params[4] ?? 'queued'),
-          author_id: (params[5] as string) || null,
-          author_email: (params[6] as string) || null,
-          author_name: (params[7] as string) || null,
-          author_avatar_url: (params[8] as string) || null,
-          channel_type: (params[9] as string) || null,
-          channel_id: (params[10] as string) || null,
-          channel_key: (params[11] as string) || null,
-          thread_id: (params[12] as string) || null,
-          continuation_context: (params[13] as string) || null,
-          context_prefix: (params[14] as string) || null,
-          reply_channel_type: (params[15] as string) || null,
-          reply_channel_id: (params[16] as string) || null,
-          child_session_id: (params[17] as string) || null,
-          child_status: (params[18] as string) || null,
-          priority: typeof params[19] === 'number' ? params[19] : 0,
-          created_at: insertCounter,
-        };
+        let row: QueueRow;
+        if (q.includes("'workflow_execute'")) {
+          // Workflow-execute insert: (id, content, queue_type, workflow_execution_id, workflow_payload, status)
+          // params: [id, workflowExecutionId, workflowPayload, status]
+          row = {
+            id: String(params[0] ?? ''),
+            content: '',
+            attachments: null,
+            model: null,
+            queue_type: 'workflow_execute',
+            workflow_execution_id: (params[1] as string) || null,
+            workflow_payload: (params[2] as string) || null,
+            status: String(params[3] ?? 'queued'),
+            author_id: null,
+            author_email: null,
+            author_name: null,
+            author_avatar_url: null,
+            channel_type: null,
+            channel_id: null,
+            channel_key: null,
+            thread_id: null,
+            continuation_context: null,
+            context_prefix: null,
+            reply_channel_type: null,
+            reply_channel_id: null,
+            child_session_id: null,
+            child_status: null,
+            priority: 0,
+            created_at: insertCounter,
+          };
+        } else {
+          row = {
+            id: String(params[0] ?? ''),
+            content: String(params[1] ?? ''),
+            attachments: (params[2] as string) || null,
+            model: (params[3] as string) || null,
+            queue_type: 'prompt',
+            workflow_execution_id: null,
+            workflow_payload: null,
+            status: String(params[4] ?? 'queued'),
+            author_id: (params[5] as string) || null,
+            author_email: (params[6] as string) || null,
+            author_name: (params[7] as string) || null,
+            author_avatar_url: (params[8] as string) || null,
+            channel_type: (params[9] as string) || null,
+            channel_id: (params[10] as string) || null,
+            channel_key: (params[11] as string) || null,
+            thread_id: (params[12] as string) || null,
+            continuation_context: (params[13] as string) || null,
+            context_prefix: (params[14] as string) || null,
+            reply_channel_type: (params[15] as string) || null,
+            reply_channel_id: (params[16] as string) || null,
+            child_session_id: (params[17] as string) || null,
+            child_status: (params[18] as string) || null,
+            priority: typeof params[19] === 'number' ? params[19] : 0,
+            created_at: insertCounter,
+          };
+        }
         queue.set(row.id, row);
         return cursor([]);
       }
@@ -2596,5 +2631,236 @@ describe('SessionAgentDO', () => {
       expect.objectContaining({ reason: 'no_prompt_row', eventType: 'agentStatus', messageId: 'nonexistent' }),
     );
     expect(broadcasts.filter((m) => m.type === 'agentStatus')).toHaveLength(0);
+  });
+
+  // ─── sendChannelInteractivePrompts — thread filter and DM fallback ────────────
+
+  describe('sendChannelInteractivePrompts — thread filter and DM fallback', () => {
+    it('does not add thread-type channel as a delivery target', async () => {
+      const { agent, sql } = await createTestAgent();
+      (agent as any).sessionState.set('userId', 'user-1');
+
+      const sendInteractiveMock = vi.fn().mockResolvedValue([]);
+      (agent as any).channelRouter.sendInteractivePrompt = sendInteractiveMock;
+      (agent as any).channelRouter.resolveUserDmTarget = vi.fn().mockResolvedValue(null);
+
+      // Set appDb to a real test DB (no slack identity link → no DM fallback)
+      const testDb = createTestDb();
+      const appDb = testDb.db;
+      appDb.insert(users).values({ id: 'user-1', email: 'user-1@example.com' }).run();
+      Object.defineProperty(agent, 'appDb', { value: appDb });
+
+      // Insert a processing row with channel_type='thread' via PromptQueue.enqueue
+      (agent as any).promptQueue.enqueue({
+        id: 'pq-t',
+        content: '',
+        status: 'processing',
+        channelType: 'thread',
+        channelId: 'thread-uuid',
+        channelKey: 'thread:thread-uuid',
+      });
+
+      const prompt: InteractivePrompt = {
+        id: 'inv-t',
+        sessionId: 'orchestrator:user-1',
+        type: 'approval',
+        title: 'Approval',
+        body: 'Test',
+        actions: [],
+        context: { channelType: 'thread', channelId: 'thread-uuid' },
+      };
+
+      // Restore the real sendChannelInteractivePrompts (it is mocked in createTestAgent)
+      delete (agent as any).sendChannelInteractivePrompts;
+
+      await (agent as any).sendChannelInteractivePrompts('inv-t', prompt);
+
+      if (sendInteractiveMock.mock.calls.length > 0) {
+        const targets = sendInteractiveMock.mock.calls[0][0].targets as Array<{ channelType: string }>;
+        expect(targets.every((t: { channelType: string }) => t.channelType !== 'thread')).toBe(true);
+      }
+      // The key assertion: no thread target was added, so sendInteractivePrompt
+      // is either not called (no DM fallback) or called without thread targets.
+      expect(sendInteractiveMock).not.toHaveBeenCalledWith(
+        expect.objectContaining({
+          targets: expect.arrayContaining([
+            expect.objectContaining({ channelType: 'thread' }),
+          ]),
+        }),
+      );
+    });
+
+    it('sends a DM with provenance label when user has Slack identity and no real channel targets', async () => {
+      const { agent } = await createTestAgent();
+      (agent as any).sessionState.set('sessionId', 'orchestrator:user-1');
+      (agent as any).sessionState.set('userId', 'user-1');
+
+      // Set up a real appDb with a Slack identity link for user-1
+      const testDb = createTestDb();
+      const appDb = testDb.db;
+      appDb.insert(users).values({ id: 'user-1', email: 'user-1@example.com' }).run();
+      appDb.insert(sessions).values({
+        id: 'orchestrator:user-1',
+        userId: 'user-1',
+        workspace: '/tmp/test',
+        status: 'running',
+      }).run();
+      appDb.insert(userIdentityLinks).values({
+        id: 'link-1',
+        userId: 'user-1',
+        provider: 'slack',
+        externalId: 'U0SLACK99',
+      }).run();
+      Object.defineProperty(agent, 'appDb', { value: appDb });
+
+      const resolveUserDmTargetMock = vi.fn().mockResolvedValue({ channelType: 'slack', channelId: 'D0DM1234' });
+      (agent as any).channelRouter.resolveUserDmTarget = resolveUserDmTargetMock;
+
+      const sendInteractiveMock = vi.fn().mockResolvedValue([{ channelType: 'slack', ref: { messageId: 't1', channelId: 'D0DM1234' } }]);
+      (agent as any).channelRouter.sendInteractivePrompt = sendInteractiveMock;
+
+      const prompt: InteractivePrompt = {
+        id: 'inv-dm',
+        sessionId: 'orchestrator:user-1',
+        type: 'approval',
+        title: 'Approval',
+        body: 'Post weekly report',
+        actions: [{ id: 'approve_once', label: 'Approve', style: 'primary' }],
+        context: { toolId: 'slack:send_message', riskLevel: 'medium', summary: 'Post weekly report' },
+      };
+
+      // Restore the real sendChannelInteractivePrompts (it is mocked in createTestAgent)
+      delete (agent as any).sendChannelInteractivePrompts;
+
+      await (agent as any).sendChannelInteractivePrompts('inv-dm', prompt);
+
+      expect(resolveUserDmTargetMock).toHaveBeenCalledWith('slack', 'user-1', 'U0SLACK99');
+      expect(sendInteractiveMock).toHaveBeenCalledOnce();
+      const callOpts = sendInteractiveMock.mock.calls[0][0] as { targets: Array<{ channelType: string; channelId: string }>; prompt: InteractivePrompt };
+      expect(callOpts.targets).toContainEqual({ channelType: 'slack', channelId: 'D0DM1234' });
+      expect(callOpts.prompt.context?.provenanceLabel as string).toContain('scheduled task');
+    });
+
+    it('sends a DM with workflow name in provenance label when processing a workflow_execute prompt', async () => {
+      const { agent } = await createTestAgent();
+      (agent as any).sessionState.set('sessionId', 'orchestrator:user-1');
+      (agent as any).sessionState.set('userId', 'user-1');
+
+      // Set up appDb with user, session, Slack identity link, and workflow + execution rows
+      const testDb = createTestDb();
+      const appDb = testDb.db;
+      appDb.insert(users).values({ id: 'user-1', email: 'user-1@example.com' }).run();
+      appDb.insert(sessions).values({
+        id: 'orchestrator:user-1', userId: 'user-1', workspace: '/tmp', status: 'running',
+      }).run();
+      appDb.insert(userIdentityLinks).values({
+        id: 'link-slack', userId: 'user-1', provider: 'slack', externalId: 'U0SLACK99',
+      }).run();
+      // Insert a workflow and execution so getWorkflowNameByExecutionId returns 'Weekly Report'
+      appDb.insert(workflows).values({
+        id: 'wf-weekly', userId: 'user-1', name: 'Weekly Report', data: '{}', version: '1.0.0',
+      }).run();
+      appDb.insert(workflowExecutions).values({
+        id: 'exec-wf-99', userId: 'user-1', workflowId: 'wf-weekly',
+        status: 'running', triggerType: 'manual', startedAt: new Date().toISOString(),
+      }).run();
+      Object.defineProperty(agent, 'appDb', { value: appDb, configurable: true });
+
+      // Enqueue a workflow_execute processing row so getProcessingWorkflowContext returns workflow context
+      (agent as any).promptQueue.enqueue({
+        id: 'pq-wf-test',
+        content: '',
+        queueType: 'workflow_execute',
+        workflowExecutionId: 'exec-wf-99',
+        status: 'processing',
+      });
+
+      const resolveUserDmTargetMock = vi.fn().mockResolvedValue({ channelType: 'slack', channelId: 'D0DM1234' });
+      (agent as any).channelRouter.resolveUserDmTarget = resolveUserDmTargetMock;
+      const sendInteractiveMock = vi.fn().mockResolvedValue([]);
+      (agent as any).channelRouter.sendInteractivePrompt = sendInteractiveMock;
+
+      const prompt: InteractivePrompt = {
+        id: 'inv-wf-dm',
+        sessionId: 'orchestrator:user-1',
+        type: 'approval',
+        title: 'Approval',
+        body: 'Send report',
+        actions: [{ id: 'approve_once', label: 'Approve', style: 'primary' }],
+        context: { toolId: 'slack:send_message', riskLevel: 'medium', summary: 'Send report' },
+      };
+
+      // Restore the real sendChannelInteractivePrompts (it is mocked in createTestAgent)
+      delete (agent as any).sendChannelInteractivePrompts;
+
+      await (agent as any).sendChannelInteractivePrompts('inv-wf-dm', prompt);
+
+      expect(sendInteractiveMock).toHaveBeenCalledOnce();
+      const callOpts = sendInteractiveMock.mock.calls[0][0] as { prompt: InteractivePrompt };
+      expect(callOpts.prompt.context?.provenanceLabel as string).toContain('Weekly Report');
+    });
+  });
+
+  // ─── expireInteractivePromptRow — error message ───────────────────────────────
+
+  describe('expireInteractivePromptRow — error message', () => {
+    it('sends actionable unattended error when session is orchestrator', async () => {
+      const { agent } = await createTestAgent();
+      (agent as any).sessionState.set('sessionId', 'orchestrator:user-1');
+
+      const runnerSendMock = vi.fn().mockReturnValue(true);
+      (agent as any).runnerLink.send = runnerSendMock;
+
+      const row = {
+        id: 'inv-expire',
+        type: 'approval',
+        request_id: 'req-expire',
+        context: JSON.stringify({ toolId: 'slack:send_message', invocationId: 'inv-expire' }),
+        channel_refs: null,
+      };
+
+      // Set up appDb so updateInvocationStatus doesn't throw
+      const testDb = createTestDb();
+      const appDb = testDb.db;
+      appDb.insert(users).values({ id: 'user-1', email: 'user-1@example.com' }).run();
+      Object.defineProperty(agent, 'appDb', { value: appDb });
+
+      await (agent as any).expireInteractivePromptRow(row);
+
+      const call = runnerSendMock.mock.calls.find(
+        (c: Array<{ type: string; error?: string }>) => c[0].type === 'call-tool-result',
+      );
+      expect(call).toBeDefined();
+      const error: string = call![0].error;
+      expect(error).toContain('expired without a response');
+      expect(error).toContain('Do not retry');
+    });
+
+    it('sends a plain expired message for attended (non-orchestrator) sessions', async () => {
+      const { agent } = await createTestAgent();
+      (agent as any).sessionState.set('sessionId', 'session-regular-123'); // non-orchestrator
+
+      const runnerSendMock = vi.fn().mockReturnValue(true);
+      (agent as any).runnerLink.send = runnerSendMock;
+
+      const row = {
+        id: 'inv-expire-att',
+        type: 'approval',
+        request_id: 'req-expire-att',
+        context: JSON.stringify({ toolId: 'slack:send_message', invocationId: 'inv-expire-att' }),
+        channel_refs: null,
+      };
+
+      await (agent as any).expireInteractivePromptRow(row);
+
+      const call = runnerSendMock.mock.calls.find(
+        (c: Array<{ type: string; error?: string }>) => c[0].type === 'call-tool-result',
+      );
+      expect(call).toBeDefined();
+      const error: string = call![0].error;
+      expect(error).toContain('expired without a response');
+      expect(error).not.toContain('Do not retry');
+      expect(error).not.toContain('running unattended');
+    });
   });
 });
