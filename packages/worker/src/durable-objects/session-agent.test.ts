@@ -2713,6 +2713,14 @@ describe('SessionAgentDO', () => {
       }).run();
       Object.defineProperty(agent, 'appDb', { value: appDb });
 
+      // Enqueue a processing row with scheduled-task author email so isUnattended fires
+      (agent as any).promptQueue.enqueue({
+        id: 'pq-sched',
+        content: '',
+        authorEmail: 'scheduled-task@valet.local',
+        status: 'processing',
+      });
+
       const resolveUserDmTargetMock = vi.fn().mockResolvedValue({ channelType: 'slack', channelId: 'D0DM1234' });
       (agent as any).channelRouter.resolveUserDmTarget = resolveUserDmTargetMock;
 
@@ -2804,7 +2812,7 @@ describe('SessionAgentDO', () => {
   // ─── expireInteractivePromptRow — error message ───────────────────────────────
 
   describe('expireInteractivePromptRow — error message', () => {
-    it('sends actionable unattended error when session is orchestrator', async () => {
+    it('sends actionable unattended error when session is orchestrator with scheduled-task author email', async () => {
       const { agent } = await createTestAgent();
       (agent as any).sessionState.set('sessionId', 'orchestrator:user-1');
 
@@ -2824,6 +2832,14 @@ describe('SessionAgentDO', () => {
       const appDb = testDb.db;
       appDb.insert(users).values({ id: 'user-1', email: 'user-1@example.com' }).run();
       Object.defineProperty(agent, 'appDb', { value: appDb });
+
+      // Enqueue a processing row with scheduled-task author email so isUnattended fires
+      (agent as any).promptQueue.enqueue({
+        id: 'pq-expire-sched',
+        content: '',
+        authorEmail: 'scheduled-task@valet.local',
+        status: 'processing',
+      });
 
       await (agent as any).expireInteractivePromptRow(row);
 

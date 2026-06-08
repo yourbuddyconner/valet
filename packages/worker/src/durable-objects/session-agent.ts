@@ -331,6 +331,11 @@ export class SessionAgentDO {
   private sessionState!: SessionState;
   private lifecycle!: SessionLifecycle;
 
+  /** Tracks the workflow execution ID for direct-dispatch workflow turns
+   *  (where no queue row exists). Set when handleWorkflowExecuteDispatch
+   *  sends directly to the runner; cleared on turn completion. */
+  private _activeWorkflowExecutionId: string | undefined;
+
   private static readonly RUNNER_GRACE_PERIOD_MS = 60_000;
   private static readonly MODAL_SANDBOX_MAX_LIFETIME_MS = 24 * 60 * 60 * 1000;
   private static readonly MODAL_SANDBOX_TIMEOUT_EDGE_THRESHOLD_MS =
@@ -1006,6 +1011,7 @@ export class SessionAgentDO {
           console.log(`[SessionAgentDO] Disconnect grace expired — reverting processing→queued`);
           this.promptQueue.revertProcessingToQueued();
           this.promptQueue.runnerBusy = false;
+          this._activeWorkflowExecutionId = undefined;
           if (this.promptQueue.length > 0 && !this.promptQueue.idleQueuedSince) {
             this.promptQueue.idleQueuedSince = Date.now();
             this.rescheduleIdleAlarm();
@@ -1173,6 +1179,7 @@ export class SessionAgentDO {
           case 'revert_and_drain':
             this.promptQueue.revertProcessingToQueued();
             this.promptQueue.runnerBusy = false;
+            this._activeWorkflowExecutionId = undefined;
             this.promptQueue.clearDispatchTimers();
             this.promptQueue.idleQueuedSince = 0;
             if (this.runnerLink.isConnected) {
@@ -1190,6 +1197,7 @@ export class SessionAgentDO {
             break;
           case 'mark_not_busy':
             this.promptQueue.runnerBusy = false;
+            this._activeWorkflowExecutionId = undefined;
             this.promptQueue.clearDispatchTimers();
             if (this.promptQueue.length > 0 && !this.promptQueue.idleQueuedSince) {
               this.promptQueue.idleQueuedSince = Date.now();
@@ -4170,6 +4178,7 @@ export class SessionAgentDO {
       } else {
         console.log(`[SessionAgentDO] handlePromptComplete: queue empty, setting runnerBusy=false`);
         this.promptQueue.runnerBusy = false;
+        this._activeWorkflowExecutionId = undefined;
         this.broadcastToClients({
           type: 'status',
           data: { runnerBusy: false },
@@ -4180,6 +4189,7 @@ export class SessionAgentDO {
       // Ensure runnerBusy is cleared even on error to prevent permanent stuck state
       console.error('[SessionAgentDO] handlePromptComplete error, forcing runnerBusy=false:', err);
       this.promptQueue.runnerBusy = false;
+      this._activeWorkflowExecutionId = undefined;
       if (completedChannelKey) {
         this.promptQueue.setChannelBusy(completedChannelKey, false);
       }
@@ -4825,6 +4835,10 @@ export class SessionAgentDO {
       this.promptQueue.runnerBusy = false;
       return queueWorkflowDispatch('runner_send_failed');
     }
+
+    // Track execution ID so isUnattended checks during this turn know it's a
+    // workflow execution (no queue row exists on the direct-dispatch path).
+    this._activeWorkflowExecutionId = executionId;
 
     this.emitAuditEvent(
       'workflow.dispatch',
@@ -6756,9 +6770,11 @@ export class SessionAgentDO {
       }
 
       if (requestId) {
-        const isOrchestrator = (this.sessionState.sessionId ?? '').startsWith('orchestrator:');
         const wfCtx = this.promptQueue.getProcessingWorkflowContext();
-        const isUnattended = isOrchestrator || wfCtx?.queueType === 'workflow_execute';
+        const isUnattended =
+          wfCtx?.queueType === 'workflow_execute' ||
+          !!this._activeWorkflowExecutionId ||
+          this.promptQueue.getProcessingAuthorEmail() === 'scheduled-task@valet.local';
         const expiryError = isUnattended
           ? `Action "${toolId}" approval request expired without a response. ` +
             `This likely means the session was running unattended (scheduled task or automation) and no one saw the approval prompt. ` +
@@ -7199,9 +7215,11 @@ export class SessionAgentDO {
       // If the user has a Slack identity, we open a DM and send the prompt there.
       // If no Slack identity or DM resolution fails, fall back to web UI error.
       if (targets.length === 0) {
-        const isOrchestrator = (sessionId ?? '').startsWith('orchestrator:');
         const wfCtx = this.promptQueue.getProcessingWorkflowContext();
-        const isUnattended = isOrchestrator || wfCtx?.queueType === 'workflow_execute';
+        const isUnattended =
+          wfCtx?.queueType === 'workflow_execute' ||
+          !!this._activeWorkflowExecutionId ||
+          this.promptQueue.getProcessingAuthorEmail() === 'scheduled-task@valet.local';
         if (!isUnattended) {
           // Attended web-only session: approval is already visible in the web UI.
           return;
@@ -7229,8 +7247,10 @@ export class SessionAgentDO {
                 JSON.stringify(refs),
                 promptId,
               );
+              return;  // delivery succeeded — done
             }
-            return;
+            console.warn(`[SessionAgentDO] DM fallback delivery failed for prompt ${promptId} — falling through to web-UI error path`);
+            // fall through to hasExternalBindings error path below
           }
         }
 
@@ -7273,9 +7293,9 @@ export class SessionAgentDO {
 
   private async buildApprovalProvenanceLabel(userId: string): Promise<string> {
     const wfCtx = this.promptQueue.getProcessingWorkflowContext();
-    if (wfCtx?.queueType === 'workflow_execute' && wfCtx.workflowExecutionId) {
-      const workflowName = await getWorkflowNameByExecutionId(this.appDb, wfCtx.workflowExecutionId)
-        .catch(() => null);
+    const executionId = wfCtx?.workflowExecutionId ?? this._activeWorkflowExecutionId ?? null;
+    if ((wfCtx?.queueType === 'workflow_execute' || !!this._activeWorkflowExecutionId) && executionId) {
+      const workflowName = await getWorkflowNameByExecutionId(this.appDb, executionId).catch(() => null);
       const agentName = await this.resolveAgentDisplayName(userId);
       return workflowName
         ? `${agentName} requested this while running workflow *${workflowName}*`

@@ -385,6 +385,14 @@ export class PromptQueue {
     };
   }
 
+  /** Get the author_email from the most recent processing entry. */
+  getProcessingAuthorEmail(): string | null {
+    const rows = this.sql
+      .exec("SELECT author_email FROM prompt_queue WHERE status = 'processing' ORDER BY created_at DESC LIMIT 1")
+      .toArray();
+    return rows.length > 0 ? (rows[0].author_email as string | null) : null;
+  }
+
   /** Get channel target for a specific prompt by messageId.
    *  Prefers reply_channel_* over channel_* (matches legacy getProcessingChannelContext
    *  precedence) so external-channel replies route correctly.
