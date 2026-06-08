@@ -167,9 +167,23 @@ const getReactions: ActionDefinition = {
   }),
 };
 
+const sendMessage: ActionDefinition = {
+  id: 'slack.send_message',
+  name: 'Send Message',
+  description: 'Post a message to a Slack channel or thread. Use this to send to any channel the bot has joined — for arbitrary channel posts and threaded replies. Use channel_reply instead only when replying on the specific channel a user wrote from. Returns ts (message timestamp) and channel — save ts to thread follow-up messages under this one via thread_ts.',
+  riskLevel: 'medium',
+  params: z.object({
+    channel: z.string().describe('Channel ID (C...) or channel name with # prefix (e.g. #proj-valet). Use list_channels to find IDs.'),
+    text: z.string().describe('Message body. Supports Slack mrkdwn formatting (bold: *text*, italic: _text_, code: `code`, links: <url|label>).'),
+    thread_ts: z.string().optional().describe('Post as a threaded reply under an existing message. Use the ts value returned by a previous send_message call (e.g. "1780887543.189519").'),
+    blocks: z.string().optional().describe('Block Kit JSON array as a string for rich formatting. When provided, text is used as the notification fallback only.'),
+  }),
+};
+
 const allActions: ActionDefinition[] = [
   dmOwner,
   dmUser,
+  sendMessage,
   addReaction,
   listChannels,
   readHistory,
@@ -430,6 +444,64 @@ async function executeAction(
       case 'slack.dm_user': {
         const p = dmUser.params.parse(params);
         return openAndSendDM(token, p.user, p.text, ctx.callerIdentity);
+      }
+
+      case 'slack.send_message': {
+        const p = sendMessage.params.parse(params);
+
+        // Resolve #name to channel ID via conversations.list
+        let channelId = p.channel;
+        if (p.channel.startsWith('#')) {
+          const name = p.channel.slice(1).toLowerCase();
+          let cursor: string | undefined;
+          let found = false;
+          outer: do {
+            const q: Record<string, unknown> = { types: 'public_channel,private_channel', limit: 200, exclude_archived: true };
+            if (cursor) q.cursor = cursor;
+            const res = await slackGet('users.conversations', token, q);
+            if (!res.ok) return slackError(res);
+            const data = (await res.json()) as { ok: boolean; error?: string; channels?: Record<string, unknown>[]; response_metadata?: { next_cursor?: string } };
+            if (!data.ok) return slackError(res, data);
+            for (const ch of (data.channels || [])) {
+              if (typeof ch.name === 'string' && ch.name.toLowerCase() === name) {
+                channelId = ch.id as string;
+                found = true;
+                break outer;
+              }
+            }
+            cursor = data.response_metadata?.next_cursor || undefined;
+          } while (cursor);
+          if (!found) return { success: false, error: `Channel "${p.channel}" not found or bot is not a member. Use list_channels to find available channels.` };
+        }
+
+        const denied = await guardPrivateChannel(token, channelId, ctx);
+        if (denied) return denied;
+
+        const body: Record<string, unknown> = { channel: channelId, text: p.text };
+        if (p.thread_ts) body.thread_ts = p.thread_ts;
+
+        if (p.blocks) {
+          try {
+            body.blocks = JSON.parse(p.blocks);
+          } catch {
+            return { success: false, error: 'blocks must be valid JSON' };
+          }
+        }
+
+        if (ctx.callerIdentity?.name) body.username = ctx.callerIdentity.name;
+        if (ctx.callerIdentity?.avatar) body.icon_url = ctx.callerIdentity.avatar;
+
+        if (!p.blocks && p.text.length > SLACK_TEXT_LIMIT) {
+          body.blocks = buildContentBlocks(p.text, p.text);
+          body.text = p.text.slice(0, SLACK_TEXT_LIMIT);
+        }
+
+        const res = await slackFetch('chat.postMessage', token, body);
+        if (!res.ok) return slackError(res);
+        const data = (await res.json()) as { ok: boolean; error?: string; ts?: string; channel?: string };
+        if (!data.ok) return slackError(res, data);
+
+        return { success: true, data: { ok: true, ts: data.ts, channel: data.channel } };
       }
 
       case 'slack.add_reaction': {
