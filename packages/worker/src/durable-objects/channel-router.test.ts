@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { InteractivePrompt, InteractiveResolution } from '@valet/sdk';
+import type { ChannelTransport, InteractivePrompt, InteractiveResolution } from '@valet/sdk';
 import { ChannelRouter, type ChannelRouterDeps } from './channel-router.js';
 
 function mockDeps(overrides?: Partial<ChannelRouterDeps>): ChannelRouterDeps {
@@ -16,6 +16,7 @@ const mockTransport = {
   sendMessage: vi.fn().mockResolvedValue({ success: true, messageId: 'ts123' }),
   sendInteractivePrompt: vi.fn().mockResolvedValue({ channelId: 'C123', messageId: 'msg1' }),
   updateInteractivePrompt: vi.fn().mockResolvedValue(undefined),
+  resolveUserDmTarget: vi.fn().mockResolvedValue(null),
   parseTarget: vi.fn((channelId: string) => {
     if (channelId.includes(':')) {
       const idx = channelId.indexOf(':');
@@ -247,6 +248,50 @@ describe('ChannelRouter', () => {
       });
 
       expect(refs).toHaveLength(0);
+    });
+  });
+
+  describe('resolveUserDmTarget', () => {
+    it('delegates to transport.resolveUserDmTarget and returns the target', async () => {
+      const dmTarget = { channelType: 'slack', channelId: 'D0ABC123' };
+      mockTransport.resolveUserDmTarget.mockResolvedValueOnce(dmTarget);
+
+      const result = await router.resolveUserDmTarget('slack', 'u1', 'U0ABC');
+
+      expect(result).toEqual(dmTarget);
+      expect(deps.resolveToken).toHaveBeenCalledWith('slack', 'u1');
+      expect(mockTransport.resolveUserDmTarget).toHaveBeenCalledWith(
+        'U0ABC',
+        expect.objectContaining({ token: 'mock-token', userId: 'u1' }),
+      );
+    });
+
+    it('returns null when transport has no resolveUserDmTarget', async () => {
+      const { channelRegistry } = await import('../channels/registry.js');
+      // Stub transport without resolveUserDmTarget — provides all required fields
+      const stubTransport: ChannelTransport = {
+        channelType: 'slack',
+        sendMessage: vi.fn(),
+        verifySignature: vi.fn().mockReturnValue(true),
+        parseInbound: vi.fn().mockResolvedValue(null),
+        scopeKeyParts: vi.fn().mockReturnValue({ channelType: 'slack', channelId: 'C0' }),
+        formatMarkdown: vi.fn((s: string) => s),
+      };
+      vi.mocked(channelRegistry.getTransport).mockReturnValueOnce(stubTransport);
+
+      const result = await router.resolveUserDmTarget('slack', 'u1', 'U0ABC');
+
+      expect(result).toBeNull();
+    });
+
+    it('returns null when token resolution fails', async () => {
+      const localDeps = mockDeps({ resolveToken: vi.fn().mockResolvedValue(undefined) });
+      const localRouter = new ChannelRouter(localDeps);
+
+      const result = await localRouter.resolveUserDmTarget('slack', 'u1', 'U0ABC');
+
+      expect(result).toBeNull();
+      expect(mockTransport.resolveUserDmTarget).not.toHaveBeenCalled();
     });
   });
 
