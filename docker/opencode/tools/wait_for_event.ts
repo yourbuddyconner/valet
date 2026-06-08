@@ -7,7 +7,10 @@ export default tool({
     "a user message, or any other prompt. Your turn ends immediately after this tool returns. " +
     "The next message you receive will be from whoever wakes you (child notification, user, etc.). " +
     "Prefer this over sleep loops when the wait time is unknown or when you expect a child " +
-    "to notify you proactively.",
+    "to notify you proactively. " +
+    "IMPORTANT: To wait for a child session to finish its assigned task, use notify_on='status_change' " +
+    "with statuses=['idle'] — NOT notify_on='terminal'. A child that completes work becomes 'idle' " +
+    "(session still alive); 'terminal' only fires on 'terminated'/'error'/'hibernated'.",
   args: {
     reason: tool.schema
       .string()
@@ -25,14 +28,18 @@ export default tool({
       .enum(["terminal", "status_change"])
       .optional()
       .describe(
-        "Which events should wake you. 'terminal' (default) only fires when a child reaches a terminal status. " +
-        "'status_change' fires on any child status transition.",
+        "Which events should wake you. 'terminal' (default) only fires when a child reaches a terminal status " +
+        "(terminated, error, hibernated). NOTE: 'idle' is NOT a terminal status — a child that finishes its task " +
+        "becomes idle (session still alive), not terminated. Use 'status_change' with statuses=['idle'] when " +
+        "waiting for a child to complete its assigned task. 'status_change' fires on any child status transition.",
       ),
     statuses: tool.schema
       .array(tool.schema.string())
       .optional()
       .describe(
-        "Optional list of statuses to trigger on (e.g. ['terminated','error']). Overrides notify_on.",
+        "Optional list of statuses to trigger on. Overrides notify_on. " +
+        "To wait for a child to finish its task: statuses=['idle']. " +
+        "To wait for a child session to be fully shut down: statuses=['terminated','error'].",
       ),
   },
   async execute(args) {
