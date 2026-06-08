@@ -22,12 +22,13 @@ Bot token — an admin pastes a bot token issued by the provider during connecti
 
 ## Actions
 
-11 actions are defined for Slack. Risk levels determine approval behavior — see [Approvals](/product/approvals) for what `low`, `medium`, `high`, and `critical` mean at run time.
+12 actions are defined for Slack. Risk levels determine approval behavior — see [Approvals](/product/approvals) for what `low`, `medium`, `high`, and `critical` mean at run time.
 
 | Action ID | What it does | Key params | Risk |
 | --- | --- | --- | --- |
 | `slack.dm_owner` | Send a direct message to the session owner on Slack. No user lookup needed. | `text` | low |
 | `slack.dm_user` | Send a direct message to a Slack user by their user ID (U...). Use list_users to find IDs. | `user`, `text` | low |
+| `slack.send_message` | Post a message to a Slack channel or thread. Returns `ts` so you can thread follow-up messages. Use this for arbitrary channel posts — use `channel_reply` only when replying on the specific channel a user wrote from. | `channel`, `text`, `thread_ts`?, `blocks`? | medium |
 | `slack.add_reaction` | Add an emoji reaction to a message | `channel`, `timestamp`, `name` | low |
 | `slack.list_channels` | List Slack channels. By default lists only channels the bot has joined. Set scope to "all" to discover all public channels in the workspace. Use prefix to filter by channel name prefix (e.g. "eng-" or "team-"). | `scope`?, `prefix`? | low |
 | `slack.read_history` | Read recent messages from a Slack channel the bot has joined. Use list_channels to get channel IDs. Each message ts can be used as thread_ts for replies. Use oldest/latest to narrow to a time window. | `channel`, `limit`?, `cursor`?, `oldest`?, `latest`?, `filter`?, `threads_only`?, `include_subtypes`? | low |
@@ -56,6 +57,33 @@ Send a direct message to a Slack user by their user ID (U...). Use list_users to
 | --- | --- | --- | --- |
 | `user` | string | Yes | User ID (U...) |
 | `text` | string | Yes | Message text |
+
+### `slack.send_message`
+
+Post a message to a Slack channel or thread. Returns `ts` (message timestamp) and `channel` — save `ts` to thread follow-up messages under this one via `thread_ts`.
+
+**When to use `slack.send_message` vs `channel_reply`:**
+
+- Use `slack.send_message` to post to any channel the bot has joined, or to start/continue a thread on any message. This is the right tool for proactive posts, scheduled reports, and multi-message threads.
+- Use `channel_reply` when you want to reply on the exact channel a user wrote *from* (indicated by the `[via slack | chatId: ...]` prefix in the incoming message). `channel_reply` is route-bound to the originating conversation; `slack.send_message` works for any target.
+
+**Worked example — post a header, then thread bullets under it:**
+
+```
+# Step 1: post the header
+call_tool("slack.send_message", { channel: "#proj-valet", text: "*Weekly status*" })
+→ { ok: true, ts: "1780887543.189519", channel: "C0..." }
+
+# Step 2: thread bullets under the header using the returned ts
+call_tool("slack.send_message", { channel: "C0...", text: "• Item 1\n• Item 2\n• Item 3", thread_ts: "1780887543.189519" })
+```
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `channel` | string | Yes | Channel ID (`C...`) or channel name with `#` prefix (e.g. `#proj-valet`). Use `list_channels` to find IDs. |
+| `text` | string | Yes | Message body. Supports Slack mrkdwn: bold `*text*`, italic `_text_`, code `` `code` ``, links `<url\|label>`. |
+| `thread_ts` | string | No | Post as a threaded reply. Use the `ts` from a previous `send_message` response (e.g. `"1780887543.189519"`). |
+| `blocks` | string | No | Block Kit JSON array as a string for rich formatting. When provided, `text` is used as the notification fallback only. |
 
 ### `slack.add_reaction`
 
