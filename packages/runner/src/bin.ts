@@ -128,18 +128,9 @@ function buildInitialConfig(): OpenCodeConfig {
   if (process.env.OPENAI_API_KEY) providerKeys.openai = process.env.OPENAI_API_KEY;
   if (process.env.GOOGLE_API_KEY) providerKeys.google = process.env.GOOGLE_API_KEY;
 
-  const tools: Record<string, boolean> = {};
-  // Disable Parallel AI tools if the API key is not configured
-  if (!process.env.PARALLEL_API_KEY) {
-    tools.parallel_web_search = false;
-    tools.parallel_web_extract = false;
-    tools.parallel_deep_research = false;
-    tools.parallel_data_enrichment = false;
-  }
-
   return {
     providerKeys,
-    tools,
+    tools: {},
     instructions: [],
     isOrchestrator: process.env.IS_ORCHESTRATOR === "true",
   };

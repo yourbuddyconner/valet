@@ -7228,14 +7228,6 @@ export class SessionAgentDO {
     if (envVars.OPENAI_API_KEY) config.providerKeys!.openai = envVars.OPENAI_API_KEY;
     if (envVars.GOOGLE_API_KEY) config.providerKeys!.google = envVars.GOOGLE_API_KEY;
 
-    // Disable parallel tools if no key
-    if (!envVars.PARALLEL_API_KEY) {
-      config.tools!.parallel_web_search = false;
-      config.tools!.parallel_web_extract = false;
-      config.tools!.parallel_deep_research = false;
-      config.tools!.parallel_data_enrichment = false;
-    }
-
     // Re-fetch custom providers from D1 so admin changes take effect immediately
     try {
       const freshProviders = await assembleCustomProviders(this.appDb, this.env.ENCRYPTION_KEY);

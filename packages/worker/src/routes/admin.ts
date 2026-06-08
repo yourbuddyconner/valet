@@ -95,7 +95,7 @@ adminRouter.put('/', async (c) => {
 
 // --- LLM API Keys ---
 
-const VALID_PROVIDERS = ['anthropic', 'openai', 'google', 'parallel'] as const;
+const VALID_PROVIDERS = ['anthropic', 'openai', 'google'] as const;
 
 adminRouter.get('/llm-keys', async (c) => {
   const keys = await listOrgApiKeys(c.get('db'));
@@ -220,7 +220,7 @@ adminRouter.delete('/users/:id', async (c) => {
 
 // --- Custom Providers ---
 
-const BUILT_IN_PROVIDER_IDS = ['anthropic', 'openai', 'google', 'parallel'];
+const BUILT_IN_PROVIDER_IDS = ['anthropic', 'openai', 'google'];
 const PROVIDER_ID_REGEX = /^[a-z0-9-]+$/;
 
 adminRouter.get('/custom-providers', async (c) => {
