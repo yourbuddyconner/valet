@@ -796,6 +796,15 @@ export class SlackTransport implements ChannelTransport {
       },
     ];
 
+    // Provenance context — present on unattended-run DM fallbacks
+    const provenanceLabel = prompt.context?.provenanceLabel as string | undefined;
+    if (provenanceLabel) {
+      blocks.push({
+        type: 'context',
+        elements: [{ type: 'mrkdwn', text: `_${provenanceLabel}_` }],
+      });
+    }
+
     if (prompt.expiresAt) {
       const expiryUnix = Math.floor(prompt.expiresAt / 1000);
       blocks.push({
@@ -906,5 +915,25 @@ export class SlackTransport implements ChannelTransport {
     if (!result.ok) {
       console.error(`[SlackTransport] updateInteractivePrompt error: ${result.error}`);
     }
+  }
+
+  async resolveUserDmTarget(
+    slackUserId: string,
+    ctx: ChannelContext,
+  ): Promise<ChannelTarget | null> {
+    const result = await slackApiCall('conversations.open', { users: slackUserId }, ctx.token);
+    const channelId =
+      result.ok &&
+      typeof result.channel === 'object' &&
+      result.channel !== null &&
+      'id' in result.channel &&
+      typeof (result.channel as Record<string, unknown>).id === 'string'
+        ? ((result.channel as Record<string, unknown>).id as string)
+        : null;
+    if (!channelId) {
+      console.error(`[SlackTransport] resolveUserDmTarget failed: ${result.error}`);
+      return null;
+    }
+    return { channelType: 'slack', channelId };
   }
 }
