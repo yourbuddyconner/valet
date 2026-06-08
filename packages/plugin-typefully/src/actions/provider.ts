@@ -5,6 +5,7 @@ export const typefullyProvider: IntegrationProvider = {
   service: 'typefully',
   displayName: 'Typefully',
   authType: 'api_key',
+  mcpServerUrl: 'https://mcp.typefully.com/mcp',
   supportedEntities: ['posts', 'drafts', 'accounts'],
 
   validateCredentials(credentials: IntegrationCredentials): boolean {
