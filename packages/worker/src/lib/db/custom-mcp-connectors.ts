@@ -7,6 +7,8 @@ import { customMcpConnectors } from '../schema/index.js';
 type ConnectorRow = typeof customMcpConnectors.$inferSelect;
 type ConnectorStatus = CustomMcpConnector['status'];
 type ConnectorAuthType = CustomMcpConnector['authType'];
+type ConnectorCredentialScope = CustomMcpConnector['credentialScope'];
+type ConnectorApiKeyPlacement = CustomMcpConnector['apiKeyPlacement'];
 type TokenEndpointAuthMethod = CustomMcpConnector['oauthTokenEndpointAuthMethod'];
 
 export interface CreateCustomMcpConnectorData {
@@ -16,6 +18,7 @@ export interface CreateCustomMcpConnectorData {
   displayName: string;
   serverUrl: string;
   authType: ConnectorAuthType;
+  credentialScope?: ConnectorCredentialScope;
   oauthClientId?: string | null;
   encryptedOauthClientSecret?: string | null;
   oauthTokenEndpointAuthMethod?: TokenEndpointAuthMethod;
@@ -23,8 +26,10 @@ export interface CreateCustomMcpConnectorData {
   oauthAuthorizationEndpoint?: string | null;
   oauthTokenEndpoint?: string | null;
   encryptedApiKey?: string | null;
+  apiKeyPlacement?: ConnectorApiKeyPlacement;
   apiKeyHeaderName?: string | null;
   apiKeyPrefix?: string | null;
+  apiKeyQueryParam?: string | null;
   encryptedAdditionalHeaders?: string | null;
   status?: ConnectorStatus;
   lastDiscoveredAt?: string | null;
@@ -45,13 +50,16 @@ function rowToConnector(row: ConnectorRow): CustomMcpConnector {
     displayName: row.displayName,
     serverUrl: row.serverUrl,
     authType: row.authType,
+    credentialScope: row.credentialScope,
     oauthClientId: row.oauthClientId,
     oauthTokenEndpointAuthMethod: row.oauthTokenEndpointAuthMethod,
     oauthScopes: row.oauthScopes,
     oauthAuthorizationEndpoint: row.oauthAuthorizationEndpoint,
     oauthTokenEndpoint: row.oauthTokenEndpoint,
+    apiKeyPlacement: row.apiKeyPlacement,
     apiKeyHeaderName: row.apiKeyHeaderName,
     apiKeyPrefix: row.apiKeyPrefix,
+    apiKeyQueryParam: row.apiKeyQueryParam,
     status: row.status,
     lastDiscoveredAt: row.lastDiscoveredAt,
     lastError: row.lastError,
@@ -107,6 +115,7 @@ export async function createConnector(
     displayName: data.displayName,
     serverUrl: data.serverUrl,
     authType: data.authType,
+    credentialScope: data.credentialScope ?? 'org',
     oauthClientId: data.oauthClientId ?? null,
     encryptedOauthClientSecret: data.encryptedOauthClientSecret ?? null,
     oauthTokenEndpointAuthMethod: data.oauthTokenEndpointAuthMethod ?? 'none',
@@ -114,8 +123,10 @@ export async function createConnector(
     oauthAuthorizationEndpoint: data.oauthAuthorizationEndpoint ?? null,
     oauthTokenEndpoint: data.oauthTokenEndpoint ?? null,
     encryptedApiKey: data.encryptedApiKey ?? null,
+    apiKeyPlacement: data.apiKeyPlacement ?? 'header',
     apiKeyHeaderName: data.apiKeyHeaderName ?? null,
     apiKeyPrefix: data.apiKeyPrefix ?? null,
+    apiKeyQueryParam: data.apiKeyQueryParam ?? null,
     encryptedAdditionalHeaders: data.encryptedAdditionalHeaders ?? null,
     status: data.status ?? 'active',
     lastDiscoveredAt: data.lastDiscoveredAt ?? null,

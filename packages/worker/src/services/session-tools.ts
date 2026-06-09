@@ -369,7 +369,7 @@ export async function resolveActionPolicy(
   const hasActiveIntegration = [...userIntegrations, ...orgIntegrations].some(
     (i) => i.service === service && i.status === 'active',
   );
-  const customConnectorDoesNotNeedIntegration = !!customConnector && customConnector.authType !== 'oauth';
+  const customConnectorDoesNotNeedIntegration = !!customConnector && !customConnectorRequiresUserCredential(customConnector);
 
   if (!hasActiveIntegration && !customConnectorDoesNotNeedIntegration) {
     const autoServices = await getAutoEnabledServices(envDB, orgId);
@@ -581,11 +581,17 @@ function buildCredentials(credResult: CredentialResult & { ok: true }): Record<s
   return credentials;
 }
 
-function requiresUserCredential(provider?: { authType?: string; isCustomConnector?: boolean }): boolean {
+function requiresUserCredential(provider?: { authType?: string; isCustomConnector?: boolean; credentialScope?: 'org' | 'user' }): boolean {
   if (!provider) return false;
   if (provider.authType === 'none') return false;
-  if (provider.isCustomConnector && provider.authType === 'api_key') return false;
+  if (provider.isCustomConnector && provider.authType === 'api_key') return provider.credentialScope === 'user';
   return true;
+}
+
+function customConnectorRequiresUserCredential(connector: { authType: string; credentialScope?: 'org' | 'user' }): boolean {
+  if (connector.authType === 'none') return false;
+  if (connector.authType === 'oauth') return true;
+  return connector.credentialScope === 'user';
 }
 
 function matchesServiceFilter(

@@ -137,6 +137,36 @@ describe('custom MCP connector service', () => {
     expect(db.select().from(mcpToolCache).where(eq(mcpToolCache.service, created.serviceSlug)).all()).toEqual([]);
   });
 
+  it('creates user-scoped API-key connectors without storing an org secret', async () => {
+    const { db } = createTestDb();
+    const appDb: AppDb = db;
+
+    const created = await createCustomMcpConnector(makeEnv(), appDb, {
+      displayName: 'Excalibur MCP',
+      serverUrl: 'https://mcp.excalibur.example.com/mcp',
+      authType: 'api_key',
+      credentialScope: 'user',
+      apiKeyHeaderName: 'X-API-Key',
+      apiKeyPrefix: null,
+      status: 'active',
+    }, { orgId: 'default', createdBy: null });
+
+    expect(created).toMatchObject({
+      serviceSlug: 'excalibur-mcp',
+      credentialScope: 'user',
+      hasApiKey: false,
+    });
+    const row = db.select().from(customMcpConnectors).where(eq(customMcpConnectors.id, created.id)).get();
+    expect(row?.encryptedApiKey).toBeNull();
+
+    const context = await loadCustomMcpConnectorContext(makeEnv(), appDb, 'default');
+    expect(context.connectors.get('excalibur-mcp')).toMatchObject({
+      credentialScope: 'user',
+      staticAuthHeader: undefined,
+      tokenAuthHeader: { name: 'X-API-Key', prefix: null },
+    });
+  });
+
   it('invalidates dynamic MCP OAuth clients when OAuth connector identity changes', async () => {
     const { db } = createTestDb();
     const appDb: AppDb = db;
@@ -194,6 +224,45 @@ describe('custom MCP connector service', () => {
         clientId: 'dynamic-client',
       }),
     ]);
+  });
+
+  it('clears user connections when the connector credential contract changes', async () => {
+    const { db } = createTestDb();
+    const appDb: AppDb = db;
+    db.insert(users).values({ id: 'user-1', email: 'user@example.com' }).run();
+    const connector = await createCustomMcpConnector(makeEnv(), appDb, {
+      displayName: 'Salesforce MCP',
+      serverUrl: 'https://mcp.salesforce.com/platform/mcp',
+      authType: 'oauth',
+      oauthClientId: 'sf-client',
+      oauthAuthorizationEndpoint: 'https://login.salesforce.com/services/oauth2/authorize',
+      oauthTokenEndpoint: 'https://login.salesforce.com/services/oauth2/token',
+    }, { orgId: 'default', createdBy: null });
+    db.insert(integrations).values({
+      id: 'integration-1',
+      userId: 'user-1',
+      service: connector.serviceSlug,
+      config: { entities: [] },
+      status: 'active',
+    }).run();
+    db.insert(credentials).values({
+      id: 'credential-1',
+      ownerType: 'user',
+      ownerId: 'user-1',
+      provider: connector.serviceSlug,
+      credentialType: 'oauth2',
+      encryptedData: 'encrypted-oauth',
+    }).run();
+
+    await updateCustomMcpConnector(makeEnv(), appDb, connector.id, {
+      authType: 'api_key',
+      credentialScope: 'user',
+      apiKeyHeaderName: 'X-API-Key',
+      apiKeyPrefix: 'Token',
+    });
+
+    expect(db.select().from(integrations).where(eq(integrations.service, connector.serviceSlug)).all()).toEqual([]);
+    expect(db.select().from(credentials).where(eq(credentials.provider, connector.serviceSlug)).all()).toEqual([]);
   });
 
   it('rejects service slugs that collide with built-in integrations', async () => {

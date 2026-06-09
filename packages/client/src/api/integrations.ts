@@ -23,7 +23,9 @@ export interface IntegrationListItem {
   scope: 'user' | 'org';
   config: { entities: string[] };
   createdAt: string;
+  authType?: 'oauth2' | 'api_key' | 'bearer';
   displayName?: string;
+  isCustomConnector?: boolean;
   isOrgManagedConnector?: boolean;
 }
 

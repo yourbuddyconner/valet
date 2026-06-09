@@ -34,6 +34,7 @@ export function IntegrationCard({ integration }: IntegrationCardProps) {
   const deleteIntegration = useDeleteIntegration();
   const Icon = getServiceIcon(integration.service);
   const status = statusText[integration.status];
+  const label = integration.displayName ?? serviceLabels[integration.service] ?? integration.service;
 
   return (
     <Card>
@@ -44,7 +45,7 @@ export function IntegrationCard({ integration }: IntegrationCardProps) {
           </div>
           <div>
             <CardTitle className="text-base">
-              {serviceLabels[integration.service] ?? integration.service}
+              {label}
             </CardTitle>
             <p className={`text-xs ${status.className}`}>
               {status.label}
@@ -55,7 +56,7 @@ export function IntegrationCard({ integration }: IntegrationCardProps) {
       <CardContent>
         <div className="flex items-center justify-between">
           <p className="text-xs text-neutral-500 dark:text-neutral-400">
-            OAuth connected
+            {getIntegrationConnectionLabel(integration)}
           </p>
           <Button
             variant="secondary"
@@ -69,4 +70,14 @@ export function IntegrationCard({ integration }: IntegrationCardProps) {
       </CardContent>
     </Card>
   );
+}
+
+export function getIntegrationConnectionLabel(integration: IntegrationListItem): string {
+  if (integration.isOrgManagedConnector) return 'Org-managed connector';
+  if (integration.isCustomConnector) {
+    if (integration.authType === 'api_key') return 'API key connected';
+    if (integration.authType === 'bearer') return 'Bearer token connected';
+    return 'OAuth connected';
+  }
+  return 'OAuth connected';
 }

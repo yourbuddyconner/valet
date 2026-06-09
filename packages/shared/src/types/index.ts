@@ -481,6 +481,8 @@ export interface ConfigureIntegrationRequest {
 }
 
 export type CustomMcpConnectorAuthType = 'none' | 'oauth' | 'api_key' | 'bearer';
+export type CustomMcpConnectorCredentialScope = 'org' | 'user';
+export type CustomMcpConnectorApiKeyPlacement = 'header' | 'query';
 
 export type CustomMcpConnectorTokenEndpointAuthMethod =
   | 'none'
@@ -494,13 +496,16 @@ export interface CustomMcpConnector {
   displayName: string;
   serverUrl: string;
   authType: CustomMcpConnectorAuthType;
+  credentialScope: CustomMcpConnectorCredentialScope;
   oauthClientId: string | null;
   oauthTokenEndpointAuthMethod: CustomMcpConnectorTokenEndpointAuthMethod;
   oauthScopes: string | null;
   oauthAuthorizationEndpoint: string | null;
   oauthTokenEndpoint: string | null;
+  apiKeyPlacement: CustomMcpConnectorApiKeyPlacement;
   apiKeyHeaderName: string | null;
   apiKeyPrefix: string | null;
+  apiKeyQueryParam: string | null;
   status: 'active' | 'disabled' | 'error';
   toolCount?: number;
   lastDiscoveredAt: string | null;
@@ -517,6 +522,7 @@ export interface CreateCustomMcpConnectorRequest {
   displayName: string;
   serverUrl: string;
   authType: CustomMcpConnectorAuthType;
+  credentialScope?: CustomMcpConnectorCredentialScope;
   oauthClientId?: string | null;
   oauthClientSecret?: string;
   oauthTokenEndpointAuthMethod?: CustomMcpConnectorTokenEndpointAuthMethod | 'auto';
@@ -524,8 +530,10 @@ export interface CreateCustomMcpConnectorRequest {
   oauthAuthorizationEndpoint?: string | null;
   oauthTokenEndpoint?: string | null;
   apiKey?: string;
+  apiKeyPlacement?: CustomMcpConnectorApiKeyPlacement;
   apiKeyHeaderName?: string | null;
   apiKeyPrefix?: string | null;
+  apiKeyQueryParam?: string | null;
   additionalHeaders?: Record<string, string>;
   status?: 'active' | 'disabled';
 }
@@ -534,6 +542,7 @@ export interface UpdateCustomMcpConnectorRequest {
   displayName?: string;
   serverUrl?: string;
   authType?: CustomMcpConnectorAuthType;
+  credentialScope?: CustomMcpConnectorCredentialScope;
   oauthClientId?: string | null;
   oauthClientSecret?: string;
   clearClientSecret?: boolean;
@@ -542,8 +551,10 @@ export interface UpdateCustomMcpConnectorRequest {
   oauthAuthorizationEndpoint?: string | null;
   oauthTokenEndpoint?: string | null;
   apiKey?: string;
+  apiKeyPlacement?: CustomMcpConnectorApiKeyPlacement;
   apiKeyHeaderName?: string | null;
   apiKeyPrefix?: string | null;
+  apiKeyQueryParam?: string | null;
   additionalHeaders?: Record<string, string>;
   clearAdditionalHeaders?: boolean;
   status?: 'active' | 'disabled' | 'error';
