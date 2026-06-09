@@ -54,7 +54,7 @@ describe('ChannelRouter', () => {
         message: 'hello',
       });
 
-      expect(result).toEqual({ success: true });
+      expect(result).toEqual({ success: true, messageId: 'ts123' });
       expect(deps.resolveToken).toHaveBeenCalledWith('slack', 'u1');
       expect(deps.resolvePersona).toHaveBeenCalledWith('u1');
       expect(mockTransport.parseTarget).toHaveBeenCalledWith('C123:1234.5678');
@@ -172,7 +172,7 @@ describe('ChannelRouter', () => {
         message: 'hi',
       });
 
-      expect(result).toEqual({ success: true });
+      expect(result).toEqual({ success: true, messageId: 'ts123' });
       expect(mockTransport.sendMessage).toHaveBeenCalled();
     });
 
@@ -204,7 +204,7 @@ describe('ChannelRouter', () => {
         message: 'hi',
       });
 
-      expect(result).toEqual({ success: true });
+      expect(result).toEqual({ success: true, messageId: 'ts123' });
       expect(mockTransport.sendMessage).toHaveBeenCalledTimes(1);
       expect(deps.onReplySent).toHaveBeenCalledWith('slack', 'C123');
     });
