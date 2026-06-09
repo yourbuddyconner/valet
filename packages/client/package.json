@@ -24,6 +24,7 @@
     "@valet/sdk": "workspace:*",
     "@valet/shared": "workspace:*",
     "clsx": "^2.1.1",
+    "cmdk": "^1.1.1",
     "heic-to": "^1.4.2",
     "mermaid": "^11.12.2",
     "react": "^19.0.0",
