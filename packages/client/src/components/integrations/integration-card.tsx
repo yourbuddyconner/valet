@@ -1,11 +1,11 @@
-import type { Integration } from '@/api/types';
+import type { IntegrationListItem } from '@/api/integrations';
 import { useDeleteIntegration } from '@/api/integrations';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { getServiceIcon } from './service-icons';
 
 interface IntegrationCardProps {
-  integration: Integration;
+  integration: IntegrationListItem;
 }
 
 const serviceLabels: Record<string, string> = {
@@ -23,7 +23,7 @@ const serviceLabels: Record<string, string> = {
   grafana: 'Grafana Cloud',
 };
 
-const statusText: Record<Integration['status'], { label: string; className: string }> = {
+const statusText: Record<IntegrationListItem['status'], { label: string; className: string }> = {
   active: { label: 'Connected', className: 'text-green-600 dark:text-green-400' },
   pending: { label: 'Pending', className: 'text-amber-600 dark:text-amber-400' },
   error: { label: 'Error', className: 'text-red-600 dark:text-red-400' },

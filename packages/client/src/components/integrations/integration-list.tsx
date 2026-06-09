@@ -17,10 +17,10 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { SearchInput } from '@/components/ui/search-input';
-import type { Integration } from '@/api/types';
+import type { IntegrationListItem } from '@/api/integrations';
 import { getIntegrationListDisplayState } from './integration-list-display';
 
-type StatusFilter = Integration['status'] | 'all';
+type StatusFilter = IntegrationListItem['status'] | 'all';
 
 const STATUS_OPTIONS: { value: StatusFilter; label: string }[] = [
   { value: 'all', label: 'All' },
@@ -53,7 +53,7 @@ export function IntegrationList({ onAddIntegration, addIntegrationLabel = 'Conne
 
   // Build a unified list of items to render
   const allItems = React.useMemo(() => {
-    const items: { key: string; type: '1password' | 'telegram' | 'slack' | 'github' | 'api' | 'auto'; service: string; status: 'active' | 'pending' | 'error' | 'disconnected'; integration?: Integration; icon?: string; description?: string }[] = [];
+    const items: { key: string; type: '1password' | 'telegram' | 'slack' | 'github' | 'api' | 'auto'; service: string; status: 'active' | 'pending' | 'error' | 'disconnected'; integration?: IntegrationListItem; icon?: string; description?: string; displayName?: string; }[] = [];
 
     if (hasOnePassword) {
       items.push({ key: '1password', type: '1password', service: '1password', status: 'active' });
@@ -82,7 +82,18 @@ export function IntegrationList({ onAddIntegration, addIntegrationLabel = 'Conne
       const dedicatedServices = new Set(items.map((i) => i.service));
       for (const integration of data.integrations) {
         if (dedicatedServices.has(integration.service)) continue;
-        items.push({ key: integration.id, type: 'api', service: integration.service, status: integration.status, integration });
+        if (integration.isOrgManagedConnector) {
+          items.push({
+            key: integration.id,
+            type: 'auto',
+            service: integration.service,
+            status: 'active',
+            description: 'Configured by organization',
+            displayName: integration.displayName,
+          });
+        } else {
+          items.push({ key: integration.id, type: 'api', service: integration.service, status: integration.status, integration });
+        }
       }
     }
 
@@ -192,7 +203,7 @@ export function IntegrationList({ onAddIntegration, addIntegrationLabel = 'Conne
               return <GitHubCard key={item.key} />;
             }
             if (item.type === 'auto') {
-              return <AutoEnabledCard key={item.key} service={item.service} icon={item.icon} description={item.description} />;
+              return <AutoEnabledCard key={item.key} service={item.service} icon={item.icon} description={item.description} displayName={item.displayName} />;
             }
             return <IntegrationCard key={item.key} integration={item.integration!} />;
           })}
@@ -575,8 +586,8 @@ const autoServiceLabels: Record<string, string> = {
   deepwiki: 'DeepWiki',
 };
 
-function AutoEnabledCard({ service, icon, description }: { service: string; icon?: string; description?: string }) {
-  const label = autoServiceLabels[service] ?? service.charAt(0).toUpperCase() + service.slice(1);
+function AutoEnabledCard({ service, icon, description, displayName }: { service: string; icon?: string; description?: string; displayName?: string }) {
+  const label = displayName ?? autoServiceLabels[service] ?? service.charAt(0).toUpperCase() + service.slice(1);
 
   return (
     <Card>

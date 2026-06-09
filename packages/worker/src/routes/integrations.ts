@@ -190,7 +190,35 @@ integrationsRouter.get('/', async (c) => {
     return customContext.connectors.has(i.service);
   });
 
-  return c.json({ integrations: sanitized });
+  // Synthesize active entries for org-managed connectors (api_key / bearer auth).
+  // These have no per-user credentials — the org key is already configured.
+  const sanitizedServices = new Set(sanitized.map((i) => i.service));
+  const orgManagedEntries: Array<{
+    id: string;
+    service: string;
+    status: 'active';
+    scope: 'org';
+    config: { entities: string[] };
+    createdAt: string;
+    displayName: string;
+    isOrgManagedConnector: true;
+  }> = [];
+  for (const connector of customContext.connectors.values()) {
+    if (connector.authType !== 'api_key' && connector.authType !== 'bearer') continue;
+    if (sanitizedServices.has(connector.serviceSlug)) continue;
+    orgManagedEntries.push({
+      id: `custom:${connector.serviceSlug}`,
+      service: connector.serviceSlug,
+      status: 'active',
+      scope: 'org',
+      config: { entities: [] },
+      createdAt: new Date().toISOString(),
+      displayName: connector.displayName,
+      isOrgManagedConnector: true,
+    });
+  }
+
+  return c.json({ integrations: [...sanitized, ...orgManagedEntries] });
 });
 
 /**
@@ -238,6 +266,8 @@ integrationsRouter.get('/available', async (c) => {
 
   for (const connector of customContext.connectors.values()) {
     if (connector.authType === 'none') continue;
+    // api_key and bearer connectors are org-managed — no per-user connection needed
+    if (connector.authType === 'api_key' || connector.authType === 'bearer') continue;
     available.push({
       service: connector.serviceSlug,
       displayName: connector.displayName,

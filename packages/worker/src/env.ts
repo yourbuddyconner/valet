@@ -18,7 +18,6 @@ export interface Env {
   ANTHROPIC_API_KEY?: string;
   OPENAI_API_KEY?: string;
   GOOGLE_API_KEY?: string;
-  PARALLEL_API_KEY?: string;
 
   // GitHub App (configured via D1 org_service_configs, not env vars)
   // All GitHub credentials are managed through the admin UI manifest flow.
