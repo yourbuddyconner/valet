@@ -81,6 +81,63 @@ describe('McpClient', () => {
     });
   });
 
+  it('sends per-user tokens through a configured auth header', async () => {
+    const requests: Array<{ init: RequestInit; rpc: { method: string } }> = [];
+    const fakeFetch = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      const requestInit = init ?? {};
+      const rpc = await readRpc(requestInit) as { method: string };
+      requests.push({ init: requestInit, rpc });
+
+      if (rpc.method === 'initialize') {
+        return new Response('Not Found', { status: 404 });
+      }
+
+      return jsonResponse({ jsonrpc: '2.0', id: 2, result: { tools: [] } });
+    });
+
+    const client = new McpClient({
+      url: 'https://mcp.example.com',
+      serviceName: 'custom',
+      tokenAuthHeader: { name: 'X-API-Key', prefix: 'Token' },
+      fetch: fakeFetch,
+    });
+
+    await expect(client.listTools('user-api-key')).resolves.toEqual([]);
+
+    expect(requests.map((req) => req.rpc.method)).toEqual(['initialize', 'tools/list']);
+    for (const request of requests) {
+      expect(request.init.headers).toMatchObject({ 'X-API-Key': 'Token user-api-key' });
+      expect(request.init.headers).not.toMatchObject({ Authorization: expect.any(String) });
+    }
+  });
+
+  it('sends static auth through a configured query parameter', async () => {
+    const urls: string[] = [];
+    const fakeFetch = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      urls.push(String(url));
+      const rpc = await readRpc(init ?? {});
+      if (rpc.method === 'initialize') {
+        return new Response('Not Found', { status: 404 });
+      }
+
+      return jsonResponse({ jsonrpc: '2.0', id: 2, result: { tools: [] } });
+    });
+
+    const client = new McpClient({
+      url: 'https://mcp.example.com/rpc?tenant=acme',
+      serviceName: 'custom',
+      staticAuthQueryParam: { name: 'api_key', value: 'org secret' },
+      fetch: fakeFetch,
+    });
+
+    await expect(client.listTools()).resolves.toEqual([]);
+
+    expect(urls).toEqual([
+      'https://mcp.example.com/rpc?tenant=acme&api_key=org%20secret',
+      'https://mcp.example.com/rpc?tenant=acme&api_key=org%20secret',
+    ]);
+  });
+
   it('rejects unsupported negotiated protocol versions instead of falling back to no-session mode', async () => {
     const fakeFetch = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
       const rpc = await readRpc(init ?? {});

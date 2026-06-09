@@ -1,7 +1,9 @@
 import { IntegrationError, ValidationError, ErrorCodes } from '@valet/shared';
 import type { Env } from '../env.js';
 import * as db from '../lib/db.js';
+import * as credentialRows from '../lib/db/credentials.js';
 import { getDb } from '../lib/drizzle.js';
+import type { AppDb } from '../lib/drizzle.js';
 import { integrationRegistry } from '../integrations/registry.js';
 import { storeCredential } from '../services/credentials.js';
 import { loadCustomMcpConnectorContext } from './custom-mcp-connectors.js';
@@ -50,6 +52,17 @@ export async function configureIntegration(
     throw new IntegrationError('Invalid credentials provided', ErrorCodes.INVALID_CREDENTIALS);
   }
 
+  const credentialType = provider.isCustomConnector && provider.authType === 'api_key'
+    ? 'api_key'
+    : 'oauth2';
+  const credentialData = credentialType === 'api_key'
+    ? { access_token: params.credentials.access_token || params.credentials.api_key || params.credentials.token || '' }
+    : params.credentials;
+
+  if (provider.isCustomConnector && provider.authType === 'api_key' && provider.credentialScope === 'user') {
+    await testCustomMcpUserCredential(params.service, provider.displayName, customContext, credentialData.access_token);
+  }
+
   // MCP OAuth services issue tokens scoped to the MCP server, not the provider's
   // standard API. Skip testConnection for these — the successful OAuth token
   // exchange already proves the connection is valid.
@@ -94,9 +107,13 @@ export async function configureIntegration(
     }
   }
 
+  if (provider.isCustomConnector) {
+    await deleteIncompatibleCustomCredentialRows(appDb, userId, params.service, credentialType);
+  }
+
   // Store credentials in unified credentials table
-  await storeCredential(env, 'user', userId, params.service, params.credentials, {
-    credentialType: 'oauth2',
+  await storeCredential(env, 'user', userId, params.service, credentialData, {
+    credentialType,
     scopes: params.config.entities.join(' '),
     expiresAt,
   });
@@ -139,4 +156,47 @@ export async function configureIntegration(
     config: created.config as unknown as Record<string, unknown>,
     createdAt: created.createdAt,
   };
+}
+
+async function testCustomMcpUserCredential(
+  service: string,
+  displayName: string,
+  customContext: Awaited<ReturnType<typeof loadCustomMcpConnectorContext>> | undefined,
+  token: string,
+): Promise<void> {
+  if (!customContext) {
+    throw new IntegrationError(`Failed to connect to ${displayName}: custom connector context unavailable`, ErrorCodes.INTEGRATION_AUTH_FAILED);
+  }
+  const actionSource = integrationRegistry.getActions(service, customContext);
+  if (!actionSource) {
+    throw new IntegrationError(`Failed to connect to ${displayName}: no action source configured`, ErrorCodes.INTEGRATION_AUTH_FAILED);
+  }
+
+  await actionSource.listActions({ credentials: { access_token: token } });
+  const listError = getActionSourceListError(actionSource);
+  if (listError) {
+    throw new IntegrationError(`Failed to connect to ${displayName}: ${listError}`, ErrorCodes.INTEGRATION_AUTH_FAILED);
+  }
+}
+
+function getActionSourceListError(actionSource: unknown): string | null {
+  if (
+    typeof actionSource === 'object'
+    && actionSource !== null
+    && 'getLastListError' in actionSource
+    && typeof actionSource.getLastListError === 'function'
+  ) {
+    return (actionSource as { getLastListError: () => string | null }).getLastListError();
+  }
+  return null;
+}
+
+async function deleteIncompatibleCustomCredentialRows(
+  appDb: AppDb,
+  userId: string,
+  service: string,
+  credentialType: 'oauth2' | 'api_key',
+): Promise<void> {
+  const staleType = credentialType === 'api_key' ? 'oauth2' : 'api_key';
+  await credentialRows.deleteCredential(appDb, 'user', userId, service, staleType);
 }

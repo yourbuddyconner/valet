@@ -2,7 +2,9 @@ import * as React from 'react';
 import type {
   CreateCustomMcpConnectorRequest,
   CustomMcpConnector,
+  CustomMcpConnectorApiKeyPlacement,
   CustomMcpConnectorAuthType,
+  CustomMcpConnectorCredentialScope,
   CustomMcpConnectorTokenEndpointAuthMethod,
   UpdateCustomMcpConnectorRequest,
 } from '@valet/shared';
@@ -45,6 +47,7 @@ export function AddMcpConnectorDialog({ open, onOpenChange, connector }: AddMcpC
   const [serverUrl, setServerUrl] = React.useState('');
   const [advancedOpen, setAdvancedOpen] = React.useState(false);
   const [authType, setAuthType] = React.useState<CustomMcpConnectorAuthType>('none');
+  const [credentialScope, setCredentialScope] = React.useState<CustomMcpConnectorCredentialScope>('org');
   const [status, setStatus] = React.useState<'active' | 'disabled'>('active');
   const [oauthClientId, setOauthClientId] = React.useState('');
   const [oauthClientSecret, setOauthClientSecret] = React.useState('');
@@ -55,8 +58,10 @@ export function AddMcpConnectorDialog({ open, onOpenChange, connector }: AddMcpC
   const [oauthAuthorizationEndpoint, setOauthAuthorizationEndpoint] = React.useState('');
   const [oauthTokenEndpoint, setOauthTokenEndpoint] = React.useState('');
   const [apiKey, setApiKey] = React.useState('');
+  const [apiKeyPlacement, setApiKeyPlacement] = React.useState<CustomMcpConnectorApiKeyPlacement>('header');
   const [apiKeyHeaderName, setApiKeyHeaderName] = React.useState('X-API-Key');
   const [apiKeyPrefix, setApiKeyPrefix] = React.useState('');
+  const [apiKeyQueryParam, setApiKeyQueryParam] = React.useState('');
   const [replaceAdditionalHeaders, setReplaceAdditionalHeaders] = React.useState(false);
   const [clearAdditionalHeaders, setClearAdditionalHeaders] = React.useState(false);
   const [additionalHeaders, setAdditionalHeaders] = React.useState<HeaderRow[]>([{ key: '', value: '' }]);
@@ -68,6 +73,7 @@ export function AddMcpConnectorDialog({ open, onOpenChange, connector }: AddMcpC
     setServerUrl(connector?.serverUrl ?? '');
     setAdvancedOpen(!!connector && (connector.authType !== 'none' || connector.hasAdditionalHeaders));
     setAuthType(connector?.authType ?? 'none');
+    setCredentialScope(connector?.credentialScope ?? 'org');
     setStatus(connector?.status === 'disabled' ? 'disabled' : 'active');
     setOauthClientId(connector?.oauthClientId ?? '');
     setOauthClientSecret('');
@@ -77,8 +83,10 @@ export function AddMcpConnectorDialog({ open, onOpenChange, connector }: AddMcpC
     setOauthAuthorizationEndpoint(connector?.oauthAuthorizationEndpoint ?? '');
     setOauthTokenEndpoint(connector?.oauthTokenEndpoint ?? '');
     setApiKey('');
+    setApiKeyPlacement(connector?.apiKeyPlacement ?? 'header');
     setApiKeyHeaderName(connector?.apiKeyHeaderName ?? (connector?.authType === 'bearer' ? 'Authorization' : 'X-API-Key'));
     setApiKeyPrefix(connector?.apiKeyPrefix ?? '');
+    setApiKeyQueryParam(connector?.apiKeyQueryParam ?? '');
     setReplaceAdditionalHeaders(false);
     setClearAdditionalHeaders(false);
     setAdditionalHeaders([{ key: '', value: '' }]);
@@ -107,6 +115,7 @@ export function AddMcpConnectorDialog({ open, onOpenChange, connector }: AddMcpC
     if (authType === 'oauth') {
       return {
         ...base,
+        credentialScope,
         oauthClientId: oauthClientId.trim() || null,
         oauthClientSecret: oauthClientSecret.trim() || undefined,
         clearClientSecret: isEditing ? clearClientSecret : undefined,
@@ -122,9 +131,12 @@ export function AddMcpConnectorDialog({ open, onOpenChange, connector }: AddMcpC
     if (authType === 'api_key' || authType === 'bearer') {
       return {
         ...base,
+        credentialScope,
         apiKey: apiKey.trim() || undefined,
-        apiKeyHeaderName: authType === 'bearer' ? 'Authorization' : apiKeyHeaderName.trim(),
-        apiKeyPrefix: authType === 'bearer' ? 'Bearer' : apiKeyPrefix.trim() || null,
+        apiKeyPlacement: authType === 'bearer' ? 'header' : apiKeyPlacement,
+        apiKeyHeaderName: authType === 'bearer' ? 'Authorization' : apiKeyPlacement === 'header' ? apiKeyHeaderName.trim() : null,
+        apiKeyPrefix: authType === 'bearer' ? 'Bearer' : apiKeyPlacement === 'header' ? apiKeyPrefix.trim() || null : null,
+        apiKeyQueryParam: authType === 'api_key' && apiKeyPlacement === 'query' ? apiKeyQueryParam.trim() || null : null,
         additionalHeaders: !isEditing || replaceAdditionalHeaders ? additionalHeadersPayload : undefined,
         clearAdditionalHeaders: isEditing ? clearAdditionalHeaders : undefined,
       };
@@ -155,12 +167,12 @@ export function AddMcpConnectorDialog({ open, onOpenChange, connector }: AddMcpC
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-h-[90vh] max-w-2xl overflow-y-auto">
-        <DialogHeader>
-          <DialogTitle>{isEditing ? 'Edit MCP Connector' : 'Add MCP Connector'}</DialogTitle>
-          <DialogDescription>
-            Configure a remote MCP server and its org-level authentication.
-          </DialogDescription>
-        </DialogHeader>
+          <DialogHeader>
+            <DialogTitle>{isEditing ? 'Edit MCP Connector' : 'Add MCP Connector'}</DialogTitle>
+            <DialogDescription>
+              Configure a remote MCP server and how credentials are scoped.
+            </DialogDescription>
+          </DialogHeader>
 
         <form className="mt-5 space-y-5" onSubmit={handleSubmit}>
           <div className="grid gap-4 sm:grid-cols-2">
@@ -253,24 +265,46 @@ export function AddMcpConnectorDialog({ open, onOpenChange, connector }: AddMcpC
 
               {(authType === 'api_key' || authType === 'bearer') && (
                 <div className="space-y-4 border-t border-neutral-200 pt-4 dark:border-neutral-700">
-                  <Field label={authType === 'bearer' ? 'Bearer token' : 'API key'}>
-                    <Input
-                      type="password"
-                      value={apiKey}
-                      onChange={(e) => setApiKey(e.target.value)}
-                      required={!connector?.hasApiKey}
-                      placeholder={connector?.hasApiKey ? '(unchanged)' : ''}
-                    />
+                  <Field label="Credential scope">
+                    <select value={credentialScope} onChange={(e) => setCredentialScope(e.target.value as CustomMcpConnectorCredentialScope)} className={selectClassName}>
+                      <option value="org">Organization key</option>
+                      <option value="user">Per-user key</option>
+                    </select>
                   </Field>
+                  {credentialScope === 'org' && (
+                    <Field label={authType === 'bearer' ? 'Bearer token' : 'API key'}>
+                      <Input
+                        type="password"
+                        value={apiKey}
+                        onChange={(e) => setApiKey(e.target.value)}
+                        required={!connector?.hasApiKey}
+                        placeholder={connector?.hasApiKey ? '(unchanged)' : ''}
+                      />
+                    </Field>
+                  )}
                   {authType === 'api_key' && (
-                    <div className="grid gap-4 sm:grid-cols-2">
-                      <Field label="Header name">
-                        <Input value={apiKeyHeaderName} onChange={(e) => setApiKeyHeaderName(e.target.value)} required />
+                    <>
+                      <Field label="API key placement">
+                        <select value={apiKeyPlacement} onChange={(e) => setApiKeyPlacement(e.target.value as CustomMcpConnectorApiKeyPlacement)} className={selectClassName}>
+                          <option value="header">Header</option>
+                          <option value="query">Query parameter</option>
+                        </select>
                       </Field>
-                      <Field label="Prefix">
-                        <Input value={apiKeyPrefix} onChange={(e) => setApiKeyPrefix(e.target.value)} placeholder="Token" />
-                      </Field>
-                    </div>
+                      {apiKeyPlacement === 'header' ? (
+                        <div className="grid gap-4 sm:grid-cols-2">
+                          <Field label="Header name">
+                            <Input value={apiKeyHeaderName} onChange={(e) => setApiKeyHeaderName(e.target.value)} required />
+                          </Field>
+                          <Field label="Prefix">
+                            <Input value={apiKeyPrefix} onChange={(e) => setApiKeyPrefix(e.target.value)} placeholder="Token" />
+                          </Field>
+                        </div>
+                      ) : (
+                        <Field label="Query parameter">
+                          <Input value={apiKeyQueryParam} onChange={(e) => setApiKeyQueryParam(e.target.value)} required placeholder="api_key" />
+                        </Field>
+                      )}
+                    </>
                   )}
                 </div>
               )}

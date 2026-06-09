@@ -9,6 +9,7 @@ export const customMcpConnectors = sqliteTable('custom_mcp_connectors', {
   displayName: text('display_name').notNull(),
   serverUrl: text('server_url').notNull(),
   authType: text('auth_type').notNull().default('none').$type<'none' | 'oauth' | 'api_key' | 'bearer'>(),
+  credentialScope: text('credential_scope').notNull().default('org').$type<'org' | 'user'>(),
 
   oauthClientId: text('oauth_client_id'),
   encryptedOauthClientSecret: text('encrypted_oauth_client_secret'),
@@ -21,8 +22,10 @@ export const customMcpConnectors = sqliteTable('custom_mcp_connectors', {
   oauthTokenEndpoint: text('oauth_token_endpoint'),
 
   encryptedApiKey: text('encrypted_api_key'),
+  apiKeyPlacement: text('api_key_placement').notNull().default('header').$type<'header' | 'query'>(),
   apiKeyHeaderName: text('api_key_header_name').default('Authorization'),
   apiKeyPrefix: text('api_key_prefix').default('Bearer'),
+  apiKeyQueryParam: text('api_key_query_param'),
 
   encryptedAdditionalHeaders: text('encrypted_additional_headers'),
 
