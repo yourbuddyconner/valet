@@ -17,6 +17,7 @@ import {
   ModelSelectorList,
   ModelSelectorLogo,
   ModelSelectorName,
+  ModelSelectorSeparator,
   ModelSelectorTrigger,
 } from '@/components/ui/model-selector';
 
@@ -1045,9 +1046,7 @@ export function ChatInput({
                   >
                     {selectedModel ? (
                       (() => {
-                        const flat = availableModels
-                          .flatMap((p) => p.models.map((m) => ({ ...m, provider: p.provider })))
-                          .find((m) => m.id === selectedModel);
+                        const flat = allModels.find((m) => m.id === selectedModel);
                         return flat ? (
                           <>
                             <ModelSelectorLogo provider={flat.provider} />
@@ -1066,6 +1065,17 @@ export function ChatInput({
                   <ModelSelectorInput placeholder="Search models..." />
                   <ModelSelectorList>
                     <ModelSelectorEmpty>No models found.</ModelSelectorEmpty>
+                    <ModelSelectorItem
+                      value="__default__"
+                      onSelect={() => {
+                        onModelChange?.('');
+                        setModelSelectorOpen(false);
+                      }}
+                    >
+                      <ModelSelectorName className="text-neutral-500">Default model</ModelSelectorName>
+                      {!selectedModel && <CheckIcon className="ml-auto h-4 w-4 shrink-0" />}
+                    </ModelSelectorItem>
+                    <ModelSelectorSeparator />
                     {availableModels.map((provider) => (
                       <ModelSelectorGroup key={provider.provider} heading={provider.provider}>
                         {provider.models.map((m) => (
