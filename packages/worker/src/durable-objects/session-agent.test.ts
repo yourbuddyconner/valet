@@ -8,6 +8,9 @@ import { workflows, workflowExecutions } from '../lib/schema/workflows.js';
 import { createInvocation, getInvocation, getUserActionPolicyOverride, upsertActionPolicy } from '../lib/db/actions.js';
 import type { InteractivePrompt } from '@valet/sdk';
 import * as sessionTools from '../services/session-tools.js';
+import * as channelsDb from '../lib/db/channels.js';
+import * as channelThreadsDb from '../lib/db/channel-threads.js';
+import * as slackDb from '../lib/db/slack.js';
 
 interface QueueRow {
   id: string;
@@ -2806,6 +2809,91 @@ describe('SessionAgentDO', () => {
       expect(sendInteractiveMock).toHaveBeenCalledOnce();
       const callOpts = sendInteractiveMock.mock.calls[0][0] as { prompt: InteractivePrompt };
       expect(callOpts.prompt.context?.provenanceLabel as string).toContain('Weekly Report');
+    });
+
+    it('creates 2-part and 3-part Slack DM bindings and pre-registers thread mapping after DM fallback delivery', async () => {
+      const { agent } = await createTestAgent();
+      (agent as any).sessionState.set('sessionId', 'orchestrator:user-1');
+      (agent as any).sessionState.set('userId', 'user-1');
+
+      const testDb = createTestDb();
+      const appDb = testDb.db;
+      appDb.insert(users).values({ id: 'user-1', email: 'user-1@example.com' }).run();
+      appDb.insert(sessions).values({
+        id: 'orchestrator:user-1', userId: 'user-1', workspace: '/tmp', status: 'running',
+      }).run();
+      appDb.insert(userIdentityLinks).values({
+        id: 'link-slack', userId: 'user-1', provider: 'slack', externalId: 'U0SLACK99',
+      }).run();
+      Object.defineProperty(agent, 'appDb', { value: appDb, configurable: true });
+
+      // Queue a scheduled-task processing row with a thread ID so getProcessingThreadId
+      // returns the existing web conversation thread.
+      (agent as any).promptQueue.enqueue({
+        id: 'pq-bind-test',
+        content: '',
+        authorEmail: 'scheduled-task@valet.local',
+        status: 'processing',
+        threadId: 'existing-web-thread-uuid',
+      });
+
+      // Mock Slack install lookup, binding creation, and thread registration.
+      vi.spyOn(slackDb, 'getOrgSlackInstallAny').mockResolvedValue({
+        teamId: 'T0TEST123', botToken: 'xoxb-test', botUserId: 'BTEST',
+        teamName: 'Test', appId: null,
+      } as any);
+      const ensureBindingSpy = vi.spyOn(channelsDb, 'ensureChannelBinding').mockResolvedValue(undefined);
+      const registerThreadSpy = vi.spyOn(channelThreadsDb, 'registerChannelThread').mockResolvedValue(undefined);
+
+      (agent as any).channelRouter.resolveUserDmTarget = vi.fn().mockResolvedValue({ channelType: 'slack', channelId: 'D0DM1234' });
+      (agent as any).channelRouter.sendInteractivePrompt = vi.fn().mockResolvedValue([
+        { channelType: 'slack', ref: { channelId: 'D0DM1234', messageId: '1700000000.000001' } },
+      ]);
+
+      delete (agent as any).sendChannelInteractivePrompts;
+
+      const prompt: InteractivePrompt = {
+        id: 'inv-bind-test',
+        sessionId: 'orchestrator:user-1',
+        type: 'approval',
+        title: 'Approval',
+        actions: [{ id: 'approve_once', label: 'Approve', style: 'primary' }],
+      };
+
+      await (agent as any).sendChannelInteractivePrompts('inv-bind-test', prompt);
+      // Flush the fire-and-forget promise chain before asserting.
+      await new Promise((r) => setTimeout(r, 0));
+
+      // 2-part binding: catches regular DM replies (no thread_ts).
+      expect(ensureBindingSpy).toHaveBeenCalledWith(
+        appDb,
+        expect.objectContaining({
+          channelId: 'T0TEST123:D0DM1234',
+          channelType: 'slack',
+          userId: 'user-1',
+          sessionId: 'orchestrator:user-1',
+        }),
+      );
+      // 3-part binding: catches explicit "Reply in thread" on the approval message.
+      expect(ensureBindingSpy).toHaveBeenCalledWith(
+        appDb,
+        expect.objectContaining({
+          channelId: 'T0TEST123:D0DM1234:1700000000.000001',
+          channelType: 'slack',
+          slackThreadTs: '1700000000.000001',
+        }),
+      );
+      // Thread mapping: routes replies to the originating web conversation thread.
+      expect(registerThreadSpy).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          channelType: 'slack',
+          channelId: 'D0DM1234',
+          externalThreadId: '1700000000.000001',
+          userId: 'user-1',
+          threadId: 'existing-web-thread-uuid',
+        }),
+      );
     });
   });
 

@@ -127,8 +127,8 @@ export async function getOrCreateChannelThread(
 
 /**
  * Pre-register an existing orchestrator thread as the target for a channel thread.
- * Used when an agent proactively sends a message (e.g. dm_owner) — we want replies
- * to route back to the thread that triggered the send, not spawn a new one.
+ * Used when an agent proactively sends a message (e.g. dm_owner, DM fallback) — we
+ * want replies to route back to the thread that triggered the send, not spawn a new one.
  *
  * Uses INSERT OR REPLACE so a stale mapping from a previous session is overwritten.
  */

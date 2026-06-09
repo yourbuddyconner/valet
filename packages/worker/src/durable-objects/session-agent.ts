@@ -7247,6 +7247,63 @@ export class SessionAgentDO {
                 JSON.stringify(refs),
                 promptId,
               );
+
+              // Bind the DM channel so any Slack replies (not just button clicks) route
+              // back to this session instead of spawning a new one via the orchestrator.
+              // Mirrors the binding logic in executeActionAndSend for dm_owner/dm_user.
+              const dmRef = refs[0].ref;
+              if (dmRef.channelId && dmRef.messageId) {
+                const slackDmChannel = dmRef.channelId;
+                const slackDmTs = dmRef.messageId;
+                const sessionId = this.sessionState.sessionId;
+                const currentThreadId = this.promptQueue.getProcessingThreadId();
+                getOrgSlackInstallAny(this.appDb, this.env.ENCRYPTION_KEY)
+                  .then((install) => {
+                    if (!install?.teamId) return;
+                    const { teamId } = install;
+                    const dmChannelId = `${teamId}:${slackDmChannel}`;
+                    const threadChannelId = `${teamId}:${slackDmChannel}:${slackDmTs}`;
+                    return this.resolveOrgId().then(async (orgId) => {
+                      const base = {
+                        sessionId,
+                        channelType: 'slack' as const,
+                        userId,
+                        orgId: orgId ?? 'default',
+                        queueMode: 'followup' as const,
+                        slackChannelId: slackDmChannel,
+                      };
+                      // 2-part: regular DM replies (no thread_ts)
+                      await ensureChannelBinding(this.appDb, {
+                        ...base,
+                        channelId: dmChannelId,
+                        scopeKey: channelScopeKey(userId, 'slack', dmChannelId),
+                      });
+                      // 3-part: explicit "Reply in thread" on the approval message
+                      await ensureChannelBinding(this.appDb, {
+                        ...base,
+                        channelId: threadChannelId,
+                        scopeKey: channelScopeKey(userId, 'slack', threadChannelId),
+                        slackThreadTs: slackDmTs,
+                      });
+                      // Pre-register channel→thread so replies land in this
+                      // orchestrator thread, not a fresh one.
+                      if (currentThreadId) {
+                        await registerChannelThread(this.env.DB, {
+                          channelType: 'slack',
+                          channelId: slackDmChannel,
+                          externalThreadId: slackDmTs,
+                          userId,
+                          sessionId,
+                          threadId: currentThreadId,
+                        });
+                      }
+                    });
+                  })
+                  .catch((err) => {
+                    console.warn('[SessionAgentDO] Failed to create Slack DM binding after approval fallback:', err instanceof Error ? err.message : String(err));
+                  });
+              }
+
               return;  // delivery succeeded — done
             }
             console.warn(`[SessionAgentDO] DM fallback delivery failed for prompt ${promptId} — falling through to web-UI error path`);
