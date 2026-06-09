@@ -6644,13 +6644,14 @@ export class SessionAgentDO {
     // here instead of falling through to the orchestrator. Fire-and-forget: binding failure
     // is non-fatal.
     //
-    // Binding strategy:
-    // - dm_owner / dm_user: always a DM channel (starts with D). Bind the 2-part channelId
-    //   (teamId:channelId) because DM replies are top-level messages with no thread_ts. The
-    //   Slack event handler computes a 2-part scope key for those, so the binding must match.
-    // - send_message: slack-events.ts ignores non-DM events entirely, so bindings for channel
-    //   posts would never be looked up. Only bind DM-channel sends (channel.startsWith('D'))
-    //   and only when not replying in an existing thread.
+    // Two bindings are created to cover both reply styles:
+    // - 2-part (teamId:channelId): for regular DM replies — Slack sends no thread_ts, so the
+    //   event handler computes a 2-part scope key.
+    // - 3-part (teamId:channelId:ts): for explicit "Reply in thread" — Slack sets thread_ts to
+    //   the bot message's ts, producing a 3-part scope key.
+    //
+    // send_message to non-DM channels is skipped: slack-events.ts ignores non-DM events, so
+    // those bindings would never be looked up.
     if (result.success) {
       const isDmAction = actionId === 'slack.dm_owner' || actionId === 'slack.dm_user';
       const isSendToDm = actionId === 'slack.send_message' &&
@@ -6658,25 +6659,40 @@ export class SessionAgentDO {
       if (isDmAction || isSendToDm) {
         const slackData = result.data as { ts?: string; channel?: string } | undefined;
         const slackChannel = slackData?.channel;
+        const slackTs = slackData?.ts;
         if (slackChannel && (isDmAction || slackChannel.startsWith('D'))) {
           const sessionId = this.sessionState.sessionId;
           getOrgSlackInstallAny(this.appDb, this.env.ENCRYPTION_KEY)
             .then((install) => {
               if (!install?.teamId) return;
-              // 2-part channelId: DM replies are top-level messages, not explicit thread replies
-              const dmChannelId = `${install.teamId}:${slackChannel}`;
-              return this.resolveOrgId().then((orgId) =>
-                ensureChannelBinding(this.appDb, {
+              const { teamId } = install;
+              const dmChannelId = `${teamId}:${slackChannel}`;
+              const threadChannelId = slackTs ? `${teamId}:${slackChannel}:${slackTs}` : null;
+              return this.resolveOrgId().then(async (orgId) => {
+                const base = {
                   sessionId,
-                  channelType: 'slack',
-                  channelId: dmChannelId,
+                  channelType: 'slack' as const,
                   userId,
                   orgId: orgId ?? 'default',
-                  scopeKey: channelScopeKey(userId, 'slack', dmChannelId),
-                  queueMode: 'followup',
+                  queueMode: 'followup' as const,
                   slackChannelId: slackChannel,
-                }),
-              );
+                };
+                // 2-part: catches regular DM replies (no thread_ts)
+                await ensureChannelBinding(this.appDb, {
+                  ...base,
+                  channelId: dmChannelId,
+                  scopeKey: channelScopeKey(userId, 'slack', dmChannelId),
+                });
+                // 3-part: catches explicit "Reply in thread" (thread_ts = this message's ts)
+                if (threadChannelId) {
+                  await ensureChannelBinding(this.appDb, {
+                    ...base,
+                    channelId: threadChannelId,
+                    scopeKey: channelScopeKey(userId, 'slack', threadChannelId),
+                    slackThreadTs: slackTs,
+                  });
+                }
+              });
             })
             .catch((err) => {
               console.warn('[SessionAgentDO] Failed to create Slack DM binding:', err instanceof Error ? err.message : String(err));
