@@ -52,6 +52,9 @@ import {
   SUPPORTED_FILE_TYPES_DESCRIPTION,
 } from '../lib/utils/prompt-validation.js';
 import { parseQueuedWorkflowPayload, deriveRuntimeStates } from '../lib/utils/runtime.js';
+import { ensureChannelBinding } from '../lib/db/channels.js';
+import { getOrgSlackInstallAny } from '../lib/db/slack.js';
+import { channelScopeKey } from '@valet/shared';
 
 // ─── WebSocket Message Types ───────────────────────────────────────────────
 
@@ -6261,6 +6264,28 @@ export class SessionAgentDO {
         return;
       }
 
+      // When Valet sends a new top-level Slack message (2-part channelId = teamId:slackChannelId),
+      // bind the resulting thread back to this session so replies route here instead of creating
+      // a new session via the orchestrator.
+      if (channelType === 'slack' && result.messageId) {
+        const parts = effectiveChannelId.split(':');
+        if (parts.length === 2) {
+          const threadChannelId = `${effectiveChannelId}:${result.messageId}`;
+          const orgId = await this.resolveOrgId();
+          ensureChannelBinding(this.appDb, {
+            sessionId: this.sessionState.sessionId,
+            channelType: 'slack',
+            channelId: threadChannelId,
+            userId,
+            orgId: orgId ?? 'default',
+            scopeKey: channelScopeKey(userId, 'slack', threadChannelId),
+            queueMode: 'followup',
+          }).catch((err) => {
+            console.warn('[SessionAgentDO] Failed to create Slack thread binding:', err instanceof Error ? err.message : String(err));
+          });
+        }
+      }
+
       this.runnerLink.send({ type: 'channel-reply-result', requestId, success: true } as any);
     } catch (err) {
       this.runnerLink.send({
@@ -6606,6 +6631,34 @@ export class SessionAgentDO {
             createdAt: Math.floor(Date.now() / 1000),
             ...channelFields,
           },
+        });
+      }
+    }
+
+    // When any Slack send action succeeds with a new top-level message, bind the resulting
+    // thread back to this session so replies route here instead of falling through to the
+    // orchestrator. Skip when thread_ts is set — replies in existing threads use the root
+    // message's ts, which already has a binding.
+    const isSlackSend = actionId === 'slack.send_message' || actionId === 'slack.dm_owner' || actionId === 'slack.dm_user';
+    const isReplyInThread = actionId === 'slack.send_message' && typeof params.thread_ts === 'string' && params.thread_ts.length > 0;
+    if (result.success && isSlackSend && !isReplyInThread) {
+      const slackData = result.data as { ts?: string; channel?: string } | undefined;
+      if (slackData?.ts && slackData?.channel) {
+        getOrgSlackInstallAny(this.appDb, this.env.ENCRYPTION_KEY).then(async (install) => {
+          if (!install?.teamId) return;
+          const threadChannelId = `${install.teamId}:${slackData.channel}:${slackData.ts}`;
+          const orgId = await this.resolveOrgId();
+          return ensureChannelBinding(this.appDb, {
+            sessionId: this.sessionState.sessionId,
+            channelType: 'slack',
+            channelId: threadChannelId,
+            userId,
+            orgId: orgId ?? 'default',
+            scopeKey: channelScopeKey(userId, 'slack', threadChannelId),
+            queueMode: 'followup',
+          });
+        }).catch((err) => {
+          console.warn('[SessionAgentDO] Failed to create Slack thread binding:', err instanceof Error ? err.message : String(err));
         });
       }
     }
