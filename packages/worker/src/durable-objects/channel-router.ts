@@ -43,6 +43,7 @@ export interface SendReplyOpts {
 export interface SendReplyResult {
   success: boolean;
   error?: string;
+  messageId?: string;
 }
 
 export interface SendInteractivePromptOpts {
@@ -92,11 +93,11 @@ export class ChannelRouter {
           );
         });
       }
+
+      return { success: true, messageId: result.messageId };
     } catch (err) {
       return { success: false, error: err instanceof Error ? err.message : String(err) };
     }
-
-    return { success: true };
   }
 
   async sendInteractivePrompt(
