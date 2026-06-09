@@ -7,6 +7,18 @@ import { useAudioRecorder } from '@/hooks/use-audio-recorder';
 import { SLASH_COMMANDS } from '@valet/shared';
 import { isImageFile, needsProcessing, needsCompression, processImage, perImageBudget } from '@/lib/image-compression';
 import { toastError } from '@/hooks/use-toast';
+import {
+  ModelSelector,
+  ModelSelectorContent,
+  ModelSelectorEmpty,
+  ModelSelectorGroup,
+  ModelSelectorInput,
+  ModelSelectorItem,
+  ModelSelectorList,
+  ModelSelectorLogo,
+  ModelSelectorName,
+  ModelSelectorTrigger,
+} from '@/components/ui/model-selector';
 
 interface ChatInputProps {
   onSend: (content: string, model?: string, attachments?: PromptAttachment[]) => void;
@@ -166,6 +178,7 @@ export function ChatInput({
   const [isSendingFiles, setIsSendingFiles] = useState(false);
   const [isCompressing, setIsCompressing] = useState(false);
   const [isDragOver, setIsDragOver] = useState(false);
+  const [modelSelectorOpen, setModelSelectorOpen] = useState(false);
   const originalFilesRef = useRef<File[]>([]);
   const internalRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -1024,22 +1037,58 @@ export function ChatInput({
             )}
             <div className="flex-1" />
             {hasModels && (
-              <select
-                value={selectedModel}
-                onChange={(e) => onModelChange?.(e.target.value)}
-                className="max-w-[240px] shrink-0 cursor-pointer truncate appearance-none rounded-md border border-neutral-200/60 bg-transparent px-1.5 py-0.5 font-mono text-xs font-medium text-neutral-400 transition-colors hover:border-neutral-300 hover:text-neutral-600 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/30 dark:border-neutral-700/60 dark:text-neutral-500 dark:hover:border-neutral-600 dark:hover:text-neutral-400"
-              >
-                <option value="">Default model</option>
-                {availableModels.map((provider) => (
-                  <optgroup key={provider.provider} label={provider.provider}>
-                    {provider.models.map((m) => (
-                      <option key={m.id} value={m.id}>
-                        {m.name}
-                      </option>
+              <ModelSelector open={modelSelectorOpen} onOpenChange={setModelSelectorOpen}>
+                <ModelSelectorTrigger asChild>
+                  <button
+                    type="button"
+                    className="flex h-7 shrink-0 items-center gap-1.5 rounded-md border border-neutral-200/60 bg-transparent px-1.5 py-0.5 font-mono text-xs font-medium text-neutral-400 transition-colors hover:border-neutral-300 hover:text-neutral-600 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/30 dark:border-neutral-700/60 dark:text-neutral-500 dark:hover:border-neutral-600 dark:hover:text-neutral-400"
+                  >
+                    {selectedModel ? (
+                      (() => {
+                        const flat = availableModels
+                          .flatMap((p) => p.models.map((m) => ({ ...m, provider: p.provider })))
+                          .find((m) => m.id === selectedModel);
+                        return flat ? (
+                          <>
+                            <ModelSelectorLogo provider={flat.provider} />
+                            <span className="max-w-[140px] truncate">{flat.name}</span>
+                          </>
+                        ) : (
+                          <span className="max-w-[140px] truncate">{selectedModel}</span>
+                        );
+                      })()
+                    ) : (
+                      <span>Default model</span>
+                    )}
+                  </button>
+                </ModelSelectorTrigger>
+                <ModelSelectorContent>
+                  <ModelSelectorInput placeholder="Search models..." />
+                  <ModelSelectorList>
+                    <ModelSelectorEmpty>No models found.</ModelSelectorEmpty>
+                    {availableModels.map((provider) => (
+                      <ModelSelectorGroup key={provider.provider} heading={provider.provider}>
+                        {provider.models.map((m) => (
+                          <ModelSelectorItem
+                            key={m.id}
+                            value={m.id}
+                            onSelect={() => {
+                              onModelChange?.(m.id);
+                              setModelSelectorOpen(false);
+                            }}
+                          >
+                            <ModelSelectorLogo provider={provider.provider} />
+                            <ModelSelectorName>{m.name}</ModelSelectorName>
+                            {selectedModel === m.id && (
+                              <CheckIcon className="ml-auto h-4 w-4 shrink-0" />
+                            )}
+                          </ModelSelectorItem>
+                        ))}
+                      </ModelSelectorGroup>
                     ))}
-                  </optgroup>
-                ))}
-              </select>
+                  </ModelSelectorList>
+                </ModelSelectorContent>
+              </ModelSelector>
             )}
             {/* Send / Stop — circle button inside the container */}
             {isAgentActive ? (
@@ -1178,6 +1227,25 @@ function MicStopIcon({ className }: { className?: string }) {
       className={className}
     >
       <rect x="6" y="6" width="12" height="12" rx="2" />
+    </svg>
+  );
+}
+
+function CheckIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      width="24"
+      height="24"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+    >
+      <path d="M20 6 9 17l-5-5" />
     </svg>
   );
 }
