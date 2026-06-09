@@ -126,6 +126,41 @@ export async function getOrCreateChannelThread(
 }
 
 /**
+ * Pre-register an existing orchestrator thread as the target for a channel thread.
+ * Used when an agent proactively sends a message (e.g. dm_owner) — we want replies
+ * to route back to the thread that triggered the send, not spawn a new one.
+ *
+ * Uses INSERT OR REPLACE so a stale mapping from a previous session is overwritten.
+ */
+export async function registerChannelThread(
+  db: D1Database,
+  params: {
+    channelType: string;
+    channelId: string;
+    externalThreadId: string;
+    userId: string;
+    sessionId: string;
+    threadId: string;
+  },
+): Promise<void> {
+  const mappingId = crypto.randomUUID();
+  await db
+    .prepare(
+      'INSERT OR REPLACE INTO channel_thread_mappings (id, session_id, thread_id, channel_type, channel_id, external_thread_id, user_id) VALUES (?, ?, ?, ?, ?, ?, ?)',
+    )
+    .bind(
+      mappingId,
+      params.sessionId,
+      params.threadId,
+      params.channelType,
+      params.channelId,
+      params.externalThreadId,
+      params.userId,
+    )
+    .run();
+}
+
+/**
  * Update the last-seen cursor for a user's thread mapping.
  */
 export async function updateThreadCursor(

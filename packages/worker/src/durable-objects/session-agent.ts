@@ -54,6 +54,7 @@ import {
 import { parseQueuedWorkflowPayload, deriveRuntimeStates } from '../lib/utils/runtime.js';
 import { ensureChannelBinding } from '../lib/db/channels.js';
 import { getOrgSlackInstallAny } from '../lib/db/slack.js';
+import { registerChannelThread } from '../lib/db/channel-threads.js';
 import { channelScopeKey } from '@valet/shared';
 
 // ─── WebSocket Message Types ───────────────────────────────────────────────
@@ -6662,6 +6663,10 @@ export class SessionAgentDO {
         const slackTs = slackData?.ts;
         if (slackChannel && (isDmAction || slackChannel.startsWith('D'))) {
           const sessionId = this.sessionState.sessionId;
+          // Capture the current processing thread ID so we can pre-register the
+          // channel→thread mapping. This routes Slack replies back to the same
+          // orchestrator thread that triggered the send, instead of spawning a new one.
+          const currentThreadId = this.promptQueue.getProcessingThreadId();
           getOrgSlackInstallAny(this.appDb, this.env.ENCRYPTION_KEY)
             .then((install) => {
               if (!install?.teamId) return;
@@ -6690,6 +6695,18 @@ export class SessionAgentDO {
                     channelId: threadChannelId,
                     scopeKey: channelScopeKey(userId, 'slack', threadChannelId),
                     slackThreadTs: slackTs,
+                  });
+                }
+                // Pre-register the channel→thread mapping so Slack replies route
+                // to the existing orchestrator thread rather than spawning a new one.
+                if (currentThreadId && slackTs) {
+                  await registerChannelThread(this.env.DB, {
+                    channelType: 'slack',
+                    channelId: slackChannel,
+                    externalThreadId: slackTs,
+                    userId,
+                    sessionId,
+                    threadId: currentThreadId,
                   });
                 }
               });
