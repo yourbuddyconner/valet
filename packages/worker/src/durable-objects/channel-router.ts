@@ -126,6 +126,19 @@ export class ChannelRouter {
     return refs;
   }
 
+  async resolveUserDmTarget(
+    channelType: string,
+    userId: string,
+    platformUserId: string,
+  ): Promise<ChannelTarget | null> {
+    const transport = channelRegistry.getTransport(channelType);
+    if (!transport?.resolveUserDmTarget) return null;
+    const token = await this.deps.resolveToken(channelType, userId);
+    if (!token) return null;
+    const ctx: ChannelContext = { token, userId };
+    return transport.resolveUserDmTarget(platformUserId, ctx);
+  }
+
   async updateInteractivePrompt(opts: UpdateInteractivePromptOpts): Promise<void> {
     const { userId, refs, resolution } = opts;
 

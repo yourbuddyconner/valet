@@ -744,6 +744,34 @@ describe('PromptQueue', () => {
     });
   });
 
+  describe('getProcessingWorkflowContext', () => {
+    it('returns null when nothing is processing', () => {
+      expect(pq.getProcessingWorkflowContext()).toBeNull();
+    });
+
+    it('returns queueType and workflowExecutionId for a workflow_execute row', () => {
+      pq.enqueue({
+        id: 'wf1',
+        content: '',
+        queueType: 'workflow_execute',
+        workflowExecutionId: 'exec-abc-123',
+        status: 'processing',
+      });
+      expect(pq.getProcessingWorkflowContext()).toEqual({
+        queueType: 'workflow_execute',
+        workflowExecutionId: 'exec-abc-123',
+      });
+    });
+
+    it('returns queueType=prompt and workflowExecutionId=null for a regular prompt row', () => {
+      pq.enqueue({ id: 'p1', content: 'hello', status: 'processing' });
+      expect(pq.getProcessingWorkflowContext()).toEqual({
+        queueType: 'prompt',
+        workflowExecutionId: null,
+      });
+    });
+  });
+
   // ─── Edge Cases ───────────────────────────────────────────────────────
 
   describe('edge cases', () => {

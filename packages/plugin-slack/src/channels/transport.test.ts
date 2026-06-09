@@ -1352,4 +1352,57 @@ describe('SlackTransport', () => {
       expect(body.text).toContain('Cancelled by Bob');
     });
   });
+
+  describe('resolveUserDmTarget', () => {
+    it('returns a DM channel target by calling conversations.open', async () => {
+      mockFetch.mockResolvedValueOnce(jsonResponse({ ok: true, channel: { id: 'D0123ABCDEF' } }));
+      const ctx: ChannelContext = { token: 'xoxb-test', userId: 'u1' };
+      const result = await transport.resolveUserDmTarget!('U0ASENUETKP', ctx);
+      expect(result).toEqual({ channelType: 'slack', channelId: 'D0123ABCDEF' });
+      const [url] = mockFetch.mock.calls[0];
+      expect(url).toBe('https://slack.com/api/conversations.open');
+    });
+
+    it('returns null when conversations.open fails', async () => {
+      mockFetch.mockResolvedValueOnce(jsonResponse({ ok: false, error: 'not_authed' }));
+      const ctx: ChannelContext = { token: 'xoxb-bad', userId: 'u1' };
+      const result = await transport.resolveUserDmTarget!('U999', ctx);
+      expect(result).toBeNull();
+    });
+  });
+
+  describe('sendInteractivePrompt — provenance block', () => {
+    it('inserts a provenance context block before the expiry and actions blocks', async () => {
+      mockFetch.mockResolvedValueOnce(jsonResponse({ ok: true, ts: '111.222' }));
+      const ctx: ChannelContext = { token: 'xoxb-test', userId: 'u1' };
+      const prompt: InteractivePrompt = {
+        id: 'inv-1',
+        sessionId: 'orchestrator:user-1',
+        type: 'approval',
+        title: 'Action requires approval',
+        body: 'Post weekly report to #general',
+        actions: [{ id: 'approve_once', label: 'Approve', style: 'primary' }],
+        context: {
+          toolId: 'slack:send_message',
+          riskLevel: 'medium',
+          summary: 'Post weekly report to #general',
+          provenanceLabel: 'Joan requested this while running a scheduled task',
+        },
+      };
+      await transport.sendInteractivePrompt(
+        { channelType: 'slack', channelId: 'D0123ABCDEF' },
+        prompt,
+        ctx,
+      );
+      const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+      const blocks: Array<{ type: string; elements?: Array<{ text: string }> }> = body.blocks;
+      const provenanceBlock = blocks.find(
+        (b) => b.type === 'context' && b.elements?.some((e) => e.text.includes('scheduled task')),
+      );
+      expect(provenanceBlock).toBeDefined();
+      const actionsIdx = blocks.findIndex((b) => b.type === 'actions');
+      const provIdx = blocks.indexOf(provenanceBlock!);
+      expect(provIdx).toBeLessThan(actionsIdx);
+    });
+  });
 });
