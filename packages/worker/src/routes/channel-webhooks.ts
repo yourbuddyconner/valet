@@ -243,6 +243,8 @@ channelWebhooksRouter.post('/:channelType/webhook/:userId', async (c) => {
             scopeKey,
             // Inherit the dead child's queueMode — no better signal available at eviction time.
             queueMode: binding.queueMode,
+            slackChannelId: binding.slackChannelId,
+            slackThreadTs: binding.slackThreadTs,
           });
           binding = { ...binding, sessionId: parentSession.id };
         } else {
