@@ -6640,39 +6640,46 @@ export class SessionAgentDO {
       }
     }
 
-    // When any Slack send action succeeds with a new top-level message, bind the resulting
-    // thread back to this session so replies route here instead of falling through to the
-    // orchestrator. Skip when thread_ts is set — replies in existing threads use the root
-    // message's ts, which already has a binding. Fire-and-forget: binding failure is non-fatal.
+    // When a DM action succeeds, bind the DM channel back to this session so replies route
+    // here instead of falling through to the orchestrator. Fire-and-forget: binding failure
+    // is non-fatal.
+    //
+    // Binding strategy:
+    // - dm_owner / dm_user: always a DM channel (starts with D). Bind the 2-part channelId
+    //   (teamId:channelId) because DM replies are top-level messages with no thread_ts. The
+    //   Slack event handler computes a 2-part scope key for those, so the binding must match.
+    // - send_message: slack-events.ts ignores non-DM events entirely, so bindings for channel
+    //   posts would never be looked up. Only bind DM-channel sends (channel.startsWith('D'))
+    //   and only when not replying in an existing thread.
     if (result.success) {
-      const isSlackSend = actionId === 'slack.send_message' || actionId === 'slack.dm_owner' || actionId === 'slack.dm_user';
-      const isReplyInThread = actionId === 'slack.send_message' && typeof params.thread_ts === 'string' && params.thread_ts.length > 0;
-      if (isSlackSend && !isReplyInThread) {
+      const isDmAction = actionId === 'slack.dm_owner' || actionId === 'slack.dm_user';
+      const isSendToDm = actionId === 'slack.send_message' &&
+        !(typeof params.thread_ts === 'string' && params.thread_ts.length > 0);
+      if (isDmAction || isSendToDm) {
         const slackData = result.data as { ts?: string; channel?: string } | undefined;
-        if (slackData?.ts && slackData?.channel) {
+        const slackChannel = slackData?.channel;
+        if (slackChannel && (isDmAction || slackChannel.startsWith('D'))) {
           const sessionId = this.sessionState.sessionId;
-          const slackChannel = slackData.channel;
-          const slackTs = slackData.ts;
           getOrgSlackInstallAny(this.appDb, this.env.ENCRYPTION_KEY)
             .then((install) => {
               if (!install?.teamId) return;
-              const threadChannelId = `${install.teamId}:${slackChannel}:${slackTs}`;
+              // 2-part channelId: DM replies are top-level messages, not explicit thread replies
+              const dmChannelId = `${install.teamId}:${slackChannel}`;
               return this.resolveOrgId().then((orgId) =>
                 ensureChannelBinding(this.appDb, {
                   sessionId,
                   channelType: 'slack',
-                  channelId: threadChannelId,
+                  channelId: dmChannelId,
                   userId,
                   orgId: orgId ?? 'default',
-                  scopeKey: channelScopeKey(userId, 'slack', threadChannelId),
+                  scopeKey: channelScopeKey(userId, 'slack', dmChannelId),
                   queueMode: 'followup',
                   slackChannelId: slackChannel,
-                  slackThreadTs: slackTs,
                 }),
               );
             })
             .catch((err) => {
-              console.warn('[SessionAgentDO] Failed to create Slack thread binding:', err instanceof Error ? err.message : String(err));
+              console.warn('[SessionAgentDO] Failed to create Slack DM binding:', err instanceof Error ? err.message : String(err));
             });
         }
       }
