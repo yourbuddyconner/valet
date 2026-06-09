@@ -241,6 +241,7 @@ channelWebhooksRouter.post('/:channelType/webhook/:userId', async (c) => {
             userId: binding.userId ?? userId,
             orgId: binding.orgId,
             scopeKey,
+            // Inherit the dead child's queueMode — no better signal available at eviction time.
             queueMode: binding.queueMode,
           });
           binding = { ...binding, sessionId: parentSession.id };

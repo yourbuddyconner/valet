@@ -41,9 +41,9 @@ The Slack API's `chat.postMessage` response includes a `ts` field. That `ts` bec
 
 The session DO routes outbound agent responses to Slack here via `transport.sendMessage()`. The return value already contains `messageId` (the Slack `ts`). After a successful send, create the binding. The routing target provides team ID and channel ID.
 
-**Touch point 2 — `packages/plugin-slack/src/actions/actions.ts` (`send_message` action)**
+**Touch point 2 — `packages/worker/src/durable-objects/session-agent.ts` (`executeActionAndSend`)**
 
-The agent calls this action directly to send Slack messages. After the Slack API call returns `ts`, create the binding using the session ID from action context and the team/channel from the action parameters.
+After `executeActionSvc` returns a successful result for `slack.send_message`, `slack.dm_owner`, or `slack.dm_user`, the DO reads `result.data.ts` and `result.data.channel`, looks up the Slack team ID from the org's install record, and creates the binding fire-and-forget. The action plugin itself is not modified — session context (sessionId, orgId) is only available in the DO, not in the action handler. Skips binding when `params.thread_ts` is set, since replies in existing threads always use the root message's `thread_ts` which already has a binding.
 
 Sends without session context — `slack-events.ts` OAuth prompts, `channel-webhooks.ts` status/ack messages — have no `sessionId` and are not modified.
 
@@ -87,6 +87,7 @@ The parent lookup is a single `sessions` table read by `parentSessionId`. "Alive
 
 | File | Change |
 |---|---|
-| `packages/worker/src/durable-objects/channel-router.ts` | Create binding after successful Slack send |
-| `packages/plugin-slack/src/actions/actions.ts` | Create binding after `send_message` action succeeds |
+| `packages/worker/src/durable-objects/channel-router.ts` | Surface `messageId` in `SendReplyResult` |
+| `packages/worker/src/durable-objects/session-agent.ts` | Create binding after channel reply and after Slack send actions |
+| `packages/worker/src/lib/db/channels.ts` | Extend `ensureChannelBinding` to accept and persist `slackChannelId`/`slackThreadTs` |
 | `packages/worker/src/routes/channel-webhooks.ts` | Add parent-chain walk to stale eviction logic |
