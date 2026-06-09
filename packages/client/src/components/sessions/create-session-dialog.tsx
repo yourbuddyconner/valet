@@ -882,7 +882,7 @@ export function CreateSessionDialog({ trigger }: CreateSessionDialogProps) {
                         (() => {
                           const flat = availableModels
                             ?.flatMap((p) => p.models.map((m) => ({ ...m, provider: p.provider })))
-                            .find((m) => m.id === selectedModel);
+                            ?.find((m) => m.id === selectedModel);
                           return flat ? (
                             <>
                               <ModelSelectorLogo provider={flat.provider} />

@@ -285,7 +285,7 @@ function PersonaEditorPage() {
                         (() => {
                           const flat = availableModels
                             ?.flatMap((p) => p.models.map((m) => ({ ...m, provider: p.provider })))
-                            .find((m) => m.id === defaultModel);
+                            ?.find((m) => m.id === defaultModel);
                           return flat ? (
                             <>
                               <ModelSelectorLogo provider={flat.provider} />
