@@ -17,6 +17,7 @@ export * from './actions.js';
 export * from './disabled-actions.js';
 export * from './mcp-oauth.js';
 export * from './analytics.js';
+export * from './request-metrics.js';
 export * from './plugins.js';
 export * from './skills.js';
 export * from './persona-tools.js';

@@ -8,6 +8,7 @@ import type { Env, Variables } from './env.js';
 import { errorHandler } from './middleware/error-handler.js';
 import { authMiddleware } from './middleware/auth.js';
 import { dbMiddleware } from './middleware/db.js';
+import { requestTelemetry } from './middleware/request-telemetry.js';
 
 import { sessionsRouter } from './routes/sessions.js';
 import { integrationsRouter } from './routes/integrations.js';
@@ -90,6 +91,9 @@ const app = new Hono<{ Bindings: Env; Variables: Variables }>();
 
 // Global middleware
 app.use('*', requestId());
+// Capture API request latency. Registered early so it wraps the full pipeline
+// (auth, db, handler); records fire-and-forget so it adds no response latency.
+app.use('*', requestTelemetry);
 app.use('*', dbMiddleware);
 app.use('*', logger());
 app.use('*', async (c, next) => {
@@ -278,6 +282,25 @@ const scheduled: ExportedHandlerScheduledHandler<Env> = async (event, env, ctx) 
       }
     } catch (error) {
       console.error('Analytics retention error:', error);
+    }
+
+    // Delete request metrics older than 90 days (batched to avoid D1 timeout)
+    try {
+      const cutoff = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString();
+      let totalDeleted = 0;
+      let deleted: number;
+      do {
+        const result = await env.DB.prepare(
+          'DELETE FROM request_metrics WHERE id IN (SELECT id FROM request_metrics WHERE created_at < ? LIMIT 1000)'
+        ).bind(cutoff).run();
+        deleted = result.meta.changes ?? 0;
+        totalDeleted += deleted;
+      } while (deleted >= 1000);
+      if (totalDeleted > 0) {
+        console.log(`Request metrics retention: deleted ${totalDeleted} rows older than 90 days`);
+      }
+    } catch (error) {
+      console.error('Request metrics retention error:', error);
     }
 
     // Prune schedule tick dedup rows older than 7 days (only needed for ~4h catch-up window, batched to avoid D1 timeout)

@@ -368,6 +368,17 @@ async () => cloudflare.request({
 - **Can't**: access Modal container logs historically (live-stream only via `modal container logs <id>`), query logs older than CF's retention period
 - **Tip**: `modal container list --json` shows all currently running sandbox containers with full IDs; cross-reference timestamps with CF logs to correlate DO events with sandbox lifecycle
 
+### API request forensics (`request_metrics`)
+
+Every sampled `/api/*` request is recorded to the `request_metrics` D1 table (method, route pattern, status, duration, inbound `request_bytes`, `user_id`, `request_id`). Authorization failures (401/403) and 5xx are always recorded regardless of sample rate. The admin dashboard's Performance tab surfaces it (latency percentiles, slow routes, access denials, heaviest/slowest requests), or query D1 directly.
+
+The workflow for investigating a leak or failure is **aggregate → pivot**:
+
+1. Find the suspicious row(s): repeated 403s by an actor (probing / broken object-level auth), an abnormally heavy request that 5xx'd (large-file parse failure), or a slow request (timeout).
+2. Take its `request_id` and search the Worker logs for that id (`needle: { value: '<request_id>' }`) to recover the full request — headers, body, downstream calls — i.e. the *cause*.
+
+The route is stored as the low-cardinality pattern (`/api/sessions/:id`), never the raw id, so the table stays PII-light; the specific resource is recoverable via the `request_id` pivot only when an investigation needs it.
+
 ## Code Conventions
 
 ### Worker (Hono)
