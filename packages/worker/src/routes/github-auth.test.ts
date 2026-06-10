@@ -70,6 +70,7 @@ vi.mock('../lib/drizzle.js', () => ({
 import { githubAuthRouter } from './github-auth.js';
 
 const FRONTEND_URL = 'http://localhost:5173';
+const PAGES_FRONTEND_URL = 'https://dev-valet-client.pages.dev';
 
 function buildApp() {
   const app = new Hono();
@@ -86,6 +87,17 @@ function buildEnv(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function mockGitHubAppAuthorizeUrl(mockUrl = 'https://github.com/login/oauth/authorize?client_id=test&state=jwt') {
+  const getWebFlowAuthorizationUrl = vi.fn().mockReturnValue({ url: mockUrl });
+  loadGitHubAppMock.mockResolvedValue({
+    oauth: {
+      getWebFlowAuthorizationUrl,
+    },
+  });
+  signJWTMock.mockResolvedValue('signed-state-jwt');
+  return { mockUrl, getWebFlowAuthorizationUrl };
+}
+
 describe('githubAuthRouter', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -93,13 +105,7 @@ describe('githubAuthRouter', () => {
 
   describe('GET / (login initiation)', () => {
     it('redirects to GitHub authorize URL when App is configured', async () => {
-      const mockUrl = 'https://github.com/login/oauth/authorize?client_id=test&state=jwt';
-      loadGitHubAppMock.mockResolvedValue({
-        oauth: {
-          getWebFlowAuthorizationUrl: vi.fn().mockReturnValue({ url: mockUrl }),
-        },
-      });
-      signJWTMock.mockResolvedValue('signed-state-jwt');
+      const { mockUrl } = mockGitHubAppAuthorizeUrl();
 
       const app = buildApp();
       const res = await app.request(
@@ -110,6 +116,50 @@ describe('githubAuthRouter', () => {
 
       expect(res.status).toBe(302);
       expect(res.headers.get('location')).toBe(mockUrl);
+    });
+
+    it('stores valid preview return origins in login state', async () => {
+      mockGitHubAppAuthorizeUrl();
+
+      const app = buildApp();
+      const res = await app.request(
+        'http://localhost/auth/github?return_to_origin=https%3A%2F%2Fpr-123.dev-valet-client.pages.dev',
+        { method: 'GET' },
+        buildEnv({
+          FRONTEND_URL: PAGES_FRONTEND_URL,
+          FRONTEND_PREVIEW_ORIGIN_SUFFIX: 'dev-valet-client.pages.dev',
+        }),
+      );
+
+      expect(res.status).toBe(302);
+      expect(signJWTMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          return_to_origin: 'https://pr-123.dev-valet-client.pages.dev',
+        }),
+        'test-key',
+      );
+    });
+
+    it('omits invalid preview return origins from login state', async () => {
+      mockGitHubAppAuthorizeUrl();
+
+      const app = buildApp();
+      const res = await app.request(
+        'http://localhost/auth/github?return_to_origin=https%3A%2F%2Fevil.example.com',
+        { method: 'GET' },
+        buildEnv({
+          FRONTEND_URL: PAGES_FRONTEND_URL,
+          FRONTEND_PREVIEW_ORIGIN_SUFFIX: 'dev-valet-client.pages.dev',
+        }),
+      );
+
+      expect(res.status).toBe(302);
+      expect(signJWTMock).toHaveBeenCalledWith(
+        expect.not.objectContaining({
+          return_to_origin: expect.any(String),
+        }),
+        'test-key',
+      );
     });
 
     it('redirects to login error when App is not configured', async () => {

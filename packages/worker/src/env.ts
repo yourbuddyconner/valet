@@ -32,6 +32,10 @@ export interface Env {
   // Frontend URL (for OAuth redirects)
   FRONTEND_URL: string;
 
+  // Optional host suffix for frontend preview deployments.
+  // Example: dev-valet-client.pages.dev allows https://pr-123.dev-valet-client.pages.dev.
+  FRONTEND_PREVIEW_ORIGIN_SUFFIX?: string;
+
   // Optional public API origin for runner/DO websocket URLs.
   // Example: https://api.example.com
   API_PUBLIC_URL?: string;

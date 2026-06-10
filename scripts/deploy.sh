@@ -32,6 +32,7 @@ set -a; source "$DEPLOY_CONFIG"; set +a
 CF_WORKER_NAME="${CF_WORKER_NAME:-$PROJECT_NAME}"
 PAGES_PROJECT_NAME="${PAGES_PROJECT_NAME:-${PROJECT_NAME}-client}"
 PAGES_DEPLOY_BRANCH="${PAGES_DEPLOY_BRANCH:-main}"
+FRONTEND_PREVIEW_ORIGIN_SUFFIX="${FRONTEND_PREVIEW_ORIGIN_SUFFIX:-${PAGES_PROJECT_NAME}.pages.dev}"
 D1_DATABASE_NAME="${D1_DATABASE_NAME:-${PROJECT_NAME}-db}"
 R2_BUCKET_NAME="${R2_BUCKET_NAME:-${PROJECT_NAME}-storage}"
 MODAL_APP_NAME="${MODAL_APP_NAME:-${PROJECT_NAME}-backend}"
@@ -109,6 +110,7 @@ generate_wrangler_config() {
         -e "s|\${D1_DATABASE_ID}|${D1_DATABASE_ID}|g" \
         -e "s|\${R2_BUCKET_NAME}|${R2_BUCKET_NAME}|g" \
         -e "s|\${ALLOWED_EMAILS}|${ALLOWED_EMAILS}|g" \
+        -e "s|\${FRONTEND_PREVIEW_ORIGIN_SUFFIX}|${FRONTEND_PREVIEW_ORIGIN_SUFFIX}|g" \
         -e "s|\${MODAL_BACKEND_URL}|${MODAL_BACKEND_URL}|g" \
         packages/worker/wrangler.toml > packages/worker/wrangler.deploy.toml
 }

@@ -8,6 +8,7 @@ import * as oauthService from '../services/oauth.js';
 import { reconcileUserInstallations } from '../services/github-installations.js';
 import * as db from '../lib/db.js';
 import { getDb } from '../lib/drizzle.js';
+import { getAuthRedirectOrigin, resolveAuthRedirectOrigin } from '../lib/auth-redirect-origin.js';
 
 export const githubAuthRouter = new Hono<{ Bindings: Env; Variables: Variables }>();
 
@@ -17,7 +18,8 @@ const LINK_STATE_TTL = 10 * 60; // 10 minutes for link (matches existing github-
 // ─── GET / — Login initiation ───────────────────────────────────────────────
 
 githubAuthRouter.get('/', async (c) => {
-  const frontendUrl = c.env.FRONTEND_URL || 'http://localhost:5173';
+  const returnToOrigin = resolveAuthRedirectOrigin(c.env, c.req.query('return_to_origin'));
+  const frontendUrl = getAuthRedirectOrigin(c.env, returnToOrigin);
   const appDb = getDb(c.env.DB);
   const app = await loadGitHubApp(c.env, appDb);
   if (!app) return c.redirect(`${frontendUrl}/login?error=github_not_configured`);
@@ -31,6 +33,7 @@ githubAuthRouter.get('/', async (c) => {
       iat: now,
       exp: now + LOGIN_STATE_TTL,
       ...(inviteCode ? { invite_code: inviteCode } : {}),
+      ...(returnToOrigin ? { return_to_origin: returnToOrigin } : {}),
     },
     c.env.ENCRYPTION_KEY,
   );
@@ -47,7 +50,7 @@ githubAuthRouter.get('/', async (c) => {
 // ─── GET /callback — Login + Link callback ──────────────────────────────────
 
 githubAuthRouter.get('/callback', async (c) => {
-  const frontendUrl = c.env.FRONTEND_URL || 'http://localhost:5173';
+  let frontendUrl = getAuthRedirectOrigin(c.env);
   const code = c.req.query('code');
   const stateParam = c.req.query('state');
 
@@ -60,6 +63,7 @@ githubAuthRouter.get('/callback', async (c) => {
   if (!payload || !payload.sub) {
     return c.redirect(`${frontendUrl}/login?error=invalid_state`);
   }
+  frontendUrl = getAuthRedirectOrigin(c.env, (payload as any).return_to_origin);
 
   const appDb = getDb(c.env.DB);
   const app = await loadGitHubApp(c.env, appDb);

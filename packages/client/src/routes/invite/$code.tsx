@@ -4,6 +4,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Button } from '@/components/ui/button';
 import { useAuthStore } from '@/stores/auth';
 import { api } from '@/api/client';
+import { buildAuthRedirectUrl } from '@/lib/auth-redirect';
 
 export const Route = createFileRoute('/invite/$code')({
   component: InvitePage,
@@ -209,7 +210,12 @@ function InvitePage() {
           <Button
             className="w-full"
             onClick={() => {
-              window.location.href = `${workerUrl}/auth/github?invite_code=${encodeURIComponent(code)}`;
+              window.location.href = buildAuthRedirectUrl({
+                workerUrl,
+                providerId: 'github',
+                inviteCode: code,
+                origin: window.location.origin,
+              });
             }}
           >
             <svg className="mr-2 h-5 w-5" viewBox="0 0 24 24" fill="currentColor">
@@ -221,7 +227,12 @@ function InvitePage() {
             variant="outline"
             className="w-full"
             onClick={() => {
-              window.location.href = `${workerUrl}/auth/google?invite_code=${encodeURIComponent(code)}`;
+              window.location.href = buildAuthRedirectUrl({
+                workerUrl,
+                providerId: 'google',
+                inviteCode: code,
+                origin: window.location.origin,
+              });
             }}
           >
             <svg className="mr-2 h-5 w-5" viewBox="0 0 24 24">

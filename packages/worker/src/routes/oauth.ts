@@ -7,6 +7,7 @@ import * as oauthService from '../services/oauth.js';
 import type { ProviderConfig } from '@valet/sdk/identity';
 import { getOrgSettings } from '../lib/db.js';
 import { getDb } from '../lib/drizzle.js';
+import { getAuthRedirectOrigin, resolveAuthRedirectOrigin } from '../lib/auth-redirect-origin.js';
 
 export const oauthRouter = new Hono<{ Bindings: Env; Variables: Variables }>();
 
@@ -67,28 +68,32 @@ function clearLoginAttempts(email: string): void {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-async function createStateJWT(env: Env, provider: string, inviteCode?: string): Promise<string> {
+async function createStateJWT(env: Env, provider: string, inviteCode?: string, returnToOrigin?: string): Promise<string> {
   const now = Math.floor(Date.now() / 1000);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const payload: any = { sub: provider, sid: crypto.randomUUID(), iat: now, exp: now + 5 * 60 };
   if (inviteCode) {
     payload.invite_code = inviteCode;
   }
+  if (returnToOrigin) {
+    payload.return_to_origin = returnToOrigin;
+  }
   return signJWT(payload, env.ENCRYPTION_KEY);
 }
 
-async function parseStateJWT(state: string, env: Env): Promise<{ valid: boolean; inviteCode?: string; provider?: string }> {
+async function parseStateJWT(state: string, env: Env): Promise<{ valid: boolean; inviteCode?: string; provider?: string; returnToOrigin?: string }> {
   const payload = await verifyJWT(state, env.ENCRYPTION_KEY);
   if (!payload) return { valid: false };
   return {
     valid: true,
     inviteCode: (payload as any).invite_code,
     provider: (payload as any).sub,
+    returnToOrigin: resolveAuthRedirectOrigin(env, (payload as any).return_to_origin),
   };
 }
 
 function getFrontendUrl(env: Env): string {
-  return env.FRONTEND_URL || 'http://localhost:5173';
+  return getAuthRedirectOrigin(env);
 }
 
 function getWorkerUrl(_env: Env, req: Request): string {
@@ -212,17 +217,19 @@ async function isLoginProviderEnabled(env: Env, providerId: string): Promise<boo
 // GET /auth/:provider — redirect to identity provider (OAuth/OIDC/SAML)
 oauthRouter.get('/:provider', async (c) => {
   const providerId = c.req.param('provider');
+  const returnToOrigin = resolveAuthRedirectOrigin(c.env, c.req.query('return_to_origin'));
+  const frontendUrl = getAuthRedirectOrigin(c.env, returnToOrigin);
   const provider = identityRegistry.get(providerId);
-  if (!provider) return c.redirect(`${getFrontendUrl(c.env)}/login?error=unknown_provider`);
-  if (provider.protocol === 'credentials') return c.redirect(`${getFrontendUrl(c.env)}/login?error=use_form`);
-  if (!provider.getAuthUrl) return c.redirect(`${getFrontendUrl(c.env)}/login?error=no_redirect`);
+  if (!provider) return c.redirect(`${frontendUrl}/login?error=unknown_provider`);
+  if (provider.protocol === 'credentials') return c.redirect(`${frontendUrl}/login?error=use_form`);
+  if (!provider.getAuthUrl) return c.redirect(`${frontendUrl}/login?error=no_redirect`);
 
   if (!(await isLoginProviderEnabled(c.env, providerId))) {
-    return c.redirect(`${getFrontendUrl(c.env)}/login?error=provider_disabled`);
+    return c.redirect(`${frontendUrl}/login?error=provider_disabled`);
   }
 
   const inviteCode = c.req.query('invite_code');
-  const state = await createStateJWT(c.env, providerId, inviteCode);
+  const state = await createStateJWT(c.env, providerId, inviteCode, returnToOrigin);
   const workerUrl = getWorkerUrl(c.env, c.req.raw);
   const callbackUrl = `${workerUrl}/auth/${providerId}/callback`;
   const config = resolveProviderConfig(c.env, provider);
@@ -243,9 +250,8 @@ export async function handleLoginOAuthCallback(
   code: string,
   state: string,
 ): Promise<Response> {
-  const frontendUrl = getFrontendUrl(env);
-
   const stateResult = await parseStateJWT(state, env);
+  const frontendUrl = getAuthRedirectOrigin(env, stateResult.returnToOrigin);
   if (!stateResult.valid) return Response.redirect(`${frontendUrl}/login?error=invalid_state`, 302);
 
   // Verify state was issued for this provider (prevents cross-provider state confusion)
