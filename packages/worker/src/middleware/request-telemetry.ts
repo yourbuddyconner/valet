@@ -3,6 +3,13 @@ import { ValetError } from '@valet/shared';
 import type { Env, Variables } from '../env.js';
 import { recordRequestMetric, resolveSampleRate, shouldSample } from '../lib/request-telemetry.js';
 
+/** Parse a Content-Length header into a non-negative byte count, or null if absent/invalid. */
+function parseContentLength(value: string | undefined): number | null {
+  if (value == null) return null;
+  const n = Number(value);
+  return Number.isInteger(n) && n >= 0 ? n : null;
+}
+
 /**
  * Times each REST API request and records its latency to `request_metrics`.
  *
@@ -38,6 +45,8 @@ export const requestTelemetry: MiddlewareHandler<{ Bindings: Env; Variables: Var
           route: c.req.routePath, // low-cardinality pattern, e.g. /api/sessions/:id
           status,
           durationMs,
+          requestId: c.get('requestId') ?? null, // pivots to the full request log
+          requestBytes: parseContentLength(c.req.header('content-length')),
           userId: c.get('user')?.id ?? null,
         };
         // c.get('db') is the per-request Drizzle instance set by dbMiddleware,

@@ -1210,6 +1210,30 @@ export interface RequestMetricsResponse {
   period: number;
 }
 
+// Security + reliability investigation lenses over the same request telemetry.
+// Each sample carries requestId to pivot into the full request log.
+export interface RequestForensicsResponse {
+  accessDenials: Array<{
+    userId: string | null;
+    route: string;
+    status: number;
+    count: number;
+  }>;
+  heavyRequests: RequestSample[];
+  slowestRequests: RequestSample[];
+  period: number;
+}
+
+export interface RequestSample {
+  method: string;
+  route: string;
+  status: number;
+  durationMs: number;
+  requestBytes: number | null;
+  requestId: string | null;
+  createdAt: string;
+}
+
 // Plugin types
 export interface OrgPlugin {
   id: string;

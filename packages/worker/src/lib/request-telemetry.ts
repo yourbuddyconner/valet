@@ -18,7 +18,22 @@ export interface RequestMetricEntry {
   route: string;
   status: number;
   durationMs: number;
+  requestId?: string | null;
+  requestBytes?: number | null;
   userId?: string | null;
+}
+
+/** Authorization failures — authenticated-but-forbidden and unauthenticated. */
+const AUTH_FAILURE_STATUSES = new Set([401, 403]);
+
+/**
+ * Whether a request must be recorded regardless of the sample rate. These are the
+ * forensic-critical events that sampling must never drop: server errors (5xx) and
+ * authorization failures (401/403 — the signal for probing / broken object-level
+ * authorization / leakage attempts).
+ */
+export function isAlwaysRecorded(status: number): boolean {
+  return status >= 500 || AUTH_FAILURE_STATUSES.has(status);
 }
 
 /**
@@ -34,12 +49,13 @@ export function resolveSampleRate(env: Pick<Env, 'REQUEST_TELEMETRY_SAMPLE_RATE'
 }
 
 /**
- * Decide whether to record a request. Server errors (5xx) are always kept — they
- * are rare and high-signal — otherwise we keep a `rate` fraction of requests.
+ * Decide whether to record a request. Forensic-critical events (5xx and auth
+ * failures — see {@link isAlwaysRecorded}) are always kept so security signal
+ * survives aggressive sampling; otherwise we keep a `rate` fraction of requests.
  * `rng` is injectable for deterministic tests.
  */
 export function shouldSample(status: number, rate: number, rng: () => number = Math.random): boolean {
-  if (status >= 500) return true;
+  if (isAlwaysRecorded(status)) return true;
   if (rate >= 1) return true;
   if (rate <= 0) return false;
   return rng() < rate;
@@ -57,6 +73,8 @@ export async function recordRequestMetric(db: AppDb, entry: RequestMetricEntry):
     route: entry.route,
     status: entry.status,
     durationMs: entry.durationMs,
+    requestId: entry.requestId ?? null,
+    requestBytes: entry.requestBytes ?? null,
     userId: entry.userId ?? null,
   });
 }

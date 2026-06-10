@@ -1,5 +1,20 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_SAMPLE_RATE, resolveSampleRate, shouldSample } from './request-telemetry.js';
+import { DEFAULT_SAMPLE_RATE, isAlwaysRecorded, resolveSampleRate, shouldSample } from './request-telemetry.js';
+
+describe('isAlwaysRecorded', () => {
+  it('flags server errors and authorization failures', () => {
+    expect(isAlwaysRecorded(500)).toBe(true);
+    expect(isAlwaysRecorded(503)).toBe(true);
+    expect(isAlwaysRecorded(401)).toBe(true);
+    expect(isAlwaysRecorded(403)).toBe(true);
+  });
+
+  it('does not flag ordinary success or client errors', () => {
+    expect(isAlwaysRecorded(200)).toBe(false);
+    expect(isAlwaysRecorded(404)).toBe(false);
+    expect(isAlwaysRecorded(429)).toBe(false);
+  });
+});
 
 describe('shouldSample', () => {
   // Constant rng so the decision is deterministic.
@@ -8,6 +23,11 @@ describe('shouldSample', () => {
   it('always records server errors regardless of rate', () => {
     expect(shouldSample(500, 0, rng(0.99))).toBe(true);
     expect(shouldSample(503, 0, rng(0.99))).toBe(true);
+  });
+
+  it('always records authorization failures regardless of rate', () => {
+    expect(shouldSample(401, 0, rng(0.99))).toBe(true);
+    expect(shouldSample(403, 0, rng(0.99))).toBe(true);
   });
 
   it('records everything at rate >= 1', () => {

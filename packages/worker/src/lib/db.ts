@@ -29,6 +29,7 @@ export * from './db/actions.js';
 export * from './db/disabled-actions.js';
 export * from './db/analytics.js';
 export * from './db/request-metrics.js';
+export * from './db/request-forensics.js';
 export * from './db/plugins.js';
 export * from './db/skills.js';
 export * from './db/persona-tools.js';

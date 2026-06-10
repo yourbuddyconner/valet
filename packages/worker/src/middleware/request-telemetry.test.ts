@@ -17,6 +17,7 @@ function buildApp(db: BetterSQLite3Database) {
   app.onError(errorHandler);
   app.use('*', requestTelemetry);
   app.use('*', async (c, next) => {
+    c.set('requestId', 'req-test'); // set by hono's requestId() in production
     c.set('db', db);
     await next();
   });
@@ -25,6 +26,8 @@ function buildApp(db: BetterSQLite3Database) {
     await new Promise((resolve) => setTimeout(resolve, 12));
     return c.json({ id: c.req.param('id') });
   });
+  app.post('/api/upload', (c) => c.json({ ok: true }));
+  app.get('/api/forbidden', (c) => c.json({ error: 'forbidden' }, 403));
   app.get('/api/boom', () => {
     throw new Error('kaboom');
   });
@@ -63,11 +66,23 @@ describe('requestTelemetry middleware', () => {
     const rows = db.select().from(requestMetrics).all().sort((a, b) => a.route.localeCompare(b.route));
     expect(rows).toHaveLength(2);
 
-    expect(rows[0]).toMatchObject({ method: 'GET', route: '/api/fast', status: 200 });
+    expect(rows[0]).toMatchObject({ method: 'GET', route: '/api/fast', status: 200, requestId: 'req-test' });
     // IDs are collapsed to the parameter name — low cardinality for grouping.
-    expect(rows[1]).toMatchObject({ method: 'GET', route: '/api/slow/:id', status: 200 });
+    expect(rows[1]).toMatchObject({ method: 'GET', route: '/api/slow/:id', status: 200, requestId: 'req-test' });
     expect(rows[1].durationMs).toBeGreaterThanOrEqual(5);
     for (const row of rows) expect(row.durationMs).toBeGreaterThanOrEqual(0);
+  });
+
+  it('captures inbound payload size from Content-Length', async () => {
+    const app = buildApp(db);
+    const { ctx, waits } = fakeCtx();
+
+    await app.request('/api/upload', { method: 'POST', headers: { 'content-length': '4096' } }, {}, ctx);
+    await Promise.all(waits);
+
+    const rows = db.select().from(requestMetrics).all();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ method: 'POST', route: '/api/upload', requestBytes: 4096 });
   });
 
   it('captures the error status for thrown requests', async () => {
@@ -96,7 +111,7 @@ describe('requestTelemetry middleware', () => {
     expect(db.select().from(requestMetrics).all()).toHaveLength(0);
   });
 
-  it('respects a zero sample rate but always records server errors', async () => {
+  it('respects a zero sample rate but always records errors and auth failures', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => {});
     const app = buildApp(db);
     const { ctx, waits } = fakeCtx();
@@ -104,11 +119,14 @@ describe('requestTelemetry middleware', () => {
 
     await app.request('/api/fast', undefined, env, ctx); // 200 — dropped by sampling
     await app.request('/api/boom', undefined, env, ctx); // 500 — always kept
+    await app.request('/api/forbidden', undefined, env, ctx); // 403 — always kept (security signal)
     await Promise.all(waits);
 
-    const rows = db.select().from(requestMetrics).all();
-    expect(rows).toHaveLength(1);
-    expect(rows[0]).toMatchObject({ route: '/api/boom', status: 500 });
+    const rows = db.select().from(requestMetrics).all().sort((a, b) => a.status - b.status);
+    expect(rows.map((r) => ({ route: r.route, status: r.status }))).toEqual([
+      { route: '/api/forbidden', status: 403 },
+      { route: '/api/boom', status: 500 },
+    ]);
     vi.restoreAllMocks();
   });
 });

@@ -16,6 +16,8 @@ export const requestMetrics = sqliteTable('request_metrics', {
   route: text().notNull(),
   status: integer().notNull(),
   durationMs: integer().notNull(),
+  requestId: text(),
+  requestBytes: integer(),
   userId: text().references(() => users.id, { onDelete: 'set null' }),
 }, (table) => [
   index('idx_request_metrics_created').on(table.createdAt),
