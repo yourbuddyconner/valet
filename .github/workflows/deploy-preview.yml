@@ -36,6 +36,9 @@ jobs:
 
       - run: echo "$GITHUB_WORKSPACE/packages/worker/node_modules/.bin" >> $GITHUB_PATH
 
+      - name: Build workspace packages
+        run: pnpm --filter '@valet/*' --filter '!@valet/worker' --filter '!@valet/client' run build
+
       - name: Create deploy config
         env:
           PROJECT_NAME: ${{ secrets.PROJECT_NAME }}
