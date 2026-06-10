@@ -91,6 +91,7 @@ export function ChatContainer({ sessionId, routeSessionId, initialThreadId, init
   const wakeMutation = useWakeSession();
   const drawer = useDrawer();
   const authUser = useAuthStore((s) => s.user);
+  const orgModelPreferences = useAuthStore((s) => s.orgModelPreferences);
   const {
     messages,
     historyReady,
@@ -611,6 +612,8 @@ export function ChatContainer({ sessionId, routeSessionId, initialThreadId, init
                 : 'Ask or build anything...'
             }
             availableModels={availableModels}
+            userModelPreferences={authUser?.modelPreferences}
+            orgModelPreferences={orgModelPreferences}
             selectedModel={selectedModel}
             onModelChange={setSelectedModel}
             onAbort={handleAbort}

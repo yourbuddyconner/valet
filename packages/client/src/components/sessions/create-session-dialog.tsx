@@ -35,6 +35,7 @@ import {
   ModelSelectorSeparator,
   ModelSelectorTrigger,
 } from '@/components/ui/model-selector';
+import { buildModelSelectorGroups } from '@/components/ui/model-selector-utils';
 
 interface CreateSessionDialogProps {
   trigger?: React.ReactNode;
@@ -188,6 +189,8 @@ export function CreateSessionDialog({ trigger }: CreateSessionDialogProps) {
   const [view, setView] = useState<DialogView>('form');
   const navigate = useNavigate();
   const createSession = useCreateSession();
+  const userModelPreferences = useAuthStore((s) => s.user?.modelPreferences);
+  const orgModelPreferences = useAuthStore((s) => s.orgModelPreferences);
 
   // Form state
   const [workspace, setWorkspace] = useState('');
@@ -222,6 +225,15 @@ export function CreateSessionDialog({ trigger }: CreateSessionDialogProps) {
   const { data: orgRepos } = useOrgRepos();
   const { data: personas } = usePersonas();
   const { data: availableModels } = useAvailableModels();
+  const modelGroups = useMemo(
+    () =>
+      buildModelSelectorGroups({
+        availableModels,
+        userModelPreferences,
+        orgModelPreferences,
+      }),
+    [availableModels, orgModelPreferences, userModelPreferences]
+  );
   const validateRepo = useValidateRepo(repoMode === 'url' ? repoUrl : '');
 
   // PR/Issue queries — derive owner/repo from selected repo
@@ -922,7 +934,31 @@ export function CreateSessionDialog({ trigger }: CreateSessionDialogProps) {
                         {!selectedModel && <CheckIcon className="ml-auto h-4 w-4 shrink-0" />}
                       </ModelSelectorItem>
                       <ModelSelectorSeparator />
-                      {availableModels?.map((provider) => (
+                      {modelGroups.preferredGroup && (
+                        <>
+                          <ModelSelectorGroup heading={modelGroups.preferredGroup.heading}>
+                            {modelGroups.preferredGroup.models.map((m) => (
+                              <ModelSelectorItem
+                                key={m.id}
+                                value={m.id}
+                                onSelect={() => {
+                                  setSelectedModel(m.id);
+                                  setModelTouched(true);
+                                  setModelSelectorOpen(false);
+                                }}
+                              >
+                                <ModelSelectorLogo provider={m.provider} />
+                                <ModelSelectorName>{m.name}</ModelSelectorName>
+                                {selectedModel === m.id && (
+                                  <CheckIcon className="ml-auto h-4 w-4 shrink-0" />
+                                )}
+                              </ModelSelectorItem>
+                            ))}
+                          </ModelSelectorGroup>
+                          <ModelSelectorSeparator />
+                        </>
+                      )}
+                      {modelGroups.providerGroups.map((provider) => (
                         <ModelSelectorGroup key={provider.provider} heading={provider.provider}>
                           {provider.models.map((m) => (
                             <ModelSelectorItem

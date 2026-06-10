@@ -45,6 +45,7 @@ import {
   ModelSelectorSeparator,
   ModelSelectorTrigger,
 } from '@/components/ui/model-selector';
+import { buildModelSelectorGroups } from '@/components/ui/model-selector-utils';
 import type { AgentPersona, PersonaVisibility } from '@/api/types';
 import { useAuthStore } from '@/stores/auth';
 
@@ -65,6 +66,7 @@ function PersonaEditorPage() {
   const navigate = useNavigate();
   const isNew = id === 'new';
   const user = useAuthStore((s) => s.user);
+  const orgModelPreferences = useAuthStore((s) => s.orgModelPreferences);
 
   const { data: persona, isLoading } = usePersona(isNew ? '' : id);
   const createPersona = useCreatePersona();
@@ -72,6 +74,15 @@ function PersonaEditorPage() {
   const updateFiles = useUpdatePersonaFiles();
   const deletePersonaMutation = useDeletePersona();
   const { data: availableModels } = useAvailableModels();
+  const modelGroups = React.useMemo(
+    () =>
+      buildModelSelectorGroups({
+        availableModels,
+        userModelPreferences: user?.modelPreferences,
+        orgModelPreferences,
+      }),
+    [availableModels, orgModelPreferences, user?.modelPreferences]
+  );
 
   const { data: personaSkills } = usePersonaSkills(isNew ? '' : id);
   const attachSkill = useAttachSkillToPersona();
@@ -313,17 +324,45 @@ function PersonaEditorPage() {
                         {!defaultModel && <CheckIcon className="ml-auto h-4 w-4 shrink-0" />}
                       </ModelSelectorItem>
                       <ModelSelectorSeparator />
-                      {availableModels?.map((provider) => (
+                      {modelGroups.preferredGroup && (
+                        <>
+                          <ModelSelectorGroup heading={modelGroups.preferredGroup.heading}>
+                            {modelGroups.preferredGroup.models.map((m) => (
+                              <ModelSelectorItem
+                                key={m.id}
+                                value={m.id}
+                                onSelect={() => {
+                                  setDefaultModel(m.id);
+                                  setModelSelectorOpen(false);
+                                }}
+                              >
+                                <ModelSelectorLogo provider={m.provider} />
+                                <ModelSelectorName>{m.name}</ModelSelectorName>
+                                {defaultModel === m.id && (
+                                  <CheckIcon className="ml-auto h-4 w-4 shrink-0" />
+                                )}
+                              </ModelSelectorItem>
+                            ))}
+                          </ModelSelectorGroup>
+                          <ModelSelectorSeparator />
+                        </>
+                      )}
+                      {modelGroups.providerGroups.map((provider) => (
                         <ModelSelectorGroup key={provider.provider} heading={provider.provider}>
                           {provider.models.map((m) => (
                             <ModelSelectorItem
                               key={m.id}
                               value={m.id}
-                              onSelect={() => { setDefaultModel(m.id); setModelSelectorOpen(false); }}
+                              onSelect={() => {
+                                setDefaultModel(m.id);
+                                setModelSelectorOpen(false);
+                              }}
                             >
                               <ModelSelectorLogo provider={provider.provider} />
                               <ModelSelectorName>{m.name}</ModelSelectorName>
-                              {defaultModel === m.id && <CheckIcon className="ml-auto h-4 w-4 shrink-0" />}
+                              {defaultModel === m.id && (
+                                <CheckIcon className="ml-auto h-4 w-4 shrink-0" />
+                              )}
                             </ModelSelectorItem>
                           ))}
                         </ModelSelectorGroup>

@@ -22,8 +22,10 @@ import {
   ModelSelectorSeparator,
   ModelSelectorTrigger,
 } from '@/components/ui/model-selector';
+import { buildModelSelectorGroups } from '@/components/ui/model-selector-utils';
 import type { AgentPersona, PersonaVisibility } from '@/api/types';
 import { useAvailableModels } from '@/api/sessions';
+import { useAuthStore } from '@/stores/auth';
 
 interface PersonaEditorProps {
   open: boolean;
@@ -52,6 +54,17 @@ export function PersonaEditor({ open, onOpenChange, persona, onSave, isSaving }:
   const [instructions, setInstructions] = React.useState('');
   const [files, setFiles] = React.useState<{ filename: string; content: string; sortOrder: number }[]>([]);
   const { data: availableModels } = useAvailableModels();
+  const userModelPreferences = useAuthStore((s) => s.user?.modelPreferences);
+  const orgModelPreferences = useAuthStore((s) => s.orgModelPreferences);
+  const modelGroups = React.useMemo(
+    () =>
+      buildModelSelectorGroups({
+        availableModels,
+        userModelPreferences,
+        orgModelPreferences,
+      }),
+    [availableModels, orgModelPreferences, userModelPreferences]
+  );
 
   // Populate form when editing — separate the primary instructions.md from additional files
   React.useEffect(() => {
@@ -199,17 +212,45 @@ export function PersonaEditor({ open, onOpenChange, persona, onSave, isSaving }:
                       {!defaultModel && <CheckIcon className="ml-auto h-4 w-4 shrink-0" />}
                     </ModelSelectorItem>
                     <ModelSelectorSeparator />
-                    {availableModels?.map((provider) => (
+                    {modelGroups.preferredGroup && (
+                      <>
+                        <ModelSelectorGroup heading={modelGroups.preferredGroup.heading}>
+                          {modelGroups.preferredGroup.models.map((m) => (
+                            <ModelSelectorItem
+                              key={m.id}
+                              value={m.id}
+                              onSelect={() => {
+                                setDefaultModel(m.id);
+                                setModelSelectorOpen(false);
+                              }}
+                            >
+                              <ModelSelectorLogo provider={m.provider} />
+                              <ModelSelectorName>{m.name}</ModelSelectorName>
+                              {defaultModel === m.id && (
+                                <CheckIcon className="ml-auto h-4 w-4 shrink-0" />
+                              )}
+                            </ModelSelectorItem>
+                          ))}
+                        </ModelSelectorGroup>
+                        <ModelSelectorSeparator />
+                      </>
+                    )}
+                    {modelGroups.providerGroups.map((provider) => (
                       <ModelSelectorGroup key={provider.provider} heading={provider.provider}>
                         {provider.models.map((m) => (
                           <ModelSelectorItem
                             key={m.id}
                             value={m.id}
-                            onSelect={() => { setDefaultModel(m.id); setModelSelectorOpen(false); }}
+                            onSelect={() => {
+                              setDefaultModel(m.id);
+                              setModelSelectorOpen(false);
+                            }}
                           >
                             <ModelSelectorLogo provider={provider.provider} />
                             <ModelSelectorName>{m.name}</ModelSelectorName>
-                            {defaultModel === m.id && <CheckIcon className="ml-auto h-4 w-4 shrink-0" />}
+                            {defaultModel === m.id && (
+                              <CheckIcon className="ml-auto h-4 w-4 shrink-0" />
+                            )}
                           </ModelSelectorItem>
                         ))}
                       </ModelSelectorGroup>
