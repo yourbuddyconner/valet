@@ -32,6 +32,7 @@ set -a; source "$DEPLOY_CONFIG"; set +a
 CF_WORKER_NAME="${CF_WORKER_NAME:-$PROJECT_NAME}"
 PAGES_PROJECT_NAME="${PAGES_PROJECT_NAME:-${PROJECT_NAME}-client}"
 PAGES_DEPLOY_BRANCH="${PAGES_DEPLOY_BRANCH:-main}"
+FRONTEND_PREVIEW_ORIGIN_SUFFIX="${FRONTEND_PREVIEW_ORIGIN_SUFFIX:-${PAGES_PROJECT_NAME}.pages.dev}"
 D1_DATABASE_NAME="${D1_DATABASE_NAME:-${PROJECT_NAME}-db}"
 R2_BUCKET_NAME="${R2_BUCKET_NAME:-${PROJECT_NAME}-storage}"
 MODAL_APP_NAME="${MODAL_APP_NAME:-${PROJECT_NAME}-backend}"
@@ -109,6 +110,7 @@ generate_wrangler_config() {
         -e "s|\${D1_DATABASE_ID}|${D1_DATABASE_ID}|g" \
         -e "s|\${R2_BUCKET_NAME}|${R2_BUCKET_NAME}|g" \
         -e "s|\${ALLOWED_EMAILS}|${ALLOWED_EMAILS}|g" \
+        -e "s|\${FRONTEND_PREVIEW_ORIGIN_SUFFIX}|${FRONTEND_PREVIEW_ORIGIN_SUFFIX}|g" \
         -e "s|\${MODAL_BACKEND_URL}|${MODAL_BACKEND_URL}|g" \
         packages/worker/wrangler.toml > packages/worker/wrangler.deploy.toml
 }
@@ -158,6 +160,21 @@ build_client() {
         VITE_BUILD_VERSION_TAG="${build_version_tag}" \
         pnpm run build "${build_args[@]}"
     )
+}
+
+pages_branch_alias() {
+    echo "$1" \
+        | tr '[:upper:]' '[:lower:]' \
+        | sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//'
+}
+
+pages_deployment_url() {
+    if [ "$PAGES_DEPLOY_BRANCH" = "main" ]; then
+        echo "https://${PAGES_PROJECT_NAME}.pages.dev"
+        return
+    fi
+
+    echo "https://$(pages_branch_alias "$PAGES_DEPLOY_BRANCH").${PAGES_PROJECT_NAME}.pages.dev"
 }
 
 deploy_client_pages() {
@@ -241,7 +258,7 @@ cmd_client() {
 
     build_client "${WORKER_URL}"
     deploy_client_pages
-    echo -e "${GREEN}✓ Client deployed: https://${PAGES_PROJECT_NAME}.pages.dev${NC}"
+    echo -e "${GREEN}✓ Client deployed: $(pages_deployment_url)${NC}"
 }
 
 cmd_all() {
@@ -317,7 +334,7 @@ cmd_all() {
     echo -e "${GREEN}========================================${NC}"
     echo ""
     echo "  Worker:  ${WORKER_URL}"
-    echo "  Client:  https://${PAGES_PROJECT_NAME}.pages.dev"
+    echo "  Client:  $(pages_deployment_url)"
     echo ""
     echo -e "${YELLOW}If this is your first deploy, set worker secrets:${NC}"
     echo "  wrangler secret put ENCRYPTION_KEY --name ${CF_WORKER_NAME}"
