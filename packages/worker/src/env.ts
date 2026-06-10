@@ -48,6 +48,10 @@ export interface Env {
 
   // Email allowlist (comma-separated). If unset, all emails are allowed.
   ALLOWED_EMAILS?: string;
+
+  // Fraction of API requests to record as latency telemetry, in [0, 1].
+  // Unset = record all (server errors are always recorded regardless).
+  REQUEST_TELEMETRY_SAMPLE_RATE?: string;
 }
 
 /** Read a string-valued env var by dynamic key name. Returns undefined for missing or non-string values. */

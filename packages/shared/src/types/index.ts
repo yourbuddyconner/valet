@@ -1187,6 +1187,29 @@ export interface AnalyticsEventsResponse {
   period: number;
 }
 
+// ─── API Request Latency Types ───────────────────────────────────────────────
+// Server-side latency of the REST API surface (the synchronous path real users
+// wait on), distinct from the agent-turn telemetry in AnalyticsPerformanceResponse.
+
+export interface RequestMetricsResponse {
+  hero: {
+    p50: number | null;
+    p95: number | null;
+    p99: number | null;
+    count: number;
+    errorRate: number;
+  };
+  routes: Array<{
+    method: string;
+    route: string;
+    count: number;
+    p50: number | null;
+    p95: number | null;
+    errorRate: number;
+  }>;
+  period: number;
+}
+
 // Plugin types
 export interface OrgPlugin {
   id: string;

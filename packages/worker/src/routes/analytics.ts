@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import type { Env, Variables } from '../env.js';
-import type { AnalyticsPerformanceResponse, AnalyticsEventsResponse } from '@valet/shared';
+import type { AnalyticsPerformanceResponse, AnalyticsEventsResponse, RequestMetricsResponse } from '@valet/shared';
 import {
   getPercentiles,
   getPerfTrend,
@@ -10,6 +10,7 @@ import {
   getThroughputStats,
   getEventFeed,
 } from '../lib/db/analytics.js';
+import { getRequestLatency, getSlowRoutes } from '../lib/db/request-metrics.js';
 
 export const analyticsRouter = new Hono<{ Bindings: Env; Variables: Variables }>();
 
@@ -103,6 +104,47 @@ analyticsRouter.get('/events', async (c) => {
   const response: AnalyticsEventsResponse = {
     events: parsed,
     total,
+    period: periodHours,
+  };
+
+  return c.json(response);
+});
+
+// GET /api/analytics/requests?period=720
+// API request latency baseline: overall percentiles + slowest routes.
+analyticsRouter.get('/requests', async (c) => {
+  const user = c.get('user');
+  if (!user || user.role !== 'admin') {
+    return c.json({ error: 'Admin access required', code: 'FORBIDDEN' }, 403);
+  }
+
+  const rawPeriod = parseInt(c.req.query('period') || '720', 10);
+  const periodHours = Number.isFinite(rawPeriod) ? Math.min(Math.max(rawPeriod, 1), 8760) : 720;
+  const periodStart = new Date(Date.now() - periodHours * 60 * 60 * 1000).toISOString();
+
+  const db = c.get('db');
+
+  const [latency, routes] = await Promise.all([
+    getRequestLatency(db, periodStart),
+    getSlowRoutes(db, periodStart, 20),
+  ]);
+
+  const response: RequestMetricsResponse = {
+    hero: {
+      p50: latency.p50,
+      p95: latency.p95,
+      p99: latency.p99,
+      count: latency.count,
+      errorRate: latency.errorRate,
+    },
+    routes: routes.map((r) => ({
+      method: r.method,
+      route: r.route,
+      count: r.count,
+      p50: r.p50,
+      p95: r.p95,
+      errorRate: r.errorRate,
+    })),
     period: periodHours,
   };
 

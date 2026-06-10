@@ -1,10 +1,11 @@
 import { useQuery } from '@tanstack/react-query';
-import type { AnalyticsPerformanceResponse, AnalyticsEventsResponse } from '@valet/shared';
+import type { AnalyticsPerformanceResponse, AnalyticsEventsResponse, RequestMetricsResponse } from '@valet/shared';
 import { api } from './client';
 
 export const analyticsKeys = {
   all: ['analytics'] as const,
   performance: (period: number) => [...analyticsKeys.all, 'performance', period] as const,
+  requests: (period: number) => [...analyticsKeys.all, 'requests', period] as const,
   events: (period: number, type?: string) => [...analyticsKeys.all, 'events', period, type] as const,
 };
 
@@ -12,6 +13,14 @@ export function useAnalyticsPerformance(periodHours: number = 720) {
   return useQuery({
     queryKey: analyticsKeys.performance(periodHours),
     queryFn: () => api.get<AnalyticsPerformanceResponse>(`/analytics/performance?period=${periodHours}`),
+    refetchInterval: 60_000,
+  });
+}
+
+export function useAnalyticsRequests(periodHours: number = 720) {
+  return useQuery({
+    queryKey: analyticsKeys.requests(periodHours),
+    queryFn: () => api.get<RequestMetricsResponse>(`/analytics/requests?period=${periodHours}`),
     refetchInterval: 60_000,
   });
 }

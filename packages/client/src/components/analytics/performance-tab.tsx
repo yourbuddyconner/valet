@@ -1,11 +1,13 @@
-import { useAnalyticsPerformance } from '@/api/analytics';
+import { useAnalyticsPerformance, useAnalyticsRequests } from '@/api/analytics';
 import { PerfHeroMetrics } from './perf-hero-metrics';
 import { LatencyTrendChart } from './latency-trend-chart';
 import { StageBreakdownTable } from './stage-breakdown-table';
 import { SlowPathsTable } from './slow-paths-table';
+import { ApiLatencyPanel } from './api-latency-panel';
 
 export function PerformanceTab({ period }: { period: number }) {
   const { data, isLoading } = useAnalyticsPerformance(period);
+  const { data: requests } = useAnalyticsRequests(period);
 
   if (isLoading) {
     return (
@@ -32,6 +34,7 @@ export function PerformanceTab({ period }: { period: number }) {
         <StageBreakdownTable data={data.stages} />
         <SlowPathsTable data={data.slowPaths} />
       </div>
+      {requests && <ApiLatencyPanel data={requests} />}
     </div>
   );
 }
