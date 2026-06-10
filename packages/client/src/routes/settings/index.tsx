@@ -23,6 +23,10 @@ import {
   ModelSelectorName,
   ModelSelectorTrigger,
 } from '@/components/ui/model-selector';
+import {
+  getCustomModelCandidate,
+  type FlatModel,
+} from '@/components/settings/model-preferences-utils';
 
 const TABS = [
   { id: 'general', label: 'General' },
@@ -1094,12 +1098,6 @@ function ToggleSwitch({
   );
 }
 
-interface FlatModel {
-  id: string;
-  name: string;
-  provider: string;
-}
-
 function flattenModels(providers: ProviderModels[]): FlatModel[] {
   return (providers ?? []).flatMap((p) =>
     (p.models ?? []).map((m) => ({ id: m.id, name: m.name, provider: p.provider }))
@@ -1114,12 +1112,22 @@ function ModelPreferencesSection() {
   const [saved, setSaved] = React.useState(false);
   const [dragIndex, setDragIndex] = React.useState<number | null>(null);
   const [selectorOpen, setSelectorOpen] = React.useState(false);
+  const [modelQuery, setModelQuery] = React.useState('');
 
   React.useEffect(() => {
     setModels(user?.modelPreferences ?? []);
   }, [user?.modelPreferences]);
 
   const allModels = React.useMemo(() => flattenModels(availableModels ?? []), [availableModels]);
+  const customModelCandidate = React.useMemo(
+    () =>
+      getCustomModelCandidate({
+        query: modelQuery,
+        selectedModelIds: models,
+        knownModels: allModels,
+      }),
+    [allModels, modelQuery, models]
+  );
 
   const hasChanges = JSON.stringify(models) !== JSON.stringify(user?.modelPreferences ?? []);
 
@@ -1139,6 +1147,11 @@ function ModelPreferencesSection() {
     if (modelId && !models.includes(modelId)) {
       setModels((prev) => [...prev, modelId]);
     }
+  }
+
+  function handleSelectorOpenChange(open: boolean) {
+    setSelectorOpen(open);
+    if (!open) setModelQuery('');
   }
 
   function removeModel(index: number) {
@@ -1241,14 +1254,18 @@ function ModelPreferencesSection() {
           </div>
         )}
 
-        <ModelSelector open={selectorOpen} onOpenChange={setSelectorOpen}>
+        <ModelSelector open={selectorOpen} onOpenChange={handleSelectorOpenChange}>
           <ModelSelectorTrigger asChild>
             <Button variant="outline" size="sm">
               Add model
             </Button>
           </ModelSelectorTrigger>
           <ModelSelectorContent>
-            <ModelSelectorInput placeholder="Search models..." />
+            <ModelSelectorInput
+              value={modelQuery}
+              onValueChange={setModelQuery}
+              placeholder="Search models or enter provider/model-id..."
+            />
             <ModelSelectorList>
               <ModelSelectorEmpty>No models found.</ModelSelectorEmpty>
               {availableModels?.map((provider) => (
@@ -1262,6 +1279,7 @@ function ModelPreferencesSection() {
                         onSelect={() => {
                           addModel(m.id);
                           setSelectorOpen(false);
+                          setModelQuery('');
                         }}
                       >
                         <ModelSelectorLogo provider={provider.provider} />
@@ -1270,6 +1288,21 @@ function ModelPreferencesSection() {
                     ))}
                 </ModelSelectorGroup>
               ))}
+              {customModelCandidate && (
+                <ModelSelectorItem
+                  value={customModelCandidate}
+                  onSelect={() => {
+                    addModel(customModelCandidate);
+                    setSelectorOpen(false);
+                    setModelQuery('');
+                  }}
+                >
+                  <ModelSelectorName>
+                    <span className="text-neutral-500">Use </span>
+                    <span className="font-mono">{customModelCandidate}</span>
+                  </ModelSelectorName>
+                </ModelSelectorItem>
+              )}
             </ModelSelectorList>
           </ModelSelectorContent>
         </ModelSelector>
