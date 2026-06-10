@@ -20,6 +20,10 @@ import {
   ModelSelectorSeparator,
   ModelSelectorTrigger,
 } from '@/components/ui/model-selector';
+import {
+  buildModelSelectorGroups,
+  type FlatModel,
+} from '@/components/ui/model-selector-utils';
 
 interface ChatInputProps {
   onSend: (content: string, model?: string, attachments?: PromptAttachment[]) => void;
@@ -33,6 +37,8 @@ interface ChatInputProps {
   placeholder?: string;
   inputRef?: React.RefObject<HTMLTextAreaElement | null>;
   availableModels?: ProviderModels[];
+  userModelPreferences?: string[];
+  orgModelPreferences?: string[];
   selectedModel?: string;
   onModelChange?: (model: string) => void;
   onAbort?: () => void;
@@ -53,12 +59,6 @@ interface ChatInputProps {
   externalValue?: string | null;
   /** Called after externalValue has been consumed */
   onExternalValueConsumed?: () => void;
-}
-
-interface FlatModel {
-  id: string;
-  name: string;
-  provider: string;
 }
 
 const MAX_IMAGE_ATTACHMENTS = 8;
@@ -153,6 +153,8 @@ export function ChatInput({
   placeholder = 'Ask or build anything...',
   inputRef,
   availableModels = [],
+  userModelPreferences,
+  orgModelPreferences,
   selectedModel = '',
   onModelChange,
   onAbort,
@@ -252,6 +254,15 @@ export function ChatInput({
       p.models.map((m) => ({ id: m.id, name: m.name, provider: p.provider }))
     );
   }, [availableModels]);
+  const modelGroups = useMemo(
+    () =>
+      buildModelSelectorGroups({
+        availableModels,
+        userModelPreferences,
+        orgModelPreferences,
+      }),
+    [availableModels, orgModelPreferences, userModelPreferences]
+  );
 
   // ─── Slash Command Detection ──────────────────────────────────────────
   // Detect /command pattern: input is exactly "/<partial>" with no spaces (command picker)
@@ -1076,7 +1087,30 @@ export function ChatInput({
                       {!selectedModel && <CheckIcon className="ml-auto h-4 w-4 shrink-0" />}
                     </ModelSelectorItem>
                     <ModelSelectorSeparator />
-                    {availableModels.map((provider) => (
+                    {modelGroups.preferredGroup && (
+                      <>
+                        <ModelSelectorGroup heading={modelGroups.preferredGroup.heading}>
+                          {modelGroups.preferredGroup.models.map((m) => (
+                            <ModelSelectorItem
+                              key={m.id}
+                              value={m.id}
+                              onSelect={() => {
+                                onModelChange?.(m.id);
+                                setModelSelectorOpen(false);
+                              }}
+                            >
+                              <ModelSelectorLogo provider={m.provider} />
+                              <ModelSelectorName>{m.name}</ModelSelectorName>
+                              {selectedModel === m.id && (
+                                <CheckIcon className="ml-auto h-4 w-4 shrink-0" />
+                              )}
+                            </ModelSelectorItem>
+                          ))}
+                        </ModelSelectorGroup>
+                        <ModelSelectorSeparator />
+                      </>
+                    )}
+                    {modelGroups.providerGroups.map((provider) => (
                       <ModelSelectorGroup key={provider.provider} heading={provider.provider}>
                         {provider.models.map((m) => (
                           <ModelSelectorItem

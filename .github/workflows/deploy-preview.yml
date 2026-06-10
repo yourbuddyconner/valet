@@ -68,7 +68,10 @@ jobs:
             WORKER_PROD_URL="${DEV_WORKER_URL}" \
             make deploy-client 2>&1 | tee /tmp/preview-deploy.log
 
-          PREVIEW_URL=$(grep -oE 'https://[^ ]+\.pages\.dev' /tmp/preview-deploy.log | tail -1)
+          PREVIEW_URL=$(grep -oE 'Deployment alias URL: https://[^[:space:]]+\.pages\.dev' /tmp/preview-deploy.log | sed -E 's/^Deployment alias URL: //' | tail -1 || true)
+          if [ -z "$PREVIEW_URL" ]; then
+            PREVIEW_URL=$(grep -oE "https://${PREVIEW_BRANCH}\.[^[:space:]]+\.pages\.dev" /tmp/preview-deploy.log | tail -1 || true)
+          fi
           if [ -z "$PREVIEW_URL" ]; then
             echo "Could not find a Pages preview URL in deploy output." >&2
             exit 1
