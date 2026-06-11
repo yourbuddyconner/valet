@@ -41,6 +41,7 @@ export interface EnqueueParams {
   childSessionId?: string | null;
   childStatus?: string | null;
   priority?: number;
+  replaceable?: boolean;
 }
 
 export interface QueueEntry {
@@ -66,6 +67,7 @@ export interface QueueEntry {
   childSessionId: string | null;
   childStatus: string | null;
   priority: number;
+  replaceable: boolean;
 }
 
 export interface CollectBufferEntry {
@@ -140,6 +142,7 @@ export class PromptQueue {
     try { this.sql.exec('ALTER TABLE prompt_queue ADD COLUMN child_session_id TEXT'); } catch { /* already exists */ }
     try { this.sql.exec('ALTER TABLE prompt_queue ADD COLUMN child_status TEXT'); } catch { /* already exists */ }
     try { this.sql.exec('ALTER TABLE prompt_queue ADD COLUMN priority INTEGER NOT NULL DEFAULT 0'); } catch { /* already exists */ }
+    try { this.sql.exec('ALTER TABLE prompt_queue ADD COLUMN replaceable INTEGER NOT NULL DEFAULT 1'); } catch { /* already exists */ }
   }
 
   // ─── Core Queue Operations ───────────────────────────────────────────────
@@ -161,7 +164,7 @@ export class PromptQueue {
     }
 
     this.sql.exec(
-      "INSERT INTO prompt_queue (id, content, attachments, model, status, author_id, author_email, author_name, author_avatar_url, channel_type, channel_id, channel_key, thread_id, continuation_context, context_prefix, reply_channel_type, reply_channel_id, child_session_id, child_status, priority) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      "INSERT INTO prompt_queue (id, content, attachments, model, status, author_id, author_email, author_name, author_avatar_url, channel_type, channel_id, channel_key, thread_id, continuation_context, context_prefix, reply_channel_type, reply_channel_id, child_session_id, child_status, priority, replaceable) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
       params.id,
       params.content,
       params.attachments || null,
@@ -182,6 +185,7 @@ export class PromptQueue {
       params.childSessionId || null,
       params.childStatus || null,
       params.priority ?? 0,
+      params.replaceable === false ? 0 : 1,
     );
   }
 
@@ -192,7 +196,7 @@ export class PromptQueue {
   dequeueNext(): QueueEntry | null {
     const rows = this.sql
       .exec(
-        "SELECT id, content, attachments, model, author_id, author_email, author_name, author_avatar_url, channel_type, channel_id, channel_key, queue_type, workflow_execution_id, workflow_payload, thread_id, continuation_context, context_prefix, reply_channel_type, reply_channel_id, child_session_id, child_status, priority FROM prompt_queue WHERE status = 'queued' ORDER BY priority DESC, created_at ASC LIMIT 1",
+        "SELECT id, content, attachments, model, author_id, author_email, author_name, author_avatar_url, channel_type, channel_id, channel_key, queue_type, workflow_execution_id, workflow_payload, thread_id, continuation_context, context_prefix, reply_channel_type, reply_channel_id, child_session_id, child_status, priority, replaceable FROM prompt_queue WHERE status = 'queued' ORDER BY priority DESC, created_at ASC LIMIT 1",
       )
       .toArray();
 
@@ -215,7 +219,7 @@ export class PromptQueue {
   dequeueNextChild(): QueueEntry | null {
     const rows = this.sql
       .exec(
-        "SELECT id, content, attachments, model, author_id, author_email, author_name, author_avatar_url, channel_type, channel_id, channel_key, queue_type, workflow_execution_id, workflow_payload, thread_id, continuation_context, context_prefix, reply_channel_type, reply_channel_id, child_session_id, child_status, priority FROM prompt_queue WHERE status = 'queued' AND child_session_id IS NOT NULL ORDER BY priority DESC, created_at ASC LIMIT 1",
+        "SELECT id, content, attachments, model, author_id, author_email, author_name, author_avatar_url, channel_type, channel_id, channel_key, queue_type, workflow_execution_id, workflow_payload, thread_id, continuation_context, context_prefix, reply_channel_type, reply_channel_id, child_session_id, child_status, priority, replaceable FROM prompt_queue WHERE status = 'queued' AND child_session_id IS NOT NULL ORDER BY priority DESC, created_at ASC LIMIT 1",
       )
       .toArray();
 
@@ -295,19 +299,24 @@ export class PromptQueue {
     this.sql.exec('DELETE FROM prompt_queue');
   }
 
-  private static readonly USER_PROMPT_QUERY =
-    "SELECT id, content, attachments, model, author_id, author_email, author_name, author_avatar_url, channel_type, channel_id, channel_key, queue_type, workflow_execution_id, workflow_payload, thread_id, continuation_context, context_prefix, reply_channel_type, reply_channel_id, child_session_id, child_status, priority FROM prompt_queue WHERE status = 'queued' AND queue_type = 'prompt' AND child_session_id IS NULL ORDER BY priority DESC, created_at ASC LIMIT 1";
+  private static readonly USER_PROMPT_COLUMNS =
+    'id, content, attachments, model, author_id, author_email, author_name, author_avatar_url, channel_type, channel_id, channel_key, queue_type, workflow_execution_id, workflow_payload, thread_id, continuation_context, context_prefix, reply_channel_type, reply_channel_id, child_session_id, child_status, priority, replaceable';
+
+  private static userPromptQuery(replaceableOnly = false): string {
+    const replaceableClause = replaceableOnly ? ' AND replaceable = 1' : '';
+    return `SELECT ${PromptQueue.USER_PROMPT_COLUMNS} FROM prompt_queue WHERE status = 'queued' AND queue_type = 'prompt' AND child_session_id IS NULL${replaceableClause} ORDER BY priority DESC, created_at ASC LIMIT 1`;
+  }
 
   /** Read the single queued user-prompt entry without removing it. Returns null if none. */
   peekQueued(): QueueEntry | null {
-    const rows = this.sql.exec(PromptQueue.USER_PROMPT_QUERY).toArray();
+    const rows = this.sql.exec(PromptQueue.userPromptQuery()).toArray();
     if (rows.length === 0) return null;
     return this.rowToEntry(rows[0]);
   }
 
   /** Remove and return the single queued user-prompt entry (not child events, not workflows). Returns null if none. */
-  withdrawQueued(): QueueEntry | null {
-    const rows = this.sql.exec(PromptQueue.USER_PROMPT_QUERY).toArray();
+  withdrawQueued(options?: { replaceableOnly?: boolean }): QueueEntry | null {
+    const rows = this.sql.exec(PromptQueue.userPromptQuery(options?.replaceableOnly)).toArray();
     if (rows.length === 0) return null;
     const row = rows[0];
     this.sql.exec('DELETE FROM prompt_queue WHERE id = ?', row.id as string);
@@ -687,6 +696,7 @@ export class PromptQueue {
       childSessionId: (row.child_session_id as string) || null,
       childStatus: (row.child_status as string) || null,
       priority: typeof row.priority === 'number' ? row.priority : 0,
+      replaceable: row.replaceable === undefined ? true : Number(row.replaceable) !== 0,
     };
   }
 }

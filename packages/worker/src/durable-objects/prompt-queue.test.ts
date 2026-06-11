@@ -27,6 +27,10 @@ interface QueueRow {
   context_prefix: string | null;
   reply_channel_type: string | null;
   reply_channel_id: string | null;
+  child_session_id: string | null;
+  child_status: string | null;
+  priority: number;
+  replaceable: number;
   created_at: number;
 }
 
@@ -78,6 +82,10 @@ function createMockSql(): SqlStorage & { queue: Map<string, QueueRow>; state: Ma
           context_prefix: null,
           reply_channel_type: null,
           reply_channel_id: null,
+          child_session_id: null,
+          child_status: null,
+          priority: 0,
+          replaceable: 1,
           created_at: insertCounter, // monotonic for ordering
         };
 
@@ -105,6 +113,10 @@ function createMockSql(): SqlStorage & { queue: Map<string, QueueRow>; state: Ma
           row.context_prefix = (params[14] as string) || null;
           row.reply_channel_type = (params[15] as string) || null;
           row.reply_channel_id = (params[16] as string) || null;
+          row.child_session_id = (params[17] as string) || null;
+          row.child_status = (params[18] as string) || null;
+          row.priority = typeof params[19] === 'number' ? params[19] : 0;
+          row.replaceable = typeof params[20] === 'number' ? params[20] : 1;
         } else if (params.length >= 3) {
           // Minimal INSERT (id, content, status, thread_id)
           row.status = q.includes("'processing'") ? 'processing' : 'queued';
@@ -133,11 +145,25 @@ function createMockSql(): SqlStorage & { queue: Map<string, QueueRow>; state: Ma
           rows = rows.filter((r) => r.status === 'completed');
         }
 
+        if (q.includes('child_session_id IS NULL')) {
+          rows = rows.filter((r) => r.child_session_id === null);
+        }
+
+        if (q.includes('child_session_id IS NOT NULL')) {
+          rows = rows.filter((r) => r.child_session_id !== null);
+        }
+
+        if (q.includes('replaceable = 1')) {
+          rows = rows.filter((r) => r.replaceable === 1);
+        }
+
         if (q.includes('COUNT(*)')) {
           return cursor([{ count: rows.length, c: rows.length }]);
         }
 
-        if (q.includes('ORDER BY created_at ASC')) {
+        if (q.includes('ORDER BY priority DESC, created_at ASC')) {
+          rows.sort((a, b) => b.priority - a.priority || a.created_at - b.created_at);
+        } else if (q.includes('ORDER BY created_at ASC')) {
           rows.sort((a, b) => a.created_at - b.created_at);
         }
         if (q.includes('ORDER BY created_at DESC')) {
@@ -187,6 +213,8 @@ function createMockSql(): SqlStorage & { queue: Map<string, QueueRow>; state: Ma
           const targetId = params[0] as string;
           const row = queue.get(targetId);
           if (row && row.status === 'completed') queue.delete(targetId);
+        } else if (q.includes('WHERE id = ?')) {
+          queue.delete(params[0] as string);
         } else if (q.includes("status = 'completed'")) {
           for (const [id, row] of queue) {
             if (row.status === 'completed') queue.delete(id);
@@ -381,6 +409,28 @@ describe('PromptQueue', () => {
       pq.clearAll();
       expect(pq.length).toBe(0);
       expect(pq.processingCount).toBe(0);
+    });
+  });
+
+  describe('peekQueued / withdrawQueued', () => {
+    it('withdrawQueued can skip protected prompts for implicit replacement', () => {
+      pq.enqueue({ id: 'scheduled', content: 'scheduled prompt', replaceable: false });
+      pq.enqueue({ id: 'public', content: 'public prompt' });
+
+      const withdrawn = pq.withdrawQueued({ replaceableOnly: true });
+
+      expect(withdrawn?.id).toBe('public');
+      expect(pq.dequeueNext()?.id).toBe('scheduled');
+    });
+
+    it('explicit withdrawQueued still removes the oldest protected prompt', () => {
+      pq.enqueue({ id: 'scheduled', content: 'scheduled prompt', replaceable: false });
+      pq.enqueue({ id: 'public', content: 'public prompt' });
+
+      const withdrawn = pq.withdrawQueued();
+
+      expect(withdrawn?.id).toBe('scheduled');
+      expect(pq.dequeueNext()?.id).toBe('public');
     });
   });
 

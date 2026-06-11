@@ -395,6 +395,8 @@ For orchestrator sessions, steer is scoped by thread/channel. A requested `steer
 
 **Queue lifecycle:** `queued` -> `processing` -> `completed` (then pruned).
 
+Queued user prompts are single-slot replaceable by default: a newly queued followup withdraws the oldest queued user prompt that is still marked replaceable. Internal dispatches that require independent delivery, such as scheduled orchestrator prompts with fresh-thread routing and queued steer prompts, mark their queue rows as non-replaceable. Non-replaceable rows are protected from implicit followup replacement but can still be removed by explicit queue clear/withdraw actions. Dispatch order is `priority DESC, created_at ASC`; fresh-thread scheduled prompts use normal priority so separate threads are delivered FIFO without jumping ahead of existing queued work.
+
 **Recovery mechanisms:**
 - Runner disconnect: all `processing` entries revert to `queued`.
 - 5-minute watchdog alarm: detects stuck `processing` prompts when no runner connected.
