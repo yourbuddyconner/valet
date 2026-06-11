@@ -41,6 +41,24 @@ function normalizeThreadStatus(status?: string | null): ThreadStatus {
   return status === 'archived' ? 'archived' : 'active';
 }
 
+function isMissingOriginColumnError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+
+  const message = error.message.toLowerCase();
+  const originColumns = [
+    'origin_type',
+    'origin_channel_type',
+    'origin_channel_id',
+    'origin_trigger_id',
+    'origin_trigger_type',
+  ];
+
+  return (
+    originColumns.some((column) => message.includes(column)) &&
+    (message.includes('no column') || message.includes('no such column'))
+  );
+}
+
 // ─── Row-to-Domain Converter ────────────────────────────────────────────────
 
 function rowToThread(row: ThreadRow): SessionThread {
@@ -75,25 +93,34 @@ export async function createThread(
 ): Promise<SessionThread> {
   const originType = data.originType ?? 'web';
 
-  await db
-    .prepare(
-      `INSERT INTO session_threads (
-        id, session_id, opencode_session_id,
-        origin_type, origin_channel_type, origin_channel_id,
-        origin_trigger_id, origin_trigger_type
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-    )
-    .bind(
-      data.id,
-      data.sessionId,
-      data.opencodeSessionId ?? null,
-      originType,
-      data.originChannelType ?? null,
-      data.originChannelId ?? null,
-      data.originTriggerId ?? null,
-      data.originTriggerType ?? null
-    )
-    .run();
+  try {
+    await db
+      .prepare(
+        `INSERT INTO session_threads (
+          id, session_id, opencode_session_id,
+          origin_type, origin_channel_type, origin_channel_id,
+          origin_trigger_id, origin_trigger_type
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .bind(
+        data.id,
+        data.sessionId,
+        data.opencodeSessionId ?? null,
+        originType,
+        data.originChannelType ?? null,
+        data.originChannelId ?? null,
+        data.originTriggerId ?? null,
+        data.originTriggerType ?? null
+      )
+      .run();
+  } catch (error) {
+    if (!isMissingOriginColumnError(error)) throw error;
+
+    await db
+      .prepare('INSERT INTO session_threads (id, session_id, opencode_session_id) VALUES (?, ?, ?)')
+      .bind(data.id, data.sessionId, data.opencodeSessionId ?? null)
+      .run();
+  }
 
   return {
     id: data.id,

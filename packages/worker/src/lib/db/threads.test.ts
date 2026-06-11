@@ -120,13 +120,17 @@ class SqliteD1Database implements D1Database {
   }
 }
 
-function createD1Db(): D1Database {
+function createD1Db(options: { skipMigrations?: string[] } = {}): D1Database {
   const sqlite = new Database(':memory:');
   sqlite.pragma('journal_mode = WAL');
   sqlite.pragma('foreign_keys = OFF');
 
   const migrationsDir = path.resolve(__dirname, '../../../migrations');
-  const files = fs.readdirSync(migrationsDir).filter((file) => file.endsWith('.sql')).sort();
+  const skipMigrations = new Set(options.skipMigrations ?? []);
+  const files = fs
+    .readdirSync(migrationsDir)
+    .filter((file) => file.endsWith('.sql') && !skipMigrations.has(file))
+    .sort();
   for (const file of files) {
     sqlite.exec(fs.readFileSync(path.join(migrationsDir, file), 'utf-8'));
   }
@@ -148,6 +152,23 @@ describe('threads db helpers', () => {
 
     const stored = await getThread(d1, 'thread-web');
     expect(stored?.originType).toBe('web');
+  });
+
+  it('creates threads before origin metadata migration is applied', async () => {
+    const legacyD1 = createD1Db({
+      skipMigrations: ['0018_session_thread_origin_metadata.sql'],
+    });
+
+    const thread = await createThread(legacyD1, {
+      id: 'thread-legacy',
+      sessionId: 'orchestrator:user-1',
+    });
+
+    expect(thread).toMatchObject({
+      id: 'thread-legacy',
+      sessionId: 'orchestrator:user-1',
+      originType: 'web',
+    });
   });
 
   it('returns origin metadata separately from legacy routing channel metadata', async () => {
@@ -201,5 +222,35 @@ describe('threads db helpers', () => {
 
     const result = await listThreads(d1, 'orchestrator:user-1');
     expect(result.threads.map((thread) => thread.id)).toEqual(['thread-web']);
+  });
+
+  it('does not duplicate a thread with multiple legacy routing mappings in page mode', async () => {
+    await createThread(d1, { id: 'thread-web', sessionId: 'orchestrator:user-1' });
+    await registerChannelThread(d1, {
+      channelType: 'slack',
+      channelId: 'D123',
+      externalThreadId: '1700000000.000001',
+      userId: 'user-1',
+      sessionId: 'orchestrator:user-1',
+      threadId: 'thread-web',
+    });
+    await registerChannelThread(d1, {
+      channelType: 'slack',
+      channelId: 'D123',
+      externalThreadId: '1700000000.000002',
+      userId: 'user-1',
+      sessionId: 'orchestrator:user-1',
+      threadId: 'thread-web',
+    });
+
+    const result = await listThreads(d1, 'orchestrator:user-1', { page: 1, pageSize: 10 });
+    expect(result.threads.map((thread) => thread.id)).toEqual(['thread-web']);
+    expect(result).toMatchObject({
+      hasMore: false,
+      page: 1,
+      pageSize: 10,
+      totalCount: 1,
+      totalPages: 1,
+    });
   });
 });

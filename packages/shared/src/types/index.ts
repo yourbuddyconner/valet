@@ -233,7 +233,7 @@ export interface SessionThread {
   originChannelType?: string;
   originChannelId?: string;
   originTriggerId?: string;
-  originTriggerType?: 'manual' | 'schedule' | string;
+  originTriggerType?: string;
   title?: string;
   summaryAdditions: number;
   summaryDeletions: number;
