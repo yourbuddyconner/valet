@@ -365,6 +365,12 @@ The `channel_reply` tool allows the orchestrator (or any session) to reply on ex
 
 Successful external replies return a tool result to the runner but do not create separate web UI transcript messages. This keeps externally sent replies from appearing as synthetic `system` bubbles in the browser thread.
 
+### Thread Routing Mappings
+
+`channel_thread_mappings` is routing metadata for replies and follow-ups across external channels such as Slack and Telegram. Adding or updating a reply routing mapping must not relabel the thread's original display origin.
+
+Orchestrator-targeted manual and scheduled triggers create automation-origin threads for sidebar grouping. Workflow execution history is not part of this behavior.
+
 ## Memory System
 
 ### Read (`memory_read` tool)

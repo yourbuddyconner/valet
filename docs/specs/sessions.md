@@ -87,6 +87,11 @@ Tracks orchestrator conversation threads. `sessionId` identifies the owning sess
 | `opencodeSessionId` | text | Persisted OpenCode session bound to the thread |
 | `title` | text | Agent-generated thread title |
 | `status` | text NOT NULL | `active` or `archived` |
+| `originType` | text | Coarse display origin such as `web`, `slack`, or `automation` |
+| `originChannelType` | text | Original platform channel type when applicable |
+| `originChannelId` | text | Original platform channel id when applicable, e.g. raw Slack conversation id |
+| `originTriggerId` | text | Trigger id for orchestrator-targeted automation threads |
+| `originTriggerType` | text | Trigger type for automation threads, e.g. `manual` or `schedule` |
 | `messageCount` | integer | Message count for sidebar/UI |
 | `summaryAdditions` | integer | Git diff summary additions |
 | `summaryDeletions` | integer | Git diff summary deletions |
@@ -421,6 +426,8 @@ For orchestrator sessions, thread identity is durable across sandbox hibernation
 2. Numbered page mode for the Thread History screen. When `page` and `pageSize` are supplied, the response additionally includes `page`, `pageSize`, `totalCount`, and `totalPages`.
 
 For orchestrator sessions, both modes read across all of the user's orchestrator session rows so historical threads survive orchestrator rotation. The Thread History UI uses page-number pagination with a fixed page size of 30 threads.
+
+Thread list responses return origin metadata (`originType`, `originChannelType`, `originChannelId`, `originTriggerId`, `originTriggerType`) separately from legacy channel routing metadata (`channelType`, `channelId`). Sidebar and list consumers group by origin metadata first and fall back to legacy `channelType`/`channelId` only for historical rows without origin fields.
 
 ### Prompt Completion
 
