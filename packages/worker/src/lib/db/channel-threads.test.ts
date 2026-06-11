@@ -5,6 +5,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { getChannelThreadMapping, getOrCreateChannelThread, registerChannelThread } from './channel-threads.js';
+import { createThread, getThread } from './threads.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -105,6 +106,52 @@ describe('registerChannelThread + getOrCreateChannelThread', () => {
     expect(threadId).toBeDefined();
     expect(typeof threadId).toBe('string');
     expect(threadId).not.toBe('existing-web-thread-uuid');
+  });
+
+  it('creates new Slack channel threads with Slack origin metadata', async () => {
+    const threadId = await getOrCreateChannelThread(d1, {
+      channelType: 'slack',
+      channelId: 'D_DM_CHANNEL',
+      externalThreadId: '1700000000.000001',
+      sessionId: 'orchestrator:user-1',
+      userId: 'user-1',
+    });
+
+    const thread = await getThread(d1, threadId);
+    expect(thread).toMatchObject({
+      originType: 'slack',
+      originChannelType: 'slack',
+      originChannelId: 'D_DM_CHANNEL',
+    });
+  });
+
+  it('does not relabel an existing web-origin thread when registering a Slack reply mapping', async () => {
+    await createThread(d1, {
+      id: 'existing-web-thread',
+      sessionId: 'orchestrator:user-1',
+      originType: 'web',
+    });
+
+    await registerChannelThread(d1, {
+      channelType: 'slack',
+      channelId: 'D_DM_CHANNEL',
+      externalThreadId: '1700000000.000001',
+      userId: 'user-1',
+      sessionId: 'orchestrator:user-1',
+      threadId: 'existing-web-thread',
+    });
+
+    const threadId = await getOrCreateChannelThread(d1, {
+      channelType: 'slack',
+      channelId: 'D_DM_CHANNEL',
+      externalThreadId: '1700000000.000001',
+      sessionId: 'orchestrator:user-1',
+      userId: 'user-1',
+    });
+    const thread = await getThread(d1, threadId);
+
+    expect(thread?.id).toBe('existing-web-thread');
+    expect(thread?.originType).toBe('web');
   });
 
   it('registerChannelThread overwrites a stale mapping with the new thread ID', async () => {

@@ -79,7 +79,13 @@ export async function getOrCreateChannelThread(
 
   // Create orchestrator thread optimistically
   const threadId = crypto.randomUUID();
-  await createThread(db, { id: threadId, sessionId: params.sessionId });
+  await createThread(db, {
+    id: threadId,
+    sessionId: params.sessionId,
+    originType: params.channelType,
+    originChannelType: params.channelType,
+    originChannelId: params.channelId,
+  });
 
   // Insert mapping with INSERT OR IGNORE to handle concurrent racers.
   // The unique index on (channel_type, channel_id, external_thread_id, user_id)
