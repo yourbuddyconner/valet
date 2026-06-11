@@ -478,9 +478,14 @@ export async function dispatchOrchestratorPrompt(
     }
   }
 
+  const promptHeaders = new Headers({ 'Content-Type': 'application/json' });
+  if (params.forceNewThread) {
+    promptHeaders.set('X-Valet-Prompt-Queue-Policy', 'append');
+  }
+
   const doRes = await sessionDO.fetch(new Request('http://do/prompt', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: promptHeaders,
     body: JSON.stringify({
       content,
       contextPrefix: params.contextPrefix,

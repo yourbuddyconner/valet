@@ -111,6 +111,15 @@ type PromptResolutionResult =
   | { ok: true }
   | { ok: false; status: number; error: string };
 
+const PROMPT_QUEUE_POLICY_HEADER = 'X-Valet-Prompt-Queue-Policy';
+const PROMPT_QUEUE_POLICY_APPEND = 'append';
+
+interface PromptQueuePolicy {
+  replaceExistingQueued?: boolean;
+  priority?: number;
+  replaceable?: boolean;
+}
+
 function buildThreadContinuationContext(rows: Array<{ role?: unknown; content?: unknown }>): string {
   return rows
     .map((row) => {
@@ -221,6 +230,7 @@ const SCHEMA_SQL = `
     channel_type TEXT,
     channel_id TEXT,
     channel_key TEXT, -- computed key for per-channel queuing (e.g. "web:default", "telegram:12345")
+    replaceable INTEGER NOT NULL DEFAULT 1,
     created_at INTEGER NOT NULL DEFAULT (unixepoch())
   );
 
@@ -605,6 +615,10 @@ export class SessionAgentDO {
           name: body.authorName,
           avatarUrl: body.authorAvatarUrl,
         } : undefined;
+        const queuePolicy: PromptQueuePolicy | undefined =
+          request.headers.get(PROMPT_QUEUE_POLICY_HEADER) === PROMPT_QUEUE_POLICY_APPEND
+            ? { replaceExistingQueued: false, priority: 0, replaceable: false }
+            : undefined;
 
         switch (effectiveMode) {
           case 'steer':
@@ -614,7 +628,7 @@ export class SessionAgentDO {
             await this.handleCollectPrompt(content, body.model, author, attachments, body.channelType, body.channelId, body.threadId, body.contextPrefix);
             break;
           default:
-            await this.handlePrompt(content, body.model, author, attachments, body.channelType, body.channelId, body.threadId, undefined, body.contextPrefix, body.replyTo);
+            await this.handlePrompt(content, body.model, author, attachments, body.channelType, body.channelId, body.threadId, undefined, body.contextPrefix, body.replyTo, queuePolicy);
             break;
         }
         console.log(`[SessionAgentDO] /prompt HTTP: completed, runnerBusy=${this.promptQueue.runnerBusy}`);
@@ -1830,7 +1844,7 @@ export class SessionAgentDO {
     continuationContext?: string,
     contextPrefix?: string,
     replyTo?: { channelType: string; channelId: string },
-    skipSingleSlot?: boolean,
+    queuePolicy?: PromptQueuePolicy,
   ) {
     // ─── Thread-reply capture for pending questions ─────────────────────
     // If there's a pending question and this message came from the same
@@ -1952,6 +1966,9 @@ export class SessionAgentDO {
     const channelBusy = this.promptQueue.isChannelBusy(channelKey);
     const anyChannelTracked = this.promptQueue.getBusyChannelKey() !== null;
     const shouldQueue = !runnerConnected || !runnerReady || channelBusy || (runnerBusy && !anyChannelTracked);
+    const replaceExistingQueued = queuePolicy?.replaceExistingQueued ?? true;
+    const queuePriority = queuePolicy?.priority ?? 0;
+    const queueReplaceable = queuePolicy?.replaceable ?? true;
     if (shouldQueue) {
       // ─── Enqueue path: defer message write to dispatch time ──────────
       const reason = channelBusy ? 'channel busy'
@@ -1963,10 +1980,10 @@ export class SessionAgentDO {
         `messageId=${messageId} attachments=${normalizedAttachments.length}`,
       );
 
-      // Single-slot enforcement: withdraw existing pending user prompt
-      // Skipped for steer prompts so the existing pending followup is preserved
-      if (!skipSingleSlot) {
-        const existingPending = this.promptQueue.withdrawQueued();
+      // Single-slot enforcement: normal user followups replace the pending prompt.
+      // Internal append/steer paths preserve existing queued work.
+      if (replaceExistingQueued) {
+        const existingPending = this.promptQueue.withdrawQueued({ replaceableOnly: true });
         if (existingPending) {
           this.broadcastToClients({
             type: 'queue.withdrawn',
@@ -1987,7 +2004,8 @@ export class SessionAgentDO {
         authorId: author?.id, authorEmail: author?.email, authorName: author?.name, authorAvatarUrl: author?.avatarUrl,
         channelType, channelId, channelKey, threadId, continuationContext, contextPrefix,
         replyChannelType: effectiveReplyTo?.channelType, replyChannelId: effectiveReplyTo?.channelId,
-        priority: skipSingleSlot ? 1 : 0,
+        priority: queuePriority,
+        replaceable: queueReplaceable,
       });
       this.promptQueue.stampPromptReceived();
       this.emitAuditEvent(
@@ -2079,6 +2097,8 @@ export class SessionAgentDO {
       authorId: author?.id, authorEmail: author?.email, authorName: author?.name, authorAvatarUrl: author?.avatarUrl,
       channelType, channelId, channelKey, threadId, continuationContext, contextPrefix,
       replyChannelType: effectiveReplyTo?.channelType, replyChannelId: effectiveReplyTo?.channelId,
+      priority: queuePriority,
+      replaceable: queueReplaceable,
     });
 
     // Forward directly to runner with author info + channel metadata
@@ -2300,7 +2320,11 @@ export class SessionAgentDO {
     }
     // Queue the new prompt — when the runner confirms abort, handlePromptComplete
     // will drain the queue and send this prompt to the runner
-    await this.handlePrompt(content, model, author, attachments, channelType, channelId, threadId, undefined, contextPrefix, undefined, true);
+    await this.handlePrompt(content, model, author, attachments, channelType, channelId, threadId, undefined, contextPrefix, undefined, {
+      replaceExistingQueued: false,
+      priority: 1,
+      replaceable: false,
+    });
   }
 
   // ─── Collect Mode (Phase D) ──────────────────────────────────────────

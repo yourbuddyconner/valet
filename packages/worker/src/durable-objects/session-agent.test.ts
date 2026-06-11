@@ -36,6 +36,7 @@ interface QueueRow {
   child_session_id: string | null;
   child_status: string | null;
   priority: number;
+  replaceable: number;
   created_at: number;
 }
 
@@ -199,6 +200,7 @@ function createMockSql(): SqlStorage & {
             child_session_id: null,
             child_status: null,
             priority: 0,
+            replaceable: 1,
             created_at: insertCounter,
           };
         } else {
@@ -226,6 +228,7 @@ function createMockSql(): SqlStorage & {
             child_session_id: (params[17] as string) || null,
             child_status: (params[18] as string) || null,
             priority: typeof params[19] === 'number' ? params[19] : 0,
+            replaceable: typeof params[20] === 'number' ? params[20] : 1,
             created_at: insertCounter,
           };
         }
@@ -249,6 +252,10 @@ function createMockSql(): SqlStorage & {
 
         if (q.includes('child_session_id IS NULL')) {
           rows = rows.filter((row) => row.child_session_id === null);
+        }
+
+        if (q.includes('replaceable = 1')) {
+          rows = rows.filter((row) => row.replaceable === 1);
         }
 
         if (q.includes('COUNT(*)')) {
@@ -1138,6 +1145,141 @@ describe('SessionAgentDO', () => {
     // Queue should contain only the second
     const pending = (agent as any).promptQueue.peekQueued();
     expect(pending.content).toBe('second followup');
+  });
+
+  it('preserves separate internal fresh-thread scheduled prompts while runner is not ready', async () => {
+    const { agent, broadcasts, sql } = await createTestAgent();
+
+    const existing = await agent.fetch(new Request('http://do/prompt', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        content: 'existing followup',
+        threadId: 'thread-existing',
+        authorId: 'user-1',
+      }),
+    }));
+    const first = await agent.fetch(new Request('http://do/prompt', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Valet-Prompt-Queue-Policy': 'append',
+      },
+      body: JSON.stringify({
+        content: 'first scheduled prompt',
+        threadId: 'thread-scheduled-1',
+        authorName: 'Scheduled Task',
+        authorEmail: 'scheduled-task@valet.local',
+        authorId: 'user-1',
+      }),
+    }));
+    const second = await agent.fetch(new Request('http://do/prompt', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Valet-Prompt-Queue-Policy': 'append',
+      },
+      body: JSON.stringify({
+        content: 'second scheduled prompt',
+        threadId: 'thread-scheduled-2',
+        authorName: 'Scheduled Task',
+        authorEmail: 'scheduled-task@valet.local',
+        authorId: 'user-1',
+      }),
+    }));
+
+    expect(existing.status).toBe(200);
+    expect(first.status).toBe(200);
+    expect(second.status).toBe(200);
+    expect(broadcasts.find((b) => b.type === 'queue.withdrawn')).toBeUndefined();
+
+    const queued = sql
+      .exec("SELECT * FROM prompt_queue WHERE status = 'queued' ORDER BY created_at ASC")
+      .toArray();
+    expect(queued).toHaveLength(3);
+    expect(queued.map((row) => row.content)).toEqual(['existing followup', 'first scheduled prompt', 'second scheduled prompt']);
+    expect(queued.map((row) => row.thread_id)).toEqual(['thread-existing', 'thread-scheduled-1', 'thread-scheduled-2']);
+    expect(queued.map((row) => row.priority)).toEqual([0, 0, 0]);
+
+    expect((agent as any).promptQueue.dequeueNext()?.content).toBe('existing followup');
+    expect((agent as any).promptQueue.dequeueNext()?.content).toBe('first scheduled prompt');
+    expect((agent as any).promptQueue.dequeueNext()?.content).toBe('second scheduled prompt');
+  });
+
+  it('ignores body-only queue preservation from public prompt payloads', async () => {
+    const { agent, broadcasts, sql } = await createTestAgent();
+
+    const first = await agent.fetch(new Request('http://do/prompt', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        content: 'first public prompt',
+        threadId: 'thread-public-1',
+        authorId: 'user-1',
+      }),
+    }));
+    const second = await agent.fetch(new Request('http://do/prompt', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        content: 'second public prompt',
+        threadId: 'thread-public-2',
+        authorId: 'user-1',
+        preserveQueuedPrompts: true,
+      }),
+    }));
+
+    expect(first.status).toBe(200);
+    expect(second.status).toBe(200);
+
+    const withdrawn = broadcasts.find((b) => b.type === 'queue.withdrawn');
+    expect(withdrawn).toBeTruthy();
+    expect((withdrawn as any).data.content).toBe('first public prompt');
+
+    const queued = sql
+      .exec("SELECT * FROM prompt_queue WHERE status = 'queued' ORDER BY created_at ASC")
+      .toArray();
+    expect(queued).toHaveLength(1);
+    expect(queued[0].content).toBe('second public prompt');
+  });
+
+  it('does not replace internal appended scheduled prompts with a later public prompt', async () => {
+    const { agent, broadcasts, sql } = await createTestAgent();
+
+    const scheduled = await agent.fetch(new Request('http://do/prompt', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Valet-Prompt-Queue-Policy': 'append',
+      },
+      body: JSON.stringify({
+        content: 'scheduled prompt',
+        threadId: 'thread-scheduled',
+        authorName: 'Scheduled Task',
+        authorEmail: 'scheduled-task@valet.local',
+        authorId: 'user-1',
+      }),
+    }));
+    const user = await agent.fetch(new Request('http://do/prompt', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        content: 'public prompt',
+        threadId: 'thread-public',
+        authorId: 'user-1',
+      }),
+    }));
+
+    expect(scheduled.status).toBe(200);
+    expect(user.status).toBe(200);
+    expect(broadcasts.find((b) => b.type === 'queue.withdrawn')).toBeUndefined();
+
+    const queued = sql
+      .exec("SELECT * FROM prompt_queue WHERE status = 'queued' ORDER BY created_at ASC")
+      .toArray();
+    expect(queued.map((row) => row.content)).toEqual(['scheduled prompt', 'public prompt']);
+    expect((agent as any).promptQueue.dequeueNext()?.content).toBe('scheduled prompt');
+    expect((agent as any).promptQueue.dequeueNext()?.content).toBe('public prompt');
   });
 
   it('broadcasts queue.state with pending item after enqueue', async () => {
