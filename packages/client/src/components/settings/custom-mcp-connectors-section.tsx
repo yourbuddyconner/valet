@@ -126,6 +126,9 @@ export function CustomMcpConnectorsSection() {
 function formatAuth(connector: CustomMcpConnector): string {
   if (connector.authType === 'none') return 'None';
   if (connector.authType === 'oauth') return connector.hasClientSecret ? 'OAuth secret' : 'OAuth PKCE';
-  if (connector.authType === 'bearer') return 'Bearer';
-  return connector.apiKeyHeaderName || 'API key';
+  if (connector.authType === 'bearer') return connector.credentialScope === 'user' ? 'Per-user bearer' : 'Bearer';
+  const target = connector.apiKeyPlacement === 'query'
+    ? connector.apiKeyQueryParam || 'Query key'
+    : connector.apiKeyHeaderName || 'API key';
+  return connector.credentialScope === 'user' ? `Per-user ${target}` : target;
 }

@@ -139,13 +139,14 @@ interface ResolvedService {
 
 function resolveService(svc: AvailableService): ResolvedService {
   const meta = SERVICE_META[svc.service] ?? DEFAULT_META;
+  const isTokenService = svc.authType === 'api_key' || svc.authType === 'bearer';
   return {
     id: svc.service,
     name: svc.displayName,
     description: meta.description || svc.supportedEntities.join(', '),
     icon: meta.icon,
-    connectionType: meta.connectionType ?? 'oauth',
-    tokenLabel: meta.tokenLabel,
+    connectionType: meta.connectionType ?? (isTokenService ? 'token' : 'oauth'),
+    tokenLabel: meta.tokenLabel ?? (svc.authType === 'bearer' ? 'Bearer Token' : 'API Key'),
     tokenPlaceholder: meta.tokenPlaceholder,
     tokenHelpText: meta.tokenHelpText,
     credentialProvider: meta.credentialProvider,

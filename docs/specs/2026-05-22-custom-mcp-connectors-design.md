@@ -78,6 +78,8 @@ CREATE TABLE custom_mcp_connectors (
   server_url TEXT NOT NULL,
   auth_type TEXT NOT NULL DEFAULT 'none'
     CHECK(auth_type IN ('none', 'oauth', 'api_key', 'bearer')),
+  credential_scope TEXT NOT NULL DEFAULT 'org'
+    CHECK(credential_scope IN ('org', 'user')),
 
   -- OAuth fields (used when auth_type = 'oauth')
   oauth_client_id TEXT,
@@ -90,8 +92,11 @@ CREATE TABLE custom_mcp_connectors (
 
   -- API key / Bearer fields (used when auth_type IN ('api_key', 'bearer'))
   encrypted_api_key TEXT,
+  api_key_placement TEXT NOT NULL DEFAULT 'header'
+    CHECK(api_key_placement IN ('header', 'query')),
   api_key_header_name TEXT DEFAULT 'Authorization',
   api_key_prefix TEXT DEFAULT 'Bearer', -- e.g. 'Bearer', 'Api-Key', ''
+  api_key_query_param TEXT,
 
   -- Additional request headers (encrypted JSON object: {"Header-Name": "value"})
   -- Sent on every MCP request. Escape hatch for servers that require
@@ -128,6 +133,8 @@ Secret fields use existing admin settings semantics:
 - non-empty string = replace encrypted value
 - empty string = normalized to omitted; it is not a clear sentinel
 - explicit clear flags perform clears where clearing is valid
+
+**Credential scope:** `credential_scope` only affects `api_key` and `bearer` connectors. `org` scope stores the API key/bearer token on the connector record and makes tools available without a per-user connection. `user` scope stores no connector-level API key; each user connects the custom connector from the integrations page and the token is stored in the user's `credentials` row with `credentialType = 'api_key'`. OAuth connectors are always user-scoped, and no-auth connectors are effectively org-scoped.
 
 ### Outbound URL Policy
 
@@ -283,11 +290,16 @@ Code exchange and refresh must use the stored method: send HTTP Basic client aut
 
 #### API Key / Bearer Token
 
-Admin provides a static API key or bearer token. Stored encrypted in `encrypted_api_key`. The key is sent on every request using the configured `api_key_header_name` (default `Authorization`) with the configured `api_key_prefix` (default `Bearer`).
+Admin chooses either an org-scoped or user-scoped credential.
 
-This is an org-level credential — all users share the same key. No per-user connection step needed. Connector tools are available to all users immediately.
+- Org-scoped API key/bearer connectors store the static secret encrypted in `encrypted_api_key`. No per-user connection step is needed, and connector tools are available to all users immediately.
+- User-scoped API key/bearer connectors do not store a connector-level secret. They appear in the user integrations page; each user enters their own key/token, which is stored in the unified `credentials` table as `credentialType = 'api_key'`.
 
-Implementation detail: API-key and bearer connectors must compose the configured auth header into `staticAuthHeader` before constructing `McpActionSource`. Additional static headers go through `additionalHeaders` only after validation as non-auth extension headers. Do not pass the decrypted API key as `access_token`, because `McpClient` treats `access_token` as `Authorization: Bearer <token>` and would ignore custom header names or double-prefix a preformatted bearer value.
+API-key connectors support either header placement (`api_key_header_name` plus optional `api_key_prefix`) or query placement (`api_key_query_param`). Bearer-token connectors always use `Authorization: Bearer <token>`.
+
+When a user connects a user-scoped API-key/bearer connector, the configure endpoint validates the submitted token by calling the MCP server with that token before creating the integration row. A failed initialize/tools-list request must reject the connection and leave no integration or credential row behind.
+
+Implementation detail: org-scoped API-key/bearer connectors compose the configured static auth source into `staticAuthHeader` or `staticAuthQueryParam` before constructing `McpActionSource`. User-scoped API-key/bearer connectors pass the resolved user token through `tokenAuthHeader` or `authQueryParam`. Additional static headers go through `additionalHeaders` only after validation as non-auth extension headers. Do not treat custom API keys as standard OAuth bearer tokens unless the connector is explicitly bearer-token auth, because that would ignore custom header/query placement or double-prefix preformatted values.
 
 ### MCP Client Updates
 
@@ -297,7 +309,7 @@ Targeted changes to `McpClient`:
 
 2. **Session reset on 404:** When a request returns 404 and the client has a cached `Mcp-Session-Id`, clear the session cache for that service and re-initialize. Retry the original request once.
 
-3. **Static headers:** Add `additionalHeaders?: Record<string, string>` for validated non-auth extension headers and `staticAuthHeader?: { name: string; value: string }` for generated API-key/bearer auth to `McpClient` constructor options. Merge these into every outgoing request in `buildFetchOpts()` so both `rpc()` and `notify()` requests include them. `buildFetchOpts()` also owns adding `MCP-Protocol-Version` when a negotiated version exists, so `notifications/initialized` and later requests are versioned consistently.
+3. **Static headers and custom auth sources:** Add `additionalHeaders?: Record<string, string>` for validated non-auth extension headers, `staticAuthHeader?: { name: string; value: string }`, `staticAuthQueryParam?: { name: string; value: string }`, and `tokenAuthHeader?: { name: string; prefix?: string | null }` to `McpClient` constructor options. Merge these into every outgoing request in `buildFetchOpts()` so both `rpc()` and `notify()` requests include them. Existing `authQueryParam` continues to support per-user tokens sent in a query parameter. `buildFetchOpts()` also owns adding `MCP-Protocol-Version` when a negotiated version exists, so `notifications/initialized` and later requests are versioned consistently.
 
 **Header merge and validation:** `additionalHeaders` are static non-auth extension headers only. Header names are case-insensitive; normalize names for validation, reject duplicates after normalization, reject invalid HTTP field names, and reject values containing CR, LF, or NUL.
 
@@ -305,7 +317,7 @@ Do not allow `additionalHeaders` to set client-owned, auth-owned, hop-by-hop, or
 
 Generated API-key/bearer auth headers are not arbitrary `additionalHeaders`. Preserve their provenance separately until `McpClient.buildFetchOpts()` merges headers. The generated API-key/bearer header may use `Authorization`, but only from the dedicated connector auth fields. If it collides with an additional header, fail connector resolution/config validation.
 
-`buildFetchOpts()` must fail closed on auth ambiguity. It must not send both an OAuth `access_token` Authorization header and a generated API-key/bearer auth header. It must not let any caller-provided header override `Content-Type`, `Accept`, `Authorization`, `MCP-Session-Id`, or `MCP-Protocol-Version`.
+`buildFetchOpts()` must fail closed on auth ambiguity. It must not send more than one token-derived auth source (`Authorization` bearer, custom token header, or token query parameter), and it must not combine a token-derived source with a generated static auth source. It must not let any caller-provided header override `Content-Type`, `Accept`, `Authorization`, `MCP-Session-Id`, or `MCP-Protocol-Version`.
 
 Merge order is: validated non-auth additional headers, client transport defaults, exactly one auth source, then negotiated MCP protocol/session headers.
 
@@ -329,7 +341,8 @@ No test endpoint. Tool discovery happens lazily through the normal `listTools()`
 - `authType`: required by the API and defaulted to `none` by the UI. Backend validates it and stores it as `auth_type`.
 - OAuth requires `oauth_client_id`; `oauth_client_secret` is optional. Authorization/token endpoints are required in the MVP and are stored explicitly. Optional `oauth_scopes` are stored as a space-separated string.
 - `oauth_token_endpoint_auth_method`: stored as `none`, `client_secret_basic`, or `client_secret_post` using the defaulting rules in the OAuth section unless explicitly overridden.
-- API key/bearer requires a non-empty secret on create and encrypts it into `encrypted_api_key`.
+- API key/bearer defaults to `credential_scope = 'org'`. Org-scoped connectors require a non-empty secret on create and encrypt it into `encrypted_api_key`. User-scoped connectors reject connector-level secrets and require each user to connect with their own key/token.
+- API key placement defaults to header. Query placement requires `api_key_query_param`. Bearer-token connectors always use the `Authorization` header with `Bearer` prefix.
 - `additional_headers`: if provided, must be a valid JSON object with string keys/values, pass header policy validation, and is encrypted into `encrypted_additional_headers`. Provided object replaces the whole header object.
 
 **Update validation:**
@@ -339,11 +352,14 @@ No test endpoint. Tool discovery happens lazily through the normal `listTools()`
   - omitted `oauth_client_secret` / `api_key` preserves the current encrypted value
   - non-empty secret replaces it
   - `clearClientSecret: true` clears `encrypted_oauth_client_secret` while staying in OAuth/public-PKCE mode
-  - API-key/bearer cannot remain active without an existing or replacement key
+  - Org-scoped API-key/bearer cannot remain active without an existing or replacement key
+  - User-scoped API-key/bearer must not store an org secret
 - If `authType` changes:
   - leaving OAuth clears `encrypted_oauth_client_secret`, `oauth_client_id`, scopes, and OAuth endpoints unless the new mode is OAuth
-  - leaving API-key/bearer clears `encrypted_api_key`, `api_key_header_name`, and `api_key_prefix`
-  - entering API-key/bearer requires a replacement secret
+  - leaving API-key/bearer clears `encrypted_api_key`, `api_key_header_name`, `api_key_prefix`, `api_key_placement`, and `api_key_query_param`
+  - entering org-scoped API-key/bearer requires a replacement secret
+  - entering user-scoped API-key/bearer requires no connector-level secret and existing per-user credentials are collected through the integrations flow
+- If the user credential contract changes (`oauth` ↔ user-scoped `api_key`/`bearer`, or any user-scoped connector becomes org-scoped/no-auth), delete existing user integration rows and credentials for the connector slug. Users must reconnect under the new credential contract; do not let stale `oauth2` and `api_key` rows compete for the same provider slug.
 - Endpoint override fields are non-secret and are returned/pre-populated. Omitted means preserve; explicit `null` or empty string clears.
 - Additional headers are write-only as values. Omitted means preserve the whole encrypted object; provided object replaces the whole object; `{}` or `clearAdditionalHeaders: true` clears it. Individual header value editing is not supported unless header names/metadata are separately stored and returned.
 - Additional headers are auth-mode independent and should be preserved across auth mode changes unless explicitly replaced/cleared.
@@ -373,8 +389,8 @@ Modeled after Claude.ai's "Add custom connector" dialog. A dialog (not an inline
 - **Advanced settings** (collapsible, collapsed by default):
   - **Auth type** (radio or select: None / OAuth / API Key / Bearer, default None)
   - If OAuth: **Client ID** (text), **Client Secret** (password, optional), **Token endpoint auth method** (Auto / Client secret basic / Client secret post), **Scopes** (text, optional), **Authorization Endpoint**, and **Token Endpoint**
-  - If API Key: **API Key** (password), **Header Name** (text), **Prefix** (text, optional)
-  - If Bearer: **Bearer Token** (password), stored as `Authorization: Bearer <token>`
+  - If API Key: **Credential scope** (Organization key / Per-user key), optional org-level **API Key** (password), **Placement** (Header / Query), **Header Name** + **Prefix** or **Query Parameter**
+  - If Bearer: **Credential scope** (Organization token / Per-user token), optional org-level **Bearer Token** (password), always sent as `Authorization: Bearer <token>`
   - Optional custom request headers are accepted as advanced static headers and stored encrypted. They must not be shown back to the client; only a `hasAdditionalHeaders` flag is returned.
 - Read-only helper text showing the **OAuth redirect URI** (e.g., `https://app.valet.dev/integrations/callback`) so admins know what to register with their OAuth provider
 - **Cancel** / **Add** buttons
@@ -389,9 +405,9 @@ The admin settings page shows a "Custom MCP Connectors" section with a table of 
 
 #### User Integrations Page
 
-Custom connectors with `authType: 'oauth'` appear in the integrations list alongside built-in integrations, visually distinguished with a "Custom" badge and a generic MCP icon (no per-connector icon in MVP). The existing `ConnectIntegrationDialog` handles the OAuth flow — the backend routes branch by resolving the requested service slug against active custom connectors. Client-side `AvailableService` and `ResolvedService` types must preserve `isCustomConnector`, and shared integration request/response types must allow arbitrary string service slugs for custom connectors while keeping the built-in `IntegrationService` union available for static services.
+Custom connectors with `authType: 'oauth'` or user-scoped `authType: 'api_key' | 'bearer'` appear in the integrations list alongside built-in integrations, visually distinguished with a "Custom" badge and a generic MCP icon (no per-connector icon in MVP). The existing `ConnectIntegrationDialog` handles OAuth and API-key entry — the backend routes branch by resolving the requested service slug against active custom connectors. Client-side `AvailableService` and `ResolvedService` types must preserve `isCustomConnector`, and shared integration request/response types must allow arbitrary string service slugs for custom connectors while keeping the built-in `IntegrationService` union available for static services.
 
-Custom connectors with `authType: 'none'` or `api_key` do not appear in the user integrations page (no per-user connection needed).
+Custom connectors with `authType: 'none'` or org-scoped `api_key`/`bearer` do not appear in the user integrations page because no per-user connection is needed.
 
 #### Action Policy UI
 
@@ -399,7 +415,7 @@ Custom connector tools appear in the action policy section after discovery. The 
 
 ### Security
 
-- OAuth client secrets, API keys, bearer tokens, and additional static request headers are encrypted at rest with PBKDF2, same as existing credentials.
+- OAuth client secrets, org-scoped API keys/bearer tokens, per-user custom MCP API keys/bearer tokens, and additional static request headers are encrypted at rest with PBKDF2, same as existing credentials.
 - Secrets are never returned in API responses. The API returns boolean flags such as `hasClientSecret`, `hasApiKey`, and `hasAdditionalHeaders`.
 - Admin-only CRUD. Users can only connect/disconnect their own credentials.
 - Custom connector slugs cannot collide with built-in services (validated at creation), are globally unique, and are immutable after creation.

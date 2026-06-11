@@ -32,6 +32,20 @@ import {
   useUpdatePersonaTools,
 } from '@/api/personas';
 import { useAvailableModels } from '@/api/sessions';
+import {
+  ModelSelector,
+  ModelSelectorContent,
+  ModelSelectorEmpty,
+  ModelSelectorGroup,
+  ModelSelectorInput,
+  ModelSelectorItem,
+  ModelSelectorList,
+  ModelSelectorLogo,
+  ModelSelectorName,
+  ModelSelectorSeparator,
+  ModelSelectorTrigger,
+} from '@/components/ui/model-selector';
+import { buildModelSelectorGroups } from '@/components/ui/model-selector-utils';
 import type { AgentPersona, PersonaVisibility } from '@/api/types';
 import { useAuthStore } from '@/stores/auth';
 
@@ -52,6 +66,7 @@ function PersonaEditorPage() {
   const navigate = useNavigate();
   const isNew = id === 'new';
   const user = useAuthStore((s) => s.user);
+  const orgModelPreferences = useAuthStore((s) => s.orgModelPreferences);
 
   const { data: persona, isLoading } = usePersona(isNew ? '' : id);
   const createPersona = useCreatePersona();
@@ -59,6 +74,15 @@ function PersonaEditorPage() {
   const updateFiles = useUpdatePersonaFiles();
   const deletePersonaMutation = useDeletePersona();
   const { data: availableModels } = useAvailableModels();
+  const modelGroups = React.useMemo(
+    () =>
+      buildModelSelectorGroups({
+        availableModels,
+        userModelPreferences: user?.modelPreferences,
+        orgModelPreferences,
+      }),
+    [availableModels, orgModelPreferences, user?.modelPreferences]
+  );
 
   const { data: personaSkills } = usePersonaSkills(isNew ? '' : id);
   const attachSkill = useAttachSkillToPersona();
@@ -76,6 +100,7 @@ function PersonaEditorPage() {
   const [instructions, setInstructions] = React.useState('');
   const [files, setFiles] = React.useState<PersonaFileDraft[]>([]);
   const [confirmDelete, setConfirmDelete] = React.useState(false);
+  const [modelSelectorOpen, setModelSelectorOpen] = React.useState(false);
 
   const canEdit = isNew || canEditPersona(persona, user);
   const isSaving = createPersona.isPending || updatePersona.isPending || updateFiles.isPending;
@@ -260,23 +285,91 @@ function PersonaEditorPage() {
                 />
               </MetadataRow>
               <MetadataRow label="Default Model">
-                <select
-                  value={defaultModel}
-                  onChange={(e) => setDefaultModel(e.target.value)}
-                  disabled={!canEdit}
-                  className="w-full cursor-pointer appearance-none rounded-md border border-neutral-200 bg-white px-3 py-2 text-sm text-neutral-900 transition-colors focus:border-neutral-500 focus:outline-none focus:ring-1 focus:ring-neutral-500 disabled:cursor-not-allowed disabled:opacity-50 dark:border-neutral-600 dark:bg-neutral-900 dark:text-neutral-100"
-                >
-                  <option value="">Auto (session default)</option>
-                  {availableModels?.map((provider) => (
-                    <optgroup key={provider.provider} label={provider.provider}>
-                      {provider.models.map((model) => (
-                        <option key={model.id} value={model.id}>
-                          {model.name}
-                        </option>
+                <ModelSelector open={modelSelectorOpen} onOpenChange={setModelSelectorOpen}>
+                  <ModelSelectorTrigger asChild>
+                    <button
+                      type="button"
+                      disabled={!canEdit}
+                      className="flex w-full items-center gap-2 rounded-md border border-neutral-200 bg-white px-3 py-2 text-sm transition-colors hover:border-neutral-300 focus:outline-none focus:ring-1 focus:ring-neutral-500 disabled:cursor-not-allowed disabled:opacity-50 dark:border-neutral-600 dark:bg-neutral-900 dark:text-neutral-100"
+                    >
+                      {defaultModel ? (
+                        (() => {
+                          const flat = availableModels
+                            ?.flatMap((p) => p.models.map((m) => ({ ...m, provider: p.provider })))
+                            ?.find((m) => m.id === defaultModel);
+                          return flat ? (
+                            <>
+                              <ModelSelectorLogo provider={flat.provider} />
+                              <ModelSelectorName>{flat.name}</ModelSelectorName>
+                            </>
+                          ) : (
+                            <ModelSelectorName>{defaultModel}</ModelSelectorName>
+                          );
+                        })()
+                      ) : (
+                        <span className="flex-1 text-left text-neutral-500">Auto (session default)</span>
+                      )}
+                      <ChevronDownIcon className="ml-auto h-4 w-4 shrink-0 text-neutral-400" />
+                    </button>
+                  </ModelSelectorTrigger>
+                  <ModelSelectorContent>
+                    <ModelSelectorInput placeholder="Search models..." />
+                    <ModelSelectorList>
+                      <ModelSelectorEmpty>No models found.</ModelSelectorEmpty>
+                      <ModelSelectorItem
+                        value="__auto__"
+                        onSelect={() => { setDefaultModel(''); setModelSelectorOpen(false); }}
+                      >
+                        <ModelSelectorName className="text-neutral-500">Auto (session default)</ModelSelectorName>
+                        {!defaultModel && <CheckIcon className="ml-auto h-4 w-4 shrink-0" />}
+                      </ModelSelectorItem>
+                      <ModelSelectorSeparator />
+                      {modelGroups.preferredGroup && (
+                        <>
+                          <ModelSelectorGroup heading={modelGroups.preferredGroup.heading}>
+                            {modelGroups.preferredGroup.models.map((m) => (
+                              <ModelSelectorItem
+                                key={m.id}
+                                value={m.id}
+                                onSelect={() => {
+                                  setDefaultModel(m.id);
+                                  setModelSelectorOpen(false);
+                                }}
+                              >
+                                <ModelSelectorLogo provider={m.provider} />
+                                <ModelSelectorName>{m.name}</ModelSelectorName>
+                                {defaultModel === m.id && (
+                                  <CheckIcon className="ml-auto h-4 w-4 shrink-0" />
+                                )}
+                              </ModelSelectorItem>
+                            ))}
+                          </ModelSelectorGroup>
+                          <ModelSelectorSeparator />
+                        </>
+                      )}
+                      {modelGroups.providerGroups.map((provider) => (
+                        <ModelSelectorGroup key={provider.provider} heading={provider.provider}>
+                          {provider.models.map((m) => (
+                            <ModelSelectorItem
+                              key={m.id}
+                              value={m.id}
+                              onSelect={() => {
+                                setDefaultModel(m.id);
+                                setModelSelectorOpen(false);
+                              }}
+                            >
+                              <ModelSelectorLogo provider={provider.provider} />
+                              <ModelSelectorName>{m.name}</ModelSelectorName>
+                              {defaultModel === m.id && (
+                                <CheckIcon className="ml-auto h-4 w-4 shrink-0" />
+                              )}
+                            </ModelSelectorItem>
+                          ))}
+                        </ModelSelectorGroup>
                       ))}
-                    </optgroup>
-                  ))}
-                </select>
+                    </ModelSelectorList>
+                  </ModelSelectorContent>
+                </ModelSelector>
               </MetadataRow>
               <MetadataRow label="Visibility">
                 <PersonaVisibilityControl
@@ -518,6 +611,22 @@ function EmptyTabMessage({ children }: { children: React.ReactNode }) {
     <p className="rounded-md border border-dashed border-neutral-200 px-4 py-6 text-center text-sm text-neutral-400 dark:border-neutral-700">
       {children}
     </p>
+  );
+}
+
+function CheckIcon({ className }: { className?: string }) {
+  return (
+    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+      <path d="M20 6 9 17l-5-5" />
+    </svg>
+  );
+}
+
+function ChevronDownIcon({ className }: { className?: string }) {
+  return (
+    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+      <path d="m6 9 6 6 6-6" />
+    </svg>
   );
 }
 

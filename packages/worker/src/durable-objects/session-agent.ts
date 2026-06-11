@@ -1,7 +1,7 @@
 import type { Env } from '../env.js';
 import type { AppDb } from '../lib/drizzle.js';
 import { getDb } from '../lib/drizzle.js';
-import { updateSessionStatus, updateSessionMetrics, addActiveSeconds, updateSessionGitState, upsertSessionFileChanged, updateSessionTitle, getSession, getSessionGitState, getChildSessions, listUserChannelBindings, getUserById, getUsersByIds, createMailboxMessage, getOrgSettings, isNotificationWebEnabled, batchInsertAnalyticsEvents, batchUpsertMessages, updateUserDiscoveredModels, setCatalogCache, updateThread, incrementThreadMessageCount, getThreadOriginChannel } from '../lib/db.js';
+import { updateSessionStatus, updateSessionMetrics, addActiveSeconds, updateSessionGitState, upsertSessionFileChanged, updateSessionTitle, getSession, getSessionGitState, getChildSessions, listUserChannelBindings, getUserById, getUsersByIds, createMailboxMessage, getOrgSettings, isNotificationWebEnabled, batchInsertAnalyticsEvents, batchUpsertMessages, updateUserDiscoveredModels, setCatalogCache, updateThread, incrementThreadMessageCount, getThreadOriginChannel, getOrchestratorIdentity, getUserSlackIdentityLink, getWorkflowNameByExecutionId } from '../lib/db.js';
 import { getCredential, type CredentialResult } from '../services/credentials.js';
 import { memRead, memWrite, memPatch, memRm, memSearch } from '../services/session-memory.js';
 import { getSlackBotToken } from '../services/slack.js';
@@ -52,6 +52,10 @@ import {
   SUPPORTED_FILE_TYPES_DESCRIPTION,
 } from '../lib/utils/prompt-validation.js';
 import { parseQueuedWorkflowPayload, deriveRuntimeStates } from '../lib/utils/runtime.js';
+import { ensureChannelBinding } from '../lib/db/channels.js';
+import { getOrgSlackInstallAny } from '../lib/db/slack.js';
+import { registerChannelThread } from '../lib/db/channel-threads.js';
+import { channelScopeKey } from '@valet/shared';
 
 // ─── WebSocket Message Types ───────────────────────────────────────────────
 
@@ -336,6 +340,11 @@ export class SessionAgentDO {
   private runnerLink!: RunnerLink;
   private sessionState!: SessionState;
   private lifecycle!: SessionLifecycle;
+
+  /** Tracks the workflow execution ID for direct-dispatch workflow turns
+   *  (where no queue row exists). Set when handleWorkflowExecuteDispatch
+   *  sends directly to the runner; cleared on turn completion. */
+  private _activeWorkflowExecutionId: string | undefined;
 
   private static readonly RUNNER_GRACE_PERIOD_MS = 60_000;
   private static readonly MODAL_SANDBOX_MAX_LIFETIME_MS = 24 * 60 * 60 * 1000;
@@ -1016,6 +1025,7 @@ export class SessionAgentDO {
           console.log(`[SessionAgentDO] Disconnect grace expired — reverting processing→queued`);
           this.promptQueue.revertProcessingToQueued();
           this.promptQueue.runnerBusy = false;
+          this._activeWorkflowExecutionId = undefined;
           if (this.promptQueue.length > 0 && !this.promptQueue.idleQueuedSince) {
             this.promptQueue.idleQueuedSince = Date.now();
             this.rescheduleIdleAlarm();
@@ -1183,6 +1193,7 @@ export class SessionAgentDO {
           case 'revert_and_drain':
             this.promptQueue.revertProcessingToQueued();
             this.promptQueue.runnerBusy = false;
+            this._activeWorkflowExecutionId = undefined;
             this.promptQueue.clearDispatchTimers();
             this.promptQueue.idleQueuedSince = 0;
             if (this.runnerLink.isConnected) {
@@ -1200,6 +1211,7 @@ export class SessionAgentDO {
             break;
           case 'mark_not_busy':
             this.promptQueue.runnerBusy = false;
+            this._activeWorkflowExecutionId = undefined;
             this.promptQueue.clearDispatchTimers();
             if (this.promptQueue.length > 0 && !this.promptQueue.idleQueuedSince) {
               this.promptQueue.idleQueuedSince = Date.now();
@@ -4190,6 +4202,7 @@ export class SessionAgentDO {
       } else {
         console.log(`[SessionAgentDO] handlePromptComplete: queue empty, setting runnerBusy=false`);
         this.promptQueue.runnerBusy = false;
+        this._activeWorkflowExecutionId = undefined;
         this.broadcastToClients({
           type: 'status',
           data: { runnerBusy: false },
@@ -4200,6 +4213,7 @@ export class SessionAgentDO {
       // Ensure runnerBusy is cleared even on error to prevent permanent stuck state
       console.error('[SessionAgentDO] handlePromptComplete error, forcing runnerBusy=false:', err);
       this.promptQueue.runnerBusy = false;
+      this._activeWorkflowExecutionId = undefined;
       if (completedChannelKey) {
         this.promptQueue.setChannelBusy(completedChannelKey, false);
       }
@@ -4845,6 +4859,10 @@ export class SessionAgentDO {
       this.promptQueue.runnerBusy = false;
       return queueWorkflowDispatch('runner_send_failed');
     }
+
+    // Track execution ID so isUnattended checks during this turn know it's a
+    // workflow execution (no queue row exists on the direct-dispatch path).
+    this._activeWorkflowExecutionId = executionId;
 
     this.emitAuditEvent(
       'workflow.dispatch',
@@ -6285,6 +6303,33 @@ export class SessionAgentDO {
         return;
       }
 
+      // When Valet sends a new top-level Slack message (2-part channelId = teamId:slackChannelId),
+      // bind the resulting thread back to this session so replies route here instead of creating
+      // a new session via the orchestrator. Fire-and-forget: binding failure is non-fatal.
+      if (channelType === 'slack' && result.messageId) {
+        const parts = effectiveChannelId.split(':');
+        if (parts.length === 2) {
+          const threadChannelId = `${effectiveChannelId}:${result.messageId}`;
+          const slackChannelId = parts[1];
+          const sessionId = this.sessionState.sessionId;
+          this.resolveOrgId().then((orgId) =>
+            ensureChannelBinding(this.appDb, {
+              sessionId,
+              channelType: 'slack',
+              channelId: threadChannelId,
+              userId,
+              orgId: orgId ?? 'default',
+              scopeKey: channelScopeKey(userId, 'slack', threadChannelId),
+              queueMode: 'followup',
+              slackChannelId,
+              slackThreadTs: result.messageId,
+            }),
+          ).catch((err) => {
+            console.warn('[SessionAgentDO] Failed to create Slack thread binding:', err instanceof Error ? err.message : String(err));
+          });
+        }
+      }
+
       this.runnerLink.send({ type: 'channel-reply-result', requestId, success: true } as any);
     } catch (err) {
       this.runnerLink.send({
@@ -6634,6 +6679,83 @@ export class SessionAgentDO {
       }
     }
 
+    // When a DM action succeeds, bind the DM channel back to this session so replies route
+    // here instead of falling through to the orchestrator. Fire-and-forget: binding failure
+    // is non-fatal.
+    //
+    // Two bindings are created to cover both reply styles:
+    // - 2-part (teamId:channelId): for regular DM replies — Slack sends no thread_ts, so the
+    //   event handler computes a 2-part scope key.
+    // - 3-part (teamId:channelId:ts): for explicit "Reply in thread" — Slack sets thread_ts to
+    //   the bot message's ts, producing a 3-part scope key.
+    //
+    // send_message to non-DM channels is skipped: slack-events.ts ignores non-DM events, so
+    // those bindings would never be looked up.
+    if (result.success) {
+      const isDmAction = actionId === 'slack.dm_owner' || actionId === 'slack.dm_user';
+      const isSendToDm = actionId === 'slack.send_message' &&
+        !(typeof params.thread_ts === 'string' && params.thread_ts.length > 0);
+      if (isDmAction || isSendToDm) {
+        const slackData = result.data as { ts?: string; channel?: string } | undefined;
+        const slackChannel = slackData?.channel;
+        const slackTs = slackData?.ts;
+        if (slackChannel && (isDmAction || slackChannel.startsWith('D'))) {
+          const sessionId = this.sessionState.sessionId;
+          // Capture the current processing thread ID so we can pre-register the
+          // channel→thread mapping. This routes Slack replies back to the same
+          // orchestrator thread that triggered the send, instead of spawning a new one.
+          const currentThreadId = this.promptQueue.getProcessingThreadId();
+          getOrgSlackInstallAny(this.appDb, this.env.ENCRYPTION_KEY)
+            .then((install) => {
+              if (!install?.teamId) return;
+              const { teamId } = install;
+              const dmChannelId = `${teamId}:${slackChannel}`;
+              const threadChannelId = slackTs ? `${teamId}:${slackChannel}:${slackTs}` : null;
+              return this.resolveOrgId().then(async (orgId) => {
+                const base = {
+                  sessionId,
+                  channelType: 'slack' as const,
+                  userId,
+                  orgId: orgId ?? 'default',
+                  queueMode: 'followup' as const,
+                  slackChannelId: slackChannel,
+                };
+                // 2-part: catches regular DM replies (no thread_ts)
+                await ensureChannelBinding(this.appDb, {
+                  ...base,
+                  channelId: dmChannelId,
+                  scopeKey: channelScopeKey(userId, 'slack', dmChannelId),
+                });
+                // 3-part: catches explicit "Reply in thread" (thread_ts = this message's ts)
+                if (threadChannelId) {
+                  await ensureChannelBinding(this.appDb, {
+                    ...base,
+                    channelId: threadChannelId,
+                    scopeKey: channelScopeKey(userId, 'slack', threadChannelId),
+                    slackThreadTs: slackTs,
+                  });
+                }
+                // Pre-register the channel→thread mapping so Slack replies route
+                // to the existing orchestrator thread rather than spawning a new one.
+                if (currentThreadId && slackTs) {
+                  await registerChannelThread(this.env.DB, {
+                    channelType: 'slack',
+                    channelId: slackChannel,
+                    externalThreadId: slackTs,
+                    userId,
+                    sessionId,
+                    threadId: currentThreadId,
+                  });
+                }
+              });
+            })
+            .catch((err) => {
+              console.warn('[SessionAgentDO] Failed to create Slack DM binding:', err instanceof Error ? err.message : String(err));
+            });
+        }
+      }
+    }
+
     // Send result to runner — include images so the agent can post them
     // out-of-band via /api/image for vision context.
     if (!result.success) {
@@ -6672,7 +6794,17 @@ export class SessionAgentDO {
       }
 
       if (requestId) {
-        this.runnerLink.send({ type: 'call-tool-result', requestId, error: `Action "${toolId}" approval expired` } as any);
+        const wfCtx = this.promptQueue.getProcessingWorkflowContext();
+        const isUnattended =
+          wfCtx?.queueType === 'workflow_execute' ||
+          !!this._activeWorkflowExecutionId ||
+          this.promptQueue.getProcessingAuthorEmail() === 'scheduled-task@valet.local';
+        const expiryError = isUnattended
+          ? `Action "${toolId}" approval request expired without a response. ` +
+            `This likely means the session was running unattended (scheduled task or automation) and no one saw the approval prompt. ` +
+            `Do not retry this action automatically — instead, let the user know that approval is needed and ask them to re-run or approve it manually.`
+          : `Action "${toolId}" approval request expired without a response.`;
+        this.runnerLink.send({ type: 'call-tool-result', requestId, error: expiryError } as any);
       } else {
         console.warn(`[SessionAgentDO] Approval prompt ${promptId} expired with no request_id — runner may be stuck`);
       }
@@ -7082,7 +7214,7 @@ export class SessionAgentDO {
       // 1. Origin target: the channel stored in the approval context at creation time
       //    (captured from the originating prompt when the approval was created)
       const originTarget = this.getPromptOriginTarget(prompt.context);
-      if (originTarget && originTarget.channelType !== 'web') {
+      if (originTarget && originTarget.channelType !== 'web' && originTarget.channelType !== 'thread') {
         const key = `${originTarget.channelType}:${originTarget.channelId}`;
         seen.add(key);
         targets.push(originTarget);
@@ -7092,7 +7224,9 @@ export class SessionAgentDO {
       //    origin if a different Slack thread is subscribed to the same orchestrator
       //    thread). Read from the processing queue row, not a mutable cursor.
       const callerCh = this.promptQueue.getProcessingChannelTarget();
-      if (callerCh?.channelType && callerCh?.channelId && callerCh.channelType !== 'web') {
+      if (callerCh?.channelType && callerCh?.channelId
+          && callerCh.channelType !== 'web'
+          && callerCh.channelType !== 'thread') {
         const key = `${callerCh.channelType}:${callerCh.channelId}`;
         if (!seen.has(key)) {
           seen.add(key);
@@ -7100,20 +7234,115 @@ export class SessionAgentDO {
         }
       }
 
-      // Fail closed: if we have no non-web channel targets, check whether this
-      // session even has external channel bindings. If it does, something went
-      // wrong with channel context propagation — log loudly and surface an error
-      // to the web UI. If it doesn't (pure web-only session), this is expected
-      // and we return silently — the approval is already visible in the web UI
-      // via broadcastToClients (called before this method).
+      // Fail closed: if we have no non-web channel targets, attempt a Slack DM
+      // fallback for unattended runs (scheduled tasks, workflow executions).
+      // If the user has a Slack identity, we open a DM and send the prompt there.
+      // If no Slack identity or DM resolution fails, fall back to web UI error.
       if (targets.length === 0) {
+        const wfCtx = this.promptQueue.getProcessingWorkflowContext();
+        const isUnattended =
+          wfCtx?.queueType === 'workflow_execute' ||
+          !!this._activeWorkflowExecutionId ||
+          this.promptQueue.getProcessingAuthorEmail() === 'scheduled-task@valet.local';
+        if (!isUnattended) {
+          // Attended web-only session: approval is already visible in the web UI.
+          return;
+        }
+
+        // Attempt Slack DM fallback for unattended runs (scheduled tasks, workflow executions).
+        const slackLink = await getUserSlackIdentityLink(this.appDb, userId).catch((err) => {
+          console.warn('[SessionAgentDO] getUserSlackIdentityLink failed for DM fallback:', err instanceof Error ? err.message : String(err));
+          return null;
+        });
+        if (slackLink?.externalId) {
+          const dmTarget = await this.channelRouter
+            .resolveUserDmTarget('slack', userId, slackLink.externalId)
+            .catch(() => null);
+          if (dmTarget) {
+            const provenanceLabel = await this.buildApprovalProvenanceLabel(userId);
+            const dmPrompt: InteractivePrompt = {
+              ...prompt,
+              context: { ...(prompt.context ?? {}), provenanceLabel },
+            };
+            const refs = await this.channelRouter.sendInteractivePrompt({ userId, targets: [dmTarget], prompt: dmPrompt });
+            if (refs.length > 0) {
+              this.ctx.storage.sql.exec(
+                'UPDATE interactive_prompts SET channel_refs = ? WHERE id = ?',
+                JSON.stringify(refs),
+                promptId,
+              );
+
+              // Bind the DM channel so any Slack replies (not just button clicks) route
+              // back to this session instead of spawning a new one via the orchestrator.
+              // Mirrors the binding logic in executeActionAndSend for dm_owner/dm_user.
+              const dmRef = refs[0].ref;
+              if (dmRef.channelId && dmRef.messageId) {
+                const slackDmChannel = dmRef.channelId;
+                const slackDmTs = dmRef.messageId;
+                const sessionId = this.sessionState.sessionId;
+                const currentThreadId = this.promptQueue.getProcessingThreadId();
+                getOrgSlackInstallAny(this.appDb, this.env.ENCRYPTION_KEY)
+                  .then((install) => {
+                    if (!install?.teamId) return;
+                    const { teamId } = install;
+                    const dmChannelId = `${teamId}:${slackDmChannel}`;
+                    const threadChannelId = `${teamId}:${slackDmChannel}:${slackDmTs}`;
+                    return this.resolveOrgId().then(async (orgId) => {
+                      const base = {
+                        sessionId,
+                        channelType: 'slack' as const,
+                        userId,
+                        orgId: orgId ?? 'default',
+                        queueMode: 'followup' as const,
+                        slackChannelId: slackDmChannel,
+                      };
+                      // 2-part: regular DM replies (no thread_ts)
+                      await ensureChannelBinding(this.appDb, {
+                        ...base,
+                        channelId: dmChannelId,
+                        scopeKey: channelScopeKey(userId, 'slack', dmChannelId),
+                      });
+                      // 3-part: explicit "Reply in thread" on the approval message
+                      await ensureChannelBinding(this.appDb, {
+                        ...base,
+                        channelId: threadChannelId,
+                        scopeKey: channelScopeKey(userId, 'slack', threadChannelId),
+                        slackThreadTs: slackDmTs,
+                      });
+                      // Pre-register channel→thread so replies land in this
+                      // orchestrator thread, not a fresh one.
+                      if (currentThreadId) {
+                        await registerChannelThread(this.env.DB, {
+                          channelType: 'slack',
+                          channelId: slackDmChannel,
+                          externalThreadId: slackDmTs,
+                          userId,
+                          sessionId,
+                          threadId: currentThreadId,
+                        });
+                      }
+                    });
+                  })
+                  .catch((err) => {
+                    console.warn('[SessionAgentDO] Failed to create Slack DM binding after approval fallback:', err instanceof Error ? err.message : String(err));
+                  });
+              }
+
+              return;  // delivery succeeded — done
+            }
+            console.warn(`[SessionAgentDO] DM fallback delivery failed for prompt ${promptId} — falling through to web-UI error path`);
+            // fall through to hasExternalBindings error path below
+          }
+        }
+
+        // No Slack identity or DM resolution failed — fall back to web UI error
         const hasExternalBindings = (await listUserChannelBindings(this.appDb, userId))
-          .some(b => b.channelType !== 'web');
+          .some((b) => b.channelType !== 'web');
         if (hasExternalBindings) {
           console.error(
             `[SessionAgentDO] sendChannelInteractivePrompts: No origin or caller channel for prompt ${promptId} — refusing to broadcast. ` +
             `Session has external channel bindings but no channel context was propagated. ` +
-            `Approval is visible in web UI only. sessionId=${sessionId} userId=${userId}`
+            `Approval is visible in web UI only. sessionId=${sessionId} userId=${userId}`,
           );
           this.broadcastToClients({
             type: 'error',
@@ -7140,6 +7369,29 @@ export class SessionAgentDO {
       }
     } catch (err) {
       console.error('[SessionAgentDO] sendChannelInteractivePrompts failed:', err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  private async buildApprovalProvenanceLabel(userId: string): Promise<string> {
+    const wfCtx = this.promptQueue.getProcessingWorkflowContext();
+    const executionId = wfCtx?.workflowExecutionId ?? this._activeWorkflowExecutionId ?? null;
+    if ((wfCtx?.queueType === 'workflow_execute' || !!this._activeWorkflowExecutionId) && executionId) {
+      const workflowName = await getWorkflowNameByExecutionId(this.appDb, executionId).catch(() => null);
+      const agentName = await this.resolveAgentDisplayName(userId);
+      return workflowName
+        ? `${agentName} requested this while running workflow *${workflowName}*`
+        : `${agentName} requested this while running a workflow`;
+    }
+    const agentName = await this.resolveAgentDisplayName(userId);
+    return `${agentName} requested this while running a scheduled task (no active session was connected)`;
+  }
+
+  private async resolveAgentDisplayName(userId: string): Promise<string> {
+    try {
+      const identity = await getOrchestratorIdentity(this.appDb, userId);
+      return identity?.name ?? 'Your Valet assistant';
+    } catch {
+      return 'Your Valet assistant';
     }
   }
 
@@ -7251,14 +7503,6 @@ export class SessionAgentDO {
     if (envVars.ANTHROPIC_API_KEY) config.providerKeys!.anthropic = envVars.ANTHROPIC_API_KEY;
     if (envVars.OPENAI_API_KEY) config.providerKeys!.openai = envVars.OPENAI_API_KEY;
     if (envVars.GOOGLE_API_KEY) config.providerKeys!.google = envVars.GOOGLE_API_KEY;
-
-    // Disable parallel tools if no key
-    if (!envVars.PARALLEL_API_KEY) {
-      config.tools!.parallel_web_search = false;
-      config.tools!.parallel_web_extract = false;
-      config.tools!.parallel_deep_research = false;
-      config.tools!.parallel_data_enrichment = false;
-    }
 
     // Re-fetch custom providers from D1 so admin changes take effect immediately
     try {

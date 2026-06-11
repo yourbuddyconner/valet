@@ -183,6 +183,8 @@ export async function ensureChannelBinding(
      *  Must match the format used by the inbound event handler's binding lookup. */
     scopeKey: string;
     queueMode?: QueueMode;
+    slackChannelId?: string;
+    slackThreadTs?: string;
   },
 ): Promise<void> {
   const scopeKey = data.scopeKey;
@@ -196,6 +198,8 @@ export async function ensureChannelBinding(
     orgId: data.orgId,
     queueMode: data.queueMode || 'followup',
     collectDebounceMs: 3000,
+    slackChannelId: data.slackChannelId ?? null,
+    slackThreadTs: data.slackThreadTs ?? null,
   }).onConflictDoUpdate({
     target: [channelBindings.channelType, channelBindings.channelId],
     set: {
@@ -203,6 +207,8 @@ export async function ensureChannelBinding(
       scopeKey: sql`excluded.scope_key`,
       userId: sql`excluded.user_id`,
       queueMode: sql`excluded.queue_mode`,
+      slackChannelId: sql`excluded.slack_channel_id`,
+      slackThreadTs: sql`excluded.slack_thread_ts`,
     },
   });
 }

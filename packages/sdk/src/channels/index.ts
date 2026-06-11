@@ -162,6 +162,11 @@ export interface ChannelTransport {
 
   /** Parse a composite channelId into a ChannelTarget. Transports with encoded IDs (e.g. Slack channel:thread_ts) implement this. */
   parseTarget?(channelId: string): ChannelTarget;
+
+  /** Resolve a direct-message channel target for the given platform user ID.
+   *  Used as a DM fallback when no real channel context is available (unattended runs).
+   *  Returns null if DM resolution fails or is unsupported. */
+  resolveUserDmTarget?(platformUserId: string, ctx: ChannelContext): Promise<ChannelTarget | null>;
 }
 
 // ─── Integration Provider (re-exported from integrations module) ─────────────

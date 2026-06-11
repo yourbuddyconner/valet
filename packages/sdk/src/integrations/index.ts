@@ -102,6 +102,7 @@ export interface IntegrationProvider {
    *  When set, uses MCP OAuth (dynamic client registration + PKCE) instead of env-var OAuth. */
   readonly mcpServerUrl?: string;
   readonly isCustomConnector?: boolean;
+  readonly credentialScope?: 'org' | 'user';
 
   validateCredentials(credentials: IntegrationCredentials): boolean;
   testConnection(credentials: IntegrationCredentials): Promise<boolean>;

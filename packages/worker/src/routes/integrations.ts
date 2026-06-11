@@ -173,6 +173,11 @@ integrationsRouter.get('/', async (c) => {
         entities: i.config.entities,
       },
       createdAt: i.createdAt,
+      ...(customContext.connectors.has(i.service) ? {
+        displayName: customContext.connectors.get(i.service)?.displayName,
+        authType: mapCustomConnectorAuthType(customContext.connectors.get(i.service)?.authType),
+        isCustomConnector: true,
+      } : {}),
     })),
     ...orgIntegrations.map((i) => ({
       id: i.id,
@@ -190,7 +195,38 @@ integrationsRouter.get('/', async (c) => {
     return customContext.connectors.has(i.service);
   });
 
-  return c.json({ integrations: sanitized });
+  // Synthesize active entries for org-managed connectors (api_key / bearer auth).
+  // These have no per-user credentials — the org key is already configured.
+  const sanitizedServices = new Set(sanitized.map((i) => i.service));
+  const orgManagedEntries: Array<{
+    id: string;
+    service: string;
+    status: 'active';
+    scope: 'org';
+    config: { entities: string[] };
+    createdAt: string;
+    displayName: string;
+    authType: 'api_key' | 'bearer';
+    isOrgManagedConnector: true;
+  }> = [];
+  for (const connector of customContext.connectors.values()) {
+    if (connector.authType !== 'api_key' && connector.authType !== 'bearer') continue;
+    if (connector.credentialScope !== 'org') continue;
+    if (sanitizedServices.has(connector.serviceSlug)) continue;
+    orgManagedEntries.push({
+      id: `custom:${connector.serviceSlug}`,
+      service: connector.serviceSlug,
+      status: 'active',
+      scope: 'org',
+      config: { entities: [] },
+      createdAt: new Date().toISOString(),
+      displayName: connector.displayName,
+      authType: connector.authType === 'bearer' ? 'bearer' : 'api_key',
+      isOrgManagedConnector: true,
+    });
+  }
+
+  return c.json({ integrations: [...sanitized, ...orgManagedEntries] });
 });
 
 /**
@@ -238,10 +274,12 @@ integrationsRouter.get('/available', async (c) => {
 
   for (const connector of customContext.connectors.values()) {
     if (connector.authType === 'none') continue;
+    // Org-scoped api_key and bearer connectors are preconfigured — no per-user connection needed.
+    if ((connector.authType === 'api_key' || connector.authType === 'bearer') && connector.credentialScope === 'org') continue;
     available.push({
       service: connector.serviceSlug,
       displayName: connector.displayName,
-      authType: connector.authType === 'oauth' ? 'oauth2' : connector.authType,
+      authType: connector.authType === 'oauth' ? 'oauth2' : connector.authType === 'bearer' ? 'bearer' : 'api_key',
       supportedEntities: [],
       hasActions: true,
       hasTriggers: false,
@@ -680,3 +718,10 @@ integrationsRouter.post('/:service/oauth/callback', async (c) => {
 
   return c.json({ credentials });
 });
+
+function mapCustomConnectorAuthType(authType: string | undefined): 'oauth2' | 'api_key' | 'bearer' | undefined {
+  if (authType === 'oauth') return 'oauth2';
+  if (authType === 'bearer') return 'bearer';
+  if (authType === 'api_key') return 'api_key';
+  return undefined;
+}

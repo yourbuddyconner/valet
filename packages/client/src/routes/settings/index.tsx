@@ -11,6 +11,22 @@ import { Button } from '@/components/ui/button';
 import { APIKeyList } from '@/components/settings/api-key-list';
 import { useTheme } from '@/hooks/use-theme';
 import { ActionPolicyOverridesSection } from '@/components/settings/action-policy-overrides-section';
+import {
+  ModelSelector,
+  ModelSelectorContent,
+  ModelSelectorEmpty,
+  ModelSelectorGroup,
+  ModelSelectorInput,
+  ModelSelectorItem,
+  ModelSelectorList,
+  ModelSelectorLogo,
+  ModelSelectorName,
+  ModelSelectorTrigger,
+} from '@/components/ui/model-selector';
+import {
+  getCustomModelCandidate,
+  type FlatModel,
+} from '@/components/settings/model-preferences-utils';
 
 const TABS = [
   { id: 'general', label: 'General' },
@@ -1082,12 +1098,6 @@ function ToggleSwitch({
   );
 }
 
-interface FlatModel {
-  id: string;
-  name: string;
-  provider: string;
-}
-
 function flattenModels(providers: ProviderModels[]): FlatModel[] {
   return (providers ?? []).flatMap((p) =>
     (p.models ?? []).map((m) => ({ id: m.id, name: m.name, provider: p.provider }))
@@ -1099,57 +1109,25 @@ function ModelPreferencesSection() {
   const updateProfile = useUpdateProfile();
   const { data: availableModels } = useAvailableModels();
   const [models, setModels] = React.useState<string[]>([]);
-  const [newModel, setNewModel] = React.useState('');
   const [saved, setSaved] = React.useState(false);
   const [dragIndex, setDragIndex] = React.useState<number | null>(null);
-  const [showDropdown, setShowDropdown] = React.useState(false);
-  const [highlightedIndex, setHighlightedIndex] = React.useState(0);
-  const inputRef = React.useRef<HTMLInputElement>(null);
-  const dropdownRef = React.useRef<HTMLDivElement>(null);
+  const [selectorOpen, setSelectorOpen] = React.useState(false);
+  const [modelQuery, setModelQuery] = React.useState('');
 
   React.useEffect(() => {
     setModels(user?.modelPreferences ?? []);
   }, [user?.modelPreferences]);
 
   const allModels = React.useMemo(() => flattenModels(availableModels ?? []), [availableModels]);
-
-  const filteredModels = React.useMemo(() => {
-    const query = newModel.toLowerCase().trim();
-    const candidates = allModels.filter((m) => !models.includes(m.id));
-    if (!query) return candidates;
-    return candidates.filter(
-      (m) =>
-        m.name.toLowerCase().includes(query) ||
-        m.id.toLowerCase().includes(query) ||
-        m.provider.toLowerCase().includes(query)
-    );
-  }, [newModel, allModels, models]);
-
-  // Close dropdown on outside click
-  React.useEffect(() => {
-    function handleClick(e: MouseEvent) {
-      if (
-        dropdownRef.current && !dropdownRef.current.contains(e.target as Node) &&
-        inputRef.current && !inputRef.current.contains(e.target as Node)
-      ) {
-        setShowDropdown(false);
-      }
-    }
-    document.addEventListener('mousedown', handleClick);
-    return () => document.removeEventListener('mousedown', handleClick);
-  }, []);
-
-  // Reset highlight when filtered list changes
-  React.useEffect(() => {
-    setHighlightedIndex(0);
-  }, [filteredModels.length]);
-
-  // Scroll highlighted item into view
-  React.useEffect(() => {
-    if (!showDropdown || !dropdownRef.current) return;
-    const item = dropdownRef.current.children[highlightedIndex] as HTMLElement | undefined;
-    item?.scrollIntoView({ block: 'nearest' });
-  }, [highlightedIndex, showDropdown]);
+  const customModelCandidate = React.useMemo(
+    () =>
+      getCustomModelCandidate({
+        query: modelQuery,
+        selectedModelIds: models,
+        knownModels: allModels,
+      }),
+    [allModels, modelQuery, models]
+  );
 
   const hasChanges = JSON.stringify(models) !== JSON.stringify(user?.modelPreferences ?? []);
 
@@ -1165,13 +1143,15 @@ function ModelPreferencesSection() {
     );
   }
 
-  function addModel(modelId?: string) {
-    const trimmed = (modelId ?? newModel).trim();
-    if (trimmed && !models.includes(trimmed)) {
-      setModels([...models, trimmed]);
-      setNewModel('');
-      setShowDropdown(false);
+  function addModel(modelId: string) {
+    if (modelId && !models.includes(modelId)) {
+      setModels((prev) => [...prev, modelId]);
     }
+  }
+
+  function handleSelectorOpenChange(open: boolean) {
+    setSelectorOpen(open);
+    if (!open) setModelQuery('');
   }
 
   function removeModel(index: number) {
@@ -1184,38 +1164,6 @@ function ModelPreferencesSection() {
     const [item] = updated.splice(from, 1);
     updated.splice(to, 0, item);
     setModels(updated);
-  }
-
-  function handleKeyDown(e: React.KeyboardEvent) {
-    if (!showDropdown || filteredModels.length === 0) {
-      if (e.key === 'Enter') {
-        e.preventDefault();
-        addModel();
-      }
-      return;
-    }
-
-    switch (e.key) {
-      case 'ArrowDown':
-        e.preventDefault();
-        setHighlightedIndex((i) => Math.min(i + 1, filteredModels.length - 1));
-        break;
-      case 'ArrowUp':
-        e.preventDefault();
-        setHighlightedIndex((i) => Math.max(i - 1, 0));
-        break;
-      case 'Enter':
-        e.preventDefault();
-        if (filteredModels[highlightedIndex]) {
-          addModel(filteredModels[highlightedIndex].id);
-        } else {
-          addModel();
-        }
-        break;
-      case 'Escape':
-        setShowDropdown(false);
-        break;
-    }
   }
 
   // Determine display name for a model ID
@@ -1306,62 +1254,58 @@ function ModelPreferencesSection() {
           </div>
         )}
 
-        <div className="relative max-w-lg">
-          <input
-            ref={inputRef}
-            type="text"
-            value={newModel}
-            onChange={(e) => {
-              setNewModel(e.target.value);
-              setShowDropdown(true);
-            }}
-            onFocus={() => setShowDropdown(true)}
-            onKeyDown={handleKeyDown}
-            placeholder={allModels.length > 0 ? 'Search models...' : 'provider/model-id'}
-            className="block w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm text-neutral-900 placeholder:text-neutral-400 focus:border-neutral-500 focus:outline-none focus:ring-1 focus:ring-neutral-500 dark:border-neutral-600 dark:bg-neutral-900 dark:text-neutral-100 dark:placeholder:text-neutral-500 dark:focus:border-neutral-400 dark:focus:ring-neutral-400"
-          />
-          {showDropdown && filteredModels.length > 0 && (
-            <div
-              ref={dropdownRef}
-              className="absolute z-20 mt-1 max-h-60 w-full overflow-auto rounded-md border border-neutral-200 bg-white shadow-lg dark:border-neutral-700 dark:bg-neutral-800"
-            >
-              {filteredModels.map((model, i) => (
-                <button
-                  key={model.id}
-                  type="button"
-                  onMouseDown={(e) => {
-                    e.preventDefault();
-                    addModel(model.id);
-                  }}
-                  onMouseEnter={() => setHighlightedIndex(i)}
-                  className={`flex w-full items-center gap-3 px-3 py-2 text-left text-sm ${
-                    i === highlightedIndex
-                      ? 'bg-neutral-100 dark:bg-neutral-700'
-                      : 'hover:bg-neutral-50 dark:hover:bg-neutral-750'
-                  }`}
-                >
-                  <div className="min-w-0 flex-1">
-                    <div className="truncate text-neutral-900 dark:text-neutral-100">
-                      {model.name}
-                    </div>
-                    <div className="truncate font-mono text-xs text-neutral-400 dark:text-neutral-500">
-                      {model.id}
-                    </div>
-                  </div>
-                  <span className="shrink-0 rounded bg-neutral-100 px-1.5 py-0.5 text-[10px] font-medium text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400">
-                    {model.provider}
-                  </span>
-                </button>
+        <ModelSelector open={selectorOpen} onOpenChange={handleSelectorOpenChange}>
+          <ModelSelectorTrigger asChild>
+            <Button variant="outline" size="sm">
+              Add model
+            </Button>
+          </ModelSelectorTrigger>
+          <ModelSelectorContent>
+            <ModelSelectorInput
+              value={modelQuery}
+              onValueChange={setModelQuery}
+              placeholder="Search models or enter provider/model-id..."
+            />
+            <ModelSelectorList>
+              <ModelSelectorEmpty>No models found.</ModelSelectorEmpty>
+              {availableModels?.map((provider) => (
+                <ModelSelectorGroup key={provider.provider} heading={provider.provider}>
+                  {provider.models
+                    .filter((m) => !models.includes(m.id))
+                    .map((m) => (
+                      <ModelSelectorItem
+                        key={m.id}
+                        value={m.id}
+                        onSelect={() => {
+                          addModel(m.id);
+                          setSelectorOpen(false);
+                          setModelQuery('');
+                        }}
+                      >
+                        <ModelSelectorLogo provider={provider.provider} />
+                        <ModelSelectorName>{m.name}</ModelSelectorName>
+                      </ModelSelectorItem>
+                    ))}
+                </ModelSelectorGroup>
               ))}
-            </div>
-          )}
-        </div>
-
-        {allModels.length === 0 && (
-          <p className="text-xs text-neutral-400 dark:text-neutral-500">
-            Start a session to discover available models, or type a model ID manually (e.g. provider/model-id).
-          </p>
-        )}
+              {customModelCandidate && (
+                <ModelSelectorItem
+                  value={customModelCandidate}
+                  onSelect={() => {
+                    addModel(customModelCandidate);
+                    setSelectorOpen(false);
+                    setModelQuery('');
+                  }}
+                >
+                  <ModelSelectorName>
+                    <span className="text-neutral-500">Use </span>
+                    <span className="font-mono">{customModelCandidate}</span>
+                  </ModelSelectorName>
+                </ModelSelectorItem>
+              )}
+            </ModelSelectorList>
+          </ModelSelectorContent>
+        </ModelSelector>
 
         <div className="flex items-center gap-3">
           <Button

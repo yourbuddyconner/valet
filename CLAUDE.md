@@ -197,14 +197,17 @@ The sandbox image is cached. To force a rebuild after changing `docker/start.sh`
 
 ### GitHub Actions CD
 
-Two workflows live in `.github/workflows/`:
+Three deploy workflows live in `.github/workflows/`:
 
 | Workflow | Trigger | Target |
 |---|---|---|
+| `deploy-preview.yml` | Pull request to `main` | frontend-only Cloudflare Pages preview against the dev API |
 | `deploy-dev.yml` | Push to `main` | dev environment |
 | `deploy-prod.yml` | Push of a `v*` tag | prod environment |
 
-Both workflows call `make deploy` (the full `scripts/deploy.sh cmd_all` path: worker → migrations → modal → client). They reconstruct `.env.deploy.<env>` from GitHub Actions variables and secrets at runtime rather than committing environment config to the repo.
+`deploy-dev.yml` and `deploy-prod.yml` call `make deploy` (the full `scripts/deploy.sh cmd_all` path: worker → migrations → modal → client). `deploy-preview.yml` calls `make deploy-client` with `PAGES_DEPLOY_BRANCH=pr-<number>` so the preview branch is published to the dev Pages project without deploying a per-PR Worker, D1, R2 bucket, or Modal backend. The client is built against the dev Worker URL; set `DEV_WORKER_URL` as a GitHub Actions variable in the `dev` environment when Cloudflare's deployment lookup cannot infer the correct workers.dev URL.
+
+The Worker accepts preview OAuth redirects only for the configured frontend origin or for hosts under `FRONTEND_PREVIEW_ORIGIN_SUFFIX`, which defaults to `${PAGES_PROJECT_NAME}.pages.dev` during deploy config generation. Keep that suffix project-specific; do not set it to a broad value like `pages.dev`.
 
 **Required GitHub Actions configuration** (set under *Settings → Environments → dev / prod*):
 
@@ -218,6 +221,7 @@ Both workflows call `make deploy` (the full `scripts/deploy.sh cmd_all` path: wo
 | `CLOUDFLARE_ACCOUNT_ID` | Secret | Your Cloudflare account ID (find it in the dashboard URL or `wrangler whoami`) |
 | `ALLOWED_EMAILS` | Secret | Comma-separated email allowlist; empty = no restriction |
 | `D1_DATABASE_ID` | Secret | Optional — auto-discovered from `wrangler d1 list` if omitted |
+| `DEV_WORKER_URL` | Variable | Optional for `deploy-preview.yml`; full dev Worker origin used for `VITE_API_URL` (for example `https://dev-valet-turnkey.<subdomain>.workers.dev`) |
 
 **Prod environment protection:** Add required reviewers to the `prod` GitHub Actions environment so every `v*` tag push triggers a manual approval gate before secrets are exposed.
 

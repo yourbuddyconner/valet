@@ -2,7 +2,7 @@ import type { D1Database } from '@cloudflare/workers-types';
 import { ValidationError } from '@valet/shared';
 import { eq, and, or, sql, desc } from 'drizzle-orm';
 import type { AppDb } from '../drizzle.js';
-import { workflows, triggers, workflowMutationProposals, workflowVersionHistory } from '../schema/index.js';
+import { workflows, triggers, workflowExecutions, workflowMutationProposals, workflowVersionHistory } from '../schema/index.js';
 import { sha256Hex } from '../workflow-runtime.js';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
@@ -289,6 +289,19 @@ export async function listWorkflowExecutions(
     ORDER BY started_at DESC
     LIMIT ? OFFSET ?
   `).bind(workflowId, userId, opts.limit ?? 50, opts.offset ?? 0).all();
+}
+
+export async function getWorkflowNameByExecutionId(
+  db: AppDb,
+  executionId: string,
+): Promise<string | null> {
+  const row = await db
+    .select({ name: workflows.name })
+    .from(workflowExecutions)
+    .innerJoin(workflows, eq(workflowExecutions.workflowId, workflows.id))
+    .where(eq(workflowExecutions.id, executionId))
+    .get();
+  return row?.name ?? null;
 }
 
 // ─── Version History ─────────────────────────────────────────────────────────

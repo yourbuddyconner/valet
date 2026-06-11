@@ -592,6 +592,131 @@ describe('personal orchestrator Slack surface policy', () => {
   });
 });
 
+describe('Slack DM thread reply routes to pre-registered orchestrator thread', () => {
+  const sessionFetchMock = vi.fn();
+
+  function buildThreadReplyRequest(threadTs: string) {
+    return new Request('http://localhost/slack/events', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-slack-signature': 'v0=test',
+        'x-slack-request-timestamp': String(Math.floor(Date.now() / 1000)),
+      },
+      body: JSON.stringify({
+        type: 'event_callback',
+        team_id: 'T123',
+        event: {
+          type: 'message',
+          user: 'UDM',
+          text: 'suh',
+          channel: 'D123',
+          channel_type: 'im',
+          ts: '1700000001.000001',
+          thread_ts: threadTs,
+        },
+      }),
+    });
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    getOrgSlackInstallMock.mockResolvedValue({
+      signingSecret: 'secret', botToken: 'token', teamId: 'T123',
+      botUserId: 'B123', teamName: null, appId: null, configuredBy: 'user-1',
+    });
+    verifySlackSignatureMock.mockReturnValue(true);
+    resolveUserByExternalIdMock.mockResolvedValue('user-1');
+    parseInboundMock.mockResolvedValue({
+      channelType: 'slack', channelId: 'D123', senderId: 'UDM', senderName: 'DM User',
+      text: 'suh', attachments: [], messageId: '1700000001.000001',
+      metadata: {
+        teamId: 'T123',
+        threadTs: '1700000000.000001',
+        eventTs: '1700000001.000001',
+        slackEventType: 'message',
+        slackChannelType: 'im',
+      },
+    });
+    // 3-part scope key for the thread reply
+    scopeKeyPartsMock.mockReturnValue({ channelType: 'slack', channelId: 'T123:D123:1700000000.000001' });
+    getChannelBindingByScopeKeyMock.mockResolvedValue({
+      id: 'binding-1',
+      sessionId: 'orchestrator:user-1',
+      channelType: 'slack',
+      channelId: 'T123:D123:1700000000.000001',
+      scopeKey: 'user:user-1:slack:T123:D123:1700000000.000001',
+      userId: 'user-1',
+      orgId: 'default',
+      queueMode: 'followup',
+      collectDebounceMs: 3000,
+      createdAt: new Date().toISOString(),
+    });
+    getSessionMock.mockResolvedValue({ id: 'orchestrator:user-1', status: 'running' });
+    sessionFetchMock.mockReset();
+    sessionFetchMock.mockResolvedValue(new Response(JSON.stringify({ ok: true }), { status: 200 }));
+  });
+
+  it('dispatches to bound session with the pre-registered thread ID from channel mapping', async () => {
+    // Simulate registerChannelThread having been called when the DM was sent:
+    // getOrCreateChannelThread returns the pre-registered web conversation thread ID.
+    getOrCreateChannelThreadMock.mockResolvedValue('existing-web-thread-uuid');
+    getChannelThreadMappingMock.mockResolvedValue(null);
+
+    const app = buildApp();
+    const res = await app.fetch(
+      buildThreadReplyRequest('1700000000.000001'),
+      {
+        DB: {},
+        ENCRYPTION_KEY: 'k',
+        SLACK_SIGNING_SECRET: 's',
+        SESSIONS: {
+          idFromName: vi.fn((name: string) => `do:${name}`),
+          get: vi.fn(() => ({ fetch: sessionFetchMock })),
+        },
+      } as any,
+      { waitUntil: vi.fn() } as any,
+    );
+
+    expect(res.status).toBe(200);
+    expect(sessionFetchMock).toHaveBeenCalledOnce();
+
+    const dispatchedRequest = sessionFetchMock.mock.calls[0][0] as Request;
+    const body = await dispatchedRequest.json() as Record<string, unknown>;
+    // The pre-registered thread ID must be passed so the reply lands in the
+    // originating web conversation, not a new one.
+    expect(body.threadId).toBe('existing-web-thread-uuid');
+  });
+
+  it('dispatches with a fresh thread ID when no pre-registration exists', async () => {
+    // No pre-registration — getOrCreateChannelThread creates a new thread.
+    getOrCreateChannelThreadMock.mockResolvedValue('new-thread-uuid');
+    getChannelThreadMappingMock.mockResolvedValue(null);
+
+    const app = buildApp();
+    const res = await app.fetch(
+      buildThreadReplyRequest('1700000000.000001'),
+      {
+        DB: {},
+        ENCRYPTION_KEY: 'k',
+        SLACK_SIGNING_SECRET: 's',
+        SESSIONS: {
+          idFromName: vi.fn((name: string) => `do:${name}`),
+          get: vi.fn(() => ({ fetch: sessionFetchMock })),
+        },
+      } as any,
+      { waitUntil: vi.fn() } as any,
+    );
+
+    expect(res.status).toBe(200);
+    expect(sessionFetchMock).toHaveBeenCalledOnce();
+
+    const dispatchedRequest = sessionFetchMock.mock.calls[0][0] as Request;
+    const body = await dispatchedRequest.json() as Record<string, unknown>;
+    expect(body.threadId).toBe('new-thread-uuid');
+  });
+});
+
 describe('bound-session dispatch failure handling', () => {
   const sessionFetchMock = vi.fn();
 

@@ -14,14 +14,29 @@ export const integrationKeys = {
   detail: (id: string) => [...integrationKeys.details(), id] as const,
 };
 
+// Wire shape of integrations returned by GET /api/integrations.
+// The API strips userId and updatedAt; createdAt is a string after JSON transport.
+export interface IntegrationListItem {
+  id: string;
+  service: string;
+  status: 'active' | 'error' | 'pending' | 'disconnected';
+  scope: 'user' | 'org';
+  config: { entities: string[] };
+  createdAt: string;
+  authType?: 'oauth2' | 'api_key' | 'bearer';
+  displayName?: string;
+  isCustomConnector?: boolean;
+  isOrgManagedConnector?: boolean;
+}
+
 interface ListIntegrationsResponse {
-  integrations: Integration[];
+  integrations: IntegrationListItem[];
 }
 
 export interface AvailableService {
   service: string;
   displayName: string;
-  authType: 'oauth2' | 'bot_token' | 'api_key';
+  authType: 'oauth2' | 'bot_token' | 'api_key' | 'bearer';
   supportedEntities: string[];
   hasActions: boolean;
   hasTriggers: boolean;

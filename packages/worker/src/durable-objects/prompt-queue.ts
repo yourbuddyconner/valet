@@ -378,6 +378,30 @@ export class PromptQueue {
     return { channelType, channelId };
   }
 
+  /** Returns queue_type and workflow_execution_id for the currently-processing row.
+   *  Returns null if nothing is processing. Used by sendChannelInteractivePrompts
+   *  to determine provenance for unattended-run approval DMs. */
+  getProcessingWorkflowContext(): { queueType: string; workflowExecutionId: string | null } | null {
+    const rows = this.sql
+      .exec(
+        "SELECT queue_type, workflow_execution_id FROM prompt_queue WHERE status = 'processing' ORDER BY created_at DESC LIMIT 1",
+      )
+      .toArray();
+    if (rows.length === 0) return null;
+    return {
+      queueType: (rows[0].queue_type as string) || 'prompt',
+      workflowExecutionId: (rows[0].workflow_execution_id as string | null) ?? null,
+    };
+  }
+
+  /** Get the author_email from the most recent processing entry. */
+  getProcessingAuthorEmail(): string | null {
+    const rows = this.sql
+      .exec("SELECT author_email FROM prompt_queue WHERE status = 'processing' ORDER BY created_at DESC LIMIT 1")
+      .toArray();
+    return rows.length > 0 ? (rows[0].author_email as string | null) : null;
+  }
+
   /** Get channel target for a specific prompt by messageId.
    *  Prefers reply_channel_* over channel_* (matches legacy getProcessingChannelContext
    *  precedence) so external-channel replies route correctly.

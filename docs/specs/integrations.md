@@ -100,6 +100,22 @@ Registered org repos.
 
 Custom OpenAI-compatible LLM providers (documented in [auth-access.md](auth-access.md), referenced here for completeness).
 
+### `credentials` table
+
+Unified encrypted credential rows keyed by owner and provider. Custom MCP OAuth connectors store per-user `oauth2` rows, and user-scoped custom MCP API-key/bearer connectors store per-user `api_key` rows with `provider = serviceSlug`. For custom MCP connectors, `api_key` is the storage credential type for both configurable API-key auth and standard bearer-token auth; the connector's own `authType` preserves the runtime/user-facing difference.
+
+| Column | Type | Notes |
+|--------|------|-------|
+| `id` | text PK | UUID |
+| `ownerType` | text | `'user'` or `'org'` |
+| `ownerId` | text | User/org identifier |
+| `provider` | text | Built-in service or custom MCP connector slug |
+| `credentialType` | text | `oauth2`, `api_key`, `bot_token`, `service_account`, or `app_install` |
+| `encryptedData` | text | PBKDF2-encrypted credential JSON |
+| `scopes` / `expiresAt` / `metadata` | text | Optional credential metadata |
+
+**Indexes:** unique on `(ownerType, ownerId, provider, credentialType)`.
+
 ### TypeScript Types
 
 ```typescript
@@ -309,11 +325,14 @@ Four separate credential storage mechanisms coexist:
 | Mechanism | Storage | Used By |
 |-----------|---------|---------|
 | `oauth_tokens` table (D1, AES-256-GCM) | `db.upsertOAuthToken()` | GitHub login, Google login, GitHub API proxy |
+| `credentials` table (D1, PBKDF2 encrypted JSON) | `storeCredential()` / `getCredential()` | MCP OAuth, user-scoped custom MCP API keys/bearer tokens, Telegram, service-account credentials |
 | `API_KEYS` Durable Object | `env.API_KEYS.idFromName(userId)` | Generic integration framework |
 | `user_credentials` table (D1, AES-256-GCM) | `db.setUserCredential()` | 1Password service account token |
 | `user_telegram_config` table (D1, AES-256-GCM) | `db.saveUserTelegramConfig()` | Telegram bot token |
 
 The generic framework and the production GitHub path store credentials **independently**. Configuring GitHub through the framework stores the token in the DO; logging in with GitHub stores it in D1. They are not connected.
+
+Custom MCP connector slugs must not retain competing user credential rows across auth-family changes. When a connector moves between OAuth and user-scoped API-key/bearer auth, existing user integration rows and credentials for that slug are cleared, and reconnect deletes any stale credential row of the incompatible type before storing the new row.
 
 ## API Contract
 
