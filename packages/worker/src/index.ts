@@ -933,6 +933,11 @@ async function dispatchScheduledWorkflows(event: ScheduledController, env: Env):
       authorName: 'Scheduled Task',
       authorEmail: 'scheduled-task@valet.local',
       forceNewThread: true,
+      threadOrigin: {
+        originType: 'automation',
+        originTriggerId: row.trigger_id,
+        originTriggerType: 'schedule',
+      },
     });
 
     if (!dispatch.dispatched) {

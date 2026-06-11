@@ -725,6 +725,11 @@ export async function handleTriggerAction(
         userId,
         content: prompt,
         forceNewThread: true,
+        threadOrigin: {
+          originType: 'automation',
+          originTriggerId: triggerId,
+          originTriggerType: config.type,
+        },
       });
       const now = new Date().toISOString();
       if (dispatch.dispatched) {

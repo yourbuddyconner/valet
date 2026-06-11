@@ -1,6 +1,7 @@
 import { type SessionThread, TERMINAL_SESSION_STATUSES } from '@valet/shared';
 import type { Env } from '../env.js';
 import * as db from '../lib/db.js';
+import type { ThreadOriginInput } from '../lib/db/threads.js';
 import type { AppDb } from '../lib/drizzle.js';
 import { getDb } from '../lib/drizzle.js';
 import { buildDoWebSocketUrl } from '../lib/do-ws-url.js';
@@ -385,6 +386,7 @@ export async function dispatchOrchestratorPrompt(
     threadId?: string;
     /** Always create a new thread instead of reusing the active one (e.g. for scheduled triggers). */
     forceNewThread?: boolean;
+    threadOrigin?: ThreadOriginInput;
     attachments?: Array<{ type: string; mime: string; url: string; filename?: string }>;
     /** Explicit reply target. If present, the DO auto-replies to this channel on turn complete. */
     replyTo?: { channelType: string; channelId: string };
@@ -448,7 +450,18 @@ export async function dispatchOrchestratorPrompt(
       }
       if (!thread) {
         const id = crypto.randomUUID();
-        thread = await db.createThread(env.DB, { id, sessionId });
+        thread = await db.createThread(env.DB, {
+          id,
+          sessionId,
+          ...(params.threadOrigin ?? {}),
+          ...(params.channelType && params.channelType !== 'thread' && !params.threadOrigin
+            ? {
+                originType: params.channelType,
+                originChannelType: params.channelType,
+                originChannelId: params.channelId,
+              }
+            : {}),
+        });
       }
       params.threadId = thread.id;
       console.log(`[OrchestratorDispatch] Auto-resolved threadId=${thread.id} for session=${sessionId} forceNew=${!!params.forceNewThread}`);
