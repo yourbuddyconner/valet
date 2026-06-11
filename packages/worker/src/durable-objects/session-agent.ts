@@ -18,7 +18,7 @@ import type { ChannelTarget, ChannelContext, InteractivePrompt, InteractiveActio
 import { MessageStore } from './message-store.js';
 import { getChannelForMessage, dropEmission } from './channel-resolver.js';
 import { ChannelRouter } from './channel-router.js';
-import { PromptQueue } from './prompt-queue.js';
+import { PromptQueue, type QueueEntry } from './prompt-queue.js';
 import { RunnerLink, type RunnerToDOMessage, type DOToRunnerMessage, type PromptAttachment, type RunnerMessageHandlers, type WorkflowExecutionDispatchPayload, type DOMessageOf } from './runner-link.js';
 import { SessionState, type SessionStartParams } from './session-state.js';
 import { SessionLifecycle, SandboxAlreadyExitedError, SandboxSnapshotFailedError } from './session-lifecycle.js';
@@ -4884,6 +4884,46 @@ export class SessionAgentDO {
       return false;
     }
 
+    // Drain as many queued prompts as we can dispatch in one pass. Items on
+    // different channels can run concurrently (TKAI-65), so when the runner
+    // wakes up to a queue of N cross-channel prompts we fire them all instead
+    // of dispatching one and waiting for it to finish before sending the next.
+    // `skippedBusyIds` prevents the dequeue/revert pair from cycling forever
+    // on rows whose channels are still busy after we already passed them.
+    let dispatchedAny = false;
+    const skippedBusyIds = new Set<string>();
+
+    while (true) {
+      const next = this.pickNextDispatchableQueuedPrompt(skippedBusyIds);
+      if (!next) {
+        if (!dispatchedAny) {
+          console.log(`[SessionAgentDO] sendNextQueuedPrompt: no queued items`);
+        }
+        break;
+      }
+
+      const ok = await this.dispatchQueuedPromptEntry(next);
+      if (!ok) {
+        // Dispatch failed — revert + audit already happened inside the helper.
+        // Don't keep trying; the runner is likely unhealthy.
+        break;
+      }
+      dispatchedAny = true;
+    }
+
+    return dispatchedAny;
+  }
+
+  /**
+   * Select the next queue row that can be dispatched right now: drops
+   * malformed/filtered entries, reverts rows whose channels are busy, and
+   * returns the first row marked 'processing' that's ready to send.
+   *
+   * `skippedBusyIds` is mutated to remember rows already reverted as busy in
+   * this drain pass. We pass that set into `dequeueNext` so each subsequent
+   * pick advances past those rows instead of cycling on the oldest one.
+   */
+  private pickNextDispatchableQueuedPrompt(skippedBusyIds: Set<string>): QueueEntry | null {
     // When a wait subscription is active, prefer child events that match the
     // subscription (dispatched directly by handleSystemMessage's wake path,
     // not via the queue — but legacy queued events may exist). If the next
@@ -4891,7 +4931,7 @@ export class SessionAgentDO {
     // to general dispatch and let the user prompt wake the agent — per the
     // orchestrator persona, user messages always wake an agent that yielded
     // via wait_for_event. The subscription is cleared at dispatch time below.
-    let prompt = this.promptQueue.dequeueNext();
+    let prompt = this.promptQueue.dequeueNext(skippedBusyIds);
     while (prompt) {
       console.log(`[SessionAgentDO] sendNextQueuedPrompt: found queued item id=${prompt.id} channelType=${prompt.channelType || 'none'} channelId=${prompt.channelId || 'none'} queueType=${prompt.queueType || 'prompt'}`);
 
@@ -4934,7 +4974,7 @@ export class SessionAgentDO {
 
       if (shouldSkip) {
         this.promptQueue.dropEntry(prompt.id);
-        prompt = this.promptQueue.dequeueNext();
+        prompt = this.promptQueue.dequeueNext(skippedBusyIds);
         continue;
       }
 
@@ -4943,19 +4983,25 @@ export class SessionAgentDO {
       const queuedChannelKey = prompt.channelKey || this.channelKeyFrom(prompt.channelType || undefined, prompt.channelId || undefined);
       if (this.promptQueue.isChannelBusy(queuedChannelKey)) {
         console.log(`[SessionAgentDO] sendNextQueuedPrompt: skipping item ${prompt.id} — channel ${queuedChannelKey} is busy`);
+        skippedBusyIds.add(prompt.id);
         this.promptQueue.revertProcessingToQueued(prompt.id);
-        prompt = this.promptQueue.dequeueNext();
+        prompt = this.promptQueue.dequeueNext(skippedBusyIds);
         continue;
       }
 
-      break;
+      return prompt;
     }
 
-    if (!prompt) {
-      console.log(`[SessionAgentDO] sendNextQueuedPrompt: no queued items`);
-      return false;
-    }
+    return null;
+  }
 
+  /**
+   * Dispatch a single queue entry that has already been marked 'processing'
+   * by {@link pickNextDispatchableQueuedPrompt}. Returns true on a successful
+   * runner send; on failure the row is reverted to 'queued' and false is
+   * returned. Channel-busy/wait-subscription filtering is the caller's job.
+   */
+  private async dispatchQueuedPromptEntry(prompt: QueueEntry): Promise<boolean> {
     // ─── Deferred user message write ───────────────────────────────────
     // User messages are not written to the message store at enqueue time.
     // Write + broadcast now at dispatch time. Uses INSERT OR IGNORE for
