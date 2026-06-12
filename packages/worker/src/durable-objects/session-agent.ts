@@ -583,7 +583,12 @@ export class SessionAgentDO {
         // Handle interrupt-only (no content) — e.g., /stop command
         if (body.interrupt && !content && attachments.length === 0) {
           if (this.promptQueue.runnerBusy) {
-            await this.handleAbort();
+            // Mirror handleInterruptPrompt: prefer threadId, otherwise the
+            // request's channel pair. Scoping prevents a stop on one thread
+            // from aborting concurrent turns on other threads.
+            const abortChannelType = body.threadId ? 'thread' : body.channelType;
+            const abortChannelId = body.threadId ? body.threadId : body.channelId;
+            await this.handleAbort(abortChannelType, abortChannelId);
           }
           return Response.json({ success: true, aborted: true });
         }
@@ -1532,7 +1537,9 @@ export class SessionAgentDO {
         break;
 
       case 'abort':
-        await this.handleAbort();
+        // Scope the abort to the channel/thread the client specified so a
+        // Stop on one thread doesn't kill concurrent turns on other threads.
+        await this.handleAbort(msg.channelType, msg.channelId);
         break;
 
       case 'revert':
