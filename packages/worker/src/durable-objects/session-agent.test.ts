@@ -1334,6 +1334,58 @@ describe('SessionAgentDO', () => {
     );
   });
 
+  it('WebSocket abort forwards channelType/channelId so a Stop on one thread is scoped, not global', async () => {
+    // Regression: with concurrent cross-thread dispatch enabled, the Stop
+    // button must send a channel-scoped abort so the runner aborts only the
+    // requested thread's OpenCode session, not every active channel.
+    const runnerSocket = { send: vi.fn() };
+    const { agent } = await createTestAgent({ sockets: [runnerSocket] });
+
+    (agent as any).promptQueue.runnerBusy = true;
+
+    await (agent as any).handleClientMessage({ send: vi.fn() }, {
+      type: 'abort',
+      channelType: 'thread',
+      channelId: 'thread-stop-me',
+    });
+
+    const aborts = runnerSocket.send.mock.calls
+      .map((call: unknown[]) => JSON.parse(call[0] as string))
+      .filter((msg) => msg.type === 'abort');
+    expect(aborts).toHaveLength(1);
+    expect(aborts[0]).toMatchObject({
+      type: 'abort',
+      channelType: 'thread',
+      channelId: 'thread-stop-me',
+    });
+  });
+
+  it('HTTP /prompt interrupt with threadId scopes the abort to that thread', async () => {
+    // Stop button can also arrive via HTTP POST /prompt with body.interrupt.
+    // It must scope the runner abort using body.threadId / body.channelType.
+    const runnerSocket = { send: vi.fn() };
+    const { agent } = await createTestAgent({ sockets: [runnerSocket] });
+
+    (agent as any).promptQueue.runnerBusy = true;
+
+    const response = await agent.fetch(new Request('http://do/prompt', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ interrupt: true, threadId: 'thread-stop-me' }),
+    }));
+    expect(response.status).toBe(200);
+
+    const aborts = runnerSocket.send.mock.calls
+      .map((call: unknown[]) => JSON.parse(call[0] as string))
+      .filter((msg) => msg.type === 'abort');
+    expect(aborts).toHaveLength(1);
+    expect(aborts[0]).toMatchObject({
+      type: 'abort',
+      channelType: 'thread',
+      channelId: 'thread-stop-me',
+    });
+  });
+
   it('sendNextQueuedPrompt writes user message to message store at dispatch time', async () => {
     const runnerSocket = { send: vi.fn() };
     const { agent, broadcasts } = await createTestAgent({ sockets: [runnerSocket] });

@@ -265,8 +265,14 @@ export function ChatContainer({ sessionId, routeSessionId, initialThreadId, init
   );
 
   const handleAbort = useCallback(() => {
-    abort();
-  }, [abort]);
+    // Scope the abort to the active thread so concurrent cross-thread turns
+    // on the same session aren't all killed by a single Stop click.
+    if (activeThreadId) {
+      abort('thread', activeThreadId);
+    } else {
+      abort();
+    }
+  }, [abort, activeThreadId]);
 
   const handleCommand = useCallback(
     (command: string, args?: string) => {
