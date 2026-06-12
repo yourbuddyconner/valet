@@ -258,6 +258,16 @@ function createMockSql(): SqlStorage & {
           rows = rows.filter((row) => row.replaceable === 1);
         }
 
+        // Honor `id NOT IN (?, ?, ...)` used by dequeueNext's exclude path.
+        const notInMatch = q.match(/id NOT IN \(([?,\s]+)\)/);
+        if (notInMatch) {
+          const placeholderCount = (notInMatch[1].match(/\?/g) ?? []).length;
+          const excluded = new Set(
+            params.slice(0, placeholderCount).map((p) => String(p)),
+          );
+          rows = rows.filter((row) => !excluded.has(String(row.id)));
+        }
+
         if (q.includes('COUNT(*)')) {
           return cursor([{ count: rows.length, c: rows.length }]);
         }
@@ -1378,6 +1388,236 @@ describe('SessionAgentDO', () => {
     // queue.state should have been broadcast with pending: null
     const queueState = broadcasts.find((b) => b.type === 'queue.state');
     expect(queueState?.data).toMatchObject({ pending: null });
+  });
+
+  it('sendNextQueuedPrompt drains every cross-channel queued prompt in one pass', async () => {
+    // Regression for the scheduled-trigger burst: three manual triggers fire
+    // before the runner is ready, all three get queued (PR #42's preservation
+    // path), and the wake-time drain has to dispatch all three — not just one
+    // at a time waiting for each to finish.
+    const runnerSocket = { send: vi.fn() };
+    const { agent } = await createTestAgent({ sockets: [runnerSocket] });
+
+    for (const threadId of ['thread-a', 'thread-b', 'thread-c']) {
+      (agent as any).promptQueue.enqueue({
+        id: `msg-${threadId}`,
+        content: `prompt for ${threadId}`,
+        status: 'queued',
+        channelType: 'thread',
+        channelId: threadId,
+        channelKey: `thread:${threadId}`,
+        threadId,
+      });
+    }
+
+    const dispatched = await (agent as any).sendNextQueuedPrompt();
+    expect(dispatched).toBe(true);
+
+    // All three prompt frames should have been sent to the runner.
+    const sentPrompts = runnerSocket.send.mock.calls
+      .map((call: unknown[]) => JSON.parse(call[0] as string))
+      .filter((msg) => msg.type === 'prompt');
+    const sentIds = sentPrompts.map((msg: { messageId: string }) => msg.messageId).sort();
+    expect(sentIds).toEqual(['msg-thread-a', 'msg-thread-b', 'msg-thread-c']);
+
+    // Queue should be empty and each channel marked busy.
+    expect((agent as any).promptQueue.length).toBe(0);
+    expect((agent as any).promptQueue.isChannelBusy('thread:thread-a')).toBe(true);
+    expect((agent as any).promptQueue.isChannelBusy('thread:thread-b')).toBe(true);
+    expect((agent as any).promptQueue.isChannelBusy('thread:thread-c')).toBe(true);
+  });
+
+  it('sendNextQueuedPrompt does not co-dispatch a regular prompt alongside a workflow_execute', async () => {
+    // Workflow_execute holds the runner exclusively (its stampDispatched marks
+    // runnerBusy without a channel). A regular prompt that lands behind it in
+    // the queue must wait for the workflow to finish, not race it.
+    const runnerSocket = { send: vi.fn() };
+    const { agent } = await createTestAgent({ sockets: [runnerSocket] });
+
+    (agent as any).promptQueue.enqueue({
+      id: 'workflow-1',
+      content: '',
+      status: 'queued',
+      queueType: 'workflow_execute',
+      workflowExecutionId: 'exec-1',
+      workflowPayload: JSON.stringify({ kind: 'run', executionId: 'exec-1', payload: {} }),
+    });
+    (agent as any).promptQueue.enqueue({
+      id: 'msg-thread-a',
+      content: 'cross-channel prompt',
+      status: 'queued',
+      channelType: 'thread',
+      channelId: 'thread-a',
+      channelKey: 'thread:thread-a',
+      threadId: 'thread-a',
+    });
+
+    const dispatched = await (agent as any).sendNextQueuedPrompt();
+    expect(dispatched).toBe(true);
+
+    const sentFrames = runnerSocket.send.mock.calls
+      .map((call: unknown[]) => JSON.parse(call[0] as string));
+    const wfFrames = sentFrames.filter((m) => m.type === 'workflow-execute');
+    const promptFrames = sentFrames.filter((m) => m.type === 'prompt');
+    expect(wfFrames).toHaveLength(1);
+    expect(promptFrames).toHaveLength(0);
+
+    // The prompt row stays queued for a later drain after the workflow completes.
+    expect((agent as any).promptQueue.length).toBe(1);
+    const remaining = (agent as any).ctx.storage.sql
+      .exec("SELECT id, status FROM prompt_queue WHERE status = 'queued'")
+      .toArray();
+    expect(remaining).toHaveLength(1);
+    expect(remaining[0]).toMatchObject({ id: 'msg-thread-a', status: 'queued' });
+  });
+
+  it('sendNextQueuedPrompt filters subsequent child events against the wait subscription that was set at drain entry', async () => {
+    // dispatchQueuedPromptEntry clears sessionState.waitSubscription on every
+    // successful dispatch. The picker must use a snapshot taken at drain entry
+    // so iter 2+ still filters out non-matching child events.
+    const runnerSocket = { send: vi.fn() };
+    const { agent } = await createTestAgent({ sockets: [runnerSocket] });
+
+    (agent as any).sessionState.waitSubscription = {
+      sessionIds: ['child-X'],
+      notifyOn: 'status_change',
+    };
+
+    // Item 1: a user prompt with no childSessionId — picks up first (FIFO),
+    // dispatcher clears waitSubscription as a side effect.
+    (agent as any).promptQueue.enqueue({
+      id: 'msg-user',
+      content: 'user prompt',
+      status: 'queued',
+      channelType: 'thread',
+      channelId: 'thread-user',
+      channelKey: 'thread:thread-user',
+      threadId: 'thread-user',
+    });
+    // Item 2: a queued child event from a session OUTSIDE the wait subscription.
+    // Under the snapshot, the picker must drop it.
+    (agent as any).promptQueue.enqueue({
+      id: 'evt-child-Y',
+      content: 'child event from non-subscribed session',
+      status: 'queued',
+      childSessionId: 'child-Y',
+      childStatus: 'running',
+    });
+
+    const dispatched = await (agent as any).sendNextQueuedPrompt();
+    expect(dispatched).toBe(true);
+
+    const sentIds = runnerSocket.send.mock.calls
+      .map((call: unknown[]) => JSON.parse(call[0] as string))
+      .filter((m) => m.type === 'prompt')
+      .map((m: { messageId: string }) => m.messageId);
+    expect(sentIds).toEqual(['msg-user']);
+
+    // The non-matching child event must have been dropped (via dropEntry),
+    // not dispatched and not left queued.
+    expect((agent as any).promptQueue.length).toBe(0);
+  });
+
+  it('sendNextQueuedPrompt isolates per-item dispatch exceptions instead of reverting earlier in-flight dispatches', async () => {
+    // If dispatchQueuedPromptEntry throws mid-drain, only the failing row
+    // should revert; earlier successful dispatches must stay 'processing' so
+    // the runner's eventual complete attributes to them correctly.
+    const runnerSocket = { send: vi.fn() };
+    const { agent } = await createTestAgent({ sockets: [runnerSocket] });
+
+    (agent as any).promptQueue.enqueue({
+      id: 'msg-ok',
+      content: 'will dispatch',
+      status: 'queued',
+      channelType: 'thread',
+      channelId: 'thread-ok',
+      channelKey: 'thread:thread-ok',
+      threadId: 'thread-ok',
+    });
+    (agent as any).promptQueue.enqueue({
+      id: 'msg-throws',
+      content: 'will throw',
+      status: 'queued',
+      channelType: 'thread',
+      channelId: 'thread-throws',
+      channelKey: 'thread:thread-throws',
+      threadId: 'thread-throws',
+    });
+
+    // Make the second item's dispatch fail with a synchronous throw inside
+    // the dispatch body. resolveModelPreferences is awaited per-item; override
+    // it to return [] for the first call and throw on the second.
+    let resolveCallCount = 0;
+    (agent as any).resolveModelPreferences = vi.fn().mockImplementation(async () => {
+      resolveCallCount += 1;
+      if (resolveCallCount === 2) throw new Error('synthetic D1 failure');
+      return [];
+    });
+
+    const dispatched = await (agent as any).sendNextQueuedPrompt();
+    expect(dispatched).toBe(true); // msg-ok succeeded
+
+    // msg-ok was sent, msg-throws was not.
+    const sentIds = runnerSocket.send.mock.calls
+      .map((call: unknown[]) => JSON.parse(call[0] as string))
+      .filter((m) => m.type === 'prompt')
+      .map((m: { messageId: string }) => m.messageId);
+    expect(sentIds).toEqual(['msg-ok']);
+
+    // Critically: msg-ok stays 'processing' (so the eventual runner complete
+    // attributes), msg-throws is back to 'queued' for retry.
+    const rows = (agent as any).ctx.storage.sql
+      .exec("SELECT id, status FROM prompt_queue ORDER BY id ASC")
+      .toArray();
+    expect(rows).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'msg-ok', status: 'processing' }),
+      expect.objectContaining({ id: 'msg-throws', status: 'queued' }),
+    ]));
+  });
+
+  it('sendNextQueuedPrompt leaves entries queued whose channel is already busy', async () => {
+    // Cross-channel drain must not steal a slot on a channel that's still
+    // processing — that row stays queued until the channel completes.
+    const runnerSocket = { send: vi.fn() };
+    const { agent } = await createTestAgent({ sockets: [runnerSocket] });
+
+    (agent as any).promptQueue.setChannelBusy('thread:thread-busy', true);
+
+    (agent as any).promptQueue.enqueue({
+      id: 'msg-busy',
+      content: 'cannot dispatch yet',
+      status: 'queued',
+      channelType: 'thread',
+      channelId: 'thread-busy',
+      channelKey: 'thread:thread-busy',
+      threadId: 'thread-busy',
+    });
+    (agent as any).promptQueue.enqueue({
+      id: 'msg-free',
+      content: 'free to dispatch',
+      status: 'queued',
+      channelType: 'thread',
+      channelId: 'thread-free',
+      channelKey: 'thread:thread-free',
+      threadId: 'thread-free',
+    });
+
+    const dispatched = await (agent as any).sendNextQueuedPrompt();
+    expect(dispatched).toBe(true);
+
+    const sentIds = runnerSocket.send.mock.calls
+      .map((call: unknown[]) => JSON.parse(call[0] as string))
+      .filter((msg) => msg.type === 'prompt')
+      .map((msg: { messageId: string }) => msg.messageId);
+    expect(sentIds).toEqual(['msg-free']);
+
+    // The busy-channel row stays queued for the next drain cycle.
+    expect((agent as any).promptQueue.length).toBe(1);
+    const remaining = (agent as any).ctx.storage.sql
+      .exec("SELECT id, status FROM prompt_queue WHERE status = 'queued'")
+      .toArray();
+    expect(remaining).toHaveLength(1);
+    expect(remaining[0]).toMatchObject({ id: 'msg-busy', status: 'queued' });
   });
 
   it('queue.withdraw removes pending and broadcasts content', async () => {
