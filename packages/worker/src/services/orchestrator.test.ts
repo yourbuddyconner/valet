@@ -74,4 +74,35 @@ describe('dispatchOrchestratorPrompt', () => {
       authorEmail: 'scheduled-task@valet.local',
     });
   });
+
+  it('marks forced trigger-created threads as automation origin', async () => {
+    const doFetch = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(null, { status: 200 }))
+      .mockResolvedValueOnce(Response.json({ success: true }));
+    const env = {
+      DB: {},
+      SESSIONS: {
+        idFromName: vi.fn((name: string) => `do:${name}`),
+        get: vi.fn(() => ({ fetch: doFetch })),
+      },
+    } as any;
+
+    await dispatchOrchestratorPrompt(env, {
+      userId: 'user-1',
+      content: 'run the daily check',
+      forceNewThread: true,
+      threadOrigin: {
+        originType: 'automation',
+        originTriggerId: 'trigger-1',
+        originTriggerType: 'schedule',
+      },
+    });
+
+    expect(createThreadMock).toHaveBeenCalledWith(env.DB, expect.objectContaining({
+      originType: 'automation',
+      originTriggerId: 'trigger-1',
+      originTriggerType: 'schedule',
+    }));
+  });
 });

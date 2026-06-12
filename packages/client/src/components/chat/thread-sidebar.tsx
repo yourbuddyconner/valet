@@ -43,11 +43,12 @@ function useResolvedChannelLabels(threads: SessionThread[]): Map<string, string>
     const seen = new Set<string>();
     const result: { channelType: string; channelId: string }[] = [];
     for (const t of threads) {
-      if (!t.channelType || t.channelType === 'web' || !t.channelId) continue;
-      const key = `${t.channelType}:${t.channelId}`;
+      const target = getThreadGroupTarget(t);
+      if (target.channelType === 'web' || target.channelType === 'automation') continue;
+      const key = `${target.channelType}:${target.channelId}`;
       if (seen.has(key)) continue;
       seen.add(key);
-      result.push({ channelType: t.channelType, channelId: t.channelId });
+      result.push({ channelType: target.channelType, channelId: target.channelId });
     }
     return result;
   }, [threads]);
@@ -86,28 +87,54 @@ interface ThreadGroup {
   threads: SessionThread[];
 }
 
-function groupThreadsByChannel(
+function getThreadGroupTarget(thread: SessionThread): { channelType: string; channelId: string; labelOverride?: string } {
+  if (thread.originType === 'automation') {
+    return { channelType: 'automation', channelId: 'default', labelOverride: 'Automations' };
+  }
+  if (thread.originType === 'web') {
+    return { channelType: 'web', channelId: 'default' };
+  }
+  if (thread.originChannelType && thread.originChannelId) {
+    return { channelType: thread.originChannelType, channelId: thread.originChannelId };
+  }
+  if (thread.originType && thread.originType !== 'thread') {
+    return { channelType: thread.originType, channelId: thread.originChannelId || 'default' };
+  }
+  return {
+    channelType: thread.channelType || 'web',
+    channelId: thread.channelId || 'default',
+  };
+}
+
+export function groupThreadsByChannel(
   threads: SessionThread[],
   resolvedLabels: Map<string, string>
 ): ThreadGroup[] {
   const groups = new Map<string, ThreadGroup>();
 
   for (const thread of threads) {
-    const ct = thread.channelType || 'web';
-    const ci = thread.channelId || 'default';
-    const key = `${ct}:${ci}`;
+    const target = getThreadGroupTarget(thread);
+    const key = `${target.channelType}:${target.channelId}`;
 
     if (!groups.has(key)) {
       const resolved = resolvedLabels.get(key);
-      const label = resolved || formatChannelLabel(ct, ci);
-      groups.set(key, { channelKey: key, channelType: ct, channelId: ci, label, threads: [] });
+      const label = target.labelOverride || resolved || formatChannelLabel(target.channelType, target.channelId);
+      groups.set(key, {
+        channelKey: key,
+        channelType: target.channelType,
+        channelId: target.channelId,
+        label,
+        threads: [],
+      });
     }
     groups.get(key)!.threads.push(thread);
   }
 
+  const priority = (type: string) => type === 'web' ? 0 : type === 'automation' ? 1 : 2;
+
   return Array.from(groups.values()).sort((a, b) => {
-    if (a.channelType === 'web' && b.channelType !== 'web') return -1;
-    if (b.channelType === 'web' && a.channelType !== 'web') return 1;
+    const priorityDiff = priority(a.channelType) - priority(b.channelType);
+    if (priorityDiff !== 0) return priorityDiff;
     return a.label.localeCompare(b.label);
   });
 }

@@ -206,6 +206,11 @@ export async function runTrigger(
       userId,
       content: `[Today is ${scheduledDate}]\n\n${prompt}`,
       forceNewThread: true,
+      threadOrigin: {
+        originType: 'automation',
+        originTriggerId: triggerId,
+        originTriggerType: config.type,
+      },
     });
 
     if (dispatch.dispatched) {
