@@ -127,8 +127,21 @@ interface ChatState {
   agentStatusChannelType?: string;
   agentStatusChannelId?: string;
   agentStatusThreadId?: string;
+  // Per-thread agent status. With cross-thread concurrent dispatch
+  // (TKAI-65) the single agentStatus field above only reflects the most
+  // recent runner message — switching to a thread whose latest event is
+  // not the freshest would lose its busy indicator. This map tracks the
+  // current status for every thread that has emitted an agentStatus event
+  // during this session.
+  threadStatuses: Record<string, { status: AgentStatus; detail?: string }>;
   integrationAuthErrors: IntegrationAuthError[];
+  /** Most-recent pending followup (session-wide). Kept for back-compat with
+   *  components that haven't switched to threadPendingFollowups yet. */
   pendingFollowup: { messageId: string; content: string; attachments?: unknown; threadId?: string } | null;
+  /** Per-thread pending followups. With cross-thread concurrent dispatch
+   *  (TKAI-65) the queue can hold one pending followup per thread; the
+   *  single pendingFollowup slot above collapsed them into one. */
+  threadPendingFollowups: Record<string, { messageId: string; content: string; attachments?: unknown; threadId?: string }>;
 }
 
 interface WebSocketInitMessage {
@@ -426,8 +439,10 @@ function createInitialState(): ChatState {
     reviewError: null,
     reviewLoading: false,
     reviewDiffFiles: null,
+    threadStatuses: {},
     integrationAuthErrors: [],
     pendingFollowup: null,
+    threadPendingFollowups: {},
   };
 }
 
@@ -484,16 +499,56 @@ export function useChat(sessionId: string) {
   // Without this, stale messages from the previous session remain visible until the
   // new WebSocket init message arrives.
   const prevSessionIdRef = useRef(sessionId);
+
+  // Per-thread sentinel of "we just called abort and haven't seen the runner's
+  // confirmation yet." While set, agentStatus events arriving for that thread
+  // are ignored — otherwise an in-flight 'tool_calling' event that left the
+  // runner before our abort frame got there would briefly flip the Stop button
+  // back on, causing UI flicker and double-clicks. The sentinel is cleared
+  // either when the runner sends 'idle' for that thread or after a 5s timeout.
+  const abortingThreadsRef = useRef<Map<string, number>>(new Map());
+  // Per-thread AbortController for in-flight HTTP sends, so an abort()
+  // immediately cancels the matching POST and the DO never sees the orphaned
+  // prompt landing after the abort.
+  const pendingHttpSendsRef = useRef<Map<string, AbortController>>(new Map());
+  // Tracks which threads have already been requested via lazy load so we
+  // don't double-fetch when the user navigates between threads. Declared
+  // here adjacent to the other refs because the session-switch effect below
+  // needs to clear it on every session swap.
+  const loadedThreadsRef = useRef(new Set<string>());
   useEffect(() => {
     if (prevSessionIdRef.current === sessionId) return;
     prevSessionIdRef.current = sessionId;
     setState(createInitialState());
+    // Drop per-thread sentinels and abort any in-flight HTTP sends from
+    // the prior session — their threadIds aren't meaningful here and the
+    // pending POSTs would write into the new session's state. Also clear
+    // the loaded-threads cache so a colliding thread id between sessions
+    // doesn't suppress lazy loading on the new session.
+    abortingThreadsRef.current.clear();
+    for (const ac of pendingHttpSendsRef.current.values()) {
+      try { ac.abort(); } catch { /* ignore */ }
+    }
+    pendingHttpSendsRef.current.clear();
+    loadedThreadsRef.current.clear();
     try {
       setSelectedModel(localStorage.getItem(`valet:model:${sessionId}`) || '');
     } catch {
       setSelectedModel('');
     }
   }, [sessionId]);
+
+  // Unmount cleanup: cancel any pending HTTP sends and clear sentinels so
+  // late .finally() callbacks don't apply state to an unmounted hook.
+  useEffect(() => {
+    return () => {
+      for (const ac of pendingHttpSendsRef.current.values()) {
+        try { ac.abort(); } catch { /* ignore */ }
+      }
+      pendingHttpSendsRef.current.clear();
+      abortingThreadsRef.current.clear();
+    };
+  }, []);
 
   // Load messages from D1 REST API on mount / session change.
   // This ensures message history survives page refresh even if the WebSocket
@@ -690,7 +745,34 @@ export function useChat(sessionId: string) {
             reviewLoading: false,
             reviewDiffFiles: null,
             integrationAuthErrors: [],
-            pendingFollowup: message.data?.pendingPrompt as ChatState['pendingFollowup'] ?? null,
+            // The legacy single-slot `pendingFollowup` is reserved for
+            // non-thread (unscoped) sessions. A thread-scoped pendingPrompt
+            // belongs in `threadPendingFollowups` only — putting it in the
+            // legacy slot too would leak across thread-scoped queue.state
+            // events that reserve the legacy slot (see queue.state handler).
+            pendingFollowup: (() => {
+              const pp = message.data?.pendingPrompt as ChatState['pendingFollowup'];
+              return (pp && !pp.threadId) ? pp : null;
+            })(),
+            // Reset per-thread state on init/reconnect. Stale entries from a
+            // previous connection would leak across (e.g. a thread that
+            // completed during the disconnect would still show 'streaming').
+            // Reset session-wide agentStatus cursors too — otherwise stale
+            // `agentStatusThreadId` from the prior connection gates the
+            // chat-container's activeThreadStatus fallback wrong.
+            agentStatusThreadId: undefined,
+            agentStatusChannelType: undefined,
+            agentStatusChannelId: undefined,
+            threadStatuses: {},
+            // Seed threadPendingFollowups from the init payload's
+            // pendingPrompt when it carries a threadId so a thread-scoped
+            // pending followup survives reconnect. Without this, a queued
+            // followup on thread X becomes invisible after reconnect and
+            // the user can accidentally double-dispatch.
+            threadPendingFollowups: (() => {
+              const pp = message.data?.pendingPrompt as ChatState['pendingFollowup'];
+              return (pp && pp.threadId) ? { [pp.threadId]: pp } : {};
+            })(),
           };
         });
         if (initModels.length > 0) {
@@ -775,12 +857,26 @@ export function useChat(sessionId: string) {
           const newMessages = [...prev.messages];
           newMessages.push(msg);
 
+          // Tool result messages signal "agent is mid-turn, processing the
+          // result." Write that into the OWNING thread's slot rather than
+          // clobbering the session-wide agentStatus.
+          const msgThreadId = msg.threadId;
+          let nextThreadStatuses = prev.threadStatuses;
+          if (d.role === 'tool' && msgThreadId) {
+            nextThreadStatuses = {
+              ...prev.threadStatuses,
+              [msgThreadId]: { status: 'thinking', detail: undefined },
+            };
+          }
           return {
             ...prev,
             messages: newMessages,
+            threadStatuses: nextThreadStatuses,
             // Stop thinking when assistant responds; reset status after tool results
             isAgentThinking: d.role === 'assistant' ? false : prev.isAgentThinking,
-            ...(d.role === 'tool'
+            // Only mutate the session-wide agentStatus when no thread scope
+            // is available — per-thread state is the source of truth.
+            ...(d.role === 'tool' && !msgThreadId
               ? { agentStatus: 'thinking' as const, agentStatusDetail: undefined }
               : {}),
           };
@@ -832,18 +928,79 @@ export function useChat(sessionId: string) {
           const effectiveStatus = newStatus ?? prev.status;
           const terminalSession = isTerminalSessionStatus(effectiveStatus);
 
-          // When a prompt is queued (runner not ready), show queued indicator
-          let { isAgentThinking, agentStatus, agentStatusDetail } = prev;
+          // Server flags promptQueued, promptDequeued, runnerBusy: false can
+          // arrive in the same envelope (rare but legitimate). Process each
+          // independently so a chained else-if doesn't drop one of the
+          // updates. Terminal-session flips override everything else.
+          let { isAgentThinking, agentStatus, agentStatusDetail, threadStatuses } = prev;
+          const statusThreadId = typeof data.threadId === 'string' ? data.threadId : undefined;
+
           if (terminalSession) {
             isAgentThinking = false;
             agentStatus = effectiveStatus === 'error' ? 'error' : 'idle';
             agentStatusDetail = undefined;
-          } else if (data.promptQueued) {
-            isAgentThinking = true;
-            agentStatus = 'queued';
-            agentStatusDetail = data.queueReason === 'busy'
-              ? 'Message queued — waiting for agent...'
-              : 'Message queued — waking session...';
+          } else {
+            if (data.promptQueued) {
+              const queueDetail = data.queueReason === 'busy'
+                ? 'Message queued — waiting for agent...'
+                : 'Message queued — waking session...';
+              if (statusThreadId) {
+                threadStatuses = {
+                  ...threadStatuses,
+                  [statusThreadId]: { status: 'queued', detail: queueDetail },
+                };
+              } else {
+                isAgentThinking = true;
+                agentStatus = 'queued';
+                agentStatusDetail = queueDetail;
+              }
+            }
+            if (data.promptDequeued && statusThreadId) {
+              // Drop the optimistic 'queued' entry — the runner's next
+              // agentStatus will drive the real state.
+              const next = { ...threadStatuses };
+              delete next[statusThreadId];
+              threadStatuses = next;
+            }
+            if (data.runnerBusy === false) {
+              if (statusThreadId) {
+                // Preserve 'error' status against this unconditional
+                // runnerBusy=false → 'idle' write (mirrors the wouldClobberError
+                // guard in the agentStatus reducer). The DO emits a 'status'
+                // frame with runnerBusy=false after handlePromptComplete fires
+                // following an error; without this guard the per-thread error
+                // chip is wiped within ms of being set.
+                const prevStatus = threadStatuses[statusThreadId]?.status;
+                if (prevStatus !== 'error') {
+                  threadStatuses = {
+                    ...threadStatuses,
+                    [statusThreadId]: { status: 'idle', detail: undefined },
+                  };
+                }
+                // If THIS thread was the last actively-working thread, clear
+                // session-wide indicators so the chrome doesn't stay stuck on
+                // 'thinking' from a prior event. 'error' threads do NOT count
+                // as active: the errored thread's own chrome already shows
+                // the error (per-thread state), and treating error as active
+                // would leave the session chrome stuck on 'thinking' forever
+                // — no subsequent agentStatus arrives once a thread has
+                // errored to its terminal state.
+                const anyOtherActive = Object.entries(threadStatuses).some(
+                  ([id, entry]) => id !== statusThreadId && entry?.status
+                    && entry.status !== 'idle' && entry.status !== 'error'
+                );
+                if (!anyOtherActive) {
+                  isAgentThinking = false;
+                  if (agentStatus !== 'error') agentStatus = 'idle';
+                  agentStatusDetail = undefined;
+                }
+              } else {
+                // Unscoped completion (legacy / non-thread channels).
+                isAgentThinking = false;
+                agentStatus = 'idle';
+                agentStatusDetail = undefined;
+              }
+            }
           }
 
           return {
@@ -854,6 +1011,7 @@ export function useChat(sessionId: string) {
             isAgentThinking,
             agentStatus,
             agentStatusDetail,
+            threadStatuses,
           };
         });
         break;
@@ -861,12 +1019,24 @@ export function useChat(sessionId: string) {
 
       case 'chunk': {
         const chunkMsg = message as WebSocketChunkMessage;
-        // Update the message's text part in-place
+        // Update the message's text part in-place. Gate on the OWNING
+        // thread's status, not the session-wide one — otherwise thread A
+        // going idle would silently drop thread B's still-streaming chunks.
         setState((prev) => {
-          if (prev.agentStatus === 'idle') return prev;
           if (!chunkMsg.messageId) return prev;
           const idx = prev.messages.findIndex((m) => m.id === chunkMsg.messageId);
           if (idx === -1) return prev;
+          const chunkThreadId = prev.messages[idx]?.threadId;
+          // When the owning thread has a per-thread status entry, use it.
+          // When the thread is known but has no entry yet (chunk arrived
+          // before the first agentStatus for that thread), accept the
+          // chunk: its arrival is itself evidence the thread is active.
+          // Only fall back to session-wide agentStatus for messages with
+          // NO threadId (legacy non-thread sessions).
+          const ownerStatus = chunkThreadId
+            ? prev.threadStatuses[chunkThreadId]?.status
+            : prev.agentStatus;
+          if (ownerStatus === 'idle') return prev;
           const msg = prev.messages[idx];
           const parts = Array.isArray(msg.parts) ? [...msg.parts] : [];
           const lastPart = parts[parts.length - 1];
@@ -907,9 +1077,50 @@ export function useChat(sessionId: string) {
 
       case 'agentStatus': {
         const statusMsg = message as WebSocketAgentStatusMessage;
+        // Suppress late agentStatus events for a thread we just aborted —
+        // they were emitted by the runner BEFORE our abort frame arrived,
+        // and applying them would flip the Stop button back on between the
+        // optimistic clear and the runner's 'aborted' confirmation. The
+        // sentinel is auto-cleared by an 'idle' status from the runner
+        // (its abort confirmation) or by a 5s timeout in abort().
+        if (statusMsg.threadId) {
+          const expiresAt = abortingThreadsRef.current.get(statusMsg.threadId);
+          if (expiresAt && Date.now() < expiresAt) {
+            if (statusMsg.status === 'idle' || statusMsg.status === 'error') {
+              // Runner confirmed the abort, or hit an error during teardown.
+              // Both clear the sentinel and apply normally so per-thread state
+              // settles on 'idle' or surfaces the teardown error to the user.
+              abortingThreadsRef.current.delete(statusMsg.threadId);
+            } else {
+              return; // suppress thinking/etc. for the aborting thread
+            }
+          }
+        }
         setState((prev) => {
           if (isTerminalSessionStatus(prev.status) && statusMsg.status !== 'error') {
             return prev;
+          }
+          // Record per-thread state so the UI can render a stop button for
+          // each in-flight thread independently. Without this map, cross-
+          // thread concurrent turns get clobbered by whichever thread last
+          // emitted an agentStatus event.
+          let nextThreadStatuses = prev.threadStatuses;
+          if (statusMsg.threadId) {
+            // Preserve an 'error' status against a trailing 'idle' that the
+            // runner emits as part of its normal end-of-turn cleanup
+            // (prompt.ts sends sendError then sendAgentStatus('idle')). If
+            // the latest per-thread state is 'error', the trailing idle is
+            // the finalizer for that error, not a fresh transition — keep
+            // the error chip visible. A new prompt for the thread sends
+            // 'queued'/'thinking', which clears the chip naturally.
+            const prevStatus = prev.threadStatuses[statusMsg.threadId]?.status;
+            const wouldClobberError = prevStatus === 'error' && statusMsg.status === 'idle';
+            if (!wouldClobberError) {
+              nextThreadStatuses = {
+                ...prev.threadStatuses,
+                [statusMsg.threadId]: { status: statusMsg.status, detail: statusMsg.detail },
+              };
+            }
           }
           return {
             ...prev,
@@ -918,6 +1129,7 @@ export function useChat(sessionId: string) {
             agentStatusChannelType: statusMsg.channelType,
             agentStatusChannelId: statusMsg.channelId,
             agentStatusThreadId: statusMsg.threadId,
+            threadStatuses: nextThreadStatuses,
             // Also update isAgentThinking for backward compatibility
             isAgentThinking: statusMsg.status !== 'idle' && !isTerminalSessionStatus(prev.status),
           };
@@ -929,6 +1141,7 @@ export function useChat(sessionId: string) {
         const errorMsg = message as WebSocketErrorMessage;
         const errorText = getWebSocketErrorText(errorMsg);
         const promptId = getWebSocketErrorPromptId(errorMsg);
+        const errThreadId = (errorMsg as { threadId?: string }).threadId;
         const errorMessage: Message = {
           id: errorMsg.messageId || crypto.randomUUID(),
           sessionId: sessionIdRef.current,
@@ -936,18 +1149,34 @@ export function useChat(sessionId: string) {
           content: `Error: ${errorText}`,
           channelType: errorMsg.channelType,
           channelId: errorMsg.channelId,
+          threadId: errThreadId,
           createdAt: new Date(),
         };
-        setState((prev) => ({
-          ...prev,
-          messages: [...prev.messages, errorMessage],
-          interactivePrompts: promptId
-            ? markInteractivePromptError(prev.interactivePrompts, promptId, errorText)
-            : prev.interactivePrompts,
-          isAgentThinking: false,
-          agentStatus: 'error',
-          agentStatusDetail: errorText,
-        }));
+        setState((prev) => {
+          // When the error is thread-scoped, record it in threadStatuses
+          // instead of clobbering the session-wide agentStatus — concurrent
+          // sibling threads keep their own state.
+          let nextThreadStatuses = prev.threadStatuses;
+          if (errThreadId) {
+            nextThreadStatuses = {
+              ...prev.threadStatuses,
+              [errThreadId]: { status: 'error', detail: errorText },
+            };
+          }
+          return {
+            ...prev,
+            messages: [...prev.messages, errorMessage],
+            interactivePrompts: promptId
+              ? markInteractivePromptError(prev.interactivePrompts, promptId, errorText)
+              : prev.interactivePrompts,
+            threadStatuses: nextThreadStatuses,
+            // Only flip the session-wide indicator when the error has no
+            // thread scope (covers session-level failures like spawn errors).
+            isAgentThinking: errThreadId ? prev.isAgentThinking : false,
+            agentStatus: errThreadId ? prev.agentStatus : 'error',
+            agentStatusDetail: errThreadId ? prev.agentStatusDetail : errorText,
+          };
+        });
         break;
       }
 
@@ -1170,18 +1399,58 @@ export function useChat(sessionId: string) {
       }
 
       case 'queue.state': {
-        setState((prev) => ({
-          ...prev,
-          pendingFollowup: (message as any).data?.pending ?? null,
-        }));
+        const data = (message as any).data as { pending: { messageId: string; content: string; attachments?: unknown; threadId?: string } | null; threadId?: string | null };
+        const pending = data?.pending ?? null;
+        // Top-level threadId scopes the update. Treat empty string as
+        // "no scope" — an empty string passing through `??` would otherwise
+        // fall into the unscoped branch and wipe every thread's followup.
+        const rawThreadId = data?.threadId ?? pending?.threadId ?? null;
+        const scopeThreadId = (typeof rawThreadId === 'string' && rawThreadId.length > 0) ? rawThreadId : null;
+        const isThreadScoped = !!(pending?.threadId || scopeThreadId);
+        setState((prev) => {
+          const nextThreadFollowups = { ...prev.threadPendingFollowups };
+          if (pending) {
+            if (pending.threadId) {
+              nextThreadFollowups[pending.threadId] = pending;
+            }
+          } else if (scopeThreadId) {
+            delete nextThreadFollowups[scopeThreadId];
+          }
+          // Update the legacy `pendingFollowup` slot ONLY for unscoped
+          // events (non-thread sessions). Cross-thread leakage into the
+          // legacy slot was confusing consumers that read it directly:
+          // thread A's pending followed by thread B's would clobber A in
+          // the legacy slot, even though A's threadPendingFollowups entry
+          // was still intact. Thread-scoped state belongs in the map.
+          const nextLegacy = isThreadScoped ? prev.pendingFollowup : pending;
+          return {
+            ...prev,
+            pendingFollowup: nextLegacy,
+            threadPendingFollowups: nextThreadFollowups,
+          };
+        });
         break;
       }
 
       case 'queue.withdrawn': {
-        setState((prev) => ({
-          ...prev,
-          pendingFollowup: null,
-        }));
+        const data = (message as any).data as { messageId?: string; content?: string; threadId?: string };
+        const rawWithdrawnThreadId = data?.threadId;
+        const withdrawnThreadId = (typeof rawWithdrawnThreadId === 'string' && rawWithdrawnThreadId.length > 0) ? rawWithdrawnThreadId : null;
+        setState((prev) => {
+          const nextThreadFollowups = { ...prev.threadPendingFollowups };
+          if (withdrawnThreadId) {
+            delete nextThreadFollowups[withdrawnThreadId];
+          }
+          // Unscoped withdrawn no longer mass-clears (matches queue.state).
+          // The legacy `pendingFollowup` only clears when this withdrawal
+          // targets the same thread or is unscoped.
+          const clearLegacy = !withdrawnThreadId || prev.pendingFollowup?.threadId === withdrawnThreadId;
+          return {
+            ...prev,
+            pendingFollowup: clearLegacy ? null : prev.pendingFollowup,
+            threadPendingFollowups: nextThreadFollowups,
+          };
+        });
         break;
       }
 
@@ -1209,6 +1478,10 @@ export function useChat(sessionId: string) {
   const sendMessage = useCallback(
     (content: string, model?: string, attachments?: PromptAttachment[], channelType?: string, channelId?: string, queueModeOverride?: QueueMode, threadId?: string, continuationContext?: string) => {
       if (!isConnected) return;
+      // Sending a new prompt on a thread implicitly cancels any in-progress
+      // "aborting" sentinel for that thread — otherwise the new prompt's
+      // first agentStatus events would be suppressed up to the 30s fallback.
+      if (threadId) abortingThreadsRef.current.delete(threadId);
 
       const payload = {
         content,
@@ -1226,33 +1499,102 @@ export function useChat(sessionId: string) {
       const payloadSize = attachments?.reduce((sum, a) => sum + (a.url?.length ?? 0), 0) ?? 0;
       if (payloadSize > 800_000) {
         console.log(`[chat] Using HTTP for large payload (${(payloadSize / 1_000_000).toFixed(1)}MB)`);
-        api.post(`/sessions/${sessionIdRef.current}/prompt`, payload).catch((err) => {
-          console.error('[chat] HTTP prompt failed:', err);
-        });
+        // Track an AbortController so a subsequent abort() can cancel the
+        // in-flight POST before it reaches the DO — without this the
+        // user's /stop is racy against the HTTP prompt request.
+        const ac = new AbortController();
+        if (threadId) pendingHttpSendsRef.current.set(threadId, ac);
+        api.post(`/sessions/${sessionIdRef.current}/prompt`, payload, { signal: ac.signal })
+          .catch((err) => {
+            if (err?.name === 'AbortError') return; // canceled by abort()
+            console.error('[chat] HTTP prompt failed:', err);
+          })
+          .finally(() => {
+            if (threadId && pendingHttpSendsRef.current.get(threadId) === ac) {
+              pendingHttpSendsRef.current.delete(threadId);
+            }
+          });
       } else {
         send({ type: 'prompt', ...payload });
       }
 
-      // Start thinking indicator when user sends a message
-      setState((prev) => ({ ...prev, isAgentThinking: true }));
+      // Start thinking indicator when user sends a message. Mirror it into
+      // the targeted thread's slot so per-thread UI flips immediately
+      // (without waiting for the runner's first agentStatus event). Write
+      // 'queued' when the thread is idle / unknown / errored — don't
+      // downgrade an actively-running 'thinking'/'streaming' indicator.
+      setState((prev) => {
+        let nextThreadStatuses = prev.threadStatuses;
+        if (threadId) {
+          const existing = prev.threadStatuses[threadId]?.status;
+          const downgrade = existing === 'thinking' || existing === 'tool_calling' || existing === 'streaming';
+          if (!downgrade) {
+            nextThreadStatuses = {
+              ...prev.threadStatuses,
+              [threadId]: { status: 'queued', detail: undefined },
+            };
+          }
+        }
+        return { ...prev, isAgentThinking: true, threadStatuses: nextThreadStatuses };
+      });
     },
     [isConnected, send, userQueueMode]
   );
 
   const abort = useCallback((channelType?: string, channelId?: string) => {
     if (!isConnected) return;
+    // Require a non-empty channelId to treat the abort as thread-scoped.
+    // Without this guard, an empty-string channelId from a URL search param
+    // would fall into the session-wide branch and wipe every thread's busy
+    // indicator session-wide.
+    const isThreadScopedInput = channelType === 'thread' && typeof channelId === 'string' && channelId.length > 0;
+
+    // Cancel any in-flight HTTP send for this thread first so the DO
+    // doesn't see an orphan prompt arrive after the abort frame.
+    if (isThreadScopedInput) {
+      const inflight = pendingHttpSendsRef.current.get(channelId!);
+      if (inflight) {
+        inflight.abort();
+        pendingHttpSendsRef.current.delete(channelId!);
+      }
+      // Sentinel: ignore late agentStatus events for this thread until
+      // the runner's confirming 'idle' arrives. The fallback timeout
+      // protects against the runner crashing mid-abort; 30s covers slow
+      // tool teardown (shell exec, network I/O, sandbox restore). The
+      // sentinel is also cleared if the user kicks off a new prompt on
+      // this thread before then — see sendMessage.
+      const FALLBACK_MS = 30_000;
+      const expiresAt = Date.now() + FALLBACK_MS;
+      abortingThreadsRef.current.set(channelId!, expiresAt);
+      setTimeout(() => {
+        const stamp = abortingThreadsRef.current.get(channelId!);
+        if (stamp === expiresAt) abortingThreadsRef.current.delete(channelId!);
+      }, FALLBACK_MS);
+    }
+
     send({
       type: 'abort',
-      ...(channelType ? { channelType } : {}),
-      ...(channelId ? { channelId } : {}),
+      ...(isThreadScopedInput ? { channelType, channelId } : {}),
     });
-    // Optimistically clear streaming state
-    setState((prev) => ({
-      ...prev,
-      isAgentThinking: false,
-      agentStatus: 'idle' as const,
-      agentStatusDetail: undefined,
-    }));
+    setState((prev) => {
+      const isThreadScoped = isThreadScopedInput;
+      const nextThreadStatuses = isThreadScoped
+        ? { ...prev.threadStatuses, [channelId!]: { status: 'idle' as AgentStatus, detail: undefined } }
+        : prev.threadStatuses;
+      // Only clear the session-wide indicator when the abort wasn't thread
+      // scoped — otherwise the runner's per-channel `agentStatus: idle`
+      // (or the next status from a still-running thread) will drive it.
+      if (isThreadScoped) {
+        return { ...prev, threadStatuses: nextThreadStatuses };
+      }
+      return {
+        ...prev,
+        isAgentThinking: false,
+        agentStatus: 'idle' as const,
+        agentStatusDetail: undefined,
+        threadStatuses: nextThreadStatuses,
+      };
+    });
   }, [isConnected, send]);
 
   const revertMessage = useCallback(
@@ -1342,7 +1684,7 @@ export function useChat(sessionId: string) {
   }, []);
 
   const executeCommand = useCallback(
-    async (command: string, _args?: string, channelType?: string, channelId?: string, _threadId?: string) => {
+    async (command: string, _args?: string, channelType?: string, channelId?: string, threadId?: string) => {
       const def = SLASH_COMMANDS.find((c) => c.name === command);
       if (!def) return;
 
@@ -1369,7 +1711,13 @@ export function useChat(sessionId: string) {
               requestReview();
               break;
             case 'stop':
-              abort();
+              // Scope the abort to the active thread so /stop on one thread
+              // doesn't kill concurrent turns on sibling threads.
+              if (threadId) {
+                abort('thread', threadId);
+              } else {
+                abort();
+              }
               break;
             case 'new-session':
               send({
@@ -1477,8 +1825,8 @@ export function useChat(sessionId: string) {
 
   // Load messages for a specific thread (fetches from D1 fallback if DO has none).
   // Used when switching to a past thread whose messages were purged from the DO
-  // after an orchestrator restart.
-  const loadedThreadsRef = useRef(new Set<string>());
+  // after an orchestrator restart. (loadedThreadsRef is declared with the other
+  // refs near the top of the hook so the session-switch effect can clear it.)
   const loadThreadMessages = useCallback((threadId: string) => {
     if (!threadId || loadedThreadsRef.current.has(threadId)) return;
     // Check if we already have messages for this thread
@@ -1548,6 +1896,7 @@ export function useChat(sessionId: string) {
     agentStatusChannelType: state.agentStatusChannelType,
     agentStatusChannelId: state.agentStatusChannelId,
     agentStatusThreadId: state.agentStatusThreadId,
+    threadStatuses: state.threadStatuses,
     availableModels: state.availableModels,
     selectedModel,
     setSelectedModel: handleModelChange,
@@ -1592,6 +1941,7 @@ export function useChat(sessionId: string) {
     }, [isConnected, send]),
     loadThreadMessages,
     pendingFollowup: state.pendingFollowup,
+    threadPendingFollowups: state.threadPendingFollowups,
     queueWithdraw,
     queuePromote,
     queueReplace,

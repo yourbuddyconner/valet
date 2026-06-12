@@ -31,7 +31,16 @@ interface QueueRow {
   child_status: string | null;
   priority: number;
   replaceable: number;
+  received_at: number | null;
+  dispatched_at: number | null;
   created_at: number;
+}
+
+interface ChannelStateRow {
+  busy: number;
+  opencode_session_id: string | null;
+  idle_queued_since: number | null;
+  error_safety_net_at: number | null;
 }
 
 function cursor<T>(rows: T[]): { toArray(): T[]; one(): T } {
@@ -46,14 +55,16 @@ function cursor<T>(rows: T[]): { toArray(): T[]; one(): T } {
 
 let insertCounter = 0;
 
-function createMockSql(): SqlStorage & { queue: Map<string, QueueRow>; state: Map<string, string> } {
+function createMockSql(): SqlStorage & { queue: Map<string, QueueRow>; state: Map<string, string>; channelState: Map<string, ChannelStateRow> } {
   const queue = new Map<string, QueueRow>();
   const state = new Map<string, string>();
+  const channelState = new Map<string, ChannelStateRow>();
   insertCounter = 0;
 
   return {
     queue,
     state,
+    channelState,
     exec(query: string, ...params: unknown[]) {
       const q = query.trim();
 
@@ -86,16 +97,19 @@ function createMockSql(): SqlStorage & { queue: Map<string, QueueRow>; state: Ma
           child_status: null,
           priority: 0,
           replaceable: 1,
+          received_at: null,
+          dispatched_at: null,
           created_at: insertCounter, // monotonic for ordering
         };
 
-        // Parse workflow_execute INSERTs
+        // Parse workflow_execute INSERTs (id, exec_id, payload, status, received_at)
         if (q.includes("'workflow_execute'")) {
           row.content = '';
           row.queue_type = 'workflow_execute';
           row.workflow_execution_id = (params[1] as string) || null;
           row.workflow_payload = (params[2] as string) || null;
           row.status = (params[3] as string) || 'queued';
+          row.received_at = typeof params[4] === 'number' ? params[4] : Date.now();
         } else if (params.length >= 17) {
           // Full prompt INSERT
           row.attachments = (params[2] as string) || null;
@@ -117,6 +131,7 @@ function createMockSql(): SqlStorage & { queue: Map<string, QueueRow>; state: Ma
           row.child_status = (params[18] as string) || null;
           row.priority = typeof params[19] === 'number' ? params[19] : 0;
           row.replaceable = typeof params[20] === 'number' ? params[20] : 1;
+          row.received_at = typeof params[21] === 'number' ? params[21] : Date.now();
         } else if (params.length >= 3) {
           // Minimal INSERT (id, content, status, thread_id)
           row.status = q.includes("'processing'") ? 'processing' : 'queued';
@@ -132,6 +147,14 @@ function createMockSql(): SqlStorage & { queue: Map<string, QueueRow>; state: Ma
 
         if (q.includes('WHERE id = ?')) {
           rows = rows.filter((r) => r.id === (params[0] as string));
+          if (q.includes("AND status = 'processing'")) {
+            rows = rows.filter((r) => r.status === 'processing');
+          } else if (q.includes("AND status = 'queued'")) {
+            rows = rows.filter((r) => r.status === 'queued');
+          }
+        } else if (q.includes('WHERE channel_key = ?')) {
+          const channelKey = String(params[0]);
+          rows = rows.filter((r) => r.channel_key === channelKey);
           if (q.includes("AND status = 'processing'")) {
             rows = rows.filter((r) => r.status === 'processing');
           } else if (q.includes("AND status = 'queued'")) {
@@ -161,16 +184,59 @@ function createMockSql(): SqlStorage & { queue: Map<string, QueueRow>; state: Ma
           return cursor([{ count: rows.length, c: rows.length }]);
         }
 
+        // Aggregates
+        if (q.includes('MAX(dispatched_at)')) {
+          const ts = rows
+            .filter((r) => r.dispatched_at !== null)
+            .reduce<number | null>((max, r) => Math.max(max ?? 0, r.dispatched_at as number) , null);
+          return cursor([{ ts }]);
+        }
+        if (q.includes('MIN(dispatched_at)')) {
+          const filtered = rows.filter((r) => r.dispatched_at !== null);
+          const ts = filtered.length === 0 ? null : filtered.reduce<number>((min, r) => Math.min(min, r.dispatched_at as number), Infinity);
+          return cursor([{ ts: ts === Infinity ? null : ts }]);
+        }
+        if (q.includes('SELECT DISTINCT channel_key')) {
+          const seen = new Set<string>();
+          const out: Array<{ channel_key: string }> = [];
+          for (const r of rows) {
+            if (r.channel_key && !seen.has(r.channel_key)) {
+              seen.add(r.channel_key);
+              out.push({ channel_key: r.channel_key });
+            }
+          }
+          return cursor(out);
+        }
+
         if (q.includes('ORDER BY priority DESC, created_at ASC')) {
           rows.sort((a, b) => b.priority - a.priority || a.created_at - b.created_at);
         } else if (q.includes('ORDER BY created_at ASC')) {
           rows.sort((a, b) => a.created_at - b.created_at);
+        } else if (q.includes('ORDER BY dispatched_at ASC')) {
+          rows = rows.filter((r) => r.dispatched_at !== null);
+          rows.sort((a, b) => (a.dispatched_at as number) - (b.dispatched_at as number));
         }
         if (q.includes('ORDER BY created_at DESC')) {
           rows.sort((a, b) => b.created_at - a.created_at);
         }
 
-        if (q.includes('LIMIT 1') && rows.length > 1) {
+        // Optional `AND id NOT IN (?, ?, ...)` for drain exclude list
+        const notInMatch = q.match(/id NOT IN \(([?,\s]+)\)/);
+        if (notInMatch) {
+          const placeholderCount = (notInMatch[1].match(/\?/g) ?? []).length;
+          const excluded = new Set(params.slice(0, placeholderCount).map((p) => String(p)));
+          rows = rows.filter((r) => !excluded.has(r.id));
+        }
+
+        // Optional `dispatched_at <= ?` for stuck-processing lookup
+        if (q.includes('dispatched_at <= ?')) {
+          const cutoff = Number(params[params.length - 1]);
+          rows = rows.filter((r) => r.dispatched_at !== null && (r.dispatched_at as number) <= cutoff);
+        }
+
+        if (q.includes('LIMIT 2') && rows.length > 2) {
+          rows = rows.slice(0, 2);
+        } else if (q.includes('LIMIT 1') && rows.length > 1) {
           rows = [rows[0]];
         }
 
@@ -178,7 +244,12 @@ function createMockSql(): SqlStorage & { queue: Map<string, QueueRow>; state: Ma
       }
 
       if (q.startsWith('UPDATE prompt_queue')) {
-        if (q.includes("SET status = 'processing' WHERE id = ?")) {
+        if (q.includes('SET dispatched_at = ?')) {
+          const ts = Number(params[0]);
+          const id = params[1] as string;
+          const row = queue.get(id);
+          if (row) row.dispatched_at = ts;
+        } else if (q.includes("SET status = 'processing' WHERE id = ?")) {
           const row = queue.get(params[0] as string);
           if (row) row.status = 'processing';
         } else if (q.includes("SET status = 'completed' WHERE status = 'processing'")) {
@@ -188,15 +259,85 @@ function createMockSql(): SqlStorage & { queue: Map<string, QueueRow>; state: Ma
         } else if (q.includes("SET status = 'completed' WHERE id = ?")) {
           const row = queue.get(params[0] as string);
           if (row) row.status = 'completed';
-        } else if (q.includes("SET status = 'queued' WHERE status = 'processing'")) {
+        } else if (q.includes("SET status = 'queued'") && q.includes("WHERE status = 'processing'")) {
+          // The new revertProcessingToQueued NULLs dispatched_at alongside.
           for (const row of queue.values()) {
-            if (row.status === 'processing') row.status = 'queued';
+            if (row.status === 'processing') {
+              row.status = 'queued';
+              if (q.includes('dispatched_at = NULL')) row.dispatched_at = null;
+            }
           }
-        } else if (q.includes("SET status = 'queued' WHERE id = ?")) {
+        } else if (q.includes("SET status = 'queued'") && q.includes('WHERE id = ?')) {
           const row = queue.get(params[0] as string);
-          if (row) row.status = 'queued';
+          if (row) {
+            row.status = 'queued';
+            if (q.includes('dispatched_at = NULL')) row.dispatched_at = null;
+          }
         }
         return cursor([]);
+      }
+
+      // ─── channel_state operations ─────────────────────────────────
+
+      if (q.startsWith('INSERT INTO channel_state')) {
+        const channelKey = String(params[0]);
+        const existing = channelState.get(channelKey) ?? {
+          busy: 0,
+          opencode_session_id: null,
+          idle_queued_since: null,
+          error_safety_net_at: null,
+        };
+        if (q.includes('opencode_session_id')) {
+          const v = params[1] === undefined || params[1] === null ? null : String(params[1]);
+          channelState.set(channelKey, { ...existing, opencode_session_id: v });
+        } else if (q.includes('idle_queued_since')) {
+          const v = params[1] === undefined || params[1] === null ? null : Number(params[1]);
+          channelState.set(channelKey, { ...existing, idle_queued_since: v });
+        } else if (q.includes('error_safety_net_at')) {
+          const v = params[1] === undefined || params[1] === null ? null : Number(params[1]);
+          channelState.set(channelKey, { ...existing, error_safety_net_at: v });
+        } else {
+          const busy = Number(params[1]) || 0;
+          channelState.set(channelKey, { ...existing, busy });
+        }
+        return cursor([]);
+      }
+
+      if (q.startsWith('UPDATE channel_state SET busy')) {
+        for (const [k, v] of channelState) channelState.set(k, { ...v, busy: 0 });
+        return cursor([]);
+      }
+      if (q.startsWith('UPDATE channel_state SET idle_queued_since')) {
+        for (const [k, v] of channelState) channelState.set(k, { ...v, idle_queued_since: null });
+        return cursor([]);
+      }
+      if (q.startsWith('UPDATE channel_state SET error_safety_net_at')) {
+        for (const [k, v] of channelState) channelState.set(k, { ...v, error_safety_net_at: null });
+        return cursor([]);
+      }
+
+      if (q.startsWith('SELECT') && q.includes('FROM channel_state')) {
+        if (q.includes('WHERE busy = 1')) {
+          const found = Array.from(channelState.entries()).find(([, r]) => r.busy === 1);
+          return found ? cursor([{ channel_key: found[0] }]) : cursor([]);
+        }
+        if (q.includes('error_safety_net_at IS NOT NULL')) {
+          const rows = Array.from(channelState.entries())
+            .filter(([, r]) => r.error_safety_net_at !== null)
+            .map(([k, r]) => ({ channel_key: k, error_safety_net_at: r.error_safety_net_at }));
+          rows.sort((a, b) => (a.error_safety_net_at ?? 0) - (b.error_safety_net_at ?? 0));
+          return cursor(rows.slice(0, 1));
+        }
+        if (q.includes('idle_queued_since IS NOT NULL')) {
+          const rows = Array.from(channelState.entries())
+            .filter(([, r]) => r.idle_queued_since !== null)
+            .map(([k, r]) => ({ channel_key: k, idle_queued_since: r.idle_queued_since }));
+          rows.sort((a, b) => (a.idle_queued_since ?? 0) - (b.idle_queued_since ?? 0));
+          return cursor(rows.slice(0, 1));
+        }
+        const channelKey = String(params[0]);
+        const row = channelState.get(channelKey);
+        return row === undefined ? cursor([]) : cursor([row]);
       }
 
       if (q.startsWith('DELETE FROM prompt_queue')) {
@@ -254,7 +395,7 @@ function createMockSql(): SqlStorage & { queue: Map<string, QueueRow>; state: Ma
 
       return cursor([]);
     },
-  } as unknown as SqlStorage & { queue: Map<string, QueueRow>; state: Map<string, string> };
+  } as unknown as SqlStorage & { queue: Map<string, QueueRow>; state: Map<string, string>; channelState: Map<string, ChannelStateRow> };
 }
 
 // ─── Tests ──────────────────────────────────────────────────────────────────
@@ -578,39 +719,38 @@ describe('PromptQueue', () => {
   });
 
   describe('stampDispatched', () => {
-    it('sets runnerBusy and lastPromptDispatchedAt', () => {
+    it('sets runnerBusy; lastPromptDispatchedAt requires a processing row with messageId', () => {
+      // No-arg stamp (workflow direct-dispatch) sets runnerBusy but doesn't
+      // touch the row table, so the aggregate getter remains 0.
       pq.stampDispatched();
       expect(pq.runnerBusy).toBe(true);
+      expect(pq.lastPromptDispatchedAt).toBe(0);
+
+      // With messageId on a processing row, the aggregate getter reflects it.
+      pq.enqueue({ id: 'mx', content: 'hi', channelKey: 'thread:x', channelType: 'thread', channelId: 'x', status: 'processing' });
+      pq.stampDispatched('mx', 'thread:x');
       expect(pq.lastPromptDispatchedAt).toBeGreaterThan(0);
     });
   });
 
-  describe('clearDispatchTimers', () => {
-    it('clears lastPromptDispatchedAt and errorSafetyNetAt', () => {
-      pq.stampDispatched();
-      pq.errorSafetyNetAt = Date.now() + 60000;
-      pq.clearDispatchTimers();
-      expect(pq.lastPromptDispatchedAt).toBe(0);
-      expect(pq.errorSafetyNetAt).toBe(0);
-    });
-  });
+  describe('per-row dispatched_at + per-channel error safety net', () => {
+    it('stampDispatched updates the prompt_queue row and runnerBusy; safety net is per-channel', () => {
+      pq.enqueue({ id: 'm1', content: 'hi', channelKey: 'thread:a', channelType: 'thread', channelId: 'a', status: 'processing' });
+      pq.stampDispatched('m1', 'thread:a');
+      expect(pq.runnerBusy).toBe(true);
+      expect(pq.lastPromptDispatchedAt).toBeGreaterThan(0);
 
-  describe('promptReceivedAt', () => {
-    it('stamps and clears', () => {
-      pq.stampPromptReceived();
-      expect(pq.promptReceivedAt).toBeGreaterThan(0);
-      pq.clearPromptReceived();
-      expect(pq.promptReceivedAt).toBe(0);
-    });
-  });
+      pq.setChannelErrorSafetyNetAt('thread:a', Date.now() + 60000);
+      expect(pq.getChannelErrorSafetyNetAt('thread:a')).toBeGreaterThan(0);
 
-  describe('currentPromptAuthorId', () => {
-    it('gets and sets', () => {
-      expect(pq.currentPromptAuthorId).toBeUndefined();
-      pq.currentPromptAuthorId = 'user123';
-      expect(pq.currentPromptAuthorId).toBe('user123');
-      pq.currentPromptAuthorId = undefined;
-      expect(pq.currentPromptAuthorId).toBeUndefined();
+      pq.clearAllChannelErrorSafetyNets();
+      expect(pq.getChannelErrorSafetyNetAt('thread:a')).toBe(0);
+    });
+
+    it('received_at is stamped at enqueue time and readable per-row', () => {
+      pq.enqueue({ id: 'm-rcv', content: 'x', channelKey: 'thread:b', channelType: 'thread', channelId: 'b', status: 'queued' });
+      expect(pq.getReceivedAtById('m-rcv')).toBeGreaterThan(0);
+      expect(pq.getReceivedAtById('does-not-exist')).toBe(0);
     });
   });
 
@@ -626,18 +766,22 @@ describe('PromptQueue', () => {
   });
 
   describe('isStuckProcessing', () => {
-    it('returns false with no dispatch', () => {
+    it('returns false with no in-flight rows', () => {
       expect(pq.isStuckProcessing(5000)).toBe(false);
     });
 
-    it('returns true when dispatch is older than timeout', () => {
-      // Set lastPromptDispatchedAt to 10 seconds ago
-      sql.state.set('lastPromptDispatchedAt', String(Date.now() - 10000));
+    it('returns true when the OLDEST processing row was dispatched longer ago than the timeout', () => {
+      pq.enqueue({ id: 'old', content: 'x', channelKey: 'thread:a', channelType: 'thread', channelId: 'a', status: 'processing' });
+      // Reach into the mock to backdate dispatched_at for the row.
+      const row = sql.queue.get('old')!;
+      row.dispatched_at = Date.now() - 10000;
       expect(pq.isStuckProcessing(5000)).toBe(true);
     });
 
-    it('returns false when dispatch is newer than timeout', () => {
-      sql.state.set('lastPromptDispatchedAt', String(Date.now() - 1000));
+    it('returns false when every processing row dispatched within the timeout window', () => {
+      pq.enqueue({ id: 'fresh', content: 'x', channelKey: 'thread:b', channelType: 'thread', channelId: 'b', status: 'processing' });
+      const row = sql.queue.get('fresh')!;
+      row.dispatched_at = Date.now() - 1000;
       expect(pq.isStuckProcessing(5000)).toBe(false);
     });
   });
@@ -744,14 +888,21 @@ describe('PromptQueue', () => {
       expect(pq.idleQueuedSince).toBe(0);
     });
 
-    it('stores and retrieves a timestamp', () => {
-      pq.idleQueuedSince = 1711921234000;
+    it('arms and reads back via per-channel API; aggregate getter returns earliest', () => {
+      pq.setChannelIdleQueuedSince('thread:a', 1711921234000);
+      expect(pq.getChannelIdleQueuedSince('thread:a')).toBe(1711921234000);
       expect(pq.idleQueuedSince).toBe(1711921234000);
+
+      pq.setChannelIdleQueuedSince('thread:b', 1711921200000); // older
+      expect(pq.idleQueuedSince).toBe(1711921200000);
     });
 
-    it('clears when set to 0', () => {
-      pq.idleQueuedSince = 1711921234000;
-      pq.idleQueuedSince = 0;
+    it('clearAllChannelIdleQueuedSince zeroes every channel', () => {
+      pq.setChannelIdleQueuedSince('thread:a', 1711921234000);
+      pq.setChannelIdleQueuedSince('thread:b', 1711921000000);
+      pq.clearAllChannelIdleQueuedSince();
+      expect(pq.getChannelIdleQueuedSince('thread:a')).toBe(0);
+      expect(pq.getChannelIdleQueuedSince('thread:b')).toBe(0);
       expect(pq.idleQueuedSince).toBe(0);
     });
   });
@@ -774,14 +925,38 @@ describe('PromptQueue', () => {
       expect(count).toBe(0);
     });
 
-    it('falls back to markCompleted when id is undefined', () => {
+    it('returns 0 and DOES NOT escalate when id is undefined', () => {
+      // The previous fallback to unscoped markCompleted() wiped every
+      // processing row across the DO. Under concurrent dispatch that
+      // orphaned every other channel's runner state. Watchdog handles
+      // truly stuck rows via its 5-min revert; this path is now a no-op.
       pq.enqueue({ id: 'a', content: 'first', status: 'processing' });
       pq.enqueue({ id: 'b', content: 'second', status: 'processing' });
 
       const count = pq.markCompletedById(undefined);
 
-      expect(count).toBe(2);
-      expect(pq.processingCount).toBe(0);
+      expect(count).toBe(0);
+      expect(pq.processingCount).toBe(2); // both rows untouched
+    });
+  });
+
+  describe('markCompletedMostRecentByChannel', () => {
+    it('completes the most recent processing row on the given channel', () => {
+      pq.enqueue({ id: 'a', content: 'first', status: 'processing', channelKey: 'thread:t1' });
+      pq.enqueue({ id: 'b', content: 'second', status: 'processing', channelKey: 'thread:t1' });
+      pq.enqueue({ id: 'c', content: 'third', status: 'processing', channelKey: 'thread:t2' });
+
+      const completedId = pq.markCompletedMostRecentByChannel('thread:t1');
+
+      expect(completedId).toBe('b');
+      expect(pq.processingCount).toBe(2); // 'a' and 'c' remain
+    });
+
+    it('returns null when no processing row exists on the channel', () => {
+      pq.enqueue({ id: 'a', content: 'first', status: 'processing', channelKey: 'thread:t1' });
+      const completedId = pq.markCompletedMostRecentByChannel('thread:t2');
+      expect(completedId).toBeNull();
+      expect(pq.processingCount).toBe(1);
     });
   });
 
