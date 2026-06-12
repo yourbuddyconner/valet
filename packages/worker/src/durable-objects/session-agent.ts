@@ -4890,11 +4890,16 @@ export class SessionAgentDO {
     // of dispatching one and waiting for it to finish before sending the next.
     // `skippedBusyIds` prevents the dequeue/revert pair from cycling forever
     // on rows whose channels are still busy after we already passed them.
+    // We snapshot `waitSubscription` because `dispatchQueuedPromptEntry`
+    // clears it on every successful dispatch — without the snapshot, the
+    // first dispatch's clear would silently disable child-event filtering for
+    // items 2..N in the same pass.
     let dispatchedAny = false;
     const skippedBusyIds = new Set<string>();
+    const waitSubscriptionSnapshot = this.sessionState.waitSubscription;
 
     while (true) {
-      const next = this.pickNextDispatchableQueuedPrompt(skippedBusyIds);
+      const next = this.pickNextDispatchableQueuedPrompt(skippedBusyIds, waitSubscriptionSnapshot);
       if (!next) {
         if (!dispatchedAny) {
           console.log(`[SessionAgentDO] sendNextQueuedPrompt: no queued items`);
@@ -4922,8 +4927,15 @@ export class SessionAgentDO {
    * `skippedBusyIds` is mutated to remember rows already reverted as busy in
    * this drain pass. We pass that set into `dequeueNext` so each subsequent
    * pick advances past those rows instead of cycling on the oldest one.
+   *
+   * `waitSubscription` is a snapshot taken at drain entry so child-event
+   * filtering uses the subscription that was in effect when the drain
+   * started, not whatever a mid-drain dispatch left behind.
    */
-  private pickNextDispatchableQueuedPrompt(skippedBusyIds: Set<string>): QueueEntry | null {
+  private pickNextDispatchableQueuedPrompt(
+    skippedBusyIds: Set<string>,
+    waitSubscription: { reason?: string; sessionIds?: string[]; notifyOn?: string; statuses?: string[] } | null,
+  ): QueueEntry | null {
     // When a wait subscription is active, prefer child events that match the
     // subscription (dispatched directly by handleSystemMessage's wake path,
     // not via the queue — but legacy queued events may exist). If the next
@@ -4940,7 +4952,7 @@ export class SessionAgentDO {
       // the agent registered via wait_for_event — drop them and try the next entry.
       let shouldSkip = false;
       if (prompt.childSessionId) {
-        const queueSub = this.sessionState.waitSubscription;
+        const queueSub = waitSubscription;
         if (queueSub) {
           const terminalStatuses = new Set(['terminated', 'error', 'hibernated']);
           const notifyOn = queueSub.notifyOn || 'status_change';
@@ -4978,6 +4990,27 @@ export class SessionAgentDO {
         continue;
       }
 
+      // Runner-exclusivity check, mirroring the live handlePrompt path:
+      //   - workflow_execute holds the runner exclusively (its stampDispatched
+      //     sets runnerBusy without a channel marker). Don't dispatch one if
+      //     anything is in flight, and don't dispatch anything else while one
+      //     is in flight.
+      //   - For regular prompts, refuse to dispatch when runnerBusy is set but
+      //     no channel is tracked — that signals an untracked turn (workflow
+      //     or recovery) owns the runner.
+      const isWorkflow = prompt.queueType === 'workflow_execute';
+      const anyChannelBusy = this.promptQueue.getBusyChannelKey() !== null;
+      const blockedByExclusivity = isWorkflow
+        ? (this.promptQueue.runnerBusy || anyChannelBusy)
+        : (this.promptQueue.runnerBusy && !anyChannelBusy);
+      if (blockedByExclusivity) {
+        console.log(`[SessionAgentDO] sendNextQueuedPrompt: skipping item ${prompt.id} — runner exclusively busy (isWorkflow=${isWorkflow} runnerBusy=${this.promptQueue.runnerBusy} anyChannelBusy=${anyChannelBusy})`);
+        skippedBusyIds.add(prompt.id);
+        this.promptQueue.revertProcessingToQueued(prompt.id);
+        prompt = this.promptQueue.dequeueNext(skippedBusyIds);
+        continue;
+      }
+
       // Skip items whose target channel is already busy (concurrent dispatch).
       // Don't drop — revert to queued so they dispatch when the channel completes.
       const queuedChannelKey = prompt.channelKey || this.channelKeyFrom(prompt.channelType || undefined, prompt.channelId || undefined);
@@ -4998,10 +5031,32 @@ export class SessionAgentDO {
   /**
    * Dispatch a single queue entry that has already been marked 'processing'
    * by {@link pickNextDispatchableQueuedPrompt}. Returns true on a successful
-   * runner send; on failure the row is reverted to 'queued' and false is
-   * returned. Channel-busy/wait-subscription filtering is the caller's job.
+   * runner send; on failure (send refused or any other thrown error during
+   * the dispatch body) the row is reverted to 'queued' and false is returned.
+   *
+   * Channel-busy/wait-subscription filtering is the caller's job. The body
+   * is wrapped in try/catch so a mid-drain exception only reverts THIS row;
+   * earlier successfully-dispatched rows stay 'processing' so they aren't
+   * silently re-sent to the runner on the next drain pass.
    */
   private async dispatchQueuedPromptEntry(prompt: QueueEntry): Promise<boolean> {
+    try {
+      return await this.dispatchQueuedPromptEntryUnsafe(prompt);
+    } catch (err) {
+      console.error(
+        `[SessionAgentDO] dispatchQueuedPromptEntry: error dispatching ${prompt.id}, reverting to queued:`,
+        err,
+      );
+      this.promptQueue.revertProcessingToQueued(prompt.id);
+      this.emitAuditEvent(
+        'prompt.dispatch_failed',
+        `Queue dispatch threw: ${prompt.id.slice(0, 8)}`,
+      );
+      return false;
+    }
+  }
+
+  private async dispatchQueuedPromptEntryUnsafe(prompt: QueueEntry): Promise<boolean> {
     // ─── Deferred user message write ───────────────────────────────────
     // User messages are not written to the message store at enqueue time.
     // Write + broadcast now at dispatch time. Uses INSERT OR IGNORE for
