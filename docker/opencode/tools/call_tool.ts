@@ -16,7 +16,7 @@ export default tool({
       .string()
       .describe("A brief, human-readable summary of what this tool call will do and why. This is shown to the user for approval. Example: 'Send a Slack message to #engineering with the deployment status update'"),
   },
-  async execute(args) {
+  async execute(args, ctx) {
     try {
       if (!args.tool_id) {
         return "Error: tool_id is required. Use list_tools to discover available tools."
@@ -34,9 +34,18 @@ export default tool({
         }
       }
 
+      // Pass the calling OpenCode session id so the DO can resolve the
+      // originating channel without falling back to a non-deterministic
+      // "most recent processing row" guess when multiple threads are running
+      // concurrently on this session.
+      const headers: Record<string, string> = { "Content-Type": "application/json" }
+      if (ctx?.sessionID) {
+        headers["x-opencode-session-id"] = ctx.sessionID
+      }
+
       const res = await fetch("http://localhost:9000/api/tools/call", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers,
         body: JSON.stringify({ toolId: args.tool_id, params, summary: args.summary }),
       })
 

@@ -9,7 +9,10 @@ function baseSnapshot(overrides: Partial<HealthSnapshot> = {}): HealthSnapshot {
     runnerBusy: false,
     queuedCount: 0,
     processingCount: 0,
-    lastDispatchedAt: 0,
+    oldestProcessingDispatchedAt: 0,
+    stuckProcessingMessageId: null,
+    idleQueuedChannelKey: null,
+    errorSafetyNetChannelKey: null,
     idleQueuedSince: 0,
     errorSafetyNetAt: 0,
     sessionStatus: 'running',
@@ -55,20 +58,31 @@ describe('SessionHealthMonitor', () => {
   describe('stuck processing', () => {
     it('reverts when processing is stuck and runner disconnected', () => {
       const now = Date.now();
-      const result = monitor.check(baseSnapshot({ now, runnerBusy: true, runnerConnected: false, processingCount: 1, lastDispatchedAt: now - 6 * 60 * 1000 }));
-      expect(result.actions).toEqual([{ type: 'revert_and_drain', reason: expect.stringContaining('stuck in processing') }]);
+      const result = monitor.check(baseSnapshot({
+        now,
+        runnerBusy: true,
+        runnerConnected: false,
+        processingCount: 1,
+        oldestProcessingDispatchedAt: now - 6 * 60 * 1000,
+        stuckProcessingMessageId: 'msg-stuck',
+      }));
+      expect(result.actions).toEqual([{
+        type: 'revert_and_drain',
+        reason: expect.stringContaining('stuck in processing'),
+        messageId: 'msg-stuck',
+      }]);
       expect(result.events[0].cause).toBe('stuck_processing');
     });
 
     it('does not fire when runner is connected', () => {
       const now = Date.now();
-      const result = monitor.check(baseSnapshot({ now, runnerBusy: true, runnerConnected: true, processingCount: 1, lastDispatchedAt: now - 6 * 60 * 1000 }));
+      const result = monitor.check(baseSnapshot({ now, runnerBusy: true, runnerConnected: true, processingCount: 1, oldestProcessingDispatchedAt: now - 6 * 60 * 1000 }));
       expect(result.actions).toHaveLength(0);
     });
 
     it('does not fire before timeout', () => {
       const now = Date.now();
-      const result = monitor.check(baseSnapshot({ now, runnerBusy: true, runnerConnected: false, processingCount: 1, lastDispatchedAt: now - 60 * 1000 }));
+      const result = monitor.check(baseSnapshot({ now, runnerBusy: true, runnerConnected: false, processingCount: 1, oldestProcessingDispatchedAt: now - 60 * 1000 }));
       expect(result.actions).toHaveLength(0);
     });
 
@@ -79,7 +93,7 @@ describe('SessionHealthMonitor', () => {
         runnerBusy: true,
         runnerConnected: false,
         processingCount: 1,
-        lastDispatchedAt: now - 6 * 60 * 1000,
+        oldestProcessingDispatchedAt: now - 6 * 60 * 1000,
         runnerDisconnectedAt: now - 3_000,
       }));
       expect(result.actions).toHaveLength(0);
@@ -90,7 +104,7 @@ describe('SessionHealthMonitor', () => {
     it('clears busy and drains when runner connected', () => {
       const result = monitor.check(baseSnapshot({ runnerBusy: true, runnerConnected: true, processingCount: 0, queuedCount: 3 }));
       expect(result.actions).toEqual([
-        { type: 'mark_not_busy', reason: expect.any(String) },
+        { type: 'mark_not_busy', reason: expect.any(String), channelKey: null },
         { type: 'drain_queue', reason: expect.any(String) },
       ]);
       expect(result.events[0].cause).toBe('stuck_queue_busy_no_processing');
@@ -98,22 +112,44 @@ describe('SessionHealthMonitor', () => {
 
     it('clears busy without drain when runner disconnected', () => {
       const result = monitor.check(baseSnapshot({ runnerBusy: true, runnerConnected: false, processingCount: 0, queuedCount: 3 }));
-      expect(result.actions).toEqual([{ type: 'mark_not_busy', reason: expect.any(String) }]);
+      expect(result.actions).toEqual([{ type: 'mark_not_busy', reason: expect.any(String), channelKey: null }]);
     });
   });
 
   describe('error safety-net', () => {
     it('forces complete when expired and runner busy', () => {
       const now = Date.now();
-      const result = monitor.check(baseSnapshot({ now, runnerBusy: true, errorSafetyNetAt: now - 1000 }));
-      expect(result.actions).toEqual([{ type: 'force_complete', reason: expect.any(String) }]);
+      const result = monitor.check(baseSnapshot({
+        now,
+        runnerBusy: true,
+        errorSafetyNetAt: now - 1000,
+        errorSafetyNetChannelKey: 'thread:t1',
+      }));
+      // force_complete carries the channelKey only; the DO resolves the
+      // specific row via the channel — stuckProcessingMessageId (gated on a
+      // different 5-min timer) would mis-target the deletion.
+      expect(result.actions).toEqual([{
+        type: 'force_complete',
+        reason: expect.any(String),
+        messageId: null,
+        channelKey: 'thread:t1',
+      }]);
       expect(result.events[0].cause).toBe('error_safety_net');
     });
 
     it('clears safety-net and emits event when not busy', () => {
       const now = Date.now();
-      const result = monitor.check(baseSnapshot({ now, runnerBusy: false, errorSafetyNetAt: now - 1000 }));
-      expect(result.actions).toEqual([{ type: 'clear_safety_net', reason: expect.any(String) }]);
+      const result = monitor.check(baseSnapshot({
+        now,
+        runnerBusy: false,
+        errorSafetyNetAt: now - 1000,
+        errorSafetyNetChannelKey: 'thread:t2',
+      }));
+      expect(result.actions).toEqual([{
+        type: 'clear_safety_net',
+        reason: expect.any(String),
+        channelKey: 'thread:t2',
+      }]);
       expect(result.events[0].cause).toBe('error_safety_net');
     });
 

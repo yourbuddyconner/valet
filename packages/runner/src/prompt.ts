@@ -797,7 +797,9 @@ export class PromptHandler {
   private eventStreamAbort: AbortController | null = null;
   private responseTimeoutId: ReturnType<typeof setTimeout> | null = null;
   private firstResponseTimeoutId: ReturnType<typeof setTimeout> | null = null;
-  private lastPromptSentAt: number = 0;
+  // (lastPromptSentAt removed at class level — the real per-channel value
+  //  lives on ChannelSession.lastPromptSentAt. The class-level field was
+  //  dead state and a footgun for future cross-channel leaks.)
 
   // Per-channel OpenCode session state
   private channels = new Map<string, ChannelSession>();
@@ -891,9 +893,9 @@ export class PromptHandler {
   private idleWaiters = new Map<string, () => void>();
   private ephemeralContent = new Map<string, string>(); // accumulated text from SSE
 
-  // Original channel info for [via ...] attribution when channelType is 'thread'
-  private pendingReplyChannelType: string | undefined;
-  private pendingReplyChannelId: string | undefined;
+  // (pendingReplyChannelType / pendingReplyChannelId removed at class level —
+  //  the per-channel fields on ChannelSession are the source of truth. The
+  //  class-level fields were dead state and a cross-channel-leak footgun.)
 
   // OpenCode question requests (question tool)
   private pendingQuestionRequests = new Map<string, { answers: (string[] | null)[] }>();
@@ -2139,7 +2141,7 @@ export class PromptHandler {
           tokens_per_sec: durationMs > 0 ? Math.round((outputTokens / durationMs) * 1000) : 0,
         },
       }]);
-      this.lastPromptSentAt = 0;
+      channel.lastPromptSentAt = 0;
     }
 
     this.agentClient.sendComplete(channel.activeMessageId ?? undefined);
@@ -2443,8 +2445,12 @@ export class PromptHandler {
       // Always acknowledge the abort so the DO can drain its prompt queue.
       // Without this, queued messages would be stuck forever waiting for the
       // 'aborted' signal that triggers handlePromptComplete().
+      // Forward the originally-requested channelType/channelId so the DO can
+      // route the completion even when no specific messageId is available —
+      // without these, the DO's fallback (getProcessingChannelKey) returns
+      // null under concurrent dispatch and the row stays stuck.
       console.log(`[PromptHandler] Abort: no active channels to abort, sending aborted ack`);
-      this.agentClient.sendAborted();
+      this.agentClient.sendAborted(undefined, channelType, channelId);
       // TEMPORARY: Task 12 plumbs channel-bound messageId through SSE handlers
       this.agentClient.sendAgentStatus("idle", undefined, this.getActiveMessageId());
       return;
@@ -2465,8 +2471,20 @@ export class PromptHandler {
       ch.idleNotified = true;
     }
 
-    // Tell DO first so clients get immediate feedback
-    this.agentClient.sendAborted(abortedMessageId);
+    // Tell DO first so clients get immediate feedback. Always forward the
+    // channel context so the DO can complete the correct row even when
+    // abortedMessageId is undefined (e.g. all targets had their
+    // activeMessageId cleared by a sibling abort frame). For multi-channel
+    // session-wide aborts, channelType/channelId stay undefined here and
+    // the DO falls back to its per-channel resolution.
+    const ackCtx = targetChannels.length === 1
+      ? this.extractChannelContext(targetChannels[0])
+      : undefined;
+    this.agentClient.sendAborted(
+      abortedMessageId,
+      ackCtx?.channelType ?? channelType,
+      ackCtx?.channelId ?? channelId,
+    );
     // TEMPORARY: Task 12 plumbs channel-bound messageId through SSE handlers
     this.agentClient.sendAgentStatus("idle", undefined, this.getActiveMessageId());
 
@@ -3514,8 +3532,11 @@ export class PromptHandler {
     // knows which external channel to reply to.
     let attributedContent = content;
     const replyChannel = this.currentPromptChannel;
-    const attrChannelType = replyChannel?.pendingReplyChannelType || this.pendingReplyChannelType || channelType;
-    const attrChannelId = replyChannel?.pendingReplyChannelId || this.pendingReplyChannelId || channelId;
+    // Attribution prefers per-channel pendingReplyChannelType/Id (set by
+    // handlePrompt for THIS channel's dispatch). The class-level fields were
+    // dead state and have been removed.
+    const attrChannelType = replyChannel?.pendingReplyChannelType || channelType;
+    const attrChannelId = replyChannel?.pendingReplyChannelId || channelId;
     if (attrChannelType && attrChannelId && attrChannelType !== "thread") {
       attributedContent = `[via ${attrChannelType} | chatId: ${attrChannelId}] ${attributedContent}`;
     }
