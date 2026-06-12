@@ -192,13 +192,28 @@ export class PromptQueue {
   /**
    * Dequeue the oldest queued entry (FIFO). Atomically marks it as 'processing'.
    * Returns null if the queue is empty.
+   *
+   * `excludeIds`, when provided, skips rows with those ids. Used by the
+   * drain loop to advance past rows whose channels are still busy without
+   * spinning on the same row each call.
    */
-  dequeueNext(): QueueEntry | null {
-    const rows = this.sql
-      .exec(
-        "SELECT id, content, attachments, model, author_id, author_email, author_name, author_avatar_url, channel_type, channel_id, channel_key, queue_type, workflow_execution_id, workflow_payload, thread_id, continuation_context, context_prefix, reply_channel_type, reply_channel_id, child_session_id, child_status, priority, replaceable FROM prompt_queue WHERE status = 'queued' ORDER BY priority DESC, created_at ASC LIMIT 1",
-      )
-      .toArray();
+  dequeueNext(excludeIds?: ReadonlySet<string>): QueueEntry | null {
+    const baseSql =
+      "SELECT id, content, attachments, model, author_id, author_email, author_name, author_avatar_url, channel_type, channel_id, channel_key, queue_type, workflow_execution_id, workflow_payload, thread_id, continuation_context, context_prefix, reply_channel_type, reply_channel_id, child_session_id, child_status, priority, replaceable FROM prompt_queue WHERE status = 'queued'";
+    const orderSql = " ORDER BY priority DESC, created_at ASC LIMIT 1";
+
+    let rows: Record<string, unknown>[];
+    if (excludeIds && excludeIds.size > 0) {
+      const placeholders = Array.from({ length: excludeIds.size }, () => '?').join(', ');
+      rows = this.sql
+        .exec(
+          `${baseSql} AND id NOT IN (${placeholders})${orderSql}`,
+          ...Array.from(excludeIds),
+        )
+        .toArray();
+    } else {
+      rows = this.sql.exec(baseSql + orderSql).toArray();
+    }
 
     if (rows.length === 0) return null;
 
