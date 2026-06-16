@@ -591,4 +591,4 @@ CF Workers compatibility: `sdk-trace-base` and `exporter-trace-otlp-http` use fe
 | Grafana backend — Cloud or self-hosted? | Determines OTLP endpoint and auth. Grafana Cloud free tier has 50GB/month traces. |
 | Sampling strategy? | Start with trace-everything. Add `TraceIdRatioBased` sampler if volume becomes a concern. Sampling decisions should propagate from worker → runner → plugin. |
 | Trace retention? | Grafana Cloud free tier: 14 days. Sufficient for debugging. Evals may need longer — consider exporting to R2/S3 for archival. |
-| Workflow tracing? | WorkflowExecutorDO traces are a natural extension but out of scope for this spec. Would be a fifth trace type. |
+| Workflow tracing? | Workflow runtime traces (ValetWorkflowInterpreter) are a natural extension but out of scope for this spec. Would be a fifth trace type. |

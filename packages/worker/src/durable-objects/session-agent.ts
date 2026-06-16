@@ -1,7 +1,7 @@
 import type { Env } from '../env.js';
 import type { AppDb } from '../lib/drizzle.js';
 import { getDb } from '../lib/drizzle.js';
-import { updateSessionStatus, updateSessionMetrics, addActiveSeconds, updateSessionGitState, upsertSessionFileChanged, updateSessionTitle, getSession, getSessionGitState, getChildSessions, listUserChannelBindings, getUserById, getUsersByIds, createMailboxMessage, getOrgSettings, isNotificationWebEnabled, batchInsertAnalyticsEvents, batchUpsertMessages, updateUserDiscoveredModels, setCatalogCache, updateThread, incrementThreadMessageCount, getThreadOriginChannel, getOrchestratorIdentity, getUserSlackIdentityLink, getWorkflowNameByExecutionId } from '../lib/db.js';
+import { updateSessionStatus, updateSessionMetrics, addActiveSeconds, updateSessionGitState, upsertSessionFileChanged, updateSessionTitle, getSession, getSessionGitState, getChildSessions, listUserChannelBindings, getUserById, getUsersByIds, createMailboxMessage, getOrgSettings, isNotificationWebEnabled, batchInsertAnalyticsEvents, batchUpsertMessages, updateUserDiscoveredModels, setCatalogCache, updateThread, incrementThreadMessageCount, getThreadOriginChannel, getOrchestratorIdentity, getUserSlackIdentityLink } from '../lib/db.js';
 import { getCredential, type CredentialResult } from '../services/credentials.js';
 import { memRead, memWrite, memPatch, memRm, memSearch } from '../services/session-memory.js';
 import { getSlackBotToken } from '../services/slack.js';
@@ -19,7 +19,7 @@ import { MessageStore } from './message-store.js';
 import { getChannelForMessage, dropEmission } from './channel-resolver.js';
 import { ChannelRouter } from './channel-router.js';
 import { PromptQueue } from './prompt-queue.js';
-import { RunnerLink, type RunnerToDOMessage, type DOToRunnerMessage, type PromptAttachment, type RunnerMessageHandlers, type WorkflowExecutionDispatchPayload, type DOMessageOf } from './runner-link.js';
+import { RunnerLink, type RunnerToDOMessage, type DOToRunnerMessage, type PromptAttachment, type RunnerMessageHandlers, type DOMessageOf } from './runner-link.js';
 import { SessionState, type SessionStartParams } from './session-state.js';
 import { SessionLifecycle, SandboxAlreadyExitedError, SandboxSnapshotFailedError } from './session-lifecycle.js';
 import { SessionHealthMonitor, DISCONNECT_GRACE_MS, SANDBOX_WAKE_TIMEOUT_MS, type HealthSnapshot } from './session-health-monitor.js';
@@ -33,17 +33,6 @@ import { spawnChild, sendSessionMessage, getSessionMessages, forwardMessages, te
 import { listTools as listToolsSvc, resolveActionPolicy, executeAction as executeActionSvc, type CredentialCache } from '../services/session-tools.js';
 import { loadCustomMcpConnectorContext } from '../services/custom-mcp-connectors.js';
 import {
-  workflowList as workflowListSvc,
-  workflowSync as workflowSyncSvc,
-  workflowRun as workflowRunSvc,
-  workflowExecutions as workflowExecutionsSvc,
-  handleWorkflowAction as handleWorkflowActionSvc,
-  handleTriggerAction as handleTriggerActionSvc,
-  handleExecutionAction as handleExecutionActionSvc,
-  processWorkflowExecutionResult as processWorkflowExecutionResultSvc,
-  buildWorkflowDispatch,
-} from '../services/session-workflows.js';
-import {
   sanitizePromptAttachments,
   attachmentPartsForDisplay,
   attachmentsForClientState,
@@ -51,7 +40,7 @@ import {
   parsePromptAttachmentBlobUrl,
   SUPPORTED_FILE_TYPES_DESCRIPTION,
 } from '../lib/utils/prompt-validation.js';
-import { parseQueuedWorkflowPayload, deriveRuntimeStates } from '../lib/utils/runtime.js';
+import { deriveRuntimeStates } from '../lib/utils/runtime.js';
 import { ensureChannelBinding } from '../lib/db/channels.js';
 import { getOrgSlackInstallAny } from '../lib/db/slack.js';
 import { registerChannelThread } from '../lib/db/channel-threads.js';
@@ -330,11 +319,6 @@ export class SessionAgentDO {
   private runnerLink!: RunnerLink;
   private sessionState!: SessionState;
   private lifecycle!: SessionLifecycle;
-
-  /** Tracks the workflow execution ID for direct-dispatch workflow turns
-   *  (where no queue row exists). Set when handleWorkflowExecuteDispatch
-   *  sends directly to the runner; cleared on turn completion. */
-  private _activeWorkflowExecutionId: string | undefined;
 
   private static readonly RUNNER_GRACE_PERIOD_MS = 60_000;
   private static readonly MODAL_SANDBOX_MAX_LIFETIME_MS = 24 * 60 * 60 * 1000;
@@ -627,16 +611,6 @@ export class SessionAgentDO {
         }
         await this.handleSystemMessage(body.content, body.parts, body.wake, body.threadId);
         return Response.json({ success: true });
-      }
-      case '/workflow-execute': {
-        if (request.method !== 'POST') {
-          return new Response(JSON.stringify({ error: 'Method not allowed' }), { status: 405 });
-        }
-        const body = await request.json() as {
-          executionId?: string;
-          payload?: WorkflowExecutionDispatchPayload;
-        };
-        return this.handleWorkflowExecuteDispatch(body.executionId, body.payload);
       }
       case '/tunnels': {
         if (request.method !== 'POST') {
@@ -1011,7 +985,6 @@ export class SessionAgentDO {
           console.log(`[SessionAgentDO] Disconnect grace expired — reverting processing→queued`);
           this.promptQueue.revertProcessingToQueued();
           this.promptQueue.runnerBusy = false;
-          this._activeWorkflowExecutionId = undefined;
           if (this.promptQueue.length > 0 && !this.promptQueue.idleQueuedSince) {
             this.promptQueue.idleQueuedSince = Date.now();
             this.rescheduleIdleAlarm();
@@ -1179,7 +1152,6 @@ export class SessionAgentDO {
           case 'revert_and_drain':
             this.promptQueue.revertProcessingToQueued();
             this.promptQueue.runnerBusy = false;
-            this._activeWorkflowExecutionId = undefined;
             this.promptQueue.clearDispatchTimers();
             this.promptQueue.idleQueuedSince = 0;
             if (this.runnerLink.isConnected) {
@@ -1197,7 +1169,6 @@ export class SessionAgentDO {
             break;
           case 'mark_not_busy':
             this.promptQueue.runnerBusy = false;
-            this._activeWorkflowExecutionId = undefined;
             this.promptQueue.clearDispatchTimers();
             if (this.promptQueue.length > 0 && !this.promptQueue.idleQueuedSince) {
               this.promptQueue.idleQueuedSince = Date.now();
@@ -2491,47 +2462,6 @@ export class SessionAgentDO {
         }
       },
 
-      'workflow-chat-message': (msg) => {
-        const ALLOWED_ROLES = new Set(['user', 'assistant', 'system']);
-        const rawRole = typeof msg.role === 'string' ? msg.role : 'user';
-        const role = (ALLOWED_ROLES.has(rawRole) ? rawRole : 'user') as 'user' | 'assistant' | 'system';
-        const content = (msg.content || '').trim();
-        if (!content) return;
-
-        const workflowMsgId = crypto.randomUUID();
-        const partsObj = msg.parts && typeof msg.parts === 'object' ? msg.parts as Record<string, unknown> : null;
-        const partsJson = partsObj ? JSON.stringify(partsObj) : null;
-        const workflowChannelType = typeof msg.channelType === 'string'
-          ? msg.channelType
-          : (partsObj && typeof partsObj.channelType === 'string' ? partsObj.channelType : null);
-        const workflowChannelId = typeof msg.channelId === 'string'
-          ? msg.channelId
-          : (partsObj && typeof partsObj.channelId === 'string' ? partsObj.channelId : null);
-        const workflowOcSessionId = typeof msg.opencodeSessionId === 'string'
-          ? msg.opencodeSessionId
-          : (partsObj && typeof partsObj.opencodeSessionId === 'string' ? partsObj.opencodeSessionId : null);
-        this.messageStore.writeMessage({
-          id: workflowMsgId,
-          role,
-          content,
-          parts: partsJson,
-          channelType: workflowChannelType,
-          channelId: workflowChannelId,
-          opencodeSessionId: workflowOcSessionId,
-        });
-        this.broadcastToClients({
-          type: 'message',
-          data: {
-            id: workflowMsgId,
-            role,
-            content,
-            ...(partsJson ? { parts: JSON.parse(partsJson) } : {}),
-            ...(workflowChannelType && workflowChannelId ? { channelType: workflowChannelType, channelId: workflowChannelId } : {}),
-            createdAt: Math.floor(Date.now() / 1000),
-          },
-        });
-      },
-
       'question': async (msg) => {
         // Resolve channel explicitly from the originating prompt — never fall back
         // to a mutable "active" cursor. If the prompt_queue row is missing or lacks
@@ -3582,108 +3512,6 @@ export class SessionAgentDO {
         }
       },
 
-      'workflow-list': async (msg) => {
-        try {
-          const result = await workflowListSvc(this.appDb, this.sessionState.userId);
-          if (result.error) {
-            this.runnerLink.send({ type: 'workflow-list-result', requestId: msg.requestId!, error: result.error } as any);
-          } else {
-            this.runnerLink.send({ type: 'workflow-list-result', requestId: msg.requestId!, workflows: result.data!.workflows } as any);
-          }
-        } catch (err) {
-          console.error('[SessionAgentDO] Failed to list workflows:', err);
-          this.runnerLink.send({ type: 'workflow-list-result', requestId: msg.requestId!, error: err instanceof Error ? err.message : String(err) } as any);
-        }
-      },
-
-      'workflow-sync': async (msg) => {
-        try {
-          const result = await workflowSyncSvc(this.appDb, this.env.DB, this.sessionState.userId, {
-            id: msg.id,
-            slug: msg.slug,
-            name: msg.name,
-            description: msg.description,
-            version: msg.version,
-            data: msg.data,
-          });
-          if (result.error) {
-            this.runnerLink.send({ type: 'workflow-sync-result', requestId: msg.requestId!, error: result.error } as any);
-          } else {
-            this.runnerLink.send({ type: 'workflow-sync-result', requestId: msg.requestId!, success: true, workflow: result.data!.workflow } as any);
-          }
-        } catch (err) {
-          console.error('[SessionAgentDO] Failed to sync workflow:', err);
-          this.runnerLink.send({ type: 'workflow-sync-result', requestId: msg.requestId!, error: err instanceof Error ? err.message : String(err) } as any);
-        }
-      },
-
-      'workflow-run': async (msg) => {
-        try {
-          const result = await workflowRunSvc(this.appDb, this.env.DB, this.env, this.sessionState.userId, msg.requestId!, {
-            workflowId: msg.workflowId!,
-            variables: msg.variables,
-            repoContext: {
-              repoUrl: msg.repoUrl,
-              branch: msg.branch,
-              ref: msg.ref,
-              sourceRepoFullName: msg.sourceRepoFullName,
-            },
-            spawnRequest: this.sessionState.spawnRequest,
-          });
-          if (result.error) {
-            this.runnerLink.send({ type: 'workflow-run-result', requestId: msg.requestId!, error: result.error } as any);
-          } else {
-            this.runnerLink.send({ type: 'workflow-run-result', requestId: msg.requestId!, execution: result.data!.execution } as any);
-          }
-        } catch (err) {
-          console.error('[SessionAgentDO] Failed to run workflow:', err);
-          this.runnerLink.send({ type: 'workflow-run-result', requestId: msg.requestId!, error: err instanceof Error ? err.message : String(err) } as any);
-        }
-      },
-
-      'workflow-executions': async (msg) => {
-        try {
-          const result = await workflowExecutionsSvc(this.appDb, this.env.DB, this.sessionState.userId, msg.workflowId, msg.limit);
-          if (result.error) {
-            this.runnerLink.send({ type: 'workflow-executions-result', requestId: msg.requestId!, error: result.error } as any);
-          } else {
-            this.runnerLink.send({ type: 'workflow-executions-result', requestId: msg.requestId!, executions: result.data!.executions } as any);
-          }
-        } catch (err) {
-          console.error('[SessionAgentDO] Failed to list workflow executions:', err);
-          this.runnerLink.send({ type: 'workflow-executions-result', requestId: msg.requestId!, error: err instanceof Error ? err.message : String(err) } as any);
-        }
-      },
-
-      'workflow-api': async (msg) => {
-        try {
-          const result = await handleWorkflowActionSvc(this.appDb, this.env.DB, this.sessionState.userId, msg.action || '', msg.payload);
-          if (result.error) {
-            this.runnerLink.send({ type: 'workflow-api-result', requestId: msg.requestId!, error: result.error } as any);
-          } else {
-            this.runnerLink.send({ type: 'workflow-api-result', requestId: msg.requestId!, data: result.data } as any);
-          }
-        } catch (err) {
-          console.error('[SessionAgentDO] Workflow API error:', err);
-          this.runnerLink.send({ type: 'workflow-api-result', requestId: msg.requestId!, error: err instanceof Error ? err.message : String(err) } as any);
-        }
-      },
-
-      'trigger-api': async (msg) => {
-        try {
-          const augmentedPayload = msg.payload ? { ...msg.payload, requestId: msg.requestId, _spawnRequest: this.sessionState.spawnRequest } : { requestId: msg.requestId, _spawnRequest: this.sessionState.spawnRequest };
-          const result = await handleTriggerActionSvc(this.appDb, this.env.DB, this.env, this.sessionState.userId, this.sessionState.sessionId, msg.action || '', augmentedPayload);
-          if (result.error) {
-            this.runnerLink.send({ type: 'trigger-api-result', requestId: msg.requestId!, error: result.error } as any);
-          } else {
-            this.runnerLink.send({ type: 'trigger-api-result', requestId: msg.requestId!, data: result.data } as any);
-          }
-        } catch (err) {
-          console.error('[SessionAgentDO] Trigger API error:', err);
-          this.runnerLink.send({ type: 'trigger-api-result', requestId: msg.requestId!, error: err instanceof Error ? err.message : String(err) } as any);
-        }
-      },
-
       'skill-api': async (msg) => {
         try {
           const orgId = await this.resolveOrgId() ?? 'default';
@@ -3755,32 +3583,6 @@ export class SessionAgentDO {
         } catch (err) {
           console.error('[SessionAgentDO] Identity API error:', err);
           this.runnerLink.send({ type: 'identity-api-result', requestId: msg.requestId!, error: err instanceof Error ? err.message : String(err), statusCode: 500 } as any);
-        }
-      },
-
-      'execution-api': async (msg) => {
-        try {
-          const result = await handleExecutionActionSvc(this.appDb, this.env.DB, this.env, this.sessionState.userId, msg.action || '', msg.payload);
-          if (result.error) {
-            this.runnerLink.send({ type: 'execution-api-result', requestId: msg.requestId!, error: result.error } as any);
-          } else {
-            this.runnerLink.send({ type: 'execution-api-result', requestId: msg.requestId!, data: result.data } as any);
-          }
-        } catch (err) {
-          console.error('[SessionAgentDO] Execution API error:', err);
-          this.runnerLink.send({ type: 'execution-api-result', requestId: msg.requestId!, error: err instanceof Error ? err.message : String(err) } as any);
-        }
-      },
-
-      'workflow-execution-result': async (msg) => {
-        const resultData = await processWorkflowExecutionResultSvc(
-          this.appDb,
-          this.env.DB,
-          msg,
-          this.sessionState.sessionId,
-        );
-        if (resultData?.shouldStopSession) {
-          this.ctx.waitUntil(this.handleStop(`workflow_execution_${resultData.nextStatus}`));
         }
       },
 
@@ -4178,7 +3980,6 @@ export class SessionAgentDO {
       } else {
         console.log(`[SessionAgentDO] handlePromptComplete: queue empty, setting runnerBusy=false`);
         this.promptQueue.runnerBusy = false;
-        this._activeWorkflowExecutionId = undefined;
         this.broadcastToClients({
           type: 'status',
           data: { runnerBusy: false },
@@ -4189,7 +3990,6 @@ export class SessionAgentDO {
       // Ensure runnerBusy is cleared even on error to prevent permanent stuck state
       console.error('[SessionAgentDO] handlePromptComplete error, forcing runnerBusy=false:', err);
       this.promptQueue.runnerBusy = false;
-      this._activeWorkflowExecutionId = undefined;
       if (completedChannelKey) {
         this.promptQueue.setChannelBusy(completedChannelKey, false);
       }
@@ -4768,88 +4568,6 @@ export class SessionAgentDO {
     }
   }
 
-  private async handleWorkflowExecuteDispatch(
-    executionIdRaw?: string,
-    payload?: WorkflowExecutionDispatchPayload,
-  ): Promise<Response> {
-    const dispatchResult = buildWorkflowDispatch(executionIdRaw, payload);
-    if (dispatchResult.error) {
-      return Response.json({ error: dispatchResult.error.error }, { status: dispatchResult.error.status });
-    }
-
-    const { executionId, payload: validPayload } = dispatchResult.ready!;
-
-    const status = this.sessionState.status;
-    const queueWorkflowDispatch = (reason: string) => {
-      const queueId = crypto.randomUUID();
-      this.promptQueue.enqueue({
-        id: queueId, content: '', queueType: 'workflow_execute',
-        workflowExecutionId: executionId, workflowPayload: JSON.stringify(validPayload),
-      });
-      this.emitAuditEvent(
-        'workflow.dispatch_queued',
-        `Workflow execution queued (${executionId.slice(0, 8)}): ${reason}`,
-        undefined,
-        { executionId, kind: validPayload.kind, reason },
-      );
-      return Response.json({ success: true, queued: true, reason }, { status: 202 });
-    };
-
-    if (status === 'hibernated') {
-      this.ctx.waitUntil(this.performWake());
-      return queueWorkflowDispatch('session_hibernated_waking');
-    }
-    if (status === 'restoring' || status === 'initializing' || status === 'hibernating') {
-      return queueWorkflowDispatch(`session_not_ready:${status}`);
-    }
-
-    if (!this.runnerLink.isConnected) {
-      return queueWorkflowDispatch('runner_not_connected');
-    }
-
-    if (!this.runnerLink.isReady) {
-      return queueWorkflowDispatch('runner_not_ready');
-    }
-
-    if (this.promptQueue.runnerBusy) {
-      return queueWorkflowDispatch('runner_busy');
-    }
-
-    this.lifecycle.touchActivity();
-    this.promptQueue.stampDispatched();
-    this.rescheduleIdleAlarm();
-    this.sessionState.lastParentIdleNotice = undefined;
-    this.sessionState.parentIdleNotifyAt = 0;
-    this.sessionState.waitSubscription = null;
-    const dispatchOwnerId = this.sessionState.userId;
-    const dispatchOwnerDetails = dispatchOwnerId ? await this.getUserDetails(dispatchOwnerId) : undefined;
-    const dispatchModelPrefs = await this.resolveModelPreferences(dispatchOwnerDetails);
-
-    const directWfDispatched = this.runnerLink.send({
-      type: 'workflow-execute',
-      executionId,
-      payload: validPayload,
-      modelPreferences: dispatchModelPrefs,
-    });
-    if (!directWfDispatched) {
-      this.promptQueue.runnerBusy = false;
-      return queueWorkflowDispatch('runner_send_failed');
-    }
-
-    // Track execution ID so isUnattended checks during this turn know it's a
-    // workflow execution (no queue row exists on the direct-dispatch path).
-    this._activeWorkflowExecutionId = executionId;
-
-    this.emitAuditEvent(
-      'workflow.dispatch',
-      `Workflow execution dispatched (${executionId.slice(0, 8)})`,
-      undefined,
-      { executionId, kind: validPayload.kind },
-    );
-
-    return Response.json({ success: true });
-  }
-
   private async sendNextQueuedPrompt(): Promise<boolean> {
     if (!this.runnerLink.isConnected) {
       console.log(`[SessionAgentDO] sendNextQueuedPrompt: no runner sockets, skipping`);
@@ -4869,7 +4587,7 @@ export class SessionAgentDO {
     // via wait_for_event. The subscription is cleared at dispatch time below.
     let prompt = this.promptQueue.dequeueNext();
     while (prompt) {
-      console.log(`[SessionAgentDO] sendNextQueuedPrompt: found queued item id=${prompt.id} channelType=${prompt.channelType || 'none'} channelId=${prompt.channelId || 'none'} queueType=${prompt.queueType || 'prompt'}`);
+      console.log(`[SessionAgentDO] sendNextQueuedPrompt: found queued item id=${prompt.id} channelType=${prompt.channelType || 'none'} channelId=${prompt.channelId || 'none'}`);
 
       // Apply wait subscription filter to queued child events.
       // Events queued while the agent was busy may not match the subscription
@@ -4895,16 +4613,6 @@ export class SessionAgentDO {
               shouldSkip = true;
             }
           }
-        }
-      }
-
-      // Drop malformed workflow entries
-      if (!shouldSkip && prompt.queueType === 'workflow_execute') {
-        const queuedExecutionId = (prompt.workflowExecutionId || '').trim();
-        const queuedPayload = parseQueuedWorkflowPayload(prompt.workflowPayload);
-        if (!queuedExecutionId || !queuedPayload) {
-          console.warn(`[SessionAgentDO] Dropping malformed queued workflow dispatch id=${prompt.id}`);
-          shouldSkip = true;
         }
       }
 
@@ -4936,7 +4644,7 @@ export class SessionAgentDO {
     // User messages are not written to the message store at enqueue time.
     // Write + broadcast now at dispatch time. Uses INSERT OR IGNORE for
     // idempotency in case of crash recovery (revertProcessingToQueued).
-    if (prompt.queueType === 'prompt' && !prompt.childSessionId) {
+    if (!prompt.childSessionId) {
       // Check if message was already written (e.g., direct dispatch then revert-to-queued)
       const alreadyWritten = this.messageStore.hasMessage(prompt.id);
 
@@ -4993,46 +4701,6 @@ export class SessionAgentDO {
         type: 'queue.state',
         data: { pending: null },
       });
-    }
-
-    if (prompt.queueType === 'workflow_execute') {
-      const queuedExecutionId = (prompt.workflowExecutionId || '').trim();
-      const queuedPayload = parseQueuedWorkflowPayload(prompt.workflowPayload)!;
-
-      this.promptQueue.stampDispatched();
-      this.promptQueue.idleQueuedSince = 0;
-      this.sessionState.lastParentIdleNotice = undefined;
-      this.sessionState.parentIdleNotifyAt = 0;
-      this.sessionState.waitSubscription = null;
-      const queueOwnerId = this.sessionState.userId;
-      const queueOwnerDetails = queueOwnerId ? await this.getUserDetails(queueOwnerId) : undefined;
-      const queueModelPrefs = await this.resolveModelPreferences(queueOwnerDetails);
-      const wfDispatched = this.runnerLink.send({
-        type: 'workflow-execute',
-        executionId: queuedExecutionId,
-        payload: queuedPayload,
-        modelPreferences: queueModelPrefs,
-      });
-      if (!wfDispatched) {
-        this.promptQueue.revertProcessingToQueued(prompt.id);
-        this.promptQueue.runnerBusy = false;
-        if (!this.promptQueue.idleQueuedSince) {
-          this.promptQueue.idleQueuedSince = Date.now();
-        }
-        this.emitAuditEvent('workflow.dispatch_failed', `Workflow dispatch failed, reverted to queue: ${queuedExecutionId.slice(0, 8)}`);
-        return false;
-      }
-      this.broadcastToClients({
-        type: 'status',
-        data: { promptDequeued: true, remaining: this.promptQueue.length },
-      });
-      this.emitAuditEvent(
-        'workflow.dispatch',
-        `Workflow execution dispatched (${queuedExecutionId.slice(0, 8)})`,
-        undefined,
-        { executionId: queuedExecutionId, kind: queuedPayload.kind, queued: true },
-      );
-      return true;
     }
 
     // Look up git details from cache for the prompt author
@@ -6770,10 +6438,7 @@ export class SessionAgentDO {
       }
 
       if (requestId) {
-        const wfCtx = this.promptQueue.getProcessingWorkflowContext();
         const isUnattended =
-          wfCtx?.queueType === 'workflow_execute' ||
-          !!this._activeWorkflowExecutionId ||
           this.promptQueue.getProcessingAuthorEmail() === 'scheduled-task@valet.local';
         const expiryError = isUnattended
           ? `Action "${toolId}" approval request expired without a response. ` +
@@ -7211,14 +6876,11 @@ export class SessionAgentDO {
       }
 
       // Fail closed: if we have no non-web channel targets, attempt a Slack DM
-      // fallback for unattended runs (scheduled tasks, workflow executions).
+      // fallback for unattended runs (scheduled tasks).
       // If the user has a Slack identity, we open a DM and send the prompt there.
       // If no Slack identity or DM resolution fails, fall back to web UI error.
       if (targets.length === 0) {
-        const wfCtx = this.promptQueue.getProcessingWorkflowContext();
         const isUnattended =
-          wfCtx?.queueType === 'workflow_execute' ||
-          !!this._activeWorkflowExecutionId ||
           this.promptQueue.getProcessingAuthorEmail() === 'scheduled-task@valet.local';
         if (!isUnattended) {
           // Attended web-only session: approval is already visible in the web UI.
@@ -7349,15 +7011,6 @@ export class SessionAgentDO {
   }
 
   private async buildApprovalProvenanceLabel(userId: string): Promise<string> {
-    const wfCtx = this.promptQueue.getProcessingWorkflowContext();
-    const executionId = wfCtx?.workflowExecutionId ?? this._activeWorkflowExecutionId ?? null;
-    if ((wfCtx?.queueType === 'workflow_execute' || !!this._activeWorkflowExecutionId) && executionId) {
-      const workflowName = await getWorkflowNameByExecutionId(this.appDb, executionId).catch(() => null);
-      const agentName = await this.resolveAgentDisplayName(userId);
-      return workflowName
-        ? `${agentName} requested this while running workflow *${workflowName}*`
-        : `${agentName} requested this while running a workflow`;
-    }
     const agentName = await this.resolveAgentDisplayName(userId);
     return `${agentName} requested this while running a scheduled task (no active session was connected)`;
   }

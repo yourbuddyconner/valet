@@ -20,7 +20,6 @@ import type {
   RunnerMessageOf,
   DOMessageOf,
   PromptAttachment,
-  WorkflowExecutionDispatchPayload,
   AgentStatus,
   ToolCallStatus,
 } from '@valet/shared';
@@ -31,7 +30,6 @@ export type {
   RunnerMessageOf,
   DOMessageOf,
   PromptAttachment,
-  WorkflowExecutionDispatchPayload,
   AgentStatus,
   ToolCallStatus,
 };

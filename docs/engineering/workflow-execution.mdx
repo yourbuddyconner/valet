@@ -1,84 +1,85 @@
 ---
 title: Workflow Execution
-description: Technical reference for workflow definitions, triggers, execution records, step traces, approvals, proposals, schedules, and API routes.
+description: Technical reference for workflow definitions, triggers, execution records, the Cloudflare Workflow interpreter, approvals, and API routes.
 ---
 
 # Workflow Execution
 
-Workflows are reusable automations that run inside Valet sessions. A workflow definition stores metadata, variables, constraints, and ordered step data. Each run creates execution records and normalized step traces.
+Workflows are reusable automations defined as a `dag/v1` graph. Each run creates a workflow execution record and a Cloudflare Workflow instance that drives the wave loop until terminal.
 
 ## Core records
 
 | Record | Purpose |
 | --- | --- |
-| `workflows` | User-owned workflow definitions with slug, version, metadata, tags, enabled flag, and JSON step data. |
-| `triggers` | Manual, webhook, or schedule entry points. |
-| `workflow_executions` | Run instances with status, variables, workflow snapshot, runtime state, and resume token. |
-| `workflow_execution_steps` | Per-step traces with input, output, status, attempt, and error data. |
+| `workflows` | User-owned workflows with slug, version, metadata, tags, enabled flag, draft definition, and a pointer to the currently-published version. |
+| `workflow_definition_versions` | Append-only history of published `dag/v1` definitions. |
+| `triggers` | Manual, webhook, or schedule entry points. Webhook triggers carry a server-issued one-time token. |
+| `workflow_executions` | Run instances with status, inputs, outputs, definition snapshot, and the Cloudflare Workflow instance id. |
+| `workflow_execution_nodes` | Per-node trace rows with status, input/output preview, durations, and links to invocation and approval ids. |
+| `workflow_approvals` | One row per approval gate hit during a run. Resolved via the approve/deny API. |
 
-Execution records keep a workflow snapshot and hash so historical runs remain explainable after the definition changes.
+The execution row carries `definitionSnapshot` so historical runs remain explainable after the workflow is edited or republished.
 
 ## Trigger types
 
 - `manual`: run directly from the UI or API.
-- `webhook`: receive external HTTP events, validate configured method/header/secret rules, and map request data into variables.
-- `schedule`: evaluate cron expressions and enqueue work.
-
-Schedule triggers can target a workflow or send a prompt to an orchestrator.
+- `webhook`: receive external HTTP events at `/api/triggers/:id/webhook` (authenticates via `X-Valet-Trigger-Token`).
+- `schedule`: evaluate cron expressions and enqueue work; can target a workflow or dispatch a prompt to an orchestrator.
 
 ## Execution lifecycle
 
-Workflow executions move through:
+```
+PENDING → RUNNING → COMPLETED | FAILED | CANCELLED
+                 → WAITING_APPROVAL → RUNNING (resolve)
+                 → WAITING_TIME → RUNNING (wait elapsed)
+RUNNING → CANCELLING → CANCELLED (cancel API path, cleanup_completed_at gated)
+```
 
-1. `pending`: queued for execution.
-2. `running`: actively executing steps in a session.
-3. `waiting_approval`: paused at an approval gate.
-4. `completed`, `failed`, or `cancelled`: terminal states.
+Active executions count against per-user and global concurrency limits.
 
-Valet applies per-user and global concurrency limits to active executions.
+## Node behavior (dag/v1)
 
-## Step behavior
-
-Workflow steps can include:
-
-- `bash`: run a command.
-- `tool`: call a Valet integration action through policy resolution.
-- `approval`: pause for human review.
-- `conditional`: branch based on runtime data.
-- `parallel`: run multiple branches.
-- `agent`: ask an agent to perform work.
-- `agent_message`: send a message to the session agent.
-
-Tool steps remain subject to integration policy and approvals. Workflow approval gates are separate controls, though they may appear in the same UI.
+| Type | Behavior |
+| --- | --- |
+| `llm` | LLM completion via the configured provider. |
+| `tool` | Calls a Valet integration action through policy resolution; honors `require_approval`. |
+| `set` | Computes JSON values from templates. |
+| `if` | Branches on `conditions`; downstream edges carry `fromOutput`. |
+| `wait` | Durable `step.sleep` for a compact duration. |
+| `approval` | Human approval gate via `step.waitForEvent`. |
+| `foreach` | Iterates over an array; body is a single permitted node type. |
+| `orchestrator` | Dispatch a prompt to the user's orchestrator. |
+| `session` | Start or resume a session and run a prompt. |
+| `stop` | Terminate with an outcome envelope. |
 
 ## Approval resume
 
-An approval step stores a resume token. Approval resumes execution. Denial cancels the run. The execution remains active until approved, denied, cancelled, failed, or otherwise resolved.
-
-## Self-modification proposals
-
-Workflows can produce mutation proposals. A proposal stores:
-
-- Base workflow hash.
-- Proposed workflow JSON.
-- Human-readable diff.
-- Review status and notes.
-
-Approved proposals can apply only if the base hash is still current. Valet also records immutable workflow version history for updates, proposal applies, rollbacks, and syncs.
+When an approval node (or a `tool` node with `require_approval` policy) is reached, the executor inserts a `workflow_approvals` row, drives the execution row to `waiting_approval`, and pauses on `step.waitForEvent`. The approve/deny API endpoints CAS the approval row to a resolved state and `instance.sendEvent` the running Cloudflare Workflow instance to resume.
 
 ## Schedule deduplication
 
-Cron schedules use minute buckets to avoid duplicate runs. Each tick records a `(triggerId, tickBucket)` pair. The unique key prevents a second execution for the same minute.
+Cron schedules use minute buckets to avoid duplicate runs. Each tick records `(triggerId, tickBucket)`; the unique key prevents a second execution for the same minute. A catch-up pass re-tries transient dispatch failures within a short look-back window.
 
 ## API routes
 
 | Method | Path | Purpose |
 | --- | --- | --- |
 | `GET` | `/api/workflows` | List workflows. |
-| `GET` | `/api/workflows/:id` | Read a workflow by ID or slug. |
+| `GET` | `/api/workflows/:id` | Read a workflow by id or slug. |
 | `POST` | `/api/workflows/sync` | Upsert a full definition. |
-| `PUT` | `/api/workflows/:id` | Update metadata or definition. |
+| `PUT` | `/api/workflows/:id` | Update metadata. |
 | `DELETE` | `/api/workflows/:id` | Delete a workflow and linked triggers. |
-| `GET` | `/api/workflows/:id/executions` | List execution history. |
-| `GET` | `/api/workflows/:id/history` | List immutable version snapshots. |
-| `POST` | `/api/workflows/:id/rollback` | Restore a historical definition. |
+| `GET` | `/api/workflows/:id/draft` | Fetch the current draft. |
+| `PUT` | `/api/workflows/:id/draft` | Save a draft. |
+| `POST` | `/api/workflows/:id/validate` | Validate the current draft. |
+| `POST` | `/api/workflows/:id/publish` | Publish the draft as a new version. |
+| `POST` | `/api/workflows/:id/test-run` | Run the draft against a sample payload. |
+| `GET` | `/api/workflows/:id/versions` | List published versions. |
+| `POST` | `/api/workflows/:id/versions/:versionId/restore` | Restore an old version into the draft. |
+| `GET` | `/api/workflows/:id/executions` | List executions for a workflow. |
+| `GET` | `/api/executions` | List recent executions. |
+| `GET` | `/api/executions/:id` | Read an execution (includes nodes + approvals). |
+| `GET` | `/api/executions/:id/approvals` | List approvals for an execution. |
+| `POST` | `/api/executions/:id/approvals/:approvalId/approve` | Approve a pending approval. |
+| `POST` | `/api/executions/:id/approvals/:approvalId/deny` | Deny a pending approval. |
+| `POST` | `/api/executions/:id/cancel` | Cancel an execution. |

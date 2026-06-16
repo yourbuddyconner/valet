@@ -13,7 +13,6 @@ export const webhooksRouter = new Hono<{ Bindings: Env; Variables: Variables }>(
  */
 webhooksRouter.all('/*', async (c, next) => {
   const url = new URL(c.req.url);
-  const workerOrigin = url.origin;
   const webhookPath = url.pathname.replace(/^\/webhooks\//, '');
 
   // Skip if it's one of the hardcoded integration webhooks
@@ -24,20 +23,20 @@ webhooksRouter.all('/*', async (c, next) => {
 
   const rawBody = c.req.method === 'GET' ? '' : await c.req.raw.clone().text().catch(() => '');
 
-  // Collect relevant headers (lowercase keys)
-  const headers: Record<string, string | undefined> = {
-    'x-webhook-signature': c.req.header('X-Webhook-Signature'),
-    'x-hub-signature-256': c.req.header('X-Hub-Signature-256'),
-    'x-github-delivery': c.req.header('X-GitHub-Delivery'),
-    'x-request-id': c.req.header('X-Request-Id'),
-    'x-webhook-id': c.req.header('X-Webhook-Id'),
-  };
+  // Forward the full request headers (lowercased keys) so workflows can
+  // reference any inbound header via {{trigger.data.headers.X}}.
+  const headers: Record<string, string | undefined> = {};
+  c.req.raw.headers.forEach((value, key) => {
+    headers[key.toLowerCase()] = value;
+  });
 
   // Collect query params
   const query: Record<string, string> = {};
   url.searchParams.forEach((value, key) => {
     query[key] = value;
   });
+  // Strip the leading '?' so the service hashes only the pair list.
+  const rawQuery = url.search.startsWith('?') ? url.search.slice(1) : url.search;
 
   const result = await webhookService.handleGenericWebhook(
     c.env,
@@ -46,7 +45,7 @@ webhooksRouter.all('/*', async (c, next) => {
     rawBody,
     headers,
     query,
-    workerOrigin,
+    rawQuery,
   );
 
   if (!result) {

@@ -1,11 +1,13 @@
-import type { D1Database, R2Bucket, DurableObjectNamespace } from '@cloudflare/workers-types';
+import type { D1Database, R2Bucket, DurableObjectNamespace, Workflow } from '@cloudflare/workers-types';
 import type { AppDb } from './lib/drizzle.js';
 
 export interface Env {
   // Durable Objects
   SESSIONS: DurableObjectNamespace;
   EVENT_BUS: DurableObjectNamespace;
-  WORKFLOW_EXECUTOR: DurableObjectNamespace;
+
+  // Cloudflare Workflows — DAG interpreter for the dag/v1 runtime.
+  WORKFLOW_INTERPRETER: Workflow;
 
   // Storage
   DB: D1Database;

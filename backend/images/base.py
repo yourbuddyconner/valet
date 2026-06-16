@@ -140,11 +140,8 @@ def get_base_image() -> modal.Image:
             # Create workspace root and install all deps
             'echo \'{"private":true,"workspaces":["packages/*"]}\' > /valet/package.json',
             "cd /valet && /root/.bun/bin/bun install",
-            # Symlink runner at /runner for start.sh and workflow CLI
+            # Symlink runner at /runner for start.sh
             "ln -s /valet/packages/runner /runner",
-            # Expose workflow CLI as a first-class sandbox command
-            "printf '#!/bin/bash\\nexec /root/.bun/bin/bun run /runner/src/workflow-cli.ts \"$@\"\\n' > /usr/local/bin/workflow",
-            "chmod +x /usr/local/bin/workflow",
         )
         # Copy start.sh
         .add_local_file("/root/docker/start.sh", "/start.sh", copy=True)
@@ -172,7 +169,7 @@ def get_base_image() -> modal.Image:
                 "OPENCODE_RUNTIME_DIR": "/tmp/valet-opencode",
                 "VALET_PERSONA_DIR": "/tmp/valet-opencode/persona",
                 # Force image rebuild on deploy (change this value to trigger rebuild)
-                "IMAGE_BUILD_VERSION": "2026-06-08-v50-wait-for-event-docs",
+                "IMAGE_BUILD_VERSION": "2026-06-15-v52-remove-workflow-cli",
                 "AGENT_BROWSER_EXECUTABLE_PATH": "/usr/bin/chromium",
                 "AGENT_BROWSER_PROFILE": "/workspace/.agent-browser-profile",
                 "PLAYWRIGHT_BROWSERS_PATH": "/ms-playwright",

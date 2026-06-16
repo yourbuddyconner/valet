@@ -39,7 +39,7 @@ function buildEnv(overrides: Partial<Env> = {}): Env {
     STORAGE: {} as Env['STORAGE'],
     SESSIONS: {} as Env['SESSIONS'],
     EVENT_BUS: {} as Env['EVENT_BUS'],
-    WORKFLOW_EXECUTOR: {} as Env['WORKFLOW_EXECUTOR'],
+    WORKFLOW_INTERPRETER: {} as Env['WORKFLOW_INTERPRETER'],
     GOOGLE_CLIENT_ID: 'google-client-id',
     GOOGLE_CLIENT_SECRET: 'google-client-secret',
     MODAL_BACKEND_URL: 'https://modal.example.com/{label}',

@@ -6,6 +6,24 @@
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
+/**
+ * Constant-time string comparison. Returns true iff both strings have
+ * the same length and the same bytes. Used to validate webhook tokens
+ * without leaking the matching prefix length via timing.
+ *
+ * Note: returns false fast on length mismatch — that's not constant-time
+ * across different-length inputs, but token length is public (every
+ * trigger token is 32 chars), so this leaks nothing useful.
+ */
+export function constantTimeEqual(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let result = 0;
+  for (let i = 0; i < a.length; i++) {
+    result |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  }
+  return result === 0;
+}
+
 async function deriveKey(secret: string): Promise<CryptoKey> {
   const keyData = encoder.encode(secret.padEnd(32, '0').slice(0, 32));
   return crypto.subtle.importKey('raw', keyData, { name: 'AES-GCM' }, false, [

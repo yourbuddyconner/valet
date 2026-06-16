@@ -69,7 +69,7 @@ Browser  <-- WS -->  CF Worker Route  <-- proxied -->  SessionAgentDO
 
 ### Channel 2: EventBusDO WebSocket (Secondary)
 
-Global singleton. Receives fire-and-forget notifications from SessionAgentDOs and WorkflowExecutorDO. Designed for cross-session notifications (dashboard updates, workflow status). **Server-side is fully implemented but has no client-side consumer.**
+Global singleton. Receives fire-and-forget notifications from SessionAgentDOs. Designed for cross-session notifications (dashboard updates). **Server-side is fully implemented but has no client-side consumer.**
 
 ```
 SessionAgentDO  -- POST /publish -->  EventBusDO  -- WS -->  (no client consumer)
@@ -297,14 +297,7 @@ The `subscribe` message type is parsed but explicitly not implemented. All event
 | `question.asked` | Agent asks a question |
 | `question.answered` | User answers a question |
 
-**WorkflowExecutorDO** (2 call sites):
-
-| Event Type | Category | Trigger |
-|------------|----------|---------|
-| `notification` | `workflow.execution.enqueued` | Workflow execution dispatched |
-| `notification` | `workflow.execution.{resumed\|denied\|cancelled}` | Workflow lifecycle action |
-
-All emissions are fire-and-forget with catch blocks — EventBus failures never affect session or workflow operation.
+All emissions are fire-and-forget with catch blocks — EventBus failures never affect session operation.
 
 ## Client Implementation
 
@@ -445,7 +438,7 @@ This prevents a race where an old socket's close handler fires after a new socke
 - V2 parts-based streaming protocol with hibernation recovery
 - Multiplayer presence tracking (join/leave/connected users)
 - EventBusDO with user-tagged broadcasting
-- Event emission from SessionAgentDO (7 event types) and WorkflowExecutorDO (notifications)
+- Event emission from SessionAgentDO (7 event types)
 - Client WebSocket hook with exponential backoff reconnection
 - Client chat state machine handling 23+ message types
 - Client-side message deduplication

@@ -81,14 +81,7 @@ function createMockSql(): SqlStorage & { queue: Map<string, QueueRow>; state: Ma
           created_at: insertCounter, // monotonic for ordering
         };
 
-        // Parse workflow_execute INSERTs
-        if (q.includes("'workflow_execute'")) {
-          row.content = '';
-          row.queue_type = 'workflow_execute';
-          row.workflow_execution_id = (params[1] as string) || null;
-          row.workflow_payload = (params[2] as string) || null;
-          row.status = (params[3] as string) || 'queued';
-        } else if (params.length >= 17) {
+        if (params.length >= 17) {
           // Full prompt INSERT
           row.attachments = (params[2] as string) || null;
           row.model = (params[3] as string) || null;
@@ -592,24 +585,6 @@ describe('PromptQueue', () => {
     });
   });
 
-  // ─── Workflow Queue Entries ───────────────────────────────────────────
-
-  describe('workflow entries', () => {
-    it('enqueues workflow_execute type', () => {
-      pq.enqueue({
-        id: 'wf1', content: '',
-        queueType: 'workflow_execute',
-        workflowExecutionId: 'exec-1',
-        workflowPayload: '{"kind":"run","executionId":"exec-1","payload":{}}',
-      });
-
-      const entry = pq.dequeueNext()!;
-      expect(entry.queueType).toBe('workflow_execute');
-      expect(entry.workflowExecutionId).toBe('exec-1');
-      expect(entry.workflowPayload).toContain('exec-1');
-    });
-  });
-
   // ─── Collect Mode ─────────────────────────────────────────────────────
 
   describe('collect mode', () => {
@@ -741,34 +716,6 @@ describe('PromptQueue', () => {
     it('runs without error', () => {
       // runMigrations does ALTER TABLE which our mock ignores
       expect(() => pq.runMigrations()).not.toThrow();
-    });
-  });
-
-  describe('getProcessingWorkflowContext', () => {
-    it('returns null when nothing is processing', () => {
-      expect(pq.getProcessingWorkflowContext()).toBeNull();
-    });
-
-    it('returns queueType and workflowExecutionId for a workflow_execute row', () => {
-      pq.enqueue({
-        id: 'wf1',
-        content: '',
-        queueType: 'workflow_execute',
-        workflowExecutionId: 'exec-abc-123',
-        status: 'processing',
-      });
-      expect(pq.getProcessingWorkflowContext()).toEqual({
-        queueType: 'workflow_execute',
-        workflowExecutionId: 'exec-abc-123',
-      });
-    });
-
-    it('returns queueType=prompt and workflowExecutionId=null for a regular prompt row', () => {
-      pq.enqueue({ id: 'p1', content: 'hello', status: 'processing' });
-      expect(pq.getProcessingWorkflowContext()).toEqual({
-        queueType: 'prompt',
-        workflowExecutionId: null,
-      });
     });
   });
 

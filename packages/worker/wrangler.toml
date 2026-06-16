@@ -1,6 +1,6 @@
 name = "${CF_WORKER_NAME}"
 main = "src/index.ts"
-compatibility_date = "2024-01-01"
+compatibility_date = "2024-10-22"
 compatibility_flags = ["nodejs_compat"]
 previews_enabled = false
 
@@ -31,10 +31,6 @@ class_name = "SessionAgentDO"
 name = "EVENT_BUS"
 class_name = "EventBusDO"
 
-[[durable_objects.bindings]]
-name = "WORKFLOW_EXECUTOR"
-class_name = "WorkflowExecutorDO"
-
 [[migrations]]
 tag = "v1"
 new_classes = ["APIKeysDurableObject", "EventBusDO"]
@@ -47,6 +43,21 @@ new_classes = ["WorkflowExecutorDO"]
 [[migrations]]
 tag = "v3"
 deleted_classes = ["APIKeysDurableObject"]
+
+# v4 deletes the WorkflowExecutorDO class binding. The class name is
+# preserved here because Cloudflare's migration registry tracks the
+# delete by name. IRREVERSIBLE — once shipped, CF deletes any storage
+# the DO held.
+[[migrations]]
+tag = "v4"
+deleted_classes = ["WorkflowExecutorDO"]
+
+# Cloudflare Workflows binding — the dag/v1 interpreter that drives
+# workflow executions. See docs/specs/workflows.md.
+[[workflows]]
+name = "valet-workflow-interpreter"
+binding = "WORKFLOW_INTERPRETER"
+class_name = "ValetWorkflowInterpreter"
 
 # D1 Database
 [[d1_databases]]

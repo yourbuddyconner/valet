@@ -5,7 +5,6 @@
   "type": "module",
   "scripts": {
     "dev": "bun run src/bin.ts",
-    "workflow": "bun run src/workflow-cli.ts",
     "build": "bun build src/bin.ts --outdir dist --target bun",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"

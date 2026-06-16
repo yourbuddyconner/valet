@@ -21,6 +21,12 @@ export const authMiddleware: MiddlewareHandler<{ Bindings: Env; Variables: Varia
   if (/^\/api\/sessions\/[^/]+\/runner-attachment$/.test(url.pathname)) {
     return next();
   }
+  // Trigger webhooks authenticate via X-Valet-Trigger-Token validated
+  // inside the route handler (constant-time compare against the
+  // trigger's server-issued token).
+  if (/^\/api\/triggers\/[^/]+\/webhook$/.test(url.pathname)) {
+    return next();
+  }
 
   // Extract bearer token from Authorization header, WebSocket subprotocol, or legacy ?token= query param
   const bearerToken = extractBearerToken(c.req.raw);

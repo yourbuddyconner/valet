@@ -195,6 +195,15 @@ export interface CreateSessionParams {
   initialPrompt?: string;
   initialModel?: string;
   personaId?: string;
+  /**
+   * Pre-allocated session id. The workflow-runtime session.start
+   * executor uses this to thread the cached id from an outer step.do
+   * into the createSession call: a retry of the step.do that wraps
+   * createSession then collides on the existing sessions PK (caught
+   * via onConflictDoNothing inside db.createSession) instead of
+   * generating a fresh UUID and spawning a second sandbox.
+   */
+  presetSessionId?: string;
 }
 
 export interface CreateSessionRequestContext {
@@ -212,7 +221,7 @@ export async function createSession(
   requestContext: CreateSessionRequestContext,
 ): Promise<CreateSessionResult> {
   const appDb = getDb(env.DB);
-  const sessionId = crypto.randomUUID();
+  const sessionId = params.presetSessionId ?? crypto.randomUUID();
   const runnerToken = generateRunnerToken();
 
   // Ensure user exists in DB
@@ -594,14 +603,28 @@ export async function terminateSession(
 ): Promise<void> {
   const appDb = getDb(env.DB);
   await db.assertSessionAccess(appDb, sessionId, userId, 'owner');
+  await terminateSessionUnchecked(env, sessionId, 'user_stopped');
+}
 
+/**
+ * Terminate a session WITHOUT an access check. For internal callers
+ * (workflow cancellation, cron sweeps) where the access check is
+ * either implicit in the caller's context or doesn't apply because
+ * the system itself is the actor. Do NOT expose via HTTP routes.
+ */
+export async function terminateSessionUnchecked(
+  env: Env,
+  sessionId: string,
+  reason: string,
+): Promise<void> {
+  const appDb = getDb(env.DB);
   const doId = env.SESSIONS.idFromName(sessionId);
   const sessionDO = env.SESSIONS.get(doId);
 
   await sessionDO.fetch(new Request('http://do/stop', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ reason: 'user_stopped' }),
+    body: JSON.stringify({ reason }),
   }));
 
   await db.updateSessionStatus(appDb, sessionId, 'terminated');

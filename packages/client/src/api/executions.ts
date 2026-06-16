@@ -2,34 +2,70 @@ import { useQuery, useMutation, useQueryClient, useInfiniteQuery } from '@tansta
 import { api } from './client';
 
 // Types
+export interface ExecutionApproval {
+  id: string;
+  nodeId: string;
+  kind: 'explicit' | 'tool_policy';
+  status: 'pending' | 'approved' | 'denied' | 'expired' | 'cancelled';
+  prompt: string;
+  summary: string | null;
+  // Parsed JSON. `null` when no details were attached; an object/array
+  // otherwise. The runtime renders parameters and human context here for
+  // tool_policy approvals (action params), and for explicit approvals
+  // when the workflow author passed a `details:` map.
+  details: unknown | null;
+  timeoutAt: string | null;
+  resolvedBy: string | null;
+  resolvedAt: string | null;
+  cancelledAt: string | null;
+  createdAt: string;
+}
+
 export interface Execution {
   id: string;
   workflowId: string;
   workflowName: string | null;
-  sessionId?: string | null;
   triggerId: string | null;
   triggerName?: string | null;
-  status: 'pending' | 'running' | 'waiting_approval' | 'completed' | 'failed' | 'cancelled';
-  resumeToken?: string | null;
+  // status union matches the worker's ExecutionStatus (execution-status.ts).
+  // 'cancelling' is transient — set when a cancel API call has marked the
+  // row but cancel-cleanup hasn't finished yet. 'waiting_time' is a wait
+  // node parked on step.sleep.
+  status: 'pending' | 'running' | 'waiting_approval' | 'waiting_time' | 'cancelling' | 'completed' | 'failed' | 'cancelled';
   triggerType: 'webhook' | 'schedule' | 'manual';
   triggerMetadata: Record<string, unknown> | null;
-  variables: Record<string, unknown> | null;
+  inputs: Record<string, unknown> | null;
   outputs: Record<string, unknown> | null;
-  steps: ExecutionStep[] | null;
   error: string | null;
   startedAt: string;
   completedAt: string | null;
+  mode?: 'production' | 'test' | null;
+  cancelledAt?: string | null;
+  cancelledBy?: string | null;
+  nodes?: ExecutionNode[];
+  // Full approval history for this execution (pending + resolved).
+  // Source of truth for the approve/deny UI.
+  approvals?: ExecutionApproval[];
 }
 
-export interface ExecutionStep {
-  stepId: string;
-  status: string;
-  attempt?: number;
-  input?: unknown;
-  output?: unknown;
-  error?: string;
-  startedAt?: string;
-  completedAt?: string;
+export interface ExecutionNode {
+  id: string;
+  nodeId: string;
+  nodeType: string;
+  status: 'pending' | 'running' | 'waiting_approval' | 'waiting_time' | 'skipped' | 'completed' | 'failed';
+  inputPreview?: string | null;
+  inputTruncated: boolean;
+  output?: string | null;
+  outputTruncated: boolean;
+  error?: string | null;
+  reason?: string | null;
+  retryAttempts: number;
+  approvalId?: string | null;
+  invocationId?: string | null;
+  startedAt?: string | null;
+  completedAt?: string | null;
+  durationMs?: number | null;
+  createdAt: string;
 }
 
 export interface ListExecutionsResponse {
@@ -38,40 +74,6 @@ export interface ListExecutionsResponse {
 
 export interface GetExecutionResponse {
   execution: Execution;
-}
-
-export interface ExecutionStepTrace {
-  id: string;
-  executionId: string;
-  stepId: string;
-  attempt: number;
-  status: string;
-  input: unknown | null;
-  output: unknown | null;
-  error: string | null;
-  startedAt: string | null;
-  completedAt: string | null;
-  createdAt: string;
-  workflowStepIndex: number | null;
-  sequence: number;
-}
-
-export interface GetExecutionStepsResponse {
-  steps: ExecutionStepTrace[];
-}
-
-export interface CompleteExecutionRequest {
-  status: 'completed' | 'failed' | 'cancelled';
-  outputs?: Record<string, unknown>;
-  steps?: ExecutionStep[];
-  error?: string;
-  completedAt?: string;
-}
-
-export interface ApproveExecutionRequest {
-  approve: boolean;
-  resumeToken: string;
-  reason?: string;
 }
 
 export interface CancelExecutionRequest {
@@ -88,7 +90,6 @@ export const executionKeys = {
     [...executionKeys.all, 'infinite', filters] as const,
   details: () => [...executionKeys.all, 'detail'] as const,
   detail: (id: string) => [...executionKeys.details(), id] as const,
-  steps: (id: string) => [...executionKeys.detail(id), 'steps'] as const,
   byWorkflow: (workflowId: string) => [...executionKeys.all, 'workflow', workflowId] as const,
 };
 
@@ -147,45 +148,64 @@ export function useWorkflowExecutions(workflowId: string) {
   });
 }
 
-export function useExecutionSteps(executionId: string) {
+export interface ListExecutionApprovalsResponse {
+  approvals: ExecutionApproval[];
+}
+
+/**
+ * Pending-approval poll for an execution. The detail endpoint returns
+ * the same list, but the hook is broken out so a list/banner view can
+ * watch approvals without re-fetching the whole execution tree.
+ */
+export function useExecutionApprovals(executionId: string, options?: { enabled?: boolean }) {
   return useQuery({
-    queryKey: executionKeys.steps(executionId),
-    queryFn: () => api.get<GetExecutionStepsResponse>(`/executions/${executionId}/steps`),
-    enabled: !!executionId,
-    refetchInterval: executionId ? 2500 : false,
+    queryKey: [...executionKeys.detail(executionId), 'approvals'] as const,
+    queryFn: () => api.get<ListExecutionApprovalsResponse>(`/executions/${executionId}/approvals`),
+    enabled: (options?.enabled ?? true) && !!executionId,
+    refetchInterval: 5000,
     refetchIntervalInBackground: true,
   });
 }
 
-export function useCompleteExecution() {
+export interface ResolveApprovalRequest {
+  reason?: string;
+}
+
+export interface ResolveApprovalResponse {
+  status: string;
+  timedOut?: boolean;
+  alreadyResolved?: boolean;
+}
+
+export function useApproveExecutionApproval() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: ({ executionId, data }: { executionId: string; data: CompleteExecutionRequest }) =>
-      api.post<{ success: boolean; status: string; completedAt: string }>(
-        `/executions/${executionId}/complete`,
-        data
+    mutationFn: ({ executionId, approvalId, reason }: { executionId: string; approvalId: string; reason?: string }) =>
+      api.post<ResolveApprovalResponse>(
+        `/executions/${executionId}/approvals/${approvalId}/approve`,
+        reason ? { reason } : {},
       ),
     onSuccess: (_, { executionId }) => {
       queryClient.invalidateQueries({ queryKey: executionKeys.detail(executionId) });
-      queryClient.invalidateQueries({ queryKey: executionKeys.steps(executionId) });
+      queryClient.invalidateQueries({ queryKey: [...executionKeys.detail(executionId), 'approvals'] });
       queryClient.invalidateQueries({ queryKey: executionKeys.lists() });
     },
   });
 }
 
-export function useApproveExecution() {
+export function useDenyExecutionApproval() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: ({ executionId, data }: { executionId: string; data: ApproveExecutionRequest }) =>
-      api.post<{ success: boolean; status: string }>(
-        `/executions/${executionId}/approve`,
-        data
+    mutationFn: ({ executionId, approvalId, reason }: { executionId: string; approvalId: string; reason?: string }) =>
+      api.post<ResolveApprovalResponse>(
+        `/executions/${executionId}/approvals/${approvalId}/deny`,
+        reason ? { reason } : {},
       ),
     onSuccess: (_, { executionId }) => {
       queryClient.invalidateQueries({ queryKey: executionKeys.detail(executionId) });
-      queryClient.invalidateQueries({ queryKey: executionKeys.steps(executionId) });
+      queryClient.invalidateQueries({ queryKey: [...executionKeys.detail(executionId), 'approvals'] });
       queryClient.invalidateQueries({ queryKey: executionKeys.lists() });
     },
   });
@@ -202,7 +222,6 @@ export function useCancelExecution() {
       ),
     onSuccess: (_, { executionId }) => {
       queryClient.invalidateQueries({ queryKey: executionKeys.detail(executionId) });
-      queryClient.invalidateQueries({ queryKey: executionKeys.steps(executionId) });
       queryClient.invalidateQueries({ queryKey: executionKeys.lists() });
     },
   });

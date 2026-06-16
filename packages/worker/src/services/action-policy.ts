@@ -18,7 +18,7 @@ export async function resolveMode(
 
 export async function resolveEffectiveMode(
   db: AppDb,
-  input: { userId: string; sessionId: string; service: string; actionId: string; riskLevel: string },
+  input: { userId: string; sessionId: string | null; service: string; actionId: string; riskLevel: string },
 ): Promise<EffectivePolicyResult> {
   return resolveEffectiveActionPolicy(db, input);
 }

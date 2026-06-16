@@ -45,7 +45,7 @@ vi.mock('../channels/registry.js', () => ({
   },
 }));
 
-vi.mock('../lib/workflow-runtime.js', () => ({
+vi.mock('../services/orchestrator.js', () => ({
   dispatchOrchestratorPrompt: dispatchOrchestratorPromptMock,
 }));
 

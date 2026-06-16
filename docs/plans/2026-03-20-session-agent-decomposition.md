@@ -416,7 +416,7 @@ packages/worker/src/services/
 ## What This Does NOT Cover
 
 - **EventBusDO** — separate DO, already clean
-- **WorkflowExecutorDO** — separate DO, already clean
+- **Workflow runtime** — handled by the Cloudflare Workflow interpreter (ValetWorkflowInterpreter), not by SessionAgentDO
 - **Runner-side changes** — Runner protocol is unchanged throughout
 - **Client-side changes** — WebSocket protocol is unchanged throughout
 - **D1 schema redesign** — only the `created_at_epoch` addition in Phase 1

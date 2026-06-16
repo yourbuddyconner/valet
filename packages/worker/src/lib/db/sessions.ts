@@ -131,6 +131,12 @@ export async function createSession(
 ): Promise<AgentSession> {
   const purpose = data.purpose || (data.isOrchestrator ? 'orchestrator' : 'interactive');
 
+  // onConflictDoNothing: the workflow runtime's session.start executor
+  // pre-allocates the session id in an outer step.do and passes it
+  // here. If the wrapping step.do retries (D1 transient, etc.), this
+  // INSERT collides on the existing PK and silently no-ops — preserving
+  // the first sandbox + the workflow_spawned_sessions row instead of
+  // generating a fresh UUID and leaking the original sandbox.
   await db.insert(sessions).values({
     id: data.id,
     userId: data.userId,
@@ -144,7 +150,7 @@ export async function createSession(
     personaId: data.personaId || null,
     isOrchestrator: data.isOrchestrator ?? false,
     purpose,
-  });
+  }).onConflictDoNothing();
 
   return {
     id: data.id,

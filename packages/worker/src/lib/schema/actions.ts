@@ -2,6 +2,7 @@ import { sqliteTable, text, index } from 'drizzle-orm/sqlite-core';
 import { sql } from 'drizzle-orm';
 import { users } from './users.js';
 import { sessions } from './sessions.js';
+import { workflowExecutions } from './workflows.js';
 
 export const actionPolicies = sqliteTable('action_policies', {
   id: text().primaryKey(),
@@ -42,7 +43,11 @@ export const userActionPolicyOverrides = sqliteTable('user_action_policy_overrid
 
 export const actionInvocations = sqliteTable('action_invocations', {
   id: text().primaryKey(),
-  sessionId: text().notNull().references(() => sessions.id, { onDelete: 'cascade' }),
+  // session_id is nullable as of migration 0019. SET NULL on both
+  // session_id and workflow_execution_id so audit rows outlive their
+  // originating session / workflow_execution.
+  sessionId: text().references(() => sessions.id, { onDelete: 'set null' }),
+  workflowExecutionId: text().references(() => workflowExecutions.id, { onDelete: 'set null' }),
   userId: text().notNull().references(() => users.id, { onDelete: 'cascade' }),
   service: text().notNull(),
   actionId: text().notNull(),

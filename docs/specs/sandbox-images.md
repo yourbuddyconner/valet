@@ -159,7 +159,7 @@ No automated version bumping. The process is fully manual.
 .run_commands("echo 'RUNNER_VERSION=2026-02-22-v113-v2-turn-id-fix'")
 ```
 
-Placed before `add_local_dir` for the runner. Changing this string invalidates the runner copy layer and **all subsequent layers** (runner install, workflow CLI, start.sh, opencode config, workspace, env vars). Use this when changing runner source, docker files, or OpenCode config.
+Placed before `add_local_dir` for the runner. Changing this string invalidates the runner copy layer and **all subsequent layers** (runner install, start.sh, opencode config, workspace, env vars). Use this when changing runner source, docker files, or OpenCode config.
 
 **2. `IMAGE_BUILD_VERSION` env var (layer 16):**
 

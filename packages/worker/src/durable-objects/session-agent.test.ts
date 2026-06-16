@@ -2752,65 +2752,6 @@ describe('SessionAgentDO', () => {
       expect(callOpts.prompt.context?.provenanceLabel as string).toContain('scheduled task');
     });
 
-    it('sends a DM with workflow name in provenance label when processing a workflow_execute prompt', async () => {
-      const { agent } = await createTestAgent();
-      (agent as any).sessionState.set('sessionId', 'orchestrator:user-1');
-      (agent as any).sessionState.set('userId', 'user-1');
-
-      // Set up appDb with user, session, Slack identity link, and workflow + execution rows
-      const testDb = createTestDb();
-      const appDb = testDb.db;
-      appDb.insert(users).values({ id: 'user-1', email: 'user-1@example.com' }).run();
-      appDb.insert(sessions).values({
-        id: 'orchestrator:user-1', userId: 'user-1', workspace: '/tmp', status: 'running',
-      }).run();
-      appDb.insert(userIdentityLinks).values({
-        id: 'link-slack', userId: 'user-1', provider: 'slack', externalId: 'U0SLACK99',
-      }).run();
-      // Insert a workflow and execution so getWorkflowNameByExecutionId returns 'Weekly Report'
-      appDb.insert(workflows).values({
-        id: 'wf-weekly', userId: 'user-1', name: 'Weekly Report', data: '{}', version: '1.0.0',
-      }).run();
-      appDb.insert(workflowExecutions).values({
-        id: 'exec-wf-99', userId: 'user-1', workflowId: 'wf-weekly',
-        status: 'running', triggerType: 'manual', startedAt: new Date().toISOString(),
-      }).run();
-      Object.defineProperty(agent, 'appDb', { value: appDb, configurable: true });
-
-      // Enqueue a workflow_execute processing row so getProcessingWorkflowContext returns workflow context
-      (agent as any).promptQueue.enqueue({
-        id: 'pq-wf-test',
-        content: '',
-        queueType: 'workflow_execute',
-        workflowExecutionId: 'exec-wf-99',
-        status: 'processing',
-      });
-
-      const resolveUserDmTargetMock = vi.fn().mockResolvedValue({ channelType: 'slack', channelId: 'D0DM1234' });
-      (agent as any).channelRouter.resolveUserDmTarget = resolveUserDmTargetMock;
-      const sendInteractiveMock = vi.fn().mockResolvedValue([]);
-      (agent as any).channelRouter.sendInteractivePrompt = sendInteractiveMock;
-
-      const prompt: InteractivePrompt = {
-        id: 'inv-wf-dm',
-        sessionId: 'orchestrator:user-1',
-        type: 'approval',
-        title: 'Approval',
-        body: 'Send report',
-        actions: [{ id: 'approve_once', label: 'Approve', style: 'primary' }],
-        context: { toolId: 'slack:send_message', riskLevel: 'medium', summary: 'Send report' },
-      };
-
-      // Restore the real sendChannelInteractivePrompts (it is mocked in createTestAgent)
-      delete (agent as any).sendChannelInteractivePrompts;
-
-      await (agent as any).sendChannelInteractivePrompts('inv-wf-dm', prompt);
-
-      expect(sendInteractiveMock).toHaveBeenCalledOnce();
-      const callOpts = sendInteractiveMock.mock.calls[0][0] as { prompt: InteractivePrompt };
-      expect(callOpts.prompt.context?.provenanceLabel as string).toContain('Weekly Report');
-    });
-
     it('creates 2-part and 3-part Slack DM bindings and pre-registers thread mapping after DM fallback delivery', async () => {
       const { agent } = await createTestAgent();
       (agent as any).sessionState.set('sessionId', 'orchestrator:user-1');

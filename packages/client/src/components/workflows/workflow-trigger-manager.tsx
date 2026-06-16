@@ -26,6 +26,7 @@ import { Input } from '@/components/ui/input';
 import { cn } from '@/lib/cn';
 import { toastError, toastSuccess } from '@/hooks/use-toast';
 import { formatRelativeTime } from '@/lib/format';
+import { WebhookTokenReveal } from '@/components/automation/webhook-token-reveal';
 
 interface WorkflowTriggerManagerProps {
   workflowId: string;
@@ -42,10 +43,18 @@ interface TriggerFormState {
   webhookPath: string;
   webhookMethod: 'GET' | 'POST';
   webhookSecret: string;
+  // Round-trip-only: no UI for editing rateLimit yet. PATCH replaces
+  // config wholesale, so stash + re-emit to avoid wiping an API-set
+  // override.
+  webhookRateLimit?: number;
   scheduleCron: string;
   scheduleTimezone: string;
   scheduleTarget: ScheduleTarget;
   schedulePrompt: string;
+  // Round-trip-only: the form has no UI for editing schedule inputs yet,
+  // but PATCH replaces config wholesale, so we stash and re-emit them on
+  // save to avoid erasing inputs that were set via the API.
+  scheduleInputs?: Record<string, unknown>;
 }
 
 const DEFAULT_FORM: TriggerFormState = {
@@ -78,6 +87,7 @@ function formFromTrigger(trigger: Trigger): TriggerFormState {
       webhookPath: trigger.config.path,
       webhookMethod: trigger.config.method || 'POST',
       webhookSecret: trigger.config.secret || '',
+      webhookRateLimit: trigger.config.rateLimit,
       scheduleCron: '',
       scheduleTimezone: 'UTC',
       scheduleTarget: 'workflow',
@@ -97,6 +107,7 @@ function formFromTrigger(trigger: Trigger): TriggerFormState {
       scheduleTimezone: trigger.config.timezone || 'UTC',
       scheduleTarget: trigger.config.target || 'workflow',
       schedulePrompt: trigger.config.prompt || '',
+      scheduleInputs: trigger.config.inputs,
     };
   }
 
@@ -115,6 +126,9 @@ function toConfig(form: TriggerFormState): TriggerConfig {
       path: form.webhookPath.trim(),
       method: form.webhookMethod,
       ...(form.webhookSecret.trim() ? { secret: form.webhookSecret.trim() } : {}),
+      // Round-trip an API-set rateLimit so editing the trigger doesn't
+      // silently wipe it.
+      ...(typeof form.webhookRateLimit === 'number' ? { rateLimit: form.webhookRateLimit } : {}),
     };
   }
 
@@ -125,6 +139,11 @@ function toConfig(form: TriggerFormState): TriggerConfig {
       timezone: form.scheduleTimezone.trim() || undefined,
       target: form.scheduleTarget,
       prompt: form.scheduleTarget === 'orchestrator' ? form.schedulePrompt.trim() : undefined,
+      // PATCH replaces config wholesale; preserve any inputs the trigger
+      // was created with so an edit doesn't silently erase them.
+      ...(form.scheduleInputs && Object.keys(form.scheduleInputs).length > 0
+        ? { inputs: form.scheduleInputs }
+        : {}),
     };
   }
 
@@ -166,6 +185,14 @@ export function WorkflowTriggerManager({ workflowId, triggers }: WorkflowTrigger
   const [editingTrigger, setEditingTrigger] = React.useState<Trigger | null>(null);
   const [form, setForm] = React.useState<TriggerFormState>(DEFAULT_FORM);
   const [formError, setFormError] = React.useState<string | null>(null);
+  // Webhook-token reveal. The server returns the token EXACTLY ONCE
+  // (on create OR on PATCH that transitions manual/schedule → webhook).
+  // If the UI drops it, the webhook URL returns 401 forever and the
+  // only recovery is to recreate the trigger.
+  const [revealedToken, setRevealedToken] = React.useState<{
+    token: string;
+    webhookUrl?: string;
+  } | null>(null);
 
   const resetForm = React.useCallback(() => {
     setForm(DEFAULT_FORM);
@@ -207,14 +234,32 @@ export function WorkflowTriggerManager({ workflowId, triggers }: WorkflowTrigger
       };
 
       if (editingTrigger) {
-        await updateTrigger.mutateAsync({
+        const result = await updateTrigger.mutateAsync({
           triggerId: editingTrigger.id,
           data: payload,
         });
         toastSuccess('Trigger updated', `${form.name.trim()} was updated.`);
+        if (result.webhookToken) {
+          setRevealedToken({
+            token: result.webhookToken,
+            ...(result.webhookUrl ? { webhookUrl: result.webhookUrl } : {}),
+          });
+          setOpen(false);
+          resetForm();
+          return;
+        }
       } else {
-        await createTrigger.mutateAsync(payload);
+        const result = await createTrigger.mutateAsync(payload);
         toastSuccess('Trigger created', `${form.name.trim()} was created.`);
+        if (result.webhookToken) {
+          setRevealedToken({
+            token: result.webhookToken,
+            ...(result.webhookUrl ? { webhookUrl: result.webhookUrl } : {}),
+          });
+          setOpen(false);
+          resetForm();
+          return;
+        }
       }
 
       setOpen(false);
@@ -530,6 +575,12 @@ export function WorkflowTriggerManager({ workflowId, triggers }: WorkflowTrigger
           </form>
         </DialogContent>
       </Dialog>
+
+      <WebhookTokenReveal
+        token={revealedToken?.token ?? null}
+        {...(revealedToken?.webhookUrl ? { webhookUrl: revealedToken.webhookUrl } : {})}
+        onClose={() => setRevealedToken(null)}
+      />
     </Card>
   );
 }

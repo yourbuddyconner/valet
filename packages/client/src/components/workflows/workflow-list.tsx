@@ -1,8 +1,10 @@
 import * as React from 'react';
-import { useWorkflows } from '@/api/workflows';
-import { WorkflowCard } from './workflow-card';
+import { Link } from '@tanstack/react-router';
+import { useWorkflows, type Workflow } from '@/api/workflows';
+import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
 import { SearchInput } from '@/components/ui/search-input';
+import { formatRelativeTime } from '@/lib/format';
 
 export function WorkflowList() {
   const [search, setSearch] = React.useState('');
@@ -49,25 +51,7 @@ export function WorkflowList() {
       </div>
 
       {workflows.length === 0 ? (
-        <div className="rounded-lg border border-neutral-200 bg-white p-8 text-center dark:border-neutral-700 dark:bg-neutral-800">
-          <div className="mx-auto mb-4 flex size-12 items-center justify-center rounded-full bg-neutral-100 dark:bg-neutral-700">
-            <WorkflowIcon className="size-6 text-neutral-400" />
-          </div>
-          <h3 className="text-sm font-medium text-balance text-neutral-900 dark:text-neutral-100">
-            No workflows yet
-          </h3>
-          <p className="mt-1 text-sm text-pretty text-neutral-500 dark:text-neutral-400">
-            Create a workflow with the agent using{' '}
-            <code className="rounded bg-neutral-100 px-1 py-0.5 text-xs dark:bg-neutral-700">
-              sync_workflow
-            </code>{' '}
-            or add one in your{' '}
-            <code className="rounded bg-neutral-100 px-1 py-0.5 text-xs dark:bg-neutral-700">
-              .opencode/workflows/
-            </code>{' '}
-            directory to get started.
-          </p>
-        </div>
+        <EmptyState />
       ) : filteredWorkflows.length === 0 ? (
         <div className="rounded-lg border border-neutral-200 bg-white p-8 text-center dark:border-neutral-700 dark:bg-neutral-800">
           <p className="text-sm text-pretty text-neutral-500 dark:text-neutral-400">
@@ -75,56 +59,89 @@ export function WorkflowList() {
           </p>
         </div>
       ) : (
-        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+        <ul className="divide-y divide-neutral-200 overflow-hidden rounded-lg border border-neutral-200 bg-white dark:divide-neutral-700 dark:border-neutral-700 dark:bg-neutral-800">
           {filteredWorkflows.map((workflow) => (
-            <WorkflowCard key={workflow.id} workflow={workflow} />
+            <WorkflowRow key={workflow.id} workflow={workflow} />
           ))}
-        </div>
+        </ul>
       )}
+    </div>
+  );
+}
+
+function WorkflowRow({ workflow }: { workflow: Workflow }) {
+  // Source of truth: workflows.published_version_id. The list endpoint
+  // returns the latest published definition under `data` even for
+  // unpublished rows (workflows.data is the /sync write surface), so
+  // checking data alone would mislabel every workflow as Published.
+  const isPublished = Boolean(workflow.publishedVersionId);
+
+  return (
+    <li>
+      <Link
+        to="/workflows/$workflowId"
+        params={{ workflowId: workflow.id }}
+        className="flex items-start justify-between gap-4 p-4 hover:bg-neutral-50 dark:hover:bg-neutral-700/50"
+      >
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            <span className="truncate text-sm font-medium text-neutral-900 dark:text-neutral-100">
+              {workflow.name}
+            </span>
+            <Badge variant={isPublished ? 'success' : 'secondary'}>
+              {isPublished ? 'Published' : 'Draft'}
+            </Badge>
+            {!workflow.enabled && (
+              <Badge variant="secondary">Disabled</Badge>
+            )}
+          </div>
+          {workflow.description && (
+            <p className="mt-1 line-clamp-2 text-xs text-pretty text-neutral-500 dark:text-neutral-400">
+              {workflow.description}
+            </p>
+          )}
+          {workflow.slug && (
+            <code className="mt-1 block truncate text-xs text-neutral-400">
+              {workflow.slug}
+            </code>
+          )}
+        </div>
+        <div className="shrink-0 text-right text-xs tabular-nums text-neutral-500 dark:text-neutral-400">
+          <div>v{workflow.version}</div>
+          <div>{formatRelativeTime(workflow.updatedAt)}</div>
+        </div>
+      </Link>
+    </li>
+  );
+}
+
+function EmptyState() {
+  return (
+    <div className="rounded-lg border border-neutral-200 bg-white p-8 text-center dark:border-neutral-700 dark:bg-neutral-800">
+      <h3 className="text-sm font-medium text-balance text-neutral-900 dark:text-neutral-100">
+        No workflows yet
+      </h3>
+      <p className="mt-1 text-sm text-pretty text-neutral-500 dark:text-neutral-400">
+        Ask the agent to draft a workflow, or open one and click <em>Publish</em> to make it available to triggers.
+      </p>
     </div>
   );
 }
 
 function WorkflowListSkeleton() {
   return (
-    <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-      {Array.from({ length: 6 }).map((_, i) => (
-        <div
-          key={i}
-          className="rounded-lg border border-neutral-200 bg-white p-6 dark:border-neutral-700 dark:bg-neutral-800"
-        >
-          <div className="flex items-start justify-between">
-            <Skeleton className="h-5 w-32" />
-            <Skeleton className="h-5 w-16" />
+    <ul className="divide-y divide-neutral-200 overflow-hidden rounded-lg border border-neutral-200 bg-white dark:divide-neutral-700 dark:border-neutral-700 dark:bg-neutral-800">
+      {Array.from({ length: 5 }).map((_, i) => (
+        <li key={i} className="p-4">
+          <div className="flex items-start justify-between gap-4">
+            <div className="min-w-0 flex-1 space-y-2">
+              <Skeleton className="h-4 w-32" />
+              <Skeleton className="h-3 w-48" />
+            </div>
+            <Skeleton className="h-3 w-16" />
           </div>
-          <Skeleton className="mt-2 h-4 w-48" />
-          <div className="mt-4 flex items-center justify-between">
-            <Skeleton className="h-4 w-24" />
-            <Skeleton className="h-4 w-20" />
-          </div>
-        </div>
+        </li>
       ))}
-    </div>
-  );
-}
-
-function WorkflowIcon({ className }: { className?: string }) {
-  return (
-    <svg
-      xmlns="http://www.w3.org/2000/svg"
-      width="24"
-      height="24"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      className={className}
-    >
-      <rect width="8" height="4" x="8" y="2" rx="1" ry="1" />
-      <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" />
-      <path d="m9 14 2 2 4-4" />
-    </svg>
+    </ul>
   );
 }

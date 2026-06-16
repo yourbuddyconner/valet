@@ -1,7 +1,6 @@
 import { sqliteTable, text, integer, index, uniqueIndex } from 'drizzle-orm/sqlite-core';
 import { sql } from 'drizzle-orm';
 import { users } from './users.js';
-import { sessions } from './sessions.js';
 
 export const workflows = sqliteTable('workflows', {
   id: text().primaryKey(),
@@ -15,6 +14,10 @@ export const workflows = sqliteTable('workflows', {
   tags: text(),
   createdAt: text().default(sql`(datetime('now'))`),
   updatedAt: text().default(sql`(datetime('now'))`),
+  // dag/v1 draft + published-version pointer + editor UI layout.
+  draftDefinition: text(),
+  publishedVersionId: text(),
+  ui: text(),
 }, (table) => [
   index('idx_workflows_user').on(table.userId),
   uniqueIndex('idx_workflows_slug').on(table.userId, table.slug),
@@ -33,6 +36,9 @@ export const triggers = sqliteTable('triggers', {
   lastRunAt: text(),
   createdAt: text().default(sql`(datetime('now'))`),
   updatedAt: text().default(sql`(datetime('now'))`),
+  // Per-trigger webhook auth token (0020). Server-generated at create
+  // time, shown to the user once, never re-exposed via GET/PATCH.
+  webhookToken: text(),
 }, (table) => [
   index('idx_triggers_user').on(table.userId),
   index('idx_triggers_workflow').on(table.workflowId),
@@ -43,6 +49,33 @@ export const triggers = sqliteTable('triggers', {
   uniqueIndex('idx_triggers_user_name').on(table.userId, table.name),
 ]);
 
+// Per-trigger sliding-minute counter for webhook rate limiting (0020).
+// The handler upserts the current bucket on each request and rejects
+// once the count exceeds the trigger's configured limit (default 60).
+export const triggerWebhookRate = sqliteTable('trigger_webhook_rate', {
+  triggerId: text().notNull().references(() => triggers.id, { onDelete: 'cascade' }),
+  windowStartTs: integer().notNull(),
+  count: integer().notNull().default(0),
+}, (table) => [
+  index('idx_twr_lookup').on(table.triggerId, table.windowStartTs),
+]);
+
+// Column groupings:
+//   - Identity + lifecycle: id, workflowId, userId, triggerId, status,
+//     startedAt, completedAt, error.
+//   - Trigger context: triggerType, triggerMetadata, initiatorType,
+//     initiatorUserId.
+//   - Inputs / outputs: inputs (validated), outputs (stop-node outputs),
+//     definitionSnapshot, definitionVersionId, workflowVersion (the
+//     human-facing semver, audit-only).
+//   - CF instance handle: cloudflareInstanceId (mirror of id for legibility).
+//   - Cancellation: cancelledAt, cancelledBy, cleanupCompletedAt.
+//   - Mode: 'production' (triggers) or 'test' (draft test-run).
+//   - Idempotency: idempotencyKey (unique with workflowId).
+//
+// Sessions spawned by `session` / `orchestrator` nodes are linked
+// through the `workflow_spawned_sessions` table — there is no
+// denormalized session id column on this table.
 export const workflowExecutions = sqliteTable('workflow_executions', {
   id: text().primaryKey(),
   workflowId: text().references(() => workflows.id, { onDelete: 'set null' }),
@@ -51,22 +84,29 @@ export const workflowExecutions = sqliteTable('workflow_executions', {
   status: text().notNull(),
   triggerType: text().notNull(),
   triggerMetadata: text({ mode: 'json' }),
-  variables: text({ mode: 'json' }),
   outputs: text({ mode: 'json' }),
-  steps: text({ mode: 'json' }),
   error: text(),
   startedAt: text().notNull(),
   completedAt: text(),
   workflowVersion: text(),
-  workflowHash: text(),
-  workflowSnapshot: text(),
   idempotencyKey: text(),
-  runtimeState: text(),
-  resumeToken: text(),
-  attemptCount: integer().notNull().default(0),
-  sessionId: text().references(() => sessions.id, { onDelete: 'set null' }),
   initiatorType: text(),
   initiatorUserId: text().references(() => users.id, { onDelete: 'set null' }),
+  cancelledAt: text(),
+  cancelledBy: text().references(() => users.id, { onDelete: 'set null' }),
+  // The cancel pipeline writes this only when every step succeeded;
+  // a partial-failure run leaves the row in `cancelling`. A row with
+  // status='cancelled' AND cleanupCompletedAt set is fully terminal;
+  // status='cancelled' with null cleanupCompletedAt means the runtime
+  // self-finalized but the cancel pipeline still needs to run (handled
+  // by the cancel API and the cron sweep).
+  cleanupCompletedAt: text(),
+  // dag/v1 execution columns.
+  definitionSnapshot: text(),
+  definitionVersionId: text(),
+  inputs: text(),
+  mode: text({ enum: ['production', 'test'] }).notNull().default('production'),
+  cloudflareInstanceId: text(),
 }, (table) => [
   index('idx_workflow_executions_workflow').on(table.workflowId),
   index('idx_workflow_executions_user').on(table.userId),
@@ -74,43 +114,6 @@ export const workflowExecutions = sqliteTable('workflow_executions', {
   index('idx_workflow_executions_status').on(table.status),
   index('idx_workflow_executions_started').on(table.startedAt),
   uniqueIndex('idx_workflow_executions_idempotency').on(table.workflowId, table.idempotencyKey),
-  index('idx_workflow_executions_session').on(table.sessionId),
-]);
-
-export const workflowExecutionSteps = sqliteTable('workflow_execution_steps', {
-  id: text().primaryKey(),
-  executionId: text().notNull().references(() => workflowExecutions.id, { onDelete: 'cascade' }),
-  stepId: text().notNull(),
-  attempt: integer().notNull(),
-  status: text().notNull(),
-  inputJson: text({ mode: 'json' }),
-  outputJson: text({ mode: 'json' }),
-  error: text(),
-  startedAt: text(),
-  completedAt: text(),
-  createdAt: text().notNull().default(sql`(datetime('now'))`),
-}, (table) => [
-  uniqueIndex('idx_execution_steps_unique').on(table.executionId, table.stepId, table.attempt),
-  index('idx_workflow_execution_steps_execution').on(table.executionId),
-  index('idx_workflow_execution_steps_status').on(table.status),
-]);
-
-export const workflowMutationProposals = sqliteTable('workflow_mutation_proposals', {
-  id: text().primaryKey(),
-  workflowId: text().notNull().references(() => workflows.id, { onDelete: 'cascade' }),
-  executionId: text().references(() => workflowExecutions.id, { onDelete: 'set null' }),
-  proposedBySessionId: text().references(() => sessions.id, { onDelete: 'set null' }),
-  baseWorkflowHash: text().notNull(),
-  proposalJson: text().notNull(),
-  diffText: text(),
-  status: text().notNull(),
-  reviewNotes: text(),
-  expiresAt: text(),
-  createdAt: text().notNull().default(sql`(datetime('now'))`),
-  updatedAt: text().notNull().default(sql`(datetime('now'))`),
-}, (table) => [
-  index('idx_workflow_mutation_proposals_workflow').on(table.workflowId),
-  index('idx_workflow_mutation_proposals_status').on(table.status),
 ]);
 
 export const workflowScheduleTicks = sqliteTable('workflow_schedule_ticks', {
@@ -123,35 +126,3 @@ export const workflowScheduleTicks = sqliteTable('workflow_schedule_ticks', {
   index('idx_workflow_schedule_ticks_trigger').on(table.triggerId),
 ]);
 
-export const pendingApprovals = sqliteTable('pending_approvals', {
-  id: text().primaryKey(),
-  executionId: text().notNull().references(() => workflowExecutions.id, { onDelete: 'cascade' }),
-  stepId: text().notNull(),
-  message: text().notNull(),
-  timeoutAt: text(),
-  defaultAction: text(),
-  status: text().notNull().default('pending'),
-  respondedAt: text(),
-  respondedBy: text(),
-  createdAt: text().default(sql`(datetime('now'))`),
-}, (table) => [
-  index('idx_pending_approvals_execution').on(table.executionId),
-  index('idx_pending_approvals_status').on(table.status),
-]);
-
-export const workflowVersionHistory = sqliteTable('workflow_version_history', {
-  id: text().primaryKey(),
-  workflowId: text().notNull().references(() => workflows.id, { onDelete: 'cascade' }),
-  workflowVersion: text(),
-  workflowHash: text().notNull(),
-  workflowData: text().notNull(),
-  source: text().notNull(),
-  sourceProposalId: text(),
-  notes: text(),
-  createdBy: text().references(() => users.id, { onDelete: 'set null' }),
-  createdAt: text().notNull().default(sql`(datetime('now'))`),
-}, (table) => [
-  uniqueIndex('idx_version_history_unique').on(table.workflowId, table.workflowHash),
-  index('idx_workflow_version_history_workflow_created').on(table.workflowId, table.createdAt),
-  index('idx_workflow_version_history_hash').on(table.workflowHash),
-]);

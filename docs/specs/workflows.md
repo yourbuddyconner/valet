@@ -1,33 +1,31 @@
 # Workflows
 
-> Defines the workflow automation system — workflow definitions, trigger types, execution lifecycle, step execution engine, approval gates, self-modification proposals, and version history.
+> Defines the workflow automation system — workflow definitions (`dag/v1`), trigger types, execution lifecycle on the Cloudflare Workflow interpreter, approval gates, and version history.
 
 ## Scope
 
 This spec covers:
 
-- Workflow definition schema and validation
+- Workflow definition schema (`dag/v1`) and validation
 - Trigger types (webhook, schedule, manual) and routing
-- Execution lifecycle and concurrency control
-- WorkflowExecutorDO behavior (enqueue, resume, cancel)
-- Runner-side step execution engine (all step types)
-- Approval gates and resume mechanism
-- Self-modification proposals (create, review, apply)
-- Version history and rollback
+- Draft + published-version lifecycle
+- Execution lifecycle on Cloudflare Workflows (the `ValetWorkflowInterpreter` entrypoint)
+- Approval gates via `workflow_approvals` + `step.waitForEvent` + `instance.sendEvent`
+- Cancellation pipeline and recovery sweeps
 - Cron schedule evaluation and deduplication
-- Webhook handler with variable mapping
+- Webhook handler with one-time-token auth
 
 ### Boundary Rules
 
-- This spec does NOT cover the OpenCode tools that invoke workflows (those use the gateway internal API documented in [sandbox-runtime.md](sandbox-runtime.md))
-- This spec does NOT cover session lifecycle or sandbox management (see [sessions.md](sessions.md))
-- This spec does NOT cover the orchestrator's relationship to workflows (see [orchestrator.md](orchestrator.md))
+- Does NOT cover the runner gateway. Workflow management is a worker concern (`/api/workflows/*`, `/api/triggers/*`, `/api/executions/*`) and the web UI.
+- Does NOT cover session lifecycle or sandbox management (see [sessions.md](sessions.md)).
+- Does NOT cover the orchestrator's relationship to workflows (see [orchestrator.md](orchestrator.md)).
 
 ## Data Model
 
 ### `workflows` table
 
-Core workflow definition.
+Core workflow definition. Schema in `packages/worker/src/lib/schema/workflows.ts`.
 
 | Column | Type | Default | Notes |
 |--------|------|---------|-------|
@@ -37,17 +35,19 @@ Core workflow definition.
 | `name` | text NOT NULL | — | Display name |
 | `description` | text | — | Optional description |
 | `version` | text NOT NULL | `'1.0.0'` | Semver string |
-| `data` | text NOT NULL | — | JSON blob: the full workflow definition (steps, constraints, variables, etc.) |
+| `data` | text NOT NULL | — | JSON blob written via `/sync`. After publish, `workflow_definition_versions.definition` is the source of truth for execution. |
 | `enabled` | boolean | `true` | Whether the workflow can be triggered |
 | `tags` | text | — | JSON array stored as text |
-| `createdAt` | text | `datetime('now')` | ISO datetime |
-| `updatedAt` | text | `datetime('now')` | ISO datetime |
+| `draftDefinition` | text | — | Current draft (`dag/v1`) being edited |
+| `publishedVersionId` | text | — | Points at the active row in `workflow_definition_versions`. Null until first publish. |
+| `ui` | text | — | Editor layout JSON (node positions etc.) |
+| `createdAt`, `updatedAt` | text | `datetime('now')` | ISO datetime |
 
 **Indexes:** unique on `(userId, slug)`.
 
 ### `triggers` table
 
-How workflows get invoked.
+Schema in `packages/worker/src/lib/schema/workflows.ts`.
 
 | Column | Type | Default | Notes |
 |--------|------|---------|-------|
@@ -59,164 +59,130 @@ How workflows get invoked.
 | `type` | text NOT NULL | — | `'webhook'` / `'schedule'` / `'manual'` |
 | `config` | text NOT NULL | — | JSON: discriminated union by type |
 | `variableMapping` | text | — | JSON: `Record<string, string>` mapping incoming data to workflow vars |
-| `lastRunAt` | text | — | ISO datetime |
-| `createdAt` / `updatedAt` | text | `datetime('now')` | ISO datetime |
+| `webhookToken` | text | — | Server-issued one-time token. Set on create / type-transition-to-webhook. Never re-exposed via GET/PATCH. |
+| `lastRunAt`, `createdAt`, `updatedAt` | text | — | Audit fields |
 
-**Trigger config shapes:**
+Trigger config shapes:
 
 ```typescript
 type TriggerConfig =
-  | { type: 'webhook'; path: string; method?: string; secret?: string; headers?: Record<string, string> }
-  | { type: 'schedule'; cron: string; timezone?: string; target?: 'workflow' | 'orchestrator'; prompt?: string }
+  | { type: 'webhook'; path: string; method?: 'GET' | 'POST'; secret?: string; headers?: Record<string, string>; rateLimit?: number }
+  | { type: 'schedule'; cron: string; timezone?: string; target?: 'workflow' | 'orchestrator'; prompt?: string; inputs?: Record<string, unknown> }
   | { type: 'manual' };
 ```
 
-Schedule triggers with `target: 'orchestrator'` dispatch a prompt to the user's orchestrator session instead of running a workflow. These have a nullable `workflowId`.
+Schedule triggers with `target: 'orchestrator'` dispatch a prompt to the user's orchestrator session instead of running a workflow — these have a nullable `workflowId`.
+
+### `workflow_definition_versions` table
+
+Append-only history of published definitions. Schema in `packages/worker/src/lib/schema/workflow-definition-versions.ts`.
+
+| Column | Type | Notes |
+|--------|------|-------|
+| `id` | text PK | UUID |
+| `workflowId` | text NOT NULL | FK to workflows, CASCADE DELETE |
+| `version` | integer NOT NULL | Monotonic per workflow |
+| `definition` | text NOT NULL | Full `dag/v1` JSON snapshot |
+| `definitionHash` | text NOT NULL | SHA-256 of the canonical definition |
+| `validationStatus` | text NOT NULL | `'ok'` or `'warning'` (e.g. llm node with no maxOutputTokens) |
+| `publishNote` | text | Optional release note |
+| `ui` | text | Editor layout snapshot at publish time |
+| `createdBy` | text | User id (set null on user delete) |
+| `createdAt` | text | ISO datetime |
+
+`workflows.published_version_id` references the active row; restoring an old version copies its `definition` back into `workflows.draft_definition`.
 
 ### `workflow_executions` table
 
-Execution instances.
+Execution instances. Schema in `packages/worker/src/lib/schema/workflows.ts`.
 
 | Column | Type | Default | Notes |
 |--------|------|---------|-------|
-| `id` | text PK | — | UUID |
+| `id` | text PK | — | UUID — also the Cloudflare Workflow instance id |
 | `workflowId` | text | — | FK to workflows, SET NULL on delete |
 | `userId` | text NOT NULL | — | Owner |
 | `triggerId` | text | — | FK to triggers, SET NULL on delete |
 | `status` | text NOT NULL | — | See [State Machine](#state-machine) |
 | `triggerType` | text NOT NULL | — | `'manual'` / `'webhook'` / `'schedule'` |
 | `triggerMetadata` | JSON text | — | Trigger-specific context |
-| `variables` | JSON text | — | Input variables for this run |
-| `outputs` | JSON text | — | Outputs after completion |
-| `steps` | JSON text | — | Final step results (denormalized summary) |
-| `error` | text | — | Error message if failed |
-| `startedAt` | text NOT NULL | — | ISO datetime |
-| `completedAt` | text | — | ISO datetime |
-| `workflowVersion` | text | — | Snapshot of version at execution time |
-| `workflowHash` | text | — | SHA-256 hash of workflow data at execution time |
-| `workflowSnapshot` | text | — | Full workflow JSON snapshot |
-| `idempotencyKey` | text | — | Prevents duplicate executions |
-| `runtimeState` | text | — | JSON `RuntimeState` for WorkflowExecutorDO |
-| `resumeToken` | text | — | Set when `status='waiting_approval'` |
-| `attemptCount` | integer | `0` | Dispatch attempt count |
-| `sessionId` | text | — | FK to sessions, SET NULL on delete |
-| `initiatorType` | text | — | `'manual'` / `'schedule'` / `'webhook'` |
-| `initiatorUserId` | text | — | Who triggered the execution |
+| `inputs` | JSON text | — | Validated workflow input map (typed inputs only) |
+| `outputs` | JSON text | — | Stop-node outputs by node id (`{ [nodeId]: { outcome, output?, message? } }`) |
+| `error` | text | — | First failure message |
+| `startedAt`, `completedAt` | text | — | ISO datetimes |
+| `definitionSnapshot` | text | — | `dag/v1` JSON at execution-create time — the runtime never re-reads `workflows.data` |
+| `definitionVersionId` | text | — | FK to workflow_definition_versions for production runs |
+| `mode` | text | `'production'` | `'production'` or `'test'` (test-runs come from the draft editor) |
+| `idempotencyKey` | text | — | Unique index on `(workflowId, idempotencyKey)` |
+| `cloudflareInstanceId` | text | — | Mirror of `id` for legibility; the Cloudflare Workflow instance is named after the execution id |
+| `cancelledAt`, `cancelledBy`, `cleanupCompletedAt` | text | — | Cancel audit + cleanup-pipeline completion marker |
 
-**Indexes:** unique on `(workflowId, idempotencyKey)`.
+**Indexes:** unique on `(workflowId, idempotencyKey)`; indexed on `status`, `startedAt`.
 
-### `workflow_execution_steps` table
+Sessions spawned by `session` / `orchestrator` nodes are linked through the `workflow_spawned_sessions` table, not a denormalized column on the execution row.
 
-Individual step traces.
+### `workflow_execution_nodes` table
 
-| Column | Type | Notes |
-|--------|------|-------|
-| `id` | text PK | UUID |
-| `executionId` | text NOT NULL | FK to workflow_executions, CASCADE DELETE |
-| `stepId` | text NOT NULL | Step identifier within the workflow |
-| `attempt` | integer NOT NULL | Attempt number |
-| `status` | text NOT NULL | `'pending'` / `'running'` / `'waiting_approval'` / `'completed'` / `'failed'` / `'cancelled'` / `'skipped'` |
-| `inputJson` | JSON text | Step input |
-| `outputJson` | JSON text | Step output |
-| `error` | text | Error message |
-| `startedAt` / `completedAt` | text | ISO datetime |
+Per-node trace rows. One row per `(executionId, nodeId[:i:iter])`. Schema in `packages/worker/src/lib/schema/workflow-execution-nodes.ts`.
 
-**Indexes:** unique on `(executionId, stepId, attempt)`. Upserts use `ON CONFLICT DO UPDATE` with COALESCE to preserve existing data.
+Statuses: `running` / `waiting_approval` / `waiting_time` / `completed` / `failed` / `skipped`. Trace rows carry `input_preview`, `output`, `error`, `reason`, `retry_attempts`, `approval_id`, `invocation_id`, durations, and TTL `expires_at` (30d production, 7d test).
 
-### `workflow_mutation_proposals` table
+### `workflow_spawned_sessions` table
 
-Self-modification proposals.
+Authoritative link from an execution to the sessions it spawned (via `session` or `orchestrator` nodes). The cancellation pipeline reads this to terminate sandboxes; it is the only source of truth for spawned sessions — no trace-parsing.
+
+### `workflow_approvals` table
+
+One row per approval gate hit during a workflow execution. Schema in `packages/worker/src/lib/schema/workflow-approvals.ts`.
 
 | Column | Type | Notes |
 |--------|------|-------|
-| `id` | text PK | UUID |
-| `workflowId` | text NOT NULL | FK to workflows, CASCADE DELETE |
-| `executionId` | text | FK to workflow_executions, SET NULL on delete |
-| `proposedBySessionId` | text | Session that created the proposal |
-| `baseWorkflowHash` | text NOT NULL | Hash of workflow at proposal time (stale detection) |
-| `proposalJson` | text NOT NULL | The proposed new workflow definition |
-| `diffText` | text | Human-readable diff |
-| `status` | text NOT NULL | `'pending'` / `'approved'` / `'rejected'` / `'applied'` / `'failed'` |
-| `reviewNotes` | text | Reviewer comments |
-| `expiresAt` | text | Default 14 days from creation |
-
-### `workflow_version_history` table
-
-Immutable version snapshots.
-
-| Column | Type | Notes |
-|--------|------|-------|
-| `id` | text PK | UUID |
-| `workflowId` | text NOT NULL | Reference (not FK — survives workflow deletion) |
-| `workflowVersion` | text | Semver string |
-| `workflowHash` | text NOT NULL | SHA-256 hash of workflow data |
-| `workflowData` | text NOT NULL | Full workflow JSON snapshot |
-| `source` | text NOT NULL | `'sync'` / `'update'` / `'proposal_apply'` / `'rollback'` / `'system'` |
-| `sourceProposalId` | text | If source is `'proposal_apply'` |
-| `notes` | text | Optional description |
-| `createdBy` | text | User ID |
-
-**Indexes:** unique on `(workflowId, workflowHash)` with `ON CONFLICT DO NOTHING` — identical snapshots are never duplicated.
+| `id` | text PK | Deterministic: `approval:<executionId>:<nodeId>[:i:<iter>]` |
+| `executionId` | text | FK to workflow_executions (set null on delete) |
+| `nodeId` | text NOT NULL | Workflow node id |
+| `kind` | text NOT NULL | `'explicit'` (approval node) or `'tool_policy'` (tool require_approval) |
+| `workflowInstanceId` | text NOT NULL | Cloudflare Workflow instance id — used by the approve/deny endpoint's `instance.sendEvent` |
+| `eventType` | text NOT NULL | `'approval_<nodeId>[_i_<iter>]'` — matches the executor's `step.waitForEvent` type |
+| `prompt` | text NOT NULL | Rendered approval prompt |
+| `summary`, `details` | text | Optional human-readable summary + JSON details |
+| `status` | text NOT NULL | `'pending'` / `'approved'` / `'denied'` / `'expired'` / `'cancelled'` |
+| `timeoutAt` | text | Per-row deadline; default 24 h |
+| `resolvedBy`, `resolvedAt`, `cancelledAt` | text | Audit fields |
+| `createdAt`, `updatedAt` | text | Lifecycle timestamps |
 
 ### `workflow_schedule_ticks` table
 
-Deduplication for cron runs.
-
-| Column | Type | Notes |
-|--------|------|-------|
-| `id` | text PK | UUID |
-| `triggerId` | text NOT NULL | FK to triggers, CASCADE DELETE |
-| `tickBucket` | text NOT NULL | ISO timestamp truncated to minute: `"2026-02-24T10:30"` |
-
-**Indexes:** unique on `(triggerId, tickBucket)`.
-
-### `pending_approvals` table
-
-Approval gate tracking.
-
-| Column | Type | Notes |
-|--------|------|-------|
-| `id` | text PK | UUID |
-| `executionId` | text NOT NULL | Reference |
-| `stepId` | text NOT NULL | Step that requires approval |
-| `message` | text NOT NULL | Approval prompt |
-| `timeoutAt` | text | Optional deadline |
-| `defaultAction` | text | Fallback if timeout |
-| `status` | text | `'pending'` default |
-
-**Note:** This table exists in the schema but is **not actively used**. The current approval mechanism uses `resumeToken` on the execution row directly. This table is scaffolding for a future more elaborate approval system.
+Per-trigger cron tick dedupe. Unique index on `(triggerId, tickBucket)` where `tickBucket` is the current minute truncation.
 
 ## State Machine
 
 ### Execution Statuses
 
 ```
-PENDING ──────────────> RUNNING            (WorkflowExecutorDO dispatches to session)
+PENDING ──────────────> RUNNING            (interpreter enters the wave loop)
 
-RUNNING ──────────────> COMPLETED          (all steps succeed)
-        ──────────────> FAILED             (step failure or engine error)
+RUNNING ──────────────> COMPLETED          (all nodes succeed)
+        ──────────────> FAILED             (node failure)
         ──────────────> CANCELLED          (user cancellation)
-        ──────────────> WAITING_APPROVAL   (approval step reached)
+        ──────────────> WAITING_APPROVAL   (approval / tool-policy node parked on step.waitForEvent)
+        ──────────────> WAITING_TIME       (wait node parked on step.sleep)
 
-WAITING_APPROVAL ─────> RUNNING            (approved — resumes execution)
-                 ─────> CANCELLED          (denied)
+WAITING_APPROVAL ─────> RUNNING            (approve/deny → sendEvent → executor try/finally exits to RUNNING)
+WAITING_TIME     ─────> RUNNING            (step.sleep elapsed)
+RUNNING          ─────> CANCELLING ──────> CANCELLED   (cancel API → instance.terminate → cleanup)
 ```
 
-Terminal states: `completed`, `failed`, `cancelled`.
+Terminal states: `completed`, `failed`, `cancelled`. The `cleanupCompletedAt` column on the execution row marks the cancel pipeline as fully done — see [Cancellation](#cancellation).
 
-### Proposal Statuses
-
-```
-PENDING ──────> APPROVED ──────> APPLIED
-        ──────> REJECTED
-                APPROVED ──────> FAILED    (apply failed, e.g. stale hash)
-```
+**Parallel-sibling note:** when multiple waiting nodes (e.g. several approval gates) run concurrently under one execution, the row's `status` only reflects the most-recent transition. Per-node status is the source of truth (see `workflow_execution_nodes` trace rows and the `workflow_approvals` table). The stuck-approval sweep filters on `executions.status IN active_statuses` so a parallel race can't hide a missing `sendEvent`.
 
 ### Concurrency Limits
 
-Active executions (`pending`, `running`, `waiting_approval`) are counted:
-- **Per-user limit:** 5 (default)
-- **Global limit:** 50 (default)
+Active executions (`pending`, `running`, `waiting_approval`, `waiting_time`) are counted:
+
+- **Per-user limit:** 10 (`PER_USER_EXECUTION_CONCURRENCY_CAP`)
+- **Global limit:** 50 (`GLOBAL_EXECUTION_CONCURRENCY_CAP`)
+
+`cancelling` is intentionally excluded from the active set so a user who just cancelled can immediately start new work — the cron sweep finalizes asynchronously.
 
 ## API Contract
 
@@ -224,288 +190,188 @@ Active executions (`pending`, `running`, `waiting_approval`) are counted:
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/` | List user's workflows |
-| GET | `/:id` | Get single (by ID or slug) |
-| POST | `/sync` | Sync single workflow from plugin |
-| POST | `/sync-all` | Full reconciliation sync (deletes workflows not in set) |
+| GET | `/` | List user's workflows (includes `publishedVersionId`) |
+| GET | `/:id` | Get single (by id or slug) |
+| POST | `/sync` | Sync a single workflow from a plugin |
+| POST | `/sync-all` | Full reconciliation sync (deletes workflows not in the incoming set) |
 | PUT | `/:id` | Update workflow fields |
 | DELETE | `/:id` | Delete workflow and its triggers |
-| GET | `/:id/executions` | Execution history for workflow |
-| GET | `/:id/history` | Version history snapshots |
-| GET | `/:id/proposals` | List mutation proposals (filterable by status) |
-| POST | `/:id/proposals` | Create self-modification proposal |
-| POST | `/:id/proposals/:proposalId/review` | Approve or reject proposal |
-| POST | `/:id/proposals/:proposalId/apply` | Apply approved proposal |
-| POST | `/:id/rollback` | Roll back to historical hash |
+| GET | `/:id/draft` | Fetch the current draft definition + UI layout |
+| PUT | `/:id/draft` | Save a draft (not validated until publish) |
+| POST | `/:id/validate` | Run the validator against the current draft |
+| POST | `/:id/publish` | Publish the draft as a new `workflow_definition_versions` row |
+| POST | `/:id/test-run` | Execute the draft against a sample trigger payload + input overrides |
+| GET | `/:id/versions` | List published versions |
+| POST | `/:id/versions/:versionId/restore` | Copy an old version back into the draft |
+| GET | `/:id/executions` | Execution history for the workflow |
+| POST | `/:id/executions/:executionId/cancel` | Cancel an execution (nested form) |
+| POST | `/:id/executions/:executionId/approvals/:approvalId/{approve,deny}` | Resolve an approval (nested form) |
 
 ### Execution Routes (`/api/executions`)
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/` | List executions (filterable by status, workflowId) |
-| GET | `/:id` | Single execution with workflow/trigger names |
-| GET | `/:id/steps` | Normalized step trace with ordering |
-| POST | `/:id/complete` | Report execution completion (from runner) |
-| POST | `/:id/status` | Update execution status |
-| POST | `/:id/approve` | Approve/deny an approval gate |
-| POST | `/:id/cancel` | Cancel execution |
+| GET | `/` | List recent executions (filterable by status, workflowId) |
+| GET | `/:id` | Single execution with nodes + approvals + parsed inputs |
+| GET | `/:id/approvals` | All approvals for an execution (pending + resolved) |
+| POST | `/:id/approvals/:approvalId/approve` | Approve a pending approval (`{ reason? }` body) |
+| POST | `/:id/approvals/:approvalId/deny` | Deny a pending approval (`{ reason? }` body) |
+| POST | `/:id/cancel` | Cancel an execution |
 
 ### Trigger Routes (`/api/triggers`)
 
 | Method | Path | Description |
 |--------|------|-------------|
-| POST | `/manual/run` | Run a workflow directly (without trigger) |
+| POST | `/manual/run` | Run a workflow directly (without a persistent trigger) |
 | GET | `/` | List user's triggers |
-| GET | `/:id` | Single trigger (includes webhookUrl for webhook type) |
-| POST | `/` | Create trigger |
-| PATCH | `/:id` | Update trigger |
+| GET | `/:id` | Single trigger (returns `webhookUrl` for webhook type; never echoes the token) |
+| POST | `/` | Create trigger (returns `webhookToken` exactly once when type is webhook) |
+| PATCH | `/:id` | Update trigger (mints + returns a fresh token when transitioning to webhook) |
 | DELETE | `/:id` | Delete trigger |
-| POST | `/:id/enable` | Enable trigger |
-| POST | `/:id/disable` | Disable trigger |
+| POST | `/:id/enable`, `/:id/disable` | Toggle enabled state |
 | POST | `/:id/run` | Manually fire a trigger |
+| ALL | `/:triggerId/webhook` | Forward-facing webhook endpoint — authenticates via `X-Valet-Trigger-Token` (constant-time compare) |
 
-### WorkflowExecutorDO Internal Endpoints
-
-Each execution gets its own DO instance (keyed by `executionId`).
-
-| Path | Method | Description |
-|------|--------|-------------|
-| `/enqueue` | POST | Start execution — bootstrap session, dispatch to sandbox |
-| `/resume` | POST | Resume after approval — validate token, dispatch or cancel |
-| `/cancel` | POST | Cancel execution — stop session, update D1 |
+A path-based fallback at `/webhooks/:path` resolves with a constant-time `config.secret` compare for deployments that wired up webhooks before the per-trigger token model. The trigger API and UI surface only the per-trigger token URL.
 
 ## Flows
 
 ### Manual Workflow Run
 
-1. Client calls `POST /api/triggers/manual/run` with `workflowId` (or slug) and optional variables.
-2. Service resolves workflow, checks concurrency limits.
-3. Checks idempotency key: `manual:{workflowId}:{userId}:{clientRequestId}`.
-4. Creates a workflow session in D1 (purpose `'workflow'`, status `'hibernated'`).
-5. Inserts execution row with status `pending`.
-6. Calls `enqueueWorkflowExecution()` which POSTs to the WorkflowExecutorDO.
-7. DO reads execution + workflow from D1.
-8. DO bootstraps the workflow session: starts a Modal sandbox via the SessionAgent DO.
-9. DO dispatches the workflow payload to the session via `POST http://do/workflow-execute`.
-10. DO updates execution status to `running` and publishes `workflow.execution.enqueued` to EventBus.
-11. Inside the sandbox, the Runner receives the workflow dispatch and invokes the workflow CLI.
-12. The workflow engine executes steps sequentially.
-13. On completion, the Runner calls `POST /api/executions/:id/complete` with status, outputs, and step results.
+1. Client calls `POST /api/triggers/manual/run` with `workflowId` (or slug) and optional input variables.
+2. Service resolves the workflow, validates concurrency, and checks idempotency (`manual:{workflowId}:{userId}:{clientRequestId}`).
+3. Service inserts an execution row in `pending` with `definitionSnapshot` set to the published definition.
+4. `env.WORKFLOW_INTERPRETER.create({ id: executionId, params })` spawns the Cloudflare Workflow instance.
+5. The interpreter's `run()` enters the wave loop: `setExecutionStatus('running')` → repeat `pickRunnable` → execute → settle → write trace rows.
+6. Terminal status (`completed` / `failed` / `cancelled`) is written by the runtime with an `allowedPrior` CAS so a concurrent cancel doesn't get overwritten.
 
-### Webhook Trigger
+### Webhook Trigger (forward-facing path)
 
-1. External system POSTs to `/webhooks/{path}`.
-2. Worker looks up trigger by webhook path.
-3. Verifies HTTP method matches.
-4. Checks signature header presence if secret is configured (existence check only — **no cryptographic verification**).
-5. Parses body, merges query params as `payload.query`.
-6. Applies variable mapping (simple JSONPath: `$.key.nested.path`).
-7. Checks idempotency via `webhook:{triggerId}:{deliveryId or bodyHash}`.
-8. Checks concurrency limits.
-9. Creates workflow session, execution, and enqueues to DO.
+1. External system POSTs to `/api/triggers/:triggerId/webhook` with `X-Valet-Trigger-Token: <token>`.
+2. Handler validates HTTP method (per `config.method`) and constant-time-compares the token against `triggers.webhook_token`.
+3. Per-trigger rate limit check (`config.rateLimit`, default 60/min) via the `trigger_webhook_rate` table.
+4. Builds a trigger envelope (`body`, lowercased `headers`, `query`, `rawQuery`) and applies `variableMapping` to derive input overrides.
+5. Idempotency key: `webhook:{triggerId}:{deliveryId or bodyHash}`.
+6. Concurrency check, then create execution + Cloudflare Workflow instance.
 
-### Schedule Trigger (Cron)
+### Schedule Trigger (cron)
 
-1. Cloudflare Workers cron trigger fires the `scheduled()` handler.
-2. `dispatchScheduledWorkflows()` queries all enabled schedule triggers with linked workflows.
-3. For each trigger, parses the cron expression and checks if it matches current time (with timezone support).
-4. Deduplication: inserts into `workflow_schedule_ticks` with unique `(triggerId, tickBucket)`. Duplicate inserts are silently ignored.
-5. **Workflow targets:** checks concurrency, creates session, creates execution, enqueues to DO.
-6. **Orchestrator targets:** dispatches prompt directly to the user's orchestrator session via `dispatchOrchestratorPrompt()`.
-7. Updates `lastRunAt` on the trigger.
+1. The worker's `scheduled()` handler fires every minute.
+2. `dispatchScheduledWorkflows()` queries all enabled schedule triggers and matches them against the current minute (timezone-aware).
+3. Per-tick dedupe via `workflow_schedule_ticks` (unique on `(triggerId, tickBucket)`).
+4. **Workflow targets:** checks concurrency, creates an execution, spawns the Cloudflare Workflow instance.
+5. **Orchestrator targets:** dispatches the configured prompt directly to the user's orchestrator session via `dispatchOrchestratorPrompt()`.
+6. The handler also runs a catch-up pass over the last few minutes — transient dispatch failures release the tick claim so the catch-up can retry.
 
 The cron matcher supports standard 5-field syntax: wildcards (`*`), exact values, ranges (`1-5`), steps (`*/5`), and comma-separated lists.
 
 ### Approval Gate
 
-1. Workflow engine hits an `approval` step.
-2. Engine generates a deterministic `resumeToken` via `sha256(executionId:stepId:attempt)`.
-3. Engine halts with `status: 'needs_approval'` and the resume token.
-4. Runner reports completion to worker with the approval status and token.
-5. Execution status set to `waiting_approval` in D1.
-6. User approves via `POST /api/executions/:id/approve` with `{ approve: true/false, resumeToken }`.
-7. Worker forwards to WorkflowExecutorDO via `POST /resume`.
-8. DO validates the resume token matches.
-9. If approved: ensures session is ready, dispatches resume payload to session DO. Status -> `running`.
-10. If denied: cancels the execution. Status -> `cancelled`.
-11. On resume, the engine **replays from the beginning** — all approval steps before the target token are auto-approved (`replayed: true`). Execution continues after the matched gate.
+1. Interpreter hits an `approval` node (or a `tool` node whose policy resolved to `require_approval`).
+2. Executor calls `setExecutionStatus('waiting_approval')` and the shared `requestApproval` helper, which inserts a `workflow_approvals` row and `step.waitForEvent`s on `approval_<nodeId>[_i_<iter>]`.
+3. UI fetches pending approvals via `GET /api/executions/:id/approvals` (or sees them nested under the execution detail) and renders approve/deny actions.
+4. User calls `POST /api/executions/:id/approvals/:approvalId/approve` (or `/deny`, optionally with `{ reason }`).
+5. Worker updates the approval row (CAS on `pending` + `timeoutAt`) and `instance.sendEvent`s to resume the Cloudflare Workflow.
+6. Executor's `try/finally` sets the execution row back to `running` regardless of outcome. The approval node returns approved / throws (deny / cancel / timeout) per `onDeny` policy.
+7. Recovery: if `sendEvent` fails, the cron `sweepStuckApprovals` retries the event for any approval whose execution is still active.
 
-### Self-Modification Proposal
+### Cancellation
 
-1. Agent (or user) creates a proposal via `POST /api/workflows/:id/proposals`.
-2. Service validates the workflow allows self-modification (`constraints.allowSelfModification === true`).
-3. Validates `baseWorkflowHash` matches the current workflow's SHA-256 hash (stale detection).
-4. Creates proposal with status `pending`, 14-day expiry.
-5. User reviews: `POST /api/workflows/:id/proposals/:proposalId/review` with `approve` or `reject`.
-6. User applies: `POST /api/workflows/:id/proposals/:proposalId/apply`.
-7. Apply flow:
-   - Re-validates self-modification allowed and proposal is approved.
-   - Checks proposal hasn't expired.
-   - Re-validates `baseWorkflowHash` matches current (concurrent edit detection).
-   - Creates pre-apply version history snapshot.
-   - Updates workflow `data` and bumps patch version.
-   - Marks proposal as `applied`.
-   - Creates post-apply version history snapshot.
+`POST /api/executions/:id/cancel` (or the nested workflow form):
 
-### Rollback
+1. Pre-check the execution row; reject already-terminal rows.
+2. CAS-update status to `cancelling` (`allowedPrior` = active statuses).
+3. For every still-pending approval row, dispatch a `result: 'cancelled'` event so the executor's `try/finally` exits and tags the trace row as `skipped:cancelled` (instead of running `onDeny`).
+4. Call `instance.terminate()` to abort the Cloudflare Workflow.
+5. Run `runCancellationCleanup` synchronously:
+   1. CAS pending approvals → `cancelled`.
+   2. Terminate spawned sessions (via `workflow_spawned_sessions`).
+   3. Drive non-terminal `action_invocations` rows to `failed` with `error='workflow_cancelled'`.
+   4. Write `skipped` trace rows for every node that wasn't already terminal.
+   5. CAS the execution row to `cancelled` + set `cleanup_completed_at`. The CAS allows transitioning from either `cancelling` OR `cancelled`-without-`cleanup_completed_at`, so the cancel API still runs cleanup even when the runtime's terminal write raced ahead.
 
-1. User calls `POST /api/workflows/:id/rollback` with `{ workflowHash }`.
-2. Service saves current state as a version history snapshot.
-3. Looks up the target version by hash in version history.
-4. Validates the historical snapshot has a `steps` array.
-5. If already at the target hash: returns `alreadyAtVersion: true`.
-6. Updates workflow data, bumps version, creates rollback snapshot.
+Failure anywhere in the pipeline leaves `cleanup_completed_at` null; the cron `sweepStuckCancellations` re-runs the pipeline for any row in `cancelling` OR in `cancelled` without `cleanup_completed_at`. The cancel API itself re-reads the row after `runCancellationCleanup` and reports the actual outcome (`cancelled` only when cleanup finished, `cancelling` otherwise).
 
-## Step Execution Engine
+## Workflow Definition (`dag/v1`)
 
-The runner-side engine (`packages/runner/src/workflow-engine.ts`) executes workflow steps inside the Modal sandbox.
+Definitions are objects with `version: 'dag/v1'`, optional `inputs` (typed input declarations), a `nodes` array, an `edges` array, and an optional `policy` block. See the `WorkflowDefinition` types in `@valet/shared`.
 
-### Step Types
+### Node Types
 
 | Type | Behavior |
 |------|----------|
-| `bash` | Spawns `bash -lc <command>` via `Bun.spawn()`. Configurable timeout (default 120s, max 600s). Output truncated at 64K chars. |
-| `tool` | Delegates to hooks. Falls through to bash for `tool=bash`. |
-| `agent` / `agent_message` | Delegates to hooks provided by the runner integration. Content from `content`, `message`, or `goal` fields. |
-| `conditional` | Evaluates `condition` against variables/outputs, executes `then` or `else` branch. |
-| `parallel` | Executes `steps` array. **Note: actually runs sequentially despite the name.** |
-| `approval` | Generates deterministic resume token, halts execution. |
-| `loop` | Valid in compiler but **no specific execution logic** — falls through to default handler. |
-| `subworkflow` | Valid in compiler but **no specific execution logic** — falls through to default handler. |
+| `llm` | LLM completion via the configured provider. NO_RETRY at the runtime level — author-driven retries via `step.do` config. |
+| `tool` | Worker-side integration action through the same pipeline agent tool calls use. Honors action policy (`allow` / `deny` / `require_approval`). |
+| `set` | Computes JSON values from templates and surfaces them to downstream nodes via `state.nodes`. |
+| `if` | Branches on a `conditions` array; downstream edges carry `fromOutput: 'true' \| 'false'`. |
+| `wait` | Durable pause via `step.sleep` for a compact duration string (`'5s'`, `'1h'`). |
+| `approval` | Human approval gate via `workflow_approvals` + `step.waitForEvent`. |
+| `foreach` | Iterates over an array. Body is a single node of a permitted subtype (`llm`, `tool`, `set`, `stop`, `orchestrator`, `session`). |
+| `orchestrator` | Dispatch a prompt to the user's orchestrator. |
+| `session` | Start or resume a session and run a prompt. |
+| `stop` | Terminate the workflow with an outcome envelope. |
 
-### Execution Constraints
+### Validator
 
-- **Max steps:** 50 (default), configurable via `runtime.policy.maxSteps`.
-- **Output variables:** Steps with `outputVariable` store their output in the context's `outputs` map, accessible by subsequent steps.
+`packages/worker/src/lib/workflow-dag/validator.ts` runs structural (Zod) + semantic checks at publish and execution-create time:
 
-### Events
+- Per-node duplicate id detection (top-level ids share namespace with foreach body ids — the runtime keys `step.do` cache, action invocations, approval ids, and trace rows on `${nodeId}:i:${iter}` with no parent scoping).
+- Edge endpoints MUST reference top-level node ids — edges into/out of foreach body ids are rejected because the runtime's wave loop only registers top-level nodes.
+- foreach body type allowlist + alias shadowing + concurrency ceilings.
+- Template parse for every author-supplied template field.
+- Per-node env checks for llm model availability (provider key configured).
 
-The engine emits structured events to a sink: `execution.started`, `step.started`, `step.completed`, `step.failed`, `step.cancelled`, `approval.required`, `approval.approved`, `approval.denied`, `execution.finished`, `execution.resumed`.
+`validateInputs` separately validates the trigger payload + input overrides against the workflow's declared `inputs` shape (type / enum / required / default).
 
-### Workflow CLI
+## Runtime
 
-The runner uses a CLI wrapper (`packages/runner/src/workflow-cli.ts`) with these commands:
+The runtime entrypoint is `ValetWorkflowInterpreter` in `packages/worker/src/workflows/interpreter.ts` — a Cloudflare Workflow class. Each execution becomes a Cloudflare Workflow instance named after the execution id.
 
-| Command | Description |
-|---------|-------------|
-| `run` | Execute workflow. Reads JSON from stdin. |
-| `resume` | Resume after approval with `--decision approve\|deny`. |
-| `validate` | Validate workflow definition from file or stdin. |
-| `propose` | **Stub** — returns hardcoded mock proposal. |
+`runDag()` in `packages/worker/src/workflows/runtime.ts` is the wave loop:
 
-Exit codes: 0 = success, 10 = input error, 20 = flag error, 40 = execution failure.
+1. Compile the definition into incoming/outgoing edge maps and a node id map.
+2. `setExecutionStatus('running')` (CAS from `pending`).
+3. Repeat until no more runnable nodes:
+   - `pickRunnable` — every unsettled node whose every incoming edge is satisfied by a settled parent.
+   - Run up to `policy.maxConcurrentNodes` nodes via `Promise.allSettled`.
+   - For step-driven types (`wait`, `approval`, `tool`, `foreach`, `session`, `orchestrator`) the executor owns its own `step.do` / `step.sleep` / `step.waitForEvent` primitives. For pure types (`llm`, `set`, `if`, `stop`) the runtime wraps the executor in a single outer `step.do`.
+   - Each node writes `running` / `waiting_*` / terminal trace rows via `traceWriter.recordTransition`, cached behind `step.do`.
+4. When no nodes remain, mark unreachable children as `skipped` (with the parent's edge-error reason when available), then write the terminal status.
 
-### Workflow Compiler
-
-Normalizes and validates definitions before execution:
-- Valid step types: `agent`, `agent_message`, `tool`, `bash`, `conditional`, `loop`, `parallel`, `subworkflow`, `approval`.
-- Assigns IDs to steps lacking them (path-based: `step[0]`, `step[0].then[1]`, etc.).
-- Deep-sorts all objects for canonical hashing.
-- Produces SHA-256 hash of the normalized workflow.
-
-### Server-Side Validation
-
-The worker-side validator (`packages/worker/src/lib/workflow-definition.ts`) checks:
-- Workflow is an object with non-empty `steps` array.
-- Each step has a `type` string.
-- `agent_message` steps require content.
-- `interrupt` and `await_response` must be boolean, `await_timeout_ms` must be >= 1000.
-- Nested `then`, `else`, `steps` arrays are recursively validated.
-
-Does **not** check for valid step types — that's only done in the runner-side compiler.
-
-## WorkflowExecutorDO
-
-Each execution gets its **own** DO instance, keyed by `executionId`. The DO manages three operations: enqueue, resume, and cancel.
-
-### RuntimeState
-
-Stored on the execution row in D1:
-
-```typescript
-interface RuntimeState {
-  executor?: {
-    dispatchCount: number;
-    firstEnqueuedAt: string;
-    lastEnqueuedAt: string;
-    sessionId?: string;
-    triggerType: 'manual' | 'webhook' | 'schedule';
-    promptDispatchedAt?: string;
-    sessionStartedAt?: string;
-    workerOrigin?: string;
-    lastError?: string;
-  };
-}
-```
-
-### Session Bootstrapping
-
-When the DO receives an enqueue request and the workflow session needs a sandbox:
-1. Reads the existing session from D1.
-2. If session needs bootstrapping: calls `bootstrapWorkflowSession()`.
-3. Bootstrap starts a Modal sandbox via the SessionAgent DO (`SESSIONS` DO binding).
-4. The sandbox receives environment variables including `IS_WORKFLOW_SESSION=true`, `WORKFLOW_ID`, `WORKFLOW_EXECUTION_ID`.
-5. Once the session is running, dispatches the workflow payload via `POST http://do/workflow-execute`.
-
-### Dispatch Retry
-
-`enqueueWorkflowExecution()` retries up to 5 times with increasing delays (150ms * attempt) on transient errors (404, 408, 429, 500). Also handles 200 OK with `promptDispatched=false`.
-
-### Workflow Hash Computation
-
-The DO has its own canonical hash computation that normalizes the workflow definition by recursively deep-sorting all object keys, normalizing step IDs, and producing `sha256:XXXX` format hashes.
+Replay determinism comes from `step.do` caching every side effect: D1 writes, clock reads, action invocations, approval row inserts. Hibernate/wake replays the cached outputs without re-issuing side effects.
 
 ## Edge Cases & Failure Modes
 
 ### Idempotency
 
-Duplicate executions are prevented by the `idempotencyKey` unique index on `(workflowId, idempotencyKey)`. Key formats:
+Duplicate executions are prevented by the unique index on `(workflowId, idempotencyKey)`:
+
 - Manual: `manual:{workflowId}:{userId}:{clientRequestId}`
 - Webhook: `webhook:{triggerId}:{deliveryId or bodyHash}`
-- Schedule: deduplication via `workflow_schedule_ticks` table
-
-### Stale Proposal Detection
-
-Proposals store `baseWorkflowHash`. Both creation and application validate this matches the current workflow hash. If the workflow was modified between proposal creation and apply, the apply is rejected.
+- Schedule: per-tick dedupe via `workflow_schedule_ticks`
+- Test-run: `test-run:{workflowId}:{userId}:{clientRequestId}` (editor double-click protection)
 
 ### Webhook Signature Verification Gap
 
-The webhook handler checks for signature header presence when a trigger has a `secret` configured, but does **not cryptographically verify** the actual signature value. This is a known gap.
-
-### Parallel Step Execution
-
-The `parallel` step type exists in the compiler and engine, but executes sub-steps **sequentially**. No actual parallelism is implemented.
+The path-based `/webhooks/:path` endpoint constant-time-compares against `config.secret` when one is set. It does NOT verify provider-specific HMAC signatures (e.g. GitHub's `X-Hub-Signature-256`). Use the per-trigger URL + `X-Valet-Trigger-Token` for stronger auth.
 
 ### Sync-All Reconciliation
 
-`syncAllWorkflows()` performs a full reconciliation: it deletes any existing workflows NOT in the incoming set. This is a destructive operation intended for plugin startup.
+`syncAllWorkflows()` is a full reconciliation: it deletes any existing workflows NOT in the incoming set. Intended for plugin startup; destructive by design.
 
 ## Implementation Status
 
 ### Fully Implemented
-- Complete workflow CRUD with version history and rollback
-- Workflow sync from plugin (single + batch reconciliation)
-- Three trigger types: webhook, schedule, manual
-- Cron schedule evaluation with timezone support and tick deduplication
-- Webhook handler with variable mapping and idempotency
-- Execution lifecycle: create, run, complete, cancel
-- Concurrency limits (per-user: 5, global: 50)
-- WorkflowExecutorDO with session bootstrapping and dispatch retry
-- Runner-side workflow engine with step types: bash, tool, agent, agent_message, conditional, parallel, approval
-- Approval gates with deterministic resume tokens and replay-based resumption
-- Self-modification proposals: create, review, apply with hash-based stale detection
-- Version history with immutable snapshots and rollback
-- Client-side React Query hooks for all operations
 
-### Partially Implemented / Stubbed
-- **`propose` CLI command**: returns hardcoded stub. Server-side proposal API works, but CLI-based proposal generation from natural language is not implemented.
-- **`pending_approvals` table**: schema exists but not actively used. Approvals use `resumeToken` on execution row.
-- **Webhook signature verification**: checks presence, not cryptographic validity.
-- **`parallel` step type**: runs sub-steps sequentially.
-- **`loop` and `subworkflow` step types**: valid in compiler but fall through to a no-op default handler.
+- Draft + published-version workflow lifecycle with restore
+- Three trigger types (webhook, schedule, manual) with one-time-token webhook auth
+- Cron schedule dispatch with timezone support, tick dedupe, and a catch-up pass
+- dag/v1 runtime on Cloudflare Workflows with the full node-type set (llm / tool / set / if / wait / approval / foreach / orchestrator / session / stop)
+- Approval gates via `workflow_approvals` + `step.waitForEvent`; flat and nested approve/deny endpoints
+- Cancellation pipeline with `cleanup_completed_at` gate, cron sweeps for stuck `cancelling` rows and stuck approvals
+- Per-execution trace rows in `workflow_execution_nodes` with retention TTL
+- Client UI: workflow detail with executions + pending approvals, executions list with inline approval action, trigger CRUD with one-shot token reveal
 
-### Not Implemented
-- No shared TypeScript types for workflows in `packages/shared` — types exist only in client and service layers.
-- No UI for configuring `allowSelfModification` constraint.
-- No real-time step progress reporting during execution (completion reports all steps at once).
-- No workflow definition editor in the client.
+### Partially Implemented
+
+- **Provider-specific webhook signatures:** the `/webhooks/:path` route checks only secret presence/equality, not HMAC. The per-trigger URL with `X-Valet-Trigger-Token` is the preferred auth surface.

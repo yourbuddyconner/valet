@@ -409,7 +409,7 @@ export async function resolveUserActionPolicyOverride(
 
 export async function resolveEffectiveActionPolicy(
   db: AppDb,
-  input: { userId: string; sessionId: string; service: string; actionId: string; riskLevel: string },
+  input: { userId: string; sessionId: string | null; service: string; actionId: string; riskLevel: string },
 ): Promise<EffectivePolicyResult> {
   const orgPolicy = await resolveOrgPolicyMatch(db, input.service, input.actionId, input.riskLevel);
 
@@ -430,7 +430,10 @@ export async function resolveEffectiveActionPolicy(
 
   const baseMode = orgPolicy?.mode ?? systemDefaultForRisk(input.riskLevel);
   const baseSource = orgPolicy ? 'org_policy' : 'system_default';
-  const userOverride = await resolveUserActionPolicyOverride(db, input);
+  const userOverride = await resolveUserActionPolicyOverride(db, {
+    ...input,
+    sessionId: input.sessionId ?? undefined,
+  });
 
   if (userOverride) {
     const mode = userOverride.override.mode as ActionMode;
@@ -469,7 +472,10 @@ export async function createInvocation(
   db: AppDb,
   data: {
     id: string;
-    sessionId: string;
+    /** Exactly one of sessionId or workflowExecutionId must be set. */
+    sessionId?: string | null;
+    /** Workflow-originated invocations carry this; agent calls carry sessionId. */
+    workflowExecutionId?: string | null;
     userId: string;
     service: string;
     actionId: string;
@@ -491,7 +497,8 @@ export async function createInvocation(
   const now = new Date().toISOString();
   await db.insert(actionInvocations).values({
     id: data.id,
-    sessionId: data.sessionId,
+    sessionId: data.sessionId ?? null,
+    workflowExecutionId: data.workflowExecutionId ?? null,
     userId: data.userId,
     service: data.service,
     actionId: data.actionId,

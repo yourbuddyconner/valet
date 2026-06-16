@@ -1,17 +1,15 @@
 import { NotFoundError, ValidationError } from '@valet/shared';
 import type { Env } from '../env.js';
-import { checkWorkflowConcurrency, enqueueWorkflowExecution } from './executions.js';
+import { checkWorkflowConcurrency } from './executions.js';
+import { dispatchWorkflowExecution } from './workflow-dispatch.js';
 import { dispatchOrchestratorPrompt } from './orchestrator.js';
-import { sha256Hex, createWorkflowSession } from '../lib/workflow-runtime.js';
 import { getDb } from '../lib/drizzle.js';
 import {
   scheduleTarget,
-  deriveRepoFullName,
   getTriggerForRun,
-  updateTriggerLastRun,
+  updateTriggerLastRunUnchecked,
   getWorkflowForManualRun,
   checkIdempotencyKey,
-  createExecution,
   type TriggerConfig,
 } from '../lib/db.js';
 
@@ -22,10 +20,6 @@ export interface ManualRunParams {
   workflowId: string;
   clientRequestId?: string;
   variables?: Record<string, unknown>;
-  repoUrl?: string;
-  branch?: string;
-  ref?: string;
-  sourceRepoFullName?: string;
 }
 
 export type ManualRunResult =
@@ -36,26 +30,19 @@ export type ManualRunResult =
       workflowName: string;
       status: string;
       variables: Record<string, unknown>;
-      sessionId: string;
       dispatched: boolean;
     }
   | { ok: false; reason: 'rate_limited'; error: string; activeUser: number; activeGlobal: number; concurrencyReason?: string }
-  | { ok: false; reason: 'duplicate'; executionId: string; workflowId: string; workflowName: string; status: string; variables: Record<string, unknown>; sessionId: string };
+  | { ok: false; reason: 'duplicate'; executionId: string; workflowId: string; workflowName: string; status: string; variables: Record<string, unknown> };
 
 export async function runWorkflowManually(
   env: Env,
   params: ManualRunParams,
-  workerOrigin: string,
 ): Promise<ManualRunResult> {
   const appDb = getDb(env.DB);
   const { userId, workflowId, variables = {} } = params;
-  const repoUrl = params.repoUrl?.trim() || undefined;
-  const branch = params.branch?.trim() || undefined;
-  const ref = params.ref?.trim() || undefined;
-  const sourceRepoFullName = deriveRepoFullName(repoUrl, params.sourceRepoFullName);
 
   const workflow = await getWorkflowForManualRun(env.DB, userId, workflowId);
-
   if (!workflow) {
     throw new NotFoundError('Workflow', workflowId);
   }
@@ -74,8 +61,7 @@ export async function runWorkflowManually(
 
   const clientRequestId = params.clientRequestId || crypto.randomUUID();
   const idempotencyKey = `manual:${workflow.id}:${userId}:${clientRequestId}`;
-  const existing = await checkIdempotencyKey(env.DB, workflow.id, idempotencyKey);
-
+  const existing = await checkIdempotencyKey(env.DB, workflow.id, userId, idempotencyKey);
   if (existing) {
     return {
       ok: false,
@@ -85,59 +71,50 @@ export async function runWorkflowManually(
       workflowName: workflow.name,
       status: existing.status as string,
       variables,
-      sessionId: existing.session_id as string,
     };
   }
 
-  const executionId = crypto.randomUUID();
-  const now = new Date().toISOString();
-  const workflowHash = await sha256Hex(String(workflow.data ?? '{}'));
-  const sessionId = await createWorkflowSession(appDb, {
-    userId,
+  const result = await dispatchWorkflowExecution(env, {
     workflowId: workflow.id,
-    executionId,
-    sourceRepoUrl: repoUrl,
-    sourceRepoFullName,
-    branch,
-    ref,
-  });
-
-  await createExecution(env.DB, {
-    id: executionId,
-    workflowId: workflow.id,
-    userId,
-    triggerId: null,
-    triggerType: 'manual',
-    triggerMetadata: JSON.stringify({ triggeredBy: 'api', direct: true }),
-    variables: JSON.stringify(variables),
-    now,
-    workflowVersion: workflow.version || null,
-    workflowHash,
-    workflowSnapshot: workflow.data,
+    user: { id: userId },
+    trigger: {
+      type: 'manual',
+      timestamp: new Date().toISOString(),
+      // trigger.data is the manual-run envelope — exposed to templates
+      // as {{trigger.data.X}}. For manual API runs there's no separate
+      // envelope vs. inputs (unlike webhooks), so the same variables
+      // populate BOTH the envelope and `inputOverrides`. Without the
+      // overrides mirror, declared workflow inputs would fail
+      // validation because createExecution no longer treats trigger.data
+      // as an inputs source.
+      data: variables,
+      metadata: { triggeredBy: 'api', direct: true, clientRequestId },
+    },
+    ...(Object.keys(variables).length > 0 ? { inputOverrides: variables } : {}),
     idempotencyKey,
-    sessionId,
-    initiatorType: 'manual',
-    initiatorUserId: userId,
   });
-
-  const dispatched = await enqueueWorkflowExecution(env, {
-    executionId,
-    workflowId: workflow.id,
-    userId,
-    sessionId,
-    triggerType: 'manual',
-    workerOrigin,
-  });
-
+  if (result.status === 'rejected') {
+    // rate_limited surfaces back to the route as HTTP 429 via the
+    // existing ManualRunResult discriminator.
+    if (result.reason === 'rate_limited') {
+      return {
+        ok: false,
+        reason: 'rate_limited',
+        error: 'Too many concurrent workflow executions',
+        activeUser: concurrency.activeUser,
+        activeGlobal: concurrency.activeGlobal,
+      };
+    }
+    throw new ValidationError(`workflow start failed: ${result.reason ?? 'unknown'}`);
+  }
   return {
     ok: true,
-    executionId,
+    executionId: result.executionId,
     workflowId: workflow.id,
     workflowName: workflow.name,
     status: 'pending',
     variables,
-    sessionId,
-    dispatched,
+    dispatched: true,
   };
 }
 
@@ -152,12 +129,14 @@ export type TriggerRunResult =
       workflowName: string;
       status: string;
       variables: Record<string, unknown>;
-      sessionId: string;
       dispatched: boolean;
     }
+  // Orchestrator-target variants carry the orchestrator's session id —
+  // a real session running the dispatched prompt, populated by
+  // dispatchOrchestratorPrompt.
   | { ok: true; type: 'orchestrator'; workflowId: string | null; workflowName: string | null; sessionId: string }
   | { ok: false; reason: 'rate_limited'; error: string; activeUser: number; activeGlobal: number; concurrencyReason?: string }
-  | { ok: false; reason: 'duplicate'; executionId: string; workflowId: string; workflowName: string; status: string; variables: Record<string, unknown>; sessionId: string }
+  | { ok: false; reason: 'duplicate'; executionId: string; workflowId: string; workflowName: string; status: string; variables: Record<string, unknown> }
   | { ok: false; reason: 'orchestrator_failed'; error: string; workflowId: string | null; workflowName: string | null; sessionId: string; dispatchReason?: string };
 
 export async function runTrigger(
@@ -167,16 +146,10 @@ export async function runTrigger(
   body: Record<string, unknown> & {
     clientRequestId?: string;
     variables?: Record<string, unknown>;
-    repoUrl?: string;
-    branch?: string;
-    ref?: string;
-    sourceRepoFullName?: string;
   },
-  workerOrigin: string,
 ): Promise<TriggerRunResult> {
   const appDb = getDb(env.DB);
   const row = await getTriggerForRun(env.DB, userId, triggerId);
-
   if (!row) {
     throw new NotFoundError('Trigger', triggerId);
   }
@@ -209,7 +182,7 @@ export async function runTrigger(
     });
 
     if (dispatch.dispatched) {
-      await updateTriggerLastRun(appDb, triggerId, now.toISOString());
+      await updateTriggerLastRunUnchecked(appDb, triggerId, now.toISOString());
     }
 
     if (!dispatch.dispatched) {
@@ -249,7 +222,7 @@ export async function runTrigger(
     };
   }
 
-  // Extract variables from body using the trigger's variable mapping
+  // Extract variables from body using the trigger's variable mapping.
   const variableMapping = row.variable_mapping
     ? JSON.parse(row.variable_mapping as string)
     : {};
@@ -265,15 +238,17 @@ export async function runTrigger(
     }
   }
 
+  // Variables map only carries trigger-provided + extracted-mapped
+  // values; framework provenance (triggerId, type, dedupe key) belongs
+  // in WorkflowTriggerPayload.metadata, not in user-visible data.
   const variables = {
     ...extractedVariables,
     ...(body.variables || {}),
-    _trigger: { type: 'manual', triggerId },
   };
 
   const clientRequestId = body.clientRequestId || crypto.randomUUID();
   const idempotencyKey = `manual-trigger:${triggerId}:${userId}:${clientRequestId}`;
-  const existing = await checkIdempotencyKey(env.DB, row.wf_id, idempotencyKey);
+  const existing = await checkIdempotencyKey(env.DB, row.wf_id, userId, idempotencyKey);
 
   if (existing) {
     return {
@@ -284,65 +259,47 @@ export async function runTrigger(
       workflowName: row.workflow_name as string,
       status: existing.status as string,
       variables,
-      sessionId: existing.session_id as string,
     };
   }
 
-  const executionId = crypto.randomUUID();
-  const now = new Date().toISOString();
-  const workflowHash = await sha256Hex(String(row.workflow_data ?? '{}'));
-  const repoUrl = body.repoUrl?.trim() || undefined;
-  const branch = body.branch?.trim() || undefined;
-  const ref = body.ref?.trim() || undefined;
-  const sourceRepoFullName = deriveRepoFullName(repoUrl as string | undefined, body.sourceRepoFullName as string | undefined);
-  const sessionId = await createWorkflowSession(appDb, {
-    userId,
-    workflowId: row.wf_id,
-    executionId,
-    sourceRepoUrl: repoUrl as string | undefined,
-    sourceRepoFullName,
-    branch: branch as string | undefined,
-    ref: ref as string | undefined,
-  });
-
-  await createExecution(env.DB, {
-    id: executionId,
-    workflowId: row.wf_id,
-    userId,
-    triggerId,
-    triggerType: 'manual',
-    triggerMetadata: JSON.stringify({ triggeredBy: 'api' }),
-    variables: JSON.stringify(variables),
-    now,
-    workflowVersion: row.workflow_version || null,
-    workflowHash,
-    workflowSnapshot: row.workflow_data,
+  const result = await dispatchWorkflowExecution(env, {
+    workflowId: row.wf_id as string,
+    user: { id: userId },
+    trigger: {
+      type: 'manual',
+      triggerId,
+      timestamp: new Date().toISOString(),
+      // See runWorkflowManually above for the trigger.data vs.
+      // inputOverrides reasoning. Manual trigger API calls reuse the
+      // same shape: variables populate both the envelope and the
+      // declared inputs.
+      data: variables,
+      metadata: { triggeredBy: 'api', clientRequestId },
+    },
+    ...(Object.keys(variables).length > 0 ? { inputOverrides: variables } : {}),
     idempotencyKey,
-    sessionId,
-    initiatorType: 'manual',
-    initiatorUserId: userId,
   });
-
-  const dispatched = await enqueueWorkflowExecution(env, {
-    executionId,
-    workflowId: row.wf_id,
-    userId,
-    sessionId,
-    triggerType: 'manual',
-    workerOrigin,
-  });
-
-  await updateTriggerLastRun(appDb, triggerId, now);
-
+  if (result.status === 'rejected') {
+    if (result.reason === 'rate_limited') {
+      return {
+        ok: false,
+        reason: 'rate_limited',
+        error: 'Too many concurrent workflow executions',
+        activeUser: concurrency.activeUser,
+        activeGlobal: concurrency.activeGlobal,
+      };
+    }
+    throw new ValidationError(`workflow start failed: ${result.reason ?? 'unknown'}`);
+  }
+  await updateTriggerLastRunUnchecked(appDb, triggerId, new Date().toISOString());
   return {
     ok: true,
     type: 'workflow',
-    executionId,
-    workflowId: row.wf_id,
-    workflowName: row.workflow_name || '',
+    executionId: result.executionId,
+    workflowId: row.wf_id as string,
+    workflowName: row.workflow_name as string,
     status: 'pending',
     variables,
-    sessionId,
-    dispatched,
+    dispatched: true,
   };
 }

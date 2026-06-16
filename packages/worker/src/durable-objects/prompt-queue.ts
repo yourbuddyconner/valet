@@ -23,9 +23,6 @@ export interface EnqueueParams {
   attachments?: string | null;
   model?: string | null;
   status?: 'queued' | 'processing';
-  queueType?: 'prompt' | 'workflow_execute';
-  workflowExecutionId?: string | null;
-  workflowPayload?: string | null;
   authorId?: string | null;
   authorEmail?: string | null;
   authorName?: string | null;
@@ -48,9 +45,6 @@ export interface QueueEntry {
   content: string;
   attachments: string | null;
   model: string | null;
-  queueType: string;
-  workflowExecutionId: string | null;
-  workflowPayload: string | null;
   authorId: string | null;
   authorEmail: string | null;
   authorName: string | null;
@@ -147,18 +141,6 @@ export class PromptQueue {
   /** Insert an entry into the prompt queue. */
   enqueue(params: EnqueueParams): void {
     const status = params.status || 'queued';
-    const queueType = params.queueType || 'prompt';
-
-    if (queueType === 'workflow_execute') {
-      this.sql.exec(
-        "INSERT INTO prompt_queue (id, content, queue_type, workflow_execution_id, workflow_payload, status) VALUES (?, '', 'workflow_execute', ?, ?, ?)",
-        params.id,
-        params.workflowExecutionId || null,
-        params.workflowPayload || null,
-        status,
-      );
-      return;
-    }
 
     this.sql.exec(
       "INSERT INTO prompt_queue (id, content, attachments, model, status, author_id, author_email, author_name, author_avatar_url, channel_type, channel_id, channel_key, thread_id, continuation_context, context_prefix, reply_channel_type, reply_channel_id, child_session_id, child_status, priority) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -192,7 +174,7 @@ export class PromptQueue {
   dequeueNext(): QueueEntry | null {
     const rows = this.sql
       .exec(
-        "SELECT id, content, attachments, model, author_id, author_email, author_name, author_avatar_url, channel_type, channel_id, channel_key, queue_type, workflow_execution_id, workflow_payload, thread_id, continuation_context, context_prefix, reply_channel_type, reply_channel_id, child_session_id, child_status, priority FROM prompt_queue WHERE status = 'queued' ORDER BY priority DESC, created_at ASC LIMIT 1",
+        "SELECT id, content, attachments, model, author_id, author_email, author_name, author_avatar_url, channel_type, channel_id, channel_key, thread_id, continuation_context, context_prefix, reply_channel_type, reply_channel_id, child_session_id, child_status, priority FROM prompt_queue WHERE status = 'queued' ORDER BY priority DESC, created_at ASC LIMIT 1",
       )
       .toArray();
 
@@ -215,7 +197,7 @@ export class PromptQueue {
   dequeueNextChild(): QueueEntry | null {
     const rows = this.sql
       .exec(
-        "SELECT id, content, attachments, model, author_id, author_email, author_name, author_avatar_url, channel_type, channel_id, channel_key, queue_type, workflow_execution_id, workflow_payload, thread_id, continuation_context, context_prefix, reply_channel_type, reply_channel_id, child_session_id, child_status, priority FROM prompt_queue WHERE status = 'queued' AND child_session_id IS NOT NULL ORDER BY priority DESC, created_at ASC LIMIT 1",
+        "SELECT id, content, attachments, model, author_id, author_email, author_name, author_avatar_url, channel_type, channel_id, channel_key, thread_id, continuation_context, context_prefix, reply_channel_type, reply_channel_id, child_session_id, child_status, priority FROM prompt_queue WHERE status = 'queued' AND child_session_id IS NOT NULL ORDER BY priority DESC, created_at ASC LIMIT 1",
       )
       .toArray();
 
@@ -296,7 +278,7 @@ export class PromptQueue {
   }
 
   private static readonly USER_PROMPT_QUERY =
-    "SELECT id, content, attachments, model, author_id, author_email, author_name, author_avatar_url, channel_type, channel_id, channel_key, queue_type, workflow_execution_id, workflow_payload, thread_id, continuation_context, context_prefix, reply_channel_type, reply_channel_id, child_session_id, child_status, priority FROM prompt_queue WHERE status = 'queued' AND queue_type = 'prompt' AND child_session_id IS NULL ORDER BY priority DESC, created_at ASC LIMIT 1";
+    "SELECT id, content, attachments, model, author_id, author_email, author_name, author_avatar_url, channel_type, channel_id, channel_key, thread_id, continuation_context, context_prefix, reply_channel_type, reply_channel_id, child_session_id, child_status, priority FROM prompt_queue WHERE status = 'queued' AND child_session_id IS NULL ORDER BY priority DESC, created_at ASC LIMIT 1";
 
   /** Read the single queued user-prompt entry without removing it. Returns null if none. */
   peekQueued(): QueueEntry | null {
@@ -367,22 +349,6 @@ export class PromptQueue {
     const channelType = (rows[0].reply_channel_type as string) || (rows[0].channel_type as string) || null;
     const channelId = (rows[0].reply_channel_id as string) || (rows[0].channel_id as string) || null;
     return { channelType, channelId };
-  }
-
-  /** Returns queue_type and workflow_execution_id for the currently-processing row.
-   *  Returns null if nothing is processing. Used by sendChannelInteractivePrompts
-   *  to determine provenance for unattended-run approval DMs. */
-  getProcessingWorkflowContext(): { queueType: string; workflowExecutionId: string | null } | null {
-    const rows = this.sql
-      .exec(
-        "SELECT queue_type, workflow_execution_id FROM prompt_queue WHERE status = 'processing' ORDER BY created_at DESC LIMIT 1",
-      )
-      .toArray();
-    if (rows.length === 0) return null;
-    return {
-      queueType: (rows[0].queue_type as string) || 'prompt',
-      workflowExecutionId: (rows[0].workflow_execution_id as string | null) ?? null,
-    };
   }
 
   /** Get the author_email from the most recent processing entry. */
@@ -693,9 +659,6 @@ export class PromptQueue {
       content: row.content as string,
       attachments: (row.attachments as string) || null,
       model: (row.model as string) || null,
-      queueType: ((row.queue_type as string) || 'prompt').trim() || 'prompt',
-      workflowExecutionId: (row.workflow_execution_id as string) || null,
-      workflowPayload: (row.workflow_payload as string) || null,
       authorId: (row.author_id as string) || null,
       authorEmail: (row.author_email as string) || null,
       authorName: (row.author_name as string) || null,

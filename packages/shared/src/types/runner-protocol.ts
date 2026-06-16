@@ -18,44 +18,6 @@ export interface PromptAttachment {
   filename?: string;
 }
 
-/** Individual step in a workflow execution result */
-export interface WorkflowRunResultStep {
-  stepId: string;
-  status: string;
-  attempt?: number;
-  startedAt?: string;
-  completedAt?: string;
-  input?: unknown;
-  output?: unknown;
-  error?: string;
-}
-
-/** Envelope returned from workflow execution */
-export interface WorkflowRunResultEnvelope {
-  ok: boolean;
-  status: 'ok' | 'needs_approval' | 'cancelled' | 'failed';
-  executionId: string;
-  output?: Record<string, unknown>;
-  steps?: WorkflowRunResultStep[];
-  requiresApproval?: null | {
-    stepId: string;
-    prompt: string;
-    items: unknown[];
-    resumeToken: string;
-  };
-  error?: string | null;
-}
-
-/** Payload for dispatching workflow execution to runner */
-export interface WorkflowExecutionDispatchPayload {
-  kind: 'run' | 'resume';
-  executionId: string;
-  workflowHash?: string;
-  resumeToken?: string;
-  decision?: 'approve' | 'deny';
-  payload: Record<string, unknown>;
-}
-
 /** Tool call status values */
 export type ToolCallStatus = 'pending' | 'running' | 'completed' | 'error';
 
@@ -197,19 +159,6 @@ export type DOToRunnerMessage =
       ref?: string;
       error?: string;
     }
-  | { type: 'workflow-list-result'; requestId: string; workflows?: unknown[]; error?: string }
-  | {
-      type: 'workflow-sync-result';
-      requestId: string;
-      success?: boolean;
-      workflow?: unknown;
-      error?: string;
-    }
-  | { type: 'workflow-run-result'; requestId: string; execution?: unknown; error?: string }
-  | { type: 'workflow-executions-result'; requestId: string; executions?: unknown[]; error?: string }
-  | { type: 'workflow-api-result'; requestId: string; data?: unknown; error?: string }
-  | { type: 'trigger-api-result'; requestId: string; data?: unknown; error?: string }
-  | { type: 'execution-api-result'; requestId: string; data?: unknown; error?: string }
   | { type: 'mailbox-send-result'; requestId: string; messageId?: string; error?: string }
   | { type: 'mailbox-check-result'; requestId: string; messages?: unknown[]; error?: string }
   | { type: 'task-create-result'; requestId: string; task?: unknown; error?: string }
@@ -217,13 +166,6 @@ export type DOToRunnerMessage =
   | { type: 'task-update-result'; requestId: string; task?: unknown; error?: string }
   | { type: 'task-my-result'; requestId: string; tasks?: unknown[]; error?: string }
   | { type: 'channel-reply-result'; requestId: string; success?: boolean; error?: string }
-  | {
-      type: 'workflow-execute';
-      executionId: string;
-      model?: string;
-      modelPreferences?: string[];
-      payload: WorkflowExecutionDispatchPayload;
-    }
   | {
       type: 'list-tools-result';
       requestId: string;
@@ -317,15 +259,6 @@ export type DOToRunnerMessage =
 
 /** Messages sent from the Runner process to the SessionAgent DO */
 export type RunnerToDOMessage =
-  | {
-      type: 'workflow-chat-message';
-      role: 'user' | 'assistant' | 'system';
-      content: string;
-      parts?: Record<string, unknown>;
-      channelType?: string;
-      channelId?: string;
-      opencodeSessionId?: string;
-    }
   | { type: 'question'; messageId?: string; questionId: string; text: string; options?: string[] }
   | { type: 'image'; messageId?: string; data: string; mimeType: string; description: string }
   | { type: 'screenshot'; messageId?: string; data: string; description: string }
@@ -458,51 +391,6 @@ export type RunnerToDOMessage =
       repoUrl?: string;
       path: string;
       ref?: string;
-    }
-  | { type: 'workflow-list'; requestId: string }
-  | {
-      type: 'workflow-sync';
-      requestId: string;
-      id?: string;
-      slug?: string;
-      name: string;
-      description?: string;
-      version?: string;
-      data: Record<string, unknown>;
-    }
-  | {
-      type: 'workflow-run';
-      requestId: string;
-      workflowId: string;
-      variables?: Record<string, unknown>;
-      repoUrl?: string;
-      branch?: string;
-      ref?: string;
-      sourceRepoFullName?: string;
-    }
-  | { type: 'workflow-executions'; requestId: string; workflowId?: string; limit?: number }
-  | {
-      type: 'workflow-api';
-      requestId: string;
-      action: string;
-      payload?: Record<string, unknown>;
-    }
-  | {
-      type: 'trigger-api';
-      requestId: string;
-      action: string;
-      payload?: Record<string, unknown>;
-    }
-  | {
-      type: 'execution-api';
-      requestId: string;
-      action: string;
-      payload?: Record<string, unknown>;
-    }
-  | {
-      type: 'workflow-execution-result';
-      executionId: string;
-      envelope: WorkflowRunResultEnvelope;
     }
   | {
       type: 'model-switched';

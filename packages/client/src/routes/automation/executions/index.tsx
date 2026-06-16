@@ -1,5 +1,6 @@
-import { createFileRoute, Link } from '@tanstack/react-router';
+import { createFileRoute } from '@tanstack/react-router';
 import { useInfiniteExecutions } from '@/api/executions';
+import { ExecutionApprovalPanel } from '@/components/workflows/execution-approval-panel';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
 import { LoadMoreButton } from '@/components/ui/load-more-button';
@@ -80,60 +81,58 @@ function ExecutionsPage() {
                   <th className="px-4 py-3 text-left text-xs font-medium uppercase text-neutral-500 dark:text-neutral-400">
                     Duration
                   </th>
-                  <th className="px-4 py-3 text-left text-xs font-medium uppercase text-neutral-500 dark:text-neutral-400">
-                    Session
-                  </th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-neutral-200 dark:divide-neutral-700">
                 {executions.map((execution) => (
-                  <tr
-                    key={execution.id}
-                    className="hover:bg-neutral-50 dark:hover:bg-neutral-700/50"
-                  >
-                    <td className="px-4 py-3">
-                      <ExecutionStatusBadge status={execution.status} />
-                    </td>
-                    <td className="px-4 py-3">
-                      <div>
-                        <p className="text-sm font-medium text-neutral-900 dark:text-neutral-100">
-                          {execution.workflowName || 'Unknown'}
-                        </p>
-                        <p className="text-xs text-neutral-500 dark:text-neutral-400">
-                          {execution.id.slice(0, 8)}...
-                        </p>
-                      </div>
-                    </td>
-                    <td className="px-4 py-3">
-                      <div className="flex items-center gap-2">
-                        <TriggerTypeIcon type={execution.triggerType} />
-                        <span className="text-sm text-neutral-600 dark:text-neutral-300">
-                          {execution.triggerType}
-                        </span>
-                      </div>
-                    </td>
-                    <td className="px-4 py-3 text-sm text-neutral-500 tabular-nums dark:text-neutral-400">
-                      {formatRelativeTime(execution.startedAt)}
-                    </td>
-                    <td className="px-4 py-3 text-sm text-neutral-500 tabular-nums dark:text-neutral-400">
-                      {execution.completedAt
-                        ? formatDuration(execution.startedAt, execution.completedAt)
-                        : '—'}
-                    </td>
-                    <td className="px-4 py-3 text-sm">
-                      {execution.sessionId ? (
-                        <Link
-                          to="/sessions/$sessionId"
-                          params={{ sessionId: execution.sessionId }}
-                          className="text-accent hover:underline"
-                        >
-                          {execution.sessionId.slice(0, 8)}...
-                        </Link>
-                      ) : (
-                        <span className="text-neutral-400 dark:text-neutral-500">—</span>
-                      )}
-                    </td>
-                  </tr>
+                  <React.Fragment key={execution.id}>
+                    <tr className="hover:bg-neutral-50 dark:hover:bg-neutral-700/50">
+                      <td className="px-4 py-3">
+                        <ExecutionStatusBadge status={execution.status} />
+                      </td>
+                      <td className="px-4 py-3">
+                        <div>
+                          <p className="text-sm font-medium text-neutral-900 dark:text-neutral-100">
+                            {execution.workflowName || 'Unknown'}
+                          </p>
+                          <p className="text-xs text-neutral-500 dark:text-neutral-400">
+                            {execution.id.slice(0, 8)}...
+                          </p>
+                        </div>
+                      </td>
+                      <td className="px-4 py-3">
+                        <div className="flex items-center gap-2">
+                          <TriggerTypeIcon type={execution.triggerType} />
+                          <span className="text-sm text-neutral-600 dark:text-neutral-300">
+                            {execution.triggerType}
+                          </span>
+                        </div>
+                      </td>
+                      <td className="px-4 py-3 text-sm text-neutral-500 tabular-nums dark:text-neutral-400">
+                        {formatRelativeTime(execution.startedAt)}
+                      </td>
+                      <td className="px-4 py-3 text-sm text-neutral-500 tabular-nums dark:text-neutral-400">
+                        {execution.completedAt
+                          ? formatDuration(execution.startedAt, execution.completedAt)
+                          : '—'}
+                      </td>
+                    </tr>
+                    {isActiveExecutionStatus(execution.status) && (
+                      // Mount on any active status, not just waiting_approval:
+                      // parallel waiting siblings can leave aggregate status
+                      // at 'running' while per-node approvals are still
+                      // pending. The panel auto-hides when there's nothing to
+                      // resolve.
+                      <tr className="bg-amber-50/30 dark:bg-amber-950/10">
+                        <td colSpan={5} className="px-4 py-3">
+                          <ExecutionApprovalPanel
+                            executionId={execution.id}
+                            title="Action required"
+                          />
+                        </td>
+                      </tr>
+                    )}
+                  </React.Fragment>
                 ))}
               </tbody>
             </table>
@@ -147,6 +146,14 @@ function ExecutionsPage() {
       )}
     </div>
   );
+}
+
+// Active = not yet terminal. Parallel waiting siblings can leave the
+// aggregate status at 'running' or 'waiting_time' while approvals are
+// still pending on individual nodes, so we mount the approval panel
+// for all active states and let it auto-hide when there's no work.
+function isActiveExecutionStatus(status: string): boolean {
+  return status === 'pending' || status === 'running' || status === 'waiting_approval' || status === 'waiting_time';
 }
 
 function ExecutionStatusBadge({ status }: { status: string }) {
