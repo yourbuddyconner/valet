@@ -610,7 +610,7 @@ export interface GatewayCallbacks {
   onChannelReply?: (channelType: string, channelId: string, message: string, imageBase64?: string, imageMimeType?: string, followUp?: boolean, fileBase64?: string, fileMimeType?: string, fileName?: string) => Promise<{ success: boolean }>;
   // Tool Discovery & Invocation
   onListTools?: (service?: string, query?: string) => Promise<{ tools: unknown[]; warnings?: Array<{ service: string; displayName: string; reason: string; message: string }> }>;
-  onCallTool?: (toolId: string, params: Record<string, unknown>, summary?: string) => Promise<{ result: unknown; images?: Array<{ data: string; mimeType: string; description: string }> }>;
+  onCallTool?: (toolId: string, params: Record<string, unknown>, summary?: string, opencodeSessionId?: string) => Promise<{ result: unknown; images?: Array<{ data: string; mimeType: string; description: string }> }>;
   // Skill API
   onSkillApi?: (action: string, payload?: Record<string, unknown>) => Promise<{ data?: unknown; error?: string; statusCode?: number }>;
   // Persona API
@@ -1351,7 +1351,8 @@ export function startGateway(port: number, callbacks: GatewayCallbacks): void {
       if (!body.toolId) {
         return c.json({ error: "Missing required field: toolId" }, 400);
       }
-      const result = await callbacks.onCallTool(body.toolId, body.params || {}, body.summary);
+      const opencodeSessionId = c.req.header("x-opencode-session-id") || undefined;
+      const result = await callbacks.onCallTool(body.toolId, body.params || {}, body.summary, opencodeSessionId);
       return c.json(result);
     } catch (err) {
       console.error("[Gateway] Call tool error:", err);

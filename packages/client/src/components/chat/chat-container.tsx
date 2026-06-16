@@ -124,14 +124,18 @@ export function ChatContainer({ sessionId, routeSessionId, initialThreadId, init
 	    integrationAuthErrors,
     dismissIntegrationAuth,
     loadThreadMessages,
-    pendingFollowup,
+    pendingFollowup: pendingFollowupGlobal,
+    threadPendingFollowups,
     agentStatusThreadId,
+    threadStatuses,
     queueWithdraw,
     queuePromote,
     queueReplace,
   } = useChat(sessionId);
   const queueModePreference = (authUser?.uiQueueMode ?? 'followup') as QueueMode;
-  const isDispatchBusy = isAgentThinking
+  // Session-wide busy fallback; the per-thread version is computed lower
+  // after activeThreadStatus is known and used for dispatch decisions.
+  const isSessionBusy = isAgentThinking
     || agentStatus === 'thinking'
     || agentStatus === 'tool_calling'
     || agentStatus === 'streaming'
@@ -177,10 +181,34 @@ export function ChatContainer({ sessionId, routeSessionId, initialThreadId, init
     ? (localThreadId ?? serverActiveThread?.id ?? null)
     : getEffectiveActiveThreadId(initialThreadId, serverActiveThread?.id);
 
+  // Per-thread followup tracking (TKAI-65): use the active thread's entry,
+  // falling back to the legacy global slot when the session has no thread
+  // scoping yet. Concurrent threads each show their own queued followup.
+  const pendingFollowup = activeThreadId
+    ? (threadPendingFollowups[activeThreadId] ?? null)
+    : pendingFollowupGlobal;
+
   // Scope pending followup & thinking indicator to the active thread
   const pendingIsForOtherThread = !!pendingFollowup?.threadId && pendingFollowup.threadId !== activeThreadId;
   const pendingIsForThisThread = !!pendingFollowup && !pendingIsForOtherThread;
-  const isAgentThinkingInThread = isAgentThinking && (!agentStatusThreadId || agentStatusThreadId === activeThreadId);
+  // Prefer per-thread status (tracks every in-flight thread independently);
+  // fall back to the legacy global status when no thread-scoped entry exists
+  // yet (e.g. very first agent event of the session, or non-thread channels).
+  const activeThreadStatusEntry = activeThreadId ? threadStatuses[activeThreadId] : undefined;
+  const activeThreadStatus = activeThreadStatusEntry?.status
+    ?? (!agentStatusThreadId || agentStatusThreadId === activeThreadId ? agentStatus : 'idle');
+  const activeThreadStatusDetail = activeThreadStatusEntry?.detail
+    ?? (!agentStatusThreadId || agentStatusThreadId === activeThreadId ? agentStatusDetail : undefined);
+  const isAgentThinkingInThread =
+    activeThreadStatus === 'thinking'
+    || activeThreadStatus === 'tool_calling'
+    || activeThreadStatus === 'streaming'
+    || activeThreadStatus === 'queued';
+
+  // Per-thread dispatch busy — gates whether handleSendMessage should
+  // queueReplace / queuePromote (which target the ACTIVE thread's pending
+  // followup, not whichever thread happens to be busy session-wide).
+  const isDispatchBusy = activeThreadId ? isAgentThinkingInThread : isSessionBusy;
 
   const selectThread = useCallback(
     (threadId: string) => {
@@ -265,14 +293,23 @@ export function ChatContainer({ sessionId, routeSessionId, initialThreadId, init
   );
 
   const handleAbort = useCallback(() => {
-    abort();
-  }, [abort]);
+    // Scope the abort to the active thread so concurrent cross-thread turns
+    // on the same session aren't all killed by a single Stop click.
+    if (activeThreadId) {
+      abort('thread', activeThreadId);
+    } else {
+      abort();
+    }
+  }, [abort, activeThreadId]);
 
   const handleCommand = useCallback(
     (command: string, args?: string) => {
-      executeCommand(command, args);
+      // Forward the active thread so /stop and other channel-scoped slash
+      // commands target the user's current thread instead of going session-
+      // wide and killing concurrent thread turns.
+      executeCommand(command, args, undefined, undefined, activeThreadId ?? undefined);
     },
-    [executeCommand]
+    [executeCommand, activeThreadId]
   );
 
   // Promote pending followup (dispatch immediately as steer)
@@ -334,7 +371,15 @@ export function ChatContainer({ sessionId, routeSessionId, initialThreadId, init
   });
   const isTerminated = isFinalSessionStatus(sessionStatus);
   const isDisabled = !isConnected || isTerminated;
-  const isAgentActive = (isAgentThinking && agentStatus !== 'queued') || agentStatus === 'thinking' || agentStatus === 'tool_calling' || agentStatus === 'streaming';
+  // Stop button + Escape handler key off the ACTIVE thread's status — not
+  // the session-wide latest — so concurrent cross-thread turns each render
+  // their own stop control independently. Include 'queued' so the user can
+  // withdraw an optimistically-queued prompt before the runner picks it up.
+  const isAgentActive =
+    activeThreadStatus === 'thinking'
+    || activeThreadStatus === 'tool_calling'
+    || activeThreadStatus === 'streaming'
+    || activeThreadStatus === 'queued';
   const displaySessionStatus = getDisplaySessionStatus({
     sessionStatus,
     connectionStatus,
@@ -527,8 +572,8 @@ export function ChatContainer({ sessionId, routeSessionId, initialThreadId, init
             <MessageList
               messages={filteredMessages}
               isAgentThinking={isAgentThinkingInThread}
-              agentStatus={agentStatus}
-              agentStatusDetail={agentStatusDetail}
+              agentStatus={activeThreadStatus}
+              agentStatusDetail={activeThreadStatusDetail}
               onRevert={revertMessage}
               childSessionEvents={filteredChildSessionEvents}
               childSessions={childSessions}

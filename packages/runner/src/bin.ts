@@ -289,7 +289,7 @@ async function main() {
       }
       return result;
     },
-    onCallTool: async (toolId, params, summary) => {
+    onCallTool: async (toolId, params, summary, opencodeSessionId) => {
       // Enforce whitelist on tool invocation
       if (activeToolWhitelist) {
         const { service, actionId } = parseToolId(toolId);
@@ -297,7 +297,7 @@ async function main() {
           throw new Error(`Tool "${toolId}" is not available for this persona`);
         }
       }
-      const callResult = await agentClient.requestCallTool(toolId, params, summary);
+      const callResult = await agentClient.requestCallTool(toolId, params, summary, opencodeSessionId);
       // If the action returned images, hand them to the PromptHandler so it
       // can abort the current turn and re-send with vision attachments.
       if (callResult.images?.length) {

@@ -291,8 +291,13 @@ export class AgentClient {
     this.send({ type: "tunnels", tunnels });
   }
 
-  sendAborted(messageId?: string): void {
-    this.send({ type: "aborted", ...(messageId ? { messageId } : {}) });
+  sendAborted(messageId?: string, channelType?: string, channelId?: string): void {
+    this.send({
+      type: "aborted",
+      ...(messageId ? { messageId } : {}),
+      ...(channelType ? { channelType } : {}),
+      ...(channelId ? { channelId } : {}),
+    });
   }
 
   sendWaitSubscription(subscription: {
@@ -606,10 +611,10 @@ export class AgentClient {
     });
   }
 
-  requestCallTool(toolId: string, params: Record<string, unknown>, summary?: string): Promise<{ result: unknown; images?: Array<{ data: string; mimeType: string; description: string }> }> {
+  requestCallTool(toolId: string, params: Record<string, unknown>, summary?: string, opencodeSessionId?: string): Promise<{ result: unknown; images?: Array<{ data: string; mimeType: string; description: string }> }> {
     const requestId = crypto.randomUUID();
     return this.createPendingRequest(requestId, TOOL_OP_TIMEOUT_MS, () => {
-      this.send({ type: "call-tool", requestId, toolId, params, summary });
+      this.send({ type: "call-tool", requestId, toolId, params, summary, opencodeSessionId });
     });
   }
 
@@ -820,7 +825,16 @@ export class AgentClient {
           this.stopHandler?.();
           break;
         case "abort":
-          await this.abortHandler?.(msg.channelType, msg.channelId);
+          // Fire-and-forget so a channel-scoped fan-out (one frame per
+          // active thread) does not serialize the inbound WS loop behind
+          // N OpenCode /abort round-trips. New prompts, answers, and
+          // command results stay responsive while aborts propagate.
+          // IIFE wrapper captures synchronous throws into the promise
+          // chain — a bare `Promise.resolve(handler(...))` lets pre-await
+          // throws escape into the WS message loop.
+          Promise.resolve((async () => {
+            await this.abortHandler?.(msg.channelType, msg.channelId);
+          })()).catch((err: unknown) => console.error(`[AgentClient] Abort handler error for ${msg.channelType || 'session'}:${msg.channelId || ''}:`, err));
           break;
         case "revert":
           await this.revertHandler?.(msg.messageId);

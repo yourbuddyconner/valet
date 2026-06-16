@@ -16,21 +16,39 @@ export interface HealthSnapshot {
   runnerBusy: boolean;
   queuedCount: number;
   processingCount: number;
-  lastDispatchedAt: number;
+  /** OLDEST dispatched_at across all processing rows. Required so a wedged
+   *  channel can be detected even while siblings keep firing fresh dispatches
+   *  (using MAX would let newer activity mask the wedge indefinitely). */
+  oldestProcessingDispatchedAt: number;
+  /** messageId of the OLDEST processing row whose dispatched_at exceeds the
+   *  stuck timeout, when one exists. Lets recovery actions target the
+   *  specific wedged row instead of nuking all processing rows. */
+  stuckProcessingMessageId: string | null;
+  /** Earliest per-channel idle_queued_since (across all channels) so the
+   *  watchdog deadline is set for the most stuck channel. */
   idleQueuedSince: number;
+  /** channelKey whose idle_queued_since is the earliest, when armed. */
+  idleQueuedChannelKey: string | null;
+  /** Earliest per-channel error_safety_net_at (across all channels). */
   errorSafetyNetAt: number;
+  /** channelKey whose error_safety_net_at is the earliest, when armed. */
+  errorSafetyNetChannelKey: string | null;
   sessionStatus: string;
   runnerDisconnectedAt: number | null;
   runnerConnectedAt: number | null;
   sandboxWakeStartedAt: number;
 }
 
+/** Recovery actions carry the specific row/channel they target so the DO
+ *  can act surgically. `revert_and_drain` reverts a single row; `force_complete`
+ *  completes a specific messageId; `clear_safety_net` and `mark_not_busy`
+ *  target one channelKey. */
 export type RecoveryAction =
-  | { type: 'revert_and_drain'; reason: string }
+  | { type: 'revert_and_drain'; reason: string; messageId: string | null }
   | { type: 'drain_queue'; reason: string }
-  | { type: 'force_complete'; reason: string }
-  | { type: 'mark_not_busy'; reason: string }
-  | { type: 'clear_safety_net'; reason: string }
+  | { type: 'force_complete'; reason: string; messageId: string | null; channelKey: string | null }
+  | { type: 'mark_not_busy'; reason: string; channelKey: string | null }
+  | { type: 'clear_safety_net'; reason: string; channelKey: string | null }
   | { type: 'perform_recovery'; reason: string }
 
 export interface RecoveryEvent {
@@ -79,7 +97,7 @@ export class SessionHealthMonitor {
       runnerBusy: snapshot.runnerBusy,
       queuedCount: snapshot.queuedCount,
       processingCount: snapshot.processingCount,
-      lastDispatchedAt: snapshot.lastDispatchedAt,
+      oldestProcessingDispatchedAt: snapshot.oldestProcessingDispatchedAt,
       sessionStatus: snapshot.sessionStatus,
       ...extra,
     };
@@ -91,13 +109,15 @@ export class SessionHealthMonitor {
     if (s.runnerConnected) return;
     // Don't revert during disconnect grace period — runner may reconnect
     if (s.runnerDisconnectedAt && (s.now - s.runnerDisconnectedAt) < DISCONNECT_GRACE_MS) return;
-    if (!s.lastDispatchedAt) return;
-    const elapsed = s.now - s.lastDispatchedAt;
+    if (!s.oldestProcessingDispatchedAt) return;
+    const elapsed = s.now - s.oldestProcessingDispatchedAt;
     if (elapsed < STUCK_PROCESSING_TIMEOUT_MS) return;
 
     const reason = `Prompt stuck in processing for ${Math.round(elapsed / 1000)}s with no runner`;
-    actions.push({ type: 'revert_and_drain', reason });
-    events.push({ eventType: 'session.recovery', cause: 'stuck_processing', properties: this.buildProperties(s, { staleDurationMs: elapsed }) });
+    // Revert ONLY the wedged row; healthy concurrent in-flight rows stay
+    // processing so they don't get re-dispatched as duplicates.
+    actions.push({ type: 'revert_and_drain', reason, messageId: s.stuckProcessingMessageId });
+    events.push({ eventType: 'session.recovery', cause: 'stuck_processing', properties: this.buildProperties(s, { staleDurationMs: elapsed, messageId: s.stuckProcessingMessageId }) });
   }
 
   private checkStuckQueue(s: HealthSnapshot, actions: RecoveryAction[], events: RecoveryEvent[]): void {
@@ -106,7 +126,11 @@ export class SessionHealthMonitor {
     if (s.queuedCount === 0) return;
 
     const reason = `runnerBusy=true with ${s.queuedCount} queued items but 0 processing`;
-    actions.push({ type: 'mark_not_busy', reason });
+    // mark_not_busy carries no per-channel scope: there are no processing
+    // rows, so no channel can be specifically "stuck busy" — this clears
+    // the session-wide runnerBusy flag only. Per-channel busy flags will
+    // be cleared by the DO's drain on reconnect.
+    actions.push({ type: 'mark_not_busy', reason, channelKey: null });
     if (s.runnerConnected) {
       actions.push({ type: 'drain_queue', reason });
     }
@@ -118,14 +142,29 @@ export class SessionHealthMonitor {
     if (s.now < s.errorSafetyNetAt) return;
 
     // Always clear the expired safety-net to prevent repeated events.
-    // force_complete also clears it, but when runner isn't busy we still
-    // need the clear_safety_net action.
+    // Both branches carry the specific channelKey so per-channel clear is
+    // surgical — clearing all channels' nets en masse would corrupt sibling
+    // channels that armed their own error safety nets independently.
     if (s.runnerBusy) {
-      actions.push({ type: 'force_complete', reason: 'Forced prompt complete after error safety-net timeout' });
+      // Pass channelKey only. The DO looks up THIS channel's processing
+      // row to decide which messageId to complete — using
+      // stuckProcessingMessageId here would mis-target because that field
+      // is gated on the 5-minute STUCK_PROCESSING_TIMEOUT_MS, but the
+      // error safety net fires at 60s, so the two timers don't align.
+      actions.push({
+        type: 'force_complete',
+        reason: 'Forced prompt complete after error safety-net timeout',
+        messageId: null,
+        channelKey: s.errorSafetyNetChannelKey,
+      });
     } else {
-      actions.push({ type: 'clear_safety_net', reason: 'Cleared expired error safety-net (runner not busy)' });
+      actions.push({
+        type: 'clear_safety_net',
+        reason: 'Cleared expired error safety-net (runner not busy)',
+        channelKey: s.errorSafetyNetChannelKey,
+      });
     }
-    events.push({ eventType: 'session.recovery', cause: 'error_safety_net', properties: this.buildProperties(s, { errorSafetyNetAt: s.errorSafetyNetAt, staleDurationMs: s.now - s.errorSafetyNetAt }) });
+    events.push({ eventType: 'session.recovery', cause: 'error_safety_net', properties: this.buildProperties(s, { errorSafetyNetAt: s.errorSafetyNetAt, errorSafetyNetChannelKey: s.errorSafetyNetChannelKey, staleDurationMs: s.now - s.errorSafetyNetAt }) });
   }
 
   private checkIdleQueueStuck(s: HealthSnapshot, actions: RecoveryAction[], events: RecoveryEvent[]): void {

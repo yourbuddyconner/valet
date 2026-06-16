@@ -229,6 +229,11 @@ export interface SessionThread {
   id: string;
   sessionId: string;
   opencodeSessionId?: string;
+  originType?: string;
+  originChannelType?: string;
+  originChannelId?: string;
+  originTriggerId?: string;
+  originTriggerType?: string;
   title?: string;
   summaryAdditions: number;
   summaryDeletions: number;

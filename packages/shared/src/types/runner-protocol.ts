@@ -301,7 +301,7 @@ export type RunnerToDOMessage =
     }
   | { type: 'git-state'; branch?: string; baseBranch?: string; commitCount?: number }
   | { type: 'models'; models: AvailableModels }
-  | { type: 'aborted'; messageId?: string }
+  | { type: 'aborted'; messageId?: string; channelType?: string; channelId?: string }
   | { type: 'wait-subscription'; reason?: string; sessionIds?: string[]; notifyOn?: string; statuses?: string[] }
   | { type: 'reverted'; messageIds: string[] }
   | { type: 'diff'; requestId: string; data: { files: DiffFile[] } }
@@ -463,6 +463,12 @@ export type RunnerToDOMessage =
       toolId: string;
       params: Record<string, unknown>;
       summary?: string;
+      /** OpenCode session ID the calling agent is running in. Lets the DO
+       *  resolve the originating channel deterministically — without it the
+       *  DO has to guess via "most recent processing row" and routes
+       *  approvals to the wrong channel under cross-thread concurrent
+       *  dispatch (TKAI-65). */
+      opencodeSessionId?: string;
     }
   | {
       type: 'skill-api';

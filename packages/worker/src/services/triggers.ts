@@ -38,6 +38,8 @@ export type ManualRunResult =
 export async function runWorkflowManually(
   env: Env,
   params: ManualRunParams,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  _workerOrigin?: string,
 ): Promise<ManualRunResult> {
   const appDb = getDb(env.DB);
   const { userId, workflowId, variables = {} } = params;
@@ -147,6 +149,12 @@ export async function runTrigger(
     clientRequestId?: string;
     variables?: Record<string, unknown>;
   },
+  // workerOrigin survives from the runner-driven dispatch path so the
+  // existing trigger-run callers and tests stay aligned. Workflow
+  // dispatch now goes through env.WORKFLOW_INTERPRETER.create and
+  // doesn't need the worker URL; we accept the param without using it.
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  _workerOrigin?: string,
 ): Promise<TriggerRunResult> {
   const appDb = getDb(env.DB);
   const row = await getTriggerForRun(env.DB, userId, triggerId);
@@ -179,6 +187,11 @@ export async function runTrigger(
       userId,
       content: `[Today is ${scheduledDate}]\n\n${prompt}`,
       forceNewThread: true,
+      threadOrigin: {
+        originType: 'automation',
+        originTriggerId: triggerId,
+        originTriggerType: config.type,
+      },
     });
 
     if (dispatch.dispatched) {
