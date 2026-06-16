@@ -1,0 +1,20 @@
+# Local OpenTelemetry backend for tracing the Worker during development.
+#
+#   make otel-local        # or: docker compose -f docker-compose.otel.yml up
+#   # then add to packages/worker/.dev.vars:
+#   #   OTEL_EXPORTER_OTLP_ENDPOINT = "http://localhost:4318"
+#   # and run: make dev-worker
+#   # Grafana: http://localhost:3000 (admin/admin) -> Explore -> Tempo
+#
+# grafana/otel-lgtm bundles an OpenTelemetry Collector + Tempo (traces) +
+# Prometheus (metrics) + Loki (logs) + Grafana, preconfigured and wired together.
+# Intended for local dev/test only — not a production backend.
+services:
+  otel-lgtm:
+    image: grafana/otel-lgtm:latest
+    container_name: valet-otel-lgtm
+    ports:
+      - "3000:3000" # Grafana UI
+      - "4317:4317" # OTLP/gRPC
+      - "4318:4318" # OTLP/HTTP — point the worker here
+    restart: unless-stopped
