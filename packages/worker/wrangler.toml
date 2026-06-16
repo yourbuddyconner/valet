@@ -1,6 +1,9 @@
 name = "${CF_WORKER_NAME}"
 main = "src/index.ts"
-compatibility_date = "2024-01-01"
+# Bumped from 2024-01-01 to enable nodejs_compat_v2 AsyncLocalStorage, which the
+# OpenTelemetry context manager (@microlabs/otel-cf-workers) uses to propagate trace
+# context across async boundaries. See docs/observability.md.
+compatibility_date = "2024-09-23"
 compatibility_flags = ["nodejs_compat"]
 previews_enabled = false
 
@@ -17,6 +20,10 @@ MODAL_BACKEND_URL = "${MODAL_BACKEND_URL}"
 # FRONTEND_URL - set via .dev.vars (local) or `wrangler secret put` (production)
 # FRONTEND_PREVIEW_ORIGIN_SUFFIX - project-specific Pages host suffix for PR preview login redirects
 FRONTEND_PREVIEW_ORIGIN_SUFFIX = "${FRONTEND_PREVIEW_ORIGIN_SUFFIX}"
+# OpenTelemetry (optional — tracing is a no-op when OTEL_EXPORTER_OTLP_ENDPOINT is unset):
+#   OTEL_EXPORTER_OTLP_ENDPOINT - OTLP/HTTP base, e.g. http://localhost:4318 (local) — set in .dev.vars
+#   OTEL_EXPORTER_OTLP_HEADERS  - "key=value,key2=value2" auth headers — set via `wrangler secret put` (sensitive)
+#   OTEL_TRACES_SAMPLER_RATIO   - head sample ratio in [0,1], default 1 when enabled
 
 # Define replacements for libraries that reference Node globals
 [define]

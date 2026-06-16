@@ -81,11 +81,20 @@ import {
 import { syncPluginsOnce } from './services/plugin-sync.js';
 import { matchesCronField, getZonedDateParts, cronMatchesNow, findMissedCronTicks } from './lib/cron.js';
 import { resolveAuthRedirectOrigin } from './lib/auth-redirect-origin.js';
+import { instrument, instrumentDO } from '@microlabs/otel-cf-workers';
+import { traceConfigFor, setSessionAttributes } from './lib/tracing/index.js';
+import { log } from './lib/log.js';
+import { SessionAgentDO as SessionAgentDOClass } from './durable-objects/session-agent.js';
+import { EventBusDO as EventBusDOClass } from './durable-objects/event-bus.js';
+import { WorkflowExecutorDO as WorkflowExecutorDOClass } from './durable-objects/workflow-executor.js';
 
-// Durable Object exports
-export { SessionAgentDO } from './durable-objects/session-agent.js';
-export { EventBusDO } from './durable-objects/event-bus.js';
-export { WorkflowExecutorDO } from './durable-objects/workflow-executor.js';
+// OpenTelemetry instrumentation. Wrapping the handler + each DO auto-creates spans
+// for fetch, alarms, storage, and outbound calls, with W3C context flowing
+// worker→DO→DO. A no-op (sampled out, zero network) until OTEL_EXPORTER_OTLP_ENDPOINT
+// is set — see lib/tracing/config.ts.
+export const SessionAgentDO = instrumentDO(SessionAgentDOClass, traceConfigFor({ name: 'valet-session-do' }));
+export const EventBusDO = instrumentDO(EventBusDOClass, traceConfigFor({ name: 'valet-eventbus-do' }));
+export const WorkflowExecutorDO = instrumentDO(WorkflowExecutorDOClass, traceConfigFor({ name: 'valet-workflow-do' }));
 
 const app = new Hono<{ Bindings: Env; Variables: Variables }>();
 
@@ -133,7 +142,7 @@ app.use('*', async (c, next) => {
   if (!skip) {
     c.executionCtx.waitUntil(
       syncPluginsOnce(c.env.DB).catch((err) => {
-        console.error('[plugin-sync] Sync failed, continuing:', err);
+        log.error('plugin-sync failed, continuing', { error: String(err) });
       }),
     );
   }
@@ -173,6 +182,12 @@ app.route('/github', githubAppSetupCallbackRouter);
 
 // Protected API routes
 app.use('/api/*', authMiddleware);
+// Tag the request's trace span with the authenticated principal so traces and logs
+// are queryable by user. A SPAN attribute (not resource) — the isolate is multi-tenant.
+app.use('/api/*', async (c, next) => {
+  setSessionAttributes({ userId: c.get('user')?.id });
+  return next();
+});
 app.route('/api/auth', authRouter);
 app.route('/api/api-keys', apiKeysRouter);
 app.route('/api/sessions', sessionsRouter);
@@ -222,7 +237,7 @@ app.notFound((c) => {
 
 // Scheduled handler for cron triggers
 const scheduled: ExportedHandlerScheduledHandler<Env> = async (event, env, ctx) => {
-  console.log('Running scheduled handler:', event.cron);
+  log.info('scheduled handler running', { cron: event.cron });
 
   try {
     await reconcileWorkflowExecutions(env);
@@ -1149,7 +1164,10 @@ async function reconcileOrchestrators(env: Env): Promise<void> {
   }
 }
 
-export default {
-  fetch: app.fetch,
-  scheduled,
-};
+export default instrument(
+  {
+    fetch: app.fetch,
+    scheduled,
+  },
+  traceConfigFor({ name: 'valet-worker' }),
+);
