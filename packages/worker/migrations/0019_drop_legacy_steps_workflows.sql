@@ -10,10 +10,17 @@
 -- Audit before delete: workflow_executions rows already have
 -- workflow_id ON DELETE SET NULL, so their history survives with a
 -- nulled workflow link.
+--
+-- Malformed-JSON guard: json_extract on an invalid `data` column would
+-- raise a parse error and abort the whole migration. Treat any row
+-- whose `data` doesn't parse as JSON the same as a non-dag/v1 row and
+-- delete it — those workflows can't be executed by the new runtime
+-- (and couldn't be executed by the old one either).
 
 DELETE FROM workflows
 WHERE data IS NULL
    OR data = ''
+   OR json_valid(data) = 0
    OR json_extract(data, '$.version') IS NULL
    OR json_extract(data, '$.version') != 'dag/v1';
 

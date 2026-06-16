@@ -10,7 +10,10 @@ import { WEBHOOK_RATE_LIMIT_DEFAULT, bumpWebhookRateCount } from '../lib/db.js';
 // Row shape shared by the id-based lookup (getWebhookTriggerById, used
 // by /api/triggers/:id/webhook with token auth) and the path-based
 // lookup (lookupWebhookTrigger, used by /webhooks/:path with optional
-// config.secret). The path-based lookup omits webhook_token.
+// config.secret). Both lookups now include webhook_token so the path
+// handler can refuse tokenized triggers — once a token is minted on a
+// row, /webhooks/:path is closed for it and the token URL is the only
+// supported entry.
 export interface TriggerWebhookRow {
   id: string;
   workflow_id: string;
@@ -120,6 +123,20 @@ export async function handleGenericWebhook(
   const trigger = await db.lookupWebhookTrigger(env.DB, webhookPath);
 
   if (!trigger) {
+    return {
+      result: { received: true, message: 'Webhook not found' } as any,
+      statusCode: 404,
+    };
+  }
+
+  // Tokenized triggers refuse the path-based route entirely. The token
+  // URL (POST /api/triggers/:id/webhook with X-Valet-Trigger-Token) is
+  // the only supported entry once a token has been minted on the row.
+  // Without this gate, an operator who configured "token-protected
+  // webhook" with no legacy secret would still accept unauthenticated
+  // hits at /webhooks/<path> — an auth bypass. Returning 404 (rather
+  // than 401) refuses without revealing which trigger the path maps to.
+  if (trigger.webhook_token) {
     return {
       result: { received: true, message: 'Webhook not found' } as any,
       statusCode: 404,

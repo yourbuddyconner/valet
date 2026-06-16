@@ -173,7 +173,7 @@ function describeTrigger(trigger: Trigger): string {
   if (trigger.type === 'manual') return 'Manual run only';
   if (trigger.type === 'webhook' && isWebhookConfig(trigger.config)) {
     const method = trigger.config.method || 'POST';
-    return `${method} /webhooks/${trigger.config.path}`;
+    return `${method} /api/triggers/${trigger.id}/webhook`;
   }
   if (trigger.type === 'schedule' && isScheduleConfig(trigger.config)) {
     const target = trigger.config.target || 'workflow';

@@ -5,7 +5,10 @@ import { sessionGitState } from '../schema/index.js';
 
 // ─── Data Access ─────────────────────────────────────────────────────────────
 
-// lookupWebhookTrigger uses json_extract + JOIN — stays as raw SQL
+// lookupWebhookTrigger uses json_extract + JOIN — stays as raw SQL.
+// webhook_token is included so the path-based handler can refuse
+// requests against tokenized triggers (the token route is the only
+// supported surface for triggers that have a token minted).
 export async function lookupWebhookTrigger(db: D1Database, webhookPath: string) {
   return db.prepare(`
     SELECT t.*, w.id as workflow_id, w.name as workflow_name, w.user_id, w.version, w.data
@@ -23,6 +26,7 @@ export async function lookupWebhookTrigger(db: D1Database, webhookPath: string) 
     data: string;
     config: string;
     variable_mapping: string | null;
+    webhook_token: string | null;
   }>();
 }
 
