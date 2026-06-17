@@ -78,6 +78,8 @@ export interface ExecuteActionResult {
   durationMs: number;
 }
 
+const ALWAYS_ENABLED_SERVICES = new Set(['workflows']);
+
 // ─── Zod Schema Helpers ─────────────────────────────────────────────────────
 
 /** Map a Zod type to a human-readable type string. */
@@ -171,6 +173,12 @@ export async function listTools(
   for (const svc of autoServices) {
     if (!serviceSourceMap.has(svc)) {
       serviceSourceMap.set(svc, [{ id: `auto:${svc}`, scope: 'user' as const, userId }]);
+    }
+  }
+
+  for (const svc of ALWAYS_ENABLED_SERVICES) {
+    if (!serviceSourceMap.has(svc)) {
+      serviceSourceMap.set(svc, [{ id: `builtin:${svc}`, scope: 'user' as const, userId }]);
     }
   }
 
@@ -371,7 +379,7 @@ export async function resolveActionPolicy(
   );
   const customConnectorDoesNotNeedIntegration = !!customConnector && !customConnectorRequiresUserCredential(customConnector);
 
-  if (!hasActiveIntegration && !customConnectorDoesNotNeedIntegration) {
+  if (!hasActiveIntegration && !customConnectorDoesNotNeedIntegration && !ALWAYS_ENABLED_SERVICES.has(service)) {
     const autoServices = await getAutoEnabledServices(envDB, orgId);
     if (!autoServices.includes(service)) {
       throw new Error(`Integration "${service}" is not active. Configure it in Settings > Integrations.`);
@@ -514,7 +522,17 @@ export async function executeAction(
   const toolExecStart = Date.now();
   let actionResult;
   try {
-    actionResult = await actionSource.execute(actionId, params, { credentials, userId, orgId, attribution, callerIdentity, analytics: actionAnalytics, guardConfig: opts.guardConfig });
+    actionResult = await actionSource.execute(actionId, params, {
+      credentials,
+      userId,
+      orgId,
+      attribution,
+      callerIdentity,
+      analytics: actionAnalytics,
+      guardConfig: opts.guardConfig,
+      appDb,
+      env,
+    } as any);
 
     // Auth failure retry — force-refresh on 401 and retry once (simple token-expired retry)
     // Note: 403 is excluded — GitHub 403s are permission problems (missing App permissions),
@@ -537,7 +555,9 @@ export async function executeAction(
         actionResult = await actionSource.execute(actionId, params, {
           credentials: refreshedCredentials, userId, attribution, callerIdentity, analytics: actionAnalytics, guardConfig: opts.guardConfig,
           orgId,
-        });
+          appDb,
+          env,
+        } as any);
       }
     }
   } catch (err) {

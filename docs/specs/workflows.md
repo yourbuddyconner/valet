@@ -21,6 +21,31 @@ This spec covers:
 - Does NOT cover session lifecycle or sandbox management (see [sessions.md](sessions.md)).
 - Does NOT cover the orchestrator's relationship to workflows (see [orchestrator.md](orchestrator.md)).
 
+## Agent Tool Surface
+
+Workflow management is available to sessions through the same remote worker tool path used for integrations:
+
+```text
+list_tools service=workflows
+call_tool workflows:workflows.<action_id> params={...} summary="..."
+```
+
+These are worker-backed actions, not sandbox/OpenCode-native tools. The worker registers `workflows` as an always-enabled no-auth integration package because authorization is the current Valet user plus workflow ownership checks, not a third-party credential row.
+
+Initial actions:
+
+| Action | Risk | Behavior |
+|--------|------|----------|
+| `workflows.list` | low | List current user's workflows with draft/published metadata |
+| `workflows.get` | low | Fetch metadata, published definition, and current draft |
+| `workflows.create` | medium | Create a new user-authored workflow draft |
+| `workflows.save_draft` | medium | Save a mutable `dag/v1` draft and optional UI layout |
+| `workflows.validate` | low | Validate a saved draft or supplied definition |
+| `workflows.publish` | high | Publish the current draft into `workflow_definition_versions` |
+| `workflows.test_run` | medium | Execute the draft with sample trigger data and optional input overrides |
+
+All actions still flow through action policy resolution and invocation audit rows. `publish` is high-risk so org policy can require human approval before a workflow becomes live.
+
 ## Data Model
 
 ### `workflows` table

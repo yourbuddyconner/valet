@@ -1,6 +1,6 @@
 ---
 name: workflows
-description: Guidance for understanding Valet workflows. Workflows are managed through the workflow editor in the web UI; agents do not currently have direct API access from inside a session.
+description: Guidance for understanding Valet workflows, including the worker-backed workflow tools available through list_tools/call_tool.
 ---
 
 # Workflows
@@ -11,10 +11,28 @@ Workflows are a `dag/v1` graph of nodes (`llm`, `tool`, `set`, `if`, `wait`, `ap
 
 - **Web UI** — `/workflows` is the canonical surface: draft editor, validate, publish, version history, executions list, pending-approval resolution.
 - **Worker HTTP API** — `/api/workflows/*`, `/api/triggers/*`, `/api/executions/*` (auth required; called by the web UI and external clients).
+- **Agent remote tools** — `list_tools service=workflows` exposes worker-backed workflow actions through the runner gateway.
 
 ## Inside a session
 
-Sessions running inside the sandbox do not currently have a wired path to the worker's workflow APIs — no worker URL or short-lived token is injected into the sandbox env, and the runner gateway does not proxy these routes. Dedicated OpenCode tools for workflow management are planned; in the meantime, recommend the user use the web UI for any workflow CRUD, publish, run, or approval action.
+Use the remote integration tool surface, not local scripts or OpenCode-native tools:
+
+```text
+list_tools service=workflows
+call_tool workflows:workflows.list params={} summary="List workflows"
+```
+
+Available actions:
+
+- `workflows.list` — list the current user's workflows.
+- `workflows.get` — fetch metadata plus published definition and draft by workflow ID or slug.
+- `workflows.create` — create a new workflow draft.
+- `workflows.save_draft` — save a `dag/v1` draft. Drafts may be incomplete.
+- `workflows.validate` — validate a saved draft or supplied definition.
+- `workflows.publish` — publish the current draft. This is high risk and may require approval.
+- `workflows.test_run` — run the draft with sample trigger data and optional declared inputs.
+
+Prefer the web UI for visual graph editing. Use tools for inspection, small edits, validation, publishing, and test runs when the user asks the agent to operate on workflows directly.
 
 ## Lifecycle (dag/v1)
 
