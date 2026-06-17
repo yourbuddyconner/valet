@@ -17,3 +17,4 @@ export {
   MODEL_IDS,
   type ClassifierConfig,
 } from './classifier.js';
+export { generateReport, type ReportInput } from './report.js';
