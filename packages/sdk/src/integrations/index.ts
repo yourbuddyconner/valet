@@ -27,6 +27,8 @@ export interface ActionDefinition<TParams extends z.ZodType = z.ZodType> {
   params: TParams;
   /** Raw JSON Schema — when present, bypasses Zod serialization in tool discovery. */
   inputSchema?: Record<string, unknown>;
+  /** Raw JSON Schema describing the action result `data` payload. */
+  outputSchema?: Record<string, unknown>;
 }
 
 /** Identity of the caller (e.g. orchestrator persona). */

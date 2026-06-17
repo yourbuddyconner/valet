@@ -1,9 +1,20 @@
 import * as React from 'react';
-import { Link } from '@tanstack/react-router';
-import { useWorkflows, type Workflow } from '@/api/workflows';
+import { Link, useNavigate } from '@tanstack/react-router';
+import { useCreateWorkflow, useWorkflows, type Workflow } from '@/api/workflows';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import { Input } from '@/components/ui/input';
 import { Skeleton } from '@/components/ui/skeleton';
 import { SearchInput } from '@/components/ui/search-input';
+import { toastError, toastSuccess } from '@/hooks/use-toast';
 import { formatRelativeTime } from '@/lib/format';
 
 export function WorkflowList() {
@@ -48,6 +59,7 @@ export function WorkflowList() {
             placeholder="Search workflows..."
           />
         </div>
+        <CreateWorkflowDialog />
       </div>
 
       {workflows.length === 0 ? (
@@ -66,6 +78,110 @@ export function WorkflowList() {
         </ul>
       )}
     </div>
+  );
+}
+
+function CreateWorkflowDialog() {
+  const navigate = useNavigate();
+  const createWorkflow = useCreateWorkflow();
+  const [open, setOpen] = React.useState(false);
+  const [name, setName] = React.useState('');
+  const [description, setDescription] = React.useState('');
+  const [slug, setSlug] = React.useState('');
+
+  function reset() {
+    setName('');
+    setDescription('');
+    setSlug('');
+  }
+
+  function handleSubmit(event: React.FormEvent) {
+    event.preventDefault();
+    const trimmedName = name.trim();
+    if (!trimmedName) return;
+
+    createWorkflow.mutate(
+      {
+        name: trimmedName,
+        ...(description.trim() ? { description: description.trim() } : {}),
+        ...(slug.trim() ? { slug: slug.trim() } : {}),
+      },
+      {
+        onSuccess: (response) => {
+          toastSuccess('Workflow created');
+          reset();
+          setOpen(false);
+          navigate({
+            to: '/workflows/$workflowId',
+            params: { workflowId: response.workflow.id },
+          });
+        },
+        onError: (err) => {
+          toastError(err instanceof Error ? err.message : 'Failed to create workflow');
+        },
+      },
+    );
+  }
+
+  return (
+    <>
+      <Button type="button" onClick={() => setOpen(true)}>
+        New workflow
+      </Button>
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent>
+          <form onSubmit={handleSubmit} className="space-y-4">
+            <DialogHeader>
+              <DialogTitle>Create workflow</DialogTitle>
+              <DialogDescription>
+                Start with a blank dag/v1 canvas and configure nodes visually.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-3">
+              <label className="block space-y-1">
+                <span className="text-xs font-medium text-neutral-700 dark:text-neutral-300">
+                  Name
+                </span>
+                <Input
+                  value={name}
+                  onChange={(event) => setName(event.target.value)}
+                  placeholder="Daily triage"
+                  autoFocus
+                />
+              </label>
+              <label className="block space-y-1">
+                <span className="text-xs font-medium text-neutral-700 dark:text-neutral-300">
+                  Description
+                </span>
+                <Input
+                  value={description}
+                  onChange={(event) => setDescription(event.target.value)}
+                  placeholder="Optional"
+                />
+              </label>
+              <label className="block space-y-1">
+                <span className="text-xs font-medium text-neutral-700 dark:text-neutral-300">
+                  Slug
+                </span>
+                <Input
+                  value={slug}
+                  onChange={(event) => setSlug(event.target.value)}
+                  placeholder="optional-slug"
+                />
+              </label>
+            </div>
+            <DialogFooter>
+              <Button type="button" variant="secondary" onClick={() => setOpen(false)}>
+                Cancel
+              </Button>
+              <Button type="submit" disabled={!name.trim() || createWorkflow.isPending}>
+                {createWorkflow.isPending ? 'Creating...' : 'Create'}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+    </>
   );
 }
 
@@ -122,8 +238,11 @@ function EmptyState() {
         No workflows yet
       </h3>
       <p className="mt-1 text-sm text-pretty text-neutral-500 dark:text-neutral-400">
-        Ask the agent to draft a workflow, or open one and click <em>Publish</em> to make it available to triggers.
+        Create a workflow to open the canvas editor, then publish it when it is ready for triggers.
       </p>
+      <div className="mt-4 flex justify-center">
+        <CreateWorkflowDialog />
+      </div>
     </div>
   );
 }

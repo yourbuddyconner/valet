@@ -636,6 +636,8 @@ async function stepDoTrace(
  */
 export async function dispatchNode(node: WorkflowNode, args: NodeExecutorArgs): Promise<unknown> {
   switch (node.type) {
+    case 'trigger':
+      return args.state.trigger;
     case 'set':
       return executeSet({ ...args, node });
     case 'stop':

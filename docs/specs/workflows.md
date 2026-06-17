@@ -300,6 +300,7 @@ Definitions are objects with `version: 'dag/v1'`, optional `inputs` (typed input
 
 | Type | Behavior |
 |------|----------|
+| `trigger` | Reserved source node for the invocation envelope. It returns `WorkflowTriggerPayload` as its node data and lets downstream nodes reference `{{nodes.trigger.data...}}`, `{{trigger...}}`, and declared `{{inputs...}}` values. |
 | `llm` | LLM completion via the configured provider. NO_RETRY at the runtime level — author-driven retries via `step.do` config. |
 | `tool` | Worker-side integration action through the same pipeline agent tool calls use. Honors action policy (`allow` / `deny` / `require_approval`). |
 | `set` | Computes JSON values from templates and surfaces them to downstream nodes via `state.nodes`. |
@@ -315,7 +316,7 @@ Definitions are objects with `version: 'dag/v1'`, optional `inputs` (typed input
 
 `packages/worker/src/lib/workflow-dag/validator.ts` runs structural (Zod) + semantic checks at publish and execution-create time:
 
-- Per-node duplicate id detection (top-level ids share namespace with foreach body ids — the runtime keys `step.do` cache, action invocations, approval ids, and trace rows on `${nodeId}:i:${iter}` with no parent scoping).
+- Per-node duplicate id detection (top-level ids share namespace with foreach body ids — the runtime keys `step.do` cache, action invocations, approval ids, and trace rows on `${nodeId}:i:${iter}` with no parent scoping). `trigger` is a reserved source-node id in visual-editor-authored workflows.
 - Edge endpoints MUST reference top-level node ids — edges into/out of foreach body ids are rejected because the runtime's wave loop only registers top-level nodes.
 - foreach body type allowlist + alias shadowing + concurrency ceilings.
 - Template parse for every author-supplied template field.
@@ -334,7 +335,7 @@ The runtime entrypoint is `ValetWorkflowInterpreter` in `packages/worker/src/wor
 3. Repeat until no more runnable nodes:
    - `pickRunnable` — every unsettled node whose every incoming edge is satisfied by a settled parent.
    - Run up to `policy.maxConcurrentNodes` nodes via `Promise.allSettled`.
-   - For step-driven types (`wait`, `approval`, `tool`, `foreach`, `session`, `orchestrator`) the executor owns its own `step.do` / `step.sleep` / `step.waitForEvent` primitives. For pure types (`llm`, `set`, `if`, `stop`) the runtime wraps the executor in a single outer `step.do`.
+   - For step-driven types (`wait`, `approval`, `tool`, `foreach`, `session`, `orchestrator`) the executor owns its own `step.do` / `step.sleep` / `step.waitForEvent` primitives. For pure/source types (`trigger`, `llm`, `set`, `if`, `stop`) the runtime wraps the executor in a single outer `step.do`.
    - Each node writes `running` / `waiting_*` / terminal trace rows via `traceWriter.recordTransition`, cached behind `step.do`.
 4. When no nodes remain, mark unreachable children as `skipped` (with the parent's edge-error reason when available), then write the terminal status.
 

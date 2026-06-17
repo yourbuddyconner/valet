@@ -47,6 +47,11 @@ export const llmNodeSchema = z.object({
   maxOutputTokens: z.number().int().positive().optional(),
 });
 
+export const triggerNodeSchema = z.object({
+  id: idSchema,
+  type: z.literal('trigger'),
+});
+
 const ifConditionSchema = z.object({
   left: z.string().min(1),
   dataType: z.enum(['string', 'number', 'date', 'boolean', 'array', 'object']),
@@ -182,6 +187,7 @@ export const foreachNodeSchema = z.object({
 // Top-level node union. z.union (not discriminatedUnion) because
 // sessionNodeSchema is itself a DU on `mode`; nested DUs aren't allowed.
 export const workflowNodeSchema = z.union([
+  triggerNodeSchema,
   llmNodeSchema,
   ifNodeSchema,
   foreachNodeSchema,

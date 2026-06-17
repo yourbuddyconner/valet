@@ -62,6 +62,39 @@ function makeParams(definition: WorkflowDefinition, overrides: Partial<WorkflowR
 // ─── Tests ──────────────────────────────────────────────────────────────────
 
 describe('runDag — set → stop end-to-end', () => {
+  it('runs a trigger source node before downstream workflow steps', async () => {
+    const def: WorkflowDefinition = {
+      version: 'dag/v1',
+      nodes: [
+        { id: 'trigger', type: 'trigger' },
+        { id: 'build', type: 'set', values: { greeting: 'hello {{nodes.trigger.data.data.email}}' } },
+      ],
+      edges: [{ from: 'trigger', to: 'build' }],
+    };
+
+    const { writer, rows } = makeTraceWriter();
+    const result = await runDag(stubEnv, makeParams(def), makeStep(), writer);
+
+    expect(result.status).toBe('completed');
+    expect(result.state.nodes.trigger).toMatchObject({
+      status: 'completed',
+      data: {
+        type: 'manual',
+        data: { email: 'a@b.com' },
+      },
+    });
+    expect(result.state.nodes.build).toMatchObject({
+      status: 'completed',
+      data: { greeting: 'hello a@b.com' },
+    });
+    expect(rows.map((row) => ({ nodeId: row.nodeId, status: row.status }))).toEqual([
+      { nodeId: 'trigger', status: 'running' },
+      { nodeId: 'trigger', status: 'completed' },
+      { nodeId: 'build', status: 'running' },
+      { nodeId: 'build', status: 'completed' },
+    ]);
+  });
+
   it('runs a single set node and stops successfully', async () => {
     const def: WorkflowDefinition = {
       version: 'dag/v1',

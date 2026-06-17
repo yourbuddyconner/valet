@@ -1,5 +1,5 @@
+import { useEffect, useState } from 'react';
 import { createFileRoute, Link } from '@tanstack/react-router';
-import * as React from 'react';
 import { PageContainer, PageHeader } from '@/components/layout/page-container';
 import {
   useWorkflow,
@@ -13,6 +13,8 @@ import {
 } from '@/api/workflows';
 import { useWorkflowExecutions } from '@/api/executions';
 import { ExecutionApprovalPanel } from '@/components/workflows/execution-approval-panel';
+import { VisualWorkflowEditor } from '@/components/workflows/visual-workflow-editor';
+import type { WorkflowDefinition } from '@valet/shared';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -37,22 +39,11 @@ function WorkflowDetailPage() {
   const restoreVersion = useRestoreWorkflowVersion();
 
   const workflow = data?.workflow;
+  const [editorDefinition, setEditorDefinition] = useState<WorkflowDefinition | null>(null);
 
-  // Local textarea state, seeded from the server draft when it loads/changes.
-  const [draftText, setDraftText] = React.useState<string>('');
-  const [draftError, setDraftError] = React.useState<string | null>(null);
-  const lastSeenDraftRef = React.useRef<string | null>(null);
-
-  React.useEffect(() => {
-    if (!draftData) return;
-    const serialized = draftData.draft
-      ? JSON.stringify(draftData.draft, null, 2)
-      : '';
-    if (lastSeenDraftRef.current !== serialized) {
-      lastSeenDraftRef.current = serialized;
-      setDraftText(serialized);
-    }
-  }, [draftData]);
+  useEffect(() => {
+    setEditorDefinition(draftData?.draft ?? null);
+  }, [draftData?.draft]);
 
   if (isLoading) {
     return (
@@ -76,17 +67,9 @@ function WorkflowDetailPage() {
     );
   }
 
-  function handleSave() {
-    setDraftError(null);
-    let parsed: Record<string, unknown>;
-    try {
-      parsed = JSON.parse(draftText || '{}') as Record<string, unknown>;
-    } catch (err) {
-      setDraftError(err instanceof Error ? err.message : 'invalid JSON');
-      return;
-    }
+  function handleSave(draft: WorkflowDefinition) {
     saveDraft.mutate(
-      { workflowId, draft: parsed },
+      { workflowId, draft: draft as unknown as Record<string, unknown> },
       {
         onSuccess: () => toastSuccess('Draft saved'),
         onError: (err) =>
@@ -95,7 +78,22 @@ function WorkflowDetailPage() {
     );
   }
 
-  function handlePublish() {
+  async function saveCurrentEditorDraft() {
+    if (!editorDefinition) return;
+    await saveDraft.mutateAsync({
+      workflowId,
+      draft: editorDefinition as unknown as Record<string, unknown>,
+    });
+  }
+
+  async function handlePublish() {
+    try {
+      await saveCurrentEditorDraft();
+    } catch (err) {
+      toastError(err instanceof Error ? err.message : 'Failed to save draft');
+      return;
+    }
+
     // Validate first so the user sees a structured error list before
     // we attempt the publish (which itself runs the same validators
     // server-side, but the toast UX is cleaner with the pre-check).
@@ -123,15 +121,20 @@ function WorkflowDetailPage() {
     );
   }
 
-  function handleTestRun() {
-    testRun.mutate(
-      { workflowId, inputs: {} },
-      {
-        onSuccess: (res) => toastSuccess(`Test run started (${res.executionId})`),
-        onError: (err) =>
-          toastError(err instanceof Error ? err.message : 'Failed to start test run'),
-      },
-    );
+  async function handleTestRun() {
+    try {
+      await saveCurrentEditorDraft();
+      testRun.mutate(
+        { workflowId, inputs: {} },
+        {
+          onSuccess: (res) => toastSuccess(`Test run started (${res.executionId})`),
+          onError: (err) =>
+            toastError(err instanceof Error ? err.message : 'Failed to start test run'),
+        },
+      );
+    } catch (err) {
+      toastError(err instanceof Error ? err.message : 'Failed to save draft');
+    }
   }
 
   function handleRestore(versionId: string) {
@@ -158,12 +161,12 @@ function WorkflowDetailPage() {
             <Button
               variant="secondary"
               onClick={handleTestRun}
-              disabled={testRun.isPending}
+              disabled={testRun.isPending || saveDraft.isPending}
             >
-              {testRun.isPending ? 'Starting…' : 'Test run'}
+              {testRun.isPending || saveDraft.isPending ? 'Starting...' : 'Test run'}
             </Button>
-            <Button onClick={handlePublish} disabled={publish.isPending}>
-              {publish.isPending ? 'Publishing…' : 'Publish'}
+            <Button onClick={handlePublish} disabled={publish.isPending || saveDraft.isPending}>
+              {publish.isPending || saveDraft.isPending ? 'Publishing...' : 'Publish'}
             </Button>
           </>
         }
@@ -181,27 +184,16 @@ function WorkflowDetailPage() {
               <Badge variant="secondary">Unpublished</Badge>
             )}
           </div>
-          <Button
-            variant="secondary"
-            onClick={handleSave}
-            disabled={saveDraft.isPending}
-          >
-            {saveDraft.isPending ? 'Saving…' : 'Save draft'}
-          </Button>
         </div>
         {draftLoading ? (
           <Skeleton className="h-64 w-full" />
         ) : (
-          <textarea
-            value={draftText}
-            onChange={(e) => setDraftText(e.target.value)}
-            spellCheck={false}
-            className="block h-96 w-full rounded-md border border-neutral-200 bg-white p-3 font-mono text-xs text-neutral-900 focus:border-neutral-400 focus:outline-none dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100"
-            placeholder="dag/v1 workflow JSON"
+          <VisualWorkflowEditor
+            definition={draftData?.draft ?? null}
+            isSaving={saveDraft.isPending}
+            onDefinitionChange={setEditorDefinition}
+            onSave={handleSave}
           />
-        )}
-        {draftError && (
-          <p className="text-xs text-red-600 dark:text-red-400">{draftError}</p>
         )}
       </section>
 

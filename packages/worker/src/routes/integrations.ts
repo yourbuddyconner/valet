@@ -315,6 +315,8 @@ integrationsRouter.get('/actions', async (c) => {
     name: string;
     description: string;
     riskLevel: string;
+    inputSchema?: Record<string, unknown>;
+    outputSchema?: Record<string, unknown>;
   }> = [];
 
   // Track which service:actionId combos we've already added from static sources
@@ -335,6 +337,8 @@ integrationsRouter.get('/actions', async (c) => {
         name: a.name,
         description: a.description,
         riskLevel: a.riskLevel,
+        ...(a.inputSchema ? { inputSchema: a.inputSchema } : {}),
+        ...(a.outputSchema ? { outputSchema: a.outputSchema } : {}),
       });
     }
   }

@@ -1,7 +1,8 @@
-import { NotFoundError, ValidationError } from '@valet/shared';
+import { NotFoundError, ValidationError, type WorkflowDefinition } from '@valet/shared';
 import type { Env } from '../env.js';
 import type { AppDb } from '../lib/drizzle.js';
 import { getDb } from '../lib/drizzle.js';
+import { workflows as workflowsTable } from '../lib/schema/workflows.js';
 import { validateDefinition } from '../lib/workflow-dag/validator.js';
 import {
   upsertWorkflow,
@@ -174,6 +175,7 @@ interface WorkflowResponse {
   tags: unknown[];
   createdAt: unknown;
   updatedAt: unknown;
+  publishedVersionId: unknown;
 }
 
 function formatWorkflowRow(row: Record<string, unknown>): WorkflowResponse {
@@ -188,6 +190,65 @@ function formatWorkflowRow(row: Record<string, unknown>): WorkflowResponse {
     tags: row.tags ? JSON.parse(row.tags as string) : [],
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+    publishedVersionId: row.published_version_id ?? null,
+  };
+}
+
+function createBlankDefinition(): WorkflowDefinition {
+  return {
+    version: 'dag/v1',
+    nodes: [{ id: 'start', type: 'set', values: {} }],
+    edges: [],
+    ui: { nodes: { start: { position: { x: 0, y: 0 } } } },
+  };
+}
+
+export interface CreateWorkflowParams {
+  name: string;
+  description?: string | null;
+  slug?: string | null;
+}
+
+export async function createWorkflow(
+  database: AppDb,
+  userId: string,
+  params: CreateWorkflowParams,
+): Promise<{ workflow: WorkflowResponse }> {
+  const now = new Date().toISOString();
+  const id = crypto.randomUUID();
+  const definition = createBlankDefinition();
+  const serializedDefinition = JSON.stringify(definition);
+
+  await database.insert(workflowsTable).values({
+    id,
+    userId,
+    slug: params.slug || null,
+    name: params.name,
+    description: params.description || null,
+    version: '1.0.0',
+    data: serializedDefinition,
+    draftDefinition: serializedDefinition,
+    publishedVersionId: null,
+    enabled: true,
+    tags: JSON.stringify([]),
+    createdAt: now,
+    updatedAt: now,
+  });
+
+  return {
+    workflow: {
+      id,
+      slug: params.slug || null,
+      name: params.name,
+      description: params.description || null,
+      version: '1.0.0',
+      data: definition,
+      enabled: true,
+      tags: [],
+      createdAt: now,
+      updatedAt: now,
+      publishedVersionId: null,
+    },
   };
 }
 

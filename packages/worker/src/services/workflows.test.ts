@@ -2,7 +2,7 @@ import { describe, expect, it, beforeEach } from 'vitest';
 import { ValidationError } from '@valet/shared';
 import { createTestDb } from '../test-utils/db.js';
 import { users, workflows } from '../lib/schema/index.js';
-import { syncWorkflow, syncAllWorkflows } from './workflows.js';
+import { createWorkflow, syncWorkflow, syncAllWorkflows } from './workflows.js';
 import { isWorkflowPublished } from '../lib/db/workflows.js';
 import { saveDraft, publishDraft } from './workflow-versions.js';
 import type { WorkflowDefinition } from '@valet/shared';
@@ -81,5 +81,37 @@ describe('workflows service — post-publish write guards', () => {
     expect(await isWorkflowPublished(db as any, WORKFLOW_ID)).toBe(true);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     expect(await isWorkflowPublished(db as any, 'missing')).toBe(false);
+  });
+});
+
+describe('workflows service — createWorkflow', () => {
+  let db: ReturnType<typeof createTestDb>['db'];
+
+  beforeEach(() => {
+    ({ db } = createTestDb());
+    db.insert(users).values({ id: USER_ID, email: 'wf@e.io' }).run();
+  });
+
+  it('creates an unpublished workflow with a dag/v1 draft', async () => {
+    const result = await createWorkflow(db as any, USER_ID, {
+      name: 'Daily triage',
+      description: 'Sort incoming requests',
+      slug: 'daily-triage',
+    });
+
+    expect(result.workflow.name).toBe('Daily triage');
+    expect(result.workflow.slug).toBe('daily-triage');
+    expect(result.workflow.publishedVersionId).toBeNull();
+
+    const row = db.select().from(workflows).all().find((wf) => wf.id === result.workflow.id);
+    const data = JSON.parse(row!.data);
+    const draft = JSON.parse(row!.draftDefinition!);
+    expect(data).toEqual({
+      version: 'dag/v1',
+      nodes: [{ id: 'start', type: 'set', values: {} }],
+      edges: [],
+      ui: { nodes: { start: { position: { x: 0, y: 0 } } } },
+    });
+    expect(draft).toEqual(data);
   });
 });

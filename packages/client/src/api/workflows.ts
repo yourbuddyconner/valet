@@ -38,6 +38,12 @@ export interface GetWorkflowResponse {
   workflow: Workflow;
 }
 
+export interface CreateWorkflowRequest {
+  name: string;
+  description?: string | null;
+  slug?: string | null;
+}
+
 export interface UpdateWorkflowRequest {
   name?: string;
   description?: string | null;
@@ -139,6 +145,19 @@ export function useWorkflow(workflowId: string) {
     queryKey: workflowKeys.detail(workflowId),
     queryFn: () => api.get<GetWorkflowResponse>(`/workflows/${workflowId}`),
     enabled: !!workflowId,
+  });
+}
+
+export function useCreateWorkflow() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (data: CreateWorkflowRequest) =>
+      api.post<GetWorkflowResponse>('/workflows', data),
+    onSuccess: (response) => {
+      queryClient.invalidateQueries({ queryKey: workflowKeys.lists() });
+      queryClient.setQueryData(workflowKeys.detail(response.workflow.id), response);
+    },
   });
 }
 

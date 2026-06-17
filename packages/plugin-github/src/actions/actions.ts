@@ -3,6 +3,95 @@ import type { ActionDefinition, ActionSource, ActionContext, ActionResult } from
 import { Octokit } from 'octokit';
 import { parseJobLog } from './parse-job-log.js';
 
+const githubIssueSummarySchema = {
+  type: 'object',
+  properties: {
+    number: { type: 'number' },
+    title: { type: 'string' },
+    state: { type: 'string', enum: ['open', 'closed'] },
+    user: { type: ['string', 'null'] },
+    url: { type: 'string' },
+    labels: { type: 'array', items: { type: ['string', 'null'] } },
+    assignees: { type: 'array', items: { type: 'string' } },
+    created_at: { type: 'string' },
+    updated_at: { type: 'string' },
+  },
+} satisfies Record<string, unknown>;
+
+const githubPullRequestSummarySchema = {
+  type: 'object',
+  properties: {
+    number: { type: 'number' },
+    title: { type: 'string' },
+    state: { type: 'string', enum: ['open', 'closed'] },
+    user: { type: ['string', 'null'] },
+    url: { type: 'string' },
+    draft: { type: 'boolean' },
+    created_at: { type: 'string' },
+    updated_at: { type: 'string' },
+    head: { type: ['string', 'null'] },
+    base: { type: ['string', 'null'] },
+  },
+} satisfies Record<string, unknown>;
+
+const githubRepositorySummarySchema = {
+  type: 'object',
+  properties: {
+    id: { type: 'number' },
+    name: { type: 'string' },
+    full_name: { type: 'string' },
+    private: { type: 'boolean' },
+    html_url: { type: 'string' },
+    description: { type: ['string', 'null'] },
+    default_branch: { type: 'string' },
+  },
+} satisfies Record<string, unknown>;
+
+const githubCommitSummarySchema = {
+  type: 'object',
+  properties: {
+    sha: { type: 'string' },
+    message: { type: ['string', 'null'] },
+    author: { type: ['string', 'null'] },
+    date: { type: ['string', 'null'] },
+    url: { type: 'string' },
+  },
+} satisfies Record<string, unknown>;
+
+const githubSearchCodeItemSchema = {
+  type: 'object',
+  properties: {
+    name: { type: 'string' },
+    path: { type: 'string' },
+    repo: { type: ['string', 'null'] },
+    url: { type: 'string' },
+  },
+} satisfies Record<string, unknown>;
+
+const githubWorkflowRunSummarySchema = {
+  type: 'object',
+  properties: {
+    id: { type: 'number' },
+    name: { type: ['string', 'null'] },
+    status: { type: ['string', 'null'] },
+    conclusion: { type: ['string', 'null'] },
+    branch: { type: ['string', 'null'] },
+    event: { type: 'string' },
+    url: { type: 'string' },
+    created_at: { type: 'string' },
+  },
+} satisfies Record<string, unknown>;
+
+const githubWorkflowSummarySchema = {
+  type: 'object',
+  properties: {
+    id: { type: 'number' },
+    name: { type: 'string' },
+    path: { type: 'string' },
+    state: { type: 'string' },
+  },
+} satisfies Record<string, unknown>;
+
 // ─── Octokit + Attribution Helpers ──────────────────────────────────────────
 
 function getOctokit(ctx: ActionContext): Octokit {
@@ -51,6 +140,10 @@ const listRepos: ActionDefinition = {
     perPage: z.number().int().min(1).max(100).optional().describe('Results per page'),
     page: z.number().int().min(1).optional().describe('Page number'),
   }),
+  outputSchema: {
+    type: 'array',
+    items: githubRepositorySummarySchema,
+  },
 };
 
 const getIssue: ActionDefinition = {
@@ -114,6 +207,10 @@ const listPullRequests: ActionDefinition = {
     state: z.enum(['open', 'closed', 'all']).optional().describe('PR state filter (default: open)'),
     limit: z.number().int().min(1).max(100).optional().describe('Max results (default: 30, max 100)'),
   }),
+  outputSchema: {
+    type: 'array',
+    items: githubPullRequestSummarySchema,
+  },
 };
 
 const inspectPullRequest: ActionDefinition = {
@@ -176,6 +273,10 @@ const listIssues: ActionDefinition = {
     direction: z.enum(['asc', 'desc']).optional().describe('Sort direction'),
     limit: z.number().int().min(1).max(100).optional().describe('Max results (default: 30)'),
   }),
+  outputSchema: {
+    type: 'array',
+    items: githubIssueSummarySchema,
+  },
 };
 
 const updateIssue: ActionDefinition = {
@@ -264,6 +365,10 @@ const listCommits: ActionDefinition = {
     author: z.string().optional().describe('GitHub username or email to filter by'),
     limit: z.number().int().min(1).max(100).optional().describe('Max results (default: 30)'),
   }),
+  outputSchema: {
+    type: 'array',
+    items: githubCommitSummarySchema,
+  },
 };
 
 const searchCode: ActionDefinition = {
@@ -275,6 +380,13 @@ const searchCode: ActionDefinition = {
     q: z.string().describe('Search query (supports GitHub code search qualifiers like "repo:", "language:", "path:")'),
     limit: z.number().int().min(1).max(100).optional().describe('Max results (default: 30)'),
   }),
+  outputSchema: {
+    type: 'object',
+    properties: {
+      total_count: { type: 'number' },
+      items: { type: 'array', items: githubSearchCodeItemSchema },
+    },
+  },
 };
 
 const searchIssues: ActionDefinition = {
@@ -288,6 +400,13 @@ const searchIssues: ActionDefinition = {
     order: z.enum(['asc', 'desc']).optional().describe('Sort order'),
     limit: z.number().int().min(1).max(100).optional().describe('Max results (default: 30)'),
   }),
+  outputSchema: {
+    type: 'object',
+    properties: {
+      total_count: { type: 'number' },
+      items: { type: 'array', items: githubIssueSummarySchema },
+    },
+  },
 };
 
 const createRelease: ActionDefinition = {
@@ -334,6 +453,13 @@ const listWorkflowRuns: ActionDefinition = {
     event: z.string().optional().describe('Filter by event type (e.g. "push", "pull_request")'),
     limit: z.number().int().min(1).max(100).optional().describe('Max results (default: 30)'),
   }),
+  outputSchema: {
+    type: 'object',
+    properties: {
+      total_count: { type: 'number' },
+      runs: { type: 'array', items: githubWorkflowRunSummarySchema },
+    },
+  },
 };
 
 const getWorkflowRun: ActionDefinition = {
@@ -398,6 +524,13 @@ const listWorkflows: ActionDefinition = {
     owner: z.string().describe('Repository owner'),
     repo: z.string().describe('Repository name'),
   }),
+  outputSchema: {
+    type: 'object',
+    properties: {
+      total_count: { type: 'number' },
+      workflows: { type: 'array', items: githubWorkflowSummarySchema },
+    },
+  },
 };
 
 const triggerWorkflow: ActionDefinition = {

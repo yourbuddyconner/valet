@@ -37,6 +37,12 @@ const updateWorkflowSchema = z.object({
   data: z.record(z.unknown()).optional(),
 });
 
+const createWorkflowSchema = z.object({
+  name: z.string().min(1).max(120),
+  description: z.string().max(500).nullable().optional(),
+  slug: z.string().min(1).max(120).nullable().optional(),
+});
+
 /**
  * GET /api/workflows
  * List user's workflows
@@ -71,6 +77,18 @@ workflowsRouter.get('/', async (c) => {
   }));
 
   return c.json({ workflows });
+});
+
+/**
+ * POST /api/workflows
+ * Create a user-authored workflow with an initial dag/v1 draft.
+ */
+workflowsRouter.post('/', zValidator('json', createWorkflowSchema), async (c) => {
+  const user = c.get('user');
+  const body = c.req.valid('json');
+
+  const result = await workflowService.createWorkflow(c.get('db'), user.id, body);
+  return c.json(result, 201);
 });
 
 /**

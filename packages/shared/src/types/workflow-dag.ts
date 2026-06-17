@@ -52,6 +52,7 @@ export interface WorkflowEdge {
 // ─── Node discriminated union ───────────────────────────────────────────────
 
 export type WorkflowNode =
+  | TriggerNode
   | LlmNode
   | IfNode
   | ForeachNode
@@ -62,6 +63,11 @@ export type WorkflowNode =
   | ToolNode
   | OrchestratorNode
   | SessionNode;
+
+export interface TriggerNode {
+  id: string;
+  type: 'trigger';
+}
 
 export interface LlmNode {
   id: string;
