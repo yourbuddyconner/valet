@@ -18,3 +18,5 @@ export {
   type ClassifierConfig,
 } from './classifier.js';
 export { generateReport, type ReportInput } from './report.js';
+export { runAudit } from './runner.js';
+export { FileClassificationSink } from './sink.js';
