@@ -81,9 +81,38 @@ import {
 import { syncPluginsOnce } from './services/plugin-sync.js';
 import { matchesCronField, getZonedDateParts, cronMatchesNow, findMissedCronTicks } from './lib/cron.js';
 import { resolveAuthRedirectOrigin } from './lib/auth-redirect-origin.js';
-import { instrument } from '@microlabs/otel-cf-workers';
-import { traceConfigFor, setSessionAttributes } from './lib/tracing.js';
+import { instrument, OTLPExporter } from '@microlabs/otel-cf-workers';
+import type { ResolveConfigFn } from '@microlabs/otel-cf-workers';
+import type { ReadableSpan, SpanExporter } from '@opentelemetry/sdk-trace-base';
+import { buildTraceConfig, redactUrlAttributes, setSessionAttributes } from './lib/tracing.js';
 import { log } from './lib/log.js';
+
+/**
+ * Redacts secrets/PII from span URLs before they leave the worker. The library
+ * configures but never invokes `postProcessor` (rc.52), so we redact at the exporter
+ * — the one hook it does call — by wrapping the OTLP exporter.
+ */
+class RedactingSpanExporter implements SpanExporter {
+  constructor(private readonly inner: SpanExporter) {}
+  export(spans: ReadableSpan[], resultCallback: Parameters<SpanExporter['export']>[1]): void {
+    for (const span of spans) redactUrlAttributes(span.attributes);
+    this.inner.export(spans, resultCallback);
+  }
+  shutdown(): Promise<void> {
+    return this.inner.shutdown();
+  }
+  forceFlush(): Promise<void> {
+    return this.inner.forceFlush?.() ?? Promise.resolve();
+  }
+}
+
+const workerTraceConfig: ResolveConfigFn = (env: Env) => {
+  const config = buildTraceConfig(env, 'valet-worker');
+  if ('exporter' in config && config.exporter && 'url' in config.exporter) {
+    config.exporter = new RedactingSpanExporter(new OTLPExporter(config.exporter));
+  }
+  return config;
+};
 
 // Durable Object exports — intentionally NOT wrapped with the library's
 // instrumentDO(). That wrapper instruments ctx.storage by proxying every storage
@@ -1170,5 +1199,5 @@ export default instrument(
     fetch: app.fetch,
     scheduled,
   },
-  traceConfigFor('valet-worker'),
+  workerTraceConfig,
 );

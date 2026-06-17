@@ -25,6 +25,10 @@ call**, so DO calls stay correlated even though the DOs run uninstrumented. On t
   `{ span.valet.user.id = "..." }`.
 - **Structured, trace-aware logging** (`lib/log.ts`): leveled JSON lines stamped with
   the active `trace_id` / `span_id`, so logs pivot to the trace that produced them.
+- **Query strings are stripped from span URLs at the exporter** (`RedactingSpanExporter`
+  in `index.ts`), so OAuth codes / tokens in URLs (e.g. `?code=...`) are never exported.
+  This is source-side defense-in-depth; the Collector gateway (below) is still the place
+  for full redaction.
 
 Tracing is a **no-op when `OTEL_EXPORTER_OTLP_ENDPOINT` is unset** — the head sampler
 drops every span, so nothing is recorded or exported and no network call is made. It
@@ -56,6 +60,10 @@ curl http://localhost:8787/health
 
 Open Grafana at <http://localhost:3000> (admin/admin) → **Explore** → **Tempo** →
 *Search* to see the trace. Filter by attribute, e.g. `{ span.valet.user.id = "..." }`.
+
+Or run **`make otel-e2e`** for an automated smoke (no Grafana needed): it boots the
+worker against a throwaway local collector and asserts spans export, query-string
+secrets are redacted, and disabling the endpoint is a true no-op.
 
 ## Production
 

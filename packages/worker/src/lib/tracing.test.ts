@@ -2,7 +2,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { context, trace } from '@opentelemetry/api';
 import { BasicTracerProvider, InMemorySpanExporter, SimpleSpanProcessor } from '@opentelemetry/sdk-trace-base';
 import { AsyncLocalStorageContextManager } from '@opentelemetry/context-async-hooks';
-import { buildTraceConfig, isTracingEnabled, parseOtlpHeaders, setSessionAttributes } from './tracing.js';
+import { buildTraceConfig, isTracingEnabled, parseOtlpHeaders, redactUrlAttributes, setSessionAttributes } from './tracing.js';
 
 describe('isTracingEnabled', () => {
   it('is false when the endpoint is unset or blank', () => {
@@ -46,6 +46,28 @@ describe('buildTraceConfig', () => {
       url: 'https://tempo.example/v1/traces',
       headers: { Authorization: 'Basic xyz' },
     });
+  });
+});
+
+describe('redactUrlAttributes', () => {
+  it('strips the query string from url.full and clears url.query (keeps path)', () => {
+    const attrs: Record<string, unknown> = {
+      'url.full': 'https://valet/auth/github/callback?code=SECRET&state=xyz',
+      'url.query': '?code=SECRET&state=xyz',
+      'url.path': '/auth/github/callback',
+      'http.request.method': 'GET',
+    };
+    redactUrlAttributes(attrs);
+    expect(attrs['url.full']).toBe('https://valet/auth/github/callback');
+    expect(attrs['url.query']).toBe('');
+    expect(attrs['url.path']).toBe('/auth/github/callback');
+    expect(attrs['http.request.method']).toBe('GET');
+  });
+
+  it('leaves a query-less url unchanged', () => {
+    const attrs: Record<string, unknown> = { 'url.full': 'https://valet/health' };
+    redactUrlAttributes(attrs);
+    expect(attrs['url.full']).toBe('https://valet/health');
   });
 });
 
