@@ -82,7 +82,7 @@ import { syncPluginsOnce } from './services/plugin-sync.js';
 import { matchesCronField, getZonedDateParts, cronMatchesNow, findMissedCronTicks } from './lib/cron.js';
 import { resolveAuthRedirectOrigin } from './lib/auth-redirect-origin.js';
 import { instrument } from '@microlabs/otel-cf-workers';
-import { traceConfigFor, setSessionAttributes } from './lib/tracing/index.js';
+import { traceConfigFor, setSessionAttributes } from './lib/tracing.js';
 import { log } from './lib/log.js';
 
 // Durable Object exports — intentionally NOT wrapped with the library's
@@ -91,8 +91,8 @@ import { log } from './lib/log.js';
 // (ctx.storage.sql.exec → "Illegal invocation"), and it does so even when tracing
 // is disabled. instrument() on the worker (below) still traces the worker→DO call
 // (a client span + W3C trace-context propagation via the DO binding), so DO calls
-// stay correlated; DO-internal spans are a follow-up using manual withSpan() calls
-// that bypass the broken storage proxy. See docs/observability.md.
+// stay correlated; DO-internal spans are a follow-up using manual spans that
+// bypass the broken storage proxy. See docs/observability.md.
 export { SessionAgentDO } from './durable-objects/session-agent.js';
 export { EventBusDO } from './durable-objects/event-bus.js';
 export { WorkflowExecutorDO } from './durable-objects/workflow-executor.js';
@@ -1170,5 +1170,5 @@ export default instrument(
     fetch: app.fetch,
     scheduled,
   },
-  traceConfigFor({ name: 'valet-worker' }),
+  traceConfigFor('valet-worker'),
 );

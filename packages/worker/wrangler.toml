@@ -20,7 +20,6 @@ FRONTEND_PREVIEW_ORIGIN_SUFFIX = "${FRONTEND_PREVIEW_ORIGIN_SUFFIX}"
 # OpenTelemetry (optional — tracing is a no-op when OTEL_EXPORTER_OTLP_ENDPOINT is unset):
 #   OTEL_EXPORTER_OTLP_ENDPOINT - OTLP/HTTP base, e.g. http://localhost:4318 (local) — set in .dev.vars
 #   OTEL_EXPORTER_OTLP_HEADERS  - "key=value,key2=value2" auth headers — set via `wrangler secret put` (sensitive)
-#   OTEL_TRACES_SAMPLER_RATIO   - head sample ratio in [0,1], default 1 when enabled
 
 # Define replacements for libraries that reference Node globals
 [define]

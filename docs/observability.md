@@ -16,8 +16,8 @@ call**, so DO calls stay correlated even though the DOs run uninstrumented. On t
 > **The DOs are deliberately not wrapped with `instrumentDO()`.** That wrapper proxies
 > `ctx.storage`, which breaks the SQLite storage API (`ctx.storage.sql.exec`) the DOs
 > rely on with an `Illegal invocation` error — even when tracing is disabled. DO-internal
-> spans are a follow-up that adds manual `withSpan()` calls inside the DO code (which
-> bypass the storage proxy).
+> spans are a follow-up that adds manual spans inside the DO code (which bypass the
+> storage proxy).
 
 - **`valet.*` correlation attributes** (`valet.session.id`, `valet.user.id`,
   `valet.org.id`) are set as **span attributes** (not resource attributes — a Worker
@@ -36,7 +36,6 @@ is safe to ship dark and enable per-environment.
 |---|---|---|
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | unset (disabled) | OTLP/HTTP base, e.g. `http://localhost:4318`. Traces POST to `/v1/traces`. |
 | `OTEL_EXPORTER_OTLP_HEADERS` | unset | `key=value,key2=value2` auth headers (e.g. Grafana Cloud basic auth). Set via `wrangler secret put`. |
-| `OTEL_TRACES_SAMPLER_RATIO` | `1` when enabled | Head sample ratio in `[0,1]`. |
 
 ## Run it locally
 
@@ -69,16 +68,5 @@ tail sampling, and PII redaction, and forwards to Tempo. Set `OTEL_EXPORTER_OTLP
 to the gateway. Reconcile worker-emitted vs gateway-accepted span counts to monitor the
 one remaining lossy hop.
 
-## Design
-
-The full cross-layer design (four trace types, span links for the long-lived session
-state machine, queue-wait visibility, GenAI semantic conventions, and the
-traces → metrics path via Tempo's metrics-generator) lives in the tracing design doc /
-Linear issue. Notable conventions:
-
-- **Session id is a span attribute, not a resource attribute** (the Worker serves many
-  sessions per isolate; resource attributes are immutable per process). On the
-  single-session runner/OpenCode processes it may instead be a resource attribute.
-- **GenAI spans** (runner layer) follow OTel GenAI semantic conventions and use
-  `gen_ai.provider.name` (not the deprecated `gen_ai.system`). Prompt/response content
-  is redacted by default.
+The full cross-layer design (runner + OpenCode layers, four trace types, span links,
+traces → metrics) lives in the tracing design doc / Linear issue.

@@ -3,7 +3,6 @@ import { context, trace } from '@opentelemetry/api';
 import { BasicTracerProvider, InMemorySpanExporter, SimpleSpanProcessor } from '@opentelemetry/sdk-trace-base';
 import { AsyncLocalStorageContextManager } from '@opentelemetry/context-async-hooks';
 import { log, setLogLevel } from './log.js';
-import { withSpan } from './tracing/spans.js';
 
 let provider: BasicTracerProvider;
 
@@ -58,7 +57,10 @@ describe('log', () => {
 
   it('stamps trace_id/span_id when emitted inside an active span', async () => {
     const spy = spyConsole('log');
-    await withSpan('op', () => log.info('in-span'));
+    await trace.getTracer('t').startActiveSpan('op', async (span) => {
+      log.info('in-span');
+      span.end();
+    });
     const entry = parse(spy.mock.calls[0][0]);
     expect(entry.trace_id).toMatch(/^[0-9a-f]{32}$/);
     expect(entry.span_id).toMatch(/^[0-9a-f]{16}$/);
