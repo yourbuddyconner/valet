@@ -43,6 +43,7 @@ Initial actions:
 | `workflows.validate` | low | Validate a saved draft or supplied definition |
 | `workflows.publish` | high | Publish the current draft into `workflow_definition_versions` |
 | `workflows.test_run` | medium | Execute the draft with sample trigger data and optional input overrides |
+| `workflows.get_execution` | low | Inspect an execution, including status, inputs, outputs, node traces, and approvals |
 
 All actions still flow through action policy resolution and invocation audit rows. `publish` is high-risk so org policy can require human approval before a workflow becomes live.
 

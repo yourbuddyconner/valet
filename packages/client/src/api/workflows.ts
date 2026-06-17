@@ -61,7 +61,7 @@ export interface GetDraftResponse {
 }
 
 export interface SaveDraftRequest {
-  draft: Record<string, unknown>;
+  draft: WorkflowDefinition;
   ui?: unknown;
 }
 

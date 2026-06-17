@@ -1,4 +1,4 @@
-import { createFileRoute } from '@tanstack/react-router';
+import { createFileRoute, Link, useNavigate } from '@tanstack/react-router';
 import { useInfiniteExecutions } from '@/api/executions';
 import { ExecutionApprovalPanel } from '@/components/workflows/execution-approval-panel';
 import { Badge } from '@/components/ui/badge';
@@ -21,6 +21,7 @@ const STATUS_OPTIONS = [
 ] as const;
 
 function ExecutionsPage() {
+  const navigate = useNavigate();
   const [statusFilter, setStatusFilter] = React.useState<string>('all');
   const { data, isLoading, error, fetchNextPage, isFetchingNextPage, hasNextPage } =
     useInfiniteExecutions(statusFilter === 'all' ? undefined : { status: statusFilter });
@@ -86,7 +87,23 @@ function ExecutionsPage() {
               <tbody className="divide-y divide-neutral-200 dark:divide-neutral-700">
                 {executions.map((execution) => (
                   <React.Fragment key={execution.id}>
-                    <tr className="hover:bg-neutral-50 dark:hover:bg-neutral-700/50">
+                    <tr
+                      tabIndex={0}
+                      onClick={() => navigate({
+                        to: '/automation/executions/$executionId',
+                        params: { executionId: execution.id },
+                      })}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter' || event.key === ' ') {
+                          event.preventDefault();
+                          navigate({
+                            to: '/automation/executions/$executionId',
+                            params: { executionId: execution.id },
+                          });
+                        }
+                      }}
+                      className="cursor-pointer hover:bg-neutral-50 focus:outline-none focus:ring-2 focus:ring-accent/40 dark:hover:bg-neutral-700/50"
+                    >
                       <td className="px-4 py-3">
                         <ExecutionStatusBadge status={execution.status} />
                       </td>
@@ -95,9 +112,14 @@ function ExecutionsPage() {
                           <p className="text-sm font-medium text-neutral-900 dark:text-neutral-100">
                             {execution.workflowName || 'Unknown'}
                           </p>
-                          <p className="text-xs text-neutral-500 dark:text-neutral-400">
+                          <Link
+                            to="/automation/executions/$executionId"
+                            params={{ executionId: execution.id }}
+                            onClick={(event) => event.stopPropagation()}
+                            className="text-xs text-neutral-500 underline-offset-2 hover:underline dark:text-neutral-400"
+                          >
                             {execution.id.slice(0, 8)}...
-                          </p>
+                          </Link>
                         </div>
                       </td>
                       <td className="px-4 py-3">

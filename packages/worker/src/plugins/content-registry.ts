@@ -1899,6 +1899,7 @@ Available actions:
 - \`workflows.validate\` — validate a saved draft or supplied definition. Returns blocking \`errors\` separately from non-blocking \`warnings\`.
 - \`workflows.publish\` — publish the current draft. This is high risk and may require approval.
 - \`workflows.test_run\` — start a draft execution with sample trigger data and optional declared inputs. Returns an execution id/status.
+- \`workflows.get_execution\` — inspect an execution by id, including status, parsed inputs/outputs, node traces, and approval history.
 
 Prefer the web UI for visual graph editing. Use tools for inspection, small edits, validation, publishing, and test runs when the user asks the agent to operate on workflows directly. Malformed drafts are not saved; the tool returns validation details instead.
 

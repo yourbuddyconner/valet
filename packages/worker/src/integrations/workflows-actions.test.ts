@@ -1,6 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createTestDb } from '../test-utils/db.js';
 import { users } from '../lib/schema/index.js';
+import { workflowApprovals } from '../lib/schema/workflow-approvals.js';
+import { workflowExecutionNodes } from '../lib/schema/workflow-execution-nodes.js';
+import { workflowExecutions } from '../lib/schema/workflows.js';
 import { createWorkflow } from '../services/workflows.js';
 import { saveDraft } from '../services/workflow-versions.js';
 import { workflowActions } from './workflows-actions.js';
@@ -24,6 +27,7 @@ describe('workflowActions', () => {
       'workflows.validate',
       'workflows.publish',
       'workflows.test_run',
+      'workflows.get_execution',
     ]);
     expect(actions.find((action) => action.id === 'workflows.publish')?.riskLevel).toBe('high');
   });
@@ -74,7 +78,9 @@ describe('workflowActions', () => {
       env: {} as Env,
     } as any);
 
-    expect(result.success).toBe(true);
+    if (!result.success) {
+      throw new Error(result.error ?? 'workflow validation failed');
+    }
     expect(result.data).toEqual({ errors: [], warnings: [] });
   });
 
@@ -175,6 +181,96 @@ describe('workflowActions', () => {
     });
   });
 
+  it('inspects an execution with node traces and approvals', async () => {
+    const { db, sqlite } = createTestDb();
+    db.insert(users).values({ id: USER_ID, email: 'workflow-actions@example.com' }).run();
+    const created = await createWorkflow(db as any, USER_ID, { name: 'Inspectable' });
+    const now = new Date('2026-06-17T18:00:00.000Z').toISOString();
+
+    db.insert(workflowExecutions).values({
+      id: 'exec-1',
+      workflowId: created.workflow.id,
+      userId: USER_ID,
+      triggerId: null,
+      status: 'completed',
+      triggerType: 'manual',
+      triggerMetadata: { source: 'test' },
+      inputs: JSON.stringify({ name: 'Conner' }),
+      outputs: { branch: 'normal_path' },
+      startedAt: now,
+      completedAt: now,
+      mode: 'test',
+    }).run();
+    db.insert(workflowExecutionNodes).values({
+      id: 'trace-1',
+      executionId: 'exec-1',
+      nodeId: 'normal_path',
+      nodeType: 'set',
+      status: 'completed',
+      inputPreview: '{"name":"Conner"}',
+      inputTruncated: false,
+      output: '{"ok":true}',
+      outputTruncated: false,
+      retryAttempts: 0,
+      expiresAt: now,
+      createdAt: now,
+    }).run();
+    db.insert(workflowApprovals).values({
+      id: 'approval-1',
+      executionId: 'exec-1',
+      nodeId: 'approval',
+      kind: 'explicit',
+      workflowInstanceId: 'exec-1',
+      eventType: 'approval_approval',
+      prompt: 'Approve?',
+      summary: 'Approval summary',
+      details: JSON.stringify({ issue: 123 }),
+      status: 'approved',
+      resolvedBy: USER_ID,
+      resolvedAt: now,
+      createdAt: now,
+      updatedAt: now,
+    }).run();
+
+    const result = await workflowActions.execute('workflows.get_execution', {
+      executionId: 'exec-1',
+    }, {
+      credentials: {},
+      userId: USER_ID,
+      appDb: db,
+      env: testEnv(sqlite),
+    } as any);
+
+    if (!result.success) {
+      throw new Error(result.error ?? 'workflow get_execution failed');
+    }
+    expect(result.data).toMatchObject({
+      execution: {
+        id: 'exec-1',
+        workflowId: created.workflow.id,
+        workflowName: 'Inspectable',
+        status: 'completed',
+        triggerMetadata: { source: 'test' },
+        inputs: { name: 'Conner' },
+        outputs: { branch: 'normal_path' },
+        mode: 'test',
+        nodes: [{
+          id: 'trace-1',
+          nodeId: 'normal_path',
+          nodeType: 'set',
+          status: 'completed',
+          output: '{"ok":true}',
+        }],
+        approvals: [{
+          id: 'approval-1',
+          nodeId: 'approval',
+          status: 'approved',
+          details: { issue: 123 },
+        }],
+      },
+    });
+  });
+
   it('requires worker context at execution time', async () => {
     const result = await workflowActions.execute('workflows.list', {}, {
       credentials: {},
@@ -185,3 +281,39 @@ describe('workflowActions', () => {
     expect(result.error).toContain('worker context');
   });
 });
+
+type SqliteDb = ReturnType<typeof createTestDb>['sqlite'];
+
+function testEnv(sqlite: SqliteDb): Env {
+  return { DB: makeD1(sqlite) } as Env;
+}
+
+function makeD1(sqlite: SqliteDb): D1Database {
+  return {
+    prepare(sql: string) {
+      return {
+        bind(...params: unknown[]) {
+          const statement = sqlite.prepare(sql);
+          return {
+            async run() {
+              const result = statement.run(...params);
+              return {
+                success: true,
+                meta: { changes: result.changes },
+              };
+            },
+            async all<T = Record<string, unknown>>() {
+              return {
+                success: true,
+                results: statement.all(...params) as T[],
+              };
+            },
+            async first<T = Record<string, unknown>>() {
+              return (statement.get(...params) ?? null) as T | null;
+            },
+          };
+        },
+      };
+    },
+  } as D1Database;
+}

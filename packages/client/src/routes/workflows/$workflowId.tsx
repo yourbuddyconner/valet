@@ -69,7 +69,7 @@ function WorkflowDetailPage() {
 
   function handleSave(draft: WorkflowDefinition) {
     saveDraft.mutate(
-      { workflowId, draft: draft as unknown as Record<string, unknown> },
+      { workflowId, draft },
       {
         onSuccess: () => toastSuccess('Draft saved'),
         onError: (err) =>
@@ -82,7 +82,7 @@ function WorkflowDetailPage() {
     if (!editorDefinition) return;
     await saveDraft.mutateAsync({
       workflowId,
-      draft: editorDefinition as unknown as Record<string, unknown>,
+      draft: editorDefinition,
     });
   }
 
@@ -257,9 +257,13 @@ function WorkflowDetailPage() {
                         <Badge variant={executionBadgeVariant(exec.status)}>
                           {exec.status}
                         </Badge>
-                        <span className="truncate font-mono text-neutral-500">
+                        <Link
+                          to="/automation/executions/$executionId"
+                          params={{ executionId: exec.id }}
+                          className="truncate font-mono text-neutral-500 underline-offset-2 hover:underline"
+                        >
                           {exec.id.slice(0, 8)}
-                        </span>
+                        </Link>
                       </div>
                       <div className="mt-1 tabular-nums text-neutral-400">
                         {formatRelativeTime(exec.startedAt)}

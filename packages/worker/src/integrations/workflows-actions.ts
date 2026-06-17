@@ -4,6 +4,7 @@ import type { Env } from '../env.js';
 import type { AppDb } from '../lib/drizzle.js';
 import {
   checkIdempotencyKey,
+  getExecution,
   getWorkflowByIdOrSlug,
   listWorkflows,
   parseExecutionInputs,
@@ -171,6 +172,23 @@ const actions: ActionDefinition[] = [
       additionalProperties: false,
     },
   },
+  {
+    id: 'workflows.get_execution',
+    name: 'Get workflow execution',
+    description: 'Inspect a workflow execution, including status, inputs, outputs, node traces, and approval history.',
+    riskLevel: 'low',
+    params: z.object({
+      executionId: z.string().min(1),
+    }),
+    inputSchema: {
+      type: 'object',
+      required: ['executionId'],
+      properties: {
+        executionId: { type: 'string', description: 'Workflow execution ID.' },
+      },
+      additionalProperties: false,
+    },
+  },
 ];
 
 export const workflowProvider: IntegrationProvider = {
@@ -224,6 +242,10 @@ export const workflowActions: ActionSource = {
             triggerData: z.record(z.unknown()).optional(),
             inputs: z.record(z.unknown()).optional(),
             clientRequestId: z.string().min(8).max(64).optional(),
+          }).parse(params)));
+        case 'workflows.get_execution':
+          return ok(await getExecutionAction(context.env, context.userId, z.object({
+            executionId: z.string().min(1),
           }).parse(params)));
         default:
           return { success: false, error: `Unknown workflow action "${actionId}".` };
@@ -409,6 +431,95 @@ async function testRunWorkflowAction(
     definitionSource: 'draft',
     idempotencyKey,
   });
+}
+
+async function getExecutionAction(
+  env: Env,
+  userId: string,
+  params: { executionId: string },
+) {
+  const row = await getExecution(env.DB, params.executionId, userId);
+  if (!row) throw new Error(`execution ${params.executionId} not found`);
+
+  const nodes = await env.DB.prepare(
+    `SELECT id, node_id, node_type, status, input_preview, input_truncated,
+            output, output_truncated, error, reason, retry_attempts, approval_id,
+            invocation_id, started_at, completed_at, duration_ms, created_at
+     FROM workflow_execution_nodes
+     WHERE execution_id = ?
+     ORDER BY created_at ASC`,
+  ).bind(params.executionId).all<Record<string, unknown>>();
+
+  const approvals = await env.DB.prepare(
+    `SELECT id, node_id, kind, status, prompt, summary, details, timeout_at,
+            resolved_by, resolved_at, cancelled_at, created_at
+     FROM workflow_approvals
+     WHERE execution_id = ?
+     ORDER BY created_at ASC`,
+  ).bind(params.executionId).all<Record<string, unknown>>();
+  const rowRecord = row as Record<string, unknown>;
+
+  return {
+    execution: {
+      id: row.id,
+      workflowId: row.workflow_id,
+      workflowName: row.workflow_name,
+      triggerId: row.trigger_id,
+      triggerName: row.trigger_name,
+      status: row.status,
+      triggerType: row.trigger_type,
+      triggerMetadata: row.trigger_metadata ? JSON.parse(row.trigger_metadata as string) : null,
+      inputs: parseExecutionInputs(row as { inputs?: string | null }),
+      outputs: row.outputs ? JSON.parse(row.outputs as string) : null,
+      error: row.error,
+      startedAt: row.started_at,
+      completedAt: row.completed_at,
+      mode: rowRecord.mode ?? null,
+      cancelledAt: rowRecord.cancelled_at ?? null,
+      cancelledBy: rowRecord.cancelled_by ?? null,
+      nodes: (nodes.results ?? []).map((n) => ({
+        id: n.id,
+        nodeId: n.node_id,
+        nodeType: n.node_type,
+        status: n.status,
+        inputPreview: n.input_preview,
+        inputTruncated: Boolean(n.input_truncated),
+        output: n.output,
+        outputTruncated: Boolean(n.output_truncated),
+        error: n.error,
+        reason: n.reason,
+        retryAttempts: n.retry_attempts,
+        approvalId: n.approval_id,
+        invocationId: n.invocation_id,
+        startedAt: n.started_at,
+        completedAt: n.completed_at,
+        durationMs: n.duration_ms,
+        createdAt: n.created_at,
+      })),
+      approvals: (approvals.results ?? []).map((a) => ({
+        id: a.id,
+        nodeId: a.node_id,
+        kind: a.kind,
+        status: a.status,
+        prompt: a.prompt,
+        summary: a.summary,
+        details: typeof a.details === 'string' ? safeJsonParse(a.details) : null,
+        timeoutAt: a.timeout_at,
+        resolvedBy: a.resolved_by,
+        resolvedAt: a.resolved_at,
+        cancelledAt: a.cancelled_at,
+        createdAt: a.created_at,
+      })),
+    },
+  };
+}
+
+function safeJsonParse(s: string): unknown {
+  try {
+    return JSON.parse(s);
+  } catch {
+    return s;
+  }
 }
 
 function ok(data: unknown): ActionResult {
