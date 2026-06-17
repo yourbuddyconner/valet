@@ -67,6 +67,7 @@ export interface SaveDraftRequest {
 
 export interface ValidateDraftResponse {
   errors: WorkflowValidationError[];
+  warnings: WorkflowValidationError[];
 }
 
 export interface PublishDraftRequest {

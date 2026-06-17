@@ -46,6 +46,29 @@ describe('validateDefinition', () => {
     expect(errs.some((e) => e.code === 'malformed_definition')).toBe(true);
   });
 
+  it('adds node id and type context to malformed node field messages', () => {
+    const errs = validateDefinition({
+      version: 'dag/v1',
+      nodes: [
+        { id: 'start', type: 'trigger' },
+        {
+          id: 'route',
+          type: 'if',
+          conditions: [{ left: 'trigger.data.ok', dataType: 'boolean', op: 'equals', right: true }],
+        },
+      ],
+      edges: [],
+    });
+
+    expect(errs).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        code: 'malformed_definition',
+        message: expect.stringContaining('nodes.1 (id: "route", type: "if")'),
+      }),
+    ]));
+    expect(errs.map((e) => e.message).join('\n')).toContain('conditions.0.operation');
+  });
+
   it('rejects duplicate node IDs', () => {
     const def = definition({
       nodes: [

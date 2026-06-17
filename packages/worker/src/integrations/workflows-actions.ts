@@ -18,7 +18,13 @@ import {
   WorkflowVersionError,
 } from '../services/workflow-versions.js';
 import { createExecution, WorkflowExecutionStartError } from '../services/workflow-executions.js';
-import { validateAgainstEnvironment, validateDefinition } from '../lib/workflow-dag/validator.js';
+import {
+  groupWorkflowValidationResults,
+  validateAgainstEnvironment,
+  validateDefinition,
+  type GroupedWorkflowValidation,
+} from '../lib/workflow-dag/validator.js';
+import { isWorkflowDefinition } from '../lib/workflow-dag/schema.js';
 import { assertWorkflowAccess } from '../lib/workflow-access.js';
 import type { WorkflowDefinition } from '@valet/shared';
 
@@ -31,7 +37,7 @@ const workflowIdParam = z.object({
   workflowId: z.string().min(1).describe('Workflow ID or slug.'),
 });
 
-const workflowDefinitionSchema = {
+const workflowDefinitionInputSchema = {
   type: 'object',
   description: 'A dag/v1 workflow definition.',
   additionalProperties: true,
@@ -91,14 +97,16 @@ const actions: ActionDefinition[] = [
       workflowId: z.string().min(1),
       draft: z.record(z.unknown()),
       ui: z.unknown().optional(),
+      validate: z.boolean().optional(),
     }),
     inputSchema: {
       type: 'object',
       required: ['workflowId', 'draft'],
       properties: {
         workflowId: { type: 'string', description: 'Workflow ID or slug.' },
-        draft: workflowDefinitionSchema,
+        draft: workflowDefinitionInputSchema,
         ui: { description: 'Optional editor layout state.' },
+        validate: { type: 'boolean', description: 'When true, return grouped validation errors/warnings after saving.' },
       },
       additionalProperties: false,
     },
@@ -116,7 +124,7 @@ const actions: ActionDefinition[] = [
       type: 'object',
       properties: {
         workflowId: { type: 'string', description: 'Workflow ID or slug. Required when definition is omitted.' },
-        definition: workflowDefinitionSchema,
+        definition: workflowDefinitionInputSchema,
       },
       additionalProperties: false,
     },
@@ -194,10 +202,11 @@ export const workflowActions: ActionSource = {
         case 'workflows.create':
           return ok(await createWorkflowAction(context.appDb, context.userId, actions[2]!.params.parse(params)));
         case 'workflows.save_draft':
-          return ok(await saveDraftAction(context.appDb, context.userId, z.object({
+          return ok(await saveDraftAction(context.appDb, context.env, context.userId, z.object({
             workflowId: z.string().min(1),
             draft: z.record(z.unknown()),
             ui: z.unknown().optional(),
+            validate: z.boolean().optional(),
           }).parse(params)));
         case 'workflows.validate':
           return ok(await validateWorkflowAction(context.appDb, context.env, context.userId, z.object({
@@ -294,12 +303,25 @@ async function createWorkflowAction(
 
 async function saveDraftAction(
   db: AppDb,
+  env: Env,
   userId: string,
-  params: { workflowId: string; draft: Record<string, unknown>; ui?: unknown },
+  params: { workflowId: string; draft: Record<string, unknown>; ui?: unknown; validate?: boolean },
 ) {
   const { id } = await assertWorkflowAccess(db, { id: userId }, params.workflowId, 'editor');
-  await saveDraft(db, id, params.draft as unknown as WorkflowDefinition, params.ui);
-  return { ok: true, workflowId: id };
+  if (!isWorkflowDefinition(params.draft)) {
+    return {
+      ok: false,
+      saved: false,
+      workflowId: id,
+      validation: validateWorkflowDefinitionInput(params.draft, env),
+    };
+  }
+  await saveDraft(db, id, params.draft, params.ui);
+  const result: { ok: true; saved: true; workflowId: string; validation?: GroupedWorkflowValidation } = { ok: true, saved: true, workflowId: id };
+  if (params.validate) {
+    result.validation = validateWorkflowDefinition(params.draft, env);
+  }
+  return result;
 }
 
 async function validateWorkflowAction(
@@ -308,26 +330,36 @@ async function validateWorkflowAction(
   userId: string,
   params: { workflowId?: string; definition?: Record<string, unknown> },
 ) {
-  let definition = params.definition as WorkflowDefinition | undefined;
-
-  if (!definition) {
-    if (!params.workflowId) {
-      throw new Error('workflowId is required when definition is omitted');
+  if (params.definition) {
+    if (!isWorkflowDefinition(params.definition)) {
+      return validateWorkflowDefinitionInput(params.definition, env);
     }
-    const { id } = await assertWorkflowAccess(db, { id: userId }, params.workflowId, 'viewer');
-    const draft = await getDraft(db, id);
-    if (!draft.draft) {
-      return { errors: [{ scope: 'workflow', code: 'no_draft', path: '/', message: 'no draft to validate' }] };
-    }
-    definition = draft.draft;
+    return validateWorkflowDefinition(params.definition, env);
   }
 
-  return {
-    errors: [
-      ...validateDefinition(definition),
-      ...validateAgainstEnvironment(definition, env),
-    ],
-  };
+  if (!params.workflowId) {
+    throw new Error('workflowId is required when definition is omitted');
+  }
+  const { id } = await assertWorkflowAccess(db, { id: userId }, params.workflowId, 'viewer');
+  const draft = await getDraft(db, id);
+  if (!draft.draft) {
+    return { errors: [{ scope: 'workflow', code: 'no_draft', path: '/', message: 'no draft to validate' }], warnings: [] };
+  }
+  return validateWorkflowDefinition(draft.draft, env);
+}
+
+function validateWorkflowDefinition(definition: WorkflowDefinition, env: Env): GroupedWorkflowValidation {
+  return groupWorkflowValidationResults([
+    ...validateDefinition(definition),
+    ...validateAgainstEnvironment(definition, env),
+  ]);
+}
+
+function validateWorkflowDefinitionInput(definition: unknown, env: Env): GroupedWorkflowValidation {
+  if (!isWorkflowDefinition(definition)) {
+    return groupWorkflowValidationResults(validateDefinition(definition));
+  }
+  return validateWorkflowDefinition(definition, env);
 }
 
 async function publishWorkflowAction(

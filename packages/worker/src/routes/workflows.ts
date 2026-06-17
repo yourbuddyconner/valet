@@ -363,11 +363,13 @@ workflowsRouter.put('/:id/draft', zValidator('json', draftPutSchema), async (c) 
   const { assertWorkflowAccess } = await import('../lib/workflow-access.js');
   const { id } = await assertWorkflowAccess(c.get('db'), user, idOrSlug, 'editor');
   const { saveDraft, WorkflowVersionError } = await import('../services/workflow-versions.js');
-  // Draft JSON is intentionally not validated against WorkflowDefinition
-  // here — drafts can be incomplete and saveDraft stores it as-is.
-  const draftAsDef = body.draft as unknown as import('@valet/shared').WorkflowDefinition;
+  const { isWorkflowDefinition } = await import('../lib/workflow-dag/schema.js');
+  const { validateDefinition } = await import('../lib/workflow-dag/validator.js');
+  if (!isWorkflowDefinition(body.draft)) {
+    return c.json({ error: 'invalid_draft', errors: validateDefinition(body.draft) }, 400);
+  }
   try {
-    await saveDraft(c.get('db'), id, draftAsDef, body.ui);
+    await saveDraft(c.get('db'), id, body.draft, body.ui);
     return c.json({ ok: true });
   } catch (err) {
     if (err instanceof WorkflowVersionError && err.code === 'not_found') {
@@ -383,7 +385,7 @@ workflowsRouter.post('/:id/validate', async (c) => {
   const { assertWorkflowAccess } = await import('../lib/workflow-access.js');
   const { id } = await assertWorkflowAccess(c.get('db'), user, idOrSlug, 'viewer');
   const { getDraft, WorkflowVersionError } = await import('../services/workflow-versions.js');
-  const { validateDefinition, validateAgainstEnvironment } = await import('../lib/workflow-dag/validator.js');
+  const { validateDefinition, validateAgainstEnvironment, groupWorkflowValidationResults } = await import('../lib/workflow-dag/validator.js');
   let result;
   try {
     result = await getDraft(c.get('db'), id);
@@ -394,12 +396,12 @@ workflowsRouter.post('/:id/validate', async (c) => {
     throw err;
   }
   if (!result.draft) {
-    return c.json({ errors: [{ scope: 'workflow', code: 'no_draft', path: '/', message: 'no draft to validate' }] });
+    return c.json({ errors: [{ scope: 'workflow', code: 'no_draft', path: '/', message: 'no draft to validate' }], warnings: [] });
   }
   // Both validators are total — no try/catch needed.
   const structuralErrors = validateDefinition(result.draft);
   const envErrors = validateAgainstEnvironment(result.draft, c.env);
-  return c.json({ errors: [...structuralErrors, ...envErrors] });
+  return c.json(groupWorkflowValidationResults([...structuralErrors, ...envErrors]));
 });
 
 workflowsRouter.post('/:id/publish', zValidator('json', publishSchema), async (c) => {

@@ -9,6 +9,16 @@
  */
 
 import { z } from 'zod';
+import type { WorkflowDefinition } from '@valet/shared';
+
+const jsonValueSchema: z.ZodType<unknown> = z.lazy(() => z.union([
+  z.string(),
+  z.number(),
+  z.boolean(),
+  z.null(),
+  z.array(jsonValueSchema),
+  z.record(jsonValueSchema),
+]));
 
 // ─── Inputs ─────────────────────────────────────────────────────────────────
 
@@ -87,7 +97,7 @@ export const waitNodeSchema = z.object({
 export const setNodeSchema = z.object({
   id: idSchema,
   type: z.literal('set'),
-  values: z.unknown(),
+  values: jsonValueSchema,
 });
 
 export const stopNodeSchema = z.object({
@@ -232,3 +242,7 @@ export const workflowDefinitionSchema = z.object({
   policy: workflowPolicySchema.optional(),
   ui: workflowEditorStateSchema.optional(),
 });
+
+export function isWorkflowDefinition(input: unknown): input is WorkflowDefinition {
+  return workflowDefinitionSchema.safeParse(input).success;
+}

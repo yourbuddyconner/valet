@@ -46,6 +46,14 @@ Initial actions:
 
 All actions still flow through action policy resolution and invocation audit rows. `publish` is high-risk so org policy can require human approval before a workflow becomes live.
 
+`workflows.validate` returns grouped validation:
+
+```json
+{ "errors": [], "warnings": [] }
+```
+
+`llm_maxoutput_warning` is advisory and does not block publish; structural errors, invalid environment references, malformed templates, missing provider keys, and graph errors are blocking. `workflows.save_draft` requires a structurally valid `WorkflowDefinition`, but accepts `validate: true` to return the same grouped semantic/environment validation result after saving the draft.
+
 ## Data Model
 
 ### `workflows` table

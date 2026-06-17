@@ -55,11 +55,94 @@ const FOREACH_BODY_TYPES = new Set(['llm', 'tool', 'set', 'stop', 'orchestrator'
 function validateDefinitionShape(def: unknown): WorkflowValidationError[] {
   const parsed = workflowDefinitionSchema.safeParse(def);
   if (parsed.success) return [];
-  return parsed.error.issues.map((issue) => ({
+  return parsed.error.issues.flatMap((issue) => formatShapeIssue(issue, def)).map((issue) => ({
     scope: 'workflow' as const,
     code: 'malformed_definition' as const,
-    message: issue.path.length > 0 ? `${issue.path.join('.')}: ${issue.message}` : issue.message,
+    message: issue.message,
   }));
+}
+
+type ZodLikeIssue = {
+  path: Array<string | number>;
+  message: string;
+  code?: string;
+  unionErrors?: Array<{ issues: ZodLikeIssue[] }>;
+  expected?: unknown;
+  received?: unknown;
+};
+
+function formatShapeIssue(issue: ZodLikeIssue, input: unknown): Array<{ message: string }> {
+  if (issue.code === 'invalid_union' && issue.path.length === 2 && issue.path[0] === 'nodes' && typeof issue.path[1] === 'number') {
+    const nodeIndex = issue.path[1];
+    const node = getInputNode(input, nodeIndex);
+    const context = formatNodeContext(nodeIndex, node);
+    const branchIssues = selectNodeUnionBranchIssues(issue, node);
+    if (branchIssues.length > 0) {
+      return branchIssues.map((branchIssue) => {
+        const relativePath = branchIssue.path.slice(issue.path.length).join('.');
+        return {
+          message: relativePath
+            ? `${context}: ${relativePath}: ${branchIssue.message}`
+            : `${context}: ${branchIssue.message}`,
+        };
+      });
+    }
+    return [{ message: `${context}: ${issue.message}` }];
+  }
+
+  const path = issue.path.length > 0 ? `${issue.path.join('.')}: ` : '';
+  return [{ message: `${path}${issue.message}` }];
+}
+
+function getInputNode(input: unknown, index: number): unknown {
+  if (!input || typeof input !== 'object') return undefined;
+  const nodes = (input as { nodes?: unknown }).nodes;
+  return Array.isArray(nodes) ? nodes[index] : undefined;
+}
+
+function formatNodeContext(index: number, node: unknown): string {
+  if (!node || typeof node !== 'object') return `nodes.${index}`;
+  const record = node as Record<string, unknown>;
+  const id = typeof record.id === 'string' ? record.id : undefined;
+  const type = typeof record.type === 'string' ? record.type : undefined;
+  if (id && type) return `nodes.${index} (id: "${id}", type: "${type}")`;
+  if (id) return `nodes.${index} (id: "${id}")`;
+  if (type) return `nodes.${index} (type: "${type}")`;
+  return `nodes.${index}`;
+}
+
+function selectNodeUnionBranchIssues(issue: ZodLikeIssue, node: unknown): ZodLikeIssue[] {
+  const unionErrors = issue.unionErrors ?? [];
+  const nodeType = node && typeof node === 'object' && typeof (node as Record<string, unknown>).type === 'string'
+    ? (node as Record<string, unknown>).type
+    : undefined;
+
+  if (nodeType) {
+    const matching = unionErrors.find((err) => !err.issues.some((branchIssue) => (
+      branchIssue.path.at(-1) === 'type'
+      && branchIssue.code === 'invalid_literal'
+      && branchIssue.received === nodeType
+    )));
+    if (matching) return flattenUnionIssues(matching.issues);
+  }
+
+  const best = unionErrors
+    .map((err) => flattenUnionIssues(err.issues))
+    .sort((a, b) => a.length - b.length)[0];
+  return best ?? [];
+}
+
+function flattenUnionIssues(issues: ZodLikeIssue[]): ZodLikeIssue[] {
+  const flattened: ZodLikeIssue[] = [];
+  for (const issue of issues) {
+    if (issue.code === 'invalid_union' && issue.unionErrors) {
+      const best = issue.unionErrors.map((err) => flattenUnionIssues(err.issues)).sort((a, b) => a.length - b.length)[0];
+      flattened.push(...(best ?? [issue]));
+    } else {
+      flattened.push(issue);
+    }
+  }
+  return flattened;
 }
 
 // ─── Public API ─────────────────────────────────────────────────────────────
@@ -163,6 +246,21 @@ export function validateDefinition(input: unknown): WorkflowValidationError[] {
   }
 
   return errors;
+}
+
+export interface GroupedWorkflowValidation {
+  errors: WorkflowValidationError[];
+  warnings: WorkflowValidationError[];
+}
+
+export function groupWorkflowValidationResults(results: WorkflowValidationError[]): GroupedWorkflowValidation {
+  const warnings = results.filter((result) => isValidationWarning(result));
+  const errors = results.filter((result) => !isValidationWarning(result));
+  return { errors, warnings };
+}
+
+function isValidationWarning(result: WorkflowValidationError): boolean {
+  return result.code === 'llm_maxoutput_warning';
 }
 
 /**
