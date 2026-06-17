@@ -7,10 +7,17 @@ the traces.
 
 ## What's instrumented today (Worker)
 
-The Worker handler and all three Durable Objects are wrapped with
+The Worker fetch/scheduled handler is wrapped with
 [`@microlabs/otel-cf-workers`](https://github.com/evanderkoogh/otel-cf-workers), which
-auto-creates spans for `fetch`, DO `fetch`/`alarm`/storage, and outbound calls, and
-propagates W3C trace context across worker → DO → DO. On top of that:
+auto-creates spans for each request, instruments outbound `fetch`, and — via the DO
+bindings — emits a **client span + W3C trace-context propagation for each worker→DO
+call**, so DO calls stay correlated even though the DOs run uninstrumented. On top of that:
+
+> **The DOs are deliberately not wrapped with `instrumentDO()`.** That wrapper proxies
+> `ctx.storage`, which breaks the SQLite storage API (`ctx.storage.sql.exec`) the DOs
+> rely on with an `Illegal invocation` error — even when tracing is disabled. DO-internal
+> spans are a follow-up that adds manual `withSpan()` calls inside the DO code (which
+> bypass the storage proxy).
 
 - **`valet.*` correlation attributes** (`valet.session.id`, `valet.user.id`,
   `valet.org.id`) are set as **span attributes** (not resource attributes — a Worker
@@ -50,6 +57,17 @@ curl http://localhost:8787/health
 
 Open Grafana at <http://localhost:3000> (admin/admin) → **Explore** → **Tempo** →
 *Search* to see the trace. Filter by attribute, e.g. `{ span.valet.user.id = "..." }`.
+
+## Production
+
+Do **not** point the worker directly at Tempo in production. The `otel-cf-workers`
+exporter sends one OTLP/HTTP request per worker invocation over `ctx.waitUntil` with
+**no batching, no retry, and a silent drop on any non-2xx** — a brief Tempo blip loses
+every span in that window with zero signal. Production should send to a standalone
+**OTel Collector gateway** (or Grafana Alloy) that owns the sending queue, retry, WAL,
+tail sampling, and PII redaction, and forwards to Tempo. Set `OTEL_EXPORTER_OTLP_ENDPOINT`
+to the gateway. Reconcile worker-emitted vs gateway-accepted span counts to monitor the
+one remaining lossy hop.
 
 ## Design
 

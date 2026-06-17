@@ -1,9 +1,6 @@
 name = "${CF_WORKER_NAME}"
 main = "src/index.ts"
-# Bumped from 2024-01-01 to enable nodejs_compat_v2 AsyncLocalStorage, which the
-# OpenTelemetry context manager (@microlabs/otel-cf-workers) uses to propagate trace
-# context across async boundaries. See docs/observability.md.
-compatibility_date = "2024-09-23"
+compatibility_date = "2024-01-01"
 compatibility_flags = ["nodejs_compat"]
 previews_enabled = false
 

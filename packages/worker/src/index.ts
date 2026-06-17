@@ -81,20 +81,21 @@ import {
 import { syncPluginsOnce } from './services/plugin-sync.js';
 import { matchesCronField, getZonedDateParts, cronMatchesNow, findMissedCronTicks } from './lib/cron.js';
 import { resolveAuthRedirectOrigin } from './lib/auth-redirect-origin.js';
-import { instrument, instrumentDO } from '@microlabs/otel-cf-workers';
+import { instrument } from '@microlabs/otel-cf-workers';
 import { traceConfigFor, setSessionAttributes } from './lib/tracing/index.js';
 import { log } from './lib/log.js';
-import { SessionAgentDO as SessionAgentDOClass } from './durable-objects/session-agent.js';
-import { EventBusDO as EventBusDOClass } from './durable-objects/event-bus.js';
-import { WorkflowExecutorDO as WorkflowExecutorDOClass } from './durable-objects/workflow-executor.js';
 
-// OpenTelemetry instrumentation. Wrapping the handler + each DO auto-creates spans
-// for fetch, alarms, storage, and outbound calls, with W3C context flowing
-// worker→DO→DO. A no-op (sampled out, zero network) until OTEL_EXPORTER_OTLP_ENDPOINT
-// is set — see lib/tracing/config.ts.
-export const SessionAgentDO = instrumentDO(SessionAgentDOClass, traceConfigFor({ name: 'valet-session-do' }));
-export const EventBusDO = instrumentDO(EventBusDOClass, traceConfigFor({ name: 'valet-eventbus-do' }));
-export const WorkflowExecutorDO = instrumentDO(WorkflowExecutorDOClass, traceConfigFor({ name: 'valet-workflow-do' }));
+// Durable Object exports — intentionally NOT wrapped with the library's
+// instrumentDO(). That wrapper instruments ctx.storage by proxying every storage
+// property as a callable, which breaks the SQLite storage API these DOs depend on
+// (ctx.storage.sql.exec → "Illegal invocation"), and it does so even when tracing
+// is disabled. instrument() on the worker (below) still traces the worker→DO call
+// (a client span + W3C trace-context propagation via the DO binding), so DO calls
+// stay correlated; DO-internal spans are a follow-up using manual withSpan() calls
+// that bypass the broken storage proxy. See docs/observability.md.
+export { SessionAgentDO } from './durable-objects/session-agent.js';
+export { EventBusDO } from './durable-objects/event-bus.js';
+export { WorkflowExecutorDO } from './durable-objects/workflow-executor.js';
 
 const app = new Hono<{ Bindings: Env; Variables: Variables }>();
 
