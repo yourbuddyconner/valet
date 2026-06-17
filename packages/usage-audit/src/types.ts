@@ -195,6 +195,7 @@ export interface Attribution {
     outputTokens: number;
     byCategory: Record<Category, { threads: number; llmCalls: number; inputTokens: number; outputTokens: number }>;
     byModel: Record<string, { calls: number; inputTokens: number; outputTokens: number }>;
+    unattributed: { llmCalls: number; inputTokens: number; outputTokens: number };
   };
   byUser: Array<{
     userId: string;
