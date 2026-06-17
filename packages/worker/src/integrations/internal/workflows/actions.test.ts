@@ -35,6 +35,7 @@ describe('workflowsActions', () => {
       expect(byId[id].riskLevel, `expected ${id} to be low`).toBe('low');
     }
     expect(byId['sync_trigger']).toBeDefined();
+    expect(byId['get_execution']).toBeDefined();
     expect(byId['get_execution_steps']).toBeDefined();
   });
 
@@ -84,6 +85,42 @@ describe('workflowsActions', () => {
 
       // Confirm the result does not contain the 'executionId is required' error
       expect(res.error ?? '').not.toMatch(/executionId is required/i);
+    });
+  });
+
+  describe('get_execution', () => {
+    beforeEach(() => {
+      vi.clearAllMocks();
+    });
+
+    it('routes to handleExecutionAction and returns execution details', async () => {
+      const { handleExecutionAction } = await import('../../../services/session-workflows.js');
+      const sentinelData = {
+        execution: {
+          id: 'exec-1',
+          workflowId: 'wf-1',
+          status: 'completed',
+          outputs: { branch: 'normal_path' },
+        },
+      };
+      vi.mocked(handleExecutionAction).mockResolvedValue({ data: sentinelData });
+
+      const res = await workflowsActions.execute(
+        'get_execution',
+        { execution_id: 'exec-1' },
+        makeCtx({ env: { DB: {} } }),
+      );
+
+      expect(res.success).toBe(true);
+      expect(res.data).toEqual(sentinelData);
+      expect(vi.mocked(handleExecutionAction)).toHaveBeenCalledWith(
+        {},
+        {},
+        { DB: {} },
+        'u',
+        'get',
+        { executionId: 'exec-1' },
+      );
     });
   });
 });

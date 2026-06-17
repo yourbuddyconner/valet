@@ -19,7 +19,6 @@ import { Route as WorkflowsIndexRouteImport } from './routes/workflows/index'
 import { Route as SettingsIndexRouteImport } from './routes/settings/index'
 import { Route as SessionsIndexRouteImport } from './routes/sessions/index'
 import { Route as IntegrationsIndexRouteImport } from './routes/integrations/index'
-import { Route as WorkflowsExecutionsRouteImport } from './routes/workflows/executions'
 import { Route as WorkflowsWorkflowIdRouteImport } from './routes/workflows/$workflowId'
 import { Route as SettingsUsageRouteImport } from './routes/settings/usage'
 import { Route as SettingsSkillsRouteImport } from './routes/settings/skills'
@@ -92,11 +91,6 @@ const SessionsIndexRoute = SessionsIndexRouteImport.update({
 const IntegrationsIndexRoute = IntegrationsIndexRouteImport.update({
   id: '/integrations/',
   path: '/integrations/',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const WorkflowsExecutionsRoute = WorkflowsExecutionsRouteImport.update({
-  id: '/workflows/executions',
-  path: '/workflows/executions',
   getParentRoute: () => rootRouteImport,
 } as any)
 const WorkflowsWorkflowIdRoute = WorkflowsWorkflowIdRouteImport.update({
@@ -239,7 +233,6 @@ export interface FileRoutesByFullPath {
   '/settings/skills': typeof SettingsSkillsRouteWithChildren
   '/settings/usage': typeof SettingsUsageRoute
   '/workflows/$workflowId': typeof WorkflowsWorkflowIdRoute
-  '/workflows/executions': typeof WorkflowsExecutionsRoute
   '/integrations/': typeof IntegrationsIndexRoute
   '/sessions/': typeof SessionsIndexRoute
   '/settings/': typeof SettingsIndexRoute
@@ -274,7 +267,6 @@ export interface FileRoutesByTo {
   '/settings/skills': typeof SettingsSkillsRouteWithChildren
   '/settings/usage': typeof SettingsUsageRoute
   '/workflows/$workflowId': typeof WorkflowsWorkflowIdRoute
-  '/workflows/executions': typeof WorkflowsExecutionsRoute
   '/integrations': typeof IntegrationsIndexRoute
   '/sessions': typeof SessionsIndexRoute
   '/settings': typeof SettingsIndexRoute
@@ -311,7 +303,6 @@ export interface FileRoutesById {
   '/settings/skills': typeof SettingsSkillsRouteWithChildren
   '/settings/usage': typeof SettingsUsageRoute
   '/workflows/$workflowId': typeof WorkflowsWorkflowIdRoute
-  '/workflows/executions': typeof WorkflowsExecutionsRoute
   '/integrations/': typeof IntegrationsIndexRoute
   '/sessions/': typeof SessionsIndexRoute
   '/settings/': typeof SettingsIndexRoute
@@ -349,7 +340,6 @@ export interface FileRouteTypes {
     | '/settings/skills'
     | '/settings/usage'
     | '/workflows/$workflowId'
-    | '/workflows/executions'
     | '/integrations/'
     | '/sessions/'
     | '/settings/'
@@ -384,7 +374,6 @@ export interface FileRouteTypes {
     | '/settings/skills'
     | '/settings/usage'
     | '/workflows/$workflowId'
-    | '/workflows/executions'
     | '/integrations'
     | '/sessions'
     | '/settings'
@@ -420,7 +409,6 @@ export interface FileRouteTypes {
     | '/settings/skills'
     | '/settings/usage'
     | '/workflows/$workflowId'
-    | '/workflows/executions'
     | '/integrations/'
     | '/sessions/'
     | '/settings/'
@@ -457,7 +445,6 @@ export interface RootRouteChildren {
   SettingsSkillsRoute: typeof SettingsSkillsRouteWithChildren
   SettingsUsageRoute: typeof SettingsUsageRoute
   WorkflowsWorkflowIdRoute: typeof WorkflowsWorkflowIdRoute
-  WorkflowsExecutionsRoute: typeof WorkflowsExecutionsRoute
   IntegrationsIndexRoute: typeof IntegrationsIndexRoute
   SessionsIndexRoute: typeof SessionsIndexRoute
   SettingsIndexRoute: typeof SettingsIndexRoute
@@ -535,13 +522,6 @@ declare module '@tanstack/react-router' {
       path: '/integrations'
       fullPath: '/integrations/'
       preLoaderRoute: typeof IntegrationsIndexRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/workflows/executions': {
-      id: '/workflows/executions'
-      path: '/workflows/executions'
-      fullPath: '/workflows/executions'
-      preLoaderRoute: typeof WorkflowsExecutionsRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/workflows/$workflowId': {
@@ -788,7 +768,6 @@ const rootRouteChildren: RootRouteChildren = {
   SettingsSkillsRoute: SettingsSkillsRouteWithChildren,
   SettingsUsageRoute: SettingsUsageRoute,
   WorkflowsWorkflowIdRoute: WorkflowsWorkflowIdRoute,
-  WorkflowsExecutionsRoute: WorkflowsExecutionsRoute,
   IntegrationsIndexRoute: IntegrationsIndexRoute,
   SessionsIndexRoute: SessionsIndexRoute,
   SettingsIndexRoute: SettingsIndexRoute,
