@@ -11,3 +11,9 @@ export {
   labelsIntroducedSince,
   snapshotLabels,
 } from './labels.js';
+export {
+  createClassifier,
+  parseClassification,
+  MODEL_IDS,
+  type ClassifierConfig,
+} from './classifier.js';
