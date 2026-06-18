@@ -56,6 +56,10 @@ export interface WorkflowFlowEdge {
   target: string;
   type: 'animated' | 'temporary';
   label?: string;
+  style?: {
+    stroke: string;
+    strokeWidth: number;
+  };
   data: {
     fromOutput?: 'true' | 'false';
     when?: string;
@@ -511,6 +515,10 @@ export function workflowEdgeToFlowEdge(edge: WorkflowEdge): WorkflowFlowEdge {
     ...(edge.fromOutput ? { sourceHandle: edge.fromOutput } : {}),
     target: edge.to,
     type: conditional || edge.when ? 'temporary' : 'animated',
+    style: {
+      stroke: conditional || edge.when ? '#64748b' : '#cbd5e1',
+      strokeWidth: 2,
+    },
     ...(edge.fromOutput ? { label: edge.fromOutput } : edge.when ? { label: 'when' } : {}),
     data: {
       ...(edge.fromOutput ? { fromOutput: edge.fromOutput } : {}),

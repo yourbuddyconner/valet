@@ -74,6 +74,7 @@ describe('workflow editor model', () => {
         source: 'start',
         target: 'branch',
         type: 'animated',
+        style: { stroke: '#cbd5e1', strokeWidth: 2 },
         data: {},
       },
       {
@@ -83,6 +84,7 @@ describe('workflow editor model', () => {
         target: 'done',
         type: 'temporary',
         label: 'true',
+        style: { stroke: '#64748b', strokeWidth: 2 },
         data: { fromOutput: 'true' },
       },
       {
@@ -90,6 +92,7 @@ describe('workflow editor model', () => {
         source: 'trigger',
         target: 'start',
         type: 'animated',
+        style: { stroke: '#cbd5e1', strokeWidth: 2 },
         data: {},
       },
     ]);

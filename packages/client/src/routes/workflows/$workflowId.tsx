@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { createFileRoute, Link, useNavigate } from '@tanstack/react-router';
-import { PageContainer, PageHeader } from '@/components/layout/page-container';
+import { PageContainer } from '@/components/layout/page-container';
 import {
   useWorkflow,
   useWorkflowDraft,
@@ -11,10 +11,16 @@ import {
   useWorkflowVersions,
   useRestoreWorkflowVersion,
   useDeleteWorkflow,
+  useUpdateWorkflow,
 } from '@/api/workflows';
 import { useWorkflowExecutions } from '@/api/executions';
 import { ExecutionApprovalPanel } from '@/components/workflows/execution-approval-panel';
 import { VisualWorkflowEditor } from '@/components/workflows/visual-workflow-editor';
+import {
+  buildWorkflowEditorTabs,
+  getWorkflowEnabledLabel,
+  type WorkflowEditorTab,
+} from '@/components/workflows/workflow-detail-view-model';
 import type { WorkflowDefinition } from '@valet/shared';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -50,10 +56,12 @@ function WorkflowDetailPage() {
   const testRun = useTestRunWorkflow();
   const restoreVersion = useRestoreWorkflowVersion();
   const deleteWorkflow = useDeleteWorkflow();
+  const updateWorkflow = useUpdateWorkflow();
 
   const workflow = data?.workflow;
   const [editorDefinition, setEditorDefinition] = useState<WorkflowDefinition | null>(null);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [activeTab, setActiveTab] = useState<WorkflowEditorTab>('editor');
 
   useEffect(() => {
     setEditorDefinition(draftData?.draft ?? null);
@@ -78,17 +86,6 @@ function WorkflowDetailPage() {
           </p>
         </div>
       </PageContainer>
-    );
-  }
-
-  function handleSave(draft: WorkflowDefinition) {
-    saveDraft.mutate(
-      { workflowId, draft },
-      {
-        onSuccess: () => toastSuccess('Draft saved'),
-        onError: (err) =>
-          toastError(err instanceof Error ? err.message : 'Failed to save draft'),
-      },
     );
   }
 
@@ -151,6 +148,18 @@ function WorkflowDetailPage() {
     }
   }
 
+  function handleSaveClick() {
+    if (!editorDefinition) return;
+    saveDraft.mutate(
+      { workflowId, draft: editorDefinition },
+      {
+        onSuccess: () => toastSuccess('Draft saved'),
+        onError: (err) =>
+          toastError(err instanceof Error ? err.message : 'Failed to save draft'),
+      },
+    );
+  }
+
   function handleRestore(versionId: string) {
     restoreVersion.mutate(
       { workflowId, versionId },
@@ -175,37 +184,23 @@ function WorkflowDetailPage() {
     }
   }
 
+  function handleToggleEnabled() {
+    if (!workflow) return;
+    updateWorkflow.mutate(
+      { workflowId: workflow.id, enabled: !workflow.enabled },
+      {
+        onError: (err) =>
+          toastError(err instanceof Error ? err.message : 'Failed to update workflow'),
+      },
+    );
+  }
+
   const versions = versionsData?.versions ?? [];
   const executions = executionsData?.executions ?? [];
+  const editorTabs = buildWorkflowEditorTabs(executions.length);
 
   return (
-    <PageContainer>
-      <PageHeader
-        title={workflow.name}
-        description={workflow.description ?? undefined}
-        actions={
-          <>
-            <Button
-              variant="destructive"
-              onClick={() => setDeleteDialogOpen(true)}
-              disabled={deleteWorkflow.isPending}
-            >
-              {deleteWorkflow.isPending ? 'Deleting...' : 'Delete'}
-            </Button>
-            <Button
-              variant="secondary"
-              onClick={handleTestRun}
-              disabled={testRun.isPending || saveDraft.isPending}
-            >
-              {testRun.isPending || saveDraft.isPending ? 'Starting...' : 'Test run'}
-            </Button>
-            <Button onClick={handlePublish} disabled={publish.isPending || saveDraft.isPending}>
-              {publish.isPending || saveDraft.isPending ? 'Publishing...' : 'Publish'}
-            </Button>
-          </>
-        }
-      />
-
+    <div className="flex h-full min-h-[720px] flex-col overflow-hidden bg-neutral-950 text-neutral-100">
       <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
@@ -228,134 +223,254 @@ function WorkflowDetailPage() {
         </AlertDialogContent>
       </AlertDialog>
 
-      <section className="space-y-2">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <h2 className="text-sm font-medium text-neutral-900 dark:text-neutral-100">
-              Draft (dag/v1)
-            </h2>
-            {draftData?.publishedVersionId ? (
-              <Badge variant="success">Has published version</Badge>
-            ) : (
-              <Badge variant="secondary">Unpublished</Badge>
-            )}
+      <header className="flex h-16 shrink-0 items-center justify-between gap-4 border-b border-neutral-800 bg-neutral-950 px-5">
+        <div className="flex min-w-0 items-center gap-3">
+          <Link
+            to="/automation/workflows"
+            className="rounded-md px-2 py-1 text-xs text-neutral-400 hover:bg-neutral-900 hover:text-neutral-100"
+          >
+            Back
+          </Link>
+          <div className="min-w-0">
+            <div className="flex min-w-0 items-center gap-2">
+              <h1 className="truncate text-base font-semibold text-neutral-100">
+                {workflow.name}
+              </h1>
+              {workflow.description && (
+                <span className="hidden truncate text-xs text-neutral-500 md:inline">
+                  {workflow.description}
+                </span>
+              )}
+            </div>
+            <div className="mt-0.5 flex items-center gap-2">
+              {draftData?.publishedVersionId ? (
+                <Badge variant="success">Published</Badge>
+              ) : (
+                <Badge variant="secondary">Draft</Badge>
+              )}
+              <span className="font-mono text-[11px] text-neutral-500">
+                dag/v1
+              </span>
+            </div>
           </div>
         </div>
-        {draftLoading ? (
-          <Skeleton className="h-64 w-full" />
-        ) : (
-          <VisualWorkflowEditor
-            definition={draftData?.draft ?? null}
-            isSaving={saveDraft.isPending}
-            onDefinitionChange={setEditorDefinition}
-            onSave={handleSave}
-          />
-        )}
-      </section>
 
-      <section className="mt-8 grid gap-6 md:grid-cols-2">
-        <div>
-          <h2 className="mb-2 text-sm font-medium text-neutral-900 dark:text-neutral-100">
-            Versions
-          </h2>
-          {versions.length === 0 ? (
-            <p className="text-xs text-neutral-500 dark:text-neutral-400">
-              No published versions yet.
-            </p>
-          ) : (
-            <ul className="divide-y divide-neutral-200 rounded-md border border-neutral-200 dark:divide-neutral-700 dark:border-neutral-700">
-              {versions.map((v) => (
-                <li
-                  key={v.id}
-                  className="flex items-center justify-between gap-2 p-3 text-xs"
-                >
-                  <div className="min-w-0 flex-1">
-                    <div className="font-medium text-neutral-900 dark:text-neutral-100">
-                      v{v.version}
-                    </div>
-                    {v.publishNote && (
-                      <div className="text-pretty text-neutral-500 dark:text-neutral-400">
-                        {v.publishNote}
-                      </div>
-                    )}
-                    <div className="tabular-nums text-neutral-400">
-                      {formatRelativeTime(v.createdAt)}
-                    </div>
-                  </div>
-                  <Button
-                    variant="secondary"
-                    onClick={() => handleRestore(v.id)}
-                    disabled={restoreVersion.isPending}
-                  >
-                    Restore
-                  </Button>
-                </li>
-              ))}
-            </ul>
-          )}
+        <div className="hidden rounded-lg border border-neutral-800 bg-neutral-900 p-1 sm:flex">
+          {editorTabs.map((tab) => (
+            <button
+              key={tab.id}
+              type="button"
+              onClick={() => setActiveTab(tab.id)}
+              className={`rounded-md px-3 py-1.5 text-sm transition ${
+                activeTab === tab.id
+                  ? 'bg-neutral-800 text-neutral-100 shadow-sm'
+                  : 'text-neutral-400 hover:text-neutral-100'
+              }`}
+            >
+              {tab.label}
+            </button>
+          ))}
         </div>
 
-        <div>
-          <h2 className="mb-2 text-sm font-medium text-neutral-900 dark:text-neutral-100">
-            Recent executions
-          </h2>
-          {executions.length === 0 ? (
-            <p className="text-xs text-neutral-500 dark:text-neutral-400">
-              No executions yet.
-            </p>
+        <div className="flex shrink-0 items-center gap-2">
+          <button
+            type="button"
+            onClick={handleToggleEnabled}
+            disabled={updateWorkflow.isPending}
+            className="hidden items-center gap-2 rounded-md px-2 py-1.5 text-sm text-neutral-400 hover:bg-neutral-900 hover:text-neutral-100 md:flex"
+          >
+            <span className={workflow.enabled ? 'text-emerald-400' : 'text-neutral-400'}>
+              {getWorkflowEnabledLabel(workflow.enabled)}
+            </span>
+            <span className={`relative h-6 w-11 rounded-full border transition ${
+              workflow.enabled
+                ? 'border-emerald-500/40 bg-emerald-500/25'
+                : 'border-neutral-700 bg-neutral-800'
+            }`}>
+              <span className={`absolute top-0.5 h-5 w-5 rounded-full bg-neutral-300 transition ${
+                workflow.enabled ? 'left-5 bg-emerald-400' : 'left-0.5'
+              }`} />
+            </span>
+          </button>
+          <Button
+            variant="secondary"
+            onClick={handleSaveClick}
+            disabled={saveDraft.isPending || !editorDefinition}
+            className="border border-neutral-700 bg-neutral-900 text-neutral-100 hover:bg-neutral-800"
+          >
+            {saveDraft.isPending ? 'Saving...' : 'Save'}
+          </Button>
+          <Button
+            variant="secondary"
+            onClick={handleTestRun}
+            disabled={testRun.isPending || saveDraft.isPending}
+            className="hidden border border-neutral-700 bg-neutral-900 text-neutral-100 hover:bg-neutral-800 sm:inline-flex"
+          >
+            {testRun.isPending || saveDraft.isPending ? 'Starting...' : 'Test'}
+          </Button>
+          <Button onClick={handlePublish} disabled={publish.isPending || saveDraft.isPending}>
+            {publish.isPending || saveDraft.isPending ? 'Publishing...' : 'Publish'}
+          </Button>
+          <Button
+            variant="ghost"
+            onClick={() => setDeleteDialogOpen(true)}
+            disabled={deleteWorkflow.isPending}
+            className="text-neutral-400 hover:bg-neutral-900 hover:text-red-300"
+            title="Delete workflow"
+          >
+            <MoreIcon />
+          </Button>
+        </div>
+      </header>
+
+      <div className="flex min-h-0 flex-1 flex-col">
+        <div className="flex border-b border-neutral-800 bg-neutral-950 p-1 sm:hidden">
+          {editorTabs.map((tab) => (
+            <button
+              key={tab.id}
+              type="button"
+              onClick={() => setActiveTab(tab.id)}
+              className={`flex-1 rounded-md px-2 py-1.5 text-sm ${
+                activeTab === tab.id ? 'bg-neutral-800 text-neutral-100' : 'text-neutral-400'
+              }`}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
+
+        {activeTab === 'editor' ? (
+          draftLoading ? (
+            <div className="p-4">
+              <Skeleton className="h-[640px] w-full bg-neutral-800" />
+            </div>
           ) : (
-            <ul className="divide-y divide-neutral-200 rounded-md border border-neutral-200 dark:divide-neutral-700 dark:border-neutral-700">
-              {executions.slice(0, 10).map((exec) => (
-                <li key={exec.id} className="space-y-2 p-3 text-xs">
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-2">
-                        <Badge variant={executionBadgeVariant(exec.status)}>
-                          {exec.status}
-                        </Badge>
-                        <Link
-                          to="/automation/executions/$executionId"
-                          params={{ executionId: exec.id }}
-                          className="truncate font-mono text-neutral-500 underline-offset-2 hover:underline"
+            <VisualWorkflowEditor
+              definition={draftData?.draft ?? null}
+              onDefinitionChange={setEditorDefinition}
+              onTestRun={handleTestRun}
+              isTesting={testRun.isPending || saveDraft.isPending}
+              className="min-h-0 flex-1 rounded-none border-0"
+            />
+          )
+        ) : activeTab === 'executions' ? (
+          <div className="min-h-0 flex-1 overflow-auto bg-neutral-950 p-5">
+            <div className="grid gap-5 xl:grid-cols-[minmax(0,1.5fr)_minmax(320px,0.8fr)]">
+              <section className="rounded-lg border border-neutral-800 bg-neutral-900/60">
+                <div className="border-b border-neutral-800 px-4 py-3">
+                  <h2 className="text-sm font-medium text-neutral-100">Executions</h2>
+                </div>
+                {executions.length === 0 ? (
+                  <p className="p-4 text-sm text-neutral-500">No executions yet.</p>
+                ) : (
+                  <ul className="divide-y divide-neutral-800">
+                    {executions.slice(0, 20).map((exec) => (
+                      <li key={exec.id} className="space-y-2 p-4 text-xs">
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-2">
+                              <Badge variant={executionBadgeVariant(exec.status)}>
+                                {exec.status}
+                              </Badge>
+                              <Link
+                                to="/automation/executions/$executionId"
+                                params={{ executionId: exec.id }}
+                                className="truncate font-mono text-neutral-400 underline-offset-2 hover:text-neutral-100 hover:underline"
+                              >
+                                {exec.id.slice(0, 8)}
+                              </Link>
+                            </div>
+                            <div className="mt-1 tabular-nums text-neutral-500">
+                              {formatRelativeTime(exec.startedAt)}
+                            </div>
+                          </div>
+                          {exec.error && (
+                            <span
+                              className="line-clamp-2 max-w-[40%] text-pretty text-red-400"
+                              title={exec.error}
+                            >
+                              {exec.error}
+                            </span>
+                          )}
+                        </div>
+                        {isActiveExecutionStatus(exec.status) && (
+                          <ExecutionApprovalPanel executionId={exec.id} variant="inline" />
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </section>
+
+              <section className="rounded-lg border border-neutral-800 bg-neutral-900/60">
+                <div className="border-b border-neutral-800 px-4 py-3">
+                  <h2 className="text-sm font-medium text-neutral-100">Versions</h2>
+                </div>
+                {versions.length === 0 ? (
+                  <p className="p-4 text-sm text-neutral-500">No published versions yet.</p>
+                ) : (
+                  <ul className="divide-y divide-neutral-800">
+                    {versions.map((v) => (
+                      <li key={v.id} className="flex items-center justify-between gap-3 p-4 text-xs">
+                        <div className="min-w-0 flex-1">
+                          <div className="font-medium text-neutral-100">v{v.version}</div>
+                          {v.publishNote && (
+                            <div className="text-pretty text-neutral-400">{v.publishNote}</div>
+                          )}
+                          <div className="tabular-nums text-neutral-500">
+                            {formatRelativeTime(v.createdAt)}
+                          </div>
+                        </div>
+                        <Button
+                          variant="secondary"
+                          onClick={() => handleRestore(v.id)}
+                          disabled={restoreVersion.isPending}
+                          className="border border-neutral-700 bg-neutral-900 text-neutral-100 hover:bg-neutral-800"
                         >
-                          {exec.id.slice(0, 8)}
-                        </Link>
-                      </div>
-                      <div className="mt-1 tabular-nums text-neutral-400">
-                        {formatRelativeTime(exec.startedAt)}
-                      </div>
-                    </div>
-                    {exec.error && (
-                      <span
-                        className="line-clamp-2 max-w-[40%] text-pretty text-red-500"
-                        title={exec.error}
-                      >
-                        {exec.error}
-                      </span>
-                    )}
-                  </div>
-                  {isActiveExecutionStatus(exec.status) && (
-                    // Mount on any active status, not just waiting_approval:
-                    // parallel approval / tool-policy nodes can leave the
-                    // aggregate status at 'running' while individual nodes
-                    // are pending. The panel polls
-                    // /api/executions/:id/approvals and auto-hides when
-                    // there's no pending row.
-                    <ExecutionApprovalPanel executionId={exec.id} variant="inline" />
-                  )}
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-      </section>
-
-      <div className="mt-8 text-xs text-neutral-500 dark:text-neutral-400">
-        <Link to="/automation/workflows" className="underline">
-          Back to workflows
-        </Link>
+                          Restore
+                        </Button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </section>
+            </div>
+          </div>
+        ) : (
+          <div className="grid min-h-0 flex-1 place-items-center bg-neutral-950 p-5">
+            <section className="w-full max-w-md rounded-lg border border-neutral-800 bg-neutral-900/70 p-5 text-center">
+              <h2 className="text-base font-medium text-neutral-100">Test workflow</h2>
+              <Button
+                className="mt-5 bg-red-500 text-white hover:bg-red-600"
+                onClick={handleTestRun}
+                disabled={testRun.isPending || saveDraft.isPending}
+              >
+                {testRun.isPending || saveDraft.isPending ? 'Starting...' : 'Test workflow'}
+              </Button>
+            </section>
+          </div>
+        )}
       </div>
-    </PageContainer>
+    </div>
+  );
+}
+
+function MoreIcon() {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className="h-4 w-4"
+    >
+      <circle cx="12" cy="12" r="1" />
+      <circle cx="19" cy="12" r="1" />
+      <circle cx="5" cy="12" r="1" />
+    </svg>
   );
 }
 

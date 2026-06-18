@@ -97,9 +97,10 @@ const FOREACH_BODY_NODE_TYPES: ForeachBodyNodeType[] = ['llm', 'tool', 'set', 's
 
 interface VisualWorkflowEditorProps {
   definition: WorkflowDefinition | null;
-  onSave: (definition: WorkflowDefinition) => void;
   onDefinitionChange?: (definition: WorkflowDefinition) => void;
-  isSaving?: boolean;
+  onTestRun?: () => void;
+  isTesting?: boolean;
+  className?: string;
 }
 
 const nodeTypes = {
@@ -121,16 +122,18 @@ export function VisualWorkflowEditor(props: VisualWorkflowEditorProps) {
 
 function VisualWorkflowEditorInner({
   definition,
-  onSave,
   onDefinitionChange,
-  isSaving = false,
+  onTestRun,
+  isTesting = false,
+  className,
 }: VisualWorkflowEditorProps) {
   const initialDefinition = definition ?? createDefaultWorkflowDefinition();
   const initialFlow = React.useMemo(() => definitionToFlow(initialDefinition), [initialDefinition]);
   const [nodes, setNodes] = React.useState<WorkflowFlowNode[]>(initialFlow.nodes);
   const [edges, setEdges] = React.useState<WorkflowFlowEdge[]>(initialFlow.edges);
-  const [selectedNodeId, setSelectedNodeId] = React.useState<string | null>(initialFlow.nodes[0]?.id ?? null);
+  const [selectedNodeId, setSelectedNodeId] = React.useState<string | null>(null);
   const [rawOpen, setRawOpen] = React.useState(false);
+  const [nodePaletteOpen, setNodePaletteOpen] = React.useState(false);
   const [rawJson, setRawJson] = React.useState('');
   const [rawJsonError, setRawJsonError] = React.useState<string | null>(null);
   const [reactFlowInstance, setReactFlowInstance] = React.useState<ReactFlowInstance | null>(null);
@@ -141,7 +144,8 @@ function VisualWorkflowEditorInner({
     const next = definitionToFlow(definition ?? createDefaultWorkflowDefinition());
     setNodes(next.nodes);
     setEdges(next.edges);
-    setSelectedNodeId(next.nodes[0]?.id ?? null);
+    setSelectedNodeId(null);
+    setRawOpen(false);
     setRawJson(JSON.stringify(flowToDefinition(next, definition ?? undefined), null, 2));
   }, [definition]);
 
@@ -236,6 +240,8 @@ function VisualWorkflowEditorInner({
     };
     setNodes((current) => [...current, flowNode]);
     setSelectedNodeId(id);
+    setRawOpen(false);
+    setNodePaletteOpen(false);
   }
 
   function handleApplyRawJson() {
@@ -254,11 +260,8 @@ function VisualWorkflowEditorInner({
     const flow = definitionToFlow(parsed);
     setNodes(flow.nodes);
     setEdges(flow.edges);
-    setSelectedNodeId(flow.nodes[0]?.id ?? null);
-  }
-
-  function handleSave() {
-    onSave(currentDefinition());
+    setSelectedNodeId(null);
+    setRawOpen(false);
   }
 
   function handleUpdateNode(patch: Partial<WorkflowNode>) {
@@ -271,139 +274,251 @@ function VisualWorkflowEditorInner({
   }
 
   return (
-    <div className="grid min-h-[680px] grid-cols-[minmax(0,1fr)_360px] overflow-hidden rounded-lg border border-neutral-200 bg-white dark:border-neutral-700 dark:bg-neutral-900">
-      <div className="relative min-h-[680px]">
-        <Canvas
-          connectionLineComponent={ConnectionLine}
-          edges={edges}
-          edgeTypes={edgeTypes}
-          fitView
-          nodes={nodes}
-          nodeTypes={nodeTypes}
-          onConnect={handleConnect}
-          onEdgesChange={handleEdgesChange}
-          onInit={setReactFlowInstance}
-          onNodeClick={(_, node) => setSelectedNodeId(node.id)}
-          onNodesChange={handleNodesChange}
-        >
-          <Controls />
-          <Panel position="top-left" className="flex max-w-[680px] flex-wrap gap-1.5 p-2">
-            {NODE_TYPE_OPTIONS.map((option) => (
-              <Button
-                key={option.type}
-                type="button"
-                variant="secondary"
-                size="sm"
-                onClick={() => handleAddNode(option.type)}
-                title={option.description}
-              >
-                {option.label}
-              </Button>
-            ))}
-          </Panel>
-          <Panel position="bottom-left" className="flex items-center gap-2 px-2 py-1.5">
-            <span className="text-xs text-neutral-500 dark:text-neutral-400">
-              Drag nodes, connect handles, select items, press Delete to remove.
-            </span>
-          </Panel>
-          {dataFlowWarnings.length > 0 && (
-            <Panel position="bottom-right" className="max-w-sm space-y-1 p-2">
-              {dataFlowWarnings.map((warning) => (
-                <div
-                  key={warning.edgeId}
-                  className="rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-xs text-amber-900 shadow-sm dark:border-amber-900/60 dark:bg-amber-950 dark:text-amber-100"
-                >
-                  {warning.message}
-                </div>
-              ))}
-            </Panel>
-          )}
-        </Canvas>
-      </div>
-
-      <aside className="flex min-h-[680px] flex-col border-l border-neutral-200 bg-surface-0 dark:border-neutral-700 dark:bg-neutral-950">
-        <div className="flex items-center justify-between border-b border-neutral-200 p-3 dark:border-neutral-700">
-          <div>
-            <h2 className="text-sm font-medium text-neutral-900 dark:text-neutral-100">
-              Editor
-            </h2>
-            <p className="text-xs text-neutral-500 dark:text-neutral-400">
-              Configure selected node or raw definition.
-            </p>
-          </div>
-          <Button type="button" onClick={handleSave} disabled={isSaving} size="sm">
-            {isSaving ? 'Saving...' : 'Save'}
-          </Button>
-        </div>
-
-        <div className="flex gap-1 border-b border-neutral-200 p-2 dark:border-neutral-700">
+    <div
+      className={cn(
+        'dark relative h-full min-h-[680px] overflow-hidden rounded-lg border border-neutral-800 bg-neutral-950 text-neutral-100',
+        className,
+      )}
+      style={{ '--surface-1': '#0a0a0a' } as React.CSSProperties}
+    >
+      <Canvas
+        className="bg-neutral-950"
+        connectionLineComponent={ConnectionLine}
+        edges={edges}
+        edgeTypes={edgeTypes}
+        fitView
+        nodes={nodes}
+        nodeTypes={nodeTypes}
+        onConnect={handleConnect}
+        onEdgesChange={handleEdgesChange}
+        onInit={setReactFlowInstance}
+        onNodeClick={(_, node) => {
+          setRawOpen(false);
+          setSelectedNodeId(node.id);
+        }}
+        onPaneClick={() => {
+          setSelectedNodeId(null);
+          setRawOpen(false);
+        }}
+        onNodesChange={handleNodesChange}
+      >
+        <Controls className="border-neutral-700 bg-neutral-900 text-neutral-100 shadow-lg [&>button]:text-neutral-100 [&>button]:hover:bg-neutral-800" />
+        <Panel position="top-right" className="flex items-center gap-2 p-3">
           <Button
             type="button"
-            variant={!rawOpen ? 'primary' : 'secondary'}
+            variant="secondary"
             size="sm"
-            onClick={() => setRawOpen(false)}
-          >
-            Node
-          </Button>
-          <Button
-            type="button"
-            variant={rawOpen ? 'primary' : 'secondary'}
-            size="sm"
-            onClick={() => setRawOpen(true)}
+            onClick={() => {
+              setSelectedNodeId(null);
+              setRawOpen(true);
+            }}
+            className="border border-neutral-700 bg-neutral-900 text-neutral-100 hover:bg-neutral-800"
           >
             JSON
           </Button>
-        </div>
-
-        {rawOpen ? (
-          <div className="flex min-h-0 flex-1 flex-col gap-3 p-3">
-            <textarea
-              value={rawJson}
-              onChange={(event) => setRawJson(event.target.value)}
-              spellCheck={false}
-              className="min-h-0 flex-1 resize-none rounded-md border border-neutral-200 bg-white p-3 font-mono text-xs text-neutral-900 focus:border-neutral-400 focus:outline-none dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100"
-            />
-            {rawJsonError && <p className="text-xs text-red-600 dark:text-red-400">{rawJsonError}</p>}
-            <Button type="button" variant="secondary" onClick={handleApplyRawJson}>
-              Apply JSON to canvas
+          <Dialog open={nodePaletteOpen} onOpenChange={setNodePaletteOpen}>
+            <DialogTrigger asChild>
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                className="h-11 w-11 border border-neutral-700 bg-neutral-900 p-0 text-neutral-100 hover:bg-neutral-800"
+                title="Add node"
+              >
+                <PlusIcon className="h-5 w-5" />
+              </Button>
+            </DialogTrigger>
+            <DialogContent className="max-w-sm">
+              <DialogTitle>Add node</DialogTitle>
+              <div className="grid gap-2">
+                {NODE_TYPE_OPTIONS.map((option) => (
+                  <Button
+                    key={option.type}
+                    type="button"
+                    variant="secondary"
+                    className="justify-start"
+                    onClick={() => handleAddNode(option.type)}
+                    title={option.description}
+                  >
+                    {option.label}
+                  </Button>
+                ))}
+              </div>
+            </DialogContent>
+          </Dialog>
+        </Panel>
+        {onTestRun && (
+          <Panel position="bottom-center" className="p-4">
+            <Button
+              type="button"
+              onClick={onTestRun}
+              disabled={isTesting}
+              className="h-11 bg-red-500 px-6 text-white shadow-lg hover:bg-red-600"
+            >
+              <FlaskIcon className="mr-2 h-4 w-4" />
+              {isTesting ? 'Starting...' : 'Test workflow'}
             </Button>
-          </div>
-        ) : selectedNode ? (
-          <NodeInspector
-            definition={currentDefinition()}
-            node={selectedNode}
-            onUpdate={handleUpdateNode}
-          />
-        ) : (
-          <div className="p-4 text-sm text-neutral-500 dark:text-neutral-400">
-            Select a node to edit its configuration.
-          </div>
+          </Panel>
         )}
-      </aside>
+        {dataFlowWarnings.length > 0 && (
+          <Panel position="bottom-right" className="max-w-sm space-y-1 p-3">
+            {dataFlowWarnings.map((warning) => (
+              <div
+                key={warning.edgeId}
+                className="rounded-md border border-amber-500/40 bg-amber-950/90 px-2 py-1 text-xs text-amber-100 shadow-sm"
+              >
+                {warning.message}
+              </div>
+            ))}
+          </Panel>
+        )}
+      </Canvas>
+
+      {(rawOpen || selectedNode) && (
+        <aside className="absolute bottom-3 right-3 top-3 z-10 flex w-[380px] max-w-[calc(100%-1.5rem)] flex-col overflow-hidden rounded-lg border border-neutral-800 bg-neutral-950/95 shadow-2xl backdrop-blur">
+          <div className="flex items-center justify-between border-b border-neutral-800 p-3">
+            <div>
+              <h2 className="text-sm font-medium text-neutral-100">
+                {rawOpen ? 'JSON' : 'Editor'}
+              </h2>
+              <p className="text-xs text-neutral-400">
+                {rawOpen ? 'Raw workflow definition' : selectedNode?.data.label}
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              {!rawOpen && (
+                <Button type="button" variant="secondary" size="sm" onClick={() => setRawOpen(true)}>
+                  JSON
+                </Button>
+              )}
+              {rawOpen && selectedNode && (
+                <Button type="button" variant="secondary" size="sm" onClick={() => setRawOpen(false)}>
+                  Node
+                </Button>
+              )}
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={() => {
+                  setRawOpen(false);
+                  setSelectedNodeId(null);
+                }}
+                title="Close"
+              >
+                <CloseIcon className="h-4 w-4" />
+              </Button>
+            </div>
+          </div>
+
+          {rawOpen ? (
+            <div className="flex min-h-0 flex-1 flex-col gap-3 p-3">
+              <textarea
+                value={rawJson}
+                onChange={(event) => setRawJson(event.target.value)}
+                spellCheck={false}
+                className="min-h-0 flex-1 resize-none rounded-md border border-neutral-800 bg-neutral-900 p-3 font-mono text-xs text-neutral-100 focus:border-neutral-500 focus:outline-none"
+              />
+              {rawJsonError && <p className="text-xs text-red-400">{rawJsonError}</p>}
+              <Button type="button" variant="secondary" onClick={handleApplyRawJson}>
+                Apply JSON to canvas
+              </Button>
+            </div>
+          ) : selectedNode ? (
+            <NodeInspector
+              definition={currentDefinition()}
+              node={selectedNode}
+              onUpdate={handleUpdateNode}
+            />
+          ) : null}
+        </aside>
+      )}
     </div>
+  );
+}
+
+function PlusIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+    >
+      <path d="M12 5v14" />
+      <path d="M5 12h14" />
+    </svg>
+  );
+}
+
+function CloseIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+    >
+      <path d="M18 6 6 18" />
+      <path d="m6 6 12 12" />
+    </svg>
+  );
+}
+
+function FlaskIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+    >
+      <path d="M9 3h6" />
+      <path d="M10 3v6.2L4.4 18.7A2 2 0 0 0 6.1 22h11.8a2 2 0 0 0 1.7-3.3L14 9.2V3" />
+      <path d="M8 15h8" />
+    </svg>
   );
 }
 
 function WorkflowNodeCard({ data, selected }: NodeProps) {
   const nodeData = data as WorkflowFlowNodeData;
   return (
-    <Node handles={nodeData.handles} className={cn(selected && 'ring-2 ring-accent/40')}>
-      <NodeHeader>
+    <Node
+      handles={nodeData.handles}
+      className={cn(
+        'border-neutral-700 bg-neutral-900/95 text-neutral-100 shadow-xl shadow-black/20',
+        '[&_.react-flow__handle]:border-neutral-950 [&_.react-flow__handle]:bg-neutral-300',
+        selected && 'border-red-400 ring-2 ring-red-400/35',
+      )}
+    >
+      <NodeHeader className="border-neutral-800 bg-neutral-900">
         <div className="flex items-start justify-between gap-2">
           <div className="min-w-0">
-            <NodeTitle className="truncate">{nodeData.label}</NodeTitle>
-            <NodeDescription className="truncate">{nodeData.node.id}</NodeDescription>
+            <NodeTitle className="truncate text-neutral-100">{nodeData.label}</NodeTitle>
+            <NodeDescription className="truncate text-neutral-500">{nodeData.node.id}</NodeDescription>
           </div>
           <Badge variant="secondary">{nodeData.nodeType}</Badge>
         </div>
       </NodeHeader>
       <NodeContent>
-        <p className="line-clamp-3 text-xs text-neutral-600 dark:text-neutral-300">
+        <p className="line-clamp-3 text-xs text-neutral-300">
           {nodeData.summary}
         </p>
       </NodeContent>
-      <NodeFooter>
-        <p className="truncate text-xs text-neutral-400">{nodeData.description}</p>
+      <NodeFooter className="border-neutral-800 bg-neutral-900">
+        <p className="truncate text-xs text-neutral-500">{nodeData.description}</p>
       </NodeFooter>
     </Node>
   );
