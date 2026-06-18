@@ -364,9 +364,17 @@ workflowsRouter.put('/:id/draft', zValidator('json', draftPutSchema), async (c) 
   const { id } = await assertWorkflowAccess(c.get('db'), user, idOrSlug, 'editor');
   const { saveDraft, WorkflowVersionError } = await import('../services/workflow-versions.js');
   const { isWorkflowDefinition } = await import('../lib/workflow-dag/schema.js');
-  const { validateDefinition } = await import('../lib/workflow-dag/validator.js');
+  const { validateDefinition, validateAgainstAvailableModels, groupWorkflowValidationResults } = await import('../lib/workflow-dag/validator.js');
   if (!isWorkflowDefinition(body.draft)) {
     return c.json({ error: 'invalid_draft', errors: validateDefinition(body.draft) }, 400);
+  }
+  const { assembleLlmProviderEnv } = await import('../lib/llm/provider-env.js');
+  const { resolveAvailableModels } = await import('../services/model-catalog.js');
+  const providerEnv = await assembleLlmProviderEnv(c.get('db'), c.env);
+  const validationEnv = { ...c.env, ...providerEnv } as Env;
+  const modelErrors = validateAgainstAvailableModels(body.draft, await resolveAvailableModels(c.get('db'), validationEnv));
+  if (modelErrors.length > 0) {
+    return c.json({ error: 'invalid_draft', ...groupWorkflowValidationResults(modelErrors) }, 400);
   }
   try {
     await saveDraft(c.get('db'), id, body.draft, body.ui);
@@ -400,7 +408,12 @@ workflowsRouter.post('/:id/validate', async (c) => {
   }
   // Both validators are total — no try/catch needed.
   const structuralErrors = validateDefinition(result.draft);
-  const envErrors = validateAgainstEnvironment(result.draft, c.env);
+  const { assembleLlmProviderEnv } = await import('../lib/llm/provider-env.js');
+  const { resolveAvailableModels } = await import('../services/model-catalog.js');
+  const providerEnv = await assembleLlmProviderEnv(c.get('db'), c.env);
+  const validationEnv = { ...c.env, ...providerEnv } as Env;
+  const availableModels = await resolveAvailableModels(c.get('db'), validationEnv);
+  const envErrors = validateAgainstEnvironment(result.draft, validationEnv, { availableModels });
   return c.json(groupWorkflowValidationResults([...structuralErrors, ...envErrors]));
 });
 
@@ -411,10 +424,16 @@ workflowsRouter.post('/:id/publish', zValidator('json', publishSchema), async (c
   const { assertWorkflowAccess } = await import('../lib/workflow-access.js');
   const { id } = await assertWorkflowAccess(c.get('db'), user, idOrSlug, 'editor');
   const { publishDraft, WorkflowVersionError } = await import('../services/workflow-versions.js');
+  const { assembleLlmProviderEnv } = await import('../lib/llm/provider-env.js');
+  const { resolveAvailableModels } = await import('../services/model-catalog.js');
+  const providerEnv = await assembleLlmProviderEnv(c.get('db'), c.env);
+  const validationEnv = { ...c.env, ...providerEnv } as Env;
+  const availableModels = await resolveAvailableModels(c.get('db'), validationEnv);
   try {
     const result = await publishDraft(c.get('db'), id, {
       userId: user.id,
-      env: c.env,
+      env: validationEnv,
+      availableModels,
       ...(body.publishNote ? { publishNote: body.publishNote } : {}),
     });
     return c.json(result);

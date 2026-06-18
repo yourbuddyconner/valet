@@ -22,10 +22,12 @@ import { createExecution, WorkflowExecutionStartError } from '../services/workfl
 import { assembleLlmProviderEnv } from '../lib/llm/provider-env.js';
 import {
   groupWorkflowValidationResults,
+  validateAgainstAvailableModels,
   validateAgainstEnvironment,
   validateDefinition,
   type GroupedWorkflowValidation,
 } from '../lib/workflow-dag/validator.js';
+import { resolveAvailableModels } from '../services/model-catalog.js';
 import { allowedIfOperations } from '../lib/workflow-dag/if-operations.js';
 import {
   FOREACH_BODY_NODE_TYPES,
@@ -485,6 +487,15 @@ async function saveDraftAction(
       validation: await validateWorkflowDefinitionInput(db, params.draft, env),
     };
   }
+  const modelErrors = await validateDraftModelCatalog(db, env, params.draft);
+  if (modelErrors.length > 0) {
+    return {
+      ok: false,
+      saved: false,
+      workflowId: id,
+      validation: groupWorkflowValidationResults(modelErrors),
+    };
+  }
   await saveDraft(db, id, params.draft, params.ui);
   const result: { ok: true; saved: true; workflowId: string; validation?: GroupedWorkflowValidation } = { ok: true, saved: true, workflowId: id };
   if (params.validate) {
@@ -520,9 +531,10 @@ async function validateWorkflowAction(
 async function validateWorkflowDefinition(db: AppDb, definition: WorkflowDefinition, env: Env): Promise<GroupedWorkflowValidation> {
   const providerEnv = await assembleLlmProviderEnv(db, env);
   const validationEnv = { ...env, ...providerEnv } as Env;
+  const availableModels = await resolveAvailableModels(db, validationEnv);
   return groupWorkflowValidationResults([
     ...validateDefinition(definition),
-    ...validateAgainstEnvironment(definition, validationEnv),
+    ...validateAgainstEnvironment(definition, validationEnv, { availableModels }),
   ]);
 }
 
@@ -533,6 +545,17 @@ async function validateWorkflowDefinitionInput(db: AppDb, definition: unknown, e
   return validateWorkflowDefinition(db, definition, env);
 }
 
+async function validateDraftModelCatalog(
+  db: AppDb,
+  env: Env,
+  definition: WorkflowDefinition,
+): Promise<ReturnType<typeof validateAgainstAvailableModels>> {
+  const providerEnv = await assembleLlmProviderEnv(db, env);
+  const validationEnv = { ...env, ...providerEnv } as Env;
+  const availableModels = await resolveAvailableModels(db, validationEnv);
+  return validateAgainstAvailableModels(definition, availableModels);
+}
+
 async function publishWorkflowAction(
   db: AppDb,
   env: Env,
@@ -540,9 +563,13 @@ async function publishWorkflowAction(
   params: { workflowId: string; publishNote?: string },
 ) {
   const { id } = await assertWorkflowAccess(db, { id: userId }, params.workflowId, 'editor');
+  const providerEnv = await assembleLlmProviderEnv(db, env);
+  const validationEnv = { ...env, ...providerEnv } as Env;
+  const availableModels = await resolveAvailableModels(db, validationEnv);
   return publishDraft(db, id, {
     userId,
-    env,
+    env: validationEnv,
+    availableModels,
     ...(params.publishNote ? { publishNote: params.publishNote } : {}),
   });
 }

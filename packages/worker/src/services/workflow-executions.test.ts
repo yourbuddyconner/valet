@@ -12,28 +12,52 @@ let db: AppDb;
 let createdInstances: Array<{ id: string; params: unknown }> = [];
 const ENCRYPTION_KEY = 'k';
 
-vi.mock('../lib/drizzle.js', () => ({
-  getDb: () => db,
-}));
+vi.mock('../lib/drizzle.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../lib/drizzle.js')>();
+  return {
+    ...actual,
+    getDb: () => db,
+  };
+});
 
 import { createExecution, WorkflowExecutionStartError } from './workflow-executions.js';
 
 function makeEnv(): Env {
+  type WorkflowCreateInput = Parameters<Env['WORKFLOW_INTERPRETER']['create']>[0];
+  type WorkflowInstance = Awaited<ReturnType<Env['WORKFLOW_INTERPRETER']['create']>>;
+  const workflowInstance = (id: string): WorkflowInstance => ({ id }) as WorkflowInstance;
+  const captureWorkflowInput = (input: WorkflowCreateInput): string => {
+    if (!input?.id) throw new Error('workflow mock requires an id');
+    createdInstances.push({ id: input.id, params: input.params });
+    return input.id;
+  };
+  const workflowInterpreter: Env['WORKFLOW_INTERPRETER'] = {
+    async create(input: WorkflowCreateInput) {
+      return workflowInstance(captureWorkflowInput(input));
+    },
+    async get(id: string) {
+      return workflowInstance(id);
+    },
+    async createBatch(inputs: WorkflowCreateInput[]) {
+      const ids: string[] = [];
+      for (const input of inputs) {
+        ids.push(captureWorkflowInput(input));
+      }
+      return ids.map(workflowInstance);
+    },
+  };
+
   return {
     DB: {} as Env['DB'],
     SESSIONS: {} as Env['SESSIONS'],
     EVENT_BUS: {} as Env['EVENT_BUS'],
-    WORKFLOW_INTERPRETER: {
-      create: async (input: { id: string; params: unknown }) => {
-        createdInstances.push(input);
-      },
-    } as unknown as Env['WORKFLOW_INTERPRETER'],
+    WORKFLOW_INTERPRETER: workflowInterpreter,
     ENCRYPTION_KEY,
     GOOGLE_CLIENT_ID: '',
     GOOGLE_CLIENT_SECRET: '',
     MODAL_BACKEND_URL: '',
     FRONTEND_URL: '',
-  } as unknown as Env;
+  } as Env;
 }
 
 // Create a workflow AND a published version linked via published_version_id
@@ -115,7 +139,7 @@ describe('createExecution', () => {
     makeWorkflow('wf1', {
       version: 'dag/v1',
       nodes: [
-        { id: 'l', type: 'llm', model: 'anthropic:claude-3-5-sonnet', prompt: 'x', maxOutputTokens: 100 },
+        { id: 'l', type: 'llm', model: 'anthropic:claude-sonnet-4-20250514', prompt: 'x', maxOutputTokens: 100 },
         { id: 'done', type: 'stop' },
       ],
       edges: [{ from: 'l', to: 'done' }],
@@ -133,7 +157,7 @@ describe('createExecution', () => {
     makeWorkflow('wf1', {
       version: 'dag/v1',
       nodes: [
-        { id: 'l', type: 'llm', model: 'anthropic:claude-3-5-sonnet', prompt: 'x', maxOutputTokens: 100 },
+        { id: 'l', type: 'llm', model: 'anthropic:claude-sonnet-4-20250514', prompt: 'x', maxOutputTokens: 100 },
         { id: 'done', type: 'stop' },
       ],
       edges: [{ from: 'l', to: 'done' }],
@@ -142,6 +166,8 @@ describe('createExecution', () => {
       provider: 'anthropic',
       key: 'sk-ant-db',
       setBy: 'u1',
+      models: [{ id: 'claude-sonnet-4-20250514', name: 'Claude Sonnet 4' }],
+      showAllModels: false,
     });
 
     const result = await createExecution(makeEnv(), {

@@ -1993,7 +1993,7 @@ Edges from an \`if\` node must include \`fromOutput\`:
 }
 \`\`\`
 
-Model IDs use \`provider:model\`, not \`provider/model\`. Supported providers are \`anthropic\`, \`openai\`, and \`google\`. The provider API key must be configured as an org LLM key in the admin UI/DB, or as a Worker env fallback secret; otherwise validation/test-run returns an environment error. \`maxOutputTokens\` is not required, but omitting it returns a warning.
+Model IDs use \`provider:model\`, not \`provider/model\`. Supported providers are \`anthropic\`, \`openai\`, and \`google\`. The provider API key must be configured as an org LLM key in the admin UI/DB, or as a Worker env fallback secret; otherwise validation/test-run returns an environment error. The model must also exist in the configured model catalog used by the settings pages/model picker; stale model IDs are rejected with \`llm_model_unavailable\` and suggestions. \`maxOutputTokens\` is not required, but omitting it returns a warning.
 
 \`tool\` calls a remote integration action:
 

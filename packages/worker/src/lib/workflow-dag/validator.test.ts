@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { validateDefinition, validateInputs, validateAgainstEnvironment } from './validator.js';
+import { validateDefinition, validateInputs, validateAgainstEnvironment, validateAgainstAvailableModels } from './validator.js';
 import type { WorkflowDefinition } from '@valet/shared';
 import type { Env } from '../../env.js';
 
@@ -626,6 +626,48 @@ describe('validateAgainstEnvironment', () => {
     });
     const errs = validateAgainstEnvironment(def, {} as Env);
     expect(errs.some((e) => e.code === 'llm_provider_key_missing' && e.nodeId === 'inner')).toBe(true);
+  });
+});
+
+describe('validateAgainstAvailableModels', () => {
+  it('rejects llm nodes whose model is not in the resolved model catalog', () => {
+    const def = definition({
+      nodes: [
+        { id: 'extract', type: 'llm', model: 'anthropic:claude-sonnet-4-6-20250929', prompt: 'do it', maxOutputTokens: 100 },
+        { id: 'finish', type: 'stop' },
+      ],
+      edges: [{ from: 'extract', to: 'finish' }],
+    });
+
+    const errs = validateAgainstAvailableModels(def, [
+      { provider: 'Anthropic', models: [{ id: 'anthropic/claude-sonnet-4-20250514', name: 'Claude Sonnet 4' }] },
+    ]);
+
+    expect(errs).toEqual([
+      expect.objectContaining({
+        scope: 'node',
+        nodeId: 'extract',
+        code: 'llm_model_unavailable',
+        message: expect.stringContaining('anthropic:claude-sonnet-4-6-20250929'),
+      }),
+    ]);
+    expect(errs[0]?.message).toContain('anthropic:claude-sonnet-4-20250514');
+  });
+
+  it('accepts workflow colon model IDs when the picker catalog uses slash model IDs', () => {
+    const def = definition({
+      nodes: [
+        { id: 'extract', type: 'llm', model: 'anthropic:claude-sonnet-4-20250514', prompt: 'do it', maxOutputTokens: 100 },
+        { id: 'finish', type: 'stop' },
+      ],
+      edges: [{ from: 'extract', to: 'finish' }],
+    });
+
+    const errs = validateAgainstAvailableModels(def, [
+      { provider: 'Anthropic', models: [{ id: 'anthropic/claude-sonnet-4-20250514', name: 'Claude Sonnet 4' }] },
+    ]);
+
+    expect(errs).toEqual([]);
   });
 });
 

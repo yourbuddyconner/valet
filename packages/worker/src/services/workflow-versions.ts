@@ -16,8 +16,8 @@ import { and, eq, desc, inArray } from 'drizzle-orm';
 import type { AppDb } from '../lib/drizzle.js';
 import { workflows } from '../lib/schema/workflows.js';
 import { workflowDefinitionVersions } from '../lib/schema/workflow-definition-versions.js';
-import type { WorkflowDefinition, WorkflowValidationError } from '@valet/shared';
-import { validateDefinition, validateAgainstEnvironment } from '../lib/workflow-dag/validator.js';
+import type { AvailableModels, WorkflowDefinition, WorkflowValidationError } from '@valet/shared';
+import { validateDefinition, validateAgainstEnvironment, validateAgainstAvailableModels } from '../lib/workflow-dag/validator.js';
 import type { Env } from '../env.js';
 import { sha256Hex } from '../lib/hash.js';
 
@@ -75,7 +75,7 @@ export async function saveDraft(db: AppDb, workflowId: string, draft: WorkflowDe
 export async function publishDraft(
   db: AppDb,
   workflowId: string,
-  opts: { userId: string; publishNote?: string; ui?: string | null; env?: Env },
+  opts: { userId: string; publishNote?: string; ui?: string | null; env?: Env; availableModels?: AvailableModels },
 ): Promise<{ version: PublishedVersion }> {
   const row = await db.select({
     draftDefinition: workflows.draftDefinition,
@@ -106,13 +106,19 @@ export async function publishDraft(
   // workflow that referencing an unconfigured provider, and the
   // execution start path later rejects it with invalid_env.
   if (opts.env) {
-    const envErrors = validateAgainstEnvironment(def, opts.env);
+    const envErrors = validateAgainstEnvironment(def, opts.env, { availableModels: opts.availableModels });
     if (envErrors.length > 0) {
       throw new WorkflowVersionError(
         'invalid_definition',
         'draft references resources not configured in this environment',
         envErrors,
       );
+    }
+  }
+  if (!opts.env && opts.availableModels) {
+    const modelErrors = validateAgainstAvailableModels(def, opts.availableModels);
+    if (modelErrors.length > 0) {
+      throw new WorkflowVersionError('invalid_definition', 'draft references unavailable LLM models', modelErrors);
     }
   }
 

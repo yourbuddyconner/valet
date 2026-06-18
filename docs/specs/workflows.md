@@ -54,7 +54,7 @@ All actions still flow through action policy resolution and invocation audit row
 { "errors": [], "warnings": [] }
 ```
 
-`llm_maxoutput_warning` is advisory and does not block publish; structural errors, invalid environment references, malformed templates, missing provider keys, and graph errors are blocking. LLM provider-key validation resolves built-in provider keys from `org_api_keys` first and Worker env fallback secrets second, matching session env assembly. `workflows.save_draft` requires a structurally valid `WorkflowDefinition`, but accepts `validate: true` to return the same grouped semantic/environment validation result after saving the draft.
+`llm_maxoutput_warning` is advisory and does not block publish; structural errors, invalid environment references, malformed templates, missing provider keys, unavailable LLM models, and graph errors are blocking. LLM provider-key validation resolves built-in provider keys from `org_api_keys` first and Worker env fallback secrets second, matching session env assembly. LLM model IDs are checked against the same resolved model catalog used by settings pages and model pickers; workflow definitions use `provider:model`, while the picker catalog stores `provider/model`, so validation normalizes between those forms. `workflows.save_draft` requires a structurally valid `WorkflowDefinition` and rejects known-unavailable LLM models before writing the draft, but still accepts semantically incomplete drafts; pass `validate: true` to return the same grouped semantic/environment validation result after saving.
 
 The validator fails fast on unknown node types before per-node discriminator validation. Errors enumerate valid node types (`trigger`, `llm`, `tool`, `set`, `if`, `wait`, `approval`, `foreach`, `orchestrator`, `session`, `stop`) and include migration hints for old or incorrect names such as `agent_prompt` → `llm`, `http`/`action` → `tool`, `loop` → `foreach`, and `sleep` → `wait`. `bash` is not a dag/v1 node type.
 
@@ -238,7 +238,7 @@ Active executions (`pending`, `running`, `waiting_approval`, `waiting_time`) are
 | PUT | `/:id` | Update workflow fields |
 | DELETE | `/:id` | Delete workflow and its triggers |
 | GET | `/:id/draft` | Fetch the current draft definition + UI layout |
-| PUT | `/:id/draft` | Save a draft (not validated until publish) |
+| PUT | `/:id/draft` | Save a structurally valid draft; rejects known-unavailable LLM models |
 | POST | `/:id/validate` | Run the validator against the current draft |
 | POST | `/:id/publish` | Publish the draft as a new `workflow_definition_versions` row |
 | POST | `/:id/test-run` | Execute the draft against a sample trigger payload + input overrides |

@@ -14,6 +14,7 @@
  */
 
 import type {
+  AvailableModels,
   WorkflowDefinition,
   WorkflowEdge,
   WorkflowNode,
@@ -878,6 +879,7 @@ function deepEqual(a: unknown, b: unknown): boolean {
 export function validateAgainstEnvironment(
   input: unknown,
   env: Env,
+  options: { availableModels?: AvailableModels | null } = {},
 ): WorkflowValidationError[] {
   // Total — no-op when the shape is malformed (callers use
   // validateDefinition for the structural complaint).
@@ -885,13 +887,69 @@ export function validateAgainstEnvironment(
   if (shape.length > 0) return [];
   const def = input as WorkflowDefinition;
   const errors: WorkflowValidationError[] = [];
+  const modelLookup = options.availableModels ? buildAvailableModelLookup(options.availableModels) : null;
   for (const node of def.nodes) {
-    collectEnvErrors(node, env, errors);
+    collectEnvErrors(node, env, errors, modelLookup);
   }
   return errors;
 }
 
-function collectEnvErrors(node: WorkflowNode, env: Env, errors: WorkflowValidationError[]): void {
+export function validateAgainstAvailableModels(
+  input: unknown,
+  availableModels: AvailableModels,
+): WorkflowValidationError[] {
+  const shape = validateDefinitionShape(input);
+  if (shape.length > 0) return [];
+  const lookup = buildAvailableModelLookup(availableModels);
+  const def = input as WorkflowDefinition;
+  const errors: WorkflowValidationError[] = [];
+  for (const node of def.nodes) {
+    collectModelAvailabilityErrors(node, errors, lookup);
+  }
+  return errors;
+}
+
+interface AvailableModelLookup {
+  ids: Set<string>;
+  byProvider: Map<string, string[]>;
+}
+
+function buildAvailableModelLookup(availableModels: AvailableModels): AvailableModelLookup {
+  const ids = new Set<string>();
+  const byProvider = new Map<string, string[]>();
+
+  for (const provider of availableModels) {
+    for (const model of provider.models) {
+      ids.add(model.id);
+      const slash = model.id.indexOf('/');
+      if (slash <= 0) continue;
+      const providerId = model.id.slice(0, slash);
+      const existing = byProvider.get(providerId) ?? [];
+      existing.push(model.id);
+      byProvider.set(providerId, existing);
+    }
+  }
+
+  return { ids, byProvider };
+}
+
+function workflowModelToCatalogId(modelId: string): { provider: string; catalogId: string } {
+  const { provider, model } = parseModelId(modelId);
+  return { provider, catalogId: `${provider}/${model}` };
+}
+
+function catalogIdToWorkflowId(catalogId: string): string {
+  const slash = catalogId.indexOf('/');
+  if (slash <= 0) return catalogId;
+  return `${catalogId.slice(0, slash)}:${catalogId.slice(slash + 1)}`;
+}
+
+function collectEnvErrors(
+  node: WorkflowNode,
+  env: Env,
+  errors: WorkflowValidationError[],
+  modelLookup: AvailableModelLookup | null,
+): void {
   if (node.type === 'llm') {
     if (!node.model) {
       errors.push({
@@ -912,6 +970,9 @@ function collectEnvErrors(node: WorkflowNode, env: Env, errors: WorkflowValidati
           message: `llm node "${node.id}" uses provider "${provider}" but its API key is not configured`,
         });
       }
+      if (modelLookup) {
+        collectModelAvailabilityErrors(node, errors, modelLookup);
+      }
     } catch (err) {
       errors.push({
         scope: 'node',
@@ -929,6 +990,46 @@ function collectEnvErrors(node: WorkflowNode, env: Env, errors: WorkflowValidati
   // "unknown service" case loudly at execution time. Re-enable a
   // publish-time check once the validator accepts a CustomMcpConnectorContext.
   if (node.type === 'foreach') {
-    collectEnvErrors(node.body as WorkflowNode, env, errors);
+    collectEnvErrors(node.body as WorkflowNode, env, errors, modelLookup);
+  }
+}
+
+function collectModelAvailabilityErrors(
+  node: WorkflowNode,
+  errors: WorkflowValidationError[],
+  modelLookup: AvailableModelLookup,
+): void {
+  if (node.type === 'llm') {
+    if (!node.model) return;
+    try {
+      const { provider, catalogId } = workflowModelToCatalogId(node.model);
+      const providerModels = modelLookup.byProvider.get(provider);
+      if (!providerModels || providerModels.length === 0) return;
+      if (modelLookup.ids.has(catalogId)) return;
+
+      const suggestions = providerModels
+        .slice(0, 8)
+        .map(catalogIdToWorkflowId)
+        .join(', ');
+      errors.push({
+        scope: 'node',
+        nodeId: node.id,
+        path: 'model',
+        code: 'llm_model_unavailable',
+        message: `llm node "${node.id}" uses model "${node.model}", but it is not in the configured model catalog for provider "${provider}".${suggestions ? ` Available models include: ${suggestions}` : ''}`,
+      });
+    } catch (err) {
+      errors.push({
+        scope: 'node',
+        nodeId: node.id,
+        path: 'model',
+        code: 'llm_model_id_invalid',
+        message: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  if (node.type === 'foreach') {
+    collectModelAvailabilityErrors(node.body as WorkflowNode, errors, modelLookup);
   }
 }

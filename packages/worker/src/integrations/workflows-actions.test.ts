@@ -9,9 +9,11 @@ import { saveDraft } from '../services/workflow-versions.js';
 import { setOrgLlmKey } from '../services/admin.js';
 import { workflowActions } from './workflows-actions.js';
 import type { Env } from '../env.js';
+import type { AppDb } from '../lib/drizzle.js';
 
 const USER_ID = 'workflow-actions-user';
 const ENCRYPTION_KEY = 'test-encryption-key';
+type WorkerActionTestContext = Parameters<typeof workflowActions.execute>[2] & { appDb: AppDb; env: Env };
 
 describe('workflowActions', () => {
   beforeEach(() => {
@@ -246,6 +248,60 @@ describe('workflowActions', () => {
       workflowId: created.workflow.id,
       validation: { errors: [], warnings: [] },
     });
+  });
+
+  it('does not save a typed draft with an unavailable llm model', async () => {
+    const { db } = createTestDb();
+    const appDb = db as AppDb;
+    const env = { ENCRYPTION_KEY } as Env;
+    const context: WorkerActionTestContext = {
+      credentials: {},
+      userId: USER_ID,
+      appDb,
+      env,
+    };
+    db.insert(users).values({ id: USER_ID, email: 'workflow-actions@example.com' }).run();
+    await setOrgLlmKey(appDb, ENCRYPTION_KEY, {
+      provider: 'anthropic',
+      key: 'sk-ant-db',
+      setBy: USER_ID,
+      models: [{ id: 'claude-sonnet-4-20250514', name: 'Claude Sonnet 4' }],
+      showAllModels: false,
+    });
+    const created = await createWorkflow(appDb, USER_ID, { name: 'Reject stale model' });
+
+    const result = await workflowActions.execute('workflows.save_draft', {
+      workflowId: created.workflow.id,
+      draft: {
+        version: 'dag/v1',
+        nodes: [
+          { id: 'generate', type: 'llm', model: 'anthropic:claude-sonnet-4-6-20250929', prompt: 'Say hi', maxOutputTokens: 100 },
+          { id: 'done', type: 'stop' },
+        ],
+        edges: [{ from: 'generate', to: 'done' }],
+      },
+    }, context);
+
+    expect(result.success).toBe(true);
+    expect(result.data).toMatchObject({
+      ok: false,
+      saved: false,
+      workflowId: created.workflow.id,
+      validation: {
+        errors: [expect.objectContaining({
+          code: 'llm_model_unavailable',
+          nodeId: 'generate',
+          message: expect.stringContaining('anthropic:claude-sonnet-4-6-20250929'),
+        })],
+        warnings: [],
+      },
+    });
+
+    const draft = await workflowActions.execute('workflows.get', {
+      workflowId: created.workflow.id,
+    }, context);
+    expect(draft.success).toBe(true);
+    expect(JSON.stringify(draft.data)).not.toContain('claude-sonnet-4-6-20250929');
   });
 
   it('inspects an execution with node traces and approvals', async () => {
