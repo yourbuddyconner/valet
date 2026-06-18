@@ -450,6 +450,27 @@ describe('MessageStore', () => {
       expect(insertCalls[0].params[1]).toBe(1); // seq
     });
 
+    it('findActiveTurnByOcSession returns null when no active turn matches', () => {
+      const store = new MessageStore(createMockSql());
+      expect(store.findActiveTurnByOcSession('oc-missing')).toBeNull();
+    });
+
+    it('findActiveTurnByOcSession returns the matching active turn', () => {
+      const store = new MessageStore(createMockSql());
+      store.createTurn('turn-a', { opencodeSessionId: 'oc-1' });
+      store.createTurn('turn-b', { opencodeSessionId: 'oc-2' });
+      expect(store.findActiveTurnByOcSession('oc-1')).toBe('turn-a');
+      expect(store.findActiveTurnByOcSession('oc-2')).toBe('turn-b');
+    });
+
+    it('findActiveTurnByOcSession stops returning a turn once it finalizes', () => {
+      const store = new MessageStore(createMockSql());
+      store.createTurn('turn-a', { opencodeSessionId: 'oc-1' });
+      expect(store.findActiveTurnByOcSession('oc-1')).toBe('turn-a');
+      store.finalizeTurn('turn-a', 'done', 'end_turn');
+      expect(store.findActiveTurnByOcSession('oc-1')).toBeNull();
+    });
+
     it('appendTextDelta is in-memory only (no new SQL queries)', () => {
       const sql = createMockSql();
       const store = new MessageStore(sql);
