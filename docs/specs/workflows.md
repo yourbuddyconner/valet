@@ -281,6 +281,8 @@ The workflow detail page is a full-canvas editor, not a document-style detail pa
 
 Workflow nodes render as compact cards with explicit handles and high-contrast edges in both light and dark mode. Tool-created workflows may arrive without saved UI positions; the client runs the deterministic graph layout from `workflow-editor-model.ts` and persists positions back into the draft `ui` block when the draft is saved.
 
+Node parameter fields that accept template strings use the workflow template helper. Typing inside `{{...}}` opens a typeahead sourced from the selected node's upstream trigger/input/tool outputs; selecting a suggestion inserts the full expression at the cursor. The same control validates empty, unclosed, and unknown template tags inline so common mistakes are visible before save/publish validation.
+
 The executions tab is a read-only execution inspector modeled after n8n's execution view. It shows a narrow run list on the left, the workflow graph in the center, and an execution/node detail panel on the right. Selecting a run fetches `GET /api/executions/:id`; the canvas overlays the latest `workflow_execution_nodes` trace row for each definition node, showing status, duration, skipped nodes, and node errors without changing the draft layout. Selecting a node opens its trace payload in the right panel so users can inspect input previews, outputs, errors, and reasons in graph context. Starting a test run switches to this tab and pins the newly-created execution while the workflow execution list catches up. The tests tab provides an explicit draft test-run entrypoint; test runs save the current draft first, then dispatch `/api/workflows/:id/test-run`.
 
 ## Flows

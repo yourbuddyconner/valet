@@ -90,6 +90,12 @@ import {
   type WorkflowFlowNode,
   type WorkflowFlowNodeData,
 } from './workflow-editor-model';
+import {
+  filterTemplateSuggestions,
+  getTemplateCompletionContext,
+  insertTemplateExpression,
+  validateTemplateTags,
+} from './workflow-template-tags';
 
 type ForeachBodyNodeType = ForeachBodyNode['type'];
 
@@ -555,7 +561,12 @@ function NodeInspector({ definition, node, onUpdate }: NodeInspectorProps) {
         </label>
         <Input value={node.id} readOnly className="font-mono text-xs" />
       </div>
-      <NodeParameterFields definition={definition} node={workflowNode} onUpdate={onUpdate} />
+      <NodeParameterFields
+        definition={definition}
+        node={workflowNode}
+        templateSources={availableInputs}
+        onUpdate={onUpdate}
+      />
       {availableInputs.length > 0 && (
         <AvailableInputs sources={availableInputs} onUseInput={handleUseInput} />
       )}
@@ -596,35 +607,37 @@ function AvailableInputs({
 function NodeParameterFields({
   definition,
   node,
+  templateSources,
   onUpdate,
 }: {
   definition: WorkflowDefinition;
   node: WorkflowNode;
+  templateSources: WorkflowOutputSource[];
   onUpdate: (patch: Partial<WorkflowNode>) => void;
 }) {
   switch (node.type) {
     case 'trigger':
       return <TriggerFields node={node} />;
     case 'llm':
-      return <LlmFields node={node} onUpdate={onUpdate} />;
+      return <LlmFields node={node} templateSources={templateSources} onUpdate={onUpdate} />;
     case 'tool':
-      return <ToolFields node={node} onUpdate={onUpdate} />;
+      return <ToolFields node={node} templateSources={templateSources} onUpdate={onUpdate} />;
     case 'if':
-      return <IfFields node={node} onUpdate={onUpdate} />;
+      return <IfFields node={node} templateSources={templateSources} onUpdate={onUpdate} />;
     case 'foreach':
-      return <ForeachFields definition={definition} node={node} onUpdate={onUpdate} />;
+      return <ForeachFields definition={definition} node={node} templateSources={templateSources} onUpdate={onUpdate} />;
     case 'approval':
-      return <ApprovalFields node={node} onUpdate={onUpdate} />;
+      return <ApprovalFields node={node} templateSources={templateSources} onUpdate={onUpdate} />;
     case 'wait':
-      return <WaitFields node={node} onUpdate={onUpdate} />;
+      return <WaitFields node={node} templateSources={templateSources} onUpdate={onUpdate} />;
     case 'set':
-      return <SetFields node={node} onUpdate={onUpdate} />;
+      return <SetFields node={node} templateSources={templateSources} onUpdate={onUpdate} />;
     case 'orchestrator':
-      return <OrchestratorFields node={node} onUpdate={onUpdate} />;
+      return <OrchestratorFields node={node} templateSources={templateSources} onUpdate={onUpdate} />;
     case 'session':
-      return <SessionFields node={node} onUpdate={onUpdate} />;
+      return <SessionFields node={node} templateSources={templateSources} onUpdate={onUpdate} />;
     case 'stop':
-      return <StopFields node={node} onUpdate={onUpdate} />;
+      return <StopFields node={node} templateSources={templateSources} onUpdate={onUpdate} />;
   }
 }
 
@@ -656,11 +669,11 @@ function TriggerFields({ node }: { node: TriggerNode }) {
   );
 }
 
-function LlmFields({ node, onUpdate }: NodeFieldProps<LlmNode>) {
+function LlmFields({ node, onUpdate, templateSources }: NodeFieldProps<LlmNode>) {
   return (
     <>
-      <TextAreaField label="Prompt" value={node.prompt} onChange={(prompt) => onUpdate({ prompt })} minRows={6} />
-      <TextAreaField label="System" value={node.system ?? ''} onChange={(system) => onUpdate({ system: optionalString(system) })} minRows={3} />
+      <TemplateTextAreaField label="Prompt" value={node.prompt} templateSources={templateSources} onChange={(prompt) => onUpdate({ prompt })} minRows={6} />
+      <TemplateTextAreaField label="System" value={node.system ?? ''} templateSources={templateSources} onChange={(system) => onUpdate({ system: optionalString(system) })} minRows={3} />
       <Field label="Model">
         <Input value={node.model ?? ''} onChange={(event) => onUpdate({ model: optionalString(event.target.value) })} placeholder="Default model" />
       </Field>
@@ -671,7 +684,7 @@ function LlmFields({ node, onUpdate }: NodeFieldProps<LlmNode>) {
   );
 }
 
-function ToolFields({ node, onUpdate }: NodeFieldProps<ToolNode>) {
+function ToolFields({ node, onUpdate, templateSources }: NodeFieldProps<ToolNode>) {
   const { data: actionCatalog = [], isLoading } = useActionCatalog();
   const catalogIndex = React.useMemo(() => buildToolCatalogIndex(actionCatalog), [actionCatalog]);
   const actions = catalogIndex.actionsByService.get(node.service) ?? [];
@@ -712,9 +725,9 @@ function ToolFields({ node, onUpdate }: NodeFieldProps<ToolNode>) {
         <ToolSchemaContract title="Outputs" schema={selectedAction.outputSchema} />
       )}
       <Field label="Summary">
-        <Input value={node.summary ?? ''} onChange={(event) => onUpdate({ summary: optionalString(event.target.value) })} />
+        <TemplateTextInput value={node.summary ?? ''} templateSources={templateSources} onChange={(summary) => onUpdate({ summary: optionalString(summary) })} />
       </Field>
-      <KeyValueEditor label="Params" value={node.params} onChange={(params) => onUpdate({ params })} />
+      <KeyValueEditor label="Params" value={node.params} templateSources={templateSources} onChange={(params) => onUpdate({ params })} />
       <SelectField
         label="Policy deny"
         value={node.onPolicyDeny ?? 'fail'}
@@ -1004,7 +1017,7 @@ function ToolPickerItemText({ children }: { children: React.ReactNode }) {
   return <span className="min-w-0 flex-1 truncate text-left">{children}</span>;
 }
 
-function IfFields({ node, onUpdate }: NodeFieldProps<IfNode>) {
+function IfFields({ node, onUpdate, templateSources }: NodeFieldProps<IfNode>) {
   function updateCondition(index: number, patch: Partial<IfCondition>) {
     onUpdate({
       conditions: node.conditions.map((condition, currentIndex) =>
@@ -1047,7 +1060,12 @@ function IfFields({ node, onUpdate }: NodeFieldProps<IfNode>) {
         ) : (
           node.conditions.map((condition, index) => (
             <div key={index} className="space-y-2 rounded-md border border-neutral-200 p-2 dark:border-neutral-700">
-              <Input value={condition.left} onChange={(event) => updateCondition(index, { left: event.target.value })} placeholder="{{nodes.start.data.value}}" />
+              <TemplateTextInput
+                value={condition.left}
+                templateSources={templateSources}
+                onChange={(left) => updateCondition(index, { left })}
+                placeholder="{{nodes.start.data.value}}"
+              />
               <div className="grid grid-cols-2 gap-2">
                 <NativeSelect
                   value={condition.dataType}
@@ -1112,10 +1130,11 @@ function ForeachFields({
         onOpenChange={setAdvancedOpen}
       >
         <Field label={selectedSource ? 'Generated expression' : 'Items expression'}>
-          <Input
+          <TemplateTextInput
             value={node.items}
             readOnly={Boolean(selectedSource)}
-            onChange={(event) => onUpdate({ items: event.target.value })}
+            templateSources={outputSources}
+            onChange={(items) => onUpdate({ items })}
             placeholder="{{nodes.fetch.data.items}}"
             className={cn(selectedSource && 'bg-neutral-50 text-neutral-500 dark:bg-neutral-900 dark:text-neutral-400')}
           />
@@ -1263,12 +1282,12 @@ function ForeachSourcePicker({
   );
 }
 
-function ApprovalFields({ node, onUpdate }: NodeFieldProps<ApprovalNode>) {
+function ApprovalFields({ node, onUpdate, templateSources }: NodeFieldProps<ApprovalNode>) {
   return (
     <>
-      <TextAreaField label="Prompt" value={node.prompt} onChange={(prompt) => onUpdate({ prompt })} minRows={5} />
+      <TemplateTextAreaField label="Prompt" value={node.prompt} templateSources={templateSources} onChange={(prompt) => onUpdate({ prompt })} minRows={5} />
       <Field label="Summary">
-        <Input value={node.summary ?? ''} onChange={(event) => onUpdate({ summary: optionalString(event.target.value) })} />
+        <TemplateTextInput value={node.summary ?? ''} templateSources={templateSources} onChange={(summary) => onUpdate({ summary: optionalString(summary) })} />
       </Field>
       <JsonValueField label="Details" value={node.details} onChange={(details) => onUpdate({ details })} />
       <Field label="Timeout">
@@ -1297,21 +1316,21 @@ function WaitFields({ node, onUpdate }: NodeFieldProps<WaitNode>) {
   );
 }
 
-function SetFields({ node, onUpdate }: NodeFieldProps<SetNode>) {
-  return <KeyValueEditor label="Values" value={asRecord(node.values)} onChange={(values) => onUpdate({ values })} />;
+function SetFields({ node, onUpdate, templateSources }: NodeFieldProps<SetNode>) {
+  return <KeyValueEditor label="Values" value={asRecord(node.values)} templateSources={templateSources} onChange={(values) => onUpdate({ values })} />;
 }
 
-function OrchestratorFields({ node, onUpdate }: NodeFieldProps<OrchestratorNode>) {
+function OrchestratorFields({ node, onUpdate, templateSources }: NodeFieldProps<OrchestratorNode>) {
   return (
     <>
-      <TextAreaField label="Prompt" value={node.prompt} onChange={(prompt) => onUpdate({ prompt })} minRows={6} />
+      <TemplateTextAreaField label="Prompt" value={node.prompt} templateSources={templateSources} onChange={(prompt) => onUpdate({ prompt })} minRows={6} />
       <CheckboxField label="Force new thread" checked={Boolean(node.forceNewThread)} onChange={(forceNewThread) => onUpdate({ forceNewThread })} />
       <WaitPolicyFields value={node.wait} onChange={(wait) => onUpdate({ wait })} />
     </>
   );
 }
 
-function SessionFields({ node, onUpdate }: NodeFieldProps<SessionNode>) {
+function SessionFields({ node, onUpdate, templateSources }: NodeFieldProps<SessionNode>) {
   const wait = node.wait;
   return (
     <>
@@ -1329,7 +1348,7 @@ function SessionFields({ node, onUpdate }: NodeFieldProps<SessionNode>) {
       />
       {node.mode === 'start' ? (
         <>
-          <TextAreaField label="Prompt" value={node.prompt} onChange={(prompt) => onUpdate({ prompt })} minRows={5} />
+          <TemplateTextAreaField label="Prompt" value={node.prompt} templateSources={templateSources} onChange={(prompt) => onUpdate({ prompt })} minRows={5} />
           <Field label="Workspace">
             <Input value={node.workspace} onChange={(event) => onUpdate({ workspace: event.target.value })} placeholder="repo or workspace" />
           </Field>
@@ -1346,7 +1365,7 @@ function SessionFields({ node, onUpdate }: NodeFieldProps<SessionNode>) {
         </>
       ) : (
         <>
-          <TextAreaField label="Prompt" value={node.prompt} onChange={(prompt) => onUpdate({ prompt })} minRows={5} />
+          <TemplateTextAreaField label="Prompt" value={node.prompt} templateSources={templateSources} onChange={(prompt) => onUpdate({ prompt })} minRows={5} />
           <Field label="Session ID">
             <Input value={node.sessionId} onChange={(event) => onUpdate({ sessionId: event.target.value })} />
           </Field>
@@ -1361,7 +1380,7 @@ function SessionFields({ node, onUpdate }: NodeFieldProps<SessionNode>) {
   );
 }
 
-function StopFields({ node, onUpdate }: NodeFieldProps<StopNode>) {
+function StopFields({ node, onUpdate, templateSources }: NodeFieldProps<StopNode>) {
   return (
     <>
       <SelectField
@@ -1371,7 +1390,7 @@ function StopFields({ node, onUpdate }: NodeFieldProps<StopNode>) {
         onChange={(outcome) => onUpdate({ outcome })}
       />
       <Field label="Message">
-        <Input value={node.message ?? ''} onChange={(event) => onUpdate({ message: optionalString(event.target.value) })} />
+        <TemplateTextInput value={node.message ?? ''} templateSources={templateSources} onChange={(message) => onUpdate({ message: optionalString(message) })} />
       </Field>
       <JsonValueField label="Output" value={node.output} onChange={(output) => onUpdate({ output })} />
     </>
@@ -1380,6 +1399,7 @@ function StopFields({ node, onUpdate }: NodeFieldProps<StopNode>) {
 
 interface NodeFieldProps<TNode extends WorkflowNode> {
   node: TNode;
+  templateSources: WorkflowOutputSource[];
   onUpdate: (patch: Partial<TNode>) => void;
 }
 
@@ -1400,27 +1420,168 @@ function LabelText({ children }: { children: React.ReactNode }) {
   );
 }
 
-function TextAreaField({
+function TemplateTextAreaField({
   label,
   value,
   onChange,
+  templateSources,
   minRows = 3,
 }: {
   label: string;
   value: string;
   onChange: (value: string) => void;
+  templateSources: WorkflowOutputSource[];
   minRows?: number;
 }) {
   return (
     <Field label={label}>
-      <textarea
+      <TemplateTextInput
         value={value}
-        onChange={(event) => onChange(event.target.value)}
-        spellCheck={false}
-        rows={minRows}
-        className="w-full resize-y rounded-md border border-neutral-200 bg-white p-2 text-sm text-neutral-900 focus:border-neutral-400 focus:outline-none dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100"
+        multiline
+        minRows={minRows}
+        templateSources={templateSources}
+        onChange={onChange}
       />
     </Field>
+  );
+}
+
+function TemplateTextInput({
+  className,
+  minRows = 3,
+  multiline = false,
+  onChange,
+  placeholder,
+  readOnly = false,
+  templateSources,
+  value,
+}: {
+  className?: string;
+  minRows?: number;
+  multiline?: boolean;
+  onChange: (value: string) => void;
+  placeholder?: string;
+  readOnly?: boolean;
+  templateSources: WorkflowOutputSource[];
+  value: string;
+}) {
+  const fieldRef = React.useRef<HTMLInputElement | HTMLTextAreaElement | null>(null);
+  const [focused, setFocused] = React.useState(false);
+  const [completion, setCompletion] = React.useState<ReturnType<typeof getTemplateCompletionContext>>(null);
+  const suggestions = React.useMemo(
+    () => completion ? filterTemplateSuggestions(templateSources, completion.query).slice(0, 8) : [],
+    [completion, templateSources],
+  );
+  const issues = React.useMemo(
+    () => validateTemplateTags(value, templateSources),
+    [templateSources, value],
+  );
+  const showSuggestions = focused && !readOnly && Boolean(completion) && suggestions.length > 0;
+
+  function updateCompletion(element: HTMLInputElement | HTMLTextAreaElement) {
+    const cursor = element.selectionStart ?? value.length;
+    setCompletion(getTemplateCompletionContext(element.value, cursor));
+  }
+
+  function insertSuggestion(source: WorkflowOutputSource) {
+    const element = fieldRef.current;
+    const selectionStart = element?.selectionStart ?? value.length;
+    const selectionEnd = element?.selectionEnd ?? selectionStart;
+    const next = insertTemplateExpression({
+      value,
+      selectionStart,
+      selectionEnd,
+      expression: source.expression,
+    });
+    onChange(next.value);
+    setCompletion(null);
+    window.requestAnimationFrame(() => {
+      fieldRef.current?.focus();
+      fieldRef.current?.setSelectionRange(next.cursor, next.cursor);
+    });
+  }
+
+  const sharedProps = {
+    value,
+    readOnly,
+    placeholder,
+    spellCheck: false,
+    onChange: (event: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+      onChange(event.target.value);
+      updateCompletion(event.currentTarget);
+    },
+    onClick: (event: React.MouseEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+      updateCompletion(event.currentTarget);
+    },
+    onKeyUp: (event: React.KeyboardEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+      updateCompletion(event.currentTarget);
+    },
+    onKeyDown: (event: React.KeyboardEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+      if (event.key === 'Tab' && showSuggestions && suggestions[0]) {
+        event.preventDefault();
+        insertSuggestion(suggestions[0]);
+      }
+    },
+    onFocus: (event: React.FocusEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+      setFocused(true);
+      updateCompletion(event.currentTarget);
+    },
+    onBlur: () => setFocused(false),
+  };
+
+  return (
+    <div className="relative">
+      {multiline ? (
+        <textarea
+          ref={fieldRef as React.RefObject<HTMLTextAreaElement>}
+          rows={minRows}
+          className={cn(
+            'w-full resize-y rounded-md border border-neutral-200 bg-white p-2 text-sm text-neutral-900 focus:border-neutral-400 focus:outline-none dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100',
+            issues.length > 0 && 'border-red-300 focus:border-red-400 dark:border-red-800',
+            className,
+          )}
+          {...sharedProps}
+        />
+      ) : (
+        <input
+          ref={fieldRef as React.RefObject<HTMLInputElement>}
+          className={cn(
+            'h-10 w-full rounded-md border border-neutral-200 bg-white px-3 text-sm text-neutral-900 focus:border-neutral-400 focus:outline-none dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100',
+            issues.length > 0 && 'border-red-300 focus:border-red-400 dark:border-red-800',
+            className,
+          )}
+          {...sharedProps}
+        />
+      )}
+      {showSuggestions && (
+        <div className="absolute left-0 right-0 top-full z-50 mt-1 max-h-64 overflow-auto rounded-md border border-neutral-200 bg-white p-1 shadow-xl dark:border-neutral-700 dark:bg-neutral-950">
+          {suggestions.map((source) => (
+            <button
+              key={source.expression}
+              type="button"
+              className="block w-full rounded-sm px-2 py-1.5 text-left text-xs hover:bg-neutral-100 focus:bg-neutral-100 focus:outline-none dark:hover:bg-neutral-900 dark:focus:bg-neutral-900"
+              onMouseDown={(event) => {
+                event.preventDefault();
+                insertSuggestion(source);
+              }}
+            >
+              <span className="flex min-w-0 items-center justify-between gap-2">
+                <span className="truncate font-medium text-neutral-800 dark:text-neutral-100">
+                  {source.label}
+                </span>
+                <Badge variant="secondary">{source.valueType}</Badge>
+              </span>
+              <span className="mt-0.5 block truncate font-mono text-neutral-500">
+                {source.expression}
+              </span>
+            </button>
+          ))}
+        </div>
+      )}
+      {issues[0] && (
+        <p className="mt-1 text-xs text-red-600 dark:text-red-400">{issues[0].message}</p>
+      )}
+    </div>
   );
 }
 
@@ -1520,10 +1681,12 @@ function CheckboxField({
 function KeyValueEditor({
   label,
   value,
+  templateSources,
   onChange,
 }: {
   label: string;
   value: Record<string, unknown>;
+  templateSources: WorkflowOutputSource[];
   onChange: (value: Record<string, unknown>) => void;
 }) {
   const entries = Object.entries(value);
@@ -1556,7 +1719,12 @@ function KeyValueEditor({
         entries.map(([key, currentValue], index) => (
           <div key={`${key}-${index}`} className="grid grid-cols-[minmax(0,0.8fr)_minmax(0,1fr)_auto] gap-2">
             <Input value={key} onChange={(event) => setEntry(index, event.target.value, stringifyEditableValue(currentValue))} placeholder="Key" />
-            <Input value={stringifyEditableValue(currentValue)} onChange={(event) => setEntry(index, key, event.target.value)} placeholder="Value" />
+            <TemplateTextInput
+              value={stringifyEditableValue(currentValue)}
+              templateSources={templateSources}
+              onChange={(nextValue) => setEntry(index, key, nextValue)}
+              placeholder="Value"
+            />
             <Button
               type="button"
               variant="secondary"
@@ -1682,6 +1850,7 @@ function ForeachBodyField({
       <NodeParameterFields
         definition={{ version: 'dag/v1', nodes: [value], edges: [] }}
         node={value}
+        templateSources={[]}
         onUpdate={updateBody}
       />
       <DisclosureSection
