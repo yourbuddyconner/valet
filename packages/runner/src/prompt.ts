@@ -4453,8 +4453,23 @@ export class PromptHandler {
       if (!channel.countedTokenMessageIds.has(ocMessageId)) {
         const tokenObj = info.tokens as Record<string, unknown> | undefined;
         if (tokenObj) {
-          const input = typeof tokenObj.input === "number" ? tokenObj.input : 0;
-          const output = typeof tokenObj.output === "number" ? tokenObj.output : 0;
+          // OpenCode exposes tokens.input (uncached), tokens.cache.{read,write}
+          // (prompt cache), tokens.reasoning (thinking models), and tokens.output.
+          // Anthropic bills input + cache_read + cache_write as input, and
+          // reasoning + output as output. Summing matches the provider invoices
+          // and what shows up on the Anthropic usage dashboard. With prompt
+          // caching active, tokens.cache.read can be 100x larger than
+          // tokens.input, so reading only tokens.input under-counts by orders
+          // of magnitude on long-context conversations.
+          const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : 0);
+          const baseInput = num(tokenObj.input);
+          const cache = isRecord(tokenObj.cache) ? tokenObj.cache : {};
+          const cacheRead = num(cache.read);
+          const cacheWrite = num(cache.write);
+          const baseOutput = num(tokenObj.output);
+          const reasoning = num(tokenObj.reasoning);
+          const input = baseInput + cacheRead + cacheWrite;
+          const output = baseOutput + reasoning;
           if (input > 0 || output > 0) {
             channel.countedTokenMessageIds.add(ocMessageId);
             channel.cumulativeInputTokens += input;
