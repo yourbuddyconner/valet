@@ -17,6 +17,8 @@ function thread(over: Partial<ThreadRow> = {}): ThreadRow {
     originTriggerType: null,
     threadTitle: null,
     sessionTitle: null,
+    hasUserMessage: false,
+    hasChannelMapping: false,
     ...over,
   };
 }

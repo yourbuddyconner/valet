@@ -161,6 +161,8 @@ export class CloudflareD1DataSource implements UsageDataSource {
         purpose: string;
         session_title: string | null;
         user_email: string | null;
+        has_user_message: number;
+        has_channel_mapping: number;
       }>(sql, params);
       for (const r of rows) {
         out.push({
@@ -177,6 +179,8 @@ export class CloudflareD1DataSource implements UsageDataSource {
           originTriggerType: r.origin_trigger_type,
           threadTitle: r.thread_title,
           sessionTitle: r.session_title,
+          hasUserMessage: Boolean(r.has_user_message),
+          hasChannelMapping: Boolean(r.has_channel_mapping),
         });
       }
     }

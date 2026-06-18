@@ -36,6 +36,15 @@ export interface ThreadRow {
   originTriggerType: string | null;
   threadTitle: string | null;
   sessionTitle: string | null;
+  // True if any message in this thread has role='user'. Channel-facing chat
+  // conversations always have one; background orchestrator self-work
+  // (memory compaction, scheduled checks) does not.
+  hasUserMessage: boolean;
+  // True iff there's a row in channel_thread_mappings for this thread (i.e.
+  // it's bound to an external Slack/Telegram thread). Populated but not
+  // load-bearing — `hasUserMessage` is the primary chat signal because the
+  // mapping table is sparse.
+  hasChannelMapping: boolean;
 }
 
 // Per-(model) breakdown inside a thread.

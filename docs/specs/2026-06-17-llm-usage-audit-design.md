@@ -93,9 +93,16 @@ section.
 | Category | Rule |
 |---|---|
 | `automation-trigger` | `origin_trigger_id IS NOT NULL` |
-| `orchestrator-chat` | `is_orchestrator=1` AND `origin_channel_type IS NOT NULL` AND no trigger |
-| `orchestrator-internal` | `is_orchestrator=1` AND no channel AND no trigger |
+| `orchestrator-chat` | `is_orchestrator=1` AND thread has any `role='user'` message AND no trigger |
+| `orchestrator-internal` | `is_orchestrator=1` AND no user message AND no trigger |
 | `ad-hoc` | everything else |
+
+`session_threads.origin_channel_type` would seem to be the right signal for
+chat-vs-internal, but in real data it's null on most channel-facing
+orchestrator threads. The `EXISTS (... role='user')` test is the reliable
+proxy: channel-bound conversations always start with an inbound user
+message; orchestrator self-work (memory compaction, scheduled checks)
+doesn't.
 
 ### Attribution outputs (SQL only)
 

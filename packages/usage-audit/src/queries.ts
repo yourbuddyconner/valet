@@ -55,6 +55,10 @@ export const SQL_THREAD_TOOL_HISTOGRAM = `
 
 // Thread + session + user metadata for a chunk of thread IDs.
 // The IN (...) placeholders are bound dynamically at call time.
+//
+// has_user_message powers the orchestrator-chat vs orchestrator-internal
+// split (origin_channel_type is too sparsely populated to use). EXISTS
+// short-circuits per thread; cheap with the (session_id, role) index.
 export function sqlThreadsByIds(threadIds: string[]): { sql: string; params: string[] } {
   const placeholders = threadIds.map(() => '?').join(', ');
   return {
@@ -72,7 +76,9 @@ export function sqlThreadsByIds(threadIds: string[]): { sql: string; params: str
         s.is_orchestrator AS is_orchestrator,
         s.purpose AS purpose,
         s.title AS session_title,
-        u.email AS user_email
+        u.email AS user_email,
+        EXISTS (SELECT 1 FROM messages m WHERE m.thread_id = st.id AND m.role = 'user') AS has_user_message,
+        EXISTS (SELECT 1 FROM channel_thread_mappings ctm WHERE ctm.thread_id = st.id) AS has_channel_mapping
       FROM session_threads st
       JOIN sessions s ON s.id = st.session_id
       LEFT JOIN users u ON u.id = s.user_id

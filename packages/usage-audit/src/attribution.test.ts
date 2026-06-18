@@ -17,6 +17,8 @@ function thread(over: Partial<ThreadRow>): ThreadRow {
     originTriggerType: null,
     threadTitle: null,
     sessionTitle: null,
+    hasUserMessage: false,
+    hasChannelMapping: false,
     ...over,
   };
 }
@@ -50,7 +52,7 @@ function totals(threadId: string, over: Partial<ThreadTotals> = {}): ThreadTotal
 
 describe('buildAttribution', () => {
   it('rolls up by category, user, model and surfaces the unattributed bucket', () => {
-    const t1 = thread({ threadId: 'th-1', userId: 'u-1', isOrchestrator: true, originChannelType: 'slack' });
+    const t1 = thread({ threadId: 'th-1', userId: 'u-1', isOrchestrator: true, hasUserMessage: true });
     const t2 = thread({ threadId: 'th-2', userId: 'u-1', originTriggerId: 'tr-1' });
     const t3 = thread({ threadId: 'th-3', userId: 'u-2' });
 
