@@ -1986,7 +1986,7 @@ Edges from an \`if\` node must include \`fromOutput\`:
 {
   "id": "summarize",
   "type": "llm",
-  "model": "anthropic:claude-sonnet-4-20250514",
+  "model": "anthropic:claude-sonnet-4-5",
   "system": "Optional system prompt",
   "prompt": "Summarize {{trigger.data.text}}",
   "maxOutputTokens": 800

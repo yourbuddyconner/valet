@@ -139,7 +139,7 @@ describe('createExecution', () => {
     makeWorkflow('wf1', {
       version: 'dag/v1',
       nodes: [
-        { id: 'l', type: 'llm', model: 'anthropic:claude-sonnet-4-20250514', prompt: 'x', maxOutputTokens: 100 },
+        { id: 'l', type: 'llm', model: 'anthropic:claude-sonnet-4-5', prompt: 'x', maxOutputTokens: 100 },
         { id: 'done', type: 'stop' },
       ],
       edges: [{ from: 'l', to: 'done' }],
@@ -157,7 +157,7 @@ describe('createExecution', () => {
     makeWorkflow('wf1', {
       version: 'dag/v1',
       nodes: [
-        { id: 'l', type: 'llm', model: 'anthropic:claude-sonnet-4-20250514', prompt: 'x', maxOutputTokens: 100 },
+        { id: 'l', type: 'llm', model: 'anthropic:claude-sonnet-4-5', prompt: 'x', maxOutputTokens: 100 },
         { id: 'done', type: 'stop' },
       ],
       edges: [{ from: 'l', to: 'done' }],
@@ -166,7 +166,7 @@ describe('createExecution', () => {
       provider: 'anthropic',
       key: 'sk-ant-db',
       setBy: 'u1',
-      models: [{ id: 'claude-sonnet-4-20250514', name: 'Claude Sonnet 4' }],
+      models: [{ id: 'claude-sonnet-4-5', name: 'Claude Sonnet 4.5' }],
       showAllModels: false,
     });
 

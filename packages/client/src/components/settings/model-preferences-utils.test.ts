@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { getCustomModelCandidate, type FlatModel } from './model-preferences-utils';
 
 const knownModels: FlatModel[] = [
-  { id: 'anthropic/claude-sonnet-4-20250514', name: 'Claude Sonnet 4', provider: 'Anthropic' },
+  { id: 'anthropic/claude-sonnet-4-5', name: 'Claude Sonnet 4.5', provider: 'Anthropic' },
   { id: 'openai/gpt-5.1', name: 'GPT-5.1', provider: 'OpenAI' },
 ];
 

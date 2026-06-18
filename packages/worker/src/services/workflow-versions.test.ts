@@ -84,7 +84,7 @@ describe('workflow-versions service', () => {
   it('rejects publishing when env-validation fails (llm provider key missing)', async () => {
     const def = makeDef({
       nodes: [
-        { id: 'extract', type: 'llm', model: 'anthropic:claude-3-5-sonnet', prompt: 'do it', maxOutputTokens: 100 },
+        { id: 'extract', type: 'llm', model: 'anthropic:claude-sonnet-4-5', prompt: 'do it', maxOutputTokens: 100 },
         { id: 'stop', type: 'stop' },
       ],
       edges: [{ from: 'extract', to: 'stop' }],

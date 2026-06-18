@@ -6,7 +6,7 @@ const providers: ProviderModelGroup[] = [
     provider: 'Anthropic',
     models: [
       { id: 'anthropic/claude-opus-4-1', name: 'Claude Opus 4.1' },
-      { id: 'anthropic/claude-sonnet-4', name: 'Claude Sonnet 4' },
+      { id: 'anthropic/claude-sonnet-4-5', name: 'Claude Sonnet 4.5' },
     ],
   },
   {
@@ -22,7 +22,7 @@ describe('model selector grouping', () => {
   it('pins user preferred models above provider groups and removes duplicates below', () => {
     const groups = buildModelSelectorGroups({
       availableModels: providers,
-      userModelPreferences: ['openai/gpt-5.1-codex', 'anthropic/claude-sonnet-4'],
+      userModelPreferences: ['openai/gpt-5.1-codex', 'anthropic/claude-sonnet-4-5'],
       orgModelPreferences: ['anthropic/claude-opus-4-1'],
     });
 
@@ -31,7 +31,7 @@ describe('model selector grouping', () => {
       source: 'user',
       models: [
         { id: 'openai/gpt-5.1-codex', name: 'GPT-5.1 Codex', provider: 'OpenAI' },
-        { id: 'anthropic/claude-sonnet-4', name: 'Claude Sonnet 4', provider: 'Anthropic' },
+        { id: 'anthropic/claude-sonnet-4-5', name: 'Claude Sonnet 4.5', provider: 'Anthropic' },
       ],
     });
     expect(groups.providerGroups).toEqual([
@@ -59,7 +59,7 @@ describe('model selector grouping', () => {
       models: [{ id: 'anthropic/claude-opus-4-1', name: 'Claude Opus 4.1', provider: 'Anthropic' }],
     });
     expect(groups.providerGroups[0]?.models).toEqual([
-      { id: 'anthropic/claude-sonnet-4', name: 'Claude Sonnet 4' },
+      { id: 'anthropic/claude-sonnet-4-5', name: 'Claude Sonnet 4.5' },
     ]);
   });
 

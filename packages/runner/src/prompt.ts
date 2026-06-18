@@ -3130,7 +3130,7 @@ export class PromptHandler {
     };
     if (model) {
       // OpenCode expects model as { providerID, modelID }
-      // Our model IDs come from the provider list as raw model IDs (e.g. "claude-3-5-sonnet-20241022")
+      // Our model IDs come from the provider list as raw model IDs (e.g. "claude-sonnet-4-5")
       // with the provider known separately, but we store them with a provider prefix
       // like "providerID/modelID" or just "modelID" if provider is implicit.
       const slashIdx = model.indexOf("/");

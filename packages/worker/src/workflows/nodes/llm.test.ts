@@ -48,7 +48,7 @@ describe('executeLlm', () => {
     const node: LlmNode = {
       id: 'extract',
       type: 'llm',
-      model: 'anthropic:claude-3-5-sonnet',
+      model: 'anthropic:claude-sonnet-4-5',
       system: 'You are a {{trigger.data.role}}',
       prompt: 'Summarize: {{trigger.data.body}}',
       maxOutputTokens: 200,
@@ -57,7 +57,7 @@ describe('executeLlm', () => {
 
     expect(out).toEqual({ greeting: 'hello world' });
     expect(generateStructured).toHaveBeenCalledWith(expect.objectContaining({
-      modelId: 'anthropic:claude-3-5-sonnet',
+      modelId: 'anthropic:claude-sonnet-4-5',
       prompt: 'Summarize: long text',
       system: 'You are a assistant',
       maxOutputTokens: 200,
@@ -86,7 +86,7 @@ describe('executeLlm', () => {
     const node: LlmNode = {
       id: 'extract',
       type: 'llm',
-      model: 'anthropic:claude-3-5-sonnet',
+      model: 'anthropic:claude-sonnet-4-5',
       prompt: 'do it',
       maxOutputTokens: 100,
     };

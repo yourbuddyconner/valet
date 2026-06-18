@@ -132,7 +132,7 @@ describe('workflowActions', () => {
       definition: {
         version: 'dag/v1',
         nodes: [
-          { id: 'extract', type: 'llm', model: 'anthropic:claude-sonnet-4-20250514', prompt: 'Summarize {{trigger.data.text}}' },
+          { id: 'extract', type: 'llm', model: 'anthropic:claude-sonnet-4-5', prompt: 'Summarize {{trigger.data.text}}' },
           { id: 'done', type: 'stop' },
         ],
         edges: [{ from: 'extract', to: 'done' }],
@@ -164,7 +164,7 @@ describe('workflowActions', () => {
       definition: {
         version: 'dag/v1',
         nodes: [
-          { id: 'generate_welcome', type: 'llm', model: 'anthropic:claude-sonnet-4-20250514', prompt: 'Say hi', maxOutputTokens: 100 },
+          { id: 'generate_welcome', type: 'llm', model: 'anthropic:claude-sonnet-4-5', prompt: 'Say hi', maxOutputTokens: 100 },
           { id: 'done', type: 'stop' },
         ],
         edges: [{ from: 'generate_welcome', to: 'done' }],
@@ -265,7 +265,7 @@ describe('workflowActions', () => {
       provider: 'anthropic',
       key: 'sk-ant-db',
       setBy: USER_ID,
-      models: [{ id: 'claude-sonnet-4-20250514', name: 'Claude Sonnet 4' }],
+      models: [{ id: 'claude-sonnet-4-5', name: 'Claude Sonnet 4.5' }],
       showAllModels: false,
     });
     const created = await createWorkflow(appDb, USER_ID, { name: 'Reject stale model' });
@@ -275,7 +275,7 @@ describe('workflowActions', () => {
       draft: {
         version: 'dag/v1',
         nodes: [
-          { id: 'generate', type: 'llm', model: 'anthropic:claude-sonnet-4-6-20250929', prompt: 'Say hi', maxOutputTokens: 100 },
+          { id: 'generate', type: 'llm', model: 'anthropic:claude-fake-model-9999', prompt: 'Say hi', maxOutputTokens: 100 },
           { id: 'done', type: 'stop' },
         ],
         edges: [{ from: 'generate', to: 'done' }],
@@ -291,7 +291,7 @@ describe('workflowActions', () => {
         errors: [expect.objectContaining({
           code: 'llm_model_unavailable',
           nodeId: 'generate',
-          message: expect.stringContaining('anthropic:claude-sonnet-4-6-20250929'),
+          message: expect.stringContaining('anthropic:claude-fake-model-9999'),
         })],
         warnings: [],
       },
@@ -301,7 +301,7 @@ describe('workflowActions', () => {
       workflowId: created.workflow.id,
     }, context);
     expect(draft.success).toBe(true);
-    expect(JSON.stringify(draft.data)).not.toContain('claude-sonnet-4-6-20250929');
+    expect(JSON.stringify(draft.data)).not.toContain('claude-fake-model-9999');
   });
 
   it('inspects an execution with node traces and approvals', async () => {

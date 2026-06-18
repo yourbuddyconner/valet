@@ -48,7 +48,7 @@ export default tool({
     model: tool.schema
       .string()
       .optional()
-      .describe("Model ID for the child session to use (e.g. 'anthropic/claude-sonnet-4-5-20250929'). If not specified, inherits parent's model preferences."),
+      .describe("Model ID for the child session to use (e.g. 'anthropic/claude-sonnet-4-5'). If not specified, inherits parent's model preferences."),
     persona_id: tool.schema
       .string()
       .optional()

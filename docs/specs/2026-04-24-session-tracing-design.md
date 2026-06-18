@@ -361,7 +361,7 @@ Follow [OTel GenAI semantic conventions](https://opentelemetry.io/docs/specs/sem
 | Attribute | Example | Convention |
 |---|---|---|
 | `gen_ai.system` | `anthropic` | GenAI semconv |
-| `gen_ai.request.model` | `claude-sonnet-4-20250514` | GenAI semconv |
+| `gen_ai.request.model` | `claude-sonnet-4-5` | GenAI semconv |
 | `gen_ai.usage.input_tokens` | `1523` | GenAI semconv |
 | `gen_ai.usage.output_tokens` | `847` | GenAI semconv |
 | `gen_ai.usage.reasoning_tokens` | `200` | GenAI semconv |

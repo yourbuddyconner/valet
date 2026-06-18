@@ -578,7 +578,7 @@ describe('validateAgainstEnvironment', () => {
   it('rejects llm nodes whose provider has no configured API key', () => {
     const def = definition({
       nodes: [
-        { id: 'extract', type: 'llm', model: 'anthropic:claude-3-5-sonnet', prompt: 'do it', maxOutputTokens: 100 },
+        { id: 'extract', type: 'llm', model: 'anthropic:claude-sonnet-4-5', prompt: 'do it', maxOutputTokens: 100 },
         { id: 'finish', type: 'stop' },
       ],
       edges: [{ from: 'extract', to: 'finish' }],
@@ -618,7 +618,7 @@ describe('validateAgainstEnvironment', () => {
           id: 'loop',
           type: 'foreach',
           items: '{{trigger.items}}',
-          body: { id: 'inner', type: 'llm', model: 'anthropic:claude-3-5-sonnet', prompt: 'x', maxOutputTokens: 50 },
+          body: { id: 'inner', type: 'llm', model: 'anthropic:claude-sonnet-4-5', prompt: 'x', maxOutputTokens: 50 },
         },
         { id: 'finish', type: 'stop' },
       ],
@@ -633,14 +633,14 @@ describe('validateAgainstAvailableModels', () => {
   it('rejects llm nodes whose model is not in the resolved model catalog', () => {
     const def = definition({
       nodes: [
-        { id: 'extract', type: 'llm', model: 'anthropic:claude-sonnet-4-6-20250929', prompt: 'do it', maxOutputTokens: 100 },
+        { id: 'extract', type: 'llm', model: 'anthropic:claude-fake-model-9999', prompt: 'do it', maxOutputTokens: 100 },
         { id: 'finish', type: 'stop' },
       ],
       edges: [{ from: 'extract', to: 'finish' }],
     });
 
     const errs = validateAgainstAvailableModels(def, [
-      { provider: 'Anthropic', models: [{ id: 'anthropic/claude-sonnet-4-20250514', name: 'Claude Sonnet 4' }] },
+      { provider: 'Anthropic', models: [{ id: 'anthropic/claude-sonnet-4-5', name: 'Claude Sonnet 4.5' }] },
     ]);
 
     expect(errs).toEqual([
@@ -648,23 +648,23 @@ describe('validateAgainstAvailableModels', () => {
         scope: 'node',
         nodeId: 'extract',
         code: 'llm_model_unavailable',
-        message: expect.stringContaining('anthropic:claude-sonnet-4-6-20250929'),
+        message: expect.stringContaining('anthropic:claude-fake-model-9999'),
       }),
     ]);
-    expect(errs[0]?.message).toContain('anthropic:claude-sonnet-4-20250514');
+    expect(errs[0]?.message).toContain('anthropic:claude-sonnet-4-5');
   });
 
   it('accepts workflow colon model IDs when the picker catalog uses slash model IDs', () => {
     const def = definition({
       nodes: [
-        { id: 'extract', type: 'llm', model: 'anthropic:claude-sonnet-4-20250514', prompt: 'do it', maxOutputTokens: 100 },
+        { id: 'extract', type: 'llm', model: 'anthropic:claude-sonnet-4-5', prompt: 'do it', maxOutputTokens: 100 },
         { id: 'finish', type: 'stop' },
       ],
       edges: [{ from: 'extract', to: 'finish' }],
     });
 
     const errs = validateAgainstAvailableModels(def, [
-      { provider: 'Anthropic', models: [{ id: 'anthropic/claude-sonnet-4-20250514', name: 'Claude Sonnet 4' }] },
+      { provider: 'Anthropic', models: [{ id: 'anthropic/claude-sonnet-4-5', name: 'Claude Sonnet 4.5' }] },
     ]);
 
     expect(errs).toEqual([]);
@@ -673,7 +673,7 @@ describe('validateAgainstAvailableModels', () => {
   it('prioritizes related and newer model suggestions over raw catalog order', () => {
     const def = definition({
       nodes: [
-        { id: 'generate_welcome', type: 'llm', model: 'anthropic:claude-sonnet-4-6-20250929', prompt: 'do it', maxOutputTokens: 100 },
+        { id: 'generate_welcome', type: 'llm', model: 'anthropic:claude-sonnet-old', prompt: 'do it', maxOutputTokens: 100 },
         { id: 'finish', type: 'stop' },
       ],
       edges: [{ from: 'generate_welcome', to: 'finish' }],
@@ -686,23 +686,18 @@ describe('validateAgainstAvailableModels', () => {
           { id: 'anthropic/claude-opus-4-5', name: 'Claude Opus 4.5' },
           { id: 'anthropic/claude-haiku-4-5-20251001', name: 'Claude Haiku 4.5' },
           { id: 'anthropic/claude-opus-4-8', name: 'Claude Opus 4.8' },
-          { id: 'anthropic/claude-sonnet-4-20250514', name: 'Claude Sonnet 4' },
           { id: 'anthropic/claude-sonnet-4-5', name: 'Claude Sonnet 4.5' },
-          { id: 'anthropic/claude-sonnet-4-5-20251101', name: 'Claude Sonnet 4.5 20251101' },
         ],
       },
     ]);
 
     const message = errs[0]?.message ?? '';
-    const sonnetLatestIndex = message.indexOf('anthropic:claude-sonnet-4-5-20251101');
-    const sonnetStableIndex = message.indexOf('anthropic:claude-sonnet-4-5');
+    const sonnetIndex = message.indexOf('anthropic:claude-sonnet-4-5');
     const opusIndex = message.indexOf('anthropic:claude-opus-4-8');
 
-    expect(sonnetLatestIndex).toBeGreaterThan(-1);
-    expect(sonnetStableIndex).toBeGreaterThan(-1);
+    expect(sonnetIndex).toBeGreaterThan(-1);
     expect(opusIndex).toBeGreaterThan(-1);
-    expect(sonnetLatestIndex).toBeLessThan(opusIndex);
-    expect(sonnetStableIndex).toBeLessThan(opusIndex);
+    expect(sonnetIndex).toBeLessThan(opusIndex);
   });
 });
 

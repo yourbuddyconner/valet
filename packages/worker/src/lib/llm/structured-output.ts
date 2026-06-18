@@ -28,7 +28,7 @@ export { parseModelId, hasProviderKey, type LlmProvider } from './model-id.js';
 
 export interface StructuredOutputRequest {
   env: Env;
-  /** Provider-prefixed model id, e.g. "anthropic:claude-3-5-sonnet". */
+  /** Provider-prefixed model id, e.g. "anthropic:claude-sonnet-4-5". */
   modelId: string;
   prompt: string;
   system?: string;

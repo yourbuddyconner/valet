@@ -4,21 +4,21 @@ import type { Env } from '../../env.js';
 
 describe('parseModelId', () => {
   it('parses anthropic/openai/google prefixes', () => {
-    expect(parseModelId('anthropic:claude-3-5-sonnet')).toEqual({ provider: 'anthropic', model: 'claude-3-5-sonnet' });
+    expect(parseModelId('anthropic:claude-sonnet-4-5')).toEqual({ provider: 'anthropic', model: 'claude-sonnet-4-5' });
     expect(parseModelId('openai:gpt-4o')).toEqual({ provider: 'openai', model: 'gpt-4o' });
     expect(parseModelId('google:gemini-2.0-flash')).toEqual({ provider: 'google', model: 'gemini-2.0-flash' });
   });
 
   it('preserves slashes and colons that appear AFTER the prefix', () => {
     // Models like openrouter-style or version pins.
-    expect(parseModelId('anthropic:claude-3-5-sonnet:20240620')).toEqual({
+    expect(parseModelId('anthropic:claude-sonnet-4-5:20240620')).toEqual({
       provider: 'anthropic',
-      model: 'claude-3-5-sonnet:20240620',
+      model: 'claude-sonnet-4-5:20240620',
     });
   });
 
   it('rejects unprefixed ids', () => {
-    expect(() => parseModelId('claude-3-5-sonnet')).toThrow(/provider-prefixed/);
+    expect(() => parseModelId('claude-sonnet-4-5')).toThrow(/provider-prefixed/);
   });
 
   it('rejects unknown providers', () => {
