@@ -42,17 +42,35 @@ export const SQL_THREAD_MODEL_TOTALS = `
   GROUP BY 1, 2, 3
 `;
 
-// Tool call histogram per thread (from analytics_events rows with tool_name set).
+// Tool call histogram per thread.
+//
+// analytics_events.tool_exec rows have no turn_id, so we can't bridge to
+// threads from them. Tool calls are also persisted inside messages.parts
+// (the streaming-turn parts array) as `{type: 'tool-call', toolName, args}`
+// entries — that gives us a direct thread_id via the parent message row.
+//
+// MCP tools are double-wrapped: the outer toolName is the literal
+// 'call_tool', and the real tool ID lives in args.tool_id. We unwrap that
+// here so the histogram surfaces real names like 'linear:linear.get_issue'
+// rather than 'call_tool' for every MCP invocation.
 export const SQL_THREAD_TOOL_HISTOGRAM = `
   SELECT
-    COALESCE(m.thread_id, '__unattributed__:' || ae.session_id) AS thread_id,
-    ae.tool_name AS tool_name,
+    m.thread_id AS thread_id,
+    CASE
+      WHEN json_extract(p.value, '$.toolName') = 'call_tool'
+        THEN COALESCE(
+          json_extract(json_extract(p.value, '$.args'), '$.tool_id'),
+          'call_tool:unknown'
+        )
+      ELSE json_extract(p.value, '$.toolName')
+    END AS tool_name,
     COUNT(*) AS calls
-  FROM analytics_events ae
-  LEFT JOIN messages m ON m.id = ae.turn_id
-  WHERE ae.tool_name IS NOT NULL
-    AND ae.created_at >= ?
-    AND ae.created_at < ?
+  FROM messages m, json_each(m.parts) p
+  WHERE m.role = 'assistant'
+    AND m.thread_id IS NOT NULL
+    AND json_extract(p.value, '$.type') = 'tool-call'
+    AND m.created_at >= ?
+    AND m.created_at < ?
   GROUP BY 1, 2
 `;
 
