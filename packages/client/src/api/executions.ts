@@ -80,6 +80,14 @@ export interface CancelExecutionRequest {
   reason?: string;
 }
 
+export interface RetryExecutionResponse {
+  executionId: string;
+  workflowId: string;
+  status: Execution['status'] | 'pending';
+  retriedFromExecutionId: string;
+  deduplicated?: boolean;
+}
+
 export const LIVE_EXECUTION_REFETCH_INTERVAL_MS = 2_000;
 
 const TERMINAL_EXECUTION_STATUSES = new Set<Execution['status']>([
@@ -254,6 +262,25 @@ export function useCancelExecution() {
     onSuccess: (_, { executionId }) => {
       queryClient.invalidateQueries({ queryKey: executionKeys.detail(executionId) });
       queryClient.invalidateQueries({ queryKey: executionKeys.lists() });
+    },
+  });
+}
+
+export function useRetryExecution() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ executionId }: { executionId: string }) =>
+      api.post<RetryExecutionResponse>(
+        `/executions/${executionId}/retry`,
+        { clientRequestId: crypto.randomUUID() },
+      ),
+    onSuccess: (result, { executionId }) => {
+      queryClient.invalidateQueries({ queryKey: executionKeys.detail(executionId) });
+      queryClient.invalidateQueries({ queryKey: executionKeys.detail(result.executionId) });
+      queryClient.invalidateQueries({ queryKey: executionKeys.lists() });
+      queryClient.invalidateQueries({ queryKey: executionKeys.byWorkflow(result.workflowId) });
+      queryClient.invalidateQueries({ queryKey: executionKeys.all });
     },
   });
 }

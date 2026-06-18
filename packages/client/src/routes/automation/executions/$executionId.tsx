@@ -1,5 +1,5 @@
-import { createFileRoute, Link } from '@tanstack/react-router';
-import { isActiveExecutionStatus, useCancelExecution, useExecution } from '@/api/executions';
+import { createFileRoute, Link, useNavigate } from '@tanstack/react-router';
+import { isActiveExecutionStatus, useCancelExecution, useExecution, useRetryExecution } from '@/api/executions';
 import type { Execution, ExecutionNode } from '@/api/executions';
 import { ExecutionApprovalPanel } from '@/components/workflows/execution-approval-panel';
 import { Badge } from '@/components/ui/badge';
@@ -15,8 +15,10 @@ export const Route = createFileRoute('/automation/executions/$executionId')({
 
 function ExecutionDetailPage() {
   const { executionId } = Route.useParams();
+  const navigate = useNavigate();
   const { data, isLoading, error } = useExecution(executionId);
   const cancel = useCancelExecution();
+  const retryExecution = useRetryExecution();
   const execution = data?.execution;
 
   const onCancel = async () => {
@@ -25,6 +27,16 @@ function ExecutionDetailPage() {
       toastSuccess('Execution cancelled');
     } catch (err) {
       toastError('Cancel failed', err instanceof Error ? err.message : 'unknown error');
+    }
+  };
+
+  const onRetry = async () => {
+    try {
+      const result = await retryExecution.mutateAsync({ executionId });
+      toastSuccess(`Retry started (${result.executionId})`);
+      navigate({ to: '/automation/executions/$executionId', params: { executionId: result.executionId } });
+    } catch (err) {
+      toastError('Retry failed', err instanceof Error ? err.message : 'unknown error');
     }
   };
 
@@ -71,12 +83,18 @@ function ExecutionDetailPage() {
             </p>
           )}
         </div>
-        {isActive && (
-          <Button variant="destructive" onClick={onCancel} disabled={cancel.isPending}>
-            <CancelIcon />
-            {cancel.isPending ? 'Cancelling...' : 'Cancel'}
+        <div className="flex shrink-0 items-center gap-2">
+          <Button variant="secondary" onClick={onRetry} disabled={retryExecution.isPending}>
+            <RetryIcon />
+            {retryExecution.isPending ? 'Retrying...' : 'Retry'}
           </Button>
-        )}
+          {isActive && (
+            <Button variant="destructive" onClick={onCancel} disabled={cancel.isPending}>
+              <CancelIcon />
+              {cancel.isPending ? 'Cancelling...' : 'Cancel'}
+            </Button>
+          )}
+        </div>
       </header>
 
       {execution.error && (
@@ -143,6 +161,15 @@ function CancelIcon() {
       <circle cx="12" cy="12" r="10" />
       <path d="m15 9-6 6" />
       <path d="m9 9 6 6" />
+    </svg>
+  );
+}
+
+function RetryIcon() {
+  return (
+    <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M3 12a9 9 0 1 0 3-6.7" />
+      <path d="M3 4v6h6" />
     </svg>
   );
 }

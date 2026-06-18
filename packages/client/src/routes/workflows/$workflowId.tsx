@@ -11,7 +11,7 @@ import {
   useDeleteWorkflow,
   useUpdateWorkflow,
 } from '@/api/workflows';
-import { useExecution, useWorkflowExecutions } from '@/api/executions';
+import { useExecution, useRetryExecution, useWorkflowExecutions } from '@/api/executions';
 import { VisualWorkflowEditor } from '@/components/workflows/visual-workflow-editor';
 import { WorkflowExecutionViewer } from '@/components/workflows/workflow-execution-viewer';
 import {
@@ -56,6 +56,7 @@ function WorkflowDetailPage() {
   const testRun = useTestRunWorkflow();
   const deleteWorkflow = useDeleteWorkflow();
   const updateWorkflow = useUpdateWorkflow();
+  const retryExecution = useRetryExecution();
 
   const workflow = data?.workflow;
   const [editorDefinition, setEditorDefinition] = useState<WorkflowDefinition | null>(null);
@@ -202,6 +203,18 @@ function WorkflowDetailPage() {
           toastError(err instanceof Error ? err.message : 'Failed to update workflow'),
       },
     );
+  }
+
+  async function handleRetryExecution(executionId: string) {
+    try {
+      const result = await retryExecution.mutateAsync({ executionId });
+      setActiveTab('executions');
+      setSelectedExecutionId(result.executionId);
+      setSelectedExecutionNodeId(null);
+      toastSuccess(`Retry started (${result.executionId})`);
+    } catch (err) {
+      toastError('Retry failed', err instanceof Error ? err.message : 'Failed to retry execution');
+    }
   }
 
   const executions = executionsData?.executions ?? [];
@@ -386,6 +399,8 @@ function WorkflowDetailPage() {
               setSelectedExecutionNodeId(null);
             }}
             onSelectNode={setSelectedExecutionNodeId}
+            onRetryExecution={handleRetryExecution}
+            isRetryingExecution={retryExecution.isPending}
           />
         ) : (
           <div className="grid min-h-0 flex-1 place-items-center bg-neutral-50 p-5 dark:bg-neutral-950">

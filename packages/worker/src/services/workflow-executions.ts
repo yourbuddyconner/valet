@@ -67,8 +67,12 @@ export interface CreateExecutionInput {
    *     version (otherwise createExecution rejects with `no_published_version`).
    *   - 'draft': load workflows.draft_definition. Used by the test-run
    *     endpoint so authors can run the in-progress draft.
+   *   - 'snapshot': run the caller-provided definition snapshot. Used by
+   *     execution retry so reruns preserve the original workflow version
+   *     even if the draft/published definition has since changed.
    */
-  definitionSource?: 'published' | 'draft';
+  definitionSource?: 'published' | 'draft' | 'snapshot';
+  definitionSnapshot?: WorkflowDefinition;
 }
 
 export interface CreateExecutionResult {
@@ -86,6 +90,7 @@ export async function createExecution(env: Env, input: CreateExecutionInput): Pr
   await assertWorkflowAccess(db, input.user, input.workflowId, 'editor');
 
   // Load the workflow + definition. Priority:
+  //   - definitionSource='snapshot' → caller-provided execution snapshot (retry)
   //   - definitionSource='draft' → workflows.draft_definition (test-run)
   //   - definitionSource='published' (default) → workflows.published_version_id
   //     → workflow_definition_versions.definition. Production triggers
@@ -119,7 +124,13 @@ export async function createExecution(env: Env, input: CreateExecutionInput): Pr
   let definitionVersionId: string | null = null;
   let workflowVersion = workflow.version;
 
-  if (definitionSource === 'draft') {
+  if (definitionSource === 'snapshot') {
+    if (!input.definitionSnapshot) {
+      throw new WorkflowExecutionStartError('invalid_definition', 'snapshot execution source requires definitionSnapshot');
+    }
+    definitionJson = JSON.stringify(input.definitionSnapshot);
+    workflowVersion = 'snapshot';
+  } else if (definitionSource === 'draft') {
     if (!workflow.draftDefinition) {
       throw new WorkflowExecutionStartError('not_found', `workflow ${input.workflowId} has no draft to run`);
     }

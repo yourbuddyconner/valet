@@ -1,19 +1,23 @@
-import { Hono } from 'hono';
+import { Hono, type Context } from 'hono';
 import { z } from 'zod';
 import { zValidator } from '@hono/zod-validator';
-import { NotFoundError } from '@valet/shared';
+import { NotFoundError, type WorkflowTriggerPayload } from '@valet/shared';
+import type { D1Database } from '@cloudflare/workers-types';
 import type { Env, Variables } from '../env.js';
 import {
   listExecutions,
   getExecution,
   parseExecutionInputs,
+  checkIdempotencyKey,
 } from '../lib/db.js';
 import { getDb } from '../lib/drizzle.js';
 import { eq } from 'drizzle-orm';
 import { workflowExecutions } from '../lib/schema/workflows.js';
 import { listWorkflowApprovalsForExecution } from '../lib/db/workflow-approvals.js';
+import { isWorkflowDefinition } from '../lib/workflow-dag/schema.js';
 
 export const executionsRouter = new Hono<{ Bindings: Env; Variables: Variables }>();
+type ExecutionsRouteContext = Context<{ Bindings: Env; Variables: Variables }>;
 
 /**
  * GET /api/executions
@@ -145,6 +149,121 @@ function safeJsonParse(s: string): unknown {
   }
 }
 
+const retryExecutionSchema = z.object({
+  clientRequestId: z.string().optional(),
+});
+
+/**
+ * POST /api/executions/:id/retry
+ *
+ * Starts a new execution from the selected execution's stored
+ * definition_snapshot, validated inputs, and original trigger payload.
+ * This is intentionally snapshot-based: retrying an old failed run should
+ * reproduce that run, not silently execute whatever draft/published version
+ * exists today.
+ */
+executionsRouter.post('/:id/retry', zValidator('json', retryExecutionSchema), async (c) => {
+  const { id } = c.req.param();
+  const user = c.get('user');
+  const body = c.req.valid('json');
+
+  const row = await getExecution(c.env.DB, id, user.id);
+  if (!row) throw new NotFoundError('Execution', id);
+
+  const workflowId = String((row as Record<string, unknown>).workflow_id ?? '');
+  if (!workflowId) throw new NotFoundError('Workflow', 'for execution retry');
+
+  const definitionSnapshotRaw = (row as Record<string, unknown>).definition_snapshot;
+  if (typeof definitionSnapshotRaw !== 'string' || !definitionSnapshotRaw.trim()) {
+    return c.json({ error: 'execution has no workflow definition snapshot', code: 'missing_definition_snapshot' }, 400);
+  }
+
+  const clientRequestId = body.clientRequestId ?? crypto.randomUUID();
+  const idempotencyKey = `retry:${id}:${user.id}:${clientRequestId}`;
+  const existing = await checkIdempotencyKey(c.env.DB, workflowId, user.id, idempotencyKey);
+  if (existing) {
+    return c.json({
+      executionId: existing.id as string,
+      status: existing.status as string,
+      workflowId,
+      retriedFromExecutionId: id,
+      deduplicated: true,
+    });
+  }
+
+  const definitionSnapshot = safeJsonParse(definitionSnapshotRaw);
+  if (!isWorkflowDefinition(definitionSnapshot)) {
+    return c.json({ error: 'execution definition snapshot is malformed', code: 'invalid_definition_snapshot' }, 400);
+  }
+
+  const trigger = await readRetryTriggerPayload(c.env.DB, id, row as Record<string, unknown>, user.id, clientRequestId);
+  const inputs = parseExecutionInputs(row as { inputs?: string | null }) ?? {};
+
+  const { createExecution, WorkflowExecutionStartError } = await import('../services/workflow-executions.js');
+  try {
+    const result = await createExecution(c.env, {
+      workflowId,
+      user,
+      trigger,
+      inputOverrides: inputs,
+      mode: ((row as Record<string, unknown>).mode === 'test' ? 'test' : 'production'),
+      definitionSource: 'snapshot',
+      definitionSnapshot,
+      idempotencyKey,
+    });
+    return c.json({ ...result, workflowId, retriedFromExecutionId: id });
+  } catch (err) {
+    if (err instanceof WorkflowExecutionStartError) {
+      if (err.code === 'not_found') throw new NotFoundError('Workflow', workflowId);
+      const statusCode = err.code === 'rate_limited' ? 429 : 400;
+      return c.json({ error: err.message, code: err.code, details: err.details }, statusCode);
+    }
+    throw err;
+  }
+});
+
+async function readRetryTriggerPayload(
+  db: D1Database,
+  executionId: string,
+  executionRow: Record<string, unknown>,
+  userId: string,
+  clientRequestId: string,
+): Promise<WorkflowTriggerPayload> {
+  const trace = await db.prepare(
+    `SELECT output
+     FROM workflow_execution_nodes
+     WHERE execution_id = ? AND node_type = 'trigger' AND status = 'completed'
+     ORDER BY created_at DESC
+     LIMIT 1`,
+  ).bind(executionId).first<{ output?: string | null }>();
+
+  const parsed = typeof trace?.output === 'string' ? safeJsonParse(trace.output) : null;
+  const trigger = parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+    ? parsed as Partial<WorkflowTriggerPayload>
+    : null;
+  const metadata = trigger?.metadata && typeof trigger.metadata === 'object' && !Array.isArray(trigger.metadata)
+    ? { ...trigger.metadata }
+    : safeJsonParse(String(executionRow.trigger_metadata ?? '{}'));
+  const triggerType = trigger?.type ?? executionRow.trigger_type;
+
+  return {
+    type: isWorkflowTriggerType(triggerType) ? triggerType : 'manual',
+    timestamp: new Date().toISOString(),
+    data: trigger?.data ?? {},
+    metadata: {
+      ...(metadata && typeof metadata === 'object' && !Array.isArray(metadata) ? metadata : {}),
+      retriedFromExecutionId: executionId,
+      retryClientRequestId: clientRequestId,
+      initiatedBy: userId,
+    },
+    ...(typeof trigger?.triggerId === 'string' ? { triggerId: trigger.triggerId } : {}),
+  };
+}
+
+function isWorkflowTriggerType(input: unknown): input is WorkflowTriggerPayload['type'] {
+  return input === 'manual' || input === 'schedule' || input === 'webhook';
+}
+
 // ─── List + resolve approvals via flat URL (no workflowId required) ────────
 
 executionsRouter.get('/:id/approvals', async (c) => {
@@ -179,23 +298,22 @@ const approvalDecisionSchema = z.object({ reason: z.string().optional() });
 executionsRouter.post(
   '/:id/approvals/:approvalId/approve',
   zValidator('json', approvalDecisionSchema),
-  async (c) => runResolveApproval(c, 'approved'),
+  async (c) => runResolveApproval(c, 'approved', c.req.valid('json').reason),
 );
 
 executionsRouter.post(
   '/:id/approvals/:approvalId/deny',
   zValidator('json', approvalDecisionSchema),
-  async (c) => runResolveApproval(c, 'denied'),
+  async (c) => runResolveApproval(c, 'denied', c.req.valid('json').reason),
 );
 
 async function runResolveApproval(
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  c: any,
+  c: ExecutionsRouteContext,
   result: 'approved' | 'denied',
+  reason?: string,
 ) {
   const { id: executionId, approvalId } = c.req.param();
   const user = c.get('user');
-  const body = c.req.valid('json') as { reason?: string };
 
   // User-scoped read first: refuses cross-tenant probing by id before
   // we hit the approval helper.
@@ -209,7 +327,7 @@ async function runResolveApproval(
     approvalId,
     executionId,
     result,
-    ...(body.reason !== undefined ? { reason: body.reason } : {}),
+    ...(reason !== undefined ? { reason } : {}),
   });
 
   if (outcome.kind === 'expired') {
@@ -255,4 +373,3 @@ executionsRouter.post('/:id/cancel', async (c) => {
   if (result.status === 'not_found') throw new NotFoundError('Execution', id);
   return c.json({ status: result.status });
 });
-

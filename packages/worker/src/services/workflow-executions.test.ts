@@ -7,6 +7,7 @@ import { eq } from 'drizzle-orm';
 import type { Env } from '../env.js';
 import type { AppDb } from '../lib/drizzle.js';
 import { setOrgLlmKey } from './admin.js';
+import type { WorkflowDefinition } from '@valet/shared';
 
 let db: AppDb;
 let createdInstances: Array<{ id: string; params: unknown }> = [];
@@ -268,6 +269,35 @@ describe('createExecution', () => {
       mode: 'test',
     });
     expect(createdInstances[0]!.params).toMatchObject({ definition: draftDef, mode: 'test' });
+  });
+
+  it('runs an explicit snapshot when definitionSource=snapshot', async () => {
+    const publishedDef = dagWithSet();
+    const snapshotDef = {
+      version: 'dag/v1',
+      nodes: [
+        { id: 'from_snapshot', type: 'set', values: { value: '{{trigger.data.x}}' } },
+        { id: 'done', type: 'stop' },
+      ],
+      edges: [{ from: 'from_snapshot', to: 'done' }],
+    } satisfies WorkflowDefinition;
+    makeWorkflow('wf-snapshot', publishedDef);
+
+    const env = makeEnv();
+    const result = await createExecution(env, {
+      workflowId: 'wf-snapshot',
+      user: { id: 'u1' },
+      trigger: { type: 'manual', timestamp: 't', data: { x: 'retry' }, metadata: { retryOfExecutionId: 'exec-old' } },
+      definitionSource: 'snapshot',
+      definitionSnapshot: snapshotDef,
+      mode: 'test',
+    });
+
+    expect(createdInstances[0]!.params).toMatchObject({ definition: snapshotDef, mode: 'test' });
+    const row = await db.select().from(workflowExecutions).where(eq(workflowExecutions.id, result.executionId)).get();
+    expect(JSON.parse(row?.definitionSnapshot ?? '{}')).toEqual(snapshotDef);
+    expect(row?.workflowVersion).toBe('snapshot');
+    expect(row?.definitionVersionId).toBeNull();
   });
 
   it('rejects test-run when no draft exists', async () => {

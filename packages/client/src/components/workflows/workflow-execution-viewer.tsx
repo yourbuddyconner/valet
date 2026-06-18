@@ -16,6 +16,7 @@ import {
   NodeTitle,
 } from '@/components/ai-elements/node';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/cn';
 import { formatRelativeTime } from '@/lib/format';
 import {
@@ -40,6 +41,8 @@ interface WorkflowExecutionViewerProps {
   selectedNodeId: string | null;
   onSelectExecution: (executionId: string) => void;
   onSelectNode: (nodeId: string | null) => void;
+  onRetryExecution?: (executionId: string) => void;
+  isRetryingExecution?: boolean;
 }
 
 interface ExecutionNodeCardData extends WorkflowFlowNodeData {
@@ -73,6 +76,8 @@ function WorkflowExecutionViewerInner({
   selectedNodeId,
   onSelectExecution,
   onSelectNode,
+  onRetryExecution,
+  isRetryingExecution = false,
 }: WorkflowExecutionViewerProps) {
   const flow = React.useMemo(
     () => definitionToFlow(definition ?? createDefaultWorkflowDefinition()),
@@ -196,7 +201,13 @@ function WorkflowExecutionViewerInner({
       </div>
 
       <aside className="min-h-0 overflow-y-auto border-l border-neutral-200 bg-white dark:border-neutral-800 dark:bg-neutral-950">
-        <ExecutionDetailsPanel execution={execution} selectedNodeId={selectedNodeId} selectedTrace={selectedTrace} />
+        <ExecutionDetailsPanel
+          execution={execution}
+          selectedNodeId={selectedNodeId}
+          selectedTrace={selectedTrace}
+          onRetryExecution={onRetryExecution}
+          isRetryingExecution={isRetryingExecution}
+        />
       </aside>
     </div>
   );
@@ -246,10 +257,14 @@ function ExecutionDetailsPanel({
   execution,
   selectedNodeId,
   selectedTrace,
+  onRetryExecution,
+  isRetryingExecution = false,
 }: {
   execution: Execution | null;
   selectedNodeId: string | null;
   selectedTrace: ExecutionNode | null;
+  onRetryExecution?: (executionId: string) => void;
+  isRetryingExecution?: boolean;
 }) {
   if (!execution) {
     return <p className="p-4 text-sm text-neutral-500">Select an execution to inspect it.</p>;
@@ -264,7 +279,22 @@ function ExecutionDetailsPanel({
   return (
     <div className="space-y-4 p-4">
       <section>
-        <h2 className="text-sm font-medium text-neutral-950 dark:text-neutral-100">Execution</h2>
+        <div className="flex items-center justify-between gap-3">
+          <h2 className="text-sm font-medium text-neutral-950 dark:text-neutral-100">Execution</h2>
+          {onRetryExecution && (
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              onClick={() => onRetryExecution(execution.id)}
+              disabled={isRetryingExecution}
+              className="border border-neutral-200 bg-white text-neutral-800 hover:bg-neutral-100 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100 dark:hover:bg-neutral-800"
+            >
+              <RetryIcon />
+              {isRetryingExecution ? 'Retrying...' : 'Retry'}
+            </Button>
+          )}
+        </div>
         <div className="mt-2 space-y-2 text-xs text-neutral-600 dark:text-neutral-400">
           <KeyValue label="Status" value={execution.status} />
           <KeyValue label="Started" value={formatExecutionTimestamp(execution.startedAt)} />
@@ -303,6 +333,15 @@ function ExecutionDetailsPanel({
         )}
       </section>
     </div>
+  );
+}
+
+function RetryIcon() {
+  return (
+    <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M3 12a9 9 0 1 0 3-6.7" />
+      <path d="M3 4v6h6" />
+    </svg>
   );
 }
 

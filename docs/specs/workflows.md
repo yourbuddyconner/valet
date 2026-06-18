@@ -257,6 +257,7 @@ Active executions (`pending`, `running`, `waiting_approval`, `waiting_time`) are
 | GET | `/:id/approvals` | All approvals for an execution (pending + resolved) |
 | POST | `/:id/approvals/:approvalId/approve` | Approve a pending approval (`{ reason? }` body) |
 | POST | `/:id/approvals/:approvalId/deny` | Deny a pending approval (`{ reason? }` body) |
+| POST | `/:id/retry` | Start a new execution from this execution's stored definition snapshot, validated inputs, and trigger payload (`{ clientRequestId? }` body) |
 | POST | `/:id/cancel` | Cancel an execution |
 
 ### Trigger Routes (`/api/triggers`)
@@ -285,7 +286,7 @@ Node parameter fields that accept template strings use the workflow template hel
 
 LLM-style model fields use the shared model picker backed by `/sessions/available-models`, including user/org preferred model grouping. The picker writes catalog model ids into the node definition and supports clearing back to the runtime default model.
 
-The executions tab is a read-only execution inspector modeled after n8n's execution view. It shows a narrow run list on the left, the workflow graph in the center, and an execution/node detail panel on the right. Selecting a run fetches `GET /api/executions/:id`; active execution details refetch every ~2 seconds until the execution reaches a terminal status so node traces update live without a page refresh. The canvas overlays the latest `workflow_execution_nodes` trace row for each definition node, showing status, duration, skipped nodes, and node errors without changing the draft layout. Selecting a node opens its trace payload in the right panel so users can inspect input previews, outputs, errors, and reasons in graph context. If the selected node has a pending workflow approval, the same panel renders approve/deny actions and invalidates the execution detail after resolution so the graph continues from that point. Starting a test run switches to this tab and pins the newly-created execution while the workflow execution list catches up. The tests tab provides an explicit draft test-run entrypoint; test buttons open `ManualWorkflowDialog`, which collects a JSON `triggerData` payload and typed controls for declared workflow `inputs`, saves the current draft, then dispatches `/api/workflows/:id/test-run`. The trigger list play button uses the same dialog for workflow-backed triggers and submits the split payload to `/api/triggers/:id/run`; orchestrator-only schedule triggers still run directly.
+The executions tab is a read-only execution inspector modeled after n8n's execution view. It shows a narrow run list on the left, the workflow graph in the center, and an execution/node detail panel on the right. Selecting a run fetches `GET /api/executions/:id`; active execution details refetch every ~2 seconds until the execution reaches a terminal status so node traces update live without a page refresh. The canvas overlays the latest `workflow_execution_nodes` trace row for each definition node, showing status, duration, skipped nodes, and node errors without changing the draft layout. Selecting a node opens its trace payload in the right panel so users can inspect input previews, outputs, errors, and reasons in graph context. If the selected node has a pending workflow approval, the same panel renders approve/deny actions and invalidates the execution detail after resolution so the graph continues from that point. The panel also exposes Retry, which posts to `/api/executions/:id/retry` and pins the newly-created execution; retry uses the original execution's `definition_snapshot`, validated `inputs`, and trigger-node payload rather than the current draft/published definition. Starting a test run switches to this tab and pins the newly-created execution while the workflow execution list catches up. The tests tab provides an explicit draft test-run entrypoint; test buttons open `ManualWorkflowDialog`, which collects a JSON `triggerData` payload and typed controls for declared workflow `inputs`, saves the current draft, then dispatches `/api/workflows/:id/test-run`. The trigger list play button uses the same dialog for workflow-backed triggers and submits the split payload to `/api/triggers/:id/run`; orchestrator-only schedule triggers still run directly.
 
 ## Flows
 
@@ -408,6 +409,7 @@ Duplicate executions are prevented by the unique index on `(workflowId, idempote
 - Webhook: `webhook:{triggerId}:{deliveryId or bodyHash}`
 - Schedule: per-tick dedupe via `workflow_schedule_ticks`
 - Test-run: `test-run:{workflowId}:{userId}:{clientRequestId}` (editor double-click protection)
+- Retry: `retry:{sourceExecutionId}:{userId}:{clientRequestId}` (retry button double-click protection)
 
 ### Webhook Signature Verification Gap
 
