@@ -8,9 +8,10 @@ vi.mock('../lib/drizzle.js', () => ({
   getDb: () => ({} as unknown),
 }));
 
-import { pollSessionUntilIdle } from './polling.js';
+import { pollSessionUntilIdle, pollThreadUntilIdle } from './polling.js';
 import type { Env } from '../env.js';
-import type { WorkflowStep, WorkflowStepConfig } from 'cloudflare:workers';
+import type { WorkflowSleepDuration, WorkflowStep, WorkflowStepConfig } from 'cloudflare:workers';
+import type { D1Database, DurableObjectId, DurableObjectNamespace, DurableObjectStub, R2Bucket, Workflow } from '@cloudflare/workers-types';
 
 interface StepCall { name: string; type: 'do' | 'sleep'; ms?: number }
 
@@ -22,16 +23,55 @@ function makeStep(): { step: WorkflowStep; calls: StepCall[] } {
       const fn = typeof configOrFn === 'function' ? configOrFn : maybeFn!;
       return fn();
     },
-    async sleep(name: string, ms: number) {
+    async sleep(name: string, ms: WorkflowSleepDuration) {
       calls.push({ name, type: 'sleep', ms: typeof ms === 'number' ? ms : 0 });
     },
     async sleepUntil() {},
     async waitForEvent() { throw new Error('not used'); },
-  } as unknown as WorkflowStep;
+  } satisfies WorkflowStep;
   return { step, calls };
 }
 
 const env = {} as Env;
+
+function makeThreadEnv(responses: Array<{ ok?: boolean; status?: number; body: unknown }>): Env {
+  const fetchMock = vi.fn(async () => {
+    const next = responses.shift() ?? { body: { status: 'idle' } };
+    return Response.json(next.body, { status: next.status ?? (next.ok === false ? 500 : 200) });
+  });
+  const objectId: DurableObjectId = {
+    name: 'orchestrator:user-1',
+    toString: () => 'orchestrator:user-1',
+    equals: (other) => other.toString() === 'orchestrator:user-1',
+  };
+  const sessionStub: DurableObjectStub = {
+    id: objectId,
+    fetch: fetchMock,
+    connect: () => {
+      throw new Error('connect is not used in polling tests');
+    },
+  };
+  const sessions: DurableObjectNamespace = {
+    newUniqueId: () => objectId,
+    idFromName: () => objectId,
+    idFromString: () => objectId,
+    get: () => sessionStub,
+    getByName: () => sessionStub,
+    jurisdiction: () => sessions,
+  };
+  return {
+    SESSIONS: sessions,
+    EVENT_BUS: {} as DurableObjectNamespace,
+    WORKFLOW_INTERPRETER: {} as Workflow,
+    DB: {} as D1Database,
+    STORAGE: {} as R2Bucket,
+    ENCRYPTION_KEY: 'test',
+    GOOGLE_CLIENT_ID: 'test',
+    GOOGLE_CLIENT_SECRET: 'test',
+    MODAL_BACKEND_URL: 'https://modal.example/{label}',
+    FRONTEND_URL: 'https://client.example',
+  };
+}
 
 beforeEach(() => {
   getSessionMock.mockReset();
@@ -128,5 +168,56 @@ describe('pollSessionUntilIdle', () => {
       'k:check:1', 'k:sleep:1',
       'k:check:2',
     ]);
+  });
+});
+
+describe('pollThreadUntilIdle', () => {
+  it('returns idle immediately when the thread has no queued or processing prompts', async () => {
+    const { step, calls } = makeStep();
+    const result = await pollThreadUntilIdle(makeThreadEnv([
+      { body: { threadId: 'thread-1', status: 'idle', queuedPrompts: 0, processingPrompts: 0 } },
+    ]), step, {
+      sessionId: 'orchestrator:user-1',
+      threadId: 'thread-1',
+      pollKey: 'thread',
+      timeoutMs: 60_000,
+    });
+
+    expect(result).toBe('idle');
+    expect(calls.filter((c) => c.type === 'sleep')).toHaveLength(0);
+  });
+
+  it('polls while the thread has queued or processing prompts', async () => {
+    const { step, calls } = makeStep();
+    const result = await pollThreadUntilIdle(makeThreadEnv([
+      { body: { threadId: 'thread-1', status: 'working', queuedPrompts: 0, processingPrompts: 1 } },
+      { body: { threadId: 'thread-1', status: 'idle', queuedPrompts: 0, processingPrompts: 0 } },
+    ]), step, {
+      sessionId: 'orchestrator:user-1',
+      threadId: 'thread-1',
+      pollKey: 'thread',
+      timeoutMs: 60_000,
+      initialIntervalMs: 100,
+      maxIntervalMs: 100,
+    });
+
+    expect(result).toBe('idle');
+    expect(calls.map((c) => c.name)).toEqual([
+      'thread:check:0',
+      'thread:sleep:0',
+      'thread:check:1',
+    ]);
+  });
+
+  it('throws when the SessionAgent thread status endpoint fails', async () => {
+    const { step } = makeStep();
+    await expect(pollThreadUntilIdle(makeThreadEnv([
+      { ok: false, status: 500, body: { error: 'boom' } },
+    ]), step, {
+      sessionId: 'orchestrator:user-1',
+      threadId: 'thread-1',
+      pollKey: 'thread',
+      timeoutMs: 60_000,
+    })).rejects.toThrow(/thread status check failed/);
   });
 });

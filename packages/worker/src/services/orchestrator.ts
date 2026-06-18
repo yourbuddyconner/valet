@@ -368,6 +368,7 @@ export async function updateOrchestratorIdentity(
 type OrchestratorPromptDispatchResult = {
   dispatched: boolean;
   sessionId: string;
+  threadId?: string;
   reason?: string;
   retryAfterMs?: number;
 };
@@ -384,7 +385,7 @@ export async function dispatchOrchestratorPrompt(
     channelType?: string;
     channelId?: string;
     threadId?: string;
-    /** Always create a new thread instead of reusing the active one (e.g. for scheduled triggers). */
+    /** Always create a new thread instead of reusing the active one (e.g. for automated triggers/workflows). */
     forceNewThread?: boolean;
     threadOrigin?: ThreadOriginInput;
     attachments?: Array<{ type: string; mime: string; url: string; filename?: string }>;
@@ -399,7 +400,7 @@ export async function dispatchOrchestratorPrompt(
   // it has no prior conversation context and should lean on its memory system.
   let content = params.content.trim();
   if (params.forceNewThread && content) {
-    content = `[This is a scheduled task running in a fresh thread — you have no prior conversation context. Use mem_search and mem_read to recall any relevant context before proceeding, and mem_write to persist important findings or decisions.]\n\n${content}`;
+    content = `[This is an automated task running in a fresh thread — you have no prior conversation context. Use mem_search and mem_read to recall any relevant context before proceeding, and mem_write to persist important findings or decisions.]\n\n${content}`;
   }
   if (!content && (!params.attachments || params.attachments.length === 0)) {
     return { dispatched: false, sessionId: `orchestrator:${params.userId}`, reason: 'empty_prompt' };
@@ -525,5 +526,5 @@ export async function dispatchOrchestratorPrompt(
   }
 
   console.log(`[OrchestratorDispatch] Success: session=${sessionId}`);
-  return { dispatched: true, sessionId };
+  return { dispatched: true, sessionId, ...(params.threadId ? { threadId: params.threadId } : {}) };
 }

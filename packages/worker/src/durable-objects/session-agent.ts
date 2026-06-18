@@ -518,6 +518,8 @@ export class SessionAgentDO {
       }
       case '/status':
         return this.handleStatus();
+      case '/thread-status':
+        return this.handleThreadStatus(url);
       case '/wake':
         return this.handleWake();
       case '/hibernate':
@@ -4726,6 +4728,15 @@ export class SessionAgentDO {
       sandboxGeneration: this.sessionState.sandboxGeneration,
       sandboxWakeStartedAt: this.sessionState.sandboxWakeStartedAt || null,
     });
+  }
+
+  private handleThreadStatus(url: URL): Response {
+    const threadId = url.searchParams.get('threadId')?.trim();
+    if (!threadId) {
+      return Response.json({ error: 'Missing threadId' }, { status: 400 });
+    }
+
+    return Response.json(this.promptQueue.getThreadPromptStatus(threadId));
   }
 
   private notifyParentIfIdle() {

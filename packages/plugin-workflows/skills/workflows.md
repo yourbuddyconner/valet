@@ -200,7 +200,13 @@ Foreach `body` may be `llm`, `tool`, `set`, `stop`, `orchestrator`, or `session`
 { "id": "pause", "type": "wait", "mode": "duration", "duration": "10m" }
 ```
 
-`orchestrator` prompts the user's orchestrator:
+`orchestrator` prompts the user's orchestrator in a fresh automation thread. Default behavior is fire-and-forget:
+
+```json
+{ "id": "ask_orchestrator", "type": "orchestrator", "prompt": "Investigate {{trigger.data.issue}}" }
+```
+
+Use `wait.mode: "until_idle"` only when downstream nodes need the orchestrator result. This waits for the workflow-created thread's prompt queue to become idle, not for the long-lived orchestrator session to stop running:
 
 ```json
 { "id": "ask_orchestrator", "type": "orchestrator", "prompt": "Investigate {{trigger.data.issue}}", "wait": { "mode": "until_idle", "timeout": "30m" } }

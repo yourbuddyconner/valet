@@ -70,6 +70,13 @@ export interface QueueEntry {
   replaceable: boolean;
 }
 
+export interface ThreadPromptStatus {
+  threadId: string;
+  status: 'idle' | 'working';
+  queuedPrompts: number;
+  processingPrompts: number;
+}
+
 export interface CollectBufferEntry {
   content: string;
   model?: string;
@@ -405,6 +412,30 @@ export class PromptQueue {
         .exec("SELECT COUNT(*) AS c FROM prompt_queue WHERE status = 'processing'")
         .one().c,
     );
+  }
+
+  getThreadPromptStatus(threadId: string): ThreadPromptStatus {
+    const rows = this.sql
+      .exec(
+        "SELECT status, COUNT(*) AS count FROM prompt_queue WHERE thread_id = ? AND queue_type = 'prompt' GROUP BY status",
+        threadId,
+      )
+      .toArray();
+
+    let queuedPrompts = 0;
+    let processingPrompts = 0;
+    for (const row of rows) {
+      const count = Number(row.count ?? 0);
+      if (row.status === 'queued') queuedPrompts = count;
+      if (row.status === 'processing') processingPrompts = count;
+    }
+
+    return {
+      threadId,
+      status: queuedPrompts > 0 || processingPrompts > 0 ? 'working' : 'idle',
+      queuedPrompts,
+      processingPrompts,
+    };
   }
 
   /** Get the thread_id from the most recent processing entry. */

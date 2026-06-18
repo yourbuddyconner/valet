@@ -363,7 +363,7 @@ The reserved `trigger` node may declare `dataSchema`, a field map using the same
 | `wait` | Durable pause via `step.sleep` for a compact duration string (`'5s'`, `'1h'`). |
 | `approval` | Human approval gate via `workflow_approvals` + `step.waitForEvent`. |
 | `foreach` | Iterates over an array. Body is a single node of a permitted subtype (`llm`, `tool`, `set`, `stop`, `orchestrator`, `session`). |
-| `orchestrator` | Dispatch a prompt to the user's orchestrator. |
+| `orchestrator` | Dispatch a prompt to the user's orchestrator in a fresh automation-origin thread. With `wait.mode: 'until_idle'`, the executor polls that created thread's prompt queue until it has no queued or processing prompts; it does not wait for the long-lived orchestrator session lifecycle to become idle. |
 | `session` | Start or resume a session and run a prompt. |
 | `stop` | Terminate the workflow with an outcome envelope. |
 
@@ -395,6 +395,8 @@ The runtime entrypoint is `ValetWorkflowInterpreter` in `packages/worker/src/wor
 4. When no nodes remain, mark unreachable children as `skipped` (with the parent's edge-error reason when available), then write the terminal status.
 
 Replay determinism comes from `step.do` caching every side effect: D1 writes, clock reads, action invocations, approval row inserts. Hibernate/wake replays the cached outputs without re-issuing side effects.
+
+`orchestrator` nodes always create a new `session_threads` row with `originType: 'automation'` before dispatching their prompt. The node output includes `{ dispatched, sessionId, threadId }`, plus `finalStatus` / `waited` when `wait.mode: 'until_idle'` is used. Waiting polls `SessionAgentDO /thread-status?threadId=...`, which reports whether that thread still has queued or processing prompt rows. This avoids hanging on the orchestrator session's D1 lifecycle status, which normally remains `running` for long-lived orchestrators.
 
 ## Edge Cases & Failure Modes
 
