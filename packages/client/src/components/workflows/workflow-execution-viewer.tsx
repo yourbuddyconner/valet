@@ -519,23 +519,37 @@ function ReadableJsonValue({
     const visibleItems = value.slice(0, 20);
     return (
       <div className="space-y-2">
-        {visibleItems.map((item, index) => (
-          <div
-            key={index}
-            className={cn(
-              'rounded-md border bg-white p-2 dark:bg-neutral-950',
-              tone === 'error' ? 'border-red-200 dark:border-red-900/50' : 'border-neutral-200 dark:border-neutral-800',
-            )}
-          >
-            <div className="mb-2 flex items-center justify-between gap-2">
-              <div className="min-w-0 truncate text-xs font-medium text-neutral-900 dark:text-neutral-100">
-                {getReadableJsonItemTitle(item, index)}
+        {visibleItems.map((item, index) => {
+          const expandable = isExpandableReadableValue(item);
+          if (expandable) {
+            return (
+              <ExpandableReadableJsonValue
+                key={index}
+                title={getReadableJsonItemTitle(item, index)}
+                value={item}
+                tone={tone}
+                depth={depth + 1}
+              />
+            );
+          }
+
+          return (
+            <div
+              key={index}
+              className={cn(
+                'rounded-md border bg-white p-2 text-xs text-neutral-900 dark:bg-neutral-950 dark:text-neutral-100',
+                tone === 'error' ? 'border-red-200 dark:border-red-900/50' : 'border-neutral-200 dark:border-neutral-800',
+              )}
+            >
+              <div className="flex items-center justify-between gap-2">
+                <span className="min-w-0 truncate font-medium" title={`Item ${index + 1}`}>
+                  Item {index + 1}
+                </span>
+                <span className="break-words text-right">{formatReadableScalar(item)}</span>
               </div>
-              <Badge variant="secondary">{getReadableJsonSummary(item)}</Badge>
             </div>
-            <ReadableJsonValue value={item} tone={tone} depth={depth + 1} />
-          </div>
-        ))}
+          );
+        })}
         {value.length > visibleItems.length && (
           <p className="text-xs text-neutral-500">
             {value.length - visibleItems.length} more items not shown.
@@ -548,7 +562,7 @@ function ReadableJsonValue({
   if (isRecord(value)) {
     const entries = Object.entries(value);
     if (entries.length === 0) return <EmptyReadableValue label="No fields" tone={tone} />;
-    if (depth >= 3) {
+    if (depth >= 8) {
       return (
         <div className="rounded-md border border-neutral-200 bg-white px-2 py-1.5 text-xs text-neutral-500 dark:border-neutral-800 dark:bg-neutral-950">
           {getReadableJsonSummary(value)}
@@ -566,14 +580,13 @@ function ReadableJsonValue({
           return (
             <div key={key} className="border-b border-neutral-100 last:border-b-0 dark:border-neutral-800">
               {nested ? (
-                <div className="space-y-2 p-2">
-                  <div className="flex min-w-0 items-center justify-between gap-2">
-                    <span className="truncate text-xs font-medium text-neutral-600 dark:text-neutral-400" title={key}>
-                      {key}
-                    </span>
-                    <Badge variant="secondary">{getReadableJsonSummary(nestedValue)}</Badge>
-                  </div>
-                  <ReadableJsonValue value={nestedValue} tone={tone} depth={depth + 1} />
+                <div className="p-2">
+                  <ExpandableReadableJsonValue
+                    title={key}
+                    value={nestedValue}
+                    tone={tone}
+                    depth={depth + 1}
+                  />
                 </div>
               ) : (
                 <div className="grid grid-cols-[minmax(7rem,11rem)_minmax(0,1fr)]">
@@ -600,6 +613,69 @@ function ReadableJsonValue({
       {formatReadableScalar(value)}
     </div>
   );
+}
+
+function ExpandableReadableJsonValue({
+  title,
+  value,
+  tone,
+  depth,
+}: {
+  title: string;
+  value: unknown;
+  tone: 'neutral' | 'error';
+  depth: number;
+}) {
+  const [open, setOpen] = React.useState(false);
+  const summary = getReadableJsonSummary(value);
+
+  return (
+    <div className={cn(
+      'overflow-hidden rounded-md border bg-white dark:bg-neutral-950',
+      tone === 'error' ? 'border-red-200 dark:border-red-900/50' : 'border-neutral-200 dark:border-neutral-800',
+    )}>
+      <button
+        type="button"
+        onClick={() => setOpen((current) => !current)}
+        className="flex w-full items-center justify-between gap-3 px-2 py-2 text-left hover:bg-neutral-50 dark:hover:bg-neutral-900"
+        aria-expanded={open}
+      >
+        <span className="flex min-w-0 items-center gap-2">
+          <ChevronIcon open={open} />
+          <span className="truncate text-xs font-medium text-neutral-900 dark:text-neutral-100" title={title}>
+            {title}
+          </span>
+        </span>
+        <Badge variant="secondary" className="shrink-0">{summary}</Badge>
+      </button>
+      {open ? (
+        <div className="border-t border-neutral-100 p-2 dark:border-neutral-800">
+          <ReadableJsonValue value={value} tone={tone} depth={depth + 1} />
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function ChevronIcon({ open }: { open: boolean }) {
+  return (
+    <svg
+      className={cn('h-3.5 w-3.5 shrink-0 text-neutral-400 transition-transform', open && 'rotate-90')}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="m9 18 6-6-6-6" />
+    </svg>
+  );
+}
+
+function isExpandableReadableValue(value: unknown): boolean {
+  return (Array.isArray(value) && value.length > 0) || (isRecord(value) && Object.keys(value).length > 0);
 }
 
 function EmptyReadableValue({ label, tone }: { label: string; tone: 'neutral' | 'error' }) {
