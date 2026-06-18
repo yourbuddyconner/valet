@@ -97,6 +97,8 @@ import {
   filterNodePaletteOptions,
   flowToDefinition,
   getDefaultNodeForType,
+  NODE_PALETTE_LIST_CLASSNAME,
+  NODE_PALETTE_PANEL_CLASSNAME,
   removeWorkflowFlowNode,
   updateWorkflowNode,
   validateWorkflowDataFlowEdges,
@@ -458,10 +460,10 @@ function VisualWorkflowEditorInner({
         {nodePaletteOpen && (
           <Panel
             position="top-right"
-            className="mt-16 w-[min(380px,calc(100vw-2rem))] overflow-hidden rounded-xl border border-neutral-200 bg-white shadow-2xl shadow-neutral-950/15 dark:border-neutral-800 dark:bg-neutral-950 dark:shadow-black/40"
+            className={NODE_PALETTE_PANEL_CLASSNAME}
           >
             <div
-              className="nodrag nopan"
+              className="nodrag nopan flex min-h-0 flex-1 flex-col"
               role="dialog"
               aria-label="Add node"
               onClick={(event) => event.stopPropagation()}
@@ -498,7 +500,7 @@ function VisualWorkflowEditorInner({
                   />
                 </div>
               </div>
-              <div className="max-h-[min(620px,calc(100vh-13rem))] overflow-y-auto p-2">
+              <div className={NODE_PALETTE_LIST_CLASSNAME}>
                 {nodePaletteResults.length > 0 ? (
                   nodePaletteResults.map((result) => (
                     <div key={result.section.id} className="py-1">

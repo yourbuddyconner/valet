@@ -13,6 +13,8 @@ import {
   getDefaultNodeForType,
   normalizeWorkflowDefinitionForEditor,
   removeWorkflowFlowNode,
+  NODE_PALETTE_LIST_CLASSNAME,
+  NODE_PALETTE_PANEL_CLASSNAME,
   createWorkflowInputPatchForNode,
   updateWorkflowNode,
   validateWorkflowDataFlowEdges,
@@ -59,6 +61,16 @@ describe('workflow editor model', () => {
         ],
       }),
     ]);
+  });
+
+  it('keeps the node palette bounded while making the list scrollable', () => {
+    expect(NODE_PALETTE_PANEL_CLASSNAME).toContain('flex');
+    expect(NODE_PALETTE_PANEL_CLASSNAME).toContain('flex-col');
+    expect(NODE_PALETTE_PANEL_CLASSNAME).toContain('max-h-[calc(100dvh-10rem)]');
+    expect(NODE_PALETTE_LIST_CLASSNAME).toContain('min-h-0');
+    expect(NODE_PALETTE_LIST_CLASSNAME).toContain('flex-1');
+    expect(NODE_PALETTE_LIST_CLASSNAME).toContain('overflow-y-auto');
+    expect(NODE_PALETTE_LIST_CLASSNAME).not.toContain('100vh-13rem');
   });
 
   it('converts dag/v1 definitions to flow nodes and edges with saved positions', () => {

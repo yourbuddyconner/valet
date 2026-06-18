@@ -376,6 +376,11 @@ export interface NodePaletteResult {
   options: Array<{ type: AddableDagNodeType; label: string; description: string }>;
 }
 
+export const NODE_PALETTE_PANEL_CLASSNAME =
+  'mt-16 flex max-h-[calc(100dvh-10rem)] w-[min(380px,calc(100vw-2rem))] flex-col overflow-hidden rounded-xl border border-neutral-200 bg-white shadow-2xl shadow-neutral-950/15 dark:border-neutral-800 dark:bg-neutral-950 dark:shadow-black/40';
+
+export const NODE_PALETTE_LIST_CLASSNAME = 'min-h-0 flex-1 overflow-y-auto p-2';
+
 export function filterNodePaletteOptions(query: string): NodePaletteResult[] {
   const normalizedQuery = query.trim().toLowerCase();
   const optionsByType = new Map(NODE_TYPE_OPTIONS.map((option) => [option.type, option]));
