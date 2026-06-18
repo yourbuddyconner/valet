@@ -1980,7 +1980,7 @@ Edges from an \`if\` node must include \`fromOutput\`:
 { "id": "prepare", "type": "set", "values": { "message": "hello {{trigger.data.name}}" } }
 \`\`\`
 
-\`llm\` generates text or structured data:
+\`llm\` generates text or structured data. Without \`outputSchema\`, it returns plain text at \`{{nodes.<id>.data.response}}\`. With \`outputSchema\`, the model must return JSON matching that schema, and the validated object is returned as \`nodes.<id>.data\`:
 
 \`\`\`json
 {

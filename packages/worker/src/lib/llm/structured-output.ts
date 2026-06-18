@@ -5,7 +5,8 @@
  *   - resolves a provider-prefixed model id (anthropic:/openai:/google:)
  *     to the right provider client using API keys from env
  *   - bridges JSON Schema → the SDK's `jsonSchema()` helper
- *   - retries on parse / schema-validation failure with backoff
+ *   - returns `{ response: text }` for schema-less text generation
+ *   - retries structured parse / schema-validation failure with backoff
  *
  * Used by the `llm` node executor. Lives here (not under workflows/) so
  * future ad-hoc LLM callers (e.g. orchestrator summary nodes) can reuse it.
@@ -13,6 +14,7 @@
 
 import {
   generateObject,
+  generateText,
   jsonSchema,
   NoObjectGeneratedError,
   JSONParseError,
@@ -32,7 +34,7 @@ export interface StructuredOutputRequest {
   modelId: string;
   prompt: string;
   system?: string;
-  /** JSON Schema describing the desired output shape. Omit for free-form JSON. */
+  /** JSON Schema describing the desired output shape. Omit for plain text `{ response }`. */
   outputSchema?: Record<string, unknown>;
   temperature?: number;
   maxOutputTokens?: number;
@@ -59,17 +61,25 @@ export async function generateStructured(
   const retries = request.retries ?? DEFAULT_RETRIES;
   const backoff = request.retryBackoffMs ?? DEFAULT_BACKOFF_MS;
 
+  if (!request.outputSchema) {
+    const result = await generateText({
+      model: languageModel,
+      prompt: request.prompt,
+      ...(request.system !== undefined ? { system: request.system } : {}),
+      ...(request.temperature !== undefined ? { temperature: request.temperature } : {}),
+      ...(request.maxOutputTokens !== undefined ? { maxOutputTokens: request.maxOutputTokens } : {}),
+    });
+    return { value: { response: result.text }, attempts: 1 };
+  }
+
   let lastErr: unknown;
   for (let attempt = 1; attempt <= retries; attempt++) {
     try {
       const result = await generateObject({
         model: languageModel,
-        // Either a JSON Schema (validation enforced) or free-form JSON if
-        // no schema was provided. The SDK's jsonSchema() helper passes
-        // the schema through to the underlying provider.
-        ...(request.outputSchema
-          ? { schema: jsonSchema(request.outputSchema as Parameters<typeof jsonSchema>[0]) }
-          : { output: 'no-schema' as const }),
+        // JSON Schema validation is enforced when authors declare an
+        // outputSchema. Schema-less LLM nodes use generateText above.
+        schema: jsonSchema(request.outputSchema as Parameters<typeof jsonSchema>[0]),
         prompt: request.prompt,
         ...(request.system !== undefined ? { system: request.system } : {}),
         ...(request.temperature !== undefined ? { temperature: request.temperature } : {}),
