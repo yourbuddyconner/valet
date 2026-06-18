@@ -516,7 +516,7 @@ export function workflowEdgeToFlowEdge(edge: WorkflowEdge): WorkflowFlowEdge {
     target: edge.to,
     type: conditional || edge.when ? 'temporary' : 'animated',
     style: {
-      stroke: conditional || edge.when ? '#64748b' : '#cbd5e1',
+      stroke: conditional || edge.when ? 'var(--workflow-edge-branch-stroke)' : 'var(--workflow-edge-stroke)',
       strokeWidth: 2,
     },
     ...(edge.fromOutput ? { label: edge.fromOutput } : edge.when ? { label: 'when' } : {}),

@@ -200,7 +200,7 @@ function WorkflowDetailPage() {
   const editorTabs = buildWorkflowEditorTabs(executions.length);
 
   return (
-    <div className="flex h-full min-h-[720px] flex-col overflow-hidden bg-neutral-950 text-neutral-100">
+    <div className="flex h-full min-h-[720px] flex-col overflow-hidden bg-neutral-50 text-neutral-950 dark:bg-neutral-950 dark:text-neutral-100">
       <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
@@ -223,17 +223,17 @@ function WorkflowDetailPage() {
         </AlertDialogContent>
       </AlertDialog>
 
-      <header className="flex h-16 shrink-0 items-center justify-between gap-4 border-b border-neutral-800 bg-neutral-950 px-5">
+      <header className="grid h-16 shrink-0 grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-4 border-b border-neutral-200 bg-white/95 px-5 shadow-sm backdrop-blur dark:border-neutral-800 dark:bg-neutral-950/95 dark:shadow-none">
         <div className="flex min-w-0 items-center gap-3">
           <Link
             to="/automation/workflows"
-            className="rounded-md px-2 py-1 text-xs text-neutral-400 hover:bg-neutral-900 hover:text-neutral-100"
+            className="rounded-md px-2 py-1 text-xs font-medium text-neutral-500 hover:bg-neutral-100 hover:text-neutral-950 dark:text-neutral-400 dark:hover:bg-neutral-900 dark:hover:text-neutral-100"
           >
             Back
           </Link>
           <div className="min-w-0">
             <div className="flex min-w-0 items-center gap-2">
-              <h1 className="truncate text-base font-semibold text-neutral-100">
+              <h1 className="truncate text-sm font-semibold text-neutral-950 dark:text-neutral-100 md:text-base">
                 {workflow.name}
               </h1>
               {workflow.description && (
@@ -255,16 +255,16 @@ function WorkflowDetailPage() {
           </div>
         </div>
 
-        <div className="hidden rounded-lg border border-neutral-800 bg-neutral-900 p-1 sm:flex">
+        <div className="hidden rounded-lg border border-neutral-200 bg-neutral-100 p-1 shadow-inner dark:border-neutral-800 dark:bg-neutral-900 sm:flex">
           {editorTabs.map((tab) => (
             <button
               key={tab.id}
               type="button"
               onClick={() => setActiveTab(tab.id)}
-              className={`rounded-md px-3 py-1.5 text-sm transition ${
+              className={`rounded-md px-4 py-2 text-sm transition ${
                 activeTab === tab.id
-                  ? 'bg-neutral-800 text-neutral-100 shadow-sm'
-                  : 'text-neutral-400 hover:text-neutral-100'
+                  ? 'bg-white text-neutral-950 shadow-sm dark:bg-neutral-800 dark:text-neutral-100'
+                  : 'text-neutral-500 hover:text-neutral-950 dark:text-neutral-400 dark:hover:text-neutral-100'
               }`}
             >
               {tab.label}
@@ -272,23 +272,23 @@ function WorkflowDetailPage() {
           ))}
         </div>
 
-        <div className="flex shrink-0 items-center gap-2">
+        <div className="flex min-w-0 shrink-0 items-center justify-end gap-2">
           <button
             type="button"
             onClick={handleToggleEnabled}
             disabled={updateWorkflow.isPending}
-            className="hidden items-center gap-2 rounded-md px-2 py-1.5 text-sm text-neutral-400 hover:bg-neutral-900 hover:text-neutral-100 md:flex"
+            className="hidden items-center gap-2 rounded-md px-2 py-1.5 text-sm text-neutral-500 hover:bg-neutral-100 hover:text-neutral-950 disabled:opacity-60 dark:text-neutral-400 dark:hover:bg-neutral-900 dark:hover:text-neutral-100 md:flex"
           >
-            <span className={workflow.enabled ? 'text-emerald-400' : 'text-neutral-400'}>
+            <span className={workflow.enabled ? 'text-emerald-600 dark:text-emerald-400' : 'text-neutral-500 dark:text-neutral-400'}>
               {getWorkflowEnabledLabel(workflow.enabled)}
             </span>
             <span className={`relative h-6 w-11 rounded-full border transition ${
               workflow.enabled
                 ? 'border-emerald-500/40 bg-emerald-500/25'
-                : 'border-neutral-700 bg-neutral-800'
+                : 'border-neutral-300 bg-neutral-200 dark:border-neutral-700 dark:bg-neutral-800'
             }`}>
-              <span className={`absolute top-0.5 h-5 w-5 rounded-full bg-neutral-300 transition ${
-                workflow.enabled ? 'left-5 bg-emerald-400' : 'left-0.5'
+              <span className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow-sm transition dark:bg-neutral-300 ${
+                workflow.enabled ? 'left-5 bg-emerald-500 dark:bg-emerald-400' : 'left-0.5'
               }`} />
             </span>
           </button>
@@ -296,7 +296,7 @@ function WorkflowDetailPage() {
             variant="secondary"
             onClick={handleSaveClick}
             disabled={saveDraft.isPending || !editorDefinition}
-            className="border border-neutral-700 bg-neutral-900 text-neutral-100 hover:bg-neutral-800"
+            className="border border-neutral-200 bg-white text-neutral-800 hover:bg-neutral-100 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100 dark:hover:bg-neutral-800"
           >
             {saveDraft.isPending ? 'Saving...' : 'Save'}
           </Button>
@@ -304,7 +304,7 @@ function WorkflowDetailPage() {
             variant="secondary"
             onClick={handleTestRun}
             disabled={testRun.isPending || saveDraft.isPending}
-            className="hidden border border-neutral-700 bg-neutral-900 text-neutral-100 hover:bg-neutral-800 sm:inline-flex"
+            className="hidden border border-neutral-200 bg-white text-neutral-800 hover:bg-neutral-100 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100 dark:hover:bg-neutral-800 sm:inline-flex"
           >
             {testRun.isPending || saveDraft.isPending ? 'Starting...' : 'Test'}
           </Button>
@@ -315,7 +315,7 @@ function WorkflowDetailPage() {
             variant="ghost"
             onClick={() => setDeleteDialogOpen(true)}
             disabled={deleteWorkflow.isPending}
-            className="text-neutral-400 hover:bg-neutral-900 hover:text-red-300"
+            className="text-neutral-500 hover:bg-neutral-100 hover:text-red-600 dark:text-neutral-400 dark:hover:bg-neutral-900 dark:hover:text-red-300"
             title="Delete workflow"
           >
             <MoreIcon />
@@ -324,14 +324,16 @@ function WorkflowDetailPage() {
       </header>
 
       <div className="flex min-h-0 flex-1 flex-col">
-        <div className="flex border-b border-neutral-800 bg-neutral-950 p-1 sm:hidden">
+        <div className="flex border-b border-neutral-200 bg-white p-1 dark:border-neutral-800 dark:bg-neutral-950 sm:hidden">
           {editorTabs.map((tab) => (
             <button
               key={tab.id}
               type="button"
               onClick={() => setActiveTab(tab.id)}
               className={`flex-1 rounded-md px-2 py-1.5 text-sm ${
-                activeTab === tab.id ? 'bg-neutral-800 text-neutral-100' : 'text-neutral-400'
+                activeTab === tab.id
+                  ? 'bg-neutral-100 text-neutral-950 dark:bg-neutral-800 dark:text-neutral-100'
+                  : 'text-neutral-500 dark:text-neutral-400'
               }`}
             >
               {tab.label}
@@ -342,7 +344,7 @@ function WorkflowDetailPage() {
         {activeTab === 'editor' ? (
           draftLoading ? (
             <div className="p-4">
-              <Skeleton className="h-[640px] w-full bg-neutral-800" />
+              <Skeleton className="h-[640px] w-full bg-neutral-200 dark:bg-neutral-800" />
             </div>
           ) : (
             <VisualWorkflowEditor
@@ -354,16 +356,16 @@ function WorkflowDetailPage() {
             />
           )
         ) : activeTab === 'executions' ? (
-          <div className="min-h-0 flex-1 overflow-auto bg-neutral-950 p-5">
+          <div className="min-h-0 flex-1 overflow-auto bg-neutral-50 p-5 dark:bg-neutral-950">
             <div className="grid gap-5 xl:grid-cols-[minmax(0,1.5fr)_minmax(320px,0.8fr)]">
-              <section className="rounded-lg border border-neutral-800 bg-neutral-900/60">
-                <div className="border-b border-neutral-800 px-4 py-3">
-                  <h2 className="text-sm font-medium text-neutral-100">Executions</h2>
+              <section className="rounded-lg border border-neutral-200 bg-white dark:border-neutral-800 dark:bg-neutral-900/60">
+                <div className="border-b border-neutral-200 px-4 py-3 dark:border-neutral-800">
+                  <h2 className="text-sm font-medium text-neutral-950 dark:text-neutral-100">Executions</h2>
                 </div>
                 {executions.length === 0 ? (
                   <p className="p-4 text-sm text-neutral-500">No executions yet.</p>
                 ) : (
-                  <ul className="divide-y divide-neutral-800">
+                  <ul className="divide-y divide-neutral-200 dark:divide-neutral-800">
                     {executions.slice(0, 20).map((exec) => (
                       <li key={exec.id} className="space-y-2 p-4 text-xs">
                         <div className="flex items-center justify-between gap-3">
@@ -375,7 +377,7 @@ function WorkflowDetailPage() {
                               <Link
                                 to="/automation/executions/$executionId"
                                 params={{ executionId: exec.id }}
-                                className="truncate font-mono text-neutral-400 underline-offset-2 hover:text-neutral-100 hover:underline"
+                                className="truncate font-mono text-neutral-500 underline-offset-2 hover:text-neutral-950 hover:underline dark:text-neutral-400 dark:hover:text-neutral-100"
                               >
                                 {exec.id.slice(0, 8)}
                               </Link>
@@ -386,7 +388,7 @@ function WorkflowDetailPage() {
                           </div>
                           {exec.error && (
                             <span
-                              className="line-clamp-2 max-w-[40%] text-pretty text-red-400"
+                              className="line-clamp-2 max-w-[40%] text-pretty text-red-600 dark:text-red-400"
                               title={exec.error}
                             >
                               {exec.error}
@@ -402,20 +404,20 @@ function WorkflowDetailPage() {
                 )}
               </section>
 
-              <section className="rounded-lg border border-neutral-800 bg-neutral-900/60">
-                <div className="border-b border-neutral-800 px-4 py-3">
-                  <h2 className="text-sm font-medium text-neutral-100">Versions</h2>
+              <section className="rounded-lg border border-neutral-200 bg-white dark:border-neutral-800 dark:bg-neutral-900/60">
+                <div className="border-b border-neutral-200 px-4 py-3 dark:border-neutral-800">
+                  <h2 className="text-sm font-medium text-neutral-950 dark:text-neutral-100">Versions</h2>
                 </div>
                 {versions.length === 0 ? (
                   <p className="p-4 text-sm text-neutral-500">No published versions yet.</p>
                 ) : (
-                  <ul className="divide-y divide-neutral-800">
+                  <ul className="divide-y divide-neutral-200 dark:divide-neutral-800">
                     {versions.map((v) => (
                       <li key={v.id} className="flex items-center justify-between gap-3 p-4 text-xs">
                         <div className="min-w-0 flex-1">
-                          <div className="font-medium text-neutral-100">v{v.version}</div>
+                          <div className="font-medium text-neutral-950 dark:text-neutral-100">v{v.version}</div>
                           {v.publishNote && (
-                            <div className="text-pretty text-neutral-400">{v.publishNote}</div>
+                            <div className="text-pretty text-neutral-500 dark:text-neutral-400">{v.publishNote}</div>
                           )}
                           <div className="tabular-nums text-neutral-500">
                             {formatRelativeTime(v.createdAt)}
@@ -425,7 +427,7 @@ function WorkflowDetailPage() {
                           variant="secondary"
                           onClick={() => handleRestore(v.id)}
                           disabled={restoreVersion.isPending}
-                          className="border border-neutral-700 bg-neutral-900 text-neutral-100 hover:bg-neutral-800"
+                          className="border border-neutral-200 bg-white text-neutral-800 hover:bg-neutral-100 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100 dark:hover:bg-neutral-800"
                         >
                           Restore
                         </Button>
@@ -437,9 +439,9 @@ function WorkflowDetailPage() {
             </div>
           </div>
         ) : (
-          <div className="grid min-h-0 flex-1 place-items-center bg-neutral-950 p-5">
-            <section className="w-full max-w-md rounded-lg border border-neutral-800 bg-neutral-900/70 p-5 text-center">
-              <h2 className="text-base font-medium text-neutral-100">Test workflow</h2>
+          <div className="grid min-h-0 flex-1 place-items-center bg-neutral-50 p-5 dark:bg-neutral-950">
+            <section className="w-full max-w-md rounded-lg border border-neutral-200 bg-white p-5 text-center dark:border-neutral-800 dark:bg-neutral-900/70">
+              <h2 className="text-base font-medium text-neutral-950 dark:text-neutral-100">Test workflow</h2>
               <Button
                 className="mt-5 bg-red-500 text-white hover:bg-red-600"
                 onClick={handleTestRun}

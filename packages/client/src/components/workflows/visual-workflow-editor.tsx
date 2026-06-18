@@ -276,13 +276,14 @@ function VisualWorkflowEditorInner({
   return (
     <div
       className={cn(
-        'dark relative h-full min-h-[680px] overflow-hidden rounded-lg border border-neutral-800 bg-neutral-950 text-neutral-100',
+        'relative h-full min-h-[680px] overflow-hidden rounded-lg border border-neutral-200 bg-neutral-50 text-neutral-950 dark:border-neutral-800 dark:bg-neutral-950 dark:text-neutral-100',
+        '[--surface-1:#f8fafc] [--workflow-edge-branch-stroke:#94a3b8] [--workflow-edge-stroke:#525252]',
+        'dark:[--surface-1:#0a0a0a] dark:[--workflow-edge-branch-stroke:#64748b] dark:[--workflow-edge-stroke:#cbd5e1]',
         className,
       )}
-      style={{ '--surface-1': '#0a0a0a' } as React.CSSProperties}
     >
       <Canvas
-        className="bg-neutral-950"
+        className="bg-neutral-50 dark:bg-neutral-950"
         connectionLineComponent={ConnectionLine}
         edges={edges}
         edgeTypes={edgeTypes}
@@ -302,8 +303,8 @@ function VisualWorkflowEditorInner({
         }}
         onNodesChange={handleNodesChange}
       >
-        <Controls className="border-neutral-700 bg-neutral-900 text-neutral-100 shadow-lg [&>button]:text-neutral-100 [&>button]:hover:bg-neutral-800" />
-        <Panel position="top-right" className="flex items-center gap-2 p-3">
+        <Controls className="border-neutral-200 bg-white text-neutral-900 shadow-lg dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100 [&>button]:text-neutral-700 [&>button]:hover:bg-neutral-100 dark:[&>button]:text-neutral-100 dark:[&>button]:hover:bg-neutral-800" />
+        <Panel position="top-right" className="flex items-center gap-2 rounded-lg border border-neutral-200 bg-white/90 p-2 shadow-lg backdrop-blur dark:border-neutral-800 dark:bg-neutral-900/90">
           <Button
             type="button"
             variant="secondary"
@@ -312,7 +313,7 @@ function VisualWorkflowEditorInner({
               setSelectedNodeId(null);
               setRawOpen(true);
             }}
-            className="border border-neutral-700 bg-neutral-900 text-neutral-100 hover:bg-neutral-800"
+            className="border border-neutral-200 bg-white text-neutral-800 hover:bg-neutral-100 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100 dark:hover:bg-neutral-800"
           >
             JSON
           </Button>
@@ -322,7 +323,7 @@ function VisualWorkflowEditorInner({
                 type="button"
                 variant="secondary"
                 size="sm"
-                className="h-11 w-11 border border-neutral-700 bg-neutral-900 p-0 text-neutral-100 hover:bg-neutral-800"
+                className="h-10 w-10 border border-neutral-200 bg-white p-0 text-neutral-800 hover:bg-neutral-100 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100 dark:hover:bg-neutral-800"
                 title="Add node"
               >
                 <PlusIcon className="h-5 w-5" />
@@ -365,7 +366,7 @@ function VisualWorkflowEditorInner({
             {dataFlowWarnings.map((warning) => (
               <div
                 key={warning.edgeId}
-                className="rounded-md border border-amber-500/40 bg-amber-950/90 px-2 py-1 text-xs text-amber-100 shadow-sm"
+                className="rounded-md border border-amber-300 bg-amber-50 px-2 py-1 text-xs text-amber-900 shadow-sm dark:border-amber-500/40 dark:bg-amber-950/90 dark:text-amber-100"
               >
                 {warning.message}
               </div>
@@ -375,13 +376,13 @@ function VisualWorkflowEditorInner({
       </Canvas>
 
       {(rawOpen || selectedNode) && (
-        <aside className="absolute bottom-3 right-3 top-3 z-10 flex w-[380px] max-w-[calc(100%-1.5rem)] flex-col overflow-hidden rounded-lg border border-neutral-800 bg-neutral-950/95 shadow-2xl backdrop-blur">
-          <div className="flex items-center justify-between border-b border-neutral-800 p-3">
+        <aside className="absolute bottom-3 right-3 top-3 z-10 flex w-[380px] max-w-[calc(100%-1.5rem)] flex-col overflow-hidden rounded-lg border border-neutral-200 bg-white/95 shadow-2xl backdrop-blur dark:border-neutral-800 dark:bg-neutral-950/95">
+          <div className="flex items-center justify-between border-b border-neutral-200 p-3 dark:border-neutral-800">
             <div>
-              <h2 className="text-sm font-medium text-neutral-100">
+              <h2 className="text-sm font-medium text-neutral-950 dark:text-neutral-100">
                 {rawOpen ? 'JSON' : 'Editor'}
               </h2>
-              <p className="text-xs text-neutral-400">
+              <p className="text-xs text-neutral-500 dark:text-neutral-400">
                 {rawOpen ? 'Raw workflow definition' : selectedNode?.data.label}
               </p>
             </div>
@@ -417,7 +418,7 @@ function VisualWorkflowEditorInner({
                 value={rawJson}
                 onChange={(event) => setRawJson(event.target.value)}
                 spellCheck={false}
-                className="min-h-0 flex-1 resize-none rounded-md border border-neutral-800 bg-neutral-900 p-3 font-mono text-xs text-neutral-100 focus:border-neutral-500 focus:outline-none"
+                className="min-h-0 flex-1 resize-none rounded-md border border-neutral-200 bg-white p-3 font-mono text-xs text-neutral-900 focus:border-neutral-400 focus:outline-none dark:border-neutral-800 dark:bg-neutral-900 dark:text-neutral-100 dark:focus:border-neutral-500"
               />
               {rawJsonError && <p className="text-xs text-red-400">{rawJsonError}</p>}
               <Button type="button" variant="secondary" onClick={handleApplyRawJson}>
@@ -498,27 +499,27 @@ function WorkflowNodeCard({ data, selected }: NodeProps) {
     <Node
       handles={nodeData.handles}
       className={cn(
-        'border-neutral-700 bg-neutral-900/95 text-neutral-100 shadow-xl shadow-black/20',
-        '[&_.react-flow__handle]:border-neutral-950 [&_.react-flow__handle]:bg-neutral-300',
-        selected && 'border-red-400 ring-2 ring-red-400/35',
+        'border-neutral-200 bg-white text-neutral-950 shadow-xl shadow-neutral-900/10 dark:border-neutral-700 dark:bg-neutral-900/95 dark:text-neutral-100 dark:shadow-black/20',
+        '[&_.react-flow__handle]:border-white [&_.react-flow__handle]:bg-neutral-700 dark:[&_.react-flow__handle]:border-neutral-950 dark:[&_.react-flow__handle]:bg-neutral-300',
+        selected && 'border-accent ring-2 ring-accent/30 dark:border-red-400 dark:ring-red-400/35',
       )}
     >
-      <NodeHeader className="border-neutral-800 bg-neutral-900">
+      <NodeHeader className="border-neutral-200 bg-neutral-50 dark:border-neutral-800 dark:bg-neutral-900">
         <div className="flex items-start justify-between gap-2">
           <div className="min-w-0">
-            <NodeTitle className="truncate text-neutral-100">{nodeData.label}</NodeTitle>
-            <NodeDescription className="truncate text-neutral-500">{nodeData.node.id}</NodeDescription>
+            <NodeTitle className="truncate text-neutral-950 dark:text-neutral-100">{nodeData.label}</NodeTitle>
+            <NodeDescription className="truncate text-neutral-500 dark:text-neutral-500">{nodeData.node.id}</NodeDescription>
           </div>
           <Badge variant="secondary">{nodeData.nodeType}</Badge>
         </div>
       </NodeHeader>
       <NodeContent>
-        <p className="line-clamp-3 text-xs text-neutral-300">
+        <p className="line-clamp-3 text-xs text-neutral-700 dark:text-neutral-300">
           {nodeData.summary}
         </p>
       </NodeContent>
-      <NodeFooter className="border-neutral-800 bg-neutral-900">
-        <p className="truncate text-xs text-neutral-500">{nodeData.description}</p>
+      <NodeFooter className="border-neutral-200 bg-neutral-50 dark:border-neutral-800 dark:bg-neutral-900">
+        <p className="truncate text-xs text-neutral-500 dark:text-neutral-500">{nodeData.description}</p>
       </NodeFooter>
     </Node>
   );

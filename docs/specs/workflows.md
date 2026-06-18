@@ -277,9 +277,9 @@ A path-based fallback at `/webhooks/:path` resolves with a constant-time `config
 
 ## Client UI
 
-The workflow detail page is a full-canvas editor, not a document-style detail page. Its shell is modeled after node automation tools such as n8n: a dark grid canvas fills the primary viewport, the workflow toolbar stays at the top, editor/executions/tests are peer tabs, and add/test controls float over the canvas. Selecting a node opens a right-side inspector drawer; clicking empty canvas returns focus to navigation/panning. Raw JSON editing remains available from the inspector, but node-specific parameter editors are the default authoring path.
+The workflow detail page is a full-canvas editor, not a document-style detail page. Its shell is modeled after node automation tools such as n8n: a theme-aware grid canvas fills the primary viewport, the workflow toolbar stays at the top, editor/executions/tests are peer tabs, and add/test controls float over the canvas. Selecting a node opens a right-side inspector drawer; clicking empty canvas returns focus to navigation/panning. Raw JSON editing remains available from the inspector, but node-specific parameter editors are the default authoring path.
 
-Workflow nodes render as compact dark cards with explicit handles and high-contrast edges. Tool-created workflows may arrive without saved UI positions; the client runs the deterministic graph layout from `workflow-editor-model.ts` and persists positions back into the draft `ui` block when the draft is saved.
+Workflow nodes render as compact cards with explicit handles and high-contrast edges in both light and dark mode. Tool-created workflows may arrive without saved UI positions; the client runs the deterministic graph layout from `workflow-editor-model.ts` and persists positions back into the draft `ui` block when the draft is saved.
 
 The executions tab lists recent runs for the workflow, links to execution detail pages, and mounts inline approval controls for active executions. The tests tab provides an explicit draft test-run entrypoint; test runs save the current draft first, then dispatch `/api/workflows/:id/test-run`.
 
