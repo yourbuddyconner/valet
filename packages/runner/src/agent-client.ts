@@ -416,7 +416,20 @@ export class AgentClient {
     this.send({ type: 'runner-health', kind, ...details });
   }
 
-  sendUsageReport(turnId: string, entries: Array<{ ocMessageId: string; model: string; inputTokens: number; outputTokens: number }>): void {
+  sendUsageReport(
+    turnId: string,
+    // Raw OpenCode token breakdown per message. The DO persists each bucket
+    // verbatim into analytics_events; consumers compose billable totals.
+    entries: Array<{
+      ocMessageId: string;
+      model: string;
+      inputTokens: number;
+      outputTokens: number;
+      cacheReadTokens: number;
+      cacheWriteTokens: number;
+      reasoningTokens: number;
+    }>,
+  ): void {
     if (entries.length === 0) return;
     this.send({ type: "usage-report", turnId, entries });
   }

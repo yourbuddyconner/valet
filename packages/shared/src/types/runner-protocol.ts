@@ -654,11 +654,20 @@ export type RunnerToDOMessage =
   | {
       type: 'usage-report';
       turnId: string;
+      // Raw OpenCode token breakdown per message. Each entry mirrors the
+      // `tokens` shape OpenCode returns (input, output, reasoning, cache.read,
+      // cache.write). The DO persists each bucket verbatim into
+      // analytics_events; consumers compose billable totals as:
+      //   billable input  = inputTokens + cacheReadTokens + cacheWriteTokens
+      //   billable output = outputTokens + reasoningTokens
       entries: Array<{
         ocMessageId: string;
         model: string;
         inputTokens: number;
         outputTokens: number;
+        cacheReadTokens: number;
+        cacheWriteTokens: number;
+        reasoningTokens: number;
       }>;
     }
   | {

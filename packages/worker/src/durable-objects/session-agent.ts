@@ -256,6 +256,9 @@ const SCHEMA_SQL = `
     queue_mode TEXT,
     input_tokens INTEGER,
     output_tokens INTEGER,
+    cache_read_tokens INTEGER,
+    cache_write_tokens INTEGER,
+    reasoning_tokens INTEGER,
     tool_name TEXT,
     error_code TEXT,
     summary TEXT,
@@ -426,6 +429,13 @@ export class SessionAgentDO {
     // Run schema migration on construction (blockConcurrencyWhile ensures it completes before any request)
     this.ctx.blockConcurrencyWhile(async () => {
       this.ctx.storage.sql.exec(SCHEMA_SQL);
+      // Idempotent column adds for analytics_events on existing DOs. SQLite
+      // ALTER TABLE ADD COLUMN errors when the column already exists; the
+      // try/catch makes each migration safe to re-run. Matches the pattern
+      // used by PromptQueue.runMigrations.
+      for (const col of ['cache_read_tokens', 'cache_write_tokens', 'reasoning_tokens']) {
+        try { this.ctx.storage.sql.exec(`ALTER TABLE analytics_events ADD COLUMN ${col} INTEGER`); } catch { /* already exists */ }
+      }
       this.sessionState = new SessionState(this.ctx.storage.sql);
       this.messageStore = new MessageStore(this.ctx.storage.sql);
       const stateDeps = {
@@ -2707,11 +2717,19 @@ export class SessionAgentDO {
         const entries = msg.entries;
         if (Array.isArray(entries)) {
           for (const entry of entries) {
+            // entry.{inputTokens,outputTokens,cacheReadTokens,cacheWriteTokens,
+            // reasoningTokens} mirror OpenCode's tokens shape verbatim. The
+            // billable-input view is input + cache_read + cache_write; the
+            // billable-output view is output + reasoning. See lib/db/analytics
+            // SQL_BILLABLE_*_EXPR for the canonical SQL composition.
             this.emitEvent('llm_call', {
               turnId: msg.turnId,
               model: entry.model ?? 'unknown',
               inputTokens: entry.inputTokens ?? 0,
               outputTokens: entry.outputTokens ?? 0,
+              cacheReadTokens: entry.cacheReadTokens ?? 0,
+              cacheWriteTokens: entry.cacheWriteTokens ?? 0,
+              reasoningTokens: entry.reasoningTokens ?? 0,
               properties: { oc_message_id: entry.ocMessageId },
             });
           }
@@ -6617,7 +6635,7 @@ export class SessionAgentDO {
 
       // Flush unflushed analytics events to D1 (single path replacing audit_log + usage_events)
       const unflushed = this.ctx.storage.sql
-        .exec('SELECT id, event_type, turn_id, duration_ms, channel, model, queue_mode, input_tokens, output_tokens, tool_name, error_code, summary, actor_id, properties, created_at FROM analytics_events WHERE flushed = 0 ORDER BY id ASC LIMIT 100')
+        .exec('SELECT id, event_type, turn_id, duration_ms, channel, model, queue_mode, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, reasoning_tokens, tool_name, error_code, summary, actor_id, properties, created_at FROM analytics_events WHERE flushed = 0 ORDER BY id ASC LIMIT 100')
         .toArray();
 
       if (unflushed.length > 0) {
@@ -6633,6 +6651,9 @@ export class SessionAgentDO {
             queueMode: row.queue_mode != null ? (row.queue_mode as string) : undefined,
             inputTokens: row.input_tokens != null ? (row.input_tokens as number) : undefined,
             outputTokens: row.output_tokens != null ? (row.output_tokens as number) : undefined,
+            cacheReadTokens: row.cache_read_tokens != null ? (row.cache_read_tokens as number) : undefined,
+            cacheWriteTokens: row.cache_write_tokens != null ? (row.cache_write_tokens as number) : undefined,
+            reasoningTokens: row.reasoning_tokens != null ? (row.reasoning_tokens as number) : undefined,
             toolName: row.tool_name != null ? (row.tool_name as string) : undefined,
             errorCode: row.error_code != null ? (row.error_code as string) : undefined,
             summary: row.summary != null ? (row.summary as string) : undefined,
@@ -6666,8 +6687,17 @@ export class SessionAgentDO {
       channel?: string;
       model?: string;
       queueMode?: string;
+      // Raw five-way token breakdown from OpenCode. Anthropic bills each
+      // bucket differently (cache reads cheap, cache writes expensive,
+      // reasoning charged as output) so we store each verbatim and let
+      // consumers compose the view they need. "Billable input" totals are
+      // `input + cache_read + cache_write`; "billable output" is
+      // `output + reasoning`.
       inputTokens?: number;
       outputTokens?: number;
+      cacheReadTokens?: number;
+      cacheWriteTokens?: number;
+      reasoningTokens?: number;
       toolName?: string;
       errorCode?: string;
       summary?: string;
@@ -6679,8 +6709,9 @@ export class SessionAgentDO {
       this.ctx.storage.sql.exec(
         `INSERT INTO analytics_events
           (event_type, turn_id, duration_ms, channel, model, queue_mode,
-           input_tokens, output_tokens, tool_name, error_code, summary, actor_id, properties)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, reasoning_tokens,
+           tool_name, error_code, summary, actor_id, properties)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         eventType,
         fields?.turnId ?? null,
         fields?.durationMs ?? null,
@@ -6689,6 +6720,9 @@ export class SessionAgentDO {
         fields?.queueMode ?? null,
         fields?.inputTokens ?? null,
         fields?.outputTokens ?? null,
+        fields?.cacheReadTokens ?? null,
+        fields?.cacheWriteTokens ?? null,
+        fields?.reasoningTokens ?? null,
         fields?.toolName ?? null,
         fields?.errorCode ?? null,
         fields?.summary ?? null,

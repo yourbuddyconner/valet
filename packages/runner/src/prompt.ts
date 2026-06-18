@@ -681,7 +681,18 @@ export class ChannelSession {
   pendingReplyChannelId: string | undefined;
 
   // Per-message usage entries for the current turn (reset per prompt)
-  usageEntries = new Map<string, { model: string; inputTokens: number; outputTokens: number }>();
+  // Per-message token breakdown for the current turn. Mirrors OpenCode's
+  // tokens shape verbatim so downstream consumers can compose cost-aware
+  // views (cache reads vs writes are billed at different rates, reasoning
+  // is billed as output, etc).
+  usageEntries = new Map<string, {
+    model: string;
+    inputTokens: number;
+    outputTokens: number;
+    cacheReadTokens: number;
+    cacheWriteTokens: number;
+    reasoningTokens: number;
+  }>();
 
   // Pre-compaction memory flush state (session-lifetime — NOT reset per prompt)
   cumulativeInputTokens = 0;
@@ -2123,22 +2134,27 @@ export class PromptHandler {
 
     console.log(`[PromptHandler] Sending complete`);
 
-    // Emit llm_response timing with token counts for throughput analysis
+    // Emit llm_response timing with token counts for throughput analysis.
+    // tokens_per_sec is the user-perceived output rate (excludes reasoning,
+    // which is internal); input/output here are billable totals composed
+    // from the raw breakdown so charts match the Anthropic dashboard.
     if (channel.lastPromptSentAt > 0) {
       const durationMs = Date.now() - channel.lastPromptSentAt;
-      let inputTokens = 0;
-      let outputTokens = 0;
+      let billableInput = 0;
+      let billableOutput = 0;
+      let visibleOutput = 0;
       for (const entry of channel.usageEntries.values()) {
-        inputTokens += entry.inputTokens;
-        outputTokens += entry.outputTokens;
+        billableInput += entry.inputTokens + entry.cacheReadTokens + entry.cacheWriteTokens;
+        billableOutput += entry.outputTokens + entry.reasoningTokens;
+        visibleOutput += entry.outputTokens;
       }
       this.agentClient.sendAnalyticsEvents([{
         eventType: 'llm_response',
         durationMs,
         properties: {
-          input_tokens: inputTokens,
-          output_tokens: outputTokens,
-          tokens_per_sec: durationMs > 0 ? Math.round((outputTokens / durationMs) * 1000) : 0,
+          input_tokens: billableInput,
+          output_tokens: billableOutput,
+          tokens_per_sec: durationMs > 0 ? Math.round((visibleOutput / durationMs) * 1000) : 0,
         },
       }]);
       channel.lastPromptSentAt = 0;
@@ -2155,6 +2171,9 @@ export class PromptHandler {
           model: data.model,
           inputTokens: data.inputTokens,
           outputTokens: data.outputTokens,
+          cacheReadTokens: data.cacheReadTokens,
+          cacheWriteTokens: data.cacheWriteTokens,
+          reasoningTokens: data.reasoningTokens,
         })
       );
       this.agentClient.sendUsageReport(channel.turnId, entries);
@@ -4453,14 +4472,16 @@ export class PromptHandler {
       if (!channel.countedTokenMessageIds.has(ocMessageId)) {
         const tokenObj = info.tokens as Record<string, unknown> | undefined;
         if (tokenObj) {
-          // OpenCode exposes tokens.input (uncached), tokens.cache.{read,write}
-          // (prompt cache), tokens.reasoning (thinking models), and tokens.output.
-          // Anthropic bills input + cache_read + cache_write as input, and
-          // reasoning + output as output. Summing matches the provider invoices
-          // and what shows up on the Anthropic usage dashboard. With prompt
-          // caching active, tokens.cache.read can be 100x larger than
-          // tokens.input, so reading only tokens.input under-counts by orders
-          // of magnitude on long-context conversations.
+          // OpenCode reports tokens as five raw buckets:
+          //   { input, output, reasoning, cache: { read, write } }
+          // We persist each verbatim so downstream cost analyses can apply
+          // the right per-bucket pricing (Anthropic cache reads are cheap,
+          // cache writes expensive, reasoning is billed as output).
+          //
+          // Compaction thresholds gate on what the model actually processed,
+          // so cumulative*Tokens sum the billable totals:
+          //   billable input  = input + cache.read + cache.write
+          //   billable output = output + reasoning
           const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : 0);
           const baseInput = num(tokenObj.input);
           const cache = isRecord(tokenObj.cache) ? tokenObj.cache : {};
@@ -4468,12 +4489,12 @@ export class PromptHandler {
           const cacheWrite = num(cache.write);
           const baseOutput = num(tokenObj.output);
           const reasoning = num(tokenObj.reasoning);
-          const input = baseInput + cacheRead + cacheWrite;
-          const output = baseOutput + reasoning;
-          if (input > 0 || output > 0) {
+          const billableInput = baseInput + cacheRead + cacheWrite;
+          const billableOutput = baseOutput + reasoning;
+          if (billableInput > 0 || billableOutput > 0) {
             channel.countedTokenMessageIds.add(ocMessageId);
-            channel.cumulativeInputTokens += input;
-            channel.cumulativeOutputTokens += output;
+            channel.cumulativeInputTokens += billableInput;
+            channel.cumulativeOutputTokens += billableOutput;
 
             // Track per-message usage for cost reporting
             const modelId = info.modelID as string | undefined;
@@ -4483,8 +4504,11 @@ export class PromptHandler {
               : channel.lastUsedModel ?? "unknown";
             channel.usageEntries.set(ocMessageId, {
               model: usageModel,
-              inputTokens: input,
-              outputTokens: output,
+              inputTokens: baseInput,
+              outputTokens: baseOutput,
+              cacheReadTokens: cacheRead,
+              cacheWriteTokens: cacheWrite,
+              reasoningTokens: reasoning,
             });
           }
         }
@@ -4781,6 +4805,9 @@ export class PromptHandler {
             model: data.model,
             inputTokens: data.inputTokens,
             outputTokens: data.outputTokens,
+            cacheReadTokens: data.cacheReadTokens,
+            cacheWriteTokens: data.cacheWriteTokens,
+            reasoningTokens: data.reasoningTokens,
           })
         );
         this.agentClient.sendUsageReport(channel.turnId, entries);

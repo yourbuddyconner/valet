@@ -24,13 +24,19 @@ export const SQL_JOIN_DIAGNOSTIC = `
 // Per-thread × model token totals. Rows where the join fails get a synthetic
 // thread_id of `__unattributed__:<session_id>` so they still show up in
 // attribution rollups even when they can't be classified.
+//
+// `input_tokens` is the BILLABLE total (raw input + cache reads + cache
+// writes), matching what providers actually charge for. `output_tokens` is
+// raw output + reasoning. Old rows (pre-migration 0019) have NULL cache
+// columns; COALESCE makes them sum to just the raw values, preserving
+// backwards compatibility for historical data.
 export const SQL_THREAD_MODEL_TOTALS = `
   SELECT
     COALESCE(m.thread_id, '__unattributed__:' || ae.session_id) AS thread_id,
     ae.session_id AS session_id,
     COALESCE(ae.model, '__unknown__') AS model,
-    SUM(COALESCE(ae.input_tokens, 0)) AS input_tokens,
-    SUM(COALESCE(ae.output_tokens, 0)) AS output_tokens,
+    SUM(COALESCE(ae.input_tokens, 0) + COALESCE(ae.cache_read_tokens, 0) + COALESCE(ae.cache_write_tokens, 0)) AS input_tokens,
+    SUM(COALESCE(ae.output_tokens, 0) + COALESCE(ae.reasoning_tokens, 0)) AS output_tokens,
     COUNT(*) AS calls,
     MIN(ae.created_at) AS first_call_at,
     MAX(ae.created_at) AS last_call_at
