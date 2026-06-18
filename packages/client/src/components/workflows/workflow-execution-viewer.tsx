@@ -98,6 +98,7 @@ function WorkflowExecutionViewerInner({
   const selectedDefinitionNode = selectedNodeId
     ? definition?.nodes.find((node) => node.id === selectedNodeId) ?? null
     : null;
+  const [detailsOpen, setDetailsOpen] = React.useState(true);
   const nodes = React.useMemo(
     () =>
       flow.nodes.map((node) => {
@@ -118,8 +119,16 @@ function WorkflowExecutionViewerInner({
   );
   const selectedTrace = selectedNodeId ? traceByNode.get(selectedNodeId) ?? null : null;
 
+  React.useEffect(() => {
+    if (execution) setDetailsOpen(true);
+  }, [execution?.id]);
+
+  React.useEffect(() => {
+    if (selectedNodeId) setDetailsOpen(true);
+  }, [selectedNodeId]);
+
   return (
-    <div className="grid min-h-0 flex-1 grid-cols-[280px_minmax(0,1fr)_320px] overflow-hidden bg-neutral-50 dark:bg-neutral-950">
+    <div className="grid min-h-0 flex-1 grid-cols-[280px_minmax(0,1fr)] overflow-hidden bg-neutral-50 dark:bg-neutral-950">
       <aside className="min-h-0 border-r border-neutral-200 bg-white dark:border-neutral-800 dark:bg-neutral-950">
         <div className="flex h-12 items-center justify-between border-b border-neutral-200 px-4 dark:border-neutral-800">
           <div>
@@ -208,19 +217,27 @@ function WorkflowExecutionViewerInner({
               Loading execution...
             </div>
           )}
+          {execution && detailsOpen ? (
+            <ExecutionDetailsPane
+              execution={execution}
+              selectedNodeId={selectedNodeId}
+              selectedDefinitionNode={selectedDefinitionNode}
+              selectedTrace={selectedTrace}
+              onRetryExecution={onRetryExecution}
+              isRetryingExecution={isRetryingExecution}
+              onClose={() => setDetailsOpen(false)}
+            />
+          ) : execution ? (
+            <button
+              type="button"
+              onClick={() => setDetailsOpen(true)}
+              className="absolute right-5 top-5 z-20 rounded-lg border border-neutral-200 bg-white/95 px-3 py-2 text-sm font-medium text-neutral-800 shadow-lg backdrop-blur hover:bg-neutral-50 dark:border-neutral-800 dark:bg-neutral-950/95 dark:text-neutral-100 dark:hover:bg-neutral-900"
+            >
+              Inspect execution
+            </button>
+          ) : null}
         </Canvas>
       </div>
-
-      <aside className="min-h-0 overflow-y-auto border-l border-neutral-200 bg-white dark:border-neutral-800 dark:bg-neutral-950">
-        <ExecutionDetailsPanel
-          execution={execution}
-          selectedNodeId={selectedNodeId}
-          selectedDefinitionNode={selectedDefinitionNode}
-          selectedTrace={selectedTrace}
-          onRetryExecution={onRetryExecution}
-          isRetryingExecution={isRetryingExecution}
-        />
-      </aside>
     </div>
   );
 }
@@ -265,13 +282,14 @@ function ExecutionNodeCard({ data, selected }: NodeProps) {
   );
 }
 
-function ExecutionDetailsPanel({
+function ExecutionDetailsPane({
   execution,
   selectedNodeId,
   selectedDefinitionNode,
   selectedTrace,
   onRetryExecution,
   isRetryingExecution = false,
+  onClose,
 }: {
   execution: Execution | null;
   selectedNodeId: string | null;
@@ -279,6 +297,7 @@ function ExecutionDetailsPanel({
   selectedTrace: ExecutionNode | null;
   onRetryExecution?: (executionId: string) => void;
   isRetryingExecution?: boolean;
+  onClose: () => void;
 }) {
   if (!execution) {
     return <p className="p-4 text-sm text-neutral-500">Select an execution to inspect it.</p>;
@@ -292,69 +311,98 @@ function ExecutionDetailsPanel({
   const selectedNodeParams = getNodeParametersForDisplay(selectedDefinitionNode);
 
   return (
-    <div className="space-y-4 p-4">
-      <section>
-        <div className="flex items-center justify-between gap-3">
-          <h2 className="text-sm font-medium text-neutral-950 dark:text-neutral-100">Execution</h2>
-          {onRetryExecution && (
-            <Button
-              type="button"
-              variant="secondary"
-              size="sm"
-              onClick={() => onRetryExecution(execution.id)}
-              disabled={isRetryingExecution}
-              className="border border-neutral-200 bg-white text-neutral-800 hover:bg-neutral-100 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100 dark:hover:bg-neutral-800"
-            >
-              <RetryIcon />
-              {isRetryingExecution ? 'Retrying...' : 'Retry'}
-            </Button>
-          )}
+    <div className="nodrag nopan nowheel absolute bottom-5 right-5 top-5 z-20 flex w-[min(520px,calc(100%-2.5rem))] flex-col overflow-hidden rounded-xl border border-neutral-200 bg-white/95 shadow-2xl shadow-neutral-900/15 backdrop-blur dark:border-neutral-800 dark:bg-neutral-950/95 dark:shadow-black/30">
+      <div className="flex shrink-0 items-center justify-between gap-3 border-b border-neutral-200 px-4 py-3 dark:border-neutral-800">
+        <div className="min-w-0">
+          <h2 className="truncate text-sm font-semibold text-neutral-950 dark:text-neutral-100">
+            {selectedNodeId ? 'Node details' : 'Execution details'}
+          </h2>
+          <p className="truncate text-xs text-neutral-500">
+            {selectedNodeId ?? execution.id.slice(0, 8)}
+          </p>
         </div>
-        <div className="mt-2 space-y-2 text-xs text-neutral-600 dark:text-neutral-400">
-          <KeyValue label="Status" value={execution.status} />
-          <KeyValue label="Started" value={formatExecutionTimestamp(execution.startedAt)} />
-          <KeyValue label="Trigger" value={execution.triggerName ?? execution.triggerType} />
-          <KeyValue label="Mode" value={execution.mode ?? 'production'} />
-        </div>
-      </section>
-
-      {execution.error && (
-        <section className="rounded-md border border-red-200 bg-red-50 p-3 dark:border-red-900/50 dark:bg-red-950/40">
-          <h3 className="text-xs font-medium text-red-700 dark:text-red-300">Error</h3>
-          <pre className="mt-2 whitespace-pre-wrap break-words text-xs text-red-700 dark:text-red-300">
-            {execution.error}
-          </pre>
-        </section>
-      )}
-
-      <section>
-        <h3 className="text-sm font-medium text-neutral-950 dark:text-neutral-100">
-          {selectedNodeId ? 'Selected node' : 'Node trace'}
-        </h3>
-        {selectedNodeId ? (
-          <div className="mt-2 rounded-md border border-neutral-200 bg-neutral-50 p-3 dark:border-neutral-800 dark:bg-neutral-900">
-            <KeyValue label="Node" value={selectedNodeId} />
-            <KeyValue label="Status" value={selectedTrace?.status ?? 'not_run'} />
-            <KeyValue label="Duration" value={formatExecutionDuration(selectedTrace?.durationMs)} />
-            {selectedNodeParams && (
-              <StructuredPayloadBlock
-                title="Params"
-                payload={parseExecutionPayload(JSON.stringify(selectedNodeParams))}
-                tone="neutral"
-              />
-            )}
-            <TracePreview trace={selectedTrace} />
-            {selectedApproval && (
-              <div className="mt-3">
-                <ExecutionApprovalCard executionId={execution.id} approval={selectedApproval} />
-              </div>
+        <button
+          type="button"
+          onClick={onClose}
+          className="grid h-8 w-8 shrink-0 place-items-center rounded-md text-neutral-500 hover:bg-neutral-100 hover:text-neutral-950 dark:text-neutral-400 dark:hover:bg-neutral-900 dark:hover:text-neutral-100"
+          aria-label="Close execution details"
+        >
+          <CloseIcon />
+        </button>
+      </div>
+      <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4">
+        <section>
+          <div className="flex items-center justify-between gap-3">
+            <h3 className="text-sm font-medium text-neutral-950 dark:text-neutral-100">Execution</h3>
+            {onRetryExecution && (
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                onClick={() => onRetryExecution(execution.id)}
+                disabled={isRetryingExecution}
+                className="border border-neutral-200 bg-white text-neutral-800 hover:bg-neutral-100 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100 dark:hover:bg-neutral-800"
+              >
+                <RetryIcon />
+                {isRetryingExecution ? 'Retrying...' : 'Retry'}
+              </Button>
             )}
           </div>
-        ) : (
-          <p className="mt-2 text-sm text-neutral-500">Select a node to inspect its input, output, and error.</p>
+          <div className="mt-2 space-y-2 text-xs text-neutral-600 dark:text-neutral-400">
+            <KeyValue label="Status" value={execution.status} />
+            <KeyValue label="Started" value={formatExecutionTimestamp(execution.startedAt)} />
+            <KeyValue label="Trigger" value={execution.triggerName ?? execution.triggerType} />
+            <KeyValue label="Mode" value={execution.mode ?? 'production'} />
+          </div>
+        </section>
+
+        {execution.error && (
+          <section className="rounded-md border border-red-200 bg-red-50 p-3 dark:border-red-900/50 dark:bg-red-950/40">
+            <h3 className="text-xs font-medium text-red-700 dark:text-red-300">Error</h3>
+            <pre className="mt-2 whitespace-pre-wrap break-words text-xs text-red-700 dark:text-red-300">
+              {execution.error}
+            </pre>
+          </section>
         )}
-      </section>
+
+        <section>
+          <h3 className="text-sm font-medium text-neutral-950 dark:text-neutral-100">
+            {selectedNodeId ? 'Selected node' : 'Node trace'}
+          </h3>
+          {selectedNodeId ? (
+            <div className="mt-2 rounded-md border border-neutral-200 bg-neutral-50 p-3 dark:border-neutral-800 dark:bg-neutral-900">
+              <KeyValue label="Node" value={selectedNodeId} />
+              <KeyValue label="Status" value={selectedTrace?.status ?? 'not_run'} />
+              <KeyValue label="Duration" value={formatExecutionDuration(selectedTrace?.durationMs)} />
+              {selectedNodeParams && (
+                <StructuredPayloadBlock
+                  title="Params"
+                  payload={parseExecutionPayload(JSON.stringify(selectedNodeParams))}
+                  tone="neutral"
+                />
+              )}
+              <TracePreview trace={selectedTrace} />
+              {selectedApproval && (
+                <div className="mt-3">
+                  <ExecutionApprovalCard executionId={execution.id} approval={selectedApproval} />
+                </div>
+              )}
+            </div>
+          ) : (
+            <p className="mt-2 text-sm text-neutral-500">Select a node to inspect its input, output, and error.</p>
+          )}
+        </section>
+      </div>
     </div>
+  );
+}
+
+function CloseIcon() {
+  return (
+    <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M18 6 6 18" />
+      <path d="m6 6 12 12" />
+    </svg>
   );
 }
 
@@ -483,23 +531,33 @@ function ReadableJsonValue({
         'overflow-hidden rounded-md border bg-white dark:bg-neutral-950',
         tone === 'error' ? 'border-red-200 dark:border-red-900/50' : 'border-neutral-200 dark:border-neutral-800',
       )}>
-        {entries.map(([key, nestedValue]) => (
-          <div
-            key={key}
-            className="grid grid-cols-[minmax(7rem,35%)_minmax(0,1fr)] border-b border-neutral-100 last:border-b-0 dark:border-neutral-800"
-          >
-            <div className="min-w-0 bg-neutral-50 px-2 py-1.5 text-xs font-medium text-neutral-600 dark:bg-neutral-900 dark:text-neutral-400">
-              <span className="block truncate" title={key}>{key}</span>
-            </div>
-            <div className="min-w-0 px-2 py-1.5 text-xs text-neutral-900 dark:text-neutral-100">
-              {isRecord(nestedValue) || Array.isArray(nestedValue) ? (
-                <ReadableJsonValue value={nestedValue} tone={tone} depth={depth + 1} />
+        {entries.map(([key, nestedValue]) => {
+          const nested = isRecord(nestedValue) || Array.isArray(nestedValue);
+          return (
+            <div key={key} className="border-b border-neutral-100 last:border-b-0 dark:border-neutral-800">
+              {nested ? (
+                <div className="space-y-2 p-2">
+                  <div className="flex min-w-0 items-center justify-between gap-2">
+                    <span className="truncate text-xs font-medium text-neutral-600 dark:text-neutral-400" title={key}>
+                      {key}
+                    </span>
+                    <Badge variant="secondary">{getReadableJsonSummary(nestedValue)}</Badge>
+                  </div>
+                  <ReadableJsonValue value={nestedValue} tone={tone} depth={depth + 1} />
+                </div>
               ) : (
-                <span className="break-words">{formatReadableScalar(nestedValue)}</span>
+                <div className="grid grid-cols-[minmax(7rem,11rem)_minmax(0,1fr)]">
+                  <div className="min-w-0 bg-neutral-50 px-2 py-1.5 text-xs font-medium text-neutral-600 dark:bg-neutral-900 dark:text-neutral-400">
+                    <span className="block truncate" title={key}>{key}</span>
+                  </div>
+                  <div className="min-w-0 px-2 py-1.5 text-xs text-neutral-900 dark:text-neutral-100">
+                    <span className="break-words">{formatReadableScalar(nestedValue)}</span>
+                  </div>
+                </div>
               )}
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
     );
   }
