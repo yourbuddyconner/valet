@@ -119,6 +119,25 @@ export interface WorkflowDataFlowValidationOptions {
   toolCatalogLoaded?: boolean;
 }
 
+export interface WorkflowEdgeTargetExpectation {
+  label: string;
+  description: string;
+  valueType: WorkflowOutputSource['valueType'];
+}
+
+export interface WorkflowEdgeInspection {
+  edgeId: string;
+  fromNodeId: string;
+  toNodeId: string;
+  fromOutput?: 'true' | 'false';
+  sourceOutputs: WorkflowOutputSource[];
+  configuredExpression?: string;
+  matchedSource?: WorkflowOutputSource;
+  targetExpectation?: WorkflowEdgeTargetExpectation;
+  targetInputSchema?: JsonSchemaLike;
+  warnings: WorkflowDataFlowWarning[];
+}
+
 export interface JsonSchemaLike {
   [key: string]: unknown;
   type?: string | string[];
@@ -285,6 +304,43 @@ export function validateWorkflowDataFlowEdges(
   }
 
   return warnings;
+}
+
+export function buildWorkflowEdgeInspection(
+  definition: WorkflowDefinition,
+  edge: Pick<WorkflowEdge, 'from' | 'to' | 'fromOutput'>,
+  actions: ToolCatalogAction[],
+  options: WorkflowDataFlowValidationOptions = {},
+): WorkflowEdgeInspection | null {
+  const edgeId = createEdgeId(edge.from, edge.to, edge.fromOutput);
+  const nodesById = new Map(definition.nodes.map((node) => [node.id, node]));
+  const target = nodesById.get(edge.to);
+  if (!nodesById.has(edge.from) || !target) return null;
+
+  const catalogIndex = buildToolCatalogIndex(actions);
+  const sources = deriveWorkflowOutputSources(definition, actions);
+  const sourceOutputs = sources.filter((source) => source.nodeId === edge.from);
+  const warnings = validateWorkflowDataFlowEdges(definition, actions, options)
+    .filter((warning) => warning.edgeId === edgeId);
+  const configuredExpression = getTargetConfiguredInputExpression(target);
+  const matchedSource = configuredExpression
+    ? sourceOutputs.find((source) => normalizeTemplateReference(source.expression) === normalizeTemplateReference(configuredExpression))
+    : undefined;
+  const targetExpectation = getTargetExpectation(target);
+  const targetInputSchema = getTargetInputSchema(target, catalogIndex.actionsByKey);
+
+  return {
+    edgeId,
+    fromNodeId: edge.from,
+    toNodeId: edge.to,
+    ...(edge.fromOutput ? { fromOutput: edge.fromOutput } : {}),
+    sourceOutputs,
+    ...(configuredExpression ? { configuredExpression } : {}),
+    ...(matchedSource ? { matchedSource } : {}),
+    ...(targetExpectation ? { targetExpectation } : {}),
+    ...(targetInputSchema ? { targetInputSchema } : {}),
+    warnings,
+  };
 }
 
 const NODE_LABELS: Record<DagNodeType, string> = {
@@ -1106,6 +1162,30 @@ function trimSummary(value: string): string {
 
 function createToolCatalogActionKey(service: string, actionId: string): string {
   return `${service}:${actionId}`;
+}
+
+function getTargetConfiguredInputExpression(node: WorkflowNode): string | undefined {
+  if (node.type === 'foreach') return node.items.trim() || undefined;
+  return undefined;
+}
+
+function getTargetExpectation(node: WorkflowNode): WorkflowEdgeTargetExpectation | undefined {
+  if (node.type === 'foreach') {
+    return {
+      label: 'For each item source',
+      description: 'Requires a typed array output.',
+      valueType: 'array',
+    };
+  }
+  return undefined;
+}
+
+function getTargetInputSchema(
+  node: WorkflowNode,
+  actionsByKey: Map<string, ToolCatalogAction>,
+): JsonSchemaLike | undefined {
+  if (node.type !== 'tool') return undefined;
+  return actionsByKey.get(createToolCatalogActionKey(node.service, node.action))?.inputSchema;
 }
 
 function deriveSchemaOutputSources(input: {

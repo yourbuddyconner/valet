@@ -85,6 +85,7 @@ import { useAvailableModels } from '@/api/sessions';
 import { useAuthStore } from '@/stores/auth';
 import {
   applyDefaultDataFlowForConnection,
+  buildWorkflowEdgeInspection,
   buildToolCatalogIndex,
   createDefaultWorkflowDefinition,
   createEdgeId,
@@ -111,6 +112,7 @@ import {
   type ToolCatalogService,
   type WorkflowOutputSource,
   type WorkflowSchemaField,
+  type WorkflowEdgeInspection,
   type WorkflowFlowEdge,
   type WorkflowFlowNode,
   type WorkflowFlowNodeData,
@@ -174,6 +176,7 @@ function VisualWorkflowEditorInner({
   const [nodes, setNodes] = React.useState<WorkflowFlowNode[]>(initialFlow.nodes);
   const [edges, setEdges] = React.useState<WorkflowFlowEdge[]>(initialFlow.edges);
   const [selectedNodeId, setSelectedNodeId] = React.useState<string | null>(null);
+  const [selectedEdgeId, setSelectedEdgeId] = React.useState<string | null>(null);
   const [rawOpen, setRawOpen] = React.useState(false);
   const [nodePaletteOpen, setNodePaletteOpen] = React.useState(false);
   const [nodePaletteQuery, setNodePaletteQuery] = React.useState('');
@@ -191,6 +194,7 @@ function VisualWorkflowEditorInner({
     setNodes(next.nodes);
     setEdges(next.edges);
     setSelectedNodeId(null);
+    setSelectedEdgeId(null);
     setRawOpen(false);
     setRawJson(JSON.stringify(flowToDefinition(next, definition ?? undefined), null, 2));
   }, [definition]);
@@ -204,6 +208,10 @@ function VisualWorkflowEditorInner({
   const selectedNode = React.useMemo(
     () => nodes.find((node) => node.id === selectedNodeId) ?? null,
     [nodes, selectedNodeId],
+  );
+  const selectedEdge = React.useMemo(
+    () => edges.find((edge) => edge.id === selectedEdgeId) ?? null,
+    [edges, selectedEdgeId],
   );
   const nodePaletteResults = React.useMemo(
     () => filterNodePaletteOptions(nodePaletteQuery),
@@ -225,9 +233,41 @@ function VisualWorkflowEditorInner({
     () => validateWorkflowDataFlowEdges(currentDefinition(), actionCatalog, { toolCatalogLoaded: actionCatalogLoaded }),
     [actionCatalog, actionCatalogLoaded, currentDefinition],
   );
+  const dataFlowWarningsByEdgeId = React.useMemo(() => {
+    const warningsByEdgeId = new Map<string, typeof dataFlowWarnings>();
+    for (const warning of dataFlowWarnings) {
+      warningsByEdgeId.set(warning.edgeId, [...(warningsByEdgeId.get(warning.edgeId) ?? []), warning]);
+    }
+    return warningsByEdgeId;
+  }, [dataFlowWarnings]);
   const dataFlowWarningNodeIds = React.useMemo(
     () => new Set(dataFlowWarnings.map((warning) => warning.nodeId)),
     [dataFlowWarnings],
+  );
+  const edgeInspection = React.useMemo(() => {
+    if (!selectedEdge) return null;
+    return buildWorkflowEdgeInspection(
+      currentDefinition(),
+      { from: selectedEdge.source, to: selectedEdge.target, fromOutput: selectedEdge.data.fromOutput },
+      actionCatalog,
+      { toolCatalogLoaded: actionCatalogLoaded },
+    );
+  }, [actionCatalog, actionCatalogLoaded, currentDefinition, selectedEdge]);
+  const renderedEdges = React.useMemo(
+    () => edges.map((edge) => {
+      const selected = edge.id === selectedEdgeId;
+      const hasWarning = dataFlowWarningsByEdgeId.has(edge.id);
+      if (!selected && !hasWarning) return edge;
+      return {
+        ...edge,
+        style: {
+          ...(edge.style ?? {}),
+          stroke: selected ? 'var(--accent, #635bff)' : '#d97706',
+          strokeWidth: selected ? 3 : 2.5,
+        },
+      };
+    }),
+    [dataFlowWarningsByEdgeId, edges, selectedEdgeId],
   );
 
   const syncRawJson = React.useCallback(() => {
@@ -261,6 +301,7 @@ function VisualWorkflowEditorInner({
     event.preventDefault();
     event.stopPropagation();
     setEdges((current) => current.filter((currentEdge) => currentEdge.id !== edge.id));
+    setSelectedEdgeId((current) => current === edge.id ? null : current);
   }, []);
 
   const clearArmedDeleteNode = React.useCallback(() => {
@@ -270,6 +311,15 @@ function VisualWorkflowEditorInner({
     }
     setArmedDeleteNodeId(null);
   }, []);
+
+  const handleEdgeClick = React.useCallback((event: React.MouseEvent, edge: ReactFlowEdge) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setRawOpen(false);
+    setSelectedNodeId(null);
+    setSelectedEdgeId(edge.id);
+    clearArmedDeleteNode();
+  }, [clearArmedDeleteNode]);
 
   const handleRequestDeleteNode = React.useCallback((nodeId: string) => {
     if (nodeId === 'trigger') return;
@@ -295,6 +345,7 @@ function VisualWorkflowEditorInner({
     setNodes(nextFlow.nodes);
     setEdges(nextFlow.edges);
     setSelectedNodeId(null);
+    setSelectedEdgeId(null);
     setRawOpen(false);
     clearArmedDeleteNode();
   }, [armedDeleteNodeId, clearArmedDeleteNode, edges, getViewport, nodes, reactFlowInstance]);
@@ -337,6 +388,7 @@ function VisualWorkflowEditorInner({
     const nextFlow = definitionToFlow(nextDefinition);
     setNodes(nextFlow.nodes);
     setEdges(nextFlow.edges);
+    setSelectedEdgeId(edge.id);
   }, [actionCatalog, definition, edges, getViewport, nodes, reactFlowInstance]);
 
   function handleAddNode(type: AddableDagNodeType) {
@@ -354,6 +406,7 @@ function VisualWorkflowEditorInner({
     };
     setNodes((current) => [...current, flowNode]);
     setSelectedNodeId(id);
+    setSelectedEdgeId(null);
     clearArmedDeleteNode();
     setRawOpen(false);
     setNodePaletteOpen(false);
@@ -377,6 +430,7 @@ function VisualWorkflowEditorInner({
     setNodes(flow.nodes);
     setEdges(flow.edges);
     setSelectedNodeId(null);
+    setSelectedEdgeId(null);
     clearArmedDeleteNode();
     setRawOpen(false);
   }
@@ -403,22 +457,25 @@ function VisualWorkflowEditorInner({
         <Canvas
           className="bg-neutral-50 dark:bg-neutral-950"
           connectionLineComponent={ConnectionLine}
-          edges={edges}
+          edges={renderedEdges}
           edgeTypes={edgeTypes}
           fitView
           nodes={nodes}
           nodeTypes={nodeTypes}
           onConnect={handleConnect}
+          onEdgeClick={handleEdgeClick}
           onEdgeDoubleClick={handleEdgeDoubleClick}
           onEdgesChange={handleEdgesChange}
           onInit={setReactFlowInstance}
           onNodeClick={(_, node) => {
             setRawOpen(false);
             setSelectedNodeId(node.id);
+            setSelectedEdgeId(null);
             if (node.id !== armedDeleteNodeId) clearArmedDeleteNode();
           }}
           onPaneClick={() => {
             setSelectedNodeId(null);
+            setSelectedEdgeId(null);
             setRawOpen(false);
             setNodePaletteOpen(false);
             clearArmedDeleteNode();
@@ -433,6 +490,7 @@ function VisualWorkflowEditorInner({
             size="sm"
             onClick={() => {
               setSelectedNodeId(null);
+              setSelectedEdgeId(null);
               clearArmedDeleteNode();
               setRawOpen(true);
             }}
@@ -453,6 +511,7 @@ function VisualWorkflowEditorInner({
             onClick={() => {
               setRawOpen(false);
               setSelectedNodeId(null);
+              setSelectedEdgeId(null);
               clearArmedDeleteNode();
               setNodePaletteOpen((open) => !open);
             }}
@@ -554,20 +613,29 @@ function VisualWorkflowEditorInner({
           </Panel>
         )}
         {dataFlowWarnings.length > 0 && (
-          <Panel position="bottom-right" className="max-w-sm space-y-1 p-3">
+          <Panel position="bottom-left" className="max-w-sm space-y-1 p-3">
             {dataFlowWarnings.map((warning) => (
               <button
-                key={warning.edgeId}
+                key={`${warning.edgeId}:${warning.message}`}
                 type="button"
                 className="block w-full rounded-md border border-amber-300 bg-amber-50 px-2 py-1 text-left text-xs text-amber-900 shadow-sm hover:bg-amber-100 focus:outline-none focus:ring-2 focus:ring-amber-400 dark:border-amber-500/40 dark:bg-amber-950/90 dark:text-amber-100 dark:hover:bg-amber-900"
                 onClick={() => {
-                  setSelectedNodeId(warning.nodeId);
+                  setSelectedNodeId(null);
+                  setSelectedEdgeId(warning.edgeId);
                   setRawOpen(false);
                 }}
               >
                 {warning.message}
               </button>
             ))}
+          </Panel>
+        )}
+        {edgeInspection && (
+          <Panel position="bottom-right" className="p-3">
+            <DataFlowInspector
+              inspection={edgeInspection}
+              onClose={() => setSelectedEdgeId(null)}
+            />
           </Panel>
         )}
         </Canvas>
@@ -796,6 +864,145 @@ function FlaskIcon({ className }: { className?: string }) {
       <path d="M10 3v6.2L4.4 18.7A2 2 0 0 0 6.1 22h11.8a2 2 0 0 0 1.7-3.3L14 9.2V3" />
       <path d="M8 15h8" />
     </svg>
+  );
+}
+
+function DataFlowInspector({
+  inspection,
+  onClose,
+}: {
+  inspection: WorkflowEdgeInspection;
+  onClose: () => void;
+}) {
+  return (
+    <div
+      className="nodrag nopan flex max-h-[min(32rem,calc(100dvh-12rem))] w-[min(34rem,calc(100vw-2rem))] flex-col overflow-hidden rounded-lg border border-neutral-200 bg-white/95 shadow-2xl backdrop-blur dark:border-neutral-800 dark:bg-neutral-950/95"
+      role="dialog"
+      aria-label="Data flow"
+      onClick={(event) => event.stopPropagation()}
+    >
+      <div className="flex items-start justify-between gap-3 border-b border-neutral-200 px-4 py-3 dark:border-neutral-800">
+        <div className="min-w-0">
+          <h2 className="text-sm font-semibold text-neutral-950 dark:text-neutral-100">Data flow</h2>
+          <p className="mt-1 truncate font-mono text-xs text-neutral-500 dark:text-neutral-400">
+            {inspection.fromNodeId}
+            {inspection.fromOutput ? `:${inspection.fromOutput}` : ''}
+            {' -> '}
+            {inspection.toNodeId}
+          </p>
+        </div>
+        <button
+          type="button"
+          className="rounded-md p-1 text-neutral-500 transition hover:bg-neutral-100 hover:text-neutral-900 dark:text-neutral-400 dark:hover:bg-neutral-900 dark:hover:text-neutral-100"
+          aria-label="Close data flow inspector"
+          onClick={onClose}
+        >
+          <CloseIcon className="h-5 w-5" />
+        </button>
+      </div>
+      <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-4">
+        {inspection.warnings.length > 0 && (
+          <div className="space-y-2">
+            {inspection.warnings.map((warning) => (
+              <div
+                key={warning.message}
+                className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:border-amber-500/40 dark:bg-amber-950/80 dark:text-amber-100"
+              >
+                {warning.message}
+              </div>
+            ))}
+          </div>
+        )}
+
+        <DataFlowSection title="Target input">
+          {inspection.targetInputSchema ? (
+            <ToolSchemaContract title="Expected inputs" schema={inspection.targetInputSchema} />
+          ) : inspection.targetExpectation ? (
+            <div className="rounded-md border border-neutral-200 bg-neutral-50 p-2 text-xs dark:border-neutral-700 dark:bg-neutral-900">
+              <div className="flex items-center justify-between gap-2">
+                <span className="font-medium text-neutral-700 dark:text-neutral-300">{inspection.targetExpectation.label}</span>
+                <Badge variant="secondary">{inspection.targetExpectation.valueType}</Badge>
+              </div>
+              <p className="mt-2 text-neutral-500 dark:text-neutral-400">{inspection.targetExpectation.description}</p>
+              {inspection.configuredExpression && (
+                <div className="mt-2 rounded border border-neutral-200 bg-white px-2 py-1 font-mono text-neutral-700 dark:border-neutral-800 dark:bg-neutral-950 dark:text-neutral-300">
+                  {inspection.configuredExpression}
+                </div>
+              )}
+            </div>
+          ) : (
+            <p className="rounded-md border border-dashed border-neutral-200 p-3 text-xs text-neutral-500 dark:border-neutral-700 dark:text-neutral-400">
+              This node does not declare a typed input contract yet.
+            </p>
+          )}
+        </DataFlowSection>
+
+        <DataFlowSection title="Source outputs">
+          {inspection.sourceOutputs.length > 0 ? (
+            <div className="space-y-2">
+              {inspection.sourceOutputs.map((source) => (
+                <WorkflowOutputSourcePreview
+                  key={source.expression}
+                  source={source}
+                  selected={source.expression === inspection.matchedSource?.expression}
+                />
+              ))}
+            </div>
+          ) : (
+            <p className="rounded-md border border-dashed border-neutral-200 p-3 text-xs text-neutral-500 dark:border-neutral-700 dark:text-neutral-400">
+              No typed outputs are available from this source node.
+            </p>
+          )}
+        </DataFlowSection>
+      </div>
+    </div>
+  );
+}
+
+function DataFlowSection({
+  children,
+  title,
+}: {
+  children: React.ReactNode;
+  title: string;
+}) {
+  return (
+    <section className="space-y-2">
+      <h3 className="text-xs font-semibold uppercase tracking-wide text-neutral-500 dark:text-neutral-400">{title}</h3>
+      {children}
+    </section>
+  );
+}
+
+function WorkflowOutputSourcePreview({
+  selected,
+  source,
+}: {
+  selected: boolean;
+  source: WorkflowOutputSource;
+}) {
+  return (
+    <div
+      className={cn(
+        'rounded-md border bg-neutral-50 p-2 text-xs dark:bg-neutral-900',
+        selected
+          ? 'border-accent ring-2 ring-accent/15 dark:border-red-400 dark:ring-red-400/20'
+          : 'border-neutral-200 dark:border-neutral-700',
+      )}
+    >
+      <div className="flex min-w-0 items-center justify-between gap-2">
+        <span className="truncate font-medium text-neutral-800 dark:text-neutral-200">{source.label}</span>
+        <Badge variant={selected ? 'default' : 'secondary'}>{source.valueType}</Badge>
+      </div>
+      <div className="mt-2 rounded border border-neutral-200 bg-white px-2 py-1 font-mono text-neutral-700 dark:border-neutral-800 dark:bg-neutral-950 dark:text-neutral-300">
+        {source.expression}
+      </div>
+      {source.itemFields && source.itemFields.length > 0 && (
+        <div className="mt-2">
+          <ForeachItemFields fields={source.itemFields} itemAlias="item" />
+        </div>
+      )}
+    </div>
   );
 }
 

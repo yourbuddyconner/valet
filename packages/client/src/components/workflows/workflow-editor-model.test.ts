@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { WorkflowDefinition } from '@valet/shared';
 import {
   applyDefaultDataFlowForConnection,
+  buildWorkflowEdgeInspection,
   buildToolCatalogIndex,
   deriveWorkflowOutputSources,
   deriveWorkflowTemplateSources,
@@ -999,6 +1000,135 @@ describe('workflow editor model', () => {
     };
 
     expect(validateWorkflowDataFlowEdges(definition, [], { toolCatalogLoaded: false })).toEqual([]);
+  });
+
+  it('builds edge inspection details with source outputs and target expectations', () => {
+    const definition: WorkflowDefinition = {
+      version: 'dag/v1',
+      nodes: [
+        { id: 'fetch_prs', type: 'tool', service: 'github', action: 'github.list_pull_requests', params: {} },
+        {
+          id: 'inspect_each_pr',
+          type: 'foreach',
+          items: '{{nodes.fetch_prs.data}}',
+          body: { id: 'inspect_pr', type: 'set', values: {} },
+        },
+      ],
+      edges: [{ from: 'fetch_prs', to: 'inspect_each_pr' }],
+    };
+
+    const inspection = buildWorkflowEdgeInspection(
+      definition,
+      { from: 'fetch_prs', to: 'inspect_each_pr' },
+      [
+        {
+          service: 'github',
+          serviceDisplayName: 'GitHub',
+          actionId: 'github.list_pull_requests',
+          name: 'List Pull Requests',
+          description: 'List pull requests',
+          riskLevel: 'low',
+          outputSchema: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                number: { type: 'number' },
+                title: { type: 'string' },
+              },
+            },
+          },
+        },
+      ],
+    );
+
+    expect(inspection).toMatchObject({
+      edgeId: 'fetch_prs->inspect_each_pr',
+      fromNodeId: 'fetch_prs',
+      toNodeId: 'inspect_each_pr',
+      configuredExpression: '{{nodes.fetch_prs.data}}',
+      targetExpectation: {
+        label: 'For each item source',
+        description: 'Requires a typed array output.',
+        valueType: 'array',
+      },
+      sourceOutputs: [
+        {
+          expression: '{{nodes.fetch_prs.data}}',
+          valueType: 'array',
+          itemFields: [
+            { name: 'number', path: ['nodes', 'fetch_prs', 'data', 'number'], valueType: 'number' },
+            { name: 'title', path: ['nodes', 'fetch_prs', 'data', 'title'], valueType: 'string' },
+          ],
+        },
+      ],
+      warnings: [],
+    });
+  });
+
+  it('includes edge validation warnings in inspection details', () => {
+    const definition: WorkflowDefinition = {
+      version: 'dag/v1',
+      nodes: [
+        { id: 'start', type: 'set', values: { message: 'hello' } },
+        {
+          id: 'loop',
+          type: 'foreach',
+          items: '',
+          body: { id: 'loop-body', type: 'set', values: {} },
+        },
+      ],
+      edges: [{ from: 'start', to: 'loop' }],
+    };
+
+    const inspection = buildWorkflowEdgeInspection(definition, { from: 'start', to: 'loop' }, []);
+
+    expect(inspection?.targetExpectation?.valueType).toBe('array');
+    expect(inspection?.warnings).toEqual([
+      {
+        edgeId: 'start->loop',
+        nodeId: 'loop',
+        severity: 'warning',
+        message: 'For each needs an array output from start, but no typed array output is available.',
+      },
+    ]);
+  });
+
+  it('includes target tool input schemas in edge inspection details', () => {
+    const definition: WorkflowDefinition = {
+      version: 'dag/v1',
+      nodes: [
+        { id: 'config', type: 'set', values: { owner: 'tkhq', repo: 'valet' } },
+        { id: 'fetch_prs', type: 'tool', service: 'github', action: 'github.list_pull_requests', params: {} },
+      ],
+      edges: [{ from: 'config', to: 'fetch_prs' }],
+    };
+
+    const inspection = buildWorkflowEdgeInspection(definition, { from: 'config', to: 'fetch_prs' }, [
+      {
+        service: 'github',
+        serviceDisplayName: 'GitHub',
+        actionId: 'github.list_pull_requests',
+        name: 'List Pull Requests',
+        description: 'List pull requests',
+        riskLevel: 'low',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            owner: { type: 'string' },
+            repo: { type: 'string' },
+          },
+        },
+      },
+    ]);
+
+    expect(inspection?.targetInputSchema).toEqual({
+      type: 'object',
+      properties: {
+        owner: { type: 'string' },
+        repo: { type: 'string' },
+      },
+    });
   });
 
   it('formats template paths with bracket notation for unsafe path segments', () => {

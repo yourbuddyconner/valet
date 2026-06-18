@@ -354,6 +354,8 @@ The reserved `trigger` node may declare `dataSchema`, a field map using `Workflo
 
 The visual editor uses the same schema-field builder for trigger `dataSchema` and LLM `outputSchema`. Trigger schemas store `WorkflowInputDefinition` fields directly. LLM output schemas adapt those fields into a JSON Schema object (`type: "object"`, `properties`, and optional `required`) so structured model outputs can feed downstream template suggestions and array-aware `foreach` wiring.
 
+Selecting an edge in the visual editor opens a dismissible data-flow inspector. The inspector summarizes typed outputs available from the source node, the target node's inferred input expectation when one exists, the configured expression that binds them, and any validation warning scoped to that edge. Data-flow warnings also highlight the affected edge so authors can inspect the contract mismatch without hunting through the graph.
+
 ### Node Types
 
 | Type | Behavior |

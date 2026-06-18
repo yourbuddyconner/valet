@@ -17,6 +17,7 @@ const Temporary = ({
   targetY,
   sourcePosition,
   targetPosition,
+  style,
 }: EdgeProps) => {
   const [edgePath] = getSimpleBezierPath({
     sourcePosition,
@@ -32,7 +33,7 @@ const Temporary = ({
       className="stroke-1 stroke-neutral-400 dark:stroke-neutral-500"
       id={id}
       path={edgePath}
-      style={{ strokeDasharray: '5, 5' }}
+      style={{ ...style, strokeDasharray: '5, 5' }}
     />
   );
 };
