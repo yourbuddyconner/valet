@@ -19,6 +19,15 @@ export interface TemplateValidationIssue {
 
 const TEMPLATE_TAG_PATTERN = /\{\{([\s\S]*?)\}\}/g;
 
+export const TEMPLATE_SUGGESTION_POPOVER_CLASS =
+  'absolute left-0 top-full z-50 mt-1 max-h-72 min-w-full w-[min(28rem,calc(100vw-2rem))] overflow-auto rounded-md border border-neutral-200 bg-white p-1 shadow-xl dark:border-neutral-700 dark:bg-neutral-950';
+
+export const TEMPLATE_SUGGESTION_LABEL_CLASS =
+  'min-w-0 whitespace-normal break-words font-medium text-neutral-800 dark:text-neutral-100';
+
+export const TEMPLATE_SUGGESTION_EXPRESSION_CLASS =
+  'mt-0.5 block whitespace-normal break-all font-mono text-neutral-500';
+
 export function getTemplateCompletionContext(
   value: string,
   cursor: number,

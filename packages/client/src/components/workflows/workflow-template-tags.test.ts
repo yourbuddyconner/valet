@@ -4,6 +4,9 @@ import {
   filterTemplateSuggestions,
   getTemplateCompletionContext,
   insertTemplateExpression,
+  TEMPLATE_SUGGESTION_EXPRESSION_CLASS,
+  TEMPLATE_SUGGESTION_LABEL_CLASS,
+  TEMPLATE_SUGGESTION_POPOVER_CLASS,
   validateTemplateTags,
 } from './workflow-template-tags';
 
@@ -73,5 +76,16 @@ describe('workflow template tags', () => {
         message: 'Template tag is missing closing braces.',
       },
     ]);
+  });
+
+  it('keeps suggestion popovers readable in narrow editor fields', () => {
+    expect(TEMPLATE_SUGGESTION_POPOVER_CLASS).toContain('min-w-full');
+    expect(TEMPLATE_SUGGESTION_POPOVER_CLASS).toContain('w-[min(28rem,calc(100vw-2rem))]');
+    expect(TEMPLATE_SUGGESTION_POPOVER_CLASS).not.toContain('right-0');
+
+    expect(TEMPLATE_SUGGESTION_LABEL_CLASS).toContain('break-words');
+    expect(TEMPLATE_SUGGESTION_LABEL_CLASS).not.toContain('truncate');
+    expect(TEMPLATE_SUGGESTION_EXPRESSION_CLASS).toContain('break-all');
+    expect(TEMPLATE_SUGGESTION_EXPRESSION_CLASS).not.toContain('truncate');
   });
 });

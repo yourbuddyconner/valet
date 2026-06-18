@@ -113,6 +113,9 @@ import {
   filterTemplateSuggestions,
   getTemplateCompletionContext,
   insertTemplateExpression,
+  TEMPLATE_SUGGESTION_EXPRESSION_CLASS,
+  TEMPLATE_SUGGESTION_LABEL_CLASS,
+  TEMPLATE_SUGGESTION_POPOVER_CLASS,
   validateTemplateTags,
 } from './workflow-template-tags';
 
@@ -1801,7 +1804,7 @@ function TemplateTextInput({
         />
       )}
       {showSuggestions && (
-        <div className="absolute left-0 right-0 top-full z-50 mt-1 max-h-64 overflow-auto rounded-md border border-neutral-200 bg-white p-1 shadow-xl dark:border-neutral-700 dark:bg-neutral-950">
+        <div className={TEMPLATE_SUGGESTION_POPOVER_CLASS}>
           {suggestions.length > 0 ? (
             suggestions.map((source) => (
               <button
@@ -1814,12 +1817,12 @@ function TemplateTextInput({
                 }}
               >
                 <span className="flex min-w-0 items-center justify-between gap-2">
-                  <span className="truncate font-medium text-neutral-800 dark:text-neutral-100">
+                  <span className={TEMPLATE_SUGGESTION_LABEL_CLASS} title={source.label}>
                     {source.label}
                   </span>
                   <Badge variant="secondary">{source.valueType}</Badge>
                 </span>
-                <span className="mt-0.5 block truncate font-mono text-neutral-500">
+                <span className={TEMPLATE_SUGGESTION_EXPRESSION_CLASS} title={source.expression}>
                   {source.expression}
                 </span>
               </button>
