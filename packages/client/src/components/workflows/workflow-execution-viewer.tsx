@@ -98,7 +98,8 @@ function WorkflowExecutionViewerInner({
   const selectedDefinitionNode = selectedNodeId
     ? definition?.nodes.find((node) => node.id === selectedNodeId) ?? null
     : null;
-  const [detailsOpen, setDetailsOpen] = React.useState(true);
+  const [executionPaneOpen, setExecutionPaneOpen] = React.useState(true);
+  const [nodePaneOpen, setNodePaneOpen] = React.useState(true);
   const nodes = React.useMemo(
     () =>
       flow.nodes.map((node) => {
@@ -120,11 +121,11 @@ function WorkflowExecutionViewerInner({
   const selectedTrace = selectedNodeId ? traceByNode.get(selectedNodeId) ?? null : null;
 
   React.useEffect(() => {
-    if (execution) setDetailsOpen(true);
+    if (execution) setExecutionPaneOpen(true);
   }, [execution?.id]);
 
   React.useEffect(() => {
-    if (selectedNodeId) setDetailsOpen(true);
+    if (selectedNodeId) setNodePaneOpen(true);
   }, [selectedNodeId]);
 
   return (
@@ -217,23 +218,37 @@ function WorkflowExecutionViewerInner({
               Loading execution...
             </div>
           )}
-          {execution && detailsOpen ? (
-            <ExecutionDetailsPane
+          {execution && executionPaneOpen ? (
+            <ExecutionSummaryPane
               execution={execution}
-              selectedNodeId={selectedNodeId}
-              selectedDefinitionNode={selectedDefinitionNode}
-              selectedTrace={selectedTrace}
               onRetryExecution={onRetryExecution}
               isRetryingExecution={isRetryingExecution}
-              onClose={() => setDetailsOpen(false)}
+              onClose={() => setExecutionPaneOpen(false)}
             />
           ) : execution ? (
             <button
               type="button"
-              onClick={() => setDetailsOpen(true)}
+              onClick={() => setExecutionPaneOpen(true)}
               className="absolute right-5 top-5 z-20 rounded-lg border border-neutral-200 bg-white/95 px-3 py-2 text-sm font-medium text-neutral-800 shadow-lg backdrop-blur hover:bg-neutral-50 dark:border-neutral-800 dark:bg-neutral-950/95 dark:text-neutral-100 dark:hover:bg-neutral-900"
             >
-              Inspect execution
+              Execution
+            </button>
+          ) : null}
+          {execution && selectedNodeId && nodePaneOpen ? (
+            <SelectedNodeDetailsPane
+              execution={execution}
+              selectedNodeId={selectedNodeId}
+              selectedDefinitionNode={selectedDefinitionNode}
+              selectedTrace={selectedTrace}
+              onClose={() => setNodePaneOpen(false)}
+            />
+          ) : execution && selectedNodeId ? (
+            <button
+              type="button"
+              onClick={() => setNodePaneOpen(true)}
+              className="absolute bottom-5 right-5 z-20 rounded-lg border border-neutral-200 bg-white/95 px-3 py-2 text-sm font-medium text-neutral-800 shadow-lg backdrop-blur hover:bg-neutral-50 dark:border-neutral-800 dark:bg-neutral-950/95 dark:text-neutral-100 dark:hover:bg-neutral-900"
+            >
+              Node details
             </button>
           ) : null}
         </Canvas>
@@ -282,44 +297,23 @@ function ExecutionNodeCard({ data, selected }: NodeProps) {
   );
 }
 
-function ExecutionDetailsPane({
+function ExecutionSummaryPane({
   execution,
-  selectedNodeId,
-  selectedDefinitionNode,
-  selectedTrace,
   onRetryExecution,
   isRetryingExecution = false,
   onClose,
 }: {
-  execution: Execution | null;
-  selectedNodeId: string | null;
-  selectedDefinitionNode: WorkflowNode | null;
-  selectedTrace: ExecutionNode | null;
+  execution: Execution;
   onRetryExecution?: (executionId: string) => void;
   isRetryingExecution?: boolean;
   onClose: () => void;
 }) {
-  if (!execution) {
-    return <p className="p-4 text-sm text-neutral-500">Select an execution to inspect it.</p>;
-  }
-
-  const selectedApproval = getSelectedNodeApproval(
-    selectedNodeId,
-    execution.approvals,
-    selectedTrace?.approvalId,
-  );
-  const selectedNodeParams = getNodeParametersForDisplay(selectedDefinitionNode);
-
   return (
-    <div className="nodrag nopan nowheel absolute bottom-5 right-5 top-5 z-20 flex w-[min(520px,calc(100%-2.5rem))] flex-col overflow-hidden rounded-xl border border-neutral-200 bg-white/95 shadow-2xl shadow-neutral-900/15 backdrop-blur dark:border-neutral-800 dark:bg-neutral-950/95 dark:shadow-black/30">
+    <div className="nodrag nopan nowheel absolute right-5 top-5 z-20 w-[min(360px,calc(100%-2.5rem))] overflow-hidden rounded-xl border border-neutral-200 bg-white/95 shadow-2xl shadow-neutral-900/15 backdrop-blur dark:border-neutral-800 dark:bg-neutral-950/95 dark:shadow-black/30">
       <div className="flex shrink-0 items-center justify-between gap-3 border-b border-neutral-200 px-4 py-3 dark:border-neutral-800">
         <div className="min-w-0">
-          <h2 className="truncate text-sm font-semibold text-neutral-950 dark:text-neutral-100">
-            {selectedNodeId ? 'Node details' : 'Execution details'}
-          </h2>
-          <p className="truncate text-xs text-neutral-500">
-            {selectedNodeId ?? execution.id.slice(0, 8)}
-          </p>
+          <h2 className="truncate text-sm font-semibold text-neutral-950 dark:text-neutral-100">Execution</h2>
+          <p className="truncate font-mono text-xs text-neutral-500">{execution.id.slice(0, 8)}</p>
         </div>
         <button
           type="button"
@@ -330,68 +324,104 @@ function ExecutionDetailsPane({
           <CloseIcon />
         </button>
       </div>
-      <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4">
-        <section>
-          <div className="flex items-center justify-between gap-3">
-            <h3 className="text-sm font-medium text-neutral-950 dark:text-neutral-100">Execution</h3>
-            {onRetryExecution && (
-              <Button
-                type="button"
-                variant="secondary"
-                size="sm"
-                onClick={() => onRetryExecution(execution.id)}
-                disabled={isRetryingExecution}
-                className="border border-neutral-200 bg-white text-neutral-800 hover:bg-neutral-100 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100 dark:hover:bg-neutral-800"
-              >
-                <RetryIcon />
-                {isRetryingExecution ? 'Retrying...' : 'Retry'}
-              </Button>
-            )}
-          </div>
-          <div className="mt-2 space-y-2 text-xs text-neutral-600 dark:text-neutral-400">
-            <KeyValue label="Status" value={execution.status} />
-            <KeyValue label="Started" value={formatExecutionTimestamp(execution.startedAt)} />
-            <KeyValue label="Trigger" value={execution.triggerName ?? execution.triggerType} />
-            <KeyValue label="Mode" value={execution.mode ?? 'production'} />
-          </div>
-        </section>
-
+      <div className="space-y-4 p-4">
+        <div className="flex items-center justify-between gap-3">
+          <ExecutionStatusPill status={execution.status} />
+          {onRetryExecution && (
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              onClick={() => onRetryExecution(execution.id)}
+              disabled={isRetryingExecution}
+              className="border border-neutral-200 bg-white text-neutral-800 hover:bg-neutral-100 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100 dark:hover:bg-neutral-800"
+            >
+              <RetryIcon />
+              {isRetryingExecution ? 'Retrying...' : 'Retry'}
+            </Button>
+          )}
+        </div>
+        <div className="space-y-2 text-xs text-neutral-600 dark:text-neutral-400">
+          <KeyValue label="Started" value={formatExecutionTimestamp(execution.startedAt)} />
+          <KeyValue label="Trigger" value={execution.triggerName ?? execution.triggerType} />
+          <KeyValue label="Mode" value={execution.mode ?? 'production'} />
+        </div>
         {execution.error && (
-          <section className="rounded-md border border-red-200 bg-red-50 p-3 dark:border-red-900/50 dark:bg-red-950/40">
+          <div className="rounded-md border border-red-200 bg-red-50 p-3 dark:border-red-900/50 dark:bg-red-950/40">
             <h3 className="text-xs font-medium text-red-700 dark:text-red-300">Error</h3>
             <pre className="mt-2 whitespace-pre-wrap break-words text-xs text-red-700 dark:text-red-300">
               {execution.error}
             </pre>
-          </section>
+          </div>
         )}
+      </div>
+    </div>
+  );
+}
 
-        <section>
-          <h3 className="text-sm font-medium text-neutral-950 dark:text-neutral-100">
-            {selectedNodeId ? 'Selected node' : 'Node trace'}
-          </h3>
-          {selectedNodeId ? (
-            <div className="mt-2 rounded-md border border-neutral-200 bg-neutral-50 p-3 dark:border-neutral-800 dark:bg-neutral-900">
-              <KeyValue label="Node" value={selectedNodeId} />
-              <KeyValue label="Status" value={selectedTrace?.status ?? 'not_run'} />
-              <KeyValue label="Duration" value={formatExecutionDuration(selectedTrace?.durationMs)} />
-              {selectedNodeParams && (
-                <StructuredPayloadBlock
-                  title="Params"
-                  payload={parseExecutionPayload(JSON.stringify(selectedNodeParams))}
-                  tone="neutral"
-                />
-              )}
-              <TracePreview trace={selectedTrace} />
-              {selectedApproval && (
-                <div className="mt-3">
-                  <ExecutionApprovalCard executionId={execution.id} approval={selectedApproval} />
-                </div>
-              )}
-            </div>
-          ) : (
-            <p className="mt-2 text-sm text-neutral-500">Select a node to inspect its input, output, and error.</p>
-          )}
+function SelectedNodeDetailsPane({
+  execution,
+  selectedNodeId,
+  selectedDefinitionNode,
+  selectedTrace,
+  onClose,
+}: {
+  execution: Execution;
+  selectedNodeId: string;
+  selectedDefinitionNode: WorkflowNode | null;
+  selectedTrace: ExecutionNode | null;
+  onClose: () => void;
+}) {
+  const selectedApproval = getSelectedNodeApproval(
+    selectedNodeId,
+    execution.approvals,
+    selectedTrace?.approvalId,
+  );
+  const selectedNodeParams = getNodeParametersForDisplay(selectedDefinitionNode);
+
+  return (
+    <div className="nodrag nopan nowheel absolute bottom-5 right-5 z-20 flex max-h-[62vh] w-[min(760px,calc(100%-2.5rem))] flex-col overflow-hidden rounded-xl border border-neutral-200 bg-white/95 shadow-2xl shadow-neutral-900/15 backdrop-blur dark:border-neutral-800 dark:bg-neutral-950/95 dark:shadow-black/30">
+      <div className="flex shrink-0 items-center justify-between gap-3 border-b border-neutral-200 px-4 py-3 dark:border-neutral-800">
+        <div className="min-w-0">
+          <h2 className="truncate text-sm font-semibold text-neutral-950 dark:text-neutral-100">Node details</h2>
+          <p className="truncate font-mono text-xs text-neutral-500">{selectedNodeId}</p>
+        </div>
+        <button
+          type="button"
+          onClick={onClose}
+          className="grid h-8 w-8 shrink-0 place-items-center rounded-md text-neutral-500 hover:bg-neutral-100 hover:text-neutral-950 dark:text-neutral-400 dark:hover:bg-neutral-900 dark:hover:text-neutral-100"
+          aria-label="Close node details"
+        >
+          <CloseIcon />
+        </button>
+      </div>
+      <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4">
+        <section className="rounded-md border border-neutral-200 bg-neutral-50 p-3 dark:border-neutral-800 dark:bg-neutral-900">
+          <div className="grid gap-2 text-xs text-neutral-600 dark:text-neutral-400 sm:grid-cols-3">
+            <KeyValue label="Status" value={selectedTrace?.status ?? 'not_run'} />
+            <KeyValue label="Duration" value={formatExecutionDuration(selectedTrace?.durationMs)} />
+            <KeyValue label="Type" value={selectedDefinitionNode?.type ?? selectedTrace?.nodeType ?? 'unknown'} />
+          </div>
         </section>
+
+        {selectedNodeParams && (
+          <StructuredPayloadBlock
+            title="Params"
+            payload={parseExecutionPayload(JSON.stringify(selectedNodeParams))}
+            tone="neutral"
+          />
+        )}
+        <TracePreview trace={selectedTrace} />
+        {selectedApproval && (
+          <div>
+            <ExecutionApprovalCard executionId={execution.id} approval={selectedApproval} />
+          </div>
+        )}
+        {!selectedNodeParams && !selectedTrace && !selectedApproval && (
+          <p className="text-sm text-neutral-500">
+            This node has not recorded parameters or trace payloads for this execution.
+          </p>
+        )}
       </div>
     </div>
   );
