@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { createFileRoute, Link } from '@tanstack/react-router';
+import { createFileRoute, Link, useNavigate } from '@tanstack/react-router';
 import { PageContainer, PageHeader } from '@/components/layout/page-container';
 import {
   useWorkflow,
@@ -10,6 +10,7 @@ import {
   useTestRunWorkflow,
   useWorkflowVersions,
   useRestoreWorkflowVersion,
+  useDeleteWorkflow,
 } from '@/api/workflows';
 import { useWorkflowExecutions } from '@/api/executions';
 import { ExecutionApprovalPanel } from '@/components/workflows/execution-approval-panel';
@@ -18,6 +19,16 @@ import type { WorkflowDefinition } from '@valet/shared';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 import { toastError, toastSuccess } from '@/hooks/use-toast';
 import { formatRelativeTime } from '@/lib/format';
 
@@ -27,6 +38,7 @@ export const Route = createFileRoute('/workflows/$workflowId')({
 
 function WorkflowDetailPage() {
   const { workflowId } = Route.useParams();
+  const navigate = useNavigate();
   const { data, isLoading, error } = useWorkflow(workflowId);
   const { data: draftData, isLoading: draftLoading } = useWorkflowDraft(workflowId);
   const { data: versionsData } = useWorkflowVersions(workflowId);
@@ -37,9 +49,11 @@ function WorkflowDetailPage() {
   const validate = useValidateWorkflowDraft();
   const testRun = useTestRunWorkflow();
   const restoreVersion = useRestoreWorkflowVersion();
+  const deleteWorkflow = useDeleteWorkflow();
 
   const workflow = data?.workflow;
   const [editorDefinition, setEditorDefinition] = useState<WorkflowDefinition | null>(null);
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
 
   useEffect(() => {
     setEditorDefinition(draftData?.draft ?? null);
@@ -148,6 +162,19 @@ function WorkflowDetailPage() {
     );
   }
 
+  async function handleDeleteWorkflow() {
+    if (!workflow) return;
+
+    try {
+      await deleteWorkflow.mutateAsync(workflow.id);
+      toastSuccess('Workflow deleted', `${workflow.name} was removed.`);
+      setDeleteDialogOpen(false);
+      navigate({ to: '/automation/workflows' });
+    } catch (err) {
+      toastError('Failed to delete workflow', err instanceof Error ? err.message : 'Delete failed');
+    }
+  }
+
   const versions = versionsData?.versions ?? [];
   const executions = executionsData?.executions ?? [];
 
@@ -158,6 +185,13 @@ function WorkflowDetailPage() {
         description={workflow.description ?? undefined}
         actions={
           <>
+            <Button
+              variant="destructive"
+              onClick={() => setDeleteDialogOpen(true)}
+              disabled={deleteWorkflow.isPending}
+            >
+              {deleteWorkflow.isPending ? 'Deleting...' : 'Delete'}
+            </Button>
             <Button
               variant="secondary"
               onClick={handleTestRun}
@@ -171,6 +205,28 @@ function WorkflowDetailPage() {
           </>
         }
       />
+
+      <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete Workflow</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to delete "{workflow.name}"? This removes the workflow and its triggers.
+              This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleteWorkflow.isPending}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={handleDeleteWorkflow}
+              disabled={deleteWorkflow.isPending}
+              className="bg-red-600 text-white hover:bg-red-700"
+            >
+              {deleteWorkflow.isPending ? 'Deleting...' : 'Delete'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <section className="space-y-2">
         <div className="flex items-center justify-between">
