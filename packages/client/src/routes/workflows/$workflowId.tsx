@@ -262,26 +262,27 @@ function WorkflowDetailPage() {
           >
             Back
           </Link>
-          <div className="min-w-0">
-            <div className="flex min-w-0 items-center gap-2">
-              <h1 className="truncate text-sm font-semibold text-neutral-950 dark:text-neutral-100 md:text-base">
-                {workflow.name}
-              </h1>
-              {workflow.description && (
-                <span className="hidden truncate text-xs text-neutral-500 md:inline">
-                  {workflow.description}
-                </span>
-              )}
-            </div>
-            <div className="mt-0.5 flex items-center gap-2">
+          <div className="min-w-0 flex-1">
+            <h1 className="truncate text-sm font-semibold leading-tight text-neutral-950 dark:text-neutral-100 md:text-base">
+              {workflow.name}
+            </h1>
+            <div className="mt-1 flex min-w-0 items-center gap-2">
               {draftData?.publishedVersionId ? (
                 <Badge variant="success">Published</Badge>
               ) : (
                 <Badge variant="secondary">Draft</Badge>
               )}
-              <span className="font-mono text-[11px] text-neutral-500">
+              <span className="shrink-0 font-mono text-[11px] text-neutral-500">
                 dag/v1
               </span>
+              {workflow.description && (
+                <span
+                  className="hidden min-w-0 truncate text-xs text-neutral-500 dark:text-neutral-400 md:block"
+                  title={workflow.description}
+                >
+                  {workflow.description}
+                </span>
+              )}
             </div>
           </div>
         </div>
