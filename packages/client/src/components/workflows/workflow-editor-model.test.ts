@@ -65,7 +65,7 @@ describe('workflow editor model', () => {
     expect(flow.nodes.find((node) => node.id === 'done')).toMatchObject({
       id: 'done',
       type: 'workflow',
-      position: { x: 960, y: 0 },
+      position: { x: 1020, y: -140 },
       data: { nodeType: 'stop', label: 'Stop', handles: { source: false, target: true } },
     });
     expect(flow.edges).toEqual([
@@ -120,6 +120,60 @@ describe('workflow editor model', () => {
       { from: 'branch', to: 'reject', fromOutput: 'false' },
       { from: 'trigger', to: 'branch' },
     ]);
+  });
+
+  it('lays out tool-created workflows by graph depth and branch direction when positions are missing', () => {
+    const flow = definitionToFlow({
+      version: 'dag/v1',
+      nodes: [
+        { id: 'trigger', type: 'trigger' },
+        { id: 'normalize', type: 'set', values: {} },
+        { id: 'branch', type: 'if', conditions: [] },
+        { id: 'true_tool', type: 'tool', service: 'github', action: 'github.list_issues', params: {} },
+        { id: 'false_llm', type: 'llm', prompt: 'Write a fallback' },
+        { id: 'finish', type: 'stop', outcome: 'success' },
+      ],
+      edges: [
+        { from: 'trigger', to: 'normalize' },
+        { from: 'normalize', to: 'branch' },
+        { from: 'branch', to: 'true_tool', fromOutput: 'true' },
+        { from: 'branch', to: 'false_llm', fromOutput: 'false' },
+        { from: 'true_tool', to: 'finish' },
+        { from: 'false_llm', to: 'finish' },
+      ],
+    });
+
+    expect(Object.fromEntries(flow.nodes.map((node) => [node.id, node.position]))).toEqual({
+      trigger: { x: 0, y: 0 },
+      normalize: { x: 340, y: 0 },
+      branch: { x: 680, y: 0 },
+      true_tool: { x: 1020, y: -140 },
+      false_llm: { x: 1020, y: 140 },
+      finish: { x: 1360, y: 0 },
+    });
+  });
+
+  it('preserves saved positions while laying out missing nodes', () => {
+    const flow = definitionToFlow({
+      version: 'dag/v1',
+      nodes: [
+        { id: 'trigger', type: 'trigger' },
+        { id: 'start', type: 'set', values: {} },
+        { id: 'done', type: 'stop', outcome: 'success' },
+      ],
+      edges: [
+        { from: 'trigger', to: 'start' },
+        { from: 'start', to: 'done' },
+      ],
+      ui: {
+        nodes: {
+          start: { position: { x: 25, y: 50 } },
+        },
+      },
+    });
+
+    expect(flow.nodes.find((node) => node.id === 'start')?.position).toEqual({ x: 25, y: 50 });
+    expect(flow.nodes.find((node) => node.id === 'done')?.position).toEqual({ x: 680, y: 0 });
   });
 
   it('serializes flow edits back to dag/v1 while preserving node payloads', () => {

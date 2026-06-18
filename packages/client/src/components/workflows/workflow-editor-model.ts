@@ -360,13 +360,14 @@ export function definitionToFlow(definition: WorkflowDefinition): WorkflowFlowSt
   const normalized = normalizeWorkflowDefinitionForEditor(definition);
   const incomingCount = countIncomingEdges(normalized.edges);
   const outgoingCount = countOutgoingEdges(normalized.edges);
+  const defaultPositions = layoutWorkflowNodes(normalized);
   return {
     nodes: normalized.nodes.map((node, index) => {
       const savedPosition = normalized.ui?.nodes?.[node.id]?.position;
       return {
         id: node.id,
         type: 'workflow',
-        position: savedPosition ?? { x: index * 320, y: 0 },
+        position: savedPosition ?? defaultPositions.get(node.id) ?? { x: index * LAYOUT_COLUMN_GAP, y: 0 },
         ...(node.type === 'trigger' ? { deletable: false } : {}),
         data: createFlowNodeData(node, {
           hasIncoming: (incomingCount.get(node.id) ?? 0) > 0,
@@ -530,6 +531,108 @@ export function flowEdgeToWorkflowEdge(edge: WorkflowFlowEdge): WorkflowEdge {
 
 export function createEdgeId(from: string, to: string, fromOutput?: 'true' | 'false'): string {
   return `${from}${fromOutput ? `:${fromOutput}` : ''}->${to}`;
+}
+
+const LAYOUT_COLUMN_GAP = 340;
+const LAYOUT_ROW_GAP = 140;
+
+function layoutWorkflowNodes(definition: WorkflowDefinition): Map<string, { x: number; y: number }> {
+  const nodeIds = new Set(definition.nodes.map((node) => node.id));
+  const nodeOrder = new Map(definition.nodes.map((node, index) => [node.id, index]));
+  const incoming = new Map<string, WorkflowEdge[]>();
+  const outgoing = new Map<string, WorkflowEdge[]>();
+
+  for (const edge of definition.edges) {
+    if (!nodeIds.has(edge.from) || !nodeIds.has(edge.to)) continue;
+    incoming.set(edge.to, [...(incoming.get(edge.to) ?? []), edge]);
+    outgoing.set(edge.from, [...(outgoing.get(edge.from) ?? []), edge]);
+  }
+
+  const depths = computeLayoutDepths(definition.nodes, incoming, outgoing);
+  const rawPositions = new Map<string, { x: number; y: number }>();
+  const maxDepth = Math.max(0, ...depths.values());
+
+  for (let depth = 0; depth <= maxDepth; depth += 1) {
+    const depthNodes = definition.nodes
+      .filter((node) => (depths.get(node.id) ?? 0) === depth)
+      .sort((left, right) => (nodeOrder.get(left.id) ?? 0) - (nodeOrder.get(right.id) ?? 0));
+
+    for (const node of depthNodes) {
+      const inbound = incoming.get(node.id) ?? [];
+      const y = inbound.length > 0
+        ? average(inbound.map((edge) => {
+            const parent = rawPositions.get(edge.from);
+            const parentY = parent?.y ?? 0;
+            if (edge.fromOutput === 'true') return parentY - LAYOUT_ROW_GAP;
+            if (edge.fromOutput === 'false') return parentY + LAYOUT_ROW_GAP;
+            return parentY;
+          }))
+        : 0;
+
+      rawPositions.set(node.id, { x: depth * LAYOUT_COLUMN_GAP, y });
+    }
+
+    spreadOverlappingDepthNodes(rawPositions, depthNodes.map((node) => node.id));
+  }
+
+  return rawPositions;
+}
+
+function computeLayoutDepths(
+  nodes: WorkflowNode[],
+  incoming: Map<string, WorkflowEdge[]>,
+  outgoing: Map<string, WorkflowEdge[]>,
+): Map<string, number> {
+  const depths = new Map<string, number>();
+  const remainingIncoming = new Map(nodes.map((node) => [node.id, incoming.get(node.id)?.length ?? 0]));
+  const queue = nodes.filter((node) => (remainingIncoming.get(node.id) ?? 0) === 0).map((node) => node.id);
+
+  for (const id of queue) depths.set(id, 0);
+
+  for (let index = 0; index < queue.length; index += 1) {
+    const id = queue[index]!;
+    const nextDepth = (depths.get(id) ?? 0) + 1;
+    for (const edge of outgoing.get(id) ?? []) {
+      depths.set(edge.to, Math.max(depths.get(edge.to) ?? 0, nextDepth));
+      const nextRemaining = (remainingIncoming.get(edge.to) ?? 0) - 1;
+      remainingIncoming.set(edge.to, nextRemaining);
+      if (nextRemaining === 0) queue.push(edge.to);
+    }
+  }
+
+  for (const [index, node] of nodes.entries()) {
+    if (depths.has(node.id)) continue;
+    const parentDepths = (incoming.get(node.id) ?? [])
+      .map((edge) => depths.get(edge.from))
+      .filter((depth): depth is number => depth !== undefined);
+    depths.set(node.id, parentDepths.length > 0 ? Math.max(...parentDepths) + 1 : index);
+  }
+
+  return depths;
+}
+
+function spreadOverlappingDepthNodes(positions: Map<string, { x: number; y: number }>, nodeIds: string[]): void {
+  const groups = new Map<number, string[]>();
+  for (const id of nodeIds) {
+    const position = positions.get(id);
+    if (!position) continue;
+    groups.set(position.y, [...(groups.get(position.y) ?? []), id]);
+  }
+
+  for (const [y, ids] of groups) {
+    if (ids.length <= 1) continue;
+    const start = y - ((ids.length - 1) * LAYOUT_ROW_GAP) / 2;
+    ids.forEach((id, index) => {
+      const position = positions.get(id);
+      if (!position) return;
+      positions.set(id, { ...position, y: start + index * LAYOUT_ROW_GAP });
+    });
+  }
+}
+
+function average(values: number[]): number {
+  if (values.length === 0) return 0;
+  return values.reduce((sum, value) => sum + value, 0) / values.length;
 }
 
 function countIncomingEdges(edges: WorkflowEdge[]): Map<string, number> {
