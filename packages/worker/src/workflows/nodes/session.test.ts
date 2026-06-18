@@ -47,7 +47,6 @@ import type { WorkflowStep } from 'cloudflare:workers';
 function buildArgs(node: SessionNode, sessionDoMock?: ReturnType<typeof vi.fn>) {
   const fullState: WorkflowDagState = {
     trigger: { type: 'manual', timestamp: '2026-06-12T00:00:00.000Z', data: {}, metadata: {} },
-    inputs: {},
     nodes: {},
     skipped: {},
   };

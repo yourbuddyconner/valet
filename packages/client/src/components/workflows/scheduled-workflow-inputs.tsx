@@ -24,7 +24,7 @@ export function ScheduledWorkflowInputs({
         </h3>
         <p className="mt-0.5 text-xs text-neutral-500 dark:text-neutral-400">
           These values are used for every scheduled run and are available as{' '}
-          <span className="font-mono">{'{{inputs.name}}'}</span>.
+          <span className="font-mono">{'{{trigger.data.name}}'}</span>.
         </p>
       </div>
 

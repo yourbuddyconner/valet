@@ -246,10 +246,7 @@ export async function dispatchWebhookForTrigger(
 
   // variableMapping is a per-trigger user-friendly extraction layer.
   // It traverses the parsed body (with `query` merged in under .query)
-  // and surfaces named values as workflow inputs. The result flows
-  // through `inputOverrides` so a declared workflow input named X picks
-  // up the mapped value — NOT through trigger.data (which is the
-  // normalized request envelope).
+  // and surfaces named values directly as trigger.data parameters.
   const variableMapping = trigger.variable_mapping
     ? JSON.parse(trigger.variable_mapping as string)
     : {};
@@ -265,7 +262,7 @@ export async function dispatchWebhookForTrigger(
     extractScope.query = query;
   }
 
-  const extractedInputs: Record<string, unknown> = {};
+  const extractedTriggerData: Record<string, unknown> = {};
   for (const [varName, pathExpr] of Object.entries(variableMapping)) {
     const pathStr = pathExpr as string;
     if (!pathStr.startsWith('$.')) continue;
@@ -280,9 +277,12 @@ export async function dispatchWebhookForTrigger(
       }
     }
     if (value !== undefined) {
-      extractedInputs[varName] = value;
+      extractedTriggerData[varName] = value;
     }
   }
+  const workflowTriggerData = Object.keys(extractedTriggerData).length > 0
+    ? extractedTriggerData
+    : normalizedPayload;
 
   const deliveryId = headers['x-github-delivery']
     || headers['x-request-id']
@@ -347,10 +347,9 @@ export async function dispatchWebhookForTrigger(
       type: 'webhook',
       triggerId: trigger.id,
       timestamp: new Date().toISOString(),
-      data: normalizedPayload,
+      data: workflowTriggerData,
       metadata: triggerMetadata,
     },
-    ...(Object.keys(extractedInputs).length > 0 ? { inputOverrides: extractedInputs } : {}),
     idempotencyKey,
   });
   if (result.status === 'rejected') {
@@ -484,4 +483,3 @@ export async function handlePushWebhook(env: Env, payload: any): Promise<void> {
     }
   }
 }
-

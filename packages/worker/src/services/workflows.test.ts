@@ -13,7 +13,6 @@ const WORKFLOW_ID = 'wf-id';
 function validDef(): WorkflowDefinition {
   return {
     version: 'dag/v1',
-    inputs: {},
     nodes: [
       { id: 'start', type: 'set', values: { x: 1 } },
       { id: 'stop', type: 'stop' },

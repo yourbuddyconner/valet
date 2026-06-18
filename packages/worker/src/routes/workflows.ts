@@ -7,7 +7,7 @@ import {
   listWorkflows,
   getWorkflowByIdOrSlug,
   listWorkflowExecutions,
-  parseExecutionInputs,
+  parseExecutionTriggerData,
 } from '../lib/db.js';
 import * as workflowService from '../services/workflows.js';
 
@@ -207,7 +207,7 @@ workflowsRouter.get('/:id/executions', async (c) => {
   });
 
   const executions = result.results.map((row) => {
-    const inputs = parseExecutionInputs(row as { inputs?: string | null });
+    const triggerData = parseExecutionTriggerData(row as { inputs?: string | null });
     return {
       id: row.id,
       workflowId: row.workflow_id,
@@ -215,7 +215,7 @@ workflowsRouter.get('/:id/executions', async (c) => {
       status: row.status,
       triggerType: row.trigger_type,
       triggerMetadata: row.trigger_metadata ? JSON.parse(row.trigger_metadata as string) : null,
-      inputs,
+      triggerData,
       outputs: row.outputs ? JSON.parse(row.outputs as string) : null,
       error: row.error,
       startedAt: row.started_at,
@@ -320,20 +320,9 @@ const publishSchema = z.object({
 });
 
 const testRunSchema = z.object({
-  /**
-   * Per spec: a draft test-run takes both
-   *   - a sample trigger payload (`triggerData`), available to the
-   *     workflow as {{trigger.data.X}}
-   *   - workflow input overrides (`inputs`), validated against
-   *     def.inputs and surfaced as {{inputs.X}}
-   *
-   * `inputs` is also accepted as the trigger payload for
-   * backward-compat with the pre-split clients (the previous schema
-   * only took `inputs` and used it as trigger.data). When triggerData
-   * is omitted, we fall back to inputs to keep that path working.
-   */
+  // Sample trigger payload, available as {{trigger.data.X}} and
+  // validated against the trigger node's dataSchema when declared.
   triggerData: z.record(z.unknown()).optional(),
-  inputs: z.record(z.unknown()).optional(),
   // Optional clientRequestId for idempotency — double-clicks on the
   // editor's Test Run button should not spawn two executions.
   clientRequestId: z.string().min(8).max(64).optional(),
@@ -469,22 +458,15 @@ workflowsRouter.post('/:id/test-run', zValidator('json', testRunSchema), async (
     return c.json({ executionId: existing.id as string, status: existing.status as string, deduplicated: true });
   }
   try {
-    // Backward-compat for clients that still send only `inputs`: when
-    // no triggerData is provided, the inputs object also doubles as the
-    // sample trigger payload. New clients should send both — the
-    // payload populates {{trigger.data.X}} and the inputs populate
-    // {{inputs.X}}.
-    const triggerData = body.triggerData ?? body.inputs ?? {};
     const result = await createExecution(c.env, {
       workflowId: id,
       user,
       trigger: {
         type: 'manual',
         timestamp: new Date().toISOString(),
-        data: triggerData,
+        data: body.triggerData ?? {},
         metadata: { mode: 'test', initiatedBy: user.id, clientRequestId },
       },
-      ...(body.inputs ? { inputOverrides: body.inputs } : {}),
       mode: 'test',
       definitionSource: 'draft',
       idempotencyKey,

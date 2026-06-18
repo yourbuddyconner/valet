@@ -1899,8 +1899,8 @@ Available actions:
 - \`workflows.schema\` — return valid node types, required fields, template syntax, old-name aliases, and foreach constraints.
 - \`workflows.validate\` — validate a saved draft or supplied definition. Returns blocking \`errors\` separately from non-blocking \`warnings\`.
 - \`workflows.publish\` — publish the current draft. This is high risk and may require approval.
-- \`workflows.test_run\` — start a draft execution with sample trigger data and optional declared inputs. Returns an execution id/status.
-- \`workflows.get_execution\` — inspect an execution by id, including status, parsed inputs/outputs, node traces, and approval history.
+- \`workflows.test_run\` — start a draft execution with sample trigger data exposed as \`{{trigger.data}}\`. Returns an execution id/status.
+- \`workflows.get_execution\` — inspect an execution by id, including status, parsed trigger data, outputs, node traces, and approval history.
 
 Prefer the web UI for visual graph editing. Use tools for inspection, small edits, validation, publishing, and test runs when the user asks the agent to operate on workflows directly. Malformed drafts are not saved; the tool returns validation details instead.
 
@@ -1911,7 +1911,6 @@ A workflow definition has this top-level shape:
 \`\`\`json
 {
   "version": "dag/v1",
-  "inputs": {},
   "nodes": [],
   "edges": []
 }
@@ -1934,7 +1933,7 @@ Common references:
 - \`{{trigger.data}}\` — invocation payload (webhook body/query/headers or test-run sample data).
 - \`{{trigger.metadata}}\` — trigger metadata such as mode, initiator, or webhook context.
 - \`{{trigger.type}}\` / \`{{trigger.timestamp}}\` — trigger envelope fields.
-- \`{{inputs.name}}\` — declared workflow input values.
+- \`{{trigger.data.name}}\` — declared trigger parameter values.
 - \`{{nodes.node_id.data}}\` — output data from a previous node.
 - \`{{nodes.llm_id.data.response}}\` — LLM text response.
 - \`{{nodes.tool_id.data}}\` — tool action result data.
@@ -1968,7 +1967,7 @@ Edges from an \`if\` node must include \`fromOutput\`:
 
 ### Node Schemas
 
-\`trigger\` represents the invocation source and exposes trigger payload data. It may declare \`dataSchema\`, using the same field shape as top-level \`inputs\`, to describe the payload fields available at \`{{trigger.data.*}}\`. The UI uses this schema for manual test-run fields and template suggestions.
+\`trigger\` represents the invocation source and exposes trigger payload data. It may declare \`dataSchema\`, using the \`WorkflowInputDefinition\` field shape, to describe and validate payload fields available at \`{{trigger.data.*}}\`. The UI uses this schema for manual test-run fields, scheduled workflow trigger parameters, and template suggestions.
 
 \`\`\`json
 {

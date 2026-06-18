@@ -53,7 +53,6 @@ function makeParams(definition: WorkflowDefinition, overrides: Partial<WorkflowR
       metadata: {},
     },
     definition,
-    inputs: {},
     mode: 'production',
     ...overrides,
   };

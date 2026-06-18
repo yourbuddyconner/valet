@@ -107,5 +107,5 @@
 - [x] Add a reserved `trigger` node type to the shared DAG contract and worker schema.
 - [x] Execute `trigger` nodes as source nodes that return the runtime `WorkflowTriggerPayload`.
 - [x] Normalize legacy editor definitions by adding a locked `trigger` node connected to root nodes.
-- [x] Expose trigger data, metadata, type, timestamp, and declared workflow inputs as selectable dataflow sources.
+- [x] Expose trigger data, metadata, type, timestamp, and declared trigger parameters as selectable dataflow sources.
 - [x] Add a read-only trigger inspector in the visual editor.

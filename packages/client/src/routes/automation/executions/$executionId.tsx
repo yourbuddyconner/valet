@@ -126,7 +126,7 @@ function ExecutionDetailPage() {
       </section>
 
       <section className="grid gap-4 lg:grid-cols-3">
-        <JsonPanel title="Inputs" value={execution.inputs} />
+        <JsonPanel title="Trigger data" value={execution.triggerData} />
         <JsonPanel title="Outputs" value={execution.outputs} />
         <JsonPanel title="Trigger metadata" value={execution.triggerMetadata} />
       </section>

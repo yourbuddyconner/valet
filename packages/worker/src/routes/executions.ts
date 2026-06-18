@@ -7,7 +7,7 @@ import type { Env, Variables } from '../env.js';
 import {
   listExecutions,
   getExecution,
-  parseExecutionInputs,
+  parseExecutionTriggerData,
   checkIdempotencyKey,
 } from '../lib/db.js';
 import { getDb } from '../lib/drizzle.js';
@@ -35,7 +35,7 @@ executionsRouter.get('/', async (c) => {
   });
 
   const executions = result.results.map((row) => {
-    const inputs = parseExecutionInputs(row as { inputs?: string | null });
+    const triggerData = parseExecutionTriggerData(row as { inputs?: string | null });
     return {
       id: row.id,
       workflowId: row.workflow_id,
@@ -44,7 +44,7 @@ executionsRouter.get('/', async (c) => {
       status: row.status,
       triggerType: row.trigger_type,
       triggerMetadata: row.trigger_metadata ? JSON.parse(row.trigger_metadata as string) : null,
-      inputs,
+      triggerData,
       outputs: row.outputs ? JSON.parse(row.outputs as string) : null,
       error: row.error,
       startedAt: row.started_at,
@@ -82,7 +82,7 @@ executionsRouter.get('/:id', async (c) => {
   const db = getDb(c.env.DB);
   const approvalRows = await listWorkflowApprovalsForExecution(db, id);
 
-  const inputs = parseExecutionInputs(row as { inputs?: string | null });
+  const triggerData = parseExecutionTriggerData(row as { inputs?: string | null });
   return c.json({
     execution: {
       id: row.id,
@@ -93,7 +93,7 @@ executionsRouter.get('/:id', async (c) => {
       status: row.status,
       triggerType: row.trigger_type,
       triggerMetadata: row.trigger_metadata ? JSON.parse(row.trigger_metadata as string) : null,
-      inputs,
+      triggerData,
       outputs: row.outputs ? JSON.parse(row.outputs as string) : null,
       error: row.error,
       startedAt: row.started_at,
@@ -157,7 +157,7 @@ const retryExecutionSchema = z.object({
  * POST /api/executions/:id/retry
  *
  * Starts a new execution from the selected execution's stored
- * definition_snapshot, validated inputs, and original trigger payload.
+ * definition_snapshot and original trigger payload.
  * This is intentionally snapshot-based: retrying an old failed run should
  * reproduce that run, not silently execute whatever draft/published version
  * exists today.
@@ -197,15 +197,15 @@ executionsRouter.post('/:id/retry', zValidator('json', retryExecutionSchema), as
   }
 
   const trigger = await readRetryTriggerPayload(c.env.DB, id, row as Record<string, unknown>, user.id, clientRequestId);
-  const inputs = parseExecutionInputs(row as { inputs?: string | null }) ?? {};
+  const storedTriggerData = parseExecutionTriggerData(row as { inputs?: string | null }) ?? {};
+  const retryTrigger = { ...trigger, data: storedTriggerData };
 
   const { createExecution, WorkflowExecutionStartError } = await import('../services/workflow-executions.js');
   try {
     const result = await createExecution(c.env, {
       workflowId,
       user,
-      trigger,
-      inputOverrides: inputs,
+      trigger: retryTrigger,
       mode: ((row as Record<string, unknown>).mode === 'test' ? 'test' : 'production'),
       definitionSource: 'snapshot',
       definitionSnapshot,

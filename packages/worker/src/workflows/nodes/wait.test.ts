@@ -19,7 +19,6 @@ function makeStep(sleepSpy: ReturnType<typeof vi.fn>): WorkflowStep {
 function args(node: WaitNode, stepSleep: ReturnType<typeof vi.fn>) {
   const state: WorkflowDagState = {
     trigger: { type: 'manual', timestamp: '2026-06-12T00:00:00.000Z', data: {}, metadata: {} },
-    inputs: {},
     nodes: {},
     skipped: {},
   };

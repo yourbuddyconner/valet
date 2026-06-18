@@ -15,10 +15,11 @@ export function parseNullableJson(raw: string | null): unknown | null {
 }
 
 /**
- * Inputs resolver for execution rows. The runtime writes the validated
- * input map to the `inputs` column; this helper parses it for read paths.
+ * Trigger-data resolver for execution rows. The runtime writes the
+ * validated trigger.data map to the legacy `inputs` column; this helper
+ * parses it for read paths while the public API exposes `triggerData`.
  */
-export function parseExecutionInputs(
+export function parseExecutionTriggerData(
   row: { inputs?: string | null },
 ): Record<string, unknown> | null {
   const raw = row.inputs ?? null;
@@ -32,6 +33,8 @@ export function parseExecutionInputs(
     return null;
   }
 }
+
+export const parseExecutionInputs = parseExecutionTriggerData;
 
 export function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value);
@@ -124,4 +127,3 @@ export async function countActiveExecutionsGlobal(db: AppDb): Promise<number> {
     .get();
   return row?.count ?? 0;
 }
-

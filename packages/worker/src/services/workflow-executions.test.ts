@@ -126,8 +126,15 @@ describe('createExecution', () => {
     })).rejects.toThrow();
   });
 
-  it('rejects when input validation fails', async () => {
-    makeWorkflow('wf1', { ...dagWithSet(), inputs: { region: { type: 'string', required: true } } });
+  it('rejects when trigger data validation fails', async () => {
+    makeWorkflow('wf1', {
+      version: 'dag/v1',
+      nodes: [
+        { id: 'trigger', type: 'trigger', dataSchema: { region: { type: 'string', required: true } } },
+        { id: 'a', type: 'set', values: { ok: '{{trigger.data.region}}' } },
+      ],
+      edges: [{ from: 'trigger', to: 'a' }],
+    });
     const env = makeEnv();
     await expect(createExecution(env, {
       workflowId: 'wf1',

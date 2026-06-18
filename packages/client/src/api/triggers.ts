@@ -45,11 +45,8 @@ export interface ScheduleConfig {
   timezone?: string;
   target?: 'workflow' | 'orchestrator';
   prompt?: string;
-  // Static input map forwarded as inputOverrides on each tick. Required
-  // for workflows that declare typed inputs. PATCH replaces config
-  // wholesale, so callers editing a schedule trigger must echo this back
-  // or the next tick will fail invalid_inputs.
-  inputs?: Record<string, unknown>;
+  // Static trigger payload used for each scheduled workflow run.
+  triggerData?: Record<string, unknown>;
 }
 
 export interface ManualConfig {
@@ -199,12 +196,10 @@ export function useRunTrigger() {
       triggerId,
       variables,
       triggerData,
-      inputs,
     }: {
       triggerId: string;
       variables?: Record<string, unknown>;
       triggerData?: Record<string, unknown>;
-      inputs?: Record<string, unknown>;
     }) =>
       api.post<{
         executionId?: string;
@@ -221,7 +216,6 @@ export function useRunTrigger() {
       }>(`/triggers/${triggerId}/run`, {
         ...(variables !== undefined ? { variables } : {}),
         ...(triggerData !== undefined ? { triggerData } : {}),
-        ...(inputs !== undefined ? { inputs } : {}),
         clientRequestId: createClientRequestId(),
       }),
     onSuccess: (data) => {

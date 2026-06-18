@@ -20,7 +20,6 @@ import {
 
 export interface ManualWorkflowPayload {
   triggerData: Record<string, unknown>;
-  inputs: Record<string, unknown>;
 }
 
 interface ManualWorkflowDialogProps {
@@ -53,8 +52,6 @@ export function ManualWorkflowDialog({
 
   const triggerDataFields = React.useMemo(() => Object.values(form.triggerDataFields), [form.triggerDataFields]);
   const hasTriggerDataFields = triggerDataFields.length > 0;
-  const inputFields = React.useMemo(() => Object.values(form.inputs), [form.inputs]);
-  const hasInputs = inputFields.length > 0;
 
   function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -64,7 +61,7 @@ export function ManualWorkflowDialog({
       return;
     }
     setFieldErrors({});
-    onSubmit({ triggerData: parsed.triggerData, inputs: parsed.inputs });
+    onSubmit({ triggerData: parsed.triggerData });
   }
 
   function updateTriggerDataText(value: string) {
@@ -84,20 +81,6 @@ export function ManualWorkflowDialog({
       },
     }));
     setFieldErrors((current) => omitKey(current, `triggerData.${name}`));
-  }
-
-  function updateInputValue(name: string, value: string | boolean) {
-    setForm((current) => ({
-      ...current,
-      inputs: {
-        ...current.inputs,
-        [name]: {
-          ...current.inputs[name]!,
-          value,
-        },
-      },
-    }));
-    setFieldErrors((current) => omitKey(current, name));
   }
 
   return (
@@ -160,39 +143,6 @@ export function ManualWorkflowDialog({
               )}
             </section>
 
-            <section className="space-y-3">
-              <div className="flex items-center justify-between gap-3">
-                <div>
-                  <h3 className="text-sm font-medium text-neutral-800 dark:text-neutral-200">
-                    Workflow inputs
-                  </h3>
-                  <p className="mt-0.5 text-xs text-neutral-500">
-                    Declared inputs are available as <span className="font-mono">{'{{inputs.name}}'}</span>.
-                  </p>
-                </div>
-              </div>
-
-              {isLoadingDefinition ? (
-                <div className="rounded-md border border-neutral-200 bg-neutral-50 p-4 text-sm text-neutral-500 dark:border-neutral-800 dark:bg-neutral-900">
-                  Loading workflow inputs...
-                </div>
-              ) : hasInputs ? (
-                <div className="space-y-3">
-                  {inputFields.map((field) => (
-                    <ManualWorkflowInputControl
-                      key={field.name}
-                      field={field}
-                      error={fieldErrors[field.name]}
-                      onChange={(value) => updateInputValue(field.name, value)}
-                    />
-                  ))}
-                </div>
-              ) : (
-                <div className="rounded-md border border-dashed border-neutral-200 bg-neutral-50 p-4 text-sm text-neutral-500 dark:border-neutral-800 dark:bg-neutral-900">
-                  No declared workflow inputs.
-                </div>
-              )}
-            </section>
           </div>
 
           <DialogFooter className="border-t border-neutral-200 px-6 py-4 dark:border-neutral-800">

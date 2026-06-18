@@ -5,7 +5,7 @@
  * they've resolved the workflow + built a normalized
  * WorkflowTriggerPayload. Handles:
  *   1. Access check (assertWorkflowAccess editor role).
- *   2. Input validation (validateInputs against def.inputs).
+ *   2. Trigger data validation (validateTriggerData against trigger.dataSchema).
  *   3. Env-dependent validation (validateAgainstEnvironment — LLM
  *      provider keys configured).
  *   4. Per-user concurrency cap.
@@ -27,7 +27,7 @@ import type {
   WorkflowTriggerPayload,
   WorkflowValidationError,
 } from '@valet/shared';
-import { validateDefinition, validateInputs, validateAgainstEnvironment } from '../lib/workflow-dag/validator.js';
+import { validateDefinition, validateTriggerData, validateAgainstEnvironment } from '../lib/workflow-dag/validator.js';
 import { assembleLlmProviderEnv } from '../lib/llm/provider-env.js';
 import { resolveAvailableModels } from './model-catalog.js';
 
@@ -54,7 +54,6 @@ export interface CreateExecutionInput {
   workflowId: string;
   user: { id: string };
   trigger: WorkflowTriggerPayload;
-  inputOverrides?: Record<string, unknown>;
   mode?: 'production' | 'test';
   /** Optional idempotency key stored on the execution row so a
    * subsequent call with the same key can be deduped. */
@@ -180,21 +179,17 @@ export async function createExecution(env: Env, input: CreateExecutionInput): Pr
     throw new WorkflowExecutionStartError('invalid_definition', 'definition failed validation', structuralErrors);
   }
 
-  // 3. Input validation.
-  //
-  // trigger.data is the trigger envelope (webhook body/headers/query,
-  // manual sample payload, etc.) — exposed to templates as
-  // {{trigger.data.X}} but NOT a substitute for declared inputs. Authors
-  // surface inputs explicitly via inputOverrides: test-run UI fields,
-  // webhook variableMapping → inputOverrides, schedule config-defined
-  // inputs. validateInputs rejects unknown keys; merging trigger.data
-  // here would flag every webhook envelope field ("body", "headers",
-  // ...) as input_unknown when a workflow declares any input.
-  const inputData = { ...(input.inputOverrides ?? {}) };
-  const inputResult = validateInputs(def, inputData);
-  if (!inputResult.ok) {
-    throw new WorkflowExecutionStartError('invalid_inputs', 'input validation failed', inputResult.errors);
+  // 3. Trigger data validation. The reserved trigger node's dataSchema
+  // is the workflow invocation contract; all invocations populate
+  // {{trigger.data.X}}.
+  const triggerDataResult = validateTriggerData(def, input.trigger.data);
+  if (!triggerDataResult.ok) {
+    throw new WorkflowExecutionStartError('invalid_inputs', 'trigger data validation failed', triggerDataResult.errors);
   }
+  const trigger: WorkflowTriggerPayload = {
+    ...input.trigger,
+    data: triggerDataResult.triggerData,
+  };
 
   // 4. Env-dependent validation (LLM provider keys, etc.).
   const providerEnv = await assembleLlmProviderEnv(db, env);
@@ -250,15 +245,15 @@ export async function createExecution(env: Env, input: CreateExecutionInput): Pr
       workflowId: workflow.id,
       userId: input.user.id,
       status: 'pending',
-      triggerType: input.trigger.type,
-      triggerId: input.trigger.triggerId ?? null,
-      triggerMetadata: JSON.stringify(input.trigger.metadata ?? {}),
+      triggerType: trigger.type,
+      triggerId: trigger.triggerId ?? null,
+      triggerMetadata: JSON.stringify(trigger.metadata ?? {}),
       ...(input.idempotencyKey ? { idempotencyKey: input.idempotencyKey } : {}),
       startedAt: now,
       workflowVersion,
       definitionSnapshot: definitionJson,
       definitionVersionId,
-      inputs: JSON.stringify(inputResult.inputs),
+      inputs: JSON.stringify(triggerDataResult.triggerData),
       mode,
       cloudflareInstanceId: executionId,
     }).run();
@@ -292,9 +287,8 @@ export async function createExecution(env: Env, input: CreateExecutionInput): Pr
         executionId,
         workflowId: workflow.id,
         userId: input.user.id,
-        trigger: input.trigger,
+        trigger,
         definition: def,
-        inputs: inputResult.inputs,
         mode,
       },
     });

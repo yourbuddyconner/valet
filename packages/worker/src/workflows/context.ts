@@ -2,7 +2,7 @@
  * Build the template/expression context exposed to node executors.
  *
  * Single source of truth for the projection from runtime state down to
- * the `{ trigger, inputs, nodes }` shape that the expression evaluator
+ * the `{ trigger, nodes }` shape that the expression evaluator
  * and template renderer consume. Every executor and the edge `when`
  * predicate use this.
  */
@@ -11,7 +11,6 @@ import type { WorkflowDagState, WorkflowNodeOutput } from '@valet/shared';
 
 export interface TemplateContext {
   trigger: unknown;
-  inputs: unknown;
   nodes: Record<string, { data: unknown }>;
   /** Foreach iteration aliases (item, index by default) are merged in by the foreach executor. */
   [alias: string]: unknown;
@@ -23,7 +22,6 @@ export function buildTemplateContext(
 ): TemplateContext {
   return {
     trigger: state.trigger,
-    inputs: state.inputs,
     nodes: pickNodeData(state.nodes),
     ...(aliases ?? {}),
   };

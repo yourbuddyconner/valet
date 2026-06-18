@@ -33,7 +33,6 @@ function makeParams(definition: WorkflowDefinition, overrides: Partial<WorkflowR
     userId: 'user-1',
     trigger: { type: 'manual', timestamp: '2026-06-12T00:00:00.000Z', data: {}, metadata: {} },
     definition,
-    inputs: {},
     mode: 'production',
     ...overrides,
   };

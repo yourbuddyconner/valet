@@ -148,7 +148,7 @@ function WorkflowDetailPage() {
     try {
       await saveCurrentEditorDraft();
       testRun.mutate(
-        { workflowId, triggerData: payload.triggerData, inputs: payload.inputs },
+        { workflowId, triggerData: payload.triggerData },
         {
           onSuccess: (res) => {
             setManualDialogOpen(false);

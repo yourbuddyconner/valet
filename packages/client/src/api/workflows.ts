@@ -82,19 +82,8 @@ export interface PublishDraftResponse {
 }
 
 export interface TestRunRequest {
-  /**
-   * Sample trigger payload — exposed to templates as
-   * {{trigger.data.X}}. Mirrors what a webhook/manual trigger would
-   * deliver at runtime. When omitted the server falls back to
-   * `inputs` for the trigger envelope (backward-compat with the
-   * pre-split shape).
-   */
+  /** Sample trigger payload exposed to templates as {{trigger.data.X}}. */
   triggerData?: Record<string, unknown>;
-  /**
-   * Workflow input overrides — validated against the draft's
-   * `inputs` declarations and surfaced as {{inputs.X}}.
-   */
-  inputs?: Record<string, unknown>;
 }
 
 export interface TestRunResponse {
@@ -261,10 +250,9 @@ export function useTestRunWorkflow() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: ({ workflowId, triggerData, inputs }: TestRunRequest & { workflowId: string }) =>
+    mutationFn: ({ workflowId, triggerData }: TestRunRequest & { workflowId: string }) =>
       api.post<TestRunResponse>(`/workflows/${workflowId}/test-run`, {
         ...(triggerData !== undefined ? { triggerData } : {}),
-        ...(inputs !== undefined ? { inputs } : {}),
       }),
     onSuccess: (_, { workflowId }) => {
       queryClient.invalidateQueries({ queryKey: workflowKeys.executions(workflowId) });

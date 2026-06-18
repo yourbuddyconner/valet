@@ -4,7 +4,7 @@
  * AST-based parser + evaluator for the dag/v1 expression language.
  *
  * Supports:
- *   - Path reads against { trigger, inputs, nodes } (and aliases set by
+ *   - Path reads against { trigger, nodes } (and aliases set by
  *     foreach iteration bodies).
  *   - Literals: string, number, boolean, null.
  *   - Comparisons: ==, !=, <, <=, >, >=.
@@ -24,7 +24,6 @@
 
 export interface TemplateContext {
   trigger?: unknown;
-  inputs?: unknown;
   nodes?: unknown;
   /** Aliases set by foreach iteration bodies (e.g. `item`, `index`). */
   [alias: string]: unknown;

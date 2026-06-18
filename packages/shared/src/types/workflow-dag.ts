@@ -9,7 +9,6 @@
 
 export interface WorkflowDefinition {
   version: 'dag/v1';
-  inputs?: Record<string, WorkflowInputDefinition>;
   nodes: WorkflowNode[];
   edges: WorkflowEdge[];
   policy?: WorkflowPolicy;
@@ -221,7 +220,6 @@ export interface WorkflowTriggerPayload {
 
 export interface WorkflowDagState {
   trigger: WorkflowTriggerPayload;
-  inputs: Record<string, unknown>;
   nodes: Record<string, WorkflowNodeOutput>;
   skipped: Record<string, { reason: string }>;
   /** Optional: edge-eval errors captured by the runtime so downstream

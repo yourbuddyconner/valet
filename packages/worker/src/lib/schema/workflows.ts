@@ -65,9 +65,10 @@ export const triggerWebhookRate = sqliteTable('trigger_webhook_rate', {
 //     startedAt, completedAt, error.
 //   - Trigger context: triggerType, triggerMetadata, initiatorType,
 //     initiatorUserId.
-//   - Inputs / outputs: inputs (validated), outputs (stop-node outputs),
-//     definitionSnapshot, definitionVersionId, workflowVersion (the
-//     human-facing semver, audit-only).
+//   - Trigger data / outputs: inputs (legacy column name storing validated
+//     trigger.data), outputs (stop-node outputs), definitionSnapshot,
+//     definitionVersionId, workflowVersion (the human-facing semver,
+//     audit-only).
 //   - CF instance handle: cloudflareInstanceId (mirror of id for legibility).
 //   - Cancellation: cancelledAt, cancelledBy, cleanupCompletedAt.
 //   - Mode: 'production' (triggers) or 'test' (draft test-run).
@@ -125,4 +126,3 @@ export const workflowScheduleTicks = sqliteTable('workflow_schedule_ticks', {
   uniqueIndex('idx_schedule_ticks_unique').on(table.triggerId, table.tickBucket),
   index('idx_workflow_schedule_ticks_trigger').on(table.triggerId),
 ]);
-

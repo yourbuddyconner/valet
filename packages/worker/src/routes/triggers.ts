@@ -43,9 +43,8 @@ const scheduleConfigSchema = z.object({
   timezone: z.string().optional(),
   target: z.enum(['workflow', 'orchestrator']).optional().default('workflow'),
   prompt: z.string().min(1).max(100000).optional(),
-  // Static input map forwarded as inputOverrides on each tick. Required
-  // for workflows that declare typed inputs.
-  inputs: z.record(z.unknown()).optional(),
+  // Static trigger payload used for each scheduled workflow run.
+  triggerData: z.record(z.unknown()).optional(),
 });
 
 const manualConfigSchema = z.object({
@@ -122,7 +121,6 @@ const triggerRunSchema = z.object({
   clientRequestId: z.string().min(8).optional(),
   variables: z.record(z.unknown()).optional(),
   triggerData: z.record(z.unknown()).optional(),
-  inputs: z.record(z.unknown()).optional(),
 }).passthrough().superRefine((value, ctx) => rejectLegacyRunFields(value, ctx));
 
 /**

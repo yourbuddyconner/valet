@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { validateDefinition, validateInputs, validateAgainstEnvironment, validateAgainstAvailableModels } from './validator.js';
+import { validateDefinition, validateTriggerData, validateAgainstEnvironment, validateAgainstAvailableModels } from './validator.js';
 import type { WorkflowDefinition } from '@valet/shared';
 import type { Env } from '../../env.js';
 
@@ -44,6 +44,22 @@ describe('validateDefinition', () => {
   it('returns malformed_definition for the wrong version', () => {
     const errs = validateDefinition({ version: 'steps/v1', nodes: [], edges: [] });
     expect(errs.some((e) => e.code === 'malformed_definition')).toBe(true);
+  });
+
+  it('rejects top-level workflow inputs', () => {
+    const errs = validateDefinition({
+      version: 'dag/v1',
+      inputs: { owner: { type: 'string' } },
+      nodes: [{ id: 'trigger', type: 'trigger' }],
+      edges: [],
+    });
+
+    expect(errs).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        code: 'malformed_definition',
+        message: expect.stringContaining('inputs'),
+      }),
+    ]));
   });
 
   it('adds node id and type context to malformed node field messages', () => {
@@ -441,33 +457,39 @@ describe('validateDefinition', () => {
   });
 });
 
-describe('validateInputs', () => {
-  it('accepts when all required inputs are present with correct types', () => {
+describe('validateTriggerData', () => {
+  it('accepts when all required trigger parameters are present with correct types', () => {
     const def = definition({
-      inputs: {
-        target: { type: 'string', required: true },
-        priority: { type: 'number' },
-      },
+      nodes: [
+        {
+          id: 'trigger',
+          type: 'trigger',
+          dataSchema: {
+            target: { type: 'string', required: true },
+            priority: { type: 'number' },
+          },
+        },
+      ],
     });
-    const result = validateInputs(def, { target: 'urgent', priority: 5 });
+    const result = validateTriggerData(def, { target: 'urgent', priority: 5 });
     expect(result.ok).toBe(true);
-    if (result.ok) expect(result.inputs).toEqual({ target: 'urgent', priority: 5 });
+    if (result.ok) expect(result.triggerData).toEqual({ target: 'urgent', priority: 5 });
   });
 
-  it('applies defaults for missing optional inputs', () => {
+  it('applies defaults for missing optional trigger parameters', () => {
     const def = definition({
-      inputs: { tag: { type: 'string', default: 'free' } },
+      nodes: [{ id: 'trigger', type: 'trigger', dataSchema: { tag: { type: 'string', default: 'free' } } }],
     });
-    const result = validateInputs(def, {});
+    const result = validateTriggerData(def, {});
     expect(result.ok).toBe(true);
-    if (result.ok) expect(result.inputs.tag).toBe('free');
+    if (result.ok) expect(result.triggerData.tag).toBe('free');
   });
 
-  it('rejects missing required input', () => {
+  it('rejects missing required trigger parameter', () => {
     const def = definition({
-      inputs: { target: { type: 'string', required: true } },
+      nodes: [{ id: 'trigger', type: 'trigger', dataSchema: { target: { type: 'string', required: true } } }],
     });
-    const result = validateInputs(def, {});
+    const result = validateTriggerData(def, {});
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.errors[0]!.code).toBe('input_required_missing');
@@ -476,9 +498,9 @@ describe('validateInputs', () => {
 
   it('rejects type mismatch', () => {
     const def = definition({
-      inputs: { count: { type: 'number' } },
+      nodes: [{ id: 'trigger', type: 'trigger', dataSchema: { count: { type: 'number' } } }],
     });
-    const result = validateInputs(def, { count: 'not-a-number' });
+    const result = validateTriggerData(def, { count: 'not-a-number' });
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.errors[0]!.code).toBe('input_type_mismatch');
@@ -487,18 +509,18 @@ describe('validateInputs', () => {
 
   it('rejects values not in declared enum', () => {
     const def = definition({
-      inputs: { priority: { type: 'string', enum: ['low', 'high'] } },
+      nodes: [{ id: 'trigger', type: 'trigger', dataSchema: { priority: { type: 'string', enum: ['low', 'high'] } } }],
     });
-    const result = validateInputs(def, { priority: 'medium' });
+    const result = validateTriggerData(def, { priority: 'medium' });
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.errors[0]!.code).toBe('input_not_in_enum');
     }
   });
 
-  it('rejects inputs not declared in the schema (catches typos in trigger payload)', () => {
-    const def = definition({ inputs: { target: { type: 'string' } } });
-    const result = validateInputs(def, { target: 'x', prioirty: 'high' });
+  it('rejects trigger parameters not declared in the schema', () => {
+    const def = definition({ nodes: [{ id: 'trigger', type: 'trigger', dataSchema: { target: { type: 'string' } } }] });
+    const result = validateTriggerData(def, { target: 'x', prioirty: 'high' });
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.errors.some((e) => e.code === 'input_unknown' && e.inputName === 'prioirty')).toBe(true);
@@ -507,11 +529,11 @@ describe('validateInputs', () => {
 
   it('rejects enum members with deep object equality (not reference equality)', () => {
     const def = definition({
-      inputs: { config: { type: 'object', enum: [{ a: 1, nested: { b: 2 } }] } },
+      nodes: [{ id: 'trigger', type: 'trigger', dataSchema: { config: { type: 'object', enum: [{ a: 1, nested: { b: 2 } }] } } }],
     });
-    const okResult = validateInputs(def, { config: { a: 1, nested: { b: 2 } } });
+    const okResult = validateTriggerData(def, { config: { a: 1, nested: { b: 2 } } });
     expect(okResult.ok).toBe(true);
-    const failResult = validateInputs(def, { config: { a: 1, nested: { b: 3 } } });
+    const failResult = validateTriggerData(def, { config: { a: 1, nested: { b: 3 } } });
     expect(failResult.ok).toBe(false);
   });
 });

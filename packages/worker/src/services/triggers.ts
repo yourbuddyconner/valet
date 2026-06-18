@@ -82,17 +82,9 @@ export async function runWorkflowManually(
     trigger: {
       type: 'manual',
       timestamp: new Date().toISOString(),
-      // trigger.data is the manual-run envelope — exposed to templates
-      // as {{trigger.data.X}}. For manual API runs there's no separate
-      // envelope vs. inputs (unlike webhooks), so the same variables
-      // populate BOTH the envelope and `inputOverrides`. Without the
-      // overrides mirror, declared workflow inputs would fail
-      // validation because createExecution no longer treats trigger.data
-      // as an inputs source.
       data: variables,
       metadata: { triggeredBy: 'api', direct: true, clientRequestId },
     },
-    ...(Object.keys(variables).length > 0 ? { inputOverrides: variables } : {}),
     idempotencyKey,
   });
   if (result.status === 'rejected') {
@@ -149,7 +141,6 @@ export async function runTrigger(
     clientRequestId?: string;
     variables?: Record<string, unknown>;
     triggerData?: Record<string, unknown>;
-    inputs?: Record<string, unknown>;
   },
   // workerOrigin survives from the runner-driven dispatch path so the
   // existing trigger-run callers and tests stay aligned. Workflow
@@ -261,7 +252,6 @@ export async function runTrigger(
     ...(body.variables || {}),
   };
   const triggerData = body.triggerData ?? variables;
-  const inputOverrides = body.inputs ?? variables;
 
   const clientRequestId = body.clientRequestId || crypto.randomUUID();
   const idempotencyKey = `manual-trigger:${triggerId}:${userId}:${clientRequestId}`;
@@ -286,16 +276,9 @@ export async function runTrigger(
       type: 'manual',
       triggerId,
       timestamp: new Date().toISOString(),
-      // See runWorkflowManually above for the trigger.data vs.
-      // inputOverrides reasoning. Manual trigger API calls reuse the
-      // same shape by default: legacy variables populate both the
-      // envelope and the declared inputs. New callers may pass
-      // triggerData + inputs separately so arbitrary trigger payloads
-      // don't get rejected as unknown declared inputs.
       data: triggerData,
       metadata: { triggeredBy: 'api', clientRequestId },
     },
-    ...(Object.keys(inputOverrides).length > 0 ? { inputOverrides } : {}),
     idempotencyKey,
   });
   if (result.status === 'rejected') {

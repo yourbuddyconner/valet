@@ -76,7 +76,7 @@ export async function executeTool(args: NodeExecutorArgs<ToolNode>): Promise<unk
 
   // Loading the customContext + actionSource is not cached because they
   // bind closures (mcp clients) we can't serialize. They are derived
-  // from inputs that don't change across replay, so re-running is
+  // from trigger data that doesn't change across replay, so re-running is
   // safe.
   const customContext = await loadCustomMcpConnectorContext(env, db);
   const actionSource = integrationRegistry.getActions(node.service, customContext);
@@ -84,7 +84,7 @@ export async function executeTool(args: NodeExecutorArgs<ToolNode>): Promise<unk
     throw new Error(`tool node "${node.id}": no integration package for service "${node.service}"`);
   }
 
-  // 2. Render params (deterministic from state.nodes + inputs).
+  // 2. Render params (deterministic from trigger + state.nodes).
   const renderedParams = renderJsonTemplates(node.params, ctx) as Record<string, unknown>;
 
   // 3. Invocation row + policy resolution. Cached because creating /
@@ -345,4 +345,3 @@ function coerceString(v: unknown): string {
   if (typeof v === 'object') return JSON.stringify(v);
   return String(v);
 }
-

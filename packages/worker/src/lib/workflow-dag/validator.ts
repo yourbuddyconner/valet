@@ -9,8 +9,8 @@
  *     session.prompt threadId/forceNewThread XOR, llm maxOutputTokens
  *     warning, etc.
  *   - per-template: parse and reject malformed templates at publish
- *   - per-input: validate WorkflowInputDefinition shapes against
- *     supplied values
+ *   - per-trigger-data: validate trigger.dataSchema shapes against
+ *     supplied trigger payload values
  */
 
 import type {
@@ -44,7 +44,7 @@ const DEFAULT_MAX_CONCURRENT_NODES = 20;
 const DEFAULT_MAX_WAIT_DURATION_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 const DEFAULT_MAX_FOREACH_ITEMS = 100;
 const DEFAULT_MAX_FOREACH_CONCURRENCY = 5;
-const RESERVED_CONTEXT_NAMES = new Set(['trigger', 'inputs', 'nodes']);
+const RESERVED_CONTEXT_NAMES = new Set(['trigger', 'nodes']);
 
 // Allowed foreach body types — narrower than top-level nodes.
 const FOREACH_BODY_TYPES = new Set<string>(FOREACH_BODY_NODE_TYPES);
@@ -340,30 +340,27 @@ function isValidationWarning(result: WorkflowValidationError): boolean {
 }
 
 /**
- * Validate provided trigger payload + override inputs against the
- * workflow's `inputs` declarations. Returns the validated input map
- * (with defaults applied) on success, or an array of errors.
+ * Validate the trigger payload against the reserved trigger node's
+ * dataSchema. Returns the validated trigger.data object with defaults
+ * applied on success, or an array of errors.
  */
-export function validateInputs(
+export function validateTriggerData(
   def: WorkflowDefinition,
   provided: Record<string, unknown>,
-): { ok: true; inputs: Record<string, unknown> } | { ok: false; errors: WorkflowValidationError[] } {
+): { ok: true; triggerData: Record<string, unknown> } | { ok: false; errors: WorkflowValidationError[] } {
   const errors: WorkflowValidationError[] = [];
   const out: Record<string, unknown> = {};
+  const triggerNode = def.nodes.find((node) => node.type === 'trigger');
+  const declared = triggerNode?.dataSchema ?? {};
 
-  const declared = def.inputs ?? {};
-
-  // No `inputs` declared → return an empty inputs map. Authors who
-  // didn't opt into typed inputs can still read the trigger payload
-  // via `{{trigger.data.x}}`; we deliberately do NOT mirror the whole
-  // provided blob into `state.inputs` (and thus into the audit row),
-  // because webhook payloads can carry PII / large data that wasn't
-  // explicitly declared as a workflow input.
+  // No schema declared means the trigger payload is intentionally open.
+  // Webhook-style triggers often carry dynamic envelopes, so only typed
+  // trigger parameters opt into required/default/enum validation.
   if (Object.keys(declared).length === 0) {
-    return { ok: true, inputs: {} };
+    return { ok: true, triggerData: provided };
   }
 
-  // Check declared inputs against provided values.
+  // Check declared trigger data fields against provided values.
   for (const [name, spec] of Object.entries(declared)) {
     const value = provided[name];
     if (value === undefined || value === null) {
@@ -372,7 +369,7 @@ export function validateInputs(
           scope: 'input',
           inputName: name,
           code: 'input_required_missing',
-          message: `Required input "${name}" is missing`,
+          message: `Required trigger parameter "${name}" is missing`,
         });
         continue;
       }
@@ -393,7 +390,7 @@ export function validateInputs(
         scope: 'input',
         inputName: name,
         code: 'input_not_in_enum',
-        message: `Input "${name}" value not in declared enum`,
+        message: `Trigger parameter "${name}" value not in declared enum`,
       });
       continue;
     }
@@ -401,24 +398,22 @@ export function validateInputs(
     out[name] = value;
   }
 
-  // Reject inputs not declared in the workflow's `inputs` schema. A typo
+  // Reject trigger data not declared in the trigger data schema. A typo
   // ('prioirty' vs declared 'priority') should fail loudly rather than be
   // silently dropped or silently passed through with a missing default.
-  // Trigger payloads themselves are NOT validated here — only when a
-  // workflow explicitly declares inputs.
   for (const name of Object.keys(provided)) {
     if (!(name in declared)) {
       errors.push({
         scope: 'input',
         inputName: name,
         code: 'input_unknown',
-        message: `Input "${name}" is not declared in the workflow's inputs schema`,
+        message: `Trigger parameter "${name}" is not declared in the trigger data schema`,
       });
     }
   }
 
   if (errors.length > 0) return { ok: false, errors };
-  return { ok: true, inputs: out };
+  return { ok: true, triggerData: out };
 }
 
 // ─── Internal helpers ───────────────────────────────────────────────────────

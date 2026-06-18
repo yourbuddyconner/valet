@@ -275,12 +275,11 @@ export const workflowEditorStateSchema = z.object({
 
 export const workflowDefinitionSchema = z.object({
   version: z.literal('dag/v1'),
-  inputs: z.record(z.string(), workflowInputDefinitionSchema).optional(),
   nodes: z.array(workflowNodeSchema).min(1),
   edges: z.array(workflowEdgeSchema),
   policy: workflowPolicySchema.optional(),
   ui: workflowEditorStateSchema.optional(),
-});
+}).strict();
 
 export function isWorkflowDefinition(input: unknown): input is WorkflowDefinition {
   return workflowDefinitionSchema.safeParse(input).success;

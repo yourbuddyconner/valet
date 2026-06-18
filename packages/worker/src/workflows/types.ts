@@ -19,7 +19,7 @@ import type { Env } from '../env.js';
 /**
  * Parameters passed via `WORKFLOW_INTERPRETER.create({ id, params })` from
  * the trigger paths. The interpreter reads everything it needs from here:
- * the validated input map and the dag/v1 definition snapshot (also
+ * the trigger payload and the dag/v1 definition snapshot (also
  * persisted on `workflow_executions.definition_snapshot` for the audit
  * trail).
  */
@@ -29,7 +29,6 @@ export interface WorkflowRunParams {
   userId: string;
   trigger: WorkflowTriggerPayload;
   definition: WorkflowDefinition;
-  inputs: Record<string, unknown>;
   /** "production" or "test" — drives trace retention and audit tagging. */
   mode?: 'production' | 'test';
 }

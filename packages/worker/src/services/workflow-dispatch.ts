@@ -14,7 +14,6 @@ export interface DispatchWorkflowInput {
   workflowId: string;
   user: { id: string };
   trigger: WorkflowTriggerPayload;
-  inputOverrides?: Record<string, unknown>;
   mode?: 'production' | 'test';
   /** Optional idempotency key stored on the resulting execution row so
    * retried deliveries (manual clientRequestId, webhook deliveryId,
@@ -37,7 +36,6 @@ export async function dispatchWorkflowExecution(
       workflowId: input.workflowId,
       user: input.user,
       trigger: input.trigger,
-      ...(input.inputOverrides ? { inputOverrides: input.inputOverrides } : {}),
       ...(input.mode ? { mode: input.mode } : {}),
       ...(input.idempotencyKey ? { idempotencyKey: input.idempotencyKey } : {}),
     });

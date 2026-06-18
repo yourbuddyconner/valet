@@ -59,8 +59,8 @@ interface TriggerFormState {
   scheduleTarget: ScheduleTarget;
   schedulePrompt: string;
   // PATCH replaces config wholesale, so schedule run parameters are
-  // stashed here and emitted as config.inputs on save.
-  scheduleInputs?: Record<string, unknown>;
+  // stashed here and emitted as config.triggerData on save.
+  scheduleTriggerData?: Record<string, unknown>;
 }
 
 const DEFAULT_FORM: TriggerFormState = {
@@ -113,7 +113,7 @@ function formFromTrigger(trigger: Trigger): TriggerFormState {
       scheduleTimezone: trigger.config.timezone || 'UTC',
       scheduleTarget: trigger.config.target || 'workflow',
       schedulePrompt: trigger.config.prompt || '',
-      scheduleInputs: trigger.config.inputs,
+      scheduleTriggerData: trigger.config.triggerData,
     };
   }
 
@@ -145,9 +145,9 @@ function toConfig(form: TriggerFormState): TriggerConfig {
       timezone: form.scheduleTimezone.trim() || undefined,
       target: form.scheduleTarget,
       prompt: form.scheduleTarget === 'orchestrator' ? form.schedulePrompt.trim() : undefined,
-      // Static workflow input overrides for every scheduled run.
-      ...(form.scheduleInputs && Object.keys(form.scheduleInputs).length > 0
-        ? { inputs: form.scheduleInputs }
+      // Static trigger payload for every scheduled workflow run.
+      ...(form.scheduleTriggerData && Object.keys(form.scheduleTriggerData).length > 0
+        ? { triggerData: form.scheduleTriggerData }
         : {}),
     };
   }
@@ -225,11 +225,12 @@ export function WorkflowTriggerManager({ workflowId, triggers }: WorkflowTrigger
       return;
     }
 
-    setScheduleInputFields(createWorkflowInputFields(draftData?.draft?.inputs, form.scheduleInputs));
+    const triggerNode = draftData?.draft?.nodes.find((node) => node.type === 'trigger');
+    setScheduleInputFields(createWorkflowInputFields(triggerNode?.dataSchema, form.scheduleTriggerData));
     setScheduleInputErrors({});
   }, [
-    draftData?.draft?.inputs,
-    form.scheduleInputs,
+    draftData?.draft,
+    form.scheduleTriggerData,
     form.scheduleTarget,
     form.type,
     open,
@@ -310,7 +311,7 @@ export function WorkflowTriggerManager({ workflowId, triggers }: WorkflowTrigger
           setScheduleInputErrors(parsedInputs.fieldErrors);
           return;
         }
-        formForSave = { ...form, scheduleInputs: parsedInputs.inputs };
+        formForSave = { ...form, scheduleTriggerData: parsedInputs.inputs };
       }
 
       const payload = {

@@ -304,13 +304,19 @@ describe('workflow editor model', () => {
     expect(normalized.ui?.nodes.trigger.position).toEqual({ x: -320, y: 40 });
   });
 
-  it('derives trigger output sources from workflow inputs and runtime envelope fields', () => {
+  it('derives trigger output sources from trigger data schema and runtime envelope fields', () => {
     const definition: WorkflowDefinition = normalizeWorkflowDefinitionForEditor({
       version: 'dag/v1',
-      inputs: {
-        issues: { type: 'array', description: 'Issues supplied by manual test run.' },
-      },
-      nodes: [{ id: 'loop', type: 'foreach', items: '', body: { id: 'loop-body', type: 'set', values: {} } }],
+      nodes: [
+        {
+          id: 'trigger',
+          type: 'trigger',
+          dataSchema: {
+            issues: { type: 'array', description: 'Issues supplied by manual test run.' },
+          },
+        },
+        { id: 'loop', type: 'foreach', items: '', body: { id: 'loop-body', type: 'set', values: {} } },
+      ],
       edges: [{ from: 'trigger', to: 'loop' }],
     });
 
@@ -325,8 +331,8 @@ describe('workflow editor model', () => {
       }),
       expect.objectContaining({
         nodeId: 'trigger',
-        label: 'Trigger input issues',
-        expression: '{{inputs.issues}}',
+        label: 'Trigger data issues',
+        expression: '{{trigger.data.issues}}',
         valueType: 'array',
       }),
     ]));

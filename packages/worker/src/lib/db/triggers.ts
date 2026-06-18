@@ -22,11 +22,9 @@ export type TriggerConfig =
       timezone?: string;
       target?: 'workflow' | 'orchestrator';
       prompt?: string;
-      // Static input map forwarded as inputOverrides on each tick.
-      // Required for workflows that declare typed inputs — without it,
-      // dispatch fails validation with invalid_inputs and the tick is
-      // burned permanently.
-      inputs?: Record<string, unknown>;
+      // Static trigger payload for each scheduled workflow run. Validated
+      // against the workflow trigger node's dataSchema before execution.
+      triggerData?: Record<string, unknown>;
     }
   | { type: 'manual' };
 

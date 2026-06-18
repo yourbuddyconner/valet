@@ -10,24 +10,29 @@ import {
 describe('manual workflow dialog model', () => {
   const definition: WorkflowDefinition = {
     version: 'dag/v1',
-    inputs: {
-      name: { type: 'string', required: true, default: 'Conner' },
-      priority: { type: 'number', default: 3 },
-      approved: { type: 'boolean', default: true },
-      config: { type: 'object', default: { region: 'us-east-1' } },
-      tags: { type: 'array', default: ['vip'] },
-      optional: { type: 'string' },
-    },
-    nodes: [{ id: 'trigger', type: 'trigger' }],
+    nodes: [
+      {
+        id: 'trigger',
+        type: 'trigger',
+        dataSchema: {
+          name: { type: 'string', required: true, default: 'Conner' },
+          priority: { type: 'number', default: 3 },
+          approved: { type: 'boolean', default: true },
+          config: { type: 'object', default: { region: 'us-east-1' } },
+          tags: { type: 'array', default: ['vip'] },
+          optional: { type: 'string' },
+        },
+      },
+    ],
     edges: [],
   };
+  const triggerSchema = definition.nodes[0]?.type === 'trigger' ? definition.nodes[0].dataSchema : undefined;
 
-  it('creates form values from declared input defaults', () => {
+  it('creates form values from declared trigger parameter defaults', () => {
     const form = createManualWorkflowForm(definition);
 
     expect(form.triggerDataText).toBe('{\n  \n}');
-    expect(form.triggerDataFields).toEqual({});
-    expect(form.inputs).toMatchObject({
+    expect(form.triggerDataFields).toMatchObject({
       name: { value: 'Conner' },
       priority: { value: '3' },
       approved: { value: true },
@@ -37,8 +42,8 @@ describe('manual workflow dialog model', () => {
     });
   });
 
-  it('creates workflow input fields from existing scheduled trigger values', () => {
-    const fields = createWorkflowInputFields(definition.inputs, {
+  it('creates trigger parameter fields from existing scheduled trigger values', () => {
+    const fields = createWorkflowInputFields(triggerSchema, {
       name: 'Scheduled run',
       priority: 8,
       approved: false,
@@ -56,8 +61,8 @@ describe('manual workflow dialog model', () => {
     });
   });
 
-  it('parses workflow input fields without trigger data', () => {
-    const fields = createWorkflowInputFields(definition.inputs);
+  it('parses trigger parameter fields for scheduled runs', () => {
+    const fields = createWorkflowInputFields(triggerSchema);
     fields.name.value = 'Scheduled run';
     fields.priority.value = '8';
     fields.approved.value = false;
@@ -106,58 +111,33 @@ describe('manual workflow dialog model', () => {
   });
 
   it('parses typed trigger data fields into triggerData', () => {
-    const form = createManualWorkflowForm({
-      version: 'dag/v1',
-      nodes: [
-        {
-          id: 'trigger',
-          type: 'trigger',
-          dataSchema: {
-            email: { type: 'string', required: true },
-            plan: { type: 'string', default: 'free' },
-            seats: { type: 'number' },
-            approved: { type: 'boolean', default: true },
-          },
-        },
-      ],
-      edges: [],
-    });
-    form.triggerDataFields.email.value = 'conner@example.com';
-    form.triggerDataFields.seats.value = '12';
-
+    const form = createManualWorkflowForm(definition);
+    form.triggerDataFields.priority.value = '5';
+    form.triggerDataFields.config.value = '{ "region": "eu-west-1" }';
+    form.triggerDataFields.tags.value = '["enterprise", "trial"]';
     const parsed = parseManualWorkflowSubmission(form);
 
     expect(parsed).toEqual({
       ok: true,
       triggerData: {
-        email: 'conner@example.com',
-        plan: 'free',
-        seats: 12,
-        approved: true,
-      },
-      inputs: {},
-    });
-  });
-
-  it('parses trigger data and typed workflow inputs for submission', () => {
-    const form = createManualWorkflowForm(definition);
-    form.triggerDataText = '{ "email": "conner@example.com" }';
-    form.inputs.priority.value = '5';
-    form.inputs.config.value = '{ "region": "eu-west-1" }';
-    form.inputs.tags.value = '["enterprise", "trial"]';
-
-    const parsed = parseManualWorkflowSubmission(form);
-
-    expect(parsed).toEqual({
-      ok: true,
-      triggerData: { email: 'conner@example.com' },
-      inputs: {
         name: 'Conner',
         priority: 5,
         approved: true,
         config: { region: 'eu-west-1' },
         tags: ['enterprise', 'trial'],
       },
+    });
+  });
+
+  it('parses raw trigger data when no trigger schema is declared', () => {
+    const form = createManualWorkflowForm({ version: 'dag/v1', nodes: [], edges: [] });
+    form.triggerDataText = '{ "email": "conner@example.com" }';
+
+    const parsed = parseManualWorkflowSubmission(form);
+
+    expect(parsed).toEqual({
+      ok: true,
+      triggerData: { email: 'conner@example.com' },
     });
   });
 
@@ -193,26 +173,21 @@ describe('manual workflow dialog model', () => {
     });
   });
 
-  it('omits blank optional inputs', () => {
+  it('omits blank optional trigger parameters', () => {
     const form = createManualWorkflowForm(definition);
-    form.triggerDataText = '{}';
-    form.inputs.optional.value = '';
+    form.triggerDataFields.optional.value = '';
 
     const parsed = parseManualWorkflowSubmission(form);
 
     expect(parsed.ok).toBe(true);
     if (parsed.ok) {
-      expect(parsed.inputs).not.toHaveProperty('optional');
+      expect(parsed.triggerData).not.toHaveProperty('optional');
     }
   });
 
-  it('reports invalid trigger JSON and input type errors', () => {
-    const form = createManualWorkflowForm(definition);
+  it('reports invalid trigger JSON when no trigger schema is declared', () => {
+    const form = createManualWorkflowForm({ version: 'dag/v1', nodes: [], edges: [] });
     form.triggerDataText = '[';
-    form.inputs.name.value = '';
-    form.inputs.priority.value = 'high';
-    form.inputs.config.value = '[]';
-    form.inputs.tags.value = '{}';
 
     const parsed = parseManualWorkflowSubmission(form);
 
@@ -220,10 +195,6 @@ describe('manual workflow dialog model', () => {
       ok: false,
       fieldErrors: {
         triggerData: 'Trigger payload must be valid JSON.',
-        name: 'Required input is missing.',
-        priority: 'Enter a valid number.',
-        config: 'Enter a JSON object.',
-        tags: 'Enter a JSON array.',
       },
     });
   });

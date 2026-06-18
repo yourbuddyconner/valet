@@ -7,7 +7,7 @@ import {
   getExecution,
   getWorkflowByIdOrSlug,
   listWorkflows,
-  parseExecutionInputs,
+  parseExecutionTriggerData,
 } from '../lib/db.js';
 import { createWorkflow } from '../services/workflows.js';
 import {
@@ -170,12 +170,11 @@ const actions: ActionDefinition[] = [
   {
     id: 'workflows.test_run',
     name: 'Test run workflow draft',
-    description: 'Run the current draft with sample trigger data and optional workflow inputs.',
+    description: 'Run the current draft with sample trigger data exposed as {{trigger.data}}.',
     riskLevel: 'medium',
     params: z.object({
       workflowId: z.string().min(1),
       triggerData: z.record(z.unknown()).optional(),
-      inputs: z.record(z.unknown()).optional(),
       clientRequestId: z.string().min(8).max(64).optional(),
     }),
     inputSchema: {
@@ -184,7 +183,6 @@ const actions: ActionDefinition[] = [
       properties: {
         workflowId: { type: 'string', description: 'Workflow ID or slug.' },
         triggerData: { type: 'object', description: 'Sample trigger payload exposed as {{trigger.data}}.' },
-        inputs: { type: 'object', description: 'Declared workflow input overrides exposed as {{inputs}}.' },
         clientRequestId: { type: 'string', description: 'Optional idempotency key for retry/double-click protection.' },
       },
       additionalProperties: false,
@@ -193,7 +191,7 @@ const actions: ActionDefinition[] = [
   {
     id: 'workflows.get_execution',
     name: 'Get workflow execution',
-    description: 'Inspect a workflow execution, including status, inputs, outputs, node traces, and approval history.',
+    description: 'Inspect a workflow execution, including status, trigger data, outputs, node traces, and approval history.',
     riskLevel: 'low',
     params: z.object({
       executionId: z.string().min(1),
@@ -261,7 +259,6 @@ export const workflowActions: ActionSource = {
           return ok(await testRunWorkflowAction(context.appDb, context.env, context.userId, z.object({
             workflowId: z.string().min(1),
             triggerData: z.record(z.unknown()).optional(),
-            inputs: z.record(z.unknown()).optional(),
             clientRequestId: z.string().min(8).max(64).optional(),
           }).parse(params)));
         case 'workflows.get_execution':
@@ -299,10 +296,10 @@ function getWorkflowSchemaAction() {
     },
     templates: {
       delimiters: '{{ expression }}',
-      runtimeContext: ['trigger', 'inputs', 'nodes', 'item', 'index'],
+      runtimeContext: ['trigger', 'nodes', 'item', 'index'],
       examples: [
         '{{trigger.data}}',
-        '{{inputs.name}}',
+        '{{trigger.data.name}}',
         '{{nodes.prepare.data.message}}',
         '{{nodes["tool-1"].data.issues}}',
         '{{item.title}}',
@@ -578,7 +575,7 @@ async function testRunWorkflowAction(
   db: AppDb,
   env: Env,
   userId: string,
-  params: { workflowId: string; triggerData?: Record<string, unknown>; inputs?: Record<string, unknown>; clientRequestId?: string },
+  params: { workflowId: string; triggerData?: Record<string, unknown>; clientRequestId?: string },
 ) {
   const { id } = await assertWorkflowAccess(db, { id: userId }, params.workflowId, 'editor');
   const clientRequestId = params.clientRequestId ?? crypto.randomUUID();
@@ -588,7 +585,7 @@ async function testRunWorkflowAction(
     return {
       executionId: existing.id as string,
       status: existing.status as string,
-      inputs: parseExecutionInputs(existing as { inputs?: string | null }),
+      triggerData: parseExecutionTriggerData(existing as { inputs?: string | null }),
       deduplicated: true,
     };
   }
@@ -599,10 +596,9 @@ async function testRunWorkflowAction(
     trigger: {
       type: 'manual',
       timestamp: new Date().toISOString(),
-      data: params.triggerData ?? params.inputs ?? {},
+      data: params.triggerData ?? {},
       metadata: { mode: 'test', initiatedBy: userId, clientRequestId, source: 'agent_tool' },
     },
-    ...(params.inputs ? { inputOverrides: params.inputs } : {}),
     mode: 'test',
     definitionSource: 'draft',
     idempotencyKey,
@@ -645,7 +641,7 @@ async function getExecutionAction(
       status: row.status,
       triggerType: row.trigger_type,
       triggerMetadata: row.trigger_metadata ? JSON.parse(row.trigger_metadata as string) : null,
-      inputs: parseExecutionInputs(row as { inputs?: string | null }),
+      triggerData: parseExecutionTriggerData(row as { inputs?: string | null }),
       outputs: row.outputs ? JSON.parse(row.outputs as string) : null,
       error: row.error,
       startedAt: row.started_at,

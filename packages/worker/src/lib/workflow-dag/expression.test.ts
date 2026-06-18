@@ -10,8 +10,7 @@ import {
 } from './expression.js';
 
 const ctx = {
-  trigger: { data: { email: 'a@b.com', priority: 'high', count: 3 } },
-  inputs: { region: 'us-east' },
+  trigger: { data: { email: 'a@b.com', priority: 'high', count: 3, region: 'us-east' } },
   nodes: {
     extract: { data: { customerEmail: 'c@d.com', tags: ['urgent', 'billing'] } },
     decide: { data: { result: true } },
@@ -21,10 +20,13 @@ const ctx = {
 };
 
 describe('parseExpression + evaluateExpression', () => {
-  it('reads dotted paths from trigger/inputs/nodes', () => {
+  it('reads dotted paths from trigger and nodes', () => {
     expect(evaluateExpression(parseExpression('trigger.data.email'), ctx)).toBe('a@b.com');
-    expect(evaluateExpression(parseExpression('inputs.region'), ctx)).toBe('us-east');
     expect(evaluateExpression(parseExpression('nodes.extract.data.customerEmail'), ctx)).toBe('c@d.com');
+  });
+
+  it('does not expose a legacy inputs context', () => {
+    expect(evaluateExpression(parseExpression('inputs.region'), ctx)).toBeUndefined();
   });
 
   it('supports foreach aliases', () => {
@@ -97,7 +99,12 @@ describe('parseExpression + evaluateExpression', () => {
 
 describe('parseTemplate + renderTemplate', () => {
   it('preserves structured values for single-template fields', () => {
-    expect(renderTemplate('{{trigger.data}}', ctx)).toEqual({ email: 'a@b.com', priority: 'high', count: 3 });
+    expect(renderTemplate('{{trigger.data}}', ctx)).toEqual({
+      email: 'a@b.com',
+      priority: 'high',
+      count: 3,
+      region: 'us-east',
+    });
     expect(renderTemplate('{{nodes.extract.data.tags}}', ctx)).toEqual(['urgent', 'billing']);
     expect(renderTemplate('{{trigger.data.count}}', ctx)).toBe(3);
     expect(renderTemplate('{{trigger.data.priority}}', ctx)).toBe('high');
@@ -115,7 +122,7 @@ describe('parseTemplate + renderTemplate', () => {
   it('JSON-stringifies objects and arrays in mixed-text templates', () => {
     expect(renderTemplate('tags: {{nodes.extract.data.tags}}', ctx)).toBe('tags: ["urgent","billing"]');
     expect(renderTemplate('payload: {{trigger.data}}', ctx)).toBe(
-      'payload: {"email":"a@b.com","priority":"high","count":3}',
+      'payload: {"email":"a@b.com","priority":"high","count":3,"region":"us-east"}',
     );
   });
 
@@ -143,7 +150,7 @@ describe('renderJsonTemplates', () => {
     const out = renderJsonTemplates(
       {
         to: '{{trigger.data.email}}',
-        meta: { region: '{{inputs.region}}' },
+        meta: { region: '{{trigger.data.region}}' },
         tags: ['{{trigger.data.priority}}', 'fixed'],
         count: 99,
       },

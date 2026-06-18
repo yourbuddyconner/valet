@@ -43,8 +43,8 @@ Initial actions:
 | `workflows.schema` | low | Return node type/schema discovery data for agents |
 | `workflows.validate` | low | Validate a saved draft or supplied definition |
 | `workflows.publish` | high | Publish the current draft into `workflow_definition_versions` |
-| `workflows.test_run` | medium | Execute the draft with sample trigger data and optional input overrides |
-| `workflows.get_execution` | low | Inspect an execution, including status, inputs, outputs, node traces, and approvals |
+| `workflows.test_run` | medium | Execute the draft with sample trigger data |
+| `workflows.get_execution` | low | Inspect an execution, including status, trigger data, outputs, node traces, and approvals |
 
 All actions still flow through action policy resolution and invocation audit rows. `publish` is high-risk so org policy can require human approval before a workflow becomes live.
 
@@ -108,11 +108,11 @@ Trigger config shapes:
 ```typescript
 type TriggerConfig =
   | { type: 'webhook'; path: string; method?: 'GET' | 'POST'; secret?: string; headers?: Record<string, string>; rateLimit?: number }
-  | { type: 'schedule'; cron: string; timezone?: string; target?: 'workflow' | 'orchestrator'; prompt?: string; inputs?: Record<string, unknown> }
+  | { type: 'schedule'; cron: string; timezone?: string; target?: 'workflow' | 'orchestrator'; prompt?: string; triggerData?: Record<string, unknown> }
   | { type: 'manual' };
 ```
 
-Schedule triggers with `target: 'workflow'` may include `inputs`; these are validated against the workflow definition's top-level `inputs` declarations and passed as `inputOverrides` on every scheduled run. Schedule triggers with `target: 'orchestrator'` dispatch a prompt to the user's orchestrator session instead of running a workflow — these have a nullable `workflowId`.
+Schedule triggers with `target: 'workflow'` may include `triggerData`; these values become the scheduled run's `trigger.data` payload and are validated against the workflow trigger node's `dataSchema`. Schedule triggers with `target: 'orchestrator'` dispatch a prompt to the user's orchestrator session instead of running a workflow — these have a nullable `workflowId`.
 
 ### `workflow_definition_versions` table
 
@@ -146,7 +146,7 @@ Execution instances. Schema in `packages/worker/src/lib/schema/workflows.ts`.
 | `status` | text NOT NULL | — | See [State Machine](#state-machine) |
 | `triggerType` | text NOT NULL | — | `'manual'` / `'webhook'` / `'schedule'` |
 | `triggerMetadata` | JSON text | — | Trigger-specific context |
-| `inputs` | JSON text | — | Validated workflow input map (typed inputs only) |
+| `inputs` | JSON text | — | Legacy column name storing the validated `trigger.data` map |
 | `outputs` | JSON text | — | Stop-node outputs by node id (`{ [nodeId]: { outcome, output?, message? } }`) |
 | `error` | text | — | First failure message |
 | `startedAt`, `completedAt` | text | — | ISO datetimes |
@@ -241,7 +241,7 @@ Active executions (`pending`, `running`, `waiting_approval`, `waiting_time`) are
 | PUT | `/:id/draft` | Save a structurally valid draft; rejects known-unavailable LLM models |
 | POST | `/:id/validate` | Run the validator against the current draft |
 | POST | `/:id/publish` | Publish the draft as a new `workflow_definition_versions` row |
-| POST | `/:id/test-run` | Execute the draft against a sample trigger payload + input overrides |
+| POST | `/:id/test-run` | Execute the draft against a sample trigger payload |
 | GET | `/:id/versions` | List published versions |
 | POST | `/:id/versions/:versionId/restore` | Copy an old version back into the draft |
 | GET | `/:id/executions` | Execution history for the workflow |
@@ -253,11 +253,11 @@ Active executions (`pending`, `running`, `waiting_approval`, `waiting_time`) are
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/` | List recent executions (filterable by status, workflowId) |
-| GET | `/:id` | Single execution with nodes + approvals + parsed inputs |
+| GET | `/:id` | Single execution with nodes + approvals + parsed trigger data |
 | GET | `/:id/approvals` | All approvals for an execution (pending + resolved) |
 | POST | `/:id/approvals/:approvalId/approve` | Approve a pending approval (`{ reason? }` body) |
 | POST | `/:id/approvals/:approvalId/deny` | Deny a pending approval (`{ reason? }` body) |
-| POST | `/:id/retry` | Start a new execution from this execution's stored definition snapshot, validated inputs, and trigger payload (`{ clientRequestId? }` body) |
+| POST | `/:id/retry` | Start a new execution from this execution's stored definition snapshot and validated trigger payload (`{ clientRequestId? }` body) |
 | POST | `/:id/cancel` | Cancel an execution |
 
 ### Trigger Routes (`/api/triggers`)
@@ -271,7 +271,7 @@ Active executions (`pending`, `running`, `waiting_approval`, `waiting_time`) are
 | PATCH | `/:id` | Update trigger (mints + returns a fresh token when transitioning to webhook) |
 | DELETE | `/:id` | Delete trigger |
 | POST | `/:id/enable`, `/:id/disable` | Toggle enabled state |
-| POST | `/:id/run` | Manually fire a trigger; accepts legacy `variables` or split `triggerData` + `inputs` |
+| POST | `/:id/run` | Manually fire a trigger; accepts legacy `variables` or `triggerData` |
 | ALL | `/:triggerId/webhook` | Forward-facing webhook endpoint — authenticates via `X-Valet-Trigger-Token` (constant-time compare) |
 
 A path-based fallback at `/webhooks/:path` resolves with a constant-time `config.secret` compare for deployments that wired up webhooks before the per-trigger token model. The trigger API and UI surface only the per-trigger token URL.
@@ -286,7 +286,7 @@ Node parameter fields that accept template strings use the workflow template hel
 
 LLM-style model fields use the shared model picker backed by `/sessions/available-models`, including user/org preferred model grouping. The picker writes catalog model ids into the node definition and supports clearing back to the runtime default model.
 
-The executions tab is a read-only execution inspector modeled after n8n's execution view. It shows a narrow run list on the left, the workflow graph in the center, and an execution/node detail panel on the right. Selecting a run fetches `GET /api/executions/:id`; active execution details refetch every ~2 seconds until the execution reaches a terminal status so node traces update live without a page refresh. The canvas overlays the latest `workflow_execution_nodes` trace row for each definition node, showing status, duration, skipped nodes, and node errors without changing the draft layout. Selecting a node opens its trace payload in the right panel so users can inspect input previews, outputs, errors, and reasons in graph context. If the selected node has a pending workflow approval, the same panel renders approve/deny actions and invalidates the execution detail after resolution so the graph continues from that point. The panel also exposes Retry, which posts to `/api/executions/:id/retry` and pins the newly-created execution; retry uses the original execution's `definition_snapshot`, validated `inputs`, and trigger-node payload rather than the current draft/published definition. Starting a test run switches to this tab and pins the newly-created execution while the workflow execution list catches up. The tests tab provides an explicit draft test-run entrypoint; test buttons open `ManualWorkflowDialog`, which collects a JSON `triggerData` payload and typed controls for declared workflow `inputs`, saves the current draft, then dispatches `/api/workflows/:id/test-run`. The trigger create/edit dialogs render the same typed workflow input controls for schedule triggers that target workflows and store parsed values in `config.inputs` for each scheduled execution. The trigger list play button uses the same dialog for workflow-backed triggers and submits the split payload to `/api/triggers/:id/run`; orchestrator-only schedule triggers still run directly.
+The executions tab is a read-only execution inspector modeled after n8n's execution view. It shows a narrow run list on the left, the workflow graph in the center, and an execution/node detail panel on the right. Selecting a run fetches `GET /api/executions/:id`; active execution details refetch every ~2 seconds until the execution reaches a terminal status so node traces update live without a page refresh. The canvas overlays the latest `workflow_execution_nodes` trace row for each definition node, showing status, duration, skipped nodes, and node errors without changing the draft layout. Selecting a node opens its trace payload in the right panel so users can inspect input previews, outputs, errors, and reasons in graph context. If the selected node has a pending workflow approval, the same panel renders approve/deny actions and invalidates the execution detail after resolution so the graph continues from that point. The panel also exposes Retry, which posts to `/api/executions/:id/retry` and pins the newly-created execution; retry uses the original execution's `definition_snapshot` and stored `trigger.data` payload rather than the current draft/published definition. Starting a test run switches to this tab and pins the newly-created execution while the workflow execution list catches up. The tests tab provides an explicit draft test-run entrypoint; test buttons open `ManualWorkflowDialog`, which renders typed controls from the trigger node's `dataSchema`, sends the parsed values as `triggerData`, saves the current draft, then dispatches `/api/workflows/:id/test-run`. The trigger create/edit dialogs render the same typed trigger parameter controls for schedule triggers that target workflows and store parsed values in `config.triggerData` for each scheduled execution. The trigger list play button uses the same dialog for workflow-backed triggers and submits `triggerData` to `/api/triggers/:id/run`; orchestrator-only schedule triggers still run directly.
 
 ## Flows
 
@@ -304,7 +304,7 @@ The executions tab is a read-only execution inspector modeled after n8n's execut
 1. External system POSTs to `/api/triggers/:triggerId/webhook` with `X-Valet-Trigger-Token: <token>`.
 2. Handler validates HTTP method (per `config.method`) and constant-time-compares the token against `triggers.webhook_token`.
 3. Per-trigger rate limit check (`config.rateLimit`, default 60/min) via the `trigger_webhook_rate` table.
-4. Builds a trigger envelope (`body`, lowercased `headers`, `query`, `rawQuery`) and applies `variableMapping` to derive input overrides.
+4. Builds a trigger envelope (`body`, lowercased `headers`, `query`, `rawQuery`) and applies `variableMapping` to derive the workflow's `trigger.data` payload.
 5. Idempotency key: `webhook:{triggerId}:{deliveryId or bodyHash}`.
 6. Concurrency check, then create execution + Cloudflare Workflow instance.
 
@@ -348,15 +348,15 @@ Failure anywhere in the pipeline leaves `cleanup_completed_at` null; the cron `s
 
 ## Workflow Definition (`dag/v1`)
 
-Definitions are objects with `version: 'dag/v1'`, optional `inputs` (typed input declarations), a `nodes` array, an `edges` array, and an optional `policy` block. See the `WorkflowDefinition` types in `@valet/shared`.
+Definitions are objects with `version: 'dag/v1'`, a `nodes` array, an `edges` array, and an optional `policy` block. Top-level `inputs` is not part of `dag/v1`; typed invocation parameters belong on the reserved `trigger` node's `dataSchema`. See the `WorkflowDefinition` types in `@valet/shared`.
 
-The reserved `trigger` node may declare `dataSchema`, a field map using the same `WorkflowInputDefinition` shape as top-level `inputs`. `dataSchema` describes the invocation payload available at `{{trigger.data}}`; the manual run dialog renders typed controls from this schema and sends the parsed values as `triggerData`. Schema fields also become template suggestions like `{{trigger.data.email}}` with scalar/array/object typing.
+The reserved `trigger` node may declare `dataSchema`, a field map using `WorkflowInputDefinition`. `dataSchema` describes the invocation payload available at `{{trigger.data}}`; manual runs and scheduled workflow triggers render typed controls from this schema and send the parsed values as `triggerData`. Schema fields also become template suggestions like `{{trigger.data.email}}` with scalar/array/object typing.
 
 ### Node Types
 
 | Type | Behavior |
 |------|----------|
-| `trigger` | Reserved source node for the invocation envelope. It returns `WorkflowTriggerPayload` as its node data and lets downstream nodes reference `{{nodes.trigger.data...}}`, `{{trigger...}}`, and declared `{{inputs...}}` values. Optional `dataSchema` documents and renders typed `trigger.data` fields. |
+| `trigger` | Reserved source node for the invocation envelope. It returns `WorkflowTriggerPayload` as its node data and lets downstream nodes reference `{{nodes.trigger.data...}}` and `{{trigger...}}`. Optional `dataSchema` documents, validates, and renders typed `trigger.data` fields. |
 | `llm` | LLM completion via the configured provider. Without `outputSchema`, returns `{ response: string }`; with `outputSchema`, returns the validated JSON object. NO_RETRY at the runtime level — author-driven retries via `step.do` config. |
 | `tool` | Worker-side integration action through the same pipeline agent tool calls use. Honors action policy (`allow` / `deny` / `require_approval`). |
 | `set` | Computes JSON values from templates and surfaces them to downstream nodes via `state.nodes`. |
@@ -378,7 +378,7 @@ The reserved `trigger` node may declare `dataSchema`, a field map using the same
 - Template parse for every author-supplied template field.
 - Per-node env checks for llm model availability (provider key configured).
 
-`validateInputs` separately validates typed input overrides against the workflow's declared `inputs` shape (type / enum / required / default). `trigger.dataSchema` is an authoring/UI contract for manual invocation and template suggestions; runtime webhook/schedule payloads are still accepted as delivered so external trigger shape drift does not block ingestion before workflow logic runs.
+`validateTriggerData` validates the invocation payload against the workflow trigger node's `dataSchema` (type / enum / required / default). If no `dataSchema` is declared, arbitrary trigger data is accepted. If a schema is declared, unknown trigger data fields are rejected so manual and scheduled runs cannot drift away from the declared contract.
 
 ## Runtime
 

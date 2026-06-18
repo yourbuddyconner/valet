@@ -75,7 +75,6 @@ function makeStep(): WorkflowStep {
 function args(node: ToolNode, triggerData: Record<string, unknown> = {}) {
   const fullState: WorkflowDagState = {
     trigger: { type: 'manual', timestamp: '2026-06-12T00:00:00.000Z', data: triggerData, metadata: {} },
-    inputs: {},
     nodes: {},
     skipped: {},
   };

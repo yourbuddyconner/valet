@@ -374,7 +374,7 @@ describe('workflowActions', () => {
         workflowName: 'Inspectable',
         status: 'completed',
         triggerMetadata: { source: 'test' },
-        inputs: { name: 'Conner' },
+        triggerData: { name: 'Conner' },
         outputs: { branch: 'normal_path' },
         mode: 'test',
         nodes: [{

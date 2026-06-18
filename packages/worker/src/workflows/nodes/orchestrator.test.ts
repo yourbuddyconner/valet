@@ -29,7 +29,6 @@ import type { WorkflowStep } from 'cloudflare:workers';
 function args(node: OrchestratorNode, triggerData: Record<string, unknown> = {}) {
   const fullState: WorkflowDagState = {
     trigger: { type: 'manual', timestamp: '2026-06-12T00:00:00.000Z', data: triggerData, metadata: {} },
-    inputs: {},
     nodes: {},
     skipped: {},
   };
@@ -42,7 +41,6 @@ function args(node: OrchestratorNode, triggerData: Record<string, unknown> = {})
       userId: 'user-1',
       trigger: fullState.trigger,
       definition: { version: 'dag/v1', nodes: [node], edges: [] },
-      inputs: {},
     } as WorkflowRunParams,
     env: {} as Env,
     // Passthrough step.do stub — supports the 2-arg (name, fn) and

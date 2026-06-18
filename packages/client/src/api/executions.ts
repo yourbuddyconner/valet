@@ -34,7 +34,7 @@ export interface Execution {
   status: 'pending' | 'running' | 'waiting_approval' | 'waiting_time' | 'cancelling' | 'completed' | 'failed' | 'cancelled';
   triggerType: 'webhook' | 'schedule' | 'manual';
   triggerMetadata: Record<string, unknown> | null;
-  inputs: Record<string, unknown> | null;
+  triggerData: Record<string, unknown> | null;
   outputs: Record<string, unknown> | null;
   error: string | null;
   startedAt: string;

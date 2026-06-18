@@ -64,8 +64,8 @@ interface TriggerFormState {
   scheduleTarget: ScheduleTarget;
   schedulePrompt: string;
   // PATCH replaces config wholesale, so schedule run parameters are
-  // stashed here and emitted as config.inputs on save.
-  scheduleInputs?: Record<string, unknown>;
+  // stashed here and emitted as config.triggerData on save.
+  scheduleTriggerData?: Record<string, unknown>;
 }
 
 const DEFAULT_FORM: TriggerFormState = {
@@ -125,7 +125,7 @@ function formFromTrigger(trigger: Trigger): TriggerFormState {
       scheduleTimezone: trigger.config.timezone || 'UTC',
       scheduleTarget: trigger.config.target || 'workflow',
       schedulePrompt: trigger.config.prompt || '',
-      scheduleInputs: trigger.config.inputs,
+      scheduleTriggerData: trigger.config.triggerData,
     };
   }
 
@@ -152,9 +152,9 @@ function toConfig(form: TriggerFormState): TriggerConfig {
       timezone: form.scheduleTimezone.trim() || undefined,
       target: form.scheduleTarget,
       prompt: form.scheduleTarget === 'orchestrator' ? form.schedulePrompt.trim() : undefined,
-      // Static workflow input overrides for every scheduled run.
-      ...(form.scheduleInputs && Object.keys(form.scheduleInputs).length > 0
-        ? { inputs: form.scheduleInputs }
+      // Static trigger payload for every scheduled workflow run.
+      ...(form.scheduleTriggerData && Object.keys(form.scheduleTriggerData).length > 0
+        ? { triggerData: form.scheduleTriggerData }
         : {}),
     };
   }
@@ -265,15 +265,16 @@ export function TriggerList() {
       return;
     }
 
-    setScheduleInputFields(createWorkflowInputFields(scheduleDraftData?.draft?.inputs, form.scheduleInputs));
+    const triggerNode = scheduleDraftData?.draft?.nodes.find((node) => node.type === 'trigger');
+    setScheduleInputFields(createWorkflowInputFields(triggerNode?.dataSchema, form.scheduleTriggerData));
     setScheduleInputErrors({});
   }, [
-    form.scheduleInputs,
+    form.scheduleTriggerData,
     form.scheduleTarget,
     form.type,
     form.workflowId,
     open,
-    scheduleDraftData?.draft?.inputs,
+    scheduleDraftData?.draft,
   ]);
 
   const filtered = React.useMemo(() => {
@@ -367,7 +368,7 @@ export function TriggerList() {
           setScheduleInputErrors(parsedInputs.fieldErrors);
           return;
         }
-        formForSave = { ...form, scheduleInputs: parsedInputs.inputs };
+        formForSave = { ...form, scheduleTriggerData: parsedInputs.inputs };
       }
 
       const payload: CreateTriggerRequest = {
@@ -457,7 +458,6 @@ export function TriggerList() {
       const result = await runTrigger.mutateAsync({
         triggerId: manualTrigger.id,
         triggerData: payload.triggerData,
-        inputs: payload.inputs,
       });
       setManualTrigger(null);
       toastSuccess('Trigger dispatched', result.message);

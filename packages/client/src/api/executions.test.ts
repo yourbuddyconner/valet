@@ -16,7 +16,7 @@ const baseExecution: Execution = {
   status: 'running',
   triggerType: 'manual',
   triggerMetadata: null,
-  inputs: null,
+  triggerData: null,
   outputs: null,
   error: null,
   startedAt: '2026-06-18T00:00:00.000Z',

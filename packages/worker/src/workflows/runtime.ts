@@ -78,7 +78,6 @@ export async function runDag(
   const compiled = compile(def);
   const state: WorkflowDagState = {
     trigger: params.trigger,
-    inputs: params.inputs,
     nodes: {},
     skipped: {},
   };

@@ -659,11 +659,9 @@ async function dispatchScheduledWorkflows(event: ScheduledController, env: Env):
       const { dispatchWorkflowExecution } = await import('./services/workflow-dispatch.js');
       let result: Awaited<ReturnType<typeof dispatchWorkflowExecution>>;
       try {
-        // Static `inputs` from schedule config flows through as
-        // inputOverrides so workflows with typed inputs validate cleanly.
-        // Without this, validateInputs rejects with invalid_inputs and the
-        // tick is burned permanently (see isTransientDispatchReason above).
-        const scheduledInputs = config.inputs ?? undefined;
+        // Static trigger data from schedule config is validated against the
+        // workflow trigger node's dataSchema before the run starts.
+        const scheduledTriggerData = config.triggerData ?? {};
         result = await dispatchWorkflowExecution(env, {
           workflowId: row.workflow_id,
           user: { id: row.user_id },
@@ -671,12 +669,9 @@ async function dispatchScheduledWorkflows(event: ScheduledController, env: Env):
             type: 'schedule',
             triggerId: row.trigger_id,
             timestamp: dispatchTime.toISOString(),
-            data: scheduledInputs ?? {},
+            data: scheduledTriggerData,
             metadata: { cron: config.cron, timezone, tickBucket: bucket, eventCron: event.cron },
           },
-          ...(scheduledInputs && Object.keys(scheduledInputs).length > 0
-            ? { inputOverrides: scheduledInputs }
-            : {}),
           idempotencyKey: `schedule:${row.trigger_id}:${bucket}`,
         });
       } catch (err) {

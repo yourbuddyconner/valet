@@ -92,7 +92,7 @@ describe('runTrigger', () => {
     }));
   });
 
-  it('passes explicit trigger data and input overrides separately for workflow triggers', async () => {
+  it('passes explicit trigger data for workflow triggers', async () => {
     const env = { DB: {} } as Parameters<typeof runTrigger>[0];
     getTriggerForRunMock.mockResolvedValue({
       wf_id: 'workflow-1',
@@ -105,14 +105,12 @@ describe('runTrigger', () => {
     await runTrigger(env, 'trigger-1', 'user-1', {
       clientRequestId: 'manual-run',
       triggerData: { email: 'conner@example.com', raw: { plan: 'enterprise' } },
-      inputs: { plan: 'enterprise' },
     }, 'http://worker.test');
 
     expect(dispatchWorkflowExecutionMock).toHaveBeenCalledWith(env, expect.objectContaining({
       trigger: expect.objectContaining({
         data: { email: 'conner@example.com', raw: { plan: 'enterprise' } },
       }),
-      inputOverrides: { plan: 'enterprise' },
     }));
   });
 });

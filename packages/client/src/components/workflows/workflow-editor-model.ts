@@ -163,7 +163,7 @@ export function buildToolCatalogIndex(actions: ToolCatalogAction[]): {
 }
 
 export function deriveWorkflowOutputSources(
-  definition: Pick<WorkflowDefinition, 'nodes' | 'inputs'>,
+  definition: Pick<WorkflowDefinition, 'nodes'>,
   actions: ToolCatalogAction[],
 ): WorkflowOutputSource[] {
   const catalogIndex = buildToolCatalogIndex(actions);
@@ -436,7 +436,7 @@ export function definitionToFlow(definition: WorkflowDefinition): WorkflowFlowSt
 
 export function flowToDefinition(
   flow: WorkflowFlowState,
-  previous?: Pick<WorkflowDefinition, 'inputs' | 'policy'>,
+  previous?: Pick<WorkflowDefinition, 'policy'>,
 ): WorkflowDefinition {
   const ui: WorkflowEditorState = {
     nodes: Object.fromEntries(
@@ -447,7 +447,6 @@ export function flowToDefinition(
 
   return {
     version: 'dag/v1',
-    ...(previous?.inputs ? { inputs: previous.inputs } : {}),
     nodes: flow.nodes.map((node) => ({ ...node.data.node, id: node.id })),
     edges: flow.edges.map(flowEdgeToWorkflowEdge),
     ...(previous?.policy ? { policy: previous.policy } : {}),
@@ -723,7 +722,7 @@ function summarizeNode(node: WorkflowNode): string {
     case 'llm':
       return trimSummary(node.prompt || node.model || 'No prompt configured');
     case 'trigger':
-      return 'Runtime trigger payload and declared workflow inputs';
+      return 'Runtime trigger payload and declared parameters';
     case 'tool':
       return trimSummary(node.service && node.action ? `${node.service}.${node.action}` : 'No action configured');
     case 'if':
@@ -745,7 +744,7 @@ function summarizeNode(node: WorkflowNode): string {
   }
 }
 
-function deriveTriggerOutputSources(definition: Pick<WorkflowDefinition, 'nodes' | 'inputs'>): WorkflowOutputSource[] {
+function deriveTriggerOutputSources(definition: Pick<WorkflowDefinition, 'nodes'>): WorkflowOutputSource[] {
   const triggerNode = definition.nodes.find((node) => node.type === 'trigger');
   if (!triggerNode) return [];
 
@@ -792,17 +791,6 @@ function deriveTriggerOutputSources(definition: Pick<WorkflowDefinition, 'nodes'
       path: ['trigger', 'data', name],
       label: `Trigger data ${name}`,
       valueType: workflowInputTypeToOutputType(field.type),
-    }));
-  }
-
-  for (const [name, input] of Object.entries(definition.inputs ?? {})) {
-    sources.push(createManualWorkflowOutputSource({
-      nodeId: 'trigger',
-      nodeLabel: 'Trigger',
-      actionName: 'Workflow input',
-      path: ['inputs', name],
-      label: `Trigger input ${name}`,
-      valueType: workflowInputTypeToOutputType(input.type),
     }));
   }
 

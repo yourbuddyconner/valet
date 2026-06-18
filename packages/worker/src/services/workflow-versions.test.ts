@@ -19,7 +19,6 @@ const WORKFLOW_ID = 'wv-wf';
 function makeDef(overrides?: Partial<WorkflowDefinition>): WorkflowDefinition {
   return {
     version: 'dag/v1',
-    inputs: {},
     nodes: [
       { id: 'start', type: 'set', values: { x: 1 } },
       { id: 'stop', type: 'stop' },

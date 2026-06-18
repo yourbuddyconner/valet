@@ -9,14 +9,12 @@ export interface ManualWorkflowInputField {
 export interface ManualWorkflowForm {
   triggerDataText: string;
   triggerDataFields: Record<string, ManualWorkflowInputField>;
-  inputs: Record<string, ManualWorkflowInputField>;
 }
 
 export type ManualWorkflowSubmission =
   | {
       ok: true;
       triggerData: Record<string, unknown>;
-      inputs: Record<string, unknown>;
     }
   | {
       ok: false;
@@ -39,7 +37,6 @@ export function createManualWorkflowForm(definition: WorkflowDefinition | null):
   return {
     triggerDataText: '{\n  \n}',
     triggerDataFields,
-    inputs: createWorkflowInputFields(definition?.inputs),
   };
 }
 
@@ -50,14 +47,6 @@ export function parseManualWorkflowSubmission(form: ManualWorkflowForm): ManualW
     ? parseTriggerDataFields(triggerDataFields, fieldErrors)
     : parseRawTriggerData(form.triggerDataText, fieldErrors);
 
-  const inputResult = parseWorkflowInputFields(form.inputs);
-  let inputs: Record<string, unknown> = {};
-  if (!inputResult.ok) {
-    Object.assign(fieldErrors, inputResult.fieldErrors);
-  } else {
-    inputs = inputResult.inputs;
-  }
-
   if (Object.keys(fieldErrors).length > 0) {
     return { ok: false, fieldErrors };
   }
@@ -65,7 +54,6 @@ export function parseManualWorkflowSubmission(form: ManualWorkflowForm): ManualW
   return {
     ok: true,
     triggerData,
-    inputs,
   };
 }
 
