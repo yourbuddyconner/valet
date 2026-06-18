@@ -19,6 +19,12 @@ import {
   ManualWorkflowDialog,
   type ManualWorkflowPayload,
 } from '@/components/workflows/manual-workflow-dialog';
+import {
+  createWorkflowInputFields,
+  parseWorkflowInputFields,
+  type ManualWorkflowInputField,
+} from '@/components/workflows/manual-workflow-dialog-model';
+import { ScheduledWorkflowInputs } from '@/components/workflows/scheduled-workflow-inputs';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
@@ -57,9 +63,8 @@ interface TriggerFormState {
   scheduleTimezone: string;
   scheduleTarget: ScheduleTarget;
   schedulePrompt: string;
-  // Round-trip-only: this editor has no UI for schedule inputs yet, but
-  // PATCH replaces config wholesale, so we stash and re-emit them on
-  // save to avoid erasing inputs that were set via the API.
+  // PATCH replaces config wholesale, so schedule run parameters are
+  // stashed here and emitted as config.inputs on save.
   scheduleInputs?: Record<string, unknown>;
 }
 
@@ -147,8 +152,7 @@ function toConfig(form: TriggerFormState): TriggerConfig {
       timezone: form.scheduleTimezone.trim() || undefined,
       target: form.scheduleTarget,
       prompt: form.scheduleTarget === 'orchestrator' ? form.schedulePrompt.trim() : undefined,
-      // PATCH replaces config wholesale; preserve existing inputs the trigger
-      // was created with so an edit doesn't silently erase them.
+      // Static workflow input overrides for every scheduled run.
       ...(form.scheduleInputs && Object.keys(form.scheduleInputs).length > 0
         ? { inputs: form.scheduleInputs }
         : {}),
@@ -168,6 +172,10 @@ function canSelectOrchestratorTarget(type: TriggerType): boolean {
 
 function shouldIncludeWorkflowId(form: TriggerFormState): boolean {
   return getFormTarget(form) === 'workflow';
+}
+
+function shouldEditScheduleInputs(form: TriggerFormState): boolean {
+  return form.type === 'schedule' && getFormTarget(form) === 'workflow' && Boolean(form.workflowId);
 }
 
 function validateForm(form: TriggerFormState): string | null {
@@ -227,6 +235,8 @@ export function TriggerList() {
   const [editingTrigger, setEditingTrigger] = React.useState<Trigger | null>(null);
   const [form, setForm] = React.useState<TriggerFormState>(DEFAULT_FORM);
   const [formError, setFormError] = React.useState<string | null>(null);
+  const [scheduleInputFields, setScheduleInputFields] = React.useState<Record<string, ManualWorkflowInputField>>({});
+  const [scheduleInputErrors, setScheduleInputErrors] = React.useState<Record<string, string>>({});
   const [manualTrigger, setManualTrigger] = React.useState<Trigger | null>(null);
   // Webhook-token reveal state. Populated from the create/PATCH response
   // when the server mints a token (new webhook trigger OR transition
@@ -241,6 +251,30 @@ export function TriggerList() {
   const workflows = workflowsData?.workflows ?? [];
   const manualWorkflowId = manualTrigger?.workflowId ?? '';
   const { data: manualDraftData, isLoading: manualDraftLoading } = useWorkflowDraft(manualWorkflowId);
+  const scheduleWorkflowId = open && shouldEditScheduleInputs(form) ? form.workflowId : '';
+  const { data: scheduleDraftData, isLoading: scheduleDraftLoading } = useWorkflowDraft(scheduleWorkflowId);
+  const scheduleInputFieldList = React.useMemo(
+    () => Object.values(scheduleInputFields),
+    [scheduleInputFields],
+  );
+
+  React.useEffect(() => {
+    if (!open || !shouldEditScheduleInputs(form)) {
+      setScheduleInputFields({});
+      setScheduleInputErrors({});
+      return;
+    }
+
+    setScheduleInputFields(createWorkflowInputFields(scheduleDraftData?.draft?.inputs, form.scheduleInputs));
+    setScheduleInputErrors({});
+  }, [
+    form.scheduleInputs,
+    form.scheduleTarget,
+    form.type,
+    form.workflowId,
+    open,
+    scheduleDraftData?.draft?.inputs,
+  ]);
 
   const filtered = React.useMemo(() => {
     let result = triggers;
@@ -261,6 +295,8 @@ export function TriggerList() {
   const resetForm = React.useCallback(() => {
     setForm(DEFAULT_FORM);
     setFormError(null);
+    setScheduleInputFields({});
+    setScheduleInputErrors({});
     setEditingTrigger(null);
   }, []);
 
@@ -295,6 +331,21 @@ export function TriggerList() {
     setFormError(null);
   };
 
+  const onScheduleInputChange = (name: string, value: string | boolean) => {
+    setScheduleInputFields((current) => ({
+      ...current,
+      [name]: {
+        ...current[name]!,
+        value,
+      },
+    }));
+    setScheduleInputErrors((current) => {
+      const next = { ...current };
+      delete next[name];
+      return next;
+    });
+  };
+
   const onSave = async (event: React.FormEvent) => {
     event.preventDefault();
     const validationError = validateForm(form);
@@ -304,11 +355,26 @@ export function TriggerList() {
     }
 
     try {
+      let formForSave = form;
+      if (shouldEditScheduleInputs(form)) {
+        if (scheduleDraftLoading) {
+          setFormError('Workflow parameters are still loading.');
+          return;
+        }
+
+        const parsedInputs = parseWorkflowInputFields(scheduleInputFields);
+        if (!parsedInputs.ok) {
+          setScheduleInputErrors(parsedInputs.fieldErrors);
+          return;
+        }
+        formForSave = { ...form, scheduleInputs: parsedInputs.inputs };
+      }
+
       const payload: CreateTriggerRequest = {
-        name: form.name.trim(),
-        enabled: form.enabled,
-        config: toConfig(form),
-        ...(shouldIncludeWorkflowId(form) && form.workflowId ? { workflowId: form.workflowId } : {}),
+        name: formForSave.name.trim(),
+        enabled: formForSave.enabled,
+        config: toConfig(formForSave),
+        ...(shouldIncludeWorkflowId(formForSave) && formForSave.workflowId ? { workflowId: formForSave.workflowId } : {}),
       };
 
       if (editingTrigger) {
@@ -316,10 +382,10 @@ export function TriggerList() {
           triggerId: editingTrigger.id,
           data: {
             ...payload,
-            workflowId: shouldIncludeWorkflowId(form) ? form.workflowId || null : null,
+            workflowId: shouldIncludeWorkflowId(formForSave) ? formForSave.workflowId || null : null,
           },
         });
-        toastSuccess('Trigger updated', `${form.name.trim()} was updated.`);
+        toastSuccess('Trigger updated', `${formForSave.name.trim()} was updated.`);
         if (result.webhookToken) {
           // Server minted a fresh token because PATCH transitioned the
           // trigger to webhook. Show the reveal dialog INSTEAD of closing
@@ -334,7 +400,7 @@ export function TriggerList() {
         }
       } else {
         const result = await createTrigger.mutateAsync(payload);
-        toastSuccess('Trigger created', `${form.name.trim()} was created.`);
+        toastSuccess('Trigger created', `${formForSave.name.trim()} was created.`);
         if (result.webhookToken) {
           setRevealedToken({
             token: result.webhookToken,
@@ -763,6 +829,14 @@ export function TriggerList() {
                       />
                     </div>
                   </div>
+                  {shouldEditScheduleInputs(form) && (
+                    <ScheduledWorkflowInputs
+                      fields={scheduleInputFieldList}
+                      fieldErrors={scheduleInputErrors}
+                      isLoading={scheduleDraftLoading}
+                      onChange={onScheduleInputChange}
+                    />
+                  )}
                   {getFormTarget(form) === 'orchestrator' && (
                     <div>
                       <label className="mb-1.5 block text-sm font-medium text-neutral-700 dark:text-neutral-300">

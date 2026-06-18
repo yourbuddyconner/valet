@@ -214,7 +214,7 @@ export function ManualWorkflowDialog({
   );
 }
 
-function ManualWorkflowInputControl({
+export function ManualWorkflowInputControl({
   field,
   error,
   onChange,

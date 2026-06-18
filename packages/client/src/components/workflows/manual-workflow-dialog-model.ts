@@ -23,6 +23,8 @@ export type ManualWorkflowSubmission =
       fieldErrors: Record<string, string>;
     };
 
+export type WorkflowInputDefinitions = Record<string, WorkflowInputDefinition>;
+
 export function createManualWorkflowForm(definition: WorkflowDefinition | null): ManualWorkflowForm {
   const triggerDataFields: Record<string, ManualWorkflowInputField> = {};
   const triggerNode = definition?.nodes.find((node) => node.type === 'trigger');
@@ -34,19 +36,10 @@ export function createManualWorkflowForm(definition: WorkflowDefinition | null):
     };
   }
 
-  const fields: Record<string, ManualWorkflowInputField> = {};
-  for (const [name, spec] of Object.entries(definition?.inputs ?? {})) {
-    fields[name] = {
-      name,
-      spec,
-      value: createInitialInputValue(spec),
-    };
-  }
-
   return {
     triggerDataText: '{\n  \n}',
     triggerDataFields,
-    inputs: fields,
+    inputs: createWorkflowInputFields(definition?.inputs),
   };
 }
 
@@ -57,8 +50,56 @@ export function parseManualWorkflowSubmission(form: ManualWorkflowForm): ManualW
     ? parseTriggerDataFields(triggerDataFields, fieldErrors)
     : parseRawTriggerData(form.triggerDataText, fieldErrors);
 
+  const inputResult = parseWorkflowInputFields(form.inputs);
+  let inputs: Record<string, unknown> = {};
+  if (!inputResult.ok) {
+    Object.assign(fieldErrors, inputResult.fieldErrors);
+  } else {
+    inputs = inputResult.inputs;
+  }
+
+  if (Object.keys(fieldErrors).length > 0) {
+    return { ok: false, fieldErrors };
+  }
+
+  return {
+    ok: true,
+    triggerData,
+    inputs,
+  };
+}
+
+export function createWorkflowInputFields(
+  definitions: WorkflowInputDefinitions | undefined,
+  values: Record<string, unknown> = {},
+): Record<string, ManualWorkflowInputField> {
+  const fields: Record<string, ManualWorkflowInputField> = {};
+  for (const [name, spec] of Object.entries(definitions ?? {})) {
+    fields[name] = {
+      name,
+      spec,
+      value: createInitialInputValue(spec, values[name]),
+    };
+  }
+  return fields;
+}
+
+export type WorkflowInputParseResult =
+  | {
+      ok: true;
+      inputs: Record<string, unknown>;
+    }
+  | {
+      ok: false;
+      fieldErrors: Record<string, string>;
+    };
+
+export function parseWorkflowInputFields(
+  fields: Record<string, ManualWorkflowInputField>,
+): WorkflowInputParseResult {
+  const fieldErrors: Record<string, string> = {};
   const inputs: Record<string, unknown> = {};
-  for (const field of Object.values(form.inputs)) {
+  for (const field of Object.values(fields)) {
     const parsed = parseInputField(field);
     if (!parsed.ok) {
       fieldErrors[field.name] = parsed.message;
@@ -73,27 +114,25 @@ export function parseManualWorkflowSubmission(form: ManualWorkflowForm): ManualW
     return { ok: false, fieldErrors };
   }
 
-  return {
-    ok: true,
-    triggerData,
-    inputs,
-  };
+  return { ok: true, inputs };
 }
 
-function createInitialInputValue(spec: WorkflowInputDefinition): string | boolean {
+function createInitialInputValue(spec: WorkflowInputDefinition, override?: unknown): string | boolean {
   if (spec.type === 'boolean') {
+    if (typeof override === 'boolean') return override;
     return typeof spec.default === 'boolean' ? spec.default : false;
   }
 
-  if (spec.default === undefined || spec.default === null) {
+  const value = override ?? spec.default;
+  if (value === undefined || value === null) {
     return '';
   }
 
   if (spec.type === 'object' || spec.type === 'array') {
-    return JSON.stringify(spec.default, null, 2);
+    return JSON.stringify(value, null, 2);
   }
 
-  return String(spec.default);
+  return String(value);
 }
 
 function parseRawTriggerData(text: string, fieldErrors: Record<string, string>): Record<string, unknown> {

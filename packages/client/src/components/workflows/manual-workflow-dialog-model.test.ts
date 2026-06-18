@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest';
 import type { WorkflowDefinition } from '@valet/shared';
 import {
   createManualWorkflowForm,
+  createWorkflowInputFields,
   parseManualWorkflowSubmission,
+  parseWorkflowInputFields,
 } from './manual-workflow-dialog-model';
 
 describe('manual workflow dialog model', () => {
@@ -32,6 +34,47 @@ describe('manual workflow dialog model', () => {
       config: { value: '{\n  "region": "us-east-1"\n}' },
       tags: { value: '[\n  "vip"\n]' },
       optional: { value: '' },
+    });
+  });
+
+  it('creates workflow input fields from existing scheduled trigger values', () => {
+    const fields = createWorkflowInputFields(definition.inputs, {
+      name: 'Scheduled run',
+      priority: 8,
+      approved: false,
+      config: { region: 'eu-west-1' },
+      tags: ['nightly', 'ops'],
+    });
+
+    expect(fields).toMatchObject({
+      name: { value: 'Scheduled run' },
+      priority: { value: '8' },
+      approved: { value: false },
+      config: { value: '{\n  "region": "eu-west-1"\n}' },
+      tags: { value: '[\n  "nightly",\n  "ops"\n]' },
+      optional: { value: '' },
+    });
+  });
+
+  it('parses workflow input fields without trigger data', () => {
+    const fields = createWorkflowInputFields(definition.inputs);
+    fields.name.value = 'Scheduled run';
+    fields.priority.value = '8';
+    fields.approved.value = false;
+    fields.config.value = '{ "region": "eu-west-1" }';
+    fields.tags.value = '["nightly", "ops"]';
+
+    const parsed = parseWorkflowInputFields(fields);
+
+    expect(parsed).toEqual({
+      ok: true,
+      inputs: {
+        name: 'Scheduled run',
+        priority: 8,
+        approved: false,
+        config: { region: 'eu-west-1' },
+        tags: ['nightly', 'ops'],
+      },
     });
   });
 
