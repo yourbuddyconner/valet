@@ -298,6 +298,47 @@ describe('workflow editor model', () => {
     ]));
   });
 
+  it('derives trigger data field sources from the trigger data schema', () => {
+    const definition: WorkflowDefinition = {
+      version: 'dag/v1',
+      nodes: [
+        {
+          id: 'trigger',
+          type: 'trigger',
+          dataSchema: {
+            email: { type: 'string', description: 'Customer email' },
+            issue_ids: { type: 'array', description: 'Issue ids' },
+            profile: { type: 'object', description: 'Customer profile' },
+          },
+        },
+      ],
+      edges: [],
+    };
+
+    const sources = deriveWorkflowOutputSources(definition, []);
+
+    expect(sources).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        nodeId: 'trigger',
+        label: 'Trigger data email',
+        expression: '{{trigger.data.email}}',
+        valueType: 'scalar',
+      }),
+      expect.objectContaining({
+        nodeId: 'trigger',
+        label: 'Trigger data issue_ids',
+        expression: '{{trigger.data.issue_ids}}',
+        valueType: 'array',
+      }),
+      expect.objectContaining({
+        nodeId: 'trigger',
+        label: 'Trigger data profile',
+        expression: '{{trigger.data.profile}}',
+        valueType: 'object',
+      }),
+    ]));
+  });
+
   it('updates typed node parameters and refreshes card summary', () => {
     const node = {
       id: 'llm-1',

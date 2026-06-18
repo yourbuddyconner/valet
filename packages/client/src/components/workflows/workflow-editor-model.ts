@@ -704,7 +704,8 @@ function summarizeNode(node: WorkflowNode): string {
 }
 
 function deriveTriggerOutputSources(definition: Pick<WorkflowDefinition, 'nodes' | 'inputs'>): WorkflowOutputSource[] {
-  if (!definition.nodes.some((node) => node.type === 'trigger')) return [];
+  const triggerNode = definition.nodes.find((node) => node.type === 'trigger');
+  if (!triggerNode) return [];
 
   const sources: WorkflowOutputSource[] = [
     createManualWorkflowOutputSource({
@@ -740,6 +741,17 @@ function deriveTriggerOutputSources(definition: Pick<WorkflowDefinition, 'nodes'
       valueType: 'scalar',
     }),
   ];
+
+  for (const [name, field] of Object.entries(triggerNode.dataSchema ?? {})) {
+    sources.push(createManualWorkflowOutputSource({
+      nodeId: 'trigger',
+      nodeLabel: 'Trigger',
+      actionName: 'Trigger data',
+      path: ['trigger', 'data', name],
+      label: `Trigger data ${name}`,
+      valueType: workflowInputTypeToOutputType(field.type),
+    }));
+  }
 
   for (const [name, input] of Object.entries(definition.inputs ?? {})) {
     sources.push(createManualWorkflowOutputSource({

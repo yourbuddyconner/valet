@@ -51,6 +51,8 @@ export function ManualWorkflowDialog({
     setFieldErrors({});
   }, [definition, open]);
 
+  const triggerDataFields = React.useMemo(() => Object.values(form.triggerDataFields), [form.triggerDataFields]);
+  const hasTriggerDataFields = triggerDataFields.length > 0;
   const inputFields = React.useMemo(() => Object.values(form.inputs), [form.inputs]);
   const hasInputs = inputFields.length > 0;
 
@@ -68,6 +70,20 @@ export function ManualWorkflowDialog({
   function updateTriggerDataText(value: string) {
     setForm((current) => ({ ...current, triggerDataText: value }));
     setFieldErrors((current) => omitKey(current, 'triggerData'));
+  }
+
+  function updateTriggerDataFieldValue(name: string, value: string | boolean) {
+    setForm((current) => ({
+      ...current,
+      triggerDataFields: {
+        ...current.triggerDataFields,
+        [name]: {
+          ...current.triggerDataFields[name]!,
+          value,
+        },
+      },
+    }));
+    setFieldErrors((current) => omitKey(current, `triggerData.${name}`));
   }
 
   function updateInputValue(name: string, value: string | boolean) {
@@ -100,32 +116,47 @@ export function ManualWorkflowDialog({
           <div className="min-h-0 flex-1 space-y-5 overflow-auto px-6 py-5">
             <section className="space-y-2">
               <div className="flex items-center justify-between gap-3">
-                <label htmlFor="manual-trigger-data" className="text-sm font-medium text-neutral-800 dark:text-neutral-200">
-                  Trigger payload
-                </label>
+                <h3 className="text-sm font-medium text-neutral-800 dark:text-neutral-200">
+                  Trigger data
+                </h3>
                 <span className="font-mono text-xs text-neutral-500">trigger.data</span>
               </div>
-              <textarea
-                id="manual-trigger-data"
-                value={form.triggerDataText}
-                onChange={(event) => updateTriggerDataText(event.target.value)}
-                rows={7}
-                spellCheck={false}
-                className={cn(
-                  'w-full resize-y rounded-md border bg-white px-3 py-2 font-mono text-sm text-neutral-900',
-                  'focus:outline-none focus:ring-2 focus:ring-neutral-400',
-                  'dark:bg-neutral-950 dark:text-neutral-100 dark:focus:ring-neutral-600',
-                  fieldErrors.triggerData
-                    ? 'border-red-300 dark:border-red-700'
-                    : 'border-neutral-200 dark:border-neutral-700',
-                )}
-              />
-              {fieldErrors.triggerData ? (
-                <p className="text-sm text-red-600 dark:text-red-400">{fieldErrors.triggerData}</p>
+              {hasTriggerDataFields ? (
+                <div className="space-y-3">
+                  {triggerDataFields.map((field) => (
+                    <ManualWorkflowInputControl
+                      key={field.name}
+                      field={field}
+                      error={fieldErrors[`triggerData.${field.name}`]}
+                      onChange={(value) => updateTriggerDataFieldValue(field.name, value)}
+                    />
+                  ))}
+                </div>
               ) : (
-                <p className="text-xs text-neutral-500">
-                  This becomes available as <span className="font-mono">{'{{trigger.data}}'}</span>.
-                </p>
+                <>
+                  <textarea
+                    id="manual-trigger-data"
+                    value={form.triggerDataText}
+                    onChange={(event) => updateTriggerDataText(event.target.value)}
+                    rows={7}
+                    spellCheck={false}
+                    className={cn(
+                      'w-full resize-y rounded-md border bg-white px-3 py-2 font-mono text-sm text-neutral-900',
+                      'focus:outline-none focus:ring-2 focus:ring-neutral-400',
+                      'dark:bg-neutral-950 dark:text-neutral-100 dark:focus:ring-neutral-600',
+                      fieldErrors.triggerData
+                        ? 'border-red-300 dark:border-red-700'
+                        : 'border-neutral-200 dark:border-neutral-700',
+                    )}
+                  />
+                  {fieldErrors.triggerData ? (
+                    <p className="text-sm text-red-600 dark:text-red-400">{fieldErrors.triggerData}</p>
+                  ) : (
+                    <p className="text-xs text-neutral-500">
+                      This becomes available as <span className="font-mono">{'{{trigger.data}}'}</span>.
+                    </p>
+                  )}
+                </>
               )}
             </section>
 

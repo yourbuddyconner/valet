@@ -24,6 +24,7 @@ describe('manual workflow dialog model', () => {
     const form = createManualWorkflowForm(definition);
 
     expect(form.triggerDataText).toBe('{\n  \n}');
+    expect(form.triggerDataFields).toEqual({});
     expect(form.inputs).toMatchObject({
       name: { value: 'Conner' },
       priority: { value: '3' },
@@ -31,6 +32,67 @@ describe('manual workflow dialog model', () => {
       config: { value: '{\n  "region": "us-east-1"\n}' },
       tags: { value: '[\n  "vip"\n]' },
       optional: { value: '' },
+    });
+  });
+
+  it('creates typed trigger data fields from the trigger data schema', () => {
+    const form = createManualWorkflowForm({
+      version: 'dag/v1',
+      nodes: [
+        {
+          id: 'trigger',
+          type: 'trigger',
+          dataSchema: {
+            email: { type: 'string', required: true, description: 'Customer email' },
+            plan: { type: 'string', default: 'free', enum: ['free', 'enterprise'] },
+            retries: { type: 'number', default: 2 },
+            metadata: { type: 'object', default: { source: 'website' } },
+          },
+        },
+      ],
+      edges: [],
+    });
+
+    expect(form.triggerDataText).toBe('{\n  \n}');
+    expect(form.triggerDataFields).toMatchObject({
+      email: { value: '' },
+      plan: { value: 'free' },
+      retries: { value: '2' },
+      metadata: { value: '{\n  "source": "website"\n}' },
+    });
+  });
+
+  it('parses typed trigger data fields into triggerData', () => {
+    const form = createManualWorkflowForm({
+      version: 'dag/v1',
+      nodes: [
+        {
+          id: 'trigger',
+          type: 'trigger',
+          dataSchema: {
+            email: { type: 'string', required: true },
+            plan: { type: 'string', default: 'free' },
+            seats: { type: 'number' },
+            approved: { type: 'boolean', default: true },
+          },
+        },
+      ],
+      edges: [],
+    });
+    form.triggerDataFields.email.value = 'conner@example.com';
+    form.triggerDataFields.seats.value = '12';
+
+    const parsed = parseManualWorkflowSubmission(form);
+
+    expect(parsed).toEqual({
+      ok: true,
+      triggerData: {
+        email: 'conner@example.com',
+        plan: 'free',
+        seats: 12,
+        approved: true,
+      },
+      inputs: {},
     });
   });
 
@@ -52,6 +114,38 @@ describe('manual workflow dialog model', () => {
         approved: true,
         config: { region: 'eu-west-1' },
         tags: ['enterprise', 'trial'],
+      },
+    });
+  });
+
+  it('reports typed trigger data field errors', () => {
+    const form = createManualWorkflowForm({
+      version: 'dag/v1',
+      nodes: [
+        {
+          id: 'trigger',
+          type: 'trigger',
+          dataSchema: {
+            email: { type: 'string', required: true },
+            count: { type: 'number' },
+            profile: { type: 'object' },
+          },
+        },
+      ],
+      edges: [],
+    });
+    form.triggerDataFields.email.value = '';
+    form.triggerDataFields.count.value = 'lots';
+    form.triggerDataFields.profile.value = '[]';
+
+    const parsed = parseManualWorkflowSubmission(form);
+
+    expect(parsed).toEqual({
+      ok: false,
+      fieldErrors: {
+        'triggerData.email': 'Required input is missing.',
+        'triggerData.count': 'Enter a valid number.',
+        'triggerData.profile': 'Enter a JSON object.',
       },
     });
   });

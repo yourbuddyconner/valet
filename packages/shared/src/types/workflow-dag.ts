@@ -67,6 +67,7 @@ export type WorkflowNode =
 export interface TriggerNode {
   id: string;
   type: 'trigger';
+  dataSchema?: Record<string, WorkflowInputDefinition>;
 }
 
 export interface LlmNode {

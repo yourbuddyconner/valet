@@ -349,11 +349,13 @@ Failure anywhere in the pipeline leaves `cleanup_completed_at` null; the cron `s
 
 Definitions are objects with `version: 'dag/v1'`, optional `inputs` (typed input declarations), a `nodes` array, an `edges` array, and an optional `policy` block. See the `WorkflowDefinition` types in `@valet/shared`.
 
+The reserved `trigger` node may declare `dataSchema`, a field map using the same `WorkflowInputDefinition` shape as top-level `inputs`. `dataSchema` describes the invocation payload available at `{{trigger.data}}`; the manual run dialog renders typed controls from this schema and sends the parsed values as `triggerData`. Schema fields also become template suggestions like `{{trigger.data.email}}` with scalar/array/object typing.
+
 ### Node Types
 
 | Type | Behavior |
 |------|----------|
-| `trigger` | Reserved source node for the invocation envelope. It returns `WorkflowTriggerPayload` as its node data and lets downstream nodes reference `{{nodes.trigger.data...}}`, `{{trigger...}}`, and declared `{{inputs...}}` values. |
+| `trigger` | Reserved source node for the invocation envelope. It returns `WorkflowTriggerPayload` as its node data and lets downstream nodes reference `{{nodes.trigger.data...}}`, `{{trigger...}}`, and declared `{{inputs...}}` values. Optional `dataSchema` documents and renders typed `trigger.data` fields. |
 | `llm` | LLM completion via the configured provider. Without `outputSchema`, returns `{ response: string }`; with `outputSchema`, returns the validated JSON object. NO_RETRY at the runtime level — author-driven retries via `step.do` config. |
 | `tool` | Worker-side integration action through the same pipeline agent tool calls use. Honors action policy (`allow` / `deny` / `require_approval`). |
 | `set` | Computes JSON values from templates and surfaces them to downstream nodes via `state.nodes`. |
@@ -375,7 +377,7 @@ Definitions are objects with `version: 'dag/v1'`, optional `inputs` (typed input
 - Template parse for every author-supplied template field.
 - Per-node env checks for llm model availability (provider key configured).
 
-`validateInputs` separately validates the trigger payload + input overrides against the workflow's declared `inputs` shape (type / enum / required / default).
+`validateInputs` separately validates typed input overrides against the workflow's declared `inputs` shape (type / enum / required / default). `trigger.dataSchema` is an authoring/UI contract for manual invocation and template suggestions; runtime webhook/schedule payloads are still accepted as delivered so external trigger shape drift does not block ingestion before workflow logic runs.
 
 ## Runtime
 

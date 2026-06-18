@@ -14,6 +14,7 @@ import type {
   TriggerNode,
   WaitNode,
   WorkflowDefinition,
+  WorkflowInputDefinition,
   WorkflowNode,
 } from '@valet/shared';
 import type {
@@ -646,7 +647,7 @@ function NodeParameterFields({
 }) {
   switch (node.type) {
     case 'trigger':
-      return <TriggerFields node={node} />;
+      return <TriggerFields node={node} onUpdate={onUpdate} />;
     case 'llm':
       return <LlmFields node={node} templateSources={templateSources} onUpdate={onUpdate} />;
     case 'tool':
@@ -670,7 +671,13 @@ function NodeParameterFields({
   }
 }
 
-function TriggerFields({ node }: { node: TriggerNode }) {
+function TriggerFields({
+  node,
+  onUpdate,
+}: {
+  node: TriggerNode;
+  onUpdate: (patch: Partial<TriggerNode>) => void;
+}) {
   return (
     <>
       <div className="rounded-md border border-neutral-200 bg-neutral-50 p-2 text-xs dark:border-neutral-700 dark:bg-neutral-900">
@@ -682,6 +689,10 @@ function TriggerFields({ node }: { node: TriggerNode }) {
           This source provides the payload from the trigger that invoked the workflow.
         </p>
       </div>
+      <TriggerDataSchemaFields
+        value={node.dataSchema ?? {}}
+        onChange={(dataSchema) => onUpdate({ dataSchema: Object.keys(dataSchema).length > 0 ? dataSchema : undefined })}
+      />
       <ToolSchemaContract
         title="Outputs"
         schema={{
@@ -689,12 +700,102 @@ function TriggerFields({ node }: { node: TriggerNode }) {
           properties: {
             type: { type: 'string', description: 'manual, schedule, or webhook' },
             timestamp: { type: 'string', description: 'Invocation timestamp' },
-            data: { type: 'object', description: 'Trigger-specific payload' },
+            data: {
+              type: 'object',
+              description: 'Trigger-specific payload',
+              properties: workflowInputDefinitionsToJsonSchemaProperties(node.dataSchema ?? {}),
+            },
             metadata: { type: 'object', description: 'System metadata for the trigger delivery' },
           },
         }}
       />
     </>
+  );
+}
+
+function TriggerDataSchemaFields({
+  value,
+  onChange,
+}: {
+  value: Record<string, WorkflowInputDefinition>;
+  onChange: (value: Record<string, WorkflowInputDefinition>) => void;
+}) {
+  const entries = Object.entries(value);
+
+  function setEntry(index: number, nextName: string, patch: Partial<WorkflowInputDefinition>) {
+    const nextEntries = entries.map(([name, spec], currentIndex) => {
+      if (currentIndex !== index) return [name, spec] as const;
+      return [nextName, { ...spec, ...patch }] as const;
+    });
+    onChange(Object.fromEntries(nextEntries.filter(([name]) => name.trim().length > 0)));
+  }
+
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center justify-between gap-2">
+        <LabelText>Trigger data schema</LabelText>
+        <Button
+          type="button"
+          variant="secondary"
+          size="sm"
+          onClick={() => onChange({ ...value, [createSchemaFieldKey(value)]: { type: 'string' } })}
+        >
+          Add
+        </Button>
+      </div>
+      {entries.length === 0 ? (
+        <p className="rounded-md border border-dashed border-neutral-200 p-3 text-xs text-neutral-500 dark:border-neutral-700 dark:text-neutral-400">
+          Add fields here to render typed manual trigger inputs and template suggestions.
+        </p>
+      ) : (
+        <div className="space-y-3">
+          {entries.map(([name, spec], index) => (
+            <div key={`${name}-${index}`} className="space-y-2 rounded-md border border-neutral-200 p-2 dark:border-neutral-700">
+              <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,0.75fr)] gap-2">
+                <Input
+                  value={name}
+                  onChange={(event) => setEntry(index, event.target.value, {})}
+                  placeholder="field_name"
+                />
+                <NativeSelect
+                  value={spec.type}
+                  options={['string', 'number', 'boolean', 'object', 'array']}
+                  onChange={(type) => setEntry(index, name, { type, default: undefined })}
+                />
+              </div>
+              <Input
+                value={spec.description ?? ''}
+                onChange={(event) => setEntry(index, name, { description: optionalString(event.target.value) })}
+                placeholder="Description"
+              />
+              <div className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2">
+                <label className="flex items-center gap-2 text-xs text-neutral-600 dark:text-neutral-300">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(spec.required)}
+                    onChange={(event) => setEntry(index, name, { required: event.target.checked || undefined })}
+                  />
+                  Required
+                </label>
+                <Input
+                  value={stringifyEditableValue(spec.default)}
+                  onChange={(event) => setEntry(index, name, { default: parseWorkflowInputDefault(event.target.value, spec.type) })}
+                  placeholder="Default"
+                />
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => onChange(Object.fromEntries(entries.filter((_, currentIndex) => currentIndex !== index)))}
+                >
+                  Remove
+                </Button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -2074,6 +2175,31 @@ function optionalString(value: string): string | undefined {
   return trimmed.length > 0 ? value : undefined;
 }
 
+function parseWorkflowInputDefault(value: string, type: WorkflowInputDefinition['type']): unknown {
+  const trimmed = value.trim();
+  if (trimmed.length === 0) return undefined;
+  if (type === 'number') return Number(trimmed);
+  if (type === 'boolean') return trimmed === 'true';
+  if (type === 'object' || type === 'array') {
+    try {
+      return JSON.parse(trimmed) as unknown;
+    } catch {
+      return value;
+    }
+  }
+  return value;
+}
+
+function createSchemaFieldKey(existing: Record<string, WorkflowInputDefinition>): string {
+  let index = 1;
+  let candidate = 'field';
+  while (existing[candidate] !== undefined) {
+    index += 1;
+    candidate = `field${index}`;
+  }
+  return candidate;
+}
+
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value)
     ? value as Record<string, unknown>
@@ -2096,6 +2222,18 @@ function describeSchemaType(schema: { type?: unknown } | undefined): string {
     return schema.type.filter((type) => type !== 'null').join(' | ') || 'unknown';
   }
   return typeof schema.type === 'string' ? schema.type : 'unknown';
+}
+
+function workflowInputDefinitionsToJsonSchemaProperties(
+  definitions: Record<string, WorkflowInputDefinition>,
+): Record<string, JsonSchemaLike> {
+  return Object.fromEntries(Object.entries(definitions).map(([name, definition]) => [
+    name,
+    {
+      type: definition.type,
+      ...(definition.description ? { description: definition.description } : {}),
+    } satisfies JsonSchemaLike,
+  ]));
 }
 
 function parseConditionRight(value: string, dataType: IfCondition['dataType']): unknown {

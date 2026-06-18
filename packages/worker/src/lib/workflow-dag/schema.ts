@@ -97,6 +97,7 @@ export const llmNodeSchema = z.object({
 export const triggerNodeSchema = z.object({
   id: idSchema,
   type: z.literal('trigger'),
+  dataSchema: z.record(workflowInputDefinitionSchema).optional(),
 });
 
 const ifConditionSchema = z.object({

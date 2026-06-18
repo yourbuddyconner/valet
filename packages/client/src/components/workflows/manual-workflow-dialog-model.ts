@@ -8,6 +8,7 @@ export interface ManualWorkflowInputField {
 
 export interface ManualWorkflowForm {
   triggerDataText: string;
+  triggerDataFields: Record<string, ManualWorkflowInputField>;
   inputs: Record<string, ManualWorkflowInputField>;
 }
 
@@ -23,6 +24,16 @@ export type ManualWorkflowSubmission =
     };
 
 export function createManualWorkflowForm(definition: WorkflowDefinition | null): ManualWorkflowForm {
+  const triggerDataFields: Record<string, ManualWorkflowInputField> = {};
+  const triggerNode = definition?.nodes.find((node) => node.type === 'trigger');
+  for (const [name, spec] of Object.entries(triggerNode?.dataSchema ?? {})) {
+    triggerDataFields[name] = {
+      name,
+      spec,
+      value: createInitialInputValue(spec),
+    };
+  }
+
   const fields: Record<string, ManualWorkflowInputField> = {};
   for (const [name, spec] of Object.entries(definition?.inputs ?? {})) {
     fields[name] = {
@@ -34,16 +45,17 @@ export function createManualWorkflowForm(definition: WorkflowDefinition | null):
 
   return {
     triggerDataText: '{\n  \n}',
+    triggerDataFields,
     inputs: fields,
   };
 }
 
 export function parseManualWorkflowSubmission(form: ManualWorkflowForm): ManualWorkflowSubmission {
   const fieldErrors: Record<string, string> = {};
-  const triggerData = parseTriggerData(form.triggerDataText);
-  if (!triggerData.ok) {
-    fieldErrors.triggerData = triggerData.message;
-  }
+  const triggerDataFields = Object.values(form.triggerDataFields);
+  const triggerData = triggerDataFields.length > 0
+    ? parseTriggerDataFields(triggerDataFields, fieldErrors)
+    : parseRawTriggerData(form.triggerDataText, fieldErrors);
 
   const inputs: Record<string, unknown> = {};
   for (const field of Object.values(form.inputs)) {
@@ -63,7 +75,7 @@ export function parseManualWorkflowSubmission(form: ManualWorkflowForm): ManualW
 
   return {
     ok: true,
-    triggerData: triggerData.ok ? triggerData.value : {},
+    triggerData,
     inputs,
   };
 }
@@ -84,19 +96,39 @@ function createInitialInputValue(spec: WorkflowInputDefinition): string | boolea
   return String(spec.default);
 }
 
-function parseTriggerData(text: string): { ok: true; value: Record<string, unknown> } | { ok: false; message: string } {
+function parseRawTriggerData(text: string, fieldErrors: Record<string, string>): Record<string, unknown> {
   const trimmed = text.trim();
-  if (!trimmed) return { ok: true, value: {} };
+  if (!trimmed) return {};
 
   try {
     const parsed: unknown = JSON.parse(trimmed);
     if (!isRecord(parsed)) {
-      return { ok: false, message: 'Trigger payload must be a JSON object.' };
+      fieldErrors.triggerData = 'Trigger payload must be a JSON object.';
+      return {};
     }
-    return { ok: true, value: parsed };
+    return parsed;
   } catch {
-    return { ok: false, message: 'Trigger payload must be valid JSON.' };
+    fieldErrors.triggerData = 'Trigger payload must be valid JSON.';
+    return {};
   }
+}
+
+function parseTriggerDataFields(
+  fields: ManualWorkflowInputField[],
+  fieldErrors: Record<string, string>,
+): Record<string, unknown> {
+  const triggerData: Record<string, unknown> = {};
+  for (const field of fields) {
+    const parsed = parseInputField(field);
+    if (!parsed.ok) {
+      fieldErrors[`triggerData.${field.name}`] = parsed.message;
+      continue;
+    }
+    if (parsed.include) {
+      triggerData[field.name] = parsed.value;
+    }
+  }
+  return triggerData;
 }
 
 function parseInputField(
