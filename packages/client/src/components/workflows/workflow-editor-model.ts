@@ -165,6 +165,16 @@ export function deriveWorkflowOutputSources(
   const sources: WorkflowOutputSource[] = deriveTriggerOutputSources(definition);
 
   for (const node of definition.nodes) {
+    if (node.type === 'set') {
+      sources.push(...deriveSetOutputSources(node));
+      continue;
+    }
+
+    if (node.type === 'llm') {
+      sources.push(...deriveLlmOutputSources(node));
+      continue;
+    }
+
     if (node.type !== 'tool') continue;
     const action = catalogIndex.actionsByKey.get(createToolCatalogActionKey(node.service, node.action));
     if (!action?.outputSchema) continue;
@@ -179,6 +189,17 @@ export function deriveWorkflowOutputSources(
   }
 
   return sources;
+}
+
+export function deriveWorkflowTemplateSources(
+  definition: WorkflowDefinition,
+  actions: ToolCatalogAction[],
+  nodeId: string,
+): WorkflowOutputSource[] {
+  const upstreamNodeIds = deriveTransitiveUpstreamNodeIds(definition, nodeId);
+  return deriveWorkflowOutputSources(definition, actions).filter((source) =>
+    source.nodeId === 'trigger' || upstreamNodeIds.has(source.nodeId),
+  );
 }
 
 export function formatWorkflowTemplatePath(path: string[]): string {
@@ -734,6 +755,55 @@ function deriveTriggerOutputSources(definition: Pick<WorkflowDefinition, 'nodes'
   return sources;
 }
 
+function deriveSetOutputSources(node: SetNode): WorkflowOutputSource[] {
+  return Object.entries(asRecord(node.values)).map(([key, value]) =>
+    createManualWorkflowOutputSource({
+      nodeId: node.id,
+      nodeLabel: NODE_LABELS[node.type],
+      actionName: 'Set value',
+      path: ['nodes', node.id, 'data', key],
+      label: `${node.id} ${key}`,
+      valueType: unknownToOutputType(value),
+    }),
+  );
+}
+
+function deriveLlmOutputSources(node: LlmNode): WorkflowOutputSource[] {
+  return [
+    createManualWorkflowOutputSource({
+      nodeId: node.id,
+      nodeLabel: NODE_LABELS[node.type],
+      actionName: 'LLM response',
+      path: ['nodes', node.id, 'data', 'response'],
+      label: `${node.id} response`,
+      valueType: 'scalar',
+    }),
+  ];
+}
+
+function deriveTransitiveUpstreamNodeIds(
+  definition: Pick<WorkflowDefinition, 'edges'>,
+  nodeId: string,
+): Set<string> {
+  const incomingByTarget = new Map<string, string[]>();
+  for (const edge of definition.edges) {
+    const incoming = incomingByTarget.get(edge.to) ?? [];
+    incoming.push(edge.from);
+    incomingByTarget.set(edge.to, incoming);
+  }
+
+  const upstream = new Set<string>();
+  const stack = [...(incomingByTarget.get(nodeId) ?? [])];
+  while (stack.length > 0) {
+    const current = stack.pop();
+    if (!current || upstream.has(current)) continue;
+    upstream.add(current);
+    stack.push(...(incomingByTarget.get(current) ?? []));
+  }
+
+  return upstream;
+}
+
 function createManualWorkflowOutputSource(input: {
   nodeId: string;
   nodeLabel: string;
@@ -756,6 +826,12 @@ function createManualWorkflowOutputSource(input: {
 function workflowInputTypeToOutputType(type: string): WorkflowOutputSource['valueType'] {
   if (type === 'array') return 'array';
   if (type === 'object') return 'object';
+  return 'scalar';
+}
+
+function unknownToOutputType(value: unknown): WorkflowOutputSource['valueType'] {
+  if (Array.isArray(value)) return 'array';
+  if (value && typeof value === 'object') return 'object';
   return 'scalar';
 }
 

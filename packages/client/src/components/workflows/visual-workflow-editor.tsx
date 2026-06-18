@@ -74,6 +74,7 @@ import {
   createFlowNodeData,
   createWorkflowInputPatchForNode,
   createNodeId,
+  deriveWorkflowTemplateSources,
   deriveWorkflowOutputSources,
   definitionToFlow,
   flowToDefinition,
@@ -190,7 +191,7 @@ function VisualWorkflowEditorInner({
 
   const handleNodesChange: OnNodesChange = React.useCallback((changes: NodeChange[]) => {
     const safeChanges = changes.filter((change) => !(change.type === 'remove' && change.id === 'trigger'));
-    setNodes((current) => applyNodeChanges(safeChanges, current) as unknown as WorkflowFlowNode[]);
+    setNodes((current) => applyNodeChanges(safeChanges, current) as WorkflowFlowNode[]);
   }, []);
 
   const handleEdgesChange: OnEdgesChange = React.useCallback((changes: EdgeChange[]) => {
@@ -549,6 +550,10 @@ function NodeInspector({ definition, node, onUpdate }: NodeInspectorProps) {
       .filter((source) => incomingNodeIds.has(source.nodeId)),
     [actionCatalog, definition, incomingNodeIds],
   );
+  const templateSources = React.useMemo(
+    () => deriveWorkflowTemplateSources(definition, actionCatalog, workflowNode.id),
+    [actionCatalog, definition, workflowNode.id],
+  );
   const handleUseInput = React.useCallback((source: WorkflowOutputSource) => {
     const patch = createWorkflowInputPatchForNode(workflowNode, source);
     if (patch) onUpdate(patch);
@@ -564,7 +569,7 @@ function NodeInspector({ definition, node, onUpdate }: NodeInspectorProps) {
       <NodeParameterFields
         definition={definition}
         node={workflowNode}
-        templateSources={availableInputs}
+        templateSources={templateSources}
         onUpdate={onUpdate}
       />
       {availableInputs.length > 0 && (
@@ -1476,7 +1481,7 @@ function TemplateTextInput({
     () => validateTemplateTags(value, templateSources),
     [templateSources, value],
   );
-  const showSuggestions = focused && !readOnly && Boolean(completion) && suggestions.length > 0;
+  const showSuggestions = focused && !readOnly && Boolean(completion);
 
   function updateCompletion(element: HTMLInputElement | HTMLTextAreaElement) {
     const cursor = element.selectionStart ?? value.length;
@@ -1555,27 +1560,33 @@ function TemplateTextInput({
       )}
       {showSuggestions && (
         <div className="absolute left-0 right-0 top-full z-50 mt-1 max-h-64 overflow-auto rounded-md border border-neutral-200 bg-white p-1 shadow-xl dark:border-neutral-700 dark:bg-neutral-950">
-          {suggestions.map((source) => (
-            <button
-              key={source.expression}
-              type="button"
-              className="block w-full rounded-sm px-2 py-1.5 text-left text-xs hover:bg-neutral-100 focus:bg-neutral-100 focus:outline-none dark:hover:bg-neutral-900 dark:focus:bg-neutral-900"
-              onMouseDown={(event) => {
-                event.preventDefault();
-                insertSuggestion(source);
-              }}
-            >
-              <span className="flex min-w-0 items-center justify-between gap-2">
-                <span className="truncate font-medium text-neutral-800 dark:text-neutral-100">
-                  {source.label}
+          {suggestions.length > 0 ? (
+            suggestions.map((source) => (
+              <button
+                key={source.expression}
+                type="button"
+                className="block w-full rounded-sm px-2 py-1.5 text-left text-xs hover:bg-neutral-100 focus:bg-neutral-100 focus:outline-none dark:hover:bg-neutral-900 dark:focus:bg-neutral-900"
+                onMouseDown={(event) => {
+                  event.preventDefault();
+                  insertSuggestion(source);
+                }}
+              >
+                <span className="flex min-w-0 items-center justify-between gap-2">
+                  <span className="truncate font-medium text-neutral-800 dark:text-neutral-100">
+                    {source.label}
+                  </span>
+                  <Badge variant="secondary">{source.valueType}</Badge>
                 </span>
-                <Badge variant="secondary">{source.valueType}</Badge>
-              </span>
-              <span className="mt-0.5 block truncate font-mono text-neutral-500">
-                {source.expression}
-              </span>
-            </button>
-          ))}
+                <span className="mt-0.5 block truncate font-mono text-neutral-500">
+                  {source.expression}
+                </span>
+              </button>
+            ))
+          ) : (
+            <p className="px-2 py-1.5 text-xs text-neutral-500">
+              No matching template variables.
+            </p>
+          )}
         </div>
       )}
       {issues[0] && (

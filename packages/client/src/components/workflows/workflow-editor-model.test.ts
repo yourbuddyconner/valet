@@ -4,6 +4,7 @@ import {
   applyDefaultDataFlowForConnection,
   buildToolCatalogIndex,
   deriveWorkflowOutputSources,
+  deriveWorkflowTemplateSources,
   createDefaultWorkflowDefinition,
   definitionToFlow,
   formatWorkflowTemplatePath,
@@ -513,6 +514,63 @@ describe('workflow editor model', () => {
     expect(sources.map((source) => source.expression)).toEqual([
       '{{nodes.search.data.items}}',
     ]);
+  });
+
+  it('derives template outputs from set values and llm responses', () => {
+    const definition: WorkflowDefinition = {
+      version: 'dag/v1',
+      nodes: [
+        { id: 'normalize_input', type: 'set', values: { customer_name: '{{trigger.data.name}}', count: 1 } },
+        {
+          id: 'generate_welcome',
+          type: 'llm',
+          prompt: 'Write welcome email',
+          model: 'anthropic:claude-opus-4-5',
+        },
+      ],
+      edges: [{ from: 'normalize_input', to: 'generate_welcome' }],
+    };
+
+    const expressions = deriveWorkflowOutputSources(definition, []).map((source) => source.expression);
+
+    expect(expressions).toContain('{{nodes.normalize_input.data.customer_name}}');
+    expect(expressions).toContain('{{nodes.generate_welcome.data.response}}');
+  });
+
+  it('scopes template suggestions to transitive upstream nodes', () => {
+    const definition: WorkflowDefinition = {
+      version: 'dag/v1',
+      nodes: [
+        { id: 'trigger', type: 'trigger' },
+        { id: 'normalize_input', type: 'set', values: { customer_name: '{{trigger.data.name}}' } },
+        {
+          id: 'generate_welcome',
+          type: 'llm',
+          prompt: 'Write welcome email',
+          model: 'anthropic:claude-opus-4-5',
+        },
+        { id: 'cooldown', type: 'wait', mode: 'duration', duration: '5s' },
+        { id: 'build_result', type: 'set', values: {} },
+        { id: 'downstream', type: 'set', values: { ignored: 'later' } },
+      ],
+      edges: [
+        { from: 'trigger', to: 'normalize_input' },
+        { from: 'normalize_input', to: 'generate_welcome' },
+        { from: 'generate_welcome', to: 'cooldown' },
+        { from: 'cooldown', to: 'build_result' },
+        { from: 'build_result', to: 'downstream' },
+      ],
+    };
+
+    const expressions = deriveWorkflowTemplateSources(definition, [], 'build_result')
+      .map((source) => source.expression);
+
+    expect(expressions).toEqual(expect.arrayContaining([
+      '{{trigger.data}}',
+      '{{nodes.normalize_input.data.customer_name}}',
+      '{{nodes.generate_welcome.data.response}}',
+    ]));
+    expect(expressions).not.toContain('{{nodes.downstream.data.ignored}}');
   });
 
   it('derives the workflows array from the GitHub list workflows output contract', () => {
