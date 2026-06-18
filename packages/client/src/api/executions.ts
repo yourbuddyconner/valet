@@ -80,6 +80,30 @@ export interface CancelExecutionRequest {
   reason?: string;
 }
 
+export const LIVE_EXECUTION_REFETCH_INTERVAL_MS = 2_000;
+
+const TERMINAL_EXECUTION_STATUSES = new Set<Execution['status']>([
+  'completed',
+  'failed',
+  'cancelled',
+]);
+
+export function isActiveExecutionStatus(status: Execution['status']): boolean {
+  return !TERMINAL_EXECUTION_STATUSES.has(status);
+}
+
+export function getExecutionDetailRefetchInterval(data?: GetExecutionResponse): number | false {
+  return data?.execution && isActiveExecutionStatus(data.execution.status)
+    ? LIVE_EXECUTION_REFETCH_INTERVAL_MS
+    : false;
+}
+
+export function getExecutionListRefetchInterval(executions?: Execution[]): number | false {
+  return executions?.some((execution) => isActiveExecutionStatus(execution.status))
+    ? LIVE_EXECUTION_REFETCH_INTERVAL_MS
+    : false;
+}
+
 // Query keys
 export const executionKeys = {
   all: ['executions'] as const,
@@ -104,6 +128,8 @@ export function useExecutions(filters?: { status?: string; workflowId?: string }
     queryKey: executionKeys.list(filters),
     queryFn: () =>
       api.get<ListExecutionsResponse>(`/executions${query ? `?${query}` : ''}`),
+    refetchInterval: (query) => getExecutionListRefetchInterval(query.state.data?.executions),
+    refetchIntervalInBackground: true,
   });
 }
 
@@ -127,6 +153,9 @@ export function useInfiniteExecutions(filters?: { status?: string; workflowId?: 
       executions: data.pages.flatMap((page) => page.executions),
       hasMore: data.pages[data.pages.length - 1]?.executions.length === 20,
     }),
+    refetchInterval: (query) =>
+      getExecutionListRefetchInterval(query.state.data?.pages.flatMap((page) => page.executions)),
+    refetchIntervalInBackground: true,
   });
 }
 
@@ -135,6 +164,8 @@ export function useExecution(executionId: string) {
     queryKey: executionKeys.detail(executionId),
     queryFn: () => api.get<GetExecutionResponse>(`/executions/${executionId}`),
     enabled: !!executionId,
+    refetchInterval: (query) => getExecutionDetailRefetchInterval(query.state.data),
+    refetchIntervalInBackground: true,
   });
 }
 

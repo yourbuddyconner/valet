@@ -1,5 +1,5 @@
 import { createFileRoute, Link } from '@tanstack/react-router';
-import { useCancelExecution, useExecution } from '@/api/executions';
+import { isActiveExecutionStatus, useCancelExecution, useExecution } from '@/api/executions';
 import type { Execution, ExecutionNode } from '@/api/executions';
 import { ExecutionApprovalPanel } from '@/components/workflows/execution-approval-panel';
 import { Badge } from '@/components/ui/badge';
@@ -256,10 +256,6 @@ function statusBadgeVariant(
 
 function formatStatus(status: string) {
   return status.replace(/_/g, ' ');
-}
-
-function isActiveExecutionStatus(status: Execution['status']): boolean {
-  return status === 'pending' || status === 'running' || status === 'waiting_approval' || status === 'waiting_time' || status === 'cancelling';
 }
 
 function formatDuration(start: string, end: string): string {

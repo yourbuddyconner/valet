@@ -1,5 +1,6 @@
 import { createFileRoute, Link, useNavigate } from '@tanstack/react-router';
-import { useInfiniteExecutions } from '@/api/executions';
+import { isActiveExecutionStatus, useInfiniteExecutions } from '@/api/executions';
+import type { Execution } from '@/api/executions';
 import { ExecutionApprovalPanel } from '@/components/workflows/execution-approval-panel';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -174,11 +175,7 @@ function ExecutionsPage() {
 // aggregate status at 'running' or 'waiting_time' while approvals are
 // still pending on individual nodes, so we mount the approval panel
 // for all active states and let it auto-hide when there's no work.
-function isActiveExecutionStatus(status: string): boolean {
-  return status === 'pending' || status === 'running' || status === 'waiting_approval' || status === 'waiting_time';
-}
-
-function ExecutionStatusBadge({ status }: { status: string }) {
+function ExecutionStatusBadge({ status }: { status: Execution['status'] }) {
   const variants: Record<string, 'default' | 'success' | 'warning' | 'error' | 'secondary'> = {
     pending: 'warning',
     running: 'default',
