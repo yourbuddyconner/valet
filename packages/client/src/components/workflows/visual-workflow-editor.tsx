@@ -97,6 +97,7 @@ import {
   definitionToFlow,
   flowToDefinition,
   getDefaultNodeForType,
+  removeWorkflowFlowNode,
   updateWorkflowNode,
   validateWorkflowDataFlowEdges,
   type AddableDagNodeType,
@@ -140,6 +141,13 @@ const edgeTypes = {
   temporary: Edge.Temporary,
 };
 
+interface WorkflowNodeDeleteContextValue {
+  armedNodeId: string | null;
+  requestDelete: (nodeId: string) => void;
+}
+
+const WorkflowNodeDeleteContext = React.createContext<WorkflowNodeDeleteContextValue | null>(null);
+
 export function VisualWorkflowEditor(props: VisualWorkflowEditorProps) {
   return (
     <ReactFlowProvider>
@@ -164,7 +172,9 @@ function VisualWorkflowEditorInner({
   const [nodePaletteOpen, setNodePaletteOpen] = React.useState(false);
   const [rawJson, setRawJson] = React.useState('');
   const [rawJsonError, setRawJsonError] = React.useState<string | null>(null);
+  const [armedDeleteNodeId, setArmedDeleteNodeId] = React.useState<string | null>(null);
   const [reactFlowInstance, setReactFlowInstance] = React.useState<ReactFlowInstance | null>(null);
+  const deleteResetTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const { getViewport } = useReactFlow();
   const { data: actionCatalog = [] } = useActionCatalog();
 
@@ -176,6 +186,12 @@ function VisualWorkflowEditorInner({
     setRawOpen(false);
     setRawJson(JSON.stringify(flowToDefinition(next, definition ?? undefined), null, 2));
   }, [definition]);
+
+  React.useEffect(() => {
+    return () => {
+      if (deleteResetTimer.current) clearTimeout(deleteResetTimer.current);
+    };
+  }, []);
 
   const selectedNode = React.useMemo(
     () => nodes.find((node) => node.id === selectedNodeId) ?? null,
@@ -224,6 +240,47 @@ function VisualWorkflowEditorInner({
     event.stopPropagation();
     setEdges((current) => current.filter((currentEdge) => currentEdge.id !== edge.id));
   }, []);
+
+  const clearArmedDeleteNode = React.useCallback(() => {
+    if (deleteResetTimer.current) {
+      clearTimeout(deleteResetTimer.current);
+      deleteResetTimer.current = null;
+    }
+    setArmedDeleteNodeId(null);
+  }, []);
+
+  const handleRequestDeleteNode = React.useCallback((nodeId: string) => {
+    if (nodeId === 'trigger') return;
+
+    if (armedDeleteNodeId !== nodeId) {
+      if (deleteResetTimer.current) clearTimeout(deleteResetTimer.current);
+      setArmedDeleteNodeId(nodeId);
+      deleteResetTimer.current = setTimeout(() => {
+        setArmedDeleteNodeId((current) => current === nodeId ? null : current);
+        deleteResetTimer.current = null;
+      }, 2500);
+      return;
+    }
+
+    const nextFlow = removeWorkflowFlowNode(
+      {
+        nodes,
+        edges,
+        viewport: reactFlowInstance?.getViewport() ?? getViewport(),
+      },
+      nodeId,
+    );
+    setNodes(nextFlow.nodes);
+    setEdges(nextFlow.edges);
+    setSelectedNodeId(null);
+    setRawOpen(false);
+    clearArmedDeleteNode();
+  }, [armedDeleteNodeId, clearArmedDeleteNode, edges, getViewport, nodes, reactFlowInstance]);
+
+  const nodeDeleteContext = React.useMemo<WorkflowNodeDeleteContextValue>(() => ({
+    armedNodeId: armedDeleteNodeId,
+    requestDelete: handleRequestDeleteNode,
+  }), [armedDeleteNodeId, handleRequestDeleteNode]);
 
   const handleConnect: OnConnect = React.useCallback((connection: Connection) => {
     if (!connection.source || !connection.target) return;
@@ -274,6 +331,7 @@ function VisualWorkflowEditorInner({
     };
     setNodes((current) => [...current, flowNode]);
     setSelectedNodeId(id);
+    clearArmedDeleteNode();
     setRawOpen(false);
     setNodePaletteOpen(false);
   }
@@ -295,6 +353,7 @@ function VisualWorkflowEditorInner({
     setNodes(flow.nodes);
     setEdges(flow.edges);
     setSelectedNodeId(null);
+    clearArmedDeleteNode();
     setRawOpen(false);
   }
 
@@ -316,28 +375,31 @@ function VisualWorkflowEditorInner({
         className,
       )}
     >
-      <Canvas
-        className="bg-neutral-50 dark:bg-neutral-950"
-        connectionLineComponent={ConnectionLine}
-        edges={edges}
-        edgeTypes={edgeTypes}
-        fitView
-        nodes={nodes}
-        nodeTypes={nodeTypes}
-        onConnect={handleConnect}
-        onEdgeDoubleClick={handleEdgeDoubleClick}
-        onEdgesChange={handleEdgesChange}
-        onInit={setReactFlowInstance}
-        onNodeClick={(_, node) => {
-          setRawOpen(false);
-          setSelectedNodeId(node.id);
-        }}
-        onPaneClick={() => {
-          setSelectedNodeId(null);
-          setRawOpen(false);
-        }}
-        onNodesChange={handleNodesChange}
-      >
+      <WorkflowNodeDeleteContext.Provider value={nodeDeleteContext}>
+        <Canvas
+          className="bg-neutral-50 dark:bg-neutral-950"
+          connectionLineComponent={ConnectionLine}
+          edges={edges}
+          edgeTypes={edgeTypes}
+          fitView
+          nodes={nodes}
+          nodeTypes={nodeTypes}
+          onConnect={handleConnect}
+          onEdgeDoubleClick={handleEdgeDoubleClick}
+          onEdgesChange={handleEdgesChange}
+          onInit={setReactFlowInstance}
+          onNodeClick={(_, node) => {
+            setRawOpen(false);
+            setSelectedNodeId(node.id);
+            if (node.id !== armedDeleteNodeId) clearArmedDeleteNode();
+          }}
+          onPaneClick={() => {
+            setSelectedNodeId(null);
+            setRawOpen(false);
+            clearArmedDeleteNode();
+          }}
+          onNodesChange={handleNodesChange}
+        >
         <Controls className="border-neutral-200 bg-white text-neutral-900 shadow-lg dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100 [&>button]:text-neutral-700 [&>button]:hover:bg-neutral-100 dark:[&>button]:text-neutral-100 dark:[&>button]:hover:bg-neutral-800" />
         <Panel position="top-right" className="flex items-center gap-2 rounded-lg border border-neutral-200 bg-white/90 p-2 shadow-lg backdrop-blur dark:border-neutral-800 dark:bg-neutral-900/90">
           <Button
@@ -346,6 +408,7 @@ function VisualWorkflowEditorInner({
             size="sm"
             onClick={() => {
               setSelectedNodeId(null);
+              clearArmedDeleteNode();
               setRawOpen(true);
             }}
             className="border border-neutral-200 bg-white text-neutral-800 hover:bg-neutral-100 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100 dark:hover:bg-neutral-800"
@@ -408,7 +471,8 @@ function VisualWorkflowEditorInner({
             ))}
           </Panel>
         )}
-      </Canvas>
+        </Canvas>
+      </WorkflowNodeDeleteContext.Provider>
 
       {(rawOpen || selectedNode) && (
         <aside className="absolute bottom-3 right-3 top-3 z-10 flex w-[380px] max-w-[calc(100%-1.5rem)] flex-col overflow-hidden rounded-lg border border-neutral-200 bg-white/95 shadow-2xl backdrop-blur dark:border-neutral-800 dark:bg-neutral-950/95">
@@ -423,7 +487,15 @@ function VisualWorkflowEditorInner({
             </div>
             <div className="flex items-center gap-2">
               {!rawOpen && (
-                <Button type="button" variant="secondary" size="sm" onClick={() => setRawOpen(true)}>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => {
+                    clearArmedDeleteNode();
+                    setRawOpen(true);
+                  }}
+                >
                   JSON
                 </Button>
               )}
@@ -439,6 +511,7 @@ function VisualWorkflowEditorInner({
                 onClick={() => {
                   setRawOpen(false);
                   setSelectedNodeId(null);
+                  clearArmedDeleteNode();
                 }}
                 title="Close"
               >
@@ -530,6 +603,9 @@ function FlaskIcon({ className }: { className?: string }) {
 
 function WorkflowNodeCard({ data, selected }: NodeProps) {
   const nodeData = data as WorkflowFlowNodeData;
+  const deleteContext = React.useContext(WorkflowNodeDeleteContext);
+  const isDeleteArmed = deleteContext?.armedNodeId === nodeData.node.id;
+  const canDelete = selected && nodeData.node.type !== 'trigger' && Boolean(deleteContext);
   return (
     <Node
       handles={nodeData.handles}
@@ -539,6 +615,31 @@ function WorkflowNodeCard({ data, selected }: NodeProps) {
         selected && 'border-accent ring-2 ring-accent/30 dark:border-red-400 dark:ring-red-400/35',
       )}
     >
+      {canDelete && (
+        <button
+          type="button"
+          className={cn(
+            'nodrag nopan absolute -right-2 -top-2 z-20 flex h-7 items-center justify-center rounded-full border text-xs font-medium shadow-lg transition',
+            isDeleteArmed
+              ? 'w-auto gap-1 border-red-500 bg-red-500 px-2 text-white hover:bg-red-600'
+              : 'w-7 border-neutral-200 bg-white text-neutral-600 hover:border-red-300 hover:bg-red-50 hover:text-red-600 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-300 dark:hover:border-red-500/50 dark:hover:bg-red-950 dark:hover:text-red-300',
+          )}
+          title={isDeleteArmed ? 'Click again to delete node' : 'Delete node'}
+          aria-label={isDeleteArmed ? `Confirm delete ${nodeData.node.id}` : `Delete ${nodeData.node.id}`}
+          onMouseDown={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+          }}
+          onClick={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            deleteContext?.requestDelete(nodeData.node.id);
+          }}
+        >
+          <CloseIcon className="h-3.5 w-3.5" />
+          {isDeleteArmed && <span>Delete</span>}
+        </button>
+      )}
       <NodeHeader className="border-neutral-200 bg-neutral-50 dark:border-neutral-800 dark:bg-neutral-900">
         <div className="flex items-start justify-between gap-2">
           <div className="min-w-0">

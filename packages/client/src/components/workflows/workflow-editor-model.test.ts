@@ -11,6 +11,7 @@ import {
   flowToDefinition,
   getDefaultNodeForType,
   normalizeWorkflowDefinitionForEditor,
+  removeWorkflowFlowNode,
   createWorkflowInputPatchForNode,
   updateWorkflowNode,
   validateWorkflowDataFlowEdges,
@@ -178,6 +179,39 @@ describe('workflow editor model', () => {
 
     expect(flow.nodes.find((node) => node.id === 'start')?.position).toEqual({ x: 25, y: 50 });
     expect(flow.nodes.find((node) => node.id === 'done')?.position).toEqual({ x: 680, y: 0 });
+  });
+
+  it('removes a flow node and its connected edges without removing trigger', () => {
+    const flow = definitionToFlow({
+      version: 'dag/v1',
+      nodes: [
+        { id: 'trigger', type: 'trigger' },
+        { id: 'start', type: 'set', values: {} },
+        { id: 'branch', type: 'if', conditions: [] },
+        { id: 'done', type: 'stop', outcome: 'success' },
+      ],
+      edges: [
+        { from: 'trigger', to: 'start' },
+        { from: 'start', to: 'branch' },
+        { from: 'branch', to: 'done', fromOutput: 'true' },
+      ],
+      ui: {
+        nodes: {
+          trigger: { position: { x: -340, y: 0 } },
+          start: { position: { x: 0, y: 0 } },
+          branch: { position: { x: 340, y: 0 } },
+          done: { position: { x: 680, y: 0 } },
+        },
+        viewport: { x: 10, y: 20, zoom: 0.8 },
+      },
+    });
+
+    const next = removeWorkflowFlowNode(flow, 'branch');
+
+    expect(next.nodes.map((node) => node.id)).toEqual(['trigger', 'start', 'done']);
+    expect(next.edges.map((edge) => edge.id)).toEqual(['trigger->start']);
+    expect(next.viewport).toEqual({ x: 10, y: 20, zoom: 0.8 });
+    expect(removeWorkflowFlowNode(next, 'trigger')).toBe(next);
   });
 
   it('serializes flow edits back to dag/v1 while preserving node payloads', () => {

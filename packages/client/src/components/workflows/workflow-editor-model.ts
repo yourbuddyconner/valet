@@ -431,6 +431,19 @@ export function flowToDefinition(
   };
 }
 
+export function removeWorkflowFlowNode(
+  flow: WorkflowFlowState,
+  nodeId: string,
+): WorkflowFlowState {
+  if (nodeId === 'trigger' || !flow.nodes.some((node) => node.id === nodeId)) return flow;
+
+  return {
+    ...flow,
+    nodes: flow.nodes.filter((node) => node.id !== nodeId),
+    edges: flow.edges.filter((edge) => edge.source !== nodeId && edge.target !== nodeId),
+  };
+}
+
 export function createFlowNodeData(
   node: WorkflowNode,
   connectivity: { hasIncoming: boolean; hasOutgoing: boolean } = { hasIncoming: true, hasOutgoing: true },
