@@ -636,7 +636,7 @@ describe('workflow editor model', () => {
       },
     ]);
 
-    expect(sources).toEqual([
+    expect(sources).toContainEqual(
       {
         nodeId: 'tool-1',
         nodeLabel: 'Tool',
@@ -650,7 +650,7 @@ describe('workflow editor model', () => {
           { name: 'title', path: ['nodes', 'tool-1', 'data', 'title'], valueType: 'string' },
         ],
       },
-    ]);
+    );
   });
 
   it('derives nested array output sources from object schemas', () => {
@@ -1064,6 +1064,107 @@ describe('workflow editor model', () => {
       ],
       warnings: [],
     });
+  });
+
+  it('derives foreach envelope output sources for downstream template fields', () => {
+    const definition: WorkflowDefinition = {
+      version: 'dag/v1',
+      nodes: [
+        { id: 'fetch_prs', type: 'tool', service: 'github', action: 'github.list_pull_requests', params: {} },
+        {
+          id: 'inspect_each_pr',
+          type: 'foreach',
+          items: '{{nodes.fetch_prs.data}}',
+          body: {
+            id: 'inspect_pr',
+            type: 'tool',
+            service: 'github',
+            action: 'github.inspect_pull_request',
+            params: {},
+          },
+        },
+        {
+          id: 'generate_digest',
+          type: 'llm',
+          prompt: 'Digest: {{nodes.inspect_each_pr.data}} {{nodes.inspect_each_pr.data.items}}',
+        },
+      ],
+      edges: [
+        { from: 'fetch_prs', to: 'inspect_each_pr' },
+        { from: 'inspect_each_pr', to: 'generate_digest' },
+      ],
+    };
+
+    const sources = deriveWorkflowTemplateSources(definition, [
+      {
+        service: 'github',
+        serviceDisplayName: 'GitHub',
+        actionId: 'github.list_pull_requests',
+        name: 'List Pull Requests',
+        description: 'List pull requests',
+        riskLevel: 'low',
+        outputSchema: { type: 'array', items: { type: 'object', properties: { number: { type: 'number' } } } },
+      },
+      {
+        service: 'github',
+        serviceDisplayName: 'GitHub',
+        actionId: 'github.inspect_pull_request',
+        name: 'Inspect Pull Request',
+        description: 'Inspect a pull request',
+        riskLevel: 'low',
+        outputSchema: {
+          type: 'object',
+          properties: {
+            title: { type: 'string' },
+            files: { type: 'array', items: { type: 'object', properties: { path: { type: 'string' } } } },
+          },
+        },
+      },
+    ], 'generate_digest');
+
+    expect(sources.map((source) => source.expression)).toEqual(expect.arrayContaining([
+      '{{nodes.inspect_each_pr.data}}',
+      '{{nodes.inspect_each_pr.data.items}}',
+      '{{nodes.inspect_each_pr.data.count}}',
+      '{{nodes.inspect_each_pr.data.completedCount}}',
+      '{{nodes.inspect_each_pr.data.failedCount}}',
+      '{{nodes.inspect_each_pr.data.skippedCount}}',
+    ]));
+    expect(sources.find((source) => source.expression === '{{nodes.inspect_each_pr.data.items}}')).toMatchObject({
+      valueType: 'array',
+      itemFields: [
+        { name: 'status', path: ['nodes', 'inspect_each_pr', 'data', 'items', 'status'], valueType: 'string' },
+        { name: 'data', path: ['nodes', 'inspect_each_pr', 'data', 'items', 'data'], valueType: 'object' },
+        { name: 'error', path: ['nodes', 'inspect_each_pr', 'data', 'items', 'error'], valueType: 'string' },
+      ],
+    });
+  });
+
+  it('builds edge inspection details for foreach source outputs', () => {
+    const definition: WorkflowDefinition = {
+      version: 'dag/v1',
+      nodes: [
+        {
+          id: 'inspect_each_pr',
+          type: 'foreach',
+          items: '{{nodes.fetch_prs.data}}',
+          body: { id: 'inspect_pr', type: 'set', values: { ok: true } },
+        },
+        { id: 'generate_digest', type: 'llm', prompt: '{{nodes.inspect_each_pr.data}}' },
+      ],
+      edges: [{ from: 'inspect_each_pr', to: 'generate_digest' }],
+    };
+
+    const inspection = buildWorkflowEdgeInspection(
+      definition,
+      { from: 'inspect_each_pr', to: 'generate_digest' },
+      [],
+    );
+
+    expect(inspection?.sourceOutputs.map((source) => source.expression)).toEqual(expect.arrayContaining([
+      '{{nodes.inspect_each_pr.data}}',
+      '{{nodes.inspect_each_pr.data.items}}',
+    ]));
   });
 
   it('includes edge validation warnings in inspection details', () => {

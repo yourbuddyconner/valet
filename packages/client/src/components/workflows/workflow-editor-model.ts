@@ -207,6 +207,11 @@ export function deriveWorkflowOutputSources(
       continue;
     }
 
+    if (node.type === 'foreach') {
+      sources.push(...deriveForeachOutputSources(node, catalogIndex.actionsByKey));
+      continue;
+    }
+
     if (node.type !== 'tool') continue;
     const action = catalogIndex.actionsByKey.get(createToolCatalogActionKey(node.service, node.action));
     if (!action?.outputSchema) continue;
@@ -1058,6 +1063,118 @@ function deriveOrchestratorOutputSources(node: OrchestratorNode): WorkflowOutput
   return sources;
 }
 
+function deriveForeachOutputSources(
+  node: ForeachNode,
+  actionsByKey: Map<string, ToolCatalogAction>,
+): WorkflowOutputSource[] {
+  const itemDataSchema = getForeachBodyOutputSchema(node.body, actionsByKey);
+  const itemSchema: JsonSchemaLike = {
+    type: 'object',
+    properties: {
+      status: {
+        type: 'string',
+        description: 'Iteration status: completed, skipped, or failed.',
+      },
+      data: itemDataSchema ?? {
+        type: 'object',
+        description: 'Output produced by the foreach body node for this item.',
+      },
+      error: {
+        type: 'string',
+        description: 'Error message when the item failed or was skipped.',
+      },
+    },
+  };
+  const itemsSchema: JsonSchemaLike = {
+    type: 'array',
+    items: itemSchema,
+  };
+
+  return [
+    createManualWorkflowOutputSource({
+      nodeId: node.id,
+      nodeLabel: NODE_LABELS[node.type],
+      actionName: 'For each result',
+      path: ['nodes', node.id, 'data'],
+      label: `${node.id} result`,
+      valueType: 'object',
+    }),
+    createWorkflowOutputSource(
+      {
+        nodeId: node.id,
+        nodeLabel: NODE_LABELS[node.type],
+        actionName: 'For each result',
+      },
+      ['nodes', node.id, 'data', 'items'],
+      'array',
+      itemsSchema,
+    ),
+    createManualWorkflowOutputSource({
+      nodeId: node.id,
+      nodeLabel: NODE_LABELS[node.type],
+      actionName: 'For each result',
+      path: ['nodes', node.id, 'data', 'count'],
+      label: `${node.id} count`,
+      valueType: 'scalar',
+    }),
+    createManualWorkflowOutputSource({
+      nodeId: node.id,
+      nodeLabel: NODE_LABELS[node.type],
+      actionName: 'For each result',
+      path: ['nodes', node.id, 'data', 'completedCount'],
+      label: `${node.id} completed count`,
+      valueType: 'scalar',
+    }),
+    createManualWorkflowOutputSource({
+      nodeId: node.id,
+      nodeLabel: NODE_LABELS[node.type],
+      actionName: 'For each result',
+      path: ['nodes', node.id, 'data', 'skippedCount'],
+      label: `${node.id} skipped count`,
+      valueType: 'scalar',
+    }),
+    createManualWorkflowOutputSource({
+      nodeId: node.id,
+      nodeLabel: NODE_LABELS[node.type],
+      actionName: 'For each result',
+      path: ['nodes', node.id, 'data', 'failedCount'],
+      label: `${node.id} failed count`,
+      valueType: 'scalar',
+    }),
+  ];
+}
+
+function getForeachBodyOutputSchema(
+  body: ForeachBodyNode,
+  actionsByKey: Map<string, ToolCatalogAction>,
+): JsonSchemaLike | undefined {
+  if (body.type === 'tool') {
+    return actionsByKey.get(createToolCatalogActionKey(body.service, body.action))?.outputSchema;
+  }
+
+  if (body.type === 'llm') {
+    if (body.outputSchema) return body.outputSchema as JsonSchemaLike;
+    return {
+      type: 'object',
+      properties: {
+        response: { type: 'string' },
+      },
+    };
+  }
+
+  if (body.type === 'set') {
+    return {
+      type: 'object',
+      properties: Object.fromEntries(Object.entries(asRecord(body.values)).map(([key, value]) => [
+        key,
+        { type: outputTypeToJsonSchemaType(unknownToOutputType(value)) } satisfies JsonSchemaLike,
+      ])),
+    };
+  }
+
+  return undefined;
+}
+
 function deriveTransitiveUpstreamNodeIds(
   definition: Pick<WorkflowDefinition, 'edges'>,
   nodeId: string,
@@ -1110,6 +1227,12 @@ function unknownToOutputType(value: unknown): WorkflowOutputSource['valueType'] 
   if (Array.isArray(value)) return 'array';
   if (value && typeof value === 'object') return 'object';
   return 'scalar';
+}
+
+function outputTypeToJsonSchemaType(type: WorkflowOutputSource['valueType']): string {
+  if (type === 'array') return 'array';
+  if (type === 'object') return 'object';
+  return 'string';
 }
 
 function asRecord(value: unknown): Record<string, unknown> {

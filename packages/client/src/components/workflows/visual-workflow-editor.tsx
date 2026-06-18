@@ -150,11 +150,13 @@ const edgeTypes = {
 
 interface WorkflowNodeDeleteContextValue {
   armedNodeId: string | null;
-  warningNodeIds: ReadonlySet<string>;
+  nodeValidationSeverities: ReadonlyMap<string, WorkflowNodeValidationSeverity>;
   requestDelete: (nodeId: string) => void;
 }
 
 const WorkflowNodeDeleteContext = React.createContext<WorkflowNodeDeleteContextValue | null>(null);
+
+type WorkflowNodeValidationSeverity = 'warning' | 'error';
 
 export function VisualWorkflowEditor(props: VisualWorkflowEditorProps) {
   return (
@@ -244,6 +246,20 @@ function VisualWorkflowEditorInner({
     () => new Set(dataFlowWarnings.map((warning) => warning.nodeId)),
     [dataFlowWarnings],
   );
+  const templateErrorNodeIds = React.useMemo(
+    () => actionCatalogLoaded ? deriveWorkflowTemplateErrorNodeIds(currentDefinition(), actionCatalog) : new Set<string>(),
+    [actionCatalog, actionCatalogLoaded, currentDefinition],
+  );
+  const nodeValidationSeverities = React.useMemo(() => {
+    const severities = new Map<string, WorkflowNodeValidationSeverity>();
+    for (const nodeId of dataFlowWarningNodeIds) {
+      severities.set(nodeId, 'warning');
+    }
+    for (const nodeId of templateErrorNodeIds) {
+      severities.set(nodeId, 'error');
+    }
+    return severities;
+  }, [dataFlowWarningNodeIds, templateErrorNodeIds]);
   const edgeInspection = React.useMemo(() => {
     if (!selectedEdge) return null;
     return buildWorkflowEdgeInspection(
@@ -352,9 +368,9 @@ function VisualWorkflowEditorInner({
 
   const nodeDeleteContext = React.useMemo<WorkflowNodeDeleteContextValue>(() => ({
     armedNodeId: armedDeleteNodeId,
-    warningNodeIds: dataFlowWarningNodeIds,
+    nodeValidationSeverities,
     requestDelete: handleRequestDeleteNode,
-  }), [armedDeleteNodeId, dataFlowWarningNodeIds, handleRequestDeleteNode]);
+  }), [armedDeleteNodeId, handleRequestDeleteNode, nodeValidationSeverities]);
 
   const handleConnect: OnConnect = React.useCallback((connection: Connection) => {
     if (!connection.source || !connection.target) return;
@@ -867,6 +883,78 @@ function FlaskIcon({ className }: { className?: string }) {
   );
 }
 
+function deriveWorkflowTemplateErrorNodeIds(
+  definition: WorkflowDefinition,
+  actionCatalog: ToolCatalogAction[],
+): Set<string> {
+  const nodeIds = new Set<string>();
+
+  for (const node of definition.nodes) {
+    const templateSources = deriveWorkflowTemplateSources(definition, actionCatalog, node.id);
+    if (getNodeTemplateValidationIssues(node, templateSources)) {
+      nodeIds.add(node.id);
+    }
+  }
+
+  return nodeIds;
+}
+
+function getNodeTemplateValidationIssues(
+  node: WorkflowNode,
+  templateSources: WorkflowOutputSource[],
+): boolean {
+  return getNodeTemplateValues(node).some((value) =>
+    validateTemplateTags(value, templateSources).length > 0,
+  );
+}
+
+function getNodeTemplateValues(node: WorkflowNode): string[] {
+  switch (node.type) {
+    case 'llm':
+      return compactStrings([node.prompt, node.system]);
+    case 'tool':
+      return [
+        ...compactStrings([node.summary]),
+        ...collectTemplateStrings(node.params),
+      ];
+    case 'set':
+      return collectTemplateStrings(node.values);
+    case 'foreach':
+      return [node.items];
+    case 'approval':
+      return [
+        ...compactStrings([node.prompt, node.summary]),
+        ...collectTemplateStrings(node.details),
+      ];
+    case 'stop':
+      return [
+        ...compactStrings([node.message]),
+        ...collectTemplateStrings(node.output),
+      ];
+    case 'orchestrator':
+      return compactStrings([node.prompt]);
+    case 'session':
+      return node.mode === 'start'
+        ? compactStrings([node.prompt, node.workspace, node.title])
+        : compactStrings([node.prompt, node.sessionId, node.threadId]);
+    case 'trigger':
+    case 'if':
+    case 'wait':
+      return [];
+  }
+}
+
+function collectTemplateStrings(value: unknown): string[] {
+  if (typeof value === 'string') return [value];
+  if (Array.isArray(value)) return value.flatMap((item) => collectTemplateStrings(item));
+  if (!value || typeof value !== 'object') return [];
+  return Object.values(value).flatMap((item) => collectTemplateStrings(item));
+}
+
+function compactStrings(values: Array<string | undefined>): string[] {
+  return values.filter((value): value is string => typeof value === 'string');
+}
+
 function DataFlowInspector({
   inspection,
   onClose,
@@ -1010,7 +1098,9 @@ function WorkflowNodeCard({ data, selected }: NodeProps) {
   const nodeData = data as WorkflowFlowNodeData;
   const deleteContext = React.useContext(WorkflowNodeDeleteContext);
   const isDeleteArmed = deleteContext?.armedNodeId === nodeData.node.id;
-  const hasWarning = deleteContext?.warningNodeIds.has(nodeData.node.id) ?? false;
+  const validationSeverity = deleteContext?.nodeValidationSeverities.get(nodeData.node.id) ?? null;
+  const hasWarning = validationSeverity === 'warning';
+  const hasError = validationSeverity === 'error';
   const canDelete = selected && nodeData.node.type !== 'trigger' && Boolean(deleteContext);
   return (
     <Node
@@ -1019,8 +1109,10 @@ function WorkflowNodeCard({ data, selected }: NodeProps) {
         'border-neutral-200 bg-white text-neutral-950 shadow-xl shadow-neutral-900/10 dark:border-neutral-700 dark:bg-neutral-900/95 dark:text-neutral-100 dark:shadow-black/20',
         '[&_.react-flow__handle]:border-white [&_.react-flow__handle]:bg-neutral-700 dark:[&_.react-flow__handle]:border-neutral-950 dark:[&_.react-flow__handle]:bg-neutral-300',
         hasWarning && 'border-amber-400 ring-2 ring-amber-300/60 dark:border-amber-400 dark:ring-amber-400/40',
-        selected && !hasWarning && 'border-accent ring-2 ring-accent/30 dark:border-red-400 dark:ring-red-400/35',
+        hasError && 'border-red-500 ring-2 ring-red-300/70 dark:border-red-400 dark:ring-red-400/40',
+        selected && !validationSeverity && 'border-accent ring-2 ring-accent/30 dark:border-red-400 dark:ring-red-400/35',
         selected && hasWarning && 'border-amber-500 ring-2 ring-amber-400/70 dark:border-amber-300 dark:ring-amber-300/55',
+        selected && hasError && 'border-red-500 ring-2 ring-red-400/80 dark:border-red-300 dark:ring-red-300/60',
       )}
     >
       {canDelete && (
