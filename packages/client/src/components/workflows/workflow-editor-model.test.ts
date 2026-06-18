@@ -839,6 +839,24 @@ describe('workflow editor model', () => {
     ])).toEqual([]);
   });
 
+  it('does not warn about explicit foreach item templates while the tool catalog is loading', () => {
+    const definition: WorkflowDefinition = {
+      version: 'dag/v1',
+      nodes: [
+        { id: 'fetch_prs', type: 'tool', service: 'github', action: 'github.list_pull_requests', params: {} },
+        {
+          id: 'inspect_each_pr',
+          type: 'foreach',
+          items: '{{nodes.fetch_prs.data}}',
+          body: { id: 'inspect_pr', type: 'set', values: {} },
+        },
+      ],
+      edges: [{ from: 'fetch_prs', to: 'inspect_each_pr' }],
+    };
+
+    expect(validateWorkflowDataFlowEdges(definition, [], { toolCatalogLoaded: false })).toEqual([]);
+  });
+
   it('formats template paths with bracket notation for unsafe path segments', () => {
     expect(formatWorkflowTemplatePath(['nodes', 'tool-1', 'data', 'pull_requests'])).toBe(
       '{{nodes["tool-1"].data.pull_requests}}',

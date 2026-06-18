@@ -177,7 +177,7 @@ function VisualWorkflowEditorInner({
   const [reactFlowInstance, setReactFlowInstance] = React.useState<ReactFlowInstance | null>(null);
   const deleteResetTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const { getViewport } = useReactFlow();
-  const { data: actionCatalog = [] } = useActionCatalog();
+  const { data: actionCatalog = [], isSuccess: actionCatalogLoaded } = useActionCatalog();
 
   React.useEffect(() => {
     const next = definitionToFlow(definition ?? createDefaultWorkflowDefinition());
@@ -211,8 +211,8 @@ function VisualWorkflowEditorInner({
   }, [definition, edges, getViewport, nodes, reactFlowInstance]);
 
   const dataFlowWarnings = React.useMemo(
-    () => validateWorkflowDataFlowEdges(currentDefinition(), actionCatalog),
-    [actionCatalog, currentDefinition],
+    () => validateWorkflowDataFlowEdges(currentDefinition(), actionCatalog, { toolCatalogLoaded: actionCatalogLoaded }),
+    [actionCatalog, actionCatalogLoaded, currentDefinition],
   );
   const dataFlowWarningNodeIds = React.useMemo(
     () => new Set(dataFlowWarnings.map((warning) => warning.nodeId)),

@@ -114,6 +114,10 @@ export interface WorkflowDataFlowWarning {
   message: string;
 }
 
+export interface WorkflowDataFlowValidationOptions {
+  toolCatalogLoaded?: boolean;
+}
+
 export interface JsonSchemaLike {
   [key: string]: unknown;
   type?: string | string[];
@@ -237,7 +241,9 @@ export function applyDefaultDataFlowForConnection(
 export function validateWorkflowDataFlowEdges(
   definition: WorkflowDefinition,
   actions: ToolCatalogAction[],
+  options: WorkflowDataFlowValidationOptions = {},
 ): WorkflowDataFlowWarning[] {
+  const toolCatalogLoaded = options.toolCatalogLoaded ?? true;
   const sources = deriveWorkflowOutputSources(definition, actions);
   const warnings: WorkflowDataFlowWarning[] = [];
   const nodesById = new Map(definition.nodes.map((node) => [node.id, node]));
@@ -252,6 +258,7 @@ export function validateWorkflowDataFlowEdges(
         source.valueType === 'array' && normalizeTemplateReference(source.expression) === configuredItems,
       );
       if (configuredArraySource) continue;
+      if (!toolCatalogLoaded && configuredItems.startsWith('nodes.')) continue;
       warnings.push({
         edgeId: createEdgeId(edge.from, edge.to, edge.fromOutput),
         nodeId: target.id,
