@@ -18,6 +18,7 @@ import type {
 } from '@valet/shared';
 import type {
   Connection,
+  Edge as ReactFlowEdge,
   EdgeChange,
   NodeChange,
   NodeProps,
@@ -198,6 +199,12 @@ function VisualWorkflowEditorInner({
     setEdges((current) => applyEdgeChanges(changes, current) as WorkflowFlowEdge[]);
   }, []);
 
+  const handleEdgeDoubleClick = React.useCallback((event: React.MouseEvent, edge: ReactFlowEdge) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setEdges((current) => current.filter((currentEdge) => currentEdge.id !== edge.id));
+  }, []);
+
   const handleConnect: OnConnect = React.useCallback((connection: Connection) => {
     if (!connection.source || !connection.target) return;
     const fromOutput = connection.sourceHandle === 'true' || connection.sourceHandle === 'false'
@@ -298,6 +305,7 @@ function VisualWorkflowEditorInner({
         nodes={nodes}
         nodeTypes={nodeTypes}
         onConnect={handleConnect}
+        onEdgeDoubleClick={handleEdgeDoubleClick}
         onEdgesChange={handleEdgesChange}
         onInit={setReactFlowInstance}
         onNodeClick={(_, node) => {
