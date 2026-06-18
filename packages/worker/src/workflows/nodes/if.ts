@@ -14,6 +14,7 @@ import {
   TemplateParseError,
   TemplateEvalError,
 } from '../../lib/workflow-dag/expression.js';
+import { normalizeIfOperation } from '../../lib/workflow-dag/if-operations.js';
 import { buildTemplateContext, type TemplateContext } from '../context.js';
 import type { NodeExecutorArgs } from '../types.js';
 
@@ -52,14 +53,15 @@ function evaluateCondition(cond: IfCondition, ctx: TemplateContext): boolean {
     throw err;
   }
   const right = cond.right;
+  const operation = normalizeIfOperation(cond.operation);
 
   switch (cond.dataType) {
-    case 'string':  return evalString(cond.operation, left, right);
-    case 'number':  return evalNumber(cond.operation, left, right);
-    case 'date':    return evalDate(cond.operation, left, right);
-    case 'boolean': return evalBoolean(cond.operation, left, right);
-    case 'array':   return evalArray(cond.operation, left, right);
-    case 'object':  return evalObject(cond.operation, left, right);
+    case 'string':  return evalString(operation, left, right);
+    case 'number':  return evalNumber(operation, left, right);
+    case 'date':    return evalDate(operation, left, right);
+    case 'boolean': return evalBoolean(operation, left, right);
+    case 'array':   return evalArray(operation, left, right);
+    case 'object':  return evalObject(operation, left, right);
   }
 }
 

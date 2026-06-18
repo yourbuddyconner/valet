@@ -24,6 +24,7 @@ import type {
   LlmNode,
 } from '@valet/shared';
 import { parseTemplate, parseExpression, TemplateParseError } from './expression.js';
+import { allowedIfOperations, isIfOperationSupported, normalizeIfOperation } from './if-operations.js';
 import { parseDurationMs } from './duration.js';
 import { parseModelId, hasProviderKey } from '../llm/model-id.js';
 import {
@@ -441,7 +442,17 @@ function validateNode(
       // path syntax which we validate as expressions.
       for (const cond of node.conditions) {
         tryParseExpression(node.id, 'left', cond.left, errors);
-        if (cond.operation === 'matchesRegex' && typeof cond.right === 'string') {
+        const operation = normalizeIfOperation(cond.operation);
+        if (!isIfOperationSupported(cond.dataType, cond.operation)) {
+          errors.push({
+            scope: 'field',
+            nodeId: node.id,
+            path: 'conditions.operation',
+            code: 'if_operation_unsupported',
+            message: `Unsupported ${cond.dataType} operation "${cond.operation}". Allowed operations: ${allowedIfOperations(cond.dataType).join(', ')}`,
+          });
+        }
+        if (operation === 'matchesRegex' && typeof cond.right === 'string') {
           try {
             new RegExp(cond.right);
           } catch (err) {

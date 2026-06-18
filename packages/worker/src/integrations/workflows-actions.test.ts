@@ -81,6 +81,10 @@ describe('workflowActions', () => {
         sleep: 'wait',
       },
       foreachBodyTypes: ['llm', 'tool', 'set', 'stop', 'orchestrator', 'session'],
+      conditionOperations: {
+        string: expect.arrayContaining(['isNotEmpty', 'matchesRegex']),
+        aliases: expect.objectContaining({ is_not_empty: 'isNotEmpty' }),
+      },
     });
     expect(result.data).toMatchObject({
       nodes: expect.arrayContaining([

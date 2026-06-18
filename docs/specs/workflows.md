@@ -60,6 +60,8 @@ The validator fails fast on unknown node types before per-node discriminator val
 
 Node IDs may include hyphens for compatibility with the visual editor. Dot notation only works for identifier-safe IDs, so references to hyphenated IDs must use bracket notation: `{{nodes["tool-1"].data.result}}`.
 
+`if` condition operations are validated by `dataType` before execution. The runtime accepts preferred camelCase operation names plus common snake-case aliases (`is_not_empty` → `isNotEmpty`, `not_equals` → `notEquals`, etc.) so agent-authored drafts do not reach Cloudflare Workflow step retries with unsupported operation names.
+
 ## Data Model
 
 ### `workflows` table

@@ -26,6 +26,7 @@ import {
   validateDefinition,
   type GroupedWorkflowValidation,
 } from '../lib/workflow-dag/validator.js';
+import { allowedIfOperations } from '../lib/workflow-dag/if-operations.js';
 import {
   FOREACH_BODY_NODE_TYPES,
   LEGACY_NODE_TYPE_ALIASES,
@@ -310,6 +311,30 @@ function getWorkflowSchemaAction() {
       fields: ['from', 'to', 'fromOutput', 'when'],
       ifBranches: ['true', 'false'],
       note: 'Edges connect top-level node IDs only. Edges from if nodes must set fromOutput to "true" or "false".',
+    },
+    conditionOperations: {
+      string: allowedIfOperations('string'),
+      number: allowedIfOperations('number'),
+      date: allowedIfOperations('date'),
+      boolean: allowedIfOperations('boolean'),
+      array: allowedIfOperations('array'),
+      object: allowedIfOperations('object'),
+      aliases: {
+        is_not_empty: 'isNotEmpty',
+        is_empty: 'isEmpty',
+        not_equals: 'notEquals',
+        does_not_exist: 'doesNotExist',
+        does_not_contain: 'doesNotContain',
+        starts_with: 'startsWith',
+        ends_with: 'endsWith',
+        matches_regex: 'matchesRegex',
+        greater_than: 'greaterThan',
+        less_than: 'lessThan',
+        greater_than_or_equal: 'greaterThanOrEqual',
+        less_than_or_equal: 'lessThanOrEqual',
+        is_true: 'isTrue',
+        is_false: 'isFalse',
+      },
     },
     nodes: [
       {

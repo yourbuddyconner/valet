@@ -55,6 +55,21 @@ describe('executeIf — string operations', () => {
     expect((await executeIf(args(node, { field: 'x' }))).result).toBe(false);
   });
 
+  it('accepts snake_case operation aliases from agent-authored workflows', async () => {
+    const node: IfNode = {
+      id: 'r',
+      type: 'if',
+      combinator: 'and',
+      conditions: [
+        { left: 'trigger.data.email', dataType: 'string', operation: 'is_not_empty' },
+        { left: 'trigger.data.name', dataType: 'string', operation: 'is_not_empty' },
+      ],
+    };
+
+    expect((await executeIf(args(node, { email: 'conner@example.com', name: 'Conner' }))).result).toBe(true);
+    expect((await executeIf(args(node, { email: 'conner@example.com', name: '' }))).result).toBe(false);
+  });
+
   it('matchesRegex with a safe pattern', async () => {
     const node: IfNode = {
       id: 'r',

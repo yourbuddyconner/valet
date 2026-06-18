@@ -517,6 +517,45 @@ describe('validateInputs', () => {
 });
 
 describe('validateDefinition — if matchesRegex compiles', () => {
+  it('accepts supported snake_case condition operation aliases', () => {
+    const def = definition({
+      nodes: [
+        {
+          id: 'check_required',
+          type: 'if',
+          combinator: 'and',
+          conditions: [
+            { left: 'trigger.data.email', dataType: 'string', operation: 'is_not_empty' },
+            { left: 'trigger.data.name', dataType: 'string', operation: 'is_not_empty' },
+          ],
+        },
+        { id: 'finish', type: 'stop' },
+      ],
+      edges: [{ from: 'check_required', to: 'finish', fromOutput: 'true' }],
+    });
+
+    expect(blockingErrors(validateDefinition(def))).toEqual([]);
+  });
+
+  it('rejects unsupported if condition operations before execution', () => {
+    const def = definition({
+      nodes: [
+        { id: 'route', type: 'if', conditions: [{ left: 'trigger.x', dataType: 'string', operation: 'isTotallyFilled' }] },
+        { id: 'finish', type: 'stop' },
+      ],
+      edges: [{ from: 'route', to: 'finish', fromOutput: 'true' }],
+    });
+
+    const errs = blockingErrors(validateDefinition(def));
+    expect(errs).toEqual([
+      expect.objectContaining({
+        code: 'if_operation_unsupported',
+        nodeId: 'route',
+        message: expect.stringContaining('Unsupported string operation "isTotallyFilled"'),
+      }),
+    ]);
+  });
+
   it('rejects an if node whose matchesRegex pattern is not a valid regex', () => {
     const def = definition({
       nodes: [

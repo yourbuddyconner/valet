@@ -157,6 +157,8 @@ Model IDs use `provider:model`, not `provider/model`. Supported providers are `a
 
 Condition fields are `left`, `dataType`, `operation`, and optional `right`. Use `operation`, not `operator` or `op`.
 
+Use the operation names returned by `workflows.schema`. Common string operations include `exists`, `doesNotExist`, `isEmpty`, `isNotEmpty`, `equals`, `notEquals`, `contains`, `doesNotContain`, `startsWith`, `endsWith`, and `matchesRegex`. Snake-case aliases such as `is_not_empty`, `not_equals`, and `matches_regex` are accepted, but camelCase is preferred.
+
 `foreach` iterates over an array expression and runs one body node per item:
 
 ```json
