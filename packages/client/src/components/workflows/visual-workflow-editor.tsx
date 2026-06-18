@@ -97,11 +97,14 @@ import {
   filterNodePaletteOptions,
   flowToDefinition,
   getDefaultNodeForType,
+  jsonSchemaToWorkflowInputDefinitions,
   NODE_PALETTE_LIST_CLASSNAME,
   NODE_PALETTE_PANEL_CLASSNAME,
   removeWorkflowFlowNode,
   updateWorkflowNode,
   validateWorkflowDataFlowEdges,
+  workflowInputDefinitionsToJsonSchema,
+  workflowInputDefinitionsToJsonSchemaProperties,
   type AddableDagNodeType,
   type JsonSchemaLike,
   type ToolCatalogAction,
@@ -991,7 +994,9 @@ function TriggerFields({
           This source provides the payload from the trigger that invoked the workflow.
         </p>
       </div>
-      <TriggerDataSchemaFields
+      <WorkflowSchemaFields
+        title="Trigger data schema"
+        emptyMessage="Add fields here to render typed manual trigger inputs and template suggestions."
         value={node.dataSchema ?? {}}
         onChange={(dataSchema) => onUpdate({ dataSchema: Object.keys(dataSchema).length > 0 ? dataSchema : undefined })}
       />
@@ -1015,12 +1020,18 @@ function TriggerFields({
   );
 }
 
-function TriggerDataSchemaFields({
+function WorkflowSchemaFields({
+  title,
+  emptyMessage,
   value,
   onChange,
+  showDefault = true,
 }: {
+  title: string;
+  emptyMessage: string;
   value: Record<string, WorkflowInputDefinition>;
   onChange: (value: Record<string, WorkflowInputDefinition>) => void;
+  showDefault?: boolean;
 }) {
   const entries = Object.entries(value);
 
@@ -1035,7 +1046,7 @@ function TriggerDataSchemaFields({
   return (
     <div className="space-y-2">
       <div className="flex items-center justify-between gap-2">
-        <LabelText>Trigger data schema</LabelText>
+        <LabelText>{title}</LabelText>
         <Button
           type="button"
           variant="secondary"
@@ -1047,7 +1058,7 @@ function TriggerDataSchemaFields({
       </div>
       {entries.length === 0 ? (
         <p className="rounded-md border border-dashed border-neutral-200 p-3 text-xs text-neutral-500 dark:border-neutral-700 dark:text-neutral-400">
-          Add fields here to render typed manual trigger inputs and template suggestions.
+          {emptyMessage}
         </p>
       ) : (
         <div className="space-y-3">
@@ -1070,7 +1081,7 @@ function TriggerDataSchemaFields({
                 onChange={(event) => setEntry(index, name, { description: optionalString(event.target.value) })}
                 placeholder="Description"
               />
-              <div className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2">
+              <div className={cn('grid items-center gap-2', showDefault ? 'grid-cols-[auto_minmax(0,1fr)_auto]' : 'grid-cols-[auto_minmax(0,1fr)]')}>
                 <label className="flex items-center gap-2 text-xs text-neutral-600 dark:text-neutral-300">
                   <input
                     type="checkbox"
@@ -1079,11 +1090,13 @@ function TriggerDataSchemaFields({
                   />
                   Required
                 </label>
-                <Input
-                  value={stringifyEditableValue(spec.default)}
-                  onChange={(event) => setEntry(index, name, { default: parseWorkflowInputDefault(event.target.value, spec.type) })}
-                  placeholder="Default"
-                />
+                {showDefault && (
+                  <Input
+                    value={stringifyEditableValue(spec.default)}
+                    onChange={(event) => setEntry(index, name, { default: parseWorkflowInputDefault(event.target.value, spec.type) })}
+                    placeholder="Default"
+                  />
+                )}
                 <Button
                   type="button"
                   variant="secondary"
@@ -1102,6 +1115,11 @@ function TriggerDataSchemaFields({
 }
 
 function LlmFields({ node, onUpdate, templateSources }: NodeFieldProps<LlmNode>) {
+  const outputSchemaFields = React.useMemo(
+    () => jsonSchemaToWorkflowInputDefinitions(node.outputSchema),
+    [node.outputSchema],
+  );
+
   return (
     <>
       <TemplateTextAreaField label="Prompt" value={node.prompt} templateSources={templateSources} onChange={(prompt) => onUpdate({ prompt })} minRows={6} />
@@ -1111,7 +1129,16 @@ function LlmFields({ node, onUpdate, templateSources }: NodeFieldProps<LlmNode>)
       </Field>
       <NumberField label="Temperature" value={node.temperature} min={0} max={2} step={0.1} onChange={(temperature) => onUpdate({ temperature })} />
       <NumberField label="Max output tokens" value={node.maxOutputTokens} min={1} step={1} onChange={(maxOutputTokens) => onUpdate({ maxOutputTokens })} />
-      <JsonValueField label="Output schema" value={node.outputSchema} onChange={(outputSchema) => onUpdate({ outputSchema })} />
+      <WorkflowSchemaFields
+        title="Output schema"
+        emptyMessage="Add fields when the model should return structured data instead of a text response."
+        value={outputSchemaFields}
+        showDefault={false}
+        onChange={(definitions) => onUpdate({ outputSchema: workflowInputDefinitionsToJsonSchema(definitions) })}
+      />
+      {node.outputSchema && (
+        <ToolSchemaContract title="Outputs" schema={node.outputSchema} />
+      )}
     </>
   );
 }
@@ -2533,18 +2560,6 @@ function describeSchemaType(schema: { type?: unknown } | undefined): string {
     return schema.type.filter((type) => type !== 'null').join(' | ') || 'unknown';
   }
   return typeof schema.type === 'string' ? schema.type : 'unknown';
-}
-
-function workflowInputDefinitionsToJsonSchemaProperties(
-  definitions: Record<string, WorkflowInputDefinition>,
-): Record<string, JsonSchemaLike> {
-  return Object.fromEntries(Object.entries(definitions).map(([name, definition]) => [
-    name,
-    {
-      type: definition.type,
-      ...(definition.description ? { description: definition.description } : {}),
-    } satisfies JsonSchemaLike,
-  ]));
 }
 
 function parseConditionRight(value: string, dataType: IfCondition['dataType']): unknown {

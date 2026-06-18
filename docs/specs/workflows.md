@@ -352,6 +352,8 @@ Definitions are objects with `version: 'dag/v1'`, a `nodes` array, an `edges` ar
 
 The reserved `trigger` node may declare `dataSchema`, a field map using `WorkflowInputDefinition`. `dataSchema` describes the invocation payload available at `{{trigger.data}}`; manual runs and scheduled workflow triggers render typed controls from this schema and send the parsed values as `triggerData`. Schema fields also become template suggestions like `{{trigger.data.email}}` with scalar/array/object typing.
 
+The visual editor uses the same schema-field builder for trigger `dataSchema` and LLM `outputSchema`. Trigger schemas store `WorkflowInputDefinition` fields directly. LLM output schemas adapt those fields into a JSON Schema object (`type: "object"`, `properties`, and optional `required`) so structured model outputs can feed downstream template suggestions and array-aware `foreach` wiring.
+
 ### Node Types
 
 | Type | Behavior |

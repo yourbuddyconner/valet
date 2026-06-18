@@ -15,6 +15,7 @@ import type {
   WorkflowDefinition,
   WorkflowEdge,
   WorkflowEditorState,
+  WorkflowInputDefinition,
   WorkflowNode,
 } from '@valet/shared';
 
@@ -126,6 +127,8 @@ export interface JsonSchemaLike {
   properties?: Record<string, JsonSchemaLike>;
   items?: JsonSchemaLike | JsonSchemaLike[];
 }
+
+const WORKFLOW_SCHEMA_FIELD_TYPES = ['string', 'number', 'boolean', 'object', 'array'] as const satisfies readonly WorkflowInputDefinition['type'][];
 
 export function buildToolCatalogIndex(actions: ToolCatalogAction[]): {
   services: ToolCatalogService[];
@@ -886,6 +889,18 @@ function deriveSetOutputSources(node: SetNode): WorkflowOutputSource[] {
 }
 
 function deriveLlmOutputSources(node: LlmNode): WorkflowOutputSource[] {
+  if (node.outputSchema) {
+    const schema = node.outputSchema as JsonSchemaLike;
+    const schemaSources = deriveLlmSchemaOutputSources({
+      schema,
+      basePath: ['nodes', node.id, 'data'],
+      nodeId: node.id,
+      nodeLabel: NODE_LABELS[node.type],
+      actionName: 'LLM response',
+    });
+    if (schemaSources.length > 0) return schemaSources;
+  }
+
   return [
     createManualWorkflowOutputSource({
       nodeId: node.id,
@@ -896,6 +911,59 @@ function deriveLlmOutputSources(node: LlmNode): WorkflowOutputSource[] {
       valueType: 'scalar',
     }),
   ];
+}
+
+export function workflowInputDefinitionsToJsonSchema(
+  definitions: Record<string, WorkflowInputDefinition>,
+): JsonSchemaLike | undefined {
+  const properties = workflowInputDefinitionsToJsonSchemaProperties(definitions);
+  const required = Object.entries(definitions)
+    .filter(([, definition]) => definition.required)
+    .map(([name]) => name);
+
+  if (Object.keys(properties).length === 0) return undefined;
+
+  return {
+    type: 'object',
+    properties,
+    ...(required.length > 0 ? { required } : {}),
+  };
+}
+
+export function workflowInputDefinitionsToJsonSchemaProperties(
+  definitions: Record<string, WorkflowInputDefinition>,
+): Record<string, JsonSchemaLike> {
+  return Object.fromEntries(Object.entries(definitions).map(([name, definition]) => [
+    name,
+    {
+      type: definition.type,
+      ...(definition.description ? { description: definition.description } : {}),
+    } satisfies JsonSchemaLike,
+  ]));
+}
+
+export function jsonSchemaToWorkflowInputDefinitions(
+  schema: Record<string, unknown> | JsonSchemaLike | undefined,
+): Record<string, WorkflowInputDefinition> {
+  if (!schema || typeof schema !== 'object' || Array.isArray(schema)) return {};
+
+  const properties = asRecord(schema.properties);
+  const required = new Set(Array.isArray(schema.required) ? schema.required.filter((field): field is string => typeof field === 'string') : []);
+
+  return Object.fromEntries(Object.entries(properties).flatMap(([name, rawField]) => {
+    const field = asRecord(rawField);
+    const type = normalizeJsonSchemaFieldType(field.type);
+    if (!type) return [];
+
+    return [[
+      name,
+      {
+        type,
+        ...(required.has(name) ? { required: true } : {}),
+        ...(typeof field.description === 'string' && field.description.trim().length > 0 ? { description: field.description } : {}),
+      } satisfies WorkflowInputDefinition,
+    ]];
+  }));
 }
 
 function deriveOrchestratorOutputSources(node: OrchestratorNode): WorkflowOutputSource[] {
@@ -1076,6 +1144,31 @@ function deriveSchemaOutputSources(input: {
   return sources;
 }
 
+function deriveLlmSchemaOutputSources(input: {
+  schema: JsonSchemaLike;
+  basePath: string[];
+  nodeId: string;
+  nodeLabel: string;
+  actionName: string;
+}): WorkflowOutputSource[] {
+  const directType = getSchemaType(input.schema);
+  if (directType === 'array') {
+    return [createWorkflowOutputSource(input, input.basePath, 'array', input.schema)];
+  }
+
+  if (directType !== 'object' || !input.schema.properties) return [];
+
+  return Object.entries(input.schema.properties).map(([property, schema]) => {
+    const propertyPath = [...input.basePath, property];
+    return createWorkflowOutputSource(
+      input,
+      propertyPath,
+      schemaTypeToOutputSourceType(schema),
+      schema,
+    );
+  });
+}
+
 function createWorkflowOutputSource(
   input: {
     nodeId: string;
@@ -1101,6 +1194,20 @@ function createWorkflowOutputSource(
 
 function getSchemaType(schema: JsonSchemaLike): string | undefined {
   return Array.isArray(schema.type) ? schema.type.find((type) => type !== 'null') : schema.type;
+}
+
+function normalizeJsonSchemaFieldType(value: unknown): WorkflowInputDefinition['type'] | undefined {
+  const candidate = Array.isArray(value) ? value.find((type) => type !== 'null') : value;
+  return WORKFLOW_SCHEMA_FIELD_TYPES.includes(candidate as WorkflowInputDefinition['type'])
+    ? candidate as WorkflowInputDefinition['type']
+    : undefined;
+}
+
+function schemaTypeToOutputSourceType(schema: JsonSchemaLike): WorkflowOutputSource['valueType'] {
+  const type = getSchemaType(schema);
+  if (type === 'array') return 'array';
+  if (type === 'object') return 'object';
+  return 'scalar';
 }
 
 function deriveArrayItemFields(schema: JsonSchemaLike, arrayPath: string[]): WorkflowSchemaField[] | undefined {

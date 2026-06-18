@@ -6,6 +6,7 @@ import {
   deriveWorkflowOutputSources,
   deriveWorkflowTemplateSources,
   createDefaultWorkflowDefinition,
+  jsonSchemaToWorkflowInputDefinitions,
   definitionToFlow,
   filterNodePaletteOptions,
   formatWorkflowTemplatePath,
@@ -18,6 +19,7 @@ import {
   createWorkflowInputPatchForNode,
   updateWorkflowNode,
   validateWorkflowDataFlowEdges,
+  workflowInputDefinitionsToJsonSchema,
 } from './workflow-editor-model';
 
 describe('workflow editor model', () => {
@@ -71,6 +73,36 @@ describe('workflow editor model', () => {
     expect(NODE_PALETTE_LIST_CLASSNAME).toContain('flex-1');
     expect(NODE_PALETTE_LIST_CLASSNAME).toContain('overflow-y-auto');
     expect(NODE_PALETTE_LIST_CLASSNAME).not.toContain('100vh-13rem');
+  });
+
+  it('converts workflow input definitions to an object JSON schema', () => {
+    expect(workflowInputDefinitionsToJsonSchema({
+      digest: { type: 'string', required: true, description: 'Summary text' },
+      pr_count: { type: 'number' },
+    })).toEqual({
+      type: 'object',
+      properties: {
+        digest: { type: 'string', description: 'Summary text' },
+        pr_count: { type: 'number' },
+      },
+      required: ['digest'],
+    });
+  });
+
+  it('converts an object JSON schema into workflow input definitions for the shared schema builder', () => {
+    expect(jsonSchemaToWorkflowInputDefinitions({
+      type: 'object',
+      required: ['digest'],
+      properties: {
+        digest: { type: 'string', description: 'Summary text' },
+        pr_count: { type: 'number' },
+        ignored_union: { type: ['string', 'null'] },
+      },
+    })).toEqual({
+      digest: { type: 'string', required: true, description: 'Summary text' },
+      pr_count: { type: 'number' },
+      ignored_union: { type: 'string' },
+    });
   });
 
   it('converts dag/v1 definitions to flow nodes and edges with saved positions', () => {
@@ -725,6 +757,57 @@ describe('workflow editor model', () => {
       '{{nodes.generate_welcome.data.response}}',
     ]));
     expect(expressions).not.toContain('{{nodes.downstream.data.ignored}}');
+  });
+
+  it('derives template outputs from structured llm output schemas', () => {
+    const definition: WorkflowDefinition = {
+      version: 'dag/v1',
+      nodes: [
+        {
+          id: 'generate_digest',
+          type: 'llm',
+          prompt: 'Summarize pull requests',
+          outputSchema: {
+            type: 'object',
+            properties: {
+              digest: { type: 'string', description: 'Markdown digest' },
+              priority_prs: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  properties: {
+                    number: { type: 'number' },
+                    title: { type: 'string' },
+                  },
+                },
+              },
+            },
+          },
+        },
+      ],
+      edges: [],
+    };
+
+    const sources = deriveWorkflowOutputSources(definition, []);
+
+    expect(sources).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        nodeId: 'generate_digest',
+        expression: '{{nodes.generate_digest.data.digest}}',
+        label: 'generate_digest digest',
+        valueType: 'scalar',
+      }),
+      expect.objectContaining({
+        nodeId: 'generate_digest',
+        expression: '{{nodes.generate_digest.data.priority_prs}}',
+        label: 'generate_digest priority_prs',
+        valueType: 'array',
+        itemFields: [
+          { name: 'number', path: ['nodes', 'generate_digest', 'data', 'priority_prs', 'number'], valueType: 'number' },
+          { name: 'title', path: ['nodes', 'generate_digest', 'data', 'priority_prs', 'title'], valueType: 'string' },
+        ],
+      }),
+    ]));
   });
 
   it('derives the workflows array from the GitHub list workflows output contract', () => {
