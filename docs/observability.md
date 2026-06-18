@@ -1,9 +1,14 @@
 # Observability
 
-Valet emits OpenTelemetry traces. This is the first slice (the Worker layer); the
-runner and OpenCode layers follow in later PRs. The end state is correlated traces
-spanning worker → runner → OpenCode, viewable in Grafana, with metrics derived from
-the traces.
+Valet instruments with **OpenTelemetry over OTLP** — a vendor-neutral standard, so the
+backend is swappable via two env vars (a Collector, Datadog, Grafana Tempo, …). This is
+the first slice (the Worker layer); the runner and OpenCode layers follow in later PRs.
+
+**Metrics are the durable signal; traces are transient.** Spans export over OTLP, but the
+lasting value is **metrics derived from them** — RED (rate/errors/duration) and, later,
+spend/usage — at a Collector's `spanmetrics` connector. So retaining raw traces is
+optional, and dashboards are built on metrics, not on trace queries. Treat spans as a
+high-detail debugging signal, not the source of truth a dashboard depends on.
 
 ## What's instrumented today (Worker)
 
@@ -67,14 +72,16 @@ secrets are redacted, and disabling the endpoint is a true no-op.
 
 ## Production
 
-Do **not** point the worker directly at Tempo in production. The `otel-cf-workers`
+Do **not** point the worker directly at the backend in production. The `otel-cf-workers`
 exporter sends one OTLP/HTTP request per worker invocation over `ctx.waitUntil` with
-**no batching, no retry, and a silent drop on any non-2xx** — a brief Tempo blip loses
-every span in that window with zero signal. Production should send to a standalone
-**OTel Collector gateway** (or Grafana Alloy) that owns the sending queue, retry, WAL,
-tail sampling, and PII redaction, and forwards to Tempo. Set `OTEL_EXPORTER_OTLP_ENDPOINT`
-to the gateway. Reconcile worker-emitted vs gateway-accepted span counts to monitor the
-one remaining lossy hop.
+**no batching, no retry, and a silent drop on any non-2xx** — a brief outage loses every
+span in that window with zero signal. Production sends to a standalone **OTel Collector**
+(or Grafana Alloy) that owns the sending queue, retry, WAL, tail sampling, and PII
+redaction. Crucially, the Collector also **derives metrics from the spans** (the
+`spanmetrics` connector) and forwards *those* to the metrics backend (Datadog / Prometheus)
+— retaining the raw traces is optional. Point `OTEL_EXPORTER_OTLP_ENDPOINT` at the
+Collector; reconcile worker-emitted vs Collector-accepted span counts to watch the one
+lossy hop.
 
-The full cross-layer design (runner + OpenCode layers, four trace types, span links,
-traces → metrics) lives in the tracing design doc / Linear issue.
+The full cross-layer design (runner + OpenCode layers, the spend/usage metrics, span
+links) lives in the tracing design doc / Linear issue.
