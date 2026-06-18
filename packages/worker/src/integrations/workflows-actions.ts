@@ -382,7 +382,7 @@ function getWorkflowSchemaAction() {
         type: 'foreach',
         required: ['id', 'type', 'items', 'body'],
         optional: ['itemAlias', 'indexAlias', 'maxItems', 'concurrency', 'onItemError'],
-        description: 'Iterate over an array expression and run one allowed body node per item.',
+        description: 'Iterate over an array expression and run one allowed body node per item. Optional maxItems truncates the input array before execution.',
         constraints: {
           bodyTypes: FOREACH_BODY_NODE_TYPES,
           bodyNote: 'Nested if, wait, approval, trigger, and foreach nodes are not supported in foreach body.',

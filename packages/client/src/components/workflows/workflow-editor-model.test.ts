@@ -1126,6 +1126,8 @@ describe('workflow editor model', () => {
       '{{nodes.inspect_each_pr.data}}',
       '{{nodes.inspect_each_pr.data.items}}',
       '{{nodes.inspect_each_pr.data.count}}',
+      '{{nodes.inspect_each_pr.data.inputCount}}',
+      '{{nodes.inspect_each_pr.data.truncatedCount}}',
       '{{nodes.inspect_each_pr.data.completedCount}}',
       '{{nodes.inspect_each_pr.data.failedCount}}',
       '{{nodes.inspect_each_pr.data.skippedCount}}',

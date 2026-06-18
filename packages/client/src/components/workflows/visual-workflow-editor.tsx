@@ -2014,7 +2014,7 @@ function ForeachFields({
           </Field>
         </div>
         <div className="grid grid-cols-2 gap-2">
-          <NumberField label="Max items" value={node.maxItems} min={1} step={1} onChange={(maxItems) => onUpdate({ maxItems })} />
+          <NumberField label="Process limit" value={node.maxItems} min={1} step={1} onChange={(maxItems) => onUpdate({ maxItems })} />
           <NumberField label="Concurrency" value={node.concurrency} min={1} step={1} onChange={(concurrency) => onUpdate({ concurrency })} />
         </div>
         <SelectField

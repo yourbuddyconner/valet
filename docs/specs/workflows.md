@@ -356,7 +356,7 @@ The visual editor uses the same schema-field builder for trigger `dataSchema` an
 
 Selecting an edge in the visual editor opens a dismissible data-flow inspector. The inspector summarizes typed outputs available from the source node, the target node's inferred input expectation when one exists, the configured expression that binds them, and any validation warning scoped to that edge. Data-flow warnings also highlight the affected edge so authors can inspect the contract mismatch without hunting through the graph.
 
-For editor typeahead and edge inspection, `foreach` nodes expose their runtime result envelope as typed outputs: `{{nodes.<id>.data}}` (object), `{{nodes.<id>.data.items}}` (array), and scalar count fields for `count`, `completedCount`, `skippedCount`, and `failedCount`. The `items` output is an array of iteration result envelopes (`status`, `data`, `error`), with `data` annotated from the body node output schema when the body action/model declares one.
+For editor typeahead and edge inspection, `foreach` nodes expose their runtime result envelope as typed outputs: `{{nodes.<id>.data}}` (object), `{{nodes.<id>.data.items}}` (array), and scalar count fields for `count`, `inputCount`, `truncatedCount`, `completedCount`, `skippedCount`, and `failedCount`. The `items` output is an array of iteration result envelopes (`status`, `data`, `error`), with `data` annotated from the body node output schema when the body action/model declares one.
 
 ### Node Types
 
@@ -369,7 +369,7 @@ For editor typeahead and edge inspection, `foreach` nodes expose their runtime r
 | `if` | Branches on a `conditions` array; downstream edges carry `fromOutput: 'true' \| 'false'`. |
 | `wait` | Durable pause via `step.sleep` for a compact duration string (`'5s'`, `'1h'`). |
 | `approval` | Human approval gate via `workflow_approvals` + `step.waitForEvent`. |
-| `foreach` | Iterates over an array. Body is a single node of a permitted subtype (`llm`, `tool`, `set`, `stop`, `orchestrator`, `session`). |
+| `foreach` | Iterates over an array. Body is a single node of a permitted subtype (`llm`, `tool`, `set`, `stop`, `orchestrator`, `session`). Optional `maxItems` truncates the input array before execution; it does not fail the node unless the configured value exceeds policy validation. |
 | `orchestrator` | Dispatch a prompt to the user's orchestrator in a fresh automation-origin thread. With `wait.mode: 'until_idle'`, the executor polls that created thread's prompt queue until it has no queued or processing prompts; it does not wait for the long-lived orchestrator session lifecycle to become idle. Waited nodes output the thread's `lastMessage` by default and can opt into `resultMode: 'transcript'`. |
 | `session` | Start or resume a session and run a prompt. |
 | `stop` | Terminate the workflow with an outcome envelope. |

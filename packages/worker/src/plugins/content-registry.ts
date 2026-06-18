@@ -2055,6 +2055,8 @@ Use the operation names returned by \`workflows.schema\`. Common string operatio
 
 Foreach \`body\` may be \`llm\`, \`tool\`, \`set\`, \`stop\`, \`orchestrator\`, or \`session\`. Nested \`if\`, \`wait\`, \`approval\`, \`trigger\`, and \`foreach\` nodes are not supported inside a foreach body.
 
+\`maxItems\` is an optional truncation limit. If the input array has more items than \`maxItems\`, the foreach node processes the first \`maxItems\` items and returns \`inputCount\` plus \`truncatedCount\` in its output envelope. It does not fail just because more items were available.
+
 \`approval\` pauses until a human approves or denies:
 
 \`\`\`json

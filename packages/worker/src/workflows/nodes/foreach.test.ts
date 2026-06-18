@@ -229,7 +229,7 @@ describe('foreach — validation', () => {
     expect(result.failures?.[0]?.message).toMatch(/did not resolve to an array/);
   });
 
-  it('rejects when items exceed maxItems', async () => {
+  it('truncates items to maxItems instead of failing', async () => {
     const def: WorkflowDefinition = {
       version: 'dag/v1',
       nodes: [
@@ -253,7 +253,16 @@ describe('foreach — validation', () => {
       writer,
     );
 
-    expect(result.status).toBe('failed');
-    expect(result.failures?.[0]?.message).toMatch(/exceeds maxItems/);
+    expect(result.status).toBe('completed');
+    const loopOut = result.state.nodes.loop?.data as {
+      items: Array<{ status: string }>;
+      count: number;
+      inputCount: number;
+      truncatedCount: number;
+    };
+    expect(loopOut.count).toBe(2);
+    expect(loopOut.inputCount).toBe(3);
+    expect(loopOut.truncatedCount).toBe(1);
+    expect(loopOut.items).toHaveLength(2);
   });
 });

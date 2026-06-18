@@ -32,6 +32,8 @@ export interface ForeachItemResult {
 export interface ForeachResult {
   items: ForeachItemResult[];
   count: number;
+  inputCount: number;
+  truncatedCount: number;
   completedCount: number;
   skippedCount: number;
   failedCount: number;
@@ -51,13 +53,13 @@ export async function executeForeach(args: NodeExecutorArgs<ForeachNode>): Promi
   if (!Array.isArray(rendered)) {
     throw new Error(`foreach "${args.node.id}": items expression did not resolve to an array (got ${typeof rendered})`);
   }
-  const items = rendered as unknown[];
+  const inputItems = rendered as unknown[];
 
-  // Enforce the per-node hard cap.
+  // Limit per-node fanout without failing the workflow. Policy validation
+  // still rejects maxItems values above the environment ceiling.
   const maxItems = args.node.maxItems ?? DEFAULT_MAX_ITEMS;
-  if (items.length > maxItems) {
-    throw new Error(`foreach "${args.node.id}": ${items.length} items exceeds maxItems ceiling ${maxItems}`);
-  }
+  const items = inputItems.slice(0, maxItems);
+  const truncatedCount = Math.max(0, inputItems.length - items.length);
 
   // Cumulative across-execution cap. Track on state so multiple
   // foreach nodes in the same workflow share the budget. The counter
@@ -134,7 +136,15 @@ export async function executeForeach(args: NodeExecutorArgs<ForeachNode>): Promi
   const completedCount = results.filter((r) => r.status === 'completed').length;
   const skippedCount = results.filter((r) => r.status === 'skipped').length;
   const failedCount = results.filter((r) => r.status === 'failed').length;
-  return { items: results, count: results.length, completedCount, skippedCount, failedCount };
+  return {
+    items: results,
+    count: results.length,
+    inputCount: inputItems.length,
+    truncatedCount,
+    completedCount,
+    skippedCount,
+    failedCount,
+  };
 }
 
 /**
