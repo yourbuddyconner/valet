@@ -85,7 +85,6 @@ import { useAvailableModels } from '@/api/sessions';
 import { useAuthStore } from '@/stores/auth';
 import {
   applyDefaultDataFlowForConnection,
-  NODE_TYPE_OPTIONS,
   buildToolCatalogIndex,
   createDefaultWorkflowDefinition,
   createEdgeId,
@@ -95,6 +94,7 @@ import {
   deriveWorkflowTemplateSources,
   deriveWorkflowOutputSources,
   definitionToFlow,
+  filterNodePaletteOptions,
   flowToDefinition,
   getDefaultNodeForType,
   removeWorkflowFlowNode,
@@ -171,11 +171,13 @@ function VisualWorkflowEditorInner({
   const [selectedNodeId, setSelectedNodeId] = React.useState<string | null>(null);
   const [rawOpen, setRawOpen] = React.useState(false);
   const [nodePaletteOpen, setNodePaletteOpen] = React.useState(false);
+  const [nodePaletteQuery, setNodePaletteQuery] = React.useState('');
   const [rawJson, setRawJson] = React.useState('');
   const [rawJsonError, setRawJsonError] = React.useState<string | null>(null);
   const [armedDeleteNodeId, setArmedDeleteNodeId] = React.useState<string | null>(null);
   const [reactFlowInstance, setReactFlowInstance] = React.useState<ReactFlowInstance | null>(null);
   const deleteResetTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  const nodePaletteSearchRef = React.useRef<HTMLInputElement | null>(null);
   const { getViewport } = useReactFlow();
   const { data: actionCatalog = [], isSuccess: actionCatalogLoaded } = useActionCatalog();
 
@@ -197,6 +199,10 @@ function VisualWorkflowEditorInner({
   const selectedNode = React.useMemo(
     () => nodes.find((node) => node.id === selectedNodeId) ?? null,
     [nodes, selectedNodeId],
+  );
+  const nodePaletteResults = React.useMemo(
+    () => filterNodePaletteOptions(nodePaletteQuery),
+    [nodePaletteQuery],
   );
 
   const currentDefinition = React.useCallback(() => {
@@ -230,6 +236,12 @@ function VisualWorkflowEditorInner({
   React.useEffect(() => {
     onDefinitionChange?.(currentDefinition());
   }, [currentDefinition, onDefinitionChange]);
+
+  React.useEffect(() => {
+    if (!nodePaletteOpen) return;
+    const frame = requestAnimationFrame(() => nodePaletteSearchRef.current?.focus());
+    return () => cancelAnimationFrame(frame);
+  }, [nodePaletteOpen]);
 
   const handleNodesChange: OnNodesChange = React.useCallback((changes: NodeChange[]) => {
     const safeChanges = changes.filter((change) => !(change.type === 'remove' && change.id === 'trigger'));
@@ -340,6 +352,7 @@ function VisualWorkflowEditorInner({
     clearArmedDeleteNode();
     setRawOpen(false);
     setNodePaletteOpen(false);
+    setNodePaletteQuery('');
   }
 
   function handleApplyRawJson() {
@@ -402,6 +415,7 @@ function VisualWorkflowEditorInner({
           onPaneClick={() => {
             setSelectedNodeId(null);
             setRawOpen(false);
+            setNodePaletteOpen(false);
             clearArmedDeleteNode();
           }}
           onNodesChange={handleNodesChange}
@@ -421,37 +435,106 @@ function VisualWorkflowEditorInner({
           >
             JSON
           </Button>
-          <Dialog open={nodePaletteOpen} onOpenChange={setNodePaletteOpen}>
-            <DialogTrigger asChild>
-              <Button
-                type="button"
-                variant="secondary"
-                size="sm"
-                className="h-10 w-10 border border-neutral-200 bg-white p-0 text-neutral-800 hover:bg-neutral-100 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100 dark:hover:bg-neutral-800"
-                title="Add node"
-              >
-                <PlusIcon className="h-5 w-5" />
-              </Button>
-            </DialogTrigger>
-            <DialogContent className="max-w-sm">
-              <DialogTitle>Add node</DialogTitle>
-              <div className="grid gap-2">
-                {NODE_TYPE_OPTIONS.map((option) => (
-                  <Button
-                    key={option.type}
-                    type="button"
-                    variant="secondary"
-                    className="justify-start"
-                    onClick={() => handleAddNode(option.type)}
-                    title={option.description}
-                  >
-                    {option.label}
-                  </Button>
-                ))}
-              </div>
-            </DialogContent>
-          </Dialog>
+          <Button
+            type="button"
+            variant="secondary"
+            size="sm"
+            className={cn(
+              'h-10 w-10 border border-neutral-200 bg-white p-0 text-neutral-800 hover:bg-neutral-100 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100 dark:hover:bg-neutral-800',
+              nodePaletteOpen && 'border-accent text-accent ring-2 ring-accent/20 dark:border-red-400 dark:text-red-300 dark:ring-red-400/25',
+            )}
+            title="Add node"
+            aria-pressed={nodePaletteOpen}
+            onClick={() => {
+              setRawOpen(false);
+              setSelectedNodeId(null);
+              clearArmedDeleteNode();
+              setNodePaletteOpen((open) => !open);
+            }}
+          >
+            <PlusIcon className="h-5 w-5" />
+          </Button>
         </Panel>
+        {nodePaletteOpen && (
+          <Panel
+            position="top-right"
+            className="mt-16 w-[min(380px,calc(100vw-2rem))] overflow-hidden rounded-xl border border-neutral-200 bg-white shadow-2xl shadow-neutral-950/15 dark:border-neutral-800 dark:bg-neutral-950 dark:shadow-black/40"
+          >
+            <div
+              className="nodrag nopan"
+              role="dialog"
+              aria-label="Add node"
+              onClick={(event) => event.stopPropagation()}
+              onKeyDown={(event) => {
+                if (event.key === 'Escape') {
+                  event.stopPropagation();
+                  setNodePaletteOpen(false);
+                }
+              }}
+            >
+              <div className="flex items-start justify-between gap-3 border-b border-neutral-100 px-5 py-4 dark:border-neutral-800">
+                <div>
+                  <h2 className="text-base font-semibold text-neutral-950 dark:text-neutral-50">What happens next?</h2>
+                  <p className="mt-1 text-sm text-neutral-500 dark:text-neutral-400">Choose a node to add to the workflow.</p>
+                </div>
+                <button
+                  type="button"
+                  className="rounded-md p-1 text-neutral-500 transition hover:bg-neutral-100 hover:text-neutral-900 dark:text-neutral-400 dark:hover:bg-neutral-900 dark:hover:text-neutral-100"
+                  aria-label="Close add node panel"
+                  onClick={() => setNodePaletteOpen(false)}
+                >
+                  <CloseIcon className="h-5 w-5" />
+                </button>
+              </div>
+              <div className="border-b border-neutral-100 p-4 dark:border-neutral-800">
+                <div className="relative">
+                  <SearchIcon className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-neutral-400 dark:text-neutral-500" />
+                  <Input
+                    ref={nodePaletteSearchRef}
+                    value={nodePaletteQuery}
+                    onChange={(event) => setNodePaletteQuery(event.target.value)}
+                    placeholder="Search nodes..."
+                    className="h-11 pl-9 text-sm"
+                  />
+                </div>
+              </div>
+              <div className="max-h-[min(620px,calc(100vh-13rem))] overflow-y-auto p-2">
+                {nodePaletteResults.length > 0 ? (
+                  nodePaletteResults.map((result) => (
+                    <div key={result.section.id} className="py-1">
+                      <div className="px-3 pb-1 pt-2 text-[11px] font-semibold uppercase tracking-wide text-neutral-400 dark:text-neutral-500">
+                        {result.section.label}
+                      </div>
+                      <div className="space-y-1">
+                        {result.options.map((option) => (
+                          <button
+                            key={option.type}
+                            type="button"
+                            className="group flex w-full items-center gap-3 rounded-lg px-3 py-3 text-left transition hover:bg-neutral-100 focus:bg-neutral-100 focus:outline-none dark:hover:bg-neutral-900 dark:focus:bg-neutral-900"
+                            onClick={() => handleAddNode(option.type)}
+                          >
+                            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-neutral-200 bg-white text-neutral-500 group-hover:border-neutral-300 group-hover:text-neutral-900 dark:border-neutral-800 dark:bg-neutral-900 dark:text-neutral-400 dark:group-hover:border-neutral-700 dark:group-hover:text-neutral-100">
+                              <NodePaletteIcon icon={result.section.icon} className="h-4 w-4" />
+                            </span>
+                            <span className="min-w-0 flex-1">
+                              <span className="block text-sm font-medium text-neutral-950 dark:text-neutral-50">{option.label}</span>
+                              <span className="mt-0.5 block text-xs leading-5 text-neutral-500 dark:text-neutral-400">{option.description}</span>
+                            </span>
+                            <ChevronRightIcon className="h-4 w-4 shrink-0 text-neutral-300 transition group-hover:translate-x-0.5 group-hover:text-neutral-500 dark:text-neutral-700 dark:group-hover:text-neutral-400" />
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  ))
+                ) : (
+                  <div className="px-4 py-10 text-center text-sm text-neutral-500 dark:text-neutral-400">
+                    No nodes match "{nodePaletteQuery}".
+                  </div>
+                )}
+              </div>
+            </div>
+          </Panel>
+        )}
         {onTestRun && (
           <Panel position="bottom-center" className="p-4">
             <Button
@@ -591,6 +674,105 @@ function CloseIcon({ className }: { className?: string }) {
       <path d="m6 6 12 12" />
     </svg>
   );
+}
+
+function SearchIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+      aria-hidden="true"
+    >
+      <circle cx="11" cy="11" r="8" />
+      <path d="m21 21-4.35-4.35" />
+    </svg>
+  );
+}
+
+function ChevronRightIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+      aria-hidden="true"
+    >
+      <path d="m9 18 6-6-6-6" />
+    </svg>
+  );
+}
+
+function NodePaletteIcon({
+  icon,
+  className,
+}: {
+  icon: 'ai' | 'app' | 'data' | 'flow' | 'human';
+  className?: string;
+}) {
+  switch (icon) {
+    case 'ai':
+      return (
+        <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <path d="M12 2v4" />
+          <path d="M12 18v4" />
+          <path d="m4.93 4.93 2.83 2.83" />
+          <path d="m16.24 16.24 2.83 2.83" />
+          <path d="M2 12h4" />
+          <path d="M18 12h4" />
+          <path d="m4.93 19.07 2.83-2.83" />
+          <path d="m16.24 7.76 2.83-2.83" />
+          <circle cx="12" cy="12" r="3" />
+        </svg>
+      );
+    case 'app':
+      return (
+        <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <rect x="3" y="3" width="7" height="7" rx="1.5" />
+          <rect x="14" y="3" width="7" height="7" rx="1.5" />
+          <rect x="3" y="14" width="7" height="7" rx="1.5" />
+          <rect x="14" y="14" width="7" height="7" rx="1.5" />
+        </svg>
+      );
+    case 'data':
+      return (
+        <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <path d="M4 7h16" />
+          <path d="M4 12h16" />
+          <path d="M4 17h16" />
+          <path d="M8 4v16" />
+          <path d="M16 4v16" />
+        </svg>
+      );
+    case 'flow':
+      return (
+        <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <circle cx="6" cy="6" r="2.5" />
+          <circle cx="18" cy="6" r="2.5" />
+          <circle cx="18" cy="18" r="2.5" />
+          <path d="M8.5 6H12a4 4 0 0 1 4 4v5.5" />
+          <path d="M12 10a4 4 0 0 1 4-4" />
+        </svg>
+      );
+    case 'human':
+      return (
+        <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <path d="M16 21v-2a4 4 0 0 0-8 0v2" />
+          <circle cx="12" cy="7" r="4" />
+          <path d="m16.5 11.5 1.5 1.5 3-3" />
+        </svg>
+      );
+  }
 }
 
 function FlaskIcon({ className }: { className?: string }) {

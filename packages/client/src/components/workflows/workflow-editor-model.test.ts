@@ -7,6 +7,7 @@ import {
   deriveWorkflowTemplateSources,
   createDefaultWorkflowDefinition,
   definitionToFlow,
+  filterNodePaletteOptions,
   formatWorkflowTemplatePath,
   flowToDefinition,
   getDefaultNodeForType,
@@ -18,6 +19,48 @@ import {
 } from './workflow-editor-model';
 
 describe('workflow editor model', () => {
+  it('groups addable node types for the node palette', () => {
+    const groups = filterNodePaletteOptions('');
+
+    expect(groups.map((group) => [group.section.label, group.options.map((option) => option.type)])).toEqual([
+      ['AI', ['llm', 'orchestrator', 'session']],
+      ['Action in an app', ['tool']],
+      ['Data transformation', ['set']],
+      ['Flow', ['if', 'foreach', 'wait', 'stop']],
+      ['Human in the loop', ['approval']],
+    ]);
+  });
+
+  it('filters node palette options by node metadata', () => {
+    expect(filterNodePaletteOptions('conditions')).toEqual([
+      expect.objectContaining({
+        section: expect.objectContaining({ label: 'Flow' }),
+        options: [expect.objectContaining({ type: 'if' })],
+      }),
+    ]);
+
+    expect(filterNodePaletteOptions('approval')).toEqual([
+      expect.objectContaining({
+        section: expect.objectContaining({ label: 'Human in the loop' }),
+        options: [expect.objectContaining({ type: 'approval' })],
+      }),
+    ]);
+  });
+
+  it('returns a whole node palette category when the category matches', () => {
+    expect(filterNodePaletteOptions('flow')).toEqual([
+      expect.objectContaining({
+        section: expect.objectContaining({ label: 'Flow' }),
+        options: [
+          expect.objectContaining({ type: 'if' }),
+          expect.objectContaining({ type: 'foreach' }),
+          expect.objectContaining({ type: 'wait' }),
+          expect.objectContaining({ type: 'stop' }),
+        ],
+      }),
+    ]);
+  });
+
   it('converts dag/v1 definitions to flow nodes and edges with saved positions', () => {
     const definition: WorkflowDefinition = {
       version: 'dag/v1',

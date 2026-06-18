@@ -325,6 +325,76 @@ export const NODE_TYPE_OPTIONS: Array<{ type: AddableDagNodeType; label: string;
   { type: 'stop', label: NODE_LABELS.stop, description: NODE_DESCRIPTIONS.stop },
 ];
 
+export interface NodePaletteSection {
+  id: string;
+  label: string;
+  description: string;
+  icon: 'ai' | 'app' | 'data' | 'flow' | 'human';
+  types: AddableDagNodeType[];
+}
+
+export const NODE_PALETTE_SECTIONS: NodePaletteSection[] = [
+  {
+    id: 'ai',
+    label: 'AI',
+    description: 'Build autonomous agents, summarize, or search documents.',
+    icon: 'ai',
+    types: ['llm', 'orchestrator', 'session'],
+  },
+  {
+    id: 'app',
+    label: 'Action in an app',
+    description: 'Do something in an app or service like GitHub or Slack.',
+    icon: 'app',
+    types: ['tool'],
+  },
+  {
+    id: 'data',
+    label: 'Data transformation',
+    description: 'Manipulate, filter, or convert data.',
+    icon: 'data',
+    types: ['set'],
+  },
+  {
+    id: 'flow',
+    label: 'Flow',
+    description: 'Branch, loop, pause, or finish the workflow.',
+    icon: 'flow',
+    types: ['if', 'foreach', 'wait', 'stop'],
+  },
+  {
+    id: 'human',
+    label: 'Human in the loop',
+    description: 'Wait for approval or human input before continuing.',
+    icon: 'human',
+    types: ['approval'],
+  },
+];
+
+export interface NodePaletteResult {
+  section: NodePaletteSection;
+  options: Array<{ type: AddableDagNodeType; label: string; description: string }>;
+}
+
+export function filterNodePaletteOptions(query: string): NodePaletteResult[] {
+  const normalizedQuery = query.trim().toLowerCase();
+  const optionsByType = new Map(NODE_TYPE_OPTIONS.map((option) => [option.type, option]));
+
+  return NODE_PALETTE_SECTIONS
+    .map((section) => {
+      const options = section.types
+        .map((type) => optionsByType.get(type))
+        .filter((option): option is { type: AddableDagNodeType; label: string; description: string } => {
+          if (!option) return false;
+          if (!normalizedQuery) return true;
+          const searchable = `${section.label} ${section.description} ${option.label} ${option.description} ${option.type}`.toLowerCase();
+          return searchable.includes(normalizedQuery);
+        });
+      return { section, options };
+    })
+    .filter((result) => result.options.length > 0);
+}
+
 export function createDefaultWorkflowDefinition(): WorkflowDefinition {
   return {
     version: 'dag/v1',
