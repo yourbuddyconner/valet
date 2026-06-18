@@ -8,14 +8,12 @@ import {
   usePublishWorkflow,
   useValidateWorkflowDraft,
   useTestRunWorkflow,
-  useWorkflowVersions,
-  useRestoreWorkflowVersion,
   useDeleteWorkflow,
   useUpdateWorkflow,
 } from '@/api/workflows';
-import { useWorkflowExecutions } from '@/api/executions';
-import { ExecutionApprovalPanel } from '@/components/workflows/execution-approval-panel';
+import { useExecution, useWorkflowExecutions } from '@/api/executions';
 import { VisualWorkflowEditor } from '@/components/workflows/visual-workflow-editor';
+import { WorkflowExecutionViewer } from '@/components/workflows/workflow-execution-viewer';
 import {
   buildWorkflowEditorTabs,
   getWorkflowEnabledLabel,
@@ -36,7 +34,6 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
 import { toastError, toastSuccess } from '@/hooks/use-toast';
-import { formatRelativeTime } from '@/lib/format';
 
 export const Route = createFileRoute('/workflows/$workflowId')({
   component: WorkflowDetailPage,
@@ -47,14 +44,12 @@ function WorkflowDetailPage() {
   const navigate = useNavigate();
   const { data, isLoading, error } = useWorkflow(workflowId);
   const { data: draftData, isLoading: draftLoading } = useWorkflowDraft(workflowId);
-  const { data: versionsData } = useWorkflowVersions(workflowId);
   const { data: executionsData } = useWorkflowExecutions(workflowId);
 
   const saveDraft = useSaveWorkflowDraft();
   const publish = usePublishWorkflow();
   const validate = useValidateWorkflowDraft();
   const testRun = useTestRunWorkflow();
-  const restoreVersion = useRestoreWorkflowVersion();
   const deleteWorkflow = useDeleteWorkflow();
   const updateWorkflow = useUpdateWorkflow();
 
@@ -62,10 +57,20 @@ function WorkflowDetailPage() {
   const [editorDefinition, setEditorDefinition] = useState<WorkflowDefinition | null>(null);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<WorkflowEditorTab>('editor');
+  const [selectedExecutionId, setSelectedExecutionId] = useState<string | null>(null);
+  const [selectedExecutionNodeId, setSelectedExecutionNodeId] = useState<string | null>(null);
+  const selectedExecution = useExecution(selectedExecutionId ?? '');
 
   useEffect(() => {
     setEditorDefinition(draftData?.draft ?? null);
   }, [draftData?.draft]);
+
+  useEffect(() => {
+    const executions = executionsData?.executions ?? [];
+    if (selectedExecutionId || executions.length === 0) return;
+    setSelectedExecutionId(executions[0]!.id);
+    setSelectedExecutionNodeId(null);
+  }, [executionsData?.executions, selectedExecutionId]);
 
   if (isLoading) {
     return (
@@ -138,7 +143,12 @@ function WorkflowDetailPage() {
       testRun.mutate(
         { workflowId, inputs: {} },
         {
-          onSuccess: (res) => toastSuccess(`Test run started (${res.executionId})`),
+          onSuccess: (res) => {
+            setActiveTab('executions');
+            setSelectedExecutionId(res.executionId);
+            setSelectedExecutionNodeId(null);
+            toastSuccess(`Test run started (${res.executionId})`);
+          },
           onError: (err) =>
             toastError(err instanceof Error ? err.message : 'Failed to start test run'),
         },
@@ -156,17 +166,6 @@ function WorkflowDetailPage() {
         onSuccess: () => toastSuccess('Draft saved'),
         onError: (err) =>
           toastError(err instanceof Error ? err.message : 'Failed to save draft'),
-      },
-    );
-  }
-
-  function handleRestore(versionId: string) {
-    restoreVersion.mutate(
-      { workflowId, versionId },
-      {
-        onSuccess: () => toastSuccess('Restored draft from version'),
-        onError: (err) =>
-          toastError(err instanceof Error ? err.message : 'Failed to restore version'),
       },
     );
   }
@@ -195,7 +194,6 @@ function WorkflowDetailPage() {
     );
   }
 
-  const versions = versionsData?.versions ?? [];
   const executions = executionsData?.executions ?? [];
   const editorTabs = buildWorkflowEditorTabs(executions.length);
 
@@ -356,88 +354,19 @@ function WorkflowDetailPage() {
             />
           )
         ) : activeTab === 'executions' ? (
-          <div className="min-h-0 flex-1 overflow-auto bg-neutral-50 p-5 dark:bg-neutral-950">
-            <div className="grid gap-5 xl:grid-cols-[minmax(0,1.5fr)_minmax(320px,0.8fr)]">
-              <section className="rounded-lg border border-neutral-200 bg-white dark:border-neutral-800 dark:bg-neutral-900/60">
-                <div className="border-b border-neutral-200 px-4 py-3 dark:border-neutral-800">
-                  <h2 className="text-sm font-medium text-neutral-950 dark:text-neutral-100">Executions</h2>
-                </div>
-                {executions.length === 0 ? (
-                  <p className="p-4 text-sm text-neutral-500">No executions yet.</p>
-                ) : (
-                  <ul className="divide-y divide-neutral-200 dark:divide-neutral-800">
-                    {executions.slice(0, 20).map((exec) => (
-                      <li key={exec.id} className="space-y-2 p-4 text-xs">
-                        <div className="flex items-center justify-between gap-3">
-                          <div className="min-w-0 flex-1">
-                            <div className="flex items-center gap-2">
-                              <Badge variant={executionBadgeVariant(exec.status)}>
-                                {exec.status}
-                              </Badge>
-                              <Link
-                                to="/automation/executions/$executionId"
-                                params={{ executionId: exec.id }}
-                                className="truncate font-mono text-neutral-500 underline-offset-2 hover:text-neutral-950 hover:underline dark:text-neutral-400 dark:hover:text-neutral-100"
-                              >
-                                {exec.id.slice(0, 8)}
-                              </Link>
-                            </div>
-                            <div className="mt-1 tabular-nums text-neutral-500">
-                              {formatRelativeTime(exec.startedAt)}
-                            </div>
-                          </div>
-                          {exec.error && (
-                            <span
-                              className="line-clamp-2 max-w-[40%] text-pretty text-red-600 dark:text-red-400"
-                              title={exec.error}
-                            >
-                              {exec.error}
-                            </span>
-                          )}
-                        </div>
-                        {isActiveExecutionStatus(exec.status) && (
-                          <ExecutionApprovalPanel executionId={exec.id} variant="inline" />
-                        )}
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </section>
-
-              <section className="rounded-lg border border-neutral-200 bg-white dark:border-neutral-800 dark:bg-neutral-900/60">
-                <div className="border-b border-neutral-200 px-4 py-3 dark:border-neutral-800">
-                  <h2 className="text-sm font-medium text-neutral-950 dark:text-neutral-100">Versions</h2>
-                </div>
-                {versions.length === 0 ? (
-                  <p className="p-4 text-sm text-neutral-500">No published versions yet.</p>
-                ) : (
-                  <ul className="divide-y divide-neutral-200 dark:divide-neutral-800">
-                    {versions.map((v) => (
-                      <li key={v.id} className="flex items-center justify-between gap-3 p-4 text-xs">
-                        <div className="min-w-0 flex-1">
-                          <div className="font-medium text-neutral-950 dark:text-neutral-100">v{v.version}</div>
-                          {v.publishNote && (
-                            <div className="text-pretty text-neutral-500 dark:text-neutral-400">{v.publishNote}</div>
-                          )}
-                          <div className="tabular-nums text-neutral-500">
-                            {formatRelativeTime(v.createdAt)}
-                          </div>
-                        </div>
-                        <Button
-                          variant="secondary"
-                          onClick={() => handleRestore(v.id)}
-                          disabled={restoreVersion.isPending}
-                          className="border border-neutral-200 bg-white text-neutral-800 hover:bg-neutral-100 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100 dark:hover:bg-neutral-800"
-                        >
-                          Restore
-                        </Button>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </section>
-            </div>
-          </div>
+          <WorkflowExecutionViewer
+            definition={draftData?.draft ?? null}
+            execution={selectedExecution.data?.execution ?? null}
+            executions={executions}
+            isLoadingExecution={selectedExecution.isLoading}
+            selectedExecutionId={selectedExecutionId}
+            selectedNodeId={selectedExecutionNodeId}
+            onSelectExecution={(executionId) => {
+              setSelectedExecutionId(executionId);
+              setSelectedExecutionNodeId(null);
+            }}
+            onSelectNode={setSelectedExecutionNodeId}
+          />
         ) : (
           <div className="grid min-h-0 flex-1 place-items-center bg-neutral-50 p-5 dark:bg-neutral-950">
             <section className="w-full max-w-md rounded-lg border border-neutral-200 bg-white p-5 text-center dark:border-neutral-800 dark:bg-neutral-900/70">
@@ -474,30 +403,4 @@ function MoreIcon() {
       <circle cx="5" cy="12" r="1" />
     </svg>
   );
-}
-
-function executionBadgeVariant(
-  status: string,
-): 'success' | 'error' | 'secondary' | 'default' {
-  switch (status) {
-    case 'completed':
-      return 'success';
-    case 'failed':
-      return 'error';
-    case 'cancelled':
-      return 'secondary';
-    case 'running':
-    case 'pending':
-    case 'waiting_approval':
-      return 'default';
-    default:
-      return 'secondary';
-  }
-}
-
-// Active = not yet terminal. Parallel waiting siblings can leave the
-// aggregate status at 'running' or 'waiting_time' while approvals are
-// still pending on individual nodes.
-function isActiveExecutionStatus(status: string): boolean {
-  return status === 'pending' || status === 'running' || status === 'waiting_approval' || status === 'waiting_time';
 }
