@@ -195,7 +195,17 @@ export function useRunTrigger() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: ({ triggerId, variables }: { triggerId: string; variables?: Record<string, unknown> }) =>
+    mutationFn: ({
+      triggerId,
+      variables,
+      triggerData,
+      inputs,
+    }: {
+      triggerId: string;
+      variables?: Record<string, unknown>;
+      triggerData?: Record<string, unknown>;
+      inputs?: Record<string, unknown>;
+    }) =>
       api.post<{
         executionId?: string;
         workflowId?: string | null;
@@ -209,7 +219,9 @@ export function useRunTrigger() {
         message: string;
         dispatched?: boolean;
       }>(`/triggers/${triggerId}/run`, {
-        variables,
+        ...(variables !== undefined ? { variables } : {}),
+        ...(triggerData !== undefined ? { triggerData } : {}),
+        ...(inputs !== undefined ? { inputs } : {}),
         clientRequestId: createClientRequestId(),
       }),
     onSuccess: (data) => {

@@ -148,6 +148,8 @@ export async function runTrigger(
   body: Record<string, unknown> & {
     clientRequestId?: string;
     variables?: Record<string, unknown>;
+    triggerData?: Record<string, unknown>;
+    inputs?: Record<string, unknown>;
   },
   // workerOrigin survives from the runner-driven dispatch path so the
   // existing trigger-run callers and tests stay aligned. Workflow
@@ -258,6 +260,8 @@ export async function runTrigger(
     ...extractedVariables,
     ...(body.variables || {}),
   };
+  const triggerData = body.triggerData ?? variables;
+  const inputOverrides = body.inputs ?? variables;
 
   const clientRequestId = body.clientRequestId || crypto.randomUUID();
   const idempotencyKey = `manual-trigger:${triggerId}:${userId}:${clientRequestId}`;
@@ -284,12 +288,14 @@ export async function runTrigger(
       timestamp: new Date().toISOString(),
       // See runWorkflowManually above for the trigger.data vs.
       // inputOverrides reasoning. Manual trigger API calls reuse the
-      // same shape: variables populate both the envelope and the
-      // declared inputs.
-      data: variables,
+      // same shape by default: legacy variables populate both the
+      // envelope and the declared inputs. New callers may pass
+      // triggerData + inputs separately so arbitrary trigger payloads
+      // don't get rejected as unknown declared inputs.
+      data: triggerData,
       metadata: { triggeredBy: 'api', clientRequestId },
     },
-    ...(Object.keys(variables).length > 0 ? { inputOverrides: variables } : {}),
+    ...(Object.keys(inputOverrides).length > 0 ? { inputOverrides } : {}),
     idempotencyKey,
   });
   if (result.status === 'rejected') {

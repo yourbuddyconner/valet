@@ -121,6 +121,8 @@ const manualRunSchema = z.object({
 const triggerRunSchema = z.object({
   clientRequestId: z.string().min(8).optional(),
   variables: z.record(z.unknown()).optional(),
+  triggerData: z.record(z.unknown()).optional(),
+  inputs: z.record(z.unknown()).optional(),
 }).passthrough().superRefine((value, ctx) => rejectLegacyRunFields(value, ctx));
 
 /**

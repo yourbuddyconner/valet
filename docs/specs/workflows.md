@@ -270,7 +270,7 @@ Active executions (`pending`, `running`, `waiting_approval`, `waiting_time`) are
 | PATCH | `/:id` | Update trigger (mints + returns a fresh token when transitioning to webhook) |
 | DELETE | `/:id` | Delete trigger |
 | POST | `/:id/enable`, `/:id/disable` | Toggle enabled state |
-| POST | `/:id/run` | Manually fire a trigger |
+| POST | `/:id/run` | Manually fire a trigger; accepts legacy `variables` or split `triggerData` + `inputs` |
 | ALL | `/:triggerId/webhook` | Forward-facing webhook endpoint — authenticates via `X-Valet-Trigger-Token` (constant-time compare) |
 
 A path-based fallback at `/webhooks/:path` resolves with a constant-time `config.secret` compare for deployments that wired up webhooks before the per-trigger token model. The trigger API and UI surface only the per-trigger token URL.
@@ -283,7 +283,7 @@ Workflow nodes render as compact cards with explicit handles and high-contrast e
 
 Node parameter fields that accept template strings use the workflow template helper. Typing inside `{{...}}` opens a typeahead sourced from the selected node's transitive upstream trigger/input/node outputs; selecting a suggestion inserts the full expression at the cursor. The same control validates empty, unclosed, and unknown template tags inline so common mistakes are visible before save/publish validation.
 
-The executions tab is a read-only execution inspector modeled after n8n's execution view. It shows a narrow run list on the left, the workflow graph in the center, and an execution/node detail panel on the right. Selecting a run fetches `GET /api/executions/:id`; the canvas overlays the latest `workflow_execution_nodes` trace row for each definition node, showing status, duration, skipped nodes, and node errors without changing the draft layout. Selecting a node opens its trace payload in the right panel so users can inspect input previews, outputs, errors, and reasons in graph context. Starting a test run switches to this tab and pins the newly-created execution while the workflow execution list catches up. The tests tab provides an explicit draft test-run entrypoint; test runs save the current draft first, then dispatch `/api/workflows/:id/test-run`.
+The executions tab is a read-only execution inspector modeled after n8n's execution view. It shows a narrow run list on the left, the workflow graph in the center, and an execution/node detail panel on the right. Selecting a run fetches `GET /api/executions/:id`; the canvas overlays the latest `workflow_execution_nodes` trace row for each definition node, showing status, duration, skipped nodes, and node errors without changing the draft layout. Selecting a node opens its trace payload in the right panel so users can inspect input previews, outputs, errors, and reasons in graph context. Starting a test run switches to this tab and pins the newly-created execution while the workflow execution list catches up. The tests tab provides an explicit draft test-run entrypoint; test buttons open `ManualWorkflowDialog`, which collects a JSON `triggerData` payload and typed controls for declared workflow `inputs`, saves the current draft, then dispatches `/api/workflows/:id/test-run`. The trigger list play button uses the same dialog for workflow-backed triggers and submits the split payload to `/api/triggers/:id/run`; orchestrator-only schedule triggers still run directly.
 
 ## Flows
 

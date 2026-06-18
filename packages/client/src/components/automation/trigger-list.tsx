@@ -14,7 +14,11 @@ import {
   useRunTrigger,
   useUpdateTrigger,
 } from '@/api/triggers';
-import { useWorkflows } from '@/api/workflows';
+import { useWorkflowDraft, useWorkflows } from '@/api/workflows';
+import {
+  ManualWorkflowDialog,
+  type ManualWorkflowPayload,
+} from '@/components/workflows/manual-workflow-dialog';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
@@ -211,6 +215,7 @@ export function TriggerList() {
   const [editingTrigger, setEditingTrigger] = React.useState<Trigger | null>(null);
   const [form, setForm] = React.useState<TriggerFormState>(DEFAULT_FORM);
   const [formError, setFormError] = React.useState<string | null>(null);
+  const [manualTrigger, setManualTrigger] = React.useState<Trigger | null>(null);
   // Webhook-token reveal state. Populated from the create/PATCH response
   // when the server mints a token (new webhook trigger OR transition
   // from manual/schedule → webhook). The token is shown ONCE and then
@@ -222,6 +227,8 @@ export function TriggerList() {
 
   const triggers = data?.triggers ?? [];
   const workflows = workflowsData?.workflows ?? [];
+  const manualWorkflowId = manualTrigger?.workflowId ?? '';
+  const { data: manualDraftData, isLoading: manualDraftLoading } = useWorkflowDraft(manualWorkflowId);
 
   const filtered = React.useMemo(() => {
     let result = triggers;
@@ -334,9 +341,33 @@ export function TriggerList() {
     }
   };
 
-  const onRun = async (trigger: Trigger) => {
+  const runTriggerDirectly = async (trigger: Trigger) => {
     try {
       const result = await runTrigger.mutateAsync({ triggerId: trigger.id });
+      toastSuccess('Trigger dispatched', result.message);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Run failed';
+      toastError('Failed to run trigger', message);
+    }
+  };
+
+  const onRun = (trigger: Trigger) => {
+    if (trigger.workflowId) {
+      setManualTrigger(trigger);
+      return;
+    }
+    void runTriggerDirectly(trigger);
+  };
+
+  const onRunManualTrigger = async (payload: ManualWorkflowPayload) => {
+    if (!manualTrigger) return;
+    try {
+      const result = await runTrigger.mutateAsync({
+        triggerId: manualTrigger.id,
+        triggerData: payload.triggerData,
+        inputs: payload.inputs,
+      });
+      setManualTrigger(null);
       toastSuccess('Trigger dispatched', result.message);
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Run failed';
@@ -383,6 +414,18 @@ export function TriggerList() {
 
   return (
     <div className="space-y-4">
+      <ManualWorkflowDialog
+        open={Boolean(manualTrigger)}
+        onOpenChange={(nextOpen) => {
+          if (!nextOpen) setManualTrigger(null);
+        }}
+        definition={manualDraftData?.draft ?? null}
+        workflowName={manualTrigger?.workflowName}
+        isLoadingDefinition={Boolean(manualTrigger?.workflowId) && manualDraftLoading}
+        isSubmitting={runTrigger.isPending}
+        onSubmit={onRunManualTrigger}
+      />
+
       {/* Toolbar */}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex items-center gap-3">

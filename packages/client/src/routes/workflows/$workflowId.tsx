@@ -15,6 +15,10 @@ import { useExecution, useWorkflowExecutions } from '@/api/executions';
 import { VisualWorkflowEditor } from '@/components/workflows/visual-workflow-editor';
 import { WorkflowExecutionViewer } from '@/components/workflows/workflow-execution-viewer';
 import {
+  ManualWorkflowDialog,
+  type ManualWorkflowPayload,
+} from '@/components/workflows/manual-workflow-dialog';
+import {
   buildWorkflowEditorTabs,
   getWorkflowEnabledLabel,
   type WorkflowEditorTab,
@@ -59,6 +63,7 @@ function WorkflowDetailPage() {
   const [activeTab, setActiveTab] = useState<WorkflowEditorTab>('editor');
   const [selectedExecutionId, setSelectedExecutionId] = useState<string | null>(null);
   const [selectedExecutionNodeId, setSelectedExecutionNodeId] = useState<string | null>(null);
+  const [manualDialogOpen, setManualDialogOpen] = useState(false);
   const selectedExecution = useExecution(selectedExecutionId ?? '');
 
   useEffect(() => {
@@ -137,13 +142,14 @@ function WorkflowDetailPage() {
     );
   }
 
-  async function handleTestRun() {
+  async function startManualWorkflowRun(payload: ManualWorkflowPayload) {
     try {
       await saveCurrentEditorDraft();
       testRun.mutate(
-        { workflowId, inputs: {} },
+        { workflowId, triggerData: payload.triggerData, inputs: payload.inputs },
         {
           onSuccess: (res) => {
+            setManualDialogOpen(false);
             setActiveTab('executions');
             setSelectedExecutionId(res.executionId);
             setSelectedExecutionNodeId(null);
@@ -156,6 +162,10 @@ function WorkflowDetailPage() {
     } catch (err) {
       toastError(err instanceof Error ? err.message : 'Failed to save draft');
     }
+  }
+
+  function openManualWorkflowDialog() {
+    setManualDialogOpen(true);
   }
 
   function handleSaveClick() {
@@ -220,6 +230,16 @@ function WorkflowDetailPage() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      <ManualWorkflowDialog
+        open={manualDialogOpen}
+        onOpenChange={setManualDialogOpen}
+        definition={editorDefinition ?? draftData?.draft ?? null}
+        workflowName={workflow.name}
+        isLoadingDefinition={draftLoading}
+        isSubmitting={testRun.isPending || saveDraft.isPending}
+        onSubmit={startManualWorkflowRun}
+      />
 
       <header className="grid h-16 shrink-0 grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-4 border-b border-neutral-200 bg-white/95 px-5 shadow-sm backdrop-blur dark:border-neutral-800 dark:bg-neutral-950/95 dark:shadow-none">
         <div className="flex min-w-0 items-center gap-3">
@@ -300,7 +320,7 @@ function WorkflowDetailPage() {
           </Button>
           <Button
             variant="secondary"
-            onClick={handleTestRun}
+            onClick={openManualWorkflowDialog}
             disabled={testRun.isPending || saveDraft.isPending}
             className="hidden border border-neutral-200 bg-white text-neutral-800 hover:bg-neutral-100 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100 dark:hover:bg-neutral-800 sm:inline-flex"
           >
@@ -348,7 +368,7 @@ function WorkflowDetailPage() {
             <VisualWorkflowEditor
               definition={draftData?.draft ?? null}
               onDefinitionChange={setEditorDefinition}
-              onTestRun={handleTestRun}
+              onTestRun={openManualWorkflowDialog}
               isTesting={testRun.isPending || saveDraft.isPending}
               className="min-h-0 flex-1 rounded-none border-0"
             />
@@ -373,7 +393,7 @@ function WorkflowDetailPage() {
               <h2 className="text-base font-medium text-neutral-950 dark:text-neutral-100">Test workflow</h2>
               <Button
                 className="mt-5 bg-red-500 text-white hover:bg-red-600"
-                onClick={handleTestRun}
+                onClick={openManualWorkflowDialog}
                 disabled={testRun.isPending || saveDraft.isPending}
               >
                 {testRun.isPending || saveDraft.isPending ? 'Starting...' : 'Test workflow'}
