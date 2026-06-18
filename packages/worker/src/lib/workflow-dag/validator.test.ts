@@ -669,6 +669,41 @@ describe('validateAgainstAvailableModels', () => {
 
     expect(errs).toEqual([]);
   });
+
+  it('prioritizes related and newer model suggestions over raw catalog order', () => {
+    const def = definition({
+      nodes: [
+        { id: 'generate_welcome', type: 'llm', model: 'anthropic:claude-sonnet-4-6-20250929', prompt: 'do it', maxOutputTokens: 100 },
+        { id: 'finish', type: 'stop' },
+      ],
+      edges: [{ from: 'generate_welcome', to: 'finish' }],
+    });
+
+    const errs = validateAgainstAvailableModels(def, [
+      {
+        provider: 'Anthropic',
+        models: [
+          { id: 'anthropic/claude-opus-4-5', name: 'Claude Opus 4.5' },
+          { id: 'anthropic/claude-haiku-4-5-20251001', name: 'Claude Haiku 4.5' },
+          { id: 'anthropic/claude-opus-4-8', name: 'Claude Opus 4.8' },
+          { id: 'anthropic/claude-sonnet-4-20250514', name: 'Claude Sonnet 4' },
+          { id: 'anthropic/claude-sonnet-4-5', name: 'Claude Sonnet 4.5' },
+          { id: 'anthropic/claude-sonnet-4-5-20251101', name: 'Claude Sonnet 4.5 20251101' },
+        ],
+      },
+    ]);
+
+    const message = errs[0]?.message ?? '';
+    const sonnetLatestIndex = message.indexOf('anthropic:claude-sonnet-4-5-20251101');
+    const sonnetStableIndex = message.indexOf('anthropic:claude-sonnet-4-5');
+    const opusIndex = message.indexOf('anthropic:claude-opus-4-8');
+
+    expect(sonnetLatestIndex).toBeGreaterThan(-1);
+    expect(sonnetStableIndex).toBeGreaterThan(-1);
+    expect(opusIndex).toBeGreaterThan(-1);
+    expect(sonnetLatestIndex).toBeLessThan(opusIndex);
+    expect(sonnetStableIndex).toBeLessThan(opusIndex);
+  });
 });
 
 describe('validateDefinition — body-level templates and per-node baseline', () => {

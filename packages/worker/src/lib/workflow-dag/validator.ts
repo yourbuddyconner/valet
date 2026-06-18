@@ -944,6 +944,64 @@ function catalogIdToWorkflowId(catalogId: string): string {
   return `${catalogId.slice(0, slash)}:${catalogId.slice(slash + 1)}`;
 }
 
+function rankedModelSuggestions(invalidCatalogId: string, providerModels: string[]): string[] {
+  const target = modelRankParts(invalidCatalogId);
+  return [...providerModels].sort((a, b) => {
+    const aParts = modelRankParts(a);
+    const bParts = modelRankParts(b);
+    const aRelated = sharedTokenCount(target.meaningfulTokens, aParts.meaningfulTokens);
+    const bRelated = sharedTokenCount(target.meaningfulTokens, bParts.meaningfulTokens);
+    if (aRelated !== bRelated) return bRelated - aRelated;
+
+    const version = compareNumberArraysDesc(aParts.version, bParts.version);
+    if (version !== 0) return version;
+
+    if (aParts.date !== bParts.date) return bParts.date - aParts.date;
+    return a.localeCompare(b);
+  });
+}
+
+interface ModelRankParts {
+  meaningfulTokens: Set<string>;
+  version: number[];
+  date: number;
+}
+
+function modelRankParts(catalogId: string): ModelRankParts {
+  const modelId = catalogId.includes('/') ? catalogId.slice(catalogId.indexOf('/') + 1) : catalogId;
+  const tokens = modelId.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+  const meaningfulTokens = new Set(tokens.filter((token) => /^[a-z]+$/.test(token) && token !== 'claude'));
+  const numericTokens = tokens.filter((token) => /^\d+$/.test(token));
+  const dates = numericTokens
+    .filter((token) => token.length === 8)
+    .map((token) => Number(token));
+  return {
+    meaningfulTokens,
+    version: numericTokens
+      .filter((token) => token.length < 8)
+      .map((token) => Number(token)),
+    date: dates.length > 0 ? Math.max(...dates) : 0,
+  };
+}
+
+function sharedTokenCount(left: Set<string>, right: Set<string>): number {
+  let count = 0;
+  for (const token of left) {
+    if (right.has(token)) count++;
+  }
+  return count;
+}
+
+function compareNumberArraysDesc(left: number[], right: number[]): number {
+  const max = Math.max(left.length, right.length);
+  for (let index = 0; index < max; index++) {
+    const leftValue = left[index] ?? -1;
+    const rightValue = right[index] ?? -1;
+    if (leftValue !== rightValue) return rightValue - leftValue;
+  }
+  return 0;
+}
+
 function collectEnvErrors(
   node: WorkflowNode,
   env: Env,
@@ -1007,7 +1065,7 @@ function collectModelAvailabilityErrors(
       if (!providerModels || providerModels.length === 0) return;
       if (modelLookup.ids.has(catalogId)) return;
 
-      const suggestions = providerModels
+      const suggestions = rankedModelSuggestions(catalogId, providerModels)
         .slice(0, 8)
         .map(catalogIdToWorkflowId)
         .join(', ');
