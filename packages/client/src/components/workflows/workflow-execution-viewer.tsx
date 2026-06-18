@@ -6,6 +6,7 @@ import type { WorkflowDefinition } from '@valet/shared';
 import { Canvas } from '@/components/ai-elements/canvas';
 import { Controls } from '@/components/ai-elements/controls';
 import { Edge } from '@/components/ai-elements/edge';
+import { ExecutionApprovalCard } from '@/components/workflows/execution-approval-panel';
 import {
   Node,
   NodeContent,
@@ -26,6 +27,7 @@ import {
   buildExecutionNodeStateMap,
   formatExecutionDuration,
   getExecutionDisplayStatus,
+  getSelectedNodeApproval,
   type ExecutionDisplayStatus,
 } from './workflow-execution-viewer-model';
 
@@ -253,6 +255,12 @@ function ExecutionDetailsPanel({
     return <p className="p-4 text-sm text-neutral-500">Select an execution to inspect it.</p>;
   }
 
+  const selectedApproval = getSelectedNodeApproval(
+    selectedNodeId,
+    execution.approvals,
+    selectedTrace?.approvalId,
+  );
+
   return (
     <div className="space-y-4 p-4">
       <section>
@@ -284,6 +292,11 @@ function ExecutionDetailsPanel({
             <KeyValue label="Status" value={selectedTrace?.status ?? 'not_run'} />
             <KeyValue label="Duration" value={formatExecutionDuration(selectedTrace?.durationMs)} />
             <TracePreview trace={selectedTrace} />
+            {selectedApproval && (
+              <div className="mt-3">
+                <ExecutionApprovalCard executionId={execution.id} approval={selectedApproval} />
+              </div>
+            )}
           </div>
         ) : (
           <p className="mt-2 text-sm text-neutral-500">Select a node to inspect its input, output, and error.</p>

@@ -50,7 +50,7 @@ export function ExecutionApprovalPanel({
     return (
       <div className="space-y-2">
         {pending.map((approval) => (
-          <ApprovalRow key={approval.id} executionId={executionId} approval={approval} />
+          <ExecutionApprovalCard key={approval.id} executionId={executionId} approval={approval} />
         ))}
       </div>
     );
@@ -66,18 +66,19 @@ export function ExecutionApprovalPanel({
       </div>
       <div className="space-y-3">
         {pending.map((approval) => (
-          <ApprovalRow key={approval.id} executionId={executionId} approval={approval} />
+          <ExecutionApprovalCard key={approval.id} executionId={executionId} approval={approval} />
         ))}
       </div>
     </div>
   );
 }
 
-function ApprovalRow({ executionId, approval }: { executionId: string; approval: ExecutionApproval }) {
+export function ExecutionApprovalCard({ executionId, approval }: { executionId: string; approval: ExecutionApproval }) {
   const approve = useApproveExecutionApproval();
   const deny = useDenyExecutionApproval();
   const [reason, setReason] = React.useState('');
   const busy = approve.isPending || deny.isPending;
+  const isPending = approval.status === 'pending';
 
   const onApprove = async () => {
     try {
@@ -138,23 +139,31 @@ function ApprovalRow({ executionId, approval }: { executionId: string; approval:
         </div>
       </div>
 
-      <div className="mt-3 space-y-2">
-        <input
-          type="text"
-          value={reason}
-          onChange={(e) => setReason(e.target.value)}
-          placeholder="Reason (optional, sent on deny)"
-          className="w-full rounded-md border border-neutral-200 bg-white px-3 py-1.5 text-xs text-neutral-900 placeholder:text-neutral-400 focus:outline-none focus:ring-2 focus:ring-neutral-900 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-100 dark:placeholder:text-neutral-500 dark:focus:ring-neutral-100"
-        />
-        <div className="flex gap-2">
-          <Button size="sm" onClick={onApprove} disabled={busy}>
-            {approve.isPending ? 'Approving…' : 'Approve'}
-          </Button>
-          <Button size="sm" variant="destructive" onClick={onDeny} disabled={busy}>
-            {deny.isPending ? 'Denying…' : 'Deny'}
-          </Button>
+      {isPending ? (
+        <div className="mt-3 space-y-2">
+          <input
+            type="text"
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            placeholder="Reason (optional, sent on deny)"
+            className="w-full rounded-md border border-neutral-200 bg-white px-3 py-1.5 text-xs text-neutral-900 placeholder:text-neutral-400 focus:outline-none focus:ring-2 focus:ring-neutral-900 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-100 dark:placeholder:text-neutral-500 dark:focus:ring-neutral-100"
+          />
+          <div className="flex gap-2">
+            <Button size="sm" onClick={onApprove} disabled={busy}>
+              {approve.isPending ? 'Approving…' : 'Approve'}
+            </Button>
+            <Button size="sm" variant="destructive" onClick={onDeny} disabled={busy}>
+              {deny.isPending ? 'Denying…' : 'Deny'}
+            </Button>
+          </div>
         </div>
-      </div>
+      ) : (
+        <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-neutral-500 dark:text-neutral-400">
+          <Badge variant="secondary">{approval.status}</Badge>
+          {approval.resolvedAt && <span>resolved {formatRelativeTime(approval.resolvedAt)}</span>}
+          {approval.resolvedBy && <span className="truncate">by {approval.resolvedBy}</span>}
+        </div>
+      )}
     </div>
   );
 }
