@@ -27,6 +27,7 @@ import type { WorkflowDefinition } from '@valet/shared';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -276,12 +277,26 @@ function WorkflowDetailPage() {
                 dag/v1
               </span>
               {workflow.description && (
-                <span
-                  className="hidden min-w-0 truncate text-xs text-neutral-500 dark:text-neutral-400 md:block"
-                  title={workflow.description}
-                >
-                  {workflow.description}
-                </span>
+                <TooltipProvider delayDuration={250}>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <span
+                        tabIndex={0}
+                        className="hidden min-w-0 cursor-default truncate rounded-sm text-xs text-neutral-500 outline-none focus-visible:ring-2 focus-visible:ring-violet-500/40 dark:text-neutral-400 md:block"
+                      >
+                        {workflow.description}
+                      </span>
+                    </TooltipTrigger>
+                    <TooltipContent
+                      side="bottom"
+                      align="start"
+                      sideOffset={8}
+                      className="max-w-sm rounded-lg border border-neutral-200 bg-white px-3.5 py-3 text-sm leading-snug text-neutral-700 shadow-xl dark:border-neutral-800 dark:bg-neutral-950 dark:text-neutral-200"
+                    >
+                      {workflow.description}
+                    </TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
               )}
             </div>
           </div>
