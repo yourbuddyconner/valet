@@ -2,8 +2,11 @@ import { describe, expect, it } from 'vitest';
 import type { ExecutionApproval, ExecutionNode } from '@/api/executions';
 import {
   buildExecutionNodeStateMap,
+  buildTraceDetailSections,
+  getNodeParametersForDisplay,
   getExecutionDisplayStatus,
   getSelectedNodeApproval,
+  parseExecutionPayload,
 } from './workflow-execution-viewer-model';
 
 function trace(partial: Partial<ExecutionNode> & Pick<ExecutionNode, 'id' | 'nodeId' | 'status'>): ExecutionNode {
@@ -68,5 +71,56 @@ describe('workflow execution viewer model', () => {
     ]);
 
     expect(selected?.id).toBe('approval-denied');
+  });
+
+  it('builds selected node parameters without id/type noise', () => {
+    const params = getNodeParametersForDisplay({
+      id: 'fetch_prs',
+      type: 'tool',
+      service: 'github',
+      action: 'github.list_pull_requests',
+      params: {
+        owner: '{{nodes.config.data.owner}}',
+        repo: '{{nodes.config.data.repo}}',
+      },
+      onPolicyDeny: 'fail',
+    });
+
+    expect(params).toEqual({
+      service: 'github',
+      action: 'github.list_pull_requests',
+      params: {
+        owner: '{{nodes.config.data.owner}}',
+        repo: '{{nodes.config.data.repo}}',
+      },
+      onPolicyDeny: 'fail',
+    });
+  });
+
+  it('omits selected node parameters when the node has no configurable fields', () => {
+    expect(getNodeParametersForDisplay({ id: 'trigger', type: 'trigger' })).toBeNull();
+  });
+
+  it('parses JSON trace payloads into formatted values', () => {
+    expect(parseExecutionPayload('[{"number":81,"title":"Handle first-come"}]')).toEqual({
+      kind: 'json',
+      value: [{ number: 81, title: 'Handle first-come' }],
+      formatted: '[\n  {\n    "number": 81,\n    "title": "Handle first-come"\n  }\n]',
+    });
+  });
+
+  it('splits trace payloads into labeled detail sections', () => {
+    const sections = buildTraceDetailSections(trace({
+      id: 'exec:fetch_prs:completed:0',
+      nodeId: 'fetch_prs',
+      status: 'completed',
+      inputPreview: '{"owner":"tkhq"}',
+      output: '[{"number":81}]',
+    }));
+
+    expect(sections.map((section) => [section.title, section.payload.kind])).toEqual([
+      ['Input', 'json'],
+      ['Output', 'json'],
+    ]);
   });
 });

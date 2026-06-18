@@ -2,7 +2,7 @@ import * as React from 'react';
 import type { NodeProps } from '@xyflow/react';
 import { ReactFlowProvider } from '@xyflow/react';
 import type { Execution, ExecutionNode } from '@/api/executions';
-import type { WorkflowDefinition } from '@valet/shared';
+import type { WorkflowDefinition, WorkflowNode } from '@valet/shared';
 import { Canvas } from '@/components/ai-elements/canvas';
 import { Controls } from '@/components/ai-elements/controls';
 import { Edge } from '@/components/ai-elements/edge';
@@ -26,9 +26,13 @@ import {
 } from './workflow-editor-model';
 import {
   buildExecutionNodeStateMap,
+  buildTraceDetailSections,
   formatExecutionDuration,
   getExecutionDisplayStatus,
+  getNodeParametersForDisplay,
   getSelectedNodeApproval,
+  parseExecutionPayload,
+  type ParsedExecutionPayload,
   type ExecutionDisplayStatus,
 } from './workflow-execution-viewer-model';
 
@@ -87,6 +91,9 @@ function WorkflowExecutionViewerInner({
     () => buildExecutionNodeStateMap(execution?.nodes ?? []),
     [execution?.nodes],
   );
+  const selectedDefinitionNode = selectedNodeId
+    ? definition?.nodes.find((node) => node.id === selectedNodeId) ?? null
+    : null;
   const nodes = React.useMemo(
     () =>
       flow.nodes.map((node) => {
@@ -204,6 +211,7 @@ function WorkflowExecutionViewerInner({
         <ExecutionDetailsPanel
           execution={execution}
           selectedNodeId={selectedNodeId}
+          selectedDefinitionNode={selectedDefinitionNode}
           selectedTrace={selectedTrace}
           onRetryExecution={onRetryExecution}
           isRetryingExecution={isRetryingExecution}
@@ -256,12 +264,14 @@ function ExecutionNodeCard({ data, selected }: NodeProps) {
 function ExecutionDetailsPanel({
   execution,
   selectedNodeId,
+  selectedDefinitionNode,
   selectedTrace,
   onRetryExecution,
   isRetryingExecution = false,
 }: {
   execution: Execution | null;
   selectedNodeId: string | null;
+  selectedDefinitionNode: WorkflowNode | null;
   selectedTrace: ExecutionNode | null;
   onRetryExecution?: (executionId: string) => void;
   isRetryingExecution?: boolean;
@@ -275,6 +285,7 @@ function ExecutionDetailsPanel({
     execution.approvals,
     selectedTrace?.approvalId,
   );
+  const selectedNodeParams = getNodeParametersForDisplay(selectedDefinitionNode);
 
   return (
     <div className="space-y-4 p-4">
@@ -321,6 +332,13 @@ function ExecutionDetailsPanel({
             <KeyValue label="Node" value={selectedNodeId} />
             <KeyValue label="Status" value={selectedTrace?.status ?? 'not_run'} />
             <KeyValue label="Duration" value={formatExecutionDuration(selectedTrace?.durationMs)} />
+            {selectedNodeParams && (
+              <StructuredPayloadBlock
+                title="Params"
+                payload={parseExecutionPayload(JSON.stringify(selectedNodeParams))}
+                tone="neutral"
+              />
+            )}
             <TracePreview trace={selectedTrace} />
             {selectedApproval && (
               <div className="mt-3">
@@ -346,12 +364,59 @@ function RetryIcon() {
 }
 
 function TracePreview({ trace }: { trace: ExecutionNode | null }) {
-  const value = trace?.error ?? trace?.output ?? trace?.reason ?? trace?.inputPreview ?? null;
-  if (!value) return <p className="mt-3 text-xs text-neutral-500">No trace payload recorded.</p>;
+  const sections = buildTraceDetailSections(trace);
+  if (sections.length === 0) return <p className="mt-3 text-xs text-neutral-500">No trace payload recorded.</p>;
   return (
-    <pre className="mt-3 max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-md bg-white p-2 text-xs text-neutral-700 dark:bg-neutral-950 dark:text-neutral-300">
-      {value}
-    </pre>
+    <div className="mt-3 space-y-3">
+      {sections.map((section) => (
+        <StructuredPayloadBlock
+          key={section.title}
+          title={section.title}
+          payload={section.payload}
+          tone={section.tone}
+          truncated={section.truncated}
+        />
+      ))}
+    </div>
+  );
+}
+
+function StructuredPayloadBlock({
+  title,
+  payload,
+  tone,
+  truncated,
+}: {
+  title: string;
+  payload: ParsedExecutionPayload;
+  tone: 'neutral' | 'error';
+  truncated?: boolean;
+}) {
+  if (payload.kind === 'empty') return null;
+  const text = payload.kind === 'json' ? payload.formatted : payload.text;
+  return (
+    <section>
+      <div className="mb-1 flex items-center justify-between gap-2">
+        <h4 className={cn(
+          'text-xs font-medium',
+          tone === 'error' ? 'text-red-700 dark:text-red-300' : 'text-neutral-700 dark:text-neutral-300',
+        )}>
+          {title}
+        </h4>
+        <div className="flex items-center gap-1">
+          {payload.kind === 'json' && <Badge variant="secondary">JSON</Badge>}
+          {truncated && <Badge variant="secondary">truncated</Badge>}
+        </div>
+      </div>
+      <pre className={cn(
+        'max-h-80 overflow-auto whitespace-pre-wrap break-words rounded-md border p-2 text-xs leading-relaxed',
+        tone === 'error'
+          ? 'border-red-200 bg-red-50 text-red-700 dark:border-red-900/50 dark:bg-red-950/40 dark:text-red-300'
+          : 'border-neutral-200 bg-white text-neutral-700 dark:border-neutral-800 dark:bg-neutral-950 dark:text-neutral-300',
+      )}>
+        {text}
+      </pre>
+    </section>
   );
 }
 
