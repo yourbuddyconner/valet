@@ -750,7 +750,7 @@ function TriggerDataSchemaFields({
       ) : (
         <div className="space-y-3">
           {entries.map(([name, spec], index) => (
-            <div key={`${name}-${index}`} className="space-y-2 rounded-md border border-neutral-200 p-2 dark:border-neutral-700">
+            <div key={index} className="space-y-2 rounded-md border border-neutral-200 p-2 dark:border-neutral-700">
               <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,0.75fr)] gap-2">
                 <Input
                   value={name}

@@ -1968,10 +1968,17 @@ Edges from an \`if\` node must include \`fromOutput\`:
 
 ### Node Schemas
 
-\`trigger\` represents the invocation source and exposes trigger payload data:
+\`trigger\` represents the invocation source and exposes trigger payload data. It may declare \`dataSchema\`, using the same field shape as top-level \`inputs\`, to describe the payload fields available at \`{{trigger.data.*}}\`. The UI uses this schema for manual test-run fields and template suggestions.
 
 \`\`\`json
-{ "id": "trigger", "type": "trigger" }
+{
+  "id": "trigger",
+  "type": "trigger",
+  "dataSchema": {
+    "email": { "type": "string", "required": true, "description": "Customer email" },
+    "plan": { "type": "string", "default": "free", "enum": ["free", "business", "enterprise"] }
+  }
+}
 \`\`\`
 
 \`set\` writes structured values to \`nodes.<id>.data\`:
