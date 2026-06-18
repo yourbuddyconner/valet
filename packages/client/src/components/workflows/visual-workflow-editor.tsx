@@ -65,7 +65,23 @@ import {
   DialogTitle,
   DialogTrigger,
 } from '@/components/ui/dialog';
+import {
+  ModelSelector,
+  ModelSelectorContent,
+  ModelSelectorEmpty,
+  ModelSelectorGroup,
+  ModelSelectorInput,
+  ModelSelectorItem,
+  ModelSelectorList,
+  ModelSelectorLogo,
+  ModelSelectorName,
+  ModelSelectorSeparator,
+  ModelSelectorTrigger,
+} from '@/components/ui/model-selector';
+import { buildModelSelectorGroups } from '@/components/ui/model-selector-utils';
 import { cn } from '@/lib/cn';
+import { useAvailableModels } from '@/api/sessions';
+import { useAuthStore } from '@/stores/auth';
 import {
   applyDefaultDataFlowForConnection,
   NODE_TYPE_OPTIONS,
@@ -688,12 +704,120 @@ function LlmFields({ node, onUpdate, templateSources }: NodeFieldProps<LlmNode>)
       <TemplateTextAreaField label="Prompt" value={node.prompt} templateSources={templateSources} onChange={(prompt) => onUpdate({ prompt })} minRows={6} />
       <TemplateTextAreaField label="System" value={node.system ?? ''} templateSources={templateSources} onChange={(system) => onUpdate({ system: optionalString(system) })} minRows={3} />
       <Field label="Model">
-        <Input value={node.model ?? ''} onChange={(event) => onUpdate({ model: optionalString(event.target.value) })} placeholder="Default model" />
+        <WorkflowModelPicker value={node.model} onChange={(model) => onUpdate({ model })} />
       </Field>
       <NumberField label="Temperature" value={node.temperature} min={0} max={2} step={0.1} onChange={(temperature) => onUpdate({ temperature })} />
       <NumberField label="Max output tokens" value={node.maxOutputTokens} min={1} step={1} onChange={(maxOutputTokens) => onUpdate({ maxOutputTokens })} />
       <JsonValueField label="Output schema" value={node.outputSchema} onChange={(outputSchema) => onUpdate({ outputSchema })} />
     </>
+  );
+}
+
+function WorkflowModelPicker({
+  value,
+  onChange,
+}: {
+  value?: string;
+  onChange: (value: string | undefined) => void;
+}) {
+  const [open, setOpen] = React.useState(false);
+  const user = useAuthStore((state) => state.user);
+  const orgModelPreferences = useAuthStore((state) => state.orgModelPreferences);
+  const { data: availableModels = [] } = useAvailableModels();
+  const modelGroups = React.useMemo(
+    () =>
+      buildModelSelectorGroups({
+        availableModels,
+        userModelPreferences: user?.modelPreferences,
+        orgModelPreferences,
+      }),
+    [availableModels, orgModelPreferences, user?.modelPreferences],
+  );
+  const selectedModel = React.useMemo(() => {
+    for (const provider of availableModels) {
+      const model = provider.models.find((candidate) => candidate.id === value);
+      if (model) return { ...model, provider: provider.provider };
+    }
+    return null;
+  }, [availableModels, value]);
+
+  return (
+    <ModelSelector open={open} onOpenChange={setOpen}>
+      <ModelSelectorTrigger asChild>
+        <button
+          type="button"
+          className="flex h-10 w-full items-center gap-2 rounded-md border border-neutral-200 bg-white px-3 text-sm text-neutral-900 transition-colors hover:border-neutral-300 focus:outline-none focus:ring-2 focus:ring-neutral-400 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-100 dark:hover:border-neutral-600 dark:focus:ring-neutral-600"
+        >
+          {selectedModel ? (
+            <>
+              <ModelSelectorLogo provider={selectedModel.provider} />
+              <ModelSelectorName>{selectedModel.name}</ModelSelectorName>
+            </>
+          ) : value ? (
+            <ModelSelectorName>{value}</ModelSelectorName>
+          ) : (
+            <ModelSelectorName className="text-neutral-500">Default model</ModelSelectorName>
+          )}
+          <ChevronDownIcon className="ml-auto h-4 w-4 shrink-0 text-neutral-400" />
+        </button>
+      </ModelSelectorTrigger>
+      <ModelSelectorContent>
+        <ModelSelectorInput placeholder="Search models..." />
+        <ModelSelectorList>
+          <ModelSelectorEmpty>No models found.</ModelSelectorEmpty>
+          <ModelSelectorItem
+            value="__default__"
+            onSelect={() => {
+              onChange(undefined);
+              setOpen(false);
+            }}
+          >
+            <ModelSelectorName className="text-neutral-500">Default model</ModelSelectorName>
+            {!value && <CheckIcon className="ml-auto h-4 w-4 shrink-0" />}
+          </ModelSelectorItem>
+          <ModelSelectorSeparator />
+          {modelGroups.preferredGroup && (
+            <>
+              <ModelSelectorGroup heading={modelGroups.preferredGroup.heading}>
+                {modelGroups.preferredGroup.models.map((model) => (
+                  <ModelSelectorItem
+                    key={model.id}
+                    value={model.id}
+                    onSelect={() => {
+                      onChange(model.id);
+                      setOpen(false);
+                    }}
+                  >
+                    <ModelSelectorLogo provider={model.provider} />
+                    <ModelSelectorName>{model.name}</ModelSelectorName>
+                    {value === model.id && <CheckIcon className="ml-auto h-4 w-4 shrink-0" />}
+                  </ModelSelectorItem>
+                ))}
+              </ModelSelectorGroup>
+              <ModelSelectorSeparator />
+            </>
+          )}
+          {modelGroups.providerGroups.map((provider) => (
+            <ModelSelectorGroup key={provider.provider} heading={provider.provider}>
+              {provider.models.map((model) => (
+                <ModelSelectorItem
+                  key={model.id}
+                  value={model.id}
+                  onSelect={() => {
+                    onChange(model.id);
+                    setOpen(false);
+                  }}
+                >
+                  <ModelSelectorLogo provider={provider.provider} />
+                  <ModelSelectorName>{model.name}</ModelSelectorName>
+                  {value === model.id && <CheckIcon className="ml-auto h-4 w-4 shrink-0" />}
+                </ModelSelectorItem>
+              ))}
+            </ModelSelectorGroup>
+          ))}
+        </ModelSelectorList>
+      </ModelSelectorContent>
+    </ModelSelector>
   );
 }
 
@@ -1372,7 +1496,7 @@ function SessionFields({ node, onUpdate, templateSources }: NodeFieldProps<Sessi
             <Input value={node.personaId ?? ''} onChange={(event) => onUpdate({ personaId: optionalString(event.target.value) })} />
           </Field>
           <Field label="Model">
-            <Input value={node.model ?? ''} onChange={(event) => onUpdate({ model: optionalString(event.target.value) })} />
+            <WorkflowModelPicker value={node.model} onChange={(model) => onUpdate({ model })} />
           </Field>
           <RepoFields value={node.repo} onChange={(repo) => onUpdate({ repo })} />
         </>
@@ -1990,6 +2114,22 @@ function parseConditionRight(value: string, dataType: IfCondition['dataType']): 
 
 function entriesToRecord(entries: string[][]): Record<string, unknown> {
   return Object.fromEntries(entries.filter(([key]) => key.trim().length > 0));
+}
+
+function CheckIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+      <path fillRule="evenodd" d="M16.704 5.29a1 1 0 0 1 .006 1.414l-7.25 7.313a1 1 0 0 1-1.42.001L3.29 9.218a1 1 0 1 1 1.42-1.407l4.04 4.08 6.54-6.595a1 1 0 0 1 1.414-.006Z" clipRule="evenodd" />
+    </svg>
+  );
+}
+
+function ChevronDownIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+      <path fillRule="evenodd" d="M5.23 7.21a.75.75 0 0 1 1.06.02L10 11.168l3.71-3.938a.75.75 0 1 1 1.08 1.04l-4.25 4.5a.75.75 0 0 1-1.08 0l-4.25-4.5a.75.75 0 0 1 .02-1.06Z" clipRule="evenodd" />
+    </svg>
+  );
 }
 
 function isForeachBodyNode(node: WorkflowNode): node is ForeachBodyNode {
