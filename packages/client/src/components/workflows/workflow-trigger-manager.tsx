@@ -139,7 +139,7 @@ function toConfig(form: TriggerFormState): TriggerConfig {
       timezone: form.scheduleTimezone.trim() || undefined,
       target: form.scheduleTarget,
       prompt: form.scheduleTarget === 'orchestrator' ? form.schedulePrompt.trim() : undefined,
-      // PATCH replaces config wholesale; preserve any inputs the trigger
+      // PATCH replaces config wholesale; preserve existing inputs the trigger
       // was created with so an edit doesn't silently erase them.
       ...(form.scheduleInputs && Object.keys(form.scheduleInputs).length > 0
         ? { inputs: form.scheduleInputs }
@@ -148,6 +148,14 @@ function toConfig(form: TriggerFormState): TriggerConfig {
   }
 
   return { type: 'manual' };
+}
+
+function getFormTarget(form: TriggerFormState): ScheduleTarget {
+  return form.type === 'schedule' ? form.scheduleTarget : 'workflow';
+}
+
+function canSelectOrchestratorTarget(type: TriggerType): boolean {
+  return type === 'schedule';
 }
 
 function validateForm(form: TriggerFormState): string | null {
@@ -214,6 +222,20 @@ export function WorkflowTriggerManager({ workflowId, triggers }: WorkflowTrigger
 
   const onField = <K extends keyof TriggerFormState>(field: K, value: TriggerFormState[K]) => {
     setForm((prev) => ({ ...prev, [field]: value }));
+    setFormError(null);
+  };
+
+  const onTypeChange = (type: TriggerType) => {
+    setForm((prev) => ({
+      ...prev,
+      type,
+      scheduleTarget: canSelectOrchestratorTarget(type) ? prev.scheduleTarget : 'workflow',
+    }));
+    setFormError(null);
+  };
+
+  const onTargetChange = (target: ScheduleTarget) => {
+    setForm((prev) => ({ ...prev, scheduleTarget: target }));
     setFormError(null);
   };
 
@@ -402,40 +424,66 @@ export function WorkflowTriggerManager({ workflowId, triggers }: WorkflowTrigger
           if (!nextOpen) resetForm();
         }}
       >
-        <DialogContent className="sm:max-w-xl">
+        <DialogContent className="sm:max-w-2xl">
           <form onSubmit={onSave}>
             <DialogHeader>
               <DialogTitle>{editingTrigger ? 'Edit Trigger' : 'Create Trigger'}</DialogTitle>
               <DialogDescription>
-                Configure trigger type and behavior. Schedule triggers can run this workflow or prompt your orchestrator.
+                Choose how this trigger starts, then choose what it runs.
               </DialogDescription>
             </DialogHeader>
 
             <div className="space-y-4 py-4">
+              <div>
+                <label className="mb-1.5 block text-sm font-medium text-neutral-700 dark:text-neutral-300">
+                  Name
+                </label>
+                <Input
+                  value={form.name}
+                  onChange={(e) => onField('name', e.target.value)}
+                  placeholder="Nightly triage"
+                />
+              </div>
+
               <div className="grid gap-4 sm:grid-cols-2">
-                <div>
-                  <label className="mb-1.5 block text-sm font-medium text-neutral-700 dark:text-neutral-300">
-                    Name
-                  </label>
-                  <Input
-                    value={form.name}
-                    onChange={(e) => onField('name', e.target.value)}
-                    placeholder="Nightly triage"
-                  />
-                </div>
-                <div>
+                <div className="space-y-1.5">
                   <label className="mb-1.5 block text-sm font-medium text-neutral-700 dark:text-neutral-300">
                     Type
                   </label>
                   <select
                     value={form.type}
-                    onChange={(e) => onField('type', e.target.value as TriggerType)}
+                    onChange={(e) => onTypeChange(e.target.value as TriggerType)}
                     className="h-9 w-full rounded-md border border-neutral-200 bg-white px-3 text-sm text-neutral-900 focus:outline-none focus:ring-2 focus:ring-neutral-900 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-100 dark:focus:ring-neutral-100"
                   >
                     <option value="manual">Manual</option>
                     <option value="webhook">Webhook</option>
                     <option value="schedule">Schedule</option>
                   </select>
+                  <p className="text-xs text-neutral-500 dark:text-neutral-400">
+                    {form.type === 'manual' && 'Run on demand from Valet.'}
+                    {form.type === 'webhook' && 'Run when an external request arrives.'}
+                    {form.type === 'schedule' && 'Run from a cron schedule.'}
+                  </p>
+                </div>
+                <div className="space-y-1.5">
+                  <label className="mb-1.5 block text-sm font-medium text-neutral-700 dark:text-neutral-300">
+                    Target
+                  </label>
+                  <select
+                    value={getFormTarget(form)}
+                    onChange={(e) => onTargetChange(e.target.value as ScheduleTarget)}
+                    className="h-9 w-full rounded-md border border-neutral-200 bg-white px-3 text-sm text-neutral-900 focus:outline-none focus:ring-2 focus:ring-neutral-900 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-100 dark:focus:ring-neutral-100"
+                  >
+                    <option value="workflow">Run this workflow</option>
+                    {canSelectOrchestratorTarget(form.type) && (
+                      <option value="orchestrator">Prompt orchestrator</option>
+                    )}
+                  </select>
+                  <p className="text-xs text-neutral-500 dark:text-neutral-400">
+                    {canSelectOrchestratorTarget(form.type)
+                      ? 'Schedules can run this workflow or prompt your orchestrator.'
+                      : 'Manual and webhook triggers run this workflow.'}
+                  </p>
                 </div>
               </div>
 
@@ -501,20 +549,7 @@ export function WorkflowTriggerManager({ workflowId, triggers }: WorkflowTrigger
                       />
                     </div>
                   </div>
-                  <div>
-                    <label className="mb-1.5 block text-sm font-medium text-neutral-700 dark:text-neutral-300">
-                      Schedule Target
-                    </label>
-                    <select
-                      value={form.scheduleTarget}
-                      onChange={(e) => onField('scheduleTarget', e.target.value as ScheduleTarget)}
-                      className="h-9 w-full rounded-md border border-neutral-200 bg-white px-3 text-sm text-neutral-900 focus:outline-none focus:ring-2 focus:ring-neutral-900 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-100 dark:focus:ring-neutral-100"
-                    >
-                      <option value="workflow">Run workflow</option>
-                      <option value="orchestrator">Prompt orchestrator</option>
-                    </select>
-                  </div>
-                  {form.scheduleTarget === 'orchestrator' && (
+                  {getFormTarget(form) === 'orchestrator' && (
                     <div>
                       <label className="mb-1.5 block text-sm font-medium text-neutral-700 dark:text-neutral-300">
                         Orchestrator Prompt
