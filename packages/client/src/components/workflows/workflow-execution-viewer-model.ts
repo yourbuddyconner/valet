@@ -118,3 +118,40 @@ export function buildTraceDetailSections(trace: ExecutionNode | null): Execution
 
   return sections;
 }
+
+export function getReadableJsonSummary(value: unknown): string {
+  if (Array.isArray(value)) return `${value.length} ${value.length === 1 ? 'item' : 'items'}`;
+  if (isRecord(value)) {
+    const count = Object.keys(value).length;
+    return `${count} ${count === 1 ? 'field' : 'fields'}`;
+  }
+  return formatReadableScalar(value);
+}
+
+export function getReadableJsonItemTitle(value: unknown, index: number): string {
+  if (!isRecord(value)) return `Item ${index + 1}`;
+
+  const numberValue = value.number;
+  const titleValue = firstString(value.title, value.name, value.summary, value.message, value.id);
+  if (typeof numberValue === 'number' && titleValue) return `#${numberValue} ${titleValue}`;
+  return titleValue || `Item ${index + 1}`;
+}
+
+export function formatReadableScalar(value: unknown): string {
+  if (value === null) return 'null';
+  if (value === undefined) return 'undefined';
+  if (typeof value === 'string') return value || 'empty string';
+  if (typeof value === 'number' || typeof value === 'boolean' || typeof value === 'bigint') return String(value);
+  return getReadableJsonSummary(value);
+}
+
+export function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function firstString(...values: unknown[]): string | null {
+  for (const value of values) {
+    if (typeof value === 'string' && value.trim()) return value;
+  }
+  return null;
+}

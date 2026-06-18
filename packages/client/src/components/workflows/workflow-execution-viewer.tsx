@@ -27,10 +27,14 @@ import {
 import {
   buildExecutionNodeStateMap,
   buildTraceDetailSections,
+  formatReadableScalar,
   formatExecutionDuration,
   getExecutionDisplayStatus,
   getNodeParametersForDisplay,
+  getReadableJsonItemTitle,
+  getReadableJsonSummary,
   getSelectedNodeApproval,
+  isRecord,
   parseExecutionPayload,
   type ParsedExecutionPayload,
   type ExecutionDisplayStatus,
@@ -393,7 +397,6 @@ function StructuredPayloadBlock({
   truncated?: boolean;
 }) {
   if (payload.kind === 'empty') return null;
-  const text = payload.kind === 'json' ? payload.formatted : payload.text;
   return (
     <section>
       <div className="mb-1 flex items-center justify-between gap-2">
@@ -404,19 +407,121 @@ function StructuredPayloadBlock({
           {title}
         </h4>
         <div className="flex items-center gap-1">
-          {payload.kind === 'json' && <Badge variant="secondary">JSON</Badge>}
+          {payload.kind === 'json' && <Badge variant="secondary">{getReadableJsonSummary(payload.value)}</Badge>}
           {truncated && <Badge variant="secondary">truncated</Badge>}
         </div>
       </div>
-      <pre className={cn(
-        'max-h-80 overflow-auto whitespace-pre-wrap break-words rounded-md border p-2 text-xs leading-relaxed',
-        tone === 'error'
-          ? 'border-red-200 bg-red-50 text-red-700 dark:border-red-900/50 dark:bg-red-950/40 dark:text-red-300'
-          : 'border-neutral-200 bg-white text-neutral-700 dark:border-neutral-800 dark:bg-neutral-950 dark:text-neutral-300',
-      )}>
-        {text}
-      </pre>
+      {payload.kind === 'json' ? (
+        <ReadableJsonValue value={payload.value} tone={tone} />
+      ) : (
+        <pre className={cn(
+          'max-h-80 overflow-auto whitespace-pre-wrap break-words rounded-md border p-2 text-xs leading-relaxed',
+          tone === 'error'
+            ? 'border-red-200 bg-red-50 text-red-700 dark:border-red-900/50 dark:bg-red-950/40 dark:text-red-300'
+            : 'border-neutral-200 bg-white text-neutral-700 dark:border-neutral-800 dark:bg-neutral-950 dark:text-neutral-300',
+        )}>
+          {payload.text}
+        </pre>
+      )}
     </section>
+  );
+}
+
+function ReadableJsonValue({
+  value,
+  tone,
+  depth = 0,
+}: {
+  value: unknown;
+  tone: 'neutral' | 'error';
+  depth?: number;
+}) {
+  if (Array.isArray(value)) {
+    if (value.length === 0) return <EmptyReadableValue label="No items" tone={tone} />;
+    const visibleItems = value.slice(0, 20);
+    return (
+      <div className="space-y-2">
+        {visibleItems.map((item, index) => (
+          <div
+            key={index}
+            className={cn(
+              'rounded-md border bg-white p-2 dark:bg-neutral-950',
+              tone === 'error' ? 'border-red-200 dark:border-red-900/50' : 'border-neutral-200 dark:border-neutral-800',
+            )}
+          >
+            <div className="mb-2 flex items-center justify-between gap-2">
+              <div className="min-w-0 truncate text-xs font-medium text-neutral-900 dark:text-neutral-100">
+                {getReadableJsonItemTitle(item, index)}
+              </div>
+              <Badge variant="secondary">{getReadableJsonSummary(item)}</Badge>
+            </div>
+            <ReadableJsonValue value={item} tone={tone} depth={depth + 1} />
+          </div>
+        ))}
+        {value.length > visibleItems.length && (
+          <p className="text-xs text-neutral-500">
+            {value.length - visibleItems.length} more items not shown.
+          </p>
+        )}
+      </div>
+    );
+  }
+
+  if (isRecord(value)) {
+    const entries = Object.entries(value);
+    if (entries.length === 0) return <EmptyReadableValue label="No fields" tone={tone} />;
+    if (depth >= 3) {
+      return (
+        <div className="rounded-md border border-neutral-200 bg-white px-2 py-1.5 text-xs text-neutral-500 dark:border-neutral-800 dark:bg-neutral-950">
+          {getReadableJsonSummary(value)}
+        </div>
+      );
+    }
+
+    return (
+      <div className={cn(
+        'overflow-hidden rounded-md border bg-white dark:bg-neutral-950',
+        tone === 'error' ? 'border-red-200 dark:border-red-900/50' : 'border-neutral-200 dark:border-neutral-800',
+      )}>
+        {entries.map(([key, nestedValue]) => (
+          <div
+            key={key}
+            className="grid grid-cols-[minmax(7rem,35%)_minmax(0,1fr)] border-b border-neutral-100 last:border-b-0 dark:border-neutral-800"
+          >
+            <div className="min-w-0 bg-neutral-50 px-2 py-1.5 text-xs font-medium text-neutral-600 dark:bg-neutral-900 dark:text-neutral-400">
+              <span className="block truncate" title={key}>{key}</span>
+            </div>
+            <div className="min-w-0 px-2 py-1.5 text-xs text-neutral-900 dark:text-neutral-100">
+              {isRecord(nestedValue) || Array.isArray(nestedValue) ? (
+                <ReadableJsonValue value={nestedValue} tone={tone} depth={depth + 1} />
+              ) : (
+                <span className="break-words">{formatReadableScalar(nestedValue)}</span>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  return (
+    <div className={cn(
+      'rounded-md border bg-white px-2 py-1.5 text-xs text-neutral-900 dark:bg-neutral-950 dark:text-neutral-100',
+      tone === 'error' ? 'border-red-200 dark:border-red-900/50' : 'border-neutral-200 dark:border-neutral-800',
+    )}>
+      {formatReadableScalar(value)}
+    </div>
+  );
+}
+
+function EmptyReadableValue({ label, tone }: { label: string; tone: 'neutral' | 'error' }) {
+  return (
+    <div className={cn(
+      'rounded-md border border-dashed px-2 py-1.5 text-xs text-neutral-500',
+      tone === 'error' ? 'border-red-200 dark:border-red-900/50' : 'border-neutral-200 dark:border-neutral-800',
+    )}>
+      {label}
+    </div>
   );
 }
 

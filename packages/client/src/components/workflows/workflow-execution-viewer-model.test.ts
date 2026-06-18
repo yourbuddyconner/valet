@@ -3,6 +3,8 @@ import type { ExecutionApproval, ExecutionNode } from '@/api/executions';
 import {
   buildExecutionNodeStateMap,
   buildTraceDetailSections,
+  getReadableJsonItemTitle,
+  getReadableJsonSummary,
   getNodeParametersForDisplay,
   getExecutionDisplayStatus,
   getSelectedNodeApproval,
@@ -122,5 +124,19 @@ describe('workflow execution viewer model', () => {
       ['Input', 'json'],
       ['Output', 'json'],
     ]);
+  });
+
+  it('summarizes parsed JSON for human-readable execution details', () => {
+    expect(getReadableJsonSummary([{ number: 81 }, { number: 78 }])).toBe('2 items');
+    expect(getReadableJsonSummary({ owner: 'tkhq', repo: 'valet' })).toBe('2 fields');
+    expect(getReadableJsonSummary('ready')).toBe('ready');
+  });
+
+  it('labels list items from recognizable object fields', () => {
+    expect(getReadableJsonItemTitle({ number: 81, title: 'Handle first-come, first-served facilities' }, 0)).toBe(
+      '#81 Handle first-come, first-served facilities',
+    );
+    expect(getReadableJsonItemTitle({ name: 'Customer Onboarding Pipeline' }, 1)).toBe('Customer Onboarding Pipeline');
+    expect(getReadableJsonItemTitle({ state: 'open' }, 2)).toBe('Item 3');
   });
 });
