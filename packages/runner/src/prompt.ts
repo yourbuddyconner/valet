@@ -664,6 +664,12 @@ export class ChannelSession {
   awaitingAssistantForAttempt = false;
   turnCreated = false;
   turnId: string | null = null;
+  /** Thread the current prompt belongs to. Sourced from the inbound prompt
+   *  message; survives across prompts on the same channel until a new
+   *  threadId is provided. Used to tag the assistant turn so messages
+   *  persist with a non-null thread_id even on channels (like `web:*`)
+   *  whose channelKey doesn't encode the thread. */
+  currentThreadId: string | null = null;
 
   // Callback to reset the sync prompt timeout on SSE activity.
   // Set by the failover loop, cleared when the sync fetch completes.
@@ -1179,13 +1185,17 @@ export class PromptHandler {
   private extractChannelContext(channel: ChannelSession): { channelType?: string; channelId?: string; threadId?: string } {
     const idx = channel.channelKey.indexOf(":");
     if (idx <= 0 || idx >= channel.channelKey.length - 1) {
-      return {};
+      return { threadId: channel.currentThreadId ?? undefined };
     }
     const channelType = channel.channelKey.slice(0, idx);
     const channelId = channel.channelKey.slice(idx + 1);
-    // Thread channels carry their thread ID in the channel key. Other channels
-    // do not carry a thread ID — never fall back to a separate mutable field.
-    const threadId = channelType === "thread" ? channelId : undefined;
+    // Thread channels carry their thread ID in the channel key; other
+    // channels (web, slack-direct, etc.) keep the active threadId on the
+    // ChannelSession via the inbound prompt's threadId parameter.
+    const threadId =
+      channelType === "thread"
+        ? channelId
+        : channel.currentThreadId ?? undefined;
     return { channelType, channelId, threadId };
   }
 
@@ -1653,10 +1663,14 @@ export class PromptHandler {
 
     // Resolve per-channel session
     this.currentPromptChannel = channel;
-    // NOTE: `threadId` parameter is no longer consumed here. Thread routing now
-    // flows through the `thread:<id>` channelKey resolved upstream in the DO.
-    // The parameter remains in the signature for caller compatibility.
-    void threadId;
+    // Thread routing primarily flows through the `thread:<id>` channelKey
+    // resolved upstream in the DO. But not every dispatch path sets it
+    // (e.g. web channels, initial auto-prompts) — in those cases the
+    // threadId parameter is still authoritative. Stash it on the channel
+    // so ensureTurnCreated can attribute the assistant turn correctly.
+    if (threadId) {
+      channel.currentThreadId = threadId;
+    }
     // Store original channel info for [via ...] attribution prefix (per-channel for concurrency)
     channel.pendingReplyChannelType = replyChannelType;
     channel.pendingReplyChannelId = replyChannelId;

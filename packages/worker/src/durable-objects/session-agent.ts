@@ -6743,10 +6743,16 @@ export class SessionAgentDO {
     summary: string,
     actorId?: string,
     metadata?: Record<string, unknown>,
+    // Set when the event refers to a specific tool — surfaces the name in
+    // the `tool_name` column rather than burying it inside JSON properties.
+    // Used by the agent.tool_call event family so downstream analytics can
+    // group/filter by tool.
+    toolName?: string,
   ): void {
     this.emitEvent(eventType, {
       summary,
       actorId,
+      toolName,
       properties: metadata,
     });
     // Broadcast to connected clients in real-time
@@ -6980,7 +6986,7 @@ export class SessionAgentDO {
       // ─── Deny ──────────────────────────────────────────────────────────
       if (outcome === 'denied') {
         this.runnerLink.send({ type: 'call-tool-result', requestId, error: `Action "${toolId}" denied by policy (risk level: ${riskLevel})` } as any);
-        this.emitAuditEvent('agent.tool_call', `Action ${toolId} denied by policy`, undefined, { invocationId, riskLevel });
+        this.emitAuditEvent('agent.tool_call', `Action ${toolId} denied by policy`, undefined, { invocationId, riskLevel }, toolId);
         return;
       }
 
@@ -7124,7 +7130,7 @@ export class SessionAgentDO {
           timestamp: new Date().toISOString(),
         });
 
-        this.emitAuditEvent('agent.tool_call', `Action ${toolId} requires approval (${riskLevel})`, undefined, { invocationId: invocationId, riskLevel });
+        this.emitAuditEvent('agent.tool_call', `Action ${toolId} requires approval (${riskLevel})`, undefined, { invocationId: invocationId, riskLevel }, toolId);
 
         await this.sendChannelInteractivePrompts(invocationId, prompt);
 
@@ -7391,7 +7397,7 @@ export class SessionAgentDO {
         console.warn(`[SessionAgentDO] Approval prompt ${promptId} expired with no request_id — runner may be stuck`);
       }
 
-      this.emitAuditEvent('agent.tool_call', `Action ${toolId} approval expired`, undefined, { invocationId });
+      this.emitAuditEvent('agent.tool_call', `Action ${toolId} approval expired`, undefined, { invocationId }, toolId);
     } else if (promptType === 'question') {
       this.runnerLink.send({
         type: 'answer',
@@ -7682,6 +7688,7 @@ export class SessionAgentDO {
             : `Action ${toolId} approved but execution failed: ${executionResult.error || 'Action failed'}`,
           undefined,
           { invocationId: promptId },
+          toolId,
         );
         deletePrompt();
       } else {
@@ -7727,7 +7734,7 @@ export class SessionAgentDO {
           timestamp: new Date().toISOString(),
         });
 
-        this.emitAuditEvent('agent.tool_call', `Action ${toolId} cancelled${reason ? `: ${reason}` : ''}`, undefined, { invocationId: promptId });
+        this.emitAuditEvent('agent.tool_call', `Action ${toolId} cancelled${reason ? `: ${reason}` : ''}`, undefined, { invocationId: promptId }, toolId);
         deletePrompt();
       }
     } else if (promptType === 'question') {
