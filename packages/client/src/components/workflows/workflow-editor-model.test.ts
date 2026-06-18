@@ -787,10 +787,56 @@ describe('workflow editor model', () => {
     ])).toEqual([
       {
         edgeId: 'tool-1->foreach-1',
+        nodeId: 'foreach-1',
         severity: 'warning',
         message: 'For each needs an array output from tool-1, but no typed array output is available.',
       },
     ]);
+  });
+
+  it('does not warn when foreach uses a typed array output through a branch edge', () => {
+    const definition: WorkflowDefinition = {
+      version: 'dag/v1',
+      nodes: [
+        { id: 'fetch_prs', type: 'tool', service: 'github', action: 'github.list_pull_requests', params: {} },
+        {
+          id: 'check_has_prs',
+          type: 'if',
+          conditions: [{ left: 'nodes.fetch_prs.data', dataType: 'array', operation: 'isNotEmpty' }],
+        },
+        {
+          id: 'inspect_each_pr',
+          type: 'foreach',
+          items: '{{nodes.fetch_prs.data}}',
+          body: { id: 'inspect_pr', type: 'set', values: {} },
+        },
+      ],
+      edges: [
+        { from: 'fetch_prs', to: 'check_has_prs' },
+        { from: 'check_has_prs', to: 'inspect_each_pr', fromOutput: 'true' },
+      ],
+    };
+
+    expect(validateWorkflowDataFlowEdges(definition, [
+      {
+        service: 'github',
+        serviceDisplayName: 'GitHub',
+        actionId: 'github.list_pull_requests',
+        name: 'List Pull Requests',
+        description: 'List pull requests',
+        riskLevel: 'low',
+        outputSchema: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              number: { type: 'number' },
+              title: { type: 'string' },
+            },
+          },
+        },
+      },
+    ])).toEqual([]);
   });
 
   it('formats template paths with bracket notation for unsafe path segments', () => {

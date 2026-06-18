@@ -109,6 +109,7 @@ export interface WorkflowSchemaField {
 
 export interface WorkflowDataFlowWarning {
   edgeId: string;
+  nodeId: string;
   severity: 'warning' | 'error';
   message: string;
 }
@@ -245,12 +246,28 @@ export function validateWorkflowDataFlowEdges(
     const target = nodesById.get(edge.to);
     if (target?.type !== 'foreach') continue;
 
+    const configuredItems = normalizeTemplateReference(target.items);
+    if (configuredItems.length > 0) {
+      const configuredArraySource = sources.find((source) =>
+        source.valueType === 'array' && normalizeTemplateReference(source.expression) === configuredItems,
+      );
+      if (configuredArraySource) continue;
+      warnings.push({
+        edgeId: createEdgeId(edge.from, edge.to, edge.fromOutput),
+        nodeId: target.id,
+        severity: 'warning',
+        message: `For each uses ${target.items}, but it is not a typed array output.`,
+      });
+      continue;
+    }
+
     const upstreamArraySources = sources.filter((source) =>
       source.nodeId === edge.from && source.valueType === 'array',
     );
     if (upstreamArraySources.length === 0) {
       warnings.push({
         edgeId: createEdgeId(edge.from, edge.to, edge.fromOutput),
+        nodeId: target.id,
         severity: 'warning',
         message: `For each needs an array output from ${edge.from}, but no typed array output is available.`,
       });
@@ -1034,4 +1051,11 @@ function formatWorkflowPath(path: string[]): string {
     if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(segment)) return `.${segment}`;
     return `[${JSON.stringify(segment)}]`;
   }).join('');
+}
+
+function normalizeTemplateReference(value: string): string {
+  const trimmed = value.trim();
+  return trimmed.startsWith('{{') && trimmed.endsWith('}}')
+    ? trimmed.slice(2, -2).trim()
+    : trimmed;
 }

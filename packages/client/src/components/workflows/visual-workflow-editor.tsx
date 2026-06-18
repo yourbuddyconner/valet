@@ -143,6 +143,7 @@ const edgeTypes = {
 
 interface WorkflowNodeDeleteContextValue {
   armedNodeId: string | null;
+  warningNodeIds: ReadonlySet<string>;
   requestDelete: (nodeId: string) => void;
 }
 
@@ -213,6 +214,10 @@ function VisualWorkflowEditorInner({
     () => validateWorkflowDataFlowEdges(currentDefinition(), actionCatalog),
     [actionCatalog, currentDefinition],
   );
+  const dataFlowWarningNodeIds = React.useMemo(
+    () => new Set(dataFlowWarnings.map((warning) => warning.nodeId)),
+    [dataFlowWarnings],
+  );
 
   const syncRawJson = React.useCallback(() => {
     setRawJson(JSON.stringify(currentDefinition(), null, 2));
@@ -279,8 +284,9 @@ function VisualWorkflowEditorInner({
 
   const nodeDeleteContext = React.useMemo<WorkflowNodeDeleteContextValue>(() => ({
     armedNodeId: armedDeleteNodeId,
+    warningNodeIds: dataFlowWarningNodeIds,
     requestDelete: handleRequestDeleteNode,
-  }), [armedDeleteNodeId, handleRequestDeleteNode]);
+  }), [armedDeleteNodeId, dataFlowWarningNodeIds, handleRequestDeleteNode]);
 
   const handleConnect: OnConnect = React.useCallback((connection: Connection) => {
     if (!connection.source || !connection.target) return;
@@ -462,12 +468,17 @@ function VisualWorkflowEditorInner({
         {dataFlowWarnings.length > 0 && (
           <Panel position="bottom-right" className="max-w-sm space-y-1 p-3">
             {dataFlowWarnings.map((warning) => (
-              <div
+              <button
                 key={warning.edgeId}
-                className="rounded-md border border-amber-300 bg-amber-50 px-2 py-1 text-xs text-amber-900 shadow-sm dark:border-amber-500/40 dark:bg-amber-950/90 dark:text-amber-100"
+                type="button"
+                className="block w-full rounded-md border border-amber-300 bg-amber-50 px-2 py-1 text-left text-xs text-amber-900 shadow-sm hover:bg-amber-100 focus:outline-none focus:ring-2 focus:ring-amber-400 dark:border-amber-500/40 dark:bg-amber-950/90 dark:text-amber-100 dark:hover:bg-amber-900"
+                onClick={() => {
+                  setSelectedNodeId(warning.nodeId);
+                  setRawOpen(false);
+                }}
               >
                 {warning.message}
-              </div>
+              </button>
             ))}
           </Panel>
         )}
@@ -605,6 +616,7 @@ function WorkflowNodeCard({ data, selected }: NodeProps) {
   const nodeData = data as WorkflowFlowNodeData;
   const deleteContext = React.useContext(WorkflowNodeDeleteContext);
   const isDeleteArmed = deleteContext?.armedNodeId === nodeData.node.id;
+  const hasWarning = deleteContext?.warningNodeIds.has(nodeData.node.id) ?? false;
   const canDelete = selected && nodeData.node.type !== 'trigger' && Boolean(deleteContext);
   return (
     <Node
@@ -612,7 +624,9 @@ function WorkflowNodeCard({ data, selected }: NodeProps) {
       className={cn(
         'border-neutral-200 bg-white text-neutral-950 shadow-xl shadow-neutral-900/10 dark:border-neutral-700 dark:bg-neutral-900/95 dark:text-neutral-100 dark:shadow-black/20',
         '[&_.react-flow__handle]:border-white [&_.react-flow__handle]:bg-neutral-700 dark:[&_.react-flow__handle]:border-neutral-950 dark:[&_.react-flow__handle]:bg-neutral-300',
-        selected && 'border-accent ring-2 ring-accent/30 dark:border-red-400 dark:ring-red-400/35',
+        hasWarning && 'border-amber-400 ring-2 ring-amber-300/60 dark:border-amber-400 dark:ring-amber-400/40',
+        selected && !hasWarning && 'border-accent ring-2 ring-accent/30 dark:border-red-400 dark:ring-red-400/35',
+        selected && hasWarning && 'border-amber-500 ring-2 ring-amber-400/70 dark:border-amber-300 dark:ring-amber-300/55',
       )}
     >
       {canDelete && (
