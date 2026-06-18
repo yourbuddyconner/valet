@@ -53,17 +53,20 @@ export class CloudflareD1DataSource implements UsageDataSource {
   }
 
   async diagnostic(from: Date, to: Date): Promise<JoinDiagnostic> {
-    const rows = await this.query<{ llm_call_rows: number; joined_to_message: number }>(
-      SQL_JOIN_DIAGNOSTIC,
-      [iso(from), iso(to)],
-    );
-    const row = rows[0] ?? { llm_call_rows: 0, joined_to_message: 0 };
+    const rows = await this.query<{
+      llm_call_rows: number;
+      joined_to_message: number;
+      attributed_to_thread: number;
+    }>(SQL_JOIN_DIAGNOSTIC, [iso(from), iso(to)]);
+    const row = rows[0] ?? { llm_call_rows: 0, joined_to_message: 0, attributed_to_thread: 0 };
     const total = Number(row.llm_call_rows ?? 0);
     const joined = Number(row.joined_to_message ?? 0);
+    const attributed = Number(row.attributed_to_thread ?? 0);
     return {
       llmCallRows: total,
       joinedToMessage: joined,
-      hitRate: total === 0 ? 0 : joined / total,
+      attributedToThread: attributed,
+      hitRate: total === 0 ? 0 : attributed / total,
     };
   }
 

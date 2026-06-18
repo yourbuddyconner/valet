@@ -129,10 +129,14 @@ export interface LabelRegistry {
   normalize(label: string): string;
 }
 
-// Diagnostic measuring how well analytics_events.turn_id joins to messages.turn_id.
+// Diagnostic for the analytics_events → messages → thread chain.
+// `joinedToMessage` is the first hop (turn_id matches a message row).
+// `attributedToThread` adds the second hop (that message has a non-null
+// thread_id). `hitRate` is the fraction with full thread attribution.
 export interface JoinDiagnostic {
   llmCallRows: number;
   joinedToMessage: number;
+  attributedToThread: number;
   hitRate: number;
 }
 

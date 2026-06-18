@@ -6,11 +6,14 @@
 // (see MessageStore.createTurn). LEFT JOIN — rows that don't match still
 // contribute to totals via the "unattributed" bucket.
 
-// Diagnostic: what fraction of llm_call rows in the window join to a message?
+// Diagnostic: what fraction of llm_call rows in the window can be attributed
+// to a thread? Reaching a message via turn_id is the first hop; the message
+// must also have a non-null thread_id (v2 assistant turns sometimes don't).
 export const SQL_JOIN_DIAGNOSTIC = `
   SELECT
     COUNT(*) AS llm_call_rows,
-    SUM(CASE WHEN m.id IS NOT NULL THEN 1 ELSE 0 END) AS joined_to_message
+    SUM(CASE WHEN m.id IS NOT NULL THEN 1 ELSE 0 END) AS joined_to_message,
+    SUM(CASE WHEN m.thread_id IS NOT NULL THEN 1 ELSE 0 END) AS attributed_to_thread
   FROM analytics_events ae
   LEFT JOIN messages m ON m.id = ae.turn_id
   WHERE ae.event_type = 'llm_call'

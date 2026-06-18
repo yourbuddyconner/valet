@@ -28,8 +28,10 @@ export async function runAudit(opts: AuditOptions): Promise<AuditResult> {
   // 1. Diagnostic.
   const diagnostic = await opts.dataSource.diagnostic(opts.from, opts.to);
   log(
-    `join diagnostic: ${diagnostic.joinedToMessage}/${diagnostic.llmCallRows} = ` +
-      `${(diagnostic.hitRate * 100).toFixed(1)}% hit rate`,
+    `attribution: ${diagnostic.attributedToThread}/${diagnostic.llmCallRows} ` +
+      `(${(diagnostic.hitRate * 100).toFixed(1)}%); ` +
+      `${diagnostic.llmCallRows - diagnostic.joinedToMessage} join failed, ` +
+      `${diagnostic.joinedToMessage - diagnostic.attributedToThread} joined-but-no-thread`,
   );
 
   // 2. Thread totals.

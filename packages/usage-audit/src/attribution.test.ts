@@ -69,7 +69,7 @@ describe('buildAttribution', () => {
       env: 'dev',
       generatedAt: new Date('2026-06-17T16:00:00Z'),
       classifierModel: 'haiku',
-      diagnostic: { llmCallRows: 18, joinedToMessage: 17, hitRate: 17 / 18 },
+      diagnostic: { llmCallRows: 18, joinedToMessage: 18, attributedToThread: 17, hitRate: 17 / 18 },
       threads: new Map([
         ['th-1', t1],
         ['th-2', t2],
@@ -122,7 +122,7 @@ describe('buildAttribution', () => {
       env: 'dev',
       generatedAt: new Date('2026-06-17T16:00:00Z'),
       classifierModel: 'haiku',
-      diagnostic: { llmCallRows: 5, joinedToMessage: 5, hitRate: 1 },
+      diagnostic: { llmCallRows: 5, joinedToMessage: 5, attributedToThread: 5, hitRate: 1 },
       threads: new Map([['th-1', thread({ threadId: 'th-1' })]]),
       totals: new Map([['th-1', totals('th-1')]]),
       users: new Map([['u-1', { id: 'u-1', email: 'one@example.com' }]]),
@@ -139,7 +139,7 @@ describe('buildAttribution', () => {
       env: 'dev',
       generatedAt: new Date('2026-06-17T16:00:00Z'),
       classifierModel: null,
-      diagnostic: { llmCallRows: 1, joinedToMessage: 1, hitRate: 1 },
+      diagnostic: { llmCallRows: 1, joinedToMessage: 1, attributedToThread: 1, hitRate: 1 },
       threads: new Map(), // empty — no thread_rows fetched
       totals: new Map([['th-stale', totals('th-stale')]]),
       users: new Map(),
