@@ -6,9 +6,11 @@ import { workflowDefinitionVersions } from '../lib/schema/workflow-definition-ve
 import { eq } from 'drizzle-orm';
 import type { Env } from '../env.js';
 import type { AppDb } from '../lib/drizzle.js';
+import { setOrgLlmKey } from './admin.js';
 
 let db: AppDb;
 let createdInstances: Array<{ id: string; params: unknown }> = [];
+const ENCRYPTION_KEY = 'k';
 
 vi.mock('../lib/drizzle.js', () => ({
   getDb: () => db,
@@ -26,7 +28,7 @@ function makeEnv(): Env {
         createdInstances.push(input);
       },
     } as unknown as Env['WORKFLOW_INTERPRETER'],
-    ENCRYPTION_KEY: 'k',
+    ENCRYPTION_KEY,
     GOOGLE_CLIENT_ID: '',
     GOOGLE_CLIENT_SECRET: '',
     MODAL_BACKEND_URL: '',
@@ -125,6 +127,31 @@ describe('createExecution', () => {
       user: { id: 'u1' },
       trigger: { type: 'manual', timestamp: 't', data: {}, metadata: {} },
     })).rejects.toBeInstanceOf(WorkflowExecutionStartError);
+  });
+
+  it('uses org DB LLM provider keys when starting an execution', async () => {
+    makeWorkflow('wf1', {
+      version: 'dag/v1',
+      nodes: [
+        { id: 'l', type: 'llm', model: 'anthropic:claude-3-5-sonnet', prompt: 'x', maxOutputTokens: 100 },
+        { id: 'done', type: 'stop' },
+      ],
+      edges: [{ from: 'l', to: 'done' }],
+    });
+    await setOrgLlmKey(db, ENCRYPTION_KEY, {
+      provider: 'anthropic',
+      key: 'sk-ant-db',
+      setBy: 'u1',
+    });
+
+    const result = await createExecution(makeEnv(), {
+      workflowId: 'wf1',
+      user: { id: 'u1' },
+      trigger: { type: 'manual', timestamp: 't', data: {}, metadata: {} },
+    });
+
+    expect(result.status).toBe('pending');
+    expect(createdInstances).toHaveLength(1);
   });
 
   it('rejects when the workflow has no published version', async () => {

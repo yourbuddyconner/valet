@@ -11,6 +11,8 @@
 import type { LlmNode } from '@valet/shared';
 import { renderTemplate } from '../../lib/workflow-dag/expression.js';
 import { generateStructured } from '../../lib/llm/structured-output.js';
+import { assembleLlmProviderEnv } from '../../lib/llm/provider-env.js';
+import { getDb } from '../../lib/drizzle.js';
 import { buildTemplateContext } from '../context.js';
 import { coerceTemplateString } from '../templates.js';
 import type { NodeExecutorArgs } from '../types.js';
@@ -42,8 +44,11 @@ export async function executeLlm(args: NodeExecutorArgs<LlmNode>): Promise<unkno
     console.warn(`[workflow-dag] llm node "${args.node.id}": maxOutputTokens ${requestedMaxTokens} clamped to ${MAX_OUTPUT_TOKENS_CEILING}`);
   }
 
+  const providerEnv = await assembleLlmProviderEnv(getDb(args.env.DB), args.env);
+  const llmEnv = { ...args.env, ...providerEnv };
+
   const result = await generateStructured({
-    env: args.env,
+    env: llmEnv,
     modelId: args.node.model,
     prompt,
     ...(system !== undefined ? { system } : {}),
@@ -66,4 +71,3 @@ export async function executeLlm(args: NodeExecutorArgs<LlmNode>): Promise<unkno
 
   return result.value;
 }
-

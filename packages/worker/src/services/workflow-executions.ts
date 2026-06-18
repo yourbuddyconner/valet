@@ -28,6 +28,7 @@ import type {
   WorkflowValidationError,
 } from '@valet/shared';
 import { validateDefinition, validateInputs, validateAgainstEnvironment } from '../lib/workflow-dag/validator.js';
+import { assembleLlmProviderEnv } from '../lib/llm/provider-env.js';
 
 export class WorkflowExecutionStartError extends Error {
   constructor(
@@ -184,7 +185,9 @@ export async function createExecution(env: Env, input: CreateExecutionInput): Pr
   }
 
   // 4. Env-dependent validation (LLM provider keys, etc.).
-  const envErrors = validateAgainstEnvironment(def, env);
+  const providerEnv = await assembleLlmProviderEnv(db, env);
+  const validationEnv = { ...env, ...providerEnv } as Env;
+  const envErrors = validateAgainstEnvironment(def, validationEnv);
   if (envErrors.length > 0) {
     throw new WorkflowExecutionStartError('invalid_env', 'workflow references resources not configured in this environment', envErrors);
   }

@@ -6,6 +6,13 @@ const generateStructured = vi.fn();
 vi.mock('../../lib/llm/structured-output.js', () => ({
   generateStructured: (...args: unknown[]) => generateStructured(...args),
 }));
+const assembleProviderEnv = vi.fn();
+vi.mock('../../lib/llm/provider-env.js', () => ({
+  assembleLlmProviderEnv: (...args: unknown[]) => assembleProviderEnv(...args),
+}));
+vi.mock('../../lib/drizzle.js', () => ({
+  getDb: (db: unknown) => db,
+}));
 
 import { executeLlm } from './llm.js';
 import type { LlmNode, WorkflowDagState } from '@valet/shared';
@@ -31,6 +38,8 @@ function args(node: LlmNode, triggerData: Record<string, unknown> = {}) {
 
 beforeEach(() => {
   generateStructured.mockReset();
+  assembleProviderEnv.mockReset();
+  assembleProviderEnv.mockResolvedValue({});
 });
 
 describe('executeLlm', () => {
@@ -68,6 +77,27 @@ describe('executeLlm', () => {
     await executeLlm(args(node));
     expect(generateStructured).toHaveBeenCalledWith(expect.objectContaining({
       outputSchema: node.outputSchema,
+    }));
+  });
+
+  it('passes DB-backed provider keys to the structured-output adapter', async () => {
+    assembleProviderEnv.mockResolvedValue({ ANTHROPIC_API_KEY: 'sk-ant-db' });
+    generateStructured.mockResolvedValue({ value: { ok: true }, attempts: 1 });
+    const node: LlmNode = {
+      id: 'extract',
+      type: 'llm',
+      model: 'anthropic:claude-3-5-sonnet',
+      prompt: 'do it',
+      maxOutputTokens: 100,
+    };
+
+    await executeLlm({
+      ...args(node),
+      env: { DB: {} as Env['DB'], ENCRYPTION_KEY: 'test-key' } as Env,
+    });
+
+    expect(generateStructured).toHaveBeenCalledWith(expect.objectContaining({
+      env: expect.objectContaining({ ANTHROPIC_API_KEY: 'sk-ant-db' }),
     }));
   });
 

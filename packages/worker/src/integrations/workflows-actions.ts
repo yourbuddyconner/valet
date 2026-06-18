@@ -19,6 +19,7 @@ import {
   WorkflowVersionError,
 } from '../services/workflow-versions.js';
 import { createExecution, WorkflowExecutionStartError } from '../services/workflow-executions.js';
+import { assembleLlmProviderEnv } from '../lib/llm/provider-env.js';
 import {
   groupWorkflowValidationResults,
   validateAgainstEnvironment,
@@ -456,13 +457,13 @@ async function saveDraftAction(
       ok: false,
       saved: false,
       workflowId: id,
-      validation: validateWorkflowDefinitionInput(params.draft, env),
+      validation: await validateWorkflowDefinitionInput(db, params.draft, env),
     };
   }
   await saveDraft(db, id, params.draft, params.ui);
   const result: { ok: true; saved: true; workflowId: string; validation?: GroupedWorkflowValidation } = { ok: true, saved: true, workflowId: id };
   if (params.validate) {
-    result.validation = validateWorkflowDefinition(params.draft, env);
+    result.validation = await validateWorkflowDefinition(db, params.draft, env);
   }
   return result;
 }
@@ -475,9 +476,9 @@ async function validateWorkflowAction(
 ) {
   if (params.definition) {
     if (!isWorkflowDefinition(params.definition)) {
-      return validateWorkflowDefinitionInput(params.definition, env);
+      return validateWorkflowDefinitionInput(db, params.definition, env);
     }
-    return validateWorkflowDefinition(params.definition, env);
+    return validateWorkflowDefinition(db, params.definition, env);
   }
 
   if (!params.workflowId) {
@@ -488,21 +489,23 @@ async function validateWorkflowAction(
   if (!draft.draft) {
     return { errors: [{ scope: 'workflow', code: 'no_draft', path: '/', message: 'no draft to validate' }], warnings: [] };
   }
-  return validateWorkflowDefinition(draft.draft, env);
+  return validateWorkflowDefinition(db, draft.draft, env);
 }
 
-function validateWorkflowDefinition(definition: WorkflowDefinition, env: Env): GroupedWorkflowValidation {
+async function validateWorkflowDefinition(db: AppDb, definition: WorkflowDefinition, env: Env): Promise<GroupedWorkflowValidation> {
+  const providerEnv = await assembleLlmProviderEnv(db, env);
+  const validationEnv = { ...env, ...providerEnv } as Env;
   return groupWorkflowValidationResults([
     ...validateDefinition(definition),
-    ...validateAgainstEnvironment(definition, env),
+    ...validateAgainstEnvironment(definition, validationEnv),
   ]);
 }
 
-function validateWorkflowDefinitionInput(definition: unknown, env: Env): GroupedWorkflowValidation {
+async function validateWorkflowDefinitionInput(db: AppDb, definition: unknown, env: Env): Promise<GroupedWorkflowValidation> {
   if (!isWorkflowDefinition(definition)) {
     return groupWorkflowValidationResults(validateDefinition(definition));
   }
-  return validateWorkflowDefinition(definition, env);
+  return validateWorkflowDefinition(db, definition, env);
 }
 
 async function publishWorkflowAction(

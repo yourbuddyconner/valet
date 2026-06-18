@@ -54,7 +54,7 @@ All actions still flow through action policy resolution and invocation audit row
 { "errors": [], "warnings": [] }
 ```
 
-`llm_maxoutput_warning` is advisory and does not block publish; structural errors, invalid environment references, malformed templates, missing provider keys, and graph errors are blocking. `workflows.save_draft` requires a structurally valid `WorkflowDefinition`, but accepts `validate: true` to return the same grouped semantic/environment validation result after saving the draft.
+`llm_maxoutput_warning` is advisory and does not block publish; structural errors, invalid environment references, malformed templates, missing provider keys, and graph errors are blocking. LLM provider-key validation resolves built-in provider keys from `org_api_keys` first and Worker env fallback secrets second, matching session env assembly. `workflows.save_draft` requires a structurally valid `WorkflowDefinition`, but accepts `validate: true` to return the same grouped semantic/environment validation result after saving the draft.
 
 The validator fails fast on unknown node types before per-node discriminator validation. Errors enumerate valid node types (`trigger`, `llm`, `tool`, `set`, `if`, `wait`, `approval`, `foreach`, `orchestrator`, `session`, `stop`) and include migration hints for old or incorrect names such as `agent_prompt` → `llm`, `http`/`action` → `tool`, `loop` → `foreach`, and `sleep` → `wait`. `bash` is not a dag/v1 node type.
 

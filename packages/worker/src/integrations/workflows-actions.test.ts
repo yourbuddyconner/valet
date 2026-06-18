@@ -6,10 +6,12 @@ import { workflowExecutionNodes } from '../lib/schema/workflow-execution-nodes.j
 import { workflowExecutions } from '../lib/schema/workflows.js';
 import { createWorkflow } from '../services/workflows.js';
 import { saveDraft } from '../services/workflow-versions.js';
+import { setOrgLlmKey } from '../services/admin.js';
 import { workflowActions } from './workflows-actions.js';
 import type { Env } from '../env.js';
 
 const USER_ID = 'workflow-actions-user';
+const ENCRYPTION_KEY = 'test-encryption-key';
 
 describe('workflowActions', () => {
   beforeEach(() => {
@@ -141,6 +143,35 @@ describe('workflowActions', () => {
       errors: [],
       warnings: [expect.objectContaining({ code: 'llm_maxoutput_warning' })],
     });
+  });
+
+  it('uses org DB LLM provider keys when validating workflow drafts', async () => {
+    const { db } = createTestDb();
+    db.insert(users).values({ id: USER_ID, email: 'workflow-actions@example.com' }).run();
+    await setOrgLlmKey(db as any, ENCRYPTION_KEY, {
+      provider: 'anthropic',
+      key: 'sk-ant-db',
+      setBy: USER_ID,
+    });
+
+    const result = await workflowActions.execute('workflows.validate', {
+      definition: {
+        version: 'dag/v1',
+        nodes: [
+          { id: 'generate_welcome', type: 'llm', model: 'anthropic:claude-sonnet-4-20250514', prompt: 'Say hi', maxOutputTokens: 100 },
+          { id: 'done', type: 'stop' },
+        ],
+        edges: [{ from: 'generate_welcome', to: 'done' }],
+      },
+    }, {
+      credentials: {},
+      userId: USER_ID,
+      appDb: db,
+      env: { ENCRYPTION_KEY } as Env,
+    } as any);
+
+    expect(result.success).toBe(true);
+    expect(result.data).toEqual({ errors: [], warnings: [] });
   });
 
   it('returns validation and does not save malformed drafts', async () => {
