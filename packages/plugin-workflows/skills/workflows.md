@@ -28,6 +28,7 @@ Available actions:
 - `workflows.get` — fetch metadata plus published definition and draft by workflow ID or slug.
 - `workflows.create` — create a new workflow draft.
 - `workflows.save_draft` — save a structurally valid `dag/v1` draft. Drafts may still be semantically incomplete. Pass `validate: true` to return grouped validation after save.
+- `workflows.schema` — return valid node types, required fields, template syntax, old-name aliases, and foreach constraints.
 - `workflows.validate` — validate a saved draft or supplied definition. Returns blocking `errors` separately from non-blocking `warnings`.
 - `workflows.publish` — publish the current draft. This is high risk and may require approval.
 - `workflows.test_run` — start a draft execution with sample trigger data and optional declared inputs. Returns an execution id/status.
@@ -50,6 +51,12 @@ A workflow definition has this top-level shape:
 
 Node IDs may contain letters, numbers, `_`, and `-`. They must be unique across top-level nodes and foreach body nodes. Edges connect top-level nodes only.
 
+Prefer underscore IDs for agent-authored workflows because dot notation is simplest. If a node ID contains `-`, use bracket notation in expressions:
+
+```text
+{{nodes["tool-1"].data.issues}}
+```
+
 ### Templates and Data
 
 String fields and JSON values on most nodes support `{{ expression }}` templates.
@@ -66,6 +73,15 @@ Common references:
 - Inside `foreach`, the defaults are `{{item}}` and `{{index}}` unless aliases are set.
 
 Do not use `outputs.*`; the runtime context is `nodes.*`.
+
+Legacy or incorrect node names are rejected. Common replacements:
+
+- `agent_prompt` or `prompt` → `llm`
+- `http` or `action` → `tool`
+- `loop` → `foreach`
+- `sleep` → `wait`
+- `start` → `trigger`
+- `bash` has no built-in dag/v1 equivalent; use `session`/`orchestrator` to run code in a sandbox or `tool` for integration actions.
 
 ### Edges
 
@@ -161,7 +177,7 @@ Condition fields are `left`, `dataType`, `operation`, and optional `right`. Use 
 }
 ```
 
-Foreach `body` may be `llm`, `tool`, `set`, `stop`, `orchestrator`, or `session`.
+Foreach `body` may be `llm`, `tool`, `set`, `stop`, `orchestrator`, or `session`. Nested `if`, `wait`, `approval`, `trigger`, and `foreach` nodes are not supported inside a foreach body.
 
 `approval` pauses until a human approves or denies:
 

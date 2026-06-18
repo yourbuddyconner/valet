@@ -11,6 +11,43 @@
 import { z } from 'zod';
 import type { WorkflowDefinition } from '@valet/shared';
 
+export const WORKFLOW_NODE_TYPES = [
+  'trigger',
+  'llm',
+  'tool',
+  'set',
+  'if',
+  'wait',
+  'approval',
+  'foreach',
+  'orchestrator',
+  'session',
+  'stop',
+] as const;
+
+export const FOREACH_BODY_NODE_TYPES = [
+  'llm',
+  'tool',
+  'set',
+  'stop',
+  'orchestrator',
+  'session',
+] as const;
+
+export const LEGACY_NODE_TYPE_ALIASES = {
+  agent_prompt: 'llm',
+  prompt: 'llm',
+  http: 'tool',
+  action: 'tool',
+  loop: 'foreach',
+  sleep: 'wait',
+  start: 'trigger',
+} as const satisfies Record<string, (typeof WORKFLOW_NODE_TYPES)[number]>;
+
+export const LEGACY_NODE_TYPE_NOTES = {
+  bash: 'No built-in shell node exists in dag/v1; use a session or orchestrator node to run code in a sandbox, or a tool node for integration actions.',
+} as const satisfies Record<string, string>;
+
 const jsonValueSchema: z.ZodType<unknown> = z.lazy(() => z.union([
   z.string(),
   z.number(),

@@ -26,7 +26,13 @@ import type {
 import { parseTemplate, parseExpression, TemplateParseError } from './expression.js';
 import { parseDurationMs } from './duration.js';
 import { parseModelId, hasProviderKey } from '../llm/model-id.js';
-import { workflowDefinitionSchema } from './schema.js';
+import {
+  FOREACH_BODY_NODE_TYPES,
+  LEGACY_NODE_TYPE_ALIASES,
+  LEGACY_NODE_TYPE_NOTES,
+  WORKFLOW_NODE_TYPES,
+  workflowDefinitionSchema,
+} from './schema.js';
 import type { Env } from '../../env.js';
 
 // ─── Policy ceilings (defaults; may be overridden by definition.policy) ────
@@ -39,7 +45,8 @@ const DEFAULT_MAX_FOREACH_CONCURRENCY = 5;
 const RESERVED_CONTEXT_NAMES = new Set(['trigger', 'inputs', 'nodes']);
 
 // Allowed foreach body types — narrower than top-level nodes.
-const FOREACH_BODY_TYPES = new Set(['llm', 'tool', 'set', 'stop', 'orchestrator', 'session']);
+const FOREACH_BODY_TYPES = new Set<string>(FOREACH_BODY_NODE_TYPES);
+const WORKFLOW_NODE_TYPE_SET = new Set<string>(WORKFLOW_NODE_TYPES);
 
 // ─── Shape guard (makes validateDefinition total) ──────────────────────────
 
@@ -53,6 +60,9 @@ const FOREACH_BODY_TYPES = new Set(['llm', 'tool', 'set', 'stop', 'orchestrator'
  * runtime.
  */
 function validateDefinitionShape(def: unknown): WorkflowValidationError[] {
+  const nodeTypeErrors = validateRawNodeTypes(def);
+  if (nodeTypeErrors.length > 0) return nodeTypeErrors;
+
   const parsed = workflowDefinitionSchema.safeParse(def);
   if (parsed.success) return [];
   return parsed.error.issues.flatMap((issue) => formatShapeIssue(issue, def)).map((issue) => ({
@@ -60,6 +70,70 @@ function validateDefinitionShape(def: unknown): WorkflowValidationError[] {
     code: 'malformed_definition' as const,
     message: issue.message,
   }));
+}
+
+function validateRawNodeTypes(input: unknown): WorkflowValidationError[] {
+  if (!input || typeof input !== 'object') return [];
+  const nodes = (input as { nodes?: unknown }).nodes;
+  if (!Array.isArray(nodes)) return [];
+
+  const errors: WorkflowValidationError[] = [];
+  for (let index = 0; index < nodes.length; index++) {
+    const node = nodes[index];
+    if (!node || typeof node !== 'object') continue;
+    const record = node as Record<string, unknown>;
+    const type = record.type;
+    if (typeof type === 'string' && !WORKFLOW_NODE_TYPE_SET.has(type)) {
+      errors.push(unknownNodeTypeError(type, `nodes.${index}.type`, record.id));
+      continue;
+    }
+
+    if (type === 'foreach') {
+      const body = record.body;
+      if (!body || typeof body !== 'object') continue;
+      const bodyRecord = body as Record<string, unknown>;
+      const bodyType = bodyRecord.type;
+      if (typeof bodyType === 'string' && !FOREACH_BODY_TYPES.has(bodyType)) {
+        errors.push(unknownForeachBodyTypeError(bodyType, `nodes.${index}.body.type`, bodyRecord.id));
+      }
+    }
+  }
+  return errors;
+}
+
+function unknownNodeTypeError(type: string, path: string, rawId: unknown): WorkflowValidationError {
+  const suggestion = Object.prototype.hasOwnProperty.call(LEGACY_NODE_TYPE_ALIASES, type)
+    ? LEGACY_NODE_TYPE_ALIASES[type as keyof typeof LEGACY_NODE_TYPE_ALIASES]
+    : undefined;
+  const note = Object.prototype.hasOwnProperty.call(LEGACY_NODE_TYPE_NOTES, type)
+    ? LEGACY_NODE_TYPE_NOTES[type as keyof typeof LEGACY_NODE_TYPE_NOTES]
+    : undefined;
+  const suffix = suggestion
+    ? ` Did you mean "${suggestion}"?`
+    : note ? ` ${note}` : '';
+  return {
+    scope: 'workflow',
+    ...(typeof rawId === 'string' ? { nodeId: rawId } : {}),
+    path,
+    code: 'unknown_node_type',
+    message: `Unknown node type "${type}". Valid types are: ${WORKFLOW_NODE_TYPES.join(', ')}.${suffix}`,
+  };
+}
+
+function unknownForeachBodyTypeError(type: string, path: string, rawId: unknown): WorkflowValidationError {
+  const suggestion = Object.prototype.hasOwnProperty.call(LEGACY_NODE_TYPE_ALIASES, type)
+    ? LEGACY_NODE_TYPE_ALIASES[type as keyof typeof LEGACY_NODE_TYPE_ALIASES]
+    : undefined;
+  const suffix = suggestion && FOREACH_BODY_TYPES.has(suggestion)
+    ? ` Did you mean "${suggestion}"?`
+    : ' Top-level-only node types cannot be nested in foreach body.';
+  return {
+    scope: 'workflow',
+    ...(typeof rawId === 'string' ? { nodeId: rawId } : {}),
+    path,
+    code: 'unknown_foreach_body_type',
+    message: `foreach body type "${type}" is not allowed. Allowed foreach body types are: ${FOREACH_BODY_NODE_TYPES.join(', ')}.${suffix}`,
+  };
 }
 
 type ZodLikeIssue = {
@@ -670,7 +744,7 @@ function tryParseTemplate(
   try {
     parseTemplate(source);
   } catch (err) {
-    const msg = err instanceof TemplateParseError ? err.message : 'parse failure';
+    const msg = formatTemplateParseError(source, err);
     errors.push({
       scope: 'field',
       nodeId,
@@ -690,7 +764,7 @@ function tryParseExpression(
   try {
     parseExpression(source);
   } catch (err) {
-    const msg = err instanceof TemplateParseError ? err.message : 'parse failure';
+    const msg = formatExpressionParseError(source, err);
     errors.push({
       scope: 'field',
       nodeId,
@@ -699,6 +773,21 @@ function tryParseExpression(
       message: msg,
     });
   }
+}
+
+function formatTemplateParseError(source: string, err: unknown): string {
+  return appendHyphenatedNodeIdHint(source, err instanceof TemplateParseError ? err.message : 'parse failure');
+}
+
+function formatExpressionParseError(source: string, err: unknown): string {
+  return appendHyphenatedNodeIdHint(source, err instanceof TemplateParseError ? err.message : 'parse failure');
+}
+
+function appendHyphenatedNodeIdHint(source: string, message: string): string {
+  const match = source.match(/\bnodes\.([A-Za-z_][A-Za-z0-9_]*-[A-Za-z0-9_-]*)/);
+  if (!match) return message;
+  const nodeId = match[1];
+  return `${message}. Node IDs containing "-" must use bracket notation in expressions, e.g. nodes["${nodeId}"].data.field`;
 }
 
 function validateJsonTemplates(nodeId: string, value: unknown, errors: WorkflowValidationError[]): void {

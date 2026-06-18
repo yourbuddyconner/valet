@@ -24,6 +24,7 @@ describe('workflowActions', () => {
       'workflows.get',
       'workflows.create',
       'workflows.save_draft',
+      'workflows.schema',
       'workflows.validate',
       'workflows.publish',
       'workflows.test_run',
@@ -53,6 +54,37 @@ describe('workflowActions', () => {
         slug: 'daily-triage',
         name: 'Daily triage',
       }],
+    });
+  });
+
+  it('returns workflow schema discovery data for agents', async () => {
+    const { db } = createTestDb();
+    db.insert(users).values({ id: USER_ID, email: 'workflow-actions@example.com' }).run();
+
+    const result = await workflowActions.execute('workflows.schema', {}, {
+      credentials: {},
+      userId: USER_ID,
+      appDb: db,
+      env: {} as Env,
+    } as any);
+
+    expect(result.success).toBe(true);
+    expect(result.data).toMatchObject({
+      version: 'dag/v1',
+      validNodeTypes: ['trigger', 'llm', 'tool', 'set', 'if', 'wait', 'approval', 'foreach', 'orchestrator', 'session', 'stop'],
+      legacyNodeTypeAliases: {
+        agent_prompt: 'llm',
+        http: 'tool',
+        loop: 'foreach',
+        sleep: 'wait',
+      },
+      foreachBodyTypes: ['llm', 'tool', 'set', 'stop', 'orchestrator', 'session'],
+    });
+    expect(result.data).toMatchObject({
+      nodes: expect.arrayContaining([
+        expect.objectContaining({ type: 'llm', required: expect.arrayContaining(['id', 'type', 'prompt']) }),
+        expect.objectContaining({ type: 'foreach', required: expect.arrayContaining(['id', 'type', 'items', 'body']) }),
+      ]),
     });
   });
 

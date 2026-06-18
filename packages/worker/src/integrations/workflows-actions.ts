@@ -25,7 +25,13 @@ import {
   validateDefinition,
   type GroupedWorkflowValidation,
 } from '../lib/workflow-dag/validator.js';
-import { isWorkflowDefinition } from '../lib/workflow-dag/schema.js';
+import {
+  FOREACH_BODY_NODE_TYPES,
+  LEGACY_NODE_TYPE_ALIASES,
+  LEGACY_NODE_TYPE_NOTES,
+  WORKFLOW_NODE_TYPES,
+  isWorkflowDefinition,
+} from '../lib/workflow-dag/schema.js';
 import { assertWorkflowAccess } from '../lib/workflow-access.js';
 import type { WorkflowDefinition } from '@valet/shared';
 
@@ -92,7 +98,7 @@ const actions: ActionDefinition[] = [
   {
     id: 'workflows.save_draft',
     name: 'Save workflow draft',
-    description: 'Save an editable dag/v1 draft. Drafts may be incomplete; publish validates them.',
+    description: 'Save an editable, structurally valid dag/v1 draft. Pass validate=true to return grouped semantic/environment validation after saving.',
     riskLevel: 'medium',
     params: z.object({
       workflowId: z.string().min(1),
@@ -111,6 +117,14 @@ const actions: ActionDefinition[] = [
       },
       additionalProperties: false,
     },
+  },
+  {
+    id: 'workflows.schema',
+    name: 'Get workflow schema',
+    description: 'Return dag/v1 node types, required fields, template syntax, aliases for old type names, and foreach constraints.',
+    riskLevel: 'low',
+    params: z.object({}),
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
   },
   {
     id: 'workflows.validate',
@@ -226,6 +240,9 @@ export const workflowActions: ActionSource = {
             ui: z.unknown().optional(),
             validate: z.boolean().optional(),
           }).parse(params)));
+        case 'workflows.schema':
+          z.object({}).parse(params);
+          return ok(getWorkflowSchemaAction());
         case 'workflows.validate':
           return ok(await validateWorkflowAction(context.appDb, context.env, context.userId, z.object({
             workflowId: z.string().min(1).optional(),
@@ -263,6 +280,110 @@ export const workflowIntegrationPackage: IntegrationPackage = {
   provider: workflowProvider,
   actions: workflowActions,
 };
+
+function getWorkflowSchemaAction() {
+  return {
+    version: 'dag/v1',
+    validNodeTypes: WORKFLOW_NODE_TYPES,
+    foreachBodyTypes: FOREACH_BODY_NODE_TYPES,
+    legacyNodeTypeAliases: LEGACY_NODE_TYPE_ALIASES,
+    removedNodeTypeNotes: LEGACY_NODE_TYPE_NOTES,
+    idSyntax: {
+      allowedPattern: '^[A-Za-z0-9_-]+$',
+      maxLength: 80,
+      note: 'Dot notation only works for identifier-safe node IDs. For IDs containing "-", use bracket notation such as {{nodes["tool-1"].data.result}}.',
+    },
+    templates: {
+      delimiters: '{{ expression }}',
+      runtimeContext: ['trigger', 'inputs', 'nodes', 'item', 'index'],
+      examples: [
+        '{{trigger.data}}',
+        '{{inputs.name}}',
+        '{{nodes.prepare.data.message}}',
+        '{{nodes["tool-1"].data.issues}}',
+        '{{item.title}}',
+      ],
+      note: 'Use nodes.*, not outputs.*.',
+    },
+    edges: {
+      fields: ['from', 'to', 'fromOutput', 'when'],
+      ifBranches: ['true', 'false'],
+      note: 'Edges connect top-level node IDs only. Edges from if nodes must set fromOutput to "true" or "false".',
+    },
+    nodes: [
+      {
+        type: 'trigger',
+        required: ['id', 'type'],
+        optional: [],
+        description: 'Represents the invocation source and exposes trigger.data, trigger.metadata, trigger.type, and trigger.timestamp.',
+      },
+      {
+        type: 'llm',
+        required: ['id', 'type', 'prompt'],
+        optional: ['model', 'system', 'outputSchema', 'temperature', 'maxOutputTokens'],
+        description: 'Generate text or structured output. Model IDs use provider:model.',
+      },
+      {
+        type: 'tool',
+        required: ['id', 'type', 'service', 'action', 'params'],
+        optional: ['summary', 'onPolicyDeny', 'retries'],
+        description: 'Call a remote integration action.',
+      },
+      {
+        type: 'set',
+        required: ['id', 'type', 'values'],
+        optional: [],
+        description: 'Write structured values to nodes.<id>.data.',
+      },
+      {
+        type: 'if',
+        required: ['id', 'type', 'conditions'],
+        optional: ['combinator'],
+        description: 'Branch on conditions. Conditions use left, dataType, operation, and optional right.',
+      },
+      {
+        type: 'wait',
+        required: ['id', 'type', 'mode', 'duration'],
+        optional: [],
+        description: 'Sleep for a duration. MVP mode is "duration".',
+      },
+      {
+        type: 'approval',
+        required: ['id', 'type', 'prompt'],
+        optional: ['summary', 'details', 'timeout', 'onDeny'],
+        description: 'Pause until a human approves or denies.',
+      },
+      {
+        type: 'foreach',
+        required: ['id', 'type', 'items', 'body'],
+        optional: ['itemAlias', 'indexAlias', 'maxItems', 'concurrency', 'onItemError'],
+        description: 'Iterate over an array expression and run one allowed body node per item.',
+        constraints: {
+          bodyTypes: FOREACH_BODY_NODE_TYPES,
+          bodyNote: 'Nested if, wait, approval, trigger, and foreach nodes are not supported in foreach body.',
+        },
+      },
+      {
+        type: 'orchestrator',
+        required: ['id', 'type', 'prompt'],
+        optional: ['forceNewThread', 'wait'],
+        description: 'Prompt the user orchestrator.',
+      },
+      {
+        type: 'session',
+        required: ['id', 'type', 'mode', 'prompt'],
+        optional: ['workspace', 'title', 'personaId', 'model', 'repo', 'sessionId', 'threadId', 'forceNewThread', 'wait'],
+        description: 'Start a new session or prompt an existing session. mode is "start" or "prompt".',
+      },
+      {
+        type: 'stop',
+        required: ['id', 'type'],
+        optional: ['outcome', 'output', 'message'],
+        description: 'End a branch with optional output.',
+      },
+    ],
+  };
+}
 
 async function listWorkflowAction(db: AppDb, userId: string) {
   const result = await listWorkflows(db, userId);

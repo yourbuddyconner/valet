@@ -69,6 +69,68 @@ describe('validateDefinition', () => {
     expect(errs.map((e) => e.message).join('\n')).toContain('conditions.0.operation');
   });
 
+  it('returns a helpful unknown node type error before node-specific discriminator errors', () => {
+    const errs = validateDefinition({
+      version: 'dag/v1',
+      nodes: [
+        { id: 'start', type: 'trigger' },
+        { id: 'run_script', type: 'bash', command: 'echo hello', mode: 'start' },
+      ],
+      edges: [],
+    });
+
+    expect(errs).toEqual([
+      expect.objectContaining({
+        code: 'unknown_node_type',
+        path: 'nodes.1.type',
+        nodeId: 'run_script',
+        message: expect.stringContaining('Unknown node type "bash"'),
+      }),
+    ]);
+    expect(errs[0]!.message).toContain('trigger, llm, tool, set, if, wait, approval, foreach, orchestrator, session, stop');
+    expect(errs[0]!.message).not.toContain('mode');
+  });
+
+  it('suggests current node type names for legacy aliases', () => {
+    const errs = validateDefinition({
+      version: 'dag/v1',
+      nodes: [{ id: 'ask_agent', type: 'agent_prompt', prompt: 'hello' }],
+      edges: [],
+    });
+
+    expect(errs).toEqual([
+      expect.objectContaining({
+        code: 'unknown_node_type',
+        message: expect.stringContaining('Did you mean "llm"?'),
+      }),
+    ]);
+  });
+
+  it('returns a helpful unknown foreach body type error', () => {
+    const errs = validateDefinition({
+      version: 'dag/v1',
+      nodes: [
+        {
+          id: 'each_item',
+          type: 'foreach',
+          items: '{{trigger.data.items}}',
+          body: { id: 'route_item', type: 'if', conditions: [] },
+        },
+      ],
+      edges: [],
+    });
+
+    expect(errs).toEqual([
+      expect.objectContaining({
+        code: 'unknown_foreach_body_type',
+        path: 'nodes.0.body.type',
+        nodeId: 'route_item',
+        message: expect.stringContaining('foreach body type "if" is not allowed'),
+      }),
+    ]);
+    expect(errs[0]!.message).toContain('llm, tool, set, stop, orchestrator, session');
+  });
+
   it('rejects duplicate node IDs', () => {
     const def = definition({
       nodes: [
@@ -345,6 +407,37 @@ describe('validateDefinition', () => {
     });
     const errs = blockingErrors(validateDefinition(def));
     expect(errs.some((e) => e.code === 'template_parse_error')).toBe(true);
+  });
+
+  it('suggests bracket notation when dot notation references a hyphenated node id', () => {
+    const def = definition({
+      nodes: [
+        { id: 'normalize-input', type: 'set', values: { email: 'a@example.com' } },
+        { id: 'finish', type: 'stop', output: '{{nodes.normalize-input.data.email}}' },
+      ],
+      edges: [{ from: 'normalize-input', to: 'finish' }],
+    });
+
+    const errs = blockingErrors(validateDefinition(def));
+    expect(errs).toEqual([
+      expect.objectContaining({
+        code: 'template_parse_error',
+        nodeId: 'finish',
+        message: expect.stringContaining('nodes["normalize-input"]'),
+      }),
+    ]);
+  });
+
+  it('accepts bracket notation references to hyphenated node ids', () => {
+    const def = definition({
+      nodes: [
+        { id: 'normalize-input', type: 'set', values: { email: 'a@example.com' } },
+        { id: 'finish', type: 'stop', output: '{{nodes["normalize-input"].data.email}}' },
+      ],
+      edges: [{ from: 'normalize-input', to: 'finish' }],
+    });
+
+    expect(blockingErrors(validateDefinition(def))).toEqual([]);
   });
 });
 

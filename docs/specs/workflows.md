@@ -40,6 +40,7 @@ Initial actions:
 | `workflows.get` | low | Fetch metadata, published definition, and current draft |
 | `workflows.create` | medium | Create a new user-authored workflow draft |
 | `workflows.save_draft` | medium | Save a mutable `dag/v1` draft and optional UI layout |
+| `workflows.schema` | low | Return node type/schema discovery data for agents |
 | `workflows.validate` | low | Validate a saved draft or supplied definition |
 | `workflows.publish` | high | Publish the current draft into `workflow_definition_versions` |
 | `workflows.test_run` | medium | Execute the draft with sample trigger data and optional input overrides |
@@ -54,6 +55,10 @@ All actions still flow through action policy resolution and invocation audit row
 ```
 
 `llm_maxoutput_warning` is advisory and does not block publish; structural errors, invalid environment references, malformed templates, missing provider keys, and graph errors are blocking. `workflows.save_draft` requires a structurally valid `WorkflowDefinition`, but accepts `validate: true` to return the same grouped semantic/environment validation result after saving the draft.
+
+The validator fails fast on unknown node types before per-node discriminator validation. Errors enumerate valid node types (`trigger`, `llm`, `tool`, `set`, `if`, `wait`, `approval`, `foreach`, `orchestrator`, `session`, `stop`) and include migration hints for old or incorrect names such as `agent_prompt` → `llm`, `http`/`action` → `tool`, `loop` → `foreach`, and `sleep` → `wait`. `bash` is not a dag/v1 node type.
+
+Node IDs may include hyphens for compatibility with the visual editor. Dot notation only works for identifier-safe IDs, so references to hyphenated IDs must use bracket notation: `{{nodes["tool-1"].data.result}}`.
 
 ## Data Model
 
