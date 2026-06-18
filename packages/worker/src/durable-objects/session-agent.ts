@@ -6976,6 +6976,10 @@ export class SessionAgentDO {
           riskLevel,
           invocationId: invocationId,
           summary,
+          // Carried through to executeActionAndSend after approval resolution so
+          // the tool_exec analytics event can be attributed to the originating
+          // assistant turn (and therefore the thread).
+          opencodeSessionId,
         };
         // Resolve channel deterministically via the calling OC session id.
         // The runner passes opencodeSessionId through call-tool exactly so we
@@ -7098,7 +7102,7 @@ export class SessionAgentDO {
       }
 
       // ─── Allow — execute immediately ───────────────────────────────────
-      await this.executeActionAndSend(requestId, toolId, service, actionId, params, userId, actionSource, invocationId, orgId);
+      await this.executeActionAndSend(requestId, toolId, service, actionId, params, userId, actionSource, invocationId, orgId, opencodeSessionId);
     } catch (err) {
       const error = err instanceof Error ? err.message : String(err);
       if (shouldFailInvocationOnCatch && invocationIdForCleanup) {
@@ -7131,10 +7135,21 @@ export class SessionAgentDO {
     actionSource: ReturnType<typeof integrationRegistry.getActions>,
     invocationId: string,
     orgId?: string,
+    // The OpenCode session that triggered this tool call. Used solely to
+    // bridge the tool_exec analytics event back to the originating assistant
+    // turn (and thus the thread) so per-thread usage attribution stays whole.
+    opencodeSessionId?: string,
   ): Promise<{ success: boolean; error?: string }> {
     const spawnRequest = this.sessionState.spawnRequest;
     const spawnEnvVars = spawnRequest?.envVars as Record<string, string> | undefined;
     const guardConfig = await this.getGuardConfig();
+    // Best-effort: find the in-flight assistant turn for this OC session. Tools
+    // can fire after a turn finalizes (post-approval, queued execution); a null
+    // turnId in that case leaves the row attributed at session level only,
+    // matching pre-fix behaviour.
+    const toolTurnId = opencodeSessionId
+      ? this.messageStore.findActiveTurnByOcSession(opencodeSessionId) ?? undefined
+      : undefined;
 
     let result;
     try {
@@ -7150,6 +7165,7 @@ export class SessionAgentDO {
       });
       this.runnerLink.send({ type: 'call-tool-result', requestId, error } as any);
       this.emitEvent('tool_exec', {
+        turnId: toolTurnId,
         toolName: toolId,
         errorCode: 'action_failed',
       });
@@ -7158,6 +7174,7 @@ export class SessionAgentDO {
 
     // Emit tool_exec timing event
     this.emitEvent('tool_exec', {
+      turnId: toolTurnId,
       toolName: toolId,
       durationMs: result.durationMs,
       errorCode: result.success ? undefined : 'action_failed',
@@ -7587,7 +7604,8 @@ export class SessionAgentDO {
         let executionResult: { success: boolean; error?: string } = { success: true };
         if (requestId) {
           try {
-            executionResult = await this.executeActionAndSend(requestId, toolId, service, actionId, params, userId, actionSource, promptId, orgId);
+            const ocSession = typeof context.opencodeSessionId === 'string' ? context.opencodeSessionId : undefined;
+            executionResult = await this.executeActionAndSend(requestId, toolId, service, actionId, params, userId, actionSource, promptId, orgId, ocSession);
           } catch (err) {
             const error = err instanceof Error ? err.message : String(err);
             await markFailed(this.appDb, promptId, error).catch((markErr) => {
