@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const dispatchMock = vi.fn();
 const pollThreadMock = vi.fn();
+const getThreadMessagesMock = vi.fn();
 
 vi.mock('../../services/orchestrator.js', () => ({
   dispatchOrchestratorPrompt: (...args: unknown[]) => dispatchMock(...args),
@@ -9,6 +10,14 @@ vi.mock('../../services/orchestrator.js', () => ({
 
 vi.mock('../polling.js', () => ({
   pollThreadUntilIdle: (...args: unknown[]) => pollThreadMock(...args),
+}));
+
+vi.mock('../../lib/db/messages.js', () => ({
+  getThreadMessages: (...args: unknown[]) => getThreadMessagesMock(...args),
+}));
+
+vi.mock('../../lib/drizzle.js', () => ({
+  getDb: () => 'db',
 }));
 
 import { executeOrchestrator } from './orchestrator.js';
@@ -53,6 +62,7 @@ function args(node: OrchestratorNode, triggerData: Record<string, unknown> = {})
 beforeEach(() => {
   dispatchMock.mockReset();
   pollThreadMock.mockReset();
+  getThreadMessagesMock.mockReset();
 });
 
 describe('executeOrchestrator', () => {
@@ -91,6 +101,7 @@ describe('executeOrchestrator', () => {
   it('polls until idle when wait.mode is until_idle and returns finalStatus', async () => {
     dispatchMock.mockResolvedValue({ dispatched: true, sessionId: 'orchestrator:user-1', threadId: 'thread-1' });
     pollThreadMock.mockResolvedValue('idle');
+    getThreadMessagesMock.mockResolvedValue([]);
     const node: OrchestratorNode = {
       id: 'orch', type: 'orchestrator', prompt: 'go', wait: { mode: 'until_idle', timeout: '1h' },
     };
@@ -100,6 +111,86 @@ describe('executeOrchestrator', () => {
       sessionId: 'orchestrator:user-1',
       threadId: 'thread-1',
     }));
+  });
+
+  it('returns the last thread message after waiting until idle', async () => {
+    dispatchMock.mockResolvedValue({ dispatched: true, sessionId: 'orchestrator:user-1', threadId: 'thread-1' });
+    pollThreadMock.mockResolvedValue('idle');
+    const userMessage = {
+      id: 'msg-user',
+      sessionId: 'orchestrator:user-1',
+      role: 'user',
+      content: 'go',
+      createdAt: new Date('2026-06-12T00:00:00.000Z'),
+    };
+    const assistantMessage = {
+      id: 'msg-assistant',
+      sessionId: 'orchestrator:user-1',
+      role: 'assistant',
+      content: 'investigation complete',
+      threadId: 'thread-1',
+      createdAt: new Date('2026-06-12T00:00:03.000Z'),
+    };
+    getThreadMessagesMock.mockResolvedValue([userMessage, assistantMessage]);
+    const expectedAssistantMessage = {
+      ...assistantMessage,
+      createdAt: '2026-06-12T00:00:03.000Z',
+    };
+
+    const node: OrchestratorNode = {
+      id: 'orch', type: 'orchestrator', prompt: 'go', wait: { mode: 'until_idle' },
+    };
+    const out = await executeOrchestrator(args(node));
+
+    expect(out).toMatchObject({
+      dispatched: true,
+      threadId: 'thread-1',
+      finalStatus: 'idle',
+      waited: true,
+      lastMessage: expectedAssistantMessage,
+    });
+  });
+
+  it('returns the full thread transcript when resultMode is transcript', async () => {
+    dispatchMock.mockResolvedValue({ dispatched: true, sessionId: 'orchestrator:user-1', threadId: 'thread-1' });
+    pollThreadMock.mockResolvedValue('idle');
+    const transcript = [
+      {
+        id: 'msg-user',
+        sessionId: 'orchestrator:user-1',
+        role: 'user',
+        content: 'go',
+        threadId: 'thread-1',
+        createdAt: new Date('2026-06-12T00:00:00.000Z'),
+      },
+      {
+        id: 'msg-assistant',
+        sessionId: 'orchestrator:user-1',
+        role: 'assistant',
+        content: 'investigation complete',
+        threadId: 'thread-1',
+        createdAt: new Date('2026-06-12T00:00:03.000Z'),
+      },
+    ];
+    getThreadMessagesMock.mockResolvedValue(transcript);
+    const expectedTranscript = [
+      { ...transcript[0], createdAt: '2026-06-12T00:00:00.000Z' },
+      { ...transcript[1], createdAt: '2026-06-12T00:00:03.000Z' },
+    ];
+
+    const node: OrchestratorNode = {
+      id: 'orch', type: 'orchestrator', prompt: 'go', wait: { mode: 'until_idle' }, resultMode: 'transcript',
+    };
+    const out = await executeOrchestrator(args(node));
+
+    expect(out).toMatchObject({
+      dispatched: true,
+      threadId: 'thread-1',
+      finalStatus: 'idle',
+      waited: true,
+      lastMessage: expectedTranscript[1],
+      transcript: expectedTranscript,
+    });
   });
 
   it('returns without polling when dispatch is rejected', async () => {

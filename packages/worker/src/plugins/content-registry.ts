@@ -2074,10 +2074,21 @@ Foreach \`body\` may be \`llm\`, \`tool\`, \`set\`, \`stop\`, \`orchestrator\`, 
 { "id": "ask_orchestrator", "type": "orchestrator", "prompt": "Investigate {{trigger.data.issue}}" }
 \`\`\`
 
-Use \`wait.mode: "until_idle"\` only when downstream nodes need the orchestrator result. This waits for the workflow-created thread's prompt queue to become idle, not for the long-lived orchestrator session to stop running:
+Fields:
+- \`prompt\` (string, required) — prompt sent to the orchestrator thread; supports templates.
+- \`wait\` (object, optional) — \`{ "mode": "none" | "until_idle", "timeout"?: string }\`.
+- \`resultMode\` (\`"last_message"\` | \`"transcript"\`, optional) — only applies with \`wait.mode: "until_idle"\`; defaults to \`"last_message"\`.
+
+Use \`wait.mode: "until_idle"\` only when downstream nodes need the orchestrator result. This waits for the workflow-created thread's prompt queue to become idle, not for the long-lived orchestrator session to stop running. Waited orchestrator nodes output \`lastMessage\` by default, so downstream nodes can reference \`{{nodes.ask_orchestrator.data.lastMessage.content}}\`:
 
 \`\`\`json
 { "id": "ask_orchestrator", "type": "orchestrator", "prompt": "Investigate {{trigger.data.issue}}", "wait": { "mode": "until_idle", "timeout": "30m" } }
+\`\`\`
+
+Set \`resultMode: "transcript"\` to also output the full ordered thread transcript:
+
+\`\`\`json
+{ "id": "ask_orchestrator", "type": "orchestrator", "prompt": "Investigate {{trigger.data.issue}}", "wait": { "mode": "until_idle", "timeout": "30m" }, "resultMode": "transcript" }
 \`\`\`
 
 \`session\` either starts a new session or prompts an existing one:

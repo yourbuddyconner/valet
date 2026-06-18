@@ -578,6 +578,24 @@ describe('workflow editor model', () => {
     expect(expressions).toContain('{{nodes.generate_welcome.data.response}}');
   });
 
+  it('derives template outputs from orchestrator wait results', () => {
+    const definition: WorkflowDefinition = {
+      version: 'dag/v1',
+      nodes: [
+        { id: 'investigate', type: 'orchestrator', prompt: 'Investigate incident', wait: { mode: 'until_idle' }, resultMode: 'transcript' },
+      ],
+      edges: [],
+    };
+
+    const sources = deriveWorkflowOutputSources(definition, []);
+    const expressions = sources.map((source) => source.expression);
+
+    expect(expressions).toContain('{{nodes.investigate.data.lastMessage}}');
+    expect(expressions).toContain('{{nodes.investigate.data.lastMessage.content}}');
+    expect(expressions).toContain('{{nodes.investigate.data.transcript}}');
+    expect(sources.find((source) => source.expression === '{{nodes.investigate.data.transcript}}')?.valueType).toBe('array');
+  });
+
   it('scopes template suggestions to transitive upstream nodes', () => {
     const definition: WorkflowDefinition = {
       version: 'dag/v1',

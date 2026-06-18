@@ -364,7 +364,7 @@ The reserved `trigger` node may declare `dataSchema`, a field map using the same
 | `wait` | Durable pause via `step.sleep` for a compact duration string (`'5s'`, `'1h'`). |
 | `approval` | Human approval gate via `workflow_approvals` + `step.waitForEvent`. |
 | `foreach` | Iterates over an array. Body is a single node of a permitted subtype (`llm`, `tool`, `set`, `stop`, `orchestrator`, `session`). |
-| `orchestrator` | Dispatch a prompt to the user's orchestrator in a fresh automation-origin thread. With `wait.mode: 'until_idle'`, the executor polls that created thread's prompt queue until it has no queued or processing prompts; it does not wait for the long-lived orchestrator session lifecycle to become idle. |
+| `orchestrator` | Dispatch a prompt to the user's orchestrator in a fresh automation-origin thread. With `wait.mode: 'until_idle'`, the executor polls that created thread's prompt queue until it has no queued or processing prompts; it does not wait for the long-lived orchestrator session lifecycle to become idle. Waited nodes output the thread's `lastMessage` by default and can opt into `resultMode: 'transcript'`. |
 | `session` | Start or resume a session and run a prompt. |
 | `stop` | Terminate the workflow with an outcome envelope. |
 
@@ -397,7 +397,7 @@ The runtime entrypoint is `ValetWorkflowInterpreter` in `packages/worker/src/wor
 
 Replay determinism comes from `step.do` caching every side effect: D1 writes, clock reads, action invocations, approval row inserts. Hibernate/wake replays the cached outputs without re-issuing side effects.
 
-`orchestrator` nodes always create a new `session_threads` row with `originType: 'automation'` before dispatching their prompt. The node output includes `{ dispatched, sessionId, threadId }`, plus `finalStatus` / `waited` when `wait.mode: 'until_idle'` is used. Waiting polls `SessionAgentDO /thread-status?threadId=...`, which reports whether that thread still has queued or processing prompt rows. This avoids hanging on the orchestrator session's D1 lifecycle status, which normally remains `running` for long-lived orchestrators.
+`orchestrator` nodes always create a new `session_threads` row with `originType: 'automation'` before dispatching their prompt. The node output includes `{ dispatched, sessionId, threadId }`, plus `finalStatus` / `waited` when `wait.mode: 'until_idle'` is used. Waited orchestrator nodes also read the workflow-created thread after it is idle and output `lastMessage` (`{{nodes.<id>.data.lastMessage.content}}` for the text body). If the node sets `resultMode: 'transcript'`, the output also includes `transcript`, an ordered array of thread messages with ISO `createdAt` strings. Waiting polls `SessionAgentDO /thread-status?threadId=...`, which reports whether that thread still has queued or processing prompt rows. This avoids hanging on the orchestrator session's D1 lifecycle status, which normally remains `running` for long-lived orchestrators.
 
 ## Edge Cases & Failure Modes
 

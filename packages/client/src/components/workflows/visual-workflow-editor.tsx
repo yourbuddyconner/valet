@@ -1559,11 +1559,20 @@ function SetFields({ node, onUpdate, templateSources }: NodeFieldProps<SetNode>)
 }
 
 function OrchestratorFields({ node, onUpdate, templateSources }: NodeFieldProps<OrchestratorNode>) {
+  const waitMode = node.wait?.mode ?? 'none';
   return (
     <>
       <TemplateTextAreaField label="Prompt" value={node.prompt} templateSources={templateSources} onChange={(prompt) => onUpdate({ prompt })} minRows={6} />
       <CheckboxField label="Force new thread" checked={Boolean(node.forceNewThread)} onChange={(forceNewThread) => onUpdate({ forceNewThread })} />
       <WaitPolicyFields value={node.wait} onChange={(wait) => onUpdate({ wait })} />
+      {waitMode === 'until_idle' && (
+        <SelectField
+          label="Result"
+          value={node.resultMode ?? 'last_message'}
+          options={['last_message', 'transcript']}
+          onChange={(resultMode) => onUpdate({ resultMode })}
+        />
+      )}
     </>
   );
 }

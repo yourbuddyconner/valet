@@ -164,6 +164,7 @@ export interface OrchestratorNode {
   type: 'orchestrator';
   prompt: string;
   forceNewThread?: boolean;
+  resultMode?: 'last_message' | 'transcript';
   wait?: {
     mode: 'none' | 'until_idle';
     timeout?: string;

@@ -175,6 +175,11 @@ export function deriveWorkflowOutputSources(
       continue;
     }
 
+    if (node.type === 'orchestrator') {
+      sources.push(...deriveOrchestratorOutputSources(node));
+      continue;
+    }
+
     if (node.type !== 'tool') continue;
     const action = catalogIndex.actionsByKey.get(createToolCatalogActionKey(node.service, node.action));
     if (!action?.outputSchema) continue;
@@ -791,6 +796,42 @@ function deriveLlmOutputSources(node: LlmNode): WorkflowOutputSource[] {
       valueType: 'scalar',
     }),
   ];
+}
+
+function deriveOrchestratorOutputSources(node: OrchestratorNode): WorkflowOutputSource[] {
+  if (node.wait?.mode !== 'until_idle') return [];
+
+  const sources = [
+    createManualWorkflowOutputSource({
+      nodeId: node.id,
+      nodeLabel: NODE_LABELS[node.type],
+      actionName: 'Orchestrator result',
+      path: ['nodes', node.id, 'data', 'lastMessage'],
+      label: `${node.id} last message`,
+      valueType: 'object',
+    }),
+    createManualWorkflowOutputSource({
+      nodeId: node.id,
+      nodeLabel: NODE_LABELS[node.type],
+      actionName: 'Orchestrator result',
+      path: ['nodes', node.id, 'data', 'lastMessage', 'content'],
+      label: `${node.id} last message content`,
+      valueType: 'scalar',
+    }),
+  ];
+
+  if (node.resultMode === 'transcript') {
+    sources.push(createManualWorkflowOutputSource({
+      nodeId: node.id,
+      nodeLabel: NODE_LABELS[node.type],
+      actionName: 'Orchestrator result',
+      path: ['nodes', node.id, 'data', 'transcript'],
+      label: `${node.id} transcript`,
+      valueType: 'array',
+    }));
+  }
+
+  return sources;
 }
 
 function deriveTransitiveUpstreamNodeIds(

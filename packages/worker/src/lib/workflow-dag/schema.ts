@@ -167,6 +167,7 @@ export const orchestratorNodeSchema = z.object({
   type: z.literal('orchestrator'),
   prompt: z.string().min(1),
   forceNewThread: z.boolean().optional(),
+  resultMode: z.enum(['last_message', 'transcript']).optional(),
   wait: waitConfigSchema,
 });
 
