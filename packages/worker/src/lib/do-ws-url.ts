@@ -2,6 +2,8 @@ import type { Env } from '../env.js';
 
 const PAGES_DEV_SUFFIX = '.pages.dev';
 
+type DoWebSocketEnv = Pick<Env, 'API_PUBLIC_URL' | 'FRONTEND_URL' | 'WORKER_NAME'>;
+
 function parseMaybeUrl(raw?: string): URL | null {
   if (!raw) return null;
   const value = raw.trim();
@@ -16,6 +18,10 @@ function parseMaybeUrl(raw?: string): URL | null {
 
 function isPagesHost(host: string): boolean {
   return host.endsWith(PAGES_DEV_SUFFIX);
+}
+
+function isNetworkUrl(url: URL | null): url is URL {
+  return url !== null && ['http:', 'https:', 'ws:', 'wss:'].includes(url.protocol);
 }
 
 function deriveApiHostFromFrontend(frontendHost: string, workerName?: string): string | null {
@@ -41,7 +47,7 @@ function deriveApiHostFromFrontend(frontendHost: string, workerName?: string): s
 }
 
 export function buildDoWebSocketUrl(args: {
-  env: Env;
+  env: DoWebSocketEnv;
   sessionId: string;
   requestUrl?: string;
   requestHost?: string;
@@ -54,10 +60,11 @@ export function buildDoWebSocketUrl(args: {
     return `${explicitProtocol}://${explicitApiUrl.host}/api/sessions/${sessionId}/ws`;
   }
 
-  const requestParsed = parseMaybeUrl(requestUrl);
+  const parsedRequestUrl = parseMaybeUrl(requestUrl);
+  const requestParsed = isNetworkUrl(parsedRequestUrl) ? parsedRequestUrl : null;
   const requestHostValue = requestParsed?.host || requestHost?.trim() || '';
   if (requestHostValue && !isPagesHost(requestHostValue)) {
-    const requestProtocol = requestParsed?.protocol === 'http:' ? 'ws' : 'wss';
+    const requestProtocol = requestParsed?.protocol === 'http:' || requestParsed?.protocol === 'ws:' ? 'ws' : 'wss';
     return `${requestProtocol}://${requestHostValue}/api/sessions/${sessionId}/ws`;
   }
 
