@@ -2,10 +2,10 @@
  * Bounded polling helper for `session` and `orchestrator` nodes that
  * use `wait.mode = "until_idle"`.
  *
- * Per spec §"Hibernation And Long-Running Waits", we poll the session's
- * status with exponential backoff (capped at 5min, total bounded by
- * timeout) rather than blocking on one long sleep. `getStatus` reads
- * the row from D1, which doesn't force-wake a hibernated session.
+ * Per spec §"Hibernation And Long-Running Waits", we poll with
+ * exponential backoff rather than blocking on one long sleep. Terminal
+ * lifecycle states are read from D1, and active sessions are checked
+ * against the SessionAgent DO's live runner/queue state.
  */
 
 import type { WorkflowStep } from 'cloudflare:workers';
@@ -35,6 +35,14 @@ interface ThreadStatusPayload {
   processingPrompts: number;
 }
 
+interface SessionStatusPayload {
+  lifecycleStatus: string;
+  status: 'idle' | 'working';
+  runnerConnected: boolean;
+  runnerBusy: boolean;
+  queuedPrompts: number;
+}
+
 // Defaults chosen to stay well under Cloudflare Workflows' per-instance
 // step cap (~1024). For a 24h timeout: 30s initial × 2 ramp ramp ... up
 // to 15min cap → ~5 ramp checks + ~95 capped checks = ~100 polls × 2
@@ -58,14 +66,34 @@ const IDLE_STATUSES = new Set(['idle', 'hibernated', 'terminated']);
 // We throw so downstream nodes don't have to defensively check.
 const FAILED_STATUSES = new Set(['archived', 'error']);
 
+function readSessionStatusPayload(value: unknown, fallbackLifecycleStatus: string): SessionStatusPayload {
+  if (!value || typeof value !== 'object') {
+    throw new Error('session status check returned an invalid payload');
+  }
+  const record = value as Record<string, unknown>;
+  const lifecycleStatus =
+    typeof record.lifecycleStatus === 'string'
+      ? record.lifecycleStatus
+      : typeof record.status === 'string'
+        ? record.status
+        : fallbackLifecycleStatus;
+  const runnerConnected = record.runnerConnected === true;
+  const runnerBusy = record.runnerBusy === true;
+  const queuedPrompts = typeof record.queuedPrompts === 'number' ? record.queuedPrompts : 0;
+  const status = IDLE_STATUSES.has(lifecycleStatus) || (runnerConnected && !runnerBusy && queuedPrompts === 0)
+    ? 'idle'
+    : 'working';
+  return { lifecycleStatus, status, runnerConnected, runnerBusy, queuedPrompts };
+}
+
 /**
  * Poll the session's `status` column until it reaches a terminal value
  * or the timeout elapses. Returns the observed idle status.
  *
- * Throws when the session is deleted ('not_found') or reaches a failure
- * state (terminated / archived / error) — the workflow author should
- * not have to write `if status === 'idle' || status === 'terminated'`
- * to detect "the session went away".
+ * Throws when the session is deleted ('not_found') or reaches a
+ * catastrophic failure state (archived / error). `terminated` is treated
+ * as a successful terminal state because user cleanup, idle TTL, and
+ * programmatic stop are normal session end-of-life paths.
  */
 export async function pollSessionUntilIdle(
   env: Env,
@@ -84,7 +112,22 @@ export async function pollSessionUntilIdle(
       const db = getDb(env.DB);
       const session = await getSession(db, opts.sessionId);
       if (!session) return 'not_found';
-      return session.status;
+      const lifecycleStatus = session.status;
+      if (IDLE_STATUSES.has(lifecycleStatus) || FAILED_STATUSES.has(lifecycleStatus)) {
+        return lifecycleStatus;
+      }
+
+      const sessions = env.SESSIONS;
+      if (!sessions) return lifecycleStatus;
+
+      const doId = sessions.idFromName(opts.sessionId);
+      const sessionDO = sessions.get(doId);
+      const res = await sessionDO.fetch(new Request('http://do/status'));
+      if (!res.ok) {
+        throw new Error(`session status check failed for ${opts.sessionId}: ${res.status}`);
+      }
+      const liveStatus = readSessionStatusPayload(await res.json(), lifecycleStatus);
+      return liveStatus.status === 'idle' ? 'idle' : liveStatus.lifecycleStatus;
     });
 
     if (status === 'not_found') {

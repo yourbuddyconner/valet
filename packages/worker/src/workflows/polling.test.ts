@@ -73,6 +73,52 @@ function makeThreadEnv(responses: Array<{ ok?: boolean; status?: number; body: u
   };
 }
 
+function makeSessionStatusEnv(responses: Array<{ ok?: boolean; status?: number; body: unknown }>): Env {
+  const fetchMock = vi.fn(async () => {
+    const next = responses.shift() ?? {
+      body: {
+        lifecycleStatus: 'running',
+        runnerConnected: true,
+        runnerBusy: false,
+        queuedPrompts: 0,
+      },
+    };
+    return Response.json(next.body, { status: next.status ?? (next.ok === false ? 500 : 200) });
+  });
+  const objectId: DurableObjectId = {
+    name: 'sess-1',
+    toString: () => 'sess-1',
+    equals: (other) => other.toString() === 'sess-1',
+  };
+  const sessionStub: DurableObjectStub = {
+    id: objectId,
+    fetch: fetchMock,
+    connect: () => {
+      throw new Error('connect is not used in polling tests');
+    },
+  };
+  const sessions: DurableObjectNamespace = {
+    newUniqueId: () => objectId,
+    idFromName: () => objectId,
+    idFromString: () => objectId,
+    get: () => sessionStub,
+    getByName: () => sessionStub,
+    jurisdiction: () => sessions,
+  };
+  return {
+    SESSIONS: sessions,
+    EVENT_BUS: {} as DurableObjectNamespace,
+    WORKFLOW_INTERPRETER: {} as Workflow,
+    DB: {} as D1Database,
+    STORAGE: {} as R2Bucket,
+    ENCRYPTION_KEY: 'test',
+    GOOGLE_CLIENT_ID: 'test',
+    GOOGLE_CLIENT_SECRET: 'test',
+    MODAL_BACKEND_URL: 'https://modal.example/{label}',
+    FRONTEND_URL: 'https://client.example',
+  };
+}
+
 beforeEach(() => {
   getSessionMock.mockReset();
 });
@@ -140,6 +186,27 @@ describe('pollSessionUntilIdle', () => {
     expect(result).toBe('idle');
     const sleeps = stepCalls.filter((c) => c.type === 'sleep').map((c) => c.ms!);
     expect(sleeps).toEqual([100, 200, 400]);
+  });
+
+  it('returns idle when the live session runner is no longer busy even if lifecycle remains running', async () => {
+    getSessionMock.mockResolvedValue({ status: 'running' });
+    const { step, calls } = makeStep();
+    const result = await pollSessionUntilIdle(makeSessionStatusEnv([
+      {
+        body: {
+          lifecycleStatus: 'running',
+          runnerConnected: true,
+          runnerBusy: false,
+          queuedPrompts: 0,
+        },
+      },
+    ]), step, {
+      sessionId: 'sess-1',
+      pollKey: 'k',
+      timeoutMs: 60_000,
+    });
+    expect(result).toBe('idle');
+    expect(calls.filter((c) => c.type === 'sleep')).toHaveLength(0);
   });
 
   it('returns timed_out when timeout elapses before idle', async () => {
