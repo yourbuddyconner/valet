@@ -28,12 +28,18 @@ import { pollSessionUntilIdle } from '../polling.js';
 import type { NodeExecutorArgs } from '../types.js';
 
 const DEFAULT_WAIT_TIMEOUT_MS = 24 * 60 * 60 * 1000;
+const SUCCESSFUL_WAIT_STATUSES = new Set(['idle', 'hibernated', 'terminated']);
+
+function sessionFinalStatusFromWaitStatus(waitStatus: string): string {
+  return SUCCESSFUL_WAIT_STATUSES.has(waitStatus) ? 'completed' : waitStatus;
+}
 
 export interface SessionStartResult {
   mode: 'start';
   sessionId: string;
   status: string;
   threadId?: string;
+  waitStatus?: string;
   finalStatus?: string;
 }
 
@@ -42,6 +48,7 @@ export interface SessionPromptResult {
   sessionId: string;
   status: 'queued';
   threadId?: string;
+  waitStatus?: string;
   finalStatus?: string;
 }
 
@@ -147,11 +154,13 @@ async function executeStart(args: NodeExecutorArgs<StartSessionNode>): Promise<S
 
   if (args.node.wait?.mode === 'until_idle') {
     const timeoutMs = args.node.wait.timeout ? (parseDurationMs(args.node.wait.timeout) ?? DEFAULT_WAIT_TIMEOUT_MS) : DEFAULT_WAIT_TIMEOUT_MS;
-    startResult.finalStatus = await pollSessionUntilIdle(args.env, args.step, {
+    const waitStatus = await pollSessionUntilIdle(args.env, args.step, {
       sessionId,
       pollKey: `session-poll:${args.node.id}${iSuffix}`,
       timeoutMs,
     });
+    startResult.waitStatus = waitStatus;
+    startResult.finalStatus = sessionFinalStatusFromWaitStatus(waitStatus);
   }
 
   return startResult;
@@ -236,13 +245,14 @@ async function executePrompt(args: NodeExecutorArgs<PromptSessionNode>): Promise
 
   if (args.node.wait?.mode === 'until_idle') {
     const timeoutMs = args.node.wait.timeout ? (parseDurationMs(args.node.wait.timeout) ?? DEFAULT_WAIT_TIMEOUT_MS) : DEFAULT_WAIT_TIMEOUT_MS;
-    promptResult.finalStatus = await pollSessionUntilIdle(args.env, args.step, {
+    const waitStatus = await pollSessionUntilIdle(args.env, args.step, {
       sessionId,
       pollKey: `session-poll:${args.node.id}${iSuffix}`,
       timeoutMs,
     });
+    promptResult.waitStatus = waitStatus;
+    promptResult.finalStatus = sessionFinalStatusFromWaitStatus(waitStatus);
   }
 
   return promptResult;
 }
-

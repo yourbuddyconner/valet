@@ -724,6 +724,23 @@ describe('workflow editor model', () => {
     expect(sources.find((source) => source.expression === '{{nodes.investigate.data.transcript}}')?.valueType).toBe('array');
   });
 
+  it('derives template outputs from session wait results', () => {
+    const definition: WorkflowDefinition = {
+      version: 'dag/v1',
+      nodes: [
+        { id: 'run_session', type: 'session', mode: 'start', prompt: 'Run tests', workspace: '/workspace', wait: { mode: 'until_idle' } },
+      ],
+      edges: [],
+    };
+
+    const expressions = deriveWorkflowOutputSources(definition, []).map((source) => source.expression);
+
+    expect(expressions).toContain('{{nodes.run_session.data.sessionId}}');
+    expect(expressions).toContain('{{nodes.run_session.data.threadId}}');
+    expect(expressions).toContain('{{nodes.run_session.data.finalStatus}}');
+    expect(expressions).toContain('{{nodes.run_session.data.waitStatus}}');
+  });
+
   it('scopes template suggestions to transitive upstream nodes', () => {
     const definition: WorkflowDefinition = {
       version: 'dag/v1',

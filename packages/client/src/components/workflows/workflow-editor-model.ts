@@ -207,6 +207,11 @@ export function deriveWorkflowOutputSources(
       continue;
     }
 
+    if (node.type === 'session') {
+      sources.push(...deriveSessionOutputSources(node));
+      continue;
+    }
+
     if (node.type === 'foreach') {
       sources.push(...deriveForeachOutputSources(node, catalogIndex.actionsByKey));
       continue;
@@ -1058,6 +1063,58 @@ function deriveOrchestratorOutputSources(node: OrchestratorNode): WorkflowOutput
       label: `${node.id} transcript`,
       valueType: 'array',
     }));
+  }
+
+  return sources;
+}
+
+function deriveSessionOutputSources(node: SessionNode): WorkflowOutputSource[] {
+  const sources: WorkflowOutputSource[] = [
+    createManualWorkflowOutputSource({
+      nodeId: node.id,
+      nodeLabel: NODE_LABELS[node.type],
+      actionName: 'Session result',
+      path: ['nodes', node.id, 'data'],
+      label: `${node.id} result`,
+      valueType: 'object',
+    }),
+    createManualWorkflowOutputSource({
+      nodeId: node.id,
+      nodeLabel: NODE_LABELS[node.type],
+      actionName: 'Session result',
+      path: ['nodes', node.id, 'data', 'sessionId'],
+      label: `${node.id} session ID`,
+      valueType: 'scalar',
+    }),
+    createManualWorkflowOutputSource({
+      nodeId: node.id,
+      nodeLabel: NODE_LABELS[node.type],
+      actionName: 'Session result',
+      path: ['nodes', node.id, 'data', 'threadId'],
+      label: `${node.id} thread ID`,
+      valueType: 'scalar',
+    }),
+  ];
+
+  if (node.wait?.mode === 'until_idle') {
+    sources.push(
+      createManualWorkflowOutputSource({
+        nodeId: node.id,
+        nodeLabel: NODE_LABELS[node.type],
+        actionName: 'Session result',
+        path: ['nodes', node.id, 'data', 'finalStatus'],
+        label: `${node.id} final status`,
+        valueType: 'scalar',
+      }),
+      createManualWorkflowOutputSource({
+        nodeId: node.id,
+        nodeLabel: NODE_LABELS[node.type],
+        actionName: 'Session result',
+        path: ['nodes', node.id, 'data', 'waitStatus'],
+        label: `${node.id} wait status`,
+        valueType: 'scalar',
+      }),
+    );
   }
 
   return sources;

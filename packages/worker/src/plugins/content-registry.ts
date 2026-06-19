@@ -2098,6 +2098,8 @@ Set \`resultMode: "transcript"\` to also output the full ordered thread transcri
 { "id": "start_session", "type": "session", "mode": "start", "workspace": "/workspace", "prompt": "Run tests", "wait": { "mode": "until_idle", "timeout": "1h" } }
 \`\`\`
 
+When a session node waits until idle, use \`{{nodes.start_session.data.finalStatus}}\` for workflow branching. It is \`"completed"\` when the session reached an idle/terminal success state. The raw observed session state is also available as \`{{nodes.start_session.data.waitStatus}}\` (\`"idle"\`, \`"hibernated"\`, \`"terminated"\`, or \`"timed_out"\`).
+
 \`\`\`json
 { "id": "prompt_session", "type": "session", "mode": "prompt", "sessionId": "{{nodes.start_session.data.sessionId}}", "prompt": "Continue", "wait": { "mode": "none" } }
 \`\`\`

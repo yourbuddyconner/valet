@@ -116,7 +116,7 @@ describe('executeSession — start mode', () => {
     }), expect.anything());
   });
 
-  it('polls when wait.mode is until_idle', async () => {
+  it('reports a completed workflow status and preserves the observed wait status when wait.mode is until_idle', async () => {
     createSessionMock.mockResolvedValue({ ok: true, session: { id: 'ignored-mock-id', status: 'initializing' } });
     pollMock.mockResolvedValue('idle');
     const node: SessionNode = {
@@ -125,7 +125,8 @@ describe('executeSession — start mode', () => {
     };
     const out = await executeSession(buildArgs(node));
     expect(pollMock).toHaveBeenCalled();
-    expect(out.finalStatus).toBe('idle');
+    expect(out.finalStatus).toBe('completed');
+    expect(out.waitStatus).toBe('idle');
   });
 
   it('throws when createSession rejects', async () => {
