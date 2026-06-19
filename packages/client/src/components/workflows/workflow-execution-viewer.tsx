@@ -378,13 +378,21 @@ function SelectedNodeDetailsPane({
     selectedTrace?.approvalId,
   );
   const selectedNodeParams = getNodeParametersForDisplay(selectedDefinitionNode);
+  const detailSections = buildTraceDetailSections(selectedTrace);
+  const nodeType = selectedDefinitionNode?.type ?? selectedTrace?.nodeType ?? 'unknown';
+  const nodeStatus = selectedTrace?.status ?? 'not_run';
+  const nodeDuration = formatExecutionDuration(selectedTrace?.durationMs);
 
   return (
-    <div className="nodrag nopan nowheel absolute bottom-5 right-5 z-20 flex max-h-[62vh] w-[min(760px,calc(100%-2.5rem))] flex-col overflow-hidden rounded-xl border border-neutral-200 bg-white/95 shadow-2xl shadow-neutral-900/15 backdrop-blur dark:border-neutral-800 dark:bg-neutral-950/95 dark:shadow-black/30">
-      <div className="flex shrink-0 items-center justify-between gap-3 border-b border-neutral-200 px-4 py-3 dark:border-neutral-800">
-        <div className="min-w-0">
-          <h2 className="truncate text-sm font-semibold text-neutral-950 dark:text-neutral-100">Node details</h2>
-          <p className="truncate font-mono text-xs text-neutral-500">{selectedNodeId}</p>
+    <div className="nodrag nopan nowheel absolute bottom-5 right-5 top-[18rem] z-20 flex w-[min(860px,calc(100%-2.5rem))] min-w-[min(520px,calc(100%-2.5rem))] flex-col overflow-hidden rounded-xl border border-neutral-200 bg-white/95 shadow-2xl shadow-neutral-900/15 backdrop-blur dark:border-neutral-800 dark:bg-neutral-950/95 dark:shadow-black/30">
+      <div className="flex shrink-0 items-start justify-between gap-4 border-b border-neutral-200 px-5 py-4 dark:border-neutral-800">
+        <div className="min-w-0 space-y-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <h2 className="truncate text-base font-semibold text-neutral-950 dark:text-neutral-100">Node details</h2>
+            <Badge variant="secondary">{nodeType}</Badge>
+            <NodeTraceStatusPill status={nodeStatus} />
+          </div>
+          <p className="truncate font-mono text-sm text-neutral-500" title={selectedNodeId}>{selectedNodeId}</p>
         </div>
         <button
           type="button"
@@ -395,34 +403,56 @@ function SelectedNodeDetailsPane({
           <CloseIcon />
         </button>
       </div>
-      <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4">
-        <section className="rounded-md border border-neutral-200 bg-neutral-50 p-3 dark:border-neutral-800 dark:bg-neutral-900">
-          <div className="grid gap-2 text-xs text-neutral-600 dark:text-neutral-400 sm:grid-cols-3">
-            <KeyValue label="Status" value={selectedTrace?.status ?? 'not_run'} />
-            <KeyValue label="Duration" value={formatExecutionDuration(selectedTrace?.durationMs)} />
-            <KeyValue label="Type" value={selectedDefinitionNode?.type ?? selectedTrace?.nodeType ?? 'unknown'} />
+      <div className="grid min-h-0 flex-1 grid-cols-[minmax(13rem,0.45fr)_minmax(0,1fr)] overflow-hidden max-lg:grid-cols-1">
+        <aside className="min-h-0 overflow-y-auto border-r border-neutral-200 bg-neutral-50/80 p-4 dark:border-neutral-800 dark:bg-neutral-900/60 max-lg:border-b max-lg:border-r-0">
+          <div className="space-y-3">
+            <h3 className="text-xs font-semibold uppercase tracking-wide text-neutral-500 dark:text-neutral-400">Run</h3>
+            <div className="grid gap-2 max-lg:grid-cols-3 max-sm:grid-cols-1">
+              <NodeMetric label="Status" value={formatNodeStatus(nodeStatus)} />
+              <NodeMetric label="Duration" value={nodeDuration} />
+              <NodeMetric label="Type" value={nodeType} />
+            </div>
+            {selectedTrace?.error && (
+              <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-xs text-red-700 dark:border-red-900/50 dark:bg-red-950/40 dark:text-red-300">
+                <div className="mb-1 font-medium">Error</div>
+                <p className="line-clamp-6 whitespace-pre-wrap break-words">{selectedTrace.error}</p>
+              </div>
+            )}
+            {selectedApproval && (
+              <div className="pt-1">
+                <ExecutionApprovalCard executionId={execution.id} approval={selectedApproval} />
+              </div>
+            )}
           </div>
-        </section>
+        </aside>
 
-        {selectedNodeParams && (
-          <StructuredPayloadBlock
-            title="Params"
-            payload={parseExecutionPayload(JSON.stringify(selectedNodeParams))}
-            tone="neutral"
-          />
-        )}
-        <TracePreview trace={selectedTrace} />
-        {selectedApproval && (
-          <div>
-            <ExecutionApprovalCard executionId={execution.id} approval={selectedApproval} />
+        <div className="min-h-0 overflow-y-auto p-4">
+          <div className="space-y-4">
+            {selectedNodeParams && (
+              <StructuredPayloadBlock
+                title="Configured params"
+                payload={parseExecutionPayload(JSON.stringify(selectedNodeParams))}
+                tone="neutral"
+              />
+            )}
+            <TracePreview sections={detailSections} />
+            {!selectedNodeParams && detailSections.length === 0 && !selectedApproval && (
+              <div className="rounded-lg border border-dashed border-neutral-200 p-4 text-sm text-neutral-500 dark:border-neutral-800">
+                This node has not recorded parameters or trace payloads for this execution.
+              </div>
+            )}
           </div>
-        )}
-        {!selectedNodeParams && !selectedTrace && !selectedApproval && (
-          <p className="text-sm text-neutral-500">
-            This node has not recorded parameters or trace payloads for this execution.
-          </p>
-        )}
+        </div>
       </div>
+    </div>
+  );
+}
+
+function NodeMetric({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-lg border border-neutral-200 bg-white p-3 dark:border-neutral-800 dark:bg-neutral-950">
+      <div className="text-[11px] font-medium uppercase tracking-wide text-neutral-500 dark:text-neutral-400">{label}</div>
+      <div className="mt-1 min-w-0 truncate font-mono text-sm text-neutral-900 dark:text-neutral-100" title={value}>{value}</div>
     </div>
   );
 }
@@ -445,11 +475,10 @@ function RetryIcon() {
   );
 }
 
-function TracePreview({ trace }: { trace: ExecutionNode | null }) {
-  const sections = buildTraceDetailSections(trace);
+function TracePreview({ sections }: { sections: ReturnType<typeof buildTraceDetailSections> }) {
   if (sections.length === 0) return <p className="mt-3 text-xs text-neutral-500">No trace payload recorded.</p>;
   return (
-    <div className="mt-3 space-y-3">
+    <div className="space-y-4">
       {sections.map((section) => (
         <StructuredPayloadBlock
           key={section.title}
@@ -702,6 +731,24 @@ function KeyValue({ label, value }: { label: string; value: string }) {
 
 function ExecutionStatusPill({ status }: { status: Execution['status'] }) {
   return <Badge variant={executionBadgeVariant(status)}>{formatNodeStatus(status)}</Badge>;
+}
+
+function NodeTraceStatusPill({ status }: { status: ExecutionDisplayStatus }) {
+  return (
+    <Badge
+      variant={
+        status === 'completed'
+          ? 'success'
+          : status === 'failed'
+            ? 'error'
+            : status === 'skipped' || status === 'not_run'
+              ? 'secondary'
+              : 'default'
+      }
+    >
+      {formatNodeStatus(status)}
+    </Badge>
+  );
 }
 
 function ExecutionNodeStatusIcon({ status }: { status: ExecutionDisplayStatus }) {
