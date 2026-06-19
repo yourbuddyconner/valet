@@ -40,8 +40,6 @@ MODAL_LABEL_PREFIX="${MODAL_LABEL_PREFIX:-${ENVIRONMENT}-}"
 ALLOWED_EMAILS="${ALLOWED_EMAILS:-}"
 MODAL_DEPLOY_CMD="${MODAL_DEPLOY_CMD:-uv run --project backend modal deploy}"
 API_PUBLIC_URL="${API_PUBLIC_URL:-}"
-WORKER_NAME="${WORKER_NAME:-${CF_WORKER_NAME}}"
-API_PUBLIC_URL_SOURCE="${API_PUBLIC_URL:+explicit}"
 
 # ─── Shared Helpers ──────────────────────────────────────────────────────────
 
@@ -107,57 +105,13 @@ discover_modal_url() {
     fi
 }
 
-discover_worker_url() {
-    if [ -n "${WORKER_PROD_URL:-}" ]; then
-        WORKER_URL="${WORKER_PROD_URL}"
-        API_PUBLIC_URL_SOURCE="explicit"
-    elif [ -n "${API_PUBLIC_URL:-}" ]; then
+resolve_worker_url() {
+    if [ -n "${API_PUBLIC_URL:-}" ]; then
         WORKER_URL="${API_PUBLIC_URL}"
-        API_PUBLIC_URL_SOURCE="${API_PUBLIC_URL_SOURCE:-explicit}"
     else
-        WORKER_URL=$(wrangler deployments list --name "${CF_WORKER_NAME}" 2>/dev/null \
-            | grep -o 'https://[^ ]*\.workers\.dev' | head -1) || true
-        if [ -z "${WORKER_URL:-}" ]; then
-            echo -e "${YELLOW}Could not auto-detect worker URL. Using https://${CF_WORKER_NAME}.workers.dev${NC}"
-            echo -e "${YELLOW}Set API_PUBLIC_URL or WORKER_PROD_URL in ${DEPLOY_CONFIG} if this is wrong.${NC}"
-            WORKER_URL="https://${CF_WORKER_NAME}.workers.dev"
-            API_PUBLIC_URL_SOURCE="fallback"
-        else
-            API_PUBLIC_URL_SOURCE="discovered"
-        fi
-    fi
-    API_PUBLIC_URL="${API_PUBLIC_URL:-${WORKER_URL}}"
-}
-
-extract_worker_url_from_deploy_output() {
-    echo "$1" | grep -o 'https://[^ ]*\.workers\.dev' | tail -1 || true
-}
-
-deploy_worker_with_current_config() {
-    local deploy_out
-
-    DEPLOY_OUT=$(cd packages/worker && wrangler deploy -c wrangler.deploy.toml 2>&1) || {
-        echo -e "${RED}Worker deploy failed:${NC}"
-        echo "$DEPLOY_OUT"
+        echo -e "${RED}API_PUBLIC_URL is required in ${DEPLOY_CONFIG}.${NC}"
+        echo "Set it to the public Worker origin, e.g. https://${CF_WORKER_NAME}.<account>.workers.dev"
         exit 1
-    }
-    echo "$DEPLOY_OUT"
-
-    deploy_out=$(extract_worker_url_from_deploy_output "$DEPLOY_OUT")
-    if [ -n "${deploy_out:-}" ]; then
-        WORKER_URL="$deploy_out"
-    else
-        WORKER_URL="https://${CF_WORKER_NAME}.workers.dev"
-    fi
-}
-
-ensure_worker_config_uses_deployed_url() {
-    if [ "${API_PUBLIC_URL_SOURCE:-}" = "fallback" ] && [ -n "${WORKER_URL:-}" ] && [ "$API_PUBLIC_URL" != "$WORKER_URL" ]; then
-        echo -e "${YELLOW}Updating API_PUBLIC_URL to deployed Worker URL: ${WORKER_URL}${NC}"
-        API_PUBLIC_URL="$WORKER_URL"
-        API_PUBLIC_URL_SOURCE="discovered"
-        generate_wrangler_config
-        deploy_worker_with_current_config
     fi
 }
 
@@ -168,7 +122,6 @@ generate_wrangler_config() {
         -e "s|\${R2_BUCKET_NAME}|${R2_BUCKET_NAME}|g" \
         -e "s|\${ALLOWED_EMAILS}|${ALLOWED_EMAILS}|g" \
         -e "s|\${API_PUBLIC_URL}|${API_PUBLIC_URL}|g" \
-        -e "s|\${WORKER_NAME}|${WORKER_NAME}|g" \
         -e "s|\${FRONTEND_PREVIEW_ORIGIN_SUFFIX}|${FRONTEND_PREVIEW_ORIGIN_SUFFIX}|g" \
         -e "s|\${MODAL_BACKEND_URL}|${MODAL_BACKEND_URL}|g" \
         packages/worker/wrangler.toml > packages/worker/wrangler.deploy.toml
@@ -253,7 +206,7 @@ cmd_worker() {
     preflight wrangler jq bun
     discover_d1_id
     discover_modal_url
-    discover_worker_url
+    resolve_worker_url
     echo ""
 
     # Generate registries
@@ -261,8 +214,12 @@ cmd_worker() {
 
     # Generate config and deploy
     generate_wrangler_config
-    deploy_worker_with_current_config
-    ensure_worker_config_uses_deployed_url
+    DEPLOY_OUT=$(cd packages/worker && wrangler deploy -c wrangler.deploy.toml 2>&1) || {
+        echo -e "${RED}Worker deploy failed:${NC}"
+        echo "$DEPLOY_OUT"
+        exit 1
+    }
+    echo "$DEPLOY_OUT"
     echo -e "${GREEN}✓ Worker: ${WORKER_URL}${NC}"
 }
 
@@ -288,7 +245,7 @@ cmd_client() {
     echo -e "${GREEN}Building and deploying client...${NC}"
     preflight wrangler pnpm
 
-    discover_worker_url
+    resolve_worker_url
     echo -e "${GREEN}✓ Using API URL: ${WORKER_URL}/api${NC}"
     echo ""
 
@@ -305,7 +262,7 @@ cmd_all() {
 
     preflight wrangler jq pnpm bun
     discover_modal_url
-    discover_worker_url
+    resolve_worker_url
 
     # --- Step 1: Ensure D1 database ---
     echo "Step 1/7: D1 database..."
@@ -332,8 +289,12 @@ cmd_all() {
     (cd packages/worker && bun scripts/generate-plugin-registry.ts)
     generate_wrangler_config
 
-    deploy_worker_with_current_config
-    ensure_worker_config_uses_deployed_url
+    DEPLOY_OUT=$(cd packages/worker && wrangler deploy -c wrangler.deploy.toml 2>&1) || {
+        echo -e "${RED}Worker deploy failed:${NC}"
+        echo "$DEPLOY_OUT"
+        exit 1
+    }
+    echo "$DEPLOY_OUT"
     echo -e "${GREEN}✓ Worker: ${WORKER_URL}${NC}"
 
     # --- Step 5: Run D1 migrations ---

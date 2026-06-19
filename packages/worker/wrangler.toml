@@ -16,8 +16,6 @@ ALLOWED_EMAILS = "${ALLOWED_EMAILS}"
 MODAL_BACKEND_URL = "${MODAL_BACKEND_URL}"
 # API_PUBLIC_URL - public Worker origin used by sandbox runners for SessionAgent DO WebSockets
 API_PUBLIC_URL = "${API_PUBLIC_URL}"
-# WORKER_NAME - Worker name fallback used when deriving API origins from Pages frontend URLs
-WORKER_NAME = "${WORKER_NAME}"
 # FRONTEND_URL - set via .dev.vars (local) or `wrangler secret put` (production)
 # FRONTEND_PREVIEW_ORIGIN_SUFFIX - project-specific Pages host suffix for PR preview login redirects
 FRONTEND_PREVIEW_ORIGIN_SUFFIX = "${FRONTEND_PREVIEW_ORIGIN_SUFFIX}"

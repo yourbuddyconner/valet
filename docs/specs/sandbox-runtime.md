@@ -181,7 +181,7 @@ exec bun run src/bin.ts \
 | Variable | Required | Source | Purpose |
 |----------|----------|--------|---------|
 | `SESSION_ID` | Yes | Modal secrets | Session identifier |
-| `DO_WS_URL` | Yes | Modal secrets | WebSocket URL to SessionAgent DO. The Worker constructs this from `API_PUBLIC_URL` when set, otherwise from the inbound request host or `FRONTEND_URL`/`WORKER_NAME`; synthetic internal URLs such as workflow dispatch URLs are never used as network origins. |
+| `DO_WS_URL` | Yes | Modal secrets | WebSocket URL to SessionAgent DO. The Worker constructs deployed sandbox URLs from `API_PUBLIC_URL`; local development may derive from localhost request URLs. Non-local request hosts and synthetic internal URLs such as workflow dispatch URLs are never trusted as sandbox network origins. |
 | `RUNNER_TOKEN` | Yes | Modal secrets | Auth token for DO connection |
 | `JWT_SECRET` | Yes | Modal secrets | Per-session HMAC key for gateway JWT validation, derived as `HMAC-SHA256(ENCRYPTION_KEY, sessionId)` — the raw `ENCRYPTION_KEY` is never sent to sandboxes (see `auth-access.md`) |
 | `OPENCODE_SERVER_PASSWORD` | Yes | Modal secrets | OpenCode server auth |

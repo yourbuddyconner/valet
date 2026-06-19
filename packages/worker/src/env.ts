@@ -42,9 +42,6 @@ export interface Env {
   // Example: https://api.example.com
   API_PUBLIC_URL?: string;
 
-  // Optional Worker name fallback (used when FRONTEND_URL is a Pages domain).
-  WORKER_NAME?: string;
-
   // Slack integration
   SLACK_SIGNING_SECRET?: string;
   SLACK_BOT_TOKEN?: string;
