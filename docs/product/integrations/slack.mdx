@@ -37,8 +37,8 @@ Bot token — an admin pastes a bot token issued by the provider during connecti
 | `slack.list_usergroups` | List Slack user groups. Use include_users only when membership IDs are needed because it can return a large result. | `include_disabled`?, `include_users`?, `include_count`?, `team_id`? | low |
 | `slack.list_usergroup_users` | List user IDs in a Slack user group. Use list_users to resolve IDs to names if needed. | `usergroup`, `include_disabled`?, `team_id`? | low |
 | `slack.update_usergroup` | Update Slack user group metadata such as name, handle, description, or default channels. Use add_usergroup_users/remove_usergroup_users for membership changes. | `usergroup`, `name`?, `handle`?, `description`?, `channels`?, `additional_channels`?, `enable_section`?, `team_id`? | high |
-| `slack.add_usergroup_users` | Idempotently add users to a Slack user group. Existing members are skipped; Slack is only updated when membership changes. | `usergroup`, `users`, `team_id`? | high |
-| `slack.remove_usergroup_users` | Idempotently remove users from a Slack user group. Missing members are skipped. Refuses to remove the final member because Slack requires disabling the group instead. | `usergroup`, `users`, `team_id`? | high |
+| `slack.add_usergroup_users` | Idempotently add users to a Slack user group. Existing members are skipped; Slack is only updated when membership changes. Avoid concurrent membership updates to the same user group because Slack's API replaces the full member list. | `usergroup`, `users`, `team_id`? | high |
+| `slack.remove_usergroup_users` | Idempotently remove users from a Slack user group. Missing members are skipped. Refuses to remove the final member because Slack requires disabling the group instead. Avoid concurrent membership updates to the same user group because Slack's API replaces the full member list. | `usergroup`, `users`, `team_id`? | high |
 | `slack.fetch_file` | Download a file from Slack. For images, the content is returned visually so you can see it. For text files, the content is returned as text. Use the url from the files array in message data. IMPORTANT: Call this tool one at a time, not in parallel — each image fetch interrupts the session to deliver the image to your vision. | `url` | low |
 | `slack.get_pins` | Get pinned messages in a channel. Returns messages in the same format as read_history. Useful for understanding what a channel considers important. | `channel` | low |
 | `slack.get_channel_info` | Get detailed information about a channel: topic, purpose, member count, creation date, creator. Useful when reading a channel for the first time — save the context to memory so you do not re-fetch. | `channel` | low |
@@ -181,7 +181,7 @@ Update Slack user group metadata such as name, handle, description, or default c
 
 ### `slack.add_usergroup_users`
 
-Idempotently add users to a Slack user group. Existing members are skipped; Slack is only updated when membership changes.
+Idempotently add users to a Slack user group. Existing members are skipped; Slack is only updated when membership changes. This wraps Slack's replace-all membership API, so avoid concurrent membership updates to the same user group.
 
 | Param | Type | Required | Description |
 | --- | --- | --- | --- |
@@ -191,7 +191,7 @@ Idempotently add users to a Slack user group. Existing members are skipped; Slac
 
 ### `slack.remove_usergroup_users`
 
-Idempotently remove users from a Slack user group. Missing members are skipped. Refuses to remove the final member because Slack requires disabling the group instead.
+Idempotently remove users from a Slack user group. Missing members are skipped. Refuses to remove the final member because Slack requires disabling the group instead. This wraps Slack's replace-all membership API, so avoid concurrent membership updates to the same user group.
 
 | Param | Type | Required | Description |
 | --- | --- | --- | --- |

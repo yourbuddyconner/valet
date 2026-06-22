@@ -297,6 +297,33 @@ describe('slackActions usergroups', () => {
     });
   });
 
+  it('serializes usergroup channel fields as comma-separated Slack API strings', async () => {
+    mocks.slackFetch.mockResolvedValueOnce(slackResponse({
+      usergroup: {
+        id: 'S001',
+        prefs: {
+          channels: ['C001', 'C002'],
+          groups: [],
+        },
+      },
+    }));
+
+    const result = await slackActions.execute('slack.update_usergroup', {
+      usergroup: 'S001',
+      channels: ['C001', ' C002 ', 'C001', ''],
+      additional_channels: [],
+      team_id: 'T001',
+    }, actionContext());
+
+    expect(result.success).toBe(true);
+    expect(mocks.slackFetch).toHaveBeenCalledWith('usergroups.update', 'xoxb-token', {
+      usergroup: 'S001',
+      team_id: 'T001',
+      channels: 'C001,C002',
+      additional_channels: '',
+    });
+  });
+
   it('adds users idempotently by unioning with current members', async () => {
     mocks.slackGet.mockResolvedValueOnce(slackResponse({ users: ['U001', 'U002'] }));
     mocks.slackFetch.mockResolvedValueOnce(slackResponse({
@@ -349,6 +376,27 @@ describe('slackActions usergroups', () => {
         usergroup: 'S001',
         added: [],
         skipped: ['U002'],
+        users: ['U001', 'U002'],
+      },
+    });
+    expect(mocks.slackFetch).not.toHaveBeenCalled();
+  });
+
+  it('does not call Slack update when remove_usergroup_users has no membership changes', async () => {
+    mocks.slackGet.mockResolvedValueOnce(slackResponse({ users: ['U001', 'U002'] }));
+
+    const result = await slackActions.execute('slack.remove_usergroup_users', {
+      usergroup: 'S001',
+      users: ['U999', ' U999 ', ''],
+    }, actionContext());
+
+    expect(result).toEqual({
+      success: true,
+      data: {
+        changed: false,
+        usergroup: 'S001',
+        removed: [],
+        skipped: ['U999'],
         users: ['U001', 'U002'],
       },
     });

@@ -171,7 +171,7 @@ const updateUsergroup: ActionDefinition = {
 const addUsergroupUsers: ActionDefinition = {
   id: 'slack.add_usergroup_users',
   name: 'Add User Group Users',
-  description: 'Idempotently add users to a Slack user group. Existing members are skipped; Slack is only updated when membership changes.',
+  description: 'Idempotently add users to a Slack user group. Existing members are skipped; Slack is only updated when membership changes. This wraps Slack\'s replace-all membership API, so avoid concurrent membership updates to the same user group.',
   riskLevel: 'high',
   params: z.object({
     usergroup: z.string().min(1).describe('User group ID (S...)'),
@@ -183,7 +183,7 @@ const addUsergroupUsers: ActionDefinition = {
 const removeUsergroupUsers: ActionDefinition = {
   id: 'slack.remove_usergroup_users',
   name: 'Remove User Group Users',
-  description: 'Idempotently remove users from a Slack user group. Missing members are skipped. Refuses to remove the final member because Slack requires disabling the group instead.',
+  description: 'Idempotently remove users from a Slack user group. Missing members are skipped. Refuses to remove the final member because Slack requires disabling the group instead. This wraps Slack\'s replace-all membership API, so avoid concurrent membership updates to the same user group.',
   riskLevel: 'high',
   params: z.object({
     usergroup: z.string().min(1).describe('User group ID (S...)'),
@@ -424,6 +424,10 @@ function normalizeStringList(values: string[]): string[] {
     normalized.push(trimmed);
   }
   return normalized;
+}
+
+function normalizeCommaSeparatedList(values: string[]): string {
+  return normalizeStringList(values).join(',');
 }
 
 function slimUsergroup(group: Record<string, unknown>): Record<string, unknown> {
@@ -873,8 +877,8 @@ async function executeAction(
         if (p.name !== undefined) body.name = p.name;
         if (p.handle !== undefined) body.handle = p.handle;
         if (p.description !== undefined) body.description = p.description;
-        if (p.channels !== undefined) body.channels = normalizeStringList(p.channels);
-        if (p.additional_channels !== undefined) body.additional_channels = normalizeStringList(p.additional_channels);
+        if (p.channels !== undefined) body.channels = normalizeCommaSeparatedList(p.channels);
+        if (p.additional_channels !== undefined) body.additional_channels = normalizeCommaSeparatedList(p.additional_channels);
         if (p.enable_section !== undefined) body.enable_section = p.enable_section;
 
         const updateKeys = Object.keys(body).filter((key) => key !== 'usergroup' && key !== 'team_id');
