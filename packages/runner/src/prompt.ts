@@ -647,6 +647,12 @@ export class ChannelSession {
   awaitingAssistantForAttempt = false;
   turnCreated = false;
   turnId: string | null = null;
+  /** Thread the current prompt belongs to. Sourced from the inbound prompt
+   *  message; survives across prompts on the same channel until a new
+   *  threadId is provided. Used to tag the assistant turn so messages
+   *  persist with a non-null thread_id even on channels (like `web:*`)
+   *  whose channelKey doesn't encode the thread. */
+  currentThreadId: string | null = null;
 
   // Callback to reset the sync prompt timeout on SSE activity.
   // Set by the failover loop, cleared when the sync fetch completes.
@@ -664,7 +670,18 @@ export class ChannelSession {
   pendingReplyChannelId: string | undefined;
 
   // Per-message usage entries for the current turn (reset per prompt)
-  usageEntries = new Map<string, { model: string; inputTokens: number; outputTokens: number }>();
+  // Per-message token breakdown for the current turn. Mirrors OpenCode's
+  // tokens shape verbatim so downstream consumers can compose cost-aware
+  // views (cache reads vs writes are billed at different rates, reasoning
+  // is billed as output, etc).
+  usageEntries = new Map<string, {
+    model: string;
+    inputTokens: number;
+    outputTokens: number;
+    cacheReadTokens: number;
+    cacheWriteTokens: number;
+    reasoningTokens: number;
+  }>();
 
   // Pre-compaction memory flush state (session-lifetime — NOT reset per prompt)
   cumulativeInputTokens = 0;
@@ -1149,13 +1166,17 @@ export class PromptHandler {
   private extractChannelContext(channel: ChannelSession): { channelType?: string; channelId?: string; threadId?: string } {
     const idx = channel.channelKey.indexOf(":");
     if (idx <= 0 || idx >= channel.channelKey.length - 1) {
-      return {};
+      return { threadId: channel.currentThreadId ?? undefined };
     }
     const channelType = channel.channelKey.slice(0, idx);
     const channelId = channel.channelKey.slice(idx + 1);
-    // Thread channels carry their thread ID in the channel key. Other channels
-    // do not carry a thread ID — never fall back to a separate mutable field.
-    const threadId = channelType === "thread" ? channelId : undefined;
+    // Thread channels carry their thread ID in the channel key; other
+    // channels (web, slack-direct, etc.) keep the active threadId on the
+    // ChannelSession via the inbound prompt's threadId parameter.
+    const threadId =
+      channelType === "thread"
+        ? channelId
+        : channel.currentThreadId ?? undefined;
     return { channelType, channelId, threadId };
   }
 
@@ -1215,10 +1236,14 @@ export class PromptHandler {
 
     // Resolve per-channel session
     this.currentPromptChannel = channel;
-    // NOTE: `threadId` parameter is no longer consumed here. Thread routing now
-    // flows through the `thread:<id>` channelKey resolved upstream in the DO.
-    // The parameter remains in the signature for caller compatibility.
-    void threadId;
+    // Thread routing primarily flows through the `thread:<id>` channelKey
+    // resolved upstream in the DO. But not every dispatch path sets it
+    // (e.g. web channels, initial auto-prompts) — in those cases the
+    // threadId parameter is still authoritative. Stash it on the channel
+    // so ensureTurnCreated can attribute the assistant turn correctly.
+    if (threadId) {
+      channel.currentThreadId = threadId;
+    }
     // Store original channel info for [via ...] attribution prefix (per-channel for concurrency)
     channel.pendingReplyChannelType = replyChannelType;
     channel.pendingReplyChannelId = replyChannelId;
@@ -1696,22 +1721,27 @@ export class PromptHandler {
 
     console.log(`[PromptHandler] Sending complete`);
 
-    // Emit llm_response timing with token counts for throughput analysis
+    // Emit llm_response timing with token counts for throughput analysis.
+    // tokens_per_sec is the user-perceived output rate (excludes reasoning,
+    // which is internal); input/output here are billable totals composed
+    // from the raw breakdown so charts match the Anthropic dashboard.
     if (channel.lastPromptSentAt > 0) {
       const durationMs = Date.now() - channel.lastPromptSentAt;
-      let inputTokens = 0;
-      let outputTokens = 0;
+      let billableInput = 0;
+      let billableOutput = 0;
+      let visibleOutput = 0;
       for (const entry of channel.usageEntries.values()) {
-        inputTokens += entry.inputTokens;
-        outputTokens += entry.outputTokens;
+        billableInput += entry.inputTokens + entry.cacheReadTokens + entry.cacheWriteTokens;
+        billableOutput += entry.outputTokens + entry.reasoningTokens;
+        visibleOutput += entry.outputTokens;
       }
       this.agentClient.sendAnalyticsEvents([{
         eventType: 'llm_response',
         durationMs,
         properties: {
-          input_tokens: inputTokens,
-          output_tokens: outputTokens,
-          tokens_per_sec: durationMs > 0 ? Math.round((outputTokens / durationMs) * 1000) : 0,
+          input_tokens: billableInput,
+          output_tokens: billableOutput,
+          tokens_per_sec: durationMs > 0 ? Math.round((visibleOutput / durationMs) * 1000) : 0,
         },
       }]);
       channel.lastPromptSentAt = 0;
@@ -1728,6 +1758,9 @@ export class PromptHandler {
           model: data.model,
           inputTokens: data.inputTokens,
           outputTokens: data.outputTokens,
+          cacheReadTokens: data.cacheReadTokens,
+          cacheWriteTokens: data.cacheWriteTokens,
+          reasoningTokens: data.reasoningTokens,
         })
       );
       this.agentClient.sendUsageReport(channel.turnId, entries);
@@ -4026,12 +4059,29 @@ export class PromptHandler {
       if (!channel.countedTokenMessageIds.has(ocMessageId)) {
         const tokenObj = info.tokens as Record<string, unknown> | undefined;
         if (tokenObj) {
-          const input = typeof tokenObj.input === "number" ? tokenObj.input : 0;
-          const output = typeof tokenObj.output === "number" ? tokenObj.output : 0;
-          if (input > 0 || output > 0) {
+          // OpenCode reports tokens as five raw buckets:
+          //   { input, output, reasoning, cache: { read, write } }
+          // We persist each verbatim so downstream cost analyses can apply
+          // the right per-bucket pricing (Anthropic cache reads are cheap,
+          // cache writes expensive, reasoning is billed as output).
+          //
+          // Compaction thresholds gate on what the model actually processed,
+          // so cumulative*Tokens sum the billable totals:
+          //   billable input  = input + cache.read + cache.write
+          //   billable output = output + reasoning
+          const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : 0);
+          const baseInput = num(tokenObj.input);
+          const cache = isRecord(tokenObj.cache) ? tokenObj.cache : {};
+          const cacheRead = num(cache.read);
+          const cacheWrite = num(cache.write);
+          const baseOutput = num(tokenObj.output);
+          const reasoning = num(tokenObj.reasoning);
+          const billableInput = baseInput + cacheRead + cacheWrite;
+          const billableOutput = baseOutput + reasoning;
+          if (billableInput > 0 || billableOutput > 0) {
             channel.countedTokenMessageIds.add(ocMessageId);
-            channel.cumulativeInputTokens += input;
-            channel.cumulativeOutputTokens += output;
+            channel.cumulativeInputTokens += billableInput;
+            channel.cumulativeOutputTokens += billableOutput;
 
             // Track per-message usage for cost reporting
             const modelId = info.modelID as string | undefined;
@@ -4041,8 +4091,11 @@ export class PromptHandler {
               : channel.lastUsedModel ?? "unknown";
             channel.usageEntries.set(ocMessageId, {
               model: usageModel,
-              inputTokens: input,
-              outputTokens: output,
+              inputTokens: baseInput,
+              outputTokens: baseOutput,
+              cacheReadTokens: cacheRead,
+              cacheWriteTokens: cacheWrite,
+              reasoningTokens: reasoning,
             });
           }
         }
@@ -4339,6 +4392,9 @@ export class PromptHandler {
             model: data.model,
             inputTokens: data.inputTokens,
             outputTokens: data.outputTokens,
+            cacheReadTokens: data.cacheReadTokens,
+            cacheWriteTokens: data.cacheWriteTokens,
+            reasoningTokens: data.reasoningTokens,
           })
         );
         this.agentClient.sendUsageReport(channel.turnId, entries);

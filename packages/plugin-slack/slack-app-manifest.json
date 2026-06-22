@@ -36,6 +36,8 @@
         "im:read",
         "im:write",
         "reactions:write",
+        "usergroups:read",
+        "usergroups:write",
         "users:read",
         "users:read.email"
       ]
