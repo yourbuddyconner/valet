@@ -21,7 +21,7 @@ import type { NodeExecutorArgs } from '../types.js';
 // Lazy import to break a cycle: runtime.ts → executor → dispatchNode → executor.
 // dispatchNode is loaded at call time.
 import { dispatchNode, isStepDrivenNode } from '../runtime.js';
-import { CancelledError, type CorrelationIds } from '../types.js';
+import { CancelledError, NO_RETRY, type CorrelationIds } from '../types.js';
 
 export interface ForeachItemResult {
   status: 'completed' | 'skipped' | 'failed';
@@ -217,7 +217,14 @@ async function runIteration(
         ...(recordWaiting ? { recordWaiting } : {}),
       });
     } else {
-      const json = await args.step.do(stepName, async () => {
+      // Side-effectful non-step-driven body types (currently just llm)
+      // need NO_RETRY to match the top-level runtime policy. Without
+      // this, CF's default 5-retry policy would duplicate billed model
+      // calls and re-render user-visible content on a transient error.
+      // Mirrors runtime.ts:executeNodeStep — the policy must hold for a
+      // node wherever it appears in the graph.
+      const stepConfig = args.node.body.type === 'llm' ? { retries: { ...NO_RETRY } } : undefined;
+      const callback = async () => {
         const out = await dispatchNode(args.node.body, {
           node: args.node.body,
           state: args.state,
@@ -229,7 +236,10 @@ async function runIteration(
           ...(recordWaiting ? { recordWaiting } : {}),
         });
         return JSON.stringify(out ?? null);
-      });
+      };
+      const json = stepConfig
+        ? await args.step.do(stepName, stepConfig, callback)
+        : await args.step.do(stepName, callback);
       data = JSON.parse(json) as unknown;
     }
     return { status: 'completed', data };

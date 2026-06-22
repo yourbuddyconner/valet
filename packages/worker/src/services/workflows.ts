@@ -328,24 +328,21 @@ export async function deleteWorkflow(
   userId: string,
   workflowIdOrSlug: string,
 ): Promise<void> {
-  // Refuse to delete a workflow that has published versions. The
-  // workflow_definition_versions audit chain ("execution X ran version
-  // V") is supposed to outlive workflow deletion; allowing a cascade
-  // would let the chain be retroactively erased. The migration 0025
-  // BEFORE DELETE trigger is defense-in-depth — this is the friendly
-  // 409 error path.
-  const existing = await getWorkflowByIdOrSlug(database, userId, workflowIdOrSlug);
-  if (existing && await isWorkflowPublished(database, existing.id as string)) {
-    throw new ValidationError(
-      `Workflow "${workflowIdOrSlug}" has published versions; delete the versions first`,
-    );
-  }
-
+  // DELETE cascades to workflow_definition_versions via the FK in
+  // 0020_workflows_dag_v1. Execution history survives —
+  // workflow_executions.workflow_id is ON DELETE SET NULL and each row
+  // carries its own definition_snapshot.
   await deleteWorkflowTriggers(database, workflowIdOrSlug, userId);
 
   const result = await deleteWorkflowByIdOrSlug(database, workflowIdOrSlug, userId);
 
-  if (result.meta.changes === 0) {
+  // better-sqlite3 (tests) exposes `changes`; D1's drizzle adapter
+  // exposes it under `meta.changes`. Treat either shape as the source
+  // of truth.
+  const changes = (result as { changes?: number; meta?: { changes?: number } }).changes
+    ?? (result as { meta?: { changes?: number } }).meta?.changes
+    ?? 0;
+  if (changes === 0) {
     throw new NotFoundError('Workflow', workflowIdOrSlug);
   }
 }

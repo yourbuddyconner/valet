@@ -2,9 +2,11 @@ import { describe, expect, it, beforeEach } from 'vitest';
 import { ValidationError } from '@valet/shared';
 import { createTestDb } from '../test-utils/db.js';
 import { users, workflows } from '../lib/schema/index.js';
-import { createWorkflow, syncWorkflow, syncAllWorkflows } from './workflows.js';
+import { createWorkflow, syncWorkflow, syncAllWorkflows, deleteWorkflow } from './workflows.js';
 import { isWorkflowPublished } from '../lib/db/workflows.js';
 import { saveDraft, publishDraft } from './workflow-versions.js';
+import { workflowDefinitionVersions } from '../lib/schema/workflow-definition-versions.js';
+import { eq } from 'drizzle-orm';
 import type { WorkflowDefinition } from '@valet/shared';
 
 const USER_ID = 'wf-user';
@@ -112,5 +114,41 @@ describe('workflows service — createWorkflow', () => {
       ui: { nodes: { start: { position: { x: 0, y: 0 } } } },
     });
     expect(draft).toEqual(data);
+  });
+});
+
+describe('deleteWorkflow — cascades to published versions', () => {
+  let db: ReturnType<typeof createTestDb>['db'];
+
+  beforeEach(() => {
+    ({ db } = createTestDb());
+    db.insert(users).values({ id: USER_ID, email: 'wf@e.io' }).run();
+    db.insert(workflows).values({
+      id: WORKFLOW_ID,
+      userId: USER_ID,
+      name: 'demo',
+      version: '0',
+      data: JSON.stringify(validDef()),
+    }).run();
+  });
+
+  it('removes the workflow row even when it has a published version', async () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await saveDraft(db as any, WORKFLOW_ID, validDef());
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await publishDraft(db as any, WORKFLOW_ID, { userId: USER_ID });
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await deleteWorkflow(db as any, USER_ID, WORKFLOW_ID);
+
+    const afterWorkflow = db.select().from(workflows).where(eq(workflows.id, WORKFLOW_ID)).all();
+    expect(afterWorkflow).toHaveLength(0);
+    // Cascade should have wiped the version rows along with the parent.
+    const afterVersions = db
+      .select()
+      .from(workflowDefinitionVersions)
+      .where(eq(workflowDefinitionVersions.workflowId, WORKFLOW_ID))
+      .all();
+    expect(afterVersions).toHaveLength(0);
   });
 });

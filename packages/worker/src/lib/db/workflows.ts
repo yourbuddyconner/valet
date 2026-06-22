@@ -221,9 +221,12 @@ export async function deleteWorkflowTriggers(db: AppDb, workflowId: string, user
 }
 
 export async function deleteWorkflowByIdOrSlug(db: AppDb, idOrSlug: string, userId: string) {
+  // `.run()` exposes a portable `{ changes }` count across D1 and
+  // better-sqlite3; the bare delete().where() return type drifts.
   return db
     .delete(workflows)
-    .where(and(or(eq(workflows.id, idOrSlug), eq(workflows.slug, idOrSlug)), eq(workflows.userId, userId)));
+    .where(and(or(eq(workflows.id, idOrSlug), eq(workflows.slug, idOrSlug)), eq(workflows.userId, userId)))
+    .run();
 }
 
 export async function getWorkflowOwnerCheck(db: AppDb, userId: string, idOrSlug: string) {

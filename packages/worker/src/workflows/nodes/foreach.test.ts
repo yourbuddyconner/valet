@@ -266,3 +266,61 @@ describe('foreach — validation', () => {
     expect(loopOut.items).toHaveLength(2);
   });
 });
+
+describe('foreach — body retry policy', () => {
+  it('wraps llm body steps with NO_RETRY (matches top-level runtime policy)', async () => {
+    // CF's default step.do retry policy (5 attempts) would duplicate
+    // billed model calls and re-render user-visible content on a
+    // transient error. The top-level llm executor opts in to NO_RETRY;
+    // foreach bodies must do the same. This test inspects the
+    // WorkflowStepConfig passed to step.do for the iteration body and
+    // asserts a NO_RETRY shape.
+    const captured: Array<{ name: string; config?: WorkflowStepConfig }> = [];
+    const step: WorkflowStep = {
+      async do<T>(name: string, configOrFn: WorkflowStepConfig | (() => Promise<T>), maybeFn?: () => Promise<T>): Promise<T> {
+        const fn = typeof configOrFn === 'function' ? configOrFn : maybeFn!;
+        const config = typeof configOrFn === 'function' ? undefined : configOrFn;
+        captured.push({ name, ...(config ? { config } : {}) });
+        return fn();
+      },
+      async sleep(_name: string, _duration: WorkflowSleepDuration): Promise<void> {},
+      async sleepUntil(_name: string, _timestamp: Date | number): Promise<void> {},
+      async waitForEvent<T>(_name: string, _options: { type: string; timeout?: WorkflowTimeoutDuration | number }): Promise<{ payload: T; timestamp: Date; type: string }> {
+        throw new Error('not used');
+      },
+    } as unknown as WorkflowStep;
+
+    const def: WorkflowDefinition = {
+      version: 'dag/v1',
+      nodes: [
+        {
+          id: 'loop',
+          type: 'foreach',
+          items: '{{trigger.data.items}}',
+          body: {
+            id: 'sum',
+            type: 'llm',
+            model: 'anthropic:claude-3-5-sonnet',
+            prompt: 'echo {{item}}',
+            maxOutputTokens: 50,
+          },
+        },
+      ],
+      edges: [],
+    };
+
+    const { writer } = makeTraceWriter();
+    await runDag(
+      stubEnv,
+      makeParams(def, { trigger: { type: 'manual', timestamp: '2026-06-12T00:00:00.000Z', data: { items: [1, 2] }, metadata: {} } }),
+      step,
+      writer,
+    );
+
+    const bodySteps = captured.filter((c) => /^node:loop:i:\d+$/.test(c.name));
+    expect(bodySteps.length).toBeGreaterThan(0);
+    for (const s of bodySteps) {
+      expect(s.config?.retries?.limit).toBe(1);
+    }
+  });
+});
