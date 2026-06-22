@@ -54,12 +54,15 @@ Valet uses an org-level Slack integration. One admin installs the app for the en
         "chat:write.customize",
         "chat:write.public",
         "files:read",
+        "files:write",
         "groups:history",
         "groups:read",
         "im:history",
         "im:read",
         "im:write",
         "reactions:write",
+        "usergroups:read",
+        "usergroups:write",
         "users:read",
         "users:read.email"
       ]
@@ -155,12 +158,15 @@ Once linked, messages you send in Slack channels where the bot is present will r
 | `chat:write.customize` | Send messages with custom username/avatar (persona identity) |
 | `chat:write.public` | Post in channels the bot hasn't joined |
 | `files:read` | Access file attachments shared in messages |
+| `files:write` | Upload files to Slack conversations |
 | `groups:history` | Read messages in private channels the bot is invited to |
 | `groups:read` | Look up private channel info |
 | `im:history` | Read direct messages to the bot |
 | `im:read` | List DM conversations (for verification flow) |
 | `im:write` | Open DMs with users (for verification code delivery) |
 | `reactions:write` | Add emoji reactions to messages |
+| `usergroups:read` | View Slack user groups and their members |
+| `usergroups:write` | Update Slack user group metadata and members |
 | `users:read` | List workspace members (for the link typeahead) |
 | `users:read.email` | Look up users by email for identity linking |
 
