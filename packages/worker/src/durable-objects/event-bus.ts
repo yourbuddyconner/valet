@@ -1,5 +1,6 @@
 import type { Env } from '../env.js';
 import type { EventBusEvent, EventBusEventType } from '@valet/shared';
+import { createDoTracer, type DoTracer } from '../lib/do-tracing.js';
 
 /**
  * EventBusDO — centralized real-time event broadcasting hub.
@@ -24,22 +25,27 @@ export class EventBusDO {
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
 
-    // WebSocket upgrade for browser clients
+    // WebSocket upgrade for browser clients (not traced — returns a 101 hijack)
     if (request.headers.get('Upgrade') === 'websocket') {
       return this.handleWebSocketUpgrade(url);
     }
 
-    // Internal HTTP endpoints (called by other DOs / worker routes)
-    if (url.pathname === '/publish' && request.method === 'POST') {
-      return this.handlePublish(request);
-    }
+    const tracer = createDoTracer(this.env, this.ctx, 'valet-event-bus-do');
+    return tracer.traceFetch(request, `EventBusDO ${url.pathname}`, async (span) => {
+      span.setAttribute('do.path', url.pathname);
 
-    if (url.pathname === '/health') {
-      const sockets = this.ctx.getWebSockets();
-      return Response.json({ connected: sockets.length });
-    }
+      // Internal HTTP endpoints (called by other DOs / worker routes)
+      if (url.pathname === '/publish' && request.method === 'POST') {
+        return this.handlePublish(request, tracer);
+      }
 
-    return new Response('Not found', { status: 404 });
+      if (url.pathname === '/health') {
+        const sockets = this.ctx.getWebSockets();
+        return Response.json({ connected: sockets.length });
+      }
+
+      return new Response('Not found', { status: 404 });
+    });
   }
 
   // ─── WebSocket Upgrade ───────────────────────────────────────────────────
@@ -66,7 +72,7 @@ export class EventBusDO {
    * Body: { userId?: string, event: EventBusEvent }
    * If userId is provided, broadcasts to that user only. Otherwise broadcasts to all.
    */
-  private async handlePublish(request: Request): Promise<Response> {
+  private async handlePublish(request: Request, tracer: DoTracer): Promise<Response> {
     const body = await request.json() as {
       userId?: string;
       event: EventBusEvent;
@@ -83,19 +89,19 @@ export class EventBusDO {
       event.timestamp = new Date().toISOString();
     }
 
-    if (userId) {
-      this.broadcast(userId, event);
-    } else {
-      this.broadcastAll(event);
-    }
-
-    return Response.json({ ok: true });
+    return tracer.span('broadcast', (span) => {
+      span.setAttribute('event.type', event.type);
+      span.setAttribute('broadcast.scope', userId ? 'user' : 'all');
+      const recipients = userId ? this.broadcast(userId, event) : this.broadcastAll(event);
+      span.setAttribute('broadcast.recipients', recipients);
+      return Response.json({ ok: true });
+    });
   }
 
   // ─── Broadcasting ────────────────────────────────────────────────────────
 
-  /** Send an event to all WebSockets tagged with a specific userId. */
-  private broadcast(userId: string, event: EventBusEvent): void {
+  /** Send an event to all WebSockets tagged with a specific userId. Returns recipient count. */
+  private broadcast(userId: string, event: EventBusEvent): number {
     const sockets = this.ctx.getWebSockets(`user:${userId}`);
     const payload = JSON.stringify(event);
 
@@ -106,10 +112,11 @@ export class EventBusDO {
         // Socket likely closed — hibernation will clean it up
       }
     }
+    return sockets.length;
   }
 
-  /** Send an event to all connected WebSockets. */
-  private broadcastAll(event: EventBusEvent): void {
+  /** Send an event to all connected WebSockets. Returns recipient count. */
+  private broadcastAll(event: EventBusEvent): number {
     const sockets = this.ctx.getWebSockets();
     const payload = JSON.stringify(event);
 
@@ -120,6 +127,7 @@ export class EventBusDO {
         // Socket likely closed
       }
     }
+    return sockets.length;
   }
 
   // ─── Hibernation Handlers ────────────────────────────────────────────────

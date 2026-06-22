@@ -1,6 +1,7 @@
 import type { Env } from '../env.js';
 import type { AppDb } from '../lib/drizzle.js';
 import { getDb } from '../lib/drizzle.js';
+import { createDoTracer } from '../lib/do-tracing.js';
 import { updateSessionStatus, updateSessionMetrics, addActiveSeconds, updateSessionGitState, upsertSessionFileChanged, updateSessionTitle, getSession, getSessionGitState, getChildSessions, listUserChannelBindings, getUserById, getUsersByIds, createMailboxMessage, getOrgSettings, isNotificationWebEnabled, batchInsertAnalyticsEvents, batchUpsertMessages, updateUserDiscoveredModels, setCatalogCache, updateThread, incrementThreadMessageCount, getThreadOriginChannel, getOrchestratorIdentity, getUserSlackIdentityLink, getWorkflowNameByExecutionId } from '../lib/db.js';
 import { getCredential, type CredentialResult } from '../services/credentials.js';
 import { memRead, memWrite, memPatch, memRm, memSearch } from '../services/session-memory.js';
@@ -506,11 +507,21 @@ export class SessionAgentDO {
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
 
-    // WebSocket upgrade
+    // WebSocket upgrade (not traced — returns a 101 hijack)
     if (request.headers.get('Upgrade') === 'websocket') {
       return this.handleWebSocketUpgrade(request, url);
     }
 
+    // Wrap control-endpoint dispatch in a DO root span, parented to the worker→DO
+    // traceparent, so DO-internal work nests under the worker trace. ctx.storage stays native.
+    const tracer = createDoTracer(this.env, this.ctx, 'valet-session-agent-do');
+    return tracer.traceFetch(request, `SessionAgentDO ${url.pathname}`, (span) => {
+      span.setAttribute('do.path', url.pathname);
+      return this.dispatchControl(request, url);
+    });
+  }
+
+  private async dispatchControl(request: Request, url: URL): Promise<Response> {
     // Internal control endpoints
     switch (url.pathname) {
       case '/start':
