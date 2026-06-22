@@ -17,6 +17,10 @@ function slackResponse(data: Record<string, unknown>): Response {
   return new Response(JSON.stringify({ ok: true, ...data }), { status: 200 });
 }
 
+function slackFailure(error: string): Response {
+  return new Response(JSON.stringify({ ok: false, error }), { status: 200 });
+}
+
 function actionContext(): ActionContext {
   return {
     credentials: { bot_token: 'xoxb-token' },
@@ -181,5 +185,238 @@ describe('slackActions list_users', () => {
       },
     });
     expect(mocks.slackGet).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('slackActions usergroups', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('lists usergroups with counts by default and slims Slack metadata', async () => {
+    mocks.slackGet.mockResolvedValueOnce(slackResponse({
+      usergroups: [
+        {
+          id: 'S001',
+          team_id: 'T001',
+          name: 'Database On-call',
+          handle: 'db-oncall',
+          description: 'Current database responders',
+          is_disabled: false,
+          date_update: 1774000000,
+          user_count: '2',
+          users: ['U001', 'U002'],
+        },
+      ],
+    }));
+
+    const result = await slackActions.execute('slack.list_usergroups', { include_users: true }, actionContext());
+
+    expect(result).toEqual({
+      success: true,
+      data: {
+        total: 1,
+        usergroups: [
+          {
+            id: 'S001',
+            team_id: 'T001',
+            name: 'Database On-call',
+            handle: 'db-oncall',
+            description: 'Current database responders',
+            is_disabled: false,
+            date_update: 1774000000,
+            user_count: 2,
+            users: ['U001', 'U002'],
+          },
+        ],
+      },
+    });
+    expect(mocks.slackGet).toHaveBeenCalledWith('usergroups.list', 'xoxb-token', {
+      include_count: true,
+      include_users: true,
+    });
+  });
+
+  it('lists users in a usergroup', async () => {
+    mocks.slackGet.mockResolvedValueOnce(slackResponse({ users: ['U001', 'U002'] }));
+
+    const result = await slackActions.execute('slack.list_usergroup_users', { usergroup: 'S001' }, actionContext());
+
+    expect(result).toEqual({
+      success: true,
+      data: {
+        usergroup: 'S001',
+        total: 2,
+        users: ['U001', 'U002'],
+      },
+    });
+    expect(mocks.slackGet).toHaveBeenCalledWith('usergroups.users.list', 'xoxb-token', { usergroup: 'S001' });
+  });
+
+  it('updates usergroup metadata and requires at least one editable field', async () => {
+    const missingFields = await slackActions.execute('slack.update_usergroup', { usergroup: 'S001' }, actionContext());
+    expect(missingFields).toEqual({
+      success: false,
+      error: 'Provide at least one usergroup field to update',
+    });
+
+    mocks.slackFetch.mockResolvedValueOnce(slackResponse({
+      usergroup: {
+        id: 'S001',
+        team_id: 'T001',
+        name: 'SME On-call',
+        handle: 'sme-oncall',
+        description: 'Current SME responder',
+        user_count: 1,
+      },
+    }));
+
+    const result = await slackActions.execute('slack.update_usergroup', {
+      usergroup: 'S001',
+      name: 'SME On-call',
+      handle: 'sme-oncall',
+      description: 'Current SME responder',
+    }, actionContext());
+
+    expect(result).toEqual({
+      success: true,
+      data: {
+        usergroup: {
+          id: 'S001',
+          team_id: 'T001',
+          name: 'SME On-call',
+          handle: 'sme-oncall',
+          description: 'Current SME responder',
+          user_count: 1,
+        },
+      },
+    });
+    expect(mocks.slackFetch).toHaveBeenCalledWith('usergroups.update', 'xoxb-token', {
+      usergroup: 'S001',
+      name: 'SME On-call',
+      handle: 'sme-oncall',
+      description: 'Current SME responder',
+    });
+  });
+
+  it('adds users idempotently by unioning with current members', async () => {
+    mocks.slackGet.mockResolvedValueOnce(slackResponse({ users: ['U001', 'U002'] }));
+    mocks.slackFetch.mockResolvedValueOnce(slackResponse({
+      usergroup: {
+        id: 'S001',
+        users: ['U001', 'U002', 'U003'],
+        user_count: 3,
+      },
+    }));
+
+    const result = await slackActions.execute('slack.add_usergroup_users', {
+      usergroup: 'S001',
+      users: ['U002', 'U003', 'U003'],
+    }, actionContext());
+
+    expect(result).toEqual({
+      success: true,
+      data: {
+        changed: true,
+        usergroup: 'S001',
+        added: ['U003'],
+        skipped: ['U002'],
+        users: ['U001', 'U002', 'U003'],
+        slack_usergroup: {
+          id: 'S001',
+          users: ['U001', 'U002', 'U003'],
+          user_count: 3,
+        },
+      },
+    });
+    expect(mocks.slackGet).toHaveBeenCalledWith('usergroups.users.list', 'xoxb-token', { usergroup: 'S001' });
+    expect(mocks.slackFetch).toHaveBeenCalledWith('usergroups.users.update', 'xoxb-token', {
+      usergroup: 'S001',
+      users: ['U001', 'U002', 'U003'],
+    });
+  });
+
+  it('does not call Slack update when add_usergroup_users has no membership changes', async () => {
+    mocks.slackGet.mockResolvedValueOnce(slackResponse({ users: ['U001', 'U002'] }));
+
+    const result = await slackActions.execute('slack.add_usergroup_users', {
+      usergroup: 'S001',
+      users: ['U002'],
+    }, actionContext());
+
+    expect(result).toEqual({
+      success: true,
+      data: {
+        changed: false,
+        usergroup: 'S001',
+        added: [],
+        skipped: ['U002'],
+        users: ['U001', 'U002'],
+      },
+    });
+    expect(mocks.slackFetch).not.toHaveBeenCalled();
+  });
+
+  it('removes users idempotently and refuses to empty a usergroup', async () => {
+    mocks.slackGet.mockResolvedValueOnce(slackResponse({ users: ['U001', 'U002', 'U003'] }));
+    mocks.slackFetch.mockResolvedValueOnce(slackResponse({
+      usergroup: {
+        id: 'S001',
+        users: ['U001', 'U003'],
+        user_count: 2,
+      },
+    }));
+
+    const result = await slackActions.execute('slack.remove_usergroup_users', {
+      usergroup: 'S001',
+      users: ['U002', 'U999'],
+    }, actionContext());
+
+    expect(result).toEqual({
+      success: true,
+      data: {
+        changed: true,
+        usergroup: 'S001',
+        removed: ['U002'],
+        skipped: ['U999'],
+        users: ['U001', 'U003'],
+        slack_usergroup: {
+          id: 'S001',
+          users: ['U001', 'U003'],
+          user_count: 2,
+        },
+      },
+    });
+    expect(mocks.slackFetch).toHaveBeenCalledWith('usergroups.users.update', 'xoxb-token', {
+      usergroup: 'S001',
+      users: ['U001', 'U003'],
+    });
+
+    vi.clearAllMocks();
+    mocks.slackGet.mockResolvedValueOnce(slackResponse({ users: ['U001'] }));
+
+    const emptyResult = await slackActions.execute('slack.remove_usergroup_users', {
+      usergroup: 'S001',
+      users: ['U001'],
+    }, actionContext());
+
+    expect(emptyResult).toEqual({
+      success: false,
+      error: 'Cannot remove all users from a Slack user group; disable the user group in Slack instead',
+    });
+    expect(mocks.slackFetch).not.toHaveBeenCalled();
+  });
+
+  it('returns Slack API errors from membership reads before attempting updates', async () => {
+    mocks.slackGet.mockResolvedValueOnce(slackFailure('missing_scope'));
+
+    const result = await slackActions.execute('slack.add_usergroup_users', {
+      usergroup: 'S001',
+      users: ['U001'],
+    }, actionContext());
+
+    expect(result).toEqual({
+      success: false,
+      error: 'Slack API error: missing_scope',
+    });
+    expect(mocks.slackFetch).not.toHaveBeenCalled();
   });
 });

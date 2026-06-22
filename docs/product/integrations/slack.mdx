@@ -12,7 +12,7 @@ Read channels, post messages, look up users, and route Slack-channel conversatio
 | Service slug | `slack` |
 | Display name | Slack |
 | Auth type | `bot_token` |
-| Supported entities | `channels`, `messages`, `users` |
+| Supported entities | `channels`, `messages`, `users`, `usergroups` |
 
 ## Setup
 
@@ -22,7 +22,7 @@ Bot token — an admin pastes a bot token issued by the provider during connecti
 
 ## Actions
 
-12 actions are defined for Slack. Risk levels determine approval behavior — see [Approvals](/product/approvals) for what `low`, `medium`, `high`, and `critical` mean at run time.
+17 actions are defined for Slack. Risk levels determine approval behavior — see [Approvals](/product/approvals) for what `low`, `medium`, `high`, and `critical` mean at run time.
 
 | Action ID | What it does | Key params | Risk |
 | --- | --- | --- | --- |
@@ -34,6 +34,11 @@ Bot token — an admin pastes a bot token issued by the provider during connecti
 | `slack.read_history` | Read recent messages from a Slack channel the bot has joined. Use list_channels to get channel IDs. Each message ts can be used as thread_ts for replies. Use oldest/latest to narrow to a time window. | `channel`, `limit`?, `cursor`?, `oldest`?, `latest`?, `filter`?, `threads_only`?, `include_subtypes`? | low |
 | `slack.read_thread` | Read replies in a Slack thread. Bot must be a member of the channel. | `channel`, `thread_ts`, `limit`?, `cursor`? | low |
 | `slack.list_users` | List human users in the Slack workspace. Returns user IDs needed for dm_user. Use filter to search by ID, handle, real name, display name, or email. | `filter`? | low |
+| `slack.list_usergroups` | List Slack user groups. Use include_users only when membership IDs are needed because it can return a large result. | `include_disabled`?, `include_users`?, `include_count`?, `team_id`? | low |
+| `slack.list_usergroup_users` | List user IDs in a Slack user group. Use list_users to resolve IDs to names if needed. | `usergroup`, `include_disabled`?, `team_id`? | low |
+| `slack.update_usergroup` | Update Slack user group metadata such as name, handle, description, or default channels. Use add_usergroup_users/remove_usergroup_users for membership changes. | `usergroup`, `name`?, `handle`?, `description`?, `channels`?, `additional_channels`?, `enable_section`?, `team_id`? | high |
+| `slack.add_usergroup_users` | Idempotently add users to a Slack user group. Existing members are skipped; Slack is only updated when membership changes. | `usergroup`, `users`, `team_id`? | high |
+| `slack.remove_usergroup_users` | Idempotently remove users from a Slack user group. Missing members are skipped. Refuses to remove the final member because Slack requires disabling the group instead. | `usergroup`, `users`, `team_id`? | high |
 | `slack.fetch_file` | Download a file from Slack. For images, the content is returned visually so you can see it. For text files, the content is returned as text. Use the url from the files array in message data. IMPORTANT: Call this tool one at a time, not in parallel — each image fetch interrupts the session to deliver the image to your vision. | `url` | low |
 | `slack.get_pins` | Get pinned messages in a channel. Returns messages in the same format as read_history. Useful for understanding what a channel considers important. | `channel` | low |
 | `slack.get_channel_info` | Get detailed information about a channel: topic, purpose, member count, creation date, creator. Useful when reading a channel for the first time — save the context to memory so you do not re-fetch. | `channel` | low |
@@ -137,6 +142,62 @@ List human users in the Slack workspace. Returns user IDs needed for dm_user. Us
 | Param | Type | Required | Description |
 | --- | --- | --- | --- |
 | `filter` | string | No | Case-insensitive search over user ID, handle, real name, display name, and email. Use this to avoid dumping the full user list. |
+
+### `slack.list_usergroups`
+
+List Slack user groups. Use `include_users` only when membership IDs are needed because it can return a large result.
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `include_disabled` | boolean | No | Include disabled user groups. Default false. |
+| `include_users` | boolean | No | Include member user IDs for each user group. Default false. |
+| `include_count` | boolean | No | Include member counts. Default true. |
+| `team_id` | string | No | Encoded team ID. Required only when using an org-level token. |
+
+### `slack.list_usergroup_users`
+
+List user IDs in a Slack user group. Use `slack.list_users` to resolve IDs to names if needed.
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `usergroup` | string | Yes | User group ID (`S...`) |
+| `include_disabled` | boolean | No | Allow listing users for disabled user groups. Default false. |
+| `team_id` | string | No | Encoded team ID. Required only when using an org-level token. |
+
+### `slack.update_usergroup`
+
+Update Slack user group metadata such as name, handle, description, or default channels. Use `slack.add_usergroup_users` and `slack.remove_usergroup_users` for membership changes.
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `usergroup` | string | Yes | User group ID (`S...`) |
+| `name` | string | No | New user group name. Must be unique among user groups. |
+| `handle` | string | No | New mention handle without `@`. Must be unique among channels, users, and user groups. |
+| `description` | string | No | Short user group description. Pass an empty string to clear it. |
+| `channels` | string[] | No | Default channel IDs for this user group. Pass an empty array to clear defaults. |
+| `additional_channels` | string[] | No | Additional channel IDs where members can add the user group. Pass an empty array to clear. |
+| `enable_section` | boolean | No | Show this user group as a sidebar section for all group members. Requires at least one default channel. |
+| `team_id` | string | No | Encoded team ID. Required only when using an org-level token. |
+
+### `slack.add_usergroup_users`
+
+Idempotently add users to a Slack user group. Existing members are skipped; Slack is only updated when membership changes.
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `usergroup` | string | Yes | User group ID (`S...`) |
+| `users` | string[] | Yes | Slack user IDs (`U...` or `W...`) to add |
+| `team_id` | string | No | Encoded team ID. Required only when using an org-level token. |
+
+### `slack.remove_usergroup_users`
+
+Idempotently remove users from a Slack user group. Missing members are skipped. Refuses to remove the final member because Slack requires disabling the group instead.
+
+| Param | Type | Required | Description |
+| --- | --- | --- | --- |
+| `usergroup` | string | Yes | User group ID (`S...`) |
+| `users` | string[] | Yes | Slack user IDs (`U...` or `W...`) to remove |
+| `team_id` | string | No | Encoded team ID. Required only when using an org-level token. |
 
 ### `slack.fetch_file`
 
