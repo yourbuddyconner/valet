@@ -256,6 +256,9 @@ const SCHEMA_SQL = `
     queue_mode TEXT,
     input_tokens INTEGER,
     output_tokens INTEGER,
+    cache_read_tokens INTEGER,
+    cache_write_tokens INTEGER,
+    reasoning_tokens INTEGER,
     tool_name TEXT,
     error_code TEXT,
     summary TEXT,
@@ -426,6 +429,13 @@ export class SessionAgentDO {
     // Run schema migration on construction (blockConcurrencyWhile ensures it completes before any request)
     this.ctx.blockConcurrencyWhile(async () => {
       this.ctx.storage.sql.exec(SCHEMA_SQL);
+      // Idempotent column adds for analytics_events on existing DOs. SQLite
+      // ALTER TABLE ADD COLUMN errors when the column already exists; the
+      // try/catch makes each migration safe to re-run. Matches the pattern
+      // used by PromptQueue.runMigrations.
+      for (const col of ['cache_read_tokens', 'cache_write_tokens', 'reasoning_tokens']) {
+        try { this.ctx.storage.sql.exec(`ALTER TABLE analytics_events ADD COLUMN ${col} INTEGER`); } catch { /* already exists */ }
+      }
       this.sessionState = new SessionState(this.ctx.storage.sql);
       this.messageStore = new MessageStore(this.ctx.storage.sql);
       const stateDeps = {
@@ -2707,11 +2717,19 @@ export class SessionAgentDO {
         const entries = msg.entries;
         if (Array.isArray(entries)) {
           for (const entry of entries) {
+            // entry.{inputTokens,outputTokens,cacheReadTokens,cacheWriteTokens,
+            // reasoningTokens} mirror OpenCode's tokens shape verbatim. The
+            // billable-input view is input + cache_read + cache_write; the
+            // billable-output view is output + reasoning. See lib/db/analytics
+            // SQL_BILLABLE_*_EXPR for the canonical SQL composition.
             this.emitEvent('llm_call', {
               turnId: msg.turnId,
               model: entry.model ?? 'unknown',
               inputTokens: entry.inputTokens ?? 0,
               outputTokens: entry.outputTokens ?? 0,
+              cacheReadTokens: entry.cacheReadTokens ?? 0,
+              cacheWriteTokens: entry.cacheWriteTokens ?? 0,
+              reasoningTokens: entry.reasoningTokens ?? 0,
               properties: { oc_message_id: entry.ocMessageId },
             });
           }
@@ -6617,7 +6635,7 @@ export class SessionAgentDO {
 
       // Flush unflushed analytics events to D1 (single path replacing audit_log + usage_events)
       const unflushed = this.ctx.storage.sql
-        .exec('SELECT id, event_type, turn_id, duration_ms, channel, model, queue_mode, input_tokens, output_tokens, tool_name, error_code, summary, actor_id, properties, created_at FROM analytics_events WHERE flushed = 0 ORDER BY id ASC LIMIT 100')
+        .exec('SELECT id, event_type, turn_id, duration_ms, channel, model, queue_mode, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, reasoning_tokens, tool_name, error_code, summary, actor_id, properties, created_at FROM analytics_events WHERE flushed = 0 ORDER BY id ASC LIMIT 100')
         .toArray();
 
       if (unflushed.length > 0) {
@@ -6633,6 +6651,9 @@ export class SessionAgentDO {
             queueMode: row.queue_mode != null ? (row.queue_mode as string) : undefined,
             inputTokens: row.input_tokens != null ? (row.input_tokens as number) : undefined,
             outputTokens: row.output_tokens != null ? (row.output_tokens as number) : undefined,
+            cacheReadTokens: row.cache_read_tokens != null ? (row.cache_read_tokens as number) : undefined,
+            cacheWriteTokens: row.cache_write_tokens != null ? (row.cache_write_tokens as number) : undefined,
+            reasoningTokens: row.reasoning_tokens != null ? (row.reasoning_tokens as number) : undefined,
             toolName: row.tool_name != null ? (row.tool_name as string) : undefined,
             errorCode: row.error_code != null ? (row.error_code as string) : undefined,
             summary: row.summary != null ? (row.summary as string) : undefined,
@@ -6666,8 +6687,17 @@ export class SessionAgentDO {
       channel?: string;
       model?: string;
       queueMode?: string;
+      // Raw five-way token breakdown from OpenCode. Anthropic bills each
+      // bucket differently (cache reads cheap, cache writes expensive,
+      // reasoning charged as output) so we store each verbatim and let
+      // consumers compose the view they need. "Billable input" totals are
+      // `input + cache_read + cache_write`; "billable output" is
+      // `output + reasoning`.
       inputTokens?: number;
       outputTokens?: number;
+      cacheReadTokens?: number;
+      cacheWriteTokens?: number;
+      reasoningTokens?: number;
       toolName?: string;
       errorCode?: string;
       summary?: string;
@@ -6679,8 +6709,9 @@ export class SessionAgentDO {
       this.ctx.storage.sql.exec(
         `INSERT INTO analytics_events
           (event_type, turn_id, duration_ms, channel, model, queue_mode,
-           input_tokens, output_tokens, tool_name, error_code, summary, actor_id, properties)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, reasoning_tokens,
+           tool_name, error_code, summary, actor_id, properties)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         eventType,
         fields?.turnId ?? null,
         fields?.durationMs ?? null,
@@ -6689,6 +6720,9 @@ export class SessionAgentDO {
         fields?.queueMode ?? null,
         fields?.inputTokens ?? null,
         fields?.outputTokens ?? null,
+        fields?.cacheReadTokens ?? null,
+        fields?.cacheWriteTokens ?? null,
+        fields?.reasoningTokens ?? null,
         fields?.toolName ?? null,
         fields?.errorCode ?? null,
         fields?.summary ?? null,
@@ -6709,10 +6743,16 @@ export class SessionAgentDO {
     summary: string,
     actorId?: string,
     metadata?: Record<string, unknown>,
+    // Set when the event refers to a specific tool — surfaces the name in
+    // the `tool_name` column rather than burying it inside JSON properties.
+    // Used by the agent.tool_call event family so downstream analytics can
+    // group/filter by tool.
+    toolName?: string,
   ): void {
     this.emitEvent(eventType, {
       summary,
       actorId,
+      toolName,
       properties: metadata,
     });
     // Broadcast to connected clients in real-time
@@ -6946,7 +6986,7 @@ export class SessionAgentDO {
       // ─── Deny ──────────────────────────────────────────────────────────
       if (outcome === 'denied') {
         this.runnerLink.send({ type: 'call-tool-result', requestId, error: `Action "${toolId}" denied by policy (risk level: ${riskLevel})` } as any);
-        this.emitAuditEvent('agent.tool_call', `Action ${toolId} denied by policy`, undefined, { invocationId, riskLevel });
+        this.emitAuditEvent('agent.tool_call', `Action ${toolId} denied by policy`, undefined, { invocationId, riskLevel }, toolId);
         return;
       }
 
@@ -6976,6 +7016,10 @@ export class SessionAgentDO {
           riskLevel,
           invocationId: invocationId,
           summary,
+          // Carried through to executeActionAndSend after approval resolution so
+          // the tool_exec analytics event can be attributed to the originating
+          // assistant turn (and therefore the thread).
+          opencodeSessionId,
         };
         // Resolve channel deterministically via the calling OC session id.
         // The runner passes opencodeSessionId through call-tool exactly so we
@@ -7086,7 +7130,7 @@ export class SessionAgentDO {
           timestamp: new Date().toISOString(),
         });
 
-        this.emitAuditEvent('agent.tool_call', `Action ${toolId} requires approval (${riskLevel})`, undefined, { invocationId: invocationId, riskLevel });
+        this.emitAuditEvent('agent.tool_call', `Action ${toolId} requires approval (${riskLevel})`, undefined, { invocationId: invocationId, riskLevel }, toolId);
 
         await this.sendChannelInteractivePrompts(invocationId, prompt);
 
@@ -7098,7 +7142,7 @@ export class SessionAgentDO {
       }
 
       // ─── Allow — execute immediately ───────────────────────────────────
-      await this.executeActionAndSend(requestId, toolId, service, actionId, params, userId, actionSource, invocationId, orgId);
+      await this.executeActionAndSend(requestId, toolId, service, actionId, params, userId, actionSource, invocationId, orgId, opencodeSessionId);
     } catch (err) {
       const error = err instanceof Error ? err.message : String(err);
       if (shouldFailInvocationOnCatch && invocationIdForCleanup) {
@@ -7131,10 +7175,21 @@ export class SessionAgentDO {
     actionSource: ReturnType<typeof integrationRegistry.getActions>,
     invocationId: string,
     orgId?: string,
+    // The OpenCode session that triggered this tool call. Used solely to
+    // bridge the tool_exec analytics event back to the originating assistant
+    // turn (and thus the thread) so per-thread usage attribution stays whole.
+    opencodeSessionId?: string,
   ): Promise<{ success: boolean; error?: string }> {
     const spawnRequest = this.sessionState.spawnRequest;
     const spawnEnvVars = spawnRequest?.envVars as Record<string, string> | undefined;
     const guardConfig = await this.getGuardConfig();
+    // Best-effort: find the in-flight assistant turn for this OC session. Tools
+    // can fire after a turn finalizes (post-approval, queued execution); a null
+    // turnId in that case leaves the row attributed at session level only,
+    // matching pre-fix behaviour.
+    const toolTurnId = opencodeSessionId
+      ? this.messageStore.findActiveTurnByOcSession(opencodeSessionId) ?? undefined
+      : undefined;
 
     let result;
     try {
@@ -7150,6 +7205,7 @@ export class SessionAgentDO {
       });
       this.runnerLink.send({ type: 'call-tool-result', requestId, error } as any);
       this.emitEvent('tool_exec', {
+        turnId: toolTurnId,
         toolName: toolId,
         errorCode: 'action_failed',
       });
@@ -7158,6 +7214,7 @@ export class SessionAgentDO {
 
     // Emit tool_exec timing event
     this.emitEvent('tool_exec', {
+      turnId: toolTurnId,
       toolName: toolId,
       durationMs: result.durationMs,
       errorCode: result.success ? undefined : 'action_failed',
@@ -7340,7 +7397,7 @@ export class SessionAgentDO {
         console.warn(`[SessionAgentDO] Approval prompt ${promptId} expired with no request_id — runner may be stuck`);
       }
 
-      this.emitAuditEvent('agent.tool_call', `Action ${toolId} approval expired`, undefined, { invocationId });
+      this.emitAuditEvent('agent.tool_call', `Action ${toolId} approval expired`, undefined, { invocationId }, toolId);
     } else if (promptType === 'question') {
       this.runnerLink.send({
         type: 'answer',
@@ -7587,7 +7644,8 @@ export class SessionAgentDO {
         let executionResult: { success: boolean; error?: string } = { success: true };
         if (requestId) {
           try {
-            executionResult = await this.executeActionAndSend(requestId, toolId, service, actionId, params, userId, actionSource, promptId, orgId);
+            const ocSession = typeof context.opencodeSessionId === 'string' ? context.opencodeSessionId : undefined;
+            executionResult = await this.executeActionAndSend(requestId, toolId, service, actionId, params, userId, actionSource, promptId, orgId, ocSession);
           } catch (err) {
             const error = err instanceof Error ? err.message : String(err);
             await markFailed(this.appDb, promptId, error).catch((markErr) => {
@@ -7630,6 +7688,7 @@ export class SessionAgentDO {
             : `Action ${toolId} approved but execution failed: ${executionResult.error || 'Action failed'}`,
           undefined,
           { invocationId: promptId },
+          toolId,
         );
         deletePrompt();
       } else {
@@ -7675,7 +7734,7 @@ export class SessionAgentDO {
           timestamp: new Date().toISOString(),
         });
 
-        this.emitAuditEvent('agent.tool_call', `Action ${toolId} cancelled${reason ? `: ${reason}` : ''}`, undefined, { invocationId: promptId });
+        this.emitAuditEvent('agent.tool_call', `Action ${toolId} cancelled${reason ? `: ${reason}` : ''}`, undefined, { invocationId: promptId }, toolId);
         deletePrompt();
       }
     } else if (promptType === 'question') {

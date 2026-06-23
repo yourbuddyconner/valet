@@ -126,6 +126,72 @@ const listUsers: ActionDefinition = {
   }),
 };
 
+const listUsergroups: ActionDefinition = {
+  id: 'slack.list_usergroups',
+  name: 'List User Groups',
+  description: 'List Slack user groups. Use include_users only when membership IDs are needed because it can return a large result.',
+  riskLevel: 'low',
+  params: z.object({
+    include_disabled: z.boolean().optional().describe('Include disabled user groups. Default false.'),
+    include_users: z.boolean().optional().describe('Include member user IDs for each user group. Default false.'),
+    include_count: z.boolean().optional().describe('Include member counts. Default true.'),
+    team_id: z.string().optional().describe('Encoded team ID. Required only when using an org-level token.'),
+  }),
+};
+
+const listUsergroupUsers: ActionDefinition = {
+  id: 'slack.list_usergroup_users',
+  name: 'List User Group Users',
+  description: 'List user IDs in a Slack user group. Use list_users to resolve IDs to names if needed.',
+  riskLevel: 'low',
+  params: z.object({
+    usergroup: z.string().min(1).describe('User group ID (S...)'),
+    include_disabled: z.boolean().optional().describe('Allow listing users for disabled user groups. Default false.'),
+    team_id: z.string().optional().describe('Encoded team ID. Required only when using an org-level token.'),
+  }),
+};
+
+const updateUsergroup: ActionDefinition = {
+  id: 'slack.update_usergroup',
+  name: 'Update User Group',
+  description: 'Update Slack user group metadata such as name, handle, description, or default channels. Use add_usergroup_users/remove_usergroup_users for membership changes.',
+  riskLevel: 'high',
+  params: z.object({
+    usergroup: z.string().min(1).describe('User group ID (S...)'),
+    name: z.string().optional().describe('New user group name. Must be unique among user groups.'),
+    handle: z.string().optional().describe('New mention handle without @. Must be unique among channels, users, and user groups.'),
+    description: z.string().optional().describe('Short user group description. Pass an empty string to clear it.'),
+    channels: z.array(z.string()).optional().describe('Default channel IDs for this user group. Pass an empty array to clear defaults.'),
+    additional_channels: z.array(z.string()).optional().describe('Additional channel IDs where members can add the user group. Pass an empty array to clear.'),
+    enable_section: z.boolean().optional().describe('Show this user group as a sidebar section for all group members. Requires at least one default channel.'),
+    team_id: z.string().optional().describe('Encoded team ID. Required only when using an org-level token.'),
+  }),
+};
+
+const addUsergroupUsers: ActionDefinition = {
+  id: 'slack.add_usergroup_users',
+  name: 'Add User Group Users',
+  description: 'Idempotently add users to a Slack user group. Existing members are skipped; Slack is only updated when membership changes. This wraps Slack\'s replace-all membership API, so avoid concurrent membership updates to the same user group.',
+  riskLevel: 'high',
+  params: z.object({
+    usergroup: z.string().min(1).describe('User group ID (S...)'),
+    users: z.array(z.string()).min(1).describe('Slack user IDs (U... or W...) to add'),
+    team_id: z.string().optional().describe('Encoded team ID. Required only when using an org-level token.'),
+  }),
+};
+
+const removeUsergroupUsers: ActionDefinition = {
+  id: 'slack.remove_usergroup_users',
+  name: 'Remove User Group Users',
+  description: 'Idempotently remove users from a Slack user group. Missing members are skipped. Refuses to remove the final member because Slack requires disabling the group instead. This wraps Slack\'s replace-all membership API, so avoid concurrent membership updates to the same user group.',
+  riskLevel: 'high',
+  params: z.object({
+    usergroup: z.string().min(1).describe('User group ID (S...)'),
+    users: z.array(z.string()).min(1).describe('Slack user IDs (U... or W...) to remove'),
+    team_id: z.string().optional().describe('Encoded team ID. Required only when using an org-level token.'),
+  }),
+};
+
 const fetchFile: ActionDefinition = {
   id: 'slack.fetch_file',
   name: 'Fetch File',
@@ -189,6 +255,11 @@ const allActions: ActionDefinition[] = [
   readHistory,
   readThread,
   listUsers,
+  listUsergroups,
+  listUsergroupUsers,
+  updateUsergroup,
+  addUsergroupUsers,
+  removeUsergroupUsers,
   fetchFile,
   getPins,
   getChannelInfo,
@@ -326,11 +397,62 @@ function slimUser(u: Record<string, unknown>): Record<string, unknown> {
   return user;
 }
 
+function setDefined(target: Record<string, unknown>, key: string, value: unknown): void {
+  if (value !== undefined && value !== null) target[key] = value;
+}
+
 function matchesUserFilter(user: Record<string, unknown>, filter: string): boolean {
   return ['id', 'name', 'real_name', 'display_name', 'email'].some((key) => {
     const value = user[key];
     return typeof value === 'string' && value.toLowerCase().includes(filter);
   });
+}
+
+function numericUserCount(value: unknown): number | undefined {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string' && /^\d+$/.test(value)) return Number(value);
+  return undefined;
+}
+
+function normalizeStringList(values: string[]): string[] {
+  const normalized: string[] = [];
+  const seen = new Set<string>();
+  for (const value of values) {
+    const trimmed = value.trim();
+    if (!trimmed || seen.has(trimmed)) continue;
+    seen.add(trimmed);
+    normalized.push(trimmed);
+  }
+  return normalized;
+}
+
+function normalizeCommaSeparatedList(values: string[]): string {
+  return normalizeStringList(values).join(',');
+}
+
+function slimUsergroup(group: Record<string, unknown>): Record<string, unknown> {
+  const usergroup: Record<string, unknown> = {};
+  setDefined(usergroup, 'id', group.id);
+  setDefined(usergroup, 'team_id', group.team_id);
+  setDefined(usergroup, 'name', group.name);
+  setDefined(usergroup, 'handle', group.handle);
+  setDefined(usergroup, 'description', group.description);
+  setDefined(usergroup, 'is_disabled', group.is_disabled);
+  setDefined(usergroup, 'date_create', group.date_create);
+  setDefined(usergroup, 'date_update', group.date_update);
+  setDefined(usergroup, 'date_delete', group.date_delete);
+  setDefined(usergroup, 'auto_type', group.auto_type);
+  setDefined(usergroup, 'created_by', group.created_by);
+  setDefined(usergroup, 'updated_by', group.updated_by);
+  setDefined(usergroup, 'deleted_by', group.deleted_by);
+  setDefined(usergroup, 'prefs', group.prefs);
+
+  const count = numericUserCount(group.user_count);
+  if (count !== undefined) usergroup.user_count = count;
+  if (Array.isArray(group.users)) {
+    usergroup.users = group.users.filter((user): user is string => typeof user === 'string');
+  }
+  return usergroup;
 }
 
 function slimChannel(ch: Record<string, unknown>): Record<string, unknown> {
@@ -420,6 +542,50 @@ async function openAndSendDM(
   if (!data.ok) return slackError(res, data);
 
   return { success: true, data: { ts: data.ts, channel: data.channel } };
+}
+
+type ReadUsergroupUsersResult =
+  | { ok: true; users: string[] }
+  | { ok: false; result: ActionResult };
+
+async function readUsergroupUsers(
+  token: string,
+  input: { usergroup: string; include_disabled?: boolean; team_id?: string },
+): Promise<ReadUsergroupUsersResult> {
+  const query: Record<string, unknown> = { usergroup: input.usergroup };
+  if (input.include_disabled !== undefined) query.include_disabled = input.include_disabled;
+  if (input.team_id) query.team_id = input.team_id;
+
+  const res = await slackGet('usergroups.users.list', token, query);
+  if (!res.ok) return { ok: false, result: await slackError(res) };
+  const data = (await res.json()) as { ok: boolean; error?: string; users?: unknown[] };
+  if (!data.ok) return { ok: false, result: await slackError(res, data) };
+
+  return {
+    ok: true,
+    users: (data.users || []).filter((user): user is string => typeof user === 'string'),
+  };
+}
+
+async function writeUsergroupUsers(
+  token: string,
+  input: { usergroup: string; users: string[]; team_id?: string },
+): Promise<ActionResult> {
+  const body: Record<string, unknown> = {
+    usergroup: input.usergroup,
+    users: input.users,
+  };
+  if (input.team_id) body.team_id = input.team_id;
+
+  const res = await slackFetch('usergroups.users.update', token, body);
+  if (!res.ok) return slackError(res);
+  const data = (await res.json()) as { ok: boolean; error?: string; usergroup?: Record<string, unknown> };
+  if (!data.ok) return slackError(res, data);
+
+  return {
+    success: true,
+    data: data.usergroup ? slimUsergroup(data.usergroup) : undefined,
+  };
 }
 
 // ─── Action Execution ────────────────────────────────────────────────────────
@@ -675,6 +841,139 @@ async function executeAction(
         }
 
         return { success: true, data: { ...(filter ? { filter } : {}), total: members.length, members } };
+      }
+
+      case 'slack.list_usergroups': {
+        const p = listUsergroups.params.parse(params);
+        const query: Record<string, unknown> = {
+          include_count: p.include_count ?? true,
+        };
+        if (p.include_disabled !== undefined) query.include_disabled = p.include_disabled;
+        if (p.include_users !== undefined) query.include_users = p.include_users;
+        if (p.team_id) query.team_id = p.team_id;
+
+        const res = await slackGet('usergroups.list', token, query);
+        if (!res.ok) return slackError(res);
+        const data = (await res.json()) as { ok: boolean; error?: string; usergroups?: unknown[] };
+        if (!data.ok) return slackError(res, data);
+
+        const usergroups = (data.usergroups || [])
+          .map((group) => slimUsergroup(group as Record<string, unknown>));
+        return { success: true, data: { total: usergroups.length, usergroups } };
+      }
+
+      case 'slack.list_usergroup_users': {
+        const p = listUsergroupUsers.params.parse(params);
+        const read = await readUsergroupUsers(token, p);
+        if (!read.ok) return read.result;
+
+        return { success: true, data: { usergroup: p.usergroup, total: read.users.length, users: read.users } };
+      }
+
+      case 'slack.update_usergroup': {
+        const p = updateUsergroup.params.parse(params);
+        const body: Record<string, unknown> = { usergroup: p.usergroup };
+        if (p.team_id) body.team_id = p.team_id;
+        if (p.name !== undefined) body.name = p.name;
+        if (p.handle !== undefined) body.handle = p.handle;
+        if (p.description !== undefined) body.description = p.description;
+        if (p.channels !== undefined) body.channels = normalizeCommaSeparatedList(p.channels);
+        if (p.additional_channels !== undefined) body.additional_channels = normalizeCommaSeparatedList(p.additional_channels);
+        if (p.enable_section !== undefined) body.enable_section = p.enable_section;
+
+        const updateKeys = Object.keys(body).filter((key) => key !== 'usergroup' && key !== 'team_id');
+        if (updateKeys.length === 0) {
+          return { success: false, error: 'Provide at least one usergroup field to update' };
+        }
+
+        const res = await slackFetch('usergroups.update', token, body);
+        if (!res.ok) return slackError(res);
+        const data = (await res.json()) as { ok: boolean; error?: string; usergroup?: Record<string, unknown> };
+        if (!data.ok) return slackError(res, data);
+
+        return { success: true, data: { usergroup: data.usergroup ? slimUsergroup(data.usergroup) : undefined } };
+      }
+
+      case 'slack.add_usergroup_users': {
+        const p = addUsergroupUsers.params.parse(params);
+        const requested = normalizeStringList(p.users);
+        if (requested.length === 0) return { success: false, error: 'Provide at least one Slack user ID' };
+
+        const read = await readUsergroupUsers(token, { usergroup: p.usergroup, team_id: p.team_id });
+        if (!read.ok) return read.result;
+
+        const currentUsers = read.users;
+        const current = new Set(currentUsers);
+        const added = requested.filter((user) => !current.has(user));
+        const skipped = requested.filter((user) => current.has(user));
+
+        if (added.length === 0) {
+          return {
+            success: true,
+            data: { changed: false, usergroup: p.usergroup, added: [], skipped, users: currentUsers },
+          };
+        }
+
+        const users = [...currentUsers, ...added];
+        const update = await writeUsergroupUsers(token, { usergroup: p.usergroup, users, team_id: p.team_id });
+        if (!update.success) return update;
+
+        return {
+          success: true,
+          data: {
+            changed: true,
+            usergroup: p.usergroup,
+            added,
+            skipped,
+            users,
+            slack_usergroup: update.data,
+          },
+        };
+      }
+
+      case 'slack.remove_usergroup_users': {
+        const p = removeUsergroupUsers.params.parse(params);
+        const requested = normalizeStringList(p.users);
+        if (requested.length === 0) return { success: false, error: 'Provide at least one Slack user ID' };
+
+        const read = await readUsergroupUsers(token, { usergroup: p.usergroup, team_id: p.team_id });
+        if (!read.ok) return read.result;
+
+        const currentUsers = read.users;
+        const current = new Set(currentUsers);
+        const toRemove = new Set(requested);
+        const removed = currentUsers.filter((user) => toRemove.has(user));
+        const skipped = requested.filter((user) => !current.has(user));
+
+        if (removed.length === 0) {
+          return {
+            success: true,
+            data: { changed: false, usergroup: p.usergroup, removed: [], skipped, users: currentUsers },
+          };
+        }
+
+        const users = currentUsers.filter((user) => !toRemove.has(user));
+        if (users.length === 0) {
+          return {
+            success: false,
+            error: 'Cannot remove all users from a Slack user group; disable the user group in Slack instead',
+          };
+        }
+
+        const update = await writeUsergroupUsers(token, { usergroup: p.usergroup, users, team_id: p.team_id });
+        if (!update.success) return update;
+
+        return {
+          success: true,
+          data: {
+            changed: true,
+            usergroup: p.usergroup,
+            removed,
+            skipped,
+            users,
+            slack_usergroup: update.data,
+          },
+        };
       }
 
       case 'slack.fetch_file': {
