@@ -54,6 +54,7 @@
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20240117.0",
     "@opentelemetry/context-async-hooks": "^2.0.0",
+    "@opentelemetry/resources": "^2.0.0",
     "@opentelemetry/sdk-trace-base": "^2.0.0",
     "@types/better-sqlite3": "^7.6.8",
     "better-sqlite3": "^11.0.0",
