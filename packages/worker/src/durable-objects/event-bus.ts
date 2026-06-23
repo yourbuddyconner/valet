@@ -30,7 +30,7 @@ export class EventBusDO {
       return this.handleWebSocketUpgrade(url);
     }
 
-    const tracer = createDoTracer(this.env, this.ctx, 'valet-event-bus-do');
+    const tracer = await createDoTracer(this.env, this.ctx, 'valet-event-bus-do');
     return tracer.traceFetch(request, `EventBusDO ${url.pathname}`, async (span) => {
       span.setAttribute('do.path', url.pathname);
 

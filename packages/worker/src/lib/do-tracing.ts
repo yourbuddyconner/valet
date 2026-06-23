@@ -4,7 +4,6 @@ import {
 } from '@opentelemetry/api';
 import { BasicTracerProvider, SimpleSpanProcessor } from '@opentelemetry/sdk-trace-base';
 import { resourceFromAttributes } from '@opentelemetry/resources';
-import { OTLPExporter } from '@microlabs/otel-cf-workers';
 import { buildTraceConfig, isTracingEnabled } from './tracing.js';
 import type { Env } from '../env.js';
 
@@ -37,10 +36,13 @@ const NOOP: DoTracer = {
   span: async (_name, fn) => fn(NOOP_SPAN),
 };
 
-export function createDoTracer(env: Env, ctx: DurableObjectState, serviceName: string): DoTracer {
+export async function createDoTracer(env: Env, ctx: DurableObjectState, serviceName: string): Promise<DoTracer> {
   if (!isTracingEnabled(env)) return NOOP;
   const config = buildTraceConfig(env, serviceName);
   if (!('exporter' in config) || !config.exporter || !('url' in config.exporter)) return NOOP;
+  // Lazy import keeps `@microlabs/otel-cf-workers` (which pulls `cloudflare:workers`) off the
+  // module-load path, so the DOs that import this file stay loadable in Node unit tests.
+  const { OTLPExporter } = await import('@microlabs/otel-cf-workers');
   const exporter = new OTLPExporter(config.exporter);
   const provider = new BasicTracerProvider({
     resource: resourceFromAttributes({ 'service.name': serviceName }),

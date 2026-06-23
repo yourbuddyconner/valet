@@ -514,7 +514,7 @@ export class SessionAgentDO {
 
     // Wrap control-endpoint dispatch in a DO root span, parented to the worker→DO
     // traceparent, so DO-internal work nests under the worker trace. ctx.storage stays native.
-    const tracer = createDoTracer(this.env, this.ctx, 'valet-session-agent-do');
+    const tracer = await createDoTracer(this.env, this.ctx, 'valet-session-agent-do');
     return tracer.traceFetch(request, `SessionAgentDO ${url.pathname}`, (span) => {
       span.setAttribute('do.path', url.pathname);
       return this.dispatchControl(request, url, tracer);
