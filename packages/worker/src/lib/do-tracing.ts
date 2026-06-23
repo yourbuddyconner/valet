@@ -3,6 +3,7 @@ import {
   type Span, type Attributes, type Context,
 } from '@opentelemetry/api';
 import { BasicTracerProvider, SimpleSpanProcessor } from '@opentelemetry/sdk-trace-base';
+import { resourceFromAttributes } from '@opentelemetry/resources';
 import { OTLPExporter } from '@microlabs/otel-cf-workers';
 import { buildTraceConfig, isTracingEnabled } from './tracing.js';
 import type { Env } from '../env.js';
@@ -41,9 +42,10 @@ export function createDoTracer(env: Env, ctx: DurableObjectState, serviceName: s
   const config = buildTraceConfig(env, serviceName);
   if (!('exporter' in config) || !config.exporter || !('url' in config.exporter)) return NOOP;
   const exporter = new OTLPExporter(config.exporter);
-  // NOTE: service.name resource (so DO spans show 'valet-*-do' instead of 'unknown_service')
-  // needs @opentelemetry/resources as a direct worker dep — added as a follow-up.
-  const provider = new BasicTracerProvider({ spanProcessors: [new SimpleSpanProcessor(exporter)] });
+  const provider = new BasicTracerProvider({
+    resource: resourceFromAttributes({ 'service.name': serviceName }),
+    spanProcessors: [new SimpleSpanProcessor(exporter)],
+  });
   const tracer = provider.getTracer(serviceName);
 
   return {
