@@ -81,6 +81,14 @@ export function WorkflowList() {
   );
 }
 
+function normalizeSlug(input: string): string {
+  return input
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '');
+}
+
 function CreateWorkflowDialog() {
   const navigate = useNavigate();
   const createWorkflow = useCreateWorkflow();
@@ -88,11 +96,27 @@ function CreateWorkflowDialog() {
   const [name, setName] = React.useState('');
   const [description, setDescription] = React.useState('');
   const [slug, setSlug] = React.useState('');
+  // Auto-derive slug from name until the user manually edits the slug
+  // field. After that the slug is theirs and we stop syncing.
+  const [slugTouched, setSlugTouched] = React.useState(false);
 
   function reset() {
     setName('');
     setDescription('');
     setSlug('');
+    setSlugTouched(false);
+  }
+
+  function handleNameChange(value: string) {
+    setName(value);
+    if (!slugTouched) {
+      setSlug(normalizeSlug(value));
+    }
+  }
+
+  function handleSlugChange(value: string) {
+    setSlug(value);
+    setSlugTouched(true);
   }
 
   function handleSubmit(event: React.FormEvent) {
@@ -144,7 +168,7 @@ function CreateWorkflowDialog() {
                 </span>
                 <Input
                   value={name}
-                  onChange={(event) => setName(event.target.value)}
+                  onChange={(event) => handleNameChange(event.target.value)}
                   placeholder="Daily triage"
                   autoFocus
                 />
@@ -165,8 +189,8 @@ function CreateWorkflowDialog() {
                 </span>
                 <Input
                   value={slug}
-                  onChange={(event) => setSlug(event.target.value)}
-                  placeholder="optional-slug"
+                  onChange={(event) => handleSlugChange(event.target.value)}
+                  placeholder="daily-triage"
                 />
               </label>
             </div>

@@ -353,7 +353,7 @@ export function buildWorkflowEdgeInspection(
   };
 }
 
-const NODE_LABELS: Record<DagNodeType, string> = {
+export const NODE_LABELS: Record<DagNodeType, string> = {
   trigger: 'Trigger',
   llm: 'LLM',
   tool: 'Tool',
@@ -367,8 +367,8 @@ const NODE_LABELS: Record<DagNodeType, string> = {
   session: 'Session',
 };
 
-const NODE_DESCRIPTIONS: Record<DagNodeType, string> = {
-  trigger: 'Workflow invocation payload',
+export const NODE_DESCRIPTIONS: Record<DagNodeType, string> = {
+  trigger: 'Where the workflow starts and what data it receives',
   llm: 'Generate or transform text with a model',
   tool: 'Call an integration action',
   if: 'Branch based on conditions',
@@ -866,7 +866,7 @@ function summarizeNode(node: WorkflowNode): string {
     case 'llm':
       return trimSummary(node.prompt || node.model || 'No prompt configured');
     case 'trigger':
-      return 'Runtime trigger payload and declared parameters';
+      return 'Where the workflow starts and what data it receives';
     case 'tool':
       return trimSummary(node.service && node.action ? `${node.service}.${node.action}` : 'No action configured');
     case 'if':

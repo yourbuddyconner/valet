@@ -265,6 +265,7 @@ function ExecutionNodeCard({ data, selected }: NodeProps) {
       handles={nodeData.handles}
       className={cn(
         'border-neutral-200 bg-white text-neutral-950 shadow-xl shadow-neutral-900/10 dark:border-neutral-700 dark:bg-neutral-900/95 dark:text-neutral-100 dark:shadow-black/20',
+        '[&_.react-flow__handle]:h-3.5 [&_.react-flow__handle]:w-3.5',
         '[&_.react-flow__handle]:border-white [&_.react-flow__handle]:bg-neutral-700 dark:[&_.react-flow__handle]:border-neutral-950 dark:[&_.react-flow__handle]:bg-neutral-300',
         selected && 'border-accent ring-2 ring-accent/30',
         status === 'completed' && 'border-emerald-300 dark:border-emerald-700',

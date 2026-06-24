@@ -99,6 +99,8 @@ import {
   flowToDefinition,
   getDefaultNodeForType,
   jsonSchemaToWorkflowInputDefinitions,
+  NODE_DESCRIPTIONS,
+  NODE_LABELS,
   NODE_PALETTE_LIST_CLASSNAME,
   NODE_PALETTE_PANEL_CLASSNAME,
   removeWorkflowFlowNode,
@@ -1107,6 +1109,9 @@ function WorkflowNodeCard({ data, selected }: NodeProps) {
       handles={nodeData.handles}
       className={cn(
         'border-neutral-200 bg-white text-neutral-950 shadow-xl shadow-neutral-900/10 dark:border-neutral-700 dark:bg-neutral-900/95 dark:text-neutral-100 dark:shadow-black/20',
+        // Anchor handles: bumped from React Flow's ~7px default to 14px for an
+        // easier hit target when dragging connections between nodes.
+        '[&_.react-flow__handle]:h-3.5 [&_.react-flow__handle]:w-3.5',
         '[&_.react-flow__handle]:border-white [&_.react-flow__handle]:bg-neutral-700 dark:[&_.react-flow__handle]:border-neutral-950 dark:[&_.react-flow__handle]:bg-neutral-300',
         hasWarning && 'border-amber-400 ring-2 ring-amber-300/60 dark:border-amber-400 dark:ring-amber-400/40',
         hasError && 'border-red-500 ring-2 ring-red-300/70 dark:border-red-400 dark:ring-red-400/40',
@@ -1187,13 +1192,25 @@ function NodeInspector({ definition, node, onUpdate }: NodeInspectorProps) {
     const patch = createWorkflowInputPatchForNode(workflowNode, source);
     if (patch) onUpdate(patch);
   }, [onUpdate, workflowNode]);
+  const typeLabel = NODE_LABELS[workflowNode.type];
+  const typeDescription = NODE_DESCRIPTIONS[workflowNode.type];
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-3">
       <div className="space-y-1">
+        <div className="text-sm font-semibold text-neutral-900 dark:text-neutral-100">
+          {typeLabel} node
+        </div>
+        <p className="text-xs text-neutral-500 dark:text-neutral-400">{typeDescription}</p>
+      </div>
+      <div className="space-y-1">
         <label className="text-xs font-medium text-neutral-700 dark:text-neutral-300">
-          Selected node
+          Node ID
         </label>
         <Input value={node.id} readOnly className="font-mono text-xs" />
+        <p className="text-[11px] text-neutral-500 dark:text-neutral-400">
+          Reference this node's output from another node with{' '}
+          <code className="font-mono">{`\${nodes.${node.id}.output}`}</code>.
+        </p>
       </div>
       <NodeParameterFields
         definition={definition}
@@ -1286,16 +1303,18 @@ function TriggerFields({
     <>
       <div className="rounded-md border border-neutral-200 bg-neutral-50 p-2 text-xs dark:border-neutral-700 dark:bg-neutral-900">
         <div className="flex items-center justify-between gap-2">
-          <span className="font-medium text-neutral-700 dark:text-neutral-300">Workflow entrypoint</span>
+          <span className="font-medium text-neutral-700 dark:text-neutral-300">How the workflow starts</span>
           <Badge variant="secondary">{node.id}</Badge>
         </div>
         <p className="mt-2 text-neutral-500 dark:text-neutral-400">
-          This source provides the payload from the trigger that invoked the workflow.
+          Every run begins here. Whatever data the trigger sends becomes this node's output —
+          downstream nodes can read it with{' '}
+          <code className="font-mono">{`\${nodes.${node.id}.output.data.<field>}`}</code>.
         </p>
       </div>
       <WorkflowSchemaFields
-        title="Trigger data schema"
-        emptyMessage="Add fields here to render typed manual trigger inputs and template suggestions."
+        title="Expected input fields"
+        emptyMessage="Declare the fields this workflow expects. Manual runs prompt for these; other nodes can reference them in templates."
         value={node.dataSchema ?? {}}
         onChange={(dataSchema) => onUpdate({ dataSchema: Object.keys(dataSchema).length > 0 ? dataSchema : undefined })}
       />
