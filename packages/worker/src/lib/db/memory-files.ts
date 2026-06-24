@@ -1,5 +1,5 @@
 import type { D1Database } from '@cloudflare/workers-types';
-import type { MemoryFile, MemoryFileListing, MemoryFileSearchResult, PatchOperation, PatchResult } from '@valet/shared';
+import type { MemoryExportFile, MemoryFile, MemoryFileListing, MemoryFileSearchResult, MemoryImportResult, PatchOperation, PatchResult } from '@valet/shared';
 import { eq, and, sql } from 'drizzle-orm';
 import type { AppDb } from '../drizzle.js';
 import { orchestratorMemoryFiles } from '../schema/memory-files.js';
@@ -445,6 +445,65 @@ export async function searchMemoryFiles(
 
   scored.sort((a, b) => b.relevance - a.relevance);
   return scored;
+}
+
+// ─── Import / Export ────────────────────────────────────────────────────────
+
+/**
+ * Returns every memory file for a user as a portable list (path + full content).
+ * Ordered by path so exports are stable and diff-friendly. Scoped to the user.
+ */
+export async function exportMemoryFiles(db: AppDb, userId: string): Promise<MemoryExportFile[]> {
+  const rows = await db
+    .select({
+      path: orchestratorMemoryFiles.path,
+      content: orchestratorMemoryFiles.content,
+      pinned: orchestratorMemoryFiles.pinned,
+      updatedAt: orchestratorMemoryFiles.updatedAt,
+    })
+    .from(orchestratorMemoryFiles)
+    .where(eq(orchestratorMemoryFiles.userId, userId))
+    .orderBy(orchestratorMemoryFiles.path);
+
+  return rows.map((r) => ({
+    path: r.path,
+    content: r.content,
+    pinned: r.pinned === 1,
+    updatedAt: r.updatedAt,
+  }));
+}
+
+/**
+ * Writes a batch of memory files for a user (merge semantics — same-path files
+ * are overwritten, others are left untouched). Reuses `writeMemoryFile` so path
+ * normalization, FTS indexing, pinning, and cap enforcement stay consistent.
+ *
+ * One bad file never fails the whole import: empties and invalid paths are
+ * collected in `skipped` with a reason. The `pinned` flag is intentionally not
+ * honored on import — pinning is derived from the path (see `writeMemoryFile`).
+ */
+export async function importMemoryFiles(
+  rawDb: D1Database,
+  userId: string,
+  files: { path: string; content: string }[],
+): Promise<MemoryImportResult> {
+  let imported = 0;
+  const skipped: { path: string; reason: string }[] = [];
+
+  for (const file of files) {
+    if (file.content.length === 0) {
+      skipped.push({ path: file.path, reason: 'empty content' });
+      continue;
+    }
+    try {
+      await writeMemoryFile(rawDb, userId, file.path, file.content);
+      imported++;
+    } catch (err) {
+      skipped.push({ path: file.path, reason: err instanceof Error ? err.message : 'write failed' });
+    }
+  }
+
+  return { imported, skipped };
 }
 
 // ─── Relevance Boost ────────────────────────────────────────────────────────

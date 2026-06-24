@@ -445,9 +445,15 @@ Both orchestrators and children can create/list tasks on the same board.
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/memories` | List/search memories (optional category, query, limit) |
-| POST | `/memories` | Create memory (content + category) |
-| DELETE | `/memories/:id` | Delete memory |
+| GET | `/memory?path=` | List a directory (empty path or trailing `/`) or read a file |
+| PUT | `/memory` | Create or overwrite a file (`{ path, content }`) |
+| PATCH | `/memory` | Surgical edits (append/prepend/replace/insert_after/delete_section) |
+| DELETE | `/memory?path=` | Delete a file, or all files under a `/`-suffixed prefix |
+| GET | `/memory/search?query=` | FTS5 search (optional `path` prefix) |
+| GET | `/memory/export` | Export all of the user's memory files as a portable JSON bundle |
+| POST | `/memory/import` | Import a bundle (merge — overwrites same-path files; skips invalid/empty) |
+
+Export/import let users move memory between environments (e.g. dev → prod). The bundle is `{ version, exportedAt, count, files: [{ path, content, pinned, updatedAt }] }`; import reuses the write path, so normalization, pinning, FTS indexing, and the memory cap all apply.
 
 ### Notification Routes (`/api/me`)
 
