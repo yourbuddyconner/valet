@@ -427,6 +427,37 @@ const readRepoFile: ActionDefinition = {
   }),
 };
 
+const listDependabotAlerts: ActionDefinition = {
+  id: 'github.list_dependabot_alerts',
+  name: 'List Dependabot Alerts',
+  description: 'List Dependabot vulnerability alerts for a repository or organization. Pass `org` instead of `owner`+`repo` to list across an entire org.',
+  riskLevel: 'low',
+  params: z.object({
+    owner: z.string().optional().describe('Repository owner (required unless `org` is set)'),
+    repo: z.string().optional().describe('Repository name (required unless `org` is set)'),
+    org: z.string().optional().describe('Organization login — when set, lists alerts across the org instead of a single repo'),
+    state: z.enum(['auto_dismissed', 'dismissed', 'fixed', 'open']).optional().describe('Filter by alert state (default: open)'),
+    severity: z.enum(['low', 'medium', 'high', 'critical']).optional().describe('Filter by severity'),
+    ecosystem: z.string().optional().describe('Filter by package ecosystem (e.g. "npm", "pip", "rubygems", "maven")'),
+    package: z.string().optional().describe('Filter by package name'),
+    sort: z.enum(['created', 'updated']).optional().describe('Sort field (default: created)'),
+    direction: z.enum(['asc', 'desc']).optional().describe('Sort direction (default: desc)'),
+    limit: z.number().int().min(1).max(100).optional().describe('Max results (default: 30)'),
+  }),
+};
+
+const getDependabotAlert: ActionDefinition = {
+  id: 'github.get_dependabot_alert',
+  name: 'Get Dependabot Alert',
+  description: 'Get details of a single Dependabot alert including the vulnerable dependency, advisory, and remediation info.',
+  riskLevel: 'low',
+  params: z.object({
+    owner: z.string().describe('Repository owner'),
+    repo: z.string().describe('Repository name'),
+    alert_number: z.number().int().describe('Dependabot alert number'),
+  }),
+};
+
 const allActions: ActionDefinition[] = [
   getRepository,
   listRepos,
@@ -457,6 +488,8 @@ const allActions: ActionDefinition[] = [
   listWorkflows,
   triggerWorkflow,
   readRepoFile,
+  listDependabotAlerts,
+  getDependabotAlert,
 ];
 
 // ─── Permission hints for 403 errors ─────────────────────────────────────────
@@ -480,6 +513,8 @@ const PERMISSION_HINTS: Record<string, string> = {
   'github.create_release': 'contents:write',
   'github.inspect_pull_request': 'pull_requests:read (+ checks:read for check runs)',
   'github.fork_repository': 'contents:write',
+  'github.list_dependabot_alerts': 'dependabot_alerts:read',
+  'github.get_dependabot_alert': 'dependabot_alerts:read',
 };
 
 function handleOctokitError(err: any, actionId: string, operation: string): ActionResult {
@@ -1337,6 +1372,64 @@ async function executeAction(
           };
         } catch (err: any) {
           return handleOctokitError(err, actionId, 'Read repo file');
+        }
+      }
+
+      case 'github.list_dependabot_alerts': {
+        const p = listDependabotAlerts.params.parse(params);
+        if (!p.org && !(p.owner && p.repo)) {
+          return { success: false, error: 'Must provide either `org`, or both `owner` and `repo`.' };
+        }
+        try {
+          const query = {
+            state: p.state,
+            severity: p.severity,
+            ecosystem: p.ecosystem,
+            package: p.package,
+            sort: p.sort,
+            direction: p.direction,
+            per_page: p.limit ?? 30,
+          };
+          const { data } = p.org
+            ? await octokit.request('GET /orgs/{org}/dependabot/alerts', { org: p.org, ...query })
+            : await octokit.request('GET /repos/{owner}/{repo}/dependabot/alerts', {
+                owner: p.owner!, repo: p.repo!, ...query,
+              });
+
+          const items = data.map((a: any) => ({
+            number: a.number,
+            state: a.state,
+            severity: a.security_advisory?.severity ?? a.security_vulnerability?.severity ?? null,
+            summary: a.security_advisory?.summary ?? null,
+            package: a.dependency?.package?.name ?? a.security_vulnerability?.package?.name ?? null,
+            ecosystem: a.dependency?.package?.ecosystem ?? a.security_vulnerability?.package?.ecosystem ?? null,
+            manifest_path: a.dependency?.manifest_path ?? null,
+            ghsa_id: a.security_advisory?.ghsa_id ?? null,
+            cve_id: a.security_advisory?.cve_id ?? null,
+            url: a.html_url,
+            created_at: a.created_at,
+            updated_at: a.updated_at ?? null,
+            dismissed_at: a.dismissed_at ?? null,
+            fixed_at: a.fixed_at ?? null,
+            repository: a.repository?.full_name ?? null,
+          }));
+
+          return { success: true, data: { total_count: items.length, alerts: items } };
+        } catch (err: any) {
+          return handleOctokitError(err, actionId, 'List dependabot alerts');
+        }
+      }
+
+      case 'github.get_dependabot_alert': {
+        const p = getDependabotAlert.params.parse(params);
+        try {
+          const { data } = await octokit.request(
+            'GET /repos/{owner}/{repo}/dependabot/alerts/{alert_number}',
+            { owner: p.owner, repo: p.repo, alert_number: p.alert_number },
+          );
+          return { success: true, data };
+        } catch (err: any) {
+          return handleOctokitError(err, actionId, 'Get dependabot alert');
         }
       }
 
