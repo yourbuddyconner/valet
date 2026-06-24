@@ -747,8 +747,8 @@ export function createEdgeId(from: string, to: string, fromOutput?: 'true' | 'fa
   return `${from}${fromOutput ? `:${fromOutput}` : ''}->${to}`;
 }
 
-const LAYOUT_COLUMN_GAP = 340;
-const LAYOUT_ROW_GAP = 140;
+export const LAYOUT_COLUMN_GAP = 340;
+export const LAYOUT_ROW_GAP = 140;
 
 function layoutWorkflowNodes(definition: WorkflowDefinition): Map<string, { x: number; y: number }> {
   const nodeIds = new Set(definition.nodes.map((node) => node.id));

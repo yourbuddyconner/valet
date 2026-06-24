@@ -15,7 +15,7 @@ import { Input } from '@/components/ui/input';
 import { Skeleton } from '@/components/ui/skeleton';
 import { SearchInput } from '@/components/ui/search-input';
 import { toastError, toastSuccess } from '@/hooks/use-toast';
-import { formatRelativeTime } from '@/lib/format';
+import { formatRelativeTime, slugify } from '@/lib/format';
 
 export function WorkflowList() {
   const [search, setSearch] = React.useState('');
@@ -81,19 +81,15 @@ export function WorkflowList() {
   );
 }
 
-function normalizeSlug(input: string): string {
-  return input
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/-+/g, '-')
-    .replace(/^-|-$/g, '');
-}
-
 function CreateWorkflowDialog() {
   const navigate = useNavigate();
   const createWorkflow = useCreateWorkflow();
   // React Query dedupes — this shares the cached list with the parent page.
-  const existingWorkflows = useWorkflows().data?.workflows ?? [];
+  // isLoading is needed so we don't render misleading "no duplicates" hints
+  // (and a green submit button) while the list is still in flight.
+  const workflowsQuery = useWorkflows();
+  const existingWorkflows = workflowsQuery.data?.workflows ?? [];
+  const workflowsLoading = workflowsQuery.isLoading;
   const [open, setOpen] = React.useState(false);
   const [name, setName] = React.useState('');
   const [description, setDescription] = React.useState('');
@@ -124,7 +120,7 @@ function CreateWorkflowDialog() {
   function handleNameChange(value: string) {
     setName(value);
     if (!slugTouched) {
-      setSlug(normalizeSlug(value));
+      setSlug(slugify(value));
     }
   }
 
@@ -230,9 +226,14 @@ function CreateWorkflowDialog() {
               </Button>
               <Button
                 type="submit"
-                disabled={!name.trim() || duplicateSlug || createWorkflow.isPending}
+                disabled={
+                  !name.trim()
+                  || duplicateSlug
+                  || workflowsLoading
+                  || createWorkflow.isPending
+                }
               >
-                {createWorkflow.isPending ? 'Creating...' : 'Create'}
+                {createWorkflow.isPending ? 'Creating...' : workflowsLoading ? 'Loading…' : 'Create'}
               </Button>
             </DialogFooter>
           </form>

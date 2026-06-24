@@ -40,6 +40,7 @@ import { Connection as ConnectionLine } from '@/components/ai-elements/connectio
 import { Controls } from '@/components/ai-elements/controls';
 import { Edge } from '@/components/ai-elements/edge';
 import {
+  getSourceHandleTopPercent,
   Node,
   NodeContent,
   NodeDescription,
@@ -99,6 +100,7 @@ import {
   flowToDefinition,
   getDefaultNodeForType,
   jsonSchemaToWorkflowInputDefinitions,
+  LAYOUT_COLUMN_GAP,
   NODE_DESCRIPTIONS,
   NODE_LABELS,
   NODE_PALETTE_LIST_CLASSNAME,
@@ -171,9 +173,6 @@ interface WorkflowAddNextContextValue {
 
 const WorkflowAddNextContext = React.createContext<WorkflowAddNextContextValue | null>(null);
 
-// Horizontal step when placing a new node to the right of an existing one.
-// Matches the column gap used by the auto-layout in workflow-editor-model.
-const NEW_NODE_COLUMN_STEP = 320;
 // Vertical nudge applied when the computed position would collide with an
 // existing node (within this many flow-units in either axis).
 const NEW_NODE_COLLISION_NUDGE = 140;
@@ -195,10 +194,10 @@ function computeNextNodePosition(
 
   let base: { x: number; y: number };
   if (anchor) {
-    base = { x: anchor.position.x + NEW_NODE_COLUMN_STEP, y: anchor.position.y };
+    base = { x: anchor.position.x + LAYOUT_COLUMN_GAP, y: anchor.position.y };
   } else if (others.length > 0) {
     const rightmost = others.reduce((best, n) => (n.position.x > best.position.x ? n : best));
-    base = { x: rightmost.position.x + NEW_NODE_COLUMN_STEP, y: rightmost.position.y };
+    base = { x: rightmost.position.x + LAYOUT_COLUMN_GAP, y: rightmost.position.y };
   } else {
     base = { x: 0, y: 0 };
   }
@@ -216,6 +215,40 @@ function computeNextNodePosition(
 }
 
 type WorkflowNodeValidationSeverity = 'warning' | 'error';
+
+// After adding a node, briefly fit-view onto it so the user always sees
+// where it landed — protects against the "I clicked add and nothing
+// happened" case when the canvas is panned far from the placement anchor.
+// rAF defers the call until React has committed the new node into the
+// React Flow store, otherwise the id is unknown to fitView.
+function scheduleFitViewToNode(instance: ReactFlowInstance | null, nodeId: string) {
+  if (!instance) return;
+  requestAnimationFrame(() => {
+    instance.fitView({ nodes: [{ id: nodeId }], duration: 250, padding: 0.3 });
+  });
+}
+
+// Build a WorkflowFlowEdge from a source/target/handle triple. Shared by
+// the user-drag path (handleConnect) and the wire-on-add path
+// (handleAddNode), which must agree on edge shape: branch handles get
+// type='temporary' + a label, default sources get type='animated'.
+function createWorkflowFlowEdge(
+  source: string,
+  target: string,
+  sourceHandle: 'true' | 'false' | undefined,
+): WorkflowFlowEdge {
+  return {
+    id: createEdgeId(source, target, sourceHandle),
+    source,
+    ...(sourceHandle ? { sourceHandle } : {}),
+    target,
+    type: sourceHandle ? 'temporary' : 'animated',
+    ...(sourceHandle ? { label: sourceHandle } : {}),
+    data: {
+      ...(sourceHandle ? { fromOutput: sourceHandle } : {}),
+    },
+  };
+}
 
 export function VisualWorkflowEditor(props: VisualWorkflowEditorProps) {
   return (
@@ -379,6 +412,19 @@ function VisualWorkflowEditorInner({
     }
   }, [selectedNodeId, nodePaletteOpen]);
 
+  // Whenever the picker closes — via Escape, the X button, the toolbar
+  // toggle, or the auto-collapse Effect above — clear the wire / anchor
+  // refs. Without this, dismissing the picker after clicking a node's
+  // "+ what happens next" would leave a dangling wire that fires on the
+  // NEXT unrelated add. handleAddNode reads-and-clears these refs into
+  // locals BEFORE returning, so the success path is unaffected.
+  React.useEffect(() => {
+    if (!nodePaletteOpen) {
+      wireOnAddSource.current = null;
+      lastSelectedBeforePicker.current = null;
+    }
+  }, [nodePaletteOpen]);
+
   const handleNodesChange: OnNodesChange = React.useCallback((changes: NodeChange[]) => {
     const safeChanges = changes.filter((change) => !(change.type === 'remove' && change.id === 'trigger'));
     setNodes((current) => applyNodeChanges(safeChanges, current) as WorkflowFlowNode[]);
@@ -491,17 +537,7 @@ function VisualWorkflowEditorInner({
     const fromOutput = connection.sourceHandle === 'true' || connection.sourceHandle === 'false'
       ? connection.sourceHandle
       : undefined;
-    const edge: WorkflowFlowEdge = {
-      id: createEdgeId(connection.source, connection.target, fromOutput),
-      source: connection.source,
-      ...(fromOutput ? { sourceHandle: fromOutput } : {}),
-      target: connection.target,
-      type: fromOutput ? 'temporary' : 'animated',
-      ...(fromOutput ? { label: fromOutput } : {}),
-      data: {
-        ...(fromOutput ? { fromOutput } : {}),
-      },
-    };
+    const edge = createWorkflowFlowEdge(connection.source, connection.target, fromOutput);
     const nextEdges = addEdge(edge, edges) as WorkflowFlowEdge[];
     const nextDefinition = applyDefaultDataFlowForConnection(
       flowToDefinition(
@@ -522,65 +558,86 @@ function VisualWorkflowEditorInner({
   }, [actionCatalog, definition, edges, getViewport, nodes, reactFlowInstance]);
 
   function handleAddNode(type: AddableDagNodeType) {
-    const id = createNodeId(type, nodes.map((node) => node.id));
-    const node = getDefaultNodeForType(type, id);
-    const position = computeNextNodePosition(nodes, lastSelectedBeforePicker.current);
-    const flowNode: WorkflowFlowNode = {
-      id,
-      type: 'workflow',
-      position,
-      data: createFlowNodeData(node),
-    };
-    const nextNodes = [...nodes, flowNode];
-
-    // If the picker was opened from an unconnected handle's "+", also
-    // create the edge from that source to the new node. We pipe the
-    // result through applyDefaultDataFlowForConnection so freshly-wired
-    // edges get the same data-flow defaults as user-dragged connections.
     const wire = wireOnAddSource.current;
+    const anchor = lastSelectedBeforePicker.current;
+    // Read both refs into locals NOW so the picker-close Effect (which
+    // clears them when nodePaletteOpen goes false) can't race the
+    // functional state updaters below.
+    lastSelectedBeforePicker.current = null;
+    wireOnAddSource.current = null;
+
     if (wire) {
-      const fromOutput = wire.handle === 'true' || wire.handle === 'false'
-        ? wire.handle
-        : undefined;
-      const newEdge: WorkflowFlowEdge = {
-        id: createEdgeId(wire.nodeId, id, fromOutput),
-        source: wire.nodeId,
-        ...(fromOutput ? { sourceHandle: fromOutput } : {}),
-        target: id,
-        type: fromOutput ? 'temporary' : 'animated',
-        ...(fromOutput ? { label: fromOutput } : {}),
-        data: {
-          ...(fromOutput ? { fromOutput } : {}),
-        },
-      };
-      const nextEdges = [...edges, newEdge];
-      const nextDefinition = applyDefaultDataFlowForConnection(
-        flowToDefinition(
-          {
-            nodes: nextNodes,
-            edges: nextEdges,
-            viewport: reactFlowInstance?.getViewport() ?? getViewport(),
-          },
-          definition ?? undefined,
-        ),
-        { from: newEdge.source, to: newEdge.target },
-        actionCatalog,
-      );
-      const nextFlow = definitionToFlow(nextDefinition);
-      setNodes(nextFlow.nodes);
-      setEdges(nextFlow.edges);
+      // Wire-on-add: nodes and edges must be updated together because
+      // the round-trip through flowToDefinition needs both. We do the
+      // work inside a setNodes functional updater so currentNodes is
+      // fresh, then use the same captured edges to keep the two arrays
+      // in agreement. setEdges follows with the recomputed flow.
+      let computedEdges: WorkflowFlowEdge[] | null = null;
+      let computedId: string | null = null;
+      setNodes((currentNodes) => {
+        const id = createNodeId(type, currentNodes.map((n) => n.id));
+        computedId = id;
+        const node = getDefaultNodeForType(type, id);
+        const position = computeNextNodePosition(currentNodes, anchor);
+        const flowNode: WorkflowFlowNode = {
+          id,
+          type: 'workflow',
+          position,
+          data: createFlowNodeData(node),
+        };
+        const fromOutput = wire.handle === 'true' || wire.handle === 'false'
+          ? wire.handle
+          : undefined;
+        const newEdge = createWorkflowFlowEdge(wire.nodeId, id, fromOutput);
+        const nextDefinition = applyDefaultDataFlowForConnection(
+          flowToDefinition(
+            {
+              nodes: [...currentNodes, flowNode],
+              edges: [...edges, newEdge],
+              viewport: reactFlowInstance?.getViewport() ?? getViewport(),
+            },
+            definition ?? undefined,
+          ),
+          { from: newEdge.source, to: newEdge.target },
+          actionCatalog,
+        );
+        const nextFlow = definitionToFlow(nextDefinition);
+        computedEdges = nextFlow.edges;
+        return nextFlow.nodes;
+      });
+      if (computedEdges) setEdges(computedEdges);
+      if (computedId) {
+        setSelectedNodeId(computedId);
+        scheduleFitViewToNode(reactFlowInstance, computedId);
+      }
     } else {
-      setNodes(nextNodes);
+      // Non-wire: simple append. Functional updater avoids any stale
+      // closure on `nodes` if a concurrent change lands first.
+      let computedId: string | null = null;
+      setNodes((currentNodes) => {
+        const id = createNodeId(type, currentNodes.map((n) => n.id));
+        computedId = id;
+        const node = getDefaultNodeForType(type, id);
+        const position = computeNextNodePosition(currentNodes, anchor);
+        const flowNode: WorkflowFlowNode = {
+          id,
+          type: 'workflow',
+          position,
+          data: createFlowNodeData(node),
+        };
+        return [...currentNodes, flowNode];
+      });
+      if (computedId) {
+        setSelectedNodeId(computedId);
+        scheduleFitViewToNode(reactFlowInstance, computedId);
+      }
     }
 
-    setSelectedNodeId(id);
     setSelectedEdgeId(null);
     clearArmedDeleteNode();
     setRawOpen(false);
     setNodePaletteOpen(false);
     setNodePaletteQuery('');
-    lastSelectedBeforePicker.current = null;
-    wireOnAddSource.current = null;
   }
 
   function handleApplyRawJson() {
@@ -1320,13 +1377,13 @@ function WorkflowNodeCard({ data, selected }: NodeProps) {
         <p className="truncate text-xs text-neutral-500 dark:text-neutral-500">{nodeData.description}</p>
       </NodeFooter>
       {unconnectedHandles && addNextContext && Array.from(unconnectedHandles).map((handle) => {
-        // Position matches the Handle layout in ai-elements/node.tsx:
-        //   default source: handle is on right edge at top: 50%
-        //   true/false:     handle sits inside a label; label is rendered
-        //                   outside the card with translate-x-full at
-        //                   top 38% / 62%
+        // Position computed by the same helper ai-elements/node.tsx uses
+        // for its Handle layout, so the plus button never drifts off the
+        // handle if those positions change.
         const isBranch = handle === 'true' || handle === 'false';
-        const top = handle === 'true' ? 38 : handle === 'false' ? 62 : 50;
+        const top = isBranch
+          ? getSourceHandleTopPercent(handle === 'true' ? 0 : 1, 2)
+          : getSourceHandleTopPercent(0, 1);
         // Branch handles have a ~28px label to the right of the card; push
         // the plus past it. Default sources have no label.
         const rightOffsetPx = isBranch ? 56 : 26;

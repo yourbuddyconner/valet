@@ -20,6 +20,16 @@ export type NodeProps = ComponentProps<typeof Card> & {
   };
 };
 
+// Vertical position (as % from the top of the node card) of a source
+// handle, given its index among the node's outputs. Single source = center.
+// Two sources = 38/62 split. Exported so external overlays (e.g. the
+// "what happens next" plus button) can sit on top of the handle without
+// duplicating these magic numbers.
+export function getSourceHandleTopPercent(index: number, total: number): number {
+  if (total <= 1) return 50;
+  return index === 0 ? 38 : 62;
+}
+
 export const Node = ({ handles, className, ...props }: NodeProps) => (
   <Card
     className={cn(
@@ -32,7 +42,7 @@ export const Node = ({ handles, className, ...props }: NodeProps) => (
   {handles.target && <Handle position={Position.Left} type="target" />}
   {handles.sourceOutputs?.length ? (
     handles.sourceOutputs.map((output, index) => {
-      const top = handles.sourceOutputs!.length === 1 ? 50 : index === 0 ? 38 : 62;
+      const top = getSourceHandleTopPercent(index, handles.sourceOutputs!.length);
       return (
         <div
           key={output}
