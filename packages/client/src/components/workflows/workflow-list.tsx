@@ -92,6 +92,8 @@ function normalizeSlug(input: string): string {
 function CreateWorkflowDialog() {
   const navigate = useNavigate();
   const createWorkflow = useCreateWorkflow();
+  // React Query dedupes — this shares the cached list with the parent page.
+  const existingWorkflows = useWorkflows().data?.workflows ?? [];
   const [open, setOpen] = React.useState(false);
   const [name, setName] = React.useState('');
   const [description, setDescription] = React.useState('');
@@ -99,6 +101,18 @@ function CreateWorkflowDialog() {
   // Auto-derive slug from name until the user manually edits the slug
   // field. After that the slug is theirs and we stop syncing.
   const [slugTouched, setSlugTouched] = React.useState(false);
+
+  const trimmedName = name.trim();
+  const duplicateName = React.useMemo(() => {
+    if (!trimmedName) return false;
+    const lower = trimmedName.toLowerCase();
+    return existingWorkflows.some((wf) => wf.name.trim().toLowerCase() === lower);
+  }, [existingWorkflows, trimmedName]);
+  const duplicateSlug = React.useMemo(() => {
+    const s = slug.trim();
+    if (!s) return false;
+    return existingWorkflows.some((wf) => wf.slug?.trim().toLowerCase() === s.toLowerCase());
+  }, [existingWorkflows, slug]);
 
   function reset() {
     setName('');
@@ -172,6 +186,12 @@ function CreateWorkflowDialog() {
                   placeholder="Daily triage"
                   autoFocus
                 />
+                {duplicateName && (
+                  <p className="text-[11px] text-amber-600 dark:text-amber-400">
+                    A workflow with this name already exists. You can still proceed —
+                    the slug below is what uniquely identifies it.
+                  </p>
+                )}
               </label>
               <label className="block space-y-1">
                 <span className="text-xs font-medium text-neutral-700 dark:text-neutral-300">
@@ -191,14 +211,27 @@ function CreateWorkflowDialog() {
                   value={slug}
                   onChange={(event) => handleSlugChange(event.target.value)}
                   placeholder="daily-triage"
+                  aria-invalid={duplicateSlug || undefined}
                 />
+                {duplicateSlug ? (
+                  <p className="text-[11px] text-red-600 dark:text-red-400">
+                    Slug already taken. Pick a different one.
+                  </p>
+                ) : (
+                  <p className="text-[11px] text-neutral-500 dark:text-neutral-400">
+                    Used in URLs and API calls. Must be unique.
+                  </p>
+                )}
               </label>
             </div>
             <DialogFooter>
               <Button type="button" variant="secondary" onClick={() => setOpen(false)}>
                 Cancel
               </Button>
-              <Button type="submit" disabled={!name.trim() || createWorkflow.isPending}>
+              <Button
+                type="submit"
+                disabled={!name.trim() || duplicateSlug || createWorkflow.isPending}
+              >
                 {createWorkflow.isPending ? 'Creating...' : 'Create'}
               </Button>
             </DialogFooter>
