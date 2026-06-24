@@ -3063,10 +3063,11 @@ function ForeachBodyField({
         <Badge variant="secondary">{value.type}</Badge>
       </div>
       <SelectField
-        label="Type"
+        label="Step type"
         value={value.type}
         options={FOREACH_BODY_NODE_TYPES}
         onChange={updateBodyType}
+        help="The kind of step the runtime executes for each item. Switching type resets the body fields below to that step's defaults."
       />
       <NodeParameterFields
         definition={{ version: 'dag/v1', nodes: [value], edges: [] }}

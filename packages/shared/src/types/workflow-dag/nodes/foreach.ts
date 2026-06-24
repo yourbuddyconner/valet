@@ -40,21 +40,39 @@ export function createDefaultForeachNode(id: string): ForeachNode {
 export const foreachNodeDocs: NodeDocs<ForeachNode> = {
   label: 'For each',
   description: 'Run one body node for every item',
-  longDescription: `Iterates a list and runs the body node once per element. The body is a
-single node (LLM, tool, set, stop, orchestrator, or session) — control-flow
-nodes (foreach, if, approval) are not allowed as bodies because the
-runtime treats the foreach as a single step boundary.
+  longDescription: `Iterates a list and runs one **body step** for every element. The body is a
+single node — pick its kind in the **Step type** dropdown.
 
-Items can be referenced inside the body with \`\${item}\` (or whatever
-\`itemAlias\` you set) and \`\${index}\` (or \`indexAlias\`). The node's output
-is an array of the per-item outputs, in the same order as the input list.
+### Why "step type"
 
-Iteration semantics:
+A foreach is one box in the DAG, but it expands at runtime into N copies of
+its body. The "step type" is the kind of work each of those copies does:
+
+- **llm** — run a model call per item (e.g. classify, summarize, extract).
+- **tool** — call an integration action per item (e.g. send a Slack message
+  per row).
+- **set** — compute derived values per item.
+- **stop** — end the workflow conditionally inside the loop.
+- **orchestrator** — hand each item to the org/user orchestrator session.
+- **session** — start or message a coding-agent session per item.
+
+Control-flow nodes (foreach, if, approval) are not allowed as bodies because
+the runtime treats the whole foreach as a single step boundary.
+
+### Referencing the current item
+
+Inside the body, the current element is bound to \`\${item}\` (rename with
+\`itemAlias\`) and its 0-based position is bound to \`\${index}\` (rename with
+\`indexAlias\`). The node's output is an array of per-item results, in the
+same order as the input list.
+
+### Iteration semantics
 
 - \`concurrency\` controls how many items run in parallel (default 1).
 - \`onItemError = 'fail'\` aborts the workflow on the first failure (default).
 - \`onItemError = 'skip'\` records the failure and continues.
-- \`onItemError = 'collect'\` returns successes plus error markers in the output array.`,
+- \`onItemError = 'collect'\` returns successes plus error markers in the
+  output array.`,
   fields: {
     items: {
       help: 'Template expression that resolves to an array. The body runs once per element.',
