@@ -284,6 +284,11 @@ export async function listTools(
           name: action.name,
           description: action.description,
           riskLevel: action.riskLevel,
+          // Pass the upstream MCP-advertised schemas straight through so
+          // the catalog endpoint can render them later without holding
+          // user credentials. Both fields are optional on the MCP side.
+          ...(action.inputSchema ? { inputSchema: action.inputSchema } : {}),
+          ...(action.outputSchema ? { outputSchema: action.outputSchema } : {}),
         });
       }
     }
