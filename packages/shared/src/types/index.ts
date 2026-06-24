@@ -866,6 +866,33 @@ export interface MemoryFileSearchResult {
   relevance: number;
 }
 
+/** A single memory file inside a portable export bundle. */
+export interface MemoryExportFile {
+  path: string;
+  content: string;
+  pinned: boolean;
+  updatedAt: string;
+}
+
+/**
+ * Portable snapshot of a user's orchestrator memory. Produced by
+ * `GET /api/me/memory/export` and consumed by `POST /api/me/memory/import`,
+ * letting users move memory between environments (e.g. dev → prod).
+ */
+export interface MemoryExportBundle {
+  /** Bundle format version. Bump on breaking shape changes. */
+  version: 1;
+  exportedAt: string;
+  count: number;
+  files: MemoryExportFile[];
+}
+
+/** Outcome of importing a memory bundle. */
+export interface MemoryImportResult {
+  imported: number;
+  skipped: { path: string; reason: string }[];
+}
+
 export interface OrchestratorInfo {
   sessionId: string;
   identity: OrchestratorIdentity | null;

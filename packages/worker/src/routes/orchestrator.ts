@@ -1,6 +1,7 @@
 import { Hono, type Context } from 'hono';
 import { z } from 'zod';
 import { zValidator } from '@hono/zod-validator';
+import type { MemoryExportBundle } from '@valet/shared';
 import type { Env, Variables } from '../env.js';
 import * as db from '../lib/db.js';
 import * as orchestratorService from '../services/orchestrator.js';
@@ -33,6 +34,18 @@ const updateIdentitySchema = z.object({
 const writeMemorySchema = z.object({
   path: z.string().min(1).max(256),
   content: z.string().min(1).max(50000),
+});
+
+const importMemorySchema = z.object({
+  files: z
+    .array(
+      z.object({
+        path: z.string().min(1).max(256),
+        content: z.string().max(50000),
+      }),
+    )
+    .min(1)
+    .max(500),
 });
 
 const patchMemorySchema = z.object({
@@ -249,6 +262,36 @@ orchestratorRouter.get('/memory/search', async (c) => {
 
   const results = await db.searchMemoryFiles(c.env.DB, user.id, query, path);
   return c.json({ results });
+});
+
+/**
+ * GET /api/me/memory/export
+ * Returns a portable bundle of all the user's memory files (path + content).
+ * Lets users move memory between environments (e.g. dev → prod).
+ */
+orchestratorRouter.get('/memory/export', async (c) => {
+  const user = c.get('user');
+  const files = await db.exportMemoryFiles(c.env.DB, user.id);
+  const bundle: MemoryExportBundle = {
+    version: 1,
+    exportedAt: new Date().toISOString(),
+    count: files.length,
+    files,
+  };
+  return c.json(bundle);
+});
+
+/**
+ * POST /api/me/memory/import
+ * Writes a batch of memory files (merge — same-path files are overwritten).
+ * Invalid/empty files are skipped and reported rather than failing the import.
+ */
+orchestratorRouter.post('/memory/import', zValidator('json', importMemorySchema), async (c) => {
+  const user = c.get('user');
+  const body = c.req.valid('json');
+
+  const result = await db.importMemoryFiles(c.env.DB, user.id, body.files);
+  return c.json(result);
 });
 
 // ─── Notification Queue Routes (Phase C) ────────────────────────────────

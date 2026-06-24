@@ -1,6 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from './client';
-import type { OrchestratorIdentity, MemoryFile, MemoryFileListing, MemoryFileSearchResult, AgentSession, MailboxMessage, UserNotificationPreference, UserIdentityLink, UserTelegramConfig } from './types';
+import type { OrchestratorIdentity, MemoryFile, MemoryFileListing, MemoryFileSearchResult, MemoryExportBundle, MemoryImportResult, AgentSession, MailboxMessage, UserNotificationPreference, UserIdentityLink, UserTelegramConfig } from './types';
 
 export const orchestratorKeys = {
   all: ['orchestrator'] as const,
@@ -214,6 +214,28 @@ export function useDeleteMemoryFile() {
   return useMutation({
     mutationFn: (path: string) =>
       api.delete<{ success: boolean; deleted: number }>(`/me/memory?path=${encodeURIComponent(path)}`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({
+        queryKey: [...orchestratorKeys.all, 'memory-files'],
+      });
+    },
+  });
+}
+
+/** Fetches a portable bundle of all memory files (for download/backup). */
+export function useExportMemory() {
+  return useMutation({
+    mutationFn: () => api.get<MemoryExportBundle>('/me/memory/export'),
+  });
+}
+
+/** Writes a batch of memory files (merge semantics — same-path files overwritten). */
+export function useImportMemory() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (files: { path: string; content: string }[]) =>
+      api.post<MemoryImportResult>('/me/memory/import', { files }),
     onSuccess: () => {
       queryClient.invalidateQueries({
         queryKey: [...orchestratorKeys.all, 'memory-files'],

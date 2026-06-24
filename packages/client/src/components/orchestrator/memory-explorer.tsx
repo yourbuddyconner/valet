@@ -6,7 +6,11 @@ import {
   useMemoryFile,
   useSearchMemoryFiles,
   useDeleteMemoryFile,
+  useExportMemory,
+  useImportMemory,
 } from '@/api/orchestrator';
+import { toastSuccess, toastError, toastWarning } from '@/hooks/use-toast';
+import { extractImportFiles } from './memory-explorer-utils';
 import type { MemoryFileListing } from '@/api/types';
 
 // ─── Directory color themes ─────────────────────────────────────────────────
@@ -155,9 +159,68 @@ export function MemoryExplorer({ files }: { files: MemoryFileListing[] }) {
   const searchQuery = useSearchMemoryFiles(debouncedSearch);
   const isSearching = debouncedSearch.length >= 2;
 
+  const exportMemory = useExportMemory();
+  const importMemory = useImportMemory();
+  const fileInputRef = React.useRef<HTMLInputElement>(null);
+
   const tree = React.useMemo(() => buildTree(files), [files]);
   const totalSize = React.useMemo(() => files.reduce((s, f) => s + f.size, 0), [files]);
   const pinnedCount = React.useMemo(() => files.filter((f) => f.pinned).length, [files]);
+
+  const handleExport = async () => {
+    try {
+      const bundle = await exportMemory.mutateAsync();
+      if (bundle.count === 0) {
+        toastWarning('Nothing to export', 'No memory files yet.');
+        return;
+      }
+      const blob = new Blob([JSON.stringify(bundle, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `valet-memory-${new Date().toISOString().slice(0, 10)}.json`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      toastSuccess('Memory exported', `${bundle.count} ${bundle.count === 1 ? 'file' : 'files'} downloaded.`);
+    } catch {
+      toastError('Export failed', 'Could not export memory files.');
+    }
+  };
+
+  const handleImportFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const input = e.target;
+    const file = input.files?.[0];
+    // Reset so re-selecting the same file fires onChange again.
+    input.value = '';
+    if (!file) return;
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(await file.text());
+    } catch {
+      toastError('Invalid file', 'Could not parse the selected JSON file.');
+      return;
+    }
+
+    const toImport = extractImportFiles(parsed);
+    if (toImport.length === 0) {
+      toastError('Invalid file', 'No valid memory files found in the bundle.');
+      return;
+    }
+
+    try {
+      const result = await importMemory.mutateAsync(toImport);
+      const skippedNote = result.skipped.length > 0 ? `, ${result.skipped.length} skipped` : '';
+      toastSuccess(
+        'Memory imported',
+        `${result.imported} ${result.imported === 1 ? 'file' : 'files'} imported${skippedNote}.`,
+      );
+    } catch {
+      toastError('Import failed', 'Could not import the memory bundle.');
+    }
+  };
 
   // Initialize all directories as expanded on first render
   React.useEffect(() => {
@@ -175,12 +238,19 @@ export function MemoryExplorer({ files }: { files: MemoryFileListing[] }) {
     });
   };
 
-  if (files.length === 0) {
-    return <EmptyState />;
-  }
+  const isEmpty = files.length === 0;
 
   return (
     <div className="overflow-hidden rounded-lg border border-neutral-200 bg-white dark:border-neutral-800 dark:bg-surface-1">
+      {/* Hidden file input drives the Import button */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="application/json,.json"
+        className="hidden"
+        onChange={handleImportFile}
+      />
+
       {/* Header */}
       <div className="border-b border-neutral-100 px-4 py-3 dark:border-neutral-800">
         <div className="flex items-center justify-between gap-3">
@@ -188,71 +258,105 @@ export function MemoryExplorer({ files }: { files: MemoryFileListing[] }) {
             <span className="text-sm font-medium text-neutral-900 dark:text-neutral-100">
               Memory
             </span>
-            <div className="flex items-center gap-2 text-2xs text-neutral-400 dark:text-neutral-500">
-              <span className="font-mono tabular-nums">{files.length} files</span>
-              <span className="text-neutral-300 dark:text-neutral-700">/</span>
-              <span className="font-mono tabular-nums">{formatSize(totalSize)}</span>
-              {pinnedCount > 0 && (
-                <>
-                  <span className="text-neutral-300 dark:text-neutral-700">/</span>
-                  <span className="flex items-center gap-1">
-                    <PinIcon className="h-2.5 w-2.5 text-violet-500 dark:text-violet-400" />
-                    <span className="font-mono tabular-nums">{pinnedCount}</span>
-                  </span>
-                </>
-              )}
-            </div>
+            {!isEmpty && (
+              <div className="flex items-center gap-2 text-2xs text-neutral-400 dark:text-neutral-500">
+                <span className="font-mono tabular-nums">{files.length} files</span>
+                <span className="text-neutral-300 dark:text-neutral-700">/</span>
+                <span className="font-mono tabular-nums">{formatSize(totalSize)}</span>
+                {pinnedCount > 0 && (
+                  <>
+                    <span className="text-neutral-300 dark:text-neutral-700">/</span>
+                    <span className="flex items-center gap-1">
+                      <PinIcon className="h-2.5 w-2.5 text-violet-500 dark:text-violet-400" />
+                      <span className="font-mono tabular-nums">{pinnedCount}</span>
+                    </span>
+                  </>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* Import / Export actions */}
+          <div className="flex items-center gap-1">
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={importMemory.isPending}
+              className="flex items-center gap-1.5 rounded-md px-2 py-1 text-2xs font-medium text-neutral-500 transition-colors hover:bg-neutral-100 hover:text-neutral-700 disabled:cursor-not-allowed disabled:opacity-50 dark:text-neutral-400 dark:hover:bg-neutral-800 dark:hover:text-neutral-200"
+              title="Import memory from a JSON file"
+            >
+              <UploadIcon className="h-3 w-3" />
+              {importMemory.isPending ? 'Importing…' : 'Import'}
+            </button>
+            <button
+              type="button"
+              onClick={handleExport}
+              disabled={isEmpty || exportMemory.isPending}
+              className="flex items-center gap-1.5 rounded-md px-2 py-1 text-2xs font-medium text-neutral-500 transition-colors hover:bg-neutral-100 hover:text-neutral-700 disabled:cursor-not-allowed disabled:opacity-50 dark:text-neutral-400 dark:hover:bg-neutral-800 dark:hover:text-neutral-200"
+              title={isEmpty ? 'No memory files to export' : 'Export all memory as a JSON file'}
+            >
+              <DownloadIcon className="h-3 w-3" />
+              {exportMemory.isPending ? 'Exporting…' : 'Export'}
+            </button>
           </div>
         </div>
 
         {/* Search */}
-        <div className="relative mt-2.5">
-          <SearchIcon className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-neutral-300 dark:text-neutral-600" />
-          <input
-            type="text"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search memory files..."
-            className="w-full rounded-md border border-neutral-200 bg-neutral-50 py-1.5 pl-8 pr-3 text-xs text-neutral-900 placeholder:text-neutral-400 focus:border-accent focus:bg-white focus:outline-none focus:ring-1 focus:ring-accent/50 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100 dark:placeholder:text-neutral-600 dark:focus:bg-surface-0"
-          />
-          {search && (
-            <button
-              onClick={() => setSearch('')}
-              className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-0.5 text-neutral-400 hover:text-neutral-600 dark:text-neutral-500 dark:hover:text-neutral-300"
-            >
-              <XIcon className="h-3 w-3" />
-            </button>
-          )}
-        </div>
-      </div>
-
-      {/* Content */}
-      <div className="max-h-[480px] overflow-y-auto">
-        {isSearching ? (
-          <SearchResults
-            results={searchQuery.data ?? []}
-            isLoading={searchQuery.isLoading}
-            query={debouncedSearch}
-            previewPath={previewPath}
-            onTogglePreview={(path) => setPreviewPath(previewPath === path ? null : path)}
-          />
-        ) : (
-          <div className="divide-y divide-neutral-100 dark:divide-neutral-800/80">
-            {tree.map((node) => (
-              <TopLevelDir
-                key={node.path}
-                node={node}
-                expandedDirs={expandedDirs ?? new Set()}
-                onToggleDir={toggleDir}
-                previewPath={previewPath}
-                onTogglePreview={(path) =>
-                  setPreviewPath(previewPath === path ? null : path)
-                }
-              />
-            ))}
+        {!isEmpty && (
+          <div className="relative mt-2.5">
+            <SearchIcon className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-neutral-300 dark:text-neutral-600" />
+            <input
+              type="text"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search memory files..."
+              className="w-full rounded-md border border-neutral-200 bg-neutral-50 py-1.5 pl-8 pr-3 text-xs text-neutral-900 placeholder:text-neutral-400 focus:border-accent focus:bg-white focus:outline-none focus:ring-1 focus:ring-accent/50 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100 dark:placeholder:text-neutral-600 dark:focus:bg-surface-0"
+            />
+            {search && (
+              <button
+                onClick={() => setSearch('')}
+                className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-0.5 text-neutral-400 hover:text-neutral-600 dark:text-neutral-500 dark:hover:text-neutral-300"
+              >
+                <XIcon className="h-3 w-3" />
+              </button>
+            )}
           </div>
         )}
       </div>
+
+      {/* Content */}
+      {isEmpty ? (
+        <div className="p-3">
+          <EmptyState />
+        </div>
+      ) : (
+        <div className="max-h-[480px] overflow-y-auto">
+          {isSearching ? (
+            <SearchResults
+              results={searchQuery.data ?? []}
+              isLoading={searchQuery.isLoading}
+              query={debouncedSearch}
+              previewPath={previewPath}
+              onTogglePreview={(path) => setPreviewPath(previewPath === path ? null : path)}
+            />
+          ) : (
+            <div className="divide-y divide-neutral-100 dark:divide-neutral-800/80">
+              {tree.map((node) => (
+                <TopLevelDir
+                  key={node.path}
+                  node={node}
+                  expandedDirs={expandedDirs ?? new Set()}
+                  onToggleDir={toggleDir}
+                  previewPath={previewPath}
+                  onTogglePreview={(path) =>
+                    setPreviewPath(previewPath === path ? null : path)
+                  }
+                />
+              ))}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -746,6 +850,22 @@ function TrashIcon({ className }: { className?: string }) {
   return (
     <svg viewBox="0 0 16 16" fill="none" className={className}>
       <path d="M3 4.5h10M6.5 4.5V3a1 1 0 011-1h1a1 1 0 011 1v1.5M5 4.5v8a1 1 0 001 1h4a1 1 0 001-1v-8" stroke="currentColor" strokeWidth="1.25" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function DownloadIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 16 16" fill="none" className={className}>
+      <path d="M8 2.5v7m0 0L5 6.5m3 3l3-3M3 12.5h10" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function UploadIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 16 16" fill="none" className={className}>
+      <path d="M8 9.5v-7m0 0L5 5.5m3-3l3 3M3 12.5h10" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
 }
