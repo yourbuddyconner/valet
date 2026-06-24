@@ -10,7 +10,7 @@ export function createDefaultSetNode(id: string): SetNode {
   return { id, type: 'set', values: {} };
 }
 
-export const setNodeDocs: NodeDocs = {
+export const setNodeDocs: NodeDocs<SetNode> = {
   label: 'Set values',
   description: 'Create values for downstream nodes',
   longDescription: `Constructs a value and emits it as this node's output. The most common

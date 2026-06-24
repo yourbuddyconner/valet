@@ -15,7 +15,7 @@ export function createDefaultLlmNode(id: string): LlmNode {
   return { id, type: 'llm', prompt: '' };
 }
 
-export const llmNodeDocs: NodeDocs = {
+export const llmNodeDocs: NodeDocs<LlmNode> = {
   label: 'LLM',
   description: 'Generate or transform text with a model',
   longDescription: `Calls a chat model (Anthropic, OpenAI, or Google) with the rendered prompt

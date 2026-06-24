@@ -34,7 +34,11 @@ export function InfoTooltip({
               'inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-full border border-neutral-300 text-[10px] font-semibold leading-none text-neutral-500 transition hover:border-neutral-500 hover:text-neutral-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 dark:border-neutral-600 dark:text-neutral-400 dark:hover:border-neutral-400 dark:hover:text-neutral-200',
               className,
             )}
-            onClick={(event) => event.preventDefault()}
+            // stopPropagation — not preventDefault — because this button is
+            // rendered inside <label> wrappers (LabelText, CheckboxField). A
+            // bubbled click would fire the label's native click-to-activate
+            // and toggle the labeled checkbox or focus the labeled input.
+            onClick={(event) => event.stopPropagation()}
           >
             i
           </button>

@@ -37,7 +37,7 @@ export function createDefaultForeachNode(id: string): ForeachNode {
   };
 }
 
-export const foreachNodeDocs: NodeDocs = {
+export const foreachNodeDocs: NodeDocs<ForeachNode> = {
   label: 'For each',
   description: 'Run one body node for every item',
   longDescription: `Iterates a list and runs the body node once per element. The body is a

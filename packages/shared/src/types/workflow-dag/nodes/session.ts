@@ -42,7 +42,7 @@ export function createDefaultSessionNode(id: string): SessionNode {
   return { id, type: 'session', mode: 'start', prompt: '', workspace: '' };
 }
 
-export const sessionNodeDocs: NodeDocs = {
+export const sessionNodeDocs: NodeDocs<SessionNode> = {
   label: 'Session',
   description: 'Start or prompt a coding session',
   longDescription: `Spawns a fresh agent session (mode \`start\`) or sends a prompt to an
@@ -62,6 +62,9 @@ fires the prompt and moves on without seeing the response.`,
   fields: {
     mode: {
       help: 'start = create a new session for this workflow run. prompt = send a prompt to a session that already exists.',
+    },
+    prompt: {
+      help: 'What to send the session. In start mode this is the opening message; in prompt mode it\'s sent on the chosen thread. Supports template expressions for upstream node outputs.',
     },
     workspace: {
       help: 'Workspace name (start mode only). A new sandbox is provisioned for this workspace.',

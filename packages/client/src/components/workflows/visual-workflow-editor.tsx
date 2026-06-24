@@ -17,7 +17,7 @@ import type {
   WorkflowInputDefinition,
   WorkflowNode,
 } from '@valet/shared';
-import { NODE_DOCS } from '@valet/shared';
+import { createDefaultWorkflowNode, NODE_DOCS } from '@valet/shared';
 import type {
   Connection,
   Edge as ReactFlowEdge,
@@ -101,7 +101,6 @@ import {
   definitionToFlow,
   filterNodePaletteOptions,
   flowToDefinition,
-  getDefaultNodeForType,
   jsonSchemaToWorkflowInputDefinitions,
   LAYOUT_COLUMN_GAP,
   NODE_DESCRIPTIONS,
@@ -581,7 +580,7 @@ function VisualWorkflowEditorInner({
       setNodes((currentNodes) => {
         const id = createNodeId(type, currentNodes.map((n) => n.id));
         computedId = id;
-        const node = getDefaultNodeForType(type, id);
+        const node = createDefaultWorkflowNode(type, id);
         const position = computeNextNodePosition(currentNodes, anchor);
         const flowNode: WorkflowFlowNode = {
           id,
@@ -621,7 +620,7 @@ function VisualWorkflowEditorInner({
       setNodes((currentNodes) => {
         const id = createNodeId(type, currentNodes.map((n) => n.id));
         computedId = id;
-        const node = getDefaultNodeForType(type, id);
+        const node = createDefaultWorkflowNode(type, id);
         const position = computeNextNodePosition(currentNodes, anchor);
         const flowNode: WorkflowFlowNode = {
           id,
@@ -2605,8 +2604,16 @@ function LabelText({
   /** Optional clarification rendered as an info-icon tooltip after the label. */
   help?: string;
 }) {
+  // Only switch to inline-flex when there's an icon to align next to the
+  // text — otherwise keep the bare <label> layout so unrelated labels
+  // across the inspector don't shift baseline alignment.
   return (
-    <label className="inline-flex items-center gap-1.5 text-xs font-medium text-neutral-700 dark:text-neutral-300">
+    <label
+      className={cn(
+        'text-xs font-medium text-neutral-700 dark:text-neutral-300',
+        help && 'inline-flex items-center gap-1.5',
+      )}
+    >
       {children}
       {help && <InfoTooltip help={help} />}
     </label>
@@ -3045,7 +3052,7 @@ function ForeachBodyField({
 
   function updateBodyType(type: ForeachBodyNodeType) {
     if (type === value.type) return;
-    const next = getDefaultNodeForType(type, value.id || 'body');
+    const next = createDefaultWorkflowNode(type, value.id || 'body');
     if (isForeachBodyNode(next)) onChange(next);
   }
 

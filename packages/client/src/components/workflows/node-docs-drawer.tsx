@@ -1,9 +1,9 @@
 import * as React from 'react';
-import { NODE_DOCS, type DagNodeType, type NodeDocs } from '@valet/shared';
+import { NODE_DOCS, type DagNodeType, type NodeDocs, type NodeFieldDoc } from '@valet/shared';
 import { Button } from '@/components/ui/button';
 import { SearchInput } from '@/components/ui/search-input';
 import { cn } from '@/lib/cn';
-import { MarkdownContent } from '@/components/chat/markdown/markdown-content';
+import { DeferredMarkdownContent } from '@/components/chat/markdown/deferred-markdown-content';
 
 interface NodeDocsDrawerProps {
   open: boolean;
@@ -94,6 +94,9 @@ export function NodeDocsDrawer({ open, onClose, focusType }: NodeDocsDrawerProps
           value={query}
           onChange={setQuery}
           placeholder="Search node types, fields…"
+          // In-memory filter over a stable 11-entry record. No async work
+          // to debounce — at the default 300ms the search feels broken.
+          debounceMs={0}
         />
       </div>
       <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-3">
@@ -122,8 +125,13 @@ function matchesQuery(type: DagNodeType, docs: NodeDocs, q: string): boolean {
   if (docs.label.toLowerCase().includes(q)) return true;
   if (docs.description.toLowerCase().includes(q)) return true;
   if (docs.longDescription.toLowerCase().includes(q)) return true;
+  // NodeDocs (when not specialized to a TNode) has fields typed against
+  // the generic key set, which collapses to `{}` for the bare `NodeDocs`
+  // alias the drawer holds. Cast locally to the shape we actually want
+  // when iterating — the keys are sparse strings, the values are
+  // NodeFieldDoc.
   if (docs.fields) {
-    for (const [field, help] of Object.entries(docs.fields)) {
+    for (const [field, help] of Object.entries(docs.fields as Record<string, NodeFieldDoc | undefined>)) {
       if (field.toLowerCase().includes(q)) return true;
       if (help?.help.toLowerCase().includes(q)) return true;
     }
@@ -140,7 +148,11 @@ interface NodeDocsSectionProps {
 
 const NodeDocsSection = React.forwardRef<HTMLElement, NodeDocsSectionProps>(
   ({ type, docs, highlighted }, ref) => {
-    const fieldEntries = docs.fields ? Object.entries(docs.fields) : [];
+    // See matchesQuery for why we cast here — the bare NodeDocs alias has
+    // generic keys that collapse to never.
+    const fieldEntries = docs.fields
+      ? Object.entries(docs.fields as Record<string, NodeFieldDoc | undefined>)
+      : [];
     return (
       <section
         ref={ref}
@@ -170,7 +182,7 @@ const NodeDocsSection = React.forwardRef<HTMLElement, NodeDocsSectionProps>(
         )}
 
         <div className="prose prose-sm max-w-none text-xs text-neutral-700 dark:prose-invert dark:text-neutral-300">
-          <MarkdownContent content={docs.longDescription} />
+          <DeferredMarkdownContent content={docs.longDescription} />
         </div>
 
         {fieldEntries.length > 0 && (

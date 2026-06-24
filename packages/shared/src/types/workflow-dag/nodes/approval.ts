@@ -14,7 +14,7 @@ export function createDefaultApprovalNode(id: string): ApprovalNode {
   return { id, type: 'approval', prompt: '' };
 }
 
-export const approvalNodeDocs: NodeDocs = {
+export const approvalNodeDocs: NodeDocs<ApprovalNode> = {
   label: 'Approval',
   description: 'Pause for human approval',
   longDescription: `Parks the workflow until a human approves or denies. Writes a row to

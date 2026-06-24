@@ -15,7 +15,7 @@ export function createDefaultToolNode(id: string): ToolNode {
   return { id, type: 'tool', service: '', action: '', params: {} };
 }
 
-export const toolNodeDocs: NodeDocs = {
+export const toolNodeDocs: NodeDocs<ToolNode> = {
   label: 'Tool',
   description: 'Call an integration action',
   longDescription: `Invokes one action on one integrated service — sending a Slack message,

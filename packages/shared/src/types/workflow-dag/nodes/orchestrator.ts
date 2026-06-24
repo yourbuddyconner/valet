@@ -16,7 +16,7 @@ export function createDefaultOrchestratorNode(id: string): OrchestratorNode {
   return { id, type: 'orchestrator', prompt: '' };
 }
 
-export const orchestratorNodeDocs: NodeDocs = {
+export const orchestratorNodeDocs: NodeDocs<OrchestratorNode> = {
   label: 'Orchestrator',
   description: 'Ask the user orchestrator to do work',
   longDescription: `Sends a prompt to the user's orchestrator (the long-lived "Jarvis"

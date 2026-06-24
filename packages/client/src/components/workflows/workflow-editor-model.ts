@@ -1,5 +1,4 @@
 import {
-  createDefaultWorkflowNode,
   NODE_DOCS,
   type AddableDagNodeType,
   type ApprovalNode,
@@ -478,9 +477,6 @@ export function createDefaultWorkflowDefinition(): WorkflowDefinition {
   };
 }
 
-export function getDefaultNodeForType(type: DagNodeType, id: string): WorkflowNode {
-  return createDefaultWorkflowNode(type, id);
-}
 
 export function normalizeWorkflowDefinitionForEditor(definition: WorkflowDefinition): WorkflowDefinition {
   if (definition.nodes.some((node) => node.type === 'trigger')) return definition;

@@ -12,7 +12,7 @@ export function createDefaultStopNode(id: string): StopNode {
   return { id, type: 'stop', outcome: 'success' };
 }
 
-export const stopNodeDocs: NodeDocs = {
+export const stopNodeDocs: NodeDocs<StopNode> = {
   label: 'Stop',
   description: 'Finish the workflow',
   longDescription: `Terminates the run. The workflow's final status is the \`outcome\` of the

@@ -11,7 +11,7 @@ export function createDefaultWaitNode(id: string): WaitNode {
   return { id, type: 'wait', mode: 'duration', duration: '5m' };
 }
 
-export const waitNodeDocs: NodeDocs = {
+export const waitNodeDocs: NodeDocs<WaitNode> = {
   label: 'Wait',
   description: 'Pause for a fixed duration',
   longDescription: `Sleeps the workflow for the specified duration before continuing. The

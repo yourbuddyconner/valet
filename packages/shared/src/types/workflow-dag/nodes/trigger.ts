@@ -11,7 +11,7 @@ export function createDefaultTriggerNode(id: string): TriggerNode {
   return { id, type: 'trigger' };
 }
 
-export const triggerNodeDocs: NodeDocs = {
+export const triggerNodeDocs: NodeDocs<TriggerNode> = {
   label: 'Trigger',
   description: 'Where the workflow starts and what data it receives',
   longDescription: `Every workflow has exactly one trigger node — it's the entrypoint. The trigger

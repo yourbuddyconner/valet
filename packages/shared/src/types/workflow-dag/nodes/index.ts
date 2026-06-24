@@ -106,10 +106,15 @@ export type AddableDagNodeType = Exclude<DagNodeType, 'trigger'>;
 
 // ─── Docs registry ───────────────────────────────────────────────────────────
 //
-// Record<DagNodeType, NodeDocs> — adding a new node type without an entry
-// is a TypeScript error, which is the point.
+// Mapped type instead of flat Record<DagNodeType, NodeDocs> so each entry
+// retains its NodeDocs<SpecificNode> generic. Adding a new node type
+// without an entry is still a TypeScript error; AND a typo in a docs
+// field name (or a renamed interface field) is now also a type error,
+// since NodeDocs<TNode>.fields keys are constrained to keyof TNode.
 
-export const NODE_DOCS: Record<DagNodeType, NodeDocs> = {
+export type NodeDocsRegistry = { [K in DagNodeType]: NodeDocs<Extract<WorkflowNode, { type: K }>> };
+
+export const NODE_DOCS: NodeDocsRegistry = {
   trigger: triggerNodeDocs,
   llm: llmNodeDocs,
   tool: toolNodeDocs,
@@ -136,9 +141,7 @@ const NODE_DEFAULT_FACTORIES: { [K in DagNodeType]: (id: string) => Extract<Work
   set: createDefaultSetNode,
   stop: createDefaultStopNode,
   orchestrator: createDefaultOrchestratorNode,
-  // SessionNode is itself a union; the factory returns the StartSessionNode
-  // branch so cast through the wider WorkflowNode 'session' member.
-  session: createDefaultSessionNode as (id: string) => Extract<WorkflowNode, { type: 'session' }>,
+  session: createDefaultSessionNode,
 };
 
 export function createDefaultWorkflowNode<K extends DagNodeType>(

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { WorkflowDefinition } from '@valet/shared';
+import { createDefaultWorkflowNode, type WorkflowDefinition } from '@valet/shared';
 import {
   applyDefaultDataFlowForConnection,
   buildWorkflowEdgeInspection,
@@ -12,7 +12,6 @@ import {
   filterNodePaletteOptions,
   formatWorkflowTemplatePath,
   flowToDefinition,
-  getDefaultNodeForType,
   normalizeWorkflowDefinitionForEditor,
   removeWorkflowFlowNode,
   NODE_PALETTE_LIST_CLASSNAME,
@@ -354,16 +353,16 @@ describe('workflow editor model', () => {
 
   it('creates default node payloads for every dag/v1 node type', () => {
     expect(createDefaultWorkflowDefinition().nodes[0]).toMatchObject({ id: 'trigger', type: 'trigger' });
-    expect(getDefaultNodeForType('llm', 'llm-1')).toMatchObject({ id: 'llm-1', type: 'llm', prompt: '' });
-    expect(getDefaultNodeForType('tool', 'tool-1')).toMatchObject({ id: 'tool-1', type: 'tool', service: '', action: '', params: {} });
-    expect(getDefaultNodeForType('if', 'if-1')).toMatchObject({ id: 'if-1', type: 'if', conditions: [] });
-    expect(getDefaultNodeForType('approval', 'approval-1')).toMatchObject({ id: 'approval-1', type: 'approval', prompt: '' });
-    expect(getDefaultNodeForType('wait', 'wait-1')).toMatchObject({ id: 'wait-1', type: 'wait', mode: 'duration', duration: '5m' });
-    expect(getDefaultNodeForType('set', 'set-1')).toMatchObject({ id: 'set-1', type: 'set', values: {} });
-    expect(getDefaultNodeForType('foreach', 'foreach-1')).toMatchObject({ id: 'foreach-1', type: 'foreach', items: '', body: { type: 'set' } });
-    expect(getDefaultNodeForType('orchestrator', 'orchestrator-1')).toMatchObject({ id: 'orchestrator-1', type: 'orchestrator', prompt: '' });
-    expect(getDefaultNodeForType('session', 'session-1')).toMatchObject({ id: 'session-1', type: 'session', mode: 'start', prompt: '', workspace: '' });
-    expect(getDefaultNodeForType('stop', 'stop-1')).toMatchObject({ id: 'stop-1', type: 'stop', outcome: 'success' });
+    expect(createDefaultWorkflowNode('llm', 'llm-1')).toMatchObject({ id: 'llm-1', type: 'llm', prompt: '' });
+    expect(createDefaultWorkflowNode('tool', 'tool-1')).toMatchObject({ id: 'tool-1', type: 'tool', service: '', action: '', params: {} });
+    expect(createDefaultWorkflowNode('if', 'if-1')).toMatchObject({ id: 'if-1', type: 'if', conditions: [] });
+    expect(createDefaultWorkflowNode('approval', 'approval-1')).toMatchObject({ id: 'approval-1', type: 'approval', prompt: '' });
+    expect(createDefaultWorkflowNode('wait', 'wait-1')).toMatchObject({ id: 'wait-1', type: 'wait', mode: 'duration', duration: '5m' });
+    expect(createDefaultWorkflowNode('set', 'set-1')).toMatchObject({ id: 'set-1', type: 'set', values: {} });
+    expect(createDefaultWorkflowNode('foreach', 'foreach-1')).toMatchObject({ id: 'foreach-1', type: 'foreach', items: '', body: { type: 'set' } });
+    expect(createDefaultWorkflowNode('orchestrator', 'orchestrator-1')).toMatchObject({ id: 'orchestrator-1', type: 'orchestrator', prompt: '' });
+    expect(createDefaultWorkflowNode('session', 'session-1')).toMatchObject({ id: 'session-1', type: 'session', mode: 'start', prompt: '', workspace: '' });
+    expect(createDefaultWorkflowNode('stop', 'stop-1')).toMatchObject({ id: 'stop-1', type: 'stop', outcome: 'success' });
   });
 
   it('normalizes legacy definitions with a locked trigger source connected to root nodes', () => {

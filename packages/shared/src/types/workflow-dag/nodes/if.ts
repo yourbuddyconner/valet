@@ -18,7 +18,7 @@ export function createDefaultIfNode(id: string): IfNode {
   return { id, type: 'if', conditions: [] };
 }
 
-export const ifNodeDocs: NodeDocs = {
+export const ifNodeDocs: NodeDocs<IfNode> = {
   label: 'If',
   description: 'Branch based on conditions',
   longDescription: `Splits the DAG along a true/false fork. Each condition compares a template
