@@ -237,6 +237,79 @@ function truncate(text: string, max: number): string {
   return collapsed.slice(0, max) + '…';
 }
 
+// ─── Output Schemas (shared) ────────────────────────────────────────────────
+
+const gmailHeadersSchema = {
+  type: 'object',
+  properties: {
+    from: { type: ['string', 'null'] },
+    to: { type: ['string', 'null'] },
+    cc: { type: ['string', 'null'] },
+    bcc: { type: ['string', 'null'] },
+    subject: { type: ['string', 'null'] },
+    date: { type: ['string', 'null'] },
+    messageIdHeader: { type: ['string', 'null'], description: 'The Message-Id RFC header (not the Gmail id)' },
+  },
+} satisfies Record<string, unknown>;
+
+const gmailMessageListItemSchema = {
+  type: 'object',
+  properties: {
+    id: { type: 'string' },
+    threadId: { type: 'string' },
+    labelIds: { type: 'array', items: { type: 'string' } },
+    snippet: { type: 'string' },
+    from: { type: ['string', 'null'] },
+    to: { type: ['string', 'null'] },
+    subject: { type: ['string', 'null'] },
+    date: { type: ['string', 'null'] },
+  },
+} satisfies Record<string, unknown>;
+
+const gmailDraftListItemSchema = {
+  type: 'object',
+  properties: {
+    draftId: { type: 'string' },
+    messageId: { type: ['string', 'null'] },
+    threadId: { type: ['string', 'null'] },
+    snippet: { type: 'string' },
+    to: { type: ['string', 'null'] },
+    cc: { type: ['string', 'null'] },
+    subject: { type: ['string', 'null'] },
+    date: { type: ['string', 'null'] },
+  },
+} satisfies Record<string, unknown>;
+
+const gmailAttachmentSchema = {
+  type: 'object',
+  properties: {
+    attachmentId: { type: 'string' },
+    filename: { type: 'string' },
+    mimeType: { type: 'string' },
+    size: { type: 'number' },
+  },
+} satisfies Record<string, unknown>;
+
+const gmailTriageMessageSchema = {
+  type: 'object',
+  properties: {
+    id: { type: 'string' },
+    threadId: { type: 'string' },
+    from: { type: ['string', 'null'] },
+    domain: { type: ['string', 'null'], description: 'Extracted sender domain' },
+    to: { type: ['string', 'null'] },
+    subject: { type: 'string' },
+    date: { type: ['string', 'null'] },
+    snippet: { type: 'string' },
+    bodyExcerpt: { type: 'string', description: 'Truncated to bodyExcerptLength' },
+    labels: { type: 'array', items: { type: 'string' } },
+    isNewsletter: { type: 'boolean', description: 'True when message has List-Unsubscribe or List-Id headers' },
+    containsMeetingReference: { type: 'boolean' },
+    containsQuestion: { type: 'boolean' },
+    actionRequested: { type: 'boolean' },
+  },
+} satisfies Record<string, unknown>;
+
 // ─── Action Definitions ───────────────────────────────────────────────────────
 
 const markdownBodyDescription =
@@ -263,6 +336,17 @@ const sendEmailDef: ActionDefinition = {
         'Optional Gmail message ID to reply to. When set, the new email is threaded with the original and uses In-Reply-To/References headers.',
       ),
   }),
+  outputSchema: {
+    type: 'object',
+    properties: {
+      id: { type: 'string', description: 'Gmail message ID of the sent email' },
+      threadId: { type: 'string' },
+      labelIds: { type: 'array', items: { type: 'string' } },
+      to: { type: 'array', items: { type: 'string' } },
+      subject: { type: 'string' },
+      message: { type: 'string', description: 'Human-readable confirmation' },
+    },
+  },
 };
 
 const listMessagesDef: ActionDefinition = {
@@ -298,6 +382,14 @@ const listMessagesDef: ActionDefinition = {
       .default(false)
       .describe('If true, also include messages from SPAM and TRASH.'),
   }),
+  outputSchema: {
+    type: 'object',
+    properties: {
+      messages: { type: 'array', items: gmailMessageListItemSchema },
+      resultSizeEstimate: { type: 'number', description: 'Gmail-reported total — may exceed messages.length when there are more pages' },
+      nextPageToken: { type: ['string', 'null'] },
+    },
+  },
 };
 
 const getMessageDef: ActionDefinition = {
@@ -316,6 +408,28 @@ const getMessageDef: ActionDefinition = {
         '"full" returns headers + body + attachments; "metadata" returns headers only; "minimal" returns just labels/snippet.',
       ),
   }),
+  outputSchema: {
+    type: 'object',
+    description: 'Shape depends on format: minimal omits headers/body/attachments; metadata adds headers; full adds body + attachments.',
+    properties: {
+      id: { type: 'string' },
+      threadId: { type: 'string' },
+      labelIds: { type: 'array', items: { type: 'string' } },
+      snippet: { type: 'string' },
+      historyId: { type: 'string' },
+      internalDate: { type: 'string' },
+      sizeEstimate: { type: 'number' },
+      headers: gmailHeadersSchema,
+      body: {
+        type: 'object',
+        properties: {
+          text: { type: 'string' },
+          html: { type: 'string' },
+        },
+      },
+      attachments: { type: 'array', items: gmailAttachmentSchema },
+    },
+  },
 };
 
 const modifyLabelsDef: ActionDefinition = {
@@ -346,6 +460,15 @@ const modifyLabelsDef: ActionDefinition = {
         (v.removeLabelIds && v.removeLabelIds.length > 0),
       { message: 'Provide at least one of addLabelIds or removeLabelIds.' },
     ),
+  outputSchema: {
+    type: 'object',
+    properties: {
+      id: { type: 'string' },
+      threadId: { type: 'string' },
+      labelIds: { type: 'array', items: { type: 'string' } },
+      message: { type: 'string' },
+    },
+  },
 };
 
 const trashMessageDef: ActionDefinition = {
@@ -357,6 +480,15 @@ const trashMessageDef: ActionDefinition = {
   params: z.object({
     messageId: z.string().describe('The Gmail message ID to move to Trash.'),
   }),
+  outputSchema: {
+    type: 'object',
+    properties: {
+      id: { type: 'string' },
+      threadId: { type: 'string' },
+      labelIds: { type: 'array', items: { type: 'string' } },
+      message: { type: 'string' },
+    },
+  },
 };
 
 const createDraftDef: ActionDefinition = {
@@ -380,6 +512,17 @@ const createDraftDef: ActionDefinition = {
         'Optional Gmail message ID to draft a reply to. The draft is threaded with the original.',
       ),
   }),
+  outputSchema: {
+    type: 'object',
+    properties: {
+      draftId: { type: 'string' },
+      messageId: { type: ['string', 'null'] },
+      threadId: { type: ['string', 'null'] },
+      to: { type: 'array', items: { type: 'string' } },
+      subject: { type: 'string' },
+      message: { type: 'string' },
+    },
+  },
 };
 
 const listDraftsDef: ActionDefinition = {
@@ -402,6 +545,14 @@ const listDraftsDef: ActionDefinition = {
       .optional()
       .describe('Optional Gmail search query to filter drafts (e.g. "subject:proposal").'),
   }),
+  outputSchema: {
+    type: 'object',
+    properties: {
+      drafts: { type: 'array', items: gmailDraftListItemSchema },
+      resultSizeEstimate: { type: 'number' },
+      nextPageToken: { type: ['string', 'null'] },
+    },
+  },
 };
 
 const getDraftDef: ActionDefinition = {
@@ -413,6 +564,24 @@ const getDraftDef: ActionDefinition = {
   params: z.object({
     draftId: z.string().describe('The Gmail draft ID, typically from list_drafts results.'),
   }),
+  outputSchema: {
+    type: 'object',
+    properties: {
+      draftId: { type: 'string' },
+      messageId: { type: ['string', 'null'] },
+      threadId: { type: ['string', 'null'] },
+      labelIds: { type: 'array', items: { type: 'string' } },
+      snippet: { type: 'string' },
+      headers: gmailHeadersSchema,
+      body: {
+        type: 'object',
+        properties: {
+          text: { type: 'string' },
+          html: { type: 'string' },
+        },
+      },
+    },
+  },
 };
 
 const updateDraftDef: ActionDefinition = {
@@ -435,6 +604,17 @@ const updateDraftDef: ActionDefinition = {
       .optional()
       .describe('Optional Gmail message ID to thread the draft with.'),
   }),
+  outputSchema: {
+    type: 'object',
+    properties: {
+      draftId: { type: 'string' },
+      messageId: { type: ['string', 'null'] },
+      threadId: { type: ['string', 'null'] },
+      to: { type: 'array', items: { type: 'string' } },
+      subject: { type: 'string' },
+      message: { type: 'string' },
+    },
+  },
 };
 
 const sendDraftDef: ActionDefinition = {
@@ -448,6 +628,16 @@ const sendDraftDef: ActionDefinition = {
       .string()
       .describe('The Gmail draft ID to send (from create_draft or list_drafts).'),
   }),
+  outputSchema: {
+    type: 'object',
+    properties: {
+      draftId: { type: 'string' },
+      messageId: { type: 'string', description: 'New message ID once sent' },
+      threadId: { type: 'string' },
+      labelIds: { type: 'array', items: { type: 'string' } },
+      message: { type: 'string' },
+    },
+  },
 };
 
 const deleteDraftDef: ActionDefinition = {
@@ -461,6 +651,13 @@ const deleteDraftDef: ActionDefinition = {
       .string()
       .describe('The Gmail draft ID to delete (from create_draft or list_drafts).'),
   }),
+  outputSchema: {
+    type: 'object',
+    properties: {
+      draftId: { type: 'string' },
+      message: { type: 'string' },
+    },
+  },
 };
 
 const listLabelsDef: ActionDefinition = {
@@ -470,6 +667,28 @@ const listLabelsDef: ActionDefinition = {
     'Lists all Gmail labels for the authenticated user, including system labels (INBOX, SENT, STARRED, UNREAD, etc.) and custom user-created labels. Use the returned IDs with modify_labels or list_messages labelIds filter.',
   riskLevel: 'low',
   params: z.object({}),
+  outputSchema: {
+    type: 'object',
+    properties: {
+      labels: {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: {
+            id: { type: 'string' },
+            name: { type: 'string' },
+            type: { type: 'string', enum: ['system', 'user'] },
+            messageListVisibility: { type: ['string', 'null'], enum: ['show', 'hide', null] },
+            labelListVisibility: {
+              type: ['string', 'null'],
+              enum: ['labelShow', 'labelShowIfUnread', 'labelHide', null],
+            },
+          },
+        },
+      },
+      count: { type: 'number' },
+    },
+  },
 };
 
 const triageInboxDef: ActionDefinition = {
@@ -502,6 +721,34 @@ const triageInboxDef: ActionDefinition = {
       .default(400)
       .describe('Max characters of body text to include per message (0 to skip bodies).'),
   }),
+  outputSchema: {
+    type: 'object',
+    properties: {
+      summary: {
+        type: 'object',
+        properties: {
+          totalUnread: { type: 'number', description: 'Gmail-reported total — may exceed fetched' },
+          fetched: { type: 'number' },
+          failedFetches: { type: 'number', description: 'Per-message fetches that errored out' },
+          topSenders: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                from: { type: 'string' },
+                count: { type: 'number' },
+              },
+            },
+          },
+          newsletterCount: { type: 'number' },
+          meetingReferenceCount: { type: 'number' },
+          questionCount: { type: 'number' },
+          actionRequestedCount: { type: 'number' },
+        },
+      },
+      messages: { type: 'array', items: gmailTriageMessageSchema },
+    },
+  },
 };
 
 const allActions: ActionDefinition[] = [

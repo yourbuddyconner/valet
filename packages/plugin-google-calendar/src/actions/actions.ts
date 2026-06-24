@@ -41,6 +41,49 @@ const eventDateTimeSchema = z
     message: 'Provide either dateTime (timed event) or date (all-day event).',
   });
 
+// ─── Output Schemas (shared) ────────────────────────────────────────────────
+
+const calendarEventDateTimeOutputSchema = {
+  type: 'object',
+  description: 'One of dateTime (timed) or date (all-day) is set, never both',
+  properties: {
+    dateTime: { type: ['string', 'null'], description: 'RFC3339 timestamp for timed events' },
+    date: { type: ['string', 'null'], description: 'ISO date YYYY-MM-DD for all-day events' },
+    timeZone: { type: ['string', 'null'], description: 'IANA timezone' },
+  },
+} satisfies Record<string, unknown>;
+
+const calendarAttendeeOutputSchema = {
+  type: 'object',
+  properties: {
+    email: { type: 'string' },
+    responseStatus: {
+      type: 'string',
+      enum: ['needsAction', 'declined', 'tentative', 'accepted'],
+    },
+    optional: { type: 'boolean' },
+  },
+} satisfies Record<string, unknown>;
+
+// Full per-event shape returned by list_events. create/update/quick-add
+// return a leaner shape (id, summary, start, end, htmlLink, …).
+const calendarEventListItemSchema = {
+  type: 'object',
+  properties: {
+    id: { type: 'string' },
+    status: { type: 'string', description: 'confirmed | tentative | cancelled' },
+    summary: { type: ['string', 'null'] },
+    description: { type: ['string', 'null'] },
+    location: { type: ['string', 'null'] },
+    start: calendarEventDateTimeOutputSchema,
+    end: calendarEventDateTimeOutputSchema,
+    attendees: { type: 'array', items: calendarAttendeeOutputSchema },
+    organizer: { type: ['string', 'null'], description: 'Organizer email' },
+    htmlLink: { type: ['string', 'null'] },
+    recurringEventId: { type: ['string', 'null'], description: 'Set on instances of a recurring series' },
+  },
+} satisfies Record<string, unknown>;
+
 // ─── Action Definitions ──────────────────────────────────────────────────────
 
 const listEvents: ActionDefinition = {
@@ -82,6 +125,14 @@ const listEvents: ActionDefinition = {
         'If true (default), expands recurring events into individual instances. Set false to receive recurring events as a single record.',
       ),
   }),
+  outputSchema: {
+    type: 'object',
+    properties: {
+      events: { type: 'array', items: calendarEventListItemSchema },
+      count: { type: 'number' },
+      nextPageToken: { type: ['string', 'null'], description: 'Pass back as a continuation token in a follow-up call' },
+    },
+  },
 };
 
 const createEvent: ActionDefinition = {
@@ -125,6 +176,19 @@ const createEvent: ActionDefinition = {
       .default(false)
       .describe('If true, attaches an automatically generated Google Meet link to the event.'),
   }),
+  outputSchema: {
+    type: 'object',
+    properties: {
+      id: { type: 'string' },
+      summary: { type: 'string' },
+      start: calendarEventDateTimeOutputSchema,
+      end: calendarEventDateTimeOutputSchema,
+      htmlLink: { type: 'string' },
+      hangoutLink: { type: ['string', 'null'], description: 'Set when conferenceData was requested' },
+      attendees: { type: 'number', description: 'Count of attendees invited' },
+      message: { type: 'string', description: 'Human-readable confirmation' },
+    },
+  },
 };
 
 const updateEvent: ActionDefinition = {
@@ -160,6 +224,18 @@ const updateEvent: ActionDefinition = {
       .default('none')
       .describe('Whether to email attendees about the change.'),
   }),
+  outputSchema: {
+    type: 'object',
+    properties: {
+      id: { type: 'string' },
+      summary: { type: 'string' },
+      start: calendarEventDateTimeOutputSchema,
+      end: calendarEventDateTimeOutputSchema,
+      htmlLink: { type: 'string' },
+      updated: { type: 'string', description: 'RFC3339 last-modified timestamp' },
+      message: { type: 'string' },
+    },
+  },
 };
 
 const deleteEvent: ActionDefinition = {
@@ -181,6 +257,14 @@ const deleteEvent: ActionDefinition = {
       .default('none')
       .describe('Whether to email cancellation notices to attendees.'),
   }),
+  outputSchema: {
+    type: 'object',
+    properties: {
+      eventId: { type: 'string' },
+      calendarId: { type: 'string' },
+      message: { type: 'string' },
+    },
+  },
 };
 
 const quickAdd: ActionDefinition = {
@@ -206,6 +290,17 @@ const quickAdd: ActionDefinition = {
       .default('none')
       .describe('Whether to email invitations (rarely useful for quick add).'),
   }),
+  outputSchema: {
+    type: 'object',
+    properties: {
+      id: { type: 'string' },
+      summary: { type: 'string' },
+      start: calendarEventDateTimeOutputSchema,
+      end: calendarEventDateTimeOutputSchema,
+      htmlLink: { type: 'string' },
+      message: { type: 'string' },
+    },
+  },
 };
 
 const allActions: ActionDefinition[] = [listEvents, createEvent, updateEvent, deleteEvent, quickAdd];

@@ -38,6 +38,105 @@ export function resolveToSlackTimestamp(input: string): string {
   return (date.getTime() / 1000).toFixed(6);
 }
 
+// ─── Output Schemas (shared) ────────────────────────────────────────────────
+//
+// Each schema below describes the shape of `data` returned by executeAction
+// for a given action. The workflow tool node renders these in the inspector
+// so authors can see what downstream `${nodes.<id>.output.<field>}` expressions
+// will resolve to without running the action first.
+//
+// Keep these in sync with the slimMessage / slimChannel / slimUser helpers
+// and with the literal return shapes in the executeAction switch.
+
+const slackMessageSummarySchema = {
+  type: 'object',
+  properties: {
+    user: { type: ['string', 'null'] },
+    user_display: { type: ['string', 'null'], description: 'Resolved "@handle <real name> (Uxxx)" form when known' },
+    bot_id: { type: ['string', 'null'] },
+    bot_display: { type: ['string', 'null'] },
+    subtype: { type: ['string', 'null'] },
+    text: { type: 'string' },
+    ts: { type: 'string' },
+    thread_ts: { type: ['string', 'null'] },
+    reply_count: { type: ['number', 'null'] },
+    reply_users_count: { type: ['number', 'null'] },
+    files: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          name: { type: 'string' },
+          mimetype: { type: ['string', 'null'] },
+          size: { type: 'number' },
+          url: { type: 'string' },
+          filetype: { type: 'string' },
+          is_external: { type: 'boolean' },
+        },
+      },
+    },
+    reactions: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          name: { type: 'string' },
+          count: { type: 'number' },
+        },
+      },
+    },
+  },
+} satisfies Record<string, unknown>;
+
+const slackChannelSummarySchema = {
+  type: 'object',
+  properties: {
+    id: { type: 'string' },
+    name: { type: 'string' },
+    is_private: { type: 'boolean' },
+    num_members: { type: ['number', 'null'] },
+    topic: { type: ['string', 'null'] },
+    purpose: { type: ['string', 'null'] },
+  },
+} satisfies Record<string, unknown>;
+
+const slackUserSummarySchema = {
+  type: 'object',
+  properties: {
+    id: { type: 'string' },
+    name: { type: 'string' },
+    real_name: { type: ['string', 'null'] },
+    display_name: { type: ['string', 'null'] },
+    email: { type: ['string', 'null'] },
+    deleted: { type: 'boolean' },
+  },
+} satisfies Record<string, unknown>;
+
+const slackUsergroupSummarySchema = {
+  type: 'object',
+  properties: {
+    id: { type: 'string' },
+    team_id: { type: 'string' },
+    name: { type: 'string' },
+    handle: { type: 'string' },
+    description: { type: 'string' },
+    is_disabled: { type: 'boolean' },
+    user_count: { type: 'number' },
+    users: { type: 'array', items: { type: 'string' } },
+  },
+} satisfies Record<string, unknown>;
+
+// Send-message-style results (dm_owner, dm_user, send_message all share the
+// same { ts, channel } shape; send_message adds an `ok: true` discriminator).
+const slackPostMessageOutputSchema = {
+  type: 'object',
+  properties: {
+    ok: { type: 'boolean', description: 'Always true on success' },
+    ts: { type: 'string', description: 'Message timestamp — use as thread_ts to reply' },
+    channel: { type: 'string', description: 'Channel ID the message was delivered to' },
+  },
+} satisfies Record<string, unknown>;
+
 // ─── Action Definitions ──────────────────────────────────────────────────────
 
 const dmOwner: ActionDefinition = {
@@ -48,6 +147,7 @@ const dmOwner: ActionDefinition = {
   params: z.object({
     text: z.string().describe('Message text'),
   }),
+  outputSchema: slackPostMessageOutputSchema,
 };
 
 const dmUser: ActionDefinition = {
@@ -59,6 +159,7 @@ const dmUser: ActionDefinition = {
     user: z.string().describe('User ID (U...)'),
     text: z.string().describe('Message text'),
   }),
+  outputSchema: slackPostMessageOutputSchema,
 };
 
 const addReaction: ActionDefinition = {
@@ -71,6 +172,14 @@ const addReaction: ActionDefinition = {
     timestamp: z.string().describe('Message timestamp'),
     name: z.string().describe('Emoji name without colons (e.g. "thumbsup")'),
   }),
+  outputSchema: {
+    type: 'object',
+    properties: {
+      channel: { type: 'string' },
+      timestamp: { type: 'string' },
+      name: { type: 'string' },
+    },
+  },
 };
 
 const listChannels: ActionDefinition = {
@@ -82,6 +191,13 @@ const listChannels: ActionDefinition = {
     scope: z.enum(['joined', 'all']).optional().describe('Which channels to list: "joined" (default) = bot member channels, "all" = all public channels'),
     prefix: z.string().optional().describe('Filter channels whose name starts with this prefix'),
   }),
+  outputSchema: {
+    type: 'object',
+    properties: {
+      channels: { type: 'array', items: slackChannelSummarySchema },
+      total: { type: 'number' },
+    },
+  },
 };
 
 const readHistory: ActionDefinition = {
@@ -101,6 +217,16 @@ const readHistory: ActionDefinition = {
       'When true, include system messages (joins, topic changes, etc.). Default false — only human/bot conversation.'
     ),
   }),
+  outputSchema: {
+    type: 'object',
+    properties: {
+      has_more: { type: 'boolean' },
+      next_cursor: { type: ['string', 'null'] },
+      fetched: { type: 'number', description: 'Raw count before client-side filter; present only when filter/threads_only is set' },
+      total: { type: 'number' },
+      messages: { type: 'array', items: slackMessageSummarySchema },
+    },
+  },
 };
 
 const readThread: ActionDefinition = {
@@ -114,6 +240,15 @@ const readThread: ActionDefinition = {
     limit: z.number().int().min(1).max(200).optional().describe('Max replies per page (default 100, max 200)'),
     cursor: z.string().optional().describe('Pagination cursor from a previous response\'s next_cursor'),
   }),
+  outputSchema: {
+    type: 'object',
+    properties: {
+      has_more: { type: 'boolean' },
+      next_cursor: { type: ['string', 'null'] },
+      total: { type: 'number' },
+      messages: { type: 'array', items: slackMessageSummarySchema },
+    },
+  },
 };
 
 const listUsers: ActionDefinition = {
@@ -124,6 +259,14 @@ const listUsers: ActionDefinition = {
   params: z.object({
     filter: z.string().optional().describe('Case-insensitive search over user ID, handle, real name, display name, and email. Use this to avoid dumping the full user list.'),
   }),
+  outputSchema: {
+    type: 'object',
+    properties: {
+      filter: { type: 'string', description: 'Echoed back when supplied' },
+      total: { type: 'number' },
+      members: { type: 'array', items: slackUserSummarySchema },
+    },
+  },
 };
 
 const listUsergroups: ActionDefinition = {
@@ -137,6 +280,13 @@ const listUsergroups: ActionDefinition = {
     include_count: z.boolean().optional().describe('Include member counts. Default true.'),
     team_id: z.string().optional().describe('Encoded team ID. Required only when using an org-level token.'),
   }),
+  outputSchema: {
+    type: 'object',
+    properties: {
+      total: { type: 'number' },
+      usergroups: { type: 'array', items: slackUsergroupSummarySchema },
+    },
+  },
 };
 
 const listUsergroupUsers: ActionDefinition = {
@@ -149,6 +299,14 @@ const listUsergroupUsers: ActionDefinition = {
     include_disabled: z.boolean().optional().describe('Allow listing users for disabled user groups. Default false.'),
     team_id: z.string().optional().describe('Encoded team ID. Required only when using an org-level token.'),
   }),
+  outputSchema: {
+    type: 'object',
+    properties: {
+      usergroup: { type: 'string' },
+      total: { type: 'number' },
+      users: { type: 'array', items: { type: 'string' } },
+    },
+  },
 };
 
 const updateUsergroup: ActionDefinition = {
@@ -166,6 +324,12 @@ const updateUsergroup: ActionDefinition = {
     enable_section: z.boolean().optional().describe('Show this user group as a sidebar section for all group members. Requires at least one default channel.'),
     team_id: z.string().optional().describe('Encoded team ID. Required only when using an org-level token.'),
   }),
+  outputSchema: {
+    type: 'object',
+    properties: {
+      usergroup: slackUsergroupSummarySchema,
+    },
+  },
 };
 
 const addUsergroupUsers: ActionDefinition = {
@@ -178,6 +342,17 @@ const addUsergroupUsers: ActionDefinition = {
     users: z.array(z.string()).min(1).describe('Slack user IDs (U... or W...) to add'),
     team_id: z.string().optional().describe('Encoded team ID. Required only when using an org-level token.'),
   }),
+  outputSchema: {
+    type: 'object',
+    properties: {
+      changed: { type: 'boolean', description: 'False when no users were added (all already present)' },
+      usergroup: { type: 'string' },
+      added: { type: 'array', items: { type: 'string' } },
+      skipped: { type: 'array', items: { type: 'string' } },
+      users: { type: 'array', items: { type: 'string' }, description: 'Final membership list after the change' },
+      slack_usergroup: slackUsergroupSummarySchema,
+    },
+  },
 };
 
 const removeUsergroupUsers: ActionDefinition = {
@@ -190,6 +365,17 @@ const removeUsergroupUsers: ActionDefinition = {
     users: z.array(z.string()).min(1).describe('Slack user IDs (U... or W...) to remove'),
     team_id: z.string().optional().describe('Encoded team ID. Required only when using an org-level token.'),
   }),
+  outputSchema: {
+    type: 'object',
+    properties: {
+      changed: { type: 'boolean' },
+      usergroup: { type: 'string' },
+      removed: { type: 'array', items: { type: 'string' } },
+      skipped: { type: 'array', items: { type: 'string' } },
+      users: { type: 'array', items: { type: 'string' }, description: 'Final membership list after the change' },
+      slack_usergroup: slackUsergroupSummarySchema,
+    },
+  },
 };
 
 const fetchFile: ActionDefinition = {
@@ -200,6 +386,15 @@ const fetchFile: ActionDefinition = {
   params: z.object({
     url: z.string().describe('Slack file URL (from the files array in message data)'),
   }),
+  outputSchema: {
+    type: 'object',
+    description: 'Shape varies by file type: text files return { content, mimetype }; images return only mimetype (the bytes are delivered to vision); other types return { mimetype, note }.',
+    properties: {
+      content: { type: 'string', description: 'Text content — only present for text files' },
+      mimetype: { type: 'string' },
+      note: { type: 'string', description: 'Explanation when the file type is not viewable' },
+    },
+  },
 };
 
 const getPins: ActionDefinition = {
@@ -210,6 +405,27 @@ const getPins: ActionDefinition = {
   params: z.object({
     channel: z.string().describe('Channel ID (C...)'),
   }),
+  outputSchema: {
+    type: 'object',
+    properties: {
+      total: { type: 'number' },
+      pins: { type: 'array', items: slackMessageSummarySchema },
+      files: {
+        type: 'array',
+        description: 'Pinned files (not messages) — only present when at least one pinned file exists',
+        items: {
+          type: 'object',
+          properties: {
+            type: { type: 'string', enum: ['file'] },
+            name: { type: 'string' },
+            mimetype: { type: ['string', 'null'] },
+            size: { type: 'number' },
+            url: { type: 'string' },
+          },
+        },
+      },
+    },
+  },
 };
 
 const getChannelInfo: ActionDefinition = {
@@ -220,6 +436,23 @@ const getChannelInfo: ActionDefinition = {
   params: z.object({
     channel: z.string().describe('Channel ID (C...)'),
   }),
+  outputSchema: {
+    type: 'object',
+    description: 'For DMs/group DMs only id/is_im/is_mpim/num_members/created are populated; for channels the full set is returned.',
+    properties: {
+      id: { type: 'string' },
+      name: { type: 'string' },
+      is_private: { type: 'boolean' },
+      is_archived: { type: 'boolean' },
+      is_im: { type: 'boolean' },
+      is_mpim: { type: 'boolean' },
+      topic: { type: ['string', 'null'] },
+      purpose: { type: ['string', 'null'] },
+      num_members: { type: 'number' },
+      created: { type: 'number', description: 'Unix epoch seconds' },
+      creator: { type: 'string', description: 'Resolved "@handle <real name> (Uxxx)" form' },
+    },
+  },
 };
 
 const getReactions: ActionDefinition = {
@@ -231,6 +464,26 @@ const getReactions: ActionDefinition = {
     channel: z.string().describe('Channel ID (C...)'),
     timestamp: z.string().describe('Message timestamp'),
   }),
+  outputSchema: {
+    type: 'object',
+    properties: {
+      reactions: {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: {
+            name: { type: 'string' },
+            count: { type: 'number' },
+            users: {
+              type: 'array',
+              description: 'Resolved "@handle <real name> (Uxxx)" form; may be truncated on popular messages',
+              items: { type: 'string' },
+            },
+          },
+        },
+      },
+    },
+  },
 };
 
 const sendMessage: ActionDefinition = {
@@ -244,6 +497,7 @@ const sendMessage: ActionDefinition = {
     thread_ts: z.string().optional().describe('Post as a threaded reply under an existing message. Use the ts value returned by a previous send_message call (e.g. "1780887543.189519").'),
     blocks: z.string().optional().describe('Block Kit JSON array as a string for rich formatting. When provided, text is used as the notification fallback only.'),
   }),
+  outputSchema: slackPostMessageOutputSchema,
 };
 
 const allActions: ActionDefinition[] = [
