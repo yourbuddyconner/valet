@@ -55,6 +55,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { InfoTooltip } from '@/components/ui/info-tooltip';
+import { NodeDocsDrawer } from './node-docs-drawer';
 import {
   Command,
   CommandEmpty,
@@ -275,6 +276,7 @@ function VisualWorkflowEditorInner({
   const [selectedEdgeId, setSelectedEdgeId] = React.useState<string | null>(null);
   const [rawOpen, setRawOpen] = React.useState(false);
   const [nodePaletteOpen, setNodePaletteOpen] = React.useState(false);
+  const [docsOpen, setDocsOpen] = React.useState(false);
   const [nodePaletteQuery, setNodePaletteQuery] = React.useState('');
   const [rawJson, setRawJson] = React.useState('');
   const [rawJsonError, setRawJsonError] = React.useState<string | null>(null);
@@ -718,6 +720,20 @@ function VisualWorkflowEditorInner({
             type="button"
             variant="secondary"
             size="sm"
+            className={cn(
+              'h-10 w-10 border border-neutral-200 bg-white p-0 text-neutral-800 hover:bg-neutral-100 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100 dark:hover:bg-neutral-800',
+              docsOpen && 'border-accent text-accent ring-2 ring-accent/20 dark:border-red-400 dark:text-red-300 dark:ring-red-400/25',
+            )}
+            title="Node reference"
+            aria-pressed={docsOpen}
+            onClick={() => setDocsOpen((open) => !open)}
+          >
+            <span className="font-serif text-base font-semibold leading-none">i</span>
+          </Button>
+          <Button
+            type="button"
+            variant="secondary"
+            size="sm"
             onClick={() => {
               setSelectedNodeId(null);
               setSelectedEdgeId(null);
@@ -872,6 +888,12 @@ function VisualWorkflowEditorInner({
         </Canvas>
         </WorkflowAddNextContext.Provider>
       </WorkflowNodeDeleteContext.Provider>
+
+      <NodeDocsDrawer
+        open={docsOpen}
+        onClose={() => setDocsOpen(false)}
+        focusType={selectedNode?.data.node.type}
+      />
 
       {(rawOpen || selectedNode) && (
         <aside className="absolute bottom-3 right-3 top-3 z-10 flex w-[380px] max-w-[calc(100%-1.5rem)] flex-col overflow-hidden rounded-lg border border-neutral-200 bg-white/95 shadow-2xl backdrop-blur dark:border-neutral-800 dark:bg-neutral-950/95">
