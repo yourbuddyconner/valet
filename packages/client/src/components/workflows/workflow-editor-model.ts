@@ -1,26 +1,28 @@
-import type {
-  ApprovalNode,
-  ForeachBodyNode,
-  ForeachNode,
-  IfCondition,
-  IfNode,
-  LlmNode,
-  OrchestratorNode,
-  SessionNode,
-  SetNode,
-  StopNode,
-  ToolNode,
-  TriggerNode,
-  WaitNode,
-  WorkflowDefinition,
-  WorkflowEdge,
-  WorkflowEditorState,
-  WorkflowInputDefinition,
-  WorkflowNode,
+import {
+  createDefaultWorkflowNode,
+  NODE_DOCS,
+  type AddableDagNodeType,
+  type ApprovalNode,
+  type DagNodeType,
+  type ForeachBodyNode,
+  type ForeachNode,
+  type IfCondition,
+  type IfNode,
+  type LlmNode,
+  type OrchestratorNode,
+  type SessionNode,
+  type SetNode,
+  type StopNode,
+  type ToolNode,
+  type TriggerNode,
+  type WorkflowDefinition,
+  type WorkflowEdge,
+  type WorkflowEditorState,
+  type WorkflowInputDefinition,
+  type WorkflowNode,
 } from '@valet/shared';
 
-export type DagNodeType = WorkflowNode['type'];
-export type AddableDagNodeType = Exclude<DagNodeType, 'trigger'>;
+export type { DagNodeType, AddableDagNodeType } from '@valet/shared';
 
 export interface FlowViewport {
   x: number;
@@ -353,33 +355,16 @@ export function buildWorkflowEdgeInspection(
   };
 }
 
-export const NODE_LABELS: Record<DagNodeType, string> = {
-  trigger: 'Trigger',
-  llm: 'LLM',
-  tool: 'Tool',
-  if: 'If',
-  foreach: 'For each',
-  approval: 'Approval',
-  wait: 'Wait',
-  set: 'Set values',
-  stop: 'Stop',
-  orchestrator: 'Orchestrator',
-  session: 'Session',
-};
+// Derived from NODE_DOCS (the source of truth in @valet/shared). Kept as
+// flat records here so existing call sites that switch on node type don't
+// need to touch the docs structure.
+export const NODE_LABELS = Object.fromEntries(
+  (Object.keys(NODE_DOCS) as DagNodeType[]).map((t) => [t, NODE_DOCS[t].label]),
+) as Record<DagNodeType, string>;
 
-export const NODE_DESCRIPTIONS: Record<DagNodeType, string> = {
-  trigger: 'Where the workflow starts and what data it receives',
-  llm: 'Generate or transform text with a model',
-  tool: 'Call an integration action',
-  if: 'Branch based on conditions',
-  foreach: 'Run one body node for every item',
-  approval: 'Pause for human approval',
-  wait: 'Pause for a fixed duration',
-  set: 'Create values for downstream nodes',
-  stop: 'Finish the workflow',
-  orchestrator: 'Ask the user orchestrator to do work',
-  session: 'Start or prompt a coding session',
-};
+export const NODE_DESCRIPTIONS = Object.fromEntries(
+  (Object.keys(NODE_DOCS) as DagNodeType[]).map((t) => [t, NODE_DOCS[t].description]),
+) as Record<DagNodeType, string>;
 
 export const NODE_TYPE_OPTIONS: Array<{ type: AddableDagNodeType; label: string; description: string }> = [
   { type: 'llm', label: NODE_LABELS.llm, description: NODE_DESCRIPTIONS.llm },
@@ -494,35 +479,7 @@ export function createDefaultWorkflowDefinition(): WorkflowDefinition {
 }
 
 export function getDefaultNodeForType(type: DagNodeType, id: string): WorkflowNode {
-  switch (type) {
-    case 'trigger':
-      return { id, type } satisfies TriggerNode;
-    case 'llm':
-      return { id, type, prompt: '' } satisfies LlmNode;
-    case 'tool':
-      return { id, type, service: '', action: '', params: {} } satisfies ToolNode;
-    case 'if':
-      return { id, type, conditions: [] } satisfies IfNode;
-    case 'foreach':
-      return {
-        id,
-        type,
-        items: '',
-        body: { id: `${id}-body`, type: 'set', values: {} } satisfies ForeachBodyNode,
-      } satisfies ForeachNode;
-    case 'approval':
-      return { id, type, prompt: '' } satisfies ApprovalNode;
-    case 'wait':
-      return { id, type, mode: 'duration', duration: '5m' } satisfies WaitNode;
-    case 'set':
-      return { id, type, values: {} } satisfies SetNode;
-    case 'orchestrator':
-      return { id, type, prompt: '' } satisfies OrchestratorNode;
-    case 'session':
-      return { id, type, mode: 'start', prompt: '', workspace: '' } satisfies SessionNode;
-    case 'stop':
-      return { id, type, outcome: 'success' } satisfies StopNode;
-  }
+  return createDefaultWorkflowNode(type, id);
 }
 
 export function normalizeWorkflowDefinitionForEditor(definition: WorkflowDefinition): WorkflowDefinition {
