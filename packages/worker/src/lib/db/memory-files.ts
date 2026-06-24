@@ -97,6 +97,10 @@ export async function writeMemoryFile(
   userId: string,
   path: string,
   content: string,
+  // Bulk callers (importMemoryFiles) set this false to defer cap enforcement to
+  // a single pass at the end, so files aren't pruned mid-batch and the prune
+  // count can be reported. Single writes (PUT/PATCH) keep the default.
+  enforceCap = true,
 ): Promise<MemoryFile> {
   const normalized = normalizePath(path);
   const error = validatePath(normalized);
@@ -165,7 +169,7 @@ export async function writeMemoryFile(
   }
 
   // Auto-prune if over cap (non-pinned files only)
-  await enforceMemoryCap(rawDb, userId);
+  if (enforceCap) await enforceMemoryCap(rawDb, userId);
 
   return {
     id,
@@ -496,14 +500,27 @@ export async function importMemoryFiles(
       continue;
     }
     try {
-      await writeMemoryFile(rawDb, userId, file.path, file.content);
+      // Defer the 200-file cap so files aren't pruned mid-batch (which would
+      // evict files written earlier in this same import); enforce once below.
+      await writeMemoryFile(rawDb, userId, file.path, file.content, false);
       imported++;
     } catch (err) {
       skipped.push({ path: file.path, reason: err instanceof Error ? err.message : 'write failed' });
     }
   }
 
-  return { imported, skipped };
+  // Enforce the cap once for the whole batch and report how many non-pinned
+  // files it pruned, so the response is honest when an import pushes the
+  // account past the 200-file cap (imported counts writes; pruned counts what
+  // the cap then removed).
+  let pruned = 0;
+  try {
+    pruned = await enforceMemoryCap(rawDb, userId);
+  } catch {
+    // A prune failure must not lose the import tally; the cap self-heals on the next write.
+  }
+
+  return { imported, skipped, pruned };
 }
 
 // ─── Relevance Boost ────────────────────────────────────────────────────────
@@ -575,13 +592,13 @@ export async function pruneEmptyJournals(rawDb: D1Database): Promise<number> {
 
 // ─── Cap Enforcement ────────────────────────────────────────────────────────
 
-async function enforceMemoryCap(rawDb: D1Database, userId: string): Promise<void> {
+async function enforceMemoryCap(rawDb: D1Database, userId: string): Promise<number> {
   const countResult = await rawDb
     .prepare('SELECT COUNT(*) as cnt FROM orchestrator_memory_files WHERE user_id = ? AND pinned = 0')
     .bind(userId)
     .first<{ cnt: number }>();
 
-  if (!countResult || countResult.cnt <= MEMORY_CAP) return;
+  if (!countResult || countResult.cnt <= MEMORY_CAP) return 0;
 
   const excess = countResult.cnt - MEMORY_CAP;
 
@@ -606,7 +623,10 @@ async function enforceMemoryCap(rawDb: D1Database, userId: string): Promise<void
     .bind(userId, excess)
     .run();
 
-  for (const row of toDelete.results || []) {
+  const prunedRows = toDelete.results || [];
+  for (const row of prunedRows) {
     await rawDb.prepare('DELETE FROM orchestrator_memory_files_fts WHERE rowid = ?').bind(row.rowid).run();
   }
+
+  return prunedRows.length;
 }
