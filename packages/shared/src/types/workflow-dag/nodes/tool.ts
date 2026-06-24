@@ -38,7 +38,7 @@ UI (or the configured \`onPolicyDeny\` behavior kicks in).`,
       help: 'Action input. Values support templates like ${nodes.previous.output.<field>} and ${trigger.data.<field>}.',
     },
     summary: {
-      help: 'Optional human-readable description shown in approval prompts and the execution trace. Defaults to "<service>.<action>".',
+      help: 'One-line description of what this specific call does ("Notify on-call about deploy"). Shown in approval prompts and the execution trace. Defaults to "<service>.<action>" — set this when "slack.send_message" isn\'t self-explanatory.',
     },
     onPolicyDeny: {
       help: 'What happens when the user (or policy) denies the action. fail aborts the workflow; skip marks the node skipped and continues.',

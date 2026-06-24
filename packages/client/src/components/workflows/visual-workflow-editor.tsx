@@ -172,6 +172,15 @@ interface WorkflowAddNextContextValue {
   // for a "+ what happens next" affordance).
   unconnectedSources: ReadonlyMap<string, ReadonlySet<SourceHandleKey>>;
   onAddNext: (sourceNodeId: string, sourceHandle: SourceHandleKey) => void;
+  // One-click variant: skip the palette entirely and immediately wire a new
+  // node of the given type downstream of the source. Used by the inspector's
+  // "Add next step" buttons so creating a node downstream of the currently-
+  // selected one is a single click.
+  onAddNextDirect: (
+    sourceNodeId: string,
+    sourceHandle: SourceHandleKey,
+    type: AddableDagNodeType,
+  ) => void;
 }
 
 const WorkflowAddNextContext = React.createContext<WorkflowAddNextContextValue | null>(null);
@@ -531,10 +540,31 @@ function VisualWorkflowEditorInner({
     setNodePaletteOpen(true);
   }, [clearArmedDeleteNode]);
 
+  // 1-click variant: seed the wire refs and call handleAddNode immediately,
+  // skipping the palette. Used by the inspector's "Add next step" buttons.
+  // handleAddNode is a hoisted function declaration so referencing it
+  // earlier in the component is safe; we keep this as a stable callback so
+  // the context value identity doesn't churn every render.
+  const handleAddNextDirect = React.useCallback(
+    (sourceNodeId: string, sourceHandle: SourceHandleKey, type: AddableDagNodeType) => {
+      wireOnAddSource.current = { nodeId: sourceNodeId, handle: sourceHandle };
+      lastSelectedBeforePicker.current = sourceNodeId;
+      setSelectedEdgeId(null);
+      clearArmedDeleteNode();
+      handleAddNode(type);
+    },
+    // handleAddNode is a function declaration inside the component; it
+    // captures the latest state via closure, so we depend only on the
+    // imperative helpers we call explicitly.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [clearArmedDeleteNode],
+  );
+
   const addNextContext = React.useMemo<WorkflowAddNextContextValue>(() => ({
     unconnectedSources,
     onAddNext: handleAddNext,
-  }), [handleAddNext, unconnectedSources]);
+    onAddNextDirect: handleAddNextDirect,
+  }), [handleAddNext, handleAddNextDirect, unconnectedSources]);
 
   const handleConnect: OnConnect = React.useCallback((connection: Connection) => {
     if (!connection.source || !connection.target) return;
@@ -1492,9 +1522,67 @@ function NodeInspector({ definition, node, onUpdate }: NodeInspectorProps) {
       {availableInputs.length > 0 && (
         <AvailableInputs sources={availableInputs} onUseInput={handleUseInput} />
       )}
+      <InspectorAddNextStep nodeId={workflowNode.id} />
     </div>
   );
 }
+
+// 1-click downstream-add affordance. Renders inside the inspector when the
+// selected node has at least one unconnected source handle. Click a quick-add
+// icon → the node lands wired to the selected node's source. No palette
+// roundtrip.
+function InspectorAddNextStep({ nodeId }: { nodeId: string }) {
+  const ctx = React.useContext(WorkflowAddNextContext);
+  const handles = ctx?.unconnectedSources.get(nodeId);
+  if (!ctx || !handles || handles.size === 0) return null;
+  // Prefer 'default'; if only branch handles remain (if-node), fall back to
+  // 'true' as the primary quick-add target.
+  const targetHandle: SourceHandleKey = handles.has('default')
+    ? 'default'
+    : handles.has('true')
+      ? 'true'
+      : 'false';
+  return (
+    <div className="rounded-md border border-neutral-200 bg-neutral-50 p-2 text-xs dark:border-neutral-700 dark:bg-neutral-900">
+      <div className="font-medium text-neutral-700 dark:text-neutral-300">Add next step</div>
+      <p className="mt-0.5 text-[11px] text-neutral-500 dark:text-neutral-400">
+        Wires from this node's {targetHandle === 'default' ? 'output' : `${targetHandle} branch`}.
+      </p>
+      <div className="mt-2 grid grid-cols-3 gap-1">
+        {INSPECTOR_QUICK_ADD_TYPES.map((entry) => (
+          <button
+            key={entry.type}
+            type="button"
+            className="flex flex-col items-center gap-1 rounded-md border border-neutral-200 bg-white px-2 py-2 text-[11px] text-neutral-700 transition hover:border-accent hover:bg-accent/5 hover:text-accent focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 dark:border-neutral-700 dark:bg-neutral-950 dark:text-neutral-300 dark:hover:border-red-400 dark:hover:bg-red-400/10 dark:hover:text-red-200"
+            title={entry.title}
+            onClick={() => ctx.onAddNextDirect(nodeId, targetHandle, entry.type)}
+          >
+            <NodePaletteIcon icon={entry.icon} className="h-4 w-4" />
+            <span>{entry.label}</span>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+type NodePaletteIconKey = 'ai' | 'app' | 'data' | 'flow' | 'human';
+
+// Quick-add lineup — the high-frequency types from the palette. Keeping it
+// tight (3×2 grid) so the inspector doesn't grow unbounded.
+const INSPECTOR_QUICK_ADD_TYPES: Array<{
+  type: AddableDagNodeType;
+  label: string;
+  icon: NodePaletteIconKey;
+  title: string;
+}> = [
+  { type: 'llm', label: 'LLM', icon: 'ai', title: 'Add LLM step downstream' },
+  { type: 'tool', label: 'Tool', icon: 'app', title: 'Add tool call downstream' },
+  { type: 'if', label: 'If', icon: 'flow', title: 'Add conditional branch downstream' },
+  { type: 'set', label: 'Set', icon: 'data', title: 'Add set/derive step downstream' },
+  { type: 'foreach', label: 'For each', icon: 'flow', title: 'Add for-each loop downstream' },
+  { type: 'stop', label: 'Stop', icon: 'flow', title: 'Add stop step downstream' },
+];
 
 function AvailableInputs({
   onUseInput,
@@ -1711,16 +1799,18 @@ function LlmFields({ node, onUpdate, templateSources }: NodeFieldProps<LlmNode>)
     () => jsonSchemaToWorkflowInputDefinitions(node.outputSchema),
     [node.outputSchema],
   );
+  // Open by default when any advanced value is already set so the user
+  // doesn't think their saved tuning vanished.
+  const hasAdvanced =
+    Boolean(node.system) || node.temperature !== undefined || node.maxOutputTokens !== undefined;
+  const [advancedOpen, setAdvancedOpen] = React.useState(hasAdvanced);
 
   return (
     <>
-      <TemplateTextAreaField label="Prompt" value={node.prompt} templateSources={templateSources} onChange={(prompt) => onUpdate({ prompt })} minRows={6} />
-      <TemplateTextAreaField label="System" value={node.system ?? ''} templateSources={templateSources} onChange={(system) => onUpdate({ system: optionalString(system) })} minRows={3} />
+      <TemplateTextAreaField label="User prompt" value={node.prompt} templateSources={templateSources} onChange={(prompt) => onUpdate({ prompt })} minRows={6} />
       <Field label="Model" help={NODE_DOCS.llm.fields?.model?.help}>
         <WorkflowModelPicker value={node.model} onChange={(model) => onUpdate({ model })} />
       </Field>
-      <NumberField label="Temperature" value={node.temperature} min={0} max={2} step={0.1} onChange={(temperature) => onUpdate({ temperature })} help={NODE_DOCS.llm.fields?.temperature?.help} />
-      <NumberField label="Max output tokens" value={node.maxOutputTokens} min={1} step={1} onChange={(maxOutputTokens) => onUpdate({ maxOutputTokens })} help={NODE_DOCS.llm.fields?.maxOutputTokens?.help} />
       <WorkflowSchemaFields
         title="Output schema"
         emptyMessage="Add fields when the model should return structured data instead of a text response."
@@ -1732,6 +1822,11 @@ function LlmFields({ node, onUpdate, templateSources }: NodeFieldProps<LlmNode>)
       {node.outputSchema && (
         <ToolSchemaContract title="Outputs" schema={node.outputSchema} />
       )}
+      <DisclosureSection open={advancedOpen} onOpenChange={setAdvancedOpen} title="Advanced">
+        <TemplateTextAreaField label="System prompt" value={node.system ?? ''} templateSources={templateSources} onChange={(system) => onUpdate({ system: optionalString(system) })} minRows={3} />
+        <NumberField label="Temperature" value={node.temperature} min={0} max={2} step={0.1} onChange={(temperature) => onUpdate({ temperature })} help={NODE_DOCS.llm.fields?.temperature?.help} />
+        <NumberField label="Max output tokens" value={node.maxOutputTokens} min={1} step={1} onChange={(maxOutputTokens) => onUpdate({ maxOutputTokens })} help={NODE_DOCS.llm.fields?.maxOutputTokens?.help} />
+      </DisclosureSection>
     </>
   );
 }
@@ -1882,6 +1977,8 @@ function ToolFields({ node, onUpdate, templateSources }: NodeFieldProps<ToolNode
   const actions = catalogIndex.actionsByService.get(node.service) ?? [];
   const selectedService = catalogIndex.services.find((service) => service.service === node.service);
   const selectedAction = actions.find((action) => action.actionId === node.action);
+  const hasAdvanced = node.retries !== undefined;
+  const [advancedOpen, setAdvancedOpen] = React.useState(hasAdvanced);
 
   return (
     <>
@@ -1909,7 +2006,16 @@ function ToolFields({ node, onUpdate, templateSources }: NodeFieldProps<ToolNode
         service={node.service}
         value={node.action}
         onCustomSelect={(action) => onUpdate({ action })}
-        onSelect={(action) => onUpdate({ action: action.actionId })}
+        onSelect={(action) => {
+          // Auto-populate params with the action's declared input keys
+          // (preserving any the user has already filled in). Skips the
+          // back-and-forth of "select action → copy schema keys by hand".
+          const seeded = seedToolParamsFromSchema(action.inputSchema, node.params);
+          onUpdate({
+            action: action.actionId,
+            ...(seeded !== node.params ? { params: seeded } : {}),
+          });
+        }}
         help={NODE_DOCS.tool.fields?.action?.help}
       />
       {selectedAction?.inputSchema && (
@@ -1929,9 +2035,28 @@ function ToolFields({ node, onUpdate, templateSources }: NodeFieldProps<ToolNode
         onChange={(onPolicyDeny) => onUpdate({ onPolicyDeny })}
         help={NODE_DOCS.tool.fields?.onPolicyDeny?.help}
       />
-      <NumberField label="Retries" value={node.retries} min={0} step={1} onChange={(retries) => onUpdate({ retries })} help={NODE_DOCS.tool.fields?.retries?.help} />
+      <DisclosureSection open={advancedOpen} onOpenChange={setAdvancedOpen} title="Advanced">
+        <NumberField label="Retries" value={node.retries} min={0} step={1} onChange={(retries) => onUpdate({ retries })} help={NODE_DOCS.tool.fields?.retries?.help} />
+      </DisclosureSection>
     </>
   );
+}
+
+// Seed tool params from an action's input schema. Returns the same object
+// reference if no new keys would be added so we can skip an onUpdate. Only
+// adds keys that aren't already present — never overwrites a user-provided
+// value.
+function seedToolParamsFromSchema(
+  schema: JsonSchemaLike | undefined,
+  current: Record<string, unknown>,
+): Record<string, unknown> {
+  if (!schema || schema.type !== 'object' || !schema.properties) return current;
+  const keys = Object.keys(schema.properties);
+  const missing = keys.filter((k) => !(k in current));
+  if (missing.length === 0) return current;
+  const next: Record<string, unknown> = { ...current };
+  for (const k of missing) next[k] = '';
+  return next;
 }
 
 function ToolSchemaContract({
@@ -2509,16 +2634,42 @@ function ApprovalFields({ node, onUpdate, templateSources }: NodeFieldProps<Appr
 }
 
 function WaitFields({ node, onUpdate }: NodeFieldProps<WaitNode>) {
+  const durationError = validateWaitDuration(node.duration);
   return (
     <>
-      <Field label="Mode">
-        <Input value={node.mode} readOnly />
-      </Field>
       <Field label="Duration" help={NODE_DOCS.wait.fields?.duration?.help}>
-        <Input value={node.duration} onChange={(event) => onUpdate({ duration: event.target.value })} placeholder="5m" />
+        <Input
+          value={node.duration}
+          onChange={(event) => onUpdate({ duration: event.target.value })}
+          placeholder="5m"
+          aria-invalid={durationError ? true : undefined}
+          className={cn(durationError && 'border-red-500 focus:border-red-500 dark:border-red-500')}
+        />
+        {durationError && (
+          <p className="text-xs text-red-600 dark:text-red-400">{durationError}</p>
+        )}
       </Field>
     </>
   );
+}
+
+// Surface obvious mistakes (bare numbers, empty, junk) in the inspector
+// without trying to match the full parser. The runtime parser in
+// duration.ts is the source of truth; this is a guard so the editor flags
+// "30" → expects "30s" before the user saves.
+function validateWaitDuration(value: string): string | null {
+  const trimmed = value.trim();
+  if (trimmed === '') return 'Duration is required (e.g. "5m", "2h", "1d").';
+  if (/^-?\d+(\.\d+)?$/.test(trimmed)) {
+    return 'Missing unit. Use a suffix like "30s", "5m", "2h", "1d".';
+  }
+  // Permissive shape check — matches "<number><unit>" with optional decimals,
+  // or an ISO-8601 duration starting with P/PT. The runtime is the final word.
+  const shape = /^(?:\d+(?:\.\d+)?\s*(?:ms|s|m|h|d|w)|P[T\d].*)$/i;
+  if (!shape.test(trimmed)) {
+    return 'Expected a duration like "30s", "5m", "2h", "1d" or an ISO-8601 duration (P1D).';
+  }
+  return null;
 }
 
 function SetFields({ node, onUpdate, templateSources }: NodeFieldProps<SetNode>) {
