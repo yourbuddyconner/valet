@@ -158,6 +158,19 @@ interface WorkflowNodeDeleteContextValue {
 
 const WorkflowNodeDeleteContext = React.createContext<WorkflowNodeDeleteContextValue | null>(null);
 
+// Source handle keys: 'default' for the single source most nodes have, or
+// 'true'/'false' for the two branches of an if-node.
+type SourceHandleKey = 'default' | 'true' | 'false';
+
+interface WorkflowAddNextContextValue {
+  // For each node, which source handles are unconnected (and therefore eligible
+  // for a "+ what happens next" affordance).
+  unconnectedSources: ReadonlyMap<string, ReadonlySet<SourceHandleKey>>;
+  onAddNext: (sourceNodeId: string, sourceHandle: SourceHandleKey) => void;
+}
+
+const WorkflowAddNextContext = React.createContext<WorkflowAddNextContextValue | null>(null);
+
 // Horizontal step when placing a new node to the right of an existing one.
 // Matches the column gap used by the auto-layout in workflow-editor-model.
 const NEW_NODE_COLUMN_STEP = 320;
@@ -238,6 +251,10 @@ function VisualWorkflowEditorInner({
   // whatever the user had selected, even though opening the picker
   // clears the selection state.
   const lastSelectedBeforePicker = React.useRef<string | null>(null);
+  // When the picker was opened via a "+" affordance on an unconnected
+  // source handle, this carries the wire we should draw once the user
+  // picks a node type.
+  const wireOnAddSource = React.useRef<{ nodeId: string; handle: SourceHandleKey } | null>(null);
   const { getViewport } = useReactFlow();
   const { data: actionCatalog = [], isSuccess: actionCatalogLoaded } = useActionCatalog();
 
@@ -430,6 +447,45 @@ function VisualWorkflowEditorInner({
     requestDelete: handleRequestDeleteNode,
   }), [armedDeleteNodeId, handleRequestDeleteNode, nodeValidationSeverities]);
 
+  const unconnectedSources = React.useMemo<ReadonlyMap<string, ReadonlySet<SourceHandleKey>>>(() => {
+    const result = new Map<string, Set<SourceHandleKey>>();
+    for (const node of nodes) {
+      const flowHandles = node.data.handles;
+      const candidates: SourceHandleKey[] = flowHandles.sourceOutputs?.length
+        ? (flowHandles.sourceOutputs as SourceHandleKey[])
+        : flowHandles.source
+          ? ['default']
+          : [];
+      if (candidates.length === 0) continue;
+      const used = new Set<SourceHandleKey>();
+      for (const edge of edges) {
+        if (edge.source !== node.id) continue;
+        const handle = edge.sourceHandle === 'true' || edge.sourceHandle === 'false'
+          ? edge.sourceHandle
+          : 'default';
+        used.add(handle);
+      }
+      const free = candidates.filter((h) => !used.has(h));
+      if (free.length > 0) result.set(node.id, new Set(free));
+    }
+    return result;
+  }, [edges, nodes]);
+
+  const handleAddNext = React.useCallback((sourceNodeId: string, sourceHandle: SourceHandleKey) => {
+    wireOnAddSource.current = { nodeId: sourceNodeId, handle: sourceHandle };
+    lastSelectedBeforePicker.current = sourceNodeId;
+    setRawOpen(false);
+    setSelectedNodeId(null);
+    setSelectedEdgeId(null);
+    clearArmedDeleteNode();
+    setNodePaletteOpen(true);
+  }, [clearArmedDeleteNode]);
+
+  const addNextContext = React.useMemo<WorkflowAddNextContextValue>(() => ({
+    unconnectedSources,
+    onAddNext: handleAddNext,
+  }), [handleAddNext, unconnectedSources]);
+
   const handleConnect: OnConnect = React.useCallback((connection: Connection) => {
     if (!connection.source || !connection.target) return;
     const fromOutput = connection.sourceHandle === 'true' || connection.sourceHandle === 'false'
@@ -475,7 +531,48 @@ function VisualWorkflowEditorInner({
       position,
       data: createFlowNodeData(node),
     };
-    setNodes((current) => [...current, flowNode]);
+    const nextNodes = [...nodes, flowNode];
+
+    // If the picker was opened from an unconnected handle's "+", also
+    // create the edge from that source to the new node. We pipe the
+    // result through applyDefaultDataFlowForConnection so freshly-wired
+    // edges get the same data-flow defaults as user-dragged connections.
+    const wire = wireOnAddSource.current;
+    if (wire) {
+      const fromOutput = wire.handle === 'true' || wire.handle === 'false'
+        ? wire.handle
+        : undefined;
+      const newEdge: WorkflowFlowEdge = {
+        id: createEdgeId(wire.nodeId, id, fromOutput),
+        source: wire.nodeId,
+        ...(fromOutput ? { sourceHandle: fromOutput } : {}),
+        target: id,
+        type: fromOutput ? 'temporary' : 'animated',
+        ...(fromOutput ? { label: fromOutput } : {}),
+        data: {
+          ...(fromOutput ? { fromOutput } : {}),
+        },
+      };
+      const nextEdges = [...edges, newEdge];
+      const nextDefinition = applyDefaultDataFlowForConnection(
+        flowToDefinition(
+          {
+            nodes: nextNodes,
+            edges: nextEdges,
+            viewport: reactFlowInstance?.getViewport() ?? getViewport(),
+          },
+          definition ?? undefined,
+        ),
+        { from: newEdge.source, to: newEdge.target },
+        actionCatalog,
+      );
+      const nextFlow = definitionToFlow(nextDefinition);
+      setNodes(nextFlow.nodes);
+      setEdges(nextFlow.edges);
+    } else {
+      setNodes(nextNodes);
+    }
+
     setSelectedNodeId(id);
     setSelectedEdgeId(null);
     clearArmedDeleteNode();
@@ -483,6 +580,7 @@ function VisualWorkflowEditorInner({
     setNodePaletteOpen(false);
     setNodePaletteQuery('');
     lastSelectedBeforePicker.current = null;
+    wireOnAddSource.current = null;
   }
 
   function handleApplyRawJson() {
@@ -526,6 +624,7 @@ function VisualWorkflowEditorInner({
       )}
     >
       <WorkflowNodeDeleteContext.Provider value={nodeDeleteContext}>
+        <WorkflowAddNextContext.Provider value={addNextContext}>
         <Canvas
           className="bg-neutral-50 dark:bg-neutral-950"
           connectionLineComponent={ConnectionLine}
@@ -712,6 +811,7 @@ function VisualWorkflowEditorInner({
           </Panel>
         )}
         </Canvas>
+        </WorkflowAddNextContext.Provider>
       </WorkflowNodeDeleteContext.Provider>
 
       {(rawOpen || selectedNode) && (
@@ -1154,11 +1254,13 @@ function WorkflowOutputSourcePreview({
 function WorkflowNodeCard({ data, selected }: NodeProps) {
   const nodeData = data as WorkflowFlowNodeData;
   const deleteContext = React.useContext(WorkflowNodeDeleteContext);
+  const addNextContext = React.useContext(WorkflowAddNextContext);
   const isDeleteArmed = deleteContext?.armedNodeId === nodeData.node.id;
   const validationSeverity = deleteContext?.nodeValidationSeverities.get(nodeData.node.id) ?? null;
   const hasWarning = validationSeverity === 'warning';
   const hasError = validationSeverity === 'error';
   const canDelete = selected && nodeData.node.type !== 'trigger' && Boolean(deleteContext);
+  const unconnectedHandles = addNextContext?.unconnectedSources.get(nodeData.node.id);
   return (
     <Node
       handles={nodeData.handles}
@@ -1217,6 +1319,39 @@ function WorkflowNodeCard({ data, selected }: NodeProps) {
       <NodeFooter className="border-neutral-200 bg-neutral-50 dark:border-neutral-800 dark:bg-neutral-900">
         <p className="truncate text-xs text-neutral-500 dark:text-neutral-500">{nodeData.description}</p>
       </NodeFooter>
+      {unconnectedHandles && addNextContext && Array.from(unconnectedHandles).map((handle) => {
+        // Position matches the Handle layout in ai-elements/node.tsx:
+        //   default source: handle is on right edge at top: 50%
+        //   true/false:     handle sits inside a label; label is rendered
+        //                   outside the card with translate-x-full at
+        //                   top 38% / 62%
+        const isBranch = handle === 'true' || handle === 'false';
+        const top = handle === 'true' ? 38 : handle === 'false' ? 62 : 50;
+        // Branch handles have a ~28px label to the right of the card; push
+        // the plus past it. Default sources have no label.
+        const rightOffsetPx = isBranch ? 56 : 26;
+        return (
+          <button
+            key={handle}
+            type="button"
+            className="nodrag nopan absolute z-20 flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded-full border border-accent bg-white text-accent shadow-sm transition hover:scale-110 hover:bg-accent hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 dark:border-red-400 dark:bg-neutral-900 dark:text-red-300 dark:hover:bg-red-400 dark:hover:text-white"
+            style={{ right: -rightOffsetPx, top: `${top}%` }}
+            title="What happens next?"
+            aria-label={`Add next node${isBranch ? ` for ${handle} branch` : ''}`}
+            onMouseDown={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+            }}
+            onClick={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              addNextContext.onAddNext(nodeData.node.id, handle);
+            }}
+          >
+            <PlusIcon className="h-3 w-3" />
+          </button>
+        );
+      })}
     </Node>
   );
 }
