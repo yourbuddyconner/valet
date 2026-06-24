@@ -204,7 +204,7 @@ Three deploy workflows live in `.github/workflows/`:
 | `deploy-dev.yml` | Push to `main` | dev environment |
 | `deploy-prod.yml` | Push of a `v*` tag | prod environment |
 
-`deploy-dev.yml` and `deploy-prod.yml` call `make deploy` (the full `scripts/deploy.sh cmd_all` path: worker → migrations → modal → client). `deploy-preview.yml` calls `make deploy-client` with `PAGES_DEPLOY_BRANCH=pr-<number>` so the preview branch is published to the dev Pages project without deploying a per-PR Worker, D1, R2 bucket, or Modal backend. The client is built against the dev Worker URL; set `DEV_WORKER_URL` as a GitHub Actions variable in the `dev` environment when Cloudflare's deployment lookup cannot infer the correct workers.dev URL.
+`deploy-dev.yml` and `deploy-prod.yml` call `make deploy` (the full `scripts/deploy.sh cmd_all` path: worker → migrations → modal → client). `deploy-preview.yml` calls `make deploy-client` with `PAGES_DEPLOY_BRANCH=pr-<number>` so the preview branch is published to the dev Pages project without deploying a per-PR Worker, D1, R2 bucket, or Modal backend. All three workflows write `API_PUBLIC_URL` into `.env.deploy.<env>` from a GitHub Actions variable of the same name in each environment; the deploy script requires it (no auto-discovery fallback) and the client build uses it as `VITE_API_URL`.
 
 The Worker accepts preview OAuth redirects only for the configured frontend origin or for hosts under `FRONTEND_PREVIEW_ORIGIN_SUFFIX`, which defaults to `${PAGES_PROJECT_NAME}.pages.dev` during deploy config generation. Keep that suffix project-specific; do not set it to a broad value like `pages.dev`.
 
@@ -220,7 +220,7 @@ The Worker accepts preview OAuth redirects only for the configured frontend orig
 | `CLOUDFLARE_ACCOUNT_ID` | Secret | Your Cloudflare account ID (find it in the dashboard URL or `wrangler whoami`) |
 | `ALLOWED_EMAILS` | Secret | Comma-separated email allowlist; empty = no restriction |
 | `D1_DATABASE_ID` | Secret | Optional — auto-discovered from `wrangler d1 list` if omitted |
-| `DEV_WORKER_URL` | Variable | Optional for `deploy-preview.yml`; full dev Worker origin used for `VITE_API_URL` (for example `https://dev-valet-turnkey.<subdomain>.workers.dev`) |
+| `API_PUBLIC_URL` | Variable | **Required** in each environment. Full public Worker origin (e.g. `https://dev-valet-turnkey.<subdomain>.workers.dev` for dev). Written into `.env.deploy.<env>` and consumed by `deploy.sh` + the Worker runtime + the client build's `VITE_API_URL` |
 
 **Prod environment protection:** Add required reviewers to the `prod` GitHub Actions environment so every `v*` tag push triggers a manual approval gate before secrets are exposed.
 
