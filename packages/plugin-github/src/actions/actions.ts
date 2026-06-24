@@ -1390,13 +1390,13 @@ async function executeAction(
             direction: p.direction,
             per_page: p.limit ?? 30,
           };
-          const { data } = p.org
-            ? await octokit.request('GET /orgs/{org}/dependabot/alerts', { org: p.org, ...query })
-            : await octokit.request('GET /repos/{owner}/{repo}/dependabot/alerts', {
-                owner: p.owner!, repo: p.repo!, ...query,
-              });
+          const data = p.org
+            ? (await octokit.request('GET /orgs/{org}/dependabot/alerts', { org: p.org, ...query })).data
+            : (await octokit.request('GET /repos/{owner}/{repo}/dependabot/alerts', {
+                owner: p.owner as string, repo: p.repo as string, ...query,
+              })).data;
 
-          const items = data.map((a: any) => ({
+          const alerts = data.map((a) => ({
             number: a.number,
             state: a.state,
             severity: a.security_advisory?.severity ?? a.security_vulnerability?.severity ?? null,
@@ -1411,10 +1411,10 @@ async function executeAction(
             updated_at: a.updated_at ?? null,
             dismissed_at: a.dismissed_at ?? null,
             fixed_at: a.fixed_at ?? null,
-            repository: a.repository?.full_name ?? null,
+            repository: (a as { repository?: { full_name?: string } }).repository?.full_name ?? null,
           }));
 
-          return { success: true, data: { total_count: items.length, alerts: items } };
+          return { success: true, data: { count: alerts.length, alerts } };
         } catch (err: any) {
           return handleOctokitError(err, actionId, 'List dependabot alerts');
         }
