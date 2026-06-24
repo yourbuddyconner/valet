@@ -36,16 +36,30 @@ const writeMemorySchema = z.object({
   content: z.string().min(1).max(50000),
 });
 
-const importMemorySchema = z.object({
+// The import envelope is validated loosely so a full memory export round-trips
+// (e.g. migrating memory dev → prod): the per-file importer (importMemoryFiles)
+// does the real per-file validation, skipping invalid/empty files with a reason
+// instead of 400-ing the whole bundle. A normal export — itself ≤200 non-pinned
+// files plus pinned preferences/* — imports losslessly; importing past the
+// 200-file non-pinned cap prunes the excess and reports it via
+// MemoryImportResult.pruned rather than silently dropping files.
+export const importMemorySchema = z.object({
   files: z
     .array(
       z.object({
         path: z.string().min(1).max(256),
-        content: z.string().max(50000),
+        // No content length cap: real memory files exceed 50k via the agent's
+        // uncapped PATCH/append writes. content is a D1 bound parameter (not
+        // subject to the 100KB SQL-text limit); the true ceiling is D1's 2MB
+        // row size, and an oversize file is skipped-and-reported per-file by
+        // importMemoryFiles — never a 400 that fails the entire import.
+        content: z.string(),
       }),
     )
-    .min(1)
-    .max(500),
+    // No max file count: exportMemoryFiles is uncapped and a real account can
+    // exceed any fixed cap (200 non-pinned soft cap + unbounded pinned
+    // preferences/*), so a fixed cap would re-create this same bug class.
+    .min(1),
 });
 
 const patchMemorySchema = z.object({

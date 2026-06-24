@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { createTestDb } from '../../test-utils/db.js';
-import { writeMemoryFile, exportMemoryFiles, importMemoryFiles } from './memory-files.js';
+import { writeMemoryFile, exportMemoryFiles, importMemoryFiles, searchMemoryFiles } from './memory-files.js';
 
 // Thin adapter: wraps better-sqlite3 sync API to match the D1Database async interface.
 function makeD1Adapter(sqlite: any) {
@@ -131,5 +131,118 @@ describe('exportMemoryFiles / importMemoryFiles', () => {
 
   it('returns an empty bundle for a user with no memory', async () => {
     expect(await exportMemoryFiles(db, 'user-with-nothing')).toEqual([]);
+  });
+
+  // ── Large files (regression for the 50k import 400) ──────────────────────────
+  // Real memory files grow past 50k via the agent's uncapped PATCH/append writes,
+  // so a real export bundle contains oversized files. Import must round-trip them.
+
+  it('imports a file over 50k characters losslessly', async () => {
+    const content = '# Big\n\n' + 'x'.repeat(60001);
+    const result = await importMemoryFiles(rawDb, USER_B, [{ path: 'big/note.md', content }]);
+
+    expect(result.imported).toBe(1);
+    expect(result.skipped).toEqual([]);
+
+    // Round-trip via export and assert byte-for-byte (no truncation).
+    const exported = await exportMemoryFiles(db, USER_B);
+    const big = exported.find((f) => f.path === 'big/note.md');
+    expect(big?.content.length).toBe(content.length);
+    expect(big?.content).toBe(content);
+  });
+
+  it('imports a large file alongside small ones in one bundle (no 400)', async () => {
+    const result = await importMemoryFiles(rawDb, USER_B, [
+      { path: 'notes/a.md', content: '# A' },
+      { path: 'notes/huge.md', content: '#\n' + 'y'.repeat(70000) },
+      { path: 'notes/b.md', content: '# B' },
+    ]);
+
+    expect(result.imported).toBe(3);
+    expect(result.skipped).toEqual([]);
+  });
+
+  it('preserves pinning, merge, and FTS sync on a mixed >50k bundle', async () => {
+    const overviewBefore = getRow(USER_A, 'projects/valet/overview.md');
+    expect(overviewBefore?.version).toBe(1);
+
+    const result = await importMemoryFiles(rawDb, USER_A, [
+      { path: 'preferences/big-pref.md', content: '# Pref\n\n' + 'p'.repeat(60000) },
+      { path: 'notes/big-note.md', content: '# Note\n\n' + 'n'.repeat(60000) },
+      // Overwrite an existing seeded file with a searchable token.
+      { path: 'projects/valet/overview.md', content: '# Valet\n\nNow mentions reindexedtoken explicitly.' },
+    ]);
+
+    expect(result.imported).toBe(3);
+    expect(result.skipped).toEqual([]);
+
+    // Pinning derived from path: preferences/* pinned, others not.
+    expect(getRow(USER_A, 'preferences/big-pref.md')?.pinned).toBe(1);
+    expect(getRow(USER_A, 'notes/big-note.md')?.pinned).toBe(0);
+
+    // Merge overwrote the existing file (version bumped), didn't duplicate.
+    expect(getRow(USER_A, 'projects/valet/overview.md')?.version).toBe(2);
+
+    // FTS index was re-synced on overwrite — the new token is searchable.
+    const hits = await searchMemoryFiles(rawDb, USER_A, 'reindexedtoken');
+    expect(hits.some((h) => h.path === 'projects/valet/overview.md')).toBe(true);
+  });
+
+  // ── Cap interaction: import respects the 200 non-pinned cap and reports it ────
+
+  const countRows = (userId: string, pinned: 0 | 1) =>
+    (sqlite
+      .prepare('SELECT COUNT(*) AS c FROM orchestrator_memory_files WHERE user_id = ? AND pinned = ?')
+      .get(userId, pinned) as { c: number }).c;
+
+  it('imports past the 200-file cap: keeps 200 non-pinned + all pinned, reports pruned', async () => {
+    const files = [
+      ...Array.from({ length: 250 }, (_, i) => ({ path: `notes/n-${i}.md`, content: `# note ${i}` })),
+      ...Array.from({ length: 10 }, (_, i) => ({ path: `preferences/p-${i}.md`, content: `# pref ${i}` })),
+    ];
+
+    const result = await importMemoryFiles(rawDb, USER_B, files);
+
+    // All 260 writes succeeded; the cap then pruned the non-pinned excess (250 - 200).
+    expect(result.imported).toBe(260);
+    expect(result.skipped).toEqual([]);
+    expect(result.pruned).toBe(50);
+
+    // Exactly 200 non-pinned survive; all 10 pinned preferences/* survive.
+    expect(countRows(USER_B, 0)).toBe(200);
+    expect(countRows(USER_B, 1)).toBe(10);
+  });
+
+  it('does not prune a normal under-cap import', async () => {
+    const result = await importMemoryFiles(rawDb, USER_B, [
+      { path: 'notes/a.md', content: '# A' },
+      { path: 'notes/b.md', content: '# B' },
+    ]);
+    expect(result.imported).toBe(2);
+    expect(result.pruned).toBe(0);
+  });
+
+  it('normalizes paths on import while preserving content verbatim', async () => {
+    const content = '# My Note\n\nVerbatim body — unchanged.';
+    const result = await importMemoryFiles(rawDb, USER_B, [{ path: 'Notes/My Note.md', content }]);
+
+    expect(result.imported).toBe(1);
+    // Path is normalized (lowercased, spaces → hyphens); content is byte-for-byte.
+    expect(getRow(USER_B, 'notes/my-note.md')?.content).toBe(content);
+  });
+
+  it('a duplicate path within one bundle collapses to one row with the last content', async () => {
+    const result = await importMemoryFiles(rawDb, USER_B, [
+      { path: 'notes/dup.md', content: '# first' },
+      { path: 'notes/dup.md', content: '# second' },
+    ]);
+
+    // imported counts write attempts (2), but the path is unique so one row remains.
+    expect(result.imported).toBe(2);
+    const rows = sqlite
+      .prepare("SELECT content FROM orchestrator_memory_files WHERE user_id = ? AND path = 'notes/dup.md'")
+      .all(USER_B) as { content: string }[];
+    expect(rows).toHaveLength(1);
+    expect(rows[0].content).toBe('# second');
   });
 });

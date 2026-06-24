@@ -213,9 +213,10 @@ export function MemoryExplorer({ files }: { files: MemoryFileListing[] }) {
     try {
       const result = await importMemory.mutateAsync(toImport);
       const skippedNote = result.skipped.length > 0 ? `, ${result.skipped.length} skipped` : '';
+      const prunedNote = result.pruned > 0 ? `, ${result.pruned} pruned by memory cap` : '';
       toastSuccess(
         'Memory imported',
-        `${result.imported} ${result.imported === 1 ? 'file' : 'files'} imported${skippedNote}.`,
+        `${result.imported} ${result.imported === 1 ? 'file' : 'files'} imported${skippedNote}${prunedNote}.`,
       );
     } catch {
       toastError('Import failed', 'Could not import the memory bundle.');

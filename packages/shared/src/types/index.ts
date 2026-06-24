@@ -891,6 +891,12 @@ export interface MemoryExportBundle {
 export interface MemoryImportResult {
   imported: number;
   skipped: { path: string; reason: string }[];
+  /**
+   * Non-pinned files removed by the 200-file memory cap after the import.
+   * Normally 0 — only non-zero when an import pushes the account's non-pinned
+   * file count past the cap (e.g. merging into an already-large account).
+   */
+  pruned: number;
 }
 
 export interface OrchestratorInfo {
