@@ -280,13 +280,17 @@ const gmailDraftListItemSchema = {
   },
 } satisfies Record<string, unknown>;
 
+// Attachment metadata only — the raw bytes are NOT inlined. Callers wanting
+// the file body need a follow-up call to Gmail's users.messages.attachments
+// endpoint with this attachmentId (no plugin action wraps that yet).
 const gmailAttachmentSchema = {
   type: 'object',
   properties: {
-    attachmentId: { type: 'string' },
+    partId: { type: ['string', 'null'] },
+    attachmentId: { type: ['string', 'null'], description: 'Pass to a future get_attachment call to download the bytes' },
     filename: { type: 'string' },
     mimeType: { type: 'string' },
-    size: { type: 'number' },
+    size: { type: 'number', description: 'Decoded byte count' },
   },
 } satisfies Record<string, unknown>;
 
