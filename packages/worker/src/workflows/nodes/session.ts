@@ -30,6 +30,34 @@ import type { NodeExecutorArgs } from '../types.js';
 const DEFAULT_WAIT_TIMEOUT_MS = 24 * 60 * 60 * 1000;
 const SUCCESSFUL_WAIT_STATUSES = new Set(['idle', 'hibernated', 'terminated']);
 
+// Allowed git URL forms. Permissive on purpose — we don't try to validate
+// hosts or paths, just the leading scheme, since callers use a wide variety
+// of git providers.
+const GIT_URL_RE = /^(?:https?|git|ssh):\/\/[^\s]+$|^git@[^\s:]+:[^\s]+$/;
+// "owner/repo" with conservative GitHub allowed character set.
+const GITHUB_FULL_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*\/[A-Za-z0-9][A-Za-z0-9._-]*$/;
+
+function validateRepoParams(
+  nodeId: string,
+  repo: NonNullable<StartSessionNode['repo']> | undefined,
+): void {
+  if (!repo) return;
+  if (repo.url !== undefined && repo.url !== '' && !GIT_URL_RE.test(repo.url)) {
+    throw new Error(
+      `session node "${nodeId}": repo.url is not a valid git URL ("${repo.url}"). Expected https://, http://, ssh://, git://, or git@host:path.`,
+    );
+  }
+  if (
+    repo.sourceRepoFullName !== undefined &&
+    repo.sourceRepoFullName !== '' &&
+    !GITHUB_FULL_NAME_RE.test(repo.sourceRepoFullName)
+  ) {
+    throw new Error(
+      `session node "${nodeId}": repo.sourceRepoFullName must be "owner/repo" ("${repo.sourceRepoFullName}").`,
+    );
+  }
+}
+
 function sessionFinalStatusFromWaitStatus(waitStatus: string): string {
   return SUCCESSFUL_WAIT_STATUSES.has(waitStatus) ? 'completed' : waitStatus;
 }
@@ -67,6 +95,7 @@ async function executeStart(args: NodeExecutorArgs<StartSessionNode>): Promise<S
   const workspace = coerceTemplateString(renderTemplate(args.node.workspace, ctx));
   const title = args.node.title !== undefined ? coerceTemplateString(renderTemplate(args.node.title, ctx)) : undefined;
   const repo = args.node.repo ? (renderJsonTemplates(args.node.repo, ctx) as StartSessionNode['repo']) : undefined;
+  validateRepoParams(args.node.id, repo);
 
   // Split into three sequential step.do calls so a retry of any
   // single step doesn't re-fire the prior side effect. Without this

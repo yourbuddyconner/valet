@@ -86,6 +86,7 @@ import {
 import { buildModelSelectorGroups } from '@/components/ui/model-selector-utils';
 import { cn } from '@/lib/cn';
 import { useAvailableModels } from '@/api/sessions';
+import { usePersonas } from '@/api/personas';
 import { useAuthStore } from '@/stores/auth';
 import {
   applyDefaultDataFlowForConnection,
@@ -1843,6 +1844,38 @@ function WorkflowModelPicker({
   );
 }
 
+function WorkflowPersonaPicker({
+  value,
+  onChange,
+}: {
+  value?: string;
+  onChange: (value: string | undefined) => void;
+}) {
+  const { data: personas = [], isLoading } = usePersonas();
+  const selected = personas.find((p) => p.id === value);
+  return (
+    <select
+      value={value ?? ''}
+      onChange={(event) => onChange(optionalString(event.target.value))}
+      disabled={isLoading}
+      className="h-10 w-full rounded-md border border-neutral-200 bg-white px-3 text-sm text-neutral-900 focus:border-neutral-400 focus:outline-none disabled:opacity-60 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100"
+    >
+      <option value="">Default persona</option>
+      {personas.map((persona) => (
+        <option key={persona.id} value={persona.id}>
+          {persona.name}
+          {persona.isDefault ? ' (default)' : ''}
+        </option>
+      ))}
+      {/* Preserve a previously-saved value that no longer exists in the list so
+          we don't silently clear it on the user. */}
+      {value && !selected && !isLoading && (
+        <option value={value}>{value} (not found)</option>
+      )}
+    </select>
+  );
+}
+
 function ToolFields({ node, onUpdate, templateSources }: NodeFieldProps<ToolNode>) {
   const { data: actionCatalog = [], isLoading } = useActionCatalog();
   const catalogIndex = React.useMemo(() => buildToolCatalogIndex(actionCatalog), [actionCatalog]);
@@ -2538,8 +2571,8 @@ function SessionFields({ node, onUpdate, templateSources }: NodeFieldProps<Sessi
           <Field label="Title">
             <Input value={node.title ?? ''} onChange={(event) => onUpdate({ title: optionalString(event.target.value) })} />
           </Field>
-          <Field label="Persona">
-            <Input value={node.personaId ?? ''} onChange={(event) => onUpdate({ personaId: optionalString(event.target.value) })} />
+          <Field label="Persona" help={NODE_DOCS.session.fields?.personaId?.help}>
+            <WorkflowPersonaPicker value={node.personaId} onChange={(personaId) => onUpdate({ personaId })} />
           </Field>
           <Field label="Model">
             <WorkflowModelPicker value={node.model} onChange={(model) => onUpdate({ model })} />
