@@ -25,6 +25,7 @@ const USER_B = 'user-export-b';
 
 describe('exportMemoryFiles / importMemoryFiles', () => {
   let rawDb: any;
+  let db: any;
   let sqlite: any;
 
   // Read a row straight from the underlying SQLite (bypasses Drizzle).
@@ -37,7 +38,7 @@ describe('exportMemoryFiles / importMemoryFiles', () => {
     sqlite.prepare("INSERT INTO users (id, email, role) VALUES (?, ?, 'member')").run(id, `${id}@test.com`);
 
   beforeEach(async () => {
-    ({ sqlite } = createTestDb());
+    ({ db, sqlite } = createTestDb());
     rawDb = makeD1Adapter(sqlite);
     seedUser(USER_A);
     seedUser(USER_B);
@@ -48,7 +49,7 @@ describe('exportMemoryFiles / importMemoryFiles', () => {
   });
 
   it('exports every file with full content, ordered by path', async () => {
-    const files = await exportMemoryFiles(rawDb, USER_A);
+    const files = await exportMemoryFiles(db, USER_A);
 
     expect(files).toHaveLength(3);
     expect(files.map((f) => f.path)).toEqual([
@@ -61,25 +62,25 @@ describe('exportMemoryFiles / importMemoryFiles', () => {
   });
 
   it('marks preferences files as pinned in the export', async () => {
-    const files = await exportMemoryFiles(rawDb, USER_A);
+    const files = await exportMemoryFiles(db, USER_A);
     expect(files.find((f) => f.path === 'preferences/coding-style.md')?.pinned).toBe(true);
     expect(files.find((f) => f.path === 'journal/2026-03-08.md')?.pinned).toBe(false);
   });
 
   it('scopes the export to a single user', async () => {
     await writeMemoryFile(rawDb, USER_B, 'projects/other/notes.md', '# Other user');
-    const exportedA = await exportMemoryFiles(rawDb, USER_A);
+    const exportedA = await exportMemoryFiles(db, USER_A);
     expect(exportedA.every((f) => f.path !== 'projects/other/notes.md')).toBe(true);
   });
 
   it('round-trips: export from one user, import into another, contents match', async () => {
-    const bundle = await exportMemoryFiles(rawDb, USER_A);
+    const bundle = await exportMemoryFiles(db, USER_A);
 
     const result = await importMemoryFiles(rawDb, USER_B, bundle);
     expect(result.imported).toBe(3);
     expect(result.skipped).toEqual([]);
 
-    const exportedB = await exportMemoryFiles(rawDb, USER_B);
+    const exportedB = await exportMemoryFiles(db, USER_B);
     expect(exportedB.map((f) => f.path)).toEqual(bundle.map((f) => f.path));
     expect(exportedB.map((f) => f.content)).toEqual(bundle.map((f) => f.content));
   });
@@ -129,6 +130,6 @@ describe('exportMemoryFiles / importMemoryFiles', () => {
   });
 
   it('returns an empty bundle for a user with no memory', async () => {
-    expect(await exportMemoryFiles(rawDb, 'user-with-nothing')).toEqual([]);
+    expect(await exportMemoryFiles(db, 'user-with-nothing')).toEqual([]);
   });
 });

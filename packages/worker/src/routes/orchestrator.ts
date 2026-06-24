@@ -271,7 +271,7 @@ orchestratorRouter.get('/memory/search', async (c) => {
  */
 orchestratorRouter.get('/memory/export', async (c) => {
   const user = c.get('user');
-  const files = await db.exportMemoryFiles(c.env.DB, user.id);
+  const files = await db.exportMemoryFiles(c.get('db'), user.id);
   const bundle: MemoryExportBundle = {
     version: 1,
     exportedAt: new Date().toISOString(),

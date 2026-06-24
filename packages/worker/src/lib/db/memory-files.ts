@@ -453,17 +453,23 @@ export async function searchMemoryFiles(
  * Returns every memory file for a user as a portable list (path + full content).
  * Ordered by path so exports are stable and diff-friendly. Scoped to the user.
  */
-export async function exportMemoryFiles(rawDb: D1Database, userId: string): Promise<MemoryExportFile[]> {
-  const result = await rawDb
-    .prepare('SELECT path, content, pinned, updated_at FROM orchestrator_memory_files WHERE user_id = ? ORDER BY path')
-    .bind(userId)
-    .all<{ path: string; content: string; pinned: number; updated_at: string }>();
+export async function exportMemoryFiles(db: AppDb, userId: string): Promise<MemoryExportFile[]> {
+  const rows = await db
+    .select({
+      path: orchestratorMemoryFiles.path,
+      content: orchestratorMemoryFiles.content,
+      pinned: orchestratorMemoryFiles.pinned,
+      updatedAt: orchestratorMemoryFiles.updatedAt,
+    })
+    .from(orchestratorMemoryFiles)
+    .where(eq(orchestratorMemoryFiles.userId, userId))
+    .orderBy(orchestratorMemoryFiles.path);
 
-  return (result.results || []).map((r) => ({
+  return rows.map((r) => ({
     path: r.path,
     content: r.content,
     pinned: r.pinned === 1,
-    updatedAt: r.updated_at,
+    updatedAt: r.updatedAt,
   }));
 }
 
