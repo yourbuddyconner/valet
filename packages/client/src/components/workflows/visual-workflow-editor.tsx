@@ -17,6 +17,7 @@ import type {
   WorkflowInputDefinition,
   WorkflowNode,
 } from '@valet/shared';
+import { NODE_DOCS } from '@valet/shared';
 import type {
   Connection,
   Edge as ReactFlowEdge,
@@ -53,6 +54,7 @@ import { useActionCatalog } from '@/api/action-catalog';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
+import { InfoTooltip } from '@/components/ui/info-tooltip';
 import {
   Command,
   CommandEmpty,
@@ -1564,6 +1566,7 @@ function TriggerFields({
         emptyMessage="Declare the fields this workflow expects. Manual runs prompt for these; other nodes can reference them in templates."
         value={node.dataSchema ?? {}}
         onChange={(dataSchema) => onUpdate({ dataSchema: Object.keys(dataSchema).length > 0 ? dataSchema : undefined })}
+        help={NODE_DOCS.trigger.fields?.dataSchema?.help}
       />
       <ToolSchemaContract
         title="Outputs"
@@ -1591,12 +1594,14 @@ function WorkflowSchemaFields({
   value,
   onChange,
   showDefault = true,
+  help,
 }: {
   title: string;
   emptyMessage: string;
   value: Record<string, WorkflowInputDefinition>;
   onChange: (value: Record<string, WorkflowInputDefinition>) => void;
   showDefault?: boolean;
+  help?: string;
 }) {
   const entries = Object.entries(value);
 
@@ -1611,7 +1616,7 @@ function WorkflowSchemaFields({
   return (
     <div className="space-y-2">
       <div className="flex items-center justify-between gap-2">
-        <LabelText>{title}</LabelText>
+        <LabelText help={help}>{title}</LabelText>
         <Button
           type="button"
           variant="secondary"
@@ -1689,17 +1694,18 @@ function LlmFields({ node, onUpdate, templateSources }: NodeFieldProps<LlmNode>)
     <>
       <TemplateTextAreaField label="Prompt" value={node.prompt} templateSources={templateSources} onChange={(prompt) => onUpdate({ prompt })} minRows={6} />
       <TemplateTextAreaField label="System" value={node.system ?? ''} templateSources={templateSources} onChange={(system) => onUpdate({ system: optionalString(system) })} minRows={3} />
-      <Field label="Model">
+      <Field label="Model" help={NODE_DOCS.llm.fields?.model?.help}>
         <WorkflowModelPicker value={node.model} onChange={(model) => onUpdate({ model })} />
       </Field>
-      <NumberField label="Temperature" value={node.temperature} min={0} max={2} step={0.1} onChange={(temperature) => onUpdate({ temperature })} />
-      <NumberField label="Max output tokens" value={node.maxOutputTokens} min={1} step={1} onChange={(maxOutputTokens) => onUpdate({ maxOutputTokens })} />
+      <NumberField label="Temperature" value={node.temperature} min={0} max={2} step={0.1} onChange={(temperature) => onUpdate({ temperature })} help={NODE_DOCS.llm.fields?.temperature?.help} />
+      <NumberField label="Max output tokens" value={node.maxOutputTokens} min={1} step={1} onChange={(maxOutputTokens) => onUpdate({ maxOutputTokens })} help={NODE_DOCS.llm.fields?.maxOutputTokens?.help} />
       <WorkflowSchemaFields
         title="Output schema"
         emptyMessage="Add fields when the model should return structured data instead of a text response."
         value={outputSchemaFields}
         showDefault={false}
         onChange={(definitions) => onUpdate({ outputSchema: workflowInputDefinitionsToJsonSchema(definitions) })}
+        help={NODE_DOCS.llm.fields?.outputSchema?.help}
       />
       {node.outputSchema && (
         <ToolSchemaContract title="Outputs" schema={node.outputSchema} />
@@ -1839,6 +1845,7 @@ function ToolFields({ node, onUpdate, templateSources }: NodeFieldProps<ToolNode
             ...(actionStillValid ? {} : { action: '' }),
           });
         }}
+        help={NODE_DOCS.tool.fields?.service?.help}
       />
       <ToolActionPicker
         actions={actions}
@@ -1849,6 +1856,7 @@ function ToolFields({ node, onUpdate, templateSources }: NodeFieldProps<ToolNode
         value={node.action}
         onCustomSelect={(action) => onUpdate({ action })}
         onSelect={(action) => onUpdate({ action: action.actionId })}
+        help={NODE_DOCS.tool.fields?.action?.help}
       />
       {selectedAction?.inputSchema && (
         <ToolSchemaContract title="Input parameters" schema={selectedAction.inputSchema} />
@@ -1856,17 +1864,18 @@ function ToolFields({ node, onUpdate, templateSources }: NodeFieldProps<ToolNode
       {selectedAction?.outputSchema && (
         <ToolSchemaContract title="Outputs" schema={selectedAction.outputSchema} />
       )}
-      <Field label="Summary">
+      <Field label="Summary" help={NODE_DOCS.tool.fields?.summary?.help}>
         <TemplateTextInput value={node.summary ?? ''} templateSources={templateSources} onChange={(summary) => onUpdate({ summary: optionalString(summary) })} />
       </Field>
-      <KeyValueEditor label="Params" value={node.params} templateSources={templateSources} onChange={(params) => onUpdate({ params })} />
+      <KeyValueEditor label="Params" value={node.params} templateSources={templateSources} onChange={(params) => onUpdate({ params })} help={NODE_DOCS.tool.fields?.params?.help} />
       <SelectField
         label="Policy deny"
         value={node.onPolicyDeny ?? 'fail'}
         options={['fail', 'skip']}
         onChange={(onPolicyDeny) => onUpdate({ onPolicyDeny })}
+        help={NODE_DOCS.tool.fields?.onPolicyDeny?.help}
       />
-      <NumberField label="Retries" value={node.retries} min={0} step={1} onChange={(retries) => onUpdate({ retries })} />
+      <NumberField label="Retries" value={node.retries} min={0} step={1} onChange={(retries) => onUpdate({ retries })} help={NODE_DOCS.tool.fields?.retries?.help} />
     </>
   );
 }
@@ -1936,6 +1945,7 @@ function ToolServicePicker({
   value,
   onCustomSelect,
   onSelect,
+  help,
 }: {
   isLoading: boolean;
   selectedService?: ToolCatalogService;
@@ -1943,6 +1953,7 @@ function ToolServicePicker({
   value: string;
   onCustomSelect: (service: string) => void;
   onSelect: (service: ToolCatalogService) => void;
+  help?: string;
 }) {
   const [open, setOpen] = React.useState(false);
   const [query, setQuery] = React.useState('');
@@ -1951,7 +1962,7 @@ function ToolServicePicker({
     customCandidate.length > 0 && !services.some((service) => service.service === customCandidate);
 
   return (
-    <Field label="Service">
+    <Field label="Service" help={help}>
       <ToolPickerDialog open={open} onOpenChange={setOpen}>
         <DialogTrigger asChild>
           <Button
@@ -2024,6 +2035,7 @@ function ToolActionPicker({
   value,
   onCustomSelect,
   onSelect,
+  help,
 }: {
   actions: ToolCatalogAction[];
   disabled: boolean;
@@ -2033,6 +2045,7 @@ function ToolActionPicker({
   value: string;
   onCustomSelect: (action: string) => void;
   onSelect: (action: ToolCatalogAction) => void;
+  help?: string;
 }) {
   const [open, setOpen] = React.useState(false);
   const [query, setQuery] = React.useState('');
@@ -2041,7 +2054,7 @@ function ToolActionPicker({
     customCandidate.length > 0 && !actions.some((action) => action.actionId === customCandidate);
 
   return (
-    <Field label="Action">
+    <Field label="Action" help={help}>
       <ToolPickerDialog open={open} onOpenChange={setOpen}>
         <DialogTrigger asChild>
           <Button
@@ -2165,10 +2178,11 @@ function IfFields({ node, onUpdate, templateSources }: NodeFieldProps<IfNode>) {
         value={node.combinator ?? 'and'}
         options={['and', 'or']}
         onChange={(combinator) => onUpdate({ combinator })}
+        help={NODE_DOCS.if.fields?.combinator?.help}
       />
       <div className="space-y-2">
         <div className="flex items-center justify-between">
-          <LabelText>Conditions</LabelText>
+          <LabelText help={NODE_DOCS.if.fields?.conditions?.help}>Conditions</LabelText>
           <Button
             type="button"
             variant="secondary"
@@ -2248,6 +2262,7 @@ function ForeachFields({
         sources={outputSources}
         value={node.items}
         onSelect={(source) => onUpdate({ items: source.expression })}
+        help={NODE_DOCS.foreach.fields?.items?.help}
       />
       {selectedSource?.itemFields && selectedSource.itemFields.length > 0 && (
         <ForeachItemFields
@@ -2255,13 +2270,13 @@ function ForeachFields({
           itemAlias={itemAlias}
         />
       )}
-      <ForeachBodyField value={node.body} onChange={(body) => onUpdate({ body })} />
+      <ForeachBodyField value={node.body} onChange={(body) => onUpdate({ body })} help={NODE_DOCS.foreach.fields?.body?.help} />
       <DisclosureSection
         open={advancedOpen}
         title="Advanced"
         onOpenChange={setAdvancedOpen}
       >
-        <Field label={selectedSource ? 'Generated expression' : 'Items expression'}>
+        <Field label={selectedSource ? 'Generated expression' : 'Items expression'} help={NODE_DOCS.foreach.fields?.items?.help}>
           <TemplateTextInput
             value={node.items}
             readOnly={Boolean(selectedSource)}
@@ -2272,22 +2287,23 @@ function ForeachFields({
           />
         </Field>
         <div className="grid grid-cols-2 gap-2">
-          <Field label="Item alias">
+          <Field label="Item alias" help={NODE_DOCS.foreach.fields?.itemAlias?.help}>
             <Input value={node.itemAlias ?? ''} onChange={(event) => onUpdate({ itemAlias: optionalString(event.target.value) })} placeholder="item" />
           </Field>
-          <Field label="Index alias">
+          <Field label="Index alias" help={NODE_DOCS.foreach.fields?.indexAlias?.help}>
             <Input value={node.indexAlias ?? ''} onChange={(event) => onUpdate({ indexAlias: optionalString(event.target.value) })} placeholder="index" />
           </Field>
         </div>
         <div className="grid grid-cols-2 gap-2">
-          <NumberField label="Process limit" value={node.maxItems} min={1} step={1} onChange={(maxItems) => onUpdate({ maxItems })} />
-          <NumberField label="Concurrency" value={node.concurrency} min={1} step={1} onChange={(concurrency) => onUpdate({ concurrency })} />
+          <NumberField label="Process limit" value={node.maxItems} min={1} step={1} onChange={(maxItems) => onUpdate({ maxItems })} help={NODE_DOCS.foreach.fields?.maxItems?.help} />
+          <NumberField label="Concurrency" value={node.concurrency} min={1} step={1} onChange={(concurrency) => onUpdate({ concurrency })} help={NODE_DOCS.foreach.fields?.concurrency?.help} />
         </div>
         <SelectField
           label="Item error"
           value={node.onItemError ?? 'fail'}
           options={['fail', 'skip', 'collect']}
           onChange={(onItemError) => onUpdate({ onItemError })}
+          help={NODE_DOCS.foreach.fields?.onItemError?.help}
         />
       </DisclosureSection>
     </>
@@ -2358,16 +2374,18 @@ function ForeachSourcePicker({
   sources,
   value,
   onSelect,
+  help,
 }: {
   selectedSource?: WorkflowOutputSource;
   sources: WorkflowOutputSource[];
   value: string;
   onSelect: (source: WorkflowOutputSource) => void;
+  help?: string;
 }) {
   const [open, setOpen] = React.useState(false);
 
   return (
-    <Field label="Source">
+    <Field label="Source" help={help}>
       <ToolPickerDialog open={open} onOpenChange={setOpen}>
         <DialogTrigger asChild>
           <Button
@@ -2417,12 +2435,12 @@ function ForeachSourcePicker({
 function ApprovalFields({ node, onUpdate, templateSources }: NodeFieldProps<ApprovalNode>) {
   return (
     <>
-      <TemplateTextAreaField label="Prompt" value={node.prompt} templateSources={templateSources} onChange={(prompt) => onUpdate({ prompt })} minRows={5} />
-      <Field label="Summary">
+      <TemplateTextAreaField label="Prompt" value={node.prompt} templateSources={templateSources} onChange={(prompt) => onUpdate({ prompt })} minRows={5} help={NODE_DOCS.approval.fields?.prompt?.help} />
+      <Field label="Summary" help={NODE_DOCS.approval.fields?.summary?.help}>
         <TemplateTextInput value={node.summary ?? ''} templateSources={templateSources} onChange={(summary) => onUpdate({ summary: optionalString(summary) })} />
       </Field>
-      <JsonValueField label="Details" value={node.details} onChange={(details) => onUpdate({ details })} />
-      <Field label="Timeout">
+      <JsonValueField label="Details" value={node.details} onChange={(details) => onUpdate({ details })} help={NODE_DOCS.approval.fields?.details?.help} />
+      <Field label="Timeout" help={NODE_DOCS.approval.fields?.timeout?.help}>
         <Input value={node.timeout ?? ''} onChange={(event) => onUpdate({ timeout: optionalString(event.target.value) })} placeholder="24h" />
       </Field>
       <SelectField
@@ -2430,6 +2448,7 @@ function ApprovalFields({ node, onUpdate, templateSources }: NodeFieldProps<Appr
         value={node.onDeny ?? 'fail'}
         options={['fail', 'skip']}
         onChange={(onDeny) => onUpdate({ onDeny })}
+        help={NODE_DOCS.approval.fields?.onDeny?.help}
       />
     </>
   );
@@ -2441,7 +2460,7 @@ function WaitFields({ node, onUpdate }: NodeFieldProps<WaitNode>) {
       <Field label="Mode">
         <Input value={node.mode} readOnly />
       </Field>
-      <Field label="Duration">
+      <Field label="Duration" help={NODE_DOCS.wait.fields?.duration?.help}>
         <Input value={node.duration} onChange={(event) => onUpdate({ duration: event.target.value })} placeholder="5m" />
       </Field>
     </>
@@ -2449,22 +2468,23 @@ function WaitFields({ node, onUpdate }: NodeFieldProps<WaitNode>) {
 }
 
 function SetFields({ node, onUpdate, templateSources }: NodeFieldProps<SetNode>) {
-  return <KeyValueEditor label="Values" value={asRecord(node.values)} templateSources={templateSources} onChange={(values) => onUpdate({ values })} />;
+  return <KeyValueEditor label="Values" value={asRecord(node.values)} templateSources={templateSources} onChange={(values) => onUpdate({ values })} help={NODE_DOCS.set.fields?.values?.help} />;
 }
 
 function OrchestratorFields({ node, onUpdate, templateSources }: NodeFieldProps<OrchestratorNode>) {
   const waitMode = node.wait?.mode ?? 'none';
   return (
     <>
-      <TemplateTextAreaField label="Prompt" value={node.prompt} templateSources={templateSources} onChange={(prompt) => onUpdate({ prompt })} minRows={6} />
-      <CheckboxField label="Force new thread" checked={Boolean(node.forceNewThread)} onChange={(forceNewThread) => onUpdate({ forceNewThread })} />
-      <WaitPolicyFields value={node.wait} onChange={(wait) => onUpdate({ wait })} />
+      <TemplateTextAreaField label="Prompt" value={node.prompt} templateSources={templateSources} onChange={(prompt) => onUpdate({ prompt })} minRows={6} help={NODE_DOCS.orchestrator.fields?.prompt?.help} />
+      <CheckboxField label="Force new thread" checked={Boolean(node.forceNewThread)} onChange={(forceNewThread) => onUpdate({ forceNewThread })} help={NODE_DOCS.orchestrator.fields?.forceNewThread?.help} />
+      <WaitPolicyFields value={node.wait} onChange={(wait) => onUpdate({ wait })} help={NODE_DOCS.orchestrator.fields?.wait?.help} />
       {waitMode === 'until_idle' && (
         <SelectField
           label="Result"
           value={node.resultMode ?? 'last_message'}
           options={['last_message', 'transcript']}
           onChange={(resultMode) => onUpdate({ resultMode })}
+          help={NODE_DOCS.orchestrator.fields?.resultMode?.help}
         />
       )}
     </>
@@ -2486,11 +2506,12 @@ function SessionFields({ node, onUpdate, templateSources }: NodeFieldProps<Sessi
             onUpdate({ mode, sessionId: '', prompt: node.prompt });
           }
         }}
+        help={NODE_DOCS.session.fields?.mode?.help}
       />
       {node.mode === 'start' ? (
         <>
           <TemplateTextAreaField label="Prompt" value={node.prompt} templateSources={templateSources} onChange={(prompt) => onUpdate({ prompt })} minRows={5} />
-          <Field label="Workspace">
+          <Field label="Workspace" help={NODE_DOCS.session.fields?.workspace?.help}>
             <Input value={node.workspace} onChange={(event) => onUpdate({ workspace: event.target.value })} placeholder="repo or workspace" />
           </Field>
           <Field label="Title">
@@ -2502,21 +2523,21 @@ function SessionFields({ node, onUpdate, templateSources }: NodeFieldProps<Sessi
           <Field label="Model">
             <WorkflowModelPicker value={node.model} onChange={(model) => onUpdate({ model })} />
           </Field>
-          <RepoFields value={node.repo} onChange={(repo) => onUpdate({ repo })} />
+          <RepoFields value={node.repo} onChange={(repo) => onUpdate({ repo })} help={NODE_DOCS.session.fields?.repo?.help} />
         </>
       ) : (
         <>
           <TemplateTextAreaField label="Prompt" value={node.prompt} templateSources={templateSources} onChange={(prompt) => onUpdate({ prompt })} minRows={5} />
-          <Field label="Session ID">
+          <Field label="Session ID" help={NODE_DOCS.session.fields?.sessionId?.help}>
             <Input value={node.sessionId} onChange={(event) => onUpdate({ sessionId: event.target.value })} />
           </Field>
-          <Field label="Thread ID">
+          <Field label="Thread ID" help={NODE_DOCS.session.fields?.threadId?.help}>
             <Input value={node.threadId ?? ''} onChange={(event) => onUpdate({ threadId: optionalString(event.target.value) })} />
           </Field>
-          <CheckboxField label="Force new thread" checked={Boolean(node.forceNewThread)} onChange={(forceNewThread) => onUpdate({ forceNewThread })} />
+          <CheckboxField label="Force new thread" checked={Boolean(node.forceNewThread)} onChange={(forceNewThread) => onUpdate({ forceNewThread })} help={NODE_DOCS.session.fields?.forceNewThread?.help} />
         </>
       )}
-      <WaitPolicyFields value={wait} onChange={(nextWait) => onUpdate({ wait: nextWait })} />
+      <WaitPolicyFields value={wait} onChange={(nextWait) => onUpdate({ wait: nextWait })} help={NODE_DOCS.session.fields?.wait?.help} />
     </>
   );
 }
@@ -2529,11 +2550,12 @@ function StopFields({ node, onUpdate, templateSources }: NodeFieldProps<StopNode
         value={node.outcome ?? 'success'}
         options={['success', 'failure']}
         onChange={(outcome) => onUpdate({ outcome })}
+        help={NODE_DOCS.stop.fields?.outcome?.help}
       />
-      <Field label="Message">
+      <Field label="Message" help={NODE_DOCS.stop.fields?.message?.help}>
         <TemplateTextInput value={node.message ?? ''} templateSources={templateSources} onChange={(message) => onUpdate({ message: optionalString(message) })} />
       </Field>
-      <JsonValueField label="Output" value={node.output} onChange={(output) => onUpdate({ output })} />
+      <JsonValueField label="Output" value={node.output} onChange={(output) => onUpdate({ output })} help={NODE_DOCS.stop.fields?.output?.help} />
     </>
   );
 }
@@ -2544,19 +2566,27 @@ interface NodeFieldProps<TNode extends WorkflowNode> {
   onUpdate: (patch: Partial<TNode>) => void;
 }
 
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
+function Field({ label, children, help }: { label: string; children: React.ReactNode; help?: string }) {
   return (
     <div className="space-y-1">
-      <LabelText>{label}</LabelText>
+      <LabelText help={help}>{label}</LabelText>
       {children}
     </div>
   );
 }
 
-function LabelText({ children }: { children: React.ReactNode }) {
+function LabelText({
+  children,
+  help,
+}: {
+  children: React.ReactNode;
+  /** Optional clarification rendered as an info-icon tooltip after the label. */
+  help?: string;
+}) {
   return (
-    <label className="text-xs font-medium text-neutral-700 dark:text-neutral-300">
+    <label className="inline-flex items-center gap-1.5 text-xs font-medium text-neutral-700 dark:text-neutral-300">
       {children}
+      {help && <InfoTooltip help={help} />}
     </label>
   );
 }
@@ -2567,15 +2597,17 @@ function TemplateTextAreaField({
   onChange,
   templateSources,
   minRows = 3,
+  help,
 }: {
   label: string;
   value: string;
   onChange: (value: string) => void;
   templateSources: WorkflowOutputSource[];
   minRows?: number;
+  help?: string;
 }) {
   return (
-    <Field label={label}>
+    <Field label={label} help={help}>
       <TemplateTextInput
         value={value}
         multiline
@@ -2737,14 +2769,16 @@ function SelectField<TValue extends string>({
   value,
   options,
   onChange,
+  help,
 }: {
   label: string;
   value: TValue;
   options: TValue[];
   onChange: (value: TValue) => void;
+  help?: string;
 }) {
   return (
-    <Field label={label}>
+    <Field label={label} help={help}>
       <NativeSelect value={value} options={options} onChange={onChange} />
     </Field>
   );
@@ -2781,6 +2815,7 @@ function NumberField({
   max,
   step,
   onChange,
+  help,
 }: {
   label: string;
   value?: number;
@@ -2788,9 +2823,10 @@ function NumberField({
   max?: number;
   step?: number;
   onChange: (value: number | undefined) => void;
+  help?: string;
 }) {
   return (
-    <Field label={label}>
+    <Field label={label} help={help}>
       <Input
         type="number"
         value={value ?? ''}
@@ -2807,10 +2843,12 @@ function CheckboxField({
   label,
   checked,
   onChange,
+  help,
 }: {
   label: string;
   checked: boolean;
   onChange: (checked: boolean) => void;
+  help?: string;
 }) {
   return (
     <label className="flex items-center gap-2 text-sm text-neutral-700 dark:text-neutral-300">
@@ -2821,6 +2859,7 @@ function CheckboxField({
         className="h-4 w-4 rounded border-neutral-300"
       />
       {label}
+      {help && <InfoTooltip help={help} />}
     </label>
   );
 }
@@ -2830,11 +2869,13 @@ function KeyValueEditor({
   value,
   templateSources,
   onChange,
+  help,
 }: {
   label: string;
   value: Record<string, unknown>;
   templateSources: WorkflowOutputSource[];
   onChange: (value: Record<string, unknown>) => void;
+  help?: string;
 }) {
   const entries = Object.entries(value);
 
@@ -2848,7 +2889,7 @@ function KeyValueEditor({
   return (
     <div className="space-y-2">
       <div className="flex items-center justify-between">
-        <LabelText>{label}</LabelText>
+        <LabelText help={help}>{label}</LabelText>
         <Button
           type="button"
           variant="secondary"
@@ -2891,10 +2932,12 @@ function JsonValueField({
   label,
   value,
   onChange,
+  help,
 }: {
   label: string;
   value: unknown;
   onChange: (value: Record<string, unknown> | undefined) => void;
+  help?: string;
 }) {
   const [text, setText] = React.useState(value === undefined ? '' : JSON.stringify(value, null, 2));
   const [error, setError] = React.useState<string | null>(null);
@@ -2923,7 +2966,7 @@ function JsonValueField({
   }
 
   return (
-    <Field label={label}>
+    <Field label={label} help={help}>
       <textarea
         value={text}
         onChange={(event) => setText(event.target.value)}
@@ -2940,9 +2983,11 @@ function JsonValueField({
 function ForeachBodyField({
   value,
   onChange,
+  help,
 }: {
   value: ForeachBodyNode;
   onChange: (value: ForeachBodyNode) => void;
+  help?: string;
 }) {
   const [advancedOpen, setAdvancedOpen] = React.useState(false);
   const [text, setText] = React.useState(JSON.stringify(value, null, 2));
@@ -2985,7 +3030,7 @@ function ForeachBodyField({
   return (
     <div className="space-y-3 rounded-md border border-neutral-200 p-2 dark:border-neutral-700">
       <div className="flex items-center justify-between gap-2">
-        <LabelText>Step to run for each item</LabelText>
+        <LabelText help={help}>Step to run for each item</LabelText>
         <Badge variant="secondary">{value.type}</Badge>
       </div>
       <SelectField
@@ -3022,9 +3067,11 @@ function ForeachBodyField({
 function WaitPolicyFields({
   value,
   onChange,
+  help,
 }: {
   value?: { mode: 'none' | 'until_idle'; timeout?: string };
   onChange: (value: { mode: 'none' | 'until_idle'; timeout?: string } | undefined) => void;
+  help?: string;
 }) {
   const mode = value?.mode ?? 'none';
   return (
@@ -3034,6 +3081,7 @@ function WaitPolicyFields({
         value={mode}
         options={['none', 'until_idle']}
         onChange={(nextMode) => onChange(nextMode === 'none' ? undefined : { mode: nextMode, timeout: value?.timeout })}
+        help={help}
       />
       {mode === 'until_idle' && (
         <Field label="Wait timeout">
@@ -3047,9 +3095,11 @@ function WaitPolicyFields({
 function RepoFields({
   value,
   onChange,
+  help,
 }: {
   value?: { url?: string; branch?: string; ref?: string; sourceRepoFullName?: string };
   onChange: (value: { url?: string; branch?: string; ref?: string; sourceRepoFullName?: string } | undefined) => void;
+  help?: string;
 }) {
   function updateRepo(patch: { url?: string; branch?: string; ref?: string; sourceRepoFullName?: string }) {
     const next = { ...(value ?? {}), ...patch };
@@ -3064,7 +3114,7 @@ function RepoFields({
 
   return (
     <div className="space-y-2 rounded-md border border-neutral-200 p-2 dark:border-neutral-700">
-      <LabelText>Repo</LabelText>
+      <LabelText help={help}>Repo</LabelText>
       <Input value={value?.url ?? ''} onChange={(event) => updateRepo({ url: event.target.value })} placeholder="URL" />
       <Input value={value?.branch ?? ''} onChange={(event) => updateRepo({ branch: event.target.value })} placeholder="Branch" />
       <Input value={value?.ref ?? ''} onChange={(event) => updateRepo({ ref: event.target.value })} placeholder="Ref" />
