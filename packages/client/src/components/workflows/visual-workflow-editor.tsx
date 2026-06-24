@@ -158,6 +158,50 @@ interface WorkflowNodeDeleteContextValue {
 
 const WorkflowNodeDeleteContext = React.createContext<WorkflowNodeDeleteContextValue | null>(null);
 
+// Horizontal step when placing a new node to the right of an existing one.
+// Matches the column gap used by the auto-layout in workflow-editor-model.
+const NEW_NODE_COLUMN_STEP = 320;
+// Vertical nudge applied when the computed position would collide with an
+// existing node (within this many flow-units in either axis).
+const NEW_NODE_COLLISION_NUDGE = 140;
+const NEW_NODE_COLLISION_THRESHOLD = 200;
+
+// Pick a sensible (x, y) for a newly-added node.
+// 1. Prefer placement adjacent to the user's anchor (selection at the moment
+//    the picker opened) — they're usually adding a downstream step.
+// 2. Otherwise, place to the right of the rightmost node so new nodes
+//    extend the canvas in the natural left-to-right direction.
+// 3. Empty graph (only trigger): drop near origin.
+// If the chosen spot collides with an existing node, nudge down until clear.
+function computeNextNodePosition(
+  existing: WorkflowFlowNode[],
+  anchorNodeId: string | null,
+): { x: number; y: number } {
+  const others = existing.filter((n) => n.id !== 'trigger');
+  const anchor = anchorNodeId ? existing.find((n) => n.id === anchorNodeId) : null;
+
+  let base: { x: number; y: number };
+  if (anchor) {
+    base = { x: anchor.position.x + NEW_NODE_COLUMN_STEP, y: anchor.position.y };
+  } else if (others.length > 0) {
+    const rightmost = others.reduce((best, n) => (n.position.x > best.position.x ? n : best));
+    base = { x: rightmost.position.x + NEW_NODE_COLUMN_STEP, y: rightmost.position.y };
+  } else {
+    base = { x: 0, y: 0 };
+  }
+
+  while (
+    existing.some(
+      (n) =>
+        Math.abs(n.position.x - base.x) < NEW_NODE_COLLISION_THRESHOLD &&
+        Math.abs(n.position.y - base.y) < NEW_NODE_COLLISION_THRESHOLD,
+    )
+  ) {
+    base = { x: base.x, y: base.y + NEW_NODE_COLLISION_NUDGE };
+  }
+  return base;
+}
+
 type WorkflowNodeValidationSeverity = 'warning' | 'error';
 
 export function VisualWorkflowEditor(props: VisualWorkflowEditorProps) {
@@ -190,6 +234,10 @@ function VisualWorkflowEditorInner({
   const [reactFlowInstance, setReactFlowInstance] = React.useState<ReactFlowInstance | null>(null);
   const deleteResetTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const nodePaletteSearchRef = React.useRef<HTMLInputElement | null>(null);
+  // Captured at picker-open time so the new node can be placed next to
+  // whatever the user had selected, even though opening the picker
+  // clears the selection state.
+  const lastSelectedBeforePicker = React.useRef<string | null>(null);
   const { getViewport } = useReactFlow();
   const { data: actionCatalog = [], isSuccess: actionCatalogLoaded } = useActionCatalog();
 
@@ -306,6 +354,14 @@ function VisualWorkflowEditorInner({
     return () => cancelAnimationFrame(frame);
   }, [nodePaletteOpen]);
 
+  // Auto-collapse the node picker when the inspector opens; otherwise the
+  // two side panels overlap visually.
+  React.useEffect(() => {
+    if (selectedNodeId && nodePaletteOpen) {
+      setNodePaletteOpen(false);
+    }
+  }, [selectedNodeId, nodePaletteOpen]);
+
   const handleNodesChange: OnNodesChange = React.useCallback((changes: NodeChange[]) => {
     const safeChanges = changes.filter((change) => !(change.type === 'remove' && change.id === 'trigger'));
     setNodes((current) => applyNodeChanges(safeChanges, current) as WorkflowFlowNode[]);
@@ -412,10 +468,7 @@ function VisualWorkflowEditorInner({
   function handleAddNode(type: AddableDagNodeType) {
     const id = createNodeId(type, nodes.map((node) => node.id));
     const node = getDefaultNodeForType(type, id);
-    const position = reactFlowInstance?.screenToFlowPosition({ x: 360, y: 240 }) ?? {
-      x: nodes.length * 320,
-      y: 0,
-    };
+    const position = computeNextNodePosition(nodes, lastSelectedBeforePicker.current);
     const flowNode: WorkflowFlowNode = {
       id,
       type: 'workflow',
@@ -429,6 +482,7 @@ function VisualWorkflowEditorInner({
     setRawOpen(false);
     setNodePaletteOpen(false);
     setNodePaletteQuery('');
+    lastSelectedBeforePicker.current = null;
   }
 
   function handleApplyRawJson() {
@@ -528,6 +582,7 @@ function VisualWorkflowEditorInner({
             aria-pressed={nodePaletteOpen}
             onClick={() => {
               setRawOpen(false);
+              lastSelectedBeforePicker.current = selectedNodeId;
               setSelectedNodeId(null);
               setSelectedEdgeId(null);
               clearArmedDeleteNode();
