@@ -16,3 +16,41 @@ export function buildWorkflowEditorTabs(executionCount: number): WorkflowEditorT
 export function getWorkflowEnabledLabel(enabled: boolean): 'Active' | 'Inactive' {
   return enabled ? 'Active' : 'Inactive';
 }
+
+export interface PublishButtonStateInput {
+  isConfirming: boolean;
+  isPending: boolean;
+}
+
+export interface PublishButtonState {
+  label: 'Publish' | 'Confirm publish' | 'Publishing...';
+  title: string;
+  isConfirming: boolean;
+}
+
+export function getPublishButtonState({
+  isConfirming,
+  isPending,
+}: PublishButtonStateInput): PublishButtonState {
+  if (isPending) {
+    return {
+      label: 'Publishing...',
+      title: 'Publishing this workflow version.',
+      isConfirming: false,
+    };
+  }
+
+  if (isConfirming) {
+    return {
+      label: 'Confirm publish',
+      title: 'Click again to publish this draft for triggers.',
+      isConfirming: true,
+    };
+  }
+
+  return {
+    label: 'Publish',
+    title: 'Publish this draft and make it active for triggers.',
+    isConfirming: false,
+  };
+}

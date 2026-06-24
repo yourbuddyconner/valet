@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { createFileRoute, Link, useNavigate } from '@tanstack/react-router';
 import { PageContainer } from '@/components/layout/page-container';
 import {
@@ -20,6 +20,7 @@ import {
 } from '@/components/workflows/manual-workflow-dialog';
 import {
   buildWorkflowEditorTabs,
+  getPublishButtonState,
   getWorkflowEnabledLabel,
   type WorkflowEditorTab,
 } from '@/components/workflows/workflow-detail-view-model';
@@ -66,6 +67,9 @@ function WorkflowDetailPage() {
   const [selectedExecutionId, setSelectedExecutionId] = useState<string | null>(null);
   const [selectedExecutionNodeId, setSelectedExecutionNodeId] = useState<string | null>(null);
   const [manualDialogOpen, setManualDialogOpen] = useState(false);
+  const [publishConfirming, setPublishConfirming] = useState(false);
+  const [publishSubmitting, setPublishSubmitting] = useState(false);
+  const publishConfirmTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const selectedExecution = useExecution(selectedExecutionId ?? '');
 
   useEffect(() => {
@@ -78,6 +82,14 @@ function WorkflowDetailPage() {
     setSelectedExecutionId(executions[0]!.id);
     setSelectedExecutionNodeId(null);
   }, [executionsData?.executions, selectedExecutionId]);
+
+  useEffect(() => {
+    return () => {
+      if (publishConfirmTimer.current) {
+        clearTimeout(publishConfirmTimer.current);
+      }
+    };
+  }, []);
 
   if (isLoading) {
     return (
@@ -109,10 +121,32 @@ function WorkflowDetailPage() {
     });
   }
 
-  async function handlePublish() {
+  function resetPublishConfirmation() {
+    if (publishConfirmTimer.current) {
+      clearTimeout(publishConfirmTimer.current);
+      publishConfirmTimer.current = null;
+    }
+    setPublishConfirming(false);
+  }
+
+  function requestPublishConfirmation() {
+    if (publishConfirmTimer.current) {
+      clearTimeout(publishConfirmTimer.current);
+    }
+    setPublishConfirming(true);
+    publishConfirmTimer.current = setTimeout(() => {
+      publishConfirmTimer.current = null;
+      setPublishConfirming(false);
+    }, 4000);
+  }
+
+  async function performPublish() {
+    resetPublishConfirmation();
+    setPublishSubmitting(true);
     try {
       await saveCurrentEditorDraft();
     } catch (err) {
+      setPublishSubmitting(false);
       toastError(err instanceof Error ? err.message : 'Failed to save draft');
       return;
     }
@@ -126,22 +160,42 @@ function WorkflowDetailPage() {
         onSuccess: (vRes) => {
           const errors = vRes.errors ?? [];
           if (errors.length > 0) {
+            resetPublishConfirmation();
+            setPublishSubmitting(false);
             toastError(`${errors.length} validation error(s): ${errors[0]!.message}`);
             return;
           }
           publish.mutate(
             { workflowId },
             {
-              onSuccess: (res) => toastSuccess(`Published version ${res.version.version}`),
-              onError: (err) =>
-                toastError(err instanceof Error ? err.message : 'Failed to publish'),
+              onSuccess: (res) => {
+                resetPublishConfirmation();
+                setPublishSubmitting(false);
+                toastSuccess(`Published version ${res.version.version}`);
+              },
+              onError: (err) => {
+                resetPublishConfirmation();
+                setPublishSubmitting(false);
+                toastError(err instanceof Error ? err.message : 'Failed to publish');
+              },
             },
           );
         },
-        onError: (err) =>
-          toastError(err instanceof Error ? err.message : 'Validation failed'),
+        onError: (err) => {
+          resetPublishConfirmation();
+          setPublishSubmitting(false);
+          toastError(err instanceof Error ? err.message : 'Validation failed');
+        },
       },
     );
+  }
+
+  function handlePublishClick() {
+    if (!publishConfirming) {
+      requestPublishConfirmation();
+      return;
+    }
+    void performPublish();
   }
 
   async function startManualWorkflowRun(payload: ManualWorkflowPayload) {
@@ -167,10 +221,12 @@ function WorkflowDetailPage() {
   }
 
   function openManualWorkflowDialog() {
+    resetPublishConfirmation();
     setManualDialogOpen(true);
   }
 
   function handleSaveClick() {
+    resetPublishConfirmation();
     if (!editorDefinition) return;
     saveDraft.mutate(
       { workflowId, draft: editorDefinition },
@@ -197,6 +253,7 @@ function WorkflowDetailPage() {
 
   function handleToggleEnabled() {
     if (!workflow) return;
+    resetPublishConfirmation();
     updateWorkflow.mutate(
       { workflowId: workflow.id, enabled: !workflow.enabled },
       {
@@ -220,6 +277,10 @@ function WorkflowDetailPage() {
 
   const executions = executionsData?.executions ?? [];
   const editorTabs = buildWorkflowEditorTabs(executions.length);
+  const publishButton = getPublishButtonState({
+    isConfirming: publishConfirming,
+    isPending: publishSubmitting || publish.isPending,
+  });
 
   return (
     <div className="flex h-full min-h-[720px] flex-col overflow-hidden bg-neutral-50 text-neutral-950 dark:bg-neutral-950 dark:text-neutral-100">
@@ -307,7 +368,10 @@ function WorkflowDetailPage() {
             <button
               key={tab.id}
               type="button"
-              onClick={() => setActiveTab(tab.id)}
+              onClick={() => {
+                resetPublishConfirmation();
+                setActiveTab(tab.id);
+              }}
               className={`rounded-md px-4 py-2 text-sm transition ${
                 activeTab === tab.id
                   ? 'bg-white text-neutral-950 shadow-sm dark:bg-neutral-800 dark:text-neutral-100'
@@ -345,7 +409,7 @@ function WorkflowDetailPage() {
             disabled={saveDraft.isPending || !editorDefinition}
             className="border border-neutral-200 bg-white text-neutral-800 hover:bg-neutral-100 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100 dark:hover:bg-neutral-800"
           >
-            {saveDraft.isPending ? 'Saving...' : 'Save'}
+            {saveDraft.isPending ? 'Saving...' : 'Save draft'}
           </Button>
           <Button
             variant="secondary"
@@ -355,12 +419,24 @@ function WorkflowDetailPage() {
           >
             {testRun.isPending || saveDraft.isPending ? 'Starting...' : 'Test'}
           </Button>
-          <Button onClick={handlePublish} disabled={publish.isPending || saveDraft.isPending}>
-            {publish.isPending || saveDraft.isPending ? 'Publishing...' : 'Publish'}
+          <Button
+            onClick={handlePublishClick}
+            disabled={publishSubmitting || publish.isPending || saveDraft.isPending || validate.isPending}
+            title={publishButton.title}
+            className={
+              publishButton.isConfirming
+                ? 'bg-amber-500 text-white hover:bg-amber-600 dark:bg-amber-500 dark:hover:bg-amber-400'
+                : undefined
+            }
+          >
+            {publishButton.label}
           </Button>
           <Button
             variant="ghost"
-            onClick={() => setDeleteDialogOpen(true)}
+            onClick={() => {
+              resetPublishConfirmation();
+              setDeleteDialogOpen(true);
+            }}
             disabled={deleteWorkflow.isPending}
             className="text-neutral-500 hover:bg-neutral-100 hover:text-red-600 dark:text-neutral-400 dark:hover:bg-neutral-900 dark:hover:text-red-300"
             title="Delete workflow"
@@ -376,7 +452,10 @@ function WorkflowDetailPage() {
             <button
               key={tab.id}
               type="button"
-              onClick={() => setActiveTab(tab.id)}
+              onClick={() => {
+                resetPublishConfirmation();
+                setActiveTab(tab.id);
+              }}
               className={`flex-1 rounded-md px-2 py-1.5 text-sm ${
                 activeTab === tab.id
                   ? 'bg-neutral-100 text-neutral-950 dark:bg-neutral-800 dark:text-neutral-100'
