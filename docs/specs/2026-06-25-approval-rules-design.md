@@ -217,6 +217,116 @@ The UI should expose choices based on context:
 
 `Approve matching requests` should open a confirmation dialog before creating a durable approval rule.
 
+### UI Surface Inventory
+
+Approval rules should be surfaced anywhere a user is asked to make or understand an approval decision. Each surface should use the same backend approval-rule resolver and should show the same audit language when a rule auto-approves work.
+
+#### Session Chat Approval Card
+
+The session chat approval card is the primary UI for manual sessions and orchestrator sessions. It should show:
+
+- `Approve once`
+- `Approve for this session`
+- `Approve matching requests`
+- `Deny`
+
+`Approve for this session` creates a session-scoped rule. `Approve matching requests` opens the durable rule dialog. If the action was auto-approved by a rule, the card or trace message should show the matched rule summary instead of rendering an approval choice.
+
+#### Session Detail / Activity Timeline
+
+Session activity history should show when an action was auto-approved. The entry should include:
+
+- matched rule id or label
+- subject
+- matcher summary
+- scope
+- created-by user
+
+This prevents silent automation from looking indistinguishable from normal tool execution.
+
+#### Workflow Execution Canvas
+
+Workflow execution mode should show approval-rule controls on selected approval-capable nodes:
+
+- explicit `approval` nodes
+- `tool` nodes blocked by policy
+- `foreach` body nodes that contain an approval-capable action
+- `session` nodes whose spawned session is waiting on an approval
+- `orchestrator` nodes if they produce approval-gated actions
+
+For a normal workflow approval, the selected-node pane should show `Approve once`, `Approve for this run`, `Approve matching requests`, and `Deny`.
+
+For a `foreach` body approval, the selected-node pane should show `Approve once`, `Approve remaining rows`, `Approve matching requests`, and `Deny`. `Approve remaining rows` creates a workflow-execution-scoped rule and should explain that future matching iterations in this run will auto-approve.
+
+#### Workflow Execution List / Details Page
+
+Execution detail pages outside the canvas should expose the same approval controls as the canvas for pending approvals. They should also show auto-approval audit fields on completed node traces so users can diagnose why a node did not pause.
+
+#### Workflow Editor Validation / Data Flow Panels
+
+The editor should not create approval rules, but it should surface rule eligibility where useful:
+
+- tool nodes should identify parameters that can become matchers, such as document ids, spreadsheet ids, repo names, issue ids, or URL hosts
+- data-flow and edge inspection panels should show resolved parameter contracts when available
+- validation messages should avoid implying that a persistent rule exists when the user only approved a runtime-scoped rule
+
+This is informational only; durable rules should still be created from concrete runtime approvals, where resolved params are known.
+
+#### Approval Rule Confirmation Dialog
+
+The durable rule dialog is shared by sessions and workflows. It should:
+
+- show the subject being approved
+- list resolved params with checkbox-controlled matchers
+- preselect stable identifiers
+- leave payload/content fields unselected
+- require at least one matcher unless the action is read-only and explicitly safe
+- preview the exact human-readable rule before saving
+
+The dialog should make scope explicit: user, team, or environment. The first implementation can default to user scope.
+
+#### Settings: Approval Rules
+
+User settings should include a durable approval-rules list. Users need to:
+
+- list active rules
+- inspect subject, scope, matcher summary, origin, creator, and last matched time if available
+- revoke a rule
+- optionally edit label and expiry
+
+Editing matchers can be deferred if the creation dialog is strong enough; revocation is required.
+
+#### Admin / Team Policy UI
+
+Admin policy UI should remain the place for organization-level deny and required-approval rules. It should also show how admin policy interacts with user approval rules:
+
+- admin deny overrides user rules
+- admin require-approval may prevent creating durable user rules if configured that way
+- user rules can quiet approvals only where admin policy allows it
+
+Team/environment-scoped approval rules can be added here once the base user-scoped flow is working.
+
+#### Slack and Telegram Approval Messages
+
+Slack and Telegram should support safe approval choices that do not require complex matcher editing:
+
+- `Approve once`
+- `Approve for this session` or `Approve for this run`, depending on context
+- `Deny`
+
+`Approve matching requests` should be omitted or deep-link to the web confirmation dialog until the channel UI can clearly show parameter matchers. Durable rule creation should not happen from a chat button that cannot display the full rule.
+
+#### Workflow Agent Tool Results
+
+Remote worker tools that validate, save, or run workflows should expose approval-rule outcomes in their returned execution data:
+
+- pending approval ids
+- auto-approved approval ids
+- matched rule summaries
+- blocked-by-admin-policy messages
+
+This lets agents explain why a workflow did or did not pause without scraping the web UI.
+
 ### Durable Rule Creation Dialog
 
 The durable rule dialog starts from a concrete approval request and shows the resolved params.
@@ -323,9 +433,12 @@ Worker tests:
 Client tests:
 
 - Approval card renders the right scope actions for session, workflow execution, and foreach.
+- Workflow execution canvas and details page render the same approval actions for the same pending approval.
 - Durable rule dialog pre-selects stable identifiers and leaves payload fields unselected.
 - Foreach "Approve remaining rows" calls the approval endpoint with the correct scope.
 - Auto-approved trace rows display matched approval-rule metadata.
+- Settings approval-rules list supports inspecting and revoking durable rules.
+- Slack/Telegram approval payloads do not create durable rules without a web confirmation URL.
 
 Integration tests:
 
