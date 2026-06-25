@@ -137,6 +137,63 @@ export function getReadableJsonItemTitle(value: unknown, index: number): string 
   return titleValue || `Item ${index + 1}`;
 }
 
+export type ReadableJsonTable =
+  | {
+      kind: 'matrix';
+      columns: string[];
+      rows: string[][];
+      totalRows: number;
+      hiddenRows: number;
+      hiddenColumns: number;
+    }
+  | {
+      kind: 'records';
+      columns: string[];
+      rows: string[][];
+      totalRows: number;
+      hiddenRows: number;
+      hiddenColumns: number;
+    };
+
+export function getReadableJsonTable(value: unknown): ReadableJsonTable | null {
+  if (!Array.isArray(value) || value.length === 0) return null;
+
+  if (value.every((item) => Array.isArray(item))) {
+    const allRows = value as unknown[][];
+    const maxColumns = Math.max(0, ...allRows.map((row) => row.length));
+    const visibleColumnCount = Math.min(maxColumns, 8);
+    const visibleRows = allRows.slice(0, 20);
+    return {
+      kind: 'matrix',
+      columns: Array.from({ length: visibleColumnCount }, (_, index) => String(index + 1)),
+      rows: visibleRows.map((row) =>
+        Array.from({ length: visibleColumnCount }, (_, index) => formatReadableScalar(row[index])),
+      ),
+      totalRows: allRows.length,
+      hiddenRows: Math.max(0, allRows.length - visibleRows.length),
+      hiddenColumns: Math.max(0, maxColumns - visibleColumnCount),
+    };
+  }
+
+  if (value.every(isRecord)) {
+    const records = value as Record<string, unknown>[];
+    const columns = collectReadableRecordColumns(records);
+    if (columns.length === 0) return null;
+    const visibleColumns = columns.slice(0, 8);
+    const visibleRows = records.slice(0, 20);
+    return {
+      kind: 'records',
+      columns: visibleColumns,
+      rows: visibleRows.map((record) => visibleColumns.map((column) => formatReadableScalar(record[column]))),
+      totalRows: records.length,
+      hiddenRows: Math.max(0, records.length - visibleRows.length),
+      hiddenColumns: Math.max(0, columns.length - visibleColumns.length),
+    };
+  }
+
+  return null;
+}
+
 export function formatReadableScalar(value: unknown): string {
   if (value === null) return 'null';
   if (value === undefined) return 'undefined';
@@ -154,4 +211,27 @@ function firstString(...values: unknown[]): string | null {
     if (typeof value === 'string' && value.trim()) return value;
   }
   return null;
+}
+
+function collectReadableRecordColumns(records: Record<string, unknown>[]): string[] {
+  const preferred = ['id', 'number', 'name', 'title', 'summary', 'status', 'state', 'email', 'url'];
+  const seen = new Set<string>();
+  const columns: string[] = [];
+
+  for (const key of preferred) {
+    if (records.some((record) => Object.prototype.hasOwnProperty.call(record, key))) {
+      seen.add(key);
+      columns.push(key);
+    }
+  }
+
+  for (const record of records.slice(0, 20)) {
+    for (const key of Object.keys(record)) {
+      if (seen.has(key)) continue;
+      seen.add(key);
+      columns.push(key);
+    }
+  }
+
+  return columns;
 }

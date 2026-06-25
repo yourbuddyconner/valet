@@ -5,6 +5,7 @@ import {
   buildTraceDetailSections,
   getReadableJsonItemTitle,
   getReadableJsonSummary,
+  getReadableJsonTable,
   getNodeParametersForDisplay,
   getExecutionDisplayStatus,
   getSelectedNodeApproval,
@@ -138,5 +139,39 @@ describe('workflow execution viewer model', () => {
     );
     expect(getReadableJsonItemTitle({ name: 'Customer Onboarding Pipeline' }, 1)).toBe('Customer Onboarding Pipeline');
     expect(getReadableJsonItemTitle({ state: 'open' }, 2)).toBe('Item 3');
+  });
+
+  it('formats matrix arrays as spreadsheet-like tables', () => {
+    expect(getReadableJsonTable([
+      ['Task', 'Owner', 'Done'],
+      ['Ship workflows', 'Conner', false],
+    ])).toEqual({
+      kind: 'matrix',
+      columns: ['1', '2', '3'],
+      rows: [
+        ['Task', 'Owner', 'Done'],
+        ['Ship workflows', 'Conner', 'false'],
+      ],
+      totalRows: 2,
+      hiddenRows: 0,
+      hiddenColumns: 0,
+    });
+  });
+
+  it('formats arrays of records as column tables', () => {
+    expect(getReadableJsonTable([
+      { number: 81, title: 'Handle first-come', state: 'open', user: 'conner' },
+      { number: 78, title: 'Add POI search', state: 'open', user: 'conner' },
+    ])).toEqual({
+      kind: 'records',
+      columns: ['number', 'title', 'state', 'user'],
+      rows: [
+        ['81', 'Handle first-come', 'open', 'conner'],
+        ['78', 'Add POI search', 'open', 'conner'],
+      ],
+      totalRows: 2,
+      hiddenRows: 0,
+      hiddenColumns: 0,
+    });
   });
 });

@@ -33,10 +33,12 @@ import {
   getNodeParametersForDisplay,
   getReadableJsonItemTitle,
   getReadableJsonSummary,
+  getReadableJsonTable,
   getSelectedNodeApproval,
   isRecord,
   parseExecutionPayload,
   type ParsedExecutionPayload,
+  type ReadableJsonTable,
   type ExecutionDisplayStatus,
 } from './workflow-execution-viewer-model';
 
@@ -546,6 +548,9 @@ function ReadableJsonValue({
 }) {
   if (Array.isArray(value)) {
     if (value.length === 0) return <EmptyReadableValue label="No items" tone={tone} />;
+    const table = getReadableJsonTable(value);
+    if (table) return <ReadableJsonTablePreview table={table} tone={tone} />;
+
     const visibleItems = value.slice(0, 20);
     return (
       <div className="space-y-2">
@@ -607,9 +612,20 @@ function ReadableJsonValue({
       )}>
         {entries.map(([key, nestedValue]) => {
           const nested = isRecord(nestedValue) || Array.isArray(nestedValue);
+          const shouldInline = nested && depth <= 1;
           return (
             <div key={key} className="border-b border-neutral-100 last:border-b-0 dark:border-neutral-800">
-              {nested ? (
+              {shouldInline ? (
+                <div className="space-y-2 p-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="min-w-0 truncate text-xs font-medium text-neutral-700 dark:text-neutral-300" title={key}>
+                      {key}
+                    </span>
+                    <Badge variant="secondary" className="shrink-0">{getReadableJsonSummary(nestedValue)}</Badge>
+                  </div>
+                  <ReadableJsonValue value={nestedValue} tone={tone} depth={depth + 1} />
+                </div>
+              ) : nested ? (
                 <div className="p-2">
                   <ExpandableReadableJsonValue
                     title={key}
@@ -641,6 +657,60 @@ function ReadableJsonValue({
       tone === 'error' ? 'border-red-200 dark:border-red-900/50' : 'border-neutral-200 dark:border-neutral-800',
     )}>
       {formatReadableScalar(value)}
+    </div>
+  );
+}
+
+function ReadableJsonTablePreview({ table, tone }: { table: ReadableJsonTable; tone: 'neutral' | 'error' }) {
+  return (
+    <div className={cn(
+      'overflow-auto rounded-md border bg-white dark:bg-neutral-950',
+      tone === 'error' ? 'border-red-200 dark:border-red-900/50' : 'border-neutral-200 dark:border-neutral-800',
+    )}>
+      <table className="min-w-full border-separate border-spacing-0 text-left text-xs">
+        <thead>
+          <tr className="bg-neutral-50 text-[11px] font-medium uppercase tracking-wide text-neutral-500 dark:bg-neutral-900 dark:text-neutral-400">
+            <th className="sticky left-0 z-10 w-12 border-b border-neutral-100 bg-neutral-50 px-2 py-2 dark:border-neutral-800 dark:bg-neutral-900">
+              #
+            </th>
+            {table.columns.map((column) => (
+              <th
+                key={column}
+                className="max-w-56 border-b border-neutral-100 px-2 py-2 dark:border-neutral-800"
+                title={table.kind === 'matrix' ? `Column ${column}` : column}
+              >
+                <span className="block truncate">{table.kind === 'matrix' ? `Col ${column}` : column}</span>
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {table.rows.map((row, rowIndex) => (
+            <tr key={rowIndex} className="align-top">
+              <td className="sticky left-0 z-10 border-b border-neutral-100 bg-white px-2 py-2 font-mono text-[11px] text-neutral-400 dark:border-neutral-800 dark:bg-neutral-950">
+                {rowIndex + 1}
+              </td>
+              {row.map((cell, columnIndex) => (
+                <td
+                  key={`${rowIndex}-${columnIndex}`}
+                  className="max-w-72 border-b border-neutral-100 px-2 py-2 text-neutral-900 dark:border-neutral-800 dark:text-neutral-100"
+                >
+                  <span className="line-clamp-4 whitespace-pre-wrap break-words" title={cell}>
+                    {cell}
+                  </span>
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {(table.hiddenRows > 0 || table.hiddenColumns > 0) && (
+        <div className="border-t border-neutral-100 px-2 py-2 text-xs text-neutral-500 dark:border-neutral-800">
+          Showing {table.rows.length} of {table.totalRows} rows
+          {table.hiddenColumns > 0 ? ` and ${table.columns.length} visible columns` : ''}
+          .
+        </div>
+      )}
     </div>
   );
 }
