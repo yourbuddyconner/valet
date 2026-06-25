@@ -182,7 +182,7 @@ export function useWorkflowExecutions(workflowId: string) {
     queryKey: executionKeys.byWorkflow(workflowId),
     queryFn: () => api.get<ListExecutionsResponse>(`/workflows/${workflowId}/executions`),
     enabled: !!workflowId,
-    refetchInterval: 2500,
+    refetchInterval: (query) => getExecutionListRefetchInterval(query.state.data?.executions),
     refetchIntervalInBackground: true,
   });
 }

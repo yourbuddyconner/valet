@@ -359,7 +359,7 @@ function WorkflowDetailPage() {
         onRestore={handleRestoreVersion}
       />
 
-      <header className="grid h-16 shrink-0 grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-4 border-b border-neutral-200 bg-white/95 px-5 shadow-sm backdrop-blur dark:border-neutral-800 dark:bg-neutral-950/95 dark:shadow-none">
+      <header className="grid h-16 shrink-0 grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-4 border-b border-neutral-200 bg-white px-5 shadow-sm dark:border-neutral-800 dark:bg-neutral-950 dark:shadow-none">
         <div className="flex min-w-0 items-center gap-3">
           <Link
             to="/automation/workflows"

@@ -202,7 +202,7 @@ function WorkflowExecutionViewerInner({
         >
           <Controls className="border-neutral-200 bg-white text-neutral-900 shadow-lg dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100 [&>button]:text-neutral-700 [&>button]:hover:bg-neutral-100 dark:[&>button]:text-neutral-100 dark:[&>button]:hover:bg-neutral-800" />
           {execution && (
-            <div className="absolute left-5 top-5 rounded-lg border border-neutral-200 bg-white/95 px-4 py-3 shadow-sm backdrop-blur dark:border-neutral-800 dark:bg-neutral-900/95">
+            <div className="absolute left-5 top-5 rounded-lg border border-neutral-200 bg-white px-4 py-3 shadow-sm dark:border-neutral-800 dark:bg-neutral-900">
               <div className="flex items-center gap-2">
                 <ExecutionStatusPill status={execution.status} />
                 <span className="font-mono text-xs text-neutral-500">{execution.id.slice(0, 8)}</span>
@@ -231,7 +231,7 @@ function WorkflowExecutionViewerInner({
             <button
               type="button"
               onClick={() => setExecutionPaneOpen(true)}
-              className="absolute right-5 top-5 z-20 rounded-lg border border-neutral-200 bg-white/95 px-3 py-2 text-sm font-medium text-neutral-800 shadow-lg backdrop-blur hover:bg-neutral-50 dark:border-neutral-800 dark:bg-neutral-950/95 dark:text-neutral-100 dark:hover:bg-neutral-900"
+              className="absolute right-5 top-5 z-20 rounded-lg border border-neutral-200 bg-white px-3 py-2 text-sm font-medium text-neutral-800 shadow-lg hover:bg-neutral-50 dark:border-neutral-800 dark:bg-neutral-950 dark:text-neutral-100 dark:hover:bg-neutral-900"
             >
               Execution
             </button>
@@ -248,7 +248,7 @@ function WorkflowExecutionViewerInner({
             <button
               type="button"
               onClick={() => setNodePaneOpen(true)}
-              className="absolute bottom-5 right-5 z-20 rounded-lg border border-neutral-200 bg-white/95 px-3 py-2 text-sm font-medium text-neutral-800 shadow-lg backdrop-blur hover:bg-neutral-50 dark:border-neutral-800 dark:bg-neutral-950/95 dark:text-neutral-100 dark:hover:bg-neutral-900"
+              className="absolute bottom-5 right-5 z-20 rounded-lg border border-neutral-200 bg-white px-3 py-2 text-sm font-medium text-neutral-800 shadow-lg hover:bg-neutral-50 dark:border-neutral-800 dark:bg-neutral-950 dark:text-neutral-100 dark:hover:bg-neutral-900"
             >
               Node details
             </button>
@@ -312,7 +312,7 @@ function ExecutionSummaryPane({
   onClose: () => void;
 }) {
   return (
-    <div className="nodrag nopan nowheel absolute right-5 top-5 z-20 w-[min(360px,calc(100%-2.5rem))] overflow-hidden rounded-xl border border-neutral-200 bg-white/95 shadow-2xl shadow-neutral-900/15 backdrop-blur dark:border-neutral-800 dark:bg-neutral-950/95 dark:shadow-black/30">
+    <div className="nodrag nopan nowheel absolute right-5 top-5 z-20 w-[min(360px,calc(100%-2.5rem))] overflow-hidden rounded-xl border border-neutral-200 bg-white shadow-2xl shadow-neutral-900/15 dark:border-neutral-800 dark:bg-neutral-950 dark:shadow-black/30">
       <div className="flex shrink-0 items-center justify-between gap-3 border-b border-neutral-200 px-4 py-3 dark:border-neutral-800">
         <div className="min-w-0">
           <h2 className="truncate text-sm font-semibold text-neutral-950 dark:text-neutral-100">Execution</h2>
@@ -387,7 +387,7 @@ function SelectedNodeDetailsPane({
   const nodeDuration = formatExecutionDuration(selectedTrace?.durationMs);
 
   return (
-    <div className="nodrag nopan nowheel absolute bottom-5 right-5 top-[18rem] z-20 flex w-[min(860px,calc(100%-2.5rem))] min-w-[min(520px,calc(100%-2.5rem))] flex-col overflow-hidden rounded-xl border border-neutral-200 bg-white/95 shadow-2xl shadow-neutral-900/15 backdrop-blur dark:border-neutral-800 dark:bg-neutral-950/95 dark:shadow-black/30">
+    <div className="nodrag nopan nowheel absolute bottom-5 right-5 top-[18rem] z-20 flex w-[min(860px,calc(100%-2.5rem))] min-w-[min(520px,calc(100%-2.5rem))] flex-col overflow-hidden rounded-xl border border-neutral-200 bg-white shadow-2xl shadow-neutral-900/15 dark:border-neutral-800 dark:bg-neutral-950 dark:shadow-black/30">
       <div className="flex shrink-0 items-start justify-between gap-4 border-b border-neutral-200 px-5 py-4 dark:border-neutral-800">
         <div className="min-w-0 space-y-2">
           <div className="flex flex-wrap items-center gap-2">
