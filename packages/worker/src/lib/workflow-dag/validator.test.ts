@@ -62,6 +62,44 @@ describe('validateDefinition', () => {
     ]));
   });
 
+  it('accepts output schemas on session and orchestrator nodes', () => {
+    const outputSchema = {
+      type: 'object',
+      properties: { totalCount: { type: 'number' } },
+      required: ['totalCount'],
+    };
+    const errs = validateDefinition({
+      version: 'dag/v1',
+      nodes: [
+        { id: 'trigger', type: 'trigger' },
+        {
+          id: 'scrape',
+          type: 'session',
+          mode: 'start',
+          prompt: 'scrape',
+          workspace: 'scrape-test',
+          wait: { mode: 'until_idle' },
+          outputSchema,
+          repairModel: 'anthropic:claude-sonnet-4-5',
+        },
+        {
+          id: 'summarize',
+          type: 'orchestrator',
+          prompt: 'summarize',
+          wait: { mode: 'until_idle' },
+          outputSchema,
+          repairModel: 'anthropic:claude-sonnet-4-5',
+        },
+      ],
+      edges: [
+        { from: 'trigger', to: 'scrape' },
+        { from: 'scrape', to: 'summarize' },
+      ],
+    });
+
+    expect(blockingErrors(errs)).toEqual([]);
+  });
+
   it('adds node id and type context to malformed node field messages', () => {
     const errs = validateDefinition({
       version: 'dag/v1',

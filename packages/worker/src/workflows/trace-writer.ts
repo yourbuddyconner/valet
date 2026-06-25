@@ -1,10 +1,10 @@
 /**
  * D1-backed implementation of the runtime's TraceWriter interface.
  *
- * Each call inserts one row into workflow_execution_nodes. Truncation
- * happens at the insert boundary (8KB input / 32KB output / 4KB error)
- * with flags surfacing in the row so the UI can render
- * "preview, full output dropped" when relevant.
+ * Each call inserts one row into workflow_execution_nodes. Input and
+ * error fields are bounded previews (8KB input / 4KB error), while
+ * node outputs are persisted in full because they are often the
+ * workflow artifact that downstream debugging depends on.
  *
  * Retention is set per execution mode:
  *   production → 30 days
@@ -22,7 +22,6 @@ import { and, eq, inArray, lt, sql } from 'drizzle-orm';
 import type { TraceTransition, TraceWriter } from './types.js';
 
 const INPUT_PREVIEW_LIMIT = 8 * 1024;
-const OUTPUT_LIMIT = 32 * 1024;
 const ERROR_LIMIT = 4 * 1024;
 
 const PRODUCTION_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
@@ -59,7 +58,7 @@ export function createD1TraceWriter(options: CreateTraceWriterOptions): TraceWri
       const inputJson = serializeWithTruncation(inputPreview, INPUT_PREVIEW_LIMIT);
 
       const output = 'output' in row ? row.output : undefined;
-      const outputJson = serializeWithTruncation(output, OUTPUT_LIMIT);
+      const outputJson = serializeWithoutTruncation(output);
 
       const errorText = 'error' in row ? truncateString(row.error, ERROR_LIMIT) : null;
       const reasonText = 'reason' in row ? row.reason ?? null : null;
@@ -202,6 +201,12 @@ function serializeWithTruncation(value: unknown, limit: number): SerializedField
   const text = typeof value === 'string' ? value : JSON.stringify(value);
   if (text.length <= limit) return { text, truncated: false };
   return { text: text.slice(0, limit), truncated: true };
+}
+
+function serializeWithoutTruncation(value: unknown): SerializedField | null {
+  if (value === undefined || value === null) return null;
+  const text = typeof value === 'string' ? value : JSON.stringify(value);
+  return { text, truncated: false };
 }
 
 function truncateString(s: string | undefined | null, limit: number): string | null {

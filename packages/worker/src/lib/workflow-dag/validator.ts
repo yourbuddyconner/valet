@@ -1035,6 +1035,31 @@ function collectEnvErrors(
       });
     }
   }
+  if ((node.type === 'session' || node.type === 'orchestrator') && node.repairModel) {
+    try {
+      const { provider } = parseModelId(node.repairModel);
+      if (!hasProviderKey(env, provider)) {
+        errors.push({
+          scope: 'node',
+          nodeId: node.id,
+          code: 'llm_provider_key_missing',
+          path: 'repairModel',
+          message: `${node.type} node "${node.id}" uses repair model provider "${provider}" but its API key is not configured`,
+        });
+      }
+      if (modelLookup) {
+        collectModelAvailabilityErrors(node, errors, modelLookup);
+      }
+    } catch (err) {
+      errors.push({
+        scope: 'node',
+        nodeId: node.id,
+        code: 'llm_model_id_invalid',
+        path: 'repairModel',
+        message: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
   // tool nodes are NOT validated at publish time. Built-in integrations
   // can be checked via integrationRegistry.getPackage, but custom MCP
   // connectors are user-scoped and only resolvable with a context this
@@ -1076,6 +1101,35 @@ function collectModelAvailabilityErrors(
         scope: 'node',
         nodeId: node.id,
         path: 'model',
+        code: 'llm_model_id_invalid',
+        message: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  if ((node.type === 'session' || node.type === 'orchestrator') && node.repairModel) {
+    try {
+      const { provider, catalogId } = workflowModelToCatalogId(node.repairModel);
+      const providerModels = modelLookup.byProvider.get(provider);
+      if (!providerModels || providerModels.length === 0) return;
+      if (modelLookup.ids.has(catalogId)) return;
+
+      const suggestions = rankedModelSuggestions(catalogId, providerModels)
+        .slice(0, 8)
+        .map(catalogIdToWorkflowId)
+        .join(', ');
+      errors.push({
+        scope: 'node',
+        nodeId: node.id,
+        path: 'repairModel',
+        code: 'llm_model_unavailable',
+        message: `${node.type} node "${node.id}" uses repair model "${node.repairModel}", but it is not in the configured model catalog for provider "${provider}".${suggestions ? ` Available models include: ${suggestions}` : ''}`,
+      });
+    } catch (err) {
+      errors.push({
+        scope: 'node',
+        nodeId: node.id,
+        path: 'repairModel',
         code: 'llm_model_id_invalid',
         message: err instanceof Error ? err.message : String(err),
       });

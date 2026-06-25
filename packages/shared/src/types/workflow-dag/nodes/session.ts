@@ -12,6 +12,8 @@ export interface StartSessionNode {
   title?: string;
   personaId?: string;
   model?: string;
+  repairModel?: string;
+  outputSchema?: Record<string, unknown>;
   resultMode?: 'last_message' | 'transcript';
   repo?: {
     url?: string;
@@ -33,6 +35,8 @@ export interface PromptSessionNode {
   prompt: string;
   threadId?: string;
   forceNewThread?: boolean;
+  repairModel?: string;
+  outputSchema?: Record<string, unknown>;
   resultMode?: 'last_message' | 'transcript';
   wait?: {
     mode: 'none' | 'until_idle';
@@ -81,8 +85,11 @@ session running in the background.
 
 When \`until_idle\` is used, the node output includes \`response\` with the
 final assistant message text, \`lastMessage\` with message metadata, and
-\`output\` when that response is valid JSON. Set \`resultMode: "transcript"\`
-to also include the ordered session transcript.`,
+\`output\` when that response is valid JSON. If \`outputSchema\` is set, the
+final response is parsed and validated against that schema; invalid JSON is
+repaired with \`repairModel\` (or the configured default model) before the
+validated object is written to \`output\`. Set \`resultMode: "transcript"\` to
+also include the ordered session transcript.`,
   fields: {
     mode: {
       help: 'start = create a new session for this workflow run. prompt = send a prompt to a session that already exists (by ID).',
@@ -113,6 +120,12 @@ to also include the ordered session transcript.`,
     },
     resultMode: {
       help: 'last_message returns the final assistant reply. transcript also returns the ordered session transcript after waiting until idle.',
+    },
+    outputSchema: {
+      help: 'Optional JSON Schema for the final assistant reply. When set, the response is parsed, validated, repaired if needed, and stored as output.',
+    },
+    repairModel: {
+      help: 'Optional model used to repair malformed or schema-invalid JSON. Defaults to the session model in start mode, then user/org model preferences.',
     },
     wait: {
       help: 'until_idle blocks until the session finishes responding. none returns immediately, leaving the session working in the background.',

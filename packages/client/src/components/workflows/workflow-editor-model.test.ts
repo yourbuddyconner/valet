@@ -723,6 +723,63 @@ describe('workflow editor model', () => {
     expect(sources.find((source) => source.expression === '{{nodes.investigate.data.transcript}}')?.valueType).toBe('array');
   });
 
+  it('derives template outputs from structured orchestrator output schemas', () => {
+    const definition: WorkflowDefinition = {
+      version: 'dag/v1',
+      nodes: [
+        {
+          id: 'investigate',
+          type: 'orchestrator',
+          prompt: 'Investigate incident',
+          wait: { mode: 'until_idle' },
+          outputSchema: {
+            type: 'object',
+            properties: {
+              severity: { type: 'string' },
+              actions: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  properties: {
+                    label: { type: 'string' },
+                    owner: { type: 'string' },
+                  },
+                },
+              },
+            },
+          },
+        },
+      ],
+      edges: [],
+    };
+
+    const sources = deriveWorkflowOutputSources(definition, []);
+
+    expect(sources).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        nodeId: 'investigate',
+        expression: '{{nodes.investigate.data.response}}',
+        valueType: 'scalar',
+      }),
+      expect.objectContaining({
+        nodeId: 'investigate',
+        expression: '{{nodes.investigate.data.output.severity}}',
+        label: 'investigate output.severity',
+        valueType: 'scalar',
+      }),
+      expect.objectContaining({
+        nodeId: 'investigate',
+        expression: '{{nodes.investigate.data.output.actions}}',
+        label: 'investigate output.actions',
+        valueType: 'array',
+        itemFields: [
+          { name: 'label', path: ['nodes', 'investigate', 'data', 'output', 'actions', 'label'], valueType: 'string' },
+          { name: 'owner', path: ['nodes', 'investigate', 'data', 'output', 'actions', 'owner'], valueType: 'string' },
+        ],
+      }),
+    ]));
+  });
+
   it('derives template outputs from session wait results', () => {
     const definition: WorkflowDefinition = {
       version: 'dag/v1',
@@ -738,6 +795,66 @@ describe('workflow editor model', () => {
     expect(expressions).toContain('{{nodes.run_session.data.threadId}}');
     expect(expressions).toContain('{{nodes.run_session.data.finalStatus}}');
     expect(expressions).toContain('{{nodes.run_session.data.waitStatus}}');
+    expect(expressions).toContain('{{nodes.run_session.data.response}}');
+  });
+
+  it('derives template outputs from structured session output schemas', () => {
+    const definition: WorkflowDefinition = {
+      version: 'dag/v1',
+      nodes: [
+        {
+          id: 'scrape_yc',
+          type: 'session',
+          mode: 'start',
+          prompt: 'Scrape YC',
+          workspace: 'yc-scraper',
+          wait: { mode: 'until_idle' },
+          outputSchema: {
+            type: 'object',
+            properties: {
+              totalCount: { type: 'number' },
+              companies: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  properties: {
+                    name: { type: 'string' },
+                    website: { type: 'string' },
+                  },
+                },
+              },
+            },
+          },
+        },
+      ],
+      edges: [],
+    };
+
+    const sources = deriveWorkflowOutputSources(definition, []);
+
+    expect(sources).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        nodeId: 'scrape_yc',
+        expression: '{{nodes.scrape_yc.data.response}}',
+        valueType: 'scalar',
+      }),
+      expect.objectContaining({
+        nodeId: 'scrape_yc',
+        expression: '{{nodes.scrape_yc.data.output.totalCount}}',
+        label: 'scrape_yc output.totalCount',
+        valueType: 'scalar',
+      }),
+      expect.objectContaining({
+        nodeId: 'scrape_yc',
+        expression: '{{nodes.scrape_yc.data.output.companies}}',
+        label: 'scrape_yc output.companies',
+        valueType: 'array',
+        itemFields: [
+          { name: 'name', path: ['nodes', 'scrape_yc', 'data', 'output', 'companies', 'name'], valueType: 'string' },
+          { name: 'website', path: ['nodes', 'scrape_yc', 'data', 'output', 'companies', 'website'], valueType: 'string' },
+        ],
+      }),
+    ]));
   });
 
   it('scopes template suggestions to transitive upstream nodes', () => {

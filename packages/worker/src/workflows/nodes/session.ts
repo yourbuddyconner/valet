@@ -23,7 +23,9 @@ import { workflowSpawnedSessions } from '../../lib/schema/workflow-spawned-sessi
 import { iterationSuffix, NO_RETRY } from '../types.js';
 import { createSession } from '../../services/sessions.js';
 import { fetchMessagesFromDO } from '../../services/session-cross.js';
+import { parseOrRepairStructuredJson } from '../../lib/llm/structured-output.js';
 import { buildTemplateContext } from '../context.js';
+import { assembleWorkflowOutputRepairEnv, resolveWorkflowOutputRepairModel } from '../output-repair.js';
 import { coerceTemplateString } from '../templates.js';
 import { pollSessionUntilIdle } from '../polling.js';
 import type { NodeExecutorArgs } from '../types.js';
@@ -152,13 +154,35 @@ async function attachWaitedSessionOutput(
   if (lastMessage) {
     result.lastMessage = lastMessage;
     result.response = lastMessage.content;
-    const parsedOutput = parseJsonOutput(lastMessage.content);
-    if (parsedOutput.parsed) result.output = parsedOutput.value;
+    if (args.node.outputSchema) {
+      const repairModel = await resolveWorkflowOutputRepairModel({
+        env: args.env,
+        userId: args.params.userId,
+        explicitModel: sessionOutputRepairModel(args.node),
+      });
+      const repairEnv = await assembleWorkflowOutputRepairEnv(args.env);
+      const structured = await parseOrRepairStructuredJson({
+        env: repairEnv,
+        modelId: repairModel,
+        text: lastMessage.content,
+        outputSchema: args.node.outputSchema,
+        contextLabel: `session node "${args.node.id}"`,
+      });
+      result.output = structured.value;
+    } else {
+      const parsedOutput = parseJsonOutput(lastMessage.content);
+      if (parsedOutput.parsed) result.output = parsedOutput.value;
+    }
   }
 
   if (sessionResultMode(args.node) === 'transcript') {
     result.transcript = transcript;
   }
+}
+
+function sessionOutputRepairModel(node: StartSessionNode | PromptSessionNode): string | undefined {
+  if (node.repairModel) return node.repairModel;
+  return node.mode === 'start' ? node.model : undefined;
 }
 
 // ─── start mode ─────────────────────────────────────────────────────────────

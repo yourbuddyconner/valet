@@ -1795,10 +1795,6 @@ function WorkflowSchemaFields({
 }
 
 function LlmFields({ node, onUpdate, templateSources }: NodeFieldProps<LlmNode>) {
-  const outputSchemaFields = React.useMemo(
-    () => jsonSchemaToWorkflowInputDefinitions(node.outputSchema),
-    [node.outputSchema],
-  );
   // Open by default when any advanced value is already set so the user
   // doesn't think their saved tuning vanished.
   const hasAdvanced =
@@ -1811,22 +1807,50 @@ function LlmFields({ node, onUpdate, templateSources }: NodeFieldProps<LlmNode>)
       <Field label="Model" help={NODE_DOCS.llm.fields?.model?.help}>
         <WorkflowModelPicker value={node.model} onChange={(model) => onUpdate({ model })} />
       </Field>
-      <WorkflowSchemaFields
-        title="Output schema"
+      <StructuredOutputSchemaFields
+        outputSchema={node.outputSchema}
+        onChange={(outputSchema) => onUpdate({ outputSchema })}
         emptyMessage="Add fields when the model should return structured data instead of a text response."
-        value={outputSchemaFields}
-        showDefault={false}
-        onChange={(definitions) => onUpdate({ outputSchema: workflowInputDefinitionsToJsonSchema(definitions) })}
         help={NODE_DOCS.llm.fields?.outputSchema?.help}
       />
-      {node.outputSchema && (
-        <ToolSchemaContract title="Outputs" schema={node.outputSchema} />
-      )}
       <DisclosureSection open={advancedOpen} onOpenChange={setAdvancedOpen} title="Advanced">
         <TemplateTextAreaField label="System prompt" value={node.system ?? ''} templateSources={templateSources} onChange={(system) => onUpdate({ system: optionalString(system) })} minRows={3} />
         <NumberField label="Temperature" value={node.temperature} min={0} max={2} step={0.1} onChange={(temperature) => onUpdate({ temperature })} help={NODE_DOCS.llm.fields?.temperature?.help} />
         <NumberField label="Max output tokens" value={node.maxOutputTokens} min={1} step={1} onChange={(maxOutputTokens) => onUpdate({ maxOutputTokens })} help={NODE_DOCS.llm.fields?.maxOutputTokens?.help} />
       </DisclosureSection>
+    </>
+  );
+}
+
+function StructuredOutputSchemaFields({
+  outputSchema,
+  onChange,
+  emptyMessage,
+  help,
+}: {
+  outputSchema?: Record<string, unknown>;
+  onChange: (schema: Record<string, unknown> | undefined) => void;
+  emptyMessage: string;
+  help?: string;
+}) {
+  const outputSchemaFields = React.useMemo(
+    () => jsonSchemaToWorkflowInputDefinitions(outputSchema),
+    [outputSchema],
+  );
+
+  return (
+    <>
+      <WorkflowSchemaFields
+        title="Output schema"
+        emptyMessage={emptyMessage}
+        value={outputSchemaFields}
+        showDefault={false}
+        onChange={(definitions) => onChange(workflowInputDefinitionsToJsonSchema(definitions))}
+        help={help}
+      />
+      {outputSchema && (
+        <ToolSchemaContract title="Outputs" schema={outputSchema} />
+      )}
     </>
   );
 }
@@ -2684,13 +2708,26 @@ function OrchestratorFields({ node, onUpdate, templateSources }: NodeFieldProps<
       <CheckboxField label="Force new thread" checked={Boolean(node.forceNewThread)} onChange={(forceNewThread) => onUpdate({ forceNewThread })} help={NODE_DOCS.orchestrator.fields?.forceNewThread?.help} />
       <WaitPolicyFields value={node.wait} onChange={(wait) => onUpdate({ wait })} help={NODE_DOCS.orchestrator.fields?.wait?.help} />
       {waitMode === 'until_idle' && (
-        <SelectField
-          label="Result"
-          value={node.resultMode ?? 'last_message'}
-          options={['last_message', 'transcript']}
-          onChange={(resultMode) => onUpdate({ resultMode })}
-          help={NODE_DOCS.orchestrator.fields?.resultMode?.help}
-        />
+        <>
+          <StructuredOutputSchemaFields
+            outputSchema={node.outputSchema}
+            onChange={(outputSchema) => onUpdate({ outputSchema })}
+            emptyMessage="Add fields when the orchestrator should return structured JSON at data.output."
+            help={NODE_DOCS.orchestrator.fields?.outputSchema?.help}
+          />
+          {node.outputSchema && (
+            <Field label="Repair model" help={NODE_DOCS.orchestrator.fields?.repairModel?.help}>
+              <WorkflowModelPicker value={node.repairModel} onChange={(repairModel) => onUpdate({ repairModel })} />
+            </Field>
+          )}
+          <SelectField
+            label="Result"
+            value={node.resultMode ?? 'last_message'}
+            options={['last_message', 'transcript']}
+            onChange={(resultMode) => onUpdate({ resultMode })}
+            help={NODE_DOCS.orchestrator.fields?.resultMode?.help}
+          />
+        </>
       )}
     </>
   );
@@ -2743,6 +2780,28 @@ function SessionFields({ node, onUpdate, templateSources }: NodeFieldProps<Sessi
         </>
       )}
       <WaitPolicyFields value={wait} onChange={(nextWait) => onUpdate({ wait: nextWait })} help={NODE_DOCS.session.fields?.wait?.help} />
+      {(wait?.mode ?? 'none') === 'until_idle' && (
+        <>
+          <StructuredOutputSchemaFields
+            outputSchema={node.outputSchema}
+            onChange={(outputSchema) => onUpdate({ outputSchema })}
+            emptyMessage="Add fields when the session should return structured JSON at data.output."
+            help={NODE_DOCS.session.fields?.outputSchema?.help}
+          />
+          {node.outputSchema && (
+            <Field label="Repair model" help={NODE_DOCS.session.fields?.repairModel?.help}>
+              <WorkflowModelPicker value={node.repairModel} onChange={(repairModel) => onUpdate({ repairModel })} />
+            </Field>
+          )}
+          <SelectField
+            label="Result"
+            value={node.resultMode ?? 'last_message'}
+            options={['last_message', 'transcript']}
+            onChange={(resultMode) => onUpdate({ resultMode })}
+            help={NODE_DOCS.session.fields?.resultMode?.help}
+          />
+        </>
+      )}
     </>
   );
 }

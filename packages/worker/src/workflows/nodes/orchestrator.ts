@@ -14,10 +14,12 @@
 import type { Message, OrchestratorNode } from '@valet/shared';
 import { getThreadMessages } from '../../lib/db/messages.js';
 import { getDb } from '../../lib/drizzle.js';
+import { parseOrRepairStructuredJson } from '../../lib/llm/structured-output.js';
 import { renderTemplate } from '../../lib/workflow-dag/expression.js';
 import { parseDurationMs } from '../../lib/workflow-dag/duration.js';
 import { dispatchOrchestratorPrompt } from '../../services/orchestrator.js';
 import { buildTemplateContext } from '../context.js';
+import { assembleWorkflowOutputRepairEnv, resolveWorkflowOutputRepairModel } from '../output-repair.js';
 import { coerceTemplateString } from '../templates.js';
 import { pollThreadUntilIdle } from '../polling.js';
 import { iterationSuffix, NO_RETRY } from '../types.js';
@@ -32,6 +34,8 @@ export interface OrchestratorResult {
   finalStatus?: string;
   waited?: boolean;
   lastMessage?: WorkflowThreadMessage;
+  response?: string;
+  output?: unknown;
   transcript?: WorkflowThreadMessage[];
 }
 
@@ -121,7 +125,20 @@ export async function executeOrchestrator(args: NodeExecutorArgs<OrchestratorNod
     },
   );
   const transcript = JSON.parse(threadMessagesJson) as WorkflowThreadMessage[];
-  const lastMessage = transcript[transcript.length - 1];
+  const lastMessage = finalAssistantMessage(transcript);
+  const structuredOutput = lastMessage && args.node.outputSchema
+    ? await parseOrRepairStructuredJson({
+      env: await assembleWorkflowOutputRepairEnv(args.env),
+      modelId: await resolveWorkflowOutputRepairModel({
+        env: args.env,
+        userId: args.params.userId,
+        explicitModel: args.node.repairModel,
+      }),
+      text: lastMessage.content,
+      outputSchema: args.node.outputSchema,
+      contextLabel: `orchestrator node "${args.node.id}"`,
+    })
+    : undefined;
 
   return {
     dispatched: dispatch.dispatched,
@@ -130,8 +147,17 @@ export async function executeOrchestrator(args: NodeExecutorArgs<OrchestratorNod
     finalStatus,
     waited: true,
     ...(lastMessage ? { lastMessage } : {}),
+    ...(lastMessage ? { response: lastMessage.content } : {}),
+    ...(structuredOutput ? { output: structuredOutput.value } : {}),
     ...(args.node.resultMode === 'transcript' ? { transcript } : {}),
   };
+}
+
+function finalAssistantMessage(messages: WorkflowThreadMessage[]): WorkflowThreadMessage | undefined {
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    if (messages[i]?.role === 'assistant') return messages[i];
+  }
+  return messages[messages.length - 1];
 }
 
 function toWorkflowThreadMessage(message: Message): WorkflowThreadMessage {

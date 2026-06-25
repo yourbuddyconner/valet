@@ -6,6 +6,7 @@ const getUserByIdMock = vi.fn();
 const pollMock = vi.fn();
 const createThreadMock = vi.fn();
 const fetchMessagesFromDOMock = vi.fn();
+const parseOrRepairStructuredJsonMock = vi.fn();
 
 vi.mock('../../services/sessions.js', () => ({
   createSession: (...args: unknown[]) => createSessionMock(...args),
@@ -29,6 +30,15 @@ vi.mock('../../services/session-cross.js', () => ({
 
 vi.mock('../polling.js', () => ({
   pollSessionUntilIdle: (...args: unknown[]) => pollMock(...args),
+}));
+
+vi.mock('../../lib/llm/structured-output.js', () => ({
+  parseOrRepairStructuredJson: (...args: unknown[]) => parseOrRepairStructuredJsonMock(...args),
+}));
+
+vi.mock('../output-repair.js', () => ({
+  assembleWorkflowOutputRepairEnv: async (env: unknown) => env,
+  resolveWorkflowOutputRepairModel: async (params: { explicitModel?: string }) => params.explicitModel,
 }));
 
 // Minimal drizzle insert stub for the spawned-session lookup row that
@@ -129,9 +139,11 @@ beforeEach(() => {
   pollMock.mockReset();
   createThreadMock.mockReset();
   fetchMessagesFromDOMock.mockReset();
+  parseOrRepairStructuredJsonMock.mockReset();
   getUserByIdMock.mockResolvedValue({ id: 'user-1', email: 'u@example.com' });
   createThreadMock.mockResolvedValue({ id: 'thread-mock', sessionId: 'sess-mock' });
   fetchMessagesFromDOMock.mockResolvedValue([]);
+  parseOrRepairStructuredJsonMock.mockResolvedValue({ value: { repaired: true }, attempts: 1, repaired: false });
 });
 
 describe('executeSession — start mode', () => {
@@ -215,6 +227,49 @@ describe('executeSession — start mode', () => {
         content: '{"companies":[{"name":"Red Barn Robotics"}],"totalCount":1}',
       },
     });
+  });
+
+  it('validates and repairs the final assistant response when outputSchema is configured', async () => {
+    createSessionMock.mockResolvedValue({ ok: true, session: { id: 'ignored-mock-id', status: 'initializing' } });
+    pollMock.mockResolvedValue('idle');
+    fetchMessagesFromDOMock.mockResolvedValue([
+      {
+        id: 'msg-assistant',
+        sessionId: 'sess-1',
+        role: 'assistant',
+        content: '{"totalCount":"167"',
+        createdAt: '2026-06-12T00:00:03.000Z',
+      },
+    ]);
+    parseOrRepairStructuredJsonMock.mockResolvedValue({
+      value: { totalCount: 167 },
+      attempts: 2,
+      repaired: true,
+    });
+    const outputSchema = {
+      type: 'object',
+      properties: { totalCount: { type: 'number' } },
+      required: ['totalCount'],
+    };
+    const node: SessionNode = {
+      id: 's', type: 'session', mode: 'start', prompt: 'scrape', workspace: 'main',
+      wait: { mode: 'until_idle' },
+      outputSchema,
+      repairModel: 'anthropic:claude-sonnet-4-5',
+    };
+
+    const out = await executeSession(buildArgs(node));
+
+    expect(out).toMatchObject({
+      response: '{"totalCount":"167"',
+      output: { totalCount: 167 },
+    });
+    expect(parseOrRepairStructuredJsonMock).toHaveBeenCalledWith(expect.objectContaining({
+      modelId: 'anthropic:claude-sonnet-4-5',
+      text: '{"totalCount":"167"',
+      outputSchema,
+      contextLabel: 'session node "s"',
+    }));
   });
 
   it('returns the full session transcript when resultMode is transcript', async () => {

@@ -167,6 +167,8 @@ export const orchestratorNodeSchema = z.object({
   type: z.literal('orchestrator'),
   prompt: z.string().min(1),
   forceNewThread: z.boolean().optional(),
+  repairModel: z.string().optional(),
+  outputSchema: z.record(z.string(), z.unknown()).optional(),
   resultMode: z.enum(['last_message', 'transcript']).optional(),
   wait: waitConfigSchema,
 });
@@ -181,6 +183,8 @@ export const startSessionNodeSchema = z.object({
   title: z.string().optional(),
   personaId: z.string().optional(),
   model: z.string().optional(),
+  repairModel: z.string().optional(),
+  outputSchema: z.record(z.string(), z.unknown()).optional(),
   repo: z.object({
     url: z.string().optional(),
     branch: z.string().optional(),
@@ -199,6 +203,8 @@ export const promptSessionNodeSchema = z.object({
   prompt: z.string().min(1),
   threadId: z.string().optional(),
   forceNewThread: z.boolean().optional(),
+  repairModel: z.string().optional(),
+  outputSchema: z.record(z.string(), z.unknown()).optional(),
   resultMode: z.enum(['last_message', 'transcript']).optional(),
   wait: waitConfigSchema,
 });

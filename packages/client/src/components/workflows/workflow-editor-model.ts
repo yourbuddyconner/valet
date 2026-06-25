@@ -988,7 +988,7 @@ export function jsonSchemaToWorkflowInputDefinitions(
 function deriveOrchestratorOutputSources(node: OrchestratorNode): WorkflowOutputSource[] {
   if (node.wait?.mode !== 'until_idle') return [];
 
-  const sources = [
+  const sources: WorkflowOutputSource[] = [
     createManualWorkflowOutputSource({
       nodeId: node.id,
       nodeLabel: NODE_LABELS[node.type],
@@ -1005,7 +1005,25 @@ function deriveOrchestratorOutputSources(node: OrchestratorNode): WorkflowOutput
       label: `${node.id} last message content`,
       valueType: 'scalar',
     }),
+    createManualWorkflowOutputSource({
+      nodeId: node.id,
+      nodeLabel: NODE_LABELS[node.type],
+      actionName: 'Orchestrator result',
+      path: ['nodes', node.id, 'data', 'response'],
+      label: `${node.id} response`,
+      valueType: 'scalar',
+    }),
   ];
+
+  if (node.outputSchema) {
+    sources.push(...deriveLlmSchemaOutputSources({
+      schema: node.outputSchema as JsonSchemaLike,
+      basePath: ['nodes', node.id, 'data', 'output'],
+      nodeId: node.id,
+      nodeLabel: NODE_LABELS[node.type],
+      actionName: 'Orchestrator output',
+    }));
+  }
 
   if (node.resultMode === 'transcript') {
     sources.push(createManualWorkflowOutputSource({
@@ -1067,7 +1085,25 @@ function deriveSessionOutputSources(node: SessionNode): WorkflowOutputSource[] {
         label: `${node.id} wait status`,
         valueType: 'scalar',
       }),
+      createManualWorkflowOutputSource({
+        nodeId: node.id,
+        nodeLabel: NODE_LABELS[node.type],
+        actionName: 'Session result',
+        path: ['nodes', node.id, 'data', 'response'],
+        label: `${node.id} response`,
+        valueType: 'scalar',
+      }),
     );
+
+    if (node.outputSchema) {
+      sources.push(...deriveLlmSchemaOutputSources({
+        schema: node.outputSchema as JsonSchemaLike,
+        basePath: ['nodes', node.id, 'data', 'output'],
+        nodeId: node.id,
+        nodeLabel: NODE_LABELS[node.type],
+        actionName: 'Session output',
+      }));
+    }
   }
 
   return sources;

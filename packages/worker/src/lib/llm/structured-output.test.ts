@@ -24,7 +24,7 @@ vi.mock('@ai-sdk/google', () => ({
   createGoogleGenerativeAI: () => (model: string) => ({ provider: 'google', model }),
 }));
 
-import { parseModelId, hasProviderKey, generateStructured } from './structured-output.js';
+import { parseModelId, hasProviderKey, generateStructured, parseOrRepairStructuredJson } from './structured-output.js';
 import type { Env } from '../../env.js';
 
 beforeEach(() => {
@@ -94,9 +94,9 @@ describe('generateStructured', () => {
     expect(generateObject).not.toHaveBeenCalled();
   });
 
-  it('uses structured object generation when an output schema is provided', async () => {
+  it('uses text generation plus schema validation when an output schema is provided', async () => {
     const outputSchema = { type: 'object', properties: { ok: { type: 'boolean' } }, required: ['ok'] };
-    generateObject.mockResolvedValue({ object: { ok: true } });
+    generateText.mockResolvedValue({ text: '{"ok":true}' });
 
     const result = await generateStructured({
       env: { OPENAI_API_KEY: 'sk-openai' } as Env,
@@ -106,11 +106,117 @@ describe('generateStructured', () => {
     });
 
     expect(result).toEqual({ value: { ok: true }, attempts: 1 });
-    expect(generateObject).toHaveBeenCalledWith(expect.objectContaining({
+    expect(generateText).toHaveBeenCalledWith(expect.objectContaining({
       model: { provider: 'openai', model: 'gpt-4o' },
-      schema: { kind: 'jsonSchema', schema: outputSchema },
-      prompt: 'Return JSON.',
+      prompt: expect.stringContaining('Return JSON.'),
     }));
+    expect(generateObject).not.toHaveBeenCalled();
+  });
+});
+
+describe('parseOrRepairStructuredJson', () => {
+  it('parses and validates raw JSON without calling the repair model', async () => {
+    const outputSchema = {
+      type: 'object',
+      properties: { totalCount: { type: 'number' } },
+      required: ['totalCount'],
+    };
+
+    const result = await parseOrRepairStructuredJson({
+      env: { ANTHROPIC_API_KEY: 'sk-ant' } as Env,
+      modelId: 'anthropic:claude-sonnet-4-5',
+      text: '{"totalCount":167}',
+      outputSchema,
+      contextLabel: 'session node "scrape"',
+    });
+
+    expect(result).toEqual({ value: { totalCount: 167 }, attempts: 1, repaired: false });
     expect(generateText).not.toHaveBeenCalled();
+  });
+
+  it('accepts JSON Schema nullable type arrays without repair', async () => {
+    const outputSchema = {
+      type: 'object',
+      properties: {
+        title: { type: ['string', 'null'] },
+      },
+      required: ['title'],
+    };
+
+    const result = await parseOrRepairStructuredJson({
+      env: { ANTHROPIC_API_KEY: 'sk-ant' } as Env,
+      modelId: 'anthropic:claude-sonnet-4-5',
+      text: '{"title":null}',
+      outputSchema,
+      contextLabel: 'session node "scrape"',
+    });
+
+    expect(result).toEqual({ value: { title: null }, attempts: 1, repaired: false });
+    expect(generateText).not.toHaveBeenCalled();
+  });
+
+  it('repairs invalid JSON using the configured model and validates the repaired object', async () => {
+    const outputSchema = {
+      type: 'object',
+      properties: { totalCount: { type: 'number' } },
+      required: ['totalCount'],
+    };
+    generateText.mockResolvedValue({ text: '{"totalCount":167}' });
+
+    const result = await parseOrRepairStructuredJson({
+      env: { ANTHROPIC_API_KEY: 'sk-ant' } as Env,
+      modelId: 'anthropic:claude-sonnet-4-5',
+      text: '{"totalCount":"167"',
+      outputSchema,
+      contextLabel: 'session node "scrape"',
+      retryBackoffMs: [0, 0, 0],
+    });
+
+    expect(result).toEqual({ value: { totalCount: 167 }, attempts: 2, repaired: true });
+    expect(generateText).toHaveBeenCalledWith(expect.objectContaining({
+      model: { provider: 'anthropic', model: 'claude-sonnet-4-5' },
+      prompt: expect.stringContaining('session node "scrape"'),
+    }));
+    expect(generateText.mock.calls[0]?.[0]?.prompt).toContain('Failed JSON');
+    expect(generateText.mock.calls[0]?.[0]?.prompt).toContain('JSON Schema');
+  });
+
+  it('repairs schema-invalid JSON and includes the validation error in the prompt', async () => {
+    const outputSchema = {
+      type: 'object',
+      properties: { totalCount: { type: 'number' } },
+      required: ['totalCount'],
+    };
+    generateText.mockResolvedValue({ text: '{"totalCount":167}' });
+
+    await parseOrRepairStructuredJson({
+      env: { ANTHROPIC_API_KEY: 'sk-ant' } as Env,
+      modelId: 'anthropic:claude-sonnet-4-5',
+      text: '{"totalCount":"167"}',
+      outputSchema,
+      contextLabel: 'session node "scrape"',
+      retryBackoffMs: [0, 0, 0],
+    });
+
+    expect(generateText.mock.calls[0]?.[0]?.prompt).toContain('$.totalCount: expected number, received string');
+  });
+
+  it('throws a clear error after the repair attempts are exhausted', async () => {
+    const outputSchema = {
+      type: 'object',
+      properties: { totalCount: { type: 'number' } },
+      required: ['totalCount'],
+    };
+    generateText.mockResolvedValue({ text: '{"totalCount":"still wrong"}' });
+
+    await expect(parseOrRepairStructuredJson({
+      env: { ANTHROPIC_API_KEY: 'sk-ant' } as Env,
+      modelId: 'anthropic:claude-sonnet-4-5',
+      text: '{"totalCount":"167"}',
+      outputSchema,
+      contextLabel: 'session node "scrape"',
+      retries: 2,
+      retryBackoffMs: [0, 0],
+    })).rejects.toThrow(/session node "scrape".*does not match outputSchema.*totalCount/s);
   });
 });

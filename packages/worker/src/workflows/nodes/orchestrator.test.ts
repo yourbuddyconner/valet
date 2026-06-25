@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const dispatchMock = vi.fn();
 const pollThreadMock = vi.fn();
 const getThreadMessagesMock = vi.fn();
+const parseOrRepairStructuredJsonMock = vi.fn();
 
 vi.mock('../../services/orchestrator.js', () => ({
   dispatchOrchestratorPrompt: (...args: unknown[]) => dispatchMock(...args),
@@ -18,6 +19,15 @@ vi.mock('../../lib/db/messages.js', () => ({
 
 vi.mock('../../lib/drizzle.js', () => ({
   getDb: () => 'db',
+}));
+
+vi.mock('../../lib/llm/structured-output.js', () => ({
+  parseOrRepairStructuredJson: (...args: unknown[]) => parseOrRepairStructuredJsonMock(...args),
+}));
+
+vi.mock('../output-repair.js', () => ({
+  assembleWorkflowOutputRepairEnv: async (env: unknown) => env,
+  resolveWorkflowOutputRepairModel: async (params: { explicitModel?: string }) => params.explicitModel,
 }));
 
 import { executeOrchestrator } from './orchestrator.js';
@@ -61,6 +71,8 @@ beforeEach(() => {
   dispatchMock.mockReset();
   pollThreadMock.mockReset();
   getThreadMessagesMock.mockReset();
+  parseOrRepairStructuredJsonMock.mockReset();
+  parseOrRepairStructuredJsonMock.mockResolvedValue({ value: { ok: true }, attempts: 1, repaired: false });
 });
 
 describe('executeOrchestrator', () => {
@@ -147,6 +159,60 @@ describe('executeOrchestrator', () => {
       waited: true,
       lastMessage: expectedAssistantMessage,
     });
+  });
+
+  it('validates and repairs the final assistant response when outputSchema is configured', async () => {
+    dispatchMock.mockResolvedValue({ dispatched: true, sessionId: 'orchestrator:user-1', threadId: 'thread-1' });
+    pollThreadMock.mockResolvedValue('idle');
+    const assistantMessage = {
+      id: 'msg-assistant',
+      sessionId: 'orchestrator:user-1',
+      role: 'assistant',
+      content: '{"companies":"wrong"}',
+      threadId: 'thread-1',
+      createdAt: new Date('2026-06-12T00:00:03.000Z'),
+    };
+    getThreadMessagesMock.mockResolvedValue([assistantMessage]);
+    parseOrRepairStructuredJsonMock.mockResolvedValue({
+      value: { companies: [{ name: 'Red Barn Robotics' }] },
+      attempts: 2,
+      repaired: true,
+    });
+    const outputSchema = {
+      type: 'object',
+      properties: {
+        companies: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: { name: { type: 'string' } },
+            required: ['name'],
+          },
+        },
+      },
+      required: ['companies'],
+    };
+
+    const node: OrchestratorNode = {
+      id: 'orch',
+      type: 'orchestrator',
+      prompt: 'go',
+      wait: { mode: 'until_idle' },
+      outputSchema,
+      repairModel: 'anthropic:claude-sonnet-4-5',
+    };
+    const out = await executeOrchestrator(args(node));
+
+    expect(out).toMatchObject({
+      response: '{"companies":"wrong"}',
+      output: { companies: [{ name: 'Red Barn Robotics' }] },
+    });
+    expect(parseOrRepairStructuredJsonMock).toHaveBeenCalledWith(expect.objectContaining({
+      modelId: 'anthropic:claude-sonnet-4-5',
+      text: '{"companies":"wrong"}',
+      outputSchema,
+      contextLabel: 'orchestrator node "orch"',
+    }));
   });
 
   it('returns the full thread transcript when resultMode is transcript', async () => {

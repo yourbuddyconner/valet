@@ -1994,7 +1994,7 @@ Edges from an \`if\` node must include \`fromOutput\`:
 { "id": "prepare", "type": "set", "values": { "message": "hello {{trigger.data.name}}" } }
 \`\`\`
 
-\`llm\` generates text or structured data. Without \`outputSchema\`, it returns plain text at \`{{nodes.<id>.data.response}}\`. With \`outputSchema\`, the model must return JSON matching that schema, and the validated object is returned as \`nodes.<id>.data\`:
+\`llm\` generates text or structured data. Without \`outputSchema\`, it returns plain text at \`{{nodes.<id>.data.response}}\`. With \`outputSchema\`, the model must return JSON matching that schema; malformed or schema-invalid JSON is repaired up to three times, and the validated object is returned as \`nodes.<id>.data\`:
 
 \`\`\`json
 {
@@ -2087,8 +2087,10 @@ Fields:
 - \`prompt\` (string, required) — prompt sent to the orchestrator thread; supports templates.
 - \`wait\` (object, optional) — \`{ "mode": "none" | "until_idle", "timeout"?: string }\`.
 - \`resultMode\` (\`"last_message"\` | \`"transcript"\`, optional) — only applies with \`wait.mode: "until_idle"\`; defaults to \`"last_message"\`.
+- \`outputSchema\` (object, optional) — JSON Schema for the final assistant reply. Only applies when waiting. Validated structured data is stored at \`{{nodes.<id>.data.output}}\`; raw text remains at \`{{nodes.<id>.data.response}}\`.
+- \`repairModel\` (string, optional) — model used to repair malformed or schema-invalid JSON. Defaults to user/org model preferences.
 
-Use \`wait.mode: "until_idle"\` only when downstream nodes need the orchestrator result. This waits for the workflow-created thread's prompt queue to become idle, not for the long-lived orchestrator session to stop running. Waited orchestrator nodes output \`lastMessage\` by default, so downstream nodes can reference \`{{nodes.ask_orchestrator.data.lastMessage.content}}\`:
+Use \`wait.mode: "until_idle"\` only when downstream nodes need the orchestrator result. This waits for the workflow-created thread's prompt queue to become idle, not for the long-lived orchestrator session to stop running. Waited orchestrator nodes output \`response\` and \`lastMessage\` by default, so downstream nodes can reference \`{{nodes.ask_orchestrator.data.response}}\` or \`{{nodes.ask_orchestrator.data.lastMessage.content}}\`:
 
 \`\`\`json
 { "id": "ask_orchestrator", "type": "orchestrator", "prompt": "Investigate {{trigger.data.issue}}", "wait": { "mode": "until_idle", "timeout": "30m" } }
@@ -2106,7 +2108,28 @@ Set \`resultMode: "transcript"\` to also output the full ordered thread transcri
 { "id": "start_session", "type": "session", "mode": "start", "workspace": "/workspace", "prompt": "Run tests", "wait": { "mode": "until_idle", "timeout": "1h" } }
 \`\`\`
 
-When a session node waits until idle, use \`{{nodes.start_session.data.finalStatus}}\` for workflow branching. It is \`"completed"\` when the session reached an idle/terminal success state. The raw observed session state is also available as \`{{nodes.start_session.data.waitStatus}}\` (\`"idle"\`, \`"hibernated"\`, \`"terminated"\`, or \`"timed_out"\`).
+When a session node waits until idle, use \`{{nodes.start_session.data.finalStatus}}\` for workflow branching. It is \`"completed"\` when the session reached an idle/terminal success state. The raw observed session state is also available as \`{{nodes.start_session.data.waitStatus}}\` (\`"idle"\`, \`"hibernated"\`, \`"terminated"\`, or \`"timed_out"\`). The final assistant message text is available at \`{{nodes.start_session.data.response}}\`.
+
+Session nodes also support \`outputSchema\` and \`repairModel\`. With \`outputSchema\`, the final assistant message must be JSON matching that schema; malformed or schema-invalid JSON is repaired up to three times. The validated object is stored under \`{{nodes.start_session.data.output}}\` so lifecycle fields like \`sessionId\`, \`threadId\`, and \`finalStatus\` cannot be overwritten by agent output.
+
+\`\`\`json
+{
+  "id": "scrape_yc",
+  "type": "session",
+  "mode": "start",
+  "workspace": "yc-scraper",
+  "prompt": "Return only JSON with companies and totalCount.",
+  "wait": { "mode": "until_idle", "timeout": "15m" },
+  "outputSchema": {
+    "type": "object",
+    "properties": {
+      "companies": { "type": "array", "items": { "type": "object" } },
+      "totalCount": { "type": "number" }
+    },
+    "required": ["companies", "totalCount"]
+  }
+}
+\`\`\`
 
 \`\`\`json
 { "id": "prompt_session", "type": "session", "mode": "prompt", "sessionId": "{{nodes.start_session.data.sessionId}}", "prompt": "Continue", "wait": { "mode": "none" } }
