@@ -112,11 +112,16 @@ Data flows bidirectionally: user prompts go DO -> Runner -> OpenCode. Agent resp
 ```bash
 export DISPLAY=:99
 export HOME=/workspace
+export TMPDIR=/tmp
 export OPENCODE_RUNTIME_DIR=/tmp/valet-opencode
 export VALET_PERSONA_DIR=/tmp/valet-opencode/persona
+export AGENT_BROWSER_HOME=/tmp/valet-agent-browser
+export AGENT_BROWSER_PROFILE=/workspace/.agent-browser-profile
 ```
 
 Sets display for VNC, keeps the terminal/user home on the durable workspace, and points runner-generated OpenCode/persona files at ephemeral sandbox storage. OpenCode itself is spawned later with XDG paths, `OPENCODE_CONFIG_DIR`, and `OPENCODE_DB` under `OPENCODE_RUNTIME_DIR`.
+
+`agent-browser` is split deliberately: `AGENT_BROWSER_HOME` stays on local `/tmp` because the daemon binds a Unix domain socket there, while `AGENT_BROWSER_PROFILE` stays under `/workspace` so browser cookies and profile data can persist with the workspace volume.
 
 ### Step 2 — VNC Stack
 

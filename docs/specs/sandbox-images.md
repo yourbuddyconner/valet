@@ -139,13 +139,19 @@ At runtime, the Runner's `OpenCodeManager` reads from `/opencode-config/`, merge
     "BUN_INSTALL": "/root/.bun",
     "PATH": "/root/.bun/bin:/usr/local/sbin:...",
     "DISPLAY": ":99",
-    "HOME": "/root",
-    "IMAGE_BUILD_VERSION": "2026-02-23-v116-fix-skills-copy-recursive",
+    "HOME": "/workspace",
+    "TMPDIR": "/tmp",
+    "OPENCODE_RUNTIME_DIR": "/tmp/valet-opencode",
+    "VALET_PERSONA_DIR": "/tmp/valet-opencode/persona",
+    "IMAGE_BUILD_VERSION": "2026-06-24-v55-agent-browser-home",
+    "AGENT_BROWSER_HOME": "/tmp/valet-agent-browser",
     "AGENT_BROWSER_EXECUTABLE_PATH": "/usr/bin/chromium",
-    "AGENT_BROWSER_PROFILE": "/root/.agent-browser-profile",
+    "AGENT_BROWSER_PROFILE": "/workspace/.agent-browser-profile",
     "PLAYWRIGHT_BROWSERS_PATH": "/ms-playwright",
 })
 ```
+
+`AGENT_BROWSER_HOME` must remain on a local filesystem because the native daemon creates Unix domain sockets there. The browser profile is intentionally separate and remains on `/workspace` for persistent cookies/session data.
 
 ## Cache Busting
 
@@ -164,7 +170,7 @@ Placed before `add_local_dir` for the runner. Changing this string invalidates t
 **2. `IMAGE_BUILD_VERSION` env var (layer 16):**
 
 ```python
-"IMAGE_BUILD_VERSION": "2026-02-23-v116-fix-skills-copy-recursive",
+"IMAGE_BUILD_VERSION": "2026-06-24-v55-agent-browser-home",
 ```
 
 Set in the final `.env()` block. Changing this only invalidates the env layer itself. Serves primarily as a documentation marker for deployed version.
