@@ -36,18 +36,40 @@ export function parseOtlpHeaders(raw: string | undefined): Record<string, string
   return headers;
 }
 
+// Secrets that sit in the URL PATH rather than the query — e.g. the Telegram bot token
+// in `https://api.telegram.org/bot<token>/<method>` (services/telegram.ts,
+// routes/channel-webhooks.ts). The HTTP instrumentation records the full outbound URL,
+// so these must be scrubbed from the path too. Add patterns as integrations embed
+// secrets in paths.
+const PATH_SECRET_PATTERNS: Array<[RegExp, string]> = [
+  [/\/bot\d+:[A-Za-z0-9_-]+/g, '/bot<redacted>'],
+];
+
+function scrubPathSecrets(value: string): string {
+  let out = value;
+  for (const [pattern, replacement] of PATH_SECRET_PATTERNS) out = out.replace(pattern, replacement);
+  return out;
+}
+
 /**
  * Drop secrets/PII from a span's URL attributes (applied by RedactingSpanExporter before
- * export). The HTTP instrumentation records the full request URL including the query
- * string, which can carry OAuth codes and tokens (e.g. `/auth/github/callback?code=...`).
- * Keep the path (low-cardinality, useful); drop the query.
+ * export). The HTTP instrumentation records the full request URL: query strings carry
+ * OAuth codes/tokens (`/auth/github/callback?code=...`) and some outbound paths embed a
+ * secret directly (the Telegram bot token). So strip every query string AND scrub known
+ * path secrets across url.full / http.url / url.path; the low-cardinality path is kept.
  */
 export function redactUrlAttributes(attrs: Record<string, unknown>): void {
-  const full = attrs['url.full'];
-  if (typeof full === 'string') {
-    const q = full.indexOf('?');
-    if (q >= 0) attrs['url.full'] = full.slice(0, q);
+  // Full-URL attributes (url.full, and http.url on cache spans): strip query, scrub path.
+  for (const key of ['url.full', 'http.url']) {
+    const v = attrs[key];
+    if (typeof v === 'string') {
+      const q = v.indexOf('?');
+      attrs[key] = scrubPathSecrets(q >= 0 ? v.slice(0, q) : v);
+    }
   }
+  // Path-only attribute carries no query but can still embed a path secret.
+  const path = attrs['url.path'];
+  if (typeof path === 'string') attrs['url.path'] = scrubPathSecrets(path);
   if ('url.query' in attrs) attrs['url.query'] = '';
 }
 

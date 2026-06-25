@@ -69,6 +69,22 @@ describe('redactUrlAttributes', () => {
     redactUrlAttributes(attrs);
     expect(attrs['url.full']).toBe('https://valet/health');
   });
+
+  it('scrubs a Telegram bot token from the path of url.full and url.path', () => {
+    const attrs: Record<string, unknown> = {
+      'url.full': 'https://api.telegram.org/bot123456789:AA-Example_Token-xyz/sendMessage',
+      'url.path': '/bot123456789:AA-Example_Token-xyz/sendMessage',
+    };
+    redactUrlAttributes(attrs);
+    expect(attrs['url.full']).toBe('https://api.telegram.org/bot<redacted>/sendMessage');
+    expect(attrs['url.path']).toBe('/bot<redacted>/sendMessage');
+  });
+
+  it('strips the query from http.url (cache spans) too', () => {
+    const attrs: Record<string, unknown> = { 'http.url': 'https://valet/auth/cb?code=SECRET' };
+    redactUrlAttributes(attrs);
+    expect(attrs['http.url']).toBe('https://valet/auth/cb');
+  });
 });
 
 describe('setSessionAttributes', () => {
