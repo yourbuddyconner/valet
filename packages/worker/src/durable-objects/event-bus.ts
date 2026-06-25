@@ -105,14 +105,16 @@ export class EventBusDO {
     const sockets = this.ctx.getWebSockets(`user:${userId}`);
     const payload = JSON.stringify(event);
 
+    let delivered = 0;
     for (const ws of sockets) {
       try {
         ws.send(payload);
+        delivered++;
       } catch {
         // Socket likely closed — hibernation will clean it up
       }
     }
-    return sockets.length;
+    return delivered;
   }
 
   /** Send an event to all connected WebSockets. Returns recipient count. */
@@ -120,14 +122,16 @@ export class EventBusDO {
     const sockets = this.ctx.getWebSockets();
     const payload = JSON.stringify(event);
 
+    let delivered = 0;
     for (const ws of sockets) {
       try {
         ws.send(payload);
+        delivered++;
       } catch {
         // Socket likely closed
       }
     }
-    return sockets.length;
+    return delivered;
   }
 
   // ─── Hibernation Handlers ────────────────────────────────────────────────

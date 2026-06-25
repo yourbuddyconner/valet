@@ -1,5 +1,6 @@
 import { trace } from '@opentelemetry/api';
 import type { TraceConfig } from '@microlabs/otel-cf-workers';
+import type { ReadableSpan, SpanExporter } from '@opentelemetry/sdk-trace-base';
 import type { Env } from '../env.js';
 
 /**
@@ -36,11 +37,10 @@ export function parseOtlpHeaders(raw: string | undefined): Record<string, string
 }
 
 /**
- * Drop secrets/PII from a span's URL attributes (applied by the exporter in index.ts
- * before export). The HTTP instrumentation records the full request URL including the
- * query string, which can carry OAuth codes and tokens (e.g.
- * `/auth/github/callback?code=...`). Keep the path (low-cardinality, useful); drop the
- * query.
+ * Drop secrets/PII from a span's URL attributes (applied by RedactingSpanExporter before
+ * export). The HTTP instrumentation records the full request URL including the query
+ * string, which can carry OAuth codes and tokens (e.g. `/auth/github/callback?code=...`).
+ * Keep the path (low-cardinality, useful); drop the query.
  */
 export function redactUrlAttributes(attrs: Record<string, unknown>): void {
   const full = attrs['url.full'];
@@ -49,6 +49,26 @@ export function redactUrlAttributes(attrs: Record<string, unknown>): void {
     if (q >= 0) attrs['url.full'] = full.slice(0, q);
   }
   if ('url.query' in attrs) attrs['url.query'] = '';
+}
+
+/**
+ * Wraps an OTLP exporter to redact URL secrets from every span before it leaves the
+ * worker. The library configures but never invokes `postProcessor` (rc.52), so the
+ * exporter is the one hook that always fires. Shared by the worker (index.ts) and the
+ * DO tracer (do-tracing.ts) so Durable Object spans get identical redaction.
+ */
+export class RedactingSpanExporter implements SpanExporter {
+  constructor(private readonly inner: SpanExporter) {}
+  export(spans: ReadableSpan[], resultCallback: Parameters<SpanExporter['export']>[1]): void {
+    for (const span of spans) redactUrlAttributes(span.attributes);
+    this.inner.export(spans, resultCallback);
+  }
+  shutdown(): Promise<void> {
+    return this.inner.shutdown();
+  }
+  forceFlush(): Promise<void> {
+    return this.inner.forceFlush?.() ?? Promise.resolve();
+  }
 }
 
 export function buildTraceConfig(env: TracingEnv, serviceName: string): TraceConfig {
@@ -82,4 +102,16 @@ export function setSessionAttributes(attrs: {
   if (attrs.sessionId) span.setAttribute('valet.session.id', attrs.sessionId);
   if (attrs.userId) span.setAttribute('valet.user.id', attrs.userId);
   if (attrs.orgId) span.setAttribute('valet.org.id', attrs.orgId);
+}
+
+/**
+ * W3C `traceparent` for the currently-active span, or null when there's no real span
+ * (tracing off, or called outside a span). Lets DO→DO fetches (e.g. SessionAgent→EventBus
+ * publish) propagate trace context so the callee's spans join the same trace.
+ */
+export function activeTraceparent(): string | null {
+  const sc = trace.getActiveSpan()?.spanContext();
+  if (!sc || !sc.traceId || sc.traceId === '0'.repeat(32)) return null;
+  const flags = (sc.traceFlags & 1) === 1 ? '01' : '00';
+  return `00-${sc.traceId}-${sc.spanId}-${flags}`;
 }

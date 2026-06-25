@@ -4,7 +4,7 @@ import {
 } from '@opentelemetry/api';
 import { BasicTracerProvider, SimpleSpanProcessor } from '@opentelemetry/sdk-trace-base';
 import { resourceFromAttributes } from '@opentelemetry/resources';
-import { buildTraceConfig, isTracingEnabled } from './tracing.js';
+import { buildTraceConfig, isTracingEnabled, RedactingSpanExporter } from './tracing.js';
 import type { Env } from '../env.js';
 
 /**
@@ -22,7 +22,6 @@ import type { Env } from '../env.js';
  * Result: DO-internal spans nest under the Worker's DO-client span in one connected trace.
  */
 export interface DoTracer {
-  readonly enabled: boolean;
   /** Wrap a DO fetch in a SERVER root span; records status/exceptions; flushes via waitUntil. */
   traceFetch(request: Request, name: string, handler: (span: Span) => Promise<Response>): Promise<Response>;
   /** Run `fn` inside a child span of the currently-active span. */
@@ -31,7 +30,6 @@ export interface DoTracer {
 
 const NOOP_SPAN = trace.wrapSpanContext({ traceId: '0'.repeat(32), spanId: '0'.repeat(16), traceFlags: TraceFlags.NONE });
 const NOOP: DoTracer = {
-  enabled: false,
   traceFetch: (_req, _name, handler) => handler(NOOP_SPAN),
   span: async (_name, fn) => fn(NOOP_SPAN),
 };
@@ -43,7 +41,9 @@ export async function createDoTracer(env: Env, ctx: DurableObjectState, serviceN
   // Lazy import keeps `@microlabs/otel-cf-workers` (which pulls `cloudflare:workers`) off the
   // module-load path, so the DOs that import this file stay loadable in Node unit tests.
   const { OTLPExporter } = await import('@microlabs/otel-cf-workers');
-  const exporter = new OTLPExporter(config.exporter);
+  // Wrap in the same redactor the worker uses (index.ts) so DO spans get identical
+  // URL-secret scrubbing before export.
+  const exporter = new RedactingSpanExporter(new OTLPExporter(config.exporter));
   const provider = new BasicTracerProvider({
     resource: resourceFromAttributes({ 'service.name': serviceName }),
     spanProcessors: [new SimpleSpanProcessor(exporter)],
@@ -51,7 +51,6 @@ export async function createDoTracer(env: Env, ctx: DurableObjectState, serviceN
   const tracer = provider.getTracer(serviceName);
 
   return {
-    enabled: true,
     async traceFetch(request, name, handler) {
       const parent = parentContext(request);
       const span = tracer.startSpan(name, { kind: SpanKind.SERVER }, parent);
@@ -87,7 +86,7 @@ export async function createDoTracer(env: Env, ctx: DurableObjectState, serviceN
 }
 
 /** Parent context from the incoming Worker→DO `traceparent` header (W3C trace-context). */
-function parentContext(request: Request): Context {
+export function parentContext(request: Request): Context {
   const tp = request.headers.get('traceparent');
   if (!tp) return context.active();
   // traceparent = version "-" trace-id(32 hex) "-" span-id(16 hex) "-" flags(2 hex)

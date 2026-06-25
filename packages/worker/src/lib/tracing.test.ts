@@ -2,7 +2,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { context, trace } from '@opentelemetry/api';
 import { BasicTracerProvider, InMemorySpanExporter, SimpleSpanProcessor } from '@opentelemetry/sdk-trace-base';
 import { AsyncLocalStorageContextManager } from '@opentelemetry/context-async-hooks';
-import { buildTraceConfig, isTracingEnabled, parseOtlpHeaders, redactUrlAttributes, setSessionAttributes } from './tracing.js';
+import { activeTraceparent, buildTraceConfig, isTracingEnabled, parseOtlpHeaders, redactUrlAttributes, setSessionAttributes } from './tracing.js';
 
 describe('isTracingEnabled', () => {
   it('is false when the endpoint is unset or blank', () => {
@@ -110,5 +110,31 @@ describe('setSessionAttributes', () => {
 
   it('is a no-op (does not throw) when there is no active span', () => {
     expect(() => setSessionAttributes({ sessionId: 's1' })).not.toThrow();
+  });
+});
+
+describe('activeTraceparent', () => {
+  let provider: BasicTracerProvider;
+  beforeAll(() => {
+    provider = new BasicTracerProvider();
+    trace.setGlobalTracerProvider(provider);
+    context.setGlobalContextManager(new AsyncLocalStorageContextManager().enable());
+  });
+  afterAll(async () => {
+    await provider.shutdown();
+    trace.disable();
+    context.disable();
+  });
+
+  it('is null when there is no active span', () => {
+    expect(activeTraceparent()).toBeNull();
+  });
+
+  it('formats the active span context as a sampled W3C traceparent', () => {
+    trace.getTracer('t').startActiveSpan('op', (span) => {
+      const sc = span.spanContext();
+      expect(activeTraceparent()).toBe(`00-${sc.traceId}-${sc.spanId}-01`);
+      span.end();
+    });
   });
 });

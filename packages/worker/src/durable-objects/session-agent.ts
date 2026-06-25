@@ -2,6 +2,7 @@ import type { Env } from '../env.js';
 import type { AppDb } from '../lib/drizzle.js';
 import { getDb } from '../lib/drizzle.js';
 import { createDoTracer, type DoTracer } from '../lib/do-tracing.js';
+import { activeTraceparent } from '../lib/tracing.js';
 import { updateSessionStatus, updateSessionMetrics, addActiveSeconds, updateSessionGitState, upsertSessionFileChanged, updateSessionTitle, getSession, getSessionGitState, getChildSessions, listUserChannelBindings, getUserById, getUsersByIds, createMailboxMessage, getOrgSettings, isNotificationWebEnabled, batchInsertAnalyticsEvents, batchUpsertMessages, updateUserDiscoveredModels, setCatalogCache, updateThread, incrementThreadMessageCount, getThreadOriginChannel, getOrchestratorIdentity, getUserSlackIdentityLink, getWorkflowNameByExecutionId } from '../lib/db.js';
 import { getCredential, type CredentialResult } from '../services/credentials.js';
 import { memRead, memWrite, memPatch, memRm, memSearch } from '../services/session-memory.js';
@@ -527,6 +528,16 @@ export class SessionAgentDO {
     const tracer = await createDoTracer(this.env, this.ctx, 'valet-session-agent-do');
     return tracer.traceFetch(request, `SessionAgentDO ${url.pathname}`, (span) => {
       span.setAttribute('do.path', url.pathname);
+      // Correlate DO spans with the session/user, mirroring the worker's
+      // setSessionAttributes. Best-effort: tracing must never break the request.
+      try {
+        const sid = this.sessionState.sessionId;
+        const uid = this.sessionState.userId;
+        if (sid) span.setAttribute('valet.session.id', sid);
+        if (uid) span.setAttribute('valet.user.id', uid);
+      } catch {
+        // sessionState not ready / unreadable — skip correlation
+      }
       return this.dispatchControl(request, url, tracer);
     });
   }
@@ -6547,9 +6558,13 @@ export class SessionAgentDO {
     try {
       const id = this.env.EVENT_BUS.idFromName('global');
       const stub = this.env.EVENT_BUS.get(id);
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      // Propagate trace context so EventBus spans join the originating trace.
+      const traceparent = activeTraceparent();
+      if (traceparent) headers['traceparent'] = traceparent;
       stub.fetch(new Request('https://event-bus/publish', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify({
           userId: event.userId,
           event,

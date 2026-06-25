@@ -83,28 +83,8 @@ import { matchesCronField, getZonedDateParts, cronMatchesNow, findMissedCronTick
 import { resolveAuthRedirectOrigin } from './lib/auth-redirect-origin.js';
 import { instrument, OTLPExporter } from '@microlabs/otel-cf-workers';
 import type { ResolveConfigFn } from '@microlabs/otel-cf-workers';
-import type { ReadableSpan, SpanExporter } from '@opentelemetry/sdk-trace-base';
-import { buildTraceConfig, redactUrlAttributes, setSessionAttributes } from './lib/tracing.js';
+import { buildTraceConfig, RedactingSpanExporter, setSessionAttributes } from './lib/tracing.js';
 import { log } from './lib/log.js';
-
-/**
- * Redacts secrets/PII from span URLs before they leave the worker. The library
- * configures but never invokes `postProcessor` (rc.52), so we redact at the exporter
- * — the one hook it does call — by wrapping the OTLP exporter.
- */
-class RedactingSpanExporter implements SpanExporter {
-  constructor(private readonly inner: SpanExporter) {}
-  export(spans: ReadableSpan[], resultCallback: Parameters<SpanExporter['export']>[1]): void {
-    for (const span of spans) redactUrlAttributes(span.attributes);
-    this.inner.export(spans, resultCallback);
-  }
-  shutdown(): Promise<void> {
-    return this.inner.shutdown();
-  }
-  forceFlush(): Promise<void> {
-    return this.inner.forceFlush?.() ?? Promise.resolve();
-  }
-}
 
 const workerTraceConfig: ResolveConfigFn = (env: Env) => {
   const config = buildTraceConfig(env, 'valet-worker');
@@ -120,8 +100,9 @@ const workerTraceConfig: ResolveConfigFn = (env: Env) => {
 // (ctx.storage.sql.exec → "Illegal invocation"), and it does so even when tracing
 // is disabled. instrument() on the worker (below) still traces the worker→DO call
 // (a client span + W3C trace-context propagation via the DO binding), so DO calls
-// stay correlated; DO-internal spans are a follow-up using manual spans that
-// bypass the broken storage proxy. See docs/observability.md.
+// stay correlated; DO-internal spans are added manually via createDoTracer
+// (lib/do-tracing.ts), which bypasses the broken storage proxy and reuses the worker's
+// redacting exporter. See docs/observability.md.
 export { SessionAgentDO } from './durable-objects/session-agent.js';
 export { EventBusDO } from './durable-objects/event-bus.js';
 export { WorkflowExecutorDO } from './durable-objects/workflow-executor.js';
