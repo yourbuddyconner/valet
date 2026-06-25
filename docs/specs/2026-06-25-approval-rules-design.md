@@ -65,9 +65,12 @@ One table stores both runtime-scoped and durable approval rules.
 | Column | Notes |
 | --- | --- |
 | `id` | UUID |
+| `orgId` | Owning organization. Required for every rule. |
+| `environment` | Environment the rule applies in, e.g. `dev` or `prod`. Required unless a rule is explicitly environment-global. |
 | `ownerUserId` | User that owns the rule |
 | `scope` | `session`, `workflow_execution`, `orchestrator_run`, `user`, `team`, `environment` |
 | `scopeId` | Session id, workflow execution id, orchestrator run id, user id, team id, or environment id |
+| `managedBy` | `user` or `admin`; admin-managed rules can only be changed by admins |
 | `approvalKind` | `tool_policy`, `workflow_approval`, `session_tool` |
 | `subject` | Stable target such as `tool:google_workspace.sheets.append_rows` or `workflowNode:write_companies` |
 | `decision` | `approved` |
@@ -76,11 +79,14 @@ One table stores both runtime-scoped and durable approval rules.
 | `origin` | `approval_prompt`, `settings`, `admin` |
 | `createdFromApprovalId` | Optional approval request that generated this rule |
 | `createdBy` | User id |
+| `lastMatchedAt` | Optional timestamp used for audit and cleanup UX |
 | `expiresAt` | Optional |
 | `revokedAt` | Nullable |
 | `createdAt`, `updatedAt` | Audit timestamps |
 
 Runtime scopes should have either an implicit lifecycle expiry or an explicit `expiresAt`. Durable scopes may omit `expiresAt`.
+
+Every approval-rule lookup must include `orgId` and `environment`. User-scoped rules only apply to the same user in the same org/environment. Team- and environment-scoped rules require admin-managed ownership or an explicit team admin permission check. Rules must never cross organization boundaries.
 
 ### Parameter Matchers
 
@@ -100,9 +106,20 @@ Rules:
 - `path` uses dot path syntax into resolved params, e.g. `spreadsheetId`, `range`, `repo.owner`.
 - All matchers must pass.
 - Missing paths fail closed.
+- Equality is type-strict after canonicalization. `"123"` does not equal `123` unless the action schema canonicalizes the field to a string.
+- Dot-path escaping must be supported for keys containing dots, brackets, or quotes. The UI should generate paths and should not require users to hand-write escaped paths.
+- Arrays and objects can be matched only with `equals` against canonical JSON values or with path-specific matchers against nested fields. Regex and substring matching apply only to strings.
+- Secrets and redacted values cannot be used as durable matchers. If a value is unavailable for audit display, it is also unavailable for matching.
 - Regex matching is path-specific and treated as advanced UI.
-- Regex values should be validated when saved.
+- Regex values should be validated when saved and rejected if they exceed length or complexity limits.
 - The UI should prefer `equals`, `oneOf`, and `startsWith` before exposing regex.
+
+Canonicalization is action-specific metadata owned by the integration action definition. Examples:
+
+- Google Sheets spreadsheet ids are trimmed strings.
+- Google Sheets ranges are normalized to the same sheet/range notation the action sends to Google.
+- GitHub owner and repo names are lowercased.
+- URLs can expose derived matcher fields such as `url.host` and `url.origin`; durable rules should prefer those over matching a full raw URL.
 
 Example persistent rule:
 
@@ -121,14 +138,16 @@ Example persistent rule:
 
 The approval system checks for an override before prompting.
 
-1. Organization/admin deny policy.
-2. Active approval rule scoped to the exact session.
-3. Active approval rule scoped to the parent workflow execution, if present.
-4. Active approval rule scoped to the current orchestrator run, if present.
-5. Active approval rule scoped to user/team/environment.
-6. Existing action policy result: allow, require approval, or deny.
+1. Gather all applicable action policy decisions for the concrete request.
+2. If any organization/admin policy denies the request, deny immediately.
+3. If any action-level policy denies the request, deny immediately.
+4. Check active approval rules scoped to the exact session.
+5. Check active approval rules scoped to the parent workflow execution, if present.
+6. Check active approval rules scoped to the current orchestrator run, if present.
+7. Check active durable approval rules scoped to user/team/environment.
+8. If no rule matches, apply the non-deny action policy result: allow, require approval, or deny-by-default.
 
-Admin deny always wins. User rules may only make allowed/approval-required work quieter; they must not bypass explicit organization denies.
+All deny decisions win before approval rules are considered. User rules may only make allowed or approval-required work quieter; they must not bypass explicit organization, team, environment, or action-level denies.
 
 Workflow-level durability should be modeled as a durable `approval_rule` with parameter matchers, not as a separate long-lived workflow-specific override concept. Runtime scopes are for active work only; durable user/team/environment scopes are the cross-session/cross-workflow mechanism.
 
@@ -141,11 +160,34 @@ Recommended subjects:
 | Subject | Meaning |
 | --- | --- |
 | `tool:<service>.<action>` | Tool/action approval, e.g. `tool:google_workspace.sheets.append_rows` |
-| `workflowNode:<workflowId>:<nodeId>` | A specific workflow node |
-| `workflowNodeAction:<workflowId>:<nodeId>:<service>.<action>` | A specific workflow tool node and action |
+| `workflowNode:<workflowId>:<nodeId>` | A specific workflow node, runtime-scoped only |
+| `workflowNodeAction:<workflowId>:<nodeId>:<service>.<action>` | A specific workflow tool node and action, runtime-scoped only |
 | `sessionTool:<toolName>` | Native/session-side tool approval |
 
 For cross-session/workflow reusable rules, prefer tool subjects with parameter matchers. For workflow-run runtime rules, workflow-node subjects are useful because users are often approving the behavior of one node in one graph.
+
+Durable rules must not use mutable workflow-node subjects unless the subject includes the published workflow version or revision id. Runtime-scoped rules may use `workflowId + nodeId` because they expire with the active execution. Durable workflow-node rules should use one of these forms:
+
+- `workflowNode:<workflowId>:<versionId>:<nodeId>`
+- `workflowNodeAction:<workflowId>:<versionId>:<nodeId>:<service>.<action>`
+
+If the workflow is edited and republished, old durable workflow-node rules do not automatically apply to the new version. Cross-version durability should use a `tool:<service>.<action>` subject with explicit parameter matchers instead.
+
+### Workflow Approval Contracts
+
+Workflow `approval` nodes are not automatically eligible for durable parameter-matched approval rules. A generic approval node can represent arbitrary human judgment, such as "approve this incident escalation," and should not become a reusable policy accidentally.
+
+Durable rules for workflow `approval` nodes are allowed only when the node declares an approval contract:
+
+```ts
+type WorkflowApprovalContract = {
+  subject: string;
+  params: Record<string, unknown>;
+  matcherHints?: Array<{ path: string; stable: boolean; label?: string }>;
+};
+```
+
+Without a contract, the UI should offer `Approve once` and runtime-scoped approvals only. With a contract, the durable rule dialog can use the contract params and matcher hints in the same way it handles tool params.
 
 ## Runtime Behavior
 
@@ -185,6 +227,16 @@ When an approval appears inside a `foreach` body:
 - Future iterations with `concurrency = 1` auto-approve as they reach the approval point.
 
 The engine must keep per-iteration workflow event types. It should not make all iterations wait on the same event type.
+
+The `Approve remaining rows` backend operation must be transactional and idempotent:
+
+1. Validate the current approval request is still pending and belongs to the caller.
+2. Create or reuse an equivalent execution-scoped rule using an idempotency key derived from `approvalId + scope`.
+3. Resolve the current approval.
+4. Resolve any already-pending matching sibling approvals in the same execution.
+5. Commit before allowing new foreach iterations to create more approval requests.
+
+Future iterations must check the resolver immediately before creating an approval prompt. This prevents duplicate prompts when concurrency is greater than `1` and prevents double-resolution when a user clicks twice.
 
 ### Workflow-Created Sessions
 
@@ -262,6 +314,18 @@ For a `foreach` body approval, the selected-node pane should show `Approve once`
 
 Execution detail pages outside the canvas should expose the same approval controls as the canvas for pending approvals. They should also show auto-approval audit fields on completed node traces so users can diagnose why a node did not pause.
 
+#### Global Pending Approvals Queue
+
+The app should have a cross-context pending approvals surface so users can find blocked work without opening every session or workflow. This can live under Automation or Notifications, but it should list:
+
+- pending session approvals
+- pending workflow approval nodes
+- pending workflow tool-policy approvals
+- pending approvals inside workflow-created sessions
+- pending foreach body approvals
+
+Each row should deep-link to the originating session, workflow execution canvas, or execution detail page. It should expose the same context-aware actions as the source surface. Durable rule creation still deep-links to the shared confirmation dialog.
+
 #### Workflow Editor Validation / Data Flow Panels
 
 The editor should not create approval rules, but it should surface rule eligibility where useful:
@@ -316,6 +380,17 @@ Slack and Telegram should support safe approval choices that do not require comp
 
 `Approve matching requests` should be omitted or deep-link to the web confirmation dialog until the channel UI can clearly show parameter matchers. Durable rule creation should not happen from a chat button that cannot display the full rule.
 
+Channel approval actions must use signed, single-use action tokens with short expiry. The token must bind:
+
+- approval id
+- user id
+- channel identity
+- decision
+- scope
+- idempotency key
+
+The backend must reject replayed, expired, or mismatched channel actions. Channel users may approve only approvals they could approve in the web UI.
+
 #### Workflow Agent Tool Results
 
 Remote worker tools that validate, save, or run workflows should expose approval-rule outcomes in their returned execution data:
@@ -347,7 +422,7 @@ Defaults:
 
 - Select stable target identifiers by default, such as `spreadsheetId`, `documentId`, `repo`, `owner`, or `url host`.
 - Do not select payload fields like row values, message body, generated text, or arbitrary content by default.
-- Show a warning when no parameter matcher is selected.
+- Block saving when no parameter matcher is selected unless the action is read-only and explicitly marked safe.
 
 ### Audit Display
 
@@ -377,13 +452,16 @@ Existing approve endpoints should accept an approval scope:
 {
   "decision": "approved",
   "scope": "once" | "session" | "workflow_execution" | "remaining_foreach" | "durable_rule",
-  "paramMatchers": []
+  "paramMatchers": [],
+  "idempotencyKey": "optional-client-generated-key"
 }
 ```
 
 For compatibility, a bare approve request is treated as `scope = once`.
 
 `scope = durable_rule` requires explicit `paramMatchers`.
+
+The approve endpoint must derive the subject, resolved params, requester context, org, environment, and durable-rule eligibility from the approval request stored on the server. Clients may choose scope and matcher paths/ops/values, but they must not provide or override requester context.
 
 ### Rule Management
 
@@ -400,12 +478,16 @@ Users can list and revoke their own durable rules. Admin/team rule management ca
 
 ## Safety Rules
 
-- Admin deny wins over approval rules.
+- Admin, team, environment, and action-level deny decisions win over approval rules.
 - Matching uses resolved runtime params only.
 - Missing parameter paths fail closed.
 - Durable rules must require at least one matcher unless the action is read-only and explicitly marked safe.
 - Regex matchers are advanced and should be displayed verbatim before saving.
 - Persistent approvals should prefer tool/action parameter rules over node-only rules.
+- Durable workflow-node rules must include workflow version/revision id or be rejected.
+- Generic workflow approval nodes cannot create durable rules unless they declare an approval contract.
+- Approval actions must be idempotent and safe to retry.
+- Slack/Telegram approvals require signed, expiring, single-use action tokens.
 - Deny-all/bulk-deny should not ship in the MVP.
 
 ## Migration Path
@@ -426,15 +508,25 @@ Worker tests:
 - Workflow execution-scoped rule resolves already-pending sibling approvals when concurrency is greater than `1`.
 - Durable user-scoped rule matches across manual session and workflow tool node.
 - Parameter matcher rejects missing paths.
+- Parameter matcher rejects type-mismatched values after canonicalization.
+- Parameter matcher rejects redacted/secret values for durable rules.
 - Regex matcher validates and fails closed on invalid patterns.
-- Admin deny overrides every approval rule.
+- Admin deny and action-level deny override every approval rule.
+- Durable workflow-node rule is rejected without workflow version/revision id.
+- Durable workflow approval rule is rejected when the node does not declare an approval contract.
+- Cross-org and cross-environment rules do not match.
+- Duplicate approve requests are idempotent and do not create duplicate rules.
+- Foreach approval with concurrency greater than `1` does not create duplicate prompts after `Approve remaining rows`.
+- Slack/Telegram signed approval actions reject replay, expiry, and channel/user mismatch.
 - Resolved runtime params are used instead of raw template params.
 
 Client tests:
 
 - Approval card renders the right scope actions for session, workflow execution, and foreach.
 - Workflow execution canvas and details page render the same approval actions for the same pending approval.
+- Global pending approvals queue shows session, workflow, workflow-created session, and foreach approvals.
 - Durable rule dialog pre-selects stable identifiers and leaves payload fields unselected.
+- Durable rule dialog hides or disables durable creation for generic workflow approval nodes without contracts.
 - Foreach "Approve remaining rows" calls the approval endpoint with the correct scope.
 - Auto-approved trace rows display matched approval-rule metadata.
 - Settings approval-rules list supports inspecting and revoking durable rules.
@@ -448,7 +540,6 @@ Integration tests:
 
 ## Open Questions
 
-1. Should durable approval rules start at user scope only, or should we include team/environment scope in the first schema?
-2. Should explicit deny rules ship in the first version, or remain admin-only for now?
-3. Which params are considered stable identifiers per integration action? This may need per-action metadata.
-4. Should "Approve matching requests" be available in Slack/Telegram immediately, or only in the web UI until the confirmation dialog is mature?
+1. Which params are considered stable identifiers per integration action? This needs per-action metadata before durable rule creation feels trustworthy.
+2. Should durable team/environment-scoped approval-rule creation ship in the first UI, or should the first UI expose only user-scoped durable rules while the schema supports all scopes?
+3. Should admin-managed approval rules be created in the same settings surface as admin deny/require-approval policies, or in a separate "approval automation" surface?
