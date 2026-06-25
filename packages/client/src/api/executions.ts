@@ -62,6 +62,7 @@ export interface ExecutionNode {
   retryAttempts: number;
   approvalId?: string | null;
   invocationId?: string | null;
+  sessionId?: string | null;
   startedAt?: string | null;
   completedAt?: string | null;
   durationMs?: number | null;

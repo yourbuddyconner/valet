@@ -79,6 +79,18 @@ executionsRouter.get('/:id', async (c) => {
      ORDER BY created_at ASC`,
   ).bind(id).all<Record<string, unknown>>();
 
+  const spawnedSessionRows = await c.env.DB.prepare(
+    `SELECT node_id, session_id
+     FROM workflow_spawned_sessions
+     WHERE execution_id = ?`,
+  ).bind(id).all<Record<string, unknown>>();
+  const spawnedSessionByNode = new Map<string, string>();
+  for (const spawnedSession of spawnedSessionRows.results ?? []) {
+    if (typeof spawnedSession.node_id !== 'string') continue;
+    if (typeof spawnedSession.session_id !== 'string') continue;
+    spawnedSessionByNode.set(spawnedSession.node_id, spawnedSession.session_id);
+  }
+
   const db = getDb(c.env.DB);
   const approvalRows = await listWorkflowApprovalsForExecution(db, id);
 
@@ -101,25 +113,30 @@ executionsRouter.get('/:id', async (c) => {
       mode: (row as Record<string, unknown>).mode ?? null,
       cancelledAt: (row as Record<string, unknown>).cancelled_at ?? null,
       cancelledBy: (row as Record<string, unknown>).cancelled_by ?? null,
-      nodes: (nodes.results ?? []).map((n) => ({
-        id: n.id,
-        nodeId: n.node_id,
-        nodeType: n.node_type,
-        status: n.status,
-        inputPreview: n.input_preview,
-        inputTruncated: Boolean(n.input_truncated),
-        output: n.output,
-        outputTruncated: Boolean(n.output_truncated),
-        error: n.error,
-        reason: n.reason,
-        retryAttempts: n.retry_attempts,
-        approvalId: n.approval_id,
-        invocationId: n.invocation_id,
-        startedAt: n.started_at,
-        completedAt: n.completed_at,
-        durationMs: n.duration_ms,
-        createdAt: n.created_at,
-      })),
+      nodes: (nodes.results ?? []).map((n) => {
+        const nodeId = String(n.node_id ?? '');
+        const nodeType = String(n.node_type ?? '');
+        return {
+          id: n.id,
+          nodeId,
+          nodeType,
+          status: n.status,
+          inputPreview: n.input_preview,
+          inputTruncated: Boolean(n.input_truncated),
+          output: n.output,
+          outputTruncated: Boolean(n.output_truncated),
+          error: n.error,
+          reason: n.reason,
+          retryAttempts: n.retry_attempts,
+          approvalId: n.approval_id,
+          invocationId: n.invocation_id,
+          sessionId: nodeType === 'session' ? spawnedSessionByNode.get(nodeId) ?? null : null,
+          startedAt: n.started_at,
+          completedAt: n.completed_at,
+          durationMs: n.duration_ms,
+          createdAt: n.created_at,
+        };
+      }),
       approvals: approvalRows.map((a) => ({
         id: a.id,
         nodeId: a.nodeId,

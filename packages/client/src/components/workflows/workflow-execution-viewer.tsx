@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { Link } from '@tanstack/react-router';
 import type { NodeProps } from '@xyflow/react';
 import { ReactFlowProvider } from '@xyflow/react';
 import type { Execution, ExecutionNode } from '@/api/executions';
@@ -34,7 +35,8 @@ import {
   getReadableJsonItemTitle,
   getReadableJsonSummary,
   getReadableJsonTable,
-  getSelectedNodeApproval,
+  getSelectedNodeApprovals,
+  getSessionTraceLink,
   isRecord,
   parseExecutionPayload,
   type ParsedExecutionPayload,
@@ -375,16 +377,18 @@ function SelectedNodeDetailsPane({
   selectedTrace: ExecutionNode | null;
   onClose: () => void;
 }) {
-  const selectedApproval = getSelectedNodeApproval(
+  const selectedApprovals = getSelectedNodeApprovals({
     selectedNodeId,
-    execution.approvals,
-    selectedTrace?.approvalId,
-  );
+    selectedNode: selectedDefinitionNode,
+    approvals: execution.approvals,
+    approvalId: selectedTrace?.approvalId,
+  });
   const selectedNodeParams = getNodeParametersForDisplay(selectedDefinitionNode);
   const detailSections = buildTraceDetailSections(selectedTrace);
   const nodeType = selectedDefinitionNode?.type ?? selectedTrace?.nodeType ?? 'unknown';
   const nodeStatus = selectedTrace?.status ?? 'not_run';
   const nodeDuration = formatExecutionDuration(selectedTrace?.durationMs);
+  const sessionLink = getSessionTraceLink(selectedTrace);
 
   return (
     <div className="nodrag nopan nowheel absolute bottom-5 right-5 top-[18rem] z-20 flex w-[min(860px,calc(100%-2.5rem))] min-w-[min(520px,calc(100%-2.5rem))] flex-col overflow-hidden rounded-xl border border-neutral-200 bg-white shadow-2xl shadow-neutral-900/15 dark:border-neutral-800 dark:bg-neutral-950 dark:shadow-black/30">
@@ -415,15 +419,29 @@ function SelectedNodeDetailsPane({
               <NodeMetric label="Duration" value={nodeDuration} />
               <NodeMetric label="Type" value={nodeType} />
             </div>
+            {sessionLink && (
+              <Button
+                asChild
+                variant="secondary"
+                size="sm"
+                className="w-full border border-neutral-200 bg-white text-neutral-800 hover:bg-neutral-100 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100 dark:hover:bg-neutral-800"
+              >
+                <Link to="/sessions/$sessionId" params={{ sessionId: sessionLink.sessionId }}>
+                  {sessionLink.label}
+                </Link>
+              </Button>
+            )}
             {selectedTrace?.error && (
               <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-xs text-red-700 dark:border-red-900/50 dark:bg-red-950/40 dark:text-red-300">
                 <div className="mb-1 font-medium">Error</div>
                 <p className="line-clamp-6 whitespace-pre-wrap break-words">{selectedTrace.error}</p>
               </div>
             )}
-            {selectedApproval && (
-              <div className="pt-1">
-                <ExecutionApprovalCard executionId={execution.id} approval={selectedApproval} />
+            {selectedApprovals.length > 0 && (
+              <div className="space-y-2 pt-1">
+                {selectedApprovals.map((approval) => (
+                  <ExecutionApprovalCard key={approval.id} executionId={execution.id} approval={approval} />
+                ))}
               </div>
             )}
           </div>
@@ -439,7 +457,7 @@ function SelectedNodeDetailsPane({
               />
             )}
             <TracePreview sections={detailSections} />
-            {!selectedNodeParams && detailSections.length === 0 && !selectedApproval && (
+            {!selectedNodeParams && detailSections.length === 0 && selectedApprovals.length === 0 && (
               <div className="rounded-lg border border-dashed border-neutral-200 p-4 text-sm text-neutral-500 dark:border-neutral-800">
                 This node has not recorded parameters or trace payloads for this execution.
               </div>

@@ -8,7 +8,9 @@ import {
   getReadableJsonTable,
   getNodeParametersForDisplay,
   getExecutionDisplayStatus,
+  getSessionTraceLink,
   getSelectedNodeApproval,
+  getSelectedNodeApprovals,
   parseExecutionPayload,
 } from './workflow-execution-viewer-model';
 
@@ -74,6 +76,62 @@ describe('workflow execution viewer model', () => {
     ]);
 
     expect(selected?.id).toBe('approval-denied');
+  });
+
+  it('returns approvals for the body node when a foreach node is selected', () => {
+    const selected = getSelectedNodeApprovals({
+      selectedNodeId: 'write_companies',
+      selectedNode: {
+        id: 'write_companies',
+        type: 'foreach',
+        items: '{{nodes.scrape_yc.data.output.companies}}',
+        body: {
+          id: 'append_row',
+          type: 'tool',
+          service: 'google_workspace',
+          action: 'sheets.append_rows',
+          params: {},
+        },
+      },
+      approvals: [
+        approval({ id: 'approval:exec:append_row:i:0', nodeId: 'append_row', status: 'pending' }),
+        approval({ id: 'approval:exec:append_row:i:1', nodeId: 'append_row', status: 'pending' }),
+        approval({ id: 'approval:exec:unrelated', nodeId: 'unrelated', status: 'pending' }),
+      ],
+    });
+
+    expect(selected.map((item) => item.id)).toEqual([
+      'approval:exec:append_row:i:0',
+      'approval:exec:append_row:i:1',
+    ]);
+  });
+
+  it('keeps an exact selected trace approval first when collecting selected node approvals', () => {
+    const selected = getSelectedNodeApprovals({
+      selectedNodeId: 'write_companies',
+      selectedNode: {
+        id: 'write_companies',
+        type: 'foreach',
+        items: '{{nodes.scrape_yc.data.output.companies}}',
+        body: {
+          id: 'append_row',
+          type: 'tool',
+          service: 'google_workspace',
+          action: 'sheets.append_rows',
+          params: {},
+        },
+      },
+      approvals: [
+        approval({ id: 'approval:exec:append_row:i:0', nodeId: 'append_row', status: 'pending' }),
+        approval({ id: 'approval:exec:append_row:i:1', nodeId: 'append_row', status: 'pending' }),
+      ],
+      approvalId: 'approval:exec:append_row:i:1',
+    });
+
+    expect(selected.map((item) => item.id)).toEqual([
+      'approval:exec:append_row:i:1',
+      'approval:exec:append_row:i:0',
+    ]);
   });
 
   it('builds selected node parameters without id/type noise', () => {
@@ -172,6 +230,21 @@ describe('workflow execution viewer model', () => {
       totalRows: 2,
       hiddenRows: 0,
       hiddenColumns: 0,
+    });
+  });
+
+  it('builds a session link from a running session trace', () => {
+    const link = getSessionTraceLink(trace({
+      id: 'exec:scrape_yc:running:0',
+      nodeId: 'scrape_yc',
+      nodeType: 'session',
+      status: 'running',
+      sessionId: 'session-123',
+    }));
+
+    expect(link).toEqual({
+      label: 'Open session',
+      sessionId: 'session-123',
     });
   });
 });

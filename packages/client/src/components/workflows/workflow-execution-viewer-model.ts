@@ -29,15 +29,52 @@ export function getSelectedNodeApproval(
   approvals: ExecutionApproval[] | undefined,
   approvalId?: string | null,
 ): ExecutionApproval | null {
-  if (!selectedNodeId || !approvals || approvals.length === 0) return null;
+  return getSelectedNodeApprovals({ selectedNodeId, approvals, approvalId })[0] ?? null;
+}
 
-  if (approvalId) {
-    const exact = approvals.find((approval) => approval.id === approvalId);
-    if (exact) return exact;
+export function getSelectedNodeApprovals({
+  selectedNodeId,
+  selectedNode,
+  approvals,
+  approvalId,
+}: {
+  selectedNodeId: string | null;
+  selectedNode?: WorkflowNode | null;
+  approvals: ExecutionApproval[] | undefined;
+  approvalId?: string | null;
+}): ExecutionApproval[] {
+  if (!selectedNodeId || !approvals || approvals.length === 0) return [];
+
+  const selectedNodeIds = new Set([selectedNodeId]);
+  if (selectedNode?.type === 'foreach') {
+    selectedNodeIds.add(selectedNode.body.id);
   }
 
-  const nodeApprovals = approvals.filter((approval) => approval.nodeId === selectedNodeId);
-  return nodeApprovals.find((approval) => approval.status === 'pending') ?? nodeApprovals[0] ?? null;
+  const selected: ExecutionApproval[] = [];
+  const seen = new Set<string>();
+  const addApproval = (approval: ExecutionApproval | undefined) => {
+    if (!approval || seen.has(approval.id)) return;
+    seen.add(approval.id);
+    selected.push(approval);
+  };
+
+  // If the selected trace has an approval id, keep that exact approval
+  // first. This matters for foreach body traces, whose nodeId is the
+  // body node id even though the selectable canvas node is the parent.
+  if (approvalId) {
+    const exact = approvals.find((approval) => approval.id === approvalId);
+    addApproval(exact);
+  }
+
+  const nodeApprovals = approvals.filter((approval) => selectedNodeIds.has(approval.nodeId));
+  for (const approval of nodeApprovals.filter((approval) => approval.status === 'pending')) {
+    addApproval(approval);
+  }
+  for (const approval of nodeApprovals.filter((approval) => approval.status !== 'pending')) {
+    addApproval(approval);
+  }
+
+  return selected;
 }
 
 export type ParsedExecutionPayload =
@@ -50,6 +87,11 @@ export interface ExecutionTraceDetailSection {
   payload: ParsedExecutionPayload;
   tone: 'neutral' | 'error';
   truncated?: boolean;
+}
+
+export interface SessionTraceLink {
+  label: 'Open session';
+  sessionId: string;
 }
 
 export function getNodeParametersForDisplay(node: WorkflowNode | null | undefined): Record<string, unknown> | null {
@@ -117,6 +159,19 @@ export function buildTraceDetailSections(trace: ExecutionNode | null): Execution
   }
 
   return sections;
+}
+
+export function getSessionTraceLink(trace: ExecutionNode | null | undefined): SessionTraceLink | null {
+  if (!trace || trace.nodeType !== 'session') return null;
+
+  const directSessionId = trimNonEmpty(trace.sessionId);
+  if (directSessionId) return { label: 'Open session', sessionId: directSessionId };
+
+  const output = parseExecutionPayload(trace.output);
+  if (output.kind !== 'json' || !isRecord(output.value)) return null;
+
+  const outputSessionId = trimNonEmpty(output.value.sessionId);
+  return outputSessionId ? { label: 'Open session', sessionId: outputSessionId } : null;
 }
 
 export function getReadableJsonSummary(value: unknown): string {
@@ -211,6 +266,10 @@ function firstString(...values: unknown[]): string | null {
     if (typeof value === 'string' && value.trim()) return value;
   }
   return null;
+}
+
+function trimNonEmpty(value: unknown): string | null {
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
 }
 
 function collectReadableRecordColumns(records: Record<string, unknown>[]): string[] {
