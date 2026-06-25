@@ -3,6 +3,17 @@
 # Boots the real worker under `wrangler dev` against a tiny local OTLP collector and
 # asserts: (1) requests produce exported spans, (2) query-string secrets are redacted,
 # (3) with no endpoint set, nothing is exported (the no-op). Exits non-zero on failure.
+#
+# Self-contained from a clean checkout. Two things wrangler does NOT do for a pnpm
+# monorepo, which this script handles so `make otel-e2e` works without prior setup:
+#   (a) Build workspace deps: the worker bundle imports @valet/shared + @valet/sdk from
+#       their compiled dist/. wrangler does not build workspace packages, so esbuild
+#       would fail with "Could not resolve @valet/shared". We build just those two below
+#       (the plugin packages are bundled from source by esbuild, so they need no pre-build).
+#   (b) Substitute config placeholders: wrangler.toml uses ${CF_WORKER_NAME}/
+#       ${R2_BUCKET_NAME}/... and wrangler has no native ${VAR} interpolation, so we sed
+#       them into a throwaway wrangler.e2e.toml (see below).
+# (If you run `wrangler dev` directly instead of via this script, you must do both first.)
 set -uo pipefail
 cd "$(dirname "$0")/.." || exit 1
 WORKER=packages/worker
@@ -46,6 +57,19 @@ run_worker() {
   freeport                                   # kill the leftover workerd still on the port
   sleep 1; kill "$cpid" 2>/dev/null          # then stop this run's collector
 }
+
+# (a) Build the two workspace deps the worker bundle imports as dist/ (@valet/shared,
+# @valet/sdk). wrangler dev does not build workspace packages; without their dist/
+# esbuild fails with "Could not resolve @valet/shared". Plugin packages are bundled from
+# source by esbuild, so they need no pre-build. Built in order (sdk depends on shared).
+echo "── building worker deps (@valet/shared, @valet/sdk) ──"
+# Clear stale tsc incremental state first: a leftover *.tsbuildinfo whose dist/ was
+# removed makes incremental tsc believe it is up-to-date and emit NOTHING — then the
+# worker bundle fails to resolve the dep. Forcing a clean emit keeps this robust to
+# partial prior builds (the .tsbuildinfo lives at the package root, not under dist/).
+rm -f packages/shared/tsconfig.tsbuildinfo packages/sdk/tsconfig.tsbuildinfo
+if ! pnpm --filter @valet/shared run build; then echo "  ✗ @valet/shared build failed"; exit 1; fi
+if ! pnpm --filter @valet/sdk run build; then echo "  ✗ @valet/sdk build failed"; exit 1; fi
 
 fail=0
 echo "── enabled: tracing -> local collector ──"
