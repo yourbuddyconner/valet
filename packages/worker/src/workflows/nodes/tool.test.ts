@@ -102,7 +102,7 @@ beforeEach(() => {
   markFailedMock.mockReset();
   isActionDisabledMock.mockResolvedValue(false);
   loadCustomMcpConnectorContextMock.mockResolvedValue({ connectors: new Map() });
-  listActionsMock.mockResolvedValue([{ id: 'slack.send_message', riskLevel: 'low' }, { id: 'slack.test', riskLevel: 'low' }, { id: 'gmail.send', riskLevel: 'medium' }, { id: 'unknown.x', riskLevel: 'low' }, { id: 'unknown.y', riskLevel: 'low' }]);
+  listActionsMock.mockResolvedValue([{ id: 'slack.send_message', riskLevel: 'low' }, { id: 'slack.test', riskLevel: 'low' }, { id: 'gmail.send', riskLevel: 'medium' }, { id: 'sheets.clear_range', riskLevel: 'medium' }, { id: 'unknown.x', riskLevel: 'low' }, { id: 'unknown.y', riskLevel: 'low' }]);
   getActionsMock.mockReturnValue({ execute: executeMock, listActions: listActionsMock });
   getProviderMock.mockReturnValue({ authType: 'none' });
   invokeWorkflowActionMock.mockResolvedValue({ outcome: 'allowed', invocationId: 'inv-1', mode: 'allow', policyId: null });
@@ -204,5 +204,55 @@ describe('executeTool', () => {
       {},
       expect.objectContaining({ credentials: { access_token: 'tok-1', workspace_id: 'W1' } }),
     );
+  });
+
+  it('force-refreshes credentials and retries once when an action returns a 401 auth error', async () => {
+    getProviderMock.mockReturnValue({ authType: 'oauth2' });
+    resolveCredentialsMock
+      .mockResolvedValueOnce({
+        ok: true,
+        credential: { accessToken: 'stale-token' },
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        credential: { accessToken: 'fresh-token' },
+      });
+    executeMock
+      .mockResolvedValueOnce({ success: false, error: 'Sheets API 401: Request had invalid authentication credentials.' })
+      .mockResolvedValueOnce({ success: true, data: { clearedRange: 'Tasks!A1:D6' } });
+
+    const node: ToolNode = {
+      id: 'clear_sheet',
+      type: 'tool',
+      service: 'google_workspace',
+      action: 'sheets.clear_range',
+      params: { spreadsheetId: 'sheet-1', range: 'Tasks!A1:D6' },
+    };
+
+    const out = await executeTool(args(node));
+
+    expect(out).toEqual({ clearedRange: 'Tasks!A1:D6' });
+    expect(resolveCredentialsMock).toHaveBeenNthCalledWith(1, 'google_workspace', expect.anything(), 'user-1', {
+      params: { spreadsheetId: 'sheet-1', range: 'Tasks!A1:D6' },
+      forceRefresh: false,
+    });
+    expect(resolveCredentialsMock).toHaveBeenNthCalledWith(2, 'google_workspace', expect.anything(), 'user-1', {
+      params: { spreadsheetId: 'sheet-1', range: 'Tasks!A1:D6' },
+      forceRefresh: true,
+    });
+    expect(executeMock).toHaveBeenNthCalledWith(
+      1,
+      'sheets.clear_range',
+      { spreadsheetId: 'sheet-1', range: 'Tasks!A1:D6' },
+      expect.objectContaining({ credentials: { access_token: 'stale-token' } }),
+    );
+    expect(executeMock).toHaveBeenNthCalledWith(
+      2,
+      'sheets.clear_range',
+      { spreadsheetId: 'sheet-1', range: 'Tasks!A1:D6' },
+      expect.objectContaining({ credentials: { access_token: 'fresh-token' } }),
+    );
+    expect(markExecutedMock).toHaveBeenCalledWith(expect.anything(), 'workflow:exec-1:clear_sheet', { clearedRange: 'Tasks!A1:D6' });
+    expect(markFailedMock).not.toHaveBeenCalled();
   });
 });

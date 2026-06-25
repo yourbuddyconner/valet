@@ -18,6 +18,7 @@
  */
 
 import type { ToolNode } from '@valet/shared';
+import type { ActionContext, ActionResult } from '@valet/sdk';
 import { renderJsonTemplates, renderTemplate } from '../../lib/workflow-dag/expression.js';
 import { buildTemplateContext } from '../context.js';
 import { integrationRegistry } from '../../integrations/registry.js';
@@ -262,12 +263,12 @@ export async function executeTool(args: NodeExecutorArgs<ToolNode>): Promise<unk
   // API call on replay. NO_RETRY is enforced by the outer runtime
   // resolveStepConfig for tool, but the inner action call is naturally
   // single-shot under its own step.do regardless.
-  const actionContext = {
+  let actionContext = {
     credentials,
     userId: runParams.userId,
     ...(attribution ? { attribution } : {}),
     analytics: { emit: () => { /* TODO: wire into analytics_events */ } },
-  };
+  } satisfies ActionContext;
 
   // node.retries is the author-declared number of additional attempts
   // (0 = single attempt, the NO_RETRY default). Action calls are
@@ -282,7 +283,48 @@ export async function executeTool(args: NodeExecutorArgs<ToolNode>): Promise<unk
     const result = await actionSource.execute(node.action, renderedParams, actionContext);
     return JSON.stringify(result);
   });
-  const result = JSON.parse(executeJson) as { success: boolean; data?: unknown; error?: string };
+  let result = JSON.parse(executeJson) as ActionResult;
+
+  if (
+    provider &&
+    providerRequiresUserCredential(provider) &&
+    provider.authType !== 'bot_token' &&
+    isAuthFailure(result)
+  ) {
+    const refreshedJson = await step.do(`tool:${node.id}${iSuffix}:credentials:auth-refresh`, { retries: { ...NO_RETRY } }, async () => {
+      const refreshed = await integrationRegistry.resolveCredentials(node.service, env, runParams.userId, {
+        params: renderedParams,
+        forceRefresh: true,
+      });
+      if (!refreshed.ok) {
+        return JSON.stringify({ ok: false, error: refreshed.error.message });
+      }
+      return JSON.stringify({
+        ok: true,
+        credentials: buildCredentials(refreshed),
+        attribution: refreshed.credential.attribution,
+      });
+    });
+    const refreshed = JSON.parse(refreshedJson) as
+      | { ok: true; credentials: Record<string, string>; attribution?: { name: string; email: string } }
+      | { ok: false; error: string };
+
+    if (refreshed.ok) {
+      credentials = refreshed.credentials;
+      attribution = refreshed.attribution;
+      actionContext = {
+        credentials,
+        userId: runParams.userId,
+        ...(attribution ? { attribution } : {}),
+        analytics: { emit: () => { /* TODO: wire into analytics_events */ } },
+      } satisfies ActionContext;
+      const retryJson = await step.do(`tool:${node.id}${iSuffix}:execute:auth-retry`, { retries: { ...NO_RETRY } }, async () => {
+        const retryResult = await actionSource.execute(node.action, renderedParams, actionContext);
+        return JSON.stringify(retryResult);
+      });
+      result = JSON.parse(retryJson) as ActionResult;
+    }
+  }
 
   if (!result.success) {
     await step.do(`tool:${node.id}${iSuffix}:mark-failed`, async () => {
@@ -318,6 +360,12 @@ function providerRequiresUserCredential(
   if (provider.authType === 'none') return false;
   if (provider.isCustomConnector && provider.authType === 'api_key') return provider.credentialScope === 'user';
   return true;
+}
+
+function isAuthFailure(result: ActionResult): boolean {
+  return !result.success &&
+    typeof result.error === 'string' &&
+    /\b(401|unauthorized|invalid.credentials|token.*expired|token.*revoked)\b/i.test(result.error);
 }
 
 interface CredentialOk {

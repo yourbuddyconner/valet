@@ -367,7 +367,7 @@ For editor typeahead and edge inspection, `foreach` nodes expose their runtime r
 |------|----------|
 | `trigger` | Reserved source node for the invocation envelope. It returns `WorkflowTriggerPayload` as its node data and lets downstream nodes reference `{{nodes.trigger.data...}}` and `{{trigger...}}`. Optional `dataSchema` documents, validates, and renders typed `trigger.data` fields. |
 | `llm` | LLM completion via the configured provider. Without `outputSchema`, returns `{ response: string }`; with `outputSchema`, returns the validated JSON object. NO_RETRY at the runtime level — author-driven retries via `step.do` config. |
-| `tool` | Worker-side integration action through the same pipeline agent tool calls use. Honors action policy (`allow` / `deny` / `require_approval`). |
+| `tool` | Worker-side integration action through the same pipeline agent tool calls use. Honors action policy (`allow` / `deny` / `require_approval`). User-credentialed actions that return an auth failure (`401`, `unauthorized`, expired/revoked token text) force-refresh credentials and retry once before failing the node. |
 | `set` | Computes JSON values from templates and surfaces them to downstream nodes via `state.nodes`. |
 | `if` | Branches on a `conditions` array; downstream edges carry `fromOutput: 'true' \| 'false'`. |
 | `wait` | Durable pause via `step.sleep` for a compact duration string (`'5s'`, `'1h'`). |
