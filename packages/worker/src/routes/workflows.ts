@@ -357,6 +357,10 @@ workflowsRouter.put('/:id/draft', zValidator('json', draftPutSchema), async (c) 
   if (!isWorkflowDefinition(body.draft)) {
     return c.json({ error: 'invalid_draft', errors: validateDefinition(body.draft) }, 400);
   }
+  const structuralErrors = validateDefinition(body.draft).filter((issue) => issue.code !== 'llm_maxoutput_warning');
+  if (structuralErrors.length > 0) {
+    return c.json({ error: 'invalid_draft', ...groupWorkflowValidationResults(structuralErrors) }, 400);
+  }
   const { assembleLlmProviderEnv } = await import('../lib/llm/provider-env.js');
   const { resolveAvailableModels } = await import('../services/model-catalog.js');
   const providerEnv = await assembleLlmProviderEnv(c.get('db'), c.env);

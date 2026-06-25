@@ -2063,7 +2063,9 @@ Use the operation names returned by \`workflows.schema\`. Common string operatio
 
 Foreach \`body\` may be \`llm\`, \`tool\`, \`set\`, \`stop\`, \`orchestrator\`, or \`session\`. Nested \`if\`, \`wait\`, \`approval\`, \`trigger\`, and \`foreach\` nodes are not supported inside a foreach body.
 
-\`maxItems\` is an optional truncation limit. If the input array has more items than \`maxItems\`, the foreach node processes the first \`maxItems\` items and returns \`inputCount\` plus \`truncatedCount\` in its output envelope. It does not fail just because more items were available.
+Foreach \`items\` must be a single template that resolves to a typed array output. For session and orchestrator nodes, structured fields declared by \`outputSchema\` are nested under \`data.output\`, so an array field named \`companies\` is referenced as \`{{nodes.scrape_yc.data.output.companies}}\`, not \`{{nodes.scrape_yc.data.companies}}\`.
+
+\`maxItems\` is an optional truncation limit. If omitted, the foreach node processes up to 100 items by default. If the input array has more items than \`maxItems\`, the foreach node processes the first \`maxItems\` items and returns \`inputCount\` plus \`truncatedCount\` in its output envelope. It does not fail just because more items were available. Explicit \`maxItems\` may be set up to the default workflow policy ceiling of 5000 iterations.
 
 \`approval\` pauses until a human approves or denies:
 

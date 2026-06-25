@@ -301,6 +301,162 @@ describe('validateDefinition', () => {
     expect(errs.some((e) => e.code === 'wait_duration_exceeds_policy')).toBe(true);
   });
 
+  it('allows explicit foreach maxItems up to the execution iteration cap', () => {
+    const def = definition({
+      nodes: [
+        {
+          id: 'loop',
+          type: 'foreach',
+          items: '{{trigger.data.items}}',
+          maxItems: 5000,
+          body: { id: 'inner', type: 'set', values: {} },
+        },
+        { id: 'finish', type: 'stop' },
+      ],
+      edges: [{ from: 'loop', to: 'finish' }],
+    });
+
+    expect(blockingErrors(validateDefinition(def))).toEqual([]);
+  });
+
+  it('rejects foreach maxItems above the execution iteration cap', () => {
+    const def = definition({
+      nodes: [
+        {
+          id: 'loop',
+          type: 'foreach',
+          items: '{{trigger.data.items}}',
+          maxItems: 5001,
+          body: { id: 'inner', type: 'set', values: {} },
+        },
+        { id: 'finish', type: 'stop' },
+      ],
+      edges: [{ from: 'loop', to: 'finish' }],
+    });
+
+    const errs = blockingErrors(validateDefinition(def));
+    expect(errs).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        code: 'foreach_max_items_exceeds_policy',
+        message: expect.stringContaining('5000'),
+      }),
+    ]));
+  });
+
+  it('rejects foreach items that reference an untyped session output field', () => {
+    const def = definition({
+      nodes: [
+        {
+          id: 'scrape_yc',
+          type: 'session',
+          mode: 'start',
+          prompt: 'scrape',
+          workspace: 'yc-scraper',
+          wait: { mode: 'until_idle' },
+        },
+        {
+          id: 'write_companies',
+          type: 'foreach',
+          items: '{{nodes.scrape_yc.data.companies}}',
+          body: { id: 'write_company', type: 'set', values: {} },
+        },
+        { id: 'finish', type: 'stop' },
+      ],
+      edges: [
+        { from: 'scrape_yc', to: 'write_companies' },
+        { from: 'write_companies', to: 'finish' },
+      ],
+    });
+
+    const errs = blockingErrors(validateDefinition(def));
+    expect(errs).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        nodeId: 'write_companies',
+        path: 'items',
+        code: 'foreach_items_untyped_array_output',
+        message: 'foreach "write_companies" uses {{nodes.scrape_yc.data.companies}}, but it is not a typed array output',
+      }),
+    ]));
+  });
+
+  it('accepts foreach items that reference an array declared by a session output schema', () => {
+    const def = definition({
+      nodes: [
+        {
+          id: 'scrape_yc',
+          type: 'session',
+          mode: 'start',
+          prompt: 'scrape',
+          workspace: 'yc-scraper',
+          wait: { mode: 'until_idle' },
+          outputSchema: {
+            type: 'object',
+            properties: {
+              companies: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  properties: {
+                    name: { type: 'string' },
+                  },
+                },
+              },
+            },
+          },
+        },
+        {
+          id: 'write_companies',
+          type: 'foreach',
+          items: '{{nodes.scrape_yc.data.output.companies}}',
+          body: { id: 'write_company', type: 'set', values: {} },
+        },
+        { id: 'finish', type: 'stop' },
+      ],
+      edges: [
+        { from: 'scrape_yc', to: 'write_companies' },
+        { from: 'write_companies', to: 'finish' },
+      ],
+    });
+
+    expect(blockingErrors(validateDefinition(def))).toEqual([]);
+  });
+
+  it('rejects direct session data paths even when the structured output schema exists under data.output', () => {
+    const def = definition({
+      nodes: [
+        {
+          id: 'scrape_yc',
+          type: 'session',
+          mode: 'start',
+          prompt: 'scrape',
+          workspace: 'yc-scraper',
+          wait: { mode: 'until_idle' },
+          outputSchema: {
+            type: 'object',
+            properties: {
+              companies: { type: 'array', items: { type: 'object' } },
+            },
+          },
+        },
+        {
+          id: 'write_companies',
+          type: 'foreach',
+          items: '{{nodes.scrape_yc.data.companies}}',
+          body: { id: 'write_company', type: 'set', values: {} },
+        },
+        { id: 'finish', type: 'stop' },
+      ],
+      edges: [
+        { from: 'scrape_yc', to: 'write_companies' },
+        { from: 'write_companies', to: 'finish' },
+      ],
+    });
+
+    expect(blockingErrors(validateDefinition(def))).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'foreach_items_untyped_array_output' }),
+    ]));
+  });
+
   it('rejects foreach itemAlias shadowing reserved context names', () => {
     const def = definition({
       nodes: [

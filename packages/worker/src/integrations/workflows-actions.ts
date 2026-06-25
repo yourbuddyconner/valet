@@ -694,6 +694,15 @@ async function saveDraftAction(
       validation: await validateWorkflowDefinitionInput(db, params.draft, env),
     };
   }
+  const structuralErrors = validateDefinition(params.draft).filter((issue) => issue.code !== 'llm_maxoutput_warning');
+  if (structuralErrors.length > 0) {
+    return {
+      ok: false,
+      saved: false,
+      workflowId: id,
+      validation: groupWorkflowValidationResults(structuralErrors),
+    };
+  }
   const modelErrors = await validateDraftModelCatalog(db, env, params.draft);
   if (modelErrors.length > 0) {
     return {

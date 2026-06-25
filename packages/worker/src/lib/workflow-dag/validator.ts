@@ -42,7 +42,7 @@ import type { Env } from '../../env.js';
 const DEFAULT_MAX_NODES = 200;
 const DEFAULT_MAX_CONCURRENT_NODES = 20;
 const DEFAULT_MAX_WAIT_DURATION_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
-const DEFAULT_MAX_FOREACH_ITEMS = 100;
+const DEFAULT_MAX_FOREACH_ITEMS = 5000;
 const DEFAULT_MAX_FOREACH_CONCURRENCY = 5;
 const RESERVED_CONTEXT_NAMES = new Set(['trigger', 'nodes']);
 
@@ -231,6 +231,22 @@ function flattenUnionIssues(issues: ZodLikeIssue[]): ZodLikeIssue[] {
  * execution paths must require an empty result.
  */
 export function validateDefinition(input: unknown): WorkflowValidationError[] {
+  return validateDefinitionWithContext(input, {});
+}
+
+export interface WorkflowDefinitionValidationContext {
+  /**
+   * Optional tool output schemas keyed by `${service}:${action}`. The base
+   * validator stays synchronous, so callers that already have a tool catalog
+   * can provide schemas while generic validation can skip unknown tool output.
+   */
+  toolOutputSchemas?: Record<string, Record<string, unknown> | undefined>;
+}
+
+export function validateDefinitionWithContext(
+  input: unknown,
+  context: WorkflowDefinitionValidationContext,
+): WorkflowValidationError[] {
   // Total: never throws on malformed input. Callers do not need try/catch.
   const malformed = validateDefinitionShape(input);
   if (malformed.length > 0) return malformed;
@@ -284,6 +300,8 @@ export function validateDefinition(input: unknown): WorkflowValidationError[] {
   for (const edge of def.edges) {
     validateEdge(edge, def, edgeTargetIds, errors);
   }
+
+  validateForeachItemSources(def, errors, context);
 
   // ── Cycles ──────────────────────────────────────────────────────────────
   if (hasCycle(def.nodes, def.edges)) {
@@ -696,6 +714,181 @@ function validateEdge(
       });
     }
   }
+}
+
+function validateForeachItemSources(
+  def: WorkflowDefinition,
+  errors: WorkflowValidationError[],
+  context: WorkflowDefinitionValidationContext,
+): void {
+  const arrayPaths = deriveTypedArrayOutputPaths(def, context);
+  const nodesById = new Map(def.nodes.map((node) => [node.id, node]));
+
+  for (const node of def.nodes) {
+    if (node.type !== 'foreach') continue;
+
+    const segments = parseSinglePathTemplate(node.items);
+    if (!segments) continue;
+
+    if (segments[0] === 'trigger') {
+      // Open trigger payloads are intentionally dynamic. Once a trigger
+      // declares dataSchema, foreach references must point at an array field.
+      const trigger = def.nodes.find((candidate) => candidate.type === 'trigger');
+      if (!trigger?.dataSchema || Object.keys(trigger.dataSchema).length === 0) continue;
+      if (arrayPaths.has(formatPathSegments(segments))) continue;
+      errors.push(foreachUntypedArrayError(node.id, node.items));
+      continue;
+    }
+
+    if (segments[0] !== 'nodes') continue;
+    const sourceId = segments[1];
+    if (!sourceId) continue;
+    const sourceNode = nodesById.get(sourceId);
+    if (!sourceNode) continue;
+
+    // Tool outputs can be user/custom-MCP driven. Only enforce this rule
+    // when the caller supplied a schema for the selected action.
+    if (
+      sourceNode.type === 'tool' &&
+      !context.toolOutputSchemas?.[toolOutputSchemaKey(sourceNode.service, sourceNode.action)]
+    ) {
+      continue;
+    }
+
+    if (arrayPaths.has(formatPathSegments(segments))) continue;
+    errors.push(foreachUntypedArrayError(node.id, node.items));
+  }
+}
+
+function foreachUntypedArrayError(nodeId: string, items: string): WorkflowValidationError {
+  return {
+    scope: 'field',
+    nodeId,
+    path: 'items',
+    code: 'foreach_items_untyped_array_output',
+    message: `foreach "${nodeId}" uses ${items}, but it is not a typed array output`,
+  };
+}
+
+function parseSinglePathTemplate(value: string): string[] | null {
+  let parsed;
+  try {
+    parsed = parseTemplate(value);
+  } catch {
+    return null;
+  }
+  if (!parsed.isSingle) return null;
+  const expression = parsed.segments.find((segment) => segment.kind === 'expr')?.text;
+  if (!expression) return null;
+
+  try {
+    const ast = parseExpression(expression) as unknown;
+    if (
+      ast &&
+      typeof ast === 'object' &&
+      (ast as { kind?: unknown }).kind === 'path' &&
+      Array.isArray((ast as { segments?: unknown }).segments) &&
+      (ast as { segments: unknown[] }).segments.every((segment) => typeof segment === 'string')
+    ) {
+      return (ast as { segments: string[] }).segments;
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+function deriveTypedArrayOutputPaths(
+  def: WorkflowDefinition,
+  context: WorkflowDefinitionValidationContext,
+): Set<string> {
+  const paths = new Set<string>();
+
+  for (const node of def.nodes) {
+    switch (node.type) {
+      case 'trigger':
+        for (const [field, schema] of Object.entries(node.dataSchema ?? {})) {
+          if (schema.type === 'array') paths.add(formatPathSegments(['trigger', 'data', field]));
+        }
+        break;
+      case 'set':
+        addStaticArrayPaths(paths, ['nodes', node.id, 'data'], node.values);
+        break;
+      case 'llm':
+        if (node.outputSchema) addSchemaArrayPaths(paths, ['nodes', node.id, 'data'], node.outputSchema);
+        break;
+      case 'orchestrator':
+        if (node.wait?.mode === 'until_idle' && node.outputSchema) {
+          addSchemaArrayPaths(paths, ['nodes', node.id, 'data', 'output'], node.outputSchema);
+        }
+        if (node.resultMode === 'transcript') {
+          paths.add(formatPathSegments(['nodes', node.id, 'data', 'transcript']));
+        }
+        break;
+      case 'session':
+        if (node.wait?.mode === 'until_idle' && node.outputSchema) {
+          addSchemaArrayPaths(paths, ['nodes', node.id, 'data', 'output'], node.outputSchema);
+        }
+        if (node.wait?.mode === 'until_idle' && node.resultMode === 'transcript') {
+          paths.add(formatPathSegments(['nodes', node.id, 'data', 'transcript']));
+        }
+        break;
+      case 'foreach':
+        paths.add(formatPathSegments(['nodes', node.id, 'data', 'items']));
+        break;
+      case 'tool': {
+        const schema = context.toolOutputSchemas?.[toolOutputSchemaKey(node.service, node.action)];
+        if (schema) addSchemaArrayPaths(paths, ['nodes', node.id, 'data'], schema);
+        break;
+      }
+      default:
+        break;
+    }
+  }
+
+  return paths;
+}
+
+function addStaticArrayPaths(paths: Set<string>, basePath: string[], value: unknown): void {
+  if (Array.isArray(value)) {
+    paths.add(formatPathSegments(basePath));
+    return;
+  }
+  if (!value || typeof value !== 'object') return;
+  for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+    addStaticArrayPaths(paths, [...basePath, key], child);
+  }
+}
+
+function addSchemaArrayPaths(paths: Set<string>, basePath: string[], schema: Record<string, unknown>): void {
+  const schemaType = getSchemaType(schema);
+  if (schemaType === 'array') {
+    paths.add(formatPathSegments(basePath));
+    return;
+  }
+  if (schemaType !== 'object') return;
+  const properties = schema.properties;
+  if (!properties || typeof properties !== 'object' || Array.isArray(properties)) return;
+  for (const [key, child] of Object.entries(properties as Record<string, unknown>)) {
+    if (child && typeof child === 'object' && !Array.isArray(child)) {
+      addSchemaArrayPaths(paths, [...basePath, key], child as Record<string, unknown>);
+    }
+  }
+}
+
+function getSchemaType(schema: Record<string, unknown>): string | undefined {
+  const rawType = schema.type;
+  return Array.isArray(rawType)
+    ? rawType.find((type): type is string => typeof type === 'string' && type !== 'null')
+    : typeof rawType === 'string' ? rawType : undefined;
+}
+
+function formatPathSegments(segments: string[]): string {
+  return segments.join('\0');
+}
+
+function toolOutputSchemaKey(service: string, action: string): string {
+  return `${service}:${action}`;
 }
 
 function hasCycle(nodes: WorkflowNode[], edges: WorkflowEdge[]): boolean {

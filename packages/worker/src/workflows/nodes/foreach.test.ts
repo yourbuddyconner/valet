@@ -265,6 +265,41 @@ describe('foreach — validation', () => {
     expect(loopOut.truncatedCount).toBe(1);
     expect(loopOut.items).toHaveLength(2);
   });
+
+  it('defaults omitted maxItems to 100', async () => {
+    const items = Array.from({ length: 101 }, (_, i) => i);
+    const def: WorkflowDefinition = {
+      version: 'dag/v1',
+      nodes: [
+        {
+          id: 'loop',
+          type: 'foreach',
+          items: '{{trigger.data.items}}',
+          body: { id: 'render', type: 'set', values: {} },
+        },
+        { id: 'done', type: 'stop' },
+      ],
+      edges: [{ from: 'loop', to: 'done' }],
+    };
+
+    const { writer } = makeTraceWriter();
+    const result = await runDag(
+      stubEnv,
+      makeParams(def, { trigger: { type: 'manual', timestamp: '2026-06-12T00:00:00.000Z', data: { items }, metadata: {} } }),
+      makeStep(),
+      writer,
+    );
+
+    expect(result.status).toBe('completed');
+    const loopOut = result.state.nodes.loop?.data as {
+      count: number;
+      inputCount: number;
+      truncatedCount: number;
+    };
+    expect(loopOut.count).toBe(100);
+    expect(loopOut.inputCount).toBe(101);
+    expect(loopOut.truncatedCount).toBe(1);
+  });
 });
 
 describe('foreach — body retry policy', () => {
