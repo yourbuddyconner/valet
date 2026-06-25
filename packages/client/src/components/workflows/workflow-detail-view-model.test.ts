@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildWorkflowEditorTabs,
+  buildWorkflowVersionRows,
   getPublishButtonState,
+  getPublishedVersionLabel,
+  getWorkflowVersionHashLabel,
   getWorkflowEnabledLabel,
 } from './workflow-detail-view-model';
 
@@ -39,5 +42,66 @@ describe('workflow detail view model', () => {
       title: 'Publishing this workflow version.',
       isConfirming: false,
     });
+  });
+
+  it('labels the active published version by version number', () => {
+    expect(
+      getPublishedVersionLabel('version-2', [
+        {
+          id: 'version-1',
+          version: 1,
+          definitionHash: '111111111111',
+          createdAt: '2026-06-18T12:00:00.000Z',
+        },
+        {
+          id: 'version-2',
+          version: 2,
+          definitionHash: '222222222222',
+          createdAt: '2026-06-18T12:10:00.000Z',
+        },
+      ]),
+    ).toBe('Published v2');
+  });
+
+  it('falls back to draft or published when version metadata is unavailable', () => {
+    expect(getPublishedVersionLabel(null, [])).toBe('Draft');
+    expect(getPublishedVersionLabel('missing-version', [])).toBe('Published');
+  });
+
+  it('marks the active workflow version row and sorts newest first', () => {
+    expect(
+      buildWorkflowVersionRows(
+        [
+          {
+            id: 'version-1',
+            version: 1,
+            definitionHash: '111111111111',
+            createdAt: '2026-06-18T12:00:00.000Z',
+          },
+          {
+            id: 'version-3',
+            version: 3,
+            definitionHash: '333333333333',
+            createdAt: '2026-06-18T12:20:00.000Z',
+          },
+          {
+            id: 'version-2',
+            version: 2,
+            definitionHash: '222222222222',
+            createdAt: '2026-06-18T12:10:00.000Z',
+          },
+        ],
+        'version-2',
+      ).map((row) => ({ id: row.id, isActive: row.isActive })),
+    ).toEqual([
+      { id: 'version-3', isActive: false },
+      { id: 'version-2', isActive: true },
+      { id: 'version-1', isActive: false },
+    ]);
+  });
+
+  it('shortens workflow version hashes for compact display', () => {
+    expect(getWorkflowVersionHashLabel('abcdef1234567890')).toBe('abcdef12');
+    expect(getWorkflowVersionHashLabel('')).toBe('unknown');
   });
 });

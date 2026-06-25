@@ -278,7 +278,14 @@ export function useRestoreWorkflowVersion() {
       api.post<RestoreVersionResponse>(
         `/workflows/${workflowId}/versions/${versionId}/restore`,
       ),
-    onSuccess: (_, { workflowId }) => {
+    onSuccess: (response, { workflowId }) => {
+      queryClient.setQueryData<GetDraftResponse>(
+        workflowKeys.draft(workflowId),
+        (current) =>
+          current
+            ? { ...current, draft: response.draft, ui: response.ui }
+            : current,
+      );
       queryClient.invalidateQueries({ queryKey: workflowKeys.draft(workflowId) });
       queryClient.invalidateQueries({ queryKey: workflowKeys.detail(workflowId) });
     },

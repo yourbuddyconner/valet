@@ -10,6 +10,8 @@ import {
   useTestRunWorkflow,
   useDeleteWorkflow,
   useUpdateWorkflow,
+  useWorkflowVersions,
+  useRestoreWorkflowVersion,
 } from '@/api/workflows';
 import { useExecution, useRetryExecution, useWorkflowExecutions } from '@/api/executions';
 import { VisualWorkflowEditor } from '@/components/workflows/visual-workflow-editor';
@@ -18,9 +20,11 @@ import {
   ManualWorkflowDialog,
   type ManualWorkflowPayload,
 } from '@/components/workflows/manual-workflow-dialog';
+import { WorkflowVersionsDialog } from '@/components/workflows/workflow-versions-dialog';
 import {
   buildWorkflowEditorTabs,
   getPublishButtonState,
+  getPublishedVersionLabel,
   getWorkflowEnabledLabel,
   type WorkflowEditorTab,
 } from '@/components/workflows/workflow-detail-view-model';
@@ -51,6 +55,7 @@ function WorkflowDetailPage() {
   const { data, isLoading, error } = useWorkflow(workflowId);
   const { data: draftData, isLoading: draftLoading } = useWorkflowDraft(workflowId);
   const { data: executionsData } = useWorkflowExecutions(workflowId);
+  const { data: versionsData, isLoading: versionsLoading } = useWorkflowVersions(workflowId);
 
   const saveDraft = useSaveWorkflowDraft();
   const publish = usePublishWorkflow();
@@ -58,6 +63,7 @@ function WorkflowDetailPage() {
   const testRun = useTestRunWorkflow();
   const deleteWorkflow = useDeleteWorkflow();
   const updateWorkflow = useUpdateWorkflow();
+  const restoreVersion = useRestoreWorkflowVersion();
   const retryExecution = useRetryExecution();
 
   const workflow = data?.workflow;
@@ -67,6 +73,7 @@ function WorkflowDetailPage() {
   const [selectedExecutionId, setSelectedExecutionId] = useState<string | null>(null);
   const [selectedExecutionNodeId, setSelectedExecutionNodeId] = useState<string | null>(null);
   const [manualDialogOpen, setManualDialogOpen] = useState(false);
+  const [versionsDialogOpen, setVersionsDialogOpen] = useState(false);
   const [publishConfirming, setPublishConfirming] = useState(false);
   const [publishSubmitting, setPublishSubmitting] = useState(false);
   const publishConfirmTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -251,6 +258,28 @@ function WorkflowDetailPage() {
     }
   }
 
+  async function handleRestoreVersion(version: { id: string; version: number }) {
+    try {
+      const restored = await restoreVersion.mutateAsync({
+        workflowId,
+        versionId: version.id,
+      });
+      setEditorDefinition(restored.draft);
+      setActiveTab('editor');
+      setVersionsDialogOpen(false);
+      resetPublishConfirmation();
+      toastSuccess(
+        `Restored version ${version.version} to draft`,
+        'Publish the draft when you are ready to make it active.',
+      );
+    } catch (err) {
+      toastError(
+        'Failed to restore version',
+        err instanceof Error ? err.message : 'Restore failed',
+      );
+    }
+  }
+
   function handleToggleEnabled() {
     if (!workflow) return;
     resetPublishConfirmation();
@@ -276,6 +305,9 @@ function WorkflowDetailPage() {
   }
 
   const executions = executionsData?.executions ?? [];
+  const versions = versionsData?.versions ?? [];
+  const publishedVersionId = draftData?.publishedVersionId ?? workflow.publishedVersionId;
+  const publishedVersionLabel = getPublishedVersionLabel(publishedVersionId, versions);
   const editorTabs = buildWorkflowEditorTabs(executions.length);
   const publishButton = getPublishButtonState({
     isConfirming: publishConfirming,
@@ -316,6 +348,17 @@ function WorkflowDetailPage() {
         onSubmit={startManualWorkflowRun}
       />
 
+      <WorkflowVersionsDialog
+        open={versionsDialogOpen}
+        onOpenChange={setVersionsDialogOpen}
+        workflowName={workflow.name}
+        versions={versions}
+        publishedVersionId={publishedVersionId}
+        isLoading={versionsLoading}
+        isRestoring={restoreVersion.isPending}
+        onRestore={handleRestoreVersion}
+      />
+
       <header className="grid h-16 shrink-0 grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-4 border-b border-neutral-200 bg-white/95 px-5 shadow-sm backdrop-blur dark:border-neutral-800 dark:bg-neutral-950/95 dark:shadow-none">
         <div className="flex min-w-0 items-center gap-3">
           <Link
@@ -329,8 +372,8 @@ function WorkflowDetailPage() {
               {workflow.name}
             </h1>
             <div className="mt-1 flex min-w-0 items-center gap-2">
-              {draftData?.publishedVersionId ? (
-                <Badge variant="success">Published</Badge>
+              {publishedVersionId ? (
+                <Badge variant="success">{publishedVersionLabel}</Badge>
               ) : (
                 <Badge variant="secondary">Draft</Badge>
               )}
@@ -403,6 +446,16 @@ function WorkflowDetailPage() {
               }`} />
             </span>
           </button>
+          <Button
+            variant="secondary"
+            onClick={() => {
+              resetPublishConfirmation();
+              setVersionsDialogOpen(true);
+            }}
+            className="hidden border border-neutral-200 bg-white text-neutral-800 hover:bg-neutral-100 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100 dark:hover:bg-neutral-800 lg:inline-flex"
+          >
+            Versions
+          </Button>
           <Button
             variant="secondary"
             onClick={handleSaveClick}

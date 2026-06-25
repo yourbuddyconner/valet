@@ -1,8 +1,23 @@
 import * as React from 'react';
 import { Link, useNavigate } from '@tanstack/react-router';
-import { useCreateWorkflow, useWorkflows, type Workflow } from '@/api/workflows';
+import {
+  useCreateWorkflow,
+  useDeleteWorkflow,
+  useWorkflows,
+  type Workflow,
+} from '@/api/workflows';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 import {
   Dialog,
   DialogContent,
@@ -16,10 +31,13 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { SearchInput } from '@/components/ui/search-input';
 import { toastError, toastSuccess } from '@/hooks/use-toast';
 import { formatRelativeTime, slugify } from '@/lib/format';
+import { getWorkflowDeleteDialogCopy, getWorkflowRowBadges } from './workflow-list-model';
 
 export function WorkflowList() {
   const [search, setSearch] = React.useState('');
   const { data, isLoading, error } = useWorkflows();
+  const deleteWorkflow = useDeleteWorkflow();
+  const [deleteTarget, setDeleteTarget] = React.useState<Workflow | null>(null);
 
   const workflows = data?.workflows ?? [];
 
@@ -34,6 +52,18 @@ export function WorkflowList() {
       return nameMatch || descMatch || slugMatch;
     });
   }, [workflows, search]);
+
+  async function handleConfirmDelete() {
+    if (!deleteTarget) return;
+
+    try {
+      await deleteWorkflow.mutateAsync(deleteTarget.id);
+      toastSuccess('Workflow deleted', `${deleteTarget.name} was removed.`);
+      setDeleteTarget(null);
+    } catch (err) {
+      toastError('Failed to delete workflow', err instanceof Error ? err.message : 'Delete failed');
+    }
+  }
 
   if (isLoading) {
     return <WorkflowListSkeleton />;
@@ -51,6 +81,16 @@ export function WorkflowList() {
 
   return (
     <div className="space-y-4">
+      <WorkflowDeleteDialog
+        workflow={deleteTarget}
+        open={Boolean(deleteTarget)}
+        isDeleting={deleteWorkflow.isPending}
+        onOpenChange={(open) => {
+          if (!open) setDeleteTarget(null);
+        }}
+        onConfirm={handleConfirmDelete}
+      />
+
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div className="w-full sm:max-w-xs">
           <SearchInput
@@ -73,11 +113,55 @@ export function WorkflowList() {
       ) : (
         <ul className="divide-y divide-neutral-200 overflow-hidden rounded-lg border border-neutral-200 bg-white dark:divide-neutral-700 dark:border-neutral-700 dark:bg-neutral-800">
           {filteredWorkflows.map((workflow) => (
-            <WorkflowRow key={workflow.id} workflow={workflow} />
+            <WorkflowRow
+              key={workflow.id}
+              workflow={workflow}
+              onRequestDelete={setDeleteTarget}
+            />
           ))}
         </ul>
       )}
     </div>
+  );
+}
+
+function WorkflowDeleteDialog({
+  workflow,
+  open,
+  isDeleting,
+  onOpenChange,
+  onConfirm,
+}: {
+  workflow: Workflow | null;
+  open: boolean;
+  isDeleting: boolean;
+  onOpenChange: (open: boolean) => void;
+  onConfirm: () => Promise<void>;
+}) {
+  const copy = getWorkflowDeleteDialogCopy(workflow?.name ?? 'this workflow');
+
+  return (
+    <AlertDialog open={open} onOpenChange={onOpenChange}>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>{copy.title}</AlertDialogTitle>
+          <AlertDialogDescription>{copy.description}</AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel disabled={isDeleting}>Cancel</AlertDialogCancel>
+          <AlertDialogAction
+            onClick={(event) => {
+              event.preventDefault();
+              void onConfirm();
+            }}
+            disabled={isDeleting}
+            className="bg-red-600 text-white hover:bg-red-700"
+          >
+            {isDeleting ? 'Deleting…' : 'Delete'}
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
   );
 }
 
@@ -243,31 +327,39 @@ function CreateWorkflowDialog() {
   );
 }
 
-function WorkflowRow({ workflow }: { workflow: Workflow }) {
+function WorkflowRow({
+  workflow,
+  onRequestDelete,
+}: {
+  workflow: Workflow;
+  onRequestDelete: (workflow: Workflow) => void;
+}) {
   // Source of truth: workflows.published_version_id. The list endpoint
   // returns the latest published definition under `data` even for
   // unpublished rows (workflows.data is the /sync write surface), so
   // checking data alone would mislabel every workflow as Published.
-  const isPublished = Boolean(workflow.publishedVersionId);
+  const badges = getWorkflowRowBadges({
+    publishedVersionId: workflow.publishedVersionId,
+    enabled: workflow.enabled,
+  });
 
   return (
-    <li>
+    <li className="flex items-start gap-4 p-4 hover:bg-neutral-50 dark:hover:bg-neutral-700/50">
       <Link
         to="/workflows/$workflowId"
         params={{ workflowId: workflow.id }}
-        className="flex items-start justify-between gap-4 p-4 hover:bg-neutral-50 dark:hover:bg-neutral-700/50"
+        className="min-w-0 flex-1 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
       >
-        <div className="min-w-0 flex-1">
+        <div className="min-w-0">
           <div className="flex items-center gap-2">
             <span className="truncate text-sm font-medium text-neutral-900 dark:text-neutral-100">
               {workflow.name}
             </span>
-            <Badge variant={isPublished ? 'success' : 'secondary'}>
-              {isPublished ? 'Published' : 'Draft'}
-            </Badge>
-            {!workflow.enabled && (
-              <Badge variant="secondary">Disabled</Badge>
-            )}
+            {badges.map((badge) => (
+              <Badge key={badge.label} variant={badge.variant}>
+                {badge.label}
+              </Badge>
+            ))}
           </div>
           {workflow.description && (
             <p className="mt-1 line-clamp-2 text-xs text-pretty text-neutral-500 dark:text-neutral-400">
@@ -280,11 +372,29 @@ function WorkflowRow({ workflow }: { workflow: Workflow }) {
             </code>
           )}
         </div>
-        <div className="shrink-0 text-right text-xs tabular-nums text-neutral-500 dark:text-neutral-400">
+      </Link>
+      <div className="flex shrink-0 items-start gap-3">
+        <div className="hidden text-right text-xs tabular-nums text-neutral-500 dark:text-neutral-400 sm:block">
           <div>v{workflow.version}</div>
           <div>{formatRelativeTime(workflow.updatedAt)}</div>
         </div>
-      </Link>
+        <div className="flex items-center gap-2">
+          <Button variant="secondary" size="sm" asChild>
+            <Link to="/workflows/$workflowId" params={{ workflowId: workflow.id }}>
+              Open
+            </Link>
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={() => onRequestDelete(workflow)}
+            className="text-neutral-500 hover:bg-red-50 hover:text-red-600 dark:text-neutral-400 dark:hover:bg-red-950/40 dark:hover:text-red-300"
+          >
+            Delete
+          </Button>
+        </div>
+      </div>
     </li>
   );
 }
