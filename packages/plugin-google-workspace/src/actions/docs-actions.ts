@@ -35,6 +35,7 @@ import {
   formatInsertResult,
 } from './docs-markdown.js';
 import type { DocsBody, DocsLists } from './docs-markdown.js';
+import { withGoogleWorkspaceOutputSchemas } from './workspace-output-schemas.js';
 
 // ─── Action Definitions ──────────────────────────────────────────────────────
 
@@ -2142,5 +2143,5 @@ async function executeAction(
 
 // ─── Export ──────────────────────────────────────────────────────────────────
 
-export const docsActionDefs: ActionDefinition[] = allActions;
+export const docsActionDefs: ActionDefinition[] = withGoogleWorkspaceOutputSchemas(allActions);
 export { executeAction as executeDocsAction };

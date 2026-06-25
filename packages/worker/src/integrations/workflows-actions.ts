@@ -54,6 +54,169 @@ const workflowDefinitionInputSchema = {
   additionalProperties: true,
 };
 
+const workflowSummaryOutputSchema = {
+  type: 'object',
+  properties: {
+    id: { type: 'string' },
+    slug: { type: ['string', 'null'] },
+    name: { type: 'string' },
+    description: { type: ['string', 'null'] },
+    version: { type: 'string' },
+    enabled: { type: 'boolean' },
+    tags: { type: 'array', items: { type: 'string' } },
+    createdAt: { type: 'string' },
+    updatedAt: { type: 'string' },
+    publishedVersionId: { type: ['string', 'null'] },
+    hasPublishedVersion: { type: 'boolean' },
+    hasPublishedDefinition: { type: 'boolean' },
+  },
+  additionalProperties: true,
+} satisfies Record<string, unknown>;
+
+const workflowDetailOutputSchema = {
+  type: 'object',
+  properties: {
+    id: { type: 'string' },
+    slug: { type: ['string', 'null'] },
+    name: { type: 'string' },
+    description: { type: ['string', 'null'] },
+    version: { type: 'string' },
+    data: workflowDefinitionInputSchema,
+    draft: { type: ['object', 'null'], additionalProperties: true },
+    draftUi: { type: ['object', 'null'], additionalProperties: true },
+    enabled: { type: 'boolean' },
+    tags: { type: 'array', items: { type: 'string' } },
+    createdAt: { type: 'string' },
+    updatedAt: { type: 'string' },
+    publishedVersionId: { type: ['string', 'null'] },
+  },
+  additionalProperties: true,
+} satisfies Record<string, unknown>;
+
+const workflowValidationIssueSchema = {
+  type: 'object',
+  properties: {
+    scope: { type: 'string' },
+    nodeId: { type: 'string' },
+    path: { type: 'string' },
+    code: { type: 'string' },
+    message: { type: 'string' },
+  },
+  additionalProperties: true,
+} satisfies Record<string, unknown>;
+
+const workflowValidationOutputSchema = {
+  type: 'object',
+  properties: {
+    errors: { type: 'array', items: workflowValidationIssueSchema },
+    warnings: { type: 'array', items: workflowValidationIssueSchema },
+  },
+} satisfies Record<string, unknown>;
+
+const workflowDraftSaveOutputSchema = {
+  type: 'object',
+  properties: {
+    ok: { type: 'boolean' },
+    saved: { type: 'boolean' },
+    workflowId: { type: 'string' },
+    validation: workflowValidationOutputSchema,
+  },
+} satisfies Record<string, unknown>;
+
+const workflowPublishedVersionSchema = {
+  type: 'object',
+  properties: {
+    id: { type: 'string' },
+    workflowId: { type: 'string' },
+    version: { type: 'number' },
+    definitionHash: { type: 'string' },
+    publishNote: { type: ['string', 'null'] },
+    createdAt: { type: 'string' },
+    createdBy: { type: ['string', 'null'] },
+  },
+  additionalProperties: true,
+} satisfies Record<string, unknown>;
+
+const workflowExecutionStartSchema = {
+  type: 'object',
+  properties: {
+    executionId: { type: 'string' },
+    status: { type: 'string', enum: ['pending'] },
+    triggerData: { type: 'object', additionalProperties: true },
+    deduplicated: { type: 'boolean' },
+  },
+} satisfies Record<string, unknown>;
+
+const workflowExecutionNodeSchema = {
+  type: 'object',
+  properties: {
+    id: { type: 'string' },
+    nodeId: { type: 'string' },
+    nodeType: { type: 'string' },
+    status: { type: 'string' },
+    inputPreview: { type: ['string', 'null'] },
+    inputTruncated: { type: 'boolean' },
+    output: { type: ['string', 'null'] },
+    outputTruncated: { type: 'boolean' },
+    error: { type: ['string', 'null'] },
+    reason: { type: ['string', 'null'] },
+    retryAttempts: { type: ['number', 'null'] },
+    approvalId: { type: ['string', 'null'] },
+    invocationId: { type: ['string', 'null'] },
+    startedAt: { type: ['string', 'null'] },
+    completedAt: { type: ['string', 'null'] },
+    durationMs: { type: ['number', 'null'] },
+    createdAt: { type: 'string' },
+  },
+} satisfies Record<string, unknown>;
+
+const workflowApprovalSchema = {
+  type: 'object',
+  properties: {
+    id: { type: 'string' },
+    nodeId: { type: 'string' },
+    kind: { type: 'string' },
+    status: { type: 'string' },
+    prompt: { type: 'string' },
+    summary: { type: ['string', 'null'] },
+    details: { type: ['object', 'string', 'null'], additionalProperties: true },
+    timeoutAt: { type: ['string', 'null'] },
+    resolvedBy: { type: ['string', 'null'] },
+    resolvedAt: { type: ['string', 'null'] },
+    cancelledAt: { type: ['string', 'null'] },
+    createdAt: { type: 'string' },
+  },
+} satisfies Record<string, unknown>;
+
+const workflowExecutionOutputSchema = {
+  type: 'object',
+  properties: {
+    execution: {
+      type: 'object',
+      properties: {
+        id: { type: 'string' },
+        workflowId: { type: 'string' },
+        workflowName: { type: ['string', 'null'] },
+        triggerId: { type: ['string', 'null'] },
+        triggerName: { type: ['string', 'null'] },
+        status: { type: 'string' },
+        triggerType: { type: ['string', 'null'] },
+        triggerMetadata: { type: ['object', 'null'], additionalProperties: true },
+        triggerData: { type: ['object', 'null'], additionalProperties: true },
+        outputs: { type: ['object', 'null'], additionalProperties: true },
+        error: { type: ['string', 'null'] },
+        startedAt: { type: ['string', 'null'] },
+        completedAt: { type: ['string', 'null'] },
+        mode: { type: ['string', 'null'] },
+        cancelledAt: { type: ['string', 'null'] },
+        cancelledBy: { type: ['string', 'null'] },
+        nodes: { type: 'array', items: workflowExecutionNodeSchema },
+        approvals: { type: 'array', items: workflowApprovalSchema },
+      },
+    },
+  },
+} satisfies Record<string, unknown>;
+
 const actions: ActionDefinition[] = [
   {
     id: 'workflows.list',
@@ -62,6 +225,12 @@ const actions: ActionDefinition[] = [
     riskLevel: 'low',
     params: z.object({}),
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    outputSchema: {
+      type: 'object',
+      properties: {
+        workflows: { type: 'array', items: workflowSummaryOutputSchema },
+      },
+    },
   },
   {
     id: 'workflows.get',
@@ -76,6 +245,12 @@ const actions: ActionDefinition[] = [
         workflowId: { type: 'string', description: 'Workflow ID or slug.' },
       },
       additionalProperties: false,
+    },
+    outputSchema: {
+      type: 'object',
+      properties: {
+        workflow: workflowDetailOutputSchema,
+      },
     },
   },
   {
@@ -97,6 +272,12 @@ const actions: ActionDefinition[] = [
         slug: { type: ['string', 'null'], description: 'Optional URL slug.' },
       },
       additionalProperties: false,
+    },
+    outputSchema: {
+      type: 'object',
+      properties: {
+        workflow: workflowDetailOutputSchema,
+      },
     },
   },
   {
@@ -121,6 +302,7 @@ const actions: ActionDefinition[] = [
       },
       additionalProperties: false,
     },
+    outputSchema: workflowDraftSaveOutputSchema,
   },
   {
     id: 'workflows.schema',
@@ -129,6 +311,25 @@ const actions: ActionDefinition[] = [
     riskLevel: 'low',
     params: z.object({}),
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    outputSchema: {
+      type: 'object',
+      properties: {
+        version: { type: 'string' },
+        validNodeTypes: { type: 'array', items: { type: 'string' } },
+        foreachBodyTypes: { type: 'array', items: { type: 'string' } },
+        legacyNodeTypeAliases: { type: 'object', additionalProperties: true },
+        removedNodeTypeNotes: { type: 'object', additionalProperties: true },
+        idSyntax: { type: 'object', additionalProperties: true },
+        templates: { type: 'object', additionalProperties: true },
+        edges: { type: 'object', additionalProperties: true },
+        conditionOperations: { type: 'object', additionalProperties: true },
+        nodes: {
+          type: 'array',
+          items: { type: 'object', additionalProperties: true },
+        },
+      },
+      additionalProperties: true,
+    },
   },
   {
     id: 'workflows.validate',
@@ -147,6 +348,7 @@ const actions: ActionDefinition[] = [
       },
       additionalProperties: false,
     },
+    outputSchema: workflowValidationOutputSchema,
   },
   {
     id: 'workflows.publish',
@@ -165,6 +367,12 @@ const actions: ActionDefinition[] = [
         publishNote: { type: 'string', description: 'Optional publish note.' },
       },
       additionalProperties: false,
+    },
+    outputSchema: {
+      type: 'object',
+      properties: {
+        version: workflowPublishedVersionSchema,
+      },
     },
   },
   {
@@ -187,6 +395,7 @@ const actions: ActionDefinition[] = [
       },
       additionalProperties: false,
     },
+    outputSchema: workflowExecutionStartSchema,
   },
   {
     id: 'workflows.get_execution',
@@ -204,6 +413,7 @@ const actions: ActionDefinition[] = [
       },
       additionalProperties: false,
     },
+    outputSchema: workflowExecutionOutputSchema,
   },
 ];
 

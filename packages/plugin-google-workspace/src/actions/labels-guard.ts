@@ -30,6 +30,7 @@ export const READ_GET_ACTIONS: string[] = [
   'docs.list_tabs',
   'docs.list_comments',
   'docs.get_comment',
+  'docs.find_text_index',
   'sheets.read_spreadsheet',
   'sheets.get_spreadsheet_info',
   'sheets.read_cell_format',

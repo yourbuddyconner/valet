@@ -25,6 +25,11 @@ import {
   type ManualWorkflowInputField,
 } from '@/components/workflows/manual-workflow-dialog-model';
 import { ScheduledWorkflowInputs } from '@/components/workflows/scheduled-workflow-inputs';
+import {
+  FriendlyScheduleFields,
+  OrchestratorPromptEditor,
+} from '@/components/automation/trigger-schedule-controls';
+import { getSchedulePresetForCron } from '@/components/automation/trigger-schedule-model';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
@@ -76,7 +81,7 @@ const DEFAULT_FORM: TriggerFormState = {
   webhookPath: '',
   webhookMethod: 'POST',
   webhookSecret: '',
-  scheduleCron: '',
+  scheduleCron: '0 9 * * 1-5',
   scheduleTimezone: 'UTC',
   scheduleTarget: 'orchestrator',
   schedulePrompt: '',
@@ -183,7 +188,7 @@ function validateForm(form: TriggerFormState): string | null {
   if (form.type === 'webhook' && !form.webhookPath.trim()) return 'Webhook path is required.';
   if (form.type === 'webhook' && !form.workflowId) return 'Webhook triggers must be linked to a workflow.';
   if (form.type === 'manual' && !form.workflowId) return 'Manual triggers must be linked to a workflow.';
-  if (form.type === 'schedule' && !form.scheduleCron.trim()) return 'Cron expression is required.';
+  if (form.type === 'schedule' && !form.scheduleCron.trim()) return 'Schedule is required.';
   if (form.type === 'schedule' && form.scheduleTarget === 'workflow' && !form.workflowId) {
     return 'Workflow schedule triggers must be linked to a workflow.';
   }
@@ -201,7 +206,9 @@ function describeTrigger(trigger: Trigger): string {
   }
   if (trigger.type === 'schedule' && isScheduleConfig(trigger.config)) {
     const target = trigger.config.target || 'workflow';
-    return `${trigger.config.cron} · ${trigger.config.timezone || 'UTC'} · ${target}`;
+    const preset = getSchedulePresetForCron(trigger.config.cron);
+    const schedule = preset.id === 'custom' ? trigger.config.cron : preset.label;
+    return `${schedule} · ${trigger.config.timezone || 'UTC'} · ${target}`;
   }
   return trigger.type;
 }
@@ -323,6 +330,7 @@ export function TriggerList() {
       ...prev,
       type,
       scheduleTarget: canSelectOrchestratorTarget(type) ? prev.scheduleTarget : 'workflow',
+      scheduleCron: type === 'schedule' && !prev.scheduleCron.trim() ? DEFAULT_FORM.scheduleCron : prev.scheduleCron,
     }));
     setFormError(null);
   };
@@ -682,7 +690,7 @@ export function TriggerList() {
           if (!nextOpen) resetForm();
         }}
       >
-        <DialogContent className="sm:max-w-2xl">
+        <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-4xl">
           <form onSubmit={onSave}>
             <DialogHeader>
               <DialogTitle>{editingTrigger ? 'Edit Trigger' : 'Create Trigger'}</DialogTitle>
@@ -720,7 +728,7 @@ export function TriggerList() {
                   <p className="text-xs text-neutral-500 dark:text-neutral-400">
                     {form.type === 'manual' && 'Run on demand from Valet.'}
                     {form.type === 'webhook' && 'Run when an external request arrives.'}
-                    {form.type === 'schedule' && 'Run from a cron schedule.'}
+                    {form.type === 'schedule' && 'Run on a recurring schedule.'}
                   </p>
                 </div>
                 <div className="space-y-1.5">
@@ -807,28 +815,12 @@ export function TriggerList() {
               {/* Schedule fields */}
               {form.type === 'schedule' && (
                 <div className="space-y-4">
-                  <div className="grid gap-4 sm:grid-cols-2">
-                    <div>
-                      <label className="mb-1.5 block text-sm font-medium text-neutral-700 dark:text-neutral-300">
-                        Cron Expression
-                      </label>
-                      <Input
-                        value={form.scheduleCron}
-                        onChange={(e) => onField('scheduleCron', e.target.value)}
-                        placeholder="0 9 * * 1-5"
-                      />
-                    </div>
-                    <div>
-                      <label className="mb-1.5 block text-sm font-medium text-neutral-700 dark:text-neutral-300">
-                        Timezone
-                      </label>
-                      <Input
-                        value={form.scheduleTimezone}
-                        onChange={(e) => onField('scheduleTimezone', e.target.value)}
-                        placeholder="America/Los_Angeles"
-                      />
-                    </div>
-                  </div>
+                  <FriendlyScheduleFields
+                    cron={form.scheduleCron}
+                    timezone={form.scheduleTimezone}
+                    onCronChange={(value) => onField('scheduleCron', value)}
+                    onTimezoneChange={(value) => onField('scheduleTimezone', value)}
+                  />
                   {shouldEditScheduleInputs(form) && (
                     <ScheduledWorkflowInputs
                       fields={scheduleInputFieldList}
@@ -838,21 +830,11 @@ export function TriggerList() {
                     />
                   )}
                   {getFormTarget(form) === 'orchestrator' && (
-                    <div>
-                      <label className="mb-1.5 block text-sm font-medium text-neutral-700 dark:text-neutral-300">
-                        Orchestrator Prompt
-                      </label>
-                      <textarea
-                        value={form.schedulePrompt}
-                        onChange={(e) => onField('schedulePrompt', e.target.value)}
-                        rows={4}
-                        placeholder="Summarize open tasks and create a plan for today."
-                        className={cn(
-                          'w-full rounded-md border border-neutral-200 bg-white px-3 py-2 text-sm text-neutral-900 placeholder:text-neutral-400 focus:outline-none focus:ring-2 focus:ring-neutral-900 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-100 dark:placeholder:text-neutral-500 dark:focus:ring-neutral-100',
-                          formError && 'border-red-500'
-                        )}
-                      />
-                    </div>
+                    <OrchestratorPromptEditor
+                      value={form.schedulePrompt}
+                      onChange={(value) => onField('schedulePrompt', value)}
+                      hasError={Boolean(formError)}
+                    />
                   )}
                 </div>
               )}

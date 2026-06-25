@@ -92,6 +92,283 @@ const githubWorkflowSummarySchema = {
   },
 } satisfies Record<string, unknown>;
 
+const githubIssueDetailSchema = {
+  type: 'object',
+  properties: {
+    ...githubIssueSummarySchema.properties,
+    body: { type: ['string', 'null'] },
+    comments: { type: 'number' },
+    closed_at: { type: ['string', 'null'] },
+  },
+  additionalProperties: true,
+} satisfies Record<string, unknown>;
+
+const githubPullRequestDetailSchema = {
+  type: 'object',
+  properties: {
+    ...githubPullRequestSummarySchema.properties,
+    body: { type: ['string', 'null'] },
+    merged: { type: 'boolean' },
+    additions: { type: 'number' },
+    deletions: { type: 'number' },
+    changed_files: { type: 'number' },
+  },
+  additionalProperties: true,
+} satisfies Record<string, unknown>;
+
+const githubCommentSchema = {
+  type: 'object',
+  properties: {
+    id: { type: 'number' },
+    user: { type: ['object', 'null'], additionalProperties: true },
+    body: { type: 'string' },
+    html_url: { type: 'string' },
+    created_at: { type: 'string' },
+    updated_at: { type: 'string' },
+  },
+  additionalProperties: true,
+} satisfies Record<string, unknown>;
+
+const githubIssueMutationSchema = {
+  type: 'object',
+  properties: {
+    number: { type: 'number' },
+    url: { type: 'string' },
+    title: { type: 'string' },
+    state: { type: 'string' },
+  },
+} satisfies Record<string, unknown>;
+
+const githubPullRequestMutationSchema = {
+  type: 'object',
+  properties: {
+    number: { type: 'number' },
+    url: { type: 'string' },
+    title: { type: 'string' },
+    state: { type: 'string' },
+    draft: { type: 'boolean' },
+  },
+} satisfies Record<string, unknown>;
+
+const githubRepositoryCreationSchema = {
+  type: 'object',
+  properties: {
+    full_name: { type: 'string' },
+    url: { type: 'string' },
+    clone_url: { type: 'string' },
+    private: { type: 'boolean' },
+  },
+} satisfies Record<string, unknown>;
+
+const githubPullRequestInspectionSchema = {
+  type: 'object',
+  properties: {
+    number: { type: 'number' },
+    title: { type: 'string' },
+    state: { type: 'string' },
+    merged: { type: 'boolean' },
+    draft: { type: 'boolean' },
+    user: { type: ['string', 'null'] },
+    url: { type: 'string' },
+    head: {
+      type: 'object',
+      properties: {
+        ref: { type: ['string', 'null'] },
+        sha: { type: 'string' },
+      },
+    },
+    base: {
+      type: 'object',
+      properties: {
+        ref: { type: ['string', 'null'] },
+      },
+    },
+    body: { type: ['string', 'null'] },
+    additions: { type: 'number' },
+    deletions: { type: 'number' },
+    changed_files: { type: 'number' },
+    files: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          filename: { type: 'string' },
+          status: { type: 'string' },
+          additions: { type: 'number' },
+          deletions: { type: 'number' },
+        },
+      },
+    },
+    reviews: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          user: { type: ['string', 'null'] },
+          state: { type: 'string' },
+          body: { type: ['string', 'null'] },
+        },
+      },
+    },
+    comments: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          user: { type: ['string', 'null'] },
+          path: { type: 'string' },
+          line: { type: ['number', 'null'] },
+          body: { type: 'string' },
+        },
+      },
+    },
+    checks: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          name: { type: 'string' },
+          status: { type: 'string' },
+          conclusion: { type: ['string', 'null'] },
+        },
+      },
+    },
+  },
+} satisfies Record<string, unknown>;
+
+const githubMergeResultSchema = {
+  type: 'object',
+  properties: {
+    merged: { type: 'boolean' },
+    message: { type: 'string' },
+    sha: { type: ['string', 'null'] },
+  },
+} satisfies Record<string, unknown>;
+
+const githubBranchResultSchema = {
+  type: 'object',
+  properties: {
+    branch: { type: 'string' },
+    sha: { type: 'string' },
+  },
+} satisfies Record<string, unknown>;
+
+const githubDeleteBranchResultSchema = {
+  type: 'object',
+  properties: {
+    deleted: { type: 'string' },
+  },
+} satisfies Record<string, unknown>;
+
+const githubReleaseResultSchema = {
+  type: 'object',
+  properties: {
+    id: { type: 'number' },
+    tag: { type: 'string' },
+    url: { type: 'string' },
+    draft: { type: 'boolean' },
+    prerelease: { type: 'boolean' },
+  },
+} satisfies Record<string, unknown>;
+
+const githubForkResultSchema = {
+  type: 'object',
+  properties: {
+    full_name: { type: 'string' },
+    url: { type: 'string' },
+    clone_url: { type: 'string' },
+  },
+} satisfies Record<string, unknown>;
+
+const githubWorkflowRunDetailSchema = {
+  type: 'object',
+  properties: {
+    id: { type: 'number' },
+    name: { type: ['string', 'null'] },
+    status: { type: ['string', 'null'] },
+    conclusion: { type: ['string', 'null'] },
+    event: { type: 'string' },
+    branch: { type: ['string', 'null'] },
+    commit_sha: { type: ['string', 'null'] },
+    url: { type: 'string' },
+    created_at: { type: 'string' },
+    updated_at: { type: 'string' },
+    run_attempt: { type: 'number' },
+    jobs: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          id: { type: 'number' },
+          name: { type: 'string' },
+          status: { type: 'string' },
+          conclusion: { type: ['string', 'null'] },
+          started_at: { type: ['string', 'null'] },
+          completed_at: { type: ['string', 'null'] },
+          steps: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                name: { type: 'string' },
+                status: { type: 'string' },
+                conclusion: { type: ['string', 'null'] },
+                number: { type: 'number' },
+              },
+            },
+          },
+        },
+      },
+    },
+    annotations: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          path: { type: 'string' },
+          start_line: { type: 'number' },
+          end_line: { type: 'number' },
+          annotation_level: { type: 'string' },
+          message: { type: 'string' },
+          title: { type: ['string', 'null'] },
+        },
+      },
+    },
+    warnings: { type: 'string' },
+  },
+} satisfies Record<string, unknown>;
+
+const githubJobLogsSchema = {
+  type: 'object',
+  properties: {
+    job_id: { type: 'number' },
+    job_name: { type: 'string' },
+    steps: {
+      type: 'array',
+      items: { type: 'object', additionalProperties: true },
+    },
+  },
+} satisfies Record<string, unknown>;
+
+const githubMessageResultSchema = {
+  type: 'object',
+  properties: {
+    message: { type: 'string' },
+    url: { type: 'string' },
+  },
+} satisfies Record<string, unknown>;
+
+const githubReadRepoFileSchema = {
+  type: 'object',
+  properties: {
+    path: { type: 'string' },
+    repo: { type: 'string' },
+    ref: { type: ['string', 'null'] },
+    size: { type: 'number' },
+    content: { type: 'string' },
+  },
+} satisfies Record<string, unknown>;
+
 // ─── Octokit + Attribution Helpers ──────────────────────────────────────────
 
 function getOctokit(ctx: ActionContext): Octokit {
@@ -128,6 +405,7 @@ const getRepository: ActionDefinition = {
     owner: z.string().describe('Repository owner'),
     repo: z.string().describe('Repository name'),
   }),
+  outputSchema: githubRepositorySummarySchema,
 };
 
 const listRepos: ActionDefinition = {
@@ -156,6 +434,7 @@ const getIssue: ActionDefinition = {
     repo: z.string(),
     issueNumber: z.number().int(),
   }),
+  outputSchema: githubIssueDetailSchema,
 };
 
 const createIssue: ActionDefinition = {
@@ -169,6 +448,7 @@ const createIssue: ActionDefinition = {
     title: z.string(),
     body: z.string().optional(),
   }),
+  outputSchema: githubIssueDetailSchema,
 };
 
 const getPullRequest: ActionDefinition = {
@@ -181,6 +461,7 @@ const getPullRequest: ActionDefinition = {
     repo: z.string(),
     pullNumber: z.number().int(),
   }),
+  outputSchema: githubPullRequestDetailSchema,
 };
 
 const createComment: ActionDefinition = {
@@ -194,6 +475,7 @@ const createComment: ActionDefinition = {
     issueNumber: z.number().int(),
     body: z.string(),
   }),
+  outputSchema: githubCommentSchema,
 };
 
 const listPullRequests: ActionDefinition = {
@@ -225,6 +507,7 @@ const inspectPullRequest: ActionDefinition = {
     filesLimit: z.number().int().min(1).max(300).optional().describe('Max files to return (default: 100)'),
     commentsLimit: z.number().int().min(1).max(300).optional().describe('Max review comments (default: 100)'),
   }),
+  outputSchema: githubPullRequestInspectionSchema,
 };
 
 const updatePullRequest: ActionDefinition = {
@@ -241,6 +524,7 @@ const updatePullRequest: ActionDefinition = {
     state: z.enum(['open', 'closed']).optional().describe('Set PR state'),
     labels: z.array(z.string()).optional().describe('Labels to set (replaces existing)'),
   }),
+  outputSchema: githubIssueMutationSchema,
 };
 
 const createRepository: ActionDefinition = {
@@ -256,6 +540,7 @@ const createRepository: ActionDefinition = {
     gitignoreTemplate: z.string().optional().describe('Gitignore template (e.g. "Node", "Python")'),
     licenseTemplate: z.string().optional().describe('License keyword (e.g. "mit", "apache-2.0")'),
   }),
+  outputSchema: githubRepositoryCreationSchema,
 };
 
 const listIssues: ActionDefinition = {
@@ -294,6 +579,7 @@ const updateIssue: ActionDefinition = {
     labels: z.array(z.string()).optional().describe('Labels to set (replaces existing)'),
     assignees: z.array(z.string()).optional().describe('Assignee usernames (replaces existing)'),
   }),
+  outputSchema: githubIssueMutationSchema,
 };
 
 const createPullRequest: ActionDefinition = {
@@ -310,6 +596,7 @@ const createPullRequest: ActionDefinition = {
     body: z.string().optional().describe('PR description (markdown)'),
     draft: z.boolean().optional().describe('Create as draft PR'),
   }),
+  outputSchema: githubPullRequestMutationSchema,
 };
 
 const mergePullRequest: ActionDefinition = {
@@ -325,6 +612,7 @@ const mergePullRequest: ActionDefinition = {
     commitTitle: z.string().optional().describe('Custom merge commit title'),
     commitMessage: z.string().optional().describe('Custom merge commit message'),
   }),
+  outputSchema: githubMergeResultSchema,
 };
 
 const createBranch: ActionDefinition = {
@@ -338,6 +626,7 @@ const createBranch: ActionDefinition = {
     branch: z.string().describe('New branch name'),
     fromRef: z.string().optional().describe('Source ref — branch, tag, or SHA (default: repo default branch)'),
   }),
+  outputSchema: githubBranchResultSchema,
 };
 
 const deleteBranch: ActionDefinition = {
@@ -350,6 +639,7 @@ const deleteBranch: ActionDefinition = {
     repo: z.string().describe('Repository name'),
     branch: z.string().describe('Branch name to delete'),
   }),
+  outputSchema: githubDeleteBranchResultSchema,
 };
 
 const listCommits: ActionDefinition = {
@@ -425,6 +715,7 @@ const createRelease: ActionDefinition = {
     prerelease: z.boolean().optional().describe('Mark as pre-release'),
     generateReleaseNotes: z.boolean().optional().describe('Auto-generate release notes'),
   }),
+  outputSchema: githubReleaseResultSchema,
 };
 
 const forkRepository: ActionDefinition = {
@@ -438,6 +729,7 @@ const forkRepository: ActionDefinition = {
     organization: z.string().optional().describe('Organization to fork to (default: authenticated user)'),
     name: z.string().optional().describe('Custom name for the fork'),
   }),
+  outputSchema: githubForkResultSchema,
 };
 
 const listWorkflowRuns: ActionDefinition = {
@@ -472,6 +764,7 @@ const getWorkflowRun: ActionDefinition = {
     repo: z.string().describe('Repository name'),
     run_id: z.number().int().describe('Workflow run ID'),
   }),
+  outputSchema: githubWorkflowRunDetailSchema,
 };
 
 const getJobLogs: ActionDefinition = {
@@ -488,6 +781,7 @@ const getJobLogs: ActionDefinition = {
     tail_lines: z.number().int().min(10).max(5000).optional().default(500).describe('Max lines per step, tail-biased (default: 500)'),
     include_timestamps: z.boolean().optional().default(false).describe('Include ISO timestamp prefixes (default: false)'),
   }),
+  outputSchema: githubJobLogsSchema,
 };
 
 const rerunWorkflow: ActionDefinition = {
@@ -501,6 +795,7 @@ const rerunWorkflow: ActionDefinition = {
     run_id: z.number().int().describe('Workflow run ID to re-run'),
     failed_only: z.boolean().optional().default(false).describe('Only re-run failed jobs (default: false)'),
   }),
+  outputSchema: githubMessageResultSchema,
 };
 
 const cancelWorkflowRun: ActionDefinition = {
@@ -513,6 +808,12 @@ const cancelWorkflowRun: ActionDefinition = {
     repo: z.string().describe('Repository name'),
     run_id: z.number().int().describe('Workflow run ID to cancel'),
   }),
+  outputSchema: {
+    type: 'object',
+    properties: {
+      message: { type: 'string' },
+    },
+  },
 };
 
 const listWorkflows: ActionDefinition = {
@@ -545,6 +846,12 @@ const triggerWorkflow: ActionDefinition = {
     ref: z.string().describe('Branch or tag to run the workflow on'),
     inputs: z.record(z.string()).optional().describe('Workflow dispatch input values (key-value pairs)'),
   }),
+  outputSchema: {
+    type: 'object',
+    properties: {
+      message: { type: 'string' },
+    },
+  },
 };
 
 const readRepoFile: ActionDefinition = {
@@ -558,6 +865,7 @@ const readRepoFile: ActionDefinition = {
     path: z.string().describe('File path in the repository'),
     ref: z.string().optional().describe('Git ref (branch, tag, or commit SHA)'),
   }),
+  outputSchema: githubReadRepoFileSchema,
 };
 
 const allActions: ActionDefinition[] = [

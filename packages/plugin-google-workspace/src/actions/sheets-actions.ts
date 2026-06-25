@@ -26,6 +26,7 @@ import {
   resolveTableIdentifier,
   listAllTables,
 } from './sheets-helpers.js';
+import { withGoogleWorkspaceOutputSchemas } from './workspace-output-schemas.js';
 
 // ─── Shared Schemas ───────────────────────────────────────────────────────
 
@@ -1713,5 +1714,5 @@ async function executeAction(
 
 // ─── Export ────────────────────────────────────────────────────────────────
 
-export const sheetsActionDefs: ActionDefinition[] = allActions;
+export const sheetsActionDefs: ActionDefinition[] = withGoogleWorkspaceOutputSchemas(allActions);
 export { executeAction as executeSheetsAction };
