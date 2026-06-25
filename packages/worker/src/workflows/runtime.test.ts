@@ -1,11 +1,39 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import type { WorkflowStep, WorkflowStepConfig, WorkflowSleepDuration, WorkflowTimeoutDuration } from 'cloudflare:workers';
 import { runDag } from './runtime.js';
 import type { WorkflowRunParams, TraceWriter, TraceTransition } from './types.js';
 import type { WorkflowDefinition } from '@valet/shared';
 import type { Env } from '../env.js';
+import { createTestDb } from '../test-utils/db.js';
+import type { AppDb } from '../lib/drizzle.js';
+import { users } from '../lib/schema/users.js';
+import { workflows, workflowExecutions } from '../lib/schema/workflows.js';
+import { workflowSpawnedSessions } from '../lib/schema/workflow-spawned-sessions.js';
+import { eq } from 'drizzle-orm';
+
+let db: AppDb;
+const terminateSessionCalls: Array<{ sessionId: string; reason: string }> = [];
+
+vi.mock('../lib/drizzle.js', async (importOriginal) => {
+  const original = await importOriginal<typeof import('../lib/drizzle.js')>();
+  return {
+    ...original,
+    getDb: (binding: Env['DB']) => binding ? db : original.getDb(binding),
+  };
+});
+
+vi.mock('../services/sessions.js', async (importOriginal) => {
+  const original = await importOriginal<typeof import('../services/sessions.js')>();
+  return {
+    ...original,
+    async terminateSessionUnchecked(_env: Env, sessionId: string, reason: string): Promise<void> {
+      terminateSessionCalls.push({ sessionId, reason });
+    },
+  };
+});
 
 const stubEnv: Env = {} as Env;
+const dbEnv = { DB: {} as Env['DB'] } as Env;
 
 // ─── Mock WorkflowStep ──────────────────────────────────────────────────────
 
@@ -33,6 +61,19 @@ function makeStep(): WorkflowStep {
   } as unknown as WorkflowStep;
 }
 
+function makeStepWithFailingCleanup(): WorkflowStep {
+  const step = makeStep();
+  step.do = async <T>(name: string, configOrFn: WorkflowStepConfig | (() => Promise<T>), maybeFn?: () => Promise<T>): Promise<T> => {
+    if (name.startsWith('spawned-session-cleanup:')) {
+      throw new Error('simulated cleanup step failure');
+    }
+    const fn = typeof configOrFn === 'function' ? configOrFn : maybeFn;
+    if (!fn) throw new Error(`Missing step callback for ${name}`);
+    return fn();
+  };
+  return step;
+}
+
 function makeTraceWriter(): { writer: TraceWriter; rows: TraceTransition[] } {
   const rows: TraceTransition[] = [];
   return {
@@ -58,9 +99,107 @@ function makeParams(definition: WorkflowDefinition, overrides: Partial<WorkflowR
   };
 }
 
+function seedWorkflowExecution(executionId: string) {
+  ({ db } = createTestDb() as { db: AppDb });
+  terminateSessionCalls.length = 0;
+
+  db.insert(users).values([{ id: 'user-1', email: 'user@example.com' }]).run();
+  db.insert(workflows).values([{ id: 'wf-1', userId: 'user-1', name: 'Workflow', version: '1', data: '{}' }]).run();
+  db.insert(workflowExecutions).values({
+    id: executionId,
+    workflowId: 'wf-1',
+    userId: 'user-1',
+    status: 'pending',
+    triggerType: 'manual',
+    startedAt: new Date().toISOString(),
+  }).run();
+}
+
 // ─── Tests ──────────────────────────────────────────────────────────────────
 
 describe('runDag — set → stop end-to-end', () => {
+  it('terminates workflow-spawned sessions when the execution completes', async () => {
+    seedWorkflowExecution('exec-cleanup');
+    db.insert(workflowSpawnedSessions).values({
+      executionId: 'exec-cleanup',
+      nodeId: 'spawn_agent',
+      sessionId: 'session-cleanup',
+      createdAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + 86_400_000).toISOString(),
+    }).run();
+
+    const def: WorkflowDefinition = {
+      version: 'dag/v1',
+      nodes: [{ id: 'done', type: 'stop' }],
+      edges: [],
+    };
+
+    const { writer } = makeTraceWriter();
+    const result = await runDag(dbEnv, makeParams(def, { executionId: 'exec-cleanup' }), makeStep(), writer);
+
+    expect(result.status).toBe('completed');
+    expect(terminateSessionCalls).toEqual([
+      { sessionId: 'session-cleanup', reason: 'workflow_completed' },
+    ]);
+    const remaining = await db.select().from(workflowSpawnedSessions)
+      .where(eq(workflowSpawnedSessions.executionId, 'exec-cleanup'))
+      .all();
+    expect(remaining).toEqual([]);
+  });
+
+  it('keeps the workflow result terminal when spawned-session cleanup throws', async () => {
+    seedWorkflowExecution('exec-cleanup-throws');
+
+    const def: WorkflowDefinition = {
+      version: 'dag/v1',
+      nodes: [{ id: 'done', type: 'stop' }],
+      edges: [],
+    };
+
+    const { writer } = makeTraceWriter();
+    const result = await runDag(
+      dbEnv,
+      makeParams(def, { executionId: 'exec-cleanup-throws' }),
+      makeStepWithFailingCleanup(),
+      writer,
+    );
+
+    expect(result.status).toBe('completed');
+    const row = await db.select().from(workflowExecutions)
+      .where(eq(workflowExecutions.id, 'exec-cleanup-throws'))
+      .get();
+    expect(row?.status).toBe('completed');
+  });
+
+  it('terminates workflow-spawned sessions when the execution fails', async () => {
+    seedWorkflowExecution('exec-failed-cleanup');
+    db.insert(workflowSpawnedSessions).values({
+      executionId: 'exec-failed-cleanup',
+      nodeId: 'spawn_agent',
+      sessionId: 'session-failed-cleanup',
+      createdAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + 86_400_000).toISOString(),
+    }).run();
+
+    const def: WorkflowDefinition = {
+      version: 'dag/v1',
+      nodes: [{ id: 'failed', type: 'stop', outcome: 'failure', message: 'done badly' }],
+      edges: [],
+    };
+
+    const { writer } = makeTraceWriter();
+    const result = await runDag(dbEnv, makeParams(def, { executionId: 'exec-failed-cleanup' }), makeStep(), writer);
+
+    expect(result.status).toBe('failed');
+    expect(terminateSessionCalls).toEqual([
+      { sessionId: 'session-failed-cleanup', reason: 'workflow_failed' },
+    ]);
+    const remaining = await db.select().from(workflowSpawnedSessions)
+      .where(eq(workflowSpawnedSessions.executionId, 'exec-failed-cleanup'))
+      .all();
+    expect(remaining).toEqual([]);
+  });
+
   it('runs a trigger source node before downstream workflow steps', async () => {
     const def: WorkflowDefinition = {
       version: 'dag/v1',

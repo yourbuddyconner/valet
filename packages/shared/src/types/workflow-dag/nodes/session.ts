@@ -109,7 +109,7 @@ session running in the background.`,
     },
   },
   gotchas: [
-    'Sessions spawned by a workflow are retained for 30 days by default and cleaned up if the workflow is cancelled.',
+    'Sessions spawned by a workflow are workflow-owned and are terminated when the workflow completes, fails, or is cancelled.',
     'Hibernated sessions wake automatically when prompted; expect a short startup delay on the first prompt of an idle session.',
     'In start mode, repo.url must be a valid Git URL (https://, http://, ssh://, or git@host:path). sourceRepoFullName must be a GitHub "owner/repo" slug. The runtime rejects malformed values at run time, not at save time.',
   ],

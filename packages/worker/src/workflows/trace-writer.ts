@@ -151,10 +151,9 @@ export async function sweepExpiredTraceRows(env: Env, options: { limit?: number;
 }
 
 /**
- * Cron entry — delete workflow_spawned_sessions rows past expires_at.
- * Parallel to sweepExpiredTraceRows; called from the same daily tick.
- * Bounded selection + chunked deletion to stay under D1's statement
- * budget on a backlog.
+ * Cron entry — prune workflow_spawned_sessions rows past expires_at
+ * after the terminal-session retry window has elapsed. This does not
+ * terminate sessions; sweepTerminalSpawnedSessions owns retries.
  */
 export async function sweepExpiredSpawnedSessions(env: Env, options: { limit?: number; chunkSize?: number } = {}): Promise<{ deleted: number }> {
   const db = getDb(env.DB);

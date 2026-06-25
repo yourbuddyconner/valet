@@ -159,7 +159,7 @@ Execution instances. Schema in `packages/worker/src/lib/schema/workflows.ts`.
 
 **Indexes:** unique on `(workflowId, idempotencyKey)`; indexed on `status`, `startedAt`.
 
-Sessions spawned by `session` / `orchestrator` nodes are linked through the `workflow_spawned_sessions` table, not a denormalized column on the execution row.
+Sessions spawned by `session` nodes are linked through the `workflow_spawned_sessions` table, not a denormalized column on the execution row. They are workflow-owned: once the execution reaches `completed` or `failed`, the runtime best-effort terminates the spawned sessions and removes successful tracking rows. A scheduled terminal-session sweep retries rows left behind by failed cleanup attempts. Cancellation uses the same table as a retryable backlog.
 
 ### `workflow_execution_nodes` table
 
@@ -169,7 +169,7 @@ Statuses: `running` / `waiting_approval` / `waiting_time` / `completed` / `faile
 
 ### `workflow_spawned_sessions` table
 
-Authoritative link from an execution to the sessions it spawned (via `session` or `orchestrator` nodes). The cancellation pipeline reads this to terminate sandboxes; it is the only source of truth for spawned sessions — no trace-parsing.
+Authoritative link from an execution to the sessions it spawned via `session` nodes. Runtime terminal cleanup, the terminal-session retry sweep, and the cancellation pipeline read this table to terminate sandboxes; it is the only source of truth for spawned sessions — no trace-parsing. Successful termination deletes the row immediately. Failed termination leaves the row for retry until `expires_at`; after that, retention cleanup prunes the stale tracking row.
 
 ### `workflow_approvals` table
 
@@ -300,6 +300,7 @@ The executions tab is a read-only execution inspector modeled after n8n's execut
 4. `env.WORKFLOW_INTERPRETER.create({ id: executionId, params })` spawns the Cloudflare Workflow instance.
 5. The interpreter's `run()` enters the wave loop: `setExecutionStatus('running')` → repeat `pickRunnable` → execute → settle → write trace rows.
 6. Terminal status (`completed` / `failed` / `cancelled`) is written by the runtime with an `allowedPrior` CAS so a concurrent cancel doesn't get overwritten.
+7. For `completed` and `failed` executions whose terminal CAS lands, the runtime best-effort terminates sessions recorded in `workflow_spawned_sessions` with reason `workflow_completed` or `workflow_failed` and deletes rows for successful terminations. Cleanup failures are logged and do not change the workflow result; remaining rows are retried by the scheduled terminal-session sweep.
 
 ### Webhook Trigger (forward-facing path)
 
@@ -341,7 +342,7 @@ The cron matcher supports standard 5-field syntax: wildcards (`*`), exact values
 4. Call `instance.terminate()` to abort the Cloudflare Workflow.
 5. Run `runCancellationCleanup` synchronously:
    1. CAS pending approvals → `cancelled`.
-   2. Terminate spawned sessions (via `workflow_spawned_sessions`).
+   2. Terminate spawned sessions (via `workflow_spawned_sessions`) with reason `workflow_cancelled`; successful rows are deleted and failed rows stay behind for retry.
    3. Drive non-terminal `action_invocations` rows to `failed` with `error='workflow_cancelled'`.
    4. Write `skipped` trace rows for every node that wasn't already terminal.
    5. CAS the execution row to `cancelled` + set `cleanup_completed_at`. The CAS allows transitioning from either `cancelling` OR `cancelled`-without-`cleanup_completed_at`, so the cancel API still runs cleanup even when the runtime's terminal write raced ahead.

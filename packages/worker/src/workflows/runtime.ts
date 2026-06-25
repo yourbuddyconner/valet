@@ -52,6 +52,7 @@ import { executeStop, StopFailure, type StopOutput } from './nodes/stop.js';
 import { executeTool } from './nodes/tool.js';
 import { executeWait } from './nodes/wait.js';
 import { readExecutionCancelState, setExecutionStatus } from './execution-status.js';
+import { terminateWorkflowSpawnedSessions, workflowSessionTerminationReason } from './spawned-session-cleanup.js';
 
 // ─── Entry point ────────────────────────────────────────────────────────────
 
@@ -216,7 +217,7 @@ export async function runDag(
   // the same column depending on whether a stop fired. Workflows that
   // finish without a stop get `outputs: {}` — the per-node trace
   // table is the source of truth for granular results.
-  await setExecutionStatus({
+  const terminalPersisted = await setExecutionStatus({
     env, step,
     executionId: params.executionId,
     status: finalStatus,
@@ -237,6 +238,22 @@ export async function runDag(
     outputs: stopOutputs,
     ...(failures.length > 0 ? { error: failures[0]!.message } : {}),
   });
+  if (terminalPersisted && finalStatus !== 'cancelled') {
+    try {
+      await step.do(`spawned-session-cleanup:${params.executionId}:terminal`, async () => {
+        const result = await terminateWorkflowSpawnedSessions(env, {
+          executionId: params.executionId,
+          reason: workflowSessionTerminationReason(finalStatus),
+        });
+        if (result.failed.length > 0) {
+          console.warn(`[workflow-runtime] spawned-session cleanup incomplete for ${params.executionId}: ${result.failed.length}/${result.attempted} failed`);
+        }
+        return result;
+      });
+    } catch (err) {
+      console.warn(`[workflow-runtime] spawned-session cleanup failed for ${params.executionId}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
 
   return {
     status: finalStatus,

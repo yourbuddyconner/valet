@@ -7,7 +7,7 @@
  * Pipeline:
  *   1. Move every pending workflow_approvals row for this execution
  *      to status='cancelled'.
- *   2. Terminate any sessions spawned by session / orchestrator nodes
+ *   2. Terminate any sessions spawned by session nodes
  *      (best-effort via workflow_spawned_sessions; logged on failure).
  *   3. Drive non-terminal action_invocations rows to 'failed' so the
  *      audit chain reflects the cancel.
@@ -27,12 +27,12 @@ import { workflowExecutions } from '../lib/schema/workflows.js';
 import { workflowApprovals } from '../lib/schema/workflow-approvals.js';
 import { workflowExecutionNodes } from '../lib/schema/workflow-execution-nodes.js';
 import { cancelAllPendingApprovalsForExecution } from '../lib/db/workflow-approvals.js';
-import { workflowSpawnedSessions } from '../lib/schema/workflow-spawned-sessions.js';
 import { actionInvocations } from '../lib/schema/actions.js';
 import {
   ACTIVE_EXECUTION_STATUSES,
   CLEANUP_CAS_PRIOR_STATUSES,
 } from '../lib/db/constants.js';
+import { terminateWorkflowSpawnedSessions } from './spawned-session-cleanup.js';
 
 export interface RunCancellationCleanupInput {
   executionId: string;
@@ -74,28 +74,17 @@ export async function runCancellationCleanup(env: Env, input: RunCancellationCle
   }
 
   // Step 2: abort spawned sessions. workflow_spawned_sessions is the
-  // authoritative lookup (no trace-parsing). The DELETE of session
-  // rows themselves is handled by the cancel cron / TTL — we just
-  // signal the sandboxes to terminate.
+  // authoritative lookup (no trace-parsing). Successfully terminated
+  // rows are deleted immediately; failed rows stay behind for retry.
   try {
-    const spawnedRows = await db.select({ sessionId: workflowSpawnedSessions.sessionId })
-      .from(workflowSpawnedSessions)
-      .where(eq(workflowSpawnedSessions.executionId, input.executionId))
-      .all();
-    const spawnedSessionIds = new Set(spawnedRows.map((r) => r.sessionId));
-    let allTerminated = true;
-    if (spawnedSessionIds.size > 0) {
-      const { terminateSessionUnchecked } = await import('../services/sessions.js');
-      for (const sId of spawnedSessionIds) {
-        try {
-          await terminateSessionUnchecked(env, sId, 'workflow_cancelled');
-        } catch (err) {
-          allTerminated = false;
-          console.warn(`[cancel-cleanup] terminateSession(${sId}) failed: ${err instanceof Error ? err.message : String(err)}`);
-        }
-      }
+    const result = await terminateWorkflowSpawnedSessions(env, {
+      executionId: input.executionId,
+      reason: 'workflow_cancelled',
+    });
+    if (result.failed.length > 0) {
+      console.warn(`[cancel-cleanup] spawned-session cleanup incomplete for ${input.executionId}: ${result.failed.length}/${result.attempted} failed`);
     }
-    sessionsOk = allTerminated;
+    sessionsOk = result.failed.length === 0;
   } catch (err) {
     console.warn(`[cancel-cleanup] spawned-session abort failed for ${input.executionId}: ${err instanceof Error ? err.message : String(err)}`);
   }

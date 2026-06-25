@@ -74,9 +74,10 @@ export const triggerWebhookRate = sqliteTable('trigger_webhook_rate', {
 //   - Mode: 'production' (triggers) or 'test' (draft test-run).
 //   - Idempotency: idempotencyKey (unique with workflowId).
 //
-// Sessions spawned by `session` / `orchestrator` nodes are linked
-// through the `workflow_spawned_sessions` table — there is no
-// denormalized session id column on this table.
+// Sessions spawned by `session` nodes are linked through the
+// `workflow_spawned_sessions` table — there is no denormalized session
+// id column on this table. Terminal workflow cleanup uses that table to
+// terminate workflow-owned sessions.
 export const workflowExecutions = sqliteTable('workflow_executions', {
   id: text().primaryKey(),
   workflowId: text().references(() => workflows.id, { onDelete: 'set null' }),

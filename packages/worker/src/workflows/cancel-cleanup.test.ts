@@ -3,18 +3,30 @@ import { createTestDb } from '../test-utils/db.js';
 import { users } from '../lib/schema/users.js';
 import { workflows, workflowExecutions } from '../lib/schema/workflows.js';
 import { workflowApprovals } from '../lib/schema/workflow-approvals.js';
+import { workflowSpawnedSessions } from '../lib/schema/workflow-spawned-sessions.js';
 import { eq } from 'drizzle-orm';
 import type { Env } from '../env.js';
 import type { AppDb } from '../lib/drizzle.js';
 
 let db: AppDb;
 let terminateCalls: string[] = [];
+let terminateSessionCalls: Array<{ sessionId: string; reason: string }> = [];
 
 // getDb in production wraps a D1 binding; in tests we return the
 // per-test drizzle instance directly.
 vi.mock('../lib/drizzle.js', () => ({
   getDb: () => db,
 }));
+
+vi.mock('../services/sessions.js', async (importOriginal) => {
+  const original = await importOriginal<typeof import('../services/sessions.js')>();
+  return {
+    ...original,
+    async terminateSessionUnchecked(_env: Env, sessionId: string, reason: string): Promise<void> {
+      terminateSessionCalls.push({ sessionId, reason });
+    },
+  };
+});
 
 import { cancelExecution, runCancellationCleanup, sweepStuckApprovals, sweepStuckCancellations } from './cancel-cleanup.js';
 
@@ -52,6 +64,7 @@ function makeEnv(): Env {
 beforeEach(() => {
   ({ db } = createTestDb() as { db: AppDb });
   terminateCalls = [];
+  terminateSessionCalls = [];
   db.insert(users).values([{ id: 'u1', email: 'u1@example.com' }]).run();
   db.insert(workflows).values([{ id: 'wf1', userId: 'u1', name: 'W', version: '1', data: '{}' }]).run();
 });
@@ -120,6 +133,30 @@ describe('runCancellationCleanup', () => {
     expect(row?.cleanupCompletedAt).not.toBeNull();
     const approval = await db.select().from(workflowApprovals).where(eq(workflowApprovals.id, 'a-race')).get();
     expect(approval?.status).toBe('cancelled');
+  });
+
+  it('terminates spawned sessions and removes successful tracking rows', async () => {
+    makeExecution('e-spawned', 'cancelling', new Date().toISOString());
+    db.insert(workflowSpawnedSessions).values({
+      executionId: 'e-spawned',
+      nodeId: 'run_session',
+      sessionId: 'session-spawned',
+      createdAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + 86_400_000).toISOString(),
+    }).run();
+
+    const env = makeEnv();
+    await runCancellationCleanup(env, { executionId: 'e-spawned' });
+
+    expect(terminateSessionCalls).toEqual([
+      { sessionId: 'session-spawned', reason: 'workflow_cancelled' },
+    ]);
+    const remaining = await db.select().from(workflowSpawnedSessions)
+      .where(eq(workflowSpawnedSessions.executionId, 'e-spawned'))
+      .all();
+    expect(remaining).toEqual([]);
+    const row = await db.select().from(workflowExecutions).where(eq(workflowExecutions.id, 'e-spawned')).get();
+    expect(row?.cleanupCompletedAt).not.toBeNull();
   });
 });
 

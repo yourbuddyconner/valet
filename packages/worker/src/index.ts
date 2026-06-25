@@ -235,6 +235,18 @@ const scheduled: ExportedHandlerScheduledHandler<Env> = async (event, env, ctx) 
     console.error('Workflow cancellation sweep error:', error);
   }
 
+  // Retry workflow-owned session termination for executions that reached
+  // completed/failed/cancelled but whose immediate cleanup was incomplete.
+  try {
+    const { sweepTerminalSpawnedSessions } = await import('./workflows/spawned-session-cleanup.js');
+    const { executions, attempted, terminated, failed } = await sweepTerminalSpawnedSessions(env);
+    if (executions > 0) {
+      console.log(`[spawned-session-cleanup] swept ${executions} terminal executions; terminated ${terminated}/${attempted}; failed=${failed.length}`);
+    }
+  } catch (error) {
+    console.error('Workflow spawned-session cleanup sweep error:', error);
+  }
+
   // Retry sendEvent for approvals that resolved in D1 but whose
   // workflow_executions row is still parked in waiting_approval — the
   // resolve API committed the row but sendEvent failed.
