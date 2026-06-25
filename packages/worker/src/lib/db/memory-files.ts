@@ -6,9 +6,6 @@ import { orchestratorMemoryFiles } from '../schema/memory-files.js';
 import { extractTitle, buildFTS5Query, normalizeBM25, extractSnippet, pathBoost } from './memory-search-helpers.js';
 
 const MEMORY_CAP = 200;
-// Max files written concurrently during a bulk import (overlaps D1 round-trip
-// latency across files, which is the import bottleneck).
-const IMPORT_CONCURRENCY = 10;
 
 // ─── Path Normalization ─────────────────────────────────────────────────────
 
@@ -494,37 +491,21 @@ export async function importMemoryFiles(
   userId: string,
   files: { path: string; content: string }[],
 ): Promise<MemoryImportResult> {
+  let imported = 0;
   const skipped: { path: string; reason: string }[] = [];
 
-  // Dedupe by normalized path, keeping the last occurrence — the same
-  // last-write-wins result a sequential import produces — so concurrent writes
-  // never race on the (user_id, path) unique index.
-  const byPath = new Map<string, { path: string; content: string }>();
   for (const file of files) {
     if (file.content.length === 0) {
       skipped.push({ path: file.path, reason: 'empty content' });
       continue;
     }
-    byPath.set(normalizePath(file.path), file);
-  }
-  const toWrite = [...byPath.values()];
-
-  // The import bottleneck is the per-file D1 round-trips (writeMemoryFile issues
-  // ~4 each), so write in bounded-concurrency chunks to overlap that latency
-  // instead of paying it serially. The 200-file cap is deferred to a single pass
-  // afterward (below) so writes don't prune each other mid-batch.
-  let imported = 0;
-  for (let i = 0; i < toWrite.length; i += IMPORT_CONCURRENCY) {
-    const results = await Promise.all(
-      toWrite.slice(i, i + IMPORT_CONCURRENCY).map((file) =>
-        writeMemoryFile(rawDb, userId, file.path, file.content, false)
-          .then(() => null)
-          .catch((err) => ({ path: file.path, reason: err instanceof Error ? err.message : 'write failed' })),
-      ),
-    );
-    for (const r of results) {
-      if (r) skipped.push(r);
-      else imported++;
+    try {
+      // Defer the 200-file cap so files aren't pruned mid-batch (which would
+      // evict files written earlier in this same import); enforce once below.
+      await writeMemoryFile(rawDb, userId, file.path, file.content, false);
+      imported++;
+    } catch (err) {
+      skipped.push({ path: file.path, reason: err instanceof Error ? err.message : 'write failed' });
     }
   }
 

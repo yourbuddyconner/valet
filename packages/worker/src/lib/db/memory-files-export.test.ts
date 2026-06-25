@@ -231,15 +231,14 @@ describe('exportMemoryFiles / importMemoryFiles', () => {
     expect(getRow(USER_B, 'notes/my-note.md')?.content).toBe(content);
   });
 
-  it('a duplicate path within one bundle collapses to one write with the last content', async () => {
+  it('a duplicate path within one bundle collapses to one row with the last content', async () => {
     const result = await importMemoryFiles(rawDb, USER_B, [
       { path: 'notes/dup.md', content: '# first' },
       { path: 'notes/dup.md', content: '# second' },
     ]);
 
-    // Same-path entries are deduped (last wins) before writing, so it's one
-    // import and one row — concurrent writes never collide on the unique index.
-    expect(result.imported).toBe(1);
+    // imported counts write attempts (2), but the path is unique so one row remains.
+    expect(result.imported).toBe(2);
     const rows = sqlite
       .prepare("SELECT content FROM orchestrator_memory_files WHERE user_id = ? AND path = 'notes/dup.md'")
       .all(USER_B) as { content: string }[];
