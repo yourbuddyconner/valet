@@ -1,6 +1,8 @@
 import type { Env } from '../env.js';
 import type { AppDb } from '../lib/drizzle.js';
 import { getDb } from '../lib/drizzle.js';
+import { createDoTracer, type DoTracer } from '../lib/do-tracing.js';
+import { activeTraceparent } from '../lib/tracing.js';
 import { updateSessionStatus, updateSessionMetrics, addActiveSeconds, updateSessionGitState, upsertSessionFileChanged, updateSessionTitle, getSession, getSessionGitState, getChildSessions, listUserChannelBindings, getUserById, getUsersByIds, createMailboxMessage, getOrgSettings, isNotificationWebEnabled, batchInsertAnalyticsEvents, batchUpsertMessages, updateUserDiscoveredModels, setCatalogCache, updateThread, incrementThreadMessageCount, getThreadOriginChannel, getOrchestratorIdentity, getUserSlackIdentityLink, getWorkflowNameByExecutionId } from '../lib/db.js';
 import { getCredential, type CredentialResult } from '../services/credentials.js';
 import { memRead, memWrite, memPatch, memRm, memSearch } from '../services/session-memory.js';
@@ -516,15 +518,36 @@ export class SessionAgentDO {
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
 
-    // WebSocket upgrade
+    // WebSocket upgrade (not traced — returns a 101 hijack)
     if (request.headers.get('Upgrade') === 'websocket') {
       return this.handleWebSocketUpgrade(request, url);
     }
 
-    // Internal control endpoints
+    // Wrap control-endpoint dispatch in a DO root span, parented to the worker→DO
+    // traceparent, so DO-internal work nests under the worker trace. ctx.storage stays native.
+    const tracer = await createDoTracer(this.env, this.ctx, 'valet-session-agent-do');
+    return tracer.traceFetch(request, `SessionAgentDO ${url.pathname}`, (span) => {
+      span.setAttribute('do.path', url.pathname);
+      // Correlate DO spans with the session/user, mirroring the worker's
+      // setSessionAttributes. Best-effort: tracing must never break the request.
+      try {
+        const sid = this.sessionState.sessionId;
+        const uid = this.sessionState.userId;
+        if (sid) span.setAttribute('valet.session.id', sid);
+        if (uid) span.setAttribute('valet.user.id', uid);
+      } catch {
+        // sessionState not ready / unreadable — skip correlation
+      }
+      return this.dispatchControl(request, url, tracer);
+    });
+  }
+
+  private async dispatchControl(request: Request, url: URL, tracer: DoTracer): Promise<Response> {
+    // Internal control endpoints — each handler runs in a child span so DO-internal
+    // operation timing is visible separately from the DO-fetch overhead.
     switch (url.pathname) {
       case '/start':
-        return this.handleStart(request);
+        return tracer.span('handleStart', () => this.handleStart(request));
       case '/stop': {
         let reason: string | undefined;
         if (request.method === 'POST') {
@@ -535,30 +558,30 @@ export class SessionAgentDO {
             // ignore missing/invalid body
           }
         }
-        return this.handleStop(reason);
+        return tracer.span('handleStop', () => this.handleStop(reason));
       }
       case '/status':
-        return this.handleStatus();
+        return tracer.span('handleStatus', () => this.handleStatus());
       case '/wake':
-        return this.handleWake();
+        return tracer.span('handleWake', () => this.handleWake());
       case '/hibernate':
-        return this.handleHibernate();
+        return tracer.span('handleHibernate', () => this.handleHibernate());
       case '/clear-queue':
-        return this.handleClearQueue(url);
+        return tracer.span('handleClearQueue', () => this.handleClearQueue(url));
       case '/flush-metrics':
-        return this.handleFlushMetrics();
+        return tracer.span('handleFlushMetrics', () => this.handleFlushMetrics());
       case '/messages':
-        return this.handleMessagesEndpoint(url);
+        return tracer.span('handleMessages', () => this.handleMessagesEndpoint(url));
       case '/prompt-attachment':
-        return this.handlePromptAttachmentEndpoint(url);
+        return tracer.span('handlePromptAttachment', () => this.handlePromptAttachmentEndpoint(url));
       case '/gc':
-        return this.handleGarbageCollect();
+        return tracer.span('handleGarbageCollect', () => this.handleGarbageCollect());
       case '/webhook-update':
-        return this.handleWebhookUpdate(request);
+        return tracer.span('handleWebhookUpdate', () => this.handleWebhookUpdate(request));
       case '/ensure-running':
-        return this.handleEnsureRunning();
+        return tracer.span('handleEnsureRunning', () => this.handleEnsureRunning());
       case '/refresh':
-        return this.handleRefresh();
+        return tracer.span('handleRefresh', () => this.handleRefresh());
       case '/models': {
         const models = this.sessionState.availableModels || [];
         return Response.json({ models });
@@ -6535,9 +6558,13 @@ export class SessionAgentDO {
     try {
       const id = this.env.EVENT_BUS.idFromName('global');
       const stub = this.env.EVENT_BUS.get(id);
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      // Propagate trace context so EventBus spans join the originating trace.
+      const traceparent = activeTraceparent();
+      if (traceparent) headers['traceparent'] = traceparent;
       stub.fetch(new Request('https://event-bus/publish', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify({
           userId: event.userId,
           event,
