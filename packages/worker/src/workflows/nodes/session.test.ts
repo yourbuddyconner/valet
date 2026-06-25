@@ -5,6 +5,7 @@ const assertSessionAccessMock = vi.fn();
 const getUserByIdMock = vi.fn();
 const pollMock = vi.fn();
 const createThreadMock = vi.fn();
+const fetchMessagesFromDOMock = vi.fn();
 
 vi.mock('../../services/sessions.js', () => ({
   createSession: (...args: unknown[]) => createSessionMock(...args),
@@ -22,6 +23,10 @@ vi.mock('../../lib/db/threads.js', () => ({
   createThread: (...args: unknown[]) => createThreadMock(...args),
 }));
 
+vi.mock('../../services/session-cross.js', () => ({
+  fetchMessagesFromDO: (...args: unknown[]) => fetchMessagesFromDOMock(...args),
+}));
+
 vi.mock('../polling.js', () => ({
   pollSessionUntilIdle: (...args: unknown[]) => pollMock(...args),
 }));
@@ -35,7 +40,7 @@ const noopChain = {
   run: async () => undefined,
 };
 vi.mock('../../lib/drizzle.js', () => ({
-  getDb: () => ({ insert: () => noopChain } as unknown),
+  getDb: () => ({ insert: () => noopChain }),
 }));
 
 import { executeSession } from './session.js';
@@ -44,24 +49,63 @@ import type { WorkflowRunParams } from '../types.js';
 import type { Env } from '../../env.js';
 import type { WorkflowStep } from 'cloudflare:workers';
 
-function buildArgs(node: SessionNode, sessionDoMock?: ReturnType<typeof vi.fn>) {
+type DurableObjectFetch = ReturnType<Env['SESSIONS']['get']>['fetch'];
+type DurableObjectFetchMock = ReturnType<typeof vi.fn<DurableObjectFetch>>;
+
+function durableObjectId(name: string): ReturnType<Env['SESSIONS']['idFromName']> {
+  return {
+    toString: () => name,
+    equals: (other) => other.toString() === name,
+    name,
+  };
+}
+
+function buildArgs(node: SessionNode, sessionDoMock?: DurableObjectFetchMock) {
   const fullState: WorkflowDagState = {
     trigger: { type: 'manual', timestamp: '2026-06-12T00:00:00.000Z', data: {}, metadata: {} },
     nodes: {},
     skipped: {},
   };
-  const fetchMock = sessionDoMock ?? vi.fn().mockResolvedValue(new Response('ok', { status: 200 }));
-  const env = {
-    DB: {},
-    SESSIONS: {
-      idFromName: (s: string) => s,
-      get: () => ({ fetch: fetchMock }),
+  const fetchMock = sessionDoMock ?? vi.fn<DurableObjectFetch>().mockResolvedValue(new Response('ok', { status: 200 }));
+  const sessionStub: ReturnType<Env['SESSIONS']['get']> = {
+    id: durableObjectId('stub-session'),
+    fetch: (input, init) => fetchMock(input, init),
+    connect: () => {
+      throw new Error('connect is not implemented in the session node test stub');
     },
-  } as unknown as Env;
+  };
+  let sessionNamespace: Env['SESSIONS'];
+  sessionNamespace = {
+    idFromName: durableObjectId,
+    idFromString: durableObjectId,
+    newUniqueId: () => durableObjectId('unique-do-id'),
+    get: () => sessionStub,
+    getByName: () => sessionStub,
+    jurisdiction: () => sessionNamespace,
+  };
+  const env = {
+    DB: {} as Env['DB'],
+    SESSIONS: sessionNamespace,
+    EVENT_BUS: {} as Env['EVENT_BUS'],
+    WORKFLOW_INTERPRETER: {} as Env['WORKFLOW_INTERPRETER'],
+    STORAGE: {} as Env['STORAGE'],
+    ENCRYPTION_KEY: 'test',
+    GOOGLE_CLIENT_ID: 'test',
+    GOOGLE_CLIENT_SECRET: 'test',
+    MODAL_BACKEND_URL: 'http://modal.test',
+    FRONTEND_URL: 'http://client.test',
+  } satisfies Env;
+  const params: WorkflowRunParams = {
+    executionId: 'exec-1',
+    workflowId: 'wf-1',
+    userId: 'user-1',
+    trigger: fullState.trigger,
+    definition: { version: 'dag/v1', nodes: [node], edges: [] },
+  };
   return {
     node,
     state: fullState,
-    params: { executionId: 'exec-1', workflowId: 'wf-1', userId: 'user-1' } as WorkflowRunParams,
+    params,
     env,
     // Passthrough step.do stub — runs the callback inline and returns
     // its value. session.ts uses step.do to cache createSession +
@@ -73,7 +117,7 @@ function buildArgs(node: SessionNode, sessionDoMock?: ReturnType<typeof vi.fn>) 
         const fn = (typeof configOrFn === 'function' ? configOrFn : maybeFn) as () => Promise<unknown>;
         return fn();
       },
-    } as unknown as WorkflowStep,
+    } as WorkflowStep,
     fetchMock,
   };
 }
@@ -84,8 +128,10 @@ beforeEach(() => {
   getUserByIdMock.mockReset();
   pollMock.mockReset();
   createThreadMock.mockReset();
+  fetchMessagesFromDOMock.mockReset();
   getUserByIdMock.mockResolvedValue({ id: 'user-1', email: 'u@example.com' });
   createThreadMock.mockResolvedValue({ id: 'thread-mock', sessionId: 'sess-mock' });
+  fetchMessagesFromDOMock.mockResolvedValue([]);
 });
 
 describe('executeSession — start mode', () => {
@@ -127,6 +173,83 @@ describe('executeSession — start mode', () => {
     expect(pollMock).toHaveBeenCalled();
     expect(out.finalStatus).toBe('completed');
     expect(out.waitStatus).toBe('idle');
+  });
+
+  it('returns the final assistant response and parsed JSON output after waiting until idle', async () => {
+    createSessionMock.mockResolvedValue({ ok: true, session: { id: 'ignored-mock-id', status: 'initializing' } });
+    pollMock.mockResolvedValue('idle');
+    fetchMessagesFromDOMock.mockResolvedValue([
+      {
+        id: 'msg-user',
+        sessionId: 'sess-1',
+        role: 'user',
+        content: 'scrape',
+        createdAt: '2026-06-12T00:00:00.000Z',
+      },
+      {
+        id: 'msg-assistant',
+        sessionId: 'sess-1',
+        role: 'assistant',
+        content: '{"companies":[{"name":"Red Barn Robotics"}],"totalCount":1}',
+        createdAt: '2026-06-12T00:00:03.000Z',
+      },
+    ]);
+    const node: SessionNode = {
+      id: 's', type: 'session', mode: 'start', prompt: 'scrape', workspace: 'main',
+      wait: { mode: 'until_idle' },
+    };
+
+    const out = await executeSession(buildArgs(node));
+
+    expect(fetchMessagesFromDOMock).toHaveBeenCalledWith(expect.anything(), out.sessionId, 5000);
+    expect(out).toMatchObject({
+      finalStatus: 'completed',
+      response: '{"companies":[{"name":"Red Barn Robotics"}],"totalCount":1}',
+      output: {
+        companies: [{ name: 'Red Barn Robotics' }],
+        totalCount: 1,
+      },
+      lastMessage: {
+        id: 'msg-assistant',
+        role: 'assistant',
+        content: '{"companies":[{"name":"Red Barn Robotics"}],"totalCount":1}',
+      },
+    });
+  });
+
+  it('returns the full session transcript when resultMode is transcript', async () => {
+    createSessionMock.mockResolvedValue({ ok: true, session: { id: 'ignored-mock-id', status: 'initializing' } });
+    pollMock.mockResolvedValue('idle');
+    const transcript = [
+      {
+        id: 'msg-user',
+        sessionId: 'sess-1',
+        role: 'user',
+        content: 'go',
+        createdAt: '2026-06-12T00:00:00.000Z',
+      },
+      {
+        id: 'msg-assistant',
+        sessionId: 'sess-1',
+        role: 'assistant',
+        content: 'done',
+        createdAt: '2026-06-12T00:00:03.000Z',
+      },
+    ];
+    fetchMessagesFromDOMock.mockResolvedValue(transcript);
+    const node: SessionNode = {
+      id: 's', type: 'session', mode: 'start', prompt: 'go', workspace: 'main',
+      wait: { mode: 'until_idle' },
+      resultMode: 'transcript',
+    };
+
+    const out = await executeSession(buildArgs(node));
+
+    expect(out).toMatchObject({
+      finalStatus: 'completed',
+      response: 'done',
+      transcript,
+    });
   });
 
   it('throws when createSession rejects', async () => {

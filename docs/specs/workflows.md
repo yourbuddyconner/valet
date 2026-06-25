@@ -374,7 +374,7 @@ For editor typeahead and edge inspection, `foreach` nodes expose their runtime r
 | `approval` | Human approval gate via `workflow_approvals` + `step.waitForEvent`. |
 | `foreach` | Iterates over an array. Body is a single node of a permitted subtype (`llm`, `tool`, `set`, `stop`, `orchestrator`, `session`). Optional `maxItems` truncates the input array before execution; it does not fail the node unless the configured value exceeds policy validation. |
 | `orchestrator` | Dispatch a prompt to the user's orchestrator in a fresh automation-origin thread. With `wait.mode: 'until_idle'`, the executor polls that created thread's prompt queue until it has no queued or processing prompts; it does not wait for the long-lived orchestrator session lifecycle to become idle. Waited nodes output the thread's `lastMessage` by default and can opt into `resultMode: 'transcript'`. |
-| `session` | Start or resume a session and run a prompt. With `wait.mode: 'until_idle'`, the executor first honors terminal D1 lifecycle states (`idle`, `hibernated`, `terminated`), then polls `SessionAgentDO /status` for active sessions and resolves when a runner is connected, `runnerBusy` is false, and no prompts are queued. This matches the UI's live agent-idle signal and avoids hanging on sessions whose lifecycle remains `running` after the agent finishes. |
+| `session` | Start or resume a session and run a prompt. With `wait.mode: 'until_idle'`, the executor first honors terminal D1 lifecycle states (`idle`, `hibernated`, `terminated`), then polls `SessionAgentDO /status` for active sessions and resolves when a runner is connected, `runnerBusy` is false, and no prompts are queued. Waited nodes read the session transcript after idle and output the final assistant reply as `response`, plus parsed JSON as `output` when the reply is a JSON value. |
 | `stop` | Terminate the workflow with an outcome envelope. |
 
 ### Validator
@@ -409,6 +409,15 @@ Replay determinism comes from `step.do` caching every side effect: D1 writes, cl
 `orchestrator` nodes always create a new `session_threads` row with `originType: 'automation'` before dispatching their prompt. The node output includes `{ dispatched, sessionId, threadId }`, plus `finalStatus` / `waited` when `wait.mode: 'until_idle'` is used. Waited orchestrator nodes also read the workflow-created thread after it is idle and output `lastMessage` (`{{nodes.<id>.data.lastMessage.content}}` for the text body). If the node sets `resultMode: 'transcript'`, the output also includes `transcript`, an ordered array of thread messages with ISO `createdAt` strings. Waiting polls `SessionAgentDO /thread-status?threadId=...`, which reports whether that thread still has queued or processing prompt rows. This avoids hanging on the orchestrator session's D1 lifecycle status, which normally remains `running` for long-lived orchestrators.
 
 `session` nodes using `wait.mode: 'until_idle'` wait on the spawned or target session's live runner activity, not only the D1 lifecycle row. The D1 row still controls deleted, terminal, and catastrophic states, but a live `running` session can finish the workflow step once `/status` reports a connected runner with no queued work. The node outputs `waitStatus` with the observed session wait result (`idle`, `hibernated`, `terminated`, or `timed_out`) and `finalStatus` with the workflow-friendly result (`completed` for successful idle/terminal wait states, otherwise the non-complete wait status). Downstream conditions that need to check whether a waited session finished should use `nodes.<id>.data.finalStatus == "completed"`.
+
+After a waited session reaches idle, the node reads the session's messages from `SessionAgentDO /messages`. The node output keeps lifecycle metadata at the top level and adds:
+
+- `response` — final assistant message text, for example `{{nodes.scrape_yc.data.response}}`.
+- `lastMessage` — final assistant message metadata (`role`, `content`, `createdAt`, author/channel fields).
+- `output` — parsed JSON when `response` is valid JSON, for example `{{nodes.scrape_yc.data.output.companies}}`.
+- `transcript` — ordered session messages only when the node sets `resultMode: 'transcript'`.
+
+The parsed JSON is intentionally nested under `output` instead of merged into the session node envelope so agent-produced fields like `status`, `sessionId`, or `threadId` cannot overwrite workflow lifecycle metadata.
 
 ## Edge Cases & Failure Modes
 

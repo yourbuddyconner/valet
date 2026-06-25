@@ -12,6 +12,7 @@ export interface StartSessionNode {
   title?: string;
   personaId?: string;
   model?: string;
+  resultMode?: 'last_message' | 'transcript';
   repo?: {
     url?: string;
     branch?: string;
@@ -32,6 +33,7 @@ export interface PromptSessionNode {
   prompt: string;
   threadId?: string;
   forceNewThread?: boolean;
+  resultMode?: 'last_message' | 'transcript';
   wait?: {
     mode: 'none' | 'until_idle';
     timeout?: string;
@@ -75,7 +77,12 @@ that needs filesystem, network, or long-running tasks.
 Decides whether the workflow blocks for the session's reply or returns
 immediately. \`until_idle\` is the usual choice — the workflow pauses until
 the agent stops working. \`none\` fires the prompt and moves on, leaving the
-session running in the background.`,
+session running in the background.
+
+When \`until_idle\` is used, the node output includes \`response\` with the
+final assistant message text, \`lastMessage\` with message metadata, and
+\`output\` when that response is valid JSON. Set \`resultMode: "transcript"\`
+to also include the ordered session transcript.`,
   fields: {
     mode: {
       help: 'start = create a new session for this workflow run. prompt = send a prompt to a session that already exists (by ID).',
@@ -103,6 +110,9 @@ session running in the background.`,
     },
     forceNewThread: {
       help: 'When true, opens a fresh thread for the prompt regardless of which thread the session was last on.',
+    },
+    resultMode: {
+      help: 'last_message returns the final assistant reply. transcript also returns the ordered session transcript after waiting until idle.',
     },
     wait: {
       help: 'until_idle blocks until the session finishes responding. none returns immediately, leaving the session working in the background.',

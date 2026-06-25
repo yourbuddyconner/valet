@@ -22,6 +22,7 @@ import { createThread } from '../../lib/db/threads.js';
 import { workflowSpawnedSessions } from '../../lib/schema/workflow-spawned-sessions.js';
 import { iterationSuffix, NO_RETRY } from '../types.js';
 import { createSession } from '../../services/sessions.js';
+import { fetchMessagesFromDO } from '../../services/session-cross.js';
 import { buildTemplateContext } from '../context.js';
 import { coerceTemplateString } from '../templates.js';
 import { pollSessionUntilIdle } from '../polling.js';
@@ -69,6 +70,11 @@ export interface SessionStartResult {
   threadId?: string;
   waitStatus?: string;
   finalStatus?: string;
+  waited?: boolean;
+  response?: string;
+  output?: unknown;
+  lastMessage?: WorkflowSessionMessage;
+  transcript?: WorkflowSessionMessage[];
 }
 
 export interface SessionPromptResult {
@@ -78,13 +84,81 @@ export interface SessionPromptResult {
   threadId?: string;
   waitStatus?: string;
   finalStatus?: string;
+  waited?: boolean;
+  response?: string;
+  output?: unknown;
+  lastMessage?: WorkflowSessionMessage;
+  transcript?: WorkflowSessionMessage[];
 }
 
 export type SessionResult = SessionStartResult | SessionPromptResult;
 
+interface WorkflowSessionMessage {
+  id?: string;
+  sessionId?: string;
+  role: string;
+  content: string;
+  parts?: unknown;
+  authorId?: string;
+  authorEmail?: string;
+  authorName?: string;
+  authorAvatarUrl?: string;
+  channelType?: string;
+  channelId?: string;
+  opencodeSessionId?: string;
+  threadId?: string;
+  createdAt: string;
+}
+
 export async function executeSession(args: NodeExecutorArgs<SessionNode>): Promise<SessionResult> {
   if (args.node.mode === 'start') return executeStart(args as NodeExecutorArgs<StartSessionNode>);
   return executePrompt(args as NodeExecutorArgs<PromptSessionNode>);
+}
+
+function sessionResultMode(node: StartSessionNode | PromptSessionNode): 'last_message' | 'transcript' {
+  return node.resultMode ?? 'last_message';
+}
+
+function parseJsonOutput(content: string): { parsed: true; value: unknown } | { parsed: false } {
+  try {
+    return { parsed: true, value: JSON.parse(content) };
+  } catch {
+    return { parsed: false };
+  }
+}
+
+function finalAssistantMessage(messages: WorkflowSessionMessage[]): WorkflowSessionMessage | undefined {
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    if (messages[i]?.role === 'assistant') return messages[i];
+  }
+  return messages[messages.length - 1];
+}
+
+async function attachWaitedSessionOutput(
+  args: NodeExecutorArgs<StartSessionNode | PromptSessionNode>,
+  result: SessionStartResult | SessionPromptResult,
+  sessionId: string,
+  iSuffix: string,
+): Promise<void> {
+  result.waited = true;
+
+  const messagesJson = await args.step.do(`session-output:${args.node.id}${iSuffix}`, async () => {
+    const messages = await fetchMessagesFromDO(args.env, sessionId, 5000);
+    return JSON.stringify(messages);
+  });
+  const transcript = JSON.parse(messagesJson) as WorkflowSessionMessage[];
+  const lastMessage = finalAssistantMessage(transcript);
+
+  if (lastMessage) {
+    result.lastMessage = lastMessage;
+    result.response = lastMessage.content;
+    const parsedOutput = parseJsonOutput(lastMessage.content);
+    if (parsedOutput.parsed) result.output = parsedOutput.value;
+  }
+
+  if (sessionResultMode(args.node) === 'transcript') {
+    result.transcript = transcript;
+  }
 }
 
 // ─── start mode ─────────────────────────────────────────────────────────────
@@ -190,6 +264,7 @@ async function executeStart(args: NodeExecutorArgs<StartSessionNode>): Promise<S
     });
     startResult.waitStatus = waitStatus;
     startResult.finalStatus = sessionFinalStatusFromWaitStatus(waitStatus);
+    await attachWaitedSessionOutput(args, startResult, sessionId, iSuffix);
   }
 
   return startResult;
@@ -281,6 +356,7 @@ async function executePrompt(args: NodeExecutorArgs<PromptSessionNode>): Promise
     });
     promptResult.waitStatus = waitStatus;
     promptResult.finalStatus = sessionFinalStatusFromWaitStatus(waitStatus);
+    await attachWaitedSessionOutput(args, promptResult, sessionId, iSuffix);
   }
 
   return promptResult;

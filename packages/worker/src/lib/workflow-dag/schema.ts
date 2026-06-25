@@ -187,6 +187,7 @@ export const startSessionNodeSchema = z.object({
     ref: z.string().optional(),
     sourceRepoFullName: z.string().optional(),
   }).optional(),
+  resultMode: z.enum(['last_message', 'transcript']).optional(),
   wait: waitConfigSchema,
 });
 
@@ -198,6 +199,7 @@ export const promptSessionNodeSchema = z.object({
   prompt: z.string().min(1),
   threadId: z.string().optional(),
   forceNewThread: z.boolean().optional(),
+  resultMode: z.enum(['last_message', 'transcript']).optional(),
   wait: waitConfigSchema,
 });
 
