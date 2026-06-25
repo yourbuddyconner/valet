@@ -328,13 +328,55 @@ Each row should deep-link to the originating session, workflow execution canvas,
 
 #### Workflow Editor Validation / Data Flow Panels
 
-The editor should not create approval rules, but it should surface rule eligibility where useful:
+The editor should surface approval readiness while the user is authoring the workflow:
 
+- nodes that may require approval should show a visible badge on the canvas
 - tool nodes should identify parameters that can become matchers, such as document ids, spreadsheet ids, repo names, issue ids, or URL hosts
 - data-flow and edge inspection panels should show resolved parameter contracts when available
 - validation messages should avoid implying that a persistent rule exists when the user only approved a runtime-scoped rule
 
-This is informational only; durable rules should still be created from concrete runtime approvals, where resolved params are known.
+Approval badges should distinguish:
+
+- `Approval required`: this node can pause unattended execution.
+- `Covered`: an approval rule or action policy already allows the node's current approval shape.
+- `Blocked`: admin or action policy denies this node's current approval shape.
+- `Needs sample data`: the node may be approvable, but its params are too templated to evaluate without trigger defaults or a test-run payload.
+
+Badges should appear on:
+
+- `approval` nodes
+- risky `tool` nodes
+- `foreach` body nodes that contain approval-capable work
+- `session` nodes that can request tool approval
+- `orchestrator` nodes that can request tool approval or spawn approval-capable sessions
+
+### Workflow Approval Readiness
+
+The workflow editor should include an approval readiness pass before `Publish`, `Test`, or enabling a trigger. The goal is to make background workflows predictable before they run unattended.
+
+The readiness pass should enumerate every approval-capable node and classify it as:
+
+- **Covered**: it will not prompt because an approval rule or action policy applies.
+- **Intentional human gate**: it is expected to pause, such as a human review `approval` node.
+- **Will prompt at runtime**: it is likely to stall a background run.
+- **Blocked**: admin or action policy denies it.
+- **Unknown**: params depend on trigger data or upstream outputs that cannot be resolved yet.
+
+For nodes that will prompt, the editor should offer context-aware setup actions:
+
+- `Pre-approve matching requests` for tool/session/orchestrator actions with concrete resolved params.
+- `Approve matching iterations in each run` for `foreach` body approvals.
+- `Keep human approval` for explicit workflow `approval` nodes and other intentionally gated steps.
+- `Run test with sample data` when templated params require trigger defaults or manual test input before a safe matcher can be suggested.
+
+Durable rules still must not be created from raw templates blindly. The editor may create rule candidates only from:
+
+- concrete trigger defaults
+- manual test-run sample data
+- action matcher hints plus resolved static params
+- workflow approval contracts
+
+Scheduled/background triggers should warn before they are enabled if the workflow contains approval-capable nodes classified as `Will prompt at runtime` or `Unknown`. The warning should explain which nodes may stall unattended execution and let the user either configure approval rules or mark the human gate as intentional.
 
 #### Approval Rule Confirmation Dialog
 
@@ -497,7 +539,8 @@ Users can list and revoke their own durable rules. Admin/team rule management ca
 3. Route workflow approval resolution through the same resolver.
 4. Add foreach `Approve remaining rows` using workflow-execution-scoped rules.
 5. Add durable rule creation from approval prompts.
-6. Add settings UI for reviewing and revoking durable rules.
+6. Add editor approval badges and workflow approval readiness checks.
+7. Add settings UI for reviewing and revoking durable rules.
 
 ## Testing Strategy
 
@@ -525,6 +568,9 @@ Client tests:
 - Approval card renders the right scope actions for session, workflow execution, and foreach.
 - Workflow execution canvas and details page render the same approval actions for the same pending approval.
 - Global pending approvals queue shows session, workflow, workflow-created session, and foreach approvals.
+- Workflow editor badges approval-capable nodes and distinguishes covered, blocked, unknown, and runtime-prompt states.
+- Workflow publish/test/trigger enablement surfaces approval readiness warnings for unattended workflow stalls.
+- Workflow readiness offers pre-approval setup only when concrete params, test sample data, matcher hints, or approval contracts are available.
 - Durable rule dialog pre-selects stable identifiers and leaves payload fields unselected.
 - Durable rule dialog hides or disables durable creation for generic workflow approval nodes without contracts.
 - Foreach "Approve remaining rows" calls the approval endpoint with the correct scope.
