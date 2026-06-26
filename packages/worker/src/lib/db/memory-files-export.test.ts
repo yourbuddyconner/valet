@@ -4,18 +4,20 @@ import { writeMemoryFile, exportMemoryFiles, importMemoryFiles, searchMemoryFile
 
 // Thin adapter: wraps better-sqlite3 sync API to match the D1Database async interface.
 function makeD1Adapter(sqlite: any) {
+  const bound = (sql: string, args: any[]) => ({
+    sql, args,
+    async run() { return sqlite.prepare(sql).run(...args); },
+    async all() { return { results: sqlite.prepare(sql).all(...args) }; },
+    async first() { return sqlite.prepare(sql).get(...args) ?? null; },
+  });
   return {
     prepare(sql: string) {
-      return {
-        bind(...args: any[]) {
-          const stmt = sqlite.prepare(sql);
-          return {
-            async run() { return stmt.run(...args); },
-            async all() { return { results: stmt.all(...args) }; },
-            async first() { return stmt.get(...args) ?? null; },
-          };
-        },
-      };
+      return { bind: (...args: any[]) => bound(sql, args) };
+    },
+    // Models D1 batch(): one atomic transaction, statements run sequentially
+    // (so a later statement sees earlier ones' writes), rollback on any failure.
+    async batch(stmts: any[]) {
+      return sqlite.transaction(() => stmts.map((s: any) => sqlite.prepare(s.sql).run(...s.args)))();
     },
   } as any;
 }
@@ -231,18 +233,45 @@ describe('exportMemoryFiles / importMemoryFiles', () => {
     expect(getRow(USER_B, 'notes/my-note.md')?.content).toBe(content);
   });
 
-  it('a duplicate path within one bundle collapses to one row with the last content', async () => {
+  it('a duplicate path within one bundle collapses to one write with the last content', async () => {
     const result = await importMemoryFiles(rawDb, USER_B, [
       { path: 'notes/dup.md', content: '# first' },
       { path: 'notes/dup.md', content: '# second' },
     ]);
 
-    // imported counts write attempts (2), but the path is unique so one row remains.
-    expect(result.imported).toBe(2);
+    // Same-path entries are deduped (last wins) before writing — one write, one row.
+    expect(result.imported).toBe(1);
     const rows = sqlite
       .prepare("SELECT content FROM orchestrator_memory_files WHERE user_id = ? AND path = 'notes/dup.md'")
       .all(USER_B) as { content: string }[];
     expect(rows).toHaveLength(1);
     expect(rows[0].content).toBe('# second');
+  });
+
+  // The whole point of the batched import: O(chunks) D1 round-trips, not O(files).
+  // This is the honest, deploy-independent guard — it counts actual DB calls
+  // (no fake latency). Real wall-clock is confirmed separately on a dev deploy.
+  it('imports a 50-file chunk in ~1 batch round-trip, not ~200 serial ones', async () => {
+    const { sqlite } = createTestDb();
+    sqlite.prepare("INSERT INTO users (id,email,role) VALUES ('rt','rt@t.com','member')").run();
+
+    let roundTrips = 0;
+    const bind = (sql: string, args: any[]) => ({
+      sql, args,
+      async run() { roundTrips++; return sqlite.prepare(sql).run(...args); },
+      async all() { roundTrips++; return { results: sqlite.prepare(sql).all(...args) }; },
+      async first() { roundTrips++; return sqlite.prepare(sql).get(...args) ?? null; },
+    });
+    const counting: any = {
+      prepare: (sql: string) => ({ bind: (...args: any[]) => bind(sql, args) }),
+      async batch(stmts: any[]) { roundTrips++; return sqlite.transaction(() => stmts.map((s: any) => sqlite.prepare(s.sql).run(...s.args)))(); },
+    };
+
+    const files = Array.from({ length: 50 }, (_, i) => ({ path: `notes/n-${i}.md`, content: `# n${i}` }));
+    const result = await importMemoryFiles(counting, 'rt', files);
+
+    expect(result.imported).toBe(50);
+    // 1 batch (the 50-file chunk) + the single cap-enforcement COUNT pass.
+    expect(roundTrips).toBeLessThanOrEqual(3);
   });
 });
