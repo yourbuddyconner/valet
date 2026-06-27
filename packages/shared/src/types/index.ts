@@ -1175,6 +1175,15 @@ export interface UsageStatsResponse {
     callCount: number;
     percentage: number;
   }>;
+  /** Per-user, per-model usage — lets the UI drill into who is using which models. */
+  byUserModel: Array<{
+    userId: string;
+    model: string;
+    inputTokens: number;
+    outputTokens: number;
+    cost: number | null;
+    callCount: number;
+  }>;
   period: number;
 }
 

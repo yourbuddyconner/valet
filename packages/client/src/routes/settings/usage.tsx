@@ -96,7 +96,7 @@ function BillingContent({ period }: { period: number }) {
       <CostChart data={data.costByDay} />
       <div className="grid gap-6 lg:grid-cols-2">
         <ModelBreakdownTable data={data.byModel} />
-        <UserBreakdownTable data={data.byUser} />
+        <UserBreakdownTable data={data.byUser} byUserModel={data.byUserModel} />
       </div>
     </div>
   );
