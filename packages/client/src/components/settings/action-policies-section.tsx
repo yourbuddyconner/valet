@@ -127,7 +127,8 @@ export function ActionPoliciesSection() {
             No custom policies configured. System defaults are in effect.
           </p>
         ) : (
-          <table className="w-full text-sm">
+          <div className="overflow-x-auto">
+          <table className="w-full min-w-[560px] text-sm">
             <thead>
               <tr className="border-b border-neutral-200 dark:border-neutral-700">
                 <th className="pb-2 text-left font-medium text-neutral-500 dark:text-neutral-400">Scope</th>
@@ -171,6 +172,7 @@ export function ActionPoliciesSection() {
               })}
             </tbody>
           </table>
+          </div>
         )}
       </div>
 

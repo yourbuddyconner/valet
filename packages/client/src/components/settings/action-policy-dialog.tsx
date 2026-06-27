@@ -409,7 +409,7 @@ function RiskLevelCards({
   ] as const;
 
   return (
-    <div className="grid grid-cols-4 gap-2">
+    <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
       {levels.map((level) => {
         const colors = riskColors[level.id];
         const selected = value === level.id;
@@ -641,7 +641,7 @@ export function ActionPolicyDialog({ open, onOpenChange, policy, noun = 'Policy'
               <label className="mb-2 block text-sm font-medium text-neutral-700 dark:text-neutral-300">
                 Scope
               </label>
-              <div className="flex gap-2">
+              <div className="flex flex-col gap-3 sm:flex-row">
                 <RadioCard
                   selected={scope === 'action'}
                   onClick={() => handleScopeChange('action')}
@@ -713,7 +713,7 @@ export function ActionPolicyDialog({ open, onOpenChange, policy, noun = 'Policy'
               <label className="mb-2 block text-sm font-medium text-neutral-700 dark:text-neutral-300">
                 Effect
               </label>
-              <div className="flex gap-2">
+              <div className="flex flex-col gap-3 sm:flex-row">
                 <ModeCard
                   selected={mode === 'allow'}
                   onClick={() => setMode('allow')}

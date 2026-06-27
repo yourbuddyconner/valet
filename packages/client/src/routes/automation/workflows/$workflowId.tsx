@@ -138,7 +138,7 @@ function WorkflowDetailPage() {
   const pendingProposals = proposals.filter((p) => p.status === 'pending').length;
 
   return (
-    <PageContainer className="flex h-[calc(100vh-3.5rem)] flex-col gap-0 overflow-hidden !p-0">
+    <PageContainer className="flex h-[calc(100dvh-3.5rem)] flex-col gap-0 overflow-hidden !p-0">
       {/* ─── Compact Header ─── */}
       <header className="flex shrink-0 items-center gap-3 border-b border-neutral-200 bg-surface-0 px-4 py-2.5 dark:border-neutral-800">
         <Link
@@ -348,9 +348,9 @@ function RunsPanel({
   selectedExec: Execution | null;
 }) {
   return (
-    <div className="flex h-full">
-      {/* Left: run list */}
-      <div className="flex w-72 shrink-0 flex-col border-r border-neutral-200 dark:border-neutral-800 lg:w-80">
+    <div className="flex h-full flex-col md:flex-row">
+      {/* Left: run list (a capped strip on mobile, a side column on md+) */}
+      <div className="flex max-h-56 w-full shrink-0 flex-col border-b border-neutral-200 md:max-h-none md:w-72 md:border-b-0 md:border-r lg:w-80 dark:border-neutral-800">
         <div className="shrink-0 border-b border-neutral-100 px-3 py-2 dark:border-neutral-800">
           <span className="text-2xs font-medium uppercase tracking-wider text-neutral-400">
             Recent Runs
@@ -1214,7 +1214,7 @@ function CompactStepRow({
           trigger={
             <button
               type="button"
-              className="shrink-0 rounded p-1 text-neutral-400 opacity-0 transition hover:bg-neutral-100 hover:text-neutral-600 group-hover:opacity-100 dark:hover:bg-neutral-800 dark:hover:text-neutral-300"
+              className="shrink-0 rounded p-2 text-neutral-400 opacity-100 transition hover:bg-neutral-100 hover:text-neutral-600 md:p-1 md:opacity-0 md:group-hover:opacity-100 dark:hover:bg-neutral-800 dark:hover:text-neutral-300"
               aria-label={`Edit ${step.name}`}
             >
               <EditIcon className="size-3.5" />

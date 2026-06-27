@@ -177,7 +177,7 @@ function ValueTooltip({ value, children }: { value: unknown; children: React.Rea
         <TooltipContent
           side="bottom"
           align="start"
-          className="max-h-[300px] max-w-[480px] overflow-auto whitespace-pre-wrap break-all rounded-md bg-neutral-900 px-3 py-2 font-mono text-[11px] leading-relaxed text-neutral-100 shadow-lg dark:bg-neutral-800 dark:text-neutral-200"
+          className="max-h-[300px] max-w-[min(480px,90vw)] overflow-auto whitespace-pre-wrap break-all rounded-md bg-neutral-900 px-3 py-2 font-mono text-[11px] leading-relaxed text-neutral-100 shadow-lg dark:bg-neutral-800 dark:text-neutral-200"
         >
           {full}
         </TooltipContent>

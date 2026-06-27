@@ -35,7 +35,7 @@ export const ModelSelectorContent = ({
     <DialogOverlay />
     <DialogPrimitive.Content
       className={cn(
-        'fixed left-1/2 top-1/2 z-50 w-full max-w-lg -translate-x-1/2 -translate-y-1/2',
+        'fixed left-1/2 top-1/2 z-50 w-[calc(100%-2rem)] max-w-lg -translate-x-1/2 -translate-y-1/2',
         'overflow-hidden rounded-lg border border-neutral-200 bg-white shadow-lg',
         'dark:border-neutral-700 dark:bg-neutral-900',
         'data-[state=open]:animate-in data-[state=closed]:animate-out',
