@@ -350,6 +350,17 @@ export class SessionAgentDO {
   private sessionState!: SessionState;
   private lifecycle!: SessionLifecycle;
 
+  // DO-scoped OTel tracer: created once and reused across fetch / WS / alarm. Spans are batched
+  // in the DO (do-tracing.ts) and flushed externally — never one POST per span on the WS hotpath.
+  // traceFlushDeadline keeps an alarm pending so buffered spans drain within the interval even if
+  // the DO is evicted (the in-memory batch buffer is otherwise lost on hibernation).
+  private static readonly TRACE_FLUSH_INTERVAL_MS = 10_000;
+  // Per-token streaming frames + keepalive: high-frequency, low-value; not traced individually.
+  private static readonly WS_TRACE_SKIP = new Set<string>(['ping', 'pong', 'message.part.text-delta', 'message.part.tool-update']);
+  private doTracer?: DoTracer;
+  private doTracerPromise?: Promise<DoTracer>;
+  private traceFlushDeadline: number | null = null;
+
   /** Tracks the workflow execution ID for direct-dispatch workflow turns
    *  (where no queue row exists). Set when handleWorkflowExecuteDispatch
    *  sends directly to the runner; cleared on turn completion. */
@@ -525,7 +536,7 @@ export class SessionAgentDO {
 
     // Wrap control-endpoint dispatch in a DO root span, parented to the worker→DO
     // traceparent, so DO-internal work nests under the worker trace. ctx.storage stays native.
-    const tracer = await createDoTracer(this.env, this.ctx, 'valet-session-agent-do');
+    const tracer = await this.getTracer();
     return tracer.traceFetch(request, `SessionAgentDO ${url.pathname}`, (span) => {
       span.setAttribute('do.path', url.pathname);
       // Correlate DO spans with the session/user, mirroring the worker's
@@ -1038,18 +1049,36 @@ export class SessionAgentDO {
 
     console.log(`[SessionAgentDO] WebSocket message: isRunner=${isRunner}, type=${parsed.type}, data=${data.slice(0, 200)}`);
 
-    if (isRunner) {
-      await this.runnerLink.handleMessage(
-        parsed as RunnerToDOMessage,
-        this.runnerHandlers,
-        () => {
-          this.lifecycle.touchActivity();
-          this.rescheduleIdleAlarm();
-        },
-      );
-    } else {
-      await this.handleClientMessage(ws, parsed as ClientMessage);
+    const dispatch = isRunner
+      ? () => this.runnerLink.handleMessage(
+          parsed as RunnerToDOMessage,
+          this.runnerHandlers,
+          () => {
+            this.lifecycle.touchActivity();
+            this.rescheduleIdleAlarm();
+          },
+        )
+      : () => this.handleClientMessage(ws, parsed as ClientMessage);
+
+    // Trace each non-noise inbound message as a ROOT span — the WS protocol carries no
+    // traceparent, so there is nothing to parent to; correlate by attributes instead. Skip
+    // keepalive + per-token streaming frames (high-frequency, low-value).
+    const msgType = typeof parsed.type === 'string' ? parsed.type : 'unknown';
+    if (SessionAgentDO.WS_TRACE_SKIP.has(msgType)) {
+      await dispatch();
+      return;
     }
+
+    const tracer = await this.getTracer();
+    const userId = isRunner ? this.sessionState.userId : this.getClientUserId(ws);
+    await tracer.span(`ws.${isRunner ? 'runner' : 'client'}.${msgType}`, dispatch, {
+      'valet.session.id': this.sessionState.sessionId,
+      ...(userId ? { 'valet.user.id': userId } : {}),
+      'ws.side': isRunner ? 'runner' : 'client',
+      'ws.msg_type': msgType,
+    });
+    // Keep an alarm pending so this buffered span drains within the flush interval even on eviction.
+    this.armTraceFlush();
   }
 
   async webSocketClose(ws: WebSocket, code: number, reason: string, _wasClean: boolean) {
@@ -1146,6 +1175,9 @@ export class SessionAgentDO {
     } catch {
       // Socket already closed or invalid close code — ignore
     }
+
+    // Flush buffered spans before the DO can hibernate after this disconnect.
+    this.ctx.waitUntil(this.flushTraces());
   }
 
   async webSocketError(ws: WebSocket, error: unknown) {
@@ -1182,12 +1214,24 @@ export class SessionAgentDO {
   // ─── Alarm Handler ────────────────────────────────────────────────────
 
   async alarm() {
+    // Drain spans buffered on the WS/alarm hotpath — the alarm is the bounded-interval flush
+    // driver (JS timers freeze under hibernation). Runs even before the terminal early-return.
+    this.ctx.waitUntil(this.flushTraces());
+
     // ─── Early Exit: terminal states don't need alarms ──────────────
     const status = this.sessionState.status;
     if (['terminated', 'archived', 'error', 'hibernated'].includes(status)) {
       return; // don't re-arm
     }
 
+    // The alarm is a self-initiated tick with no inbound trace context → a root span. The branch
+    // actually taken (recovery / hibernate / health action) shows as the work inside.
+    const tracer = await this.getTracer();
+    await tracer.span('do.alarm', () => this.alarmTick(), { 'valet.session.id': this.sessionState.sessionId });
+  }
+
+  private async alarmTick(): Promise<void> {
+    const status = this.sessionState.status;
     const now = Date.now();
     const nowSecs = Math.floor(now / 1000);
 
@@ -6178,6 +6222,8 @@ export class SessionAgentDO {
       console.log(`[SessionAgentDO] performHibernate skipped — status is ${currentStatus}`);
       return;
     }
+    // Drain buffered spans before the isolate is torn down.
+    this.ctx.waitUntil(this.flushTraces());
 
     console.log(`[SessionAgentDO] performHibernate starting for session ${sessionId}`);
 
@@ -6447,10 +6493,41 @@ export class SessionAgentDO {
       ? wakeStarted + SANDBOX_WAKE_TIMEOUT_MS
       : null;
 
-    return [promptExpiry, followupMs, watchdog, safetyNet, parentIdle, gracePeriod, idleQueueDeadline, readyDeadline, backoffDeadline, wakeDeadline];
+    return [promptExpiry, followupMs, watchdog, safetyNet, parentIdle, gracePeriod, idleQueueDeadline, readyDeadline, backoffDeadline, wakeDeadline, this.traceFlushDeadline];
   }
 
   private rescheduleIdleAlarm(): void {
+    this.lifecycle.scheduleAlarm(this.collectAlarmDeadlines());
+  }
+
+  // ─── DO-scoped tracing (batched; see do-tracing.ts) ───────────────────
+  private getTracer(): Promise<DoTracer> {
+    return (this.doTracerPromise ??= createDoTracer(this.env, this.ctx, 'valet-session-agent-do').then((t) => {
+      this.doTracer = t;
+      return t;
+    }));
+  }
+
+  /** Drain buffered spans now (alarm / close / hibernate / fetch). Best-effort — never throws. */
+  private async flushTraces(): Promise<void> {
+    this.traceFlushDeadline = null;
+    try {
+      await (await this.getTracer()).forceFlush();
+    } catch {
+      // tracing is best-effort
+    }
+  }
+
+  /**
+   * Keep an alarm pending while spans are buffered so they flush within TRACE_FLUSH_INTERVAL_MS
+   * even if the DO hibernates (the in-memory buffer is lost on eviction). Idempotent + cheap:
+   * arms once per flush cycle, through the existing scheduleAlarm machinery (collectAlarmDeadlines
+   * includes traceFlushDeadline). Call after handling a WS message that produced spans.
+   */
+  private armTraceFlush(): void {
+    if (this.traceFlushDeadline !== null) return;
+    if ((this.doTracer?.pendingCount() ?? 0) === 0) return;
+    this.traceFlushDeadline = Date.now() + SessionAgentDO.TRACE_FLUSH_INTERVAL_MS;
     this.lifecycle.scheduleAlarm(this.collectAlarmDeadlines());
   }
 
