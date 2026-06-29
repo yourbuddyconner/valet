@@ -3,13 +3,12 @@ import type { Env, Variables } from '../env.js';
 import { NotFoundError, ValidationError } from '@valet/shared';
 import type { ActionRiskLevel } from '@valet/shared';
 import {
-  deleteUserActionPolicyOverride,
-  getUserActionPolicyOverride,
-  listUserActionPolicyOverrides,
-  resolveOrgPolicyMatch,
-  upsertUserActionPolicyOverride,
+  deleteActionPolicy,
+  getActionPolicy,
+  listUserDurableActionPolicies,
+  resolveAdminPolicyMatch,
+  upsertActionPolicy,
 } from '../lib/db.js';
-import type { ActionPolicyLifetime } from '../lib/db/actions.js';
 import { listMcpToolCache } from '../lib/db/mcp-tool-cache.js';
 import type { AppDb } from '../lib/drizzle.js';
 import { integrationRegistry } from '../integrations/registry.js';
@@ -72,11 +71,36 @@ async function resolveCatalogRiskLevel(db: AppDb, service: string, actionId: str
   }
 }
 
+/**
+ * Shape-preserving row mapper. The UI was written against the legacy
+ * `user_action_policy_overrides` shape; map our new `action_policies` rows
+ * into that shape so the client doesn't have to change yet. Sessions-scoped
+ * grants now live in `runtime_grants` and are not surfaced here — the
+ * legacy UI only ever created durable rows through this endpoint.
+ */
+function toOverrideShape(row: Awaited<ReturnType<typeof listUserDurableActionPolicies>>[number]) {
+  return {
+    id: row.id,
+    userId: row.principalId,
+    service: row.service,
+    actionId: row.actionId,
+    riskLevel: row.riskLevel,
+    mode: row.mode,
+    lifetime: row.expiresAt ? 'timed' : 'persistent',
+    sessionId: null,
+    expiresAt: row.expiresAt,
+    source: row.origin,
+    sourceInvocationId: row.sourceApprovalId,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  };
+}
+
 // GET /api/action-policy-overrides
 actionPolicyOverridesRouter.get('/', async (c) => {
   const user = c.get('user');
-  const rows = await listUserActionPolicyOverrides(c.get('db'), user.id);
-  return c.json(rows);
+  const rows = await listUserDurableActionPolicies(c.get('db'), user.id);
+  return c.json(rows.map(toOverrideShape));
 });
 
 // PUT /api/action-policy-overrides/:id
@@ -93,28 +117,31 @@ actionPolicyOverridesRouter.put('/:id', async (c) => {
   const mode = validateMode(body.mode);
   const { service, actionId, riskLevel } = validateTarget(body);
 
-  const existing = await getUserActionPolicyOverride(c.get('db'), id);
-  if (existing && existing.userId !== user.id) {
+  const existing = await getActionPolicy(c.get('db'), id);
+  if (existing && existing.principalId !== user.id) {
     throw new NotFoundError('Action policy override', id);
   }
 
   if (mode === 'allow' && service && actionId) {
     const resolvedRiskLevel = await resolveCatalogRiskLevel(c.get('db'), service, actionId);
-    const explicitOrg = await resolveOrgPolicyMatch(c.get('db'), service, actionId, resolvedRiskLevel ?? '__unknown__');
-    if (explicitOrg?.mode === 'deny') {
+    const explicitAdmin = await resolveAdminPolicyMatch(c.get('db'), service, actionId, resolvedRiskLevel ?? '__unknown__');
+    if (explicitAdmin?.mode === 'deny') {
       throw new ValidationError('This target is denied by organization policy and cannot be allowed by a user override');
     }
   }
 
-  const savedId = await upsertUserActionPolicyOverride(c.get('db'), {
+  const savedId = await upsertActionPolicy(c.get('db'), {
     id,
-    userId: user.id,
     service,
     actionId,
     riskLevel,
     mode,
-    lifetime: 'persistent' satisfies ActionPolicyLifetime,
-    source: 'settings',
+    managedBy: 'user',
+    principalType: 'user',
+    principalId: user.id,
+    subjectType: 'tool_action',
+    origin: 'settings',
+    createdBy: user.id,
   });
 
   return c.json({ ok: true, id: savedId });
@@ -124,12 +151,12 @@ actionPolicyOverridesRouter.put('/:id', async (c) => {
 actionPolicyOverridesRouter.delete('/:id', async (c) => {
   const id = c.req.param('id');
   const user = c.get('user');
-  const existing = await getUserActionPolicyOverride(c.get('db'), id);
+  const existing = await getActionPolicy(c.get('db'), id);
 
-  if (!existing || existing.userId !== user.id) {
+  if (!existing || existing.principalId !== user.id || existing.managedBy !== 'user') {
     throw new NotFoundError('Action policy override', id);
   }
 
-  await deleteUserActionPolicyOverride(c.get('db'), id, user.id);
+  await deleteActionPolicy(c.get('db'), id);
   return c.json({ ok: true });
 });

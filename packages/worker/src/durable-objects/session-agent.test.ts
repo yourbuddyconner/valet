@@ -5,7 +5,7 @@ import { sessions } from '../lib/schema/sessions.js';
 import { users } from '../lib/schema/users.js';
 import { userIdentityLinks } from '../lib/schema/channels.js';
 import { workflows, workflowExecutions } from '../lib/schema/workflows.js';
-import { createInvocation, getInvocation, getUserActionPolicyOverride, upsertActionPolicy } from '../lib/db/actions.js';
+import { createInvocation, getActionPolicy, getInvocation, getRuntimeGrant, upsertActionPolicy } from '../lib/db/actions.js';
 import type { InteractivePrompt } from '@valet/sdk';
 import * as sessionTools from '../services/session-tools.js';
 import * as channelsDb from '../lib/db/channels.js';
@@ -2695,12 +2695,24 @@ describe('SessionAgentDO', () => {
       });
 
       if (opts?.failOverrideWrite) {
+        // Inject a write failure on both new-model targets: runtime_grants
+        // (for allow_session) and action_policies (for allow_always).
         testDb.sqlite.exec(`
-          CREATE TRIGGER fail_uapo_insert BEFORE INSERT ON user_action_policy_overrides
+          CREATE TRIGGER fail_rg_insert BEFORE INSERT ON runtime_grants
           BEGIN
             SELECT RAISE(ABORT, 'override write failed');
           END;
-          CREATE TRIGGER fail_uapo_update BEFORE UPDATE ON user_action_policy_overrides
+          CREATE TRIGGER fail_rg_update BEFORE UPDATE ON runtime_grants
+          BEGIN
+            SELECT RAISE(ABORT, 'override write failed');
+          END;
+          CREATE TRIGGER fail_ap_insert BEFORE INSERT ON action_policies
+          WHEN NEW.managed_by = 'user'
+          BEGIN
+            SELECT RAISE(ABORT, 'override write failed');
+          END;
+          CREATE TRIGGER fail_ap_update BEFORE UPDATE ON action_policies
+          WHEN NEW.managed_by = 'user'
           BEGIN
             SELECT RAISE(ABORT, 'override write failed');
           END;
@@ -2790,41 +2802,39 @@ describe('SessionAgentDO', () => {
       }));
     });
 
-    it('allow_session creates a session-scoped exact override and executes', async () => {
+    it('allow_session creates a session-scoped runtime grant and executes', async () => {
       const { agent, sql, appDb } = await setupApprovalPrompt('allow_session');
 
-      const override = await getUserActionPolicyOverride(appDb as any, 'inv-approval:session');
+      const grant = await getRuntimeGrant(appDb as any, 'inv-approval:session');
       const invocation = await getInvocation(appDb as any, 'inv-approval');
 
-      expect(override).toMatchObject({
+      expect(grant).toMatchObject({
         userId: 'user-1',
         service: 'gmail',
         actionId: 'draft.create',
-        mode: 'allow',
-        lifetime: 'session',
         sessionId: 'orchestrator:user-1',
-        source: 'approval_prompt',
-        sourceInvocationId: 'inv-approval',
+        subjectType: 'tool_action',
       });
       expect(invocation).toMatchObject({ status: 'approved', resolvedBy: 'user-1' });
       expect((agent as any).executeActionAndSend).toHaveBeenCalledOnce();
       expect(sql.interactivePrompts.has('inv-approval')).toBe(false);
     });
 
-    it('allow_always creates a persistent exact override and executes', async () => {
+    it('allow_always creates a durable user action policy and executes', async () => {
       const { agent, appDb } = await setupApprovalPrompt('allow_always');
 
-      const override = await getUserActionPolicyOverride(appDb as any, 'inv-approval:persistent');
+      const policy = await getActionPolicy(appDb as any, 'inv-approval:persistent');
 
-      expect(override).toMatchObject({
-        userId: 'user-1',
+      expect(policy).toMatchObject({
         service: 'gmail',
         actionId: 'draft.create',
         mode: 'allow',
-        lifetime: 'persistent',
-        sessionId: null,
-        source: 'approval_prompt',
-        sourceInvocationId: 'inv-approval',
+        managedBy: 'user',
+        principalType: 'user',
+        principalId: 'user-1',
+        subjectType: 'tool_action',
+        origin: 'approval_prompt',
+        sourceApprovalId: 'inv-approval',
       });
       expect((agent as any).executeActionAndSend).toHaveBeenCalledOnce();
     });
@@ -2844,7 +2854,7 @@ describe('SessionAgentDO', () => {
       const invocation = await getInvocation(appDb as any, 'inv-approval');
 
       expect(invocation).toMatchObject({ status: 'approved', resolvedBy: 'user-1' });
-      expect(await getUserActionPolicyOverride(appDb as any, 'inv-approval:session')).toBeUndefined();
+      expect(await getRuntimeGrant(appDb as any, 'inv-approval:session')).toBeUndefined();
       expect((agent as any).executeActionAndSend).toHaveBeenCalledOnce();
     });
 
@@ -2876,7 +2886,7 @@ describe('SessionAgentDO', () => {
       expect(sql.interactivePrompts.has('inv-approval')).toBe(false);
     });
 
-    it('does not persist an allow override when the invocation is no longer pending', async () => {
+    it('does not persist an allow grant when the invocation is no longer pending', async () => {
       const { agent, appDb } = await setupApprovalPrompt('allow_session', {
         invocationStatus: 'denied',
       });
@@ -2884,7 +2894,7 @@ describe('SessionAgentDO', () => {
       const invocation = await getInvocation(appDb as any, 'inv-approval');
 
       expect(invocation).toMatchObject({ status: 'denied' });
-      expect(await getUserActionPolicyOverride(appDb as any, 'inv-approval:session')).toBeUndefined();
+      expect(await getRuntimeGrant(appDb as any, 'inv-approval:session')).toBeUndefined();
       expect((agent as any).executeActionAndSend).not.toHaveBeenCalled();
     });
 

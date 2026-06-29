@@ -22,7 +22,10 @@ export interface InvokeActionResult {
   outcome: 'allowed' | 'pending_approval' | 'denied';
   invocationId: string;
   mode: ActionMode;
-  policyId: string | null;
+  /** action_policies row that produced the decision, if any. */
+  matchedPolicyId: string | null;
+  /** runtime_grants row that auto-approved, if any. */
+  matchedGrantId: string | null;
 }
 
 export interface InvokeWorkflowActionParams {
@@ -75,18 +78,22 @@ export async function invokeAction(
     resolvedMode: policy.mode,
     params: input.params ? JSON.stringify(input.params) : undefined,
     expiresAt,
-    policyId: policy.orgPolicyId,
-    orgPolicyId: policy.orgPolicyId,
+    matchedPolicyId: policy.matchedPolicyId,
+    matchedGrantId: policy.matchedGrantId,
     baseMode: policy.baseMode,
     baseSource: policy.baseSource,
-    userOverrideId: policy.userOverrideId,
     policySource: policy.source,
-    policyLifetime: policy.lifetime,
     policyScope: policy.scope,
     status,
   });
 
-  return { outcome: policy.outcome, invocationId, mode: policy.mode, policyId: policy.orgPolicyId };
+  return {
+    outcome: policy.outcome,
+    invocationId,
+    mode: policy.mode,
+    matchedPolicyId: policy.matchedPolicyId,
+    matchedGrantId: policy.matchedGrantId,
+  };
 }
 
 /**
@@ -108,13 +115,15 @@ export async function invokeWorkflowAction(
       outcome: mode === 'allow' ? 'allowed' : mode === 'deny' ? 'denied' : 'pending_approval',
       invocationId: input.invocationId,
       mode,
-      policyId: existing.policyId ?? existing.orgPolicyId ?? null,
+      matchedPolicyId: existing.matchedPolicyId ?? null,
+      matchedGrantId: existing.matchedGrantId ?? null,
     };
   }
 
   const policy = await resolveEffectiveMode(db, {
     userId: input.userId,
     sessionId: null,
+    workflowExecutionId: input.executionId,
     service: input.service,
     actionId: input.actionId,
     riskLevel: input.riskLevel,
@@ -143,18 +152,22 @@ export async function invokeWorkflowAction(
     resolvedMode: policy.mode,
     params: input.params ? JSON.stringify(input.params) : undefined,
     expiresAt,
-    policyId: policy.orgPolicyId,
-    orgPolicyId: policy.orgPolicyId,
+    matchedPolicyId: policy.matchedPolicyId,
+    matchedGrantId: policy.matchedGrantId,
     baseMode: policy.baseMode,
     baseSource: policy.baseSource,
-    userOverrideId: policy.userOverrideId,
     policySource: policy.source,
-    policyLifetime: policy.lifetime,
     policyScope: policy.scope,
     status,
   });
 
-  return { outcome: policy.outcome, invocationId: input.invocationId, mode: policy.mode, policyId: policy.orgPolicyId };
+  return {
+    outcome: policy.outcome,
+    invocationId: input.invocationId,
+    mode: policy.mode,
+    matchedPolicyId: policy.matchedPolicyId,
+    matchedGrantId: policy.matchedGrantId,
+  };
 }
 
 /**

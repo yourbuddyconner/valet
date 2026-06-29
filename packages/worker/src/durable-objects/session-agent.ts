@@ -11,7 +11,7 @@ import { resolveAvailableModels } from '../services/model-catalog.js';
 import { integrationRegistry } from '../integrations/registry.js';
 import { updateIntegrationStatus } from '../lib/db/integrations.js';
 import { approveInvocation, denyInvocation, markFailed } from '../services/actions.js';
-import { resolveOrgPolicyMatch, updateInvocationStatus, upsertUserActionPolicyOverride, deleteSessionActionPolicyOverrides } from '../lib/db/actions.js';
+import { resolveAdminPolicyMatch, updateInvocationStatus, upsertActionPolicy, upsertRuntimeGrant, deleteRuntimeGrantsByScope } from '../lib/db/actions.js';
 import { getActivePluginArtifacts, getPluginSettings } from '../lib/db/plugins.js';
 import { getPersonaSkills, getOrgDefaultSkills, getPersonaToolWhitelist } from '../lib/db.js';
 import type { ChannelTarget, ChannelContext, InteractivePrompt, InteractiveAction, InteractivePromptRef, InteractiveResolution } from '@valet/sdk';
@@ -4577,7 +4577,7 @@ export class SessionAgentDO {
     // Expire session-scoped action policy overrides before stopping the runner
     // so no in-flight tool call can sneak through with a stale auto-allow.
     if (sessionId) {
-      await deleteSessionActionPolicyOverrides(this.appDb, sessionId);
+      await deleteRuntimeGrantsByScope(this.appDb, { sessionId });
     }
 
     // Tell runner to stop
@@ -5615,7 +5615,7 @@ export class SessionAgentDO {
     // replaced, so ephemeral "allow for this session" approvals should not
     // carry over to the fresh OpenCode instance.
     if (sessionId) {
-      await deleteSessionActionPolicyOverrides(this.appDb, sessionId);
+      await deleteRuntimeGrantsByScope(this.appDb, { sessionId });
     }
 
     // Explicit refresh — reset circuit breaker so the user can force a restart
@@ -5849,7 +5849,7 @@ export class SessionAgentDO {
       // Expire session-scoped action policy overrides before snapshot/stop
       // so no in-flight tool call can sneak through with a stale auto-allow.
       if (sessionId) {
-        await deleteSessionActionPolicyOverrides(this.appDb, sessionId);
+        await deleteRuntimeGrantsByScope(this.appDb, { sessionId });
       }
 
       // Snapshot via lifecycle (pure HTTP)
@@ -7253,7 +7253,7 @@ export class SessionAgentDO {
 
       if (resolutionAction !== 'cancel') {
         try {
-          const orgPolicy = await resolveOrgPolicyMatch(this.appDb, String(service), String(actionId), String(context.riskLevel || 'medium'));
+          const orgPolicy = await resolveAdminPolicyMatch(this.appDb, String(service), String(actionId), String(context.riskLevel || 'medium'));
           if (orgPolicy?.mode === 'deny') {
             const error = `Action "${toolId}" is denied by organization policy and cannot be allowed.`;
             return failAndDeletePrompt(error, 403);
@@ -7280,18 +7280,31 @@ export class SessionAgentDO {
 
         if (resolutionAction === 'allow_session' || resolutionAction === 'allow_always') {
           try {
-            const lifetime = resolutionAction === 'allow_session' ? 'session' : 'persistent';
-            await upsertUserActionPolicyOverride(this.appDb, {
-              id: `${promptId}:${lifetime}`,
-              userId,
-              service: String(service),
-              actionId: String(actionId),
-              mode: 'allow',
-              lifetime,
-              sessionId: lifetime === 'session' ? sessionId : null,
-              source: 'approval_prompt',
-              sourceInvocationId: promptId,
-            });
+            if (resolutionAction === 'allow_session') {
+              await upsertRuntimeGrant(this.appDb, {
+                id: `${promptId}:session`,
+                userId,
+                sessionId,
+                subjectType: 'tool_action',
+                service: String(service),
+                actionId: String(actionId),
+                policyKey: `session:${sessionId}:${service}.${actionId}:`,
+              });
+            } else {
+              await upsertActionPolicy(this.appDb, {
+                id: `${promptId}:persistent`,
+                service: String(service),
+                actionId: String(actionId),
+                mode: 'allow',
+                managedBy: 'user',
+                principalType: 'user',
+                principalId: userId,
+                subjectType: 'tool_action',
+                origin: 'approval_prompt',
+                sourceApprovalId: promptId,
+                createdBy: userId,
+              });
+            }
           } catch (err) {
             const error = `Failed to save approval override: ${err instanceof Error ? err.message : String(err)}`;
             await markFailed(this.appDb, promptId, error).catch((markErr) => {
