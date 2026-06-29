@@ -154,8 +154,9 @@ Execution instances. Schema in `packages/worker/src/lib/schema/workflows.ts`.
 | `definitionVersionId` | text | — | FK to workflow_definition_versions for production runs |
 | `mode` | text | `'production'` | `'production'` or `'test'` (test-runs come from the draft editor) |
 | `idempotencyKey` | text | — | Unique index on `(workflowId, idempotencyKey)` |
-| `cloudflareInstanceId` | text | — | Mirror of `id` for legibility; the Cloudflare Workflow instance is named after the execution id |
 | `cancelledAt`, `cancelledBy`, `cleanupCompletedAt` | text | — | Cancel audit + cleanup-pipeline completion marker |
+
+The Cloudflare Workflow instance id is `id` directly — there is no separate column, the CF instance is registered with the same identifier as the execution row. Both `cancel-cleanup` and the approve-resume hook call `WORKFLOW_INTERPRETER.get(executionId)`.
 
 **Indexes:** unique on `(workflowId, idempotencyKey)`; indexed on `status`, `startedAt`.
 

@@ -42,9 +42,14 @@ WHERE data IS NULL
 -- ───────────────────────────────────────────────────────────────────────────
 -- New status values: waiting_time, cancelling. New columns: cancelled_at,
 -- cancelled_by, definition_snapshot, definition_version_id, inputs, mode,
--- cloudflare_instance_id, cleanup_completed_at. Eight legacy columns
--- (variables, steps, workflow_hash, workflow_snapshot, attempt_count,
--- session_id, runtime_state, resume_token) are gone.
+-- cleanup_completed_at. Eight legacy columns (variables, steps,
+-- workflow_hash, workflow_snapshot, attempt_count, session_id,
+-- runtime_state, resume_token) are gone.
+--
+-- The Cloudflare Workflows instance id is `id` directly — we register the
+-- CF instance with the same identifier as the execution row. No separate
+-- `cloudflare_instance_id` column; cancel-cleanup and the approve resume
+-- hook both call `WORKFLOW_INTERPRETER.get(executionId)`.
 
 CREATE TABLE workflow_executions (
   id TEXT PRIMARY KEY,
@@ -69,7 +74,6 @@ CREATE TABLE workflow_executions (
   definition_version_id TEXT,
   inputs TEXT,
   mode TEXT NOT NULL DEFAULT 'production' CHECK (mode IN ('production', 'test')),
-  cloudflare_instance_id TEXT,
   -- cleanup_completed_at: set when cancel-cleanup finished every pipeline
   -- step. The runtime only CASes status='cancelled' once cleanup lands;
   -- the cron sweep retries 'cancelling' rows until then.

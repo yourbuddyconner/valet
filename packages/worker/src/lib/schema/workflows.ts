@@ -69,7 +69,6 @@ export const triggerWebhookRate = sqliteTable('trigger_webhook_rate', {
 //     trigger.data), outputs (stop-node outputs), definitionSnapshot,
 //     definitionVersionId, workflowVersion (the human-facing semver,
 //     audit-only).
-//   - CF instance handle: cloudflareInstanceId (mirror of id for legibility).
 //   - Cancellation: cancelledAt, cancelledBy, cleanupCompletedAt.
 //   - Mode: 'production' (triggers) or 'test' (draft test-run).
 //   - Idempotency: idempotencyKey (unique with workflowId).
@@ -108,7 +107,6 @@ export const workflowExecutions = sqliteTable('workflow_executions', {
   definitionVersionId: text(),
   inputs: text(),
   mode: text({ enum: ['production', 'test'] }).notNull().default('production'),
-  cloudflareInstanceId: text(),
 }, (table) => [
   index('idx_workflow_executions_workflow').on(table.workflowId),
   index('idx_workflow_executions_user').on(table.userId),

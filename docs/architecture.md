@@ -383,9 +383,9 @@ erDiagram
 | `workflows` | user_id, slug, draft_definition, published_version_id | Draft + published-version pointer for the dag/v1 lifecycle |
 | `workflow_definition_versions` | workflow_id, version, definition, definition_hash | Append-only history of published dag/v1 definitions |
 | `triggers` | workflow_id, type, config, webhook_token | Types: webhook (one-time-token authed), schedule, manual |
-| `workflow_executions` | workflow_id, trigger_id, status, definition_snapshot, cloudflare_instance_id, cleanup_completed_at | One row per run; the row id is also the Cloudflare Workflow instance id |
+| `workflow_executions` | workflow_id, trigger_id, status, definition_snapshot, cleanup_completed_at | One row per run; the row id is also the Cloudflare Workflow instance id |
 | `workflow_execution_nodes` | execution_id, node_id, status, approval_id, invocation_id, expires_at | Per-node trace rows with retention TTL |
-| `workflow_approvals` | execution_id, node_id, workflow_instance_id, event_type, status, timeout_at | One row per approval gate; resolved via the approve/deny API + `instance.sendEvent` |
+| `action_invocations` (workflow-attributed) | workflow_execution_id, node_id, iteration_index, service, action_id, status, expires_at | Unified approval primitive — both tool-policy holds and explicit `approval` node invocations of `workflows.request_approval` live here; resolved via the approve/deny API + `instance.sendEvent` |
 | `workflow_spawned_sessions` | execution_id, session_id | Authoritative link from an execution to sessions spawned by `session` or `orchestrator` nodes |
 
 **Memory (1 table)**

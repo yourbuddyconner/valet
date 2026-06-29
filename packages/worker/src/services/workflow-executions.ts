@@ -255,7 +255,6 @@ export async function createExecution(env: Env, input: CreateExecutionInput): Pr
       definitionVersionId,
       inputs: JSON.stringify(triggerDataResult.triggerData),
       mode,
-      cloudflareInstanceId: executionId,
     }).run();
   } catch (err) {
     // Idempotency-key race: another caller with the same key won the
