@@ -1,96 +1,213 @@
-# Approval Rules and Parameter-Matched Overrides
+# Parameter-Matched Action Policies
 
 ## Goal
 
-Valet needs one approval override system that works across sessions, workflow executions, workflow-created sessions, foreach loops, orchestrator runs, and direct tool calls.
+Valet should have one approval framework — one resolver, one API surface, one mental model — covering:
 
-The immediate workflow problem is noisy approvals inside `foreach`: when concurrency is `1`, only one approval is pending at a time, so a simple "approve all pending" action does not help. The user needs a way to approve the current request and automatically approve matching future requests in the same run.
+- organization/admin allow, require-approval, and deny policy
+- user-created "approve matching requests" durable policy
+- runtime-scoped approvals for a session, workflow execution, or remaining `foreach` iterations
+- parameter-sensitive rules such as "allow Google Sheets writes only for this spreadsheet and ranges beginning with `Companies!`"
 
-The broader product goal is reusable approval policy: users should be able to permanently allow a specific action shape, such as "Google Sheets append rows only when `spreadsheetId` is this sheet and `range` starts with `Companies!`", regardless of whether the request comes from a manual session or a workflow.
+The workflow problem this solves is approval fatigue. Background workflows should not repeatedly stop on equivalent approvals, especially inside `foreach(concurrency: 1)` where only one pending approval exists at a time. A user should be able to approve the current request and have future matching requests in the same run, session, or durable user scope auto-approve — without spawning a parallel approval-rules subsystem.
+
+"One framework" means one resolver and one conceptual model. It does **not** mean one physical table. Durable policy and ephemeral runtime grants have different lifecycles, and the data model splits them accordingly (see Data Model).
 
 ## Non-Goals
 
-- This does not replace organization-level deny rules. Admin deny must continue to win.
-- This does not allow broad "always approve all Google Workspace writes" by default.
-- This does not use raw templated workflow params for matching. Matching must use resolved runtime params.
-- This does not require a rich rule editor in the first implementation. Persistent rules can be created from concrete approval prompts first.
+- Do not add an `approval_rules` table.
+- Do not preserve `user_action_policy_overrides` as a second long-term policy framework.
+- Do not let user-created allow policies bypass organization/admin deny policy.
+- Do not create durable policies from unresolved workflow templates.
+- Do not create broad "always approve all writes" policies by default.
+- Do not require a full custom policy builder in the first UI. The first durable-policy flow can start from concrete approval prompts.
+- Do not introduce an `environment` dimension. dev and prod are separate Cloudflare deployments with separate D1 databases — the deployment is the environment. No other table in the schema carries `environment`, and this one should not either.
+- Do not add `team`-scoped or multi-environment policy columns yet. They are deferred until multi-org / team membership actually lands; speculative enum values invite half-implemented resolver paths.
+- Do not fold `disabled_actions` into this framework. It is a separate capability-availability layer, not a duplicate of the per-invocation policy decision (see "Relationship to `disabled_actions`"). Unifying the two is a deliberate later effort, not part of this work.
 
-## Concepts
+## Core Concepts
 
 ### Approval Request
 
 An approval request is a concrete runtime attempt to do something gated:
 
-- A session tool call asking to run a risky action.
-- A workflow `approval` node.
-- A workflow `tool` node blocked by action policy.
-- A tool call inside a workflow-created session.
-- A tool call inside a `foreach` body node.
+- a session tool call asking to run a risky action
+- a workflow `tool` node blocked by action policy
+- a workflow `approval` node
+- a tool call inside a workflow-created session
+- a tool call inside a `foreach` body node
 
 Every approval request should expose:
 
-- requester context: session id, workflow execution id, workflow id, node id if any
-- approval kind: `tool_policy`, `workflow_approval`, `session_tool`, etc.
-- subject: stable thing being approved
+- requester context: session id, workflow execution id, workflow id, workflow version id, node id, iteration index if any
+- subject: stable target being approved
+- policy target: service/action/risk level or workflow-node subject
 - resolved runtime params
-- prompt/summary/details for UI
+- prompt, summary, and details for UI
 
-### Approval Rule
+### Two Storage Tables, One Resolver
 
-An approval rule is the single persisted primitive for approval overrides. It can be short-lived or durable depending on its scope and expiry.
+The framework is **one resolver** over **two tables** differentiated by lifecycle:
 
-Examples:
+- **`action_policies` — durable.** Admin/org rules and user durable "always approve matching" grants. Long-lived, edited in settings, survives sessions and executions. Carries parameter matchers.
+- **`runtime_grants` — ephemeral.** Session- and workflow-execution-scoped allow grants (including "approve remaining `foreach` rows"). Always `mode = allow`. Bound to a parent context; deleted when that context becomes terminal. High-churn, never durable.
 
-- Approve matching requests for this session.
-- Approve matching requests for this workflow execution.
-- Approve matching requests for the remaining rows in a `foreach` loop.
-- Always approve matching requests for this parameter shape across sessions and workflows.
+This keeps the durable hot-path table small and lets explicit cleanup on terminal transition (plus FK cascade on parent deletion) handle "context ended → grant gone," instead of forcing every resolution to liveness-join against session/execution state. Today's `user_action_policy_overrides` already plays the ephemeral role for sessions; `runtime_grants` generalizes it to workflow executions, and `action_policies` absorbs the durable user grants.
 
-Rules scoped to active runtime contexts expire automatically with that context. Rules scoped to `user`, `team`, or `environment` are persistent until revoked or expired.
+The orchestrator is not a separate scope. The user/org orchestrator is itself an agent session (well-known id `orchestrator:{userId}` / `orchestrator:org:{orgId}`), so its tool approvals resolve through the normal `session` scope on that session id — there is no `orchestrator_run` entity, table, or lifecycle to scope against.
 
-### Product Labels
+The UI may still use friendly words:
 
-The backend should not have separate "grant" and "policy" concepts. The UI can still use those words for clarity:
+- **Policy**: a durable rule in `action_policies`.
+- **Grant**: a user-facing label for an allow rule created from an approval prompt — durable (in `action_policies`) or runtime-scoped (in `runtime_grants`).
+- **Approve once**: resolves only the current approval request and creates no row.
 
-- A **grant** is an approval rule with a runtime scope, such as `session` or `workflow_execution`.
-- A **policy** is an approval rule with a durable scope, such as `user`, `team`, or `environment`.
-- "Approve once" does not create a rule. It only resolves the current approval request.
+Backend code should not introduce any third grant/rule model.
+
+### Relationship to `disabled_actions`
+
+`disabled_actions` is **not** part of this framework and is intentionally left untouched. It operates at a different layer:
+
+- **`disabled_actions` — capability availability.** An admin-managed (`/api/admin/disabled-actions`) org-level kill-switch keyed by service/action. A disabled service/action is *filtered out of the tool catalog before the agent ever sees it* (`session-tools.ts` skips disabled services during tool listing; the workflow `tool` node throws at preflight, `tool.ts`). The agent never knows the capability exists.
+- **`action_policies` / `runtime_grants` — per-invocation decision.** The tool *is* offered; an attempt resolves to allow / require approval / deny and is audited as an invocation.
+
+These are complementary, not duplicate. The duplicate this spec retires (`user_action_policy_overrides`) was a second copy of the *per-invocation decision*; `disabled_actions` is a distinct availability control. The approval resolver never sees disabled actions because catalog filtering removes them upstream — so no resolution-order interaction is needed.
+
+A future effort could collapse the two (e.g. an admin `deny` policy gaining an optional "hide from catalog" flag, with `disabled_actions` migrating into it), but that must first reconcile hide-vs-deny semantics and is out of scope here.
 
 ## Data Model
 
-### `approval_rules`
+### `action_policies` (durable)
 
-One table stores both runtime-scoped and durable approval rules.
+The existing table already represents durable action-level policy. Extend it; do not replace it.
+
+Existing columns (`service`, `actionId`, `riskLevel`, `mode`, `createdBy`, `createdAt`, `updatedAt`) remain. Add ownership, target, parameter matching, and audit metadata:
 
 | Column | Notes |
 | --- | --- |
-| `id` | UUID |
-| `orgId` | Owning organization. Required for every rule. |
-| `environment` | Environment the rule applies in, e.g. `dev` or `prod`. Required unless a rule is explicitly environment-global. |
-| `ownerUserId` | User that owns the rule |
-| `scope` | `session`, `workflow_execution`, `orchestrator_run`, `user`, `team`, `environment` |
-| `scopeId` | Session id, workflow execution id, orchestrator run id, user id, team id, or environment id |
-| `managedBy` | `user` or `admin`; admin-managed rules can only be changed by admins |
-| `approvalKind` | `tool_policy`, `workflow_approval`, `session_tool` |
-| `subject` | Stable target such as `tool:google_workspace.sheets.append_rows` or `workflowNode:write_companies` |
-| `decision` | `approved` |
-| `paramMatchers` | JSON array of parameter matchers |
-| `label` | Optional user-facing name |
-| `origin` | `approval_prompt`, `settings`, `admin` |
-| `createdFromApprovalId` | Optional approval request that generated this rule |
-| `createdBy` | User id |
-| `lastMatchedAt` | Optional timestamp used for audit and cleanup UX |
-| `expiresAt` | Optional |
-| `revokedAt` | Nullable |
-| `createdAt`, `updatedAt` | Audit timestamps |
+| `orgId` | Owning organization. `DEFAULT 'default'`, matching every peer table (`personas`, `skills`, `plugins`, …). Existing rows backfill to `'default'`. |
+| `managedBy` | `admin`, `user`, or `system`. Admin rows can deny or require approval. User rows can only quiet approvals where admin policy permits. |
+| `principalType` | `org` or `user`. Durable principals only — session/execution scopes live in `runtime_grants`; `team` is deferred. |
+| `principalId` | Org id or user id. |
+| `subjectType` | `tool_action`, `workflow_node`, `workflow_node_action`, or `session_tool`. |
+| `workflowId` | Optional workflow id for workflow-node policies. |
+| `workflowVersionId` | Required for durable workflow-node policies (a republish changes node shape; a durable row pinned to a version cannot silently apply to a different shape). |
+| `nodeId` | Optional workflow node id. |
+| `paramMatchers` | JSON array of parameter matchers. Defaults to `[]`. |
+| `matcherSummary` | Cached human-readable summary for audit and UI. |
+| `subjectLabel` | Optional derived display string (e.g. `tool:google_workspace.sheets.append_rows`). **Display only — never a match key.** Matching uses the typed columns below, not this string. |
+| `userGrantBehavior` | `allowed` or `blocked`. Applies to admin `require_approval` rows. `allowed` lets user/runtime allow grants quiet matching approvals; `blocked` forces a prompt until admin policy changes. Defaults to `allowed`. |
+| `origin` | `settings`, `approval_prompt`, `workflow_editor`, `admin`, `migration`. |
+| `sourceApprovalId` | Approval request that produced this policy, if any. |
+| `lastMatchedAt` | Timestamp for audit and cleanup UI. |
+| `expiresAt` | Set for timed durable user grants; null means persistent. (No separate `lifetime` enum — `expiresAt` distinguishes persistent from timed.) |
+| `revokedAt` | Soft delete timestamp. |
 
-Runtime scopes should have either an implicit lifecycle expiry or an explicit `expiresAt`. Durable scopes may omit `expiresAt`.
+`mode` remains the policy decision:
 
-Every approval-rule lookup must include `orgId` and `environment`. User-scoped rules only apply to the same user in the same org/environment. Team- and environment-scoped rules require admin-managed ownership or an explicit team admin permission check. Rules must never cross organization boundaries.
+- `allow`: allow or auto-approve matching work
+- `require_approval`: require explicit approval
+- `deny`: block matching work
+
+User-managed rows in `action_policies` can be `allow` only. Admin-managed rows can be `allow`, `require_approval`, or `deny`.
+
+### `runtime_grants` (ephemeral)
+
+A new table for context-scoped allow grants. Every row is `mode = allow` implicitly; the table exists only to quiet approvals within a live context.
+
+| Column | Notes |
+| --- | --- |
+| `id` | Primary key. |
+| `orgId` | `DEFAULT 'default'`. |
+| `userId` | Creator. FK to `users`, `ON DELETE CASCADE`. |
+| `sessionId` | Nullable FK to `sessions`, `ON DELETE CASCADE`. |
+| `workflowExecutionId` | Nullable FK to `workflow_executions`, `ON DELETE CASCADE`. |
+| `subjectType` | Same enum as `action_policies`. |
+| `service`, `actionId`, `riskLevel` | Target fields, nullable per `subjectType`. |
+| `workflowId`, `nodeId` | For workflow-scoped grants. Runtime grants omit `workflowVersionId` — they expire with the execution and never outlive a republish. |
+| `paramMatchers` | JSON array, defaults to `[]`. Usually empty for `foreach` ("approve remaining rows" ignores per-row params). |
+| `policyKey` | Deterministic idempotency key derived from scope id, subject, node id, and matcher fingerprint. Makes equivalent later approvals reuse the same grant. |
+| `matcherSummary` | Display string. |
+| `createdAt` | Timestamp. |
+| `revokedAt` | Soft delete. |
+
+Exactly one of `sessionId` / `workflowExecutionId` is set, mirroring how `action_invocations` carries both. The FK cascades handle row deletion; explicit cleanup on **terminal-state transition** (not deletion) removes grants when a session or execution completes — reusing the existing `deleteSessionActionPolicyOverrides`-style lifecycle hook, generalized to workflow executions.
+
+Because the resolver only loads runtime grants for the **current** context id (the session/execution you are already running inside), the rows it sees are active by construction — no liveness-join against unrelated contexts. A defensive terminal check remains cheap belt-and-suspenders.
+
+### Policy Targets
+
+Both tables must support tool actions and non-tool approval subjects without ambiguous nullable fields. Resolver candidate loading must include `subjectType` in every lookup so broad `NULL` service/action values cannot accidentally match unrelated work.
+
+| `subjectType` | Required target fields | Nullable target fields | Notes |
+| --- | --- | --- | --- |
+| `tool_action` | `service`, `actionId` | `workflowId`, `workflowVersionId`, `nodeId` | Normal integration action approval, including session-side remote tools. |
+| `workflow_node_action` | `service`, `actionId`, `workflowId`, `nodeId` | `workflowVersionId` for runtime grants only | Workflow `tool` node approval. Durable rows require `workflowVersionId`. |
+| `workflow_node` | `workflowId`, `nodeId` | `workflowVersionId` for runtime grants only | Generic workflow `approval` node with an approval contract. Durable rows require `workflowVersionId`. `service`, `actionId`, `riskLevel` must be null — a generic approval node has no integration target or risk level. |
+| `session_tool` | `subject` (native tool name, e.g. `bash`) | `service`, `actionId`, `riskLevel`, `workflowId`, `workflowVersionId`, `nodeId` | Built-in/native sandbox tool gating where no integration action id exists — e.g. restrict `bash` to commands matching a regex matcher. Match on the native tool name. Storage lands in Phase 1; the interdictor that routes native calls through the resolver ships in Phase 2 (see "Native Tool Gating"). |
+
+Rows with `subjectType = workflow_node` must not match tool-action queries.
+
+#### Native Tool Gating (`session_tool`)
+
+`session_tool` is the storage shape for restricting built-in tools (`bash`, file edits, etc.), a capability the platform wants but does not yet have. **Today nothing routes native tool calls through the resolver** — only integration/MCP actions (those with `service` + `actionId` + `riskLevel`) reach `invokeAction`. Enabling `session_tool` policies requires an **interdictor**: an interception hook in the session tool path that catches built-in tool calls and resolves them against `action_policies` before execution.
+
+The interdictor ships in **Phase 2**, alongside the matcher engine it depends on. The Phase 2 `matches` (regex) matcher is what makes built-in restriction useful — e.g. a `session_tool` policy on `bash` with `{ path: "command", op: "matches", value: "rm -rf /|curl .*\\| ?sh" }` to deny destructive commands. The data model carries `session_tool` from Phase 1 so the interdictor lands in Phase 2 without a later migration.
+
+### Uniqueness And Indexes
+
+The migration must drop the existing partial unique indexes that only key on service/action/risk (`idx_ap_action`, `idx_ap_service`, `idx_ap_risk` per the migration SQL). The expanded table needs multiple rows for the same action — e.g. one admin policy plus one user durable grant for the same Google Sheets action.
+
+`action_policies` uniqueness:
+
+- Admin/base rows unique by `orgId`, `managedBy`, `principalType`, `principalId`, `subjectType`, target fields, and `paramMatchers` fingerprint.
+- User durable rows unique by `orgId`, `managedBy`, `principalType`, `principalId`, `subjectType`, target fields, and `paramMatchers` fingerprint.
+
+`runtime_grants` uniqueness:
+
+- Unique by scope id (`sessionId`/`workflowExecutionId`), `subjectType`, target fields, and `policyKey`. `policyKey` must be deterministic and safe to reuse on retry — derived from scope id, subject, node id, and matcher fingerprint, not the approval id.
+
+`action_policies` lookup indexes:
+
+- `orgId`, `subjectType`, `service`, `actionId`, `riskLevel`, `revokedAt`
+- `orgId`, `managedBy`, `principalType`, `principalId`, `revokedAt`
+- `expiresAt` for timed-policy cleanup
+- `workflowId`, `workflowVersionId`, `nodeId` for workflow readiness and audit UI
+
+`runtime_grants` lookup indexes:
+
+- `sessionId`, `revokedAt`
+- `workflowExecutionId`, `revokedAt`
+
+### `action_invocations` changes
+
+Audit rows must carry the matched policy and/or grant for the new model. Add two nullable columns:
+
+- `matchedPolicyId` — FK to `action_policies(id)`, `ON DELETE SET NULL`.
+- `matchedGrantId` — FK to `runtime_grants(id)`, `ON DELETE SET NULL`.
+
+`ON DELETE SET NULL` matters: revoking a policy or hard-deleting a runtime grant on terminal transition must not lose the audit row.
+
+Existing columns — `policyId`, `orgPolicyId`, `userOverrideId`, `baseMode`, `baseSource`, `policySource`, `policyLifetime`, `policyScope` — stay in the schema for historical reads but stop being populated by new invocations. For one release, new rows alias `policyId` / `orgPolicyId` to `matchedPolicyId` so existing audit queries keep working; remove the alias and `userOverrideId` writes in a follow-up.
+
+### Retire `user_action_policy_overrides`
+
+`user_action_policy_overrides` is the existing duplicate policy layer. Treat it as legacy compatibility:
+
+1. Stop creating new rows in `user_action_policy_overrides`.
+2. Migrate existing rows:
+   - `lifetime = persistent` → `action_policies` user durable grant (`principalType = user`).
+   - `lifetime = timed` → `action_policies` user durable grant with `expiresAt`.
+   - `lifetime = session` → `runtime_grants` with `sessionId` set.
+3. Update runtime resolution to read `action_policies` + `runtime_grants`.
+4. Remove or alias `/api/action-policy-overrides` after the settings UI is converted.
+5. Replace `action_invocations.userOverrideId` with `matchedPolicyId` / `matchedGrantId` semantics. Existing audit rows keep old columns for history.
 
 ### Parameter Matchers
 
-Parameter matchers are evaluated against resolved runtime params.
+> **Phase 2.** The matcher engine and per-action canonicalization are not required for the runtime-grant approval-fatigue win (Phase 1 matches on subject/node, not per-row params). They land in Phase 2 for durable user policies. See Phased Delivery.
+
+Parameter matchers are evaluated against resolved runtime params after action-specific canonicalization.
 
 ```ts
 type ParamMatcher =
@@ -103,30 +220,33 @@ type ParamMatcher =
 
 Rules:
 
-- `path` uses dot path syntax into resolved params, e.g. `spreadsheetId`, `range`, `repo.owner`.
 - All matchers must pass.
 - Missing paths fail closed.
-- Equality is type-strict after canonicalization. `"123"` does not equal `123` unless the action schema canonicalizes the field to a string.
-- Dot-path escaping must be supported for keys containing dots, brackets, or quotes. The UI should generate paths and should not require users to hand-write escaped paths.
-- Arrays and objects can be matched only with `equals` against canonical JSON values or with path-specific matchers against nested fields. Regex and substring matching apply only to strings.
-- Secrets and redacted values cannot be used as durable matchers. If a value is unavailable for audit display, it is also unavailable for matching.
-- Regex matching is path-specific and treated as advanced UI.
-- Regex values should be validated when saved and rejected if they exceed length or complexity limits.
-- The UI should prefer `equals`, `oneOf`, and `startsWith` before exposing regex.
+- Equality is type-strict after canonicalization.
+- Dot paths work for normal keys; escaped or bracket paths are required for keys containing dots, brackets, or quotes.
+- Regex and substring matching apply only to strings.
+- Secrets and redacted values cannot be used as durable matchers.
+- Durable user-managed write policies require at least one matcher unless the action is read-only and explicitly marked safe.
+- The UI should prefer `equals`, `oneOf`, and `startsWith`; regex is advanced.
 
-Canonicalization is action-specific metadata owned by the integration action definition. Examples:
+Canonicalization belongs to the integration action definition. Examples:
 
-- Google Sheets spreadsheet ids are trimmed strings.
-- Google Sheets ranges are normalized to the same sheet/range notation the action sends to Google.
-- GitHub owner and repo names are lowercased.
-- URLs can expose derived matcher fields such as `url.host` and `url.origin`; durable rules should prefer those over matching a full raw URL.
+- Google Sheets `spreadsheetId` is trimmed.
+- Google Sheets `range` is normalized to the notation sent to Google.
+- GitHub owner/repo names are lowercased.
+- URLs can expose derived matcher fields such as `url.host` and `url.origin`.
 
-Example persistent rule:
+Example durable user policy (`action_policies`):
 
 ```json
 {
-  "subject": "tool:google_workspace.sheets.append_rows",
-  "scope": "user",
+  "managedBy": "user",
+  "principalType": "user",
+  "principalId": "user_123",
+  "subjectType": "tool_action",
+  "service": "google_workspace",
+  "actionId": "sheets.append_rows",
+  "mode": "allow",
   "paramMatchers": [
     { "path": "spreadsheetId", "op": "equals", "value": "1NTVgJuy..." },
     { "path": "range", "op": "startsWith", "value": "Companies!" }
@@ -134,50 +254,83 @@ Example persistent rule:
 }
 ```
 
-## Matching Order
+Example runtime grant for remaining `foreach` rows (`runtime_grants`):
 
-The approval system checks for an override before prompting.
+```json
+{
+  "workflowExecutionId": "exec_123",
+  "subjectType": "workflow_node_action",
+  "service": "google_workspace",
+  "actionId": "sheets.append_rows",
+  "workflowId": "wf_123",
+  "nodeId": "node_write_companies",
+  "policyKey": "exec_123:node_write_companies:google_workspace.sheets.append_rows:sha256([])",
+  "paramMatchers": []
+}
+```
 
-1. Gather all applicable action policy decisions for the concrete request.
-2. If any organization/admin policy denies the request, deny immediately.
-3. If any action-level policy denies the request, deny immediately.
-4. Check active approval rules scoped to the exact session.
-5. Check active approval rules scoped to the parent workflow execution, if present.
-6. Check active approval rules scoped to the current orchestrator run, if present.
-7. Check active durable approval rules scoped to user/team/environment.
-8. If no rule matches, apply the non-deny action policy result: allow, require approval, or deny-by-default.
+The `foreach` grant carries no param matchers: "approve remaining rows" deliberately matches the node subject regardless of per-row params.
 
-All deny decisions win before approval rules are considered. User rules may only make allowed or approval-required work quieter; they must not bypass explicit organization, team, environment, or action-level denies.
+## Policy Resolution
 
-Workflow-level durability should be modeled as a durable `approval_rule` with parameter matchers, not as a separate long-lived workflow-specific override concept. Runtime scopes are for active work only; durable user/team/environment scopes are the cross-session/cross-workflow mechanism.
+One resolver replaces the current split between `resolveOrgPolicyMatch` and `resolveUserActionPolicyOverride`.
+
+Input:
+
+- `orgId`
+- `userId`
+- optional `sessionId` (the resolver expands this to its lineage: self + `parentSessionId` ancestor chain, capped at a depth of 16 with a visited-set cycle guard)
+- optional `workflowExecutionId` — recovered per lineage member, not only for the originating session. For **each** session in the expanded lineage, look up `workflow_spawned_sessions` and add any recovered `executionId` to the candidate executions set. A runtime grant matches if its `sessionId` is in the lineage **or** its `workflowExecutionId` is in the candidate executions set. This handles the case where a workflow-spawned session further spawns a child via `spawn_session`: the child's lineage is `[child, workflow_session]`, and the execution is recovered from `workflow_session`'s row.
+- service, action id, risk level, subjectType, target fields
+- resolved runtime params
+
+Resolution order:
+
+1. Load candidate `action_policies` rows for the same org and matching subjectType/target.
+2. Evaluate admin `deny` first. Any matching deny → deny immediately.
+3. Determine the base admin/system decision from admin `allow` / `require_approval` rows by specificity, then system risk defaults if none match.
+4. Base decision `allow` → allow immediately. No grant lookup needed.
+5. Base decision `require_approval` with `userGrantBehavior = blocked` → require approval immediately.
+6. Base decision `require_approval` with `userGrantBehavior = allowed` → check grants in order:
+   1. `runtime_grants` over the session lineage and workflow execution, most specific first: own session, then ancestor sessions up the `parentSessionId` chain, then workflow execution.
+   2. durable user `allow` policies in `action_policies`.
+7. If a grant matches → allow (auto-approved). Otherwise require approval.
+
+Deny always wins. Allow grants quiet only grantable `require_approval` decisions; they never turn admin `deny` into `allow`, and they are not consulted when admin/system policy already allows.
+
+Specificity ranking within a group:
+
+1. exact action + parameter match
+2. exact action without parameter match
+3. service + parameter match
+4. service without parameter match
+5. risk level
+6. system default
+
+Runtime grants beat durable user policies (more contextual). Admin deny beats both.
+
+Because runtime grants are loaded only for the current context id, the resolver never sees grants from terminal contexts — they were deleted on terminal transition (and cascade on deletion). A defensive terminal-state check is still cheap to keep.
 
 ## Subject Model
 
-Subjects must be stable enough to match the same permission shape across contexts.
+Subjects are a **derived display/audit label**, not a match key. Matching is on typed columns (`subjectType`, `service`, `actionId`, `workflowId`, `workflowVersionId`, `nodeId`) plus `paramMatchers`. Storing the same identifiers twice (typed columns *and* an encoded string used for matching) invites drift; the typed columns are canonical.
 
-Recommended subjects:
-
-| Subject | Meaning |
+| Display subject | Meaning |
 | --- | --- |
-| `tool:<service>.<action>` | Tool/action approval, e.g. `tool:google_workspace.sheets.append_rows` |
-| `workflowNode:<workflowId>:<nodeId>` | A specific workflow node, runtime-scoped only |
-| `workflowNodeAction:<workflowId>:<nodeId>:<service>.<action>` | A specific workflow tool node and action, runtime-scoped only |
+| `tool:<service>.<action>` | Tool/action approval |
+| `workflowNode:<workflowId>:<versionId>:<nodeId>` | Durable workflow approval node |
+| `workflowNodeAction:<workflowId>:<versionId>:<nodeId>:<service>.<action>` | Durable workflow tool node + action |
 | `sessionTool:<toolName>` | Native/session-side tool approval |
 
-For cross-session/workflow reusable rules, prefer tool subjects with parameter matchers. For workflow-run runtime rules, workflow-node subjects are useful because users are often approving the behavior of one node in one graph.
+Runtime grants render the same labels minus `versionId` (they pin to an execution, not a version). Durable workflow-node policies must carry `workflowVersionId` in their typed columns.
 
-Durable rules must not use mutable workflow-node subjects unless the subject includes the published workflow version or revision id. Runtime-scoped rules may use `workflowId + nodeId` because they expire with the active execution. Durable workflow-node rules should use one of these forms:
+For reusable cross-session/cross-workflow policy, prefer `tool_action` + parameter matchers over workflow-node subjects.
 
-- `workflowNode:<workflowId>:<versionId>:<nodeId>`
-- `workflowNodeAction:<workflowId>:<versionId>:<nodeId>:<service>.<action>`
+## Workflow Approval Contracts
 
-If the workflow is edited and republished, old durable workflow-node rules do not automatically apply to the new version. Cross-version durability should use a `tool:<service>.<action>` subject with explicit parameter matchers instead.
+Generic workflow `approval` nodes are not automatically eligible for durable user-managed policy. A generic approval can represent human judgment (incident escalation) and should not become a reusable action policy by accident.
 
-### Workflow Approval Contracts
-
-Workflow `approval` nodes are not automatically eligible for durable parameter-matched approval rules. A generic approval node can represent arbitrary human judgment, such as "approve this incident escalation," and should not become a reusable policy accidentally.
-
-Durable rules for workflow `approval` nodes are allowed only when the node declares an approval contract:
+Durable policies for workflow `approval` nodes are allowed only when the node declares an approval contract:
 
 ```ts
 type WorkflowApprovalContract = {
@@ -187,268 +340,156 @@ type WorkflowApprovalContract = {
 };
 ```
 
-Without a contract, the UI should offer `Approve once` and runtime-scoped approvals only. With a contract, the durable rule dialog can use the contract params and matcher hints in the same way it handles tool params.
+Without a contract, the UI offers `Approve once` and runtime-scoped approvals only. With a contract, the durable policy dialog uses the contract params and matcher hints the same way it handles tool params.
 
 ## Runtime Behavior
 
 ### Sessions
 
-Current session approval behavior should be implemented as session-scoped approval rules.
+Session approvals resolve against the unified resolver before prompting:
 
-When a session approval appears:
+- `Approve once`: resolve only the current invocation; create no row.
+- `Approve for this session`: create a `runtime_grants` row with `sessionId` set.
+- `Approve matching requests`: create a user durable `allow` policy in `action_policies` with parameter matchers (Phase 2).
 
-- `Approve once` resolves only that request.
-- `Approve for this session` creates `approval_rule(scope = session, scopeId = sessionId)`.
-- `Approve matching requests` creates a durable approval rule, usually scoped to the user.
-
-Future session tool calls check the approval-rule resolver before creating another prompt.
+The orchestrator is a session, so orchestrator tool approvals use this same path with the well-known orchestrator session id (`orchestrator:{userId}` / `orchestrator:org:{orgId}`). "Approve for this session" on the orchestrator is the durable-feeling grant for orchestrator actions, since that session is long-lived.
 
 ### Workflow Executions
 
-Workflow execution approvals should use execution-scoped approval rules.
+- `Approve once`: resolve only the current approval.
+- `Approve for this run`: create a `runtime_grants` row with `workflowExecutionId` set.
+- `Approve matching requests`: create a durable user policy when eligible (Phase 2). Team/environment scopes are out of scope.
 
-When a workflow approval appears:
-
-- `Approve once` resolves only that approval row.
-- `Approve for this run` creates `approval_rule(scope = workflow_execution, scopeId = executionId)`.
-- `Approve matching requests` creates a durable approval rule, usually scoped to the user.
-
-Future workflow nodes and workflow-created sessions check for execution-scoped rules using the parent execution id.
+A workflow-created session's tool calls match the execution's runtime grants by recovering the execution from `workflow_spawned_sessions` — see "Session Provenance, Grant Scope, And Approval Propagation" for the linkage and the approval surfacing that comes with it.
 
 ### Foreach
 
-Foreach approval UX should not depend on multiple approvals being pending at once.
+`foreach` approval UX must not depend on multiple approvals being pending.
 
 When an approval appears inside a `foreach` body:
 
-- `Approve once` resolves the current iteration only.
-- `Approve remaining rows` creates an execution-scoped approval rule for the same body approval shape and resolves the current approval.
-- If other sibling approvals are already pending because `concurrency > 1`, the backend resolves those matching pending approvals immediately.
-- Future iterations with `concurrency = 1` auto-approve as they reach the approval point.
+- `Approve once` resolves the current iteration.
+- `Approve remaining rows` creates a workflow-execution-scoped `runtime_grants` row for the body node subject (no per-row matchers), resolves the current approval, and resolves any already-pending sibling approvals in the same execution.
+- Future iterations check the resolver immediately before creating an approval prompt, so `concurrency = 1` prompts once and then auto-approves matching future rows.
 
-The engine must keep per-iteration workflow event types. It should not make all iterations wait on the same event type.
+The backend operation must be transactional and idempotent:
 
-The `Approve remaining rows` backend operation must be transactional and idempotent:
-
-1. Validate the current approval request is still pending and belongs to the caller.
-2. Create or reuse an equivalent execution-scoped rule using an idempotency key derived from `approvalId + scope`.
+1. Validate the current approval is pending and belongs to the caller.
+2. Create or reuse an equivalent execution-scoped `runtime_grants` row using a deterministic `policyKey` derived from execution id, subject, body node id, and matcher fingerprint.
 3. Resolve the current approval.
-4. Resolve any already-pending matching sibling approvals in the same execution.
-5. Commit before allowing new foreach iterations to create more approval requests.
+4. Resolve matching already-pending sibling approvals in the same execution.
+5. Commit before allowing future iterations to prompt.
 
-Future iterations must check the resolver immediately before creating an approval prompt. This prevents duplicate prompts when concurrency is greater than `1` and prevents double-resolution when a user clicks twice.
+The client idempotency key can include `approvalId + scope` to make button retries safe, but persisted grant uniqueness must use the stable `policyKey`. Otherwise retrying one approval is safe while future equivalent loop approvals cannot reliably reuse the same runtime grant.
 
-### Workflow-Created Sessions
+### Session Provenance, Grant Scope, And Approval Propagation
 
-Sessions created by workflow `session` nodes should carry parent workflow context:
+A session can be spawned several ways, and approval behavior must follow its provenance — not assume "workflow" is the only origin:
 
-- `workflowExecutionId`
-- `workflowId`
-- `nodeId`
+| Origin | Link to context (today) |
+| --- | --- |
+| Interactive (root) | none, or `parentSessionId` if opened as a child |
+| Child of another session (orchestrator sub-agent, agent `spawn_session` tool) | `parentSessionId` (set by `spawnChild`) |
+| Workflow `session` node | `workflow_spawned_sessions(executionId, nodeId, sessionId)` — has **no** `parentSessionId`, and currently lacks `workflowId`/`workflowVersionId` |
+| Orchestrator | well-known id (`orchestrator:{userId}` / `orchestrator:org:{orgId}`), `isOrchestrator` |
 
-When a workflow-created session hits an approval:
+There are two distinct linkage mechanisms — `parentSessionId` (session→session) and `workflow_spawned_sessions` (execution→session) — and they don't overlap. Resolution and surfacing both walk this provenance, in opposite directions.
 
-1. Check session-scoped rules.
-2. Check workflow-execution-scoped rules.
-3. Check durable user/team/environment rules.
-4. Prompt if nothing matches.
+**Grants flow down the lineage.** A session-scoped runtime grant matches the session it was created on **and any session spawned beneath it**. Resolution expands the current `sessionId` to its lineage — self plus the `parentSessionId` ancestor chain — and matches `runtime_grants` whose `sessionId` is any member:
 
-This lets the user approve a session action for only that spawned session or for the rest of the workflow run.
+```
+resolve(session S):
+  runtime grants WHERE session_id IN (S, S.parent, S.parent.parent, …)
+  + workflow-execution grants (if S is workflow-spawned; via workflow_spawned_sessions)
+  + durable user policies
+```
+
+This is what makes "Approve for this session" on the orchestrator (or any parent) cover the headless children it spawns — without inheritance, a background child hits the same gate with no human to answer it and stalls, which is the exact failure this spec exists to prevent. `Approve for this session` therefore means "this session and the subtree it spawns"; revoking it removes the grant for the whole subtree.
+
+**Approval requests surface up the lineage.** Symmetrically, an approval raised in a child session must become visible — and resolvable — at every ancestor context, so the user does not have to watch child sessions. There is **one approval record** (the `action_invocation` / `workflow_approval` row); it is surfaced, not duplicated, at:
+
+1. the originating session (unchanged),
+2. each ancestor session — notably the **orchestrator**, as an approval card in its thread,
+3. the **workflow execution** view, if the session is workflow-spawned,
+4. the **global pending-approvals queue**.
+
+Any surface can resolve the single record; resolution is idempotent (same approval id), so approving from the orchestrator thread, the execution canvas, or the child session all resolve the same gate exactly once. Surfaces update live via the event bus. Proactive per-channel push (DM the user on the orchestrator's channel, ping the workflow owner) reuses existing interactive-prompt infrastructure where present and is polished in Phase 2.
+
+**Required linkage work (Phase 1).** Extend `workflow_spawned_sessions` with `workflowId` and `workflowVersionId` (it has neither today) so workflow-spawned sessions can match execution-scoped grants and workflow-node subjects, joined while the row is live (it exists for the session's lifetime, deleted on termination). Provenance fan-out for approval surfacing reuses the same `parentSessionId` chain and spawned-session link.
+
+**Grant scope vs creator (multi-user sessions).** A session can have multiple `session_participants`. Runtime grants are **session-scoped, not creator-scoped**: the match key is `sessionId`, and the grant's `userId` column is creator/audit only — it is not part of matching. Any participant's agent actions in that session benefit equally from a grant created by any other participant. Permission to **create or revoke** a session-scoped grant follows session access — `editor`+ on the session (the same check used by `spawnChild` and other session-write APIs). Viewers see active grants in the session UI but cannot modify them. The same rule applies to workflow-execution-scoped grants against workflow execution access.
+
+### Resolution Authorization
+
+Surfacing is broad; resolution authority is checked against the **origin**, not the surface. A propagated approval that appears in the orchestrator thread, an ancestor session, or the workflow execution view is still resolved against the originating session's or execution's access control:
+
+- A session approval resolves on `editor`+ access to the originating session.
+- A workflow approval resolves on `editor`+ access to the workflow execution.
+- A user with read access to an ancestor surface but no edit access to the origin sees the approval card with disabled action buttons and a deep link back to the origin where they (or another user) can act.
+
+This prevents privilege escalation through surfacing — being able to see a shared orchestrator thread does not grant the ability to approve actions in someone else's child session.
+
+### Denial Propagation
+
+Symmetric to pending-approval propagation. When an `action_invocation` transitions to `denied` (or a workflow approval to `denied`/`expired`) in a descendant context, publish a denial event to each ancestor context's stream over the same provenance fan-out. UI surfaces show a read-only "Tool blocked by policy" trace entry in the parent session, the orchestrator thread, and the workflow execution view, linking back to the origin.
+
+The durable audit record stays in the originating session — ancestors only display the signal. No new permission model is needed because denials are read-only signals, not actions. Without this, a headless or background child session that hits an admin `deny` fails invisibly to the user, which is the same babysit-the-child failure mode the propagation work exists to eliminate.
+
+## Phased Delivery
+
+The hardest, least-grounded part of this design — per-action canonicalization and "which params are stable identifiers" metadata — blocks *durable* param policies but is **not** needed for the approval-fatigue win. Sequence accordingly.
+
+### Phase 1 — Runtime grants + unified resolver (ships the win)
+
+- `runtime_grants` table; ownership/target columns on `action_policies` (no matcher engine yet).
+- Migrate `user_action_policy_overrides` (persistent/timed → durable `action_policies`; session → `runtime_grants`).
+- Unified resolver: deny → admin base → runtime grants (session lineage + execution) → durable user grants → require approval.
+- Session provenance: extend `workflow_spawned_sessions` with `workflowId`/`workflowVersionId`; lineage-aware grant resolution (self + `parentSessionId` chain).
+- Scoped approval endpoints: `once`, `session`, `workflow_execution`, `remaining_foreach`.
+- Foreach: execution-scoped grant by `policyKey`, resolve current + pending siblings.
+- Route workflow approvals through the resolver.
+- Approval propagation: surface a child session's single approval record at ancestor sessions, the orchestrator thread, the workflow execution view, and the global queue; resolvable from any surface (idempotent); live via the event bus.
+- Client: session + execution approval cards with `once` / `session` / `run` / `remaining`.
+
+Phase 1 is fully testable end-to-end and delivers prompt-once `foreach(concurrency: 1)` plus child-session approvals that surface to the parent — without any per-action matcher metadata.
+
+### Phase 2 — Durable parameter policies
+
+- Param matcher engine (`equals`/`oneOf`/`startsWith`/`contains`/`matches`), fail-closed, type-strict.
+- Per-action canonicalization + matcher-hint metadata, starting with Google Workspace and GitHub.
+- `durable_policy` approval scope + confirmation dialog with stable-identifier preselection.
+- Native-tool interdictor: intercept built-in session tool calls (`bash`, file edits, etc.), resolve them against `session_tool` policies before execution, with regex matchers on tool args (e.g. `bash` `command`).
+- Workflow editor readiness pass and "pre-approve matching requests."
+- Proactive per-channel approval push: DM the user on the orchestrator's channel and ping workflow owners when a propagated approval is pending, honoring notification preferences.
+- Settings UI convergence onto action policies.
 
 ## UI Design
 
 ### Approval Prompt Actions
 
-The UI should expose choices based on context:
-
 | Context | Primary choices |
 | --- | --- |
-| Plain session | `Approve once`, `Approve for this session`, `Approve matching requests`, `Deny` |
-| Workflow execution | `Approve once`, `Approve for this run`, `Approve matching requests`, `Deny` |
-| Foreach body | `Approve once`, `Approve remaining rows`, `Approve matching requests`, `Deny` |
+| Plain session | `Approve once`, `Approve for this session`, `Approve matching requests`*, `Deny` |
+| Workflow execution | `Approve once`, `Approve for this run`, `Approve matching requests`*, `Deny` |
+| Foreach body | `Approve once`, `Approve remaining rows`, `Approve matching requests`*, `Deny` |
 
-`Approve matching requests` should open a confirmation dialog before creating a durable approval rule.
+\* `Approve matching requests` (durable) is Phase 2; it opens a confirmation dialog before creating a durable user-managed action policy.
 
-### UI Surface Inventory
+### Session Chat Approval Card
 
-Approval rules should be surfaced anywhere a user is asked to make or understand an approval decision. Each surface should use the same backend approval-rule resolver and should show the same audit language when a rule auto-approves work.
+Shows `Approve once`, `Approve for this session`, `Approve matching requests` (Phase 2), `Deny`. If an action is auto-approved by policy, the trace shows the matched policy/grant label instead of approval choices.
 
-#### Session Chat Approval Card
+### Workflow Execution Canvas
 
-The session chat approval card is the primary UI for manual sessions and orchestrator sessions. It should show:
+Workflow execution mode exposes approval controls on selected approval-capable nodes: `approval` nodes, `tool` nodes blocked by policy, `foreach` body nodes with approval-capable work, and `session` nodes whose spawned session is waiting. An `orchestrator` node dispatches to the persistent orchestrator session; approvals raised there surface against that session (and in the global queue), not the workflow node — the node may link to them but does not own the approval. For a `foreach` body approval, the selected-node pane shows `Approve remaining rows` and explains that future matching iterations in this run will auto-approve.
 
-- `Approve once`
-- `Approve for this session`
-- `Approve matching requests`
-- `Deny`
+### Workflow Editor Readiness (Phase 2)
 
-`Approve for this session` creates a session-scoped rule. `Approve matching requests` opens the durable rule dialog. If the action was auto-approved by a rule, the card or trace message should show the matched rule summary instead of rendering an approval choice.
+Before `Publish`, `Test`, or enabling a trigger, run an approval readiness pass classifying approval-capable nodes as **Covered**, **Intentional human gate**, **Will prompt at runtime**, **Blocked**, or **Unknown** (params depend on trigger data or upstream outputs not resolvable yet). Badge approval-capable nodes. Readiness setup actions: `Pre-approve matching requests`, `Approve matching iterations in each run`, `Keep human approval`, `Run test with sample data`. Durable policies must be created only from concrete trigger defaults, manual test payloads, action matcher hints, resolved static params, or workflow approval contracts.
 
-#### Session Detail / Activity Timeline
+### Durable Policy Confirmation Dialog (Phase 2)
 
-Session activity history should show when an action was auto-approved. The entry should include:
-
-- matched rule id or label
-- subject
-- matcher summary
-- scope
-- created-by user
-
-This prevents silent automation from looking indistinguishable from normal tool execution.
-
-#### Workflow Execution Canvas
-
-Workflow execution mode should show approval-rule controls on selected approval-capable nodes:
-
-- explicit `approval` nodes
-- `tool` nodes blocked by policy
-- `foreach` body nodes that contain an approval-capable action
-- `session` nodes whose spawned session is waiting on an approval
-- `orchestrator` nodes if they produce approval-gated actions
-
-For a normal workflow approval, the selected-node pane should show `Approve once`, `Approve for this run`, `Approve matching requests`, and `Deny`.
-
-For a `foreach` body approval, the selected-node pane should show `Approve once`, `Approve remaining rows`, `Approve matching requests`, and `Deny`. `Approve remaining rows` creates a workflow-execution-scoped rule and should explain that future matching iterations in this run will auto-approve.
-
-#### Workflow Execution List / Details Page
-
-Execution detail pages outside the canvas should expose the same approval controls as the canvas for pending approvals. They should also show auto-approval audit fields on completed node traces so users can diagnose why a node did not pause.
-
-#### Global Pending Approvals Queue
-
-The app should have a cross-context pending approvals surface so users can find blocked work without opening every session or workflow. This can live under Automation or Notifications, but it should list:
-
-- pending session approvals
-- pending workflow approval nodes
-- pending workflow tool-policy approvals
-- pending approvals inside workflow-created sessions
-- pending foreach body approvals
-
-Each row should deep-link to the originating session, workflow execution canvas, or execution detail page. It should expose the same context-aware actions as the source surface. Durable rule creation still deep-links to the shared confirmation dialog.
-
-#### Workflow Editor Validation / Data Flow Panels
-
-The editor should surface approval readiness while the user is authoring the workflow:
-
-- nodes that may require approval should show a visible badge on the canvas
-- tool nodes should identify parameters that can become matchers, such as document ids, spreadsheet ids, repo names, issue ids, or URL hosts
-- data-flow and edge inspection panels should show resolved parameter contracts when available
-- validation messages should avoid implying that a persistent rule exists when the user only approved a runtime-scoped rule
-
-Approval badges should distinguish:
-
-- `Approval required`: this node can pause unattended execution.
-- `Covered`: an approval rule or action policy already allows the node's current approval shape.
-- `Blocked`: admin or action policy denies this node's current approval shape.
-- `Needs sample data`: the node may be approvable, but its params are too templated to evaluate without trigger defaults or a test-run payload.
-
-Badges should appear on:
-
-- `approval` nodes
-- risky `tool` nodes
-- `foreach` body nodes that contain approval-capable work
-- `session` nodes that can request tool approval
-- `orchestrator` nodes that can request tool approval or spawn approval-capable sessions
-
-### Workflow Approval Readiness
-
-The workflow editor should include an approval readiness pass before `Publish`, `Test`, or enabling a trigger. The goal is to make background workflows predictable before they run unattended.
-
-The readiness pass should enumerate every approval-capable node and classify it as:
-
-- **Covered**: it will not prompt because an approval rule or action policy applies.
-- **Intentional human gate**: it is expected to pause, such as a human review `approval` node.
-- **Will prompt at runtime**: it is likely to stall a background run.
-- **Blocked**: admin or action policy denies it.
-- **Unknown**: params depend on trigger data or upstream outputs that cannot be resolved yet.
-
-For nodes that will prompt, the editor should offer context-aware setup actions:
-
-- `Pre-approve matching requests` for tool/session/orchestrator actions with concrete resolved params.
-- `Approve matching iterations in each run` for `foreach` body approvals.
-- `Keep human approval` for explicit workflow `approval` nodes and other intentionally gated steps.
-- `Run test with sample data` when templated params require trigger defaults or manual test input before a safe matcher can be suggested.
-
-Durable rules still must not be created from raw templates blindly. The editor may create rule candidates only from:
-
-- concrete trigger defaults
-- manual test-run sample data
-- action matcher hints plus resolved static params
-- workflow approval contracts
-
-Scheduled/background triggers should warn before they are enabled if the workflow contains approval-capable nodes classified as `Will prompt at runtime` or `Unknown`. The warning should explain which nodes may stall unattended execution and let the user either configure approval rules or mark the human gate as intentional.
-
-#### Approval Rule Confirmation Dialog
-
-The durable rule dialog is shared by sessions and workflows. It should:
-
-- show the subject being approved
-- list resolved params with checkbox-controlled matchers
-- preselect stable identifiers
-- leave payload/content fields unselected
-- require at least one matcher unless the action is read-only and explicitly safe
-- preview the exact human-readable rule before saving
-
-The dialog should make scope explicit: user, team, or environment. The first implementation can default to user scope.
-
-#### Settings: Approval Rules
-
-User settings should include a durable approval-rules list. Users need to:
-
-- list active rules
-- inspect subject, scope, matcher summary, origin, creator, and last matched time if available
-- revoke a rule
-- optionally edit label and expiry
-
-Editing matchers can be deferred if the creation dialog is strong enough; revocation is required.
-
-#### Admin / Team Policy UI
-
-Admin policy UI should remain the place for organization-level deny and required-approval rules. It should also show how admin policy interacts with user approval rules:
-
-- admin deny overrides user rules
-- admin require-approval may prevent creating durable user rules if configured that way
-- user rules can quiet approvals only where admin policy allows it
-
-Team/environment-scoped approval rules can be added here once the base user-scoped flow is working.
-
-#### Slack and Telegram Approval Messages
-
-Slack and Telegram should support safe approval choices that do not require complex matcher editing:
-
-- `Approve once`
-- `Approve for this session` or `Approve for this run`, depending on context
-- `Deny`
-
-`Approve matching requests` should be omitted or deep-link to the web confirmation dialog until the channel UI can clearly show parameter matchers. Durable rule creation should not happen from a chat button that cannot display the full rule.
-
-Channel approval actions must use signed, single-use action tokens with short expiry. The token must bind:
-
-- approval id
-- user id
-- channel identity
-- decision
-- scope
-- idempotency key
-
-The backend must reject replayed, expired, or mismatched channel actions. Channel users may approve only approvals they could approve in the web UI.
-
-#### Workflow Agent Tool Results
-
-Remote worker tools that validate, save, or run workflows should expose approval-rule outcomes in their returned execution data:
-
-- pending approval ids
-- auto-approved approval ids
-- matched rule summaries
-- blocked-by-admin-policy messages
-
-This lets agents explain why a workflow did or did not pause without scraping the web UI.
-
-### Durable Rule Creation Dialog
-
-The durable rule dialog starts from a concrete approval request and shows the resolved params.
-
-Example:
+Starts from a concrete approval request and shows resolved params.
 
 ```text
 Always approve:
@@ -460,132 +501,168 @@ Only when:
 [ ] values any
 ```
 
-Defaults:
+Defaults: preselect stable identifiers (`spreadsheetId`, `documentId`, `owner`, `repo`, `url.host`); leave payload fields (row values, message bodies, generated text) unselected; block saving when no matcher is selected unless the action is read-only and explicitly safe.
 
-- Select stable target identifiers by default, such as `spreadsheetId`, `documentId`, `repo`, `owner`, or `url host`.
-- Do not select payload fields like row values, message body, generated text, or arbitrary content by default.
-- Block saving when no parameter matcher is selected unless the action is read-only and explicitly marked safe.
+### Settings And Admin Policy UI
+
+- User settings show user durable policies and active runtime grants.
+- Admin settings show admin allow / require-approval / deny policies.
+- The old "Action Policy Overrides" UI is renamed/replaced, not left as a separate concept.
+
+Users can list active policies/grants; inspect subject, scope, matcher summary, origin, creator, last matched; revoke; optionally edit label and expiry. Admins see that admin deny overrides user allow, and that user grants can quiet approvals only where admin policy permits.
+
+### Global Pending Approvals Queue
+
+A cross-context surface listing pending session approvals, workflow approval nodes, workflow tool-policy approvals, workflow-created-session approvals, and `foreach` body approvals. Each row deep-links to its origin and exposes the same context-aware actions.
+
+Because approvals propagate up the provenance chain (see "Session Provenance, Grant Scope, And Approval Propagation"), the same approval also appears at each ancestor context — an approval raised in a workflow-spawned or orchestrator-spawned child shows up in the orchestrator thread and the workflow execution view, and in the parent session, not only in the child. All surfaces act on the one underlying record: resolving from any surface resolves it once and clears it from the others live via the event bus.
+
+### Slack And Telegram Approval Messages
+
+Support `Approve once`, `Approve for this session`/`Approve for this run`, and `Deny`. `Approve matching requests` deep-links to the web confirmation dialog until channel UI can display matcher details — durable policy creation must not happen from a chat button that cannot show the full policy. Channel actions require signed, single-use tokens with short expiry binding approval id, user id, channel identity, decision, scope, and idempotency key.
 
 ### Audit Display
 
-Auto-approved actions should show why they did not prompt:
+Auto-approved actions show why they did not prompt:
 
 ```text
-Auto-approved by approval rule
+Auto-approved by action policy
 google_workspace.sheets.append_rows
 spreadsheetId equals 1NTVgJuy...
 created by Conner on Jun 25, 2026
 ```
 
-Workflow execution traces should include:
-
-- approval rule id
-- matched subject
-- matched params summary
-- created-by user
+Workflow execution traces and action invocation rows include matched policy/grant id, matched subject, matched param summary, created-by, and runtime scope if any.
 
 ## API Design
 
 ### Approval Resolution
 
-Existing approve endpoints should accept an approval scope:
+Approve endpoints accept a scope:
 
 ```json
 {
   "decision": "approved",
-  "scope": "once" | "session" | "workflow_execution" | "remaining_foreach" | "durable_rule",
+  "scope": "once" | "session" | "workflow_execution" | "remaining_foreach" | "durable_policy",
   "paramMatchers": [],
   "idempotencyKey": "optional-client-generated-key"
 }
 ```
 
-For compatibility, a bare approve request is treated as `scope = once`.
+A bare approve request is `scope = once`. `scope = durable_policy` (Phase 2) requires explicit `paramMatchers`. The endpoint derives subject, resolved params, requester context, org, and durable-policy eligibility from the stored approval request. Clients choose scope and matcher paths/ops/values but must not provide requester context.
 
-`scope = durable_rule` requires explicit `paramMatchers`.
-
-The approve endpoint must derive the subject, resolved params, requester context, org, environment, and durable-rule eligibility from the approval request stored on the server. Clients may choose scope and matcher paths/ops/values, but they must not provide or override requester context.
-
-### Rule Management
-
-Add CRUD routes for durable approval rules:
+### Policy Management
 
 ```text
-GET    /api/approval-rules
-POST   /api/approval-rules
-PATCH  /api/approval-rules/:id
-DELETE /api/approval-rules/:id
+GET    /api/action-policies
+POST   /api/action-policies
+PATCH  /api/action-policies/:id
+DELETE /api/action-policies/:id
 ```
 
-Users can list and revoke their own durable rules. Admin/team rule management can be added separately.
+`/api/action-policy-overrides` becomes a compatibility alias during migration or is removed before release.
+
+Permissions:
+
+- Admins create/edit/revoke/list admin-managed policies for their org.
+- Non-admin users create only `managedBy = user`, `mode = allow` rows for themselves through approval-derived or matcher-validated settings flows.
+- Non-admin users list their own durable policies and active runtime grants tied to sessions/executions they can access.
+- Non-admin users revoke their own user-managed rows but cannot edit `managedBy`, `mode`, `principalType`, `principalId`, `orgId`, or target fields after creation.
+- Clients never provide requester context, org, subject, service/action, or resolved params for approval-derived creation. The server derives those from the stored approval request.
 
 ## Safety Rules
 
-- Admin, team, environment, and action-level deny decisions win over approval rules.
+- Admin-managed deny policies always win.
+- User-managed policies and runtime grants may only create `allow` decisions.
 - Matching uses resolved runtime params only.
 - Missing parameter paths fail closed.
-- Durable rules must require at least one matcher unless the action is read-only and explicitly marked safe.
-- Regex matchers are advanced and should be displayed verbatim before saving.
-- Persistent approvals should prefer tool/action parameter rules over node-only rules.
-- Durable workflow-node rules must include workflow version/revision id or be rejected.
-- Generic workflow approval nodes cannot create durable rules unless they declare an approval contract.
-- Approval actions must be idempotent and safe to retry.
-- Slack/Telegram approvals require signed, expiring, single-use action tokens.
-- Deny-all/bulk-deny should not ship in the MVP.
+- Durable write policies require at least one matcher unless the action is read-only and explicitly safe.
+- Regex matchers are advanced and displayed verbatim before saving.
+- Durable workflow-node policies require workflow version id; runtime grants omit it.
+- Generic workflow approval nodes cannot create durable policies without an approval contract.
+- Approval actions are idempotent and safe to retry; persisted grant uniqueness uses `policyKey`.
+- An approval is a single record surfaced at multiple contexts; resolving from any surface resolves it exactly once and clears the others.
+- Resolution authorization is checked against the **origin** of the approval, not the surface it was acted on from. Surfacing carries no implicit permission to act.
+- Session-scoped grants inherit down the spawned-session subtree; revoking one removes it for the whole subtree.
+- Runtime grants are session-scoped, not creator-scoped: any session participant benefits, and create/revoke requires `editor`+ access to the session, not ownership of the grant.
+- Denials propagate up the provenance chain as read-only display signals; ancestors see the failure without inheriting permission to retry.
+- Slack/Telegram approval actions require signed, expiring, single-use action tokens.
 
 ## Migration Path
 
-1. Add the `approval_rules` table and resolver.
-2. Route existing session "approve for session" behavior through session-scoped approval rules.
-3. Route workflow approval resolution through the same resolver.
-4. Add foreach `Approve remaining rows` using workflow-execution-scoped rules.
-5. Add durable rule creation from approval prompts.
-6. Add editor approval badges and workflow approval readiness checks.
-7. Add settings UI for reviewing and revoking durable rules.
+The previous draft of this section sequenced schema changes, backfill, and code switchovers as separate phases, leaving a window where new `user_action_policy_overrides` rows would be written after migration but before the resolver switched — silently dropped. Collapse the rollout into three atomic steps instead:
+
+**1. One D1 migration (atomic per file).** In a single migration:
+   - Extend `action_policies` with ownership/target/audit/matcher columns; default `orgId` to `'default'`, default `paramMatchers` to `'[]'`, default `userGrantBehavior` to `'allowed'`.
+   - Create `runtime_grants` with FK cascades to `users`, `sessions`, `workflow_executions`.
+   - Extend `workflow_spawned_sessions` with `workflow_id` and `workflow_version_id`.
+   - Extend `action_invocations` with `matched_policy_id` and `matched_grant_id`.
+   - Drop the existing partial unique indexes that only key on service/action/risk (`idx_ap_action`, `idx_ap_service`, `idx_ap_risk`).
+   - Backfill existing `action_policies` rows as admin/org policies (`managedBy = 'admin'`, `principalType = 'org'`, `principalId = orgId`, `subjectType = 'tool_action'` when service/action present).
+   - Migrate `user_action_policy_overrides` rows: persistent/timed → durable `action_policies` user grants; session → `runtime_grants`.
+   - Add scope-aware unique and lookup indexes on both tables.
+
+At the end of this migration, the new tables hold every row that ever lived in the old model. The old table still exists but is now stale and unread.
+
+**2. One Worker deploy (atomic per instance).** In a single deploy:
+   - Switch reads + writes for action policy resolution to the unified resolver over `action_policies` + `runtime_grants`.
+   - Stop writing `user_action_policy_overrides` entirely.
+   - Route workflow approvals, workflow tool nodes, workflow-created sessions, and `foreach` through the unified resolver.
+   - Update settings and approval UIs to read/write the new model; convert `/api/action-policy-overrides` to a compatibility alias.
+
+**3. Cleanup deploy (later, optional).** Drop the `/api/action-policy-overrides` alias, the `userActionPolicyOverrides` schema, and the unused legacy columns on `action_invocations` (`userOverrideId`, `policyLifetime`, etc.) once nothing references them.
+
+The only write-race window is between step 1 finishing and step 2 deploying — seconds in practice for sequenced migration-then-deploy. For this pre-release feature on workflows, any grants written in that window are session-scoped ephemerals at worst; users would re-approve once. Acceptable. If a production environment ever needs zero-loss cutover, insert a dual-write deploy between steps 1 and 2 that writes both old and new during the window, then collapse afterward.
 
 ## Testing Strategy
 
 Worker tests:
 
-- Exact session-scoped rule auto-approves a matching session approval.
-- Workflow execution-scoped rule auto-approves future foreach iterations when concurrency is `1`.
-- Workflow execution-scoped rule resolves already-pending sibling approvals when concurrency is greater than `1`.
-- Durable user-scoped rule matches across manual session and workflow tool node.
-- Parameter matcher rejects missing paths.
-- Parameter matcher rejects type-mismatched values after canonicalization.
-- Parameter matcher rejects redacted/secret values for durable rules.
-- Regex matcher validates and fails closed on invalid patterns.
-- Admin deny and action-level deny override every approval rule.
-- Durable workflow-node rule is rejected without workflow version/revision id.
-- Durable workflow approval rule is rejected when the node does not declare an approval contract.
-- Cross-org and cross-environment rules do not match.
-- Duplicate approve requests are idempotent and do not create duplicate rules.
-- Foreach approval with concurrency greater than `1` does not create duplicate prompts after `Approve remaining rows`.
-- Slack/Telegram signed approval actions reject replay, expiry, and channel/user mismatch.
-- Resolved runtime params are used instead of raw template params.
+- Existing admin action policies resolve exactly as before after backfill.
+- Admin and user/runtime policies for the same service/action coexist (old uniqueness no longer blocks).
+- Admin deny overrides every user-managed allow and runtime grant.
+- Admin `require_approval` + `userGrantBehavior = blocked` ignores user/runtime allow grants.
+- Admin `require_approval` + `userGrantBehavior = allowed` is quieted by a matching runtime grant or durable user policy.
+- Admin/system `allow` returns allow without consulting grants.
+- Session-scoped runtime grant auto-approves matching session tool calls and stops after the session is terminal.
+- Workflow-execution-scoped runtime grant auto-approves future `foreach` iterations at `concurrency = 1` and stops after the execution is terminal.
+- Execution-scoped grant resolves already-pending sibling approvals at `concurrency > 1`.
+- `remaining_foreach` uses a stable `policyKey` so equivalent later approvals reuse the same runtime grant; distinct matcher fingerprints create distinct grants.
+- Durable user policy matches across manual sessions and workflow tool nodes (Phase 2).
+- Parameter matcher rejects missing paths, type mismatches, and redacted/secret fields; regex validates on save and fails closed at runtime (Phase 2).
+- Durable workflow-node policy rejected without workflow version id; durable workflow approval policy rejected without an approval contract.
+- Cross-org policies do not match.
+- Non-admin users cannot create admin-managed, deny, or require-approval policies.
+- Duplicate approval requests are idempotent and do not create duplicate grants.
+- Migrated `user_action_policy_overrides` rows produce equivalent resolution decisions.
+- A session-scoped grant on a parent session auto-approves a matching call in a child session spawned beneath it (lineage inheritance).
+- A grant does not match a sibling session outside the lineage.
+- A workflow-spawned session recovers its execution scope via `workflow_spawned_sessions` and matches an execution-scoped grant.
+- A child spawned by a workflow-spawned session recovers the execution via lineage walk (per-member join), not only via the originating session.
+- Lineage walk caps at depth 16 and survives a `parentSessionId` cycle without looping.
+- Resolving a propagated approval from an ancestor context resolves the single record once; the child's pending state clears and a second resolve is a no-op.
+- A grant created by user A on a session co-occupied by users A and B auto-approves a matching call regardless of which participant's interaction triggered it; revoke by either editor participant works.
+- A user with read-only access to an ancestor surface cannot resolve a propagated approval whose origin they lack `editor`+ access to (403 / disabled UI).
+- A `denied` invocation in a descendant session emits a denial event to ancestor contexts; the durable audit row lives only on the origin.
 
 Client tests:
 
-- Approval card renders the right scope actions for session, workflow execution, and foreach.
-- Workflow execution canvas and details page render the same approval actions for the same pending approval.
-- Global pending approvals queue shows session, workflow, workflow-created session, and foreach approvals.
-- Workflow editor badges approval-capable nodes and distinguishes covered, blocked, unknown, and runtime-prompt states.
-- Workflow publish/test/trigger enablement surfaces approval readiness warnings for unattended workflow stalls.
-- Workflow readiness offers pre-approval setup only when concrete params, test sample data, matcher hints, or approval contracts are available.
-- Durable rule dialog pre-selects stable identifiers and leaves payload fields unselected.
-- Durable rule dialog hides or disables durable creation for generic workflow approval nodes without contracts.
-- Foreach "Approve remaining rows" calls the approval endpoint with the correct scope.
-- Auto-approved trace rows display matched approval-rule metadata.
-- Settings approval-rules list supports inspecting and revoking durable rules.
-- Slack/Telegram approval payloads do not create durable rules without a web confirmation URL.
+- Approval card renders correct scope actions for session, workflow execution, and `foreach`.
+- Workflow execution canvas and details page render the same approval actions for a pending approval.
+- A child session's pending approval surfaces in the parent session, the orchestrator thread, and the workflow execution view, and resolving from one clears the others live.
+- `Approve remaining rows` calls the approval endpoint with the correct scope.
+- Auto-approved traces display matched policy/grant metadata.
+- Settings can inspect and revoke user-managed policies and active runtime grants.
+- (Phase 2) Workflow editor badges approval-capable nodes; durable policy dialog preselects stable identifiers and disables durable creation for contract-less approval nodes.
 
 Integration tests:
 
 - A workflow with `foreach(concurrency: 1)` and a gated Google Sheets write prompts once, then auto-approves remaining rows.
-- A workflow-created session uses a workflow-execution-scoped rule.
-- A durable Google Sheets rule applies to both a manual session and a workflow tool node.
+- A workflow-created session uses a workflow-execution-scoped runtime grant.
+- An orchestrator-spawned headless child hits a gated action; the approval surfaces in the orchestrator thread and is resolved there without the user opening the child session.
+- (Phase 2) A durable Google Sheets policy applies to both a manual session and a workflow tool node.
 
-## Open Questions
+## Follow-Up Questions
 
-1. Which params are considered stable identifiers per integration action? This needs per-action metadata before durable rule creation feels trustworthy.
-2. Should durable team/environment-scoped approval-rule creation ship in the first UI, or should the first UI expose only user-scoped durable rules while the schema supports all scopes?
-3. Should admin-managed approval rules be created in the same settings surface as admin deny/require-approval policies, or in a separate "approval automation" surface?
+1. **Per-action stable-identifier metadata.** Phase 2 durable policies need each integration action to declare which params are stable identifiers and how they canonicalize. Which actions get this first beyond Google Workspace and GitHub?
+2. **Runtime grant audit retention.** Matching excludes terminal contexts, but how long should completed-context grants stay visible in audit UI before cleanup hard-deletes them?
