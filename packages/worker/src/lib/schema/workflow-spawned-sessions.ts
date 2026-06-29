@@ -18,6 +18,12 @@ export const workflowSpawnedSessions = sqliteTable('workflow_spawned_sessions', 
   executionId: text('execution_id').notNull().references(() => workflowExecutions.id, { onDelete: 'cascade' }),
   nodeId: text('node_id').notNull(),
   sessionId: text('session_id').notNull(),
+  // Added in migration 0022 so the unified resolver can recover the parent
+  // workflow context for a spawned session (lineage walk → execution scope,
+  // workflow-node subject matching). Nullable for backfilled / pre-0022 rows;
+  // new spawn sites populate both.
+  workflowId: text('workflow_id'),
+  workflowVersionId: text('workflow_version_id'),
   createdAt: text('created_at').notNull(),
   expiresAt: text('expires_at').notNull(),
 }, (table) => [

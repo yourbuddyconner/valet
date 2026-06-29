@@ -14,10 +14,75 @@ export const actionPolicies = sqliteTable('action_policies', {
   createdBy: text().references(() => users.id, { onDelete: 'set null' }),
   createdAt: text().notNull().default(sql`(datetime('now'))`),
   updatedAt: text().notNull().default(sql`(datetime('now'))`),
+  // ─── Unified policy framework (migration 0022) ──────────────────────────
+  // Ownership / scope. Defaults backfill existing rows as admin/org policies.
+  orgId: text().notNull().default('default'),
+  managedBy: text().notNull().default('admin'),    // 'admin' | 'user' | 'system'
+  principalType: text().notNull().default('org'),  // 'org' | 'user'
+  principalId: text().notNull().default('default'),
+  // Target discriminator. New code must respect the per-type required fields
+  // in the spec; migrated rows are 'tool_action' regardless of partial targets.
+  subjectType: text().notNull().default('tool_action'),
+  subjectLabel: text(),                            // Display-only; never used for matching.
+  workflowId: text(),
+  workflowVersionId: text(),
+  nodeId: text(),
+  // Parameter matchers (Phase 2 enforces; Phase 1 stores).
+  paramMatchers: text().notNull().default('[]'),
+  matcherSummary: text(),
+  // Admin require_approval rows: 'allowed' means user grants may quiet matching
+  // approvals; 'blocked' forces a prompt every time.
+  userGrantBehavior: text().notNull().default('allowed'),
+  // Provenance / audit.
+  origin: text().notNull().default('settings'),    // 'settings' | 'approval_prompt' | 'workflow_editor' | 'admin' | 'migration'
+  sourceApprovalId: text(),
+  lastMatchedAt: text(),
+  expiresAt: text(),                               // Null = persistent; set = timed.
+  revokedAt: text(),
 });
-// Note: Partial unique indexes (idx_ap_action, idx_ap_service, idx_ap_risk) are defined
-// in the migration SQL. Drizzle's SQLite index builder does not support WHERE clauses.
+// Note: Unique and lookup indexes (idx_ap_unique, idx_ap_lookup_*) are defined
+// in migration 0022. Drizzle's SQLite index builder does not support WHERE
+// clauses, so partial indexes live in the migration SQL.
 
+/**
+ * Ephemeral allow grants scoped to a live session or workflow execution.
+ *
+ * Exactly one of `sessionId` / `workflowExecutionId` is set (enforced by a
+ * CHECK constraint in migration 0022). Hard-deleted on terminal-state
+ * transition of the parent context; FK cascades are the backstop.
+ *
+ * All rows are implicitly `mode = 'allow'`. Quieting an approval is the
+ * only function of this table.
+ */
+export const runtimeGrants = sqliteTable('runtime_grants', {
+  id: text().primaryKey(),
+  orgId: text().notNull().default('default'),
+  userId: text().notNull().references(() => users.id, { onDelete: 'cascade' }),
+  sessionId: text().references(() => sessions.id, { onDelete: 'cascade' }),
+  workflowExecutionId: text().references(() => workflowExecutions.id, { onDelete: 'cascade' }),
+  subjectType: text().notNull(),
+  service: text(),
+  actionId: text(),
+  riskLevel: text(),
+  workflowId: text(),
+  nodeId: text(),
+  paramMatchers: text().notNull().default('[]'),
+  // Deterministic idempotency key: scope id + subject + node id + matcher fingerprint.
+  // Equivalent later approvals reuse the same grant.
+  policyKey: text().notNull(),
+  matcherSummary: text(),
+  createdAt: text().notNull().default(sql`(datetime('now'))`),
+  revokedAt: text(),
+});
+// Note: Unique policy_key indexes (per-session, per-execution) and lookup
+// indexes are partial-WHERE indexes defined in migration 0022.
+
+/**
+ * Legacy user-managed override table. Migration 0022 backfills every row
+ * into action_policies (persistent / timed) or runtime_grants (session) and
+ * leaves this table populated for the existing resolver. The next commit
+ * retires reads/writes; a follow-up migration drops it.
+ */
 export const userActionPolicyOverrides = sqliteTable('user_action_policy_overrides', {
   id: text().primaryKey(),
   userId: text().notNull().references(() => users.id, { onDelete: 'cascade' }),
@@ -61,6 +126,8 @@ export const actionInvocations = sqliteTable('action_invocations', {
   resolvedAt: text(),
   executedAt: text(),
   expiresAt: text(),
+  // Legacy audit columns. Kept for historical reads; new code writes the
+  // matched_* columns below instead.
   policyId: text().references(() => actionPolicies.id, { onDelete: 'set null' }),
   orgPolicyId: text().references(() => actionPolicies.id, { onDelete: 'set null' }),
   baseMode: text(),
@@ -69,6 +136,10 @@ export const actionInvocations = sqliteTable('action_invocations', {
   policySource: text(),
   policyLifetime: text(),
   policyScope: text(),
+  // Unified-resolver audit (migration 0022). Backfilled from user_override_id
+  // mapping; new invocations write these in place of the legacy columns.
+  matchedPolicyId: text().references(() => actionPolicies.id, { onDelete: 'set null' }),
+  matchedGrantId: text().references(() => runtimeGrants.id, { onDelete: 'set null' }),
   createdAt: text().notNull().default(sql`(datetime('now'))`),
   updatedAt: text().notNull().default(sql`(datetime('now'))`),
 }, (table) => [
