@@ -507,6 +507,10 @@ export interface ResolveActionPolicyInput {
   service: string;
   actionId: string;
   riskLevel: string;
+  /** When resolving for a workflow node, the node id of the current invocation.
+   *  Runtime grants with their own nodeId only match invocations from that node. */
+  workflowId?: string | null;
+  nodeId?: string | null;
 }
 
 /**
@@ -663,7 +667,18 @@ export async function resolveEffectiveActionPolicy(
         )
         .all();
 
-      const grantMatch = pickMostSpecific(grants, service, actionId, riskLevel);
+      // nodeId-aware matching: when a runtime grant carries a nodeId, it
+      // only applies to invocations from that exact workflow node. Without
+      // this, a "Approve remaining rows" grant on a foreach body would
+      // silently auto-approve every other workflow approval node in the
+      // same execution (all of which invoke the same workflows.request_approval
+      // service+actionId). Grants without a nodeId apply broadly (e.g. "Approve
+      // for this run" covers all nodes in the execution).
+      const nodeFilteredGrants = grants.filter((g) => {
+        if (!g.nodeId) return true;
+        return g.nodeId === input.nodeId && (!g.workflowId || g.workflowId === input.workflowId);
+      });
+      const grantMatch = pickMostSpecific(nodeFilteredGrants, service, actionId, riskLevel);
       if (grantMatch) {
         return {
           mode: 'allow',
@@ -829,6 +844,10 @@ export async function createInvocation(
     policySource?: PolicySource | null;
     policyScope?: PolicyScope | null;
     status?: string;
+    /** Workflow-runtime context captured for the resume hook and
+     *  nodeId-aware grant matching. */
+    nodeId?: string | null;
+    iterationIndex?: number | null;
   },
 ) {
   const now = nowIso();
@@ -849,6 +868,8 @@ export async function createInvocation(
     baseSource: data.baseSource ?? null,
     policySource: data.policySource ?? null,
     policyScope: data.policyScope ?? null,
+    nodeId: data.nodeId ?? null,
+    iterationIndex: data.iterationIndex ?? null,
     status: data.status || 'pending',
     createdAt: now,
     updatedAt: now,
@@ -915,6 +936,100 @@ export async function listInvocationsBySession(
   }
 
   return query.all();
+}
+
+// ─── Workflow-attributed invocation helpers ─────────────────────────────────
+// Replace the legacy workflow_approvals listing/sweep functions. The audit
+// row IS the action_invocation now; these are thin query helpers.
+
+/**
+ * Lists pending workflow-attributed invocations for an execution. Used by
+ * cancel cleanup to dispatch `cancelled` events for every Workflow step
+ * waiting on `approval_<nodeId>`.
+ */
+export async function listPendingWorkflowApprovalsForExecution(
+  db: AppDb,
+  executionId: string,
+): Promise<Array<Pick<ActionInvocationRow, 'id' | 'nodeId' | 'iterationIndex'>>> {
+  return db
+    .select({
+      id: actionInvocations.id,
+      nodeId: actionInvocations.nodeId,
+      iterationIndex: actionInvocations.iterationIndex,
+    })
+    .from(actionInvocations)
+    .where(
+      and(
+        eq(actionInvocations.workflowExecutionId, executionId),
+        eq(actionInvocations.status, 'pending'),
+      ),
+    )
+    .all();
+}
+
+/**
+ * Cancellation helper: transitions every pending workflow-attributed
+ * invocation for an execution to 'failed' with error='workflow execution
+ * cancelled'. Replaces the legacy `cancelAllPendingApprovalsForExecution`
+ * which operated on the retired `workflow_approvals` table.
+ */
+export async function cancelPendingWorkflowApprovalsForExecution(
+  db: AppDb,
+  executionId: string,
+): Promise<void> {
+  const now = nowIso();
+  await db
+    .update(actionInvocations)
+    .set({
+      status: 'failed',
+      error: 'workflow execution cancelled',
+      executedAt: now,
+      updatedAt: now,
+    })
+    .where(
+      and(
+        eq(actionInvocations.workflowExecutionId, executionId),
+        eq(actionInvocations.status, 'pending'),
+      ),
+    );
+}
+
+/**
+ * Stuck-approval sweep helper: finds workflow-attributed invocations whose
+ * status transitioned to a terminal value but where the resume event
+ * dispatch may have failed (CF API blip, etc.). Caller re-dispatches.
+ */
+export async function listStuckWorkflowApprovalsForResume(
+  db: AppDb,
+  opts: { cutoffIso: string; ageFloorIso: string; limit: number },
+): Promise<
+  Array<Pick<ActionInvocationRow,
+    'id' | 'workflowExecutionId' | 'nodeId' | 'iterationIndex' | 'status' | 'resolvedBy'>>
+> {
+  return db
+    .select({
+      id: actionInvocations.id,
+      workflowExecutionId: actionInvocations.workflowExecutionId,
+      nodeId: actionInvocations.nodeId,
+      iterationIndex: actionInvocations.iterationIndex,
+      status: actionInvocations.status,
+      resolvedBy: actionInvocations.resolvedBy,
+    })
+    .from(actionInvocations)
+    .where(
+      and(
+        or(
+          eq(actionInvocations.status, 'approved'),
+          eq(actionInvocations.status, 'denied'),
+        ),
+        sql`${actionInvocations.workflowExecutionId} IS NOT NULL`,
+        sql`${actionInvocations.resolvedAt} IS NOT NULL`,
+        sql`${actionInvocations.resolvedAt} < ${opts.cutoffIso}`,
+        sql`${actionInvocations.resolvedAt} > ${opts.ageFloorIso}`,
+      ),
+    )
+    .limit(opts.limit)
+    .all();
 }
 
 export async function listPendingInvocationsByUser(db: AppDb, userId: string) {

@@ -265,3 +265,91 @@ CREATE INDEX idx_rg_execution
 -- action_policies + runtime_grants exclusively; a follow-up migration then
 -- drops the legacy table.
 -- ───────────────────────────────────────────────────────────────────────────
+
+-- ───────────────────────────────────────────────────────────────────────────
+-- 12. Workflow-runtime context on action_invocations + retire workflow_approvals.
+-- ───────────────────────────────────────────────────────────────────────────
+-- `workflow_approvals` is retired here as part of the unified-approval
+-- consolidation (docs/specs/2026-06-25-approval-rules-design.md
+-- §"Relationship to `workflow_approvals` and `action_invocations`").
+-- Every workflow approval gate — both the `tool` node's policy-blocked
+-- invocations and the `approval` node's explicit human gates — lives in
+-- `action_invocations` after this migration. The DAG `approval` node stays
+-- as authoring sugar; at runtime it executes as a `workflows.request_approval`
+-- built-in action call.
+--
+-- nodeId / iterationIndex are captured on action_invocations so the resume
+-- hook can derive the Workflows event type (`approval_<nodeId>[_i_<index>]`)
+-- without parsing the deterministic invocation id, and so the resolver can
+-- do nodeId-aware grant matching (e.g. a "Approve remaining rows" grant on
+-- a foreach body must not auto-approve unrelated approval nodes that share
+-- the same service+actionId).
+
+ALTER TABLE action_invocations ADD COLUMN node_id TEXT;
+ALTER TABLE action_invocations ADD COLUMN iteration_index INTEGER;
+
+CREATE INDEX idx_ai_workflow_node
+  ON action_invocations(workflow_execution_id, node_id, iteration_index);
+
+-- Migrate kind='explicit' workflow_approvals into action_invocations. These
+-- are human-gate rows from `approval` nodes; the corresponding Cloudflare
+-- Workflows instance is still waiting on `step.waitForEvent('approval_<nodeId>')`,
+-- and the new resume hook fires when the migrated row transitions.
+--
+-- userId is recovered from workflow_executions.user_id. Status maps mostly
+-- 1:1; 'cancelled' lands as 'failed' with error='workflow execution
+-- cancelled' (action_invocations has no 'cancelled' enum value). risk_level
+-- is 'medium' so the resolver's system default is require_approval — matches
+-- the semantics of an explicit gate.
+
+INSERT INTO action_invocations (
+  id,
+  workflow_execution_id,
+  user_id,
+  service,
+  action_id,
+  risk_level,
+  resolved_mode,
+  status,
+  params,
+  expires_at,
+  node_id,
+  resolved_by,
+  resolved_at,
+  error,
+  created_at,
+  updated_at
+)
+SELECT
+  wa.id,
+  wa.execution_id,
+  COALESCE(we.user_id, wa.resolved_by, '__system__'),
+  'workflows',
+  'request_approval',
+  'medium',
+  'require_approval',
+  CASE wa.status
+    WHEN 'cancelled' THEN 'failed'
+    ELSE wa.status
+  END,
+  json_object('prompt', wa.prompt, 'summary', wa.summary, 'details', wa.details),
+  wa.timeout_at,
+  wa.node_id,
+  wa.resolved_by,
+  wa.resolved_at,
+  CASE WHEN wa.status = 'cancelled' THEN 'workflow execution cancelled' ELSE NULL END,
+  COALESCE(wa.created_at, datetime('now')),
+  COALESCE(wa.updated_at, datetime('now'))
+FROM workflow_approvals wa
+LEFT JOIN workflow_executions we ON wa.execution_id = we.id
+WHERE wa.kind = 'explicit'
+  AND NOT EXISTS (SELECT 1 FROM action_invocations ai WHERE ai.id = wa.id);
+
+-- Drop the workflow_approvals table. kind='tool_policy' rows were pure
+-- duplicates of their corresponding action_invocations entries; the
+-- Workflow instance keeps waiting on the same derived event name, which
+-- the new resume hook fires on action_invocations transitions.
+
+DROP INDEX IF EXISTS idx_wa_execution;
+DROP INDEX IF EXISTS idx_wa_pending;
+DROP TABLE workflow_approvals;

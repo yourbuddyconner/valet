@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createTestDb } from '../test-utils/db.js';
 import { users } from '../lib/schema/index.js';
-import { workflowApprovals } from '../lib/schema/workflow-approvals.js';
+import { actionInvocations } from '../lib/schema/actions.js';
 import { workflowExecutionNodes } from '../lib/schema/workflow-execution-nodes.js';
 import { workflowExecutions } from '../lib/schema/workflows.js';
 import { createWorkflow } from '../services/workflows.js';
@@ -338,17 +338,25 @@ describe('workflowActions', () => {
       expiresAt: now,
       createdAt: now,
     }).run();
-    db.insert(workflowApprovals).values({
+    // Post-consolidation (migration 0022): workflow_approvals is retired.
+    // The explicit approval invocation lives in action_invocations as a
+    // call to the built-in workflows.request_approval action; prompt /
+    // summary / details land in params.
+    db.insert(actionInvocations).values({
       id: 'approval-1',
-      executionId: 'exec-1',
-      nodeId: 'approval',
-      kind: 'explicit',
-      workflowInstanceId: 'exec-1',
-      eventType: 'approval_approval',
-      prompt: 'Approve?',
-      summary: 'Approval summary',
-      details: JSON.stringify({ issue: 123 }),
+      workflowExecutionId: 'exec-1',
+      userId: USER_ID,
+      service: 'workflows',
+      actionId: 'request_approval',
+      riskLevel: 'medium',
+      resolvedMode: 'require_approval',
       status: 'approved',
+      nodeId: 'approval',
+      params: JSON.stringify({
+        prompt: 'Approve?',
+        summary: 'Approval summary',
+        details: { issue: 123 },
+      }),
       resolvedBy: USER_ID,
       resolvedAt: now,
       createdAt: now,

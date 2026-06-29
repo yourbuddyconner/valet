@@ -1,25 +1,27 @@
 /**
- * Shared resolve-approval helper used by both API surfaces:
+ * Workflow-attributed approval resolution. Used by both API surfaces:
  *   - Nested:   POST /api/workflows/:id/executions/:execId/approvals/:apprId/{approve,deny}
  *   - Flat:     POST /api/executions/:id/approvals/:apprId/{approve,deny}
  *
- * The flat surface is what the UI uses when it has just an executionId
- * (most pending-approval views don't track workflowId separately). Both
- * routes funnel through this helper so access checks and Cloudflare
- * sendEvent semantics stay identical.
+ * Post-consolidation (migration 0023), there is no separate
+ * `workflow_approvals` table — the approval gate IS the
+ * `action_invocations` row. This helper:
+ *   1. Looks up the action_invocation by id, asserts it's
+ *      workflow-attributed and matches the URL execution.
+ *   2. Verifies editor access on the parent workflow.
+ *   3. Transitions the invocation via the unified approve/deny path.
+ *   4. Dispatches the Cloudflare Workflows resume event so the paused
+ *      step.waitForEvent completes.
  */
 
 import { eq } from 'drizzle-orm';
 import { NotFoundError } from '@valet/shared';
 import type { Env } from '../env.js';
 import { getDb } from '../lib/drizzle.js';
-import {
-  getWorkflowApproval,
-  resolveWorkflowApproval,
-  expireWorkflowApproval,
-} from '../lib/db/workflow-approvals.js';
+import { getInvocation } from '../lib/db/actions.js';
 import { assertWorkflowAccess } from '../lib/workflow-access.js';
 import { workflowExecutions } from '../lib/schema/workflows.js';
+import { approveInvocation, denyInvocation } from './actions.js';
 
 export type ApprovalResolveResult =
   | { kind: 'resolved'; status: 'approved' | 'denied' }
@@ -29,6 +31,7 @@ export type ApprovalResolveResult =
 export interface ResolveApprovalInput {
   env: Env;
   user: { id: string };
+  /** action_invocations row id. */
   approvalId: string;
   /** Required for cross-tenant safety — the route MUST pass the URL's
    *  executionId so we can refuse approvals whose execution doesn't
@@ -46,15 +49,11 @@ export interface ResolveApprovalInput {
 export async function resolveWorkflowApprovalRequest(input: ResolveApprovalInput): Promise<ApprovalResolveResult> {
   const db = getDb(input.env.DB);
 
-  const approval = await getWorkflowApproval(db, input.approvalId);
-  if (!approval || approval.executionId !== input.executionId) {
+  const invocation = await getInvocation(db, input.approvalId);
+  if (!invocation || invocation.workflowExecutionId !== input.executionId) {
     throw new NotFoundError('WorkflowApproval', input.approvalId);
   }
 
-  // Resolve the workflow id from the execution row when the caller
-  // didn't supply one (flat route), and cross-check when they did
-  // (nested route — defense against a URL with mismatched workflow +
-  // execution ids).
   const execRow = await db.select({ workflowId: workflowExecutions.workflowId })
     .from(workflowExecutions)
     .where(eq(workflowExecutions.id, input.executionId))
@@ -70,41 +69,46 @@ export async function resolveWorkflowApprovalRequest(input: ResolveApprovalInput
   // approve/deny via the nested route.
   await assertWorkflowAccess(db, input.user, execRow.workflowId, 'editor');
 
-  if (approval.status !== 'pending') {
-    return { kind: 'already_resolved', status: approval.status };
+  if (invocation.status !== 'pending') {
+    return { kind: 'already_resolved', status: invocation.status };
   }
 
   // Per-row timeout check. Without this, a user who races a deadline
   // could resolve a stale approval that the runtime has already moved
   // past via step.waitForEvent's natural timeout.
-  if (approval.timeoutAt && new Date(approval.timeoutAt).getTime() <= Date.now()) {
-    await expireWorkflowApproval(db, input.approvalId);
+  if (invocation.expiresAt && new Date(invocation.expiresAt).getTime() <= Date.now()) {
+    // The expired status transition happens inside approveInvocation /
+    // denyInvocation's CAS path; here we just surface the timeout.
     return { kind: 'expired' };
   }
 
-  const updated = await resolveWorkflowApproval(db, input.approvalId, {
-    status: input.result,
-    resolvedBy: input.user.id,
-  });
-  if (!updated) {
-    // CAS missed — either another caller resolved first, or the
-    // timeoutAt deadline slipped between our pre-check and the UPDATE.
-    const refreshed = await getWorkflowApproval(db, input.approvalId);
-    if (refreshed?.status === 'pending'
-        && refreshed.timeoutAt
-        && new Date(refreshed.timeoutAt).getTime() <= Date.now()) {
-      await expireWorkflowApproval(db, input.approvalId);
+  const transition = input.result === 'approved'
+    ? await approveInvocation(db, input.approvalId, input.user.id)
+    : await denyInvocation(db, input.approvalId, input.user.id, input.reason);
+
+  if (!transition.ok) {
+    if (transition.invocation?.status === 'expired') {
       return { kind: 'expired' };
     }
-    return { kind: 'already_resolved', status: refreshed?.status ?? 'unknown' };
+    return { kind: 'already_resolved', status: transition.invocation?.status ?? 'unknown' };
   }
 
-  // sendEvent dispatch. The DB row is already updated; sweepStuckApprovals
-  // is the safety net if this throws (transient instance hiccup).
+  // Cloudflare Workflows resume dispatch. The DB row is already updated;
+  // the cancel-cleanup stuck-approval sweep is the safety net if this
+  // throws (transient instance hiccup).
+  const nodeId = invocation.nodeId;
+  if (!nodeId) {
+    console.warn(`[workflow-approvals] invocation ${input.approvalId} is workflow-attributed but missing nodeId; cannot dispatch resume event`);
+    return { kind: 'resolved', status: input.result };
+  }
+  const iterSuffix = typeof invocation.iterationIndex === 'number'
+    ? `_i_${invocation.iterationIndex}`
+    : '';
+  const eventType = `approval_${nodeId}${iterSuffix}`;
   try {
-    const instance = await input.env.WORKFLOW_INTERPRETER.get(approval.workflowInstanceId);
+    const instance = await input.env.WORKFLOW_INTERPRETER.get(input.executionId);
     await instance.sendEvent({
-      type: approval.eventType,
+      type: eventType,
       payload: {
         result: input.result,
         userId: input.user.id,

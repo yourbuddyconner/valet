@@ -37,6 +37,12 @@ export interface InvokeWorkflowActionParams {
   actionId: string;
   riskLevel: string;
   params?: Record<string, unknown>;
+  /** DAG node id of the invoking workflow node. Captured on the
+   *  action_invocations row so the resume hook can derive the
+   *  `approval_<nodeId>` event type and nodeId-aware grant matching works. */
+  nodeId?: string;
+  /** Foreach iteration index when the invoking node is a foreach body. */
+  iterationIndex?: number;
 }
 
 function isExpiredTimestamp(value: string | null, nowMs: number): boolean {
@@ -124,6 +130,7 @@ export async function invokeWorkflowAction(
     userId: input.userId,
     sessionId: null,
     workflowExecutionId: input.executionId,
+    nodeId: input.nodeId,
     service: input.service,
     actionId: input.actionId,
     riskLevel: input.riskLevel,
@@ -158,6 +165,8 @@ export async function invokeWorkflowAction(
     baseSource: policy.baseSource,
     policySource: policy.source,
     policyScope: policy.scope,
+    nodeId: input.nodeId ?? null,
+    iterationIndex: input.iterationIndex ?? null,
     status,
   });
 

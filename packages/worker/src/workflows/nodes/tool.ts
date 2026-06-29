@@ -27,7 +27,7 @@ import { loadCustomMcpConnectorContext } from '../../services/custom-mcp-connect
 import { getDb } from '../../lib/drizzle.js';
 import { invokeWorkflowAction, markExecuted, markFailed } from '../../services/actions.js';
 import { updateInvocationStatus } from '../../lib/db/actions.js';
-import { requestApproval } from '../approvals.js';
+import { waitForApprovalEvent } from '../approvals.js';
 import { setExecutionStatus } from '../execution-status.js';
 import { CancelledError, iterationSuffix, NO_RETRY } from '../types.js';
 import type { NodeExecutorArgs } from '../types.js';
@@ -104,6 +104,8 @@ export async function executeTool(args: NodeExecutorArgs<ToolNode>): Promise<unk
       actionId: node.action,
       riskLevel: preflight.riskLevel,
       params: renderedParams,
+      nodeId: node.id,
+      ...(iterationIndex !== undefined ? { iterationIndex } : {}),
     });
     return JSON.stringify(result);
   });
@@ -118,9 +120,6 @@ export async function executeTool(args: NodeExecutorArgs<ToolNode>): Promise<unk
   }
 
   if (invocation.outcome === 'pending_approval') {
-    const summary = node.summary !== undefined
-      ? coerceString(renderTemplate(node.summary, ctx))
-      : `${node.service}.${node.action}`;
     // Surface the approvalId onto correlations BEFORE entering the
     // wait so the waiting_approval trace row records it. Computed
     // identically to requestApproval's internal id (including the
@@ -162,21 +161,18 @@ export async function executeTool(args: NodeExecutorArgs<ToolNode>): Promise<unk
       invocationId,
       approvalId: `approval:${runParams.executionId}:${node.id}${iSuffix}`,
     });
-    // requestApproval already does its own step.do / step.waitForEvent.
-    // iterationIndex scopes the approvalId + step.waitForEvent type
-    // when this tool is the body of a foreach.
-    let approval: Awaited<ReturnType<typeof requestApproval>>;
+    // waitForApprovalEvent does its own step.do / step.waitForEvent.
+    // iterationIndex scopes the step.waitForEvent type when this tool
+    // is the body of a foreach. The invocation row already exists
+    // (created above); the wait helper just suspends until the unified
+    // approve/deny path dispatches the resume event.
+    let approval: Awaited<ReturnType<typeof waitForApprovalEvent>>;
     try {
-      approval = await requestApproval({
+      approval = await waitForApprovalEvent({
         env,
         step,
-        executionId: runParams.executionId,
-        workflowInstanceId: runParams.executionId,
+        invocationId,
         nodeId: node.id,
-        kind: 'tool_policy',
-        prompt: `Approve ${node.service}.${node.action}?`,
-        summary,
-        details: renderedParams,
         ...(iterationIndex !== undefined ? { iterationIndex } : {}),
       });
     } finally {

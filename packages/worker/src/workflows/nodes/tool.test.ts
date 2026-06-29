@@ -9,7 +9,7 @@ const isActionDisabledMock = vi.fn();
 const loadCustomMcpConnectorContextMock = vi.fn();
 const invokeWorkflowActionMock = vi.fn();
 const updateInvocationStatusMock = vi.fn();
-const requestApprovalMock = vi.fn();
+const waitForApprovalEventMock = vi.fn();
 
 vi.mock('../../integrations/registry.js', () => ({
   integrationRegistry: {
@@ -44,7 +44,7 @@ vi.mock('../../lib/db/actions.js', () => ({
 }));
 
 vi.mock('../approvals.js', () => ({
-  requestApproval: (...args: unknown[]) => requestApprovalMock(...args),
+  waitForApprovalEvent: (...args: unknown[]) => waitForApprovalEventMock(...args),
 }));
 
 // setExecutionStatus persists workflow_executions.status transitions via
@@ -97,7 +97,7 @@ beforeEach(() => {
   loadCustomMcpConnectorContextMock.mockReset();
   invokeWorkflowActionMock.mockReset();
   updateInvocationStatusMock.mockReset();
-  requestApprovalMock.mockReset();
+  waitForApprovalEventMock.mockReset();
   markExecutedMock.mockReset();
   markFailedMock.mockReset();
   isActionDisabledMock.mockResolvedValue(false);
@@ -161,17 +161,17 @@ describe('executeTool', () => {
 
   it('pauses for approval and proceeds when granted', async () => {
     invokeWorkflowActionMock.mockResolvedValue({ outcome: 'pending_approval', invocationId: 'inv-1', mode: 'require_approval', policyId: null });
-    requestApprovalMock.mockResolvedValue({ result: 'approved', approvedBy: 'user-2', respondedAt: 'now' });
+    waitForApprovalEventMock.mockResolvedValue({ result: 'approved', approvedBy: 'user-2', respondedAt: 'now' });
     executeMock.mockResolvedValue({ success: true, data: 'ok' });
     const node: ToolNode = { id: 't', type: 'tool', service: 'slack', action: 'slack.send_message', params: {} };
     await executeTool(args(node));
-    expect(requestApprovalMock).toHaveBeenCalledWith(expect.objectContaining({ nodeId: 't', kind: 'tool_policy' }));
+    expect(waitForApprovalEventMock).toHaveBeenCalledWith(expect.objectContaining({ nodeId: 't' }));
     expect(executeMock).toHaveBeenCalled();
   });
 
   it('fails when approval is denied', async () => {
     invokeWorkflowActionMock.mockResolvedValue({ outcome: 'pending_approval', invocationId: 'inv-1', mode: 'require_approval', policyId: null });
-    requestApprovalMock.mockResolvedValue({ result: 'denied', deniedBy: 'user-2', respondedAt: 'now' });
+    waitForApprovalEventMock.mockResolvedValue({ result: 'denied', deniedBy: 'user-2', respondedAt: 'now' });
     const node: ToolNode = { id: 't', type: 'tool', service: 'slack', action: 'slack.send_message', params: {} };
     await expect(executeTool(args(node))).rejects.toThrow(/approval denied/);
   });

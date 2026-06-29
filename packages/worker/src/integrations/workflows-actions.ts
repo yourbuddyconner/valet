@@ -841,11 +841,14 @@ async function getExecutionAction(
      ORDER BY created_at ASC`,
   ).bind(params.executionId).all<Record<string, unknown>>();
 
+  // Post-consolidation (migration 0023): workflow_approvals is retired.
+  // Workflow-attributed approvals — both tool-policy holds and explicit
+  // workflows.request_approval invocations — live in action_invocations.
   const approvals = await env.DB.prepare(
-    `SELECT id, node_id, kind, status, prompt, summary, details, timeout_at,
-            resolved_by, resolved_at, cancelled_at, created_at
-     FROM workflow_approvals
-     WHERE execution_id = ?
+    `SELECT id, node_id, status, params, expires_at,
+            resolved_by, resolved_at, created_at, service, action_id
+     FROM action_invocations
+     WHERE workflow_execution_id = ?
      ORDER BY created_at ASC`,
   ).bind(params.executionId).all<Record<string, unknown>>();
   const rowRecord = row as Record<string, unknown>;
@@ -887,20 +890,29 @@ async function getExecutionAction(
         durationMs: n.duration_ms,
         createdAt: n.created_at,
       })),
-      approvals: (approvals.results ?? []).map((a) => ({
-        id: a.id,
-        nodeId: a.node_id,
-        kind: a.kind,
-        status: a.status,
-        prompt: a.prompt,
-        summary: a.summary,
-        details: typeof a.details === 'string' ? safeJsonParse(a.details) : null,
-        timeoutAt: a.timeout_at,
-        resolvedBy: a.resolved_by,
-        resolvedAt: a.resolved_at,
-        cancelledAt: a.cancelled_at,
-        createdAt: a.created_at,
-      })),
+      approvals: (approvals.results ?? []).map((a) => {
+        const parsedParams = typeof a.params === 'string' ? safeJsonParse(a.params) : null;
+        const explicit = a.service === 'workflows' && a.action_id === 'request_approval';
+        // Prompt/summary/details are stored in params for explicit
+        // approval nodes. Tool-policy approvals derive their prompt from
+        // service+actionId; the UI assembles its display from the
+        // invocation row directly.
+        const p = (parsedParams && typeof parsedParams === 'object') ? parsedParams as Record<string, unknown> : {};
+        return {
+          id: a.id,
+          nodeId: a.node_id,
+          kind: explicit ? 'explicit' : 'tool_policy',
+          status: a.status,
+          prompt: explicit ? (p.prompt ?? null) : `Approve ${a.service}.${a.action_id}?`,
+          summary: explicit ? (p.summary ?? null) : null,
+          details: explicit ? (p.details ?? null) : parsedParams,
+          timeoutAt: a.expires_at,
+          resolvedBy: a.resolved_by,
+          resolvedAt: a.resolved_at,
+          cancelledAt: null,
+          createdAt: a.created_at,
+        };
+      }),
     },
   };
 }

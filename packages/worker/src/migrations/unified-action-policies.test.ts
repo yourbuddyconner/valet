@@ -33,10 +33,28 @@ describe('0022_unified_action_policies', () => {
     applyMigrationsUpTo(sqlite, MIGRATION);
 
     // Fixture: user, session, existing admin policy, three UAPOs, three audit rows
-    // that reference each UAPO via user_override_id.
+    // that reference each UAPO via user_override_id; plus a workflow execution
+    // and a pair of workflow_approvals (one explicit, one tool_policy) so we
+    // exercise the workflow_approvals retirement at the end of migration 0022.
     sqlite.exec(`
       INSERT INTO users (id, email) VALUES ('user_1', 'u1@example.com');
       INSERT INTO sessions (id, user_id, workspace) VALUES ('sess_1', 'user_1', 'ws1');
+
+      -- Workflow + execution for the workflow_approvals fixture below.
+      INSERT INTO workflows (id, user_id, name, data)
+        VALUES ('wf_1', 'user_1', 'wf', '{"version":"dag/v1"}');
+      INSERT INTO workflow_executions (id, workflow_id, user_id, status, trigger_type, started_at)
+        VALUES ('exec_1', 'wf_1', 'user_1', 'running', 'manual', datetime('now'));
+
+      -- Two workflow_approvals rows: one explicit (must migrate into
+      -- action_invocations), one tool_policy (should be dropped since its
+      -- corresponding action_invocations row already exists).
+      INSERT INTO action_invocations (id, workflow_execution_id, user_id, service, action_id, risk_level, resolved_mode, status)
+        VALUES ('wa_tool_policy', 'exec_1', 'user_1', 'gmail', 'send_email', 'medium', 'require_approval', 'pending');
+      INSERT INTO workflow_approvals (id, execution_id, node_id, kind, workflow_instance_id, event_type, prompt, summary, details, status, timeout_at)
+        VALUES ('wa_tool_policy', 'exec_1', 'tool_node', 'tool_policy', 'exec_1', 'approval_tool_node', 'Approve gmail.send_email?', 'send email', '{"to":"a@b"}', 'pending', '2099-01-01T00:00:00Z');
+      INSERT INTO workflow_approvals (id, execution_id, node_id, kind, workflow_instance_id, event_type, prompt, summary, details, status, timeout_at)
+        VALUES ('wa_explicit', 'exec_1', 'approval_node', 'explicit', 'exec_1', 'approval_approval_node', 'Continue with deploy?', 'deploy gate', '{"env":"prod"}', 'pending', '2099-01-01T00:00:00Z');
 
       -- Pre-existing admin policy (created via the legacy settings flow).
       INSERT INTO action_policies (id, service, action_id, risk_level, mode, created_by)
@@ -255,12 +273,8 @@ describe('0022_unified_action_policies', () => {
     });
 
     it('rejects a row with both session_id and workflow_execution_id set', () => {
-      // workflow_executions row not needed for the CHECK to fire — but FK does need a target.
-      // Insert a stub workflow then an execution to satisfy the FK before testing CHECK.
-      sqlite.exec(`
-        INSERT INTO workflows (id, user_id, name, data) VALUES ('wf_1', 'user_1', 'wf', '{"version":"dag/v1"}');
-        INSERT INTO workflow_executions (id, workflow_id, user_id, status, trigger_type) VALUES ('exec_1', 'wf_1', 'user_1', 'running', 'manual');
-      `);
+      // wf_1 and exec_1 are already in the fixture (used by the workflow_approvals
+      // retirement tests); FK targets exist before the CHECK fires.
       applyMigration(sqlite, MIGRATION);
       expect(() =>
         sqlite.prepare(`
@@ -268,6 +282,60 @@ describe('0022_unified_action_policies', () => {
           VALUES ('rg_bad', 'user_1', 'sess_1', 'exec_1', 'tool_action', 'k')
         `).run()
       ).toThrow(/CHECK/i);
+    });
+  });
+
+  describe('workflow_approvals retirement', () => {
+    it('adds node_id and iteration_index columns to action_invocations', () => {
+      applyMigration(sqlite, MIGRATION);
+      const cols = sqlite.prepare(`PRAGMA table_info(action_invocations)`).all() as Array<{ name: string }>;
+      const names = new Set(cols.map((c) => c.name));
+      expect(names.has('node_id')).toBe(true);
+      expect(names.has('iteration_index')).toBe(true);
+    });
+
+    it('drops the workflow_approvals table', () => {
+      applyMigration(sqlite, MIGRATION);
+      const row = sqlite.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='workflow_approvals'`).get();
+      expect(row).toBeUndefined();
+    });
+
+    it('migrates explicit workflow_approvals into action_invocations as workflows.request_approval', () => {
+      applyMigration(sqlite, MIGRATION);
+      const row = sqlite.prepare(`SELECT * FROM action_invocations WHERE id = ?`).get('wa_explicit') as Record<string, unknown>;
+      expect(row).toBeDefined();
+      expect(row.service).toBe('workflows');
+      expect(row.action_id).toBe('request_approval');
+      expect(row.workflow_execution_id).toBe('exec_1');
+      expect(row.node_id).toBe('approval_node');
+      expect(row.user_id).toBe('user_1');
+      expect(row.status).toBe('pending');
+      expect(row.resolved_mode).toBe('require_approval');
+      expect(row.risk_level).toBe('medium');
+      // Prompt/summary/details land in params JSON for explicit approval rows.
+      const params = JSON.parse(String(row.params));
+      expect(params.prompt).toBe('Continue with deploy?');
+      expect(params.summary).toBe('deploy gate');
+      expect(params.details).toBe('{"env":"prod"}');
+    });
+
+    it('does NOT migrate tool_policy workflow_approvals (the action_invocations row already covered them)', () => {
+      applyMigration(sqlite, MIGRATION);
+      // The tool_policy fixture row's id ('wa_tool_policy') was inserted as an
+      // action_invocation BEFORE the migration. The migration's NOT EXISTS guard
+      // skips it. So there's still exactly one row by that id, with the original
+      // tool service (not 'workflows').
+      const rows = sqlite.prepare(`SELECT id, service, action_id FROM action_invocations WHERE id = ?`).all('wa_tool_policy') as Array<Record<string, unknown>>;
+      expect(rows).toHaveLength(1);
+      expect(rows[0].service).toBe('gmail');
+      expect(rows[0].action_id).toBe('send_email');
+    });
+
+    it('adds idx_ai_workflow_node lookup index', () => {
+      applyMigration(sqlite, MIGRATION);
+      const indexes = sqlite.prepare(`SELECT name FROM sqlite_master WHERE type='index'`).all() as Array<{ name: string }>;
+      const names = new Set(indexes.map((i) => i.name));
+      expect(names.has('idx_ai_workflow_node')).toBe(true);
     });
   });
 });

@@ -1,4 +1,4 @@
-import { sqliteTable, text, index } from 'drizzle-orm/sqlite-core';
+import { sqliteTable, text, integer, index } from 'drizzle-orm/sqlite-core';
 import { sql } from 'drizzle-orm';
 import { users } from './users.js';
 import { sessions } from './sessions.js';
@@ -140,6 +140,11 @@ export const actionInvocations = sqliteTable('action_invocations', {
   // mapping; new invocations write these in place of the legacy columns.
   matchedPolicyId: text().references(() => actionPolicies.id, { onDelete: 'set null' }),
   matchedGrantId: text().references(() => runtimeGrants.id, { onDelete: 'set null' }),
+  // Workflow-runtime context (migration 0023). Captured for workflow-attributed
+  // invocations so the resume hook can derive the Workflows event type
+  // (`approval_<nodeId>[_i_<index>]`) and to enable nodeId-aware grant matching.
+  nodeId: text(),
+  iterationIndex: integer(),
   createdAt: text().notNull().default(sql`(datetime('now'))`),
   updatedAt: text().notNull().default(sql`(datetime('now'))`),
 }, (table) => [

@@ -11,9 +11,9 @@ import {
   checkIdempotencyKey,
 } from '../lib/db.js';
 import { getDb } from '../lib/drizzle.js';
-import { eq } from 'drizzle-orm';
+import { asc, eq } from 'drizzle-orm';
 import { workflowExecutions } from '../lib/schema/workflows.js';
-import { listWorkflowApprovalsForExecution } from '../lib/db/workflow-approvals.js';
+import { actionInvocations } from '../lib/schema/actions.js';
 import { isWorkflowDefinition } from '../lib/workflow-dag/schema.js';
 
 export const executionsRouter = new Hono<{ Bindings: Env; Variables: Variables }>();
@@ -92,7 +92,12 @@ executionsRouter.get('/:id', async (c) => {
   }
 
   const db = getDb(c.env.DB);
-  const approvalRows = await listWorkflowApprovalsForExecution(db, id);
+  // Post-consolidation (migration 0022): workflow_approvals is retired.
+  // Workflow-attributed approvals live in action_invocations.
+  const approvalRows = await db.select().from(actionInvocations)
+    .where(eq(actionInvocations.workflowExecutionId, id))
+    .orderBy(asc(actionInvocations.createdAt))
+    .all();
 
   const triggerData = parseExecutionTriggerData(row as { inputs?: string | null });
   return c.json({
@@ -137,23 +142,7 @@ executionsRouter.get('/:id', async (c) => {
           createdAt: n.created_at,
         };
       }),
-      approvals: approvalRows.map((a) => ({
-        id: a.id,
-        nodeId: a.nodeId,
-        kind: a.kind,
-        status: a.status,
-        prompt: a.prompt,
-        summary: a.summary,
-        // Parsed once for the UI — the details column is author-supplied
-        // JSON that the validator already parsed at publish time, so a
-        // parse failure here would mean the row was hand-edited.
-        details: a.details ? safeJsonParse(a.details) : null,
-        timeoutAt: a.timeoutAt,
-        resolvedBy: a.resolvedBy,
-        resolvedAt: a.resolvedAt,
-        cancelledAt: a.cancelledAt,
-        createdAt: a.createdAt,
-      })),
+      approvals: approvalRows.map(mapInvocationToApprovalView),
     },
   });
 });
@@ -164,6 +153,34 @@ function safeJsonParse(s: string): unknown {
   } catch {
     return s;
   }
+}
+
+/**
+ * Map an action_invocations row into the workflow-approvals view shape the
+ * UI was built against. Explicit approvals (service='workflows',
+ * actionId='request_approval') derive prompt/summary/details from params;
+ * tool-policy approvals synthesize a prompt from service+actionId.
+ */
+function mapInvocationToApprovalView(a: typeof actionInvocations.$inferSelect) {
+  const parsedParams = a.params ? safeJsonParse(a.params) : null;
+  const explicit = a.service === 'workflows' && a.actionId === 'request_approval';
+  const p = parsedParams && typeof parsedParams === 'object'
+    ? (parsedParams as Record<string, unknown>)
+    : {};
+  return {
+    id: a.id,
+    nodeId: a.nodeId,
+    kind: explicit ? 'explicit' : 'tool_policy',
+    status: a.status,
+    prompt: explicit ? (p.prompt ?? null) : `Approve ${a.service}.${a.actionId}?`,
+    summary: explicit ? (p.summary ?? null) : null,
+    details: explicit ? (p.details ?? null) : parsedParams,
+    timeoutAt: a.expiresAt,
+    resolvedBy: a.resolvedBy,
+    resolvedAt: a.resolvedAt,
+    cancelledAt: null,
+    createdAt: a.createdAt,
+  };
 }
 
 const retryExecutionSchema = z.object({
@@ -291,22 +308,12 @@ executionsRouter.get('/:id/approvals', async (c) => {
   if (!row) throw new NotFoundError('Execution', id);
 
   const db = getDb(c.env.DB);
-  const approvals = await listWorkflowApprovalsForExecution(db, id);
+  const approvals = await db.select().from(actionInvocations)
+    .where(eq(actionInvocations.workflowExecutionId, id))
+    .orderBy(asc(actionInvocations.createdAt))
+    .all();
   return c.json({
-    approvals: approvals.map((a) => ({
-      id: a.id,
-      nodeId: a.nodeId,
-      kind: a.kind,
-      status: a.status,
-      prompt: a.prompt,
-      summary: a.summary,
-      details: a.details ? safeJsonParse(a.details) : null,
-      timeoutAt: a.timeoutAt,
-      resolvedBy: a.resolvedBy,
-      resolvedAt: a.resolvedAt,
-      cancelledAt: a.cancelledAt,
-      createdAt: a.createdAt,
-    })),
+    approvals: approvals.map(mapInvocationToApprovalView),
   });
 });
 

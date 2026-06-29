@@ -24,9 +24,12 @@ import { and, eq, inArray, lt, isNotNull, isNull, sql } from 'drizzle-orm';
 import type { Env } from '../env.js';
 import { getDb } from '../lib/drizzle.js';
 import { workflowExecutions } from '../lib/schema/workflows.js';
-import { workflowApprovals } from '../lib/schema/workflow-approvals.js';
 import { workflowExecutionNodes } from '../lib/schema/workflow-execution-nodes.js';
-import { cancelAllPendingApprovalsForExecution } from '../lib/db/workflow-approvals.js';
+import {
+  cancelPendingWorkflowApprovalsForExecution,
+  listPendingWorkflowApprovalsForExecution,
+  listStuckWorkflowApprovalsForResume,
+} from '../lib/db/actions.js';
 import { actionInvocations } from '../lib/schema/actions.js';
 import {
   ACTIVE_EXECUTION_STATUSES,
@@ -67,7 +70,7 @@ export async function runCancellationCleanup(env: Env, input: RunCancellationCle
 
   // Step 1: cancel pending approval rows. Idempotent — no-op if 0 pending.
   try {
-    await cancelAllPendingApprovalsForExecution(db, input.executionId);
+    await cancelPendingWorkflowApprovalsForExecution(db, input.executionId);
     approvalsOk = true;
   } catch (err) {
     console.warn(`[cancel-cleanup] cancel-approvals failed for ${input.executionId}: ${err instanceof Error ? err.message : String(err)}`);
@@ -326,38 +329,36 @@ export async function sweepStuckApprovals(env: Env, options: { staleMs?: number;
   // 'waiting_approval' would silently hide that case. Active-status
   // filter still skips completed/failed/cancelled executions where the
   // workflow instance is gone and sendEvent would be useless.
-  const stuck = await db.select({
-    id: workflowApprovals.id,
-    workflowInstanceId: workflowApprovals.workflowInstanceId,
-    eventType: workflowApprovals.eventType,
-    status: workflowApprovals.status,
-    resolvedBy: workflowApprovals.resolvedBy,
-    executionStatus: workflowExecutions.status,
-  })
-    .from(workflowApprovals)
-    .innerJoin(workflowExecutions, eq(workflowApprovals.executionId, workflowExecutions.id))
-    .where(and(
-      inArray(workflowApprovals.status, ['approved', 'denied']),
-      inArray(workflowExecutions.status, [...ACTIVE_EXECUTION_STATUSES]),
-      isNotNull(workflowApprovals.resolvedAt),
-      lt(workflowApprovals.resolvedAt, cutoff),
-      // Skip approvals older than maxAgeMs — they'll timeout naturally.
-      sql`${workflowApprovals.resolvedAt} > ${ageFloor}`,
-    ))
-    .limit(limit)
+  // Filter further to active executions in code (the helper's primary
+  // filter is the time window; execution-status filter happens here).
+  const candidates = await listStuckWorkflowApprovalsForResume(db, {
+    cutoffIso: cutoff,
+    ageFloorIso: ageFloor,
+    limit: limit * 4, // overscan; some will be from terminal executions
+  });
+
+  const activeExecIds = await db.select({ id: workflowExecutions.id })
+    .from(workflowExecutions)
+    .where(inArray(workflowExecutions.status, [...ACTIVE_EXECUTION_STATUSES]))
     .all();
+  const activeSet = new Set(activeExecIds.map((r) => r.id));
 
   let retried = 0;
-  for (const row of stuck) {
+  for (const row of candidates) {
+    if (retried >= limit) break;
+    if (!row.workflowExecutionId || !activeSet.has(row.workflowExecutionId)) continue;
+    if (!row.nodeId) continue;
+    const iterSuffix = typeof row.iterationIndex === 'number' ? `_i_${row.iterationIndex}` : '';
+    const eventType = `approval_${row.nodeId}${iterSuffix}`;
     try {
-      const instance = await env.WORKFLOW_INTERPRETER.get(row.workflowInstanceId);
+      const instance = await env.WORKFLOW_INTERPRETER.get(row.workflowExecutionId);
       await instance.sendEvent({
-        type: row.eventType,
+        type: eventType,
         payload: { result: row.status as 'approved' | 'denied', userId: row.resolvedBy ?? 'system' },
       });
       retried++;
     } catch (err) {
-      console.warn(`[approval-resume-sweep] sendEvent failed for approval ${row.id}: ${err instanceof Error ? err.message : String(err)}`);
+      console.warn(`[approval-resume-sweep] sendEvent failed for invocation ${row.id}: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
   return { retried };
@@ -519,16 +520,14 @@ async function tryDispatchCancelAndTerminate(
     // instead of running the onDeny path — otherwise an onDeny='skip'
     // approval would let downstream nodes (Slack sends, tool calls)
     // run as if the user had explicitly denied the request.
-    const pending = await db.select({
-      eventType: workflowApprovals.eventType,
-    }).from(workflowApprovals).where(and(
-      eq(workflowApprovals.executionId, executionId),
-      eq(workflowApprovals.status, 'pending'),
-    )).all();
+    const pending = await listPendingWorkflowApprovalsForExecution(db, executionId);
     for (const row of pending) {
+      if (!row.nodeId) continue;
+      const iterSuffix = typeof row.iterationIndex === 'number' ? `_i_${row.iterationIndex}` : '';
+      const eventType = `approval_${row.nodeId}${iterSuffix}`;
       try {
         await instance.sendEvent({
-          type: row.eventType,
+          type: eventType,
           payload: { result: 'cancelled', userId: cancelledBy ?? 'system' },
         });
       } catch {
