@@ -75,6 +75,33 @@ These are complementary, not duplicate. The duplicate this spec retires (`user_a
 
 A future effort could collapse the two (e.g. an admin `deny` policy gaining an optional "hide from catalog" flag, with `disabled_actions` migrating into it), but that must first reconcile hide-vs-deny semantics and is out of scope here.
 
+### Relationship to `workflow_approvals` and `action_invocations`
+
+`workflow_approvals` is retired by this work. The unified primitive for any approval gate — session tool call, workflow `tool` node policy hold, or workflow `approval` node — is `action_invocations` with `status = 'pending'`. There is one record type for "human decision required," not two.
+
+The mechanics:
+
+- **Workflow `tool` node hits policy.** `invokeWorkflowAction` already creates an `action_invocations` row. The previous flow ALSO created a `workflow_approvals` row to drive the Cloudflare Workflows `step.waitForEvent` resume. That second row was pure duplication — every audit and lifecycle field already lived on `action_invocations`, and the Workflows-runtime fields (`workflowInstanceId`, `eventType`) are recoverable from `workflow_executions.cloudflare_instance_id` plus the derived `approval_<nodeId>` event name. The duplicate row goes away.
+
+- **Workflow `approval` node executes.** Instead of a special row in a special table, the runtime invokes the **built-in `workflows.request_approval` action** via the same `invokeWorkflowAction` path as any other tool. The action lives in the `workflows` service (same namespace as `workflows.list`, `workflows.get`, etc., per `integrations/workflows-actions.ts`). Params carry `{ prompt, summary, details }`. The resulting `action_invocations` row IS the approval gate. The Workflows instance pauses on `step.waitForEvent('approval_<nodeId>')` and resumes when the unified approve/deny path fires `instance.sendEvent`.
+
+The DAG `approval` node type stays — it's authoring sugar in the workflow editor. The runtime compiles it to a `workflows.request_approval` invocation. Users authoring workflows still drop in an "Approval" node and fill in prompt/summary/details; they don't see the underlying mechanism.
+
+`workflows.request_approval` is hidden from the agent tool catalog in Phase 1 (the workflow runtime is the only legitimate caller). The listAction provider omits it; the registry still resolves it for direct execution. Phase 2+ may revisit visibility if there's a clear use case for session agents to invoke it directly — at that point we'd also reconsider whether it belongs in a more general namespace.
+
+#### Why this is the right primitive
+
+`action_invocations` already models "a human-gated event with a lifecycle, owner, scope, audit, and policy decision." Every column it has — `status`, `resolvedBy`, `resolvedAt`, `expiresAt`, `userId`, `sessionId`/`workflowExecutionId`, `matchedPolicyId`/`matchedGrantId`, etc. — also describes a workflow approval. The only fields `workflow_approvals` carried that aren't on `action_invocations` are recoverable (Workflows runtime ids) or already storable in `params` (prompt/summary/details).
+
+Once consolidated, the entire approval framework — resolver, runtime grants, lineage inheritance, propagation, audit, scoped endpoints, foreach "approve remaining rows" — applies uniformly to both tool gates and explicit approval gates. No special case. Adding new approval-like surfaces in the future (e.g., a Phase 2 native-tool interdictor that gates `bash` calls, or future session-prompt promotion for cross-DO interactive questions) extends the same mechanism: register a built-in action, route invocations through the resolver.
+
+#### Implementation notes
+
+- **Internal-service namespace convention.** None exists today. Service names are kebab-case bare strings (`gmail`, `github`, `workflows`). No `_internal`, `_core`, or underscore-prefixed namespaces are introduced — speculative architecture for one action. If Phase 2+ accumulates more built-in actions that don't fit any plugin (native-tool interdictor, session-prompt promotion), revisit then.
+- **`workflows.request_approval` lives in `plugin-workflows`.** The existing `integrations/workflows-actions.ts` already auto-enables the `workflows` service. The new action is registered alongside `workflows.list`, `workflows.get`, etc., but excluded from `listActions()`.
+- **nodeId-aware matching for runtime grants.** A grant created by "Approve remaining rows" in a `foreach` body MUST NOT auto-approve other workflow approval nodes in the same execution — every workflow approval node maps to the same `workflows.request_approval` service+actionId, so without nodeId-aware matching, one foreach grant would silently approve every other approval node. The resolver matches runtime grants on `workflowId`+`nodeId` when the grant has them set; grants without `nodeId` apply broadly (e.g. "approve for this whole run"), grants with `nodeId` apply only to invocations from that specific node.
+- **Resume hook unification.** `approveInvocation` and `denyInvocation` fire `instance.sendEvent('approval_<nodeId>', { decision })` when the invocation is workflow-attributed (i.e. `workflowExecutionId IS NOT NULL`). The hook reads `workflow_executions.cloudflare_instance_id` and resolves the Workflows instance. The workflow-specific approve/deny endpoint becomes redundant — clients use `/api/action-invocations/:id/approve` for everything.
+
 ## Data Model
 
 ### `action_policies` (durable)
@@ -445,9 +472,11 @@ The hardest, least-grounded part of this design — per-action canonicalization 
 - Migrate `user_action_policy_overrides` (persistent/timed → durable `action_policies`; session → `runtime_grants`).
 - Unified resolver: deny → admin base → runtime grants (session lineage + execution) → durable user grants → require approval.
 - Session provenance: extend `workflow_spawned_sessions` with `workflowId`/`workflowVersionId`; lineage-aware grant resolution (self + `parentSessionId` chain).
+- Retire `workflow_approvals`. Register `workflows.request_approval` as a built-in (hidden) action; workflow `approval` nodes execute as `invokeWorkflowAction` calls to it. `tool_policy` workflow approvals stop creating duplicate rows — the `action_invocations` row IS the gate.
+- Resume hook: `approveInvocation` / `denyInvocation` fires `instance.sendEvent('approval_<nodeId>')` when the invocation is workflow-attributed. The workflow-specific approve endpoint goes away.
+- nodeId-aware matching for runtime grants on `workflowId`+`nodeId` so a `foreach` body grant doesn't leak across unrelated approval nodes.
 - Scoped approval endpoints: `once`, `session`, `workflow_execution`, `remaining_foreach`.
 - Foreach: execution-scoped grant by `policyKey`, resolve current + pending siblings.
-- Route workflow approvals through the resolver.
 - Approval propagation: surface a child session's single approval record at ancestor sessions, the orchestrator thread, the workflow execution view, and the global queue; resolvable from any surface (idempotent); live via the event bus.
 - Client: session + execution approval cards with `once` / `session` / `run` / `remaining`.
 
@@ -613,6 +642,16 @@ At the end of this migration, the new tables hold every row that ever lived in t
 **3. Cleanup deploy (later, optional).** Drop the `/api/action-policy-overrides` alias, the `userActionPolicyOverrides` schema, and the unused legacy columns on `action_invocations` (`userOverrideId`, `policyLifetime`, etc.) once nothing references them.
 
 The only write-race window is between step 1 finishing and step 2 deploying — seconds in practice for sequenced migration-then-deploy. For this pre-release feature on workflows, any grants written in that window are session-scoped ephemerals at worst; users would re-approve once. Acceptable. If a production environment ever needs zero-loss cutover, insert a dual-write deploy between steps 1 and 2 that writes both old and new during the window, then collapse afterward.
+
+### Migration: retire `workflow_approvals`
+
+A separate, atomic migration follows the action-policies cutover above. In one D1 migration:
+
+- For each `workflow_approvals` row with `kind = 'tool_policy'`: no-op. The corresponding `action_invocations` row already exists; the duplicate is just dropped with the table.
+- For each `workflow_approvals` row with `kind = 'explicit'`: insert into `action_invocations` with `service = 'workflows'`, `actionId = 'request_approval'`, `params = JSON of { prompt, summary, details }`, preserving id / status / executionId / nodeId / userId / resolvedBy / resolvedAt / timeout. (No `service`/`actionId` nullability change needed — explicit approvals get real values.)
+- Drop `workflow_approvals` table.
+
+Code cutover in the same deploy: workflow `approval` node executor invokes `workflows.request_approval`; workflow `tool` node stops creating duplicate approval rows; resume hook in `approveInvocation` / `denyInvocation` fires `instance.sendEvent` when invocation is workflow-attributed; client switches the workflow approval surface to consume `action_invocations` rows directly.
 
 ## Testing Strategy
 

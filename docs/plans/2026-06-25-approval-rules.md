@@ -133,23 +133,38 @@ Additional checks:
 
 Commit point: `git commit -m "Unify action policy resolution over two tables"`
 
-## 4. Route Workflow Approvals Through The Resolver
+## 4. Retire `workflow_approvals`; Consolidate Onto `action_invocations`
 
-- [ ] Extend `workflow_approvals` audit rows with `org_id`, `workflow_id`, `workflow_version_id`, `iteration_index`, `subject`, `resolved_params`, `matched_policy_id`/`matched_grant_id`, `auto_approved_at`, `auto_approved_by`.
-- [ ] Update `packages/worker/src/workflows/approvals.ts` to check the unified resolver before creating a pending wait. On a matching allow: write/mark the audit row approved, attach the matched id, return approved without waiting.
-- [ ] Update `tool`, `approval`, `foreach`, and `session` node runtimes to pass subject + resolved params into resolution. (The `orchestrator` node only dispatches a prompt to the persistent orchestrator session; its tool approvals resolve inside that session via the normal session path — no per-node policy resolution.)
-- [ ] Ensure workflow-created sessions pass parent workflow-execution context into session tool approval checks.
-- [ ] Use durable workflow subjects only when `workflow_version_id` is known; runtime grants for an execution omit it.
+Reframed from the previous draft. The previous step 4 ("route workflow approvals through the resolver") assumed `workflow_approvals` would stay as a separate table; tool-node policy approvals were going to be routed through the resolver but the audit row stayed in `workflow_approvals`. That kept a parallel approval primitive alive — the exact thing the spec's thesis argues against. This commit collapses both kinds of workflow approval (`tool_policy`, `explicit`) onto `action_invocations`, the existing universal approval primitive.
+
+- [ ] Register `workflows.request_approval` as a built-in action in `packages/worker/src/integrations/workflows-actions.ts`. Action takes params `{ prompt, summary, details, choices? }`. Hidden from `listActions()` so it doesn't appear in the agent tool catalog; routable via `execute(actionId, ...)` for the workflow runtime.
+- [ ] Rewrite `packages/worker/src/workflows/nodes/approval.ts` to invoke `workflows.request_approval` via `invokeWorkflowAction`. Drop the `workflow_approvals` row creation entirely. The resulting `action_invocations` row IS the gate; `step.waitForEvent('approval_<nodeId>')` resumes when it transitions.
+- [ ] Update `packages/worker/src/workflows/nodes/tool.ts` to stop creating `workflow_approvals` rows for `tool_policy` approvals. `invokeWorkflowAction` already creates the `action_invocations` row; that's the only gate needed.
+- [ ] Add the workflow-resume hook to `approveInvocation` and `denyInvocation` (`packages/worker/src/services/actions.ts`): when the invocation has `workflowExecutionId`, look up `workflow_executions.cloudflare_instance_id` and fire `instance.sendEvent('approval_<nodeId>', { decision })`. The workflow-specific approve endpoint is no longer the only writer of the resume event.
+- [ ] Add nodeId-aware matching to the resolver: when a runtime grant has `workflowId` / `nodeId` set, those participate in the match. Without this, a "Approve remaining rows in foreach body X" grant would silently auto-approve every other workflow approval node in the same execution (because all of them invoke the same `workflows.request_approval` service+actionId).
+- [ ] Update `getExecutionAction` (in `integrations/workflows-actions.ts:line 837`-ish) to query `action_invocations` (filtered to `service='workflows' AND actionId='request_approval'` plus tool-policy invocations) instead of `workflow_approvals`. Update `workflowApprovalSchema` response shape accordingly — derive prompt/summary/details from `params`.
+- [ ] Migration `0023_retire_workflow_approvals.sql`: copy `kind='explicit'` rows into `action_invocations` (service='workflows', actionId='request_approval', `params = JSON of {prompt, summary, details}`), preserve id/status/executionId/nodeId/userId/resolvedBy/resolvedAt/timeout. Drop the `workflow_approvals` table (rows of `kind='tool_policy'` are redundant duplicates; the matching `action_invocations` row already exists).
+- [ ] Workflow-specific approve/deny endpoint (if separately exposed) is removed or aliased to `/api/action-invocations/:id/approve`. Client switches to that endpoint.
+- [ ] Update `cancel-cleanup.ts` to transition workflow-attributed pending `action_invocations` to `failed` (with error="workflow execution cancelled") instead of touching `workflow_approvals`. No new status enum value needed.
 
 Verification:
 
 ```bash
-pnpm vitest packages/worker/src/workflows/approvals.test.ts packages/worker/src/workflows/nodes/tool.test.ts packages/worker/src/workflows/nodes/foreach.test.ts packages/worker/src/workflows/nodes/session.test.ts
+pnpm --filter @valet/worker typecheck
+pnpm --filter @valet/worker exec vitest run
 ```
 
-Expected: workflow approvals auto-approve when a matching runtime grant or durable policy exists.
+Expected: all worker tests pass. Workflow approval nodes execute as built-in tool actions; tool-policy approvals are gated through `action_invocations` alone; both resume the Workflow via the unified hook.
 
-Commit point: `git commit -m "Use unified resolver for workflow approvals"`
+Additional checks:
+
+- A workflow approval node executing produces exactly one `action_invocations` row (service='workflows', actionId='request_approval') and zero `workflow_approvals` rows.
+- A workflow tool node hitting `require_approval` produces exactly one `action_invocations` row.
+- Approving via `/api/action-invocations/:id/approve` on a workflow-attributed invocation fires `instance.sendEvent` and resumes the Workflow.
+- A foreach body containing an `approval` node, with `concurrency: 1` and "Approve remaining rows" applied, prompts once then auto-approves subsequent iterations — and a SEPARATE approval node elsewhere in the same execution is NOT auto-approved (nodeId-aware matching).
+- Migration of any existing `workflow_approvals` rows produces equivalent `action_invocations` rows; the `workflow_approvals` table is gone.
+
+Commit point: `git commit -m "Retire workflow_approvals; workflow approvals consolidate onto action_invocations"`
 
 ## 5. Add Context-Aware Approval Scopes
 
