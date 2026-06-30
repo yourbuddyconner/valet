@@ -470,16 +470,16 @@ export function TriggerList() {
                     </td>
                     <td className="px-4 py-3">
                       <div className="flex items-center justify-end gap-1.5">
-                        <Button size="sm" variant="ghost" onClick={() => onRun(trigger)} disabled={busy} className="min-h-[40px] min-w-[40px] md:min-h-0 md:min-w-0">
+                        <Button size="sm" variant="ghost" onClick={() => onRun(trigger)} disabled={busy} className="min-h-[44px] min-w-[44px] md:min-h-0 md:min-w-0">
                           <PlayIcon className="size-3.5" />
                         </Button>
-                        <Button size="sm" variant="ghost" onClick={() => onToggleEnabled(trigger)} disabled={busy} className="min-h-[40px] min-w-[40px] md:min-h-0 md:min-w-0">
+                        <Button size="sm" variant="ghost" onClick={() => onToggleEnabled(trigger)} disabled={busy} className="min-h-[44px] min-w-[44px] md:min-h-0 md:min-w-0">
                           {trigger.enabled ? <PauseIcon className="size-3.5" /> : <PlayCircleIcon className="size-3.5" />}
                         </Button>
-                        <Button size="sm" variant="ghost" onClick={() => openEditDialog(trigger)} disabled={busy} className="min-h-[40px] min-w-[40px] md:min-h-0 md:min-w-0">
+                        <Button size="sm" variant="ghost" onClick={() => openEditDialog(trigger)} disabled={busy} className="min-h-[44px] min-w-[44px] md:min-h-0 md:min-w-0">
                           <EditIcon className="size-3.5" />
                         </Button>
-                        <Button size="sm" variant="ghost" onClick={() => onDelete(trigger)} disabled={busy} className="min-h-[40px] min-w-[40px] text-red-500 hover:text-red-600 md:min-h-0 md:min-w-0">
+                        <Button size="sm" variant="ghost" onClick={() => onDelete(trigger)} disabled={busy} className="min-h-[44px] min-w-[44px] text-red-500 hover:text-red-600 md:min-h-0 md:min-w-0">
                           <TrashIcon className="size-3.5" />
                         </Button>
                       </div>

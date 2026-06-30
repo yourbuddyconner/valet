@@ -1002,7 +1002,7 @@ export function ChatInput({
             <button
               type="button"
               onClick={() => fileInputRef.current?.click()}
-              className="flex h-9 w-9 md:h-7 md:w-7 shrink-0 items-center justify-center rounded-lg text-neutral-400 transition-colors hover:bg-surface-2 hover:text-neutral-600 dark:text-neutral-500 dark:hover:bg-surface-3 dark:hover:text-neutral-300"
+              className="flex h-11 w-11 md:h-7 md:w-7 shrink-0 items-center justify-center rounded-lg text-neutral-400 transition-colors hover:bg-surface-2 hover:text-neutral-600 dark:text-neutral-500 dark:hover:bg-surface-3 dark:hover:text-neutral-300"
               title="Attach files"
               aria-label="Attach files"
             >
@@ -1013,7 +1013,7 @@ export function ChatInput({
                 <button
                   type="button"
                   onClick={cancelRecording}
-                  className="flex h-9 w-9 md:h-7 md:w-7 shrink-0 items-center justify-center rounded-lg text-neutral-400 transition-colors hover:bg-surface-2 hover:text-neutral-600 dark:text-neutral-500 dark:hover:bg-surface-3 dark:hover:text-neutral-300"
+                  className="flex h-11 w-11 md:h-7 md:w-7 shrink-0 items-center justify-center rounded-lg text-neutral-400 transition-colors hover:bg-surface-2 hover:text-neutral-600 dark:text-neutral-500 dark:hover:bg-surface-3 dark:hover:text-neutral-300"
                   title="Cancel recording"
                   aria-label="Cancel recording"
                 >
@@ -1026,7 +1026,7 @@ export function ChatInput({
                 <button
                   type="button"
                   onClick={handleMicClick}
-                  className="flex h-9 w-9 md:h-7 md:w-7 shrink-0 items-center justify-center rounded-lg bg-red-500/10 text-red-500 transition-colors hover:bg-red-500/20"
+                  className="flex h-11 w-11 md:h-7 md:w-7 shrink-0 items-center justify-center rounded-lg bg-red-500/10 text-red-500 transition-colors hover:bg-red-500/20"
                   title="Stop recording"
                   aria-label="Stop recording"
                 >
@@ -1037,7 +1037,7 @@ export function ChatInput({
               <button
                 type="button"
                 onClick={handleMicClick}
-                className="flex h-9 w-9 md:h-7 md:w-7 shrink-0 items-center justify-center rounded-lg text-neutral-400 transition-colors hover:bg-surface-2 hover:text-neutral-600 dark:text-neutral-500 dark:hover:bg-surface-3 dark:hover:text-neutral-300"
+                className="flex h-11 w-11 md:h-7 md:w-7 shrink-0 items-center justify-center rounded-lg text-neutral-400 transition-colors hover:bg-surface-2 hover:text-neutral-600 dark:text-neutral-500 dark:hover:bg-surface-3 dark:hover:text-neutral-300"
                 title="Record voice note"
                 aria-label="Record voice note"
               >
@@ -1139,7 +1139,7 @@ export function ChatInput({
               <button
                 type="button"
                 onClick={onAbort}
-                className="flex h-10 w-10 md:h-8 md:w-8 shrink-0 items-center justify-center rounded-full bg-neutral-600 text-white transition-colors hover:bg-neutral-700 dark:bg-neutral-400 dark:text-neutral-900 dark:hover:bg-neutral-300"
+                className="flex h-11 w-11 md:h-8 md:w-8 shrink-0 items-center justify-center rounded-full bg-neutral-600 text-white transition-colors hover:bg-neutral-700 dark:bg-neutral-400 dark:text-neutral-900 dark:hover:bg-neutral-300"
                 aria-label="Stop"
               >
                 <StopIcon className="h-3.5 w-3.5" />
@@ -1148,7 +1148,7 @@ export function ChatInput({
               <button
                 type="submit"
                 disabled={(!value.trim() && attachments.length === 0) || disabled || sendDisabled || isSendingFiles || isCompressing}
-                className="flex h-10 w-10 md:h-8 md:w-8 shrink-0 items-center justify-center rounded-full bg-neutral-900 text-white transition-colors hover:bg-neutral-800 disabled:bg-neutral-300 disabled:text-neutral-500 dark:bg-neutral-100 dark:text-neutral-900 dark:hover:bg-neutral-200 dark:disabled:bg-neutral-700 dark:disabled:text-neutral-500"
+                className="flex h-11 w-11 md:h-8 md:w-8 shrink-0 items-center justify-center rounded-full bg-neutral-900 text-white transition-colors hover:bg-neutral-800 disabled:bg-neutral-300 disabled:text-neutral-500 dark:bg-neutral-100 dark:text-neutral-900 dark:hover:bg-neutral-200 dark:disabled:bg-neutral-700 dark:disabled:text-neutral-500"
                 aria-label="Send"
               >
                 <SendIcon className="h-4 w-4" />
