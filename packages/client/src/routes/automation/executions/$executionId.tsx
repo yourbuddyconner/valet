@@ -1,7 +1,11 @@
+import * as React from 'react';
 import { createFileRoute, Link, useNavigate } from '@tanstack/react-router';
 import { isActiveExecutionStatus, useCancelExecution, useExecution, useRetryExecution } from '@/api/executions';
+import { useWorkflow } from '@/api/workflows';
 import type { Execution, ExecutionNode } from '@/api/executions';
+import type { WorkflowDefinition } from '@valet/shared';
 import { ExecutionApprovalPanel } from '@/components/workflows/execution-approval-panel';
+import { WorkflowExecutionViewer } from '@/components/workflows/workflow-execution-viewer';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -20,6 +24,25 @@ function ExecutionDetailPage() {
   const cancel = useCancelExecution();
   const retryExecution = useRetryExecution();
   const execution = data?.execution;
+  // Persist the toggle across reloads — switching to Canvas should
+  // stick. localStorage avoids dragging URL state for what's a pure UI
+  // preference. Default to 'canvas' since that's the more graphical
+  // view of the same data.
+  const [view, setView] = React.useState<'canvas' | 'trace'>(() => {
+    if (typeof window === 'undefined') return 'canvas';
+    return (localStorage.getItem('exec.detail.view') as 'canvas' | 'trace' | null) ?? 'canvas';
+  });
+  React.useEffect(() => {
+    if (typeof window !== 'undefined') localStorage.setItem('exec.detail.view', view);
+  }, [view]);
+  const [selectedNodeId, setSelectedNodeId] = React.useState<string | null>(null);
+  // Fetch the workflow only when canvas view is selected; the table
+  // view doesn't need the DAG. enabled-by-presence on the workflow id
+  // keeps the request out of flight until both prerequisites land.
+  const { data: workflowData } = useWorkflow(execution?.workflowId ?? '');
+  const definition: WorkflowDefinition | null = workflowData?.workflow.data
+    ? (workflowData.workflow.data as unknown as WorkflowDefinition)
+    : null;
 
   const onCancel = async () => {
     try {
@@ -111,24 +134,73 @@ function ExecutionDetailPage() {
         title="Action required"
       />
 
-      <section className="grid gap-4 md:grid-cols-3">
-        <SummaryItem label="Workflow ID" value={execution.workflowId} />
-        <SummaryItem label="Trigger ID" value={execution.triggerId ?? 'manual'} />
-        <SummaryItem label="Node traces" value={String(nodes.length)} />
-      </section>
+      <ViewToggle value={view} onChange={setView} />
 
-      <section>
-        <h2 className="mb-2 text-sm font-medium text-neutral-900 dark:text-neutral-100">
-          Node trace
-        </h2>
-        <NodeTraceTable nodes={nodes} />
-      </section>
+      {view === 'canvas' ? (
+        <section className="h-[640px] overflow-hidden rounded-lg border border-neutral-200 bg-white dark:border-neutral-800 dark:bg-neutral-950">
+          <WorkflowExecutionViewer
+            definition={definition}
+            execution={execution}
+            executions={[execution]}
+            isLoadingExecution={isLoading}
+            selectedExecutionId={execution.id}
+            selectedNodeId={selectedNodeId}
+            onSelectExecution={() => undefined}
+            onSelectNode={setSelectedNodeId}
+            onRetryExecution={() => onRetry()}
+            isRetryingExecution={retryExecution.isPending}
+          />
+        </section>
+      ) : (
+        <>
+          <section className="grid gap-4 md:grid-cols-3">
+            <SummaryItem label="Workflow ID" value={execution.workflowId} />
+            <SummaryItem label="Trigger ID" value={execution.triggerId ?? 'manual'} />
+            <SummaryItem label="Node traces" value={String(nodes.length)} />
+          </section>
 
-      <section className="grid gap-4 lg:grid-cols-3">
-        <JsonPanel title="Trigger data" value={execution.triggerData} />
-        <JsonPanel title="Outputs" value={execution.outputs} />
-        <JsonPanel title="Trigger metadata" value={execution.triggerMetadata} />
-      </section>
+          <section>
+            <h2 className="mb-2 text-sm font-medium text-neutral-900 dark:text-neutral-100">
+              Node trace
+            </h2>
+            <NodeTraceTable nodes={nodes} />
+          </section>
+
+          <section className="grid gap-4 lg:grid-cols-3">
+            <JsonPanel title="Trigger data" value={execution.triggerData} />
+            <JsonPanel title="Outputs" value={execution.outputs} />
+            <JsonPanel title="Trigger metadata" value={execution.triggerMetadata} />
+          </section>
+        </>
+      )}
+    </div>
+  );
+}
+
+function ViewToggle({
+  value,
+  onChange,
+}: {
+  value: 'canvas' | 'trace';
+  onChange: (v: 'canvas' | 'trace') => void;
+}) {
+  return (
+    <div className="inline-flex rounded-md border border-neutral-200 bg-neutral-50 p-0.5 dark:border-neutral-800 dark:bg-neutral-900">
+      {(['canvas', 'trace'] as const).map((opt) => (
+        <button
+          key={opt}
+          type="button"
+          onClick={() => onChange(opt)}
+          className={cn(
+            'rounded px-3 py-1 text-xs font-medium transition-colors',
+            value === opt
+              ? 'bg-white text-neutral-900 shadow-sm dark:bg-neutral-700 dark:text-neutral-100'
+              : 'text-neutral-500 hover:text-neutral-900 dark:text-neutral-400 dark:hover:text-neutral-100',
+          )}
+        >
+          {opt === 'canvas' ? 'Canvas' : 'Trace'}
+        </button>
+      ))}
     </div>
   );
 }
