@@ -471,6 +471,10 @@ function SelectedNodeDetailsPane({
         </button>
       </header>
 
+      {/* Single scroll area covers payload data + approvals so a
+          foreach node with hundreds of resolved iterations actually
+          scrolls. The session link stays in a tiny sticky footer
+          below because it's a one-line CTA. */}
       <div className="min-h-0 flex-1 overflow-y-auto">
         {!hasAnyContent ? (
           <div className="p-4">
@@ -480,7 +484,6 @@ function SelectedNodeDetailsPane({
           </div>
         ) : (
           <div className="space-y-4 p-4">
-            {/* Output first — for a finished node, this is the answer. */}
             {outputSection && (
               <StructuredPayloadBlock
                 title="Output"
@@ -489,7 +492,6 @@ function SelectedNodeDetailsPane({
                 truncated={outputSection.truncated}
               />
             )}
-            {/* Secondary trace sections (Input / Error / Reason). */}
             {secondarySections.map((section) => (
               <StructuredPayloadBlock
                 key={section.title}
@@ -499,8 +501,6 @@ function SelectedNodeDetailsPane({
                 truncated={section.truncated}
               />
             ))}
-            {/* Configured params last among data — it's what was set up,
-                not what happened. */}
             {selectedNodeParams && (
               <StructuredPayloadBlock
                 title="Configured params"
@@ -508,30 +508,28 @@ function SelectedNodeDetailsPane({
                 tone="neutral"
               />
             )}
+            {selectedApprovals.length > 0 && (
+              <section>
+                <h4 className="mb-1.5 text-xs font-medium text-neutral-700 dark:text-neutral-300">Approvals</h4>
+                <ApprovalGroup executionId={execution.id} approvals={selectedApprovals} />
+              </section>
+            )}
           </div>
         )}
       </div>
 
-      {/* Actions at the bottom — these are the things you DO with a
-          node (approve, open session). Persistent footer separates
-          action from data. */}
-      {hasActions && (
-        <footer className="shrink-0 space-y-2 border-t border-neutral-200 bg-neutral-50/60 p-4 dark:border-neutral-800 dark:bg-neutral-900/40">
-          {selectedApprovals.length > 0 && (
-            <ApprovalGroup executionId={execution.id} approvals={selectedApprovals} />
-          )}
-          {sessionLink && (
-            <Button
-              asChild
-              variant="secondary"
-              size="sm"
-              className="w-full border border-neutral-200 bg-white text-neutral-800 hover:bg-neutral-100 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100 dark:hover:bg-neutral-800"
-            >
-              <Link to="/sessions/$sessionId" params={{ sessionId: sessionLink.sessionId }}>
-                {sessionLink.label}
-              </Link>
-            </Button>
-          )}
+      {sessionLink && (
+        <footer className="shrink-0 border-t border-neutral-200 bg-neutral-50/60 p-3 dark:border-neutral-800 dark:bg-neutral-900/40">
+          <Button
+            asChild
+            variant="secondary"
+            size="sm"
+            className="w-full border border-neutral-200 bg-white text-neutral-800 hover:bg-neutral-100 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100 dark:hover:bg-neutral-800"
+          >
+            <Link to="/sessions/$sessionId" params={{ sessionId: sessionLink.sessionId }}>
+              {sessionLink.label}
+            </Link>
+          </Button>
         </footer>
       )}
     </div>
