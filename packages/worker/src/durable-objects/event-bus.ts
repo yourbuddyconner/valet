@@ -15,8 +15,7 @@ export class EventBusDO {
   private ctx: DurableObjectState;
   private env: Env;
   // DO-scoped batched tracer (created once; see do-tracing.ts). EventBus has no alarm, so its
-  // buffered broadcast spans flush on the size threshold and on webSocketClose.
-  private doTracer?: DoTracer;
+  // buffered broadcast spans flush on the size threshold and on webSocketClose / webSocketError.
   private doTracerPromise?: Promise<DoTracer>;
 
   constructor(ctx: DurableObjectState, env: Env) {
@@ -25,10 +24,7 @@ export class EventBusDO {
   }
 
   private getTracer(): Promise<DoTracer> {
-    return (this.doTracerPromise ??= createDoTracer(this.env, this.ctx, 'valet-event-bus-do').then((t) => {
-      this.doTracer = t;
-      return t;
-    }));
+    return (this.doTracerPromise ??= createDoTracer(this.env, this.ctx, 'valet-event-bus-do'));
   }
 
   /** Drain buffered spans now (webSocketClose). Best-effort — never throws. */
@@ -185,11 +181,15 @@ export class EventBusDO {
   }
 
   async webSocketClose(ws: WebSocket, code: number, reason: string): Promise<void> {
+    // Drain buffered broadcast spans before the DO can hibernate after this disconnect —
+    // EventBus has no alarm, so close/error are the only lifecycle flush drivers.
+    this.ctx.waitUntil(this.flushTraces());
     ws.close(code, reason);
   }
 
   async webSocketError(ws: WebSocket, error: unknown): Promise<void> {
     console.error('EventBus WebSocket error:', error);
+    this.ctx.waitUntil(this.flushTraces());
     ws.close(1011, 'Internal error');
   }
 }

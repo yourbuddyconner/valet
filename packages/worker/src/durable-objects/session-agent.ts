@@ -358,7 +358,6 @@ export class SessionAgentDO {
   private static readonly TRACE_FLUSH_INTERVAL_MS = 10_000;
   // Per-token streaming frames + keepalive: high-frequency, low-value; not traced individually.
   private static readonly WS_TRACE_SKIP = new Set<string>(['ping', 'pong', 'message.part.text-delta', 'message.part.tool-update']);
-  private doTracer?: DoTracer;
   private doTracerPromise?: Promise<DoTracer>;
   private traceFlushDeadline: number | null = null;
   // Per-turn W3C traceparent of the originating Worker trace, captured at prompt dispatch so
@@ -6517,10 +6516,7 @@ export class SessionAgentDO {
 
   // ─── DO-scoped tracing (batched; see do-tracing.ts) ───────────────────
   private getTracer(): Promise<DoTracer> {
-    return (this.doTracerPromise ??= createDoTracer(this.env, this.ctx, 'valet-session-agent-do').then((t) => {
-      this.doTracer = t;
-      return t;
-    }));
+    return (this.doTracerPromise ??= createDoTracer(this.env, this.ctx, 'valet-session-agent-do'));
   }
 
   /** Drain buffered spans now (alarm / close / hibernate / fetch). Best-effort — never throws. */
