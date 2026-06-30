@@ -10,6 +10,13 @@ import type { QueueMode } from '@valet/shared';
 import { Button } from '@/components/ui/button';
 import { APIKeyList } from '@/components/settings/api-key-list';
 import { useTheme } from '@/hooks/use-theme';
+import { useFontScale } from '@/hooks/use-font-scale';
+import {
+  FONT_SCALE_DEFAULT,
+  FONT_SCALE_MAX,
+  FONT_SCALE_MIN,
+  FONT_SCALE_STEP,
+} from '@/lib/font-scale';
 import { ActionPolicyOverridesSection } from '@/components/settings/action-policy-overrides-section';
 import {
   ModelSelector,
@@ -150,7 +157,7 @@ function GeneralTab() {
       </SettingsSection>
 
       <SettingsSection title="Appearance">
-        <div className="space-y-4">
+        <div className="space-y-6">
           <div>
             <label className="text-sm font-medium text-neutral-700 dark:text-neutral-300">
               Theme
@@ -161,6 +168,7 @@ function GeneralTab() {
               <ThemeButton label="System" active={theme === 'system'} onClick={() => setTheme('system')} />
             </div>
           </div>
+          <FontScaleControl />
         </div>
       </SettingsSection>
 
@@ -1374,6 +1382,59 @@ function ThemeButton({
     >
       {label}
     </button>
+  );
+}
+
+function FontScaleControl() {
+  const { fontScale, setFontScale, resetFontScale } = useFontScale();
+  const isDefault = fontScale === FONT_SCALE_DEFAULT;
+
+  return (
+    <div>
+      <div className="flex items-center justify-between">
+        <label
+          htmlFor="font-scale-slider"
+          className="text-sm font-medium text-neutral-700 dark:text-neutral-300"
+        >
+          Font size
+        </label>
+        <div className="flex items-center gap-3">
+          <span className="text-sm tabular-nums text-neutral-500 dark:text-neutral-400">
+            {Math.round(fontScale * 100)}%
+          </span>
+          {!isDefault && (
+            <button
+              type="button"
+              onClick={resetFontScale}
+              className="text-xs font-medium text-neutral-500 underline-offset-2 hover:text-neutral-700 hover:underline dark:text-neutral-400 dark:hover:text-neutral-200"
+            >
+              Reset
+            </button>
+          )}
+        </div>
+      </div>
+      <div className="mt-3 flex items-center gap-3">
+        <span className="text-xs text-neutral-400 dark:text-neutral-500">
+          {Math.round(FONT_SCALE_MIN * 100)}%
+        </span>
+        <input
+          id="font-scale-slider"
+          type="range"
+          min={FONT_SCALE_MIN}
+          max={FONT_SCALE_MAX}
+          step={FONT_SCALE_STEP}
+          value={fontScale}
+          onChange={(e) => setFontScale(parseFloat(e.target.value))}
+          className="h-1.5 w-full cursor-pointer appearance-none rounded-full bg-neutral-200 accent-neutral-900 dark:bg-neutral-700 dark:accent-neutral-100"
+        />
+        <span className="text-xs text-neutral-400 dark:text-neutral-500">
+          {Math.round(FONT_SCALE_MAX * 100)}%
+        </span>
+      </div>
+      <p className="mt-2 text-xs text-neutral-500 dark:text-neutral-400">
+        Scales text across the app. Saved on this device.
+      </p>
+    </div>
   );
 }
 
