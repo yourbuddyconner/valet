@@ -2,7 +2,7 @@ import * as React from 'react';
 import { Link } from '@tanstack/react-router';
 import type { NodeProps } from '@xyflow/react';
 import { ReactFlowProvider } from '@xyflow/react';
-import type { Execution, ExecutionNode } from '@/api/executions';
+import type { Execution, ExecutionApproval, ExecutionNode } from '@/api/executions';
 import type { WorkflowDefinition, WorkflowNode } from '@valet/shared';
 import { Canvas } from '@/components/ai-elements/canvas';
 import { Controls } from '@/components/ai-elements/controls';
@@ -518,11 +518,7 @@ function SelectedNodeDetailsPane({
       {hasActions && (
         <footer className="shrink-0 space-y-2 border-t border-neutral-200 bg-neutral-50/60 p-4 dark:border-neutral-800 dark:bg-neutral-900/40">
           {selectedApprovals.length > 0 && (
-            <div className="space-y-2">
-              {selectedApprovals.map((approval) => (
-                <ExecutionApprovalCard key={approval.id} executionId={execution.id} approval={approval} />
-              ))}
-            </div>
+            <ApprovalGroup executionId={execution.id} approvals={selectedApprovals} />
           )}
           {sessionLink && (
             <Button
@@ -540,6 +536,115 @@ function SelectedNodeDetailsPane({
       )}
     </div>
   );
+}
+
+/**
+ * Renders a node's approvals with two layouts depending on status:
+ *
+ *   - Pending approvals get the full ExecutionApprovalCard — that's
+ *     where action lives (approve, deny, sweep buttons).
+ *   - Resolved approvals collapse into a compact one-line table; for
+ *     a foreach that ran 50 iterations and auto-approved all of them
+ *     a full card per row is just 50× the same audit line. The table
+ *     row carries iteration index, status, and resolved time; clicking
+ *     it expands inline for the full prompt + details when needed.
+ */
+function ApprovalGroup({
+  executionId,
+  approvals,
+}: {
+  executionId: string;
+  approvals: ExecutionApproval[];
+}) {
+  const pending = approvals.filter((a) => a.status === 'pending');
+  const resolved = approvals.filter((a) => a.status !== 'pending');
+  // Count summary for resolved — collapses "5 executed / 1 denied" etc.
+  const counts = resolved.reduce<Record<string, number>>((acc, a) => {
+    acc[a.status] = (acc[a.status] ?? 0) + 1;
+    return acc;
+  }, {});
+  const countParts = Object.entries(counts).map(([status, n]) => `${n} ${status}`);
+
+  return (
+    <div className="space-y-2">
+      {pending.map((approval) => (
+        <ExecutionApprovalCard key={approval.id} executionId={executionId} approval={approval} />
+      ))}
+      {resolved.length > 0 && (
+        <div className="overflow-hidden rounded-md border border-neutral-200 bg-white dark:border-neutral-800 dark:bg-neutral-900">
+          <div className="flex items-center justify-between gap-2 border-b border-neutral-200 px-3 py-1.5 text-xs text-neutral-500 dark:border-neutral-800 dark:text-neutral-400">
+            <span>{resolved.length === 1 ? '1 approval' : `${resolved.length} approvals`}</span>
+            <span className="truncate">{countParts.join(' · ')}</span>
+          </div>
+          <ul className="divide-y divide-neutral-100 dark:divide-neutral-800">
+            {resolved.map((approval) => (
+              <CompactApprovalRow key={approval.id} approval={approval} />
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function CompactApprovalRow({ approval }: { approval: ExecutionApproval }) {
+  const [open, setOpen] = React.useState(false);
+  const iterLabel = typeof approval.iterationIndex === 'number'
+    ? `iter ${approval.iterationIndex}`
+    : null;
+  const promptOneLine = approval.prompt
+    ? approval.prompt.split('\n')[0]
+    : null;
+  return (
+    <li>
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs hover:bg-neutral-50 dark:hover:bg-neutral-800/50"
+      >
+        <Badge variant={resolvedBadgeVariant(approval.status)} className="shrink-0">{approval.status}</Badge>
+        {iterLabel && (
+          <span className="shrink-0 font-mono text-neutral-500 dark:text-neutral-400">{iterLabel}</span>
+        )}
+        {promptOneLine && approval.kind === 'explicit' && (
+          <span className="min-w-0 flex-1 truncate text-neutral-700 dark:text-neutral-300">{promptOneLine}</span>
+        )}
+        <span className="ml-auto shrink-0 text-neutral-400 dark:text-neutral-500">
+          {approval.resolvedAt ? formatRelativeTime(approval.resolvedAt) : formatRelativeTime(approval.createdAt)}
+        </span>
+        <span className="shrink-0 text-neutral-400">{open ? '▾' : '▸'}</span>
+      </button>
+      {open && (
+        <div className="space-y-1 border-t border-neutral-100 bg-neutral-50/60 px-3 py-2 text-xs dark:border-neutral-800 dark:bg-neutral-900/40">
+          {approval.prompt && (
+            <p className="whitespace-pre-wrap text-pretty text-neutral-900 dark:text-neutral-100">{approval.prompt}</p>
+          )}
+          {approval.resolvedBy && (
+            <p className="text-neutral-500 dark:text-neutral-400">
+              by <span className="font-mono">{approval.resolvedBy}</span>
+            </p>
+          )}
+          {approval.details !== null && approval.details !== undefined && (
+            <details className="mt-1">
+              <summary className="cursor-pointer text-neutral-500 hover:text-neutral-900 dark:text-neutral-400 dark:hover:text-neutral-100">
+                Details
+              </summary>
+              <pre className="mt-1 overflow-x-auto rounded bg-white p-2 text-[11px] dark:bg-neutral-950">
+                {JSON.stringify(approval.details, null, 2)}
+              </pre>
+            </details>
+          )}
+        </div>
+      )}
+    </li>
+  );
+}
+
+function resolvedBadgeVariant(status: string): 'success' | 'error' | 'secondary' | 'warning' {
+  if (status === 'approved' || status === 'executed') return 'success';
+  if (status === 'denied' || status === 'failed') return 'error';
+  if (status === 'expired') return 'warning';
+  return 'secondary';
 }
 
 function CloseIcon() {
