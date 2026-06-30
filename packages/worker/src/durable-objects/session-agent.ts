@@ -10,8 +10,9 @@ import { assembleCustomProviders, assembleBuiltInProviderModelConfigs, assembleR
 import { resolveAvailableModels } from '../services/model-catalog.js';
 import { integrationRegistry } from '../integrations/registry.js';
 import { updateIntegrationStatus } from '../lib/db/integrations.js';
-import { approveInvocation, denyInvocation, markFailed } from '../services/actions.js';
-import { resolveAdminPolicyMatch, updateInvocationStatus, upsertActionPolicy, upsertRuntimeGrant, deleteRuntimeGrantsByScope } from '../lib/db/actions.js';
+import { denyInvocation, markFailed } from '../services/actions.js';
+import { resolveAdminPolicyMatch, updateInvocationStatus, deleteRuntimeGrantsByScope } from '../lib/db/actions.js';
+import { resolveInvocationWithScope, type ApprovalScope } from '../services/scoped-approvals.js';
 import { getActivePluginArtifacts, getPluginSettings } from '../lib/db/plugins.js';
 import { getPersonaSkills, getOrgDefaultSkills, getPersonaToolWhitelist } from '../lib/db.js';
 import type { ChannelTarget, ChannelContext, InteractivePrompt, InteractiveAction, InteractivePromptRef, InteractiveResolution } from '@valet/sdk';
@@ -6833,6 +6834,91 @@ export class SessionAgentDO {
    * Execute an integration action via the service and send the result to the runner.
    * Shared between immediate execution and post-approval execution.
    */
+  /**
+   * Dispatch tools for invocations that the scoped-approval sweep just
+   * resolved alongside the originating prompt.
+   *
+   * Each sibling has its own `interactive_prompts` row in this DO with
+   * the same context shape as the originating prompt. We claim the row
+   * (CAS), run the tool, then clean up — mirroring the originating
+   * prompt's flow but condensed since the resolver already approved the
+   * invocation row.
+   *
+   * Best-effort: a sibling failure is logged and the invocation is
+   * marked failed, but the originating approval response has already
+   * been returned to the user. Runner-side MCP timeouts are the final
+   * safety net for any sibling whose tool genuinely never ran.
+   */
+  private async dispatchSweptApprovalSiblings(siblingIds: string[], userId: string): Promise<void> {
+    if (siblingIds.length === 0) return;
+    for (const siblingId of siblingIds) {
+      try {
+        await this.dispatchOneSweptSibling(siblingId, userId);
+      } catch (err) {
+        console.warn(`[session-agent] swept sibling dispatch failed for ${siblingId}: ${err instanceof Error ? err.message : String(err)}`);
+        await markFailed(this.appDb, siblingId, err instanceof Error ? err.message : String(err)).catch(() => {});
+      }
+    }
+  }
+
+  private async dispatchOneSweptSibling(siblingId: string, userId: string): Promise<void> {
+    const rows = this.ctx.storage.sql.exec(
+      'SELECT id, type, request_id, context, channel_refs FROM interactive_prompts WHERE id = ?',
+      siblingId,
+    ).toArray();
+    if (rows.length === 0) {
+      // Prompt entry already gone (sibling resolved separately, sibling
+      // belongs to a different DO, etc.). Nothing to dispatch here; the
+      // resolver-side state is already consistent.
+      return;
+    }
+    const row = rows[0] as Record<string, unknown>;
+    if (row.type !== 'approval') return;
+
+    const claimed = this.ctx.storage.sql.exec(
+      "UPDATE interactive_prompts SET status = 'resolving' WHERE id = ? AND status = 'pending' RETURNING id",
+      siblingId,
+    ).toArray();
+    if (claimed.length === 0) {
+      // Raced with another resolver; let that one own dispatch.
+      return;
+    }
+
+    const requestId = (row.request_id as string | null) ?? null;
+    const context = row.context ? JSON.parse(row.context as string) : {};
+    const channelRefsJson = (row.channel_refs as string) || null;
+    const toolId = String(context.toolId ?? '');
+    const service = String(context.service ?? '');
+    const actionId = String(context.actionId ?? '');
+    const params = (context.params as Record<string, unknown>) ?? {};
+    const ocSession = typeof context.opencodeSessionId === 'string' ? context.opencodeSessionId : undefined;
+
+    const orgId = await this.resolveOrgId() ?? 'default';
+    const customContext = await loadCustomMcpConnectorContext(this.env, this.appDb, orgId);
+    const actionSource = integrationRegistry.getActions(service, customContext);
+
+    if (requestId) {
+      await this.executeActionAndSend(requestId, toolId, service, actionId, params, userId, actionSource, siblingId, orgId, ocSession);
+    }
+
+    this.ctx.storage.sql.exec('DELETE FROM interactive_prompts WHERE id = ?', siblingId);
+
+    const resolved: InteractiveResolution = {
+      actionId: 'allow_once',
+      resolvedBy: userId,
+    };
+    this.broadcastToClients({
+      type: 'interactive_prompt_resolved',
+      promptId: siblingId,
+      promptType: 'approval',
+      resolution: resolved,
+      context,
+    });
+    if (channelRefsJson) {
+      this.ctx.waitUntil(this.updateChannelInteractivePrompts(channelRefsJson, resolved));
+    }
+  }
+
   private async executeActionAndSend(
     requestId: string,
     toolId: string,
@@ -7264,59 +7350,49 @@ export class SessionAgentDO {
           return { ok: false, status: 500, error };
         }
 
-        let approval;
+        // Map the user's resolution choice to an approval scope. The
+        // helper persists the grant (when scope > 'once'), resolves the
+        // originating invocation, and sweeps any matching pending sibling
+        // invocations in the same session — fixing the parallel-pending-
+        // tools case where firing multiple tools at once and clicking
+        // "Allow session" used to only resolve the one the user clicked.
+        const scope: ApprovalScope = resolutionAction === 'allow_session'
+          ? 'session'
+          : resolutionAction === 'allow_always'
+            ? 'durable_policy'
+            : 'once';
+
+        let scopedResult;
         try {
-          approval = await approveInvocation(this.appDb, promptId, userId);
+          scopedResult = await resolveInvocationWithScope(this.appDb, {
+            invocationId: promptId,
+            decision: 'approved',
+            userId,
+            scope,
+          });
         } catch (err) {
           const error = err instanceof Error ? err.message : String(err);
           restorePrompt();
           return { ok: false, status: 500, error };
         }
-        if (!approval.ok) {
-          const error = 'This action approval is no longer pending.';
+
+        if (scopedResult.kind === 'not_found' || scopedResult.kind === 'already_resolved' || scopedResult.kind === 'expired') {
+          const error = scopedResult.kind === 'expired'
+            ? 'This action approval has expired.'
+            : 'This action approval is no longer pending.';
           deleteNoLongerPendingPrompt(error);
           return { ok: false, status: 409, error };
         }
 
-        if (resolutionAction === 'allow_session' || resolutionAction === 'allow_always') {
-          try {
-            if (resolutionAction === 'allow_session') {
-              await upsertRuntimeGrant(this.appDb, {
-                id: `${promptId}:session`,
-                userId,
-                sessionId,
-                subjectType: 'tool_action',
-                service: String(service),
-                actionId: String(actionId),
-                policyKey: `session:${sessionId}:${service}.${actionId}:`,
-              });
-            } else {
-              await upsertActionPolicy(this.appDb, {
-                id: `${promptId}:persistent`,
-                service: String(service),
-                actionId: String(actionId),
-                mode: 'allow',
-                managedBy: 'user',
-                principalType: 'user',
-                principalId: userId,
-                subjectType: 'tool_action',
-                origin: 'approval_prompt',
-                sourceApprovalId: promptId,
-                createdBy: userId,
-              });
-            }
-          } catch (err) {
-            const error = `Failed to save approval override: ${err instanceof Error ? err.message : String(err)}`;
-            await markFailed(this.appDb, promptId, error).catch((markErr) => {
-              console.error('[session-agent] Failed to mark invocation failed after override save error:', markErr);
-            });
-            if (requestId) {
-              this.runnerLink.send({ type: 'call-tool-result', requestId, error } as any);
-            }
-            broadcastPromptExpired();
-            deletePrompt();
-            return { ok: false, status: 500, error };
-          }
+        // resolved — dispatch siblings (if any) before the original's
+        // dispatch below. Each sibling has its own interactive_prompts
+        // row in this DO; claim + run + clean each one independently.
+        // Best-effort: a sibling dispatch failure doesn't roll back the
+        // originating approval. The runner-side MCP timeout is the
+        // eventual safety net for any sibling whose tool never ran.
+        const sweptSiblings = scopedResult.resolved.filter((r) => r.id !== promptId);
+        if (sweptSiblings.length > 0) {
+          this.ctx.waitUntil(this.dispatchSweptApprovalSiblings(sweptSiblings.map((s) => s.id), userId));
         }
 
         const orgId = await this.resolveOrgId() ?? 'default';

@@ -2805,7 +2805,7 @@ describe('SessionAgentDO', () => {
     it('allow_session creates a session-scoped runtime grant and executes', async () => {
       const { agent, sql, appDb } = await setupApprovalPrompt('allow_session');
 
-      const grant = await getRuntimeGrant(appDb as any, 'inv-approval:session');
+      const grant = await getRuntimeGrant(appDb as any, 'approval:inv-approval:session');
       const invocation = await getInvocation(appDb as any, 'inv-approval');
 
       expect(grant).toMatchObject({
@@ -2823,7 +2823,7 @@ describe('SessionAgentDO', () => {
     it('allow_always creates a durable user action policy and executes', async () => {
       const { agent, appDb } = await setupApprovalPrompt('allow_always');
 
-      const policy = await getActionPolicy(appDb as any, 'inv-approval:persistent');
+      const policy = await getActionPolicy(appDb as any, 'approval:inv-approval:durable');
 
       expect(policy).toMatchObject({
         service: 'gmail',
@@ -2854,7 +2854,7 @@ describe('SessionAgentDO', () => {
       const invocation = await getInvocation(appDb as any, 'inv-approval');
 
       expect(invocation).toMatchObject({ status: 'approved', resolvedBy: 'user-1' });
-      expect(await getRuntimeGrant(appDb as any, 'inv-approval:session')).toBeUndefined();
+      expect(await getRuntimeGrant(appDb as any, 'approval:inv-approval:session')).toBeUndefined();
       expect((agent as any).executeActionAndSend).toHaveBeenCalledOnce();
     });
 
@@ -2894,7 +2894,7 @@ describe('SessionAgentDO', () => {
       const invocation = await getInvocation(appDb as any, 'inv-approval');
 
       expect(invocation).toMatchObject({ status: 'denied' });
-      expect(await getRuntimeGrant(appDb as any, 'inv-approval:session')).toBeUndefined();
+      expect(await getRuntimeGrant(appDb as any, 'approval:inv-approval:session')).toBeUndefined();
       expect((agent as any).executeActionAndSend).not.toHaveBeenCalled();
     });
 
@@ -2969,24 +2969,24 @@ describe('SessionAgentDO', () => {
       }));
     });
 
-    it('broadcasts terminal prompt state when override persistence fails after approval', async () => {
-      const { agent, sql, appDb, broadcasts } = await setupApprovalPrompt('allow_session', {
+    it('leaves the invocation pending and restores the prompt when grant persistence fails', async () => {
+      // Post-refactor semantic: resolveInvocationWithScope persists the
+      // grant BEFORE approving the invocation. If the grant write
+      // throws, the approval never happens — invocation stays pending,
+      // prompt is restored to pending, user gets a 500 and can retry.
+      // (The old flow approved first, then wrote the grant, requiring
+      // a markFailed compensating action on grant-write failure.)
+      const { agent, sql, appDb } = await setupApprovalPrompt('allow_session', {
         failOverrideWrite: true,
       });
 
       const invocation = await getInvocation(appDb as any, 'inv-approval');
-
       expect(invocation).toMatchObject({
-        status: 'failed',
-        resolvedBy: 'user-1',
+        status: 'pending',
+        resolvedBy: null,
       });
       expect((agent as any).executeActionAndSend).not.toHaveBeenCalled();
-      expect(sql.interactivePrompts.has('inv-approval')).toBe(false);
-      expect(broadcasts).toContainEqual(expect.objectContaining({
-        type: 'interactive_prompt_expired',
-        promptId: 'inv-approval',
-        promptType: 'approval',
-      }));
+      expect(sql.interactivePrompts.get('inv-approval')).toMatchObject({ status: 'pending' });
     });
 
     it('rejects approval resolution from a non-owner websocket user', async () => {
