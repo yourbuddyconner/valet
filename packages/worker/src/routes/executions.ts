@@ -99,6 +99,11 @@ executionsRouter.get('/:id', async (c) => {
     .where(eq(actionInvocations.workflowExecutionId, id))
     .orderBy(asc(actionInvocations.createdAt))
     .all();
+  // Index by id so per-node trace rendering can surface the audit fields
+  // (matched grant/policy + source/scope) — that's what tells the user
+  // an invocation was auto-approved via a runtime grant instead of
+  // having a human gate it.
+  const invocationById = new Map(approvalRows.map((inv) => [inv.id, inv]));
 
   const triggerData = parseExecutionTriggerData(row as { inputs?: string | null });
   return c.json({
@@ -122,6 +127,8 @@ executionsRouter.get('/:id', async (c) => {
       nodes: (nodes.results ?? []).map((n) => {
         const nodeId = String(n.node_id ?? '');
         const nodeType = String(n.node_type ?? '');
+        const invocationId = typeof n.invocation_id === 'string' ? n.invocation_id : null;
+        const invocation = invocationId ? invocationById.get(invocationId) : null;
         return {
           id: n.id,
           nodeId,
@@ -135,12 +142,20 @@ executionsRouter.get('/:id', async (c) => {
           reason: n.reason,
           retryAttempts: n.retry_attempts,
           approvalId: n.approval_id,
-          invocationId: n.invocation_id,
+          invocationId,
           sessionId: nodeType === 'session' ? spawnedSessionByNode.get(nodeId) ?? null : null,
           startedAt: n.started_at,
           completedAt: n.completed_at,
           durationMs: n.duration_ms,
           createdAt: n.created_at,
+          // Auto-approval audit. When the resolver decided allow because
+          // a grant or durable policy matched, these fields explain why
+          // the user never saw a prompt — surfaced in the node detail
+          // panel so the audit chain isn't invisible.
+          matchedPolicyId: invocation?.matchedPolicyId ?? null,
+          matchedGrantId: invocation?.matchedGrantId ?? null,
+          policySource: invocation?.policySource ?? null,
+          policyScope: invocation?.policyScope ?? null,
         };
       }),
       approvals: approvalRows.map(mapInvocationToApprovalView),

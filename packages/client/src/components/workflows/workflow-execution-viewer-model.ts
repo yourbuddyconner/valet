@@ -83,7 +83,7 @@ export type ParsedExecutionPayload =
   | { kind: 'text'; text: string };
 
 export interface ExecutionTraceDetailSection {
-  title: 'Input' | 'Output' | 'Error' | 'Reason';
+  title: 'Input' | 'Output' | 'Error' | 'Reason' | 'Auto-approved';
   payload: ParsedExecutionPayload;
   tone: 'neutral' | 'error';
   truncated?: boolean;
@@ -158,7 +158,45 @@ export function buildTraceDetailSections(trace: ExecutionNode | null): Execution
     });
   }
 
+  const autoApprovalText = describeAutoApproval(trace);
+  if (autoApprovalText) {
+    sections.push({
+      title: 'Auto-approved',
+      payload: { kind: 'text', text: autoApprovalText },
+      tone: 'neutral',
+    });
+  }
+
   return sections;
+}
+
+/**
+ * Human-readable explanation of why an invocation was auto-approved
+ * without prompting. Returns null when the trace either had no
+ * invocation, was denied/prompted, or the resolver fell back to system
+ * default (no grant or policy match).
+ */
+function describeAutoApproval(trace: ExecutionNode): string | null {
+  const source = trace.policySource;
+  if (!source || source === 'system_default') return null;
+  const scope = trace.policyScope ?? 'action';
+  const scopeLabel = scope === 'action'
+    ? 'exact action'
+    : scope === 'service'
+      ? 'service'
+      : scope === 'risk_level'
+        ? 'risk level'
+        : 'scope';
+  switch (source) {
+    case 'runtime_grant':
+      return `Auto-approved by a runtime grant (${scopeLabel} match). The grant lives on the session or workflow run; it expires when its parent context completes.`;
+    case 'user_policy':
+      return `Auto-approved by a durable user policy (${scopeLabel} match). The user previously chose "Always allow" for this target.`;
+    case 'admin_policy':
+      return `Auto-approved by an admin policy (${scopeLabel} match). Configured at the organization level.`;
+    default:
+      return null;
+  }
 }
 
 export function getSessionTraceLink(trace: ExecutionNode | null | undefined): SessionTraceLink | null {

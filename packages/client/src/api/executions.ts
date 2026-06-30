@@ -77,6 +77,15 @@ export interface ExecutionNode {
   completedAt?: string | null;
   durationMs?: number | null;
   createdAt: string;
+  // Auto-approval audit metadata. Set when the resolver decided
+  // 'allow' because a runtime grant or durable user policy matched —
+  // i.e. the user never saw an approval prompt. The trace detail panel
+  // uses these to render an "Auto-approved by …" line so the audit
+  // chain isn't invisible.
+  matchedPolicyId?: string | null;
+  matchedGrantId?: string | null;
+  policySource?: 'system_default' | 'admin_policy' | 'user_policy' | 'runtime_grant' | null;
+  policyScope?: 'action' | 'service' | 'risk_level' | 'none' | null;
 }
 
 export interface ListExecutionsResponse {
