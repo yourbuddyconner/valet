@@ -1,5 +1,6 @@
 import * as React from 'react';
 import type { Execution, ExecutionNode } from '@/api/executions';
+import type { WorkflowDefinition, WorkflowNode } from '@valet/shared';
 import { Badge } from '@/components/ui/badge';
 import { MarkdownContent } from '@/components/chat/markdown/markdown-content';
 import { formatRelativeTime } from '@/lib/format';
@@ -11,10 +12,15 @@ import { correctNodeStatusForFinishedExecution } from './workflow-execution-view
 export function TraceNodeCard({
   node,
   executionStatus,
+  definition,
   defaultOpen,
 }: {
   node: ExecutionNode;
   executionStatus: Execution['status'];
+  /** The workflow's snapshot DAG — used to pull configured fields the
+   *  trace row doesn't carry (if conditions, foreach items expression,
+   *  approval prompt, etc.) so the rendered body can be plain-English. */
+  definition?: WorkflowDefinition | null;
   defaultOpen: boolean;
 }) {
   const [open, setOpen] = React.useState(defaultOpen);
@@ -22,7 +28,11 @@ export function TraceNodeCard({
   const status = corrected === 'not_run' ? node.status : corrected;
   const output = useParsedPayload(node.output);
   const input = useParsedPayload(node.inputPreview);
-  const summary = describeNodeOutcome(node, output);
+  const defNode = React.useMemo(
+    () => definition?.nodes.find((n) => n.id === node.nodeId) ?? null,
+    [definition, node.nodeId],
+  );
+  const summary = describeNodeOutcome(node, output, defNode);
   const isError = status === 'failed' || !!node.error;
 
   return (
@@ -74,7 +84,7 @@ export function TraceNodeCard({
               <ErrorBlock value={node.error} />
             </Section>
           )}
-          <NodeBody node={node} output={output} />
+          <NodeBody node={node} output={output} defNode={defNode} />
           {input !== undefined && input !== null && (
             <CollapsibleSection title={node.inputTruncated ? 'Input (truncated)' : 'Input'}>
               <SmartValue value={input} />
@@ -89,7 +99,15 @@ export function TraceNodeCard({
 
 // ─── Per-node-type body picker ───────────────────────────────────────────────
 
-function NodeBody({ node, output }: { node: ExecutionNode; output: unknown }) {
+function NodeBody({
+  node,
+  output,
+  defNode,
+}: {
+  node: ExecutionNode;
+  output: unknown;
+  defNode: WorkflowNode | null;
+}) {
   if (output === null || output === undefined) {
     if (node.reason) {
       return (
@@ -102,12 +120,12 @@ function NodeBody({ node, output }: { node: ExecutionNode; output: unknown }) {
   switch (node.nodeType) {
     case 'trigger': return <TriggerBody output={output} />;
     case 'set': return <SetBody output={output} />;
-    case 'if': return <IfBody output={output} />;
+    case 'if': return <IfBody output={output} defNode={defNode} />;
     case 'llm': return <LlmBody output={output} />;
     case 'tool': return <ToolBody output={output} />;
     case 'wait': return <WaitBody output={output} />;
     case 'approval': return <ApprovalBody output={output} />;
-    case 'foreach': return <ForeachBody output={output} />;
+    case 'foreach': return <ForeachBody output={output} defNode={defNode} />;
     case 'session':
     case 'orchestrator': return <SessionBody output={output} />;
     case 'stop': return <StopBody output={output} />;
@@ -141,24 +159,142 @@ function SetBody({ output }: { output: unknown }) {
   return <Section title="Values"><SmartValue value={output} /></Section>;
 }
 
-function IfBody({ output }: { output: unknown }) {
+function IfBody({ output, defNode }: { output: unknown; defNode: WorkflowNode | null }) {
   const o = asObject(output);
   if (!o) return <Section title="Output"><SmartValue value={output} /></Section>;
   const result = o.result === true;
-  const matched = Array.isArray(o.matched) ? o.matched : [];
+  const matched = new Set(Array.isArray(o.matched) ? o.matched.filter((i): i is number => typeof i === 'number') : []);
+  const combinator = typeof o.combinator === 'string' ? o.combinator : 'and';
+  const conditions = defNode && defNode.type === 'if' ? defNode.conditions : [];
+
   return (
     <Section title="Branch">
-      <div className="flex flex-wrap items-center gap-2 text-sm">
-        <Badge variant={result ? 'success' : 'secondary'}>{result ? 'true' : 'false'}</Badge>
-        <span className="text-neutral-500 dark:text-neutral-400">
-          {matched.length} condition{matched.length === 1 ? '' : 's'} matched
-        </span>
-        {typeof o.combinator === 'string' && (
-          <span className="text-xs text-neutral-400">combinator: {o.combinator}</span>
+      <div className="space-y-3">
+        <div className="flex flex-wrap items-center gap-2 text-sm">
+          <Badge variant={result ? 'success' : 'secondary'}>{result ? 'true' : 'false'}</Badge>
+          <span className="text-neutral-700 dark:text-neutral-300">
+            {summarizeBranch(result, conditions.length, matched.size, combinator)}
+          </span>
+        </div>
+        {conditions.length > 0 && (
+          <ul className="space-y-1.5">
+            {conditions.map((cond, i) => {
+              const hit = matched.has(i);
+              return (
+                <li
+                  key={i}
+                  className={cn(
+                    'flex items-start gap-2 rounded-md border px-2.5 py-2 text-sm',
+                    hit
+                      ? 'border-emerald-200 bg-emerald-50/40 dark:border-emerald-900/40 dark:bg-emerald-950/20'
+                      : 'border-neutral-200 bg-neutral-50/40 dark:border-neutral-800 dark:bg-neutral-900/40',
+                  )}
+                >
+                  <span
+                    className={cn(
+                      'mt-0.5 shrink-0 font-mono text-xs',
+                      hit ? 'text-emerald-600 dark:text-emerald-400' : 'text-neutral-400',
+                    )}
+                    aria-hidden
+                  >
+                    {hit ? '✓' : '·'}
+                  </span>
+                  <ConditionLine condition={cond} />
+                </li>
+              );
+            })}
+          </ul>
         )}
       </div>
     </Section>
   );
+}
+
+function summarizeBranch(result: boolean, total: number, matchedCount: number, combinator: string): string {
+  if (total === 0) return result ? 'matched' : 'did not match';
+  const rule = combinator === 'or' ? 'any required' : 'all required';
+  if (total === 1) {
+    return result ? 'Condition matched' : 'Condition did not match';
+  }
+  return `${matchedCount} of ${total} matched (${rule})`;
+}
+
+function ConditionLine({ condition }: { condition: { left: string; dataType: string; operation: string; right?: unknown } }) {
+  return (
+    <div className="min-w-0 flex-1 flex flex-wrap items-center gap-1.5 leading-relaxed">
+      <code className="break-all rounded bg-neutral-100 px-1.5 py-0.5 font-mono text-[12px] text-neutral-800 dark:bg-neutral-800 dark:text-neutral-200">
+        {humanizeExpression(condition.left)}
+      </code>
+      <span className="text-neutral-600 dark:text-neutral-400">{englishOperation(condition.operation)}</span>
+      {operationNeedsRight(condition.operation) && condition.right !== undefined && (
+        <code className="break-all rounded bg-neutral-100 px-1.5 py-0.5 font-mono text-[12px] text-neutral-800 dark:bg-neutral-800 dark:text-neutral-200">
+          {formatRightValue(condition.right)}
+        </code>
+      )}
+    </div>
+  );
+}
+
+/** Clean up a template-y expression for display:
+ *   "{{nodes.scrape_yc.data.output.companies}}" → same but stripped of braces
+ *   "nodes.scrape_yc.data.output.companies"     → same.
+ *   Trigger paths stay as `trigger.foo`.
+ */
+function humanizeExpression(expr: string): string {
+  return expr.replace(/^\{\{\s*/, '').replace(/\s*\}\}$/, '').trim();
+}
+
+/** Plain-English translation of an if-condition operation. Aliases
+ *  (`is_not_empty`, `not_equals`, …) all collapse to their canonical
+ *  camelCase before lookup so legacy workflows render correctly. */
+function englishOperation(op: string): string {
+  const norm = op
+    .replace(/[_-]+(.)/g, (_, c) => c.toUpperCase())
+    .replace(/^./, (c) => c.toLowerCase());
+  switch (norm) {
+    case 'exists': return 'exists';
+    case 'doesNotExist': return 'does not exist';
+    case 'isEmpty': return 'is empty';
+    case 'isNotEmpty': return 'is not empty';
+    case 'equals': return 'equals';
+    case 'notEquals': return 'does not equal';
+    case 'contains': return 'contains';
+    case 'doesNotContain': return 'does not contain';
+    case 'startsWith': return 'starts with';
+    case 'endsWith': return 'ends with';
+    case 'matchesRegex': return 'matches';
+    case 'greaterThan': return '>';
+    case 'greaterThanOrEqual': return '≥';
+    case 'lessThan': return '<';
+    case 'lessThanOrEqual': return '≤';
+    case 'after': return 'is after';
+    case 'before': return 'is before';
+    case 'afterOrEqual': return 'is on or after';
+    case 'beforeOrEqual': return 'is on or before';
+    case 'isTrue': return 'is true';
+    case 'isFalse': return 'is false';
+    case 'lengthEquals': return 'has length';
+    case 'lengthGreaterThan': return 'has length >';
+    case 'lengthLessThan': return 'has length <';
+    default: return op;
+  }
+}
+
+function operationNeedsRight(op: string): boolean {
+  const noRight = new Set(['exists', 'doesNotExist', 'isEmpty', 'isNotEmpty', 'isTrue', 'isFalse']);
+  const norm = op.replace(/[_-]+(.)/g, (_, c) => c.toUpperCase()).replace(/^./, (c) => c.toLowerCase());
+  return !noRight.has(norm);
+}
+
+function formatRightValue(value: unknown): string {
+  if (value === null) return 'null';
+  if (typeof value === 'string') {
+    const clean = humanizeExpression(value);
+    // Quote when it's clearly a literal (no dots / no template syntax).
+    return /^[A-Za-z0-9_-]+$/.test(clean) ? `"${clean}"` : clean;
+  }
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  return JSON.stringify(value);
 }
 
 function LlmBody({ output }: { output: unknown }) {
@@ -219,7 +355,7 @@ function ApprovalBody({ output }: { output: unknown }) {
   );
 }
 
-function ForeachBody({ output }: { output: unknown }) {
+function ForeachBody({ output, defNode }: { output: unknown; defNode: WorkflowNode | null }) {
   const o = asObject(output);
   if (!o) return <Section title="Output"><SmartValue value={output} /></Section>;
   const inputCount = typeof o.inputCount === 'number' ? o.inputCount : null;
@@ -227,20 +363,45 @@ function ForeachBody({ output }: { output: unknown }) {
   const failedCount = typeof o.failedCount === 'number' ? o.failedCount : 0;
   const skippedCount = typeof o.skippedCount === 'number' ? o.skippedCount : 0;
   const truncatedCount = typeof o.truncatedCount === 'number' ? o.truncatedCount : 0;
+  const items = defNode && defNode.type === 'foreach' ? defNode.items : null;
+  const concurrency = defNode && defNode.type === 'foreach' ? defNode.concurrency : null;
+
   return (
-    <Section title="Iterations">
-      <div className="flex flex-wrap items-center gap-2 text-sm">
-        {completedCount !== null && (
-          <Badge variant="success">{completedCount} completed</Badge>
-        )}
-        {failedCount > 0 && <Badge variant="error">{failedCount} failed</Badge>}
-        {skippedCount > 0 && <Badge variant="secondary">{skippedCount} skipped</Badge>}
-        {truncatedCount > 0 && <Badge variant="warning">{truncatedCount} truncated</Badge>}
-        {inputCount !== null && completedCount !== null && completedCount < inputCount && (
-          <span className="text-xs text-neutral-500">of {inputCount} input{inputCount === 1 ? '' : 's'}</span>
-        )}
-      </div>
-    </Section>
+    <>
+      {items && (
+        <Section title="Iterating">
+          <p className="flex flex-wrap items-center gap-1.5 text-sm leading-relaxed text-neutral-700 dark:text-neutral-300">
+            <span>Over</span>
+            <code className="break-all rounded bg-neutral-100 px-1.5 py-0.5 font-mono text-[12px] text-neutral-800 dark:bg-neutral-800 dark:text-neutral-200">
+              {humanizeExpression(items)}
+            </code>
+            {inputCount !== null && (
+              <span className="text-neutral-500 dark:text-neutral-400">
+                — {inputCount} item{inputCount === 1 ? '' : 's'}
+              </span>
+            )}
+            {typeof concurrency === 'number' && concurrency > 1 && (
+              <span className="text-neutral-500 dark:text-neutral-400">
+                · {concurrency} at a time
+              </span>
+            )}
+          </p>
+        </Section>
+      )}
+      <Section title="Results">
+        <div className="flex flex-wrap items-center gap-2 text-sm">
+          {completedCount !== null && (
+            <Badge variant="success">{completedCount} completed</Badge>
+          )}
+          {failedCount > 0 && <Badge variant="error">{failedCount} failed</Badge>}
+          {skippedCount > 0 && <Badge variant="secondary">{skippedCount} skipped</Badge>}
+          {truncatedCount > 0 && <Badge variant="warning">{truncatedCount} truncated</Badge>}
+          {inputCount !== null && completedCount !== null && completedCount < inputCount && (
+            <span className="text-xs text-neutral-500">of {inputCount} input{inputCount === 1 ? '' : 's'}</span>
+          )}
+        </div>
+      </Section>
+    </>
   );
 }
 
@@ -717,7 +878,7 @@ function formatDuration(ms: number): string {
  * Pull a one-sentence summary out of the trace for the collapsed-card
  * header. Different node types have different "answer" fields.
  */
-function describeNodeOutcome(node: ExecutionNode, output: unknown): string | null {
+function describeNodeOutcome(node: ExecutionNode, output: unknown, defNode: WorkflowNode | null): string | null {
   if (node.error) return node.error.split('\n')[0];
   if (node.reason) return node.reason;
   const o = asObject(output);
@@ -731,8 +892,21 @@ function describeNodeOutcome(node: ExecutionNode, output: unknown): string | nul
     }
     case 'if': {
       if (!o) return null;
-      const r = o.result === true ? 'true' : 'false';
-      return `Branched to ${r}`;
+      const took = o.result === true ? 'true branch' : 'false branch';
+      // Splice the first matched (or first overall) condition in so the
+      // summary reads like "Took true branch — companies is not empty".
+      const conditions = defNode && defNode.type === 'if' ? defNode.conditions : [];
+      const matched = Array.isArray(o.matched) ? o.matched : [];
+      const idx = typeof matched[0] === 'number' ? matched[0] : 0;
+      const cond = conditions[idx];
+      if (cond) {
+        const left = humanizeExpression(cond.left);
+        const op = englishOperation(cond.operation);
+        const needsRight = operationNeedsRight(cond.operation);
+        const right = needsRight && cond.right !== undefined ? ` ${formatRightValue(cond.right)}` : '';
+        return `Took ${took} — ${left} ${op}${right}`;
+      }
+      return `Took ${took}`;
     }
     case 'llm': {
       if (typeof output === 'string') return firstLine(output, 120);

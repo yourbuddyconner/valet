@@ -215,7 +215,7 @@ function ExecutionDetailPage() {
             <h2 className="mb-2 text-sm font-medium text-neutral-900 dark:text-neutral-100">
               Node trace
             </h2>
-            <TraceNodeList nodes={nodes} executionStatus={execution.status} />
+            <TraceNodeList nodes={nodes} executionStatus={execution.status} definition={definition} />
           </section>
 
           <section className="grid gap-4 lg:grid-cols-3">
@@ -356,7 +356,7 @@ function PayloadPanel({ title, value }: { title: string; value: unknown }) {
   );
 }
 
-function TraceNodeList({ nodes, executionStatus }: { nodes: ExecutionNode[]; executionStatus: Execution['status'] }) {
+function TraceNodeList({ nodes, executionStatus, definition }: { nodes: ExecutionNode[]; executionStatus: Execution['status']; definition: WorkflowDefinition | null }) {
   // Collapse to one row per DAG node: each node can have multiple
   // trace rows for status transitions; we want the latest.
   const latest = React.useMemo(() => {
@@ -389,6 +389,7 @@ function TraceNodeList({ nodes, executionStatus }: { nodes: ExecutionNode[]; exe
           key={node.id}
           node={node}
           executionStatus={executionStatus}
+          definition={definition}
           defaultOpen={defaultExpanded.has(node.id)}
         />
       ))}
