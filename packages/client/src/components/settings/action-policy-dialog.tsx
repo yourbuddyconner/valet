@@ -24,6 +24,12 @@ interface ActionPolicyDialogProps {
   onOpenChange: (open: boolean) => void;
   policy?: EditableActionPolicy | null;
   noun?: string;
+  /** When true, only the `allow` mode is offered. User-managed policies
+   *  are allow-only per spec safety rule (the server rejects other
+   *  modes), so the dialog hides them entirely instead of presenting
+   *  buttons that submit and bounce. Admin-policy callers leave this
+   *  off to keep require_approval / deny available. */
+  allowOnly?: boolean;
   onSave: (data: {
     id: string;
     service?: string | null;
@@ -478,12 +484,12 @@ function PolicyJsonView({
 
 // ─── Main Dialog ─────────────────────────────────────────────────────────────
 
-export function ActionPolicyDialog({ open, onOpenChange, policy, noun = 'Policy', onSave, isPending }: ActionPolicyDialogProps) {
+export function ActionPolicyDialog({ open, onOpenChange, policy, noun = 'Policy', allowOnly = false, onSave, isPending }: ActionPolicyDialogProps) {
   const [scope, setScope] = React.useState<PolicyScope>('action');
   const [service, setService] = React.useState('');
   const [actionId, setActionId] = React.useState('');
   const [riskLevel, setRiskLevel] = React.useState('medium');
-  const [mode, setMode] = React.useState<ActionMode>('require_approval');
+  const [mode, setMode] = React.useState<ActionMode>(allowOnly ? 'allow' : 'require_approval');
   const [showJson, setShowJson] = React.useState(false);
 
   const { data: catalog } = useActionCatalog();
@@ -501,7 +507,7 @@ export function ActionPolicyDialog({ open, onOpenChange, policy, noun = 'Policy'
       setService('');
       setActionId('');
       setRiskLevel('medium');
-      setMode('require_approval');
+      setMode(allowOnly ? 'allow' : 'require_approval');
     }
     setShowJson(false);
   }, [policy, open]);
@@ -713,29 +719,44 @@ export function ActionPolicyDialog({ open, onOpenChange, policy, noun = 'Policy'
               <label className="mb-2 block text-sm font-medium text-neutral-700 dark:text-neutral-300">
                 Effect
               </label>
-              <div className="flex gap-2">
-                <ModeCard
-                  selected={mode === 'allow'}
-                  onClick={() => setMode('allow')}
-                  label="Allow"
-                  description="Execute without approval"
-                  colorClass="border-emerald-500 bg-emerald-500/5 dark:border-emerald-400 dark:bg-emerald-500/10"
-                />
-                <ModeCard
-                  selected={mode === 'require_approval'}
-                  onClick={() => setMode('require_approval')}
-                  label="Require Approval"
-                  description="Pause and ask user first"
-                  colorClass="border-amber-500 bg-amber-500/5 dark:border-amber-400 dark:bg-amber-500/10"
-                />
-                <ModeCard
-                  selected={mode === 'deny'}
-                  onClick={() => setMode('deny')}
-                  label="Deny"
-                  description="Block execution entirely"
-                  colorClass="border-red-500 bg-red-500/5 dark:border-red-400 dark:bg-red-500/10"
-                />
-              </div>
+              {allowOnly ? (
+                <div className="flex flex-col gap-2">
+                  <ModeCard
+                    selected={mode === 'allow'}
+                    onClick={() => setMode('allow')}
+                    label="Allow"
+                    description="Auto-approve without prompting"
+                    colorClass="border-emerald-500 bg-emerald-500/5 dark:border-emerald-400 dark:bg-emerald-500/10"
+                  />
+                  <p className="text-xs text-neutral-500 dark:text-neutral-400">
+                    User policies are allow-only by design — Require Approval is the default for un-policied actions, and Deny is admin-managed at the organization level.
+                  </p>
+                </div>
+              ) : (
+                <div className="flex gap-2">
+                  <ModeCard
+                    selected={mode === 'allow'}
+                    onClick={() => setMode('allow')}
+                    label="Allow"
+                    description="Execute without approval"
+                    colorClass="border-emerald-500 bg-emerald-500/5 dark:border-emerald-400 dark:bg-emerald-500/10"
+                  />
+                  <ModeCard
+                    selected={mode === 'require_approval'}
+                    onClick={() => setMode('require_approval')}
+                    label="Require Approval"
+                    description="Pause and ask user first"
+                    colorClass="border-amber-500 bg-amber-500/5 dark:border-amber-400 dark:bg-amber-500/10"
+                  />
+                  <ModeCard
+                    selected={mode === 'deny'}
+                    onClick={() => setMode('deny')}
+                    label="Deny"
+                    description="Block execution entirely"
+                    colorClass="border-red-500 bg-red-500/5 dark:border-red-400 dark:bg-red-500/10"
+                  />
+                </div>
+              )}
             </div>
 
             <DialogFooter>

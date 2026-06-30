@@ -1,0 +1,286 @@
+<h2>Session chat — workflow steps as tool-call cards</h2>
+<p class="subtitle">Matching the existing tool-card idiom: compact, content-width, monospace, click-to-expand. Each workflow step renders as one card inline with the chat.</p>
+
+<style>
+  .frame { background:#0b0d12; border:1px solid #222; border-radius:10px; padding:0; min-height: 720px; display:flex; flex-direction:column; overflow:hidden; }
+
+  /* Workflow context bar */
+  .wf-bar { padding:8px 14px; background:#0c1018; border-bottom:1px solid #1f2937; display:flex; align-items:center; gap:10px; }
+  .wf-icon { width:18px; height:18px; border-radius:4px; background:#10b981; display:flex; align-items:center; justify-content:center; font-size:11px; color:#000; font-weight:700; }
+  .wf-meta { flex:1; display:flex; align-items:center; gap:6px; }
+  .wf-title { font-size:11px; color:#e5e7eb; font-family:ui-monospace, monospace; font-weight:500; }
+  .wf-sub { font-size:10px; color:#6b7280; font-family:ui-monospace, monospace; }
+  .wf-progress { display:flex; gap:2px; align-items:center; }
+  .step-dot { width:10px; height:3px; border-radius:1px; background:#1f2937; }
+  .step-dot.ok { background:#10b981; }
+  .step-dot.run { background:#f59e0b; animation: pulse 1.4s ease-in-out infinite; }
+  .step-dot.fail { background:#ef4444; }
+  @keyframes pulse { 0%, 100% { opacity:1; } 50% { opacity:0.4; } }
+  .open-exec-btn { font-family:ui-monospace, monospace; font-size:10px; padding:3px 8px; border:1px solid #1f2937; background:#0c1018; color:#9ca3af; border-radius:4px; cursor:pointer; }
+  .open-exec-btn:hover { color:#e5e7eb; border-color:#374151; }
+
+  /* Chat */
+  .chat { flex:1; overflow-y:auto; padding:16px; display:flex; flex-direction:column; gap:6px; background:#0b0d12; }
+
+  /* Message row */
+  .msg { display:flex; gap:8px; align-items:flex-start; padding:3px 0; }
+  .msg.user { flex-direction:row-reverse; }
+  .avatar { width:22px; height:22px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:9px; color:#fff; font-family:ui-monospace, monospace; flex-shrink:0; margin-top:2px; background:#1e3a5f; }
+  .avatar.assistant { background:transparent; color:#a78bfa; font-size:13px; }
+  .bubble { max-width: 78%; padding:7px 11px; border-radius:8px; font-size:12px; line-height:1.55; color:#e5e7eb; }
+  .bubble.user { background:#1e3a5f; border-bottom-right-radius:3px; }
+  .bubble.assistant { color:#d1d5db; padding:6px 0; }
+  .author-line { font-size:10px; color:#6b7280; margin-bottom:1px; font-family:ui-monospace, monospace; display:flex; gap:6px; align-items:center; }
+
+  /* TOOL CARD — matches your existing shell */
+  .tc { display:inline-flex; flex-direction:column; max-width: min(100%, 70vw); background:#0a0b0f; border:1px solid rgba(64,64,64,0.5); border-radius:6px; overflow:hidden; margin: 2px 0; }
+  .tc.run { border-color: rgba(96, 165, 250, 0.25); }
+  .tc.fail { border-color: rgba(239,68,68, 0.3); }
+  .tc-row { display:flex; gap:8px; align-items:center; padding:5px 10px; cursor:pointer; }
+  .tc-row:hover { background: rgba(255,255,255,0.02); }
+  .chev { color:#6b7280; font-size:9px; width:10px; }
+  .dot-ok { width:11px; height:11px; flex-shrink:0; }
+  .dot-ok svg { width:100%; height:100%; }
+  .dot-run { width:6px; height:6px; border-radius:50%; background:#60a5fa; box-shadow: 0 0 8px #60a5fa; animation: pulse 1.4s ease-in-out infinite; }
+  .dot-fail { width:11px; height:11px; flex-shrink:0; color:#ef4444; }
+  .ticon { width:13px; height:13px; opacity:0.6; flex-shrink:0; }
+  .tlabel { font-family:ui-monospace, monospace; font-size:11px; font-weight:600; color:#d1d5db; flex-shrink:0; }
+  .tsummary { font-family:ui-monospace, monospace; font-size:11px; color:#6b7280; flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .tstatus { font-family:ui-monospace, monospace; font-size:10px; color:#10b981; margin-left:auto; }
+  .tstatus.fail { color:#ef4444; }
+  .tstatus.run { color:#60a5fa; }
+
+  /* Card body */
+  .tc-body { border-top:1px solid rgba(64,64,64,0.4); padding: 8px 10px; display:flex; flex-direction:column; gap:8px; background: rgba(0,0,0,0.2); }
+  .sec-label { font-family:ui-monospace, monospace; font-size:9px; text-transform:uppercase; letter-spacing:0.08em; color:#6b7280; margin-bottom:3px; }
+  .sec-body { font-family:ui-monospace, monospace; font-size:11px; color:#cbd5e1; line-height:1.6; }
+  .sec-body pre { white-space:pre-wrap; margin:0; }
+  .pill { font-family:ui-monospace, monospace; font-size:9px; padding:1px 5px; background:#0c1018; border:1px solid #1f2937; border-radius:3px; color:#9ca3af; }
+  .pill.persona { color:#c7d2fe; border-color:#4338ca; background:#1e1b4b; }
+  .pill.model { color:#a7f3d0; border-color:#064e3b; background:#022c22; }
+  .kv { display:grid; grid-template-columns: max-content 1fr; gap:3px 12px; font-size:11px; font-family: ui-monospace, monospace; }
+  .kv-key { color:#94a3b8; }
+  .kv-val { color:#e2e8f0; }
+
+  .options { margin-top:14px; }
+</style>
+
+<div class="frame">
+  <!-- Slim workflow context bar -->
+  <div class="wf-bar">
+    <div class="wf-icon">⚡</div>
+    <div class="wf-meta">
+      <span class="wf-title">basic flow control test</span>
+      <span class="wf-sub">· execution 77e5ab07 · step 7 of 7</span>
+    </div>
+    <div class="wf-progress">
+      <span class="step-dot ok"></span>
+      <span class="step-dot ok"></span>
+      <span class="step-dot ok"></span>
+      <span class="step-dot ok"></span>
+      <span class="step-dot ok"></span>
+      <span class="step-dot ok"></span>
+      <span class="step-dot fail"></span>
+    </div>
+    <button class="open-exec-btn">execution ↗</button>
+  </div>
+
+  <!-- Chat -->
+  <div class="chat">
+
+    <!-- Loop container card — collapsed -->
+    <div class="msg">
+      <div class="avatar" style="background:#064e3b;color:#6ee7b7;">⚡</div>
+      <div style="display:flex;flex-direction:column;gap:2px;flex:1;">
+        <div class="tc">
+          <div class="tc-row">
+            <span class="chev">▸</span>
+            <span class="dot-ok"><svg viewBox="0 0 16 16" fill="none" stroke="#10b981" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3.5 8.5 6.5 11.5 12.5 5"/></svg></span>
+            <span class="ticon" style="color:#a78bfa;">↻</span>
+            <span class="tlabel">loop</span>
+            <span class="tsummary">personaShoutouts · over workflow.personas · 3 iterations · 1.2s</span>
+            <span class="tstatus">done</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Step group: agent_prompt iter 1 -->
+    <!-- agent_prompt card (collapsed = just shows summary; here expanded) -->
+    <div class="msg">
+      <div class="avatar" style="background:#064e3b;color:#6ee7b7;">⚡</div>
+      <div style="display:flex;flex-direction:column;gap:0;flex:1;min-width:0;">
+        <div class="tc">
+          <div class="tc-row">
+            <span class="chev">▾</span>
+            <span class="dot-ok"><svg viewBox="0 0 16 16" fill="none" stroke="#10b981" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3.5 8.5 6.5 11.5 12.5 5"/></svg></span>
+            <span class="ticon" style="color:#a78bfa;">✦</span>
+            <span class="tlabel">agent_prompt</span>
+            <span class="tsummary">personaResult <span class="pill persona">◐ Captain Chaos</span> · iter 1/3</span>
+            <span class="tstatus">420ms</span>
+          </div>
+          <div class="tc-body">
+            <div>
+              <div class="sec-label">prompt</div>
+              <div class="sec-body">Tell me about your morning routine in one sentence, then say a quick hello to the team.</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Assistant response — normal chat bubble below the card, same as a tool's followup -->
+    <div class="msg">
+      <div class="avatar assistant">◆</div>
+      <div style="max-width:78%;">
+        <div class="author-line">
+          <span class="pill model">claude-opus-4.6</span>
+          <span style="color:#6b7280;">1.2k tok</span>
+        </div>
+        <div class="bubble assistant">
+          <div style="font-size:10px;color:#6b7280;font-family:ui-monospace;margin-bottom:4px;text-transform:uppercase;letter-spacing:.06em;">structured · capability+greeting</div>
+          <div class="kv">
+            <div class="kv-key">capability</div>
+            <div class="kv-val">"Orchestrating spring raids on properly cobblers — I go in clean, unsplash every bug-eyed eight..."</div>
+            <div class="kv-key">greeting</div>
+            <div class="kv-val">"Alright team, Captain Chaos reporting for duty — three espressos deep and ready to roll"</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Step group: agent_prompt iter 2 (collapsed card) -->
+    <div class="msg">
+      <div class="avatar" style="background:#064e3b;color:#6ee7b7;">⚡</div>
+      <div style="display:flex;flex-direction:column;flex:1;min-width:0;">
+        <div class="tc">
+          <div class="tc-row">
+            <span class="chev">▸</span>
+            <span class="dot-ok"><svg viewBox="0 0 16 16" fill="none" stroke="#10b981" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3.5 8.5 6.5 11.5 12.5 5"/></svg></span>
+            <span class="ticon" style="color:#a78bfa;">✦</span>
+            <span class="tlabel">agent_prompt</span>
+            <span class="tsummary">personaResult <span class="pill persona">◑ Captain Chaos</span> · iter 2/3</span>
+            <span class="tstatus">380ms</span>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="msg">
+      <div class="avatar assistant">◆</div>
+      <div style="max-width:78%;">
+        <div class="bubble assistant">
+          <div class="kv">
+            <div class="kv-key">capability</div>
+            <div class="kv-val">"Orchestrating complex software engineering heists — I plan with a hand-drawn sketch on cocktail napkins..."</div>
+            <div class="kv-key">greeting</div>
+            <div class="kv-val">"Alright team, Captain Chaos reporting — the musical sting just hit and we are ready to riff"</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- bash card -->
+    <div class="msg">
+      <div class="avatar" style="background:#064e3b;color:#6ee7b7;">⚡</div>
+      <div style="display:flex;flex-direction:column;flex:1;min-width:0;">
+        <div class="tc">
+          <div class="tc-row">
+            <span class="chev">▸</span>
+            <span class="dot-ok"><svg viewBox="0 0 16 16" fill="none" stroke="#10b981" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3.5 8.5 6.5 11.5 12.5 5"/></svg></span>
+            <span class="ticon" style="color:#fbbf24;">$_</span>
+            <span class="tlabel">bash</span>
+            <span class="tsummary">envOutput · echo "Runner OS: $(uname -s), Shell: ${SHELL}" → exit 0</span>
+            <span class="tstatus">120ms</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- bash card (expanded, with terminal output) -->
+    <div class="msg">
+      <div class="avatar" style="background:#064e3b;color:#6ee7b7;">⚡</div>
+      <div style="display:flex;flex-direction:column;flex:1;min-width:0;">
+        <div class="tc">
+          <div class="tc-row">
+            <span class="chev">▾</span>
+            <span class="dot-ok"><svg viewBox="0 0 16 16" fill="none" stroke="#10b981" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3.5 8.5 6.5 11.5 12.5 5"/></svg></span>
+            <span class="ticon" style="color:#fbbf24;">$_</span>
+            <span class="tlabel">bash</span>
+            <span class="tsummary">timestampOutput</span>
+            <span class="tstatus">90ms</span>
+          </div>
+          <div class="tc-body">
+            <div>
+              <div class="sec-label">command</div>
+              <div class="sec-body"><pre>echo "Workflow ran at $(date +%H:%M:%S)"</pre></div>
+            </div>
+            <div>
+              <div class="sec-label">stdout · exit 0</div>
+              <div class="sec-body" style="background:#000;padding:6px 8px;border-radius:3px;color:#a7f3d0;"><pre>Workflow ran at 21:43:11</pre></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- failed notify card, auto-expanded -->
+    <div class="msg">
+      <div class="avatar" style="background:#064e3b;color:#6ee7b7;">⚡</div>
+      <div style="display:flex;flex-direction:column;flex:1;min-width:0;">
+        <div class="tc fail">
+          <div class="tc-row">
+            <span class="chev">▾</span>
+            <span class="dot-fail"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="4" x2="12" y2="12"/><line x1="12" y1="4" x2="4" y2="12"/></svg></span>
+            <span class="ticon" style="color:#fca5a5;">▤</span>
+            <span class="tlabel">notify</span>
+            <span class="tsummary">notify-both-responded · failed during interpolation</span>
+            <span class="tstatus fail">error</span>
+          </div>
+          <div class="tc-body" style="background: rgba(239,68,68,0.04);">
+            <div>
+              <div class="sec-label">error</div>
+              <div class="sec-body" style="color:#fecaca;"><pre>loop_post_not_array: outputs.personaResult.capability
+
+  outputs.personaResult is produced inside a loop, so it's an array.
+  Did you mean outputs.personaResult[0].capability, or to join across iterations?</pre></div>
+            </div>
+            <div style="display:flex;gap:8px;">
+              <button class="open-exec-btn" style="color:#e5e7eb;">↻ retry from here</button>
+              <button class="open-exec-btn">↗ open in builder</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- User can still chat normally -->
+    <div class="msg user">
+      <div class="avatar">CS</div>
+      <div>
+        <div class="bubble user">why did the notify fail?</div>
+      </div>
+    </div>
+    <div class="msg">
+      <div class="avatar assistant">◆</div>
+      <div style="max-width:78%;">
+        <div class="bubble assistant">The notify step referenced <code style="color:#fbbf24;">outputs.personaResult.capability</code> — but because <code style="color:#fbbf24;">personaResult</code> is produced inside a loop, it's an array of objects, not a single object. You'd want <code style="color:#fbbf24;">outputs.personaResult[0].capability</code>, or join across iterations.</div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<div class="options">
+  <div class="option opt-block" data-choice="yes" onclick="toggleSelect(this)">
+    <div class="opt-title" style="font-weight:600;color:#f9fafb;">Yes — workflow steps as tool-cards in chat</div>
+    <div class="opt-sub" style="font-size:11px;color:#9ca3af;">Each step renders with the existing ToolCardShell idiom. agent_prompt response stays as a normal assistant bubble below. Bash/notify/loop fully self-contained inside the card.</div>
+  </div>
+  <div class="option opt-block" data-choice="merged" onclick="toggleSelect(this)">
+    <div class="opt-title" style="font-weight:600;color:#f9fafb;">Yes, but fold the response INTO the agent_prompt card too</div>
+    <div class="opt-sub" style="font-size:11px;color:#9ca3af;">No separate assistant bubble — the card contains both prompt and response as labeled sections. Tighter grouping, less "chatty" but more consistent.</div>
+  </div>
+  <div class="option opt-block" data-choice="other" onclick="toggleSelect(this)">
+    <div class="opt-title" style="font-weight:600;color:#f9fafb;">Closer, but adjust something</div>
+    <div class="opt-sub" style="font-size:11px;color:#9ca3af;">Tell me what's still off.</div>
+  </div>
+</div>

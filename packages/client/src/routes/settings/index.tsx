@@ -11,6 +11,7 @@ import { Button } from '@/components/ui/button';
 import { APIKeyList } from '@/components/settings/api-key-list';
 import { useTheme } from '@/hooks/use-theme';
 import { ActionPolicyOverridesSection } from '@/components/settings/action-policy-overrides-section';
+import { RuntimeGrantsSection } from '@/components/settings/runtime-grants-section';
 import {
   ModelSelector,
   ModelSelectorContent,
@@ -195,6 +196,7 @@ function AgentTab() {
 
       <ModelPreferencesSection />
       <ActionPolicyOverridesSection />
+      <RuntimeGrantsSection />
       <TimezoneSection />
       <IdleTimeoutSection />
       <SandboxResourcesSection />

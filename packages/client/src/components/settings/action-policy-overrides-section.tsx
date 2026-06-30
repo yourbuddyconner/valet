@@ -198,7 +198,7 @@ export function ActionPolicyOverridesSection() {
   }
 
   function handleDelete(id: string) {
-    if (confirm('Delete this override?')) {
+    if (confirm('Delete this rule?')) {
       deleteMutation.mutate(id);
     }
   }
@@ -207,12 +207,12 @@ export function ActionPolicyOverridesSection() {
     <div className="rounded-lg border border-neutral-200 bg-white p-6 dark:border-neutral-700 dark:bg-neutral-800">
       <div className="flex items-center justify-between gap-4">
         <div>
-          <h2 className="text-lg font-medium text-neutral-900 dark:text-neutral-100">Tool Approval Overrides</h2>
+          <h2 className="text-lg font-medium text-neutral-900 dark:text-neutral-100">Auto-approval rules</h2>
           <p className="mt-1 text-sm text-neutral-500 dark:text-neutral-400">
-            Override your own action approval behavior by action, service, or risk level. Organization deny policies still take precedence.
+            Durable allow rules that skip the approval prompt for matching tool calls. Pick an action, an entire service, or a risk level. Organization deny / require-approval policies still take precedence — these only loosen the default, they can't override admin restrictions.
           </p>
         </div>
-        <Button size="sm" onClick={handleAdd}>Add Override</Button>
+        <Button size="sm" onClick={handleAdd}>Add rule</Button>
       </div>
 
       <div className="mt-4">
@@ -224,7 +224,7 @@ export function ActionPolicyOverridesSection() {
           </div>
         ) : split.persistent.length === 0 ? (
           <p className="text-sm text-neutral-500 dark:text-neutral-400">
-            No persistent overrides configured.
+            No rules yet. Tools will keep asking for approval until you add one — or until you click <em>Always Allow</em> from an approval card.
           </p>
         ) : (
           <OverridesTable
@@ -262,7 +262,8 @@ export function ActionPolicyOverridesSection() {
         open={dialogOpen}
         onOpenChange={setDialogOpen}
         policy={editingOverride ? toEditablePolicy(editingOverride) : null}
-        noun="Override"
+        noun="rule"
+        allowOnly
         onSave={handleSave}
         isPending={upsertMutation.isPending}
       />

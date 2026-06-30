@@ -1,0 +1,138 @@
+<h2>New Workflow — chat to create, diagram to verify</h2>
+<p class="subtitle">A user typed a prompt, the LLM produced workflow JSON, the JSON is rendered as a diagram. Refine in the input below; save when you like it.</p>
+
+<div class="mockup">
+  <div class="mockup-header">Preview: /automation/workflows/new</div>
+  <div class="mockup-body" style="background:#fafafa; padding:0;">
+
+    <!-- Header -->
+    <div style="padding: 20px 24px; background: white; border-bottom: 1px solid #eee;">
+      <div style="font-size: 12px; color: #999; margin-bottom: 4px;">AUTOMATION / WORKFLOWS</div>
+      <div style="font-size: 22px; font-weight: 600; color: #111;">New workflow</div>
+      <div style="font-size: 14px; color: #666; margin-top: 4px;">
+        Describe what you want it to do. The agent drafts a workflow; you can refine it before saving.
+      </div>
+    </div>
+
+    <!-- User prompt as a chat turn -->
+    <div style="padding: 20px 24px; background: white; border-bottom: 1px solid #f0f0f0;">
+      <div style="font-size:11px; color:#888; font-weight:600; letter-spacing:0.4px; margin-bottom:6px;">YOUR PROMPT</div>
+      <div style="background:#f5f7fa; border-left:3px solid #5a6fd8; padding:12px 14px; border-radius:6px; font-size:14px; color:#222; line-height:1.5;">
+        Every weekday at 9am, check overnight CI runs on main. If anything failed, summarize and post to Slack <code style="background:#fff;padding:1px 6px;border-radius:3px;">#engineering</code>. If everything passed, post a brief "✅ all green".
+      </div>
+      <div style="margin-top:8px; display:flex; gap:8px;">
+        <button style="background:transparent; color:#5a6fd8; border:1px solid #5a6fd8; padding:5px 12px; border-radius:6px; font-size:13px; cursor:pointer;">↻ Regenerate</button>
+        <button style="background:transparent; color:#666; border:1px solid #ddd; padding:5px 12px; border-radius:6px; font-size:13px; cursor:pointer;">✎ Edit prompt</button>
+      </div>
+    </div>
+
+    <!-- Diagram view -->
+    <div style="padding: 24px; background: #fafafa;">
+
+      <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom: 16px;">
+        <div>
+          <div style="font-size:11px; color:#888; font-weight:600; letter-spacing:0.4px; margin-bottom:4px;">DRAFT WORKFLOW</div>
+          <div style="font-size: 18px; font-weight: 600; color:#111;">CI Overnight Digest</div>
+        </div>
+        <div style="display:flex; gap:8px;">
+          <button style="background:white; color:#555; border:1px solid #ddd; padding:6px 12px; border-radius:6px; font-size:13px; cursor:pointer;">{ } JSON</button>
+          <button style="background:white; color:#555; border:1px solid #ddd; padding:6px 12px; border-radius:6px; font-size:13px; cursor:pointer;">⏰ Add schedule</button>
+        </div>
+      </div>
+
+      <!-- Diagram -->
+      <div style="background: white; border: 1px solid #e5e5e5; border-radius: 12px; padding: 24px; display:flex; flex-direction:column; align-items:center; gap: 4px;">
+
+        <!-- Start -->
+        <div style="width:120px; padding:6px 10px; background:#111; color:#fff; border-radius:999px; font-size:11px; text-align:center; letter-spacing:0.5px; font-weight:600;">START</div>
+        <div style="height:18px; width:2px; background:#ccc;"></div>
+
+        <!-- Step 1: bash -->
+        <div style="width: 320px; background:white; border:1px solid #d4d4d4; border-radius:10px; padding:12px 14px; box-shadow:0 1px 2px rgba(0,0,0,0.04);">
+          <div style="display:flex; align-items:center; gap:8px; margin-bottom:4px;">
+            <span style="background:#222; color:#fff; font-size:10px; padding:2px 7px; border-radius:4px; font-weight:600; letter-spacing:0.3px;">BASH</span>
+            <span style="font-size:13px; font-weight:600; color:#111;">List overnight runs</span>
+          </div>
+          <code style="display:block; font-size:12px; color:#444; background:#f6f6f6; padding:6px 8px; border-radius:4px; margin-top:6px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">gh run list --branch main --limit 20 --json status,conclusion</code>
+        </div>
+        <div style="height:18px; width:2px; background:#ccc;"></div>
+
+        <!-- Conditional -->
+        <div style="width: 360px; background:#fff7e6; border:1px solid #f0c674; border-radius:10px; padding:12px 14px;">
+          <div style="display:flex; align-items:center; gap:8px;">
+            <span style="background:#b87f0a; color:#fff; font-size:10px; padding:2px 7px; border-radius:4px; font-weight:600; letter-spacing:0.3px;">CONDITIONAL</span>
+            <span style="font-size:13px; font-weight:600; color:#111;">Any failures?</span>
+          </div>
+          <div style="font-size:12px; color:#776a4a; margin-top:6px; font-family:monospace;">outputs.list_runs.failed &gt; 0</div>
+        </div>
+
+        <!-- Branch split -->
+        <div style="display:flex; gap:48px; margin-top:8px; align-items:flex-start; position:relative;">
+          <!-- THEN branch -->
+          <div style="display:flex; flex-direction:column; align-items:center; gap:4px;">
+            <div style="font-size:10px; color:#1a7a3a; font-weight:600; letter-spacing:0.5px; background:#e6f7ed; padding:2px 8px; border-radius:999px;">THEN</div>
+            <div style="height:14px; width:2px; background:#ccc;"></div>
+            <div style="width:240px; background:white; border:1px solid #d4d4d4; border-radius:10px; padding:10px 12px;">
+              <div style="display:flex; align-items:center; gap:6px;">
+                <span style="background:#5a6fd8; color:#fff; font-size:10px; padding:2px 7px; border-radius:4px; font-weight:600; letter-spacing:0.3px;">AGENT</span>
+                <span style="font-size:13px; font-weight:600; color:#111;">Summarize failures</span>
+              </div>
+              <div style="font-size:12px; color:#555; margin-top:4px; line-height:1.4;">"For each failed run, list workflow name, commit, and link…"</div>
+            </div>
+            <div style="height:14px; width:2px; background:#ccc;"></div>
+            <div style="width:240px; background:white; border:1px solid #d4d4d4; border-radius:10px; padding:10px 12px;">
+              <div style="display:flex; align-items:center; gap:6px;">
+                <span style="background:#5a6fd8; color:#fff; font-size:10px; padding:2px 7px; border-radius:4px; font-weight:600; letter-spacing:0.3px;">AGENT</span>
+                <span style="font-size:13px; font-weight:600; color:#111;">Post failures to Slack</span>
+              </div>
+              <div style="font-size:12px; color:#555; margin-top:4px; line-height:1.4;">channel: #engineering</div>
+            </div>
+          </div>
+
+          <!-- ELSE branch -->
+          <div style="display:flex; flex-direction:column; align-items:center; gap:4px;">
+            <div style="font-size:10px; color:#866; font-weight:600; letter-spacing:0.5px; background:#fef0f0; padding:2px 8px; border-radius:999px;">ELSE</div>
+            <div style="height:14px; width:2px; background:#ccc;"></div>
+            <div style="width:240px; background:white; border:1px solid #d4d4d4; border-radius:10px; padding:10px 12px;">
+              <div style="display:flex; align-items:center; gap:6px;">
+                <span style="background:#5a6fd8; color:#fff; font-size:10px; padding:2px 7px; border-radius:4px; font-weight:600; letter-spacing:0.3px;">AGENT</span>
+                <span style="font-size:13px; font-weight:600; color:#111;">Post all-green to Slack</span>
+              </div>
+              <div style="font-size:12px; color:#555; margin-top:4px; line-height:1.4;">"✅ Overnight CI: all green"</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Merge & end -->
+        <div style="height:18px; width:2px; background:#ccc; margin-top:8px;"></div>
+        <div style="width:120px; padding:6px 10px; background:#1a7a3a; color:#fff; border-radius:999px; font-size:11px; text-align:center; letter-spacing:0.5px; font-weight:600;">END</div>
+      </div>
+
+    </div>
+
+    <!-- Refine input -->
+    <div style="padding: 16px 24px; background:white; border-top:1px solid #eee;">
+      <div style="display:flex; gap:10px; align-items:flex-start;">
+        <div style="flex:1;">
+          <input class="mock-input" placeholder="Refine — e.g. 'add a step that pings on-call if more than 3 failed'" style="width:100%;" />
+        </div>
+        <button style="background:#111; color:#fff; border:0; padding:9px 18px; border-radius:8px; font-size:14px; font-weight:500; cursor:pointer;">Send</button>
+      </div>
+      <div style="display:flex; gap:10px; margin-top:12px; justify-content:flex-end;">
+        <button style="background:transparent; color:#666; border:1px solid #ddd; padding:8px 16px; border-radius:8px; font-size:14px; cursor:pointer;">Discard</button>
+        <button style="background:#1a7a3a; color:#fff; border:0; padding:8px 18px; border-radius:8px; font-size:14px; font-weight:600; cursor:pointer;">Save workflow</button>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<div class="section" style="margin-top: 28px;">
+  <div class="label">Open questions</div>
+  <ol style="font-size: 14px; line-height: 1.7; color: #444;">
+    <li><strong>Refine UX:</strong> single input box that re-generates the whole workflow, or per-step "edit this step" buttons that send a scoped LLM request?</li>
+    <li><strong>Schedule attachment:</strong> add schedule/webhook trigger from this same screen ("Add schedule" button), or save first and attach trigger from the workflow detail page?</li>
+    <li><strong>JSON visibility:</strong> JSON button toggles a side panel (devs can read/edit raw), or hide JSON entirely from this view and put it behind "advanced"?</li>
+    <li><strong>Diagram engine:</strong> hand-rolled CSS like the mockup (works for linear + branching, harder for loops/parallel), or React Flow (proper DAG library, more capability, more weight)?</li>
+  </ol>
+</div>
