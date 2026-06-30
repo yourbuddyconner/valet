@@ -10,6 +10,7 @@ import { NotFoundError, ValidationError } from '@valet/shared';
 import { getWorkflowByIdOrSlug } from '../lib/db.js';
 import { getDraft, saveDraft } from '../services/workflow-versions.js';
 import { isWorkflowDefinition } from '../lib/workflow-dag/schema.js';
+import { applyOps, type WorkflowOp } from '../services/workflow-ops.js';
 import {
   createCopilotThread,
   getCopilotThread,
@@ -143,9 +144,9 @@ copilotRouter.post('/chat', zValidator('json', chatBodySchema), async (c) => {
       },
     }),
     saveDraft: tool({
-      description: 'Persist a new draft definition for the workflow under edit. Always pass the COMPLETE definition (not a patch). Run validate after saving when you want to confirm structural correctness.',
+      description: 'Persist a NEW draft definition for the workflow under edit, replacing it wholesale. Use this only when starting from scratch or restructuring the workflow at the graph level. For incremental edits to an existing workflow, prefer applyWorkflowPatch — it is dramatically cheaper.',
       inputSchema: z.object({
-        definition: z.record(z.unknown()).describe('Full dag/v1 workflow definition: { version, nodes, edges, dataSchema?, uiHints? }'),
+        definition: z.record(z.unknown()).describe('Full dag/v1 workflow definition: { version, nodes, edges, policy?, ui? }'),
       }),
       execute: async ({ definition }: { definition: Record<string, unknown> }) => {
         if (!isWorkflowDefinition(definition)) {
@@ -153,6 +154,49 @@ copilotRouter.post('/chat', zValidator('json', chatBodySchema), async (c) => {
         }
         await saveDraft(db, workflowId, definition);
         return { ok: true, workflowId };
+      },
+    }),
+    applyWorkflowPatch: tool({
+      description: [
+        'Apply a sequence of semantic patch operations to the current draft.',
+        'Use this for ALL incremental edits — adding/removing nodes, tweaking',
+        'a single field, re-wiring an edge. Operations apply in order and are',
+        'atomic: a failure on any op rolls back the entire patch.',
+        '',
+        'Op types:',
+        '  • addNode    { node: <full node object incl. id + type> }',
+        '  • updateNode { id: <nodeId>, patch: <deep-merge partial> }',
+        '       - JSON-merge-patch semantics: null deletes a key, arrays replace whole',
+        '       - cannot change node.id (use removeNode + addNode for that)',
+        '  • removeNode { id: <nodeId> } — cascades edges incident on the node',
+        '  • addEdge    { edge: { from, to, fromOutput?, when? } }',
+        '  • removeEdge { from, to, fromOutput? }',
+        '  • setMeta    { patch: { version?, policy?, ui? } }',
+        '',
+        'Always prefer this over saveDraft when the workflow already exists.',
+      ].join('\n'),
+      inputSchema: z.object({
+        ops: z.array(z.record(z.unknown())).min(1).describe('Ordered list of operations. See description for shapes.'),
+      }),
+      execute: async ({ ops }: { ops: Record<string, unknown>[] }) => {
+        const draft = await getDraft(db, workflowId);
+        if (!draft.draft) {
+          return { ok: false, error: 'no current draft to patch — call saveDraft first to seed one' };
+        }
+        try {
+          const next = applyOps(draft.draft, ops as unknown as WorkflowOp[]);
+          await saveDraft(db, workflowId, next);
+          return {
+            ok: true,
+            workflowId,
+            appliedOps: ops.length,
+            nodeCount: next.nodes.length,
+            edgeCount: next.edges.length,
+          };
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          return { ok: false, error: msg };
+        }
       },
     }),
   };
