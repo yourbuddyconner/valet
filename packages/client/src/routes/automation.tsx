@@ -5,7 +5,7 @@ import { cn } from '@/lib/cn';
 const TABS = [
   { path: '/automation/triggers', label: 'Triggers' },
   { path: '/automation/workflows', label: 'Workflows' },
-  { path: '/automation/executions', label: 'Executions' },
+  { path: '/automation/executions', label: 'Runs' },
 ] as const;
 
 export const Route = createFileRoute('/automation')({
@@ -26,7 +26,7 @@ function AutomationLayout() {
     <PageContainer>
       <PageHeader
         title="Automation"
-        description="Manage triggers, workflows, and execution history"
+        description="Manage triggers, workflows, and run history"
       />
 
       {/* Tab Navigation */}

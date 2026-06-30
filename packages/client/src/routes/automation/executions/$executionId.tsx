@@ -269,7 +269,7 @@ function BackLink() {
       className="inline-flex items-center gap-1 text-sm text-neutral-500 hover:text-neutral-950 dark:text-neutral-400 dark:hover:text-neutral-50"
     >
       <ArrowLeftIcon />
-      Executions
+      Runs
     </Link>
   );
 }

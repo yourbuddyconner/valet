@@ -22,6 +22,14 @@ interface ToolCardShellProps {
   expandable?: boolean;
   /** Optional callback for custom expansion behavior */
   onToggle?: () => void;
+  /**
+   * Optional tool result. When status is `completed` but the result
+   * clearly represents a false outcome (literal `false`, or an object
+   * with `{ok|success|result|passed: false}`), the success checkmark is
+   * replaced with a neutral ✗ so the header stops conflating "the call
+   * ran" with "the underlying check returned true."
+   */
+  result?: unknown;
 }
 
 export const ToolCardExpansionIntentContext = createContext<boolean | null>(null);
@@ -49,7 +57,9 @@ export function ToolCardShell({
   defaultExpanded = false,
   expandable,
   onToggle,
+  result,
 }: ToolCardShellProps) {
+  const isFalseOutcome = status === 'completed' && hasFalseOutcome(result);
   const expansionIntent = useContext(ToolCardExpansionIntentContext);
   const [expanded, setExpanded] = useState(expansionIntent ?? defaultExpanded);
   const isActive = status === 'pending' || status === 'running';
@@ -95,7 +105,7 @@ export function ToolCardShell({
         )}
 
         {/* Status indicator */}
-        <StatusDot status={status} />
+        <StatusDot status={status} falseOutcome={isFalseOutcome} />
 
         {/* Tool icon */}
         <span className={cn('h-3.5 w-3.5 shrink-0', STATUS_COLORS[status])}>
@@ -141,7 +151,7 @@ export function ToolCardShell({
   );
 }
 
-function StatusDot({ status }: { status: ToolCallStatus }) {
+function StatusDot({ status, falseOutcome }: { status: ToolCallStatus; falseOutcome?: boolean }) {
   if (status === 'pending' || status === 'running') {
     return (
       <span className="relative flex h-1.5 w-1.5 shrink-0">
@@ -152,6 +162,14 @@ function StatusDot({ status }: { status: ToolCallStatus }) {
   }
 
   if (status === 'completed') {
+    if (falseOutcome) {
+      return (
+        <svg className="h-3 w-3 shrink-0 text-neutral-400 dark:text-neutral-500" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <line x1="4" y1="4" x2="12" y2="12" />
+          <line x1="12" y1="4" x2="4" y2="12" />
+        </svg>
+      );
+    }
     return (
       <svg className="h-3 w-3 shrink-0 text-emerald-600 dark:text-emerald-400" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
         <polyline points="3.5 8.5 6.5 11.5 12.5 5" />
@@ -169,6 +187,30 @@ function StatusDot({ status }: { status: ToolCallStatus }) {
   }
 
   return null;
+}
+
+function hasFalseOutcome(result: unknown): boolean {
+  const parsed = unwrap(result);
+  if (parsed === false) return true;
+  if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+    const obj = parsed as Record<string, unknown>;
+    for (const key of ['ok', 'success', 'result', 'passed']) {
+      if (obj[key] === false) return true;
+    }
+  }
+  return false;
+}
+
+function unwrap(value: unknown): unknown {
+  if (typeof value !== 'string') return value;
+  const trimmed = value.trim();
+  if (!trimmed) return value;
+  if (trimmed[0] !== '{' && trimmed[0] !== '[' && trimmed !== 'true' && trimmed !== 'false') return value;
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    return value;
+  }
 }
 
 function RunningDots() {

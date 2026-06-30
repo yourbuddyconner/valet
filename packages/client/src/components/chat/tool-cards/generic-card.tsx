@@ -414,6 +414,7 @@ export function GenericCard({ tool }: { tool: ToolCallData }) {
       icon={<WrenchIcon className="h-3.5 w-3.5" />}
       label={tool.toolName}
       status={tool.status}
+      result={tool.result}
       summary={summary ? (
         <span className="text-neutral-500 dark:text-neutral-400">{summary}</span>
       ) : undefined}

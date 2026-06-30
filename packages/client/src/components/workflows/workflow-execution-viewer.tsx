@@ -150,7 +150,7 @@ function WorkflowExecutionViewerInner({
       <aside className="min-h-0 border-r border-neutral-200 bg-white dark:border-neutral-800 dark:bg-neutral-950">
         <div className="flex h-12 items-center justify-between border-b border-neutral-200 px-4 dark:border-neutral-800">
           <div>
-            <h2 className="text-sm font-medium text-neutral-950 dark:text-neutral-100">Executions</h2>
+            <h2 className="text-sm font-medium text-neutral-950 dark:text-neutral-100">Runs</h2>
             <p className="text-xs text-neutral-500">{executions.length} runs</p>
           </div>
         </div>

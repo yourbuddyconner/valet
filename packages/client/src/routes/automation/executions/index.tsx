@@ -53,13 +53,13 @@ function ExecutionsPage() {
       ) : error ? (
         <div className="rounded-lg border border-red-200 bg-red-50 p-4 dark:border-red-800 dark:bg-red-950">
           <p className="text-sm text-pretty text-red-600 dark:text-red-400">
-            Failed to load executions. Please try again.
+            Failed to load runs. Please try again.
           </p>
         </div>
       ) : executions.length === 0 ? (
         <div className="rounded-lg border border-neutral-200 bg-white p-8 text-center dark:border-neutral-700 dark:bg-neutral-800">
           <p className="text-sm text-pretty text-neutral-500 dark:text-neutral-400">
-            No executions found. Run a workflow to see execution history.
+            No runs found. Run a workflow to see run history.
           </p>
         </div>
       ) : (

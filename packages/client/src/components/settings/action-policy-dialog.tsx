@@ -620,7 +620,7 @@ export function ActionPolicyDialog({ open, onOpenChange, policy, noun = 'Policy'
   const [scope, setScope] = React.useState<PolicyScope>('action');
   const [service, setService] = React.useState('');
   const [actionId, setActionId] = React.useState('');
-  const [riskLevel, setRiskLevel] = React.useState('medium');
+  const [riskLevel, setRiskLevel] = React.useState('low');
   const [mode, setMode] = React.useState<ActionMode>(allowOnly ? 'allow' : 'require_approval');
   const [appliesIn, setAppliesIn] = React.useState<AppliesIn>('any');
   const [matchers, setMatchers] = React.useState<ParamMatcher[]>([]);
@@ -639,7 +639,7 @@ export function ActionPolicyDialog({ open, onOpenChange, policy, noun = 'Policy'
       setScope(inferScope(policy));
       setService(policy.service || '');
       setActionId(policy.actionId || '');
-      setRiskLevel(policy.riskLevel || 'medium');
+      setRiskLevel(policy.riskLevel || 'low');
       setMode(policy.mode);
       setAppliesIn(policy.appliesIn ?? 'any');
       setMatchers(policy.paramMatchers ?? []);
@@ -647,7 +647,7 @@ export function ActionPolicyDialog({ open, onOpenChange, policy, noun = 'Policy'
       setScope('action');
       setService('');
       setActionId('');
-      setRiskLevel('medium');
+      setRiskLevel('low');
       setMode(allowOnly ? 'allow' : 'require_approval');
       setAppliesIn('any');
       setMatchers([]);

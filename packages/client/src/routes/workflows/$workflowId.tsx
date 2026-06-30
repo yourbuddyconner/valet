@@ -502,8 +502,9 @@ function WorkflowDetailPage() {
             disabled={deleteWorkflow.isPending}
             className="text-neutral-500 hover:bg-neutral-100 hover:text-red-600 dark:text-neutral-400 dark:hover:bg-neutral-900 dark:hover:text-red-300"
             title="Delete workflow"
+            aria-label="Delete workflow"
           >
-            <MoreIcon />
+            <TrashIcon />
           </Button>
         </div>
       </header>
@@ -543,7 +544,7 @@ function WorkflowDetailPage() {
               className="min-h-0 flex-1 rounded-none border-0"
             />
           )
-        ) : activeTab === 'executions' ? (
+        ) : (
           <WorkflowExecutionViewer
             definition={draftData?.draft ?? null}
             execution={selectedExecution.data?.execution ?? null}
@@ -559,26 +560,13 @@ function WorkflowDetailPage() {
             onRetryExecution={handleRetryExecution}
             isRetryingExecution={retryExecution.isPending}
           />
-        ) : (
-          <div className="grid min-h-0 flex-1 place-items-center bg-neutral-50 p-5 dark:bg-neutral-950">
-            <section className="w-full max-w-md rounded-lg border border-neutral-200 bg-white p-5 text-center dark:border-neutral-800 dark:bg-neutral-900/70">
-              <h2 className="text-base font-medium text-neutral-950 dark:text-neutral-100">Test workflow</h2>
-              <Button
-                className="mt-5 bg-red-500 text-white hover:bg-red-600"
-                onClick={openManualWorkflowDialog}
-                disabled={testRun.isPending || saveDraft.isPending}
-              >
-                {testRun.isPending || saveDraft.isPending ? 'Starting...' : 'Test workflow'}
-              </Button>
-            </section>
-          </div>
         )}
       </div>
     </div>
   );
 }
 
-function MoreIcon() {
+function TrashIcon() {
   return (
     <svg
       xmlns="http://www.w3.org/2000/svg"
@@ -590,9 +578,11 @@ function MoreIcon() {
       strokeLinejoin="round"
       className="h-4 w-4"
     >
-      <circle cx="12" cy="12" r="1" />
-      <circle cx="19" cy="12" r="1" />
-      <circle cx="5" cy="12" r="1" />
+      <path d="M3 6h18" />
+      <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+      <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+      <line x1="10" y1="11" x2="10" y2="17" />
+      <line x1="14" y1="11" x2="14" y2="17" />
     </svg>
   );
 }

@@ -1,4 +1,4 @@
-export type WorkflowEditorTab = 'editor' | 'executions' | 'tests';
+export type WorkflowEditorTab = 'editor' | 'executions';
 
 export interface WorkflowEditorTabItem {
   id: WorkflowEditorTab;
@@ -8,8 +8,7 @@ export interface WorkflowEditorTabItem {
 export function buildWorkflowEditorTabs(executionCount: number): WorkflowEditorTabItem[] {
   return [
     { id: 'editor', label: 'Editor' },
-    { id: 'executions', label: executionCount > 0 ? `Executions ${executionCount}` : 'Executions' },
-    { id: 'tests', label: 'Tests' },
+    { id: 'executions', label: executionCount > 0 ? `Runs ${executionCount}` : 'Runs' },
   ];
 }
 

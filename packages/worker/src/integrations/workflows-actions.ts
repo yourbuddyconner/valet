@@ -759,7 +759,7 @@ export const workflowActions: ActionSource = {
         case 'workflows.get':
           return ok(await getWorkflowAction(context.appDb, context.userId, workflowIdParam.parse(params)));
         case 'workflows.create':
-          return ok(await createWorkflowAction(context.appDb, context.userId, actions[2]!.params.parse(params)));
+          return ok(await createWorkflowAction(context.appDb, context.env, context.userId, actions[2]!.params.parse(params)));
         case 'workflows.save_draft':
           return ok(await saveDraftAction(context.appDb, context.env, context.userId, z.object({
             workflowId: z.string().min(1),
@@ -1004,10 +1004,23 @@ async function getWorkflowAction(db: AppDb, userId: string, params: { workflowId
 
 async function createWorkflowAction(
   db: AppDb,
+  env: Env,
   userId: string,
   params: { name: string; description?: string | null; slug?: string | null },
 ) {
-  return createWorkflow(db, userId, params);
+  const result = await createWorkflow(db, userId, params);
+  return {
+    ...result,
+    // Surfacing the editor URL lets the orchestrator's tool-result card
+    // linkify a direct jump into the canvas instead of forcing the user
+    // to navigate the nav tree after a creation.
+    editorUrl: workflowEditorUrlFor(env, result.workflow.id),
+  };
+}
+
+function workflowEditorUrlFor(env: Env, workflowId: string): string {
+  const base = (env.FRONTEND_URL ?? '').replace(/\/$/, '');
+  return `${base}/workflows/${workflowId}`;
 }
 
 async function saveDraftAction(

@@ -9,16 +9,15 @@ import {
 } from './workflow-detail-view-model';
 
 describe('workflow detail view model', () => {
-  it('labels editor tabs with execution count when executions exist', () => {
+  it('labels editor tabs with run count when runs exist', () => {
     expect(buildWorkflowEditorTabs(3)).toEqual([
       { id: 'editor', label: 'Editor' },
-      { id: 'executions', label: 'Executions 3' },
-      { id: 'tests', label: 'Tests' },
+      { id: 'executions', label: 'Runs 3' },
     ]);
   });
 
-  it('keeps executions tab compact when there are no executions', () => {
-    expect(buildWorkflowEditorTabs(0)[1]).toEqual({ id: 'executions', label: 'Executions' });
+  it('keeps runs tab compact when there are no runs', () => {
+    expect(buildWorkflowEditorTabs(0)[1]).toEqual({ id: 'executions', label: 'Runs' });
   });
 
   it('returns the toolbar status label from enabled state', () => {

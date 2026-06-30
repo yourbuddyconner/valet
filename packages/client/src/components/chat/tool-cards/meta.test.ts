@@ -11,7 +11,7 @@ describe('getToolCardMeta', () => {
         result: null,
       })
     ).toEqual({
-      label: 'Read',
+      label: 'read',
       summary: 'packages/client/src/app.tsx',
     });
 
@@ -23,7 +23,7 @@ describe('getToolCardMeta', () => {
         result: null,
       })
     ).toEqual({
-      label: 'Bash',
+      label: 'bash',
       summary: 'Run typecheck',
     });
   });
