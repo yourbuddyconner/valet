@@ -418,65 +418,89 @@ function SelectedNodeDetailsPane({
   const nodeDuration = formatExecutionDuration(selectedTrace?.durationMs);
   const sessionLink = getSessionTraceLink(selectedTrace);
 
+  // Split detail sections by relevance. Output gets pride of place at
+  // top (it's the answer to "what did this node do?"). Auto-approved
+  // becomes inline header context, not its own block. The rest collapse
+  // into a single ordered list below Output.
+  const outputSection = detailSections.find((s) => s.title === 'Output');
+  const autoApprovedSection = detailSections.find((s) => s.title === 'Auto-approved');
+  const secondarySections = detailSections.filter(
+    (s) => s.title !== 'Output' && s.title !== 'Auto-approved',
+  );
+  const autoApprovedText = autoApprovedSection?.payload.kind === 'text'
+    ? autoApprovedSection.payload.text
+    : null;
+  const hasActions = selectedApprovals.length > 0 || sessionLink;
+  const hasAnyContent = !!outputSection
+    || !!selectedNodeParams
+    || secondarySections.length > 0
+    || hasActions;
+
   return (
-    <div className="nodrag nopan nowheel absolute bottom-5 right-5 top-[18rem] z-20 flex w-[min(860px,calc(100%-2.5rem))] min-w-[min(520px,calc(100%-2.5rem))] flex-col overflow-hidden rounded-xl border border-neutral-200 bg-white shadow-2xl shadow-neutral-900/15 dark:border-neutral-800 dark:bg-neutral-950 dark:shadow-black/30">
-      <div className="flex shrink-0 items-start justify-between gap-4 border-b border-neutral-200 px-5 py-4 dark:border-neutral-800">
-        <div className="min-w-0 space-y-2">
-          <div className="flex flex-wrap items-center gap-2">
-            <h2 className="truncate text-base font-semibold text-neutral-950 dark:text-neutral-100">Node details</h2>
+    <div className="nodrag nopan nowheel absolute bottom-5 right-5 top-5 z-20 flex w-[min(440px,calc(100%-2.5rem))] flex-col overflow-hidden rounded-xl border border-neutral-200 bg-white shadow-2xl shadow-neutral-900/15 dark:border-neutral-800 dark:bg-neutral-950 dark:shadow-black/30">
+      {/* Header: one line of metadata, no separate title. The node id
+          is the title; type + status + duration are the badge strip. */}
+      <header className="flex shrink-0 items-start justify-between gap-3 border-b border-neutral-200 px-4 pt-4 pb-3 dark:border-neutral-800">
+        <div className="min-w-0">
+          <h2 className="truncate font-mono text-sm font-semibold text-neutral-950 dark:text-neutral-100" title={selectedNodeId}>
+            {selectedNodeId}
+          </h2>
+          <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-xs">
             <Badge variant="secondary">{nodeType}</Badge>
             <NodeTraceStatusPill status={nodeStatus} />
+            {selectedTrace?.durationMs !== undefined && selectedTrace?.durationMs !== null && (
+              <span className="text-neutral-500 tabular-nums dark:text-neutral-400">{nodeDuration}</span>
+            )}
+            {autoApprovedText && (
+              <span
+                className="inline-flex items-center gap-1 rounded-md bg-emerald-50 px-1.5 py-0.5 text-[11px] font-medium text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300"
+                title={autoApprovedText}
+              >
+                auto-approved
+              </span>
+            )}
           </div>
-          <p className="truncate font-mono text-sm text-neutral-500" title={selectedNodeId}>{selectedNodeId}</p>
         </div>
         <button
           type="button"
           onClick={onClose}
-          className="grid h-8 w-8 shrink-0 place-items-center rounded-md text-neutral-500 hover:bg-neutral-100 hover:text-neutral-950 dark:text-neutral-400 dark:hover:bg-neutral-900 dark:hover:text-neutral-100"
+          className="grid h-7 w-7 shrink-0 place-items-center rounded-md text-neutral-500 hover:bg-neutral-100 hover:text-neutral-950 dark:text-neutral-400 dark:hover:bg-neutral-900 dark:hover:text-neutral-100"
           aria-label="Close node details"
         >
           <CloseIcon />
         </button>
-      </div>
-      <div className="grid min-h-0 flex-1 grid-cols-[minmax(13rem,0.45fr)_minmax(0,1fr)] overflow-hidden max-lg:grid-cols-1">
-        <aside className="min-h-0 overflow-y-auto border-r border-neutral-200 bg-neutral-50/80 p-4 dark:border-neutral-800 dark:bg-neutral-900/60 max-lg:border-b max-lg:border-r-0">
-          <div className="space-y-3">
-            <h3 className="text-xs font-semibold uppercase tracking-wide text-neutral-500 dark:text-neutral-400">Run</h3>
-            <div className="grid gap-2 max-lg:grid-cols-3 max-sm:grid-cols-1">
-              <NodeMetric label="Status" value={formatNodeStatus(nodeStatus)} />
-              <NodeMetric label="Duration" value={nodeDuration} />
-              <NodeMetric label="Type" value={nodeType} />
-            </div>
-            {sessionLink && (
-              <Button
-                asChild
-                variant="secondary"
-                size="sm"
-                className="w-full border border-neutral-200 bg-white text-neutral-800 hover:bg-neutral-100 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100 dark:hover:bg-neutral-800"
-              >
-                <Link to="/sessions/$sessionId" params={{ sessionId: sessionLink.sessionId }}>
-                  {sessionLink.label}
-                </Link>
-              </Button>
-            )}
-            {selectedTrace?.error && (
-              <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-xs text-red-700 dark:border-red-900/50 dark:bg-red-950/40 dark:text-red-300">
-                <div className="mb-1 font-medium">Error</div>
-                <p className="line-clamp-6 whitespace-pre-wrap break-words">{selectedTrace.error}</p>
-              </div>
-            )}
-            {selectedApprovals.length > 0 && (
-              <div className="space-y-2 pt-1">
-                {selectedApprovals.map((approval) => (
-                  <ExecutionApprovalCard key={approval.id} executionId={execution.id} approval={approval} />
-                ))}
-              </div>
-            )}
-          </div>
-        </aside>
+      </header>
 
-        <div className="min-h-0 overflow-y-auto p-4">
-          <div className="space-y-4">
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        {!hasAnyContent ? (
+          <div className="p-4">
+            <p className="rounded-lg border border-dashed border-neutral-200 p-4 text-sm text-neutral-500 dark:border-neutral-800">
+              This node has not recorded parameters or trace payloads for this execution.
+            </p>
+          </div>
+        ) : (
+          <div className="space-y-4 p-4">
+            {/* Output first — for a finished node, this is the answer. */}
+            {outputSection && (
+              <StructuredPayloadBlock
+                title="Output"
+                payload={outputSection.payload}
+                tone={outputSection.tone}
+                truncated={outputSection.truncated}
+              />
+            )}
+            {/* Secondary trace sections (Input / Error / Reason). */}
+            {secondarySections.map((section) => (
+              <StructuredPayloadBlock
+                key={section.title}
+                title={section.title}
+                payload={section.payload}
+                tone={section.tone}
+                truncated={section.truncated}
+              />
+            ))}
+            {/* Configured params last among data — it's what was set up,
+                not what happened. */}
             {selectedNodeParams && (
               <StructuredPayloadBlock
                 title="Configured params"
@@ -484,24 +508,36 @@ function SelectedNodeDetailsPane({
                 tone="neutral"
               />
             )}
-            <TracePreview sections={detailSections} />
-            {!selectedNodeParams && detailSections.length === 0 && selectedApprovals.length === 0 && (
-              <div className="rounded-lg border border-dashed border-neutral-200 p-4 text-sm text-neutral-500 dark:border-neutral-800">
-                This node has not recorded parameters or trace payloads for this execution.
-              </div>
-            )}
           </div>
-        </div>
+        )}
       </div>
-    </div>
-  );
-}
 
-function NodeMetric({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-lg border border-neutral-200 bg-white p-3 dark:border-neutral-800 dark:bg-neutral-950">
-      <div className="text-[11px] font-medium uppercase tracking-wide text-neutral-500 dark:text-neutral-400">{label}</div>
-      <div className="mt-1 min-w-0 truncate font-mono text-sm text-neutral-900 dark:text-neutral-100" title={value}>{value}</div>
+      {/* Actions at the bottom — these are the things you DO with a
+          node (approve, open session). Persistent footer separates
+          action from data. */}
+      {hasActions && (
+        <footer className="shrink-0 space-y-2 border-t border-neutral-200 bg-neutral-50/60 p-4 dark:border-neutral-800 dark:bg-neutral-900/40">
+          {selectedApprovals.length > 0 && (
+            <div className="space-y-2">
+              {selectedApprovals.map((approval) => (
+                <ExecutionApprovalCard key={approval.id} executionId={execution.id} approval={approval} />
+              ))}
+            </div>
+          )}
+          {sessionLink && (
+            <Button
+              asChild
+              variant="secondary"
+              size="sm"
+              className="w-full border border-neutral-200 bg-white text-neutral-800 hover:bg-neutral-100 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100 dark:hover:bg-neutral-800"
+            >
+              <Link to="/sessions/$sessionId" params={{ sessionId: sessionLink.sessionId }}>
+                {sessionLink.label}
+              </Link>
+            </Button>
+          )}
+        </footer>
+      )}
     </div>
   );
 }
@@ -521,23 +557,6 @@ function RetryIcon() {
       <path d="M3 12a9 9 0 1 0 3-6.7" />
       <path d="M3 4v6h6" />
     </svg>
-  );
-}
-
-function TracePreview({ sections }: { sections: ReturnType<typeof buildTraceDetailSections> }) {
-  if (sections.length === 0) return <p className="mt-3 text-xs text-neutral-500">No trace payload recorded.</p>;
-  return (
-    <div className="space-y-4">
-      {sections.map((section) => (
-        <StructuredPayloadBlock
-          key={section.title}
-          title={section.title}
-          payload={section.payload}
-          tone={section.tone}
-          truncated={section.truncated}
-        />
-      ))}
-    </div>
   );
 }
 
