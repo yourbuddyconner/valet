@@ -44,7 +44,22 @@ function ExecutionDetailPage() {
     ? (workflowData.workflow.data as unknown as WorkflowDefinition)
     : null;
 
+  // Two-phase cancel — first click arms, second confirms. Auto-disarms
+  // after a few seconds so a stray click doesn't leave the button in a
+  // dangerous state, and resets if the execution status changes out
+  // from under us.
+  const [cancelArmed, setCancelArmed] = React.useState(false);
+  React.useEffect(() => {
+    if (!cancelArmed) return;
+    const timer = window.setTimeout(() => setCancelArmed(false), 4000);
+    return () => window.clearTimeout(timer);
+  }, [cancelArmed]);
   const onCancel = async () => {
+    if (!cancelArmed) {
+      setCancelArmed(true);
+      return;
+    }
+    setCancelArmed(false);
     try {
       await cancel.mutateAsync({ executionId, data: { reason: 'Cancelled from execution details' } });
       toastSuccess('Execution cancelled');
@@ -112,9 +127,14 @@ function ExecutionDetailPage() {
             {retryExecution.isPending ? 'Retrying...' : 'Retry'}
           </Button>
           {isActive && (
-            <Button variant="destructive" onClick={onCancel} disabled={cancel.isPending}>
+            <Button
+              variant={cancelArmed ? 'destructive' : 'secondary'}
+              onClick={onCancel}
+              disabled={cancel.isPending}
+              className={cancelArmed ? 'animate-pulse' : undefined}
+            >
               <CancelIcon />
-              {cancel.isPending ? 'Cancelling...' : 'Cancel'}
+              {cancel.isPending ? 'Cancelling…' : cancelArmed ? 'Click again to confirm' : 'Cancel'}
             </Button>
           )}
         </div>
