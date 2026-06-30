@@ -214,7 +214,7 @@ function ExecutionDetailPage() {
             <h2 className="mb-2 text-sm font-medium text-neutral-900 dark:text-neutral-100">
               Node trace
             </h2>
-            <NodeTraceTable nodes={nodes} />
+            <NodeTraceTable nodes={nodes} executionStatus={execution.status} />
           </section>
 
           <section className="grid gap-4 lg:grid-cols-3">
@@ -316,7 +316,7 @@ function SummaryItem({ label, value }: { label: string; value: string }) {
   );
 }
 
-function NodeTraceTable({ nodes }: { nodes: ExecutionNode[] }) {
+function NodeTraceTable({ nodes, executionStatus }: { nodes: ExecutionNode[]; executionStatus: Execution['status'] }) {
   // Collapse per DAG node: each node can have many trace rows (one per
   // status transition: running → waiting_approval → completed). The
   // canvas view picks the latest using buildExecutionNodeStateMap;
@@ -359,7 +359,7 @@ function NodeTraceTable({ nodes }: { nodes: ExecutionNode[] }) {
                   </div>
                 </td>
                 <td className="px-4 py-3">
-                  <NodeStatusBadge status={node.status} />
+                  <NodeStatusBadge status={effectiveNodeStatus(node.status, executionStatus)} />
                 </td>
                 <td className="px-4 py-3 text-xs tabular-nums text-neutral-500 dark:text-neutral-400">
                   {typeof node.durationMs === 'number' ? `${node.durationMs}ms` : '—'}
@@ -410,6 +410,33 @@ function ExecutionStatusBadge({ status }: { status: Execution['status'] }) {
 
 function NodeStatusBadge({ status }: { status: ExecutionNode['status'] }) {
   return <Badge variant={statusBadgeVariant(status)}>{formatStatus(status)}</Badge>;
+}
+
+/**
+ * Display-side correction for trace rows that the runtime never
+ * transitioned out of an active state. The runtime writes a
+ * waiting_approval row when a foreach body parks, but when the sweep
+ * later resolves all 50 iterations through a runtime grant, the
+ * follow-up "completed" trace transition for that body node never
+ * lands — leaving the row stuck at waiting_approval even though the
+ * workflow ran to the end. The execution's terminal status is the
+ * source of truth: if the workflow finished, an active-looking node
+ * must have actually finished too.
+ */
+function effectiveNodeStatus(
+  status: ExecutionNode['status'],
+  executionStatus: Execution['status'],
+): ExecutionNode['status'] {
+  const executionFinished =
+    executionStatus === 'completed' || executionStatus === 'failed' || executionStatus === 'cancelled';
+  if (!executionFinished) return status;
+  if (status === 'completed' || status === 'failed' || status === 'skipped') return status;
+  // pending / running / waiting_approval / waiting_time → assume the
+  // node finished alongside the execution. For 'failed' executions we
+  // don't blanket-rewrite to 'failed' here — we don't know which node
+  // caused it — but we do shed the misleading active state.
+  if (executionStatus === 'failed') return 'failed';
+  return 'completed';
 }
 
 function statusBadgeVariant(

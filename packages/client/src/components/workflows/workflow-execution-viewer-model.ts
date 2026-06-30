@@ -1,4 +1,4 @@
-import type { ExecutionApproval, ExecutionNode } from '@/api/executions';
+import type { Execution, ExecutionApproval, ExecutionNode } from '@/api/executions';
 import type { WorkflowNode } from '@valet/shared';
 
 export type ExecutionDisplayStatus = ExecutionNode['status'] | 'not_run';
@@ -14,8 +14,33 @@ export function buildExecutionNodeStateMap(nodes: ExecutionNode[]): Map<string, 
 export function getExecutionDisplayStatus(
   nodeId: string,
   nodeState: Map<string, ExecutionNode>,
+  executionStatus?: Execution['status'],
 ): ExecutionDisplayStatus {
-  return nodeState.get(nodeId)?.status ?? 'not_run';
+  const status = nodeState.get(nodeId)?.status ?? 'not_run';
+  if (!executionStatus) return status;
+  return correctNodeStatusForFinishedExecution(status, executionStatus);
+}
+
+/**
+ * Display-side correction for trace rows the runtime never advanced
+ * out of an active state. The foreach approval-sweep can fulfill a
+ * body node's wait via a runtime grant without writing a follow-up
+ * "completed" trace transition — leaves a node visible as
+ * waiting_approval even after the workflow finished. The execution's
+ * terminal status is the source of truth: if the workflow finished,
+ * the node finished too. Exported so the standalone trace table can
+ * apply the same correction.
+ */
+export function correctNodeStatusForFinishedExecution(
+  status: ExecutionDisplayStatus,
+  executionStatus: Execution['status'],
+): ExecutionDisplayStatus {
+  const executionFinished =
+    executionStatus === 'completed' || executionStatus === 'failed' || executionStatus === 'cancelled';
+  if (!executionFinished) return status;
+  if (status === 'completed' || status === 'failed' || status === 'skipped' || status === 'not_run') return status;
+  if (executionStatus === 'failed') return 'failed';
+  return 'completed';
 }
 
 export function formatExecutionDuration(durationMs: number | null | undefined): string {

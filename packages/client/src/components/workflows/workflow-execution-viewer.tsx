@@ -123,7 +123,7 @@ function WorkflowExecutionViewerInner({
           data: {
             ...node.data,
             executionTrace: trace,
-            executionStatus: getExecutionDisplayStatus(node.id, traceByNode),
+            executionStatus: getExecutionDisplayStatus(node.id, traceByNode, execution?.status),
           } satisfies ExecutionNodeCardData,
         };
       }),
