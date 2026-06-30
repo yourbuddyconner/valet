@@ -10,6 +10,7 @@ import type { AppDb } from '../lib/drizzle.js';
 import { copilotThreads, copilotMessages } from '../lib/schema/copilot.js';
 import { getWorkflowByIdOrSlug } from '../lib/db.js';
 import { getDraft } from './workflow-versions.js';
+import { getWorkflowSchemaReference } from './workflow-schema-reference.js';
 import { NotFoundError } from '@valet/shared';
 
 export interface CopilotThread {
@@ -177,6 +178,7 @@ function renderSystemPrompt(input: {
   definition: unknown;
 }): string {
   const defJson = JSON.stringify(input.definition, null, 2);
+  const schemaJson = JSON.stringify(getWorkflowSchemaReference(), null, 2);
   return [
     `You are the Valet workflow copilot. Your job is to help the user build, edit,`,
     `validate, and ship the workflow they are currently editing. You have direct`,
@@ -192,6 +194,20 @@ function renderSystemPrompt(input: {
     ``,
     '```json',
     defJson,
+    '```',
+    ``,
+    `### dag/v1 schema reference`,
+    ``,
+    `This is the authoritative shape for every valid node type. Do not invent`,
+    `node types or fields not listed here. Common mistakes:`,
+    `  • the conditional node type is \`if\` (with \`conditions[]\`), not "condition"`,
+    `    or "branch"`,
+    `  • approval nodes need \`prompt\` (required), not \`summary\``,
+    `  • tool nodes require \`service\`, \`action\`, AND \`params\``,
+    `  • foreach.body must be one of: ${getWorkflowSchemaReference().foreachBodyTypes.join(', ')}`,
+    ``,
+    '```json',
+    schemaJson,
     '```',
     ``,
     `This snapshot was taken when this conversation started. The user or other`,

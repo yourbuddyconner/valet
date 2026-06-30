@@ -37,6 +37,24 @@ interface WorkingDef {
 }
 
 export function applyOps(def: WorkflowDefinition, ops: WorkflowOp[]): WorkflowDefinition {
+  const next = applyOpsLenient(def, ops);
+  // Runtime narrow back to a real WorkflowDefinition. If the LLM
+  // produced a shape that violates the schema we throw before
+  // persisting so the caller can surface the issue.
+  if (!isWorkflowDefinition(next)) {
+    throw new Error('patch result is not a valid dag/v1 workflow definition');
+  }
+  return next;
+}
+
+/**
+ * Apply ops without the strict end-of-pipeline narrow. Returns the raw
+ * intermediate shape as `unknown` so callers can choose their own
+ * validation strategy — e.g. the copilot runs `validateDefinition` to
+ * surface specific issues to the model, rather than failing with a
+ * single opaque boolean.
+ */
+export function applyOpsLenient(def: WorkflowDefinition, ops: WorkflowOp[]): unknown {
   let working = toWorking(def);
   for (const [i, op] of ops.entries()) {
     try {
@@ -45,12 +63,6 @@ export function applyOps(def: WorkflowDefinition, ops: WorkflowOp[]): WorkflowDe
       const msg = err instanceof Error ? err.message : String(err);
       throw new Error(`op #${i} (${op.op}): ${msg}`);
     }
-  }
-  // Runtime narrow back to a real WorkflowDefinition. If the LLM
-  // produced a shape that violates the schema we throw before
-  // persisting so the caller can surface the issue.
-  if (!isWorkflowDefinition(working)) {
-    throw new Error('patch result is not a valid dag/v1 workflow definition');
   }
   return working;
 }

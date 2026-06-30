@@ -10,7 +10,9 @@ import { NotFoundError, ValidationError } from '@valet/shared';
 import { getWorkflowByIdOrSlug } from '../lib/db.js';
 import { getDraft, saveDraft } from '../services/workflow-versions.js';
 import { isWorkflowDefinition } from '../lib/workflow-dag/schema.js';
-import { applyOps, type WorkflowOp } from '../services/workflow-ops.js';
+import { validateDefinition } from '../lib/workflow-dag/validator.js';
+import { applyOpsLenient, type WorkflowOp } from '../services/workflow-ops.js';
+import { getWorkflowSchemaReference } from '../services/workflow-schema-reference.js';
 import {
   createCopilotThread,
   getCopilotThread,
@@ -173,6 +175,10 @@ copilotRouter.post('/chat', zValidator('json', chatBodySchema), async (c) => {
         '  • removeEdge { from, to, fromOutput? }',
         '  • setMeta    { patch: { version?, policy?, ui? } }',
         '',
+        'On failure, this returns { ok: false, error, issues } — `issues` is',
+        'the structured validator output (code, path, message, nodeId/edgeId).',
+        'Use those to fix the patch and retry; do not call getWorkflow.',
+        '',
         'Always prefer this over saveDraft when the workflow already exists.',
       ].join('\n'),
       inputSchema: z.object({
@@ -183,21 +189,41 @@ copilotRouter.post('/chat', zValidator('json', chatBodySchema), async (c) => {
         if (!draft.draft) {
           return { ok: false, error: 'no current draft to patch — call saveDraft first to seed one' };
         }
+        // Apply ops over Record-shaped working copy, then run the
+        // structural validator so the model sees *what* is wrong with
+        // each node, not just a boolean fail. We persist only if the
+        // result is genuinely valid.
+        let next: unknown;
         try {
-          const next = applyOps(draft.draft, ops as unknown as WorkflowOp[]);
-          await saveDraft(db, workflowId, next);
-          return {
-            ok: true,
-            workflowId,
-            appliedOps: ops.length,
-            nodeCount: next.nodes.length,
-            edgeCount: next.edges.length,
-          };
+          next = applyOpsLenient(draft.draft, ops as unknown as WorkflowOp[]);
         } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
-          return { ok: false, error: msg };
+          return { ok: false, error: err instanceof Error ? err.message : String(err) };
         }
+        const issues = validateDefinition(next);
+        if (issues.length > 0) {
+          return {
+            ok: false,
+            error: `patch produced ${issues.length} validation issue${issues.length === 1 ? '' : 's'}; fix and retry`,
+            issues,
+          };
+        }
+        if (!isWorkflowDefinition(next)) {
+          return { ok: false, error: 'patch result is not a valid dag/v1 workflow definition' };
+        }
+        await saveDraft(db, workflowId, next);
+        return {
+          ok: true,
+          workflowId,
+          appliedOps: ops.length,
+          nodeCount: next.nodes.length,
+          edgeCount: next.edges.length,
+        };
       },
+    }),
+    getNodeSchema: tool({
+      description: 'Return the authoritative schema reference for every valid dag/v1 node type — required and optional fields, descriptions, foreach body constraints, condition operations, template syntax, edge fields. Call this BEFORE adding a node type you are not 100% sure about, especially `if`, `approval`, `foreach`, `wait`, and `session`. No arguments.',
+      inputSchema: z.object({}),
+      execute: async () => getWorkflowSchemaReference(),
     }),
   };
 
