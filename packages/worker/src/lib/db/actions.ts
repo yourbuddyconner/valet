@@ -1032,6 +1032,106 @@ export async function listStuckWorkflowApprovalsForResume(
     .all();
 }
 
+// ─── Propagation: descendant fan-out ─────────────────────────────────────────
+// Surfacing a parent session / workflow execution's "pending approvals" view
+// requires walking DOWN the provenance tree — `parent_session_id` for
+// sessions, plus `workflow_spawned_sessions` for executions. Recursive CTE
+// is the natural fit; the query builder doesn't compose recursive CTEs
+// cleanly, so we drop to raw SQL here.
+
+type DescendantPendingInvocationRow = {
+  id: string;
+  session_id: string | null;
+  workflow_execution_id: string | null;
+  service: string;
+  action_id: string;
+  risk_level: string;
+  resolved_mode: string;
+  status: string;
+  params: string | null;
+  expires_at: string | null;
+  node_id: string | null;
+  iteration_index: number | null;
+  created_at: string;
+};
+
+const DESCENDANT_DEPTH_CAP = 32;
+
+/**
+ * Returns pending action_invocations rooted at a session — both the
+ * session's own and every descendant in the `parent_session_id` tree.
+ * Used by the session-context "pending approvals" view so a parent
+ * session (incl. an orchestrator session) surfaces approval gates from
+ * its spawned children.
+ */
+export async function listDescendantPendingApprovalsForSession(
+  db: AppDb,
+  sessionId: string,
+  opts?: { now?: string },
+): Promise<DescendantPendingInvocationRow[]> {
+  const now = opts?.now ?? nowIso();
+  // SQLite caps recursive CTE iterations at the PRAGMA limit; depth cap
+  // here guards against cycles and pathological trees on top of that.
+  return db.all<DescendantPendingInvocationRow>(sql`
+    WITH RECURSIVE session_tree(id, depth) AS (
+      SELECT id, 0 FROM sessions WHERE id = ${sessionId}
+      UNION ALL
+      SELECT s.id, t.depth + 1
+        FROM sessions s
+        INNER JOIN session_tree t ON s.parent_session_id = t.id
+        WHERE t.depth < ${DESCENDANT_DEPTH_CAP}
+    )
+    SELECT
+      ai.id, ai.session_id, ai.workflow_execution_id, ai.service, ai.action_id,
+      ai.risk_level, ai.resolved_mode, ai.status, ai.params, ai.expires_at,
+      ai.node_id, ai.iteration_index, ai.created_at
+    FROM action_invocations ai
+    WHERE ai.session_id IN (SELECT id FROM session_tree)
+      AND ai.status = 'pending'
+      AND (ai.expires_at IS NULL OR ai.expires_at > ${now})
+    ORDER BY ai.created_at ASC
+  `);
+}
+
+/**
+ * Returns pending action_invocations rooted at a workflow execution —
+ * the execution's own (tool-policy holds + explicit approval gates) plus
+ * every pending invocation in any session this execution spawned and
+ * their descendants. Used by the workflow execution "pending approvals"
+ * view.
+ */
+export async function listDescendantPendingApprovalsForExecution(
+  db: AppDb,
+  executionId: string,
+  opts?: { now?: string },
+): Promise<DescendantPendingInvocationRow[]> {
+  const now = opts?.now ?? nowIso();
+  return db.all<DescendantPendingInvocationRow>(sql`
+    WITH RECURSIVE spawned_tree(id, depth) AS (
+      SELECT session_id AS id, 0
+        FROM workflow_spawned_sessions
+        WHERE execution_id = ${executionId}
+      UNION ALL
+      SELECT s.id, t.depth + 1
+        FROM sessions s
+        INNER JOIN spawned_tree t ON s.parent_session_id = t.id
+        WHERE t.depth < ${DESCENDANT_DEPTH_CAP}
+    )
+    SELECT
+      ai.id, ai.session_id, ai.workflow_execution_id, ai.service, ai.action_id,
+      ai.risk_level, ai.resolved_mode, ai.status, ai.params, ai.expires_at,
+      ai.node_id, ai.iteration_index, ai.created_at
+    FROM action_invocations ai
+    WHERE (
+      ai.workflow_execution_id = ${executionId}
+      OR ai.session_id IN (SELECT id FROM spawned_tree)
+    )
+      AND ai.status = 'pending'
+      AND (ai.expires_at IS NULL OR ai.expires_at > ${now})
+    ORDER BY ai.created_at ASC
+  `);
+}
+
 export async function listPendingInvocationsByUser(db: AppDb, userId: string) {
   const now = nowIso();
   return db

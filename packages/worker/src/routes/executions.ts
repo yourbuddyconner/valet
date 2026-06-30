@@ -9,6 +9,7 @@ import {
   getExecution,
   parseExecutionTriggerData,
   checkIdempotencyKey,
+  listDescendantPendingApprovalsForExecution,
 } from '../lib/db.js';
 import { getDb } from '../lib/drizzle.js';
 import { asc, eq } from 'drizzle-orm';
@@ -315,6 +316,24 @@ executionsRouter.get('/:id/approvals', async (c) => {
   return c.json({
     approvals: approvals.map(mapInvocationToApprovalView),
   });
+});
+
+/**
+ * GET /api/executions/:id/pending-approvals
+ * Lists pending approvals rooted at this workflow execution — the
+ * execution's own (tool-policy holds + explicit approval gates) plus
+ * every pending invocation in any session this execution spawned and
+ * their descendants. The execution view uses this to surface every
+ * approval gate stalling the workflow without the user opening each
+ * spawned session.
+ */
+executionsRouter.get('/:id/pending-approvals', async (c) => {
+  const { id } = c.req.param();
+  const user = c.get('user');
+  const row = await getExecution(c.env.DB, id, user.id);
+  if (!row) throw new NotFoundError('Execution', id);
+  const approvals = await listDescendantPendingApprovalsForExecution(getDb(c.env.DB), id);
+  return c.json({ approvals });
 });
 
 // `scope` is `once` for plain approvals, `workflow_execution` when the user
