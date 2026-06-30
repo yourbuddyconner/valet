@@ -204,6 +204,13 @@ function WorkflowExecutionViewerInner({
         )}
       >
         <Canvas
+          // Remount the canvas when the workflow's node count changes
+          // (definition transitions from placeholder to loaded), so
+          // React Flow's fitView re-fits to the real graph. Without
+          // this the initial fit lands on the 1-node placeholder and
+          // we never re-zoom when the real nodes show up — leading
+          // to giant nodes filling the viewport.
+          key={`${flow.nodes.length}:${flow.edges.length}`}
           className="bg-neutral-50 dark:bg-neutral-950"
           edgeTypes={edgeTypes}
           edges={flow.edges}
@@ -217,7 +224,7 @@ function WorkflowExecutionViewerInner({
           panOnDrag
         >
           <Controls className="border-neutral-200 bg-white text-neutral-900 shadow-lg dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100 [&>button]:text-neutral-700 [&>button]:hover:bg-neutral-100 dark:[&>button]:text-neutral-100 dark:[&>button]:hover:bg-neutral-800" />
-          {execution && (
+          {!embedded && execution && (
             <div className="absolute left-5 top-5 rounded-lg border border-neutral-200 bg-white px-4 py-3 shadow-sm dark:border-neutral-800 dark:bg-neutral-900">
               <div className="flex items-center gap-2">
                 <ExecutionStatusPill status={execution.status} />
