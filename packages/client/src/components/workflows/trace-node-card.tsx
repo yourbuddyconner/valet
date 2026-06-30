@@ -13,6 +13,7 @@ export function TraceNodeCard({
   node,
   executionStatus,
   definition,
+  iterations,
   defaultOpen,
 }: {
   node: ExecutionNode;
@@ -21,6 +22,11 @@ export function TraceNodeCard({
    *  trace row doesn't carry (if conditions, foreach items expression,
    *  approval prompt, etc.) so the rendered body can be plain-English. */
   definition?: WorkflowDefinition | null;
+  /** For foreach body nodes: the parent foreach's per-iteration items.
+   *  Each item is `{status, data}`. Surfacing this lets the body card
+   *  page through all iterations instead of showing a single empty
+   *  "no result" stub. */
+  iterations?: unknown[];
   defaultOpen: boolean;
 }) {
   const [open, setOpen] = React.useState(defaultOpen);
@@ -93,7 +99,7 @@ export function TraceNodeCard({
               <ErrorBlock value={node.error} />
             </Section>
           )}
-          <NodeBody node={node} output={output} defNode={defNode} />
+          <NodeBody node={node} output={output} defNode={defNode} iterations={iterations} />
           {input !== undefined && input !== null && (
             <CollapsibleSection title={node.inputTruncated ? 'Input (truncated)' : 'Input'}>
               <SmartValue value={input} />
@@ -112,10 +118,12 @@ function NodeBody({
   node,
   output,
   defNode,
+  iterations,
 }: {
   node: ExecutionNode;
   output: unknown;
   defNode: WorkflowNode | null;
+  iterations?: unknown[];
 }) {
   if (output === null || output === undefined) {
     // Tool nodes still render — the configured call (service.action +
@@ -135,7 +143,7 @@ function NodeBody({
     case 'set': return <SetBody output={output} />;
     case 'if': return <IfBody output={output} defNode={defNode} />;
     case 'llm': return <LlmBody output={output} />;
-    case 'tool': return <ToolBody output={output} defNode={defNode} />;
+    case 'tool': return <ToolBody output={output} defNode={defNode} iterations={iterations} />;
     case 'wait': return <WaitBody output={output} />;
     case 'approval': return <ApprovalBody output={output} />;
     case 'foreach': return <ForeachBody output={output} defNode={defNode} />;
@@ -329,12 +337,20 @@ function LlmBody({ output }: { output: unknown }) {
   return <Section title="Output"><SmartValue value={output} /></Section>;
 }
 
-function ToolBody({ output, defNode }: { output: unknown; defNode: WorkflowNode | null }) {
+function ToolBody({
+  output,
+  defNode,
+  iterations,
+}: {
+  output: unknown;
+  defNode: WorkflowNode | null;
+  iterations?: unknown[];
+}) {
   const o = asObject(output);
   const isTool = defNode?.type === 'tool';
   const callName = isTool ? `${defNode.service}.${defNode.action}` : null;
   const params = isTool && defNode.params && Object.keys(defNode.params).length > 0 ? defNode.params : null;
-  const noResult = !o && (output === null || output === undefined);
+  const hasIterations = Array.isArray(iterations) && iterations.length > 0;
 
   return (
     <>
@@ -359,21 +375,105 @@ function ToolBody({ output, defNode }: { output: unknown; defNode: WorkflowNode 
           </div>
         </Section>
       )}
-      {o ? (
+      {hasIterations ? (
+        <IterationPager iterations={iterations as unknown[]} />
+      ) : o ? (
         <Section title="Result"><KeyValueGrid value={o} /></Section>
-      ) : !noResult ? (
+      ) : output !== null && output !== undefined ? (
         <Section title="Result"><SmartValue value={output} /></Section>
       ) : callName ? (
-        // We have a tool name but no recorded result. Common case: the
-        // trace row was captured at wait/approval entry and the runtime
-        // never wrote the completion row (foreach body via approval
-        // sweep). Tell the user instead of showing an empty card.
         <p className="text-sm text-neutral-500 dark:text-neutral-400">
-          No result was recorded for this trace row. If this is a foreach iteration,
-          the parent foreach card aggregates results.
+          No result was recorded for this trace row.
         </p>
       ) : null}
     </>
+  );
+}
+
+/**
+ * Paginator for a foreach body's per-iteration results. The parent
+ * foreach records `{items: [{status, data}, ...]}` — surface those as
+ * a single-card paginator so the user can step through individual
+ * iterations instead of being shown a blank "no result" stub.
+ */
+function IterationPager({ iterations }: { iterations: unknown[] }) {
+  const [index, setIndex] = React.useState(0);
+  const clamped = Math.min(Math.max(0, index), iterations.length - 1);
+  const item = iterations[clamped];
+  const itemObj = asObject(item);
+  const status = typeof itemObj?.status === 'string' ? itemObj.status : null;
+  const data = itemObj && 'data' in itemObj ? itemObj.data : item;
+  const error = typeof itemObj?.error === 'string' ? itemObj.error : null;
+  const dataObj = asObject(data);
+
+  const go = (delta: number) => setIndex((i) => {
+    const next = i + delta;
+    if (next < 0) return iterations.length - 1;
+    if (next >= iterations.length) return 0;
+    return next;
+  });
+
+  return (
+    <Section title="Iterations">
+      <div className="space-y-3">
+        <div className="flex flex-wrap items-center gap-2 text-sm">
+          <div className="inline-flex overflow-hidden rounded-md border border-neutral-200 dark:border-neutral-800">
+            <button
+              type="button"
+              onClick={() => go(-1)}
+              className="px-2 py-1 text-neutral-600 hover:bg-neutral-100 dark:text-neutral-300 dark:hover:bg-neutral-800"
+              aria-label="Previous iteration"
+            >
+              ‹
+            </button>
+            <span className="border-x border-neutral-200 px-3 py-1 font-mono text-xs tabular-nums dark:border-neutral-800">
+              {clamped + 1} / {iterations.length}
+            </span>
+            <button
+              type="button"
+              onClick={() => go(1)}
+              className="px-2 py-1 text-neutral-600 hover:bg-neutral-100 dark:text-neutral-300 dark:hover:bg-neutral-800"
+              aria-label="Next iteration"
+            >
+              ›
+            </button>
+          </div>
+          {status && (
+            <Badge variant={status === 'completed' ? 'success' : status === 'failed' ? 'error' : 'secondary'}>
+              {status}
+            </Badge>
+          )}
+          <IterationJumper count={iterations.length} value={clamped} onChange={setIndex} />
+        </div>
+        {error && <ErrorBlock value={error} />}
+        {dataObj ? (
+          <KeyValueGrid value={dataObj} />
+        ) : data !== undefined && data !== null ? (
+          <SmartValue value={data} />
+        ) : (
+          <span className="text-sm text-neutral-500 dark:text-neutral-400 italic">No data recorded for this iteration.</span>
+        )}
+      </div>
+    </Section>
+  );
+}
+
+function IterationJumper({ count, value, onChange }: { count: number; value: number; onChange: (i: number) => void }) {
+  return (
+    <label className="ml-auto flex items-center gap-1 text-xs text-neutral-500 dark:text-neutral-400">
+      <span>Jump to</span>
+      <input
+        type="number"
+        min={1}
+        max={count}
+        value={value + 1}
+        onChange={(e) => {
+          const n = Number(e.target.value);
+          if (Number.isFinite(n) && n >= 1 && n <= count) onChange(n - 1);
+        }}
+        className="w-14 rounded border border-neutral-200 bg-white px-1.5 py-0.5 text-center font-mono text-xs tabular-nums text-neutral-800 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-200"
+      />
+    </label>
   );
 }
 

@@ -387,9 +387,25 @@ function TraceNodeList({ nodes, executionStatus, definition }: { nodes: Executio
   // write_row reads like a step that runs after write_companies when
   // it's actually inside it.
   const bodyToParent = new Map<string, string>();
+  // Per-body iteration results, pulled out of the parent foreach's
+  // recorded output (`{items: [...]}`). The runtime never writes a
+  // result on the body's own trace row, so without this the body card
+  // has nothing real to show; the parent has all 51 iteration results
+  // sitting right there.
+  const iterationsByBody = new Map<string, unknown[]>();
   if (definition) {
     for (const n of definition.nodes) {
-      if (n.type === 'foreach' && n.body) bodyToParent.set(n.body.id, n.id);
+      if (n.type !== 'foreach' || !n.body) continue;
+      bodyToParent.set(n.body.id, n.id);
+      const parentTrace = latest.find((t) => t.nodeId === n.id);
+      if (!parentTrace?.output) continue;
+      try {
+        const parsed = JSON.parse(parentTrace.output);
+        const items = parsed && typeof parsed === 'object' ? (parsed as { items?: unknown }).items : null;
+        if (Array.isArray(items) && items.length > 0) iterationsByBody.set(n.body.id, items);
+      } catch {
+        // ignore — keep the trace card useful even if the payload didn't parse
+      }
     }
   }
 
@@ -397,11 +413,13 @@ function TraceNodeList({ nodes, executionStatus, definition }: { nodes: Executio
     <div className="space-y-2">
       {latest.map((node) => {
         const parentId = bodyToParent.get(node.nodeId);
+        const iterations = iterationsByBody.get(node.nodeId);
         const card = (
           <TraceNodeCard
             node={node}
             executionStatus={executionStatus}
             definition={definition}
+            iterations={iterations}
             defaultOpen={defaultExpanded.has(node.id)}
           />
         );
