@@ -3,7 +3,7 @@ import { eq } from 'drizzle-orm';
 import { createTestDb } from '../test-utils/db.js';
 import { users } from '../lib/schema/users.js';
 import { credentials, integrations, mcpOauthClients, mcpToolCache, customMcpConnectors } from '../lib/schema/index.js';
-import { actionPolicies, userActionPolicyOverrides } from '../lib/schema/actions.js';
+import { actionPolicies } from '../lib/schema/actions.js';
 import { disabledActions } from '../lib/schema/disabled-actions.js';
 import { encryptString } from '../lib/crypto.js';
 import type { AppDb } from '../lib/drizzle.js';
@@ -479,15 +479,6 @@ describe('custom MCP connector service', () => {
       mode: 'deny',
       createdBy: 'user-1',
     }).run();
-    db.insert(userActionPolicyOverrides).values({
-      id: 'override-1',
-      userId: 'user-1',
-      service: connector.serviceSlug,
-      actionId: null,
-      riskLevel: null,
-      mode: 'allow',
-    }).run();
-
     await deleteCustomMcpConnectorCascade(makeD1Batch(sqlite), appDb, connector.id);
 
     expect(db.select().from(customMcpConnectors).all()).toHaveLength(0);
@@ -497,6 +488,5 @@ describe('custom MCP connector service', () => {
     expect(db.select().from(mcpOauthClients).all()).toHaveLength(0);
     expect(db.select().from(disabledActions).all()).toHaveLength(0);
     expect(db.select().from(actionPolicies).all()).toHaveLength(0);
-    expect(db.select().from(userActionPolicyOverrides).all()).toHaveLength(0);
   });
 });

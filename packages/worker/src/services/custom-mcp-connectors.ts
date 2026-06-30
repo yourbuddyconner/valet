@@ -311,7 +311,7 @@ export async function deleteCustomMcpConnectorCascade(
     d1.prepare('DELETE FROM mcp_oauth_clients WHERE service = ?').bind(service),
     d1.prepare('DELETE FROM disabled_actions WHERE service = ?').bind(service),
     d1.prepare('DELETE FROM action_policies WHERE service = ?').bind(service),
-    d1.prepare('DELETE FROM user_action_policy_overrides WHERE service = ?').bind(service),
+    d1.prepare('DELETE FROM runtime_grants WHERE service = ?').bind(service),
     d1.prepare('DELETE FROM custom_mcp_connectors WHERE id = ?').bind(id),
   ]);
 }

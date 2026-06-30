@@ -77,35 +77,6 @@ export const runtimeGrants = sqliteTable('runtime_grants', {
 // Note: Unique policy_key indexes (per-session, per-execution) and lookup
 // indexes are partial-WHERE indexes defined in migration 0022.
 
-/**
- * Legacy user-managed override table. Migration 0022 backfills every row
- * into action_policies (persistent / timed) or runtime_grants (session) and
- * leaves this table populated for the existing resolver. The next commit
- * retires reads/writes; a follow-up migration drops it.
- */
-export const userActionPolicyOverrides = sqliteTable('user_action_policy_overrides', {
-  id: text().primaryKey(),
-  userId: text().notNull().references(() => users.id, { onDelete: 'cascade' }),
-  // IntegrationPackage.service id. Intentionally mirrors action_policies.service.
-  service: text(),
-  actionId: text(),
-  riskLevel: text(),
-  mode: text().notNull(),
-  lifetime: text().notNull().default('persistent'),
-  sessionId: text().references(() => sessions.id, { onDelete: 'cascade' }),
-  expiresAt: text(),
-  source: text().notNull().default('settings'),
-  sourceInvocationId: text(),
-  createdAt: text().notNull().default(sql`(datetime('now'))`),
-  updatedAt: text().notNull().default(sql`(datetime('now'))`),
-}, (table) => [
-  index('idx_uapo_user').on(table.userId),
-  index('idx_uapo_session').on(table.sessionId),
-  index('idx_uapo_expires').on(table.expiresAt),
-]);
-// Note: Partial unique indexes for user overrides are defined in the migration SQL.
-// Drizzle's SQLite index builder does not support WHERE clauses.
-
 export const actionInvocations = sqliteTable('action_invocations', {
   id: text().primaryKey(),
   // session_id is nullable as of migration 0019. SET NULL on both
@@ -132,7 +103,7 @@ export const actionInvocations = sqliteTable('action_invocations', {
   orgPolicyId: text().references(() => actionPolicies.id, { onDelete: 'set null' }),
   baseMode: text(),
   baseSource: text(),
-  userOverrideId: text().references(() => userActionPolicyOverrides.id, { onDelete: 'set null' }),
+  userOverrideId: text(),
   policySource: text(),
   policyLifetime: text(),
   policyScope: text(),

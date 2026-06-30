@@ -253,11 +253,24 @@ describe('0022_unified_action_policies', () => {
     });
   });
 
-  describe('UAPO table retention', () => {
-    it('leaves user_action_policy_overrides populated for the existing resolver', () => {
+  describe('user_action_policy_overrides retirement', () => {
+    it('drops the user_action_policy_overrides table — every row has already been migrated by this point', () => {
       applyMigration(sqlite, MIGRATION);
-      const rows = sqlite.prepare(`SELECT id FROM user_action_policy_overrides`).all() as Array<{ id: string }>;
-      expect(rows).toHaveLength(3);
+      const row = sqlite
+        .prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='user_action_policy_overrides'`)
+        .get();
+      expect(row).toBeUndefined();
+    });
+
+    it('preserves action_invocations.user_override_id values for historical audit', () => {
+      applyMigration(sqlite, MIGRATION);
+      // The FK is dangling after the table drop, but the data stays —
+      // historical rows can still be correlated with the migrated grants
+      // whose ids were preserved by steps 6/7.
+      const persist = sqlite
+        .prepare(`SELECT user_override_id FROM action_invocations WHERE id = ?`)
+        .get('inv_persist') as { user_override_id: string };
+      expect(persist.user_override_id).toBe('uapo_persist');
     });
   });
 

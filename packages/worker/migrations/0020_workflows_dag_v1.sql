@@ -161,7 +161,7 @@ CREATE TABLE action_invocations_new (
   org_policy_id TEXT REFERENCES action_policies(id) ON DELETE SET NULL,
   base_mode TEXT,
   base_source TEXT,
-  user_override_id TEXT REFERENCES user_action_policy_overrides(id) ON DELETE SET NULL,
+  user_override_id TEXT,
   policy_source TEXT,
   policy_lifetime TEXT,
   policy_scope TEXT,

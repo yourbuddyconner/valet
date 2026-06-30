@@ -353,3 +353,5 @@ WHERE wa.kind = 'explicit'
 DROP INDEX IF EXISTS idx_wa_execution;
 DROP INDEX IF EXISTS idx_wa_pending;
 DROP TABLE workflow_approvals;
+
+DROP TABLE user_action_policy_overrides;
