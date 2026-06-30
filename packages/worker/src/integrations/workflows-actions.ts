@@ -8,8 +8,26 @@ import {
   getWorkflowByIdOrSlug,
   listWorkflows,
   parseExecutionTriggerData,
+  scheduleTarget,
+  requiresWorkflow,
+  listTriggers,
+  getTrigger,
+  getWorkflowForTrigger,
+  checkWebhookPathUniqueness,
+  createTrigger,
+  generateWebhookToken,
+  getTriggerForUpdate,
+  updateTrigger,
+  deleteTrigger,
+  enableTrigger,
+  disableTrigger,
+  type TriggerConfig,
 } from '../lib/db.js';
 import { createWorkflow } from '../services/workflows.js';
+// Note: services/triggers.ts (used by triggers.run) is imported lazily
+// in runTriggerAction to break a load-time cycle:
+//   workflows-actions → triggers → orchestrator → env-assembly →
+//   credentials → integrations/registry → workflows-actions.
 import {
   getDraft,
   getPublishedDefinition,
@@ -218,6 +236,203 @@ const workflowExecutionOutputSchema = {
   },
 } satisfies Record<string, unknown>;
 
+// ─── trigger zod params + JSON schemas ───────────────────────────────
+
+const webhookConfigSchema = z.object({
+  type: z.literal('webhook'),
+  path: z.string().min(1),
+  method: z.enum(['GET', 'POST']).optional().default('POST'),
+  secret: z.string().optional(),
+  headers: z.record(z.string()).optional(),
+  rateLimit: z.number().int().positive().max(10000).optional(),
+});
+
+const scheduleConfigSchema = z.object({
+  type: z.literal('schedule'),
+  cron: z.string().min(1),
+  timezone: z.string().optional(),
+  target: z.enum(['workflow', 'orchestrator']).optional().default('workflow'),
+  prompt: z.string().min(1).max(100000).optional(),
+  triggerData: z.record(z.unknown()).optional(),
+});
+
+const manualConfigSchema = z.object({ type: z.literal('manual') });
+
+const triggerConfigSchema = z.discriminatedUnion('type', [
+  webhookConfigSchema,
+  scheduleConfigSchema,
+  manualConfigSchema,
+]);
+
+const triggerIdParam = z.object({
+  triggerId: z.string().min(1).describe('Trigger ID.'),
+});
+
+const triggersListParams = z.object({
+  workflowId: z.string().min(1).optional(),
+});
+
+const triggerCreateParams = z.object({
+  workflowId: z.string().min(1).optional(),
+  name: z.string().min(1),
+  enabled: z.boolean().optional().default(true),
+  config: triggerConfigSchema,
+  variableMapping: z.record(z.string()).optional(),
+}).superRefine((value, ctx) => {
+  if (value.config.type === 'schedule' && scheduleTarget(value.config) === 'orchestrator' && !value.config.prompt?.trim()) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Schedule triggers targeting orchestrator require a prompt', path: ['config', 'prompt'] });
+  }
+  if (requiresWorkflow(value.config) && !value.workflowId) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'workflowId is required for this trigger type', path: ['workflowId'] });
+  }
+});
+
+const triggerUpdateParams = z.object({
+  triggerId: z.string().min(1),
+  workflowId: z.string().min(1).nullable().optional(),
+  name: z.string().min(1).optional(),
+  enabled: z.boolean().optional(),
+  config: triggerConfigSchema.optional(),
+  variableMapping: z.record(z.string()).optional(),
+});
+
+const triggerRunParams = z.object({
+  triggerId: z.string().min(1),
+  triggerData: z.record(z.unknown()).optional(),
+  variables: z.record(z.unknown()).optional(),
+  clientRequestId: z.string().min(8).max(64).optional(),
+});
+
+const triggerConfigJsonSchema = { type: 'object', additionalProperties: true } as const;
+
+const triggerSummaryOutputSchema = {
+  type: 'object',
+  properties: {
+    id: { type: 'string' },
+    workflowId: { type: ['string', 'null'] },
+    workflowName: { type: ['string', 'null'] },
+    name: { type: 'string' },
+    enabled: { type: 'boolean' },
+    type: { type: 'string', enum: ['webhook', 'schedule', 'manual'] },
+    config: triggerConfigJsonSchema,
+    variableMapping: { type: ['object', 'null'], additionalProperties: { type: 'string' } },
+    lastRunAt: { type: ['string', 'null'] },
+    createdAt: { type: 'string' },
+    updatedAt: { type: 'string' },
+  },
+  additionalProperties: true,
+} satisfies Record<string, unknown>;
+
+const triggerDetailOutputSchema = {
+  type: 'object',
+  properties: {
+    trigger: {
+      type: 'object',
+      properties: {
+        ...triggerSummaryOutputSchema.properties,
+        webhookUrl: { type: ['string', 'null'], description: 'Set only for webhook triggers.' },
+      },
+      additionalProperties: true,
+    },
+  },
+} satisfies Record<string, unknown>;
+
+const triggersListOutputSchema = {
+  type: 'object',
+  properties: { triggers: { type: 'array', items: triggerSummaryOutputSchema } },
+} satisfies Record<string, unknown>;
+
+const triggerCreateInputSchema = {
+  type: 'object',
+  required: ['name', 'config'],
+  properties: {
+    name: { type: 'string', description: 'Human-readable trigger name.' },
+    workflowId: { type: 'string', description: 'Workflow to fire. Required for webhook and workflow-target schedule triggers.' },
+    enabled: { type: 'boolean', description: 'Defaults to true.' },
+    config: {
+      type: 'object',
+      description: 'Discriminated union: { type: "webhook", path, method?, secret?, headers?, rateLimit? } | { type: "schedule", cron, timezone?, target?, prompt?, triggerData? } | { type: "manual" }',
+      additionalProperties: true,
+    },
+    variableMapping: { type: 'object', additionalProperties: { type: 'string' }, description: 'Optional mapping from incoming payload fields to workflow variables.' },
+  },
+  additionalProperties: false,
+} as const;
+
+const triggerCreateOutputSchema = {
+  type: 'object',
+  properties: {
+    id: { type: 'string' },
+    workflowId: { type: ['string', 'null'] },
+    name: { type: 'string' },
+    enabled: { type: 'boolean' },
+    type: { type: 'string' },
+    config: triggerConfigJsonSchema,
+    variableMapping: { type: ['object', 'null'], additionalProperties: { type: 'string' } },
+    webhookUrl: { type: ['string', 'null'] },
+    webhookToken: { type: ['string', 'null'], description: 'One-time webhook auth token. Persist this now — it is never echoed again.' },
+    createdAt: { type: 'string' },
+    updatedAt: { type: 'string' },
+  },
+} satisfies Record<string, unknown>;
+
+const triggerUpdateInputSchema = {
+  type: 'object',
+  required: ['triggerId'],
+  properties: {
+    triggerId: { type: 'string', description: 'Trigger ID.' },
+    name: { type: 'string' },
+    enabled: { type: 'boolean' },
+    workflowId: { type: ['string', 'null'], description: 'Pass null to detach from a workflow (only valid when the resulting trigger config does not require one).' },
+    config: { type: 'object', description: 'Replacement config. Same discriminated-union shape as triggers.create.', additionalProperties: true },
+    variableMapping: { type: 'object', additionalProperties: { type: 'string' } },
+  },
+  additionalProperties: false,
+} as const;
+
+const triggerUpdateOutputSchema = {
+  type: 'object',
+  properties: {
+    success: { type: 'boolean' },
+    updatedAt: { type: 'string' },
+    webhookToken: { type: ['string', 'null'], description: 'Set only when an update transitioned the trigger into a webhook type.' },
+    webhookUrl: { type: ['string', 'null'] },
+  },
+} satisfies Record<string, unknown>;
+
+const triggerSuccessOutputSchema = {
+  type: 'object',
+  properties: { success: { type: 'boolean' } },
+} satisfies Record<string, unknown>;
+
+const triggerRunInputSchema = {
+  type: 'object',
+  required: ['triggerId'],
+  properties: {
+    triggerId: { type: 'string' },
+    triggerData: { type: 'object', description: 'Payload exposed as {{trigger.data}} during the run.', additionalProperties: true },
+    variables: { type: 'object', description: 'Variable overrides for this run.', additionalProperties: true },
+    clientRequestId: { type: 'string', description: 'Optional idempotency key.' },
+  },
+  additionalProperties: false,
+} as const;
+
+const triggerRunOutputSchema = {
+  type: 'object',
+  properties: {
+    ok: { type: 'boolean' },
+    executionId: { type: ['string', 'null'] },
+    workflowId: { type: ['string', 'null'] },
+    workflowName: { type: ['string', 'null'] },
+    status: { type: ['string', 'null'] },
+    sessionId: { type: ['string', 'null'], description: 'Set when the trigger fired the orchestrator.' },
+    reason: { type: ['string', 'null'], description: 'When ok=false, one of: rate_limited, duplicate, orchestrator_failed.' },
+    error: { type: ['string', 'null'] },
+    variables: { type: ['object', 'null'], additionalProperties: true },
+  },
+  additionalProperties: true,
+} satisfies Record<string, unknown>;
+
 const actions: ActionDefinition[] = [
   {
     id: 'workflows.list',
@@ -416,6 +631,105 @@ const actions: ActionDefinition[] = [
     },
     outputSchema: workflowExecutionOutputSchema,
   },
+  // ─── triggers ────────────────────────────────────────────────────
+  {
+    id: 'triggers.list',
+    name: 'List triggers',
+    description: 'List automation triggers owned by the current user. Returns id, name, type (webhook/schedule/manual), enabled state, config, and last-run timestamp for each.',
+    riskLevel: 'low',
+    params: triggersListParams,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        workflowId: { type: 'string', description: 'Optional: only return triggers attached to this workflow.' },
+      },
+      additionalProperties: false,
+    },
+    outputSchema: triggersListOutputSchema,
+  },
+  {
+    id: 'triggers.get',
+    name: 'Get trigger',
+    description: 'Get a single trigger by ID. Returns full config and (for webhook triggers) the publicly-callable webhook URL. Never returns the webhook auth token; that is only shown once at create-time.',
+    riskLevel: 'low',
+    params: triggerIdParam,
+    inputSchema: {
+      type: 'object',
+      required: ['triggerId'],
+      properties: { triggerId: { type: 'string', description: 'Trigger ID.' } },
+      additionalProperties: false,
+    },
+    outputSchema: triggerDetailOutputSchema,
+  },
+  {
+    id: 'triggers.create',
+    name: 'Create trigger',
+    description: 'Create a new trigger. Webhook triggers return a one-time webhookToken — store it; the GET/PATCH endpoints never echo it again. Schedule triggers run on a cron expression and may target either a workflow or the orchestrator (with a prompt). Manual triggers fire only via triggers.run.',
+    riskLevel: 'medium',
+    params: triggerCreateParams,
+    inputSchema: triggerCreateInputSchema,
+    outputSchema: triggerCreateOutputSchema,
+  },
+  {
+    id: 'triggers.update',
+    name: 'Update trigger',
+    description: 'Update name, enabled state, config, workflow binding, or variable mapping. Transitioning to webhook type mints a new token (returned once); transitioning away clears the token. Other fields can be PATCHed independently.',
+    riskLevel: 'medium',
+    params: triggerUpdateParams,
+    inputSchema: triggerUpdateInputSchema,
+    outputSchema: triggerUpdateOutputSchema,
+  },
+  {
+    id: 'triggers.delete',
+    name: 'Delete trigger',
+    description: 'Permanently delete a trigger. Webhook URLs and schedule cron entries stop firing immediately. Existing executions are not affected.',
+    riskLevel: 'high',
+    params: triggerIdParam,
+    inputSchema: {
+      type: 'object',
+      required: ['triggerId'],
+      properties: { triggerId: { type: 'string', description: 'Trigger ID.' } },
+      additionalProperties: false,
+    },
+    outputSchema: triggerSuccessOutputSchema,
+  },
+  {
+    id: 'triggers.enable',
+    name: 'Enable trigger',
+    description: 'Re-enable a paused trigger. The trigger will fire on its next webhook/schedule event.',
+    riskLevel: 'low',
+    params: triggerIdParam,
+    inputSchema: {
+      type: 'object',
+      required: ['triggerId'],
+      properties: { triggerId: { type: 'string', description: 'Trigger ID.' } },
+      additionalProperties: false,
+    },
+    outputSchema: triggerSuccessOutputSchema,
+  },
+  {
+    id: 'triggers.disable',
+    name: 'Disable trigger',
+    description: 'Pause a trigger without deleting it. Webhook calls will return an error and schedule firings will be skipped until re-enabled.',
+    riskLevel: 'medium',
+    params: triggerIdParam,
+    inputSchema: {
+      type: 'object',
+      required: ['triggerId'],
+      properties: { triggerId: { type: 'string', description: 'Trigger ID.' } },
+      additionalProperties: false,
+    },
+    outputSchema: triggerSuccessOutputSchema,
+  },
+  {
+    id: 'triggers.run',
+    name: 'Run trigger',
+    description: 'Fire a trigger immediately, bypassing the schedule or webhook entry-point. Pass triggerData to override the static payload (schedule triggers) or supply a fresh payload (manual triggers). Returns the started execution; use workflows.get_execution to inspect progress.',
+    riskLevel: 'medium',
+    params: triggerRunParams,
+    inputSchema: triggerRunInputSchema,
+    outputSchema: triggerRunOutputSchema,
+  },
 ];
 
 export const workflowProvider: IntegrationProvider = {
@@ -476,6 +790,22 @@ export const workflowActions: ActionSource = {
           return ok(await getExecutionAction(context.env, context.userId, z.object({
             executionId: z.string().min(1),
           }).parse(params)));
+        case 'triggers.list':
+          return ok(await listTriggersAction(context.env, context.userId, triggersListParams.parse(params)));
+        case 'triggers.get':
+          return ok(await getTriggerAction(context.env, context.userId, triggerIdParam.parse(params)));
+        case 'triggers.create':
+          return ok(await createTriggerAction(context.env, context.userId, triggerCreateParams.parse(params)));
+        case 'triggers.update':
+          return ok(await updateTriggerAction(context.env, context.userId, triggerUpdateParams.parse(params)));
+        case 'triggers.delete':
+          return ok(await deleteTriggerAction(context.env, context.userId, triggerIdParam.parse(params)));
+        case 'triggers.enable':
+          return ok(await enableTriggerAction(context.env, context.userId, triggerIdParam.parse(params)));
+        case 'triggers.disable':
+          return ok(await disableTriggerAction(context.env, context.userId, triggerIdParam.parse(params)));
+        case 'triggers.run':
+          return ok(await runTriggerAction(context.env, context.userId, triggerRunParams.parse(params)));
         default:
           return { success: false, error: `Unknown workflow action "${actionId}".` };
       }
@@ -911,6 +1241,254 @@ async function getExecutionAction(
 
 function ok(data: unknown): ActionResult {
   return { success: true, data };
+}
+
+// ─── trigger handlers ────────────────────────────────────────────────
+
+/**
+ * Build a public webhook URL. Falls back to the worker's own origin
+ * via env.API_PUBLIC_URL; the route handler does the same when
+ * c.req.header('host') is unavailable.
+ */
+function webhookUrlFor(env: Env, triggerId: string): string | null {
+  const base = env.API_PUBLIC_URL?.replace(/\/$/, '');
+  if (!base) return null;
+  return `${base}/api/triggers/${triggerId}/webhook`;
+}
+
+async function listTriggersAction(env: Env, userId: string, params: { workflowId?: string }) {
+  const result = await listTriggers(env.DB, userId);
+  let rows = result.results;
+  if (params.workflowId) rows = rows.filter((r) => r.workflow_id === params.workflowId);
+  return {
+    triggers: rows.map((row) => ({
+      id: row.id,
+      workflowId: row.workflow_id,
+      workflowName: row.workflow_name,
+      name: row.name,
+      enabled: Boolean(row.enabled),
+      type: row.type,
+      config: JSON.parse(row.config as string),
+      variableMapping: row.variable_mapping ? JSON.parse(row.variable_mapping as string) : null,
+      lastRunAt: row.last_run_at,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    })),
+  };
+}
+
+async function getTriggerAction(env: Env, userId: string, params: { triggerId: string }) {
+  const row = await getTrigger(env.DB, userId, params.triggerId);
+  if (!row) throw new Error(`trigger ${params.triggerId} not found`);
+  return {
+    trigger: {
+      id: row.id,
+      workflowId: row.workflow_id,
+      workflowName: row.workflow_name,
+      name: row.name,
+      enabled: Boolean(row.enabled),
+      type: row.type,
+      config: JSON.parse(row.config as string),
+      variableMapping: row.variable_mapping ? JSON.parse(row.variable_mapping as string) : null,
+      webhookUrl: row.type === 'webhook' ? webhookUrlFor(env, row.id as string) : null,
+      lastRunAt: row.last_run_at,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    },
+  };
+}
+
+async function createTriggerAction(
+  env: Env,
+  userId: string,
+  params: z.infer<typeof triggerCreateParams>,
+) {
+  const db = (await import('../lib/drizzle.js')).getDb(env.DB);
+
+  let workflowId: string | null = null;
+  const needsWorkflow = requiresWorkflow(params.config);
+  if (needsWorkflow || params.workflowId) {
+    const workflow = await getWorkflowForTrigger(db, userId, params.workflowId ?? '');
+    if (!workflow) throw new Error(`workflow ${params.workflowId ?? '<missing>'} not found`);
+    workflowId = workflow.id;
+  }
+
+  if (params.config.type === 'webhook') {
+    const conflict = await checkWebhookPathUniqueness(env.DB, params.config.path);
+    if (conflict) throw new Error(`webhook path "${params.config.path}" already in use`);
+  }
+
+  const id = crypto.randomUUID();
+  const now = new Date().toISOString();
+  const webhookToken = params.config.type === 'webhook' ? generateWebhookToken() : null;
+
+  await createTrigger(db, {
+    id,
+    userId,
+    workflowId,
+    name: params.name,
+    enabled: params.enabled,
+    type: params.config.type,
+    config: JSON.stringify(params.config),
+    variableMapping: params.variableMapping ? JSON.stringify(params.variableMapping) : null,
+    now,
+    webhookToken,
+  });
+
+  return {
+    id,
+    workflowId,
+    name: params.name,
+    enabled: params.enabled,
+    type: params.config.type,
+    config: params.config,
+    variableMapping: params.variableMapping ?? null,
+    webhookUrl: params.config.type === 'webhook' ? webhookUrlFor(env, id) : null,
+    webhookToken,
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
+async function updateTriggerAction(
+  env: Env,
+  userId: string,
+  params: z.infer<typeof triggerUpdateParams>,
+) {
+  const db = (await import('../lib/drizzle.js')).getDb(env.DB);
+  const existing = await getTriggerForUpdate(db, userId, params.triggerId);
+  if (!existing) throw new Error(`trigger ${params.triggerId} not found`);
+
+  const currentConfig = JSON.parse(existing.config) as TriggerConfig;
+  const nextConfig = params.config ?? currentConfig;
+  let nextWorkflowId = params.workflowId !== undefined ? params.workflowId : existing.workflow_id;
+
+  if (nextConfig.type === 'schedule' && scheduleTarget(nextConfig) === 'orchestrator' && !nextConfig.prompt?.trim()) {
+    throw new Error('Schedule triggers targeting orchestrator require a prompt');
+  }
+  if (requiresWorkflow(nextConfig) && !nextWorkflowId) {
+    throw new Error('workflowId is required for this trigger type');
+  }
+  if (nextWorkflowId) {
+    const workflow = await getWorkflowForTrigger(db, userId, nextWorkflowId);
+    if (!workflow) throw new Error(`workflow ${nextWorkflowId} not found`);
+    nextWorkflowId = workflow.id;
+  }
+  if (nextConfig.type === 'webhook') {
+    const conflict = await checkWebhookPathUniqueness(env.DB, nextConfig.path, params.triggerId);
+    if (conflict) throw new Error(`webhook path "${nextConfig.path}" already in use`);
+  }
+
+  const now = new Date().toISOString();
+  const updates: string[] = [];
+  const values: unknown[] = [];
+
+  if (params.name !== undefined) { updates.push('name = ?'); values.push(params.name); }
+  if (params.enabled !== undefined) { updates.push('enabled = ?'); values.push(params.enabled ? 1 : 0); }
+  if (params.workflowId !== undefined || (params.config && !requiresWorkflow(params.config))) {
+    updates.push('workflow_id = ?');
+    values.push(nextWorkflowId);
+  }
+  if (params.config !== undefined) {
+    updates.push('type = ?'); updates.push('config = ?');
+    values.push(params.config.type); values.push(JSON.stringify(params.config));
+  }
+  if (params.variableMapping !== undefined) {
+    updates.push('variable_mapping = ?');
+    values.push(JSON.stringify(params.variableMapping));
+  }
+
+  let mintedWebhookToken: string | null = null;
+  if (params.config !== undefined) {
+    const becameWebhook = nextConfig.type === 'webhook' && existing.type !== 'webhook';
+    const leftWebhook = nextConfig.type !== 'webhook' && existing.type === 'webhook';
+    if (becameWebhook) {
+      mintedWebhookToken = generateWebhookToken();
+      updates.push('webhook_token = ?'); values.push(mintedWebhookToken);
+    } else if (leftWebhook) {
+      updates.push('webhook_token = ?'); values.push(null);
+    }
+  }
+
+  updates.push('updated_at = ?'); values.push(now); values.push(params.triggerId);
+
+  await updateTrigger(env.DB, params.triggerId, userId, updates, values);
+
+  return {
+    success: true,
+    updatedAt: now,
+    webhookToken: mintedWebhookToken,
+    webhookUrl: mintedWebhookToken ? webhookUrlFor(env, params.triggerId) : null,
+  };
+}
+
+async function deleteTriggerAction(env: Env, userId: string, params: { triggerId: string }) {
+  const db = (await import('../lib/drizzle.js')).getDb(env.DB);
+  const result = await deleteTrigger(db, params.triggerId, userId);
+  if (result.meta.changes === 0) throw new Error(`trigger ${params.triggerId} not found`);
+  return { success: true };
+}
+
+async function enableTriggerAction(env: Env, userId: string, params: { triggerId: string }) {
+  const db = (await import('../lib/drizzle.js')).getDb(env.DB);
+  const result = await enableTrigger(db, params.triggerId, userId, new Date().toISOString());
+  if (result.meta.changes === 0) throw new Error(`trigger ${params.triggerId} not found`);
+  return { success: true };
+}
+
+async function disableTriggerAction(env: Env, userId: string, params: { triggerId: string }) {
+  const db = (await import('../lib/drizzle.js')).getDb(env.DB);
+  const result = await disableTrigger(db, params.triggerId, userId, new Date().toISOString());
+  if (result.meta.changes === 0) throw new Error(`trigger ${params.triggerId} not found`);
+  return { success: true };
+}
+
+async function runTriggerAction(
+  env: Env,
+  userId: string,
+  params: z.infer<typeof triggerRunParams>,
+) {
+  const body: Record<string, unknown> & {
+    clientRequestId?: string;
+    variables?: Record<string, unknown>;
+    triggerData?: Record<string, unknown>;
+  } = {};
+  if (params.clientRequestId) body.clientRequestId = params.clientRequestId;
+  if (params.variables) body.variables = params.variables;
+  if (params.triggerData) body.triggerData = params.triggerData;
+
+  const { runTrigger } = await import('../services/triggers.js');
+  const result = await runTrigger(env, params.triggerId, userId, body);
+  if (result.ok) {
+    if (result.type === 'workflow') {
+      return {
+        ok: true,
+        executionId: result.executionId,
+        workflowId: result.workflowId,
+        workflowName: result.workflowName,
+        status: 'queued',
+        variables: result.variables,
+      };
+    }
+    return {
+      ok: true,
+      workflowId: result.workflowId,
+      workflowName: result.workflowName,
+      sessionId: result.sessionId,
+      status: 'dispatched',
+    };
+  }
+  return {
+    ok: false,
+    reason: result.reason,
+    error: 'error' in result ? result.error : null,
+    workflowId: 'workflowId' in result ? result.workflowId : null,
+    workflowName: 'workflowName' in result ? result.workflowName : null,
+    sessionId: 'sessionId' in result ? result.sessionId : null,
+    executionId: 'executionId' in result ? result.executionId : null,
+    status: 'status' in result ? result.status : null,
+    variables: 'variables' in result ? result.variables : null,
+  };
 }
 
 function formatWorkflowActionError(err: unknown): string {

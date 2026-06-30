@@ -33,8 +33,17 @@ describe('workflowActions', () => {
       'workflows.publish',
       'workflows.test_run',
       'workflows.get_execution',
+      'triggers.list',
+      'triggers.get',
+      'triggers.create',
+      'triggers.update',
+      'triggers.delete',
+      'triggers.enable',
+      'triggers.disable',
+      'triggers.run',
     ]);
     expect(actions.find((action) => action.id === 'workflows.publish')?.riskLevel).toBe('high');
+    expect(actions.find((action) => action.id === 'triggers.delete')?.riskLevel).toBe('high');
   });
 
   it('lists workflows owned by the calling user', async () => {
