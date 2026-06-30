@@ -1,27 +1,23 @@
-import { memo } from 'react';
+import { Fragment, useState, type ReactNode } from 'react';
 import { decode as decodeToon } from '@toon-format/toon';
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
-import { ToolCardShell, ToolCardSection, ToolCodeBlock } from './tool-card-shell';
+import { ToolCardShell, ToolCardSection } from './tool-card-shell';
 import { WrenchIcon } from './icons';
 import type { ToolCallData } from './types';
-// Reuse the trace-card value renderers — recursive KV grids, long
-// strings expand in place (no tooltip-only truncation), nested objects
-// indent, URLs/dates render as themselves. Same UX in both places.
-import { SmartValue, KeyValueGrid } from '@/components/workflows/trace-node-card';
 
 // ---------------------------------------------------------------------------
-// Data helpers
+// Parsing helpers
 // ---------------------------------------------------------------------------
 
 function tryParseJson(value: unknown): unknown | null {
   if (value == null) return null;
-  if (typeof value === 'object') return value; // already parsed object/array
-  if (typeof value === 'boolean' || typeof value === 'number') return value; // already primitives
+  if (typeof value === 'object') return value;
+  if (typeof value === 'boolean' || typeof value === 'number') return value;
   if (typeof value !== 'string') return null;
   try {
     return JSON.parse(value);
   } catch {
-    // Tool results may be TOON-encoded (token-efficient format used for LLM context)
+    // Tool results may be TOON-encoded (token-efficient format used for
+    // LLM context). Fall back to decoding before giving up.
     try {
       return decodeToon(value);
     } catch {
@@ -30,298 +26,236 @@ function tryParseJson(value: unknown): unknown | null {
   }
 }
 
-type Shape = 'table' | 'kv' | 'scalar' | 'json';
-
-function detectShape(data: unknown): Shape {
-  if (data == null || typeof data === 'string' || typeof data === 'number' || typeof data === 'boolean') {
-    return 'scalar';
-  }
-
-  if (Array.isArray(data)) {
-    // Need 2+ object items where each has ≥50% of the union key set
-    const objects = data.filter((d): d is Record<string, unknown> => d != null && typeof d === 'object' && !Array.isArray(d));
-    if (objects.length >= 2) {
-      const allKeys = new Set<string>();
-      for (const obj of objects) {
-        for (const k of Object.keys(obj)) allKeys.add(k);
+/**
+ * Walk a parsed payload and one-level-unwrap any string values that
+ * look like JSON-encoded objects/arrays. This is the common case where
+ * a tool serialises a sub-payload as a string (e.g. `call_tool`'s
+ * `params` field). We only unwrap obvious cases (`{...}` or `[...]`),
+ * not free-text that happens to contain brackets.
+ */
+function normalisePayload(value: unknown): unknown {
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (trimmed.length >= 2) {
+      const first = trimmed[0];
+      const last = trimmed[trimmed.length - 1];
+      if ((first === '{' && last === '}') || (first === '[' && last === ']')) {
+        try {
+          return normalisePayload(JSON.parse(trimmed));
+        } catch {
+          /* fall through */
+        }
       }
-      const threshold = allKeys.size * 0.5;
-      const uniform = objects.every((obj) => Object.keys(obj).length >= threshold);
-      if (uniform) return 'table';
     }
-    return 'json';
+    return value;
   }
-
-  if (typeof data === 'object') {
-    // Flat-ish object → kv
-    const values = Object.values(data as Record<string, unknown>);
-    const nestedCount = values.filter((v) => v != null && typeof v === 'object').length;
-    // If more than half of the values are nested objects, treat as json
-    if (values.length > 0 && nestedCount > values.length * 0.6) return 'json';
-    return 'kv';
+  if (Array.isArray(value)) {
+    return value.map(normalisePayload);
   }
-
-  return 'json';
-}
-
-/** Pick the most meaningful columns for display, skipping all-null columns */
-function selectColumns(rows: Record<string, unknown>[], maxCols: number = 8): { visible: string[]; hidden: string[] } {
-  const allKeys = new Set<string>();
-  for (const row of rows) {
-    for (const k of Object.keys(row)) allKeys.add(k);
+  if (value && typeof value === 'object') {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      out[k] = normalisePayload(v);
+    }
+    return out;
   }
-
-  // Filter out columns that are all null/undefined
-  const nonEmpty = [...allKeys].filter((key) =>
-    rows.some((row) => row[key] != null && row[key] !== ''),
-  );
-
-  // Prioritize common "name/id/title" keys first, then the rest
-  const priority = ['name', 'title', 'id', 'label', 'description', 'type', 'status', 'slug', 'key', 'value', 'email', 'handle'];
-  const sorted = nonEmpty.sort((a, b) => {
-    const ai = priority.indexOf(a.toLowerCase());
-    const bi = priority.indexOf(b.toLowerCase());
-    if (ai !== -1 && bi !== -1) return ai - bi;
-    if (ai !== -1) return -1;
-    if (bi !== -1) return 1;
-    return 0;
-  });
-
-  return {
-    visible: sorted.slice(0, maxCols),
-    hidden: sorted.slice(maxCols),
-  };
+  return value;
 }
 
 // ---------------------------------------------------------------------------
-// Value renderers
+// JSON renderer
+//
+// The body of every tool card is just pretty-printed JSON with subtle
+// syntax highlighting. One column. Predictable. Copy-pasteable.
+// Multi-line strings are rendered in place with proper indentation
+// (newlines preserved, not escaped). URLs are clickable.
 // ---------------------------------------------------------------------------
 
-const URL_REGEX = /https?:\/\/[^\s"'<>]+/g;
+const INDENT = '  ';
+const URL_REGEX = /https?:\/\/[^\s"'<>)]+/g;
+const MAX_CHARS = 3000;
 
-/** Render a string with URLs as clickable links */
-function Linkify({ text, truncate }: { text: string; truncate?: number }) {
-  const matches = [...text.matchAll(URL_REGEX)];
-  if (matches.length === 0) {
-    const display = truncate && text.length > truncate ? text.slice(0, truncate) + '...' : text;
-    return <>{display}</>;
-  }
-
-  const parts: React.ReactNode[] = [];
-  let lastIndex = 0;
-  for (const match of matches) {
-    const url = match[0];
-    const start = match.index!;
-    if (start > lastIndex) {
-      parts.push(text.slice(lastIndex, start));
-    }
-    const displayUrl = truncate && url.length > truncate ? url.slice(0, truncate) + '...' : url;
-    parts.push(
-      <a
-        key={start}
-        href={url}
-        target="_blank"
-        rel="noopener noreferrer"
-        className="text-blue-500 hover:text-blue-400 hover:underline dark:text-blue-400 dark:hover:text-blue-300"
-      >
-        {displayUrl}
-      </a>,
-    );
-    lastIndex = start + url.length;
-  }
-  if (lastIndex < text.length) {
-    parts.push(text.slice(lastIndex));
-  }
-  return <>{parts}</>;
-}
-
-const CellValue = memo(function CellValue({ value }: { value: unknown }) {
-  if (value === null || value === undefined) {
-    return <span className="text-neutral-300 dark:text-neutral-600">&mdash;</span>;
-  }
-  if (typeof value === 'boolean') {
-    return (
-      <span className={value ? 'text-emerald-600 dark:text-emerald-400' : 'text-neutral-400 dark:text-neutral-500'}>
-        {value ? 'true' : 'false'}
-      </span>
-    );
-  }
-  if (typeof value === 'number') {
-    return <span className="tabular-nums">{value}</span>;
-  }
-  if (typeof value === 'object') {
-    const s = JSON.stringify(value);
-    const display = s.length > 60 ? s.slice(0, 60) + '...' : s;
-    return <span className="text-neutral-500 dark:text-neutral-500">{display}</span>;
-  }
-  const str = String(value);
-  return <Linkify text={str} truncate={80} />;
-});
-
-/** Format a value as a full string for tooltip display */
-function formatFullValue(value: unknown): string | null {
-  if (value == null) return null;
-  if (typeof value === 'boolean' || typeof value === 'number') return null; // not worth a tooltip
-  if (typeof value === 'object') return JSON.stringify(value, null, 2);
-  const str = String(value);
-  return str.length > 30 ? str : null; // only tooltip for values that might be truncated
-}
-
-/** Wraps content in a Radix Tooltip showing the full value on hover */
-function ValueTooltip({ value, children }: { value: unknown; children: React.ReactNode }) {
-  const full = formatFullValue(value);
-  if (!full) return <>{children}</>;
+export function ToolPayload({ value }: { value: unknown }) {
+  const normalised = normalisePayload(value);
+  const approxSize = approxJsonSize(normalised);
+  const [showAll, setShowAll] = useState(approxSize <= MAX_CHARS);
 
   return (
-    <TooltipProvider delayDuration={200}>
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <span className="cursor-default">{children}</span>
-        </TooltipTrigger>
-        <TooltipContent
-          side="bottom"
-          align="start"
-          className="max-h-[300px] max-w-[480px] overflow-auto whitespace-pre-wrap break-all rounded-md bg-neutral-900 px-3 py-2 font-mono text-[11px] leading-relaxed text-neutral-100 shadow-lg dark:bg-neutral-800 dark:text-neutral-200"
+    <div className="space-y-1.5">
+      <pre className="m-0 max-h-[480px] overflow-auto rounded-md border border-neutral-200 bg-neutral-50/60 px-3 py-2.5 font-mono text-[11.5px] leading-[1.65] text-neutral-700 dark:border-neutral-800 dark:bg-neutral-950/40 dark:text-neutral-200">
+        <JsonNode value={normalised} indent={0} budget={{ remaining: showAll ? Infinity : MAX_CHARS }} />
+      </pre>
+      {!showAll && (
+        <button
+          type="button"
+          onClick={() => setShowAll(true)}
+          className="text-[11px] text-neutral-500 hover:text-neutral-900 dark:text-neutral-400 dark:hover:text-neutral-100"
         >
-          {full}
-        </TooltipContent>
-      </Tooltip>
-    </TooltipProvider>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Sub-renderers
-// ---------------------------------------------------------------------------
-
-function TableRenderer({ data }: { data: Record<string, unknown>[] }) {
-  const maxRows = 20;
-  const displayRows = data.slice(0, maxRows);
-  const { visible, hidden } = selectColumns(data);
-
-  if (visible.length === 0) {
-    return <ToolCodeBlock>{JSON.stringify(data, null, 2)}</ToolCodeBlock>;
-  }
-
-  return (
-    <div>
-      <div className="overflow-x-auto" style={{ maxHeight: '280px' }}>
-        <table className="w-full border-collapse font-mono text-[11px]">
-          <thead>
-            <tr className="border-b border-neutral-150 dark:border-neutral-700/60">
-              {visible.map((col) => (
-                <th
-                  key={col}
-                  className="whitespace-nowrap px-2 py-1 text-left font-mono text-[9px] font-medium uppercase tracking-wider text-neutral-400 dark:text-neutral-500"
-                >
-                  {col}
-                </th>
-              ))}
-              {hidden.length > 0 && (
-                <th className="whitespace-nowrap px-2 py-1 text-left font-mono text-[9px] font-medium uppercase tracking-wider text-neutral-300 dark:text-neutral-600">
-                  +{hidden.length} more
-                </th>
-              )}
-            </tr>
-          </thead>
-          <tbody>
-            {displayRows.map((row, i) => (
-              <tr
-                key={i}
-                className={
-                  i % 2 === 1
-                    ? 'bg-neutral-50/50 dark:bg-neutral-800/20'
-                    : ''
-                }
-              >
-                {visible.map((col) => (
-                  <td
-                    key={col}
-                    className="max-w-[240px] truncate whitespace-nowrap px-2 py-0.5 text-neutral-600 dark:text-neutral-400"
-                  >
-                    <ValueTooltip value={row[col]}>
-                      <CellValue value={row[col]} />
-                    </ValueTooltip>
-                  </td>
-                ))}
-                {hidden.length > 0 && (
-                  <td className="px-2 py-0.5 text-neutral-300 dark:text-neutral-600">
-                    &middot;&middot;&middot;
-                  </td>
-                )}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-      {data.length > maxRows && (
-        <div className="border-t border-neutral-100 px-2 py-1 font-mono text-[9px] text-neutral-400 dark:border-neutral-800 dark:text-neutral-500">
-          +{data.length - maxRows} more rows
-        </div>
+          Show all (~{approxSize.toLocaleString()} chars)
+        </button>
       )}
     </div>
   );
 }
 
-function ArgsRenderer({ args }: { args: unknown }) {
-  const parsed = tryParseJson(args);
-  if (parsed == null) return null;
-
-  if (typeof parsed === 'object' && !Array.isArray(parsed)) {
-    const obj = parsed as Record<string, unknown>;
-    const entries = Object.entries(obj);
-    if (entries.length === 0) return null;
-    // Args often contain string values that are themselves JSON-encoded
-    // (e.g. `call_tool`'s `params` field). Re-parse those so the KV row
-    // renders the inner shape instead of a raw `"{\"name\":...}"` blob.
-    const unwrapped = Object.fromEntries(
-      entries.map(([k, v]) => [k, unwrapNestedJsonString(v)]),
-    );
-    return <KeyValueGrid value={unwrapped} />;
-  }
-
-  return <SmartValue value={parsed} />;
+interface Budget {
+  remaining: number;
 }
 
-function unwrapNestedJsonString(value: unknown): unknown {
-  if (typeof value !== 'string') return value;
-  const trimmed = value.trim();
-  if (trimmed.length < 2) return value;
-  const first = trimmed[0];
-  if (first !== '{' && first !== '[') return value;
-  try {
-    return JSON.parse(trimmed);
-  } catch {
-    return value;
+function JsonNode({ value, indent, budget }: { value: unknown; indent: number; budget: Budget }): ReactNode {
+  if (value === null) return <span className="text-neutral-400 italic">null</span>;
+  if (value === undefined) return <span className="text-neutral-400 italic">undefined</span>;
+  if (typeof value === 'boolean') {
+    return <span className="text-violet-600 dark:text-violet-400">{String(value)}</span>;
   }
+  if (typeof value === 'number') {
+    return <span className="text-violet-600 dark:text-violet-400">{value}</span>;
+  }
+  if (typeof value === 'string') {
+    return <JsonString value={value} indent={indent} budget={budget} />;
+  }
+  if (Array.isArray(value)) {
+    return <JsonArray items={value} indent={indent} budget={budget} />;
+  }
+  if (typeof value === 'object') {
+    return <JsonObject object={value as Record<string, unknown>} indent={indent} budget={budget} />;
+  }
+  return <span>{String(value)}</span>;
 }
 
-function ResultRenderer({ result }: { result: unknown }) {
-  const parsed = tryParseJson(result);
+function JsonObject({ object, indent, budget }: { object: Record<string, unknown>; indent: number; budget: Budget }) {
+  const entries = Object.entries(object);
+  if (entries.length === 0) {
+    return <span className="text-neutral-400">{'{}'}</span>;
+  }
+  const childPad = INDENT.repeat(indent + 1);
+  const closePad = INDENT.repeat(indent);
+  return (
+    <>
+      {'{'}
+      {entries.map(([key, val], i) => {
+        if (budget.remaining <= 0) return <Fragment key={key}></Fragment>;
+        return (
+          <Fragment key={key}>
+            {'\n'}
+            {childPad}
+            <span className="text-neutral-500 dark:text-neutral-400">&quot;{key}&quot;</span>
+            {': '}
+            <JsonNode value={val} indent={indent + 1} budget={budget} />
+            {i < entries.length - 1 ? ',' : ''}
+          </Fragment>
+        );
+      })}
+      {budget.remaining <= 0 && <span className="text-neutral-400">{`\n${childPad}…`}</span>}
+      {'\n'}
+      {closePad}
+      {'}'}
+    </>
+  );
+}
 
-  // Unparseable — render raw string
-  if (parsed == null) {
-    const str = String(result);
+function JsonArray({ items, indent, budget }: { items: unknown[]; indent: number; budget: Budget }) {
+  if (items.length === 0) return <span className="text-neutral-400">[]</span>;
+  const childPad = INDENT.repeat(indent + 1);
+  const closePad = INDENT.repeat(indent);
+  return (
+    <>
+      {'['}
+      {items.map((item, i) => {
+        if (budget.remaining <= 0) return <Fragment key={i}></Fragment>;
+        return (
+          <Fragment key={i}>
+            {'\n'}
+            {childPad}
+            <JsonNode value={item} indent={indent + 1} budget={budget} />
+            {i < items.length - 1 ? ',' : ''}
+          </Fragment>
+        );
+      })}
+      {budget.remaining <= 0 && <span className="text-neutral-400">{`\n${childPad}…`}</span>}
+      {'\n'}
+      {closePad}
+      {']'}
+    </>
+  );
+}
+
+function JsonString({ value, indent, budget }: { value: string; indent: number; budget: Budget }) {
+  // Spend the value's approximate cost from the budget. The pretty
+  // multi-line string roughly counts as one char per output char.
+  budget.remaining -= value.length + 2;
+
+  const STR = 'text-emerald-700 dark:text-emerald-400';
+
+  // Multi-line string: indent every subsequent line so the JSON layout
+  // stays readable. The opening quote sits where the value would; the
+  // closing quote lands on its own line at the parent indent + 1 so it
+  // visually closes the value.
+  if (value.includes('\n')) {
+    const childPad = INDENT.repeat(indent + 1);
+    const lines = value.split('\n');
     return (
-      <ToolCodeBlock maxHeight="280px">
-        {str.length > 4000 ? str.slice(0, 4000) + '\n... (truncated)' : str}
-      </ToolCodeBlock>
+      <span className={STR}>
+        &quot;
+        {lines.map((line, i) => (
+          <Fragment key={i}>
+            <LinkifiedSpan text={line} />
+            {i < lines.length - 1 ? `\n${childPad}` : ''}
+          </Fragment>
+        ))}
+        &quot;
+      </span>
     );
   }
 
-  // Arrays of homogeneous objects still get the table view; everything
-  // else routes through SmartValue, which handles nested objects, long
-  // strings (with show-more), URLs/dates, etc. — same renderer the
-  // workflow trace uses.
-  const shape = detectShape(parsed);
-  if (shape === 'table') {
-    return <TableRenderer data={parsed as Record<string, unknown>[]} />;
+  return (
+    <span className={STR}>
+      &quot;
+      <LinkifiedSpan text={value} />
+      &quot;
+    </span>
+  );
+}
+
+/** Inline render that turns embedded http(s) URLs into clickable links. */
+function LinkifiedSpan({ text }: { text: string }) {
+  const matches = [...text.matchAll(URL_REGEX)];
+  if (matches.length === 0) return <>{text}</>;
+
+  const parts: ReactNode[] = [];
+  let cursor = 0;
+  matches.forEach((match, i) => {
+    const start = match.index ?? 0;
+    if (start > cursor) parts.push(<Fragment key={`t${i}`}>{text.slice(cursor, start)}</Fragment>);
+    const url = match[0];
+    parts.push(
+      <a
+        key={`u${i}`}
+        href={url}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="text-blue-500 underline-offset-2 hover:underline dark:text-blue-400"
+      >
+        {url}
+      </a>
+    );
+    cursor = start + url.length;
+  });
+  if (cursor < text.length) parts.push(<Fragment key="tail">{text.slice(cursor)}</Fragment>);
+  return <>{parts}</>;
+}
+
+/** Cheap estimate of pretty-printed size; used to gate the show-all toggle. */
+function approxJsonSize(value: unknown): number {
+  try {
+    return JSON.stringify(value, null, 2).length;
+  } catch {
+    return 0;
   }
-  return <SmartValue value={parsed} />;
 }
 
 // ---------------------------------------------------------------------------
-// Summary extraction
+// Summary extraction (collapsed-state header)
 // ---------------------------------------------------------------------------
 
 function extractSummary(tool: ToolCallData): string | null {
@@ -330,22 +264,19 @@ function extractSummary(tool: ToolCallData): string | null {
     ? (args as Record<string, unknown>)
     : null;
 
-  // Special case: call_tool → show tool_id
   if (tool.toolName === 'call_tool' && argsObj?.tool_id) {
     return String(argsObj.tool_id);
   }
 
-  // Try common arg fields for summary
   if (argsObj) {
     for (const key of ['description', 'command', 'file_path', 'filePath', 'path', 'pattern', 'query', 'message', 'url', 'name', 'tool_id']) {
       const val = argsObj[key];
       if (typeof val === 'string' && val.length > 0) {
-        return val.length > 100 ? val.slice(0, 100) + '...' : val;
+        return val.length > 100 ? val.slice(0, 100) + '…' : val;
       }
     }
   }
 
-  // Result-based summary
   const parsed = tryParseJson(tool.result);
   if (parsed != null) {
     if (Array.isArray(parsed)) {
@@ -353,11 +284,10 @@ function extractSummary(tool: ToolCallData): string | null {
     }
     if (typeof parsed === 'object') {
       const obj = parsed as Record<string, unknown>;
-      // Try to show a meaningful field from the result
       for (const key of ['name', 'title', 'status', 'message', 'id']) {
         const val = obj[key];
         if (typeof val === 'string' && val.length > 0) {
-          return val.length > 80 ? val.slice(0, 80) + '...' : val;
+          return val.length > 80 ? val.slice(0, 80) + '…' : val;
         }
       }
     }
@@ -367,13 +297,12 @@ function extractSummary(tool: ToolCallData): string | null {
 }
 
 // ---------------------------------------------------------------------------
-// Main component
+// Card
 // ---------------------------------------------------------------------------
 
 export function GenericCard({ tool }: { tool: ToolCallData }) {
   const hasArgs = tool.args != null && (typeof tool.args !== 'object' || Object.keys(tool.args as object).length > 0);
   const hasResult = tool.result != null && tool.result !== '';
-
   const summary = extractSummary(tool);
 
   return (
@@ -390,12 +319,12 @@ export function GenericCard({ tool }: { tool: ToolCallData }) {
         <>
           {hasArgs && (
             <ToolCardSection label="arguments">
-              <ArgsRenderer args={tool.args} />
+              <ToolPayload value={tool.args} />
             </ToolCardSection>
           )}
           {hasResult && (
             <ToolCardSection label="result" className="border-t border-neutral-100 dark:border-neutral-800">
-              <ResultRenderer result={tool.result} />
+              <ToolPayload value={tryParseJson(tool.result) ?? tool.result} />
             </ToolCardSection>
           )}
         </>
