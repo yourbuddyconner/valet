@@ -137,11 +137,25 @@ export async function appendCopilotMessage(
     parts: params.parts !== undefined ? JSON.stringify(params.parts) : null,
     createdAt: now,
   });
+
+  // Backfill the thread title from the first user message so the
+  // switcher shows something more recognizable than `Thread 4f9c…`.
+  const updates: Record<string, unknown> = {
+    messageCount: sql`message_count + 1`,
+    updatedAt: now,
+  };
+  if (params.role === 'user' && params.content.trim().length > 0) {
+    const existing = await db.select({ title: copilotThreads.title })
+      .from(copilotThreads)
+      .where(eq(copilotThreads.id, threadId))
+      .get();
+    if (existing && !existing.title) {
+      updates.title = deriveThreadTitle(params.content);
+    }
+  }
+
   await db.update(copilotThreads)
-    .set({
-      messageCount: sql`message_count + 1`,
-      updatedAt: now,
-    })
+    .set(updates)
     .where(eq(copilotThreads.id, threadId));
   return {
     id,
@@ -151,6 +165,11 @@ export async function appendCopilotMessage(
     parts: params.parts ?? null,
     createdAt: now,
   };
+}
+
+function deriveThreadTitle(text: string): string {
+  const cleaned = text.trim().replace(/\s+/g, ' ');
+  return cleaned.length > 60 ? cleaned.slice(0, 60) + '…' : cleaned;
 }
 
 export async function deleteCopilotThread(

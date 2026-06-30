@@ -2,51 +2,166 @@
  * Workflow Copilot panel — collapsible side rail in the workflow
  * editor. Streams chat from /api/copilot/chat via the Vercel AI SDK.
  *
- * MVP: text + tool-call rendering, single thread per workflow (first
- * load picks the most recent or creates a new one). Model picker and
- * thread switcher come in follow-up commits.
+ * Structure:
+ *   <CopilotPanel>  owns thread list + active threadId
+ *     <ThreadStream key={threadId}>  owns chat state for that thread
+ *
+ * Keying the inner component by threadId means switching threads
+ * remounts cleanly and starts with the persisted messages already in
+ * hand — no after-mount state sync.
  */
 import { useState, useEffect, useRef, type ReactNode } from 'react';
-import { useCopilotChat, useCopilotMessages, useCopilotThreads, type UiMessage } from '@/api/copilot';
+import {
+  useCopilotChat,
+  useCopilotMessages,
+  useCopilotThreads,
+  type UiMessage,
+  type CopilotMessage,
+} from '@/api/copilot';
 import { ToolPayload } from '@/components/payload/tool-payload';
 import { DeferredMarkdownContent } from '@/components/chat/markdown/deferred-markdown-content';
 import { useQueryClient } from '@tanstack/react-query';
+import { workflowKeys } from '@/api/workflows';
 
 interface CopilotPanelProps {
   workflowId: string;
-  /** Invalidate workflow draft + executions when the copilot edits */
-  onWorkflowChange?: () => void;
 }
 
-export function CopilotPanel({ workflowId, onWorkflowChange }: CopilotPanelProps) {
+export function CopilotPanel({ workflowId }: CopilotPanelProps) {
+  const { data: threadsData, isLoading: threadsLoading } = useCopilotThreads(workflowId);
+  const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
+  const [threadMenuOpen, setThreadMenuOpen] = useState(false);
+  // Bumping this key remounts ThreadStream (i.e. resets chat-local
+  // state). We do so on explicit user actions — selecting a thread,
+  // clicking "+ New" — but NOT when the chat hook surfaces a
+  // server-assigned thread id mid-conversation. That would otherwise
+  // wipe the conversation the user is actively having.
+  const [mountKey, setMountKey] = useState(0);
+
+  const autoSelectedFor = useRef<string | null>(null);
+  useEffect(() => {
+    if (threadsLoading) return;
+    if (autoSelectedFor.current === workflowId) return;
+    autoSelectedFor.current = workflowId;
+    const mostRecent = threadsData?.threads[0]?.id ?? null;
+    setActiveThreadId(mostRecent);
+    setMountKey((k) => k + 1);
+  }, [workflowId, threadsLoading, threadsData]);
+
+  const handleNewThread = () => {
+    setActiveThreadId(null);
+    setMountKey((k) => k + 1);
+    setThreadMenuOpen(false);
+  };
+
+  const handleSelectThread = (id: string) => {
+    if (id === activeThreadId) return;
+    setActiveThreadId(id);
+    setMountKey((k) => k + 1);
+    setThreadMenuOpen(false);
+  };
+
+  // Sync without remount: hook discovered or invented its thread id
+  // during a live stream. Update state so the switcher highlights it,
+  // but DON'T bump mountKey — that would tear down the conversation.
+  const handleThreadDiscovered = (id: string) => {
+    setActiveThreadId((current) => (current === id ? current : id));
+  };
+
+  return (
+    <div className="flex h-full flex-col border-l border-neutral-200 bg-white dark:border-neutral-800 dark:bg-neutral-950">
+      <header className="relative flex items-center gap-2 border-b border-neutral-200 px-3 py-2 dark:border-neutral-800">
+        <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-md bg-violet-500/10 text-[10px] font-semibold text-violet-600 dark:text-violet-300">
+          ✦
+        </span>
+        <span className="text-sm font-medium text-neutral-900 dark:text-neutral-100">
+          Copilot
+        </span>
+        <button
+          type="button"
+          onClick={() => setThreadMenuOpen((v) => !v)}
+          className="ml-auto inline-flex items-center gap-1 rounded border border-neutral-200 px-1.5 py-0.5 text-[10px] text-neutral-500 hover:border-neutral-300 hover:text-neutral-900 dark:border-neutral-700 dark:text-neutral-400 dark:hover:border-neutral-600 dark:hover:text-neutral-100"
+          title="Conversations"
+        >
+          {(threadsData?.threads.length ?? 0)} thread{(threadsData?.threads.length ?? 0) === 1 ? '' : 's'}
+          <span className="inline-block">▾</span>
+        </button>
+        <button
+          type="button"
+          onClick={handleNewThread}
+          className="inline-flex items-center rounded border border-violet-300 px-1.5 py-0.5 text-[10px] font-medium text-violet-700 hover:bg-violet-50 dark:border-violet-700 dark:text-violet-300 dark:hover:bg-neutral-900"
+          title="Start a new conversation"
+        >
+          + New
+        </button>
+
+        {threadMenuOpen && (
+          <ThreadList
+            threads={threadsData?.threads ?? []}
+            activeThreadId={activeThreadId}
+            onSelect={handleSelectThread}
+            onClose={() => setThreadMenuOpen(false)}
+          />
+        )}
+      </header>
+
+      <ThreadStream
+        key={mountKey}
+        workflowId={workflowId}
+        threadId={activeThreadId}
+        onThreadDiscovered={handleThreadDiscovered}
+      />
+    </div>
+  );
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// Per-thread streaming view
+// ────────────────────────────────────────────────────────────────────────
+
+function ThreadStream({
+  workflowId,
+  threadId,
+  onThreadDiscovered,
+}: {
+  workflowId: string;
+  threadId: string | null;
+  onThreadDiscovered: (id: string) => void;
+}) {
   const qc = useQueryClient();
-  const { data: threadsData } = useCopilotThreads(workflowId);
-  const initialThreadId = threadsData?.threads[0]?.id ?? null;
-  const { data: messagesData } = useCopilotMessages(initialThreadId);
+  // Load persisted messages for this thread (if any). When threadId is
+  // null we render the empty state directly; no fetch.
+  const { data: messagesData, isLoading: messagesLoading } = useCopilotMessages(threadId);
+  // Once we know we have a thread but messages are still fetching, show
+  // a thin skeleton instead of empty-state to avoid a flicker.
+  const showSkeleton = threadId !== null && messagesLoading && !messagesData;
 
-  // Seed local state from the persisted thread once it loads.
-  const [bootstrapped, setBootstrapped] = useState(false);
-  const initial: UiMessage[] = bootstrapped || !messagesData
-    ? []
-    : messagesData.messages
-        .filter((m) => m.role === 'user' || m.role === 'assistant')
-        .map((m) => ({
-          id: m.id,
-          role: m.role as 'user' | 'assistant',
-          parts: (m.parts ?? [{ type: 'text', text: m.content }]) as UiMessage['parts'],
-        }));
+  const initialMessages = messagesData
+    ? toUiMessages(messagesData.messages)
+    : [];
 
-  const { messages, send, stop, status, error, threadId } = useCopilotChat({
+  const { messages, send, stop, status, error, threadId: liveThreadId } = useCopilotChat({
     workflowId,
-    initialThreadId,
-    initialMessages: initial,
+    initialThreadId: threadId,
+    // Pass already-loaded messages; the hook reads this once but since
+    // we're keyed by threadId in the parent, the component remounts on
+    // switch and re-reads.
+    initialMessages,
   });
 
+  // Surface the server-assigned id up so the switcher highlights it.
+  // The parent intentionally syncs without remounting — preserves the
+  // live conversation across the null → real-id transition.
   useEffect(() => {
-    if (messagesData && !bootstrapped) setBootstrapped(true);
-  }, [messagesData, bootstrapped]);
+    if (liveThreadId && liveThreadId !== threadId) {
+      onThreadDiscovered(liveThreadId);
+      qc.invalidateQueries({ queryKey: ['copilot', 'threads', workflowId] });
+    }
+  }, [liveThreadId, threadId, onThreadDiscovered, qc, workflowId]);
 
-  // Whenever a tool call lands that mutates the workflow, invalidate.
+  // Whenever the model lands a tool result that mutated the workflow,
+  // invalidate the actual editor draft query so the canvas re-renders.
+  // Previously this used the wrong key and silently no-op'd.
   const lastToolCount = useRef(0);
   useEffect(() => {
     const toolCount = messages.reduce(
@@ -54,19 +169,17 @@ export function CopilotPanel({ workflowId, onWorkflowChange }: CopilotPanelProps
       0,
     );
     if (toolCount > lastToolCount.current) {
-      onWorkflowChange?.();
-      qc.invalidateQueries({ queryKey: ['workflow', workflowId] });
-      qc.invalidateQueries({ queryKey: ['workflowDraft', workflowId] });
+      qc.invalidateQueries({ queryKey: workflowKeys.draft(workflowId) });
+      qc.invalidateQueries({ queryKey: workflowKeys.detail(workflowId) });
       lastToolCount.current = toolCount;
     }
-  }, [messages, onWorkflowChange, qc, workflowId]);
+  }, [messages, qc, workflowId]);
 
-  // Auto-scroll on new messages.
   const scrollRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!scrollRef.current) return;
     scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-  }, [messages]);
+  }, [messages, status]);
 
   const [input, setInput] = useState('');
   const onSubmit = (e: React.FormEvent) => {
@@ -78,23 +191,11 @@ export function CopilotPanel({ workflowId, onWorkflowChange }: CopilotPanelProps
   };
 
   return (
-    <div className="flex h-full flex-col border-l border-neutral-200 bg-white dark:border-neutral-800 dark:bg-neutral-950">
-      <header className="flex items-center justify-between border-b border-neutral-200 px-3 py-2 dark:border-neutral-800">
-        <div className="flex items-center gap-2">
-          <span className="inline-flex h-5 w-5 items-center justify-center rounded-md bg-violet-500/10 text-[10px] font-semibold text-violet-600 dark:text-violet-300">
-            ✦
-          </span>
-          <span className="text-sm font-medium text-neutral-900 dark:text-neutral-100">
-            Copilot
-          </span>
-        </div>
-        {threadId && (
-          <span className="font-mono text-[10px] text-neutral-400">{threadId.slice(0, 8)}</span>
-        )}
-      </header>
-
+    <>
       <div ref={scrollRef} className="flex-1 overflow-auto px-3 py-3">
-        {messages.length === 0 ? (
+        {showSkeleton ? (
+          <ThreadSkeleton />
+        ) : messages.length === 0 ? (
           <EmptyState />
         ) : (
           <div className="space-y-3">
@@ -150,58 +251,149 @@ export function CopilotPanel({ workflowId, onWorkflowChange }: CopilotPanelProps
           )}
         </div>
       </form>
+    </>
+  );
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// Thread list popover
+// ────────────────────────────────────────────────────────────────────────
+
+interface ThreadSummary {
+  id: string;
+  title: string | null;
+  messageCount: number;
+  updatedAt: string;
+}
+
+function ThreadList({
+  threads,
+  activeThreadId,
+  onSelect,
+  onClose,
+}: {
+  threads: ThreadSummary[];
+  activeThreadId: string | null;
+  onSelect: (id: string) => void;
+  onClose: () => void;
+}) {
+  return (
+    <div
+      className="absolute right-3 top-10 z-30 w-[260px] overflow-hidden rounded-md border border-neutral-200 bg-white shadow-lg dark:border-neutral-700 dark:bg-neutral-900"
+      role="dialog"
+      onClick={(e) => e.stopPropagation()}
+    >
+      <div className="border-b border-neutral-200 px-3 py-2 text-[10px] font-medium uppercase tracking-wider text-neutral-500 dark:border-neutral-800 dark:text-neutral-400">
+        Conversations
+      </div>
+      {threads.length === 0 ? (
+        <div className="px-3 py-4 text-xs text-neutral-500 dark:text-neutral-400">
+          No prior conversations. The next message starts a new thread.
+        </div>
+      ) : (
+        <ul className="max-h-[280px] overflow-y-auto">
+          {threads.map((t) => (
+            <li key={t.id}>
+              <button
+                type="button"
+                onClick={() => onSelect(t.id)}
+                className={`flex w-full items-start justify-between gap-2 px-3 py-2 text-left text-xs hover:bg-neutral-50 dark:hover:bg-neutral-800 ${
+                  t.id === activeThreadId
+                    ? 'bg-violet-50/60 dark:bg-violet-950/40'
+                    : ''
+                }`}
+              >
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-neutral-900 dark:text-neutral-100">
+                    {t.title ?? `Thread ${t.id.slice(0, 8)}`}
+                  </p>
+                  <p className="mt-0.5 text-[10px] text-neutral-500 dark:text-neutral-400">
+                    {t.messageCount} message{t.messageCount === 1 ? '' : 's'} · {formatRelative(t.updatedAt)}
+                  </p>
+                </div>
+                {t.id === activeThreadId && (
+                  <span className="mt-0.5 inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-violet-500" />
+                )}
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      <button
+        type="button"
+        onClick={onClose}
+        className="block w-full border-t border-neutral-200 bg-neutral-50 px-3 py-1.5 text-[10px] text-neutral-500 hover:bg-neutral-100 dark:border-neutral-800 dark:bg-neutral-900 dark:text-neutral-400 dark:hover:bg-neutral-800"
+      >
+        Close
+      </button>
     </div>
   );
 }
 
-/**
- * "Cooking" indicator — derives a contextual label from the last
- * assistant turn so the user knows what the model is actively doing,
- * not just that it's still alive. Three states:
- *   • a tool call landed but no result yet  → "Calling X…"
- *   • text is streaming                     → "Writing…"
- *   • nothing yet on the new assistant turn → "Thinking…"
- */
-function CookingIndicator({ messages }: { messages: UiMessage[] }) {
-  const last = messages[messages.length - 1];
-  let label = 'Thinking';
-  if (last && last.role === 'assistant' && last.parts.length > 0) {
-    // Find the last tool-call without a matching tool-result.
-    const calls = new Map<string, { name: string }>();
-    const resolved = new Set<string>();
-    for (const p of last.parts) {
-      if (p.type === 'tool-call') {
-        const tc = p as { toolCallId: string; toolName: string };
-        calls.set(tc.toolCallId, { name: tc.toolName });
-      } else if (p.type === 'tool-result') {
-        const tr = p as { toolCallId: string };
-        resolved.add(tr.toolCallId);
+function formatRelative(iso: string): string {
+  const now = Date.now();
+  const then = new Date(iso).getTime();
+  if (Number.isNaN(then)) return iso;
+  const seconds = Math.floor((now - then) / 1000);
+  if (seconds < 60) return 'just now';
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  if (days < 7) return `${days}d ago`;
+  return new Date(iso).toLocaleDateString();
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// Persisted-message → UiMessage conversion
+// ────────────────────────────────────────────────────────────────────────
+
+function toUiMessages(persisted: CopilotMessage[]): UiMessage[] {
+  // The chat UI only renders user + assistant rows. Tool calls and
+  // results are children of the assistant turn that triggered them.
+  // Persisted shape stores assistant text + parts together; we
+  // reconstruct UiMessages directly.
+  const out: UiMessage[] = [];
+  for (const m of persisted) {
+    if (m.role === 'tool') {
+      // Tool results attach to the most recent assistant message.
+      const last = out[out.length - 1];
+      if (last && last.role === 'assistant' && m.parts) {
+        const parts = Array.isArray(m.parts) ? m.parts : [m.parts];
+        for (const p of parts) {
+          if (p && typeof p === 'object') {
+            last.parts.push(p as UiMessage['parts'][number]);
+          }
+        }
       }
+      continue;
     }
-    const pending = [...calls.entries()].find(([id]) => !resolved.has(id));
-    if (pending) {
-      label = `Calling ${pending[1].name}`;
-    } else {
-      const lastPart = last.parts[last.parts.length - 1];
-      if (lastPart?.type === 'text') label = 'Writing';
+    if (m.role === 'user') {
+      out.push({ id: m.id, role: 'user', parts: [{ type: 'text', text: m.content }] });
+      continue;
     }
+    // assistant
+    const parts = Array.isArray(m.parts) ? (m.parts as UiMessage['parts']) : [];
+    if (parts.length === 0 && m.content) {
+      parts.push({ type: 'text', text: m.content });
+    }
+    out.push({ id: m.id, role: 'assistant', parts });
   }
-  return (
-    <div className="flex items-center gap-2 px-1 py-0.5 text-xs text-neutral-500 dark:text-neutral-400">
-      <ShimmerDot />
-      <span className="bg-gradient-to-r from-neutral-500 via-violet-500 to-neutral-500 bg-[length:200%_100%] bg-clip-text text-transparent animate-cooking-shimmer dark:from-neutral-400 dark:via-violet-300 dark:to-neutral-400">
-        {label}…
-      </span>
-    </div>
-  );
+  return out;
 }
 
-function ShimmerDot() {
+// ────────────────────────────────────────────────────────────────────────
+// Misc UI
+// ────────────────────────────────────────────────────────────────────────
+
+function ThreadSkeleton() {
   return (
-    <span className="relative flex h-2 w-2 shrink-0">
-      <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-violet-500/50" />
-      <span className="relative inline-flex h-2 w-2 rounded-full bg-violet-500" />
-    </span>
+    <div className="space-y-2.5 px-1 py-2">
+      <div className="ml-auto h-6 w-2/3 animate-pulse rounded-lg bg-neutral-200 dark:bg-neutral-800" />
+      <div className="h-12 w-full animate-pulse rounded-lg bg-neutral-100 dark:bg-neutral-900" />
+      <div className="ml-auto h-6 w-1/2 animate-pulse rounded-lg bg-neutral-200 dark:bg-neutral-800" />
+    </div>
   );
 }
 
@@ -251,15 +443,11 @@ function renderPart(part: UiMessage['parts'][number], i: number): ReactNode {
   }
   if (part.type === 'tool-call') {
     const p = part as { toolName: string; args: unknown };
-    return (
-      <ToolCallCard key={i} kind="call" toolName={p.toolName} payload={p.args} />
-    );
+    return <ToolCallCard key={i} kind="call" toolName={p.toolName} payload={p.args} />;
   }
   if (part.type === 'tool-result') {
     const p = part as { result: unknown };
-    return (
-      <ToolCallCard key={i} kind="result" toolName="result" payload={p.result} />
-    );
+    return <ToolCallCard key={i} kind="result" toolName="result" payload={p.result} />;
   }
   return null;
 }
@@ -285,5 +473,55 @@ function ToolCallCard({ kind, toolName, payload }: { kind: 'call' | 'result'; to
         </div>
       )}
     </div>
+  );
+}
+
+/**
+ * "Cooking" indicator — derives a contextual label from the last
+ * assistant turn so the user knows what the model is actively doing,
+ * not just that it's still alive. Three states:
+ *   • a tool call landed but no result yet  → "Calling X…"
+ *   • text is streaming                     → "Writing…"
+ *   • nothing yet on the new assistant turn → "Thinking…"
+ */
+function CookingIndicator({ messages }: { messages: UiMessage[] }) {
+  const last = messages[messages.length - 1];
+  let label = 'Thinking';
+  if (last && last.role === 'assistant' && last.parts.length > 0) {
+    const calls = new Map<string, { name: string }>();
+    const resolved = new Set<string>();
+    for (const p of last.parts) {
+      if (p.type === 'tool-call') {
+        const tc = p as { toolCallId: string; toolName: string };
+        calls.set(tc.toolCallId, { name: tc.toolName });
+      } else if (p.type === 'tool-result') {
+        const tr = p as { toolCallId: string };
+        resolved.add(tr.toolCallId);
+      }
+    }
+    const pending = [...calls.entries()].find(([id]) => !resolved.has(id));
+    if (pending) {
+      label = `Calling ${pending[1].name}`;
+    } else {
+      const lastPart = last.parts[last.parts.length - 1];
+      if (lastPart?.type === 'text') label = 'Writing';
+    }
+  }
+  return (
+    <div className="flex items-center gap-2 px-1 py-0.5 text-xs text-neutral-500 dark:text-neutral-400">
+      <ShimmerDot />
+      <span className="bg-gradient-to-r from-neutral-500 via-violet-500 to-neutral-500 bg-[length:200%_100%] bg-clip-text text-transparent animate-cooking-shimmer dark:from-neutral-400 dark:via-violet-300 dark:to-neutral-400">
+        {label}…
+      </span>
+    </div>
+  );
+}
+
+function ShimmerDot() {
+  return (
+    <span className="relative flex h-2 w-2 shrink-0">
+      <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-violet-500/50" />
+      <span className="relative inline-flex h-2 w-2 rounded-full bg-violet-500" />
+    </span>
   );
 }
