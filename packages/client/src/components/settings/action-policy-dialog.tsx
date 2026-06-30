@@ -322,10 +322,8 @@ function TypeaheadCombobox({
                 renderItem(item, i === highlightedIndex)
               ) : (
                 <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2">
-                    <span className="truncate text-neutral-900 dark:text-neutral-100">{item.label}</span>
-                    <span className="shrink-0 font-mono text-[11px] text-neutral-400 dark:text-neutral-500">{item.id}</span>
-                  </div>
+                  <div className="truncate text-neutral-900 dark:text-neutral-100">{item.label}</div>
+                  <div className="truncate font-mono text-[11px] text-neutral-400 dark:text-neutral-500">{item.id}</div>
                   {item.description && (
                     <div className="truncate text-xs text-neutral-500 dark:text-neutral-400">{item.description}</div>
                   )}
@@ -773,7 +771,7 @@ export function ActionPolicyDialog({ open, onOpenChange, policy, noun = 'Policy'
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-lg">
+      <DialogContent className="max-w-2xl">
         <DialogHeader>
           <div className="flex items-center justify-between pr-6">
             <DialogTitle>
@@ -827,7 +825,7 @@ export function ActionPolicyDialog({ open, onOpenChange, policy, noun = 'Policy'
                   onSelect={() => handleScopeChange('action')}
                   label="A specific action"
                 >
-                  <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                  <div className="mt-2 space-y-2">
                     <TypeaheadCombobox
                       items={serviceItems}
                       value={service}
