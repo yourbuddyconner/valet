@@ -381,16 +381,31 @@ function WorkflowDetailPage() {
                 type="button"
                 onClick={handleToggleEnabled}
                 disabled={updateWorkflow.isPending}
-                className={`inline-flex shrink-0 items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium transition disabled:opacity-60 ${
+                role="switch"
+                aria-checked={workflow.enabled}
+                className={`group inline-flex shrink-0 items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px] font-medium transition disabled:opacity-60 ${
                   workflow.enabled
-                    ? 'border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 dark:border-emerald-900/50 dark:bg-emerald-950/40 dark:text-emerald-300'
-                    : 'border-neutral-200 bg-neutral-50 text-neutral-500 hover:bg-neutral-100 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-400'
+                    ? 'border-emerald-300 bg-emerald-50 text-emerald-700 hover:border-emerald-400 hover:bg-emerald-100 dark:border-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300 dark:hover:bg-emerald-950/60'
+                    : 'border-neutral-300 bg-neutral-50 text-neutral-500 hover:border-neutral-400 hover:bg-neutral-100 hover:text-neutral-700 dark:border-neutral-600 dark:bg-neutral-900 dark:text-neutral-400 dark:hover:bg-neutral-800 dark:hover:text-neutral-200'
                 }`}
                 title={workflow.enabled ? 'Click to disable triggers' : 'Click to enable triggers'}
               >
-                <span className={`h-1.5 w-1.5 rounded-full ${
-                  workflow.enabled ? 'bg-emerald-500' : 'bg-neutral-400 dark:bg-neutral-500'
-                }`} />
+                {/* Inline mini-switch so the affordance reads as a toggle,
+                    not a status pill. Thumb position + colour swap on
+                    state. */}
+                <span
+                  className={`relative inline-block h-2.5 w-4 rounded-full transition ${
+                    workflow.enabled
+                      ? 'bg-emerald-400 group-hover:bg-emerald-500 dark:bg-emerald-500/60'
+                      : 'bg-neutral-300 group-hover:bg-neutral-400 dark:bg-neutral-600'
+                  }`}
+                >
+                  <span
+                    className={`absolute top-0.5 h-1.5 w-1.5 rounded-full bg-white shadow-sm transition-all dark:bg-neutral-100 ${
+                      workflow.enabled ? 'left-2' : 'left-0.5'
+                    }`}
+                  />
+                </span>
                 {getWorkflowEnabledLabel(workflow.enabled)}
               </button>
               <span className="hidden shrink-0 font-mono text-[11px] text-neutral-500 sm:inline">
