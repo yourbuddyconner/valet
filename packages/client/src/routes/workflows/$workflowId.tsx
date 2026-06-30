@@ -373,9 +373,9 @@ function WorkflowDetailPage() {
             </h1>
             <div className="mt-1 flex min-w-0 items-center gap-2">
               {publishedVersionId ? (
-                <Badge variant="success">{publishedVersionLabel}</Badge>
+                <Badge variant="success" className="whitespace-nowrap">{publishedVersionLabel}</Badge>
               ) : (
-                <Badge variant="secondary">Draft</Badge>
+                <Badge variant="secondary" className="whitespace-nowrap">Draft</Badge>
               )}
               <button
                 type="button"
