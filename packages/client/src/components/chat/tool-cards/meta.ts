@@ -22,6 +22,17 @@ export function getToolCardMeta(tool: ToolCallData): ToolCardMeta {
   const baseName = toolBaseName(tool.toolName);
   const args = asRecord(tool.args);
 
+  // call_tool is the orchestrator's generic dispatcher — the *real*
+  // tool being invoked is in args.tool_id. Surface that as the summary
+  // so the collapsed card reads e.g. `call_tool · workflows.create`
+  // instead of a bare `call_tool · completed`.
+  if (baseName === 'call_tool') {
+    return {
+      label: 'call_tool',
+      summary: asString(args?.tool_id) ?? asString(args?.summary),
+    };
+  }
+
   // Labels are kept in lowercase to match the specialized card labels —
   // when the specialized chunk lazy-loads, the Suspense fallback (the
   // summary card) and the specialized card show the same label, so the

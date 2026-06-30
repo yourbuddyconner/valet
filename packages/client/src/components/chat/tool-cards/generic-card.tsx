@@ -4,6 +4,10 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/comp
 import { ToolCardShell, ToolCardSection, ToolCodeBlock } from './tool-card-shell';
 import { WrenchIcon } from './icons';
 import type { ToolCallData } from './types';
+// Reuse the trace-card value renderers — recursive KV grids, long
+// strings expand in place (no tooltip-only truncation), nested objects
+// indent, URLs/dates render as themselves. Same UX in both places.
+import { SmartValue, KeyValueGrid } from '@/components/workflows/trace-node-card';
 
 // ---------------------------------------------------------------------------
 // Data helpers
@@ -259,30 +263,6 @@ function TableRenderer({ data }: { data: Record<string, unknown>[] }) {
   );
 }
 
-function KvRenderer({ data }: { data: Record<string, unknown> }) {
-  const entries = Object.entries(data);
-  if (entries.length === 0) return null;
-
-  return (
-    <div className="overflow-auto font-mono text-[11px]" style={{ maxHeight: '280px' }}>
-      <div className="space-y-0">
-        {entries.map(([key, value]) => (
-          <div key={key} className="flex gap-3 px-0 py-0.5">
-            <span className="shrink-0 text-neutral-400 dark:text-neutral-500" style={{ minWidth: '100px' }}>
-              {key}
-            </span>
-            <span className="min-w-0 truncate text-neutral-600 dark:text-neutral-400">
-              <ValueTooltip value={value}>
-                <CellValue value={value} />
-              </ValueTooltip>
-            </span>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
 function ArgsRenderer({ args }: { args: unknown }) {
   const parsed = tryParseJson(args);
   if (parsed == null) return null;
@@ -297,11 +277,10 @@ function ArgsRenderer({ args }: { args: unknown }) {
     const unwrapped = Object.fromEntries(
       entries.map(([k, v]) => [k, unwrapNestedJsonString(v)]),
     );
-    return <KvRenderer data={unwrapped} />;
+    return <KeyValueGrid value={unwrapped} />;
   }
 
-  const str = typeof args === 'string' ? args : JSON.stringify(args, null, 2);
-  return <ToolCodeBlock maxHeight="160px">{str}</ToolCodeBlock>;
+  return <SmartValue value={parsed} />;
 }
 
 function unwrapNestedJsonString(value: unknown): unknown {
@@ -330,37 +309,15 @@ function ResultRenderer({ result }: { result: unknown }) {
     );
   }
 
+  // Arrays of homogeneous objects still get the table view; everything
+  // else routes through SmartValue, which handles nested objects, long
+  // strings (with show-more), URLs/dates, etc. — same renderer the
+  // workflow trace uses.
   const shape = detectShape(parsed);
-
-  switch (shape) {
-    case 'table':
-      return <TableRenderer data={parsed as Record<string, unknown>[]} />;
-
-    case 'kv':
-      return <KvRenderer data={parsed as Record<string, unknown>} />;
-
-    case 'scalar': {
-      const str = String(parsed);
-      if (str.length > 200) {
-        return <ToolCodeBlock maxHeight="280px">{str}</ToolCodeBlock>;
-      }
-      return (
-        <div className="font-mono text-[11px] text-neutral-600 dark:text-neutral-400">
-          <CellValue value={parsed} />
-        </div>
-      );
-    }
-
-    case 'json':
-    default: {
-      const str = JSON.stringify(parsed, null, 2);
-      return (
-        <ToolCodeBlock maxHeight="280px">
-          {str.length > 4000 ? str.slice(0, 4000) + '\n... (truncated)' : str}
-        </ToolCodeBlock>
-      );
-    }
+  if (shape === 'table') {
+    return <TableRenderer data={parsed as Record<string, unknown>[]} />;
   }
+  return <SmartValue value={parsed} />;
 }
 
 // ---------------------------------------------------------------------------

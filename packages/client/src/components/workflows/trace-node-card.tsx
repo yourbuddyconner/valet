@@ -815,7 +815,7 @@ function arrayItemSummary(item: unknown, index: number): React.ReactNode {
   return <span>{index + 1}. {String(item)}</span>;
 }
 
-function KeyValueGrid({ value }: { value: Record<string, unknown> }) {
+export function KeyValueGrid({ value }: { value: Record<string, unknown> }) {
   const entries = Object.entries(value);
   if (entries.length === 0) return <span className="text-neutral-400 italic">no fields</span>;
   return (
