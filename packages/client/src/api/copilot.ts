@@ -128,7 +128,20 @@ export function useCopilotChat(opts: UseCopilotChatOptions) {
 
       if (!resp.ok) {
         const body = await resp.text().catch(() => '');
-        throw new Error(body || `HTTP ${resp.status}`);
+        let friendly = body || `HTTP ${resp.status}`;
+        try {
+          const parsed = JSON.parse(body) as { error?: string | { issues?: Array<{ message?: string; path?: unknown[] }> } };
+          if (typeof parsed.error === 'string') {
+            friendly = parsed.error;
+          } else if (parsed.error && Array.isArray(parsed.error.issues)) {
+            friendly = parsed.error.issues
+              .map((i) => `${i.message ?? ''}${i.path ? ` (${i.path.join('.')})` : ''}`)
+              .join('; ');
+          }
+        } catch {
+          /* leave friendly as raw body */
+        }
+        throw new Error(friendly);
       }
 
       const newThreadId = resp.headers.get('X-Copilot-Thread-Id');
@@ -148,6 +161,15 @@ export function useCopilotChat(opts: UseCopilotChatOptions) {
         setStatus('idle');
         return;
       }
+      // Drop the empty assistant placeholder we optimistically added so
+      // the user message isn't followed by a blank bubble + an error.
+      setMessages((prev) => {
+        const last = prev[prev.length - 1];
+        if (last && last.role === 'assistant' && last.parts.length === 0) {
+          return prev.slice(0, -1);
+        }
+        return prev;
+      });
       setStatus('error');
       setError(err instanceof Error ? err.message : String(err));
     } finally {

@@ -61,9 +61,12 @@ copilotRouter.delete('/threads/:threadId', async (c) => {
 // ────────────────────────────────────────────────────────────────────────
 
 const chatBodySchema = z.object({
-  workflowId: z.string().min(1).optional(),
-  threadId: z.string().min(1).optional(),
-  model: z.string().min(1).optional(),
+  // All three accept null because the client sends them through
+  // JSON.stringify which preserves `null` for unset fields, and a fresh
+  // thread has threadId === null on the first request.
+  workflowId: z.string().min(1).nullish(),
+  threadId: z.string().min(1).nullish(),
+  model: z.string().min(1).nullish(),
   // Vercel AI SDK UI message shape. We pass through to convertToModelMessages.
   messages: z.array(z.record(z.unknown())),
 });
@@ -74,16 +77,21 @@ copilotRouter.post('/chat', zValidator('json', chatBodySchema), async (c) => {
   const body = c.req.valid('json');
 
   // Resolve or create the thread. workflowId is required when creating;
-  // threadId is required when continuing.
-  let thread = body.threadId ? await getCopilotThread(db, body.threadId, user.id) : null;
+  // threadId is required when continuing. Both fields are nullish on
+  // the wire to accommodate the client's serialised null defaults.
+  const threadIdInput = body.threadId ?? null;
+  const workflowIdInput = body.workflowId ?? null;
+  const modelInput = body.model ?? null;
+
+  let thread = threadIdInput ? await getCopilotThread(db, threadIdInput, user.id) : null;
   if (!thread) {
-    if (!body.workflowId) {
+    if (!workflowIdInput) {
       throw new ValidationError('workflowId required to start a new copilot thread');
     }
     thread = await createCopilotThread(db, {
-      workflowId: body.workflowId,
+      workflowId: workflowIdInput,
       userId: user.id,
-      model: body.model ?? DEFAULT_MODEL,
+      model: modelInput ?? DEFAULT_MODEL,
     });
   }
 
@@ -105,7 +113,7 @@ copilotRouter.post('/chat', zValidator('json', chatBodySchema), async (c) => {
     });
   }
 
-  const modelId = body.model ?? thread.model ?? DEFAULT_MODEL;
+  const modelId = modelInput ?? thread.model ?? DEFAULT_MODEL;
   const { provider, model } = parseModelId(modelId);
 
   // Provider client — DB-configured org BYOK keys win over env vars.
