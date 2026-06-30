@@ -27,24 +27,21 @@ function tryParseJson(value: unknown): unknown | null {
 }
 
 /**
- * Walk a parsed payload and one-level-unwrap any string values that
- * look like JSON-encoded objects/arrays. This is the common case where
- * a tool serialises a sub-payload as a string (e.g. `call_tool`'s
- * `params` field). We only unwrap obvious cases (`{...}` or `[...]`),
- * not free-text that happens to contain brackets.
+ * Walk a parsed payload and unwrap string values that are themselves
+ * encoded payloads (JSON or TOON). This is the common case where a
+ * tool serialises a sub-payload as a string — `call_tool`'s `params`,
+ * or a `list_tools` result that comes back as a TOON-encoded blob.
+ * We only attempt the unwrap when the string starts with a structural
+ * marker (`{`, `[`, or `[N]:` for TOON array-of-objects); free-text
+ * that happens to contain brackets is left alone.
  */
 function normalisePayload(value: unknown): unknown {
   if (typeof value === 'string') {
     const trimmed = value.trim();
-    if (trimmed.length >= 2) {
-      const first = trimmed[0];
-      const last = trimmed[trimmed.length - 1];
-      if ((first === '{' && last === '}') || (first === '[' && last === ']')) {
-        try {
-          return normalisePayload(JSON.parse(trimmed));
-        } catch {
-          /* fall through */
-        }
+    if (looksEncoded(trimmed)) {
+      const decoded = tryParseJson(trimmed);
+      if (decoded !== null && decoded !== trimmed) {
+        return normalisePayload(decoded);
       }
     }
     return value;
@@ -60,6 +57,16 @@ function normalisePayload(value: unknown): unknown {
     return out;
   }
   return value;
+}
+
+function looksEncoded(trimmed: string): boolean {
+  if (trimmed.length < 2) return false;
+  const first = trimmed[0];
+  const last = trimmed[trimmed.length - 1];
+  if ((first === '{' && last === '}') || (first === '[' && last === ']')) return true;
+  // TOON array-of-objects header (e.g. `[6]:` or `[6]{id,name}:`).
+  if (first === '[' && /^\[\d+\][^\n]*:/.test(trimmed)) return true;
+  return false;
 }
 
 // ---------------------------------------------------------------------------
@@ -79,6 +86,13 @@ export function ToolPayload({ value }: { value: unknown }) {
   const normalised = normalisePayload(value);
   const tableRows = detectTableRows(normalised);
   const [mode, setMode] = useState<'table' | 'json'>(tableRows ? 'table' : 'json');
+
+  // Raw multi-line string (TOON we couldn't decode, log output, free
+  // text result). Render as a clean preformatted code block instead of
+  // wrapping in JSON quotes — much easier to read.
+  if (typeof normalised === 'string' && normalised.includes('\n')) {
+    return <RawTextBlock text={normalised} />;
+  }
 
   if (tableRows) {
     return (
@@ -101,6 +115,27 @@ export function ToolPayload({ value }: { value: unknown }) {
   }
 
   return <JsonBlock value={normalised} />;
+}
+
+function RawTextBlock({ text }: { text: string }) {
+  const [showAll, setShowAll] = useState(text.length <= MAX_CHARS);
+  const display = showAll ? text : text.slice(0, MAX_CHARS) + '\n…';
+  return (
+    <div className="space-y-1.5">
+      <pre className="m-0 max-h-[480px] overflow-auto whitespace-pre-wrap break-words rounded-md border border-neutral-200 bg-neutral-50/60 px-3 py-2.5 font-mono text-[11.5px] leading-[1.65] text-neutral-700 dark:border-neutral-800 dark:bg-neutral-950/40 dark:text-neutral-200">
+        {display}
+      </pre>
+      {!showAll && (
+        <button
+          type="button"
+          onClick={() => setShowAll(true)}
+          className="text-[11px] text-neutral-500 hover:text-neutral-900 dark:text-neutral-400 dark:hover:text-neutral-100"
+        >
+          Show all ({text.length.toLocaleString()} chars)
+        </button>
+      )}
+    </div>
+  );
 }
 
 function JsonBlock({ value }: { value: unknown }) {
@@ -427,7 +462,17 @@ function extractArgHint(tool: ToolCallData, argsObj: Record<string, unknown> | n
 
 function extractResultHint(rawResult: unknown): string | null {
   const parsed = tryParseJson(rawResult);
-  if (parsed == null) return null;
+  // TOON-encoded array results that decodeToon couldn't crack still
+  // start with `[N]:` — grab the count cheaply so the header still
+  // reads e.g. `query · 6 results` even when the body fell back to a
+  // raw text block.
+  if (parsed == null) {
+    if (typeof rawResult === 'string') {
+      const m = /^\s*\[(\d+)\]/.exec(rawResult);
+      if (m) return `${m[1]} result${m[1] === '1' ? '' : 's'}`;
+    }
+    return null;
+  }
   if (Array.isArray(parsed)) {
     return `${parsed.length} result${parsed.length === 1 ? '' : 's'}`;
   }
