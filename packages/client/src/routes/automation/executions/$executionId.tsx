@@ -24,6 +24,12 @@ function ExecutionDetailPage() {
   const cancel = useCancelExecution();
   const retryExecution = useRetryExecution();
   const execution = data?.execution;
+  const [copyState, setCopyState] = React.useState<'idle' | 'copied'>('idle');
+  React.useEffect(() => {
+    if (copyState !== 'copied') return;
+    const t = window.setTimeout(() => setCopyState('idle'), 2000);
+    return () => window.clearTimeout(t);
+  }, [copyState]);
   // Persist the toggle across reloads — switching to Canvas should
   // stick. localStorage avoids dragging URL state for what's a pure UI
   // preference. Default to 'canvas' since that's the more graphical
@@ -65,6 +71,18 @@ function ExecutionDetailPage() {
       toastSuccess('Execution cancelled');
     } catch (err) {
       toastError('Cancel failed', err instanceof Error ? err.message : 'unknown error');
+    }
+  };
+
+  const onCopyTrace = async () => {
+    if (!execution) return;
+    const text = serializeExecutionTrace({ execution, definition });
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopyState('copied');
+      toastSuccess('Trace copied', `${text.length.toLocaleString()} chars`);
+    } catch (err) {
+      toastError('Copy failed', err instanceof Error ? err.message : 'unknown error');
     }
   };
 
@@ -122,6 +140,10 @@ function ExecutionDetailPage() {
           )}
         </div>
         <div className="flex shrink-0 items-center gap-2">
+          <Button variant="secondary" onClick={onCopyTrace}>
+            <CopyIcon />
+            {copyState === 'copied' ? 'Copied!' : 'Copy trace'}
+          </Button>
           <Button variant="secondary" onClick={onRetry} disabled={retryExecution.isPending}>
             <RetryIcon />
             {retryExecution.isPending ? 'Retrying...' : 'Retry'}
@@ -253,6 +275,15 @@ function CancelIcon() {
       <circle cx="12" cy="12" r="10" />
       <path d="m15 9-6 6" />
       <path d="m9 9 6 6" />
+    </svg>
+  );
+}
+
+function CopyIcon() {
+  return (
+    <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <rect width="14" height="14" x="8" y="8" rx="2" ry="2" />
+      <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2" />
     </svg>
   );
 }
@@ -398,4 +429,163 @@ function ExecutionDetailSkeleton() {
       </div>
     </div>
   );
+}
+
+/**
+ * Serializes a workflow execution into a markdown-formatted trace suitable
+ * for pasting into Claude / an issue / a chat. Includes execution
+ * metadata, workflow definition (when available), trigger payload,
+ * outputs, error, per-node trace with input/output/error/params, and
+ * the full approval history.
+ *
+ * Trade-off: dump-everything maximizes diagnostic value at the cost of
+ * length. Large blobs (JSON outputs from a sandbox or a tool result)
+ * can balloon a single execution to dozens of KB; that's fine for our
+ * clipboard use case but we let the user see the size on copy.
+ */
+function serializeExecutionTrace({
+  execution,
+  definition,
+}: {
+  execution: Execution;
+  definition: WorkflowDefinition | null;
+}): string {
+  const lines: string[] = [];
+
+  lines.push('# Workflow execution trace');
+  lines.push('');
+  lines.push('## Metadata');
+  lines.push(`- **ID:** \`${execution.id}\``);
+  if (execution.workflowName) lines.push(`- **Workflow:** ${execution.workflowName} (\`${execution.workflowId}\`)`);
+  else lines.push(`- **Workflow ID:** \`${execution.workflowId}\``);
+  lines.push(`- **Status:** ${execution.status}`);
+  if (execution.mode) lines.push(`- **Mode:** ${execution.mode}`);
+  lines.push(`- **Trigger:** ${execution.triggerType}${execution.triggerName ? ` (${execution.triggerName})` : ''}${execution.triggerId ? ` — \`${execution.triggerId}\`` : ''}`);
+  lines.push(`- **Started:** ${execution.startedAt}`);
+  if (execution.completedAt) lines.push(`- **Completed:** ${execution.completedAt} (${formatDuration(execution.startedAt, execution.completedAt)})`);
+  if (execution.cancelledAt) lines.push(`- **Cancelled:** ${execution.cancelledAt}${execution.cancelledBy ? ` by ${execution.cancelledBy}` : ''}`);
+  lines.push('');
+
+  if (execution.error) {
+    lines.push('## Error');
+    lines.push('```');
+    lines.push(execution.error);
+    lines.push('```');
+    lines.push('');
+  }
+
+  if (execution.triggerData && Object.keys(execution.triggerData).length > 0) {
+    lines.push('## Trigger data');
+    lines.push('```json');
+    lines.push(JSON.stringify(execution.triggerData, null, 2));
+    lines.push('```');
+    lines.push('');
+  }
+
+  if (execution.triggerMetadata && Object.keys(execution.triggerMetadata).length > 0) {
+    lines.push('## Trigger metadata');
+    lines.push('```json');
+    lines.push(JSON.stringify(execution.triggerMetadata, null, 2));
+    lines.push('```');
+    lines.push('');
+  }
+
+  if (execution.outputs && Object.keys(execution.outputs).length > 0) {
+    lines.push('## Outputs');
+    lines.push('```json');
+    lines.push(JSON.stringify(execution.outputs, null, 2));
+    lines.push('```');
+    lines.push('');
+  }
+
+  if (definition && Array.isArray(definition.nodes)) {
+    lines.push('## Workflow definition (DAG)');
+    lines.push('```json');
+    lines.push(JSON.stringify(definition, null, 2));
+    lines.push('```');
+    lines.push('');
+  }
+
+  const nodes = execution.nodes ?? [];
+  if (nodes.length > 0) {
+    lines.push(`## Nodes (${nodes.length})`);
+    lines.push('');
+    for (const node of nodes) {
+      lines.push(`### \`${node.nodeId}\` (${node.nodeType}) — ${node.status}`);
+      const meta: string[] = [];
+      if (typeof node.durationMs === 'number') meta.push(`duration: ${node.durationMs}ms`);
+      if (node.startedAt) meta.push(`started: ${node.startedAt}`);
+      if (node.completedAt) meta.push(`completed: ${node.completedAt}`);
+      if (node.retryAttempts > 0) meta.push(`retries: ${node.retryAttempts}`);
+      if (node.sessionId) meta.push(`session: \`${node.sessionId}\``);
+      if (node.invocationId) meta.push(`invocation: \`${node.invocationId}\``);
+      if (node.approvalId) meta.push(`approval: \`${node.approvalId}\``);
+      if (node.policySource && node.policySource !== 'system_default') {
+        meta.push(`auto-approved: ${node.policySource}${node.policyScope ? ` (${node.policyScope})` : ''}`);
+      }
+      if (meta.length > 0) lines.push(`- ${meta.join(' · ')}`);
+      lines.push('');
+
+      if (node.inputPreview) {
+        lines.push(`**Input${node.inputTruncated ? ' (truncated)' : ''}:**`);
+        lines.push('```');
+        lines.push(node.inputPreview);
+        lines.push('```');
+        lines.push('');
+      }
+      if (node.output) {
+        lines.push(`**Output${node.outputTruncated ? ' (truncated)' : ''}:**`);
+        lines.push('```');
+        lines.push(node.output);
+        lines.push('```');
+        lines.push('');
+      }
+      if (node.error) {
+        lines.push('**Error:**');
+        lines.push('```');
+        lines.push(node.error);
+        lines.push('```');
+        lines.push('');
+      }
+      if (node.reason) {
+        lines.push('**Reason:**');
+        lines.push('```');
+        lines.push(node.reason);
+        lines.push('```');
+        lines.push('');
+      }
+    }
+  }
+
+  const approvals = execution.approvals ?? [];
+  if (approvals.length > 0) {
+    lines.push(`## Approvals (${approvals.length})`);
+    lines.push('');
+    for (const a of approvals) {
+      const iter = typeof a.iterationIndex === 'number' ? ` · iter ${a.iterationIndex}` : '';
+      lines.push(`### \`${a.nodeId}\`${iter} — ${a.status} (${a.kind})`);
+      const meta: string[] = [];
+      meta.push(`requested: ${a.createdAt}`);
+      if (a.timeoutAt) meta.push(`expires: ${a.timeoutAt}`);
+      if (a.resolvedAt) meta.push(`resolved: ${a.resolvedAt}`);
+      if (a.resolvedBy) meta.push(`by: \`${a.resolvedBy}\``);
+      if (a.originSessionId) meta.push(`from session: \`${a.originSessionId}\``);
+      lines.push(`- ${meta.join(' · ')}`);
+      if (a.prompt) {
+        lines.push('');
+        lines.push(`> ${a.prompt.replace(/\n/g, '\n> ')}`);
+      }
+      if (a.summary) lines.push(`- _summary:_ ${a.summary}`);
+      if (a.details !== null && a.details !== undefined) {
+        lines.push('');
+        lines.push('Details:');
+        lines.push('```json');
+        lines.push(JSON.stringify(a.details, null, 2));
+        lines.push('```');
+      }
+      lines.push('');
+    }
+  }
+
+  return lines.join('\n');
 }
