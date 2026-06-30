@@ -82,7 +82,14 @@ export function ExecutionApprovalCard({ executionId, approval }: { executionId: 
   const deny = useDenyExecutionApproval();
   const [reason, setReason] = React.useState('');
   const busy = approve.isPending || deny.isPending;
-  const isPending = approval.status === 'pending';
+  // A pending approval whose timeout has already passed will be rejected
+  // by the server with "approval has expired" — there's no periodic
+  // sweep that flips status to 'expired' in the DB, so we detect it
+  // client-side and render the expired state instead of approve buttons.
+  const isExpired = approval.status === 'pending'
+    && typeof approval.timeoutAt === 'string'
+    && new Date(approval.timeoutAt).getTime() <= Date.now();
+  const isPending = approval.status === 'pending' && !isExpired;
   // iterationIndex is set when the approval was raised inside a foreach
   // body. The card uses this to offer the scoped "Approve remaining rows"
   // button — which creates an execution-scoped grant narrowed to this
@@ -218,6 +225,11 @@ export function ExecutionApprovalCard({ executionId, approval }: { executionId: 
               {deny.isPending ? 'Denying…' : 'Deny'}
             </Button>
           </div>
+        </div>
+      ) : isExpired ? (
+        <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-neutral-500 dark:text-neutral-400">
+          <Badge variant="error">expired</Badge>
+          <span>timed out {formatRelativeTime(approval.timeoutAt as string)}</span>
         </div>
       ) : (
         <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-neutral-500 dark:text-neutral-400">
