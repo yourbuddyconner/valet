@@ -16,6 +16,7 @@ export function BashCard({ tool }: { tool: ToolCallData }) {
       icon={<TerminalIcon className="h-3.5 w-3.5" />}
       label="bash"
       status={tool.status}
+      tool={tool}
       summary={
         description ? (
           <span className="text-neutral-500 dark:text-neutral-400">{description}</span>

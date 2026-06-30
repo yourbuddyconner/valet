@@ -1,7 +1,8 @@
 import { createContext, useContext, useState, type ReactNode } from 'react';
 import { cn } from '@/lib/cn';
-import type { ToolCallStatus } from './types';
+import type { ToolCallData, ToolCallStatus } from './types';
 import { ChevronIcon } from './icons';
+import { getResultTail } from './summarize';
 
 interface ToolCardShellProps {
   /** Tool icon element */
@@ -30,9 +31,24 @@ interface ToolCardShellProps {
    * ran" with "the underlying check returned true."
    */
   result?: unknown;
+  /**
+   * Optional full tool payload. When provided, the shell auto-appends
+   * a result-tail (e.g. ` · 12 matches`) to the summary so specialized
+   * cards (grep, glob, bash, …) get the same above-the-fold count the
+   * generic card uses, without each one re-implementing it.
+   */
+  tool?: ToolCallData;
 }
 
 export const ToolCardExpansionIntentContext = createContext<boolean | null>(null);
+
+/**
+ * Chat-level "expand all" override. When `true`, the shell forces
+ * itself open (and the DeferredToolCard engages immediately) regardless
+ * of the per-card intent. The toggle lives in the chat header so users
+ * can pop every card open at once when skimming a long thread.
+ */
+export const ToolCardExpandAllContext = createContext<boolean>(false);
 
 const STATUS_COLORS: Record<ToolCallStatus, string> = {
   pending: 'text-neutral-400 dark:text-neutral-500',
@@ -58,13 +74,24 @@ export function ToolCardShell({
   expandable,
   onToggle,
   result,
+  tool,
 }: ToolCardShellProps) {
   const isFalseOutcome = status === 'completed' && hasFalseOutcome(result);
+  // Auto-enrich: if a tool was passed and the result has a tail not
+  // already present in the summary, append it. Specialized cards opt
+  // in just by passing `tool={tool}` — no per-card duplication of
+  // count-extraction logic.
+  const enrichedSummary = enrichSummary(summary, tool);
   const expansionIntent = useContext(ToolCardExpansionIntentContext);
+  const expandAll = useContext(ToolCardExpandAllContext);
   const [expanded, setExpanded] = useState(expansionIntent ?? defaultExpanded);
   const isActive = status === 'pending' || status === 'running';
   const hasContent = !!children;
   const isExpandable = expandable ?? hasContent;
+  // Chat-level expand-all overrides the local expanded state without
+  // overwriting it — when the user toggles expand-all off, cards return
+  // to whatever the user had clicked them to before.
+  const effectiveExpanded = expandAll || expanded;
 
   return (
     <div
@@ -97,7 +124,7 @@ export function ToolCardShell({
           <ChevronIcon
             className={cn(
               'h-3 w-3 shrink-0 text-neutral-400 transition-transform duration-150 dark:text-neutral-500',
-              hasContent && expanded && 'rotate-90',
+              hasContent && effectiveExpanded && 'rotate-90',
             )}
           />
         ) : (
@@ -118,31 +145,39 @@ export function ToolCardShell({
         </span>
 
         {/* Summary */}
-        {summary && (
+        {enrichedSummary && (
           <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-neutral-400 dark:text-neutral-500">
-            {summary}
+            {enrichedSummary}
           </span>
         )}
 
-        {/* Status label */}
-        <span
-          className={cn(
-            'ml-auto shrink-0 font-mono text-[10px] tabular-nums',
-            STATUS_COLORS[status],
-          )}
-        >
-          {isActive ? (
-            <span className="inline-flex items-center gap-1">
-              <RunningDots />
-            </span>
-          ) : (
-            status
-          )}
-        </span>
+        {/* Status label — hidden for `completed` to cut header noise
+            (the green check + summary already say enough). Visible for
+            running/pending/error where the word adds information. */}
+        {status === 'completed' ? (
+          // Push the (now hidden) status to keep summary text from
+          // running to the very right edge — same spacing as before.
+          <span aria-hidden className="ml-auto shrink-0" />
+        ) : (
+          <span
+            className={cn(
+              'ml-auto shrink-0 font-mono text-[10px] tabular-nums',
+              STATUS_COLORS[status],
+            )}
+          >
+            {isActive ? (
+              <span className="inline-flex items-center gap-1">
+                <RunningDots />
+              </span>
+            ) : (
+              status
+            )}
+          </span>
+        )}
       </button>
 
       {/* Expanded content */}
-      {expanded && children && (
+      {effectiveExpanded && children && (
         <div className="border-t border-neutral-100 dark:border-neutral-800">
           {children}
         </div>
@@ -187,6 +222,24 @@ function StatusDot({ status, falseOutcome }: { status: ToolCallStatus; falseOutc
   }
 
   return null;
+}
+
+function enrichSummary(summary: ReactNode | undefined, tool: ToolCallData | undefined): ReactNode | undefined {
+  if (!tool) return summary;
+  const tail = getResultTail(tool.result, tool.status);
+  if (!tail) return summary;
+  // Don't double-append when the card already includes the count
+  // (grep / list write it manually into their JSX summary).
+  if (typeof summary === 'string' && summary.includes(tail)) return summary;
+  if (!summary) {
+    return <span className="text-neutral-400 dark:text-neutral-500">{tail}</span>;
+  }
+  return (
+    <>
+      {summary}
+      <span className="text-neutral-400 dark:text-neutral-500"> · {tail}</span>
+    </>
+  );
 }
 
 function hasFalseOutcome(result: unknown): boolean {

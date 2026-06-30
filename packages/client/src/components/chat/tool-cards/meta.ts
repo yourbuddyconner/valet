@@ -1,4 +1,5 @@
 import type { ToolCallData } from './types';
+import { getToolSummary } from './summarize';
 
 export interface ToolCardMeta {
   label: string;
@@ -18,19 +19,24 @@ function toolBaseName(toolName: string): string {
   return toolName.toLowerCase().split('__').pop()?.split('.').pop() ?? toolName.toLowerCase();
 }
 
+/** Promote the shared summary to a meta-style ToolCardMeta. */
+function withSharedSummary(meta: ToolCardMeta, tool: ToolCallData): ToolCardMeta {
+  const shared = getToolSummary(tool);
+  if (shared && shared !== meta.summary) {
+    return { ...meta, summary: shared };
+  }
+  return meta;
+}
+
 export function getToolCardMeta(tool: ToolCallData): ToolCardMeta {
   const baseName = toolBaseName(tool.toolName);
   const args = asRecord(tool.args);
 
   // call_tool is the orchestrator's generic dispatcher — the *real*
-  // tool being invoked is in args.tool_id. Surface that as the summary
-  // so the collapsed card reads e.g. `call_tool · workflows.create`
-  // instead of a bare `call_tool · completed`.
+  // tool being invoked is in args.tool_id, plus an optional result
+  // count. The shared summarizer assembles both.
   if (baseName === 'call_tool') {
-    return {
-      label: 'call_tool',
-      summary: asString(args?.tool_id) ?? asString(args?.summary),
-    };
+    return withSharedSummary({ label: 'call_tool' }, tool);
   }
 
   // Labels are kept in lowercase to match the specialized card labels —
@@ -162,8 +168,11 @@ export function getToolCardMeta(tool: ToolCallData): ToolCardMeta {
         summary: 'Read messages',
       };
     default:
-      return {
-        label: tool.toolName,
-      };
+      // Fallback: every tool we don't have a hand-tuned card for runs
+      // through the shared summarizer so the collapsed header still
+      // shows arg + result-count above the fold. This is what makes
+      // `list_tools`, `tool_search`, `triggers.*`, etc. readable
+      // without having to expand.
+      return withSharedSummary({ label: tool.toolName }, tool);
   }
 }

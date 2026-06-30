@@ -6,6 +6,7 @@ import { MarkdownContent } from '@/components/chat/markdown/markdown-content';
 import { formatRelativeTime } from '@/lib/format';
 import { cn } from '@/lib/cn';
 import { correctNodeStatusForFinishedExecution } from './workflow-execution-viewer-model';
+import { ToolPayload } from '@/components/payload/tool-payload';
 
 // ─── Public ──────────────────────────────────────────────────────────────────
 
@@ -709,11 +710,12 @@ export function SmartValue({ value }: { value: unknown }): React.ReactElement {
   if (typeof value === 'string') {
     return <SmartString value={value} />;
   }
-  if (Array.isArray(value)) {
-    return <ArrayValue items={value} />;
-  }
-  if (typeof value === 'object') {
-    return <KeyValueGrid value={value as Record<string, unknown>} />;
+  if (Array.isArray(value) || typeof value === 'object') {
+    // Delegate any object/array to the shared payload renderer — same
+    // single-column pretty JSON + auto-table treatment the chat tool
+    // cards use. Keeps the trace card from cascading into nested KV
+    // grids when values contain nested objects.
+    return <ToolPayload value={value} />;
   }
   return <span className="font-mono text-sm">{String(value)}</span>;
 }
@@ -743,77 +745,11 @@ function SmartString({ value }: { value: string }) {
   return <span className="break-words text-sm text-neutral-900 dark:text-neutral-100">{value}</span>;
 }
 
-function ArrayValue({ items }: { items: unknown[] }) {
-  const [showAll, setShowAll] = React.useState(false);
-  if (items.length === 0) return <span className="text-neutral-400 italic">empty list</span>;
-  // Scalar arrays render as a compact comma-separated row.
-  const allScalar = items.every((i) =>
-    i === null || i === undefined || typeof i === 'string' || typeof i === 'number' || typeof i === 'boolean'
-  );
-  if (allScalar) {
-    const preview = items.slice(0, 8);
-    return (
-      <div className="space-y-1">
-        <div className="flex flex-wrap items-center gap-1.5">
-          {preview.map((item, i) => (
-            <span
-              key={i}
-              className="inline-flex items-center rounded bg-neutral-100 px-1.5 py-0.5 font-mono text-[11px] text-neutral-700 dark:bg-neutral-800 dark:text-neutral-300"
-            >
-              {item === null ? 'null' : String(item)}
-            </span>
-          ))}
-        </div>
-        {items.length > preview.length && (
-          <p className="text-xs text-neutral-500">+ {items.length - preview.length} more</p>
-        )}
-      </div>
-    );
-  }
-  // Object arrays: show count + N expandable cards.
-  const visible = showAll ? items : items.slice(0, 5);
-  return (
-    <div className="space-y-2">
-      <div className="text-xs text-neutral-500">{items.length} item{items.length === 1 ? '' : 's'}</div>
-      <div className="space-y-1.5">
-        {visible.map((item, i) => (
-          <details key={i} className="rounded-md border border-neutral-200 bg-neutral-50/50 dark:border-neutral-800 dark:bg-neutral-900/40">
-            <summary className="cursor-pointer px-3 py-1.5 text-xs text-neutral-700 dark:text-neutral-300">
-              {arrayItemSummary(item, i)}
-            </summary>
-            <div className="border-t border-neutral-200 px-3 py-2 dark:border-neutral-800">
-              <SmartValue value={item} />
-            </div>
-          </details>
-        ))}
-      </div>
-      {items.length > 5 && (
-        <button
-          type="button"
-          onClick={() => setShowAll((v) => !v)}
-          className="text-xs text-neutral-500 hover:text-neutral-900 dark:text-neutral-400 dark:hover:text-neutral-100"
-        >
-          {showAll ? 'Show fewer' : `Show all ${items.length}`}
-        </button>
-      )}
-    </div>
-  );
-}
-
-function arrayItemSummary(item: unknown, index: number): React.ReactNode {
-  if (item && typeof item === 'object' && !Array.isArray(item)) {
-    const obj = item as Record<string, unknown>;
-    // Prefer a name-like field if present.
-    const candidates = ['name', 'title', 'id', 'status', 'key'];
-    for (const k of candidates) {
-      const v = obj[k];
-      if (typeof v === 'string') return <span><span className="text-neutral-400">{index + 1}. </span>{v}</span>;
-    }
-    const fieldCount = Object.keys(obj).length;
-    return <span>{index + 1}. {fieldCount} field{fieldCount === 1 ? '' : 's'}</span>;
-  }
-  return <span>{index + 1}. {String(item)}</span>;
-}
+// ArrayValue + arrayItemSummary used to live here. After SmartValue
+// started delegating object/array rendering to the shared ToolPayload
+// component, they became unused — ToolPayload's auto-table view (for
+// homogeneous object arrays) and JSON view (for everything else)
+// replaces the old expandable-card pattern.
 
 function KeyValueGrid({ value }: { value: Record<string, unknown> }) {
   const entries = Object.entries(value);

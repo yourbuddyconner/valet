@@ -6,6 +6,7 @@ import { ThinkingIndicator } from './thinking-indicator';
 import { DeferredMarkdownContent } from './markdown/deferred-markdown-content';
 import { DeferredToolCard } from './deferred-tool-card';
 import type { ToolCallData, ToolCallStatus } from './tool-cards/types';
+import { ToolCardExpandAllContext } from './tool-cards/tool-card-shell';
 import { ChildSessionInlineList } from './child-session-card';
 import { useDrawer } from '@/hooks/use-drawer';
 import type { ChildSessionEvent, ConnectedUser } from '@/hooks/use-chat';
@@ -113,8 +114,10 @@ export function MessageList({ messages, isAgentThinking, agentStatus, agentStatu
 
   const isEmpty = messages.length === 0;
   const turns = isEmpty ? [] : groupIntoTurns(messages);
+  const [expandAll, setExpandAll] = useState(false);
 
   return (
+    <ToolCardExpandAllContext.Provider value={expandAll}>
     <div className="relative flex-1 overflow-hidden">
       <div ref={scrollRef} className="h-full overflow-y-auto overflow-x-hidden scroll-smooth">
         {isEmpty ? (
@@ -168,7 +171,22 @@ export function MessageList({ messages, isAgentThinking, agentStatus, agentStatu
           Bottom
         </button>
       )}
+
+      {/* Expand-all toggle — pops every tool card in the thread open at
+          once when skimming. Overrides per-card state without erasing
+          it, so toggling back off restores individual user clicks. */}
+      {!isEmpty && (
+        <button
+          type="button"
+          onClick={() => setExpandAll((v) => !v)}
+          className="absolute right-3 top-3 z-10 rounded-md border border-neutral-200 bg-white/90 px-2 py-1 font-mono text-[10px] font-medium text-neutral-500 shadow-sm backdrop-blur transition hover:bg-white hover:text-neutral-700 dark:border-neutral-700 dark:bg-neutral-800/90 dark:text-neutral-400 dark:hover:bg-neutral-800 dark:hover:text-neutral-200"
+          title={expandAll ? 'Collapse all tool cards' : 'Expand all tool cards'}
+        >
+          {expandAll ? 'Collapse all' : 'Expand all'}
+        </button>
+      )}
     </div>
+    </ToolCardExpandAllContext.Provider>
   );
 }
 

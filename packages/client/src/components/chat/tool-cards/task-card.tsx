@@ -46,6 +46,7 @@ export function TaskCard({ tool }: { tool: ToolCallData }) {
       icon={<ForkIcon className="h-3.5 w-3.5" />}
       label="task"
       status={tool.status}
+      tool={tool}
       summary={summary}
     >
       {/* Prompt (collapsed) */}

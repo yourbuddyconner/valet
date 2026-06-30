@@ -24,6 +24,7 @@ export function SendMessageCard({ tool }: { tool: ToolCallData }) {
       icon={<MessageIcon className="h-3.5 w-3.5" />}
       label="send_message"
       status={tool.status}
+      tool={tool}
       summary={
         targetId ? (
           <span className="text-neutral-500 dark:text-neutral-400">
@@ -55,6 +56,7 @@ export function ReadMessagesCard({ tool }: { tool: ToolCallData }) {
       icon={<MessageIcon className="h-3.5 w-3.5" />}
       label="read_messages"
       status={tool.status}
+      tool={tool}
       defaultExpanded={Boolean(messages) || (tool.status === 'completed' && typeof tool.result === 'string')}
       summary={
         targetId ? (

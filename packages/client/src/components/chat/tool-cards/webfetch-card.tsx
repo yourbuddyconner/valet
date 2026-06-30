@@ -24,6 +24,7 @@ export function WebFetchCard({ tool }: { tool: ToolCallData }) {
       icon={<GlobeIcon className="h-3.5 w-3.5" />}
       label="webfetch"
       status={tool.status}
+      tool={tool}
       summary={
         <span className="flex items-center gap-1.5">
           <span className="font-semibold text-neutral-600 dark:text-neutral-300">{hostname}</span>
