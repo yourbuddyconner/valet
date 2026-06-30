@@ -386,7 +386,7 @@ function WorkflowDetailPage() {
                     <TooltipTrigger asChild>
                       <span
                         tabIndex={0}
-                        className="hidden min-w-0 cursor-default truncate rounded-sm text-xs text-neutral-500 outline-none focus-visible:ring-2 focus-visible:ring-violet-500/40 dark:text-neutral-400 md:block"
+                        className="hidden min-w-0 cursor-default truncate rounded-sm text-xs text-neutral-500 outline-none focus-visible:ring-2 focus-visible:ring-violet-500/40 dark:text-neutral-400 xl:block"
                       >
                         {workflow.description}
                       </span>
@@ -431,7 +431,7 @@ function WorkflowDetailPage() {
             type="button"
             onClick={handleToggleEnabled}
             disabled={updateWorkflow.isPending}
-            className="hidden items-center gap-2 rounded-md px-2 py-1.5 text-sm text-neutral-500 hover:bg-neutral-100 hover:text-neutral-950 disabled:opacity-60 dark:text-neutral-400 dark:hover:bg-neutral-900 dark:hover:text-neutral-100 md:flex"
+            className="hidden items-center gap-2 rounded-md px-2 py-1.5 text-sm text-neutral-500 hover:bg-neutral-100 hover:text-neutral-950 disabled:opacity-60 dark:text-neutral-400 dark:hover:bg-neutral-900 dark:hover:text-neutral-100 xl:flex"
           >
             <span className={workflow.enabled ? 'text-emerald-600 dark:text-emerald-400' : 'text-neutral-500 dark:text-neutral-400'}>
               {getWorkflowEnabledLabel(workflow.enabled)}
@@ -452,7 +452,7 @@ function WorkflowDetailPage() {
               resetPublishConfirmation();
               setVersionsDialogOpen(true);
             }}
-            className="hidden border border-neutral-200 bg-white text-neutral-800 hover:bg-neutral-100 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100 dark:hover:bg-neutral-800 lg:inline-flex"
+            className="hidden border border-neutral-200 bg-white text-neutral-800 hover:bg-neutral-100 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100 dark:hover:bg-neutral-800 xl:inline-flex"
           >
             Versions
           </Button>
