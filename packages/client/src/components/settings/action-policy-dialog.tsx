@@ -77,52 +77,6 @@ const riskColors: Record<string, { bg: string; text: string; dot: string }> = {
   critical: { bg: 'bg-red-500/10', text: 'text-red-600 dark:text-red-400', dot: 'bg-red-500' },
 };
 
-// ─── Radio Card ───────────────────────────────────────────────────────────────
-
-function RadioCard({
-  selected,
-  onClick,
-  label,
-  description,
-  className,
-}: {
-  selected: boolean;
-  onClick: () => void;
-  label: string;
-  description?: string;
-  className?: string;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={cn(
-        'flex flex-1 flex-col rounded-lg border px-3 py-2.5 text-left text-sm transition-colors',
-        selected
-          ? 'border-neutral-900 bg-neutral-50 dark:border-neutral-300 dark:bg-neutral-800'
-          : 'border-neutral-200 hover:border-neutral-300 dark:border-neutral-700 dark:hover:border-neutral-600',
-        className,
-      )}
-    >
-      <span
-        className={cn(
-          'font-medium',
-          selected
-            ? 'text-neutral-900 dark:text-neutral-100'
-            : 'text-neutral-600 dark:text-neutral-400',
-        )}
-      >
-        {label}
-      </span>
-      {description && (
-        <span className="mt-0.5 text-xs text-neutral-500 dark:text-neutral-500">
-          {description}
-        </span>
-      )}
-    </button>
-  );
-}
-
 // ─── Mode Card (colored) ─────────────────────────────────────────────────────
 
 function ModeCard({
@@ -502,6 +456,166 @@ function PolicyJsonView({
   );
 }
 
+// ─── Scope Row ───────────────────────────────────────────────────────────────
+
+/**
+ * Wraps each "Apply to" choice with its own inline picker so the form
+ * reads like one continuous sentence. Inactive rows show just the
+ * label; active row expands with its picker children.
+ */
+function ScopeRow({
+  selected,
+  onSelect,
+  label,
+  children,
+}: {
+  selected: boolean;
+  onSelect: () => void;
+  label: string;
+  children?: React.ReactNode;
+}) {
+  return (
+    <div
+      className={cn(
+        'rounded-lg border px-3 py-2 transition-colors',
+        selected
+          ? 'border-neutral-900 bg-neutral-50 dark:border-neutral-300 dark:bg-neutral-800/60'
+          : 'border-neutral-200 dark:border-neutral-700',
+      )}
+    >
+      <button
+        type="button"
+        onClick={onSelect}
+        className="flex w-full items-center gap-2 text-left text-sm"
+      >
+        <span
+          className={cn(
+            'h-3.5 w-3.5 shrink-0 rounded-full border',
+            selected
+              ? 'border-neutral-900 bg-neutral-900 dark:border-neutral-200 dark:bg-neutral-200'
+              : 'border-neutral-300 dark:border-neutral-600',
+          )}
+        />
+        <span
+          className={cn(
+            'font-medium',
+            selected ? 'text-neutral-900 dark:text-neutral-100' : 'text-neutral-500 dark:text-neutral-400',
+          )}
+        >
+          {label}
+        </span>
+      </button>
+      {selected && children}
+    </div>
+  );
+}
+
+// ─── Matcher List ────────────────────────────────────────────────────────────
+
+const MATCHER_OPS_INTERNAL: Array<{ id: ParamMatcher['op']; label: string; needsValue: boolean; valueHint?: string }> = MATCHER_OPS;
+
+function MatcherList({
+  matchers,
+  pathSuggestions,
+  onChange,
+  onRemove,
+}: {
+  matchers: ParamMatcher[];
+  pathSuggestions: string[];
+  onChange: (i: number, patch: Partial<ParamMatcher>) => void;
+  onRemove: (i: number) => void;
+}) {
+  // datalist makes the suggestions native + free-text in the same input.
+  const listId = React.useId();
+  return (
+    <div className="space-y-2">
+      <datalist id={listId}>
+        {pathSuggestions.map((p) => <option key={p} value={p} />)}
+      </datalist>
+      {matchers.map((m, i) => {
+        const opDef = MATCHER_OPS_INTERNAL.find((o) => o.id === m.op);
+        return (
+          <div key={i} className="space-y-1.5 rounded-md border border-neutral-200 p-2 dark:border-neutral-700">
+            <div className="flex items-center gap-1.5">
+              <input
+                type="text"
+                value={m.path}
+                onChange={(e) => onChange(i, { path: e.target.value })}
+                placeholder="param path"
+                list={pathSuggestions.length > 0 ? listId : undefined}
+                className="flex-1 rounded border border-neutral-300 bg-white px-2 py-1 font-mono text-xs text-neutral-900 placeholder:text-neutral-400 focus:outline-none focus:ring-1 focus:ring-neutral-500 dark:border-neutral-600 dark:bg-neutral-900 dark:text-neutral-100"
+              />
+              <select
+                value={m.op}
+                onChange={(e) => onChange(i, { op: e.target.value as ParamMatcher['op'] })}
+                className="rounded border border-neutral-300 bg-white px-2 py-1 text-xs text-neutral-700 focus:outline-none focus:ring-1 focus:ring-neutral-500 dark:border-neutral-600 dark:bg-neutral-900 dark:text-neutral-300"
+              >
+                {MATCHER_OPS_INTERNAL.map((opt) => (
+                  <option key={opt.id} value={opt.id}>{opt.label}</option>
+                ))}
+              </select>
+              {opDef?.needsValue && (
+                <ValueInput op={m.op} value={m.value} onChange={(v) => onChange(i, { value: v })} />
+              )}
+              <button
+                type="button"
+                onClick={() => onRemove(i)}
+                className="rounded p-1 text-neutral-400 hover:text-red-600 dark:hover:text-red-400"
+                aria-label="Remove condition"
+              >
+                ×
+              </button>
+            </div>
+            {opDef?.valueHint && (
+              <p className="text-[11px] text-neutral-500 dark:text-neutral-500">{opDef.valueHint}</p>
+            )}
+          </div>
+        );
+      })}
+      <p className="text-[11px] text-neutral-500 dark:text-neutral-500">
+        All conditions must match (AND).
+      </p>
+    </div>
+  );
+}
+
+function ValueInput({
+  op,
+  value,
+  onChange,
+}: {
+  op: ParamMatcher['op'];
+  value: unknown;
+  onChange: (next: unknown) => void;
+}) {
+  const display = Array.isArray(value)
+    ? value.map(String).join(',')
+    : value === undefined || value === null
+      ? ''
+      : String(value);
+  return (
+    <input
+      type="text"
+      value={display}
+      onChange={(e) => {
+        const raw = e.target.value;
+        if (op === 'in' || op === 'not_in') {
+          onChange(raw.split(',').map((s) => s.trim()).filter((s) => s.length > 0));
+          return;
+        }
+        if (op === 'gt' || op === 'gte' || op === 'lt' || op === 'lte') {
+          const n = Number(raw);
+          onChange(Number.isFinite(n) && raw.trim().length > 0 ? n : raw);
+          return;
+        }
+        onChange(raw);
+      }}
+      placeholder="value"
+      className="flex-1 rounded border border-neutral-300 bg-white px-2 py-1 text-xs text-neutral-900 placeholder:text-neutral-400 focus:outline-none focus:ring-1 focus:ring-neutral-500 dark:border-neutral-600 dark:bg-neutral-900 dark:text-neutral-100"
+    />
+  );
+}
+
 // ─── Main Dialog ─────────────────────────────────────────────────────────────
 
 export function ActionPolicyDialog({ open, onOpenChange, policy, noun = 'Policy', allowOnly = false, onSave, isPending }: ActionPolicyDialogProps) {
@@ -512,7 +626,6 @@ export function ActionPolicyDialog({ open, onOpenChange, policy, noun = 'Policy'
   const [mode, setMode] = React.useState<ActionMode>(allowOnly ? 'allow' : 'require_approval');
   const [appliesIn, setAppliesIn] = React.useState<AppliesIn>('any');
   const [matchers, setMatchers] = React.useState<ParamMatcher[]>([]);
-  const [advancedOpen, setAdvancedOpen] = React.useState(false);
   const [showJson, setShowJson] = React.useState(false);
 
   const { data: catalog } = useActionCatalog();
@@ -527,9 +640,6 @@ export function ActionPolicyDialog({ open, onOpenChange, policy, noun = 'Policy'
       setMode(policy.mode);
       setAppliesIn(policy.appliesIn ?? 'any');
       setMatchers(policy.paramMatchers ?? []);
-      // Expand "Advanced" automatically when the policy already uses
-      // either feature — easier than hunting for the disclosure.
-      setAdvancedOpen((policy.appliesIn && policy.appliesIn !== 'any') || ((policy.paramMatchers?.length ?? 0) > 0) || false);
     } else {
       setScope('action');
       setService('');
@@ -538,7 +648,6 @@ export function ActionPolicyDialog({ open, onOpenChange, policy, noun = 'Policy'
       setMode(allowOnly ? 'allow' : 'require_approval');
       setAppliesIn('any');
       setMatchers([]);
-      setAdvancedOpen(false);
     }
     setShowJson(false);
   }, [policy, open]);
@@ -578,6 +687,21 @@ export function ActionPolicyDialog({ open, onOpenChange, policy, noun = 'Policy'
         };
       });
   }, [catalog, service]);
+
+  // Derived: path autocomplete suggestions for matcher rows. When the
+  // user has picked a specific action whose inputSchema lists named
+  // properties, surface those as suggestions so they don't have to know
+  // the field name is `spreadsheetId` from documentation. Falls back to
+  // empty (free-text only) when the catalog has no schema.
+  const pathSuggestions = React.useMemo<string[]>(() => {
+    if (!catalog || !service || !actionId) return [];
+    const entry = catalog.find((e) => e.service === service && e.actionId === actionId);
+    const schema = entry?.inputSchema;
+    if (!schema || typeof schema !== 'object') return [];
+    const props = (schema as Record<string, unknown>).properties;
+    if (!props || typeof props !== 'object') return [];
+    return Object.keys(props as Record<string, unknown>);
+  }, [catalog, service, actionId]);
 
   function handleScopeChange(newScope: PolicyScope) {
     setScope(newScope);
@@ -638,23 +762,6 @@ export function ActionPolicyDialog({ open, onOpenChange, policy, noun = 'Policy'
   function removeMatcher(i: number) {
     setMatchers((rows) => rows.filter((_, idx) => idx !== i));
   }
-  /** Stringify any value for the input; arrays render as comma-separated. */
-  function valueToInput(v: unknown): string {
-    if (Array.isArray(v)) return v.map(String).join(',');
-    if (v === undefined || v === null) return '';
-    return String(v);
-  }
-  /** Parse the input back into the right shape for the op. */
-  function inputToValue(op: ParamMatcher['op'], raw: string): unknown {
-    if (op === 'in' || op === 'not_in') {
-      return raw.split(',').map((s) => s.trim()).filter((s) => s.length > 0);
-    }
-    if (op === 'gt' || op === 'gte' || op === 'lt' || op === 'lte') {
-      const n = Number(raw);
-      return Number.isFinite(n) ? n : raw;
-    }
-    return raw;
-  }
 
   const isValid = (() => {
     switch (scope) {
@@ -669,7 +776,11 @@ export function ActionPolicyDialog({ open, onOpenChange, policy, noun = 'Policy'
       <DialogContent className="max-w-lg">
         <DialogHeader>
           <div className="flex items-center justify-between pr-6">
-            <DialogTitle>{policy ? `Edit ${noun}` : `Add ${noun}`}</DialogTitle>
+            <DialogTitle>
+              {allowOnly
+                ? (policy ? 'Edit auto-approval rule' : 'Auto-approve…')
+                : (policy ? `Edit ${noun}` : `Add ${noun}`)}
+            </DialogTitle>
             <button
               type="button"
               onClick={() => setShowJson((v) => !v)}
@@ -702,97 +813,74 @@ export function ActionPolicyDialog({ open, onOpenChange, policy, noun = 'Policy'
           </div>
         ) : (
           <form onSubmit={handleSubmit} className="space-y-5">
-            {/* Scope selector */}
-            <div>
+            {/* Apply to — scope picker. Each option includes its inline
+                picker (action vs service vs risk level) so the form
+                reads as one sentence instead of three radio + three
+                separate input sections. */}
+            <section>
               <label className="mb-2 block text-sm font-medium text-neutral-700 dark:text-neutral-300">
-                Scope
+                Apply to
               </label>
-              <div className="flex gap-2">
-                <RadioCard
+              <div className="space-y-2">
+                <ScopeRow
                   selected={scope === 'action'}
-                  onClick={() => handleScopeChange('action')}
-                  label="Specific Action"
-                  description="Target a single action"
-                />
-                <RadioCard
+                  onSelect={() => handleScopeChange('action')}
+                  label="A specific action"
+                >
+                  <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                    <TypeaheadCombobox
+                      items={serviceItems}
+                      value={service}
+                      onChange={handleServiceChange}
+                      placeholder="Service"
+                      allowFreeText
+                    />
+                    <TypeaheadCombobox
+                      items={actionItems}
+                      value={actionId}
+                      onChange={setActionId}
+                      placeholder={service ? 'Action' : 'Pick a service first'}
+                      disabled={!service}
+                      allowFreeText
+                    />
+                  </div>
+                </ScopeRow>
+                <ScopeRow
                   selected={scope === 'service'}
-                  onClick={() => handleScopeChange('service')}
-                  label="Entire Service"
-                  description="All actions in a service"
-                />
-                <RadioCard
+                  onSelect={() => handleScopeChange('service')}
+                  label="Any action in a service"
+                >
+                  <div className="mt-2">
+                    <TypeaheadCombobox
+                      items={serviceItems}
+                      value={service}
+                      onChange={handleServiceChange}
+                      placeholder="Service"
+                      allowFreeText
+                    />
+                  </div>
+                </ScopeRow>
+                <ScopeRow
                   selected={scope === 'risk_level'}
-                  onClick={() => handleScopeChange('risk_level')}
-                  label="Risk Level"
-                  description="By risk classification"
-                />
+                  onSelect={() => handleScopeChange('risk_level')}
+                  label="Any action of a risk level"
+                >
+                  <div className="mt-2">
+                    <RiskLevelCards value={riskLevel} onChange={setRiskLevel} />
+                  </div>
+                </ScopeRow>
               </div>
-            </div>
+            </section>
 
-            {/* Service typeahead */}
-            {(scope === 'action' || scope === 'service') && (
-              <div>
+            {/* Effect — only rendered for admin-mode policies. User
+                policies are allow-only; showing a one-option section
+                with a paragraph explaining why is dead UI, so we drop
+                it entirely there. */}
+            {!allowOnly && (
+              <section>
                 <label className="mb-2 block text-sm font-medium text-neutral-700 dark:text-neutral-300">
-                  Service
+                  Effect
                 </label>
-                <TypeaheadCombobox
-                  items={serviceItems}
-                  value={service}
-                  onChange={handleServiceChange}
-                  placeholder="Search services or type a name..."
-                  allowFreeText
-                  freeTextHint="Type a service name like &quot;linear&quot; if it doesn't appear in the list"
-                />
-              </div>
-            )}
-
-            {/* Action typeahead */}
-            {scope === 'action' && (
-              <div>
-                <label className="mb-2 block text-sm font-medium text-neutral-700 dark:text-neutral-300">
-                  Action
-                </label>
-                <TypeaheadCombobox
-                  items={actionItems}
-                  value={actionId}
-                  onChange={setActionId}
-                  placeholder={service ? 'Search actions or type an ID...' : 'Select a service first'}
-                  disabled={!service}
-                  allowFreeText
-                  freeTextHint="Type an action ID like &quot;linear.save_issue&quot; if it doesn't appear"
-                />
-              </div>
-            )}
-
-            {/* Risk level radio cards */}
-            {scope === 'risk_level' && (
-              <div>
-                <label className="mb-2 block text-sm font-medium text-neutral-700 dark:text-neutral-300">
-                  Risk Level
-                </label>
-                <RiskLevelCards value={riskLevel} onChange={setRiskLevel} />
-              </div>
-            )}
-
-            {/* Mode selector */}
-            <div>
-              <label className="mb-2 block text-sm font-medium text-neutral-700 dark:text-neutral-300">
-                Effect
-              </label>
-              {allowOnly ? (
-                <div className="flex flex-col gap-2">
-                  <ModeCard
-                    selected={mode === 'allow'}
-                    onClick={() => setMode('allow')}
-                    label="Allow"
-                    description="Auto-approve without prompting"
-                    colorClass="border-emerald-500 bg-emerald-500/5 dark:border-emerald-400 dark:bg-emerald-500/10"
-                  />
-                  <p className="text-xs text-neutral-500 dark:text-neutral-400">
-                    User policies are allow-only by design — Require Approval is the default for un-policied actions, and Deny is admin-managed at the organization level.
-                  </p>
-                </div>
-              ) : (
                 <div className="flex gap-2">
                   <ModeCard
                     selected={mode === 'allow'}
@@ -816,117 +904,69 @@ export function ActionPolicyDialog({ open, onOpenChange, policy, noun = 'Policy'
                     colorClass="border-red-500 bg-red-500/5 dark:border-red-400 dark:bg-red-500/10"
                   />
                 </div>
+              </section>
+            )}
+
+            {/* When — first-class param-condition editor. Each row
+                renders the path field with autocomplete from the
+                selected action's inputSchema; disabled for service /
+                risk-level scopes where conditions can't safely apply
+                across actions with different param shapes. */}
+            <section>
+              <div className="mb-2 flex items-center justify-between">
+                <label className="text-sm font-medium text-neutral-700 dark:text-neutral-300">When</label>
+                {scope === 'action' && (
+                  <button
+                    type="button"
+                    onClick={addMatcher}
+                    className="text-xs text-neutral-600 hover:text-neutral-900 dark:text-neutral-400 dark:hover:text-neutral-100"
+                  >
+                    + add condition
+                  </button>
+                )}
+              </div>
+              {scope !== 'action' ? (
+                <p className="rounded-md border border-neutral-200 bg-neutral-50 px-3 py-2 text-xs text-neutral-500 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-400">
+                  Conditions only apply to specific actions — different actions in a service (or at a risk level) have different parameters.
+                  Switch to <em>A specific action</em> to add conditions.
+                </p>
+              ) : matchers.length === 0 ? (
+                <p className="text-xs text-neutral-500 dark:text-neutral-500">
+                  No conditions — the rule fires for any params. Add one like <code className="rounded bg-neutral-100 px-1 dark:bg-neutral-800">spreadsheetId equals 1S2hM5…</code> to scope to a single target.
+                </p>
+              ) : (
+                <MatcherList
+                  matchers={matchers}
+                  pathSuggestions={pathSuggestions}
+                  onChange={updateMatcher}
+                  onRemove={removeMatcher}
+                />
               )}
-            </div>
+            </section>
 
-            {/* Advanced disclosure: context + param matchers */}
-            <div className="rounded-lg border border-neutral-200 dark:border-neutral-700">
-              <button
-                type="button"
-                onClick={() => setAdvancedOpen((v) => !v)}
-                className="flex w-full items-center justify-between px-3 py-2 text-left text-sm font-medium text-neutral-700 dark:text-neutral-300"
-              >
-                <span>Advanced (context + conditions)</span>
-                <span className="text-neutral-400">{advancedOpen ? '−' : '+'}</span>
-              </button>
-              {advancedOpen && (
-                <div className="space-y-4 border-t border-neutral-200 px-3 py-3 dark:border-neutral-700">
-                  <div>
-                    <label className="mb-1 block text-xs font-medium text-neutral-600 dark:text-neutral-400">
-                      Where this rule applies
-                    </label>
-                    <div className="flex gap-2">
-                      {(['any', 'session', 'workflow'] as const).map((opt) => (
-                        <button
-                          key={opt}
-                          type="button"
-                          onClick={() => setAppliesIn(opt)}
-                          className={cn(
-                            'flex-1 rounded-md border px-2 py-1.5 text-sm transition-colors',
-                            appliesIn === opt
-                              ? 'border-neutral-900 bg-neutral-50 dark:border-neutral-300 dark:bg-neutral-800'
-                              : 'border-neutral-200 text-neutral-500 hover:border-neutral-300 dark:border-neutral-700 dark:text-neutral-400 dark:hover:border-neutral-600',
-                          )}
-                        >
-                          {opt === 'any' ? 'Anywhere' : opt === 'session' ? 'Chat sessions only' : 'Workflow runs only'}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-
-                  <div>
-                    <div className="mb-1 flex items-center justify-between">
-                      <label className="block text-xs font-medium text-neutral-600 dark:text-neutral-400">
-                        Param conditions
-                      </label>
-                      <button
-                        type="button"
-                        onClick={addMatcher}
-                        className="text-xs text-neutral-500 hover:text-neutral-900 dark:hover:text-neutral-100"
-                      >
-                        + add condition
-                      </button>
-                    </div>
-                    {matchers.length === 0 ? (
-                      <p className="text-xs text-neutral-500 dark:text-neutral-500">
-                        Empty — the rule fires for any params. Add a condition like <code className="rounded bg-neutral-100 px-1 dark:bg-neutral-800">spreadsheetId equals 1S2hM5…</code> to scope the rule to a single target.
-                      </p>
-                    ) : (
-                      <div className="space-y-2">
-                        {matchers.map((m, i) => {
-                          const opDef = MATCHER_OPS.find((o) => o.id === m.op);
-                          return (
-                            <div key={i} className="space-y-1.5 rounded-md border border-neutral-200 p-2 dark:border-neutral-700">
-                              <div className="flex items-center gap-1.5">
-                                <input
-                                  type="text"
-                                  value={m.path}
-                                  onChange={(e) => updateMatcher(i, { path: e.target.value })}
-                                  placeholder="path (e.g. spreadsheetId)"
-                                  className="flex-1 rounded border border-neutral-300 bg-white px-2 py-1 font-mono text-xs text-neutral-900 placeholder:text-neutral-400 focus:outline-none focus:ring-1 focus:ring-neutral-500 dark:border-neutral-600 dark:bg-neutral-900 dark:text-neutral-100"
-                                />
-                                <select
-                                  value={m.op}
-                                  onChange={(e) => updateMatcher(i, { op: e.target.value as ParamMatcher['op'] })}
-                                  className="rounded border border-neutral-300 bg-white px-2 py-1 text-xs text-neutral-700 focus:outline-none focus:ring-1 focus:ring-neutral-500 dark:border-neutral-600 dark:bg-neutral-900 dark:text-neutral-300"
-                                >
-                                  {MATCHER_OPS.map((opt) => (
-                                    <option key={opt.id} value={opt.id}>{opt.label}</option>
-                                  ))}
-                                </select>
-                                {opDef?.needsValue && (
-                                  <input
-                                    type="text"
-                                    value={valueToInput(m.value)}
-                                    onChange={(e) => updateMatcher(i, { value: inputToValue(m.op, e.target.value) })}
-                                    placeholder="value"
-                                    className="flex-1 rounded border border-neutral-300 bg-white px-2 py-1 text-xs text-neutral-900 placeholder:text-neutral-400 focus:outline-none focus:ring-1 focus:ring-neutral-500 dark:border-neutral-600 dark:bg-neutral-900 dark:text-neutral-100"
-                                  />
-                                )}
-                                <button
-                                  type="button"
-                                  onClick={() => removeMatcher(i)}
-                                  className="rounded p-1 text-neutral-400 hover:text-red-600 dark:hover:text-red-400"
-                                  aria-label="Remove condition"
-                                >
-                                  ×
-                                </button>
-                              </div>
-                              {opDef?.valueHint && (
-                                <p className="text-[11px] text-neutral-500 dark:text-neutral-500">{opDef.valueHint}</p>
-                              )}
-                            </div>
-                          );
-                        })}
-                        <p className="text-[11px] text-neutral-500 dark:text-neutral-500">
-                          All conditions must match (AND). Empty list = matches any params.
-                        </p>
-                      </div>
+            {/* In — context filter. Top-level (not buried under
+                Advanced) so the user sees it as part of the rule's
+                shape, not an afterthought. */}
+            <section>
+              <label className="mb-2 block text-sm font-medium text-neutral-700 dark:text-neutral-300">In</label>
+              <div className="flex gap-2">
+                {(['any', 'session', 'workflow'] as const).map((opt) => (
+                  <button
+                    key={opt}
+                    type="button"
+                    onClick={() => setAppliesIn(opt)}
+                    className={cn(
+                      'flex-1 rounded-md border px-2 py-1.5 text-sm transition-colors',
+                      appliesIn === opt
+                        ? 'border-neutral-900 bg-neutral-50 dark:border-neutral-300 dark:bg-neutral-800'
+                        : 'border-neutral-200 text-neutral-500 hover:border-neutral-300 dark:border-neutral-700 dark:text-neutral-400 dark:hover:border-neutral-600',
                     )}
-                  </div>
-                </div>
-              )}
-            </div>
+                  >
+                    {opt === 'any' ? 'Anywhere' : opt === 'session' ? 'Chat sessions only' : 'Workflow runs only'}
+                  </button>
+                ))}
+              </div>
+            </section>
 
             <DialogFooter>
               <Button
