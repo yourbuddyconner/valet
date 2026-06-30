@@ -292,17 +292,6 @@ export function validateWorkflowDataFlowEdges(
       );
       if (configuredArraySource) continue;
       if (!toolCatalogLoaded && configuredItems.startsWith('nodes.')) continue;
-      // Open trigger payloads are intentionally dynamic. Once a trigger
-      // declares dataSchema, foreach references must point at an array
-      // field — but with no schema there's nothing to statically check
-      // against and the runtime accepts any payload shape. Mirrors the
-      // server validator's `segments[0] === 'trigger'` escape hatch in
-      // packages/worker/src/lib/workflow-dag/validator.ts.
-      if (configuredItems.startsWith('trigger.')) {
-        const trigger = definition.nodes.find((node) => node.type === 'trigger');
-        const schema = trigger && 'dataSchema' in trigger ? trigger.dataSchema : undefined;
-        if (!schema || Object.keys(schema).length === 0) continue;
-      }
       warnings.push({
         edgeId: createEdgeId(edge.from, edge.to, edge.fromOutput),
         nodeId: target.id,

@@ -1117,35 +1117,11 @@ describe('workflow editor model', () => {
     ])).toEqual([]);
   });
 
-  it('does not warn when foreach reads from an untyped trigger payload', () => {
-    // Mirrors the server validator's escape hatch: trigger.* references
-    // are intentionally dynamic when no dataSchema is declared.
+  it('warns when foreach reads from an untyped trigger payload — author should declare dataSchema', () => {
     const definition: WorkflowDefinition = {
       version: 'dag/v1',
       nodes: [
         { id: 'trigger', type: 'trigger' },
-        {
-          id: 'sweep',
-          type: 'foreach',
-          items: '{{trigger.data.names}}',
-          body: { id: 'append_row', type: 'set', values: {} },
-        },
-      ],
-      edges: [{ from: 'trigger', to: 'sweep' }],
-    };
-
-    expect(validateWorkflowDataFlowEdges(definition, [])).toEqual([]);
-  });
-
-  it('warns when foreach reads from a typed trigger payload that lacks the named array field', () => {
-    const definition: WorkflowDefinition = {
-      version: 'dag/v1',
-      nodes: [
-        {
-          id: 'trigger',
-          type: 'trigger',
-          dataSchema: { name: { type: 'string' } },
-        },
         {
           id: 'sweep',
           type: 'foreach',

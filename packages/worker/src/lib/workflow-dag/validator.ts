@@ -731,10 +731,14 @@ function validateForeachItemSources(
     if (!segments) continue;
 
     if (segments[0] === 'trigger') {
-      // Open trigger payloads are intentionally dynamic. Once a trigger
-      // declares dataSchema, foreach references must point at an array field.
-      const trigger = def.nodes.find((candidate) => candidate.type === 'trigger');
-      if (!trigger?.dataSchema || Object.keys(trigger.dataSchema).length === 0) continue;
+      // foreach must reach a typed array. With no trigger.dataSchema the
+      // payload's shape is opaque, so we can't prove the named path is
+      // iterable — the workflow is one malformed trigger call away from
+      // a runtime explosion. The author must declare the trigger schema
+      // and name an array field there. Surfaced as a hard error (not a
+      // warning) so programmatic authors calling workflows.validate or
+      // workflows.save_draft see a real signal — warnings are invisible
+      // to that loop and the agent will happily ship broken workflows.
       if (arrayPaths.has(formatPathSegments(segments))) continue;
       errors.push(foreachUntypedArrayError(node.id, node.items));
       continue;

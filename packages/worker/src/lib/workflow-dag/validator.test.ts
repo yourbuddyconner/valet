@@ -304,6 +304,10 @@ describe('validateDefinition', () => {
   it('allows explicit foreach maxItems up to the execution iteration cap', () => {
     const def = definition({
       nodes: [
+        // Declared so trigger.data.items is a typed array — otherwise
+        // the foreach items rule would error first and mask the
+        // maxItems policy check this test cares about.
+        { id: 'trigger', type: 'trigger', dataSchema: { items: { type: 'array' } } },
         {
           id: 'loop',
           type: 'foreach',
@@ -341,6 +345,85 @@ describe('validateDefinition', () => {
         message: expect.stringContaining('5000'),
       }),
     ]));
+  });
+
+  it('rejects foreach items that reference a trigger field with no declared dataSchema', () => {
+    // Programmatic authors call workflows.validate / workflows.save_draft
+    // and only honor errors — a "warning" on this case is invisible to
+    // them. So this is a hard error: the author must declare the
+    // trigger's shape and the named field must be an array.
+    const def = definition({
+      nodes: [
+        { id: 'trigger', type: 'trigger' },
+        {
+          id: 'sweep',
+          type: 'foreach',
+          items: '{{trigger.data.names}}',
+          body: { id: 'inner', type: 'set', values: {} },
+        },
+        { id: 'finish', type: 'stop' },
+      ],
+      edges: [
+        { from: 'trigger', to: 'sweep' },
+        { from: 'sweep', to: 'finish' },
+      ],
+    });
+
+    expect(blockingErrors(validateDefinition(def))).toEqual([
+      expect.objectContaining({
+        code: 'foreach_items_untyped_array_output',
+        nodeId: 'sweep',
+        path: 'items',
+        message: 'foreach "sweep" uses {{trigger.data.names}}, but it is not a typed array output',
+      }),
+    ]);
+  });
+
+  it('rejects foreach items that reference a trigger field declared as a non-array type', () => {
+    const def = definition({
+      nodes: [
+        { id: 'trigger', type: 'trigger', dataSchema: { names: { type: 'string' } } },
+        {
+          id: 'sweep',
+          type: 'foreach',
+          items: '{{trigger.data.names}}',
+          body: { id: 'inner', type: 'set', values: {} },
+        },
+        { id: 'finish', type: 'stop' },
+      ],
+      edges: [
+        { from: 'trigger', to: 'sweep' },
+        { from: 'sweep', to: 'finish' },
+      ],
+    });
+
+    expect(blockingErrors(validateDefinition(def))).toEqual([
+      expect.objectContaining({
+        code: 'foreach_items_untyped_array_output',
+        nodeId: 'sweep',
+      }),
+    ]);
+  });
+
+  it('accepts foreach items that reference a trigger field declared as an array', () => {
+    const def = definition({
+      nodes: [
+        { id: 'trigger', type: 'trigger', dataSchema: { names: { type: 'array' } } },
+        {
+          id: 'sweep',
+          type: 'foreach',
+          items: '{{trigger.data.names}}',
+          body: { id: 'inner', type: 'set', values: {} },
+        },
+        { id: 'finish', type: 'stop' },
+      ],
+      edges: [
+        { from: 'trigger', to: 'sweep' },
+        { from: 'sweep', to: 'finish' },
+      ],
+    });
+
+    expect(blockingErrors(validateDefinition(def))).toEqual([]);
   });
 
   it('rejects foreach items that reference an untyped session output field', () => {
