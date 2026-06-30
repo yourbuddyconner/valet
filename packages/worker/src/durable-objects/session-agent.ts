@@ -1,8 +1,9 @@
 import type { Env } from '../env.js';
 import type { AppDb } from '../lib/drizzle.js';
 import { getDb } from '../lib/drizzle.js';
-import { createDoTracer, type DoTracer } from '../lib/do-tracing.js';
+import { createDoTracer, parseTraceparent, type DoTracer } from '../lib/do-tracing.js';
 import { activeTraceparent } from '../lib/tracing.js';
+import type { Context } from '@opentelemetry/api';
 import { updateSessionStatus, updateSessionMetrics, addActiveSeconds, updateSessionGitState, upsertSessionFileChanged, updateSessionTitle, getSession, getSessionGitState, getChildSessions, listUserChannelBindings, getUserById, getUsersByIds, createMailboxMessage, getOrgSettings, isNotificationWebEnabled, batchInsertAnalyticsEvents, batchUpsertMessages, updateUserDiscoveredModels, setCatalogCache, updateThread, incrementThreadMessageCount, getThreadOriginChannel, getOrchestratorIdentity, getUserSlackIdentityLink, getWorkflowNameByExecutionId } from '../lib/db.js';
 import { getCredential, type CredentialResult } from '../services/credentials.js';
 import { memRead, memWrite, memPatch, memRm, memSearch } from '../services/session-memory.js';
@@ -360,6 +361,13 @@ export class SessionAgentDO {
   private doTracer?: DoTracer;
   private doTracerPromise?: Promise<DoTracer>;
   private traceFlushDeadline: number | null = null;
+  // Per-turn W3C traceparent of the originating Worker trace, captured at prompt dispatch so
+  // webSocketMessage can parent the runner's reply spans to it instead of disconnected roots.
+  // Keyed by a channel key (the DO runs cross-thread turns concurrently); turnChannelKeys maps a
+  // turnId → that key so runner messages carrying only a turnId (finalize/usage-report) resolve
+  // too. In-memory + best-effort: lost on hibernation (spans fall back to roots), and size-capped.
+  private turnTraceparents = new Map<string, string>();
+  private turnChannelKeys = new Map<string, string>();
 
   /** Tracks the workflow execution ID for direct-dispatch workflow turns
    *  (where no queue row exists). Set when handleWorkflowExecuteDispatch
@@ -1071,12 +1079,18 @@ export class SessionAgentDO {
 
     const tracer = await this.getTracer();
     const userId = isRunner ? this.sessionState.userId : this.getClientUserId(ws);
+    // Parent the runner's reply spans to the originating turn's trace (captured at dispatch, keyed
+    // by channel). Channel-bearing messages resolve directly; turnId-only ones (finalize/usage-
+    // report) resolve via the turnId→channel map populated on message.create. Client messages and
+    // unkeyable runner messages fall back to a root span (no inbound trace context exists).
+    const parent = isRunner ? this.resolveTurnParent(parsed as RunnerToDOMessage) : undefined;
     await tracer.span(`ws.${isRunner ? 'runner' : 'client'}.${msgType}`, dispatch, {
       'valet.session.id': this.sessionState.sessionId,
       ...(userId ? { 'valet.user.id': userId } : {}),
       'ws.side': isRunner ? 'runner' : 'client',
       'ws.msg_type': msgType,
-    });
+      ...(parent ? { 'ws.trace_parented': true } : {}),
+    }, parent);
     // Keep an alarm pending so this buffered span drains within the flush interval even on eviction.
     this.armTraceFlush();
   }
@@ -2323,7 +2337,7 @@ export class SessionAgentDO {
       : content;
 
     const channelOcSessionId = this.getChannelOcSessionId(channelKey);
-    const dispatched = this.runnerLink.send({
+    const dispatched = this.sendPrompt({
       type: 'prompt',
       messageId,
       content: agentContent,
@@ -3163,6 +3177,7 @@ export class SessionAgentDO {
 
       'message.finalize': (msg) => {
         const turnId = msg.turnId!;
+        this.turnChannelKeys.delete(turnId); // turn done — drop the trace correlation (bounded-growth)
         if (!this.messageStore.getTurnSnapshot(turnId)) {
           if (!this.messageStore.recoverTurn(turnId)) {
             console.warn(`[SessionAgentDO] finalize for unknown turn ${turnId}`);
@@ -3313,7 +3328,7 @@ export class SessionAgentDO {
               if (initialModel) {
                 this.sessionState.initialModel = undefined;
               }
-              this.runnerLink.send({
+              this.sendPrompt({
                 type: 'prompt',
                 messageId,
                 content: initialPrompt,
@@ -5162,7 +5177,7 @@ export class SessionAgentDO {
             await this.ensureThreadOcSessionHydrated(threadId, sysChannelKey);
           }
           const sysOcSessionId = this.getChannelOcSessionId(sysChannelKey);
-          const sysDispatched = this.runnerLink.send({
+          const sysDispatched = this.sendPrompt({
             type: 'prompt',
             messageId,
             content,
@@ -5611,7 +5626,7 @@ export class SessionAgentDO {
       ? `${prompt.contextPrefix}\n\n${prompt.content}`
       : prompt.content;
 
-    const queueDispatched = this.runnerLink.send({
+    const queueDispatched = this.sendPrompt({
       type: 'prompt',
       messageId: prompt.id,
       content: queueAgentContent,
@@ -6526,9 +6541,55 @@ export class SessionAgentDO {
    */
   private armTraceFlush(): void {
     if (this.traceFlushDeadline !== null) return;
-    if ((this.doTracer?.pendingCount() ?? 0) === 0) return;
+    // armTraceFlush is only called right after a span was buffered, so there is always something
+    // to flush — no need to probe a pending count.
     this.traceFlushDeadline = Date.now() + SessionAgentDO.TRACE_FLUSH_INTERVAL_MS;
     this.lifecycle.scheduleAlarm(this.collectAlarmDeadlines());
+  }
+
+  /**
+   * Stable key for the per-turn traceparent map. Derived from the SAME raw channel fields that
+   * appear on both the outbound prompt and the runner's echoed reply messages, so store-time and
+   * lookup-time keys match by construction (independent of channelKeyFrom's normalization).
+   */
+  private turnKeyFor(channelType?: string, channelId?: string, threadId?: string): string {
+    return threadId ? `thread:${threadId}` : `${channelType ?? ''}:${channelId ?? ''}`;
+  }
+
+  /**
+   * Send a prompt to the runner, stamping it with the active turn's traceparent and recording that
+   * traceparent (keyed by channel) so webSocketMessage can parent the runner's reply spans to the
+   * originating Worker trace. No-op on the trace side when there's no active span (e.g. a queue- or
+   * alarm-driven dispatch outside a Worker request); the prompt is still sent.
+   */
+  private sendPrompt(msg: DOMessageOf<'prompt'>): boolean {
+    const tp = activeTraceparent();
+    if (tp) {
+      msg.traceparent = tp;
+      const key = this.turnKeyFor(msg.channelType, msg.channelId, msg.threadId);
+      this.turnTraceparents.set(key, tp);
+      if (this.turnTraceparents.size > 64) this.turnTraceparents.delete(this.turnTraceparents.keys().next().value!);
+    }
+    return this.runnerLink.send(msg);
+  }
+
+  /** Resolve the parent trace Context for an inbound runner message, or undefined to root it. */
+  private resolveTurnParent(msg: RunnerToDOMessage): Context | undefined {
+    const m = msg as { channelType?: string; channelId?: string; threadId?: string; turnId?: string };
+    let key: string | undefined;
+    if (m.channelType || m.channelId || m.threadId) {
+      key = this.turnKeyFor(m.channelType, m.channelId, m.threadId);
+      // message.create carries both turnId and channel — remember the mapping so later turnId-only
+      // messages (finalize / usage-report) resolve the same traceparent.
+      if (m.turnId) {
+        this.turnChannelKeys.set(m.turnId, key);
+        if (this.turnChannelKeys.size > 256) this.turnChannelKeys.delete(this.turnChannelKeys.keys().next().value!);
+      }
+    } else if (m.turnId) {
+      key = this.turnChannelKeys.get(m.turnId);
+    }
+    const tp = key ? this.turnTraceparents.get(key) : undefined;
+    return tp ? parseTraceparent(tp) : undefined;
   }
 
   // ─── Helpers ───────────────────────────────────────────────────────────
