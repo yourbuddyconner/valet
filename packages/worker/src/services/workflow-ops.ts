@@ -7,15 +7,18 @@
  * the LLM doesn't have to maintain mental array indices.
  *
  * Application is atomic: ops apply in order against a working copy
- * and the result replaces the draft only if every op succeeds. Any
- * thrown error from `applyOps` rolls back to the input definition.
+ * and the result replaces the draft only if every op succeeds AND the
+ * final shape passes `isWorkflowDefinition`. Any failure rolls back
+ * to the caller's input.
+ *
+ * Implementation note: internally we work over plain
+ * `Record<string, unknown>` shapes because the LLM emits arbitrary
+ * JSON and node objects don't satisfy the discriminated union at
+ * compile time. The narrow back to `WorkflowDefinition` happens once
+ * at the end via the runtime type guard — no `as unknown as` casts.
  */
-import type { WorkflowDefinition, WorkflowEdge } from '@valet/shared';
-import type { WorkflowNode } from '@valet/shared';
-
-// ────────────────────────────────────────────────────────────────────────
-// Op types
-// ────────────────────────────────────────────────────────────────────────
+import type { WorkflowDefinition } from '@valet/shared';
+import { isWorkflowDefinition } from '../lib/workflow-dag/schema.js';
 
 export type WorkflowOp =
   | { op: 'addNode'; node: Record<string, unknown> }
@@ -25,12 +28,16 @@ export type WorkflowOp =
   | { op: 'removeEdge'; from: string; to: string; fromOutput?: 'true' | 'false' }
   | { op: 'setMeta'; patch: Record<string, unknown> };
 
-// ────────────────────────────────────────────────────────────────────────
-// Apply
-// ────────────────────────────────────────────────────────────────────────
+interface WorkingDef {
+  version: unknown;
+  nodes: Array<Record<string, unknown>>;
+  edges: Array<Record<string, unknown>>;
+  // policy, ui, etc. — carried opaquely.
+  [key: string]: unknown;
+}
 
 export function applyOps(def: WorkflowDefinition, ops: WorkflowOp[]): WorkflowDefinition {
-  let working: WorkflowDefinition = structuredClone(def);
+  let working = toWorking(def);
   for (const [i, op] of ops.entries()) {
     try {
       working = applyOp(working, op);
@@ -39,10 +46,36 @@ export function applyOps(def: WorkflowDefinition, ops: WorkflowOp[]): WorkflowDe
       throw new Error(`op #${i} (${op.op}): ${msg}`);
     }
   }
+  // Runtime narrow back to a real WorkflowDefinition. If the LLM
+  // produced a shape that violates the schema we throw before
+  // persisting so the caller can surface the issue.
+  if (!isWorkflowDefinition(working)) {
+    throw new Error('patch result is not a valid dag/v1 workflow definition');
+  }
   return working;
 }
 
-function applyOp(def: WorkflowDefinition, op: WorkflowOp): WorkflowDefinition {
+function toWorking(def: WorkflowDefinition): WorkingDef {
+  // Workflow definitions are pure JSON (no Dates, Maps, or functions),
+  // so a serialize/parse round-trip detaches us from the discriminated
+  // union typing in one step. JSON.parse returns `unknown` here; we
+  // narrow with `isPlainObject` and the array filter has a typed
+  // predicate, so no `as` cast is needed.
+  const cloned: unknown = JSON.parse(JSON.stringify(def));
+  if (!isPlainObject(cloned)) {
+    throw new Error('definition must be an object');
+  }
+  const nodes = Array.isArray(cloned.nodes) ? cloned.nodes.filter(isPlainObject) : [];
+  const edges = Array.isArray(cloned.edges) ? cloned.edges.filter(isPlainObject) : [];
+  return {
+    ...cloned,
+    nodes,
+    edges,
+    version: cloned.version,
+  };
+}
+
+function applyOp(def: WorkingDef, op: WorkflowOp): WorkingDef {
   switch (op.op) {
     case 'addNode':       return addNode(def, op.node);
     case 'updateNode':    return updateNode(def, op.id, op.patch);
@@ -50,19 +83,10 @@ function applyOp(def: WorkflowDefinition, op: WorkflowOp): WorkflowDefinition {
     case 'addEdge':       return addEdge(def, op.edge);
     case 'removeEdge':    return removeEdge(def, op.from, op.to, op.fromOutput);
     case 'setMeta':       return setMeta(def, op.patch);
-    default: {
-      const _exhaustive: never = op;
-      void _exhaustive;
-      throw new Error(`unknown op`);
-    }
   }
 }
 
-// ────────────────────────────────────────────────────────────────────────
-// Individual ops
-// ────────────────────────────────────────────────────────────────────────
-
-function addNode(def: WorkflowDefinition, node: Record<string, unknown>): WorkflowDefinition {
+function addNode(def: WorkingDef, node: Record<string, unknown>): WorkingDef {
   const id = node.id;
   if (typeof id !== 'string' || id.length === 0) {
     throw new Error('node.id is required and must be a non-empty string');
@@ -73,23 +97,23 @@ function addNode(def: WorkflowDefinition, node: Record<string, unknown>): Workfl
   if (def.nodes.some((n) => n.id === id)) {
     throw new Error(`node id "${id}" already exists`);
   }
-  return { ...def, nodes: [...def.nodes, node as unknown as WorkflowNode] };
+  return { ...def, nodes: [...def.nodes, node] };
 }
 
-function updateNode(def: WorkflowDefinition, id: string, patch: Record<string, unknown>): WorkflowDefinition {
+function updateNode(def: WorkingDef, id: string, patch: Record<string, unknown>): WorkingDef {
   const idx = def.nodes.findIndex((n) => n.id === id);
   if (idx === -1) throw new Error(`node "${id}" not found`);
   if (patch.id !== undefined && patch.id !== id) {
     throw new Error('updateNode cannot change a node id — use removeNode + addNode');
   }
-  const merged = deepMerge(def.nodes[idx] as unknown as Record<string, unknown>, patch);
+  const merged = deepMerge(def.nodes[idx], patch);
   return {
     ...def,
-    nodes: def.nodes.map((n, i) => (i === idx ? (merged as unknown as WorkflowNode) : n)),
+    nodes: def.nodes.map((n, i) => (i === idx ? merged : n)),
   };
 }
 
-function removeNode(def: WorkflowDefinition, id: string): WorkflowDefinition {
+function removeNode(def: WorkingDef, id: string): WorkingDef {
   if (!def.nodes.some((n) => n.id === id)) {
     throw new Error(`node "${id}" not found`);
   }
@@ -102,7 +126,7 @@ function removeNode(def: WorkflowDefinition, id: string): WorkflowDefinition {
   };
 }
 
-function addEdge(def: WorkflowDefinition, edge: Record<string, unknown>): WorkflowDefinition {
+function addEdge(def: WorkingDef, edge: Record<string, unknown>): WorkingDef {
   if (typeof edge.from !== 'string' || typeof edge.to !== 'string') {
     throw new Error('edge.from and edge.to are required strings');
   }
@@ -116,15 +140,15 @@ function addEdge(def: WorkflowDefinition, edge: Record<string, unknown>): Workfl
     (e) => e.from === edge.from && e.to === edge.to && e.fromOutput === edge.fromOutput,
   );
   if (exists) throw new Error(`edge ${edge.from} → ${edge.to} already exists`);
-  return { ...def, edges: [...def.edges, edge as unknown as WorkflowEdge] };
+  return { ...def, edges: [...def.edges, edge] };
 }
 
 function removeEdge(
-  def: WorkflowDefinition,
+  def: WorkingDef,
   from: string,
   to: string,
   fromOutput?: 'true' | 'false',
-): WorkflowDefinition {
+): WorkingDef {
   const before = def.edges.length;
   const filtered = def.edges.filter(
     (e) => !(e.from === from && e.to === to && (fromOutput === undefined || e.fromOutput === fromOutput)),
@@ -135,25 +159,21 @@ function removeEdge(
   return { ...def, edges: filtered };
 }
 
-function setMeta(def: WorkflowDefinition, patch: Record<string, unknown>): WorkflowDefinition {
+function setMeta(def: WorkingDef, patch: Record<string, unknown>): WorkingDef {
   // Only the documented top-level fields are mergeable via setMeta.
   // Specifically NOT `nodes` or `edges` — use the structural ops for
   // those so the model doesn't accidentally clobber the graph.
-  const allowed: Array<keyof WorkflowDefinition> = ['version', 'policy', 'ui'];
-  const merged: Record<string, unknown> = { ...(def as unknown as Record<string, unknown>) };
+  const allowed = new Set(['version', 'policy', 'ui']);
+  const merged: WorkingDef = { ...def };
   for (const [k, v] of Object.entries(patch)) {
-    if (!(allowed as string[]).includes(k)) {
+    if (!allowed.has(k)) {
       throw new Error(`setMeta cannot modify "${k}" — use addNode/addEdge/etc. for graph changes`);
     }
     if (v === null) delete merged[k];
     else merged[k] = v;
   }
-  return merged as unknown as WorkflowDefinition;
+  return merged;
 }
-
-// ────────────────────────────────────────────────────────────────────────
-// Deep merge
-// ────────────────────────────────────────────────────────────────────────
 
 /**
  * Recursive merge:
@@ -162,9 +182,8 @@ function setMeta(def: WorkflowDefinition, patch: Record<string, unknown>): Workf
  *   • `null` in the patch deletes the key from the target
  *   • everything else replaces
  *
- * This is JSON-Merge-Patch semantics (RFC 7396), chosen because LLMs
- * compose it intuitively for nested updates without needing to think
- * about JSON Pointer paths.
+ * JSON-Merge-Patch semantics (RFC 7396) — chosen because LLMs compose
+ * it intuitively for nested updates without needing JSON Pointer.
  */
 function deepMerge(target: Record<string, unknown>, patch: Record<string, unknown>): Record<string, unknown> {
   const out: Record<string, unknown> = { ...target };
@@ -173,18 +192,20 @@ function deepMerge(target: Record<string, unknown>, patch: Record<string, unknow
       delete out[k];
       continue;
     }
+    if (v === undefined) continue;
+    const targetVal = out[k];
     if (
-      v !== undefined &&
-      typeof v === 'object' &&
-      !Array.isArray(v) &&
-      typeof out[k] === 'object' &&
-      out[k] !== null &&
-      !Array.isArray(out[k])
+      isPlainObject(v) &&
+      isPlainObject(targetVal)
     ) {
-      out[k] = deepMerge(out[k] as Record<string, unknown>, v as Record<string, unknown>);
-    } else if (v !== undefined) {
+      out[k] = deepMerge(targetVal, v);
+    } else {
       out[k] = v;
     }
   }
   return out;
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }

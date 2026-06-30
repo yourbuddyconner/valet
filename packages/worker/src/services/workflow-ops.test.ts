@@ -1,11 +1,21 @@
 import { describe, expect, it } from 'vitest';
-import type { WorkflowDefinition } from '@valet/shared';
+import {
+  createDefaultWorkflowNode,
+  type WorkflowDefinition,
+  type WorkflowNode,
+} from '@valet/shared';
 import { applyOps } from './workflow-ops.js';
 
+/**
+ * Build a fresh definition pre-populated with a `set` node so we don't
+ * have to fight the discriminated union in the fixtures. Tests below
+ * either use this helper or pass inline plain objects to addNode —
+ * which is what the copilot will be doing in practice.
+ */
 function blankDef(): WorkflowDefinition {
   return {
     version: 'dag/v1',
-    nodes: [{ id: 'start', type: 'set', values: {} } as unknown as WorkflowDefinition['nodes'][number]],
+    nodes: [createDefaultWorkflowNode('set', 'start')],
     edges: [],
   };
 }
@@ -13,7 +23,7 @@ function blankDef(): WorkflowDefinition {
 describe('applyOps', () => {
   it('addNode appends and rejects dup ids', () => {
     const out = applyOps(blankDef(), [
-      { op: 'addNode', node: { id: 'a', type: 'set', values: { hello: 'world' } } },
+      { op: 'addNode', node: { id: 'a', type: 'set', values: {} } },
     ]);
     expect(out.nodes).toHaveLength(2);
     expect(out.nodes[1].id).toBe('a');
@@ -24,17 +34,18 @@ describe('applyOps', () => {
   });
 
   it('updateNode deep-merges and refuses id changes', () => {
+    const tool = createDefaultWorkflowNode('tool', 'a');
     const def: WorkflowDefinition = {
       version: 'dag/v1',
-      nodes: [
-        { id: 'a', type: 'tool_policy', service: 'workflows', action: 'list', params: { limit: 5 } } as unknown as WorkflowDefinition['nodes'][number],
-      ],
+      nodes: [{ ...tool, service: 'workflows', action: 'list', params: { limit: 5 } }],
       edges: [],
     };
     const out = applyOps(def, [
       { op: 'updateNode', id: 'a', patch: { params: { limit: 25, query: 'trigger' } } },
     ]);
-    expect((out.nodes[0] as unknown as Record<string, unknown>).params).toEqual({ limit: 25, query: 'trigger' });
+    const updated = pickNode(out, 'a');
+    if (updated.type !== 'tool') throw new Error('expected tool node');
+    expect(updated.params).toEqual({ limit: 25, query: 'trigger' });
 
     expect(() =>
       applyOps(def, [{ op: 'updateNode', id: 'a', patch: { id: 'b' } }]),
@@ -45,8 +56,8 @@ describe('applyOps', () => {
     const def: WorkflowDefinition = {
       version: 'dag/v1',
       nodes: [
-        { id: 'a', type: 'set' } as unknown as WorkflowDefinition['nodes'][number],
-        { id: 'b', type: 'set' } as unknown as WorkflowDefinition['nodes'][number],
+        createDefaultWorkflowNode('set', 'a'),
+        createDefaultWorkflowNode('set', 'b'),
       ],
       edges: [{ from: 'a', to: 'b' }],
     };
@@ -59,8 +70,8 @@ describe('applyOps', () => {
     const def: WorkflowDefinition = {
       version: 'dag/v1',
       nodes: [
-        { id: 'a', type: 'set' } as unknown as WorkflowDefinition['nodes'][number],
-        { id: 'b', type: 'set' } as unknown as WorkflowDefinition['nodes'][number],
+        createDefaultWorkflowNode('set', 'a'),
+        createDefaultWorkflowNode('set', 'b'),
       ],
       edges: [],
     };
@@ -79,8 +90,8 @@ describe('applyOps', () => {
     const before = JSON.stringify(def);
     expect(() =>
       applyOps(def, [
-        { op: 'addNode', node: { id: 'a', type: 'set' } },
-        { op: 'addNode', node: { id: 'a', type: 'set' } }, // dup → throws
+        { op: 'addNode', node: { id: 'a', type: 'set', values: {} } },
+        { op: 'addNode', node: { id: 'a', type: 'set', values: {} } }, // dup → throws
       ]),
     ).toThrow(/op #1.*already exists/);
     // applyOps clones internally, so caller's input is untouched
@@ -93,3 +104,9 @@ describe('applyOps', () => {
     ).toThrow(/cannot modify "nodes"/);
   });
 });
+
+function pickNode(def: WorkflowDefinition, id: string): WorkflowNode {
+  const node = def.nodes.find((n) => n.id === id);
+  if (!node) throw new Error(`node ${id} missing`);
+  return node;
+}
