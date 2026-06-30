@@ -214,13 +214,13 @@ function ExecutionDetailPage() {
             <h2 className="mb-2 text-sm font-medium text-neutral-900 dark:text-neutral-100">
               Node trace
             </h2>
-            <NodeTraceTable nodes={nodes} executionStatus={execution.status} />
+            <TraceNodeList nodes={nodes} executionStatus={execution.status} />
           </section>
 
           <section className="grid gap-4 lg:grid-cols-3">
-            <JsonPanel title="Trigger data" value={execution.triggerData} />
-            <JsonPanel title="Outputs" value={execution.outputs} />
-            <JsonPanel title="Trigger metadata" value={execution.triggerMetadata} />
+            <PayloadPanel title="Trigger data" value={execution.triggerData} />
+            <PayloadPanel title="Outputs" value={execution.outputs} />
+            <PayloadPanel title="Trigger metadata" value={execution.triggerMetadata} />
           </section>
         </>
       )}
@@ -316,17 +316,109 @@ function SummaryItem({ label, value }: { label: string; value: string }) {
   );
 }
 
-function NodeTraceTable({ nodes, executionStatus }: { nodes: ExecutionNode[]; executionStatus: Execution['status'] }) {
-  // Collapse per DAG node: each node can have many trace rows (one per
-  // status transition: running → waiting_approval → completed). The
-  // canvas view picks the latest using buildExecutionNodeStateMap;
-  // mirror that here so the table doesn't read "WAITING APPROVAL" for
-  // a node that since completed.
+/**
+ * Recursively unwrap a value that may be a JSON-string of a JSON value.
+ * Most workflow payloads round-trip through the DB as TEXT, so an
+ * `outputs` field commonly arrives as `"{}"` (a JSON string of an
+ * empty object) or `"{\"mode\":\"test\"}"`. Unwrap once or twice
+ * until the parse fails or the value isn't string-shaped JSON.
+ *
+ * Caps at 3 unwraps so a pathological string-of-string-of-string
+ * doesn't loop forever.
+ */
+function unwrapEncodedJson(value: unknown, depth = 0): unknown {
+  if (depth >= 3) return value;
+  if (typeof value !== 'string') return value;
+  const trimmed = value.trim();
+  if (!trimmed || (trimmed[0] !== '{' && trimmed[0] !== '[' && trimmed[0] !== '"')) return value;
+  try {
+    return unwrapEncodedJson(JSON.parse(trimmed), depth + 1);
+  } catch {
+    return value;
+  }
+}
+
+/** Render a JSON value as a pretty-printed, scrollable, copyable
+ *  block. Unwraps double-encoded strings first so users see real
+ *  structure rather than `\"key\":\"value\"` noise. */
+function PayloadBlock({
+  label,
+  value,
+  tone = 'neutral',
+}: {
+  label?: string;
+  value: unknown;
+  tone?: 'neutral' | 'error';
+}) {
+  const unwrapped = React.useMemo(() => unwrapEncodedJson(value), [value]);
+  const isEmpty = unwrapped === null || unwrapped === undefined
+    || (typeof unwrapped === 'string' && unwrapped.length === 0);
+  if (isEmpty) return null;
+  const display = typeof unwrapped === 'string'
+    ? unwrapped
+    : JSON.stringify(unwrapped, null, 2);
+  const onCopy = async () => {
+    try { await navigator.clipboard.writeText(display); } catch { /* noop */ }
+  };
+  return (
+    <div className={cn(
+      'overflow-hidden rounded-md border',
+      tone === 'error'
+        ? 'border-red-200 dark:border-red-900/50'
+        : 'border-neutral-200 dark:border-neutral-800',
+    )}>
+      {label && (
+        <div className={cn(
+          'flex items-center justify-between gap-2 border-b px-3 py-1.5 text-[11px] font-medium uppercase tracking-wide',
+          tone === 'error'
+            ? 'border-red-200 bg-red-50 text-red-700 dark:border-red-900/50 dark:bg-red-950/40 dark:text-red-300'
+            : 'border-neutral-200 bg-neutral-50 text-neutral-500 dark:border-neutral-800 dark:bg-neutral-950 dark:text-neutral-400',
+        )}>
+          <span>{label}</span>
+          <button
+            type="button"
+            onClick={onCopy}
+            className="font-normal normal-case tracking-normal text-neutral-500 hover:text-neutral-900 dark:text-neutral-400 dark:hover:text-neutral-100"
+            title="Copy"
+          >
+            copy
+          </button>
+        </div>
+      )}
+      <pre className={cn(
+        'max-h-96 overflow-auto whitespace-pre-wrap break-words p-3 font-mono text-[12px] leading-relaxed',
+        tone === 'error'
+          ? 'bg-red-50/40 text-red-700 dark:bg-red-950/20 dark:text-red-300'
+          : 'bg-white text-neutral-800 dark:bg-neutral-900 dark:text-neutral-200',
+      )}>
+        {display}
+      </pre>
+    </div>
+  );
+}
+
+function PayloadPanel({ title, value }: { title: string; value: unknown }) {
+  return (
+    <div className="rounded-lg border border-neutral-200 bg-white dark:border-neutral-800 dark:bg-neutral-900">
+      <div className="border-b border-neutral-200 px-4 py-2.5 text-sm font-medium text-neutral-900 dark:border-neutral-800 dark:text-neutral-100">
+        {title}
+      </div>
+      <div className="p-3">
+        <PayloadBlock value={value} />
+      </div>
+    </div>
+  );
+}
+
+function TraceNodeList({ nodes, executionStatus }: { nodes: ExecutionNode[]; executionStatus: Execution['status'] }) {
+  // Collapse to one row per DAG node: each node can have multiple
+  // trace rows for status transitions; we want the latest.
   const latest = React.useMemo(() => {
     const byNode = new Map<string, ExecutionNode>();
     for (const n of nodes) byNode.set(n.nodeId, n);
     return Array.from(byNode.values());
   }, [nodes]);
+
   if (latest.length === 0) {
     return (
       <div className="rounded-lg border border-neutral-200 bg-white p-6 text-sm text-neutral-500 dark:border-neutral-800 dark:bg-neutral-900 dark:text-neutral-400">
@@ -335,71 +427,108 @@ function NodeTraceTable({ nodes, executionStatus }: { nodes: ExecutionNode[]; ex
     );
   }
 
+  // Decide which rows expand by default. A user landing here usually
+  // wants the most-recent finished node and any failure visible
+  // immediately; everything else collapses.
+  const defaultExpanded = new Set<string>();
+  const lastIdx = latest.length - 1;
+  if (lastIdx >= 0) defaultExpanded.add(latest[lastIdx].id);
+  for (const n of latest) {
+    if (n.status === 'failed' || n.error) defaultExpanded.add(n.id);
+  }
+
   return (
-    <div className="overflow-hidden rounded-lg border border-neutral-200 bg-white dark:border-neutral-800 dark:bg-neutral-900">
-      <div className="overflow-x-auto">
-        <table className="min-w-full">
-          <thead>
-            <tr className="border-b border-neutral-200 bg-neutral-50 dark:border-neutral-800 dark:bg-neutral-950">
-              <TableHead>Node</TableHead>
-              <TableHead>Status</TableHead>
-              <TableHead>Duration</TableHead>
-              <TableHead>Output / error</TableHead>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-neutral-200 dark:divide-neutral-800">
-            {latest.map((node) => (
-              <tr key={node.id}>
-                <td className="px-4 py-3">
-                  <div className="font-mono text-xs text-neutral-900 dark:text-neutral-100">
-                    {node.nodeId}
-                  </div>
-                  <div className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">
-                    {node.nodeType}
-                  </div>
-                </td>
-                <td className="px-4 py-3">
-                  <NodeStatusBadge status={effectiveNodeStatus(node.status, executionStatus)} />
-                </td>
-                <td className="px-4 py-3 text-xs tabular-nums text-neutral-500 dark:text-neutral-400">
-                  {typeof node.durationMs === 'number' ? `${node.durationMs}ms` : '—'}
-                </td>
-                <td className="max-w-[520px] px-4 py-3">
-                  <pre className={cn(
-                    'max-h-28 overflow-auto whitespace-pre-wrap break-words rounded-md p-2 text-xs',
-                    node.error
-                      ? 'bg-red-50 text-red-700 dark:bg-red-950 dark:text-red-300'
-                      : 'bg-neutral-50 text-neutral-700 dark:bg-neutral-950 dark:text-neutral-300',
-                  )}>
-                    {node.error ?? node.output ?? node.reason ?? '—'}
-                  </pre>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+    <div className="space-y-2">
+      {latest.map((node) => (
+        <TraceNodeRow
+          key={node.id}
+          node={node}
+          executionStatus={executionStatus}
+          defaultOpen={defaultExpanded.has(node.id)}
+        />
+      ))}
     </div>
   );
 }
 
-function TableHead({ children }: { children: React.ReactNode }) {
-  return (
-    <th className="px-4 py-3 text-left text-xs font-medium uppercase text-neutral-500 dark:text-neutral-400">
-      {children}
-    </th>
-  );
-}
+function TraceNodeRow({
+  node,
+  executionStatus,
+  defaultOpen,
+}: {
+  node: ExecutionNode;
+  executionStatus: Execution['status'];
+  defaultOpen: boolean;
+}) {
+  const [open, setOpen] = React.useState(defaultOpen);
+  const status = effectiveNodeStatus(node.status, executionStatus);
+  const hasOutput = !!node.output;
+  const hasError = !!node.error;
+  const hasReason = !!node.reason;
+  const hasInput = !!node.inputPreview;
+  const summary = node.error ?? (typeof node.reason === 'string' ? node.reason : null);
 
-function JsonPanel({ title, value }: { title: string; value: unknown }) {
   return (
-    <div className="rounded-lg border border-neutral-200 bg-white dark:border-neutral-800 dark:bg-neutral-900">
-      <div className="border-b border-neutral-200 px-4 py-3 text-sm font-medium text-neutral-900 dark:border-neutral-800 dark:text-neutral-100">
-        {title}
-      </div>
-      <pre className="max-h-80 overflow-auto p-4 text-xs text-neutral-700 dark:text-neutral-300">
-        {value === null || value === undefined ? 'null' : JSON.stringify(value, null, 2)}
-      </pre>
+    <div className={cn(
+      'overflow-hidden rounded-lg border bg-white dark:bg-neutral-900',
+      hasError ? 'border-red-200 dark:border-red-900/50' : 'border-neutral-200 dark:border-neutral-800',
+    )}>
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full items-center gap-3 px-4 py-3 text-left hover:bg-neutral-50 dark:hover:bg-neutral-800/40"
+      >
+        <span className="grid h-5 w-5 shrink-0 place-items-center text-neutral-400">
+          {open ? '▾' : '▸'}
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            <span className="truncate font-mono text-xs font-medium text-neutral-900 dark:text-neutral-100">
+              {node.nodeId}
+            </span>
+            <Badge variant="secondary" className="shrink-0">{node.nodeType}</Badge>
+            <NodeStatusBadge status={status} />
+          </div>
+          {!open && summary && (
+            <p className={cn(
+              'mt-1 truncate text-xs',
+              hasError ? 'text-red-600 dark:text-red-400' : 'text-neutral-500 dark:text-neutral-400',
+            )}>
+              {summary}
+            </p>
+          )}
+        </div>
+        <span className="shrink-0 font-mono text-xs tabular-nums text-neutral-500 dark:text-neutral-400">
+          {typeof node.durationMs === 'number' ? `${node.durationMs}ms` : '—'}
+        </span>
+      </button>
+      {open && (hasOutput || hasError || hasReason || hasInput) && (
+        <div className="space-y-3 border-t border-neutral-200 p-4 dark:border-neutral-800">
+          {hasError && (
+            <PayloadBlock label="Error" value={node.error} tone="error" />
+          )}
+          {hasOutput && (
+            <PayloadBlock
+              label={node.outputTruncated ? 'Output (truncated)' : 'Output'}
+              value={node.output}
+            />
+          )}
+          {hasInput && (
+            <PayloadBlock
+              label={node.inputTruncated ? 'Input (truncated)' : 'Input'}
+              value={node.inputPreview}
+            />
+          )}
+          {hasReason && (
+            <PayloadBlock label="Reason" value={node.reason} />
+          )}
+        </div>
+      )}
+      {open && !(hasOutput || hasError || hasReason || hasInput) && (
+        <div className="border-t border-neutral-200 px-4 py-3 text-xs text-neutral-500 dark:border-neutral-800 dark:text-neutral-400">
+          No payload recorded for this trace row.
+        </div>
+      )}
     </div>
   );
 }
