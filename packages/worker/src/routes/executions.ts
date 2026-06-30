@@ -107,11 +107,23 @@ executionsRouter.get('/:id', async (c) => {
   const invocationById = new Map(approvalRows.map((inv) => [inv.id, inv]));
 
   const triggerData = parseExecutionTriggerData(row as { inputs?: string | null });
+  // Pull the snapshotted DAG so the client can render the canvas
+  // against the *exact* nodes that ran — not whatever the workflow's
+  // current draft / published version happens to be (those diverge
+  // when a workflow's been edited since the run, or when test_run
+  // executes a draft that isn't published yet).
+  const snapshotRaw = (row as Record<string, unknown>).definition_snapshot;
+  let definitionSnapshot: unknown = null;
+  if (typeof snapshotRaw === 'string' && snapshotRaw.trim().length > 0) {
+    try { definitionSnapshot = JSON.parse(snapshotRaw); }
+    catch { definitionSnapshot = null; }
+  }
   return c.json({
     execution: {
       id: row.id,
       workflowId: row.workflow_id,
       workflowName: row.workflow_name,
+      definitionSnapshot,
       triggerId: row.trigger_id,
       triggerName: row.trigger_name,
       status: row.status,

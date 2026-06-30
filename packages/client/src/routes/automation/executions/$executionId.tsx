@@ -42,13 +42,21 @@ function ExecutionDetailPage() {
     if (typeof window !== 'undefined') localStorage.setItem('exec.detail.view', view);
   }, [view]);
   const [selectedNodeId, setSelectedNodeId] = React.useState<string | null>(null);
-  // Fetch the workflow only when canvas view is selected; the table
-  // view doesn't need the DAG. enabled-by-presence on the workflow id
-  // keeps the request out of flight until both prerequisites land.
-  const { data: workflowData } = useWorkflow(execution?.workflowId ?? '');
-  const definition: WorkflowDefinition | null = workflowData?.workflow.data
-    ? (workflowData.workflow.data as unknown as WorkflowDefinition)
-    : null;
+  // Prefer the execution's snapshotted DAG — it's what actually ran.
+  // The workflow's current `data` is the draft / published surface and
+  // diverges from the snapshot when the workflow has been edited since
+  // the run, or when a draft was test_run'd before publication.
+  const snapshotDefinition: WorkflowDefinition | null =
+    execution?.definitionSnapshot && typeof execution.definitionSnapshot === 'object'
+      ? (execution.definitionSnapshot as WorkflowDefinition)
+      : null;
+  const { data: workflowData } = useWorkflow(
+    snapshotDefinition ? '' : execution?.workflowId ?? '',
+  );
+  const definition: WorkflowDefinition | null = snapshotDefinition
+    ?? (workflowData?.workflow.data
+      ? (workflowData.workflow.data as unknown as WorkflowDefinition)
+      : null);
 
   // Two-phase cancel — first click arms, second confirms. Auto-disarms
   // after a few seconds so a stray click doesn't leave the button in a

@@ -56,6 +56,11 @@ export interface Execution {
   // Full approval history for this execution (pending + resolved).
   // Source of truth for the approve/deny UI.
   approvals?: ExecutionApproval[];
+  // The DAG that this execution actually ran — captured at trigger
+  // time so it survives later edits to the workflow's draft or
+  // published version. The canvas renders against this instead of the
+  // workflow's current state.
+  definitionSnapshot?: unknown;
 }
 
 export interface ExecutionNode {
