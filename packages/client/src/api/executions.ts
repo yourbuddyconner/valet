@@ -23,6 +23,12 @@ export interface ExecutionApproval {
   // foreach body; the card uses this to show the "Approve remaining rows"
   // button (scope=workflow_execution + nodeId narrower).
   iterationIndex?: number | null;
+  // Set when this approval was raised inside a session that the workflow
+  // execution spawned (or a descendant of one). The UI badges it and
+  // links to the originating session for resolution instead of rendering
+  // inline approve/deny — the resolve endpoints differ between
+  // execution-attributed and session-attributed approvals.
+  originSessionId?: string | null;
 }
 
 export interface Execution {
@@ -205,6 +211,27 @@ export function useExecutionApprovals(executionId: string, options?: { enabled?:
   return useQuery({
     queryKey: [...executionKeys.detail(executionId), 'approvals'] as const,
     queryFn: () => api.get<ListExecutionApprovalsResponse>(`/executions/${executionId}/approvals`),
+    enabled: (options?.enabled ?? true) && !!executionId,
+    refetchInterval: 5000,
+    refetchIntervalInBackground: true,
+  });
+}
+
+/**
+ * Pending-approvals poll that ALSO surfaces approvals from sessions this
+ * execution spawned (and their descendants). Used by the execution
+ * detail view so the user sees every approval gate stalling the
+ * workflow — not just direct tool-policy / approval-node holds — without
+ * having to open each spawned session manually.
+ *
+ * Rows with `originSessionId` set are session-attributed propagations:
+ * the panel badges them and deep-links to the originating session
+ * rather than rendering inline approve/deny.
+ */
+export function usePendingExecutionApprovals(executionId: string, options?: { enabled?: boolean }) {
+  return useQuery({
+    queryKey: [...executionKeys.detail(executionId), 'pending-approvals'] as const,
+    queryFn: () => api.get<ListExecutionApprovalsResponse>(`/executions/${executionId}/pending-approvals`),
     enabled: (options?.enabled ?? true) && !!executionId,
     refetchInterval: 5000,
     refetchIntervalInBackground: true,

@@ -1,7 +1,8 @@
 import * as React from 'react';
+import { Link } from '@tanstack/react-router';
 import {
   type ExecutionApproval,
-  useExecutionApprovals,
+  usePendingExecutionApprovals,
   useApproveExecutionApproval,
   useDenyExecutionApproval,
 } from '@/api/executions';
@@ -36,8 +37,11 @@ export function ExecutionApprovalPanel({
   title = 'Pending approvals',
   variant = 'panel',
 }: ExecutionApprovalPanelProps) {
-  // Only poll when the parent didn't pass approvals already.
-  const fetched = useExecutionApprovals(executionId, {
+  // Pending-approvals endpoint returns workflow-attributed gates AND
+  // approvals from any session this execution spawned (transitively).
+  // The execution-detail prop still passes its own workflow-direct
+  // list; the propagation poll fills in the spawned-session view.
+  const fetched = usePendingExecutionApprovals(executionId, {
     enabled: approvals === undefined,
   });
 
@@ -85,6 +89,12 @@ export function ExecutionApprovalCard({ executionId, approval }: { executionId: 
   // foreach node, sweeping every pending iteration of the same body to
   // approved in one click.
   const isForeachIteration = typeof approval.iterationIndex === 'number';
+  // Propagated from a session this execution spawned. The execution
+  // approve/deny routes only resolve workflow-attributed invocations, so
+  // for these rows we surface a deep link to the originating session
+  // (where the existing session approval card can resolve it) instead
+  // of rendering inline buttons.
+  const isPropagated = typeof approval.originSessionId === 'string' && approval.originSessionId.length > 0;
 
   const onApprove = async (scope: 'once' | 'workflow_execution' = 'once', narrowToNode = false) => {
     try {
@@ -124,6 +134,11 @@ export function ExecutionApprovalCard({ executionId, approval }: { executionId: 
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
             <Badge variant="secondary" className="text-xs">{approval.kind === 'tool_policy' ? 'tool' : 'approval'}</Badge>
+            {isPropagated && (
+              <Badge variant="default" className="text-xs" title="Raised in a session this workflow spawned">
+                from session
+              </Badge>
+            )}
             <span className="truncate font-mono text-xs text-neutral-500 dark:text-neutral-400">{approval.nodeId}</span>
           </div>
           <p className="mt-1 whitespace-pre-wrap text-pretty text-neutral-900 dark:text-neutral-100">
@@ -155,7 +170,18 @@ export function ExecutionApprovalCard({ executionId, approval }: { executionId: 
         </div>
       </div>
 
-      {isPending ? (
+      {isPending && isPropagated ? (
+        <div className="mt-3 flex items-center gap-2 text-xs text-neutral-600 dark:text-neutral-300">
+          <span>Resolve from the originating session:</span>
+          <Link
+            to="/sessions/$sessionId"
+            params={{ sessionId: approval.originSessionId as string }}
+            className="font-mono text-xs text-amber-700 underline hover:text-amber-900 dark:text-amber-300 dark:hover:text-amber-100"
+          >
+            {approval.originSessionId}
+          </Link>
+        </div>
+      ) : isPending ? (
         <div className="mt-3 space-y-2">
           <input
             type="text"

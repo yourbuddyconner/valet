@@ -335,9 +335,56 @@ executionsRouter.get('/:id/pending-approvals', async (c) => {
   const user = c.get('user');
   const row = await getExecution(c.env.DB, id, user.id);
   if (!row) throw new NotFoundError('Execution', id);
-  const approvals = await listDescendantPendingApprovalsForExecution(getDb(c.env.DB), id);
-  return c.json({ approvals });
+  const rows = await listDescendantPendingApprovalsForExecution(getDb(c.env.DB), id);
+  return c.json({ approvals: rows.map(mapDescendantApprovalView) });
 });
+
+/**
+ * Adapt a descendant `action_invocations` row (raw shape from the
+ * propagation query) into the approval view shape the UI was built
+ * against, with an `originSessionId` field set when the approval came
+ * from a session this execution spawned (or one of its descendants).
+ * The execution-detail approval-panel reads that field to badge the row
+ * as "from session X" and offer a deep link instead of inline buttons.
+ */
+function mapDescendantApprovalView(a: {
+  id: string;
+  session_id: string | null;
+  workflow_execution_id: string | null;
+  service: string;
+  action_id: string;
+  status: string;
+  params: string | null;
+  expires_at: string | null;
+  node_id: string | null;
+  iteration_index: number | null;
+  created_at: string;
+}) {
+  const parsedParams = a.params ? safeJsonParse(a.params) : null;
+  const explicit = a.service === 'workflows' && a.action_id === 'request_approval';
+  const p = parsedParams && typeof parsedParams === 'object'
+    ? (parsedParams as Record<string, unknown>)
+    : {};
+  return {
+    id: a.id,
+    nodeId: a.node_id,
+    kind: explicit ? 'explicit' as const : 'tool_policy' as const,
+    status: a.status,
+    prompt: explicit ? (p.prompt ?? null) : `Approve ${a.service}.${a.action_id}?`,
+    summary: explicit ? (p.summary ?? null) : null,
+    details: explicit ? (p.details ?? null) : parsedParams,
+    timeoutAt: a.expires_at,
+    resolvedBy: null,
+    resolvedAt: null,
+    cancelledAt: null,
+    createdAt: a.created_at,
+    iterationIndex: a.iteration_index,
+    // Set when the approval came from a session this execution spawned
+    // (or one of its descendants). The UI badges it and deep-links to
+    // the originating session for resolution.
+    originSessionId: a.session_id,
+  };
+}
 
 // `scope` is `once` for plain approvals, `workflow_execution` when the user
 // wants a runtime grant for the rest of the execution. `nodeId` narrows a
