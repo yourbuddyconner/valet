@@ -7,7 +7,7 @@ import type { WorkflowDefinition, WorkflowNode } from '@valet/shared';
 import { Canvas } from '@/components/ai-elements/canvas';
 import { Controls } from '@/components/ai-elements/controls';
 import { Edge } from '@/components/ai-elements/edge';
-import { ExecutionApprovalCard } from '@/components/workflows/execution-approval-panel';
+import { ExecutionApprovalCard, ExecutionApprovalPanel } from '@/components/workflows/execution-approval-panel';
 import {
   Node,
   NodeContent,
@@ -351,6 +351,15 @@ function ExecutionSummaryPane({
           <KeyValue label="Trigger" value={execution.triggerName ?? execution.triggerType} />
           <KeyValue label="Mode" value={execution.mode ?? 'production'} />
         </div>
+        {/* Pending approvals surfaced inline so users don't have to click
+            into the gated node to find the approve/deny buttons. Renders
+            null when nothing is pending; uses the same approvals list the
+            execution detail endpoint already returned. */}
+        <ExecutionApprovalPanel
+          executionId={execution.id}
+          approvals={execution.approvals}
+          title={execution.approvals && execution.approvals.filter((a) => a.status === 'pending').length > 1 ? 'Pending approvals' : 'Approval required'}
+        />
         {execution.error && (
           <div className="rounded-md border border-red-200 bg-red-50 p-3 dark:border-red-900/50 dark:bg-red-950/40">
             <h3 className="text-xs font-medium text-red-700 dark:text-red-300">Error</h3>
