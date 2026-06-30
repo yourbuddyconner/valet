@@ -37,6 +37,7 @@ import {
   isWorkflowDefinition,
 } from '../lib/workflow-dag/schema.js';
 import { assertWorkflowAccess } from '../lib/workflow-access.js';
+import { mapApprovalView } from '../lib/approval-view.js';
 import type { WorkflowDefinition } from '@valet/shared';
 
 interface WorkerActionContext extends ActionContext {
@@ -891,40 +892,21 @@ async function getExecutionAction(
         durationMs: n.duration_ms,
         createdAt: n.created_at,
       })),
-      approvals: (approvals.results ?? []).map((a) => {
-        const parsedParams = typeof a.params === 'string' ? safeJsonParse(a.params) : null;
-        const explicit = a.service === 'workflows' && a.action_id === 'request_approval';
-        // Prompt/summary/details are stored in params for explicit
-        // approval nodes. Tool-policy approvals derive their prompt from
-        // service+actionId; the UI assembles its display from the
-        // invocation row directly.
-        const p = (parsedParams && typeof parsedParams === 'object') ? parsedParams as Record<string, unknown> : {};
-        return {
-          id: a.id,
-          nodeId: a.node_id,
-          kind: explicit ? 'explicit' : 'tool_policy',
-          status: a.status,
-          prompt: explicit ? (p.prompt ?? null) : `Approve ${a.service}.${a.action_id}?`,
-          summary: explicit ? (p.summary ?? null) : null,
-          details: explicit ? (p.details ?? null) : parsedParams,
-          timeoutAt: a.expires_at,
-          resolvedBy: a.resolved_by,
-          resolvedAt: a.resolved_at,
-          cancelledAt: null,
-          createdAt: a.created_at,
-          iterationIndex: a.iteration_index,
-        };
-      }),
+      approvals: (approvals.results ?? []).map((a) => mapApprovalView({
+        id: a.id as string,
+        nodeId: (a.node_id as string | null) ?? null,
+        service: a.service as string,
+        actionId: a.action_id as string,
+        status: a.status as string,
+        params: (a.params as string | null) ?? null,
+        expiresAt: (a.expires_at as string | null) ?? null,
+        resolvedBy: (a.resolved_by as string | null) ?? null,
+        resolvedAt: (a.resolved_at as string | null) ?? null,
+        createdAt: a.created_at as string,
+        iterationIndex: (a.iteration_index as number | null) ?? null,
+      })),
     },
   };
-}
-
-function safeJsonParse(s: string): unknown {
-  try {
-    return JSON.parse(s);
-  } catch {
-    return s;
-  }
 }
 
 function ok(data: unknown): ActionResult {

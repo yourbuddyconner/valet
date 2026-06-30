@@ -88,7 +88,7 @@ describe('actionPolicyOverridesRouter', () => {
     ]);
   });
 
-  it('creates action, service, and risk-level user grants', async () => {
+  it('creates action, service, and risk-level user allow grants', async () => {
     const actionRes = await app.fetch(new Request('http://localhost/action-override', {
       method: 'PUT',
       body: JSON.stringify({ service: 'gmail', actionId: 'draft.create', mode: 'allow' }),
@@ -96,12 +96,12 @@ describe('actionPolicyOverridesRouter', () => {
     }), { DB: {} } as any);
     const serviceRes = await app.fetch(new Request('http://localhost/service-override', {
       method: 'PUT',
-      body: JSON.stringify({ service: 'linear', mode: 'require_approval' }),
+      body: JSON.stringify({ service: 'linear', mode: 'allow' }),
       headers: { 'content-type': 'application/json' },
     }), { DB: {} } as any);
     const riskRes = await app.fetch(new Request('http://localhost/risk-override', {
       method: 'PUT',
-      body: JSON.stringify({ riskLevel: 'critical', mode: 'deny' }),
+      body: JSON.stringify({ riskLevel: 'critical', mode: 'allow' }),
       headers: { 'content-type': 'application/json' },
     }), { DB: {} } as any);
 
@@ -112,9 +112,27 @@ describe('actionPolicyOverridesRouter', () => {
     const rows = await listUserDurableActionPolicies(db as any, USER_ID);
     expect(rows).toEqual(expect.arrayContaining([
       expect.objectContaining({ id: 'action-override', service: 'gmail', actionId: 'draft.create', mode: 'allow', managedBy: 'user' }),
-      expect.objectContaining({ id: 'service-override', service: 'linear', actionId: null, mode: 'require_approval', managedBy: 'user' }),
-      expect.objectContaining({ id: 'risk-override', riskLevel: 'critical', mode: 'deny', managedBy: 'user' }),
+      expect.objectContaining({ id: 'service-override', service: 'linear', actionId: null, mode: 'allow', managedBy: 'user' }),
+      expect.objectContaining({ id: 'risk-override', riskLevel: 'critical', mode: 'allow', managedBy: 'user' }),
     ]));
+  });
+
+  it('rejects user policies with non-allow modes per spec safety rule', async () => {
+    const denyRes = await app.fetch(new Request('http://localhost/user-deny', {
+      method: 'PUT',
+      body: JSON.stringify({ service: 'linear', mode: 'deny' }),
+      headers: { 'content-type': 'application/json' },
+    }), { DB: {} } as any);
+    const requireRes = await app.fetch(new Request('http://localhost/user-require', {
+      method: 'PUT',
+      body: JSON.stringify({ service: 'gmail', mode: 'require_approval' }),
+      headers: { 'content-type': 'application/json' },
+    }), { DB: {} } as any);
+
+    expect(denyRes.status).toBe(400);
+    expect(requireRes.status).toBe(400);
+    expect(await getActionPolicy(db as any, 'user-deny')).toBeUndefined();
+    expect(await getActionPolicy(db as any, 'user-require')).toBeUndefined();
   });
 
   it('rejects invalid target combinations', async () => {

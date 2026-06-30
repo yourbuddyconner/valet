@@ -323,7 +323,7 @@ INSERT INTO action_invocations (
 SELECT
   wa.id,
   wa.execution_id,
-  COALESCE(we.user_id, wa.resolved_by, '__system__'),
+  COALESCE(we.user_id, wa.resolved_by),
   'workflows',
   'request_approval',
   'medium',
@@ -343,6 +343,11 @@ SELECT
 FROM workflow_approvals wa
 LEFT JOIN workflow_executions we ON wa.execution_id = we.id
 WHERE wa.kind = 'explicit'
+  -- Skip orphans whose execution row was already deleted (ON DELETE SET NULL)
+  -- and that had no resolver — they can't be attributed to a real user, and
+  -- D1 migrations run with foreign_keys off so a bogus user_id would
+  -- insert silently rather than fail.
+  AND COALESCE(we.user_id, wa.resolved_by) IS NOT NULL
   AND NOT EXISTS (SELECT 1 FROM action_invocations ai WHERE ai.id = wa.id);
 
 -- Drop the workflow_approvals table. kind='tool_policy' rows were pure

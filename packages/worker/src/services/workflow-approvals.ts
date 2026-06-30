@@ -18,7 +18,7 @@
  */
 
 import { eq } from 'drizzle-orm';
-import { NotFoundError } from '@valet/shared';
+import { NotFoundError, ValidationError } from '@valet/shared';
 import type { Env } from '../env.js';
 import { getDb } from '../lib/drizzle.js';
 import { getInvocation } from '../lib/db/actions.js';
@@ -86,7 +86,7 @@ export async function resolveWorkflowApprovalRequest(input: ResolveApprovalInput
   // workflow-attributed approval; reject early so the caller's UI doesn't
   // silently degrade.
   if (scope === 'session' || scope === 'durable_policy') {
-    throw new Error(`scope "${scope}" is not valid for workflow approvals`);
+    throw new ValidationError(`scope "${scope}" is not valid for workflow approvals; use "once" or "workflow_execution"`);
   }
 
   const result = await resolveInvocationWithScope(db, {
@@ -109,16 +109,18 @@ export async function resolveWorkflowApprovalRequest(input: ResolveApprovalInput
   }
 
   // Dispatch the resume event for the originating row AND each swept
-  // sibling. Best-effort — the stuck-approval sweep retries any failures.
-  for (const row of result.resolved) {
-    try {
-      await dispatchResume(input.env, row, input.user.id, input.reason);
-    } catch (err) {
-      console.warn(
-        `[workflow-approvals] sendEvent failed for ${row.id}: ${err instanceof Error ? err.message : String(err)}`,
-      );
-    }
-  }
+  // sibling in parallel. Best-effort — the stuck-approval sweep retries
+  // any failures. allSettled keeps one slow sibling from blocking
+  // others (a foreach sweep can resolve dozens of iterations at once).
+  await Promise.allSettled(
+    result.resolved.map((row) =>
+      dispatchResume(input.env, row, input.user.id, input.reason).catch((err) => {
+        console.warn(
+          `[workflow-approvals] sendEvent failed for ${row.id}: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }),
+    ),
+  );
 
   return {
     kind: 'resolved',

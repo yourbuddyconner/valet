@@ -533,6 +533,10 @@ export async function resolveEffectiveActionPolicy(
   const { service, actionId, riskLevel } = input;
 
   // 1-2. Admin candidate set, filtered by org + subject + target match.
+  // Defensive expires_at check: admin rows don't have an expiry UX today,
+  // but the column exists and a CLI / direct DB write could set one.
+  // Symmetric with the user policy lookup further down.
+  const nowForAdmin = nowIso();
   const adminRows: ActionPolicyRow[] = await db
     .select()
     .from(actionPolicies)
@@ -542,6 +546,7 @@ export async function resolveEffectiveActionPolicy(
         eq(actionPolicies.managedBy, 'admin'),
         eq(actionPolicies.subjectType, 'tool_action'),
         isNull(actionPolicies.revokedAt),
+        or(isNull(actionPolicies.expiresAt), gt(actionPolicies.expiresAt, nowForAdmin)),
         or(
           and(eq(actionPolicies.service, service), eq(actionPolicies.actionId, actionId)),
           and(

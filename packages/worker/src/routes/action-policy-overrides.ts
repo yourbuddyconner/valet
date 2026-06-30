@@ -115,6 +115,13 @@ actionPolicyOverridesRouter.put('/:id', async (c) => {
   }>();
 
   const mode = validateMode(body.mode);
+  // Per spec safety rule: user-managed policies can only create allow
+  // decisions. The unified resolver filters user rows to mode='allow'
+  // at match time anyway — accepting other modes here would silently
+  // save a no-op policy, which is confusing UX.
+  if (mode !== 'allow') {
+    throw new ValidationError(`User policies may only set mode='allow' (got "${mode}"). Admin-managed deny / require_approval policies live under the admin action policy API.`);
+  }
   const { service, actionId, riskLevel } = validateTarget(body);
 
   const existing = await getActionPolicy(c.get('db'), id);

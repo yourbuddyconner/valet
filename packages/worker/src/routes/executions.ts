@@ -15,6 +15,7 @@ import { getDb } from '../lib/drizzle.js';
 import { asc, eq } from 'drizzle-orm';
 import { workflowExecutions } from '../lib/schema/workflows.js';
 import { actionInvocations } from '../lib/schema/actions.js';
+import { mapApprovalView } from '../lib/approval-view.js';
 import { isWorkflowDefinition } from '../lib/workflow-dag/schema.js';
 
 export const executionsRouter = new Hono<{ Bindings: Env; Variables: Variables }>();
@@ -164,42 +165,23 @@ executionsRouter.get('/:id', async (c) => {
 });
 
 function safeJsonParse(s: string): unknown {
-  try {
-    return JSON.parse(s);
-  } catch {
-    return s;
-  }
+  try { return JSON.parse(s); } catch { return s; }
 }
 
-/**
- * Map an action_invocations row into the workflow-approvals view shape the
- * UI was built against. Explicit approvals (service='workflows',
- * actionId='request_approval') derive prompt/summary/details from params;
- * tool-policy approvals synthesize a prompt from service+actionId.
- */
 function mapInvocationToApprovalView(a: typeof actionInvocations.$inferSelect) {
-  const parsedParams = a.params ? safeJsonParse(a.params) : null;
-  const explicit = a.service === 'workflows' && a.actionId === 'request_approval';
-  const p = parsedParams && typeof parsedParams === 'object'
-    ? (parsedParams as Record<string, unknown>)
-    : {};
-  return {
+  return mapApprovalView({
     id: a.id,
     nodeId: a.nodeId,
-    kind: explicit ? 'explicit' : 'tool_policy',
+    service: a.service,
+    actionId: a.actionId,
     status: a.status,
-    prompt: explicit ? (p.prompt ?? null) : `Approve ${a.service}.${a.actionId}?`,
-    summary: explicit ? (p.summary ?? null) : null,
-    details: explicit ? (p.details ?? null) : parsedParams,
-    timeoutAt: a.expiresAt,
+    params: a.params,
+    expiresAt: a.expiresAt,
     resolvedBy: a.resolvedBy,
     resolvedAt: a.resolvedAt,
-    cancelledAt: null,
     createdAt: a.createdAt,
-    // Set when the approval is raised inside a foreach body. The UI uses
-    // this to decide whether to offer "Approve remaining rows".
     iterationIndex: a.iterationIndex,
-  };
+  });
 }
 
 const retryExecutionSchema = z.object({
@@ -354,14 +336,6 @@ executionsRouter.get('/:id/pending-approvals', async (c) => {
   return c.json({ approvals: rows.map(mapDescendantApprovalView) });
 });
 
-/**
- * Adapt a descendant `action_invocations` row (raw shape from the
- * propagation query) into the approval view shape the UI was built
- * against, with an `originSessionId` field set when the approval came
- * from a session this execution spawned (or one of its descendants).
- * The execution-detail approval-panel reads that field to badge the row
- * as "from session X" and offer a deep link instead of inline buttons.
- */
 function mapDescendantApprovalView(a: {
   id: string;
   session_id: string | null;
@@ -375,30 +349,23 @@ function mapDescendantApprovalView(a: {
   iteration_index: number | null;
   created_at: string;
 }) {
-  const parsedParams = a.params ? safeJsonParse(a.params) : null;
-  const explicit = a.service === 'workflows' && a.action_id === 'request_approval';
-  const p = parsedParams && typeof parsedParams === 'object'
-    ? (parsedParams as Record<string, unknown>)
-    : {};
-  return {
+  // sessionId is always passed (possibly null) so the shared mapper sets
+  // originSessionId on the result — the UI uses that to render a deep
+  // link to the originating session instead of inline approve/deny.
+  return mapApprovalView({
     id: a.id,
     nodeId: a.node_id,
-    kind: explicit ? 'explicit' as const : 'tool_policy' as const,
+    service: a.service,
+    actionId: a.action_id,
     status: a.status,
-    prompt: explicit ? (p.prompt ?? null) : `Approve ${a.service}.${a.action_id}?`,
-    summary: explicit ? (p.summary ?? null) : null,
-    details: explicit ? (p.details ?? null) : parsedParams,
-    timeoutAt: a.expires_at,
+    params: a.params,
+    expiresAt: a.expires_at,
     resolvedBy: null,
     resolvedAt: null,
-    cancelledAt: null,
     createdAt: a.created_at,
     iterationIndex: a.iteration_index,
-    // Set when the approval came from a session this execution spawned
-    // (or one of its descendants). The UI badges it and deep-links to
-    // the originating session for resolution.
-    originSessionId: a.session_id,
-  };
+    sessionId: a.session_id,
+  });
 }
 
 // `scope` is `once` for plain approvals, `workflow_execution` when the user

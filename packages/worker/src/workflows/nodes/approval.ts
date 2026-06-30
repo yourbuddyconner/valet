@@ -15,6 +15,7 @@ import { buildTemplateContext } from '../context.js';
 import { coerceTemplateString } from '../templates.js';
 import { waitForApprovalEvent } from '../approvals.js';
 import { invokeWorkflowAction, markExecuted, markFailed } from '../../services/actions.js';
+import { isActionDisabled } from '../../lib/db/disabled-actions.js';
 import { getDb } from '../../lib/drizzle.js';
 import { setExecutionStatus } from '../execution-status.js';
 import { CancelledError, iterationSuffix } from '../types.js';
@@ -41,6 +42,14 @@ export async function executeApproval(args: NodeExecutorArgs<ApprovalNode>): Pro
   // Deterministic invocation id: idempotent on Cloudflare step.do replays.
   const invocationId = `approval:${args.params.executionId}:${args.node.id}${iSuffix}`;
   if (args.correlations) args.correlations.approvalId = invocationId;
+
+  // Admin kill-switch parity with the tool node: an admin can disable
+  // `workflows.request_approval` via /api/admin/disabled-actions to
+  // prevent any explicit approval gates from running (used to evacuate
+  // workflows during incidents). Mirrors tool.ts's preflight isActionDisabled.
+  if (await isActionDisabled(getDb(args.env.DB), 'workflows', 'request_approval')) {
+    throw new Error(`approval node "${args.node.id}": workflows.request_approval is disabled`);
+  }
 
   await setExecutionStatus({
     env: args.env,
