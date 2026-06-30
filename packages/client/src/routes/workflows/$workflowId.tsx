@@ -377,7 +377,23 @@ function WorkflowDetailPage() {
               ) : (
                 <Badge variant="secondary">Draft</Badge>
               )}
-              <span className="shrink-0 font-mono text-[11px] text-neutral-500">
+              <button
+                type="button"
+                onClick={handleToggleEnabled}
+                disabled={updateWorkflow.isPending}
+                className={`inline-flex shrink-0 items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium transition disabled:opacity-60 ${
+                  workflow.enabled
+                    ? 'border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 dark:border-emerald-900/50 dark:bg-emerald-950/40 dark:text-emerald-300'
+                    : 'border-neutral-200 bg-neutral-50 text-neutral-500 hover:bg-neutral-100 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-400'
+                }`}
+                title={workflow.enabled ? 'Click to disable triggers' : 'Click to enable triggers'}
+              >
+                <span className={`h-1.5 w-1.5 rounded-full ${
+                  workflow.enabled ? 'bg-emerald-500' : 'bg-neutral-400 dark:bg-neutral-500'
+                }`} />
+                {getWorkflowEnabledLabel(workflow.enabled)}
+              </button>
+              <span className="hidden shrink-0 font-mono text-[11px] text-neutral-500 sm:inline">
                 dag/v1
               </span>
               {workflow.description && (
@@ -427,25 +443,6 @@ function WorkflowDetailPage() {
         </div>
 
         <div className="flex min-w-0 shrink-0 items-center justify-end gap-2">
-          <button
-            type="button"
-            onClick={handleToggleEnabled}
-            disabled={updateWorkflow.isPending}
-            className="hidden items-center gap-2 rounded-md px-2 py-1.5 text-sm text-neutral-500 hover:bg-neutral-100 hover:text-neutral-950 disabled:opacity-60 dark:text-neutral-400 dark:hover:bg-neutral-900 dark:hover:text-neutral-100 xl:flex"
-          >
-            <span className={workflow.enabled ? 'text-emerald-600 dark:text-emerald-400' : 'text-neutral-500 dark:text-neutral-400'}>
-              {getWorkflowEnabledLabel(workflow.enabled)}
-            </span>
-            <span className={`relative h-6 w-11 rounded-full border transition ${
-              workflow.enabled
-                ? 'border-emerald-500/40 bg-emerald-500/25'
-                : 'border-neutral-300 bg-neutral-200 dark:border-neutral-700 dark:bg-neutral-800'
-            }`}>
-              <span className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow-sm transition dark:bg-neutral-300 ${
-                workflow.enabled ? 'left-5 bg-emerald-500 dark:bg-emerald-400' : 'left-0.5'
-              }`} />
-            </span>
-          </button>
           <Button
             variant="secondary"
             onClick={() => {
