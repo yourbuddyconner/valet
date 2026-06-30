@@ -1,6 +1,7 @@
 import * as React from 'react';
 import type { Execution, ExecutionNode } from '@/api/executions';
 import { Badge } from '@/components/ui/badge';
+import { MarkdownContent } from '@/components/chat/markdown/markdown-content';
 import { formatRelativeTime } from '@/lib/format';
 import { cn } from '@/lib/cn';
 import { correctNodeStatusForFinishedExecution } from './workflow-execution-viewer-model';
@@ -172,7 +173,7 @@ function LlmBody({ output }: { output: unknown }) {
   if (text) {
     return (
       <Section title="Generated">
-        <LongText text={text} />
+        <RichText text={text} />
       </Section>
     );
   }
@@ -271,7 +272,7 @@ function SessionBody({ output }: { output: unknown }) {
       </Section>
       {lastContent && (
         <Section title="Last message">
-          <LongText text={lastContent} />
+          <RichText text={lastContent} />
         </Section>
       )}
     </>
@@ -510,6 +511,64 @@ function LongText({ text }: { text: string }) {
           className="text-xs text-neutral-500 hover:text-neutral-900 dark:text-neutral-400 dark:hover:text-neutral-100"
         >
           {expanded ? 'Show less' : `Show all (${text.length.toLocaleString()} chars)`}
+        </button>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Renders LLM / agent prose with proper markdown — fenced code blocks
+ * stay highlighted, headings and lists structure, links clickable.
+ * Defaults to rendered view with a small toggle to the raw text for
+ * users who want to see the source markdown. Long text collapses past
+ * a threshold to keep cards scannable.
+ */
+function RichText({ text }: { text: string }) {
+  const [mode, setMode] = React.useState<'rendered' | 'plain'>('rendered');
+  const [expanded, setExpanded] = React.useState(false);
+  const isLong = text.length > 1200;
+  const visibleText = !isLong || expanded ? text : text.slice(0, 1200) + '…';
+  return (
+    <div className="space-y-1.5">
+      <div className="flex items-center justify-between gap-2">
+        <div className="inline-flex rounded-md border border-neutral-200 bg-neutral-50 p-0.5 dark:border-neutral-800 dark:bg-neutral-900">
+          {(['rendered', 'plain'] as const).map((opt) => (
+            <button
+              key={opt}
+              type="button"
+              onClick={() => setMode(opt)}
+              className={cn(
+                'rounded px-2 py-0.5 text-[11px] transition',
+                mode === opt
+                  ? 'bg-white text-neutral-900 shadow-sm dark:bg-neutral-700 dark:text-neutral-100'
+                  : 'text-neutral-500 hover:text-neutral-800 dark:text-neutral-400 dark:hover:text-neutral-200',
+              )}
+            >
+              {opt === 'rendered' ? 'Rendered' : 'Plain text'}
+            </button>
+          ))}
+        </div>
+        <span className="text-[11px] text-neutral-400 dark:text-neutral-500 tabular-nums">
+          {text.length.toLocaleString()} chars
+        </span>
+      </div>
+      <div className="overflow-hidden rounded-md border border-neutral-200 bg-white px-4 py-2 dark:border-neutral-800 dark:bg-neutral-950">
+        {mode === 'rendered' ? (
+          <MarkdownContent content={visibleText} />
+        ) : (
+          <pre className="whitespace-pre-wrap break-words font-mono text-[12px] leading-relaxed text-neutral-800 dark:text-neutral-200">
+            {visibleText}
+          </pre>
+        )}
+      </div>
+      {isLong && (
+        <button
+          type="button"
+          onClick={() => setExpanded((v) => !v)}
+          className="text-xs text-neutral-500 hover:text-neutral-900 dark:text-neutral-400 dark:hover:text-neutral-100"
+        >
+          {expanded ? 'Show less' : 'Show all'}
         </button>
       )}
     </div>
