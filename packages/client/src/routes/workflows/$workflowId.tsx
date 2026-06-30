@@ -15,6 +15,7 @@ import {
 } from '@/api/workflows';
 import { useExecution, useRetryExecution, useWorkflowExecutions } from '@/api/executions';
 import { VisualWorkflowEditor } from '@/components/workflows/visual-workflow-editor';
+import { CopilotPanel } from '@/components/workflows/copilot-panel';
 import { WorkflowExecutionViewer } from '@/components/workflows/workflow-execution-viewer';
 import {
   ManualWorkflowDialog,
@@ -76,6 +77,7 @@ function WorkflowDetailPage() {
   const [versionsDialogOpen, setVersionsDialogOpen] = useState(false);
   const [publishConfirming, setPublishConfirming] = useState(false);
   const [publishSubmitting, setPublishSubmitting] = useState(false);
+  const [copilotOpen, setCopilotOpen] = useState(false);
   const publishConfirmTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const selectedExecution = useExecution(selectedExecutionId ?? '');
 
@@ -536,13 +538,28 @@ function WorkflowDetailPage() {
               <Skeleton className="h-[640px] w-full bg-neutral-200 dark:bg-neutral-800" />
             </div>
           ) : (
-            <VisualWorkflowEditor
-              definition={draftData?.draft ?? null}
-              onDefinitionChange={setEditorDefinition}
-              onTestRun={openManualWorkflowDialog}
-              isTesting={testRun.isPending || saveDraft.isPending}
-              className="min-h-0 flex-1 rounded-none border-0"
-            />
+            <div className="flex min-h-0 flex-1">
+              <VisualWorkflowEditor
+                definition={draftData?.draft ?? null}
+                onDefinitionChange={setEditorDefinition}
+                onTestRun={openManualWorkflowDialog}
+                isTesting={testRun.isPending || saveDraft.isPending}
+                className="min-h-0 flex-1 rounded-none border-0"
+              />
+              {copilotOpen && (
+                <div className="hidden w-[380px] shrink-0 md:block">
+                  <CopilotPanel workflowId={workflow.id} />
+                </div>
+              )}
+              <button
+                type="button"
+                onClick={() => setCopilotOpen((v) => !v)}
+                className="absolute right-3 top-[6.25rem] z-20 hidden rounded-md border border-violet-300 bg-white px-2 py-1 text-[11px] font-medium text-violet-700 shadow-sm hover:bg-violet-50 dark:border-violet-700 dark:bg-neutral-900 dark:text-violet-300 dark:hover:bg-neutral-800 md:inline-flex"
+                title={copilotOpen ? 'Close copilot' : 'Open copilot'}
+              >
+                ✦ {copilotOpen ? 'Close' : 'Copilot'}
+              </button>
+            </div>
           )
         ) : (
           <WorkflowExecutionViewer
