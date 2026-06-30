@@ -287,24 +287,34 @@ function ArgsRenderer({ args }: { args: unknown }) {
   const parsed = tryParseJson(args);
   if (parsed == null) return null;
 
-  // If it's an object, render as kv
   if (typeof parsed === 'object' && !Array.isArray(parsed)) {
     const obj = parsed as Record<string, unknown>;
     const entries = Object.entries(obj);
     if (entries.length === 0) return null;
-
-    // Check if any value is very long (>200 chars) — fall back to code block
-    const hasLong = entries.some(([, v]) => typeof v === 'string' && v.length > 200);
-    if (hasLong) {
-      const str = JSON.stringify(obj, null, 2);
-      return <ToolCodeBlock maxHeight="160px">{str}</ToolCodeBlock>;
-    }
-
-    return <KvRenderer data={obj} />;
+    // Args often contain string values that are themselves JSON-encoded
+    // (e.g. `call_tool`'s `params` field). Re-parse those so the KV row
+    // renders the inner shape instead of a raw `"{\"name\":...}"` blob.
+    const unwrapped = Object.fromEntries(
+      entries.map(([k, v]) => [k, unwrapNestedJsonString(v)]),
+    );
+    return <KvRenderer data={unwrapped} />;
   }
 
   const str = typeof args === 'string' ? args : JSON.stringify(args, null, 2);
   return <ToolCodeBlock maxHeight="160px">{str}</ToolCodeBlock>;
+}
+
+function unwrapNestedJsonString(value: unknown): unknown {
+  if (typeof value !== 'string') return value;
+  const trimmed = value.trim();
+  if (trimmed.length < 2) return value;
+  const first = trimmed[0];
+  if (first !== '{' && first !== '[') return value;
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    return value;
+  }
 }
 
 function ResultRenderer({ result }: { result: unknown }) {
