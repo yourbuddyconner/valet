@@ -9,6 +9,7 @@
 import { useState, useEffect, useRef, type ReactNode } from 'react';
 import { useCopilotChat, useCopilotMessages, useCopilotThreads, type UiMessage } from '@/api/copilot';
 import { ToolPayload } from '@/components/payload/tool-payload';
+import { DeferredMarkdownContent } from '@/components/chat/markdown/deferred-markdown-content';
 import { useQueryClient } from '@tanstack/react-query';
 
 interface CopilotPanelProps {
@@ -158,13 +159,13 @@ function EmptyState() {
 
 function MessageBubble({ message }: { message: UiMessage }) {
   if (message.role === 'user') {
+    const text = message.parts
+      .filter((p): p is { type: 'text'; text: string } => p.type === 'text')
+      .map((p) => p.text)
+      .join('\n');
     return (
-      <div className="ml-auto w-fit max-w-[85%] rounded-lg bg-neutral-100 px-3 py-1.5 text-sm text-neutral-900 dark:bg-neutral-800 dark:text-neutral-100">
-        {message.parts
-          .filter((p): p is { type: 'text'; text: string } => p.type === 'text')
-          .map((p, i) => (
-            <div key={i} className="whitespace-pre-wrap">{p.text}</div>
-          ))}
+      <div className="ml-auto w-fit max-w-[85%] whitespace-pre-wrap rounded-lg bg-neutral-100 px-3 py-1.5 text-sm text-neutral-900 dark:bg-neutral-800 dark:text-neutral-100">
+        {text}
       </div>
     );
   }
@@ -180,8 +181,8 @@ function renderPart(part: UiMessage['parts'][number], i: number): ReactNode {
     const text = (part as { text: string }).text;
     if (!text) return null;
     return (
-      <div key={i} className="whitespace-pre-wrap text-sm text-neutral-800 dark:text-neutral-200">
-        {text}
+      <div key={i} className="copilot-markdown text-sm text-neutral-800 dark:text-neutral-200">
+        <DeferredMarkdownContent content={text} isStreaming />
       </div>
     );
   }
