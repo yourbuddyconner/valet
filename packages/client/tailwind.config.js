@@ -55,6 +55,10 @@ export default {
           from: { opacity: '0', transform: 'translateY(12px) scale(0.95)' },
           to: { opacity: '1', transform: 'translateY(0) scale(1)' },
         },
+        'cooking-shimmer': {
+          '0%': { backgroundPosition: '200% 50%' },
+          '100%': { backgroundPosition: '-200% 50%' },
+        },
       },
       animation: {
         'fade-in': 'fade-in 0.2s ease-out',
@@ -62,6 +66,7 @@ export default {
         'pulse-dot': 'pulse-dot 1.5s ease-in-out infinite',
         'stagger-in': 'stagger-in 0.4s cubic-bezier(0.16, 1, 0.3, 1) both',
         'number-in': 'number-in 0.5s cubic-bezier(0.16, 1, 0.3, 1) both',
+        'cooking-shimmer': 'cooking-shimmer 2.5s linear infinite',
       },
     },
   },

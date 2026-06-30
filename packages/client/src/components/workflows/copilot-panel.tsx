@@ -36,7 +36,7 @@ export function CopilotPanel({ workflowId, onWorkflowChange }: CopilotPanelProps
           parts: (m.parts ?? [{ type: 'text', text: m.content }]) as UiMessage['parts'],
         }));
 
-  const { messages, send, status, error, threadId } = useCopilotChat({
+  const { messages, send, stop, status, error, threadId } = useCopilotChat({
     workflowId,
     initialThreadId,
     initialMessages: initial,
@@ -101,6 +101,7 @@ export function CopilotPanel({ workflowId, onWorkflowChange }: CopilotPanelProps
             {messages.map((m) => (
               <MessageBubble key={m.id} message={m} />
             ))}
+            {status === 'streaming' && <CookingIndicator messages={messages} />}
             {error && (
               <p className="rounded-md border border-red-200 bg-red-50 px-2 py-1.5 text-xs text-red-700 dark:border-red-900/40 dark:bg-red-950/40 dark:text-red-300">
                 {error}
@@ -125,20 +126,82 @@ export function CopilotPanel({ workflowId, onWorkflowChange }: CopilotPanelProps
               }
             }}
             rows={1}
-            placeholder={status === 'streaming' ? 'Streaming…' : 'Ask the copilot to build, edit, or fix this workflow'}
+            placeholder={status === 'streaming' ? 'Cooking…' : 'Ask the copilot to build, edit, or fix this workflow'}
             className="min-h-[28px] flex-1 resize-none bg-transparent text-sm text-neutral-900 outline-none placeholder:text-neutral-400 dark:text-neutral-100"
             disabled={status === 'streaming'}
           />
-          <button
-            type="submit"
-            disabled={!input.trim() || status === 'streaming'}
-            className="shrink-0 rounded-md bg-violet-600 px-2.5 py-1 text-[11px] font-medium text-white shadow-sm transition disabled:cursor-not-allowed disabled:opacity-50 hover:bg-violet-700"
-          >
-            {status === 'streaming' ? '…' : 'Send'}
-          </button>
+          {status === 'streaming' ? (
+            <button
+              type="button"
+              onClick={() => stop()}
+              className="shrink-0 rounded-md border border-neutral-300 bg-white px-2.5 py-1 text-[11px] font-medium text-neutral-700 shadow-sm hover:bg-neutral-100 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-200 dark:hover:bg-neutral-800"
+              title="Stop"
+            >
+              Stop
+            </button>
+          ) : (
+            <button
+              type="submit"
+              disabled={!input.trim()}
+              className="shrink-0 rounded-md bg-violet-600 px-2.5 py-1 text-[11px] font-medium text-white shadow-sm transition disabled:cursor-not-allowed disabled:opacity-50 hover:bg-violet-700"
+            >
+              Send
+            </button>
+          )}
         </div>
       </form>
     </div>
+  );
+}
+
+/**
+ * "Cooking" indicator — derives a contextual label from the last
+ * assistant turn so the user knows what the model is actively doing,
+ * not just that it's still alive. Three states:
+ *   • a tool call landed but no result yet  → "Calling X…"
+ *   • text is streaming                     → "Writing…"
+ *   • nothing yet on the new assistant turn → "Thinking…"
+ */
+function CookingIndicator({ messages }: { messages: UiMessage[] }) {
+  const last = messages[messages.length - 1];
+  let label = 'Thinking';
+  if (last && last.role === 'assistant' && last.parts.length > 0) {
+    // Find the last tool-call without a matching tool-result.
+    const calls = new Map<string, { name: string }>();
+    const resolved = new Set<string>();
+    for (const p of last.parts) {
+      if (p.type === 'tool-call') {
+        const tc = p as { toolCallId: string; toolName: string };
+        calls.set(tc.toolCallId, { name: tc.toolName });
+      } else if (p.type === 'tool-result') {
+        const tr = p as { toolCallId: string };
+        resolved.add(tr.toolCallId);
+      }
+    }
+    const pending = [...calls.entries()].find(([id]) => !resolved.has(id));
+    if (pending) {
+      label = `Calling ${pending[1].name}`;
+    } else {
+      const lastPart = last.parts[last.parts.length - 1];
+      if (lastPart?.type === 'text') label = 'Writing';
+    }
+  }
+  return (
+    <div className="flex items-center gap-2 px-1 py-0.5 text-xs text-neutral-500 dark:text-neutral-400">
+      <ShimmerDot />
+      <span className="bg-gradient-to-r from-neutral-500 via-violet-500 to-neutral-500 bg-[length:200%_100%] bg-clip-text text-transparent animate-cooking-shimmer dark:from-neutral-400 dark:via-violet-300 dark:to-neutral-400">
+        {label}…
+      </span>
+    </div>
+  );
+}
+
+function ShimmerDot() {
+  return (
+    <span className="relative flex h-2 w-2 shrink-0">
+      <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-violet-500/50" />
+      <span className="relative inline-flex h-2 w-2 rounded-full bg-violet-500" />
+    </span>
   );
 }
 
