@@ -2,7 +2,7 @@ import * as React from 'react';
 import { createFileRoute, Link, useNavigate } from '@tanstack/react-router';
 import { isActiveExecutionStatus, useCancelExecution, useExecution, useRetryExecution } from '@/api/executions';
 import { useWorkflow } from '@/api/workflows';
-import type { Execution, ExecutionNode } from '@/api/executions';
+import type { Execution, ExecutionApproval, ExecutionNode } from '@/api/executions';
 import type { WorkflowDefinition } from '@valet/shared';
 import { ExecutionApprovalPanel } from '@/components/workflows/execution-approval-panel';
 import { WorkflowExecutionViewer } from '@/components/workflows/workflow-execution-viewer';
@@ -215,7 +215,12 @@ function ExecutionDetailPage() {
             <h2 className="mb-2 text-sm font-medium text-neutral-900 dark:text-neutral-100">
               Node trace
             </h2>
-            <TraceNodeList nodes={nodes} executionStatus={execution.status} definition={definition} />
+            <TraceNodeList
+              nodes={nodes}
+              executionStatus={execution.status}
+              definition={definition}
+              approvals={execution.approvals}
+            />
           </section>
 
           <section className="grid gap-4 lg:grid-cols-3">
@@ -356,7 +361,7 @@ function PayloadPanel({ title, value }: { title: string; value: unknown }) {
   );
 }
 
-function TraceNodeList({ nodes, executionStatus, definition }: { nodes: ExecutionNode[]; executionStatus: Execution['status']; definition: WorkflowDefinition | null }) {
+function TraceNodeList({ nodes, executionStatus, definition, approvals }: { nodes: ExecutionNode[]; executionStatus: Execution['status']; definition: WorkflowDefinition | null; approvals?: ExecutionApproval[] }) {
   // Collapse to one row per DAG node: each node can have multiple
   // trace rows for status transitions; we want the latest.
   const latest = React.useMemo(() => {
@@ -393,18 +398,35 @@ function TraceNodeList({ nodes, executionStatus, definition }: { nodes: Executio
   // has nothing real to show; the parent has all 51 iteration results
   // sitting right there.
   const iterationsByBody = new Map<string, unknown[]>();
+  // Per-iteration rendered inputs, harvested from tool_policy
+  // approvals. Approval.details carries the actual rendered params
+  // that went to the tool, and approvals tag the iteration index they
+  // were raised for — together they reconstruct the per-iteration
+  // input the foreach result itself doesn't keep.
+  const iterationInputsByBody = new Map<string, Map<number, unknown>>();
   if (definition) {
     for (const n of definition.nodes) {
       if (n.type !== 'foreach' || !n.body) continue;
       bodyToParent.set(n.body.id, n.id);
       const parentTrace = latest.find((t) => t.nodeId === n.id);
-      if (!parentTrace?.output) continue;
-      try {
-        const parsed = JSON.parse(parentTrace.output);
-        const items = parsed && typeof parsed === 'object' ? (parsed as { items?: unknown }).items : null;
-        if (Array.isArray(items) && items.length > 0) iterationsByBody.set(n.body.id, items);
-      } catch {
-        // ignore — keep the trace card useful even if the payload didn't parse
+      if (parentTrace?.output) {
+        try {
+          const parsed = JSON.parse(parentTrace.output);
+          const items = parsed && typeof parsed === 'object' ? (parsed as { items?: unknown }).items : null;
+          if (Array.isArray(items) && items.length > 0) iterationsByBody.set(n.body.id, items);
+        } catch {
+          // keep the card useful even if the payload didn't parse
+        }
+      }
+      if (approvals && approvals.length > 0) {
+        const inputs = new Map<number, unknown>();
+        for (const ap of approvals) {
+          if (ap.nodeId !== n.body.id) continue;
+          if (typeof ap.iterationIndex !== 'number') continue;
+          if (ap.details === null || ap.details === undefined) continue;
+          inputs.set(ap.iterationIndex, ap.details);
+        }
+        if (inputs.size > 0) iterationInputsByBody.set(n.body.id, inputs);
       }
     }
   }
@@ -414,12 +436,14 @@ function TraceNodeList({ nodes, executionStatus, definition }: { nodes: Executio
       {latest.map((node) => {
         const parentId = bodyToParent.get(node.nodeId);
         const iterations = iterationsByBody.get(node.nodeId);
+        const iterationInputs = iterationInputsByBody.get(node.nodeId);
         const card = (
           <TraceNodeCard
             node={node}
             executionStatus={executionStatus}
             definition={definition}
             iterations={iterations}
+            iterationInputs={iterationInputs}
             defaultOpen={defaultExpanded.has(node.id)}
           />
         );

@@ -14,6 +14,7 @@ export function TraceNodeCard({
   executionStatus,
   definition,
   iterations,
+  iterationInputs,
   defaultOpen,
 }: {
   node: ExecutionNode;
@@ -27,6 +28,11 @@ export function TraceNodeCard({
    *  page through all iterations instead of showing a single empty
    *  "no result" stub. */
   iterations?: unknown[];
+  /** Per-iteration rendered inputs (template-resolved params), keyed
+   *  by iteration index. Source: tool_policy approvals where
+   *  approval.details captures exactly what the runtime sent to the
+   *  tool. The foreach result alone doesn't preserve inputs. */
+  iterationInputs?: Map<number, unknown>;
   defaultOpen: boolean;
 }) {
   const [open, setOpen] = React.useState(defaultOpen);
@@ -99,7 +105,7 @@ export function TraceNodeCard({
               <ErrorBlock value={node.error} />
             </Section>
           )}
-          <NodeBody node={node} output={output} defNode={defNode} iterations={iterations} />
+          <NodeBody node={node} output={output} defNode={defNode} iterations={iterations} iterationInputs={iterationInputs} />
           {input !== undefined && input !== null && (
             <CollapsibleSection title={node.inputTruncated ? 'Input (truncated)' : 'Input'}>
               <SmartValue value={input} />
@@ -119,11 +125,13 @@ function NodeBody({
   output,
   defNode,
   iterations,
+  iterationInputs,
 }: {
   node: ExecutionNode;
   output: unknown;
   defNode: WorkflowNode | null;
   iterations?: unknown[];
+  iterationInputs?: Map<number, unknown>;
 }) {
   if (output === null || output === undefined) {
     // Tool nodes still render — the configured call (service.action +
@@ -143,7 +151,7 @@ function NodeBody({
     case 'set': return <SetBody output={output} />;
     case 'if': return <IfBody output={output} defNode={defNode} />;
     case 'llm': return <LlmBody output={output} />;
-    case 'tool': return <ToolBody output={output} defNode={defNode} iterations={iterations} />;
+    case 'tool': return <ToolBody output={output} defNode={defNode} iterations={iterations} iterationInputs={iterationInputs} />;
     case 'wait': return <WaitBody output={output} />;
     case 'approval': return <ApprovalBody output={output} />;
     case 'foreach': return <ForeachBody output={output} defNode={defNode} />;
@@ -341,10 +349,12 @@ function ToolBody({
   output,
   defNode,
   iterations,
+  iterationInputs,
 }: {
   output: unknown;
   defNode: WorkflowNode | null;
   iterations?: unknown[];
+  iterationInputs?: Map<number, unknown>;
 }) {
   const o = asObject(output);
   const isTool = defNode?.type === 'tool';
@@ -376,7 +386,7 @@ function ToolBody({
         </Section>
       )}
       {hasIterations ? (
-        <IterationPager iterations={iterations as unknown[]} />
+        <IterationPager iterations={iterations as unknown[]} iterationInputs={iterationInputs} />
       ) : o ? (
         <Section title="Result"><KeyValueGrid value={o} /></Section>
       ) : output !== null && output !== undefined ? (
@@ -396,7 +406,7 @@ function ToolBody({
  * a single-card paginator so the user can step through individual
  * iterations instead of being shown a blank "no result" stub.
  */
-function IterationPager({ iterations }: { iterations: unknown[] }) {
+function IterationPager({ iterations, iterationInputs }: { iterations: unknown[]; iterationInputs?: Map<number, unknown> }) {
   const [index, setIndex] = React.useState(0);
   const clamped = Math.min(Math.max(0, index), iterations.length - 1);
   const item = iterations[clamped];
@@ -405,6 +415,8 @@ function IterationPager({ iterations }: { iterations: unknown[] }) {
   const data = itemObj && 'data' in itemObj ? itemObj.data : item;
   const error = typeof itemObj?.error === 'string' ? itemObj.error : null;
   const dataObj = asObject(data);
+  const input = iterationInputs?.get(clamped);
+  const inputObj = asObject(input);
 
   const go = (delta: number) => setIndex((i) => {
     const next = i + delta;
@@ -446,13 +458,30 @@ function IterationPager({ iterations }: { iterations: unknown[] }) {
           <IterationJumper count={iterations.length} value={clamped} onChange={setIndex} />
         </div>
         {error && <ErrorBlock value={error} />}
-        {dataObj ? (
-          <KeyValueGrid value={dataObj} />
-        ) : data !== undefined && data !== null ? (
-          <SmartValue value={data} />
-        ) : (
-          <span className="text-sm text-neutral-500 dark:text-neutral-400 italic">No data recorded for this iteration.</span>
+        {input !== undefined && input !== null && (
+          <div>
+            <h5 className="mb-1.5 text-[11px] font-medium uppercase tracking-wide text-neutral-500 dark:text-neutral-400">
+              Input (rendered)
+            </h5>
+            {inputObj ? (
+              <KeyValueGrid value={inputObj} />
+            ) : (
+              <SmartValue value={input} />
+            )}
+          </div>
         )}
+        <div>
+          <h5 className="mb-1.5 text-[11px] font-medium uppercase tracking-wide text-neutral-500 dark:text-neutral-400">
+            Output
+          </h5>
+          {dataObj ? (
+            <KeyValueGrid value={dataObj} />
+          ) : data !== undefined && data !== null ? (
+            <SmartValue value={data} />
+          ) : (
+            <span className="text-sm text-neutral-500 dark:text-neutral-400 italic">No data recorded for this iteration.</span>
+          )}
+        </div>
       </div>
     </Section>
   );
