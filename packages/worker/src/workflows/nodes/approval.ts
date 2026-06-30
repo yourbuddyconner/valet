@@ -17,6 +17,7 @@ import { waitForApprovalEvent } from '../approvals.js';
 import { invokeWorkflowAction, markExecuted, markFailed } from '../../services/actions.js';
 import { isActionDisabled } from '../../lib/db/disabled-actions.js';
 import { getDb } from '../../lib/drizzle.js';
+import { parseDurationMs } from '../../lib/workflow-dag/duration.js';
 import { setExecutionStatus } from '../execution-status.js';
 import { CancelledError, iterationSuffix } from '../types.js';
 import type { NodeExecutorArgs } from '../types.js';
@@ -60,6 +61,12 @@ export async function executeApproval(args: NodeExecutorArgs<ApprovalNode>): Pro
     allowedPrior: ['running'],
   });
 
+  // Compute the timeout once: the same value goes into the
+  // action_invocation's expires_at AND into step.waitForEvent's timeout.
+  // Decoupling them is exactly how the UI ended up showing "expired"
+  // while the workflow was still in waiting_approval.
+  const approvalTimeoutMs = args.node.timeout ? (parseDurationMs(args.node.timeout) ?? undefined) : undefined;
+
   // Create the action_invocation that backs this approval gate. Inside
   // step.do so the side effect is cached on replays. invokeWorkflowAction
   // is idempotent on invocationId, so a step.do retry returns the cached
@@ -75,6 +82,7 @@ export async function executeApproval(args: NodeExecutorArgs<ApprovalNode>): Pro
       params: { prompt, summary, details },
       nodeId: args.node.id,
       iterationIndex,
+      ...(approvalTimeoutMs !== undefined ? { approvalTimeoutMs } : {}),
     });
   });
 

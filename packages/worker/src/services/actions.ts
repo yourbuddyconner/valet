@@ -7,7 +7,15 @@ import {
 import { resolveEffectiveMode } from './action-policy.js';
 import type { ActionMode } from '@valet/shared';
 
-const APPROVAL_EXPIRY_MS = 240 * 1000;
+// Session approvals (chat tool calls) — short timeout because the user
+// is actively present; an unanswered card after a few minutes is more
+// likely abandoned than thoughtfully pending.
+const SESSION_APPROVAL_EXPIRY_MS = 240 * 1000;
+
+// Workflow approvals — longer timeout. A workflow can park for hours
+// while no one's looking at the UI; 4 minutes here would silently fail
+// every gate that the author wasn't standing in front of.
+const WORKFLOW_APPROVAL_DEFAULT_EXPIRY_MS = 24 * 60 * 60 * 1000;
 
 export interface InvokeActionParams {
   sessionId: string;
@@ -43,6 +51,12 @@ export interface InvokeWorkflowActionParams {
   nodeId?: string;
   /** Foreach iteration index when the invoking node is a foreach body. */
   iterationIndex?: number;
+  /** Override the default workflow approval timeout. Used by approval
+   *  nodes whose author set a `timeout` field on the node — the same
+   *  value is passed to the Cloudflare step.waitForEvent timeout so the
+   *  invocation's expires_at and the workflow's wait stay on one clock.
+   *  When omitted, defaults to WORKFLOW_APPROVAL_DEFAULT_EXPIRY_MS. */
+  approvalTimeoutMs?: number;
 }
 
 function isExpiredTimestamp(value: string | null, nowMs: number): boolean {
@@ -69,7 +83,7 @@ export async function invokeAction(
   const invocationId = crypto.randomUUID();
 
   const expiresAt = policy.mode === 'require_approval'
-    ? new Date(Date.now() + APPROVAL_EXPIRY_MS).toISOString()
+    ? new Date(Date.now() + SESSION_APPROVAL_EXPIRY_MS).toISOString()
     : undefined;
 
   const status = policy.mode === 'deny' ? 'denied' : policy.mode === 'allow' ? 'executed' : 'pending';
@@ -136,8 +150,9 @@ export async function invokeWorkflowAction(
     riskLevel: input.riskLevel,
   });
 
+  const timeoutMs = input.approvalTimeoutMs ?? WORKFLOW_APPROVAL_DEFAULT_EXPIRY_MS;
   const expiresAt = policy.mode === 'require_approval'
-    ? new Date(Date.now() + APPROVAL_EXPIRY_MS).toISOString()
+    ? new Date(Date.now() + timeoutMs).toISOString()
     : undefined;
   // Allow-mode rows enter as 'pending' (not 'executed'): the actual
   // action call hasn't happened yet — tool.ts performs the side effect
