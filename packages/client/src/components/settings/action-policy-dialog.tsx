@@ -9,7 +9,23 @@ import {
 } from '@/components/ui/dialog';
 import { cn } from '@/lib/cn';
 import { useActionCatalog } from '@/api/action-catalog';
-import type { ActionMode } from '@valet/shared';
+import type { ActionMode, ParamMatcher } from '@valet/shared';
+
+type AppliesIn = 'any' | 'workflow' | 'session';
+
+const MATCHER_OPS: Array<{ id: ParamMatcher['op']; label: string; needsValue: boolean; valueHint?: string }> = [
+  { id: 'eq', label: 'equals', needsValue: true },
+  { id: 'neq', label: 'not equals', needsValue: true },
+  { id: 'regex', label: 'matches regex', needsValue: true, valueHint: 'JavaScript regex without delimiters, e.g. ^1S2hM5' },
+  { id: 'in', label: 'is one of', needsValue: true, valueHint: 'Comma-separated list' },
+  { id: 'not_in', label: 'is not one of', needsValue: true, valueHint: 'Comma-separated list' },
+  { id: 'gt', label: 'greater than', needsValue: true },
+  { id: 'gte', label: 'greater than or equal', needsValue: true },
+  { id: 'lt', label: 'less than', needsValue: true },
+  { id: 'lte', label: 'less than or equal', needsValue: true },
+  { id: 'exists', label: 'is set', needsValue: false },
+  { id: 'not_exists', label: 'is missing', needsValue: false },
+];
 
 export interface EditableActionPolicy {
   id: string;
@@ -17,6 +33,8 @@ export interface EditableActionPolicy {
   actionId?: string | null;
   riskLevel?: string | null;
   mode: ActionMode;
+  appliesIn?: AppliesIn;
+  paramMatchers?: ParamMatcher[];
 }
 
 interface ActionPolicyDialogProps {
@@ -36,6 +54,8 @@ interface ActionPolicyDialogProps {
     actionId?: string | null;
     riskLevel?: string | null;
     mode: string;
+    appliesIn?: AppliesIn;
+    paramMatchers?: ParamMatcher[];
   }) => void;
   isPending?: boolean;
 }
@@ -490,6 +510,9 @@ export function ActionPolicyDialog({ open, onOpenChange, policy, noun = 'Policy'
   const [actionId, setActionId] = React.useState('');
   const [riskLevel, setRiskLevel] = React.useState('medium');
   const [mode, setMode] = React.useState<ActionMode>(allowOnly ? 'allow' : 'require_approval');
+  const [appliesIn, setAppliesIn] = React.useState<AppliesIn>('any');
+  const [matchers, setMatchers] = React.useState<ParamMatcher[]>([]);
+  const [advancedOpen, setAdvancedOpen] = React.useState(false);
   const [showJson, setShowJson] = React.useState(false);
 
   const { data: catalog } = useActionCatalog();
@@ -502,12 +525,20 @@ export function ActionPolicyDialog({ open, onOpenChange, policy, noun = 'Policy'
       setActionId(policy.actionId || '');
       setRiskLevel(policy.riskLevel || 'medium');
       setMode(policy.mode);
+      setAppliesIn(policy.appliesIn ?? 'any');
+      setMatchers(policy.paramMatchers ?? []);
+      // Expand "Advanced" automatically when the policy already uses
+      // either feature — easier than hunting for the disclosure.
+      setAdvancedOpen((policy.appliesIn && policy.appliesIn !== 'any') || ((policy.paramMatchers?.length ?? 0) > 0) || false);
     } else {
       setScope('action');
       setService('');
       setActionId('');
       setRiskLevel('medium');
       setMode(allowOnly ? 'allow' : 'require_approval');
+      setAppliesIn('any');
+      setMatchers([]);
+      setAdvancedOpen(false);
     }
     setShowJson(false);
   }, [policy, open]);
@@ -574,7 +605,9 @@ export function ActionPolicyDialog({ open, onOpenChange, policy, noun = 'Policy'
       actionId?: string | null;
       riskLevel?: string | null;
       mode: string;
-    } = { id, mode };
+      appliesIn?: AppliesIn;
+      paramMatchers?: ParamMatcher[];
+    } = { id, mode, appliesIn, paramMatchers: matchers.filter((m) => m.path.trim().length > 0) };
 
     switch (scope) {
       case 'action':
@@ -594,6 +627,33 @@ export function ActionPolicyDialog({ open, onOpenChange, policy, noun = 'Policy'
     }
 
     onSave(data);
+  }
+
+  function updateMatcher(i: number, patch: Partial<ParamMatcher>) {
+    setMatchers((rows) => rows.map((r, idx) => (idx === i ? { ...r, ...patch } : r)));
+  }
+  function addMatcher() {
+    setMatchers((rows) => [...rows, { path: '', op: 'eq', value: '' }]);
+  }
+  function removeMatcher(i: number) {
+    setMatchers((rows) => rows.filter((_, idx) => idx !== i));
+  }
+  /** Stringify any value for the input; arrays render as comma-separated. */
+  function valueToInput(v: unknown): string {
+    if (Array.isArray(v)) return v.map(String).join(',');
+    if (v === undefined || v === null) return '';
+    return String(v);
+  }
+  /** Parse the input back into the right shape for the op. */
+  function inputToValue(op: ParamMatcher['op'], raw: string): unknown {
+    if (op === 'in' || op === 'not_in') {
+      return raw.split(',').map((s) => s.trim()).filter((s) => s.length > 0);
+    }
+    if (op === 'gt' || op === 'gte' || op === 'lt' || op === 'lte') {
+      const n = Number(raw);
+      return Number.isFinite(n) ? n : raw;
+    }
+    return raw;
   }
 
   const isValid = (() => {
@@ -755,6 +815,115 @@ export function ActionPolicyDialog({ open, onOpenChange, policy, noun = 'Policy'
                     description="Block execution entirely"
                     colorClass="border-red-500 bg-red-500/5 dark:border-red-400 dark:bg-red-500/10"
                   />
+                </div>
+              )}
+            </div>
+
+            {/* Advanced disclosure: context + param matchers */}
+            <div className="rounded-lg border border-neutral-200 dark:border-neutral-700">
+              <button
+                type="button"
+                onClick={() => setAdvancedOpen((v) => !v)}
+                className="flex w-full items-center justify-between px-3 py-2 text-left text-sm font-medium text-neutral-700 dark:text-neutral-300"
+              >
+                <span>Advanced (context + conditions)</span>
+                <span className="text-neutral-400">{advancedOpen ? '−' : '+'}</span>
+              </button>
+              {advancedOpen && (
+                <div className="space-y-4 border-t border-neutral-200 px-3 py-3 dark:border-neutral-700">
+                  <div>
+                    <label className="mb-1 block text-xs font-medium text-neutral-600 dark:text-neutral-400">
+                      Where this rule applies
+                    </label>
+                    <div className="flex gap-2">
+                      {(['any', 'session', 'workflow'] as const).map((opt) => (
+                        <button
+                          key={opt}
+                          type="button"
+                          onClick={() => setAppliesIn(opt)}
+                          className={cn(
+                            'flex-1 rounded-md border px-2 py-1.5 text-sm transition-colors',
+                            appliesIn === opt
+                              ? 'border-neutral-900 bg-neutral-50 dark:border-neutral-300 dark:bg-neutral-800'
+                              : 'border-neutral-200 text-neutral-500 hover:border-neutral-300 dark:border-neutral-700 dark:text-neutral-400 dark:hover:border-neutral-600',
+                          )}
+                        >
+                          {opt === 'any' ? 'Anywhere' : opt === 'session' ? 'Chat sessions only' : 'Workflow runs only'}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div>
+                    <div className="mb-1 flex items-center justify-between">
+                      <label className="block text-xs font-medium text-neutral-600 dark:text-neutral-400">
+                        Param conditions
+                      </label>
+                      <button
+                        type="button"
+                        onClick={addMatcher}
+                        className="text-xs text-neutral-500 hover:text-neutral-900 dark:hover:text-neutral-100"
+                      >
+                        + add condition
+                      </button>
+                    </div>
+                    {matchers.length === 0 ? (
+                      <p className="text-xs text-neutral-500 dark:text-neutral-500">
+                        Empty — the rule fires for any params. Add a condition like <code className="rounded bg-neutral-100 px-1 dark:bg-neutral-800">spreadsheetId equals 1S2hM5…</code> to scope the rule to a single target.
+                      </p>
+                    ) : (
+                      <div className="space-y-2">
+                        {matchers.map((m, i) => {
+                          const opDef = MATCHER_OPS.find((o) => o.id === m.op);
+                          return (
+                            <div key={i} className="space-y-1.5 rounded-md border border-neutral-200 p-2 dark:border-neutral-700">
+                              <div className="flex items-center gap-1.5">
+                                <input
+                                  type="text"
+                                  value={m.path}
+                                  onChange={(e) => updateMatcher(i, { path: e.target.value })}
+                                  placeholder="path (e.g. spreadsheetId)"
+                                  className="flex-1 rounded border border-neutral-300 bg-white px-2 py-1 font-mono text-xs text-neutral-900 placeholder:text-neutral-400 focus:outline-none focus:ring-1 focus:ring-neutral-500 dark:border-neutral-600 dark:bg-neutral-900 dark:text-neutral-100"
+                                />
+                                <select
+                                  value={m.op}
+                                  onChange={(e) => updateMatcher(i, { op: e.target.value as ParamMatcher['op'] })}
+                                  className="rounded border border-neutral-300 bg-white px-2 py-1 text-xs text-neutral-700 focus:outline-none focus:ring-1 focus:ring-neutral-500 dark:border-neutral-600 dark:bg-neutral-900 dark:text-neutral-300"
+                                >
+                                  {MATCHER_OPS.map((opt) => (
+                                    <option key={opt.id} value={opt.id}>{opt.label}</option>
+                                  ))}
+                                </select>
+                                {opDef?.needsValue && (
+                                  <input
+                                    type="text"
+                                    value={valueToInput(m.value)}
+                                    onChange={(e) => updateMatcher(i, { value: inputToValue(m.op, e.target.value) })}
+                                    placeholder="value"
+                                    className="flex-1 rounded border border-neutral-300 bg-white px-2 py-1 text-xs text-neutral-900 placeholder:text-neutral-400 focus:outline-none focus:ring-1 focus:ring-neutral-500 dark:border-neutral-600 dark:bg-neutral-900 dark:text-neutral-100"
+                                  />
+                                )}
+                                <button
+                                  type="button"
+                                  onClick={() => removeMatcher(i)}
+                                  className="rounded p-1 text-neutral-400 hover:text-red-600 dark:hover:text-red-400"
+                                  aria-label="Remove condition"
+                                >
+                                  ×
+                                </button>
+                              </div>
+                              {opDef?.valueHint && (
+                                <p className="text-[11px] text-neutral-500 dark:text-neutral-500">{opDef.valueHint}</p>
+                              )}
+                            </div>
+                          );
+                        })}
+                        <p className="text-[11px] text-neutral-500 dark:text-neutral-500">
+                          All conditions must match (AND). Empty list = matches any params.
+                        </p>
+                      </div>
+                    )}
+                  </div>
                 </div>
               )}
             </div>

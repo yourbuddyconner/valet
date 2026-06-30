@@ -90,6 +90,8 @@ function toEditablePolicy(override: ActionPolicyOverride): EditableActionPolicy 
     actionId: override.actionId,
     riskLevel: override.riskLevel,
     mode: override.mode,
+    appliesIn: override.appliesIn,
+    paramMatchers: override.paramMatchers,
   };
 }
 
@@ -191,6 +193,8 @@ export function ActionPolicyOverridesSection() {
     actionId?: string | null;
     riskLevel?: string | null;
     mode: string;
+    appliesIn?: 'any' | 'workflow' | 'session';
+    paramMatchers?: import('@valet/shared').ParamMatcher[];
   }) {
     upsertMutation.mutate(data, {
       onSuccess: () => setDialogOpen(false),

@@ -79,6 +79,7 @@ export async function invokeAction(
     service: input.service,
     actionId: input.actionId,
     riskLevel: input.riskLevel,
+    params: input.params,
   });
   const invocationId = crypto.randomUUID();
 
@@ -148,6 +149,7 @@ export async function invokeWorkflowAction(
     service: input.service,
     actionId: input.actionId,
     riskLevel: input.riskLevel,
+    params: input.params,
   });
 
   const timeoutMs = input.approvalTimeoutMs ?? WORKFLOW_APPROVAL_DEFAULT_EXPIRY_MS;

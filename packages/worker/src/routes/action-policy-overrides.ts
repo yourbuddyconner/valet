@@ -9,6 +9,7 @@ import {
   resolveAdminPolicyMatch,
   upsertActionPolicy,
 } from '../lib/db.js';
+import { validateParamMatchers, type ParamMatcher } from '../lib/action-policy-matchers.js';
 import { listMcpToolCache } from '../lib/db/mcp-tool-cache.js';
 import type { AppDb } from '../lib/drizzle.js';
 import { integrationRegistry } from '../integrations/registry.js';
@@ -20,6 +21,23 @@ type OverrideMode = 'allow' | 'require_approval' | 'deny';
 const VALID_MODES = new Set<OverrideMode>(['allow', 'require_approval', 'deny']);
 const VALID_RISK_LEVELS = ['low', 'medium', 'high', 'critical'] as const satisfies readonly ActionRiskLevel[];
 const VALID_RISK_LEVEL_SET = new Set<string>(VALID_RISK_LEVELS);
+const VALID_APPLIES_IN = new Set<string>(['any', 'workflow', 'session']);
+
+function validateAppliesIn(value: unknown): 'any' | 'workflow' | 'session' {
+  if (value === undefined || value === null) return 'any';
+  if (typeof value === 'string' && VALID_APPLIES_IN.has(value)) {
+    return value as 'any' | 'workflow' | 'session';
+  }
+  throw new ValidationError(`Invalid appliesIn: ${String(value)}. Must be one of: ${Array.from(VALID_APPLIES_IN).join(', ')}`);
+}
+
+function validateMatchers(value: unknown): ParamMatcher[] {
+  try {
+    return validateParamMatchers(value);
+  } catch (err) {
+    throw new ValidationError(err instanceof Error ? err.message : 'Invalid paramMatchers');
+  }
+}
 
 function nullableString(value: unknown): string | null {
   return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null;
@@ -86,6 +104,11 @@ function toOverrideShape(row: Awaited<ReturnType<typeof listUserDurableActionPol
     actionId: row.actionId,
     riskLevel: row.riskLevel,
     mode: row.mode,
+    appliesIn: row.appliesIn ?? 'any',
+    paramMatchers: (() => {
+      try { return JSON.parse(row.paramMatchers ?? '[]'); }
+      catch { return []; }
+    })(),
     lifetime: row.expiresAt ? 'timed' : 'persistent',
     sessionId: null,
     expiresAt: row.expiresAt,
@@ -112,6 +135,8 @@ actionPolicyOverridesRouter.put('/:id', async (c) => {
     actionId?: string | null;
     riskLevel?: string | null;
     mode?: string;
+    appliesIn?: string;
+    paramMatchers?: unknown;
   }>();
 
   const mode = validateMode(body.mode);
@@ -123,6 +148,8 @@ actionPolicyOverridesRouter.put('/:id', async (c) => {
     throw new ValidationError(`User policies may only set mode='allow' (got "${mode}"). Admin-managed deny / require_approval policies live under the admin action policy API.`);
   }
   const { service, actionId, riskLevel } = validateTarget(body);
+  const appliesIn = validateAppliesIn(body.appliesIn);
+  const paramMatchers = validateMatchers(body.paramMatchers);
 
   const existing = await getActionPolicy(c.get('db'), id);
   if (existing && existing.principalId !== user.id) {
@@ -143,6 +170,8 @@ actionPolicyOverridesRouter.put('/:id', async (c) => {
     actionId,
     riskLevel,
     mode,
+    appliesIn,
+    paramMatchers,
     managedBy: 'user',
     principalType: 'user',
     principalId: user.id,

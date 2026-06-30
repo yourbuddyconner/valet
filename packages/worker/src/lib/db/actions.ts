@@ -8,6 +8,7 @@ import {
   workflowSpawnedSessions,
 } from '../schema/index.js';
 import type { ActionMode } from '@valet/shared';
+import { evaluateMatchers, parseStoredMatchers } from '../action-policy-matchers.js';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -155,6 +156,9 @@ export interface UpsertActionPolicyInput {
   nodeId?: string | null;
   paramMatchers?: unknown[];
   matcherSummary?: string | null;
+  /** Context conditional: 'any' (default), 'workflow', or 'session'.
+   *  Filters the resolver candidate set by where the invocation lives. */
+  appliesIn?: 'any' | 'workflow' | 'session';
   userGrantBehavior?: UserGrantBehavior;
   origin?: ActionPolicyOrigin;
   sourceApprovalId?: string | null;
@@ -243,6 +247,7 @@ export async function upsertActionPolicy(
       nodeId,
       paramMatchers: paramMatchersJson,
       matcherSummary,
+      appliesIn: data.appliesIn ?? 'any',
       userGrantBehavior,
       origin,
       sourceApprovalId,
@@ -252,7 +257,9 @@ export async function upsertActionPolicy(
       target: actionPolicies.id,
       set: {
         mode: data.mode,
+        paramMatchers: paramMatchersJson,
         matcherSummary,
+        appliesIn: data.appliesIn ?? 'any',
         userGrantBehavior,
         sourceApprovalId,
         expiresAt,
@@ -481,6 +488,23 @@ type TargetedRow = {
   riskLevel: string | null;
 };
 
+/**
+ * Phase 2 filter: drop a policy whose applies_in disagrees with the
+ * invocation's context, or whose param_matchers don't all evaluate true
+ * against the invocation's actual params. Applied uniformly to admin
+ * and user candidate sets before pickMostSpecific.
+ */
+function policyMatchesContextAndParams(
+  row: ActionPolicyRow,
+  context: 'workflow' | 'session',
+  params: unknown,
+): boolean {
+  const appliesIn = row.appliesIn ?? 'any';
+  if (appliesIn !== 'any' && appliesIn !== context) return false;
+  const matchers = parseStoredMatchers(row.paramMatchers);
+  return evaluateMatchers(matchers, params);
+}
+
 function pickMostSpecific<T extends TargetedRow>(
   rows: readonly T[],
   service: string,
@@ -511,6 +535,13 @@ export interface ResolveActionPolicyInput {
    *  Runtime grants with their own nodeId only match invocations from that node. */
   workflowId?: string | null;
   nodeId?: string | null;
+  /** The actual params the action is being invoked with. Evaluated
+   *  against policy/grant paramMatchers — a candidate whose matchers
+   *  don't all pass is dropped from the candidate set. Pass an empty
+   *  object when there's nothing meaningful to match against; matchers
+   *  with `op='exists'` etc. still evaluate against `undefined` paths
+   *  correctly. */
+  params?: unknown;
 }
 
 /**
@@ -564,8 +595,20 @@ export async function resolveEffectiveActionPolicy(
     )
     .all();
 
+  // Phase 2: context + matcher filtering. A policy with applies_in='workflow'
+  // is dropped when the invocation came from a session (and vice versa);
+  // a policy whose param_matchers don't all evaluate true against the
+  // invocation's actual params is dropped too. Empty matchers means
+  // "matches any params" — the Phase-1 behavior is the default.
+  const invocationContext: 'workflow' | 'session' = input.workflowExecutionId
+    ? 'workflow'
+    : 'session';
+  const filteredAdminRows = adminRows.filter((r) =>
+    policyMatchesContextAndParams(r, invocationContext, input.params),
+  );
+
   const adminDeny = pickMostSpecific(
-    adminRows.filter((r) => r.mode === 'deny'),
+    filteredAdminRows.filter((r) => r.mode === 'deny'),
     service,
     actionId,
     riskLevel,
@@ -585,7 +628,7 @@ export async function resolveEffectiveActionPolicy(
   }
 
   const adminBase = pickMostSpecific(
-    adminRows.filter((r) => r.mode === 'allow' || r.mode === 'require_approval'),
+    filteredAdminRows.filter((r) => r.mode === 'allow' || r.mode === 'require_approval'),
     service,
     actionId,
     riskLevel,
@@ -680,8 +723,12 @@ export async function resolveEffectiveActionPolicy(
       // service+actionId). Grants without a nodeId apply broadly (e.g. "Approve
       // for this run" covers all nodes in the execution).
       const nodeFilteredGrants = grants.filter((g) => {
-        if (!g.nodeId) return true;
-        return g.nodeId === input.nodeId && (!g.workflowId || g.workflowId === input.workflowId);
+        if (g.nodeId && (g.nodeId !== input.nodeId || (g.workflowId && g.workflowId !== input.workflowId))) {
+          return false;
+        }
+        // Phase 2: matcher evaluation against invocation params.
+        const matchers = parseStoredMatchers(g.paramMatchers);
+        return evaluateMatchers(matchers, input.params);
       });
       const grantMatch = pickMostSpecific(nodeFilteredGrants, service, actionId, riskLevel);
       if (grantMatch) {
@@ -731,8 +778,13 @@ export async function resolveEffectiveActionPolicy(
     )
     .all();
 
+  // Phase 2: same context + matcher filter applied to user rows.
+  const filteredUserRows = userRows.filter((r) =>
+    policyMatchesContextAndParams(r, invocationContext, input.params),
+  );
+
   const userMatch = pickMostSpecific(
-    userRows.filter((r) => r.mode === 'allow'),
+    filteredUserRows.filter((r) => r.mode === 'allow'),
     service,
     actionId,
     riskLevel,

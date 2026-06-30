@@ -30,6 +30,9 @@ export const actionPolicies = sqliteTable('action_policies', {
   // Parameter matchers (Phase 2 enforces; Phase 1 stores).
   paramMatchers: text().notNull().default('[]'),
   matcherSummary: text(),
+  // Context conditional: 'any' (default), 'workflow', or 'session'. Filters
+  // the resolver's candidate set by where the invocation originated.
+  appliesIn: text().notNull().default('any'),
   // Admin require_approval rows: 'allowed' means user grants may quiet matching
   // approvals; 'blocked' forces a prompt every time.
   userGrantBehavior: text().notNull().default('allowed'),

@@ -1051,6 +1051,12 @@ export interface ActionPolicy {
   updatedAt: string;
 }
 
+export interface ParamMatcher {
+  path: string;
+  op: 'eq' | 'neq' | 'regex' | 'in' | 'not_in' | 'gt' | 'gte' | 'lt' | 'lte' | 'exists' | 'not_exists';
+  value?: unknown;
+}
+
 export interface ActionPolicyOverride {
   id: string;
   userId: string;
@@ -1058,6 +1064,10 @@ export interface ActionPolicyOverride {
   actionId?: string | null;
   riskLevel?: ActionRiskLevel | null;
   mode: ActionMode;
+  /** Context conditional — defaults to 'any'. */
+  appliesIn: 'any' | 'workflow' | 'session';
+  /** Param matchers; all must evaluate true for the policy to fire. */
+  paramMatchers: ParamMatcher[];
   lifetime: ActionPolicyLifetime;
   sessionId?: string | null;
   expiresAt?: string | null;

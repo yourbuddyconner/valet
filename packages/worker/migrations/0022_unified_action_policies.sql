@@ -62,6 +62,8 @@ ALTER TABLE action_policies ADD COLUMN workflow_version_id TEXT;
 ALTER TABLE action_policies ADD COLUMN node_id TEXT;
 ALTER TABLE action_policies ADD COLUMN param_matchers TEXT NOT NULL DEFAULT '[]';
 ALTER TABLE action_policies ADD COLUMN matcher_summary TEXT;
+ALTER TABLE action_policies ADD COLUMN applies_in TEXT NOT NULL DEFAULT 'any'
+  CHECK(applies_in IN ('any', 'workflow', 'session'));
 ALTER TABLE action_policies ADD COLUMN user_grant_behavior TEXT NOT NULL DEFAULT 'allowed';
 ALTER TABLE action_policies ADD COLUMN origin TEXT NOT NULL DEFAULT 'settings';
 ALTER TABLE action_policies ADD COLUMN source_approval_id TEXT;
