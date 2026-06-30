@@ -77,13 +77,39 @@ const MAX_CHARS = 3000;
 
 export function ToolPayload({ value }: { value: unknown }) {
   const normalised = normalisePayload(value);
-  const approxSize = approxJsonSize(normalised);
-  const [showAll, setShowAll] = useState(approxSize <= MAX_CHARS);
+  const tableRows = detectTableRows(normalised);
+  const [mode, setMode] = useState<'table' | 'json'>(tableRows ? 'table' : 'json');
 
+  if (tableRows) {
+    return (
+      <div className="space-y-1.5">
+        <div className="flex items-center justify-between">
+          <span className="text-[10px] uppercase tracking-wider text-neutral-400 dark:text-neutral-500">
+            {tableRows.length} row{tableRows.length === 1 ? '' : 's'}
+          </span>
+          <button
+            type="button"
+            onClick={() => setMode(mode === 'table' ? 'json' : 'table')}
+            className="text-[11px] text-neutral-500 hover:text-neutral-900 dark:text-neutral-400 dark:hover:text-neutral-100"
+          >
+            {mode === 'table' ? 'JSON' : 'Table'}
+          </button>
+        </div>
+        {mode === 'table' ? <TableRenderer data={tableRows} /> : <JsonBlock value={normalised} />}
+      </div>
+    );
+  }
+
+  return <JsonBlock value={normalised} />;
+}
+
+function JsonBlock({ value }: { value: unknown }) {
+  const approxSize = approxJsonSize(value);
+  const [showAll, setShowAll] = useState(approxSize <= MAX_CHARS);
   return (
     <div className="space-y-1.5">
       <pre className="m-0 max-h-[480px] overflow-auto rounded-md border border-neutral-200 bg-neutral-50/60 px-3 py-2.5 font-mono text-[11.5px] leading-[1.65] text-neutral-700 dark:border-neutral-800 dark:bg-neutral-950/40 dark:text-neutral-200">
-        <JsonNode value={normalised} indent={0} budget={{ remaining: showAll ? Infinity : MAX_CHARS }} />
+        <JsonNode value={value} indent={0} budget={{ remaining: showAll ? Infinity : MAX_CHARS }} />
       </pre>
       {!showAll && (
         <button
@@ -96,6 +122,117 @@ export function ToolPayload({ value }: { value: unknown }) {
       )}
     </div>
   );
+}
+
+/**
+ * If `value` is an array of homogeneous flat-ish objects (≥1 row, every
+ * row has at least half the union of keys, no row exceeds 12 columns),
+ * return it cast as rows. Otherwise null. The threshold is intentionally
+ * permissive so `tool_search`-style results (which can have heterogenous
+ * optional fields) still render as a table.
+ */
+function detectTableRows(value: unknown): Record<string, unknown>[] | null {
+  if (!Array.isArray(value) || value.length === 0) return null;
+  const rows = value.filter(
+    (v): v is Record<string, unknown> => v != null && typeof v === 'object' && !Array.isArray(v),
+  );
+  if (rows.length !== value.length || rows.length < 1) return null;
+
+  const allKeys = new Set<string>();
+  for (const row of rows) for (const k of Object.keys(row)) allKeys.add(k);
+  if (allKeys.size === 0 || allKeys.size > 12) return null;
+
+  const threshold = Math.max(1, Math.floor(allKeys.size * 0.5));
+  const uniform = rows.every((row) => Object.keys(row).length >= threshold);
+  return uniform ? rows : null;
+}
+
+const TABLE_PRIORITY = ['name', 'title', 'id', 'tool_id', 'label', 'slug', 'type', 'status', 'description', 'risk', 'risk_level', 'key', 'value'];
+
+function selectColumns(rows: Record<string, unknown>[], maxCols = 6): { visible: string[]; hidden: string[] } {
+  const allKeys = new Set<string>();
+  for (const row of rows) for (const k of Object.keys(row)) allKeys.add(k);
+  const nonEmpty = [...allKeys].filter((key) =>
+    rows.some((row) => row[key] != null && row[key] !== ''),
+  );
+  const sorted = nonEmpty.sort((a, b) => {
+    const ai = TABLE_PRIORITY.indexOf(a.toLowerCase());
+    const bi = TABLE_PRIORITY.indexOf(b.toLowerCase());
+    if (ai !== -1 && bi !== -1) return ai - bi;
+    if (ai !== -1) return -1;
+    if (bi !== -1) return 1;
+    return 0;
+  });
+  return { visible: sorted.slice(0, maxCols), hidden: sorted.slice(maxCols) };
+}
+
+function TableRenderer({ data }: { data: Record<string, unknown>[] }) {
+  const MAX_ROWS = 25;
+  const displayRows = data.slice(0, MAX_ROWS);
+  const { visible, hidden } = selectColumns(data);
+
+  if (visible.length === 0) return <JsonBlock value={data} />;
+
+  return (
+    <div className="overflow-hidden rounded-md border border-neutral-200 dark:border-neutral-800">
+      <div className="max-h-[480px] overflow-auto">
+        <table className="w-full border-collapse font-mono text-[11px]">
+          <thead className="sticky top-0 z-10 bg-neutral-50 dark:bg-neutral-900">
+            <tr className="border-b border-neutral-200 dark:border-neutral-800">
+              {visible.map((col) => (
+                <th key={col} className="whitespace-nowrap px-2 py-1.5 text-left text-[9.5px] font-medium uppercase tracking-wider text-neutral-500 dark:text-neutral-400">
+                  {col}
+                </th>
+              ))}
+              {hidden.length > 0 && (
+                <th className="whitespace-nowrap px-2 py-1.5 text-left text-[9.5px] font-medium uppercase tracking-wider text-neutral-400 dark:text-neutral-500">
+                  +{hidden.length}
+                </th>
+              )}
+            </tr>
+          </thead>
+          <tbody>
+            {displayRows.map((row, i) => (
+              <tr key={i} className={i % 2 === 1 ? 'bg-neutral-50/40 dark:bg-neutral-900/30' : ''}>
+                {visible.map((col) => (
+                  <td key={col} className="max-w-[280px] truncate px-2 py-1 text-neutral-700 dark:text-neutral-300" title={formatCellTitle(row[col])}>
+                    <CellInline value={row[col]} />
+                  </td>
+                ))}
+                {hidden.length > 0 && (
+                  <td className="px-2 py-1 text-neutral-300 dark:text-neutral-600">…</td>
+                )}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {data.length > MAX_ROWS && (
+        <div className="border-t border-neutral-200 bg-neutral-50 px-2 py-1 text-[10px] text-neutral-500 dark:border-neutral-800 dark:bg-neutral-900 dark:text-neutral-400">
+          +{data.length - MAX_ROWS} more rows
+        </div>
+      )}
+    </div>
+  );
+}
+
+function CellInline({ value }: { value: unknown }) {
+  if (value === null || value === undefined) return <span className="text-neutral-300 dark:text-neutral-600">—</span>;
+  if (typeof value === 'boolean') {
+    return <span className={value ? 'text-violet-600 dark:text-violet-400' : 'text-neutral-400'}>{String(value)}</span>;
+  }
+  if (typeof value === 'number') return <span className="tabular-nums text-violet-600 dark:text-violet-400">{value}</span>;
+  if (typeof value === 'object') {
+    const s = JSON.stringify(value);
+    return <span className="text-neutral-400">{s.length > 60 ? s.slice(0, 60) + '…' : s}</span>;
+  }
+  return <span>{String(value)}</span>;
+}
+
+function formatCellTitle(value: unknown): string | undefined {
+  if (value === null || value === undefined) return undefined;
+  if (typeof value === 'object') return JSON.stringify(value);
+  return String(value);
 }
 
 interface Budget {
@@ -264,35 +401,51 @@ function extractSummary(tool: ToolCallData): string | null {
     ? (args as Record<string, unknown>)
     : null;
 
+  const argHint = extractArgHint(tool, argsObj);
+  const resultHint = extractResultHint(tool.result);
+
+  if (argHint && resultHint) return `${argHint} · ${resultHint}`;
+  return argHint ?? resultHint;
+}
+
+function extractArgHint(tool: ToolCallData, argsObj: Record<string, unknown> | null): string | null {
   if (tool.toolName === 'call_tool' && argsObj?.tool_id) {
     return String(argsObj.tool_id);
   }
+  if (!argsObj) return null;
+  // Search-style args are surfaced first so users see *what they
+  // searched for* above the fold, then the count appended via
+  // extractResultHint completes the "query · N results" pattern.
+  for (const key of ['query', 'pattern', 'q', 'search', 'description', 'command', 'file_path', 'filePath', 'path', 'message', 'url', 'name', 'tool_id']) {
+    const val = argsObj[key];
+    if (typeof val === 'string' && val.length > 0) {
+      return val.length > 80 ? val.slice(0, 80) + '…' : val;
+    }
+  }
+  return null;
+}
 
-  if (argsObj) {
-    for (const key of ['description', 'command', 'file_path', 'filePath', 'path', 'pattern', 'query', 'message', 'url', 'name', 'tool_id']) {
-      const val = argsObj[key];
+function extractResultHint(rawResult: unknown): string | null {
+  const parsed = tryParseJson(rawResult);
+  if (parsed == null) return null;
+  if (Array.isArray(parsed)) {
+    return `${parsed.length} result${parsed.length === 1 ? '' : 's'}`;
+  }
+  if (typeof parsed === 'object') {
+    const obj = parsed as Record<string, unknown>;
+    // A `results`/`items`/`matches` array under an outer wrapper is a
+    // very common "list" shape; surface its length too.
+    for (const arrKey of ['results', 'items', 'matches', 'workflows', 'executions', 'tools']) {
+      const arr = obj[arrKey];
+      if (Array.isArray(arr)) return `${arr.length} ${arrKey}`;
+    }
+    for (const key of ['name', 'title', 'status', 'message', 'id']) {
+      const val = obj[key];
       if (typeof val === 'string' && val.length > 0) {
-        return val.length > 100 ? val.slice(0, 100) + '…' : val;
+        return val.length > 60 ? val.slice(0, 60) + '…' : val;
       }
     }
   }
-
-  const parsed = tryParseJson(tool.result);
-  if (parsed != null) {
-    if (Array.isArray(parsed)) {
-      return `${parsed.length} item${parsed.length === 1 ? '' : 's'}`;
-    }
-    if (typeof parsed === 'object') {
-      const obj = parsed as Record<string, unknown>;
-      for (const key of ['name', 'title', 'status', 'message', 'id']) {
-        const val = obj[key];
-        if (typeof val === 'string' && val.length > 0) {
-          return val.length > 80 ? val.slice(0, 80) + '…' : val;
-        }
-      }
-    }
-  }
-
   return null;
 }
 
