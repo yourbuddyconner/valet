@@ -408,9 +408,6 @@ function WorkflowDetailPage() {
                 </span>
                 {getWorkflowEnabledLabel(workflow.enabled)}
               </button>
-              <span className="hidden shrink-0 font-mono text-[11px] text-neutral-500 sm:inline">
-                dag/v1
-              </span>
               {workflow.description && (
                 <TooltipProvider delayDuration={250}>
                   <Tooltip>
