@@ -628,7 +628,12 @@ export function ActionPolicyDialog({ open, onOpenChange, policy, noun = 'Policy'
 
   const { data: catalog } = useActionCatalog();
 
-  // Reset form when dialog opens/policy changes
+  // Reset form when dialog opens/policy changes. Depending on `policy`
+  // (the object) re-fires this effect on every render because the
+  // parent passes a fresh-derived object each time (toEditablePolicy
+  // returns a new ref), which would overwrite the user's in-progress
+  // edits between keystrokes. Key on the stable id + open instead.
+  const policyId = policy?.id ?? null;
   React.useEffect(() => {
     if (policy) {
       setScope(inferScope(policy));
@@ -648,7 +653,10 @@ export function ActionPolicyDialog({ open, onOpenChange, policy, noun = 'Policy'
       setMatchers([]);
     }
     setShowJson(false);
-  }, [policy, open]);
+    // policyId + open captures "switched policies" or "reopened" — the
+    // two cases we actually want to reset on.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [policyId, open]);
 
   // Derived: unique services from catalog
   const serviceItems = React.useMemo<TypeaheadItem[]>(() => {
