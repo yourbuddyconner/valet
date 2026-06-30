@@ -181,6 +181,9 @@ function mapInvocationToApprovalView(a: typeof actionInvocations.$inferSelect) {
     resolvedAt: a.resolvedAt,
     cancelledAt: null,
     createdAt: a.createdAt,
+    // Set when the approval is raised inside a foreach body. The UI uses
+    // this to decide whether to offer "Approve remaining rows".
+    iterationIndex: a.iterationIndex,
   };
 }
 

@@ -846,7 +846,8 @@ async function getExecutionAction(
   // workflows.request_approval invocations — live in action_invocations.
   const approvals = await env.DB.prepare(
     `SELECT id, node_id, status, params, expires_at,
-            resolved_by, resolved_at, created_at, service, action_id
+            resolved_by, resolved_at, created_at, service, action_id,
+            iteration_index
      FROM action_invocations
      WHERE workflow_execution_id = ?
      ORDER BY created_at ASC`,
@@ -911,6 +912,7 @@ async function getExecutionAction(
           resolvedAt: a.resolved_at,
           cancelledAt: null,
           createdAt: a.created_at,
+          iterationIndex: a.iteration_index,
         };
       }),
     },

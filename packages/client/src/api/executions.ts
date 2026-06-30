@@ -19,6 +19,10 @@ export interface ExecutionApproval {
   resolvedAt: string | null;
   cancelledAt: string | null;
   createdAt: string;
+  // Foreach iteration index. Set when the approval was raised inside a
+  // foreach body; the card uses this to show the "Approve remaining rows"
+  // button (scope=workflow_execution + nodeId narrower).
+  iterationIndex?: number | null;
 }
 
 export interface Execution {
@@ -217,15 +221,36 @@ export interface ResolveApprovalResponse {
   alreadyResolved?: boolean;
 }
 
+// Scope of a workflow approval decision. 'once' resolves only the
+// originating row. 'workflow_execution' persists a runtime grant on the
+// execution that the backend uses to sweep currently-pending matching
+// invocations AND auto-approve future ones. Pair with `nodeId` to narrow
+// the grant to a specific foreach body (the "Approve remaining rows"
+// button).
+export type ApprovalScope = 'once' | 'workflow_execution';
+
+export interface ResolveApprovalArgs {
+  executionId: string;
+  approvalId: string;
+  reason?: string;
+  scope?: ApprovalScope;
+  nodeId?: string;
+}
+
 export function useApproveExecutionApproval() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: ({ executionId, approvalId, reason }: { executionId: string; approvalId: string; reason?: string }) =>
-      api.post<ResolveApprovalResponse>(
+    mutationFn: ({ executionId, approvalId, reason, scope, nodeId }: ResolveApprovalArgs) => {
+      const body: Record<string, unknown> = {};
+      if (reason) body.reason = reason;
+      if (scope) body.scope = scope;
+      if (nodeId) body.nodeId = nodeId;
+      return api.post<ResolveApprovalResponse>(
         `/executions/${executionId}/approvals/${approvalId}/approve`,
-        reason ? { reason } : {},
-      ),
+        body,
+      );
+    },
     onSuccess: (_, { executionId }) => {
       queryClient.invalidateQueries({ queryKey: executionKeys.detail(executionId) });
       queryClient.invalidateQueries({ queryKey: [...executionKeys.detail(executionId), 'approvals'] });
@@ -238,7 +263,7 @@ export function useDenyExecutionApproval() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: ({ executionId, approvalId, reason }: { executionId: string; approvalId: string; reason?: string }) =>
+    mutationFn: ({ executionId, approvalId, reason }: ResolveApprovalArgs) =>
       api.post<ResolveApprovalResponse>(
         `/executions/${executionId}/approvals/${approvalId}/deny`,
         reason ? { reason } : {},

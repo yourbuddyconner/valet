@@ -79,11 +79,27 @@ export function ExecutionApprovalCard({ executionId, approval }: { executionId: 
   const [reason, setReason] = React.useState('');
   const busy = approve.isPending || deny.isPending;
   const isPending = approval.status === 'pending';
+  // iterationIndex is set when the approval was raised inside a foreach
+  // body. The card uses this to offer the scoped "Approve remaining rows"
+  // button — which creates an execution-scoped grant narrowed to this
+  // foreach node, sweeping every pending iteration of the same body to
+  // approved in one click.
+  const isForeachIteration = typeof approval.iterationIndex === 'number';
 
-  const onApprove = async () => {
+  const onApprove = async (scope: 'once' | 'workflow_execution' = 'once', narrowToNode = false) => {
     try {
-      await approve.mutateAsync({ executionId, approvalId: approval.id });
-      toastSuccess('Approved', `Approval for ${approval.nodeId} dispatched.`);
+      await approve.mutateAsync({
+        executionId,
+        approvalId: approval.id,
+        scope,
+        ...(narrowToNode && approval.nodeId ? { nodeId: approval.nodeId } : {}),
+      });
+      const successMessage = scope === 'workflow_execution'
+        ? narrowToNode
+          ? `Approved remaining iterations of ${approval.nodeId}.`
+          : `Approved for the rest of this run.`
+        : `Approval for ${approval.nodeId} dispatched.`;
+      toastSuccess('Approved', successMessage);
     } catch (err) {
       toastError('Approve failed', err instanceof Error ? err.message : 'unknown error');
     }
@@ -148,9 +164,29 @@ export function ExecutionApprovalCard({ executionId, approval }: { executionId: 
             placeholder="Reason (optional, sent on deny)"
             className="w-full rounded-md border border-neutral-200 bg-white px-3 py-1.5 text-xs text-neutral-900 placeholder:text-neutral-400 focus:outline-none focus:ring-2 focus:ring-neutral-900 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-100 dark:placeholder:text-neutral-500 dark:focus:ring-neutral-100"
           />
-          <div className="flex gap-2">
-            <Button size="sm" onClick={onApprove} disabled={busy}>
-              {approve.isPending ? 'Approving…' : 'Approve'}
+          <div className="flex flex-wrap gap-2">
+            <Button size="sm" onClick={() => onApprove('once')} disabled={busy}>
+              {approve.isPending ? 'Approving…' : 'Approve once'}
+            </Button>
+            {isForeachIteration && (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => onApprove('workflow_execution', true)}
+                disabled={busy}
+                title="Auto-approve every remaining iteration of this foreach body"
+              >
+                Approve remaining rows
+              </Button>
+            )}
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => onApprove('workflow_execution')}
+              disabled={busy}
+              title="Auto-approve any matching approval gate for the rest of this run"
+            >
+              Approve for this run
             </Button>
             <Button size="sm" variant="destructive" onClick={onDeny} disabled={busy}>
               {deny.isPending ? 'Denying…' : 'Deny'}
