@@ -29,9 +29,10 @@ export function TraceNodeCard({
   const output = useParsedPayload(node.output);
   const input = useParsedPayload(node.inputPreview);
   const defNode = React.useMemo(
-    () => definition?.nodes.find((n) => n.id === node.nodeId) ?? null,
+    () => findDefNodeById(definition, node.nodeId),
     [definition, node.nodeId],
   );
+  const toolCall = defNode?.type === 'tool' ? `${defNode.service}.${defNode.action}` : null;
   const summary = describeNodeOutcome(node, output, defNode);
   const isError = status === 'failed' || !!node.error;
 
@@ -57,6 +58,14 @@ export function TraceNodeCard({
               {node.nodeId}
             </span>
             <Badge variant="secondary" className="shrink-0">{node.nodeType}</Badge>
+            {toolCall && (
+              <code
+                className="shrink-0 rounded bg-violet-50 px-1.5 py-0.5 font-mono text-[11px] text-violet-700 dark:bg-violet-950/40 dark:text-violet-300"
+                title="Action being called"
+              >
+                {toolCall}
+              </code>
+            )}
             <StatusPill status={status} />
             {node.retryAttempts > 0 && (
               <Badge variant="warning" className="shrink-0">retry ×{node.retryAttempts}</Badge>
@@ -109,12 +118,16 @@ function NodeBody({
   defNode: WorkflowNode | null;
 }) {
   if (output === null || output === undefined) {
-    if (node.reason) {
-      return (
-        <Section title="Reason"><span className="text-sm text-neutral-700 dark:text-neutral-300">{node.reason}</span></Section>
-      );
+    // Tool nodes still render — the configured call (service.action +
+    // params) is useful even when no result was recorded.
+    if (node.nodeType !== 'tool') {
+      if (node.reason) {
+        return (
+          <Section title="Reason"><span className="text-sm text-neutral-700 dark:text-neutral-300">{node.reason}</span></Section>
+        );
+      }
+      return null;
     }
-    return null;
   }
 
   switch (node.nodeType) {
@@ -122,7 +135,7 @@ function NodeBody({
     case 'set': return <SetBody output={output} />;
     case 'if': return <IfBody output={output} defNode={defNode} />;
     case 'llm': return <LlmBody output={output} />;
-    case 'tool': return <ToolBody output={output} />;
+    case 'tool': return <ToolBody output={output} defNode={defNode} />;
     case 'wait': return <WaitBody output={output} />;
     case 'approval': return <ApprovalBody output={output} />;
     case 'foreach': return <ForeachBody output={output} defNode={defNode} />;
@@ -316,13 +329,52 @@ function LlmBody({ output }: { output: unknown }) {
   return <Section title="Output"><SmartValue value={output} /></Section>;
 }
 
-function ToolBody({ output }: { output: unknown }) {
+function ToolBody({ output, defNode }: { output: unknown; defNode: WorkflowNode | null }) {
   const o = asObject(output);
-  if (!o) return <Section title="Result"><SmartValue value={output} /></Section>;
-  // Most tool outputs are flat objects. Promote a top-level URL if
-  // present (Drive create_document → url; sheets updates → updatedRange);
-  // render the rest as a key-value grid.
-  return <Section title="Result"><KeyValueGrid value={o} /></Section>;
+  const isTool = defNode?.type === 'tool';
+  const callName = isTool ? `${defNode.service}.${defNode.action}` : null;
+  const params = isTool && defNode.params && Object.keys(defNode.params).length > 0 ? defNode.params : null;
+  const noResult = !o && (output === null || output === undefined);
+
+  return (
+    <>
+      {callName && (
+        <Section title="Action">
+          <div className="space-y-2">
+            <div className="flex flex-wrap items-baseline gap-2">
+              <code className="rounded bg-violet-50 px-1.5 py-0.5 font-mono text-[13px] font-medium text-violet-800 dark:bg-violet-950/40 dark:text-violet-300">
+                {callName}
+              </code>
+              {isTool && typeof defNode.summary === 'string' && defNode.summary && (
+                <span className="text-sm text-neutral-500 dark:text-neutral-400">
+                  — {defNode.summary}
+                </span>
+              )}
+            </div>
+            {params && (
+              <CollapsibleSection title="Parameters (configured)">
+                <KeyValueGrid value={params as Record<string, unknown>} />
+              </CollapsibleSection>
+            )}
+          </div>
+        </Section>
+      )}
+      {o ? (
+        <Section title="Result"><KeyValueGrid value={o} /></Section>
+      ) : !noResult ? (
+        <Section title="Result"><SmartValue value={output} /></Section>
+      ) : callName ? (
+        // We have a tool name but no recorded result. Common case: the
+        // trace row was captured at wait/approval entry and the runtime
+        // never wrote the completion row (foreach body via approval
+        // sweep). Tell the user instead of showing an empty card.
+        <p className="text-sm text-neutral-500 dark:text-neutral-400">
+          No result was recorded for this trace row. If this is a foreach iteration,
+          the parent foreach card aggregates results.
+        </p>
+      ) : null}
+    </>
+  );
 }
 
 function WaitBody({ output }: { output: unknown }) {
@@ -839,6 +891,22 @@ function safeParseJson(value: string): unknown {
   try { return JSON.parse(trimmed); } catch { return null; }
 }
 
+/** Locate the workflow-definition node that produced this trace row.
+ *  Top-level nodes match directly; foreach bodies are nested under
+ *  the parent foreach as `body`, so a trace row like `write_row` (the
+ *  body of `write_companies`) only resolves once we walk in. */
+function findDefNodeById(
+  definition: WorkflowDefinition | null | undefined,
+  id: string,
+): WorkflowNode | null {
+  if (!definition) return null;
+  for (const node of definition.nodes) {
+    if (node.id === id) return node;
+    if (node.type === 'foreach' && node.body && node.body.id === id) return node.body;
+  }
+  return null;
+}
+
 function asObject(value: unknown): Record<string, unknown> | null {
   if (value && typeof value === 'object' && !Array.isArray(value)) {
     return value as Record<string, unknown>;
@@ -914,17 +982,19 @@ function describeNodeOutcome(node: ExecutionNode, output: unknown, defNode: Work
       return 'Generated response';
     }
     case 'tool': {
-      if (!o) return null;
-      // Sheets append/clear: summarize updates.
-      const u = asObject(o.updates);
-      if (u && typeof u.updatedRange === 'string') {
-        const rows = typeof u.updatedRows === 'number' ? `${u.updatedRows} row${u.updatedRows === 1 ? '' : 's'}` : null;
-        return [rows, `→ ${u.updatedRange}`].filter(Boolean).join(' ');
+      const callName = defNode && defNode.type === 'tool' ? `${defNode.service}.${defNode.action}` : null;
+      if (o) {
+        // Sheets append/clear: summarize updates.
+        const u = asObject(o.updates);
+        if (u && typeof u.updatedRange === 'string') {
+          const rows = typeof u.updatedRows === 'number' ? `${u.updatedRows} row${u.updatedRows === 1 ? '' : 's'}` : null;
+          return [rows, `→ ${u.updatedRange}`].filter(Boolean).join(' ');
+        }
+        if (typeof o.clearedRange === 'string') return `Cleared ${o.clearedRange}`;
+        // Slack send_message: ts + channel.
+        if (typeof o.ts === 'string' && typeof o.channel === 'string') return `Posted to ${o.channel}`;
       }
-      if (typeof o.clearedRange === 'string') return `Cleared ${o.clearedRange}`;
-      // Slack send_message: ts + channel.
-      if (typeof o.ts === 'string' && typeof o.channel === 'string') return `Posted to ${o.channel}`;
-      return null;
+      return callName ? `Called ${callName}` : null;
     }
     case 'wait': {
       if (!o) return null;
