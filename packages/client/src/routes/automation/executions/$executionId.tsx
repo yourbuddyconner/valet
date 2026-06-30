@@ -382,17 +382,48 @@ function TraceNodeList({ nodes, executionStatus, definition }: { nodes: Executio
     if (n.status === 'failed' || n.error) defaultExpanded.add(n.id);
   }
 
+  // Map foreach body nodes to their parent so we can render them as a
+  // visually nested child instead of a sibling step. Without this,
+  // write_row reads like a step that runs after write_companies when
+  // it's actually inside it.
+  const bodyToParent = new Map<string, string>();
+  if (definition) {
+    for (const n of definition.nodes) {
+      if (n.type === 'foreach' && n.body) bodyToParent.set(n.body.id, n.id);
+    }
+  }
+
   return (
     <div className="space-y-2">
-      {latest.map((node) => (
-        <TraceNodeCard
-          key={node.id}
-          node={node}
-          executionStatus={executionStatus}
-          definition={definition}
-          defaultOpen={defaultExpanded.has(node.id)}
-        />
-      ))}
+      {latest.map((node) => {
+        const parentId = bodyToParent.get(node.nodeId);
+        const card = (
+          <TraceNodeCard
+            node={node}
+            executionStatus={executionStatus}
+            definition={definition}
+            defaultOpen={defaultExpanded.has(node.id)}
+          />
+        );
+        if (parentId) {
+          return (
+            <div key={node.id} className="relative ml-7 pl-4">
+              {/* L-rail: emerges from the gap above (visually from the
+                  parent foreach card), bends right, and hooks into the
+                  body card's left edge near its header centerline. */}
+              <span
+                aria-hidden
+                className="pointer-events-none absolute left-0 -top-2 h-6 w-4 rounded-bl-md border-b-2 border-l-2 border-dashed border-violet-300 dark:border-violet-700"
+              />
+              <div className="mb-1 ml-1 text-[11px] text-neutral-500 dark:text-neutral-400">
+                body of <code className="font-mono">{parentId}</code>
+              </div>
+              {card}
+            </div>
+          );
+        }
+        return <div key={node.id}>{card}</div>;
+      })}
     </div>
   );
 }
