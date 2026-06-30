@@ -13,12 +13,8 @@ import { formatRelativeTime } from '@/lib/format';
 
 interface ExecutionApprovalPanelProps {
   executionId: string;
-  /** Pass the parent's already-fetched approval list if available, so
-   *  the panel doesn't fire its own poll on top of the execution detail
-   *  query. When omitted, the panel polls /api/executions/:id/approvals
-   *  every few seconds. */
-  approvals?: ExecutionApproval[] | undefined;
-  /** Optional title override. Defaults to "Pending approvals". */
+  /** Optional title override. Defaults to "Approval required" / "Pending
+   *  approvals" based on the pending count from the poll. */
   title?: string;
   /** Compact rendering — used inside the executions list row. */
   variant?: 'panel' | 'inline';
@@ -33,22 +29,23 @@ interface ExecutionApprovalPanelProps {
  */
 export function ExecutionApprovalPanel({
   executionId,
-  approvals,
-  title = 'Pending approvals',
+  title,
   variant = 'panel',
 }: ExecutionApprovalPanelProps) {
-  // Pending-approvals endpoint returns workflow-attributed gates AND
-  // approvals from any session this execution spawned (transitively).
-  // The execution-detail prop still passes its own workflow-direct
-  // list; the propagation poll fills in the spawned-session view.
-  const fetched = usePendingExecutionApprovals(executionId, {
-    enabled: approvals === undefined,
-  });
+  // Always poll the pending-approvals endpoint. It already merges
+  // workflow-direct gates with descendant invocations from any session
+  // this execution spawned (transitively) — letting the parent pass
+  // execution.approvals here would silently hide every cross-context
+  // approval, which is exactly the propagation surface this view is
+  // supposed to expose.
+  const fetched = usePendingExecutionApprovals(executionId);
 
-  const list: ExecutionApproval[] = approvals ?? fetched.data?.approvals ?? [];
+  const list: ExecutionApproval[] = fetched.data?.approvals ?? [];
   const pending = list.filter((a) => a.status === 'pending');
 
   if (pending.length === 0) return null;
+
+  const resolvedTitle = title ?? (pending.length > 1 ? 'Pending approvals' : 'Approval required');
 
   if (variant === 'inline') {
     return (
@@ -64,7 +61,7 @@ export function ExecutionApprovalPanel({
     <div className="rounded-lg border border-amber-300 bg-amber-50/60 p-4 dark:border-amber-800/60 dark:bg-amber-950/30">
       <div className="mb-3 flex items-center justify-between">
         <h3 className="text-sm font-medium text-amber-900 dark:text-amber-200">
-          {title}
+          {resolvedTitle}
         </h3>
         <Badge variant="default">{pending.length}</Badge>
       </div>

@@ -108,7 +108,6 @@ function ExecutionDetailPage() {
 
       <ExecutionApprovalPanel
         executionId={execution.id}
-        approvals={execution.approvals}
         title="Action required"
       />
 

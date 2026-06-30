@@ -352,14 +352,12 @@ function ExecutionSummaryPane({
           <KeyValue label="Mode" value={execution.mode ?? 'production'} />
         </div>
         {/* Pending approvals surfaced inline so users don't have to click
-            into the gated node to find the approve/deny buttons. Renders
-            null when nothing is pending; uses the same approvals list the
-            execution detail endpoint already returned. */}
-        <ExecutionApprovalPanel
-          executionId={execution.id}
-          approvals={execution.approvals}
-          title={execution.approvals && execution.approvals.filter((a) => a.status === 'pending').length > 1 ? 'Pending approvals' : 'Approval required'}
-        />
+            into the gated node to find the approve/deny buttons. The
+            panel polls /pending-approvals on its own so it picks up
+            spawned-session approvals (cross-context propagation) — the
+            execution-detail endpoint only knows about workflow-direct
+            gates and would silently hide the propagated ones. */}
+        <ExecutionApprovalPanel executionId={execution.id} />
         {execution.error && (
           <div className="rounded-md border border-red-200 bg-red-50 p-3 dark:border-red-900/50 dark:bg-red-950/40">
             <h3 className="text-xs font-medium text-red-700 dark:text-red-300">Error</h3>
