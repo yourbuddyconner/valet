@@ -8,6 +8,7 @@ import { actionInvocations } from '../schema/actions.js';
 import {
   listDescendantPendingApprovalsForSession,
   listDescendantPendingApprovalsForExecution,
+  isSessionDescendantOfExecution,
 } from './actions.js';
 
 const USER_ID = 'u1';
@@ -162,6 +163,23 @@ describe('descendant pending-approvals fan-out', () => {
 
       const rows = await listDescendantPendingApprovalsForExecution(db as any, 'exec-1');
       expect(rows.map((r) => r.id).sort()).toEqual(['inv-direct', 'inv-spawned']);
+    });
+
+    it('isSessionDescendantOfExecution: true for a direct spawn, true for a multi-level child, false for unrelated', async () => {
+      insertSession(db, 'sess-spawned');
+      insertSession(db, 'sess-child', 'sess-spawned');
+      insertSession(db, 'sess-orphan');
+      db.insert(workflowSpawnedSessions).values({
+        executionId: 'exec-1',
+        nodeId: 'spawn_node',
+        sessionId: 'sess-spawned',
+        createdAt: new Date().toISOString(),
+        expiresAt: new Date(Date.now() + 86_400_000).toISOString(),
+      }).run();
+
+      expect(await isSessionDescendantOfExecution(db as any, 'exec-1', 'sess-spawned')).toBe(true);
+      expect(await isSessionDescendantOfExecution(db as any, 'exec-1', 'sess-child')).toBe(true);
+      expect(await isSessionDescendantOfExecution(db as any, 'exec-1', 'sess-orphan')).toBe(false);
     });
 
     it('excludes invocations from a different execution', async () => {

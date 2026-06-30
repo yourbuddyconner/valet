@@ -1137,6 +1137,33 @@ export async function listDescendantPendingApprovalsForExecution(
   `);
 }
 
+/**
+ * Walks the same spawned + descendant tree as the propagation surface
+ * to confirm whether a session belongs to (or descends from) a workflow
+ * execution. Used by the approve route to authorize cross-context
+ * resolution of session-attributed invocations from the workflow UI.
+ */
+export async function isSessionDescendantOfExecution(
+  db: AppDb,
+  executionId: string,
+  sessionId: string,
+): Promise<boolean> {
+  const rows = await db.all<{ id: string }>(sql`
+    WITH RECURSIVE spawned_tree(id, depth) AS (
+      SELECT session_id AS id, 0
+        FROM workflow_spawned_sessions
+        WHERE execution_id = ${executionId}
+      UNION ALL
+      SELECT s.id, t.depth + 1
+        FROM sessions s
+        INNER JOIN spawned_tree t ON s.parent_session_id = t.id
+        WHERE t.depth < ${DESCENDANT_DEPTH_CAP}
+    )
+    SELECT id FROM spawned_tree WHERE id = ${sessionId} LIMIT 1
+  `);
+  return rows.length > 0;
+}
+
 export async function listPendingInvocationsByUser(db: AppDb, userId: string) {
   const now = nowIso();
   return db

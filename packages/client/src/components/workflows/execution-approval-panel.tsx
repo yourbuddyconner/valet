@@ -175,15 +175,25 @@ export function ExecutionApprovalCard({ executionId, approval }: { executionId: 
       </div>
 
       {isPending && isPropagated ? (
-        <div className="mt-3 flex items-center gap-2 text-xs text-neutral-600 dark:text-neutral-300">
-          <span>Resolve from the originating session:</span>
-          <Link
-            to="/sessions/$sessionId"
-            params={{ sessionId: approval.originSessionId as string }}
-            className="font-mono text-xs text-amber-700 underline hover:text-amber-900 dark:text-amber-300 dark:hover:text-amber-100"
-          >
-            {approval.originSessionId}
-          </Link>
+        <div className="mt-3 space-y-2">
+          <div className="flex flex-wrap gap-2">
+            <Button size="sm" onClick={() => onApprove('once')} disabled={busy}>
+              {approve.isPending ? 'Approving…' : 'Approve once'}
+            </Button>
+            <Button size="sm" variant="destructive" onClick={onDeny} disabled={busy}>
+              {deny.isPending ? 'Denying…' : 'Deny'}
+            </Button>
+          </div>
+          <div className="flex items-center gap-2 text-xs text-neutral-500 dark:text-neutral-400">
+            <span>Wider scopes (allow for session / always allow):</span>
+            <Link
+              to="/sessions/$sessionId"
+              params={{ sessionId: approval.originSessionId as string }}
+              className="text-amber-700 underline hover:text-amber-900 dark:text-amber-300 dark:hover:text-amber-100"
+            >
+              open session
+            </Link>
+          </div>
         </div>
       ) : isPending ? (
         <div className="mt-3 space-y-2">

@@ -21,7 +21,7 @@ import { eq } from 'drizzle-orm';
 import { NotFoundError, ValidationError } from '@valet/shared';
 import type { Env } from '../env.js';
 import { getDb } from '../lib/drizzle.js';
-import { getInvocation } from '../lib/db/actions.js';
+import { getInvocation, isSessionDescendantOfExecution } from '../lib/db/actions.js';
 import type { ActionInvocationRow } from '../lib/db/actions.js';
 import { assertWorkflowAccess } from '../lib/workflow-access.js';
 import { workflowExecutions } from '../lib/schema/workflows.js';
@@ -64,7 +64,7 @@ export async function resolveWorkflowApprovalRequest(input: ResolveApprovalInput
   const scope: ApprovalScope = input.scope ?? 'once';
 
   const invocation = await getInvocation(db, input.approvalId);
-  if (!invocation || invocation.workflowExecutionId !== input.executionId) {
+  if (!invocation) {
     throw new NotFoundError('WorkflowApproval', input.approvalId);
   }
 
@@ -81,6 +81,25 @@ export async function resolveWorkflowApprovalRequest(input: ResolveApprovalInput
 
   // Editor access on the resolved workflow id.
   await assertWorkflowAccess(db, input.user, execRow.workflowId, 'editor');
+
+  // Session-attributed branch. The invocation isn't owned by this workflow
+  // execution; it lives on a session the workflow spawned. We forward to
+  // the SessionAgentDO so the runner-side waiter resolves and the tool
+  // actually dispatches — flipping the DB row alone would leave the agent
+  // parked forever.
+  if (invocation.workflowExecutionId !== input.executionId) {
+    if (!invocation.sessionId) {
+      throw new NotFoundError('WorkflowApproval', input.approvalId);
+    }
+    if (scope !== 'once') {
+      throw new ValidationError(`scope "${scope}" is not valid for session-attributed approvals; use "once"`);
+    }
+    const isDescendant = await isSessionDescendantOfExecution(db, input.executionId, invocation.sessionId);
+    if (!isDescendant) {
+      throw new NotFoundError('WorkflowApproval', input.approvalId);
+    }
+    return forwardSessionApprovalToDO(input.env, invocation.sessionId, input.approvalId, input.result, input.user.id);
+  }
 
   // Session-scoped or durable-policy scopes don't make sense on a
   // workflow-attributed approval; reject early so the caller's UI doesn't
@@ -127,6 +146,45 @@ export async function resolveWorkflowApprovalRequest(input: ResolveApprovalInput
     status: input.result,
     sweptCount: Math.max(0, result.resolved.length - 1),
   };
+}
+
+/**
+ * Forward a propagated approval resolution from the workflow execution
+ * view to the SessionAgentDO that owns the invocation. The DO's
+ * `/prompt-resolved` endpoint runs the full session-side path: DB
+ * update, runner tool dispatch, broadcast to session clients. Mapping:
+ *   - approved → 'allow_once' (session/durable scopes are not exposed
+ *     through this surface; user wanting those can deep-link into the
+ *     session and use the in-session card)
+ *   - denied   → 'cancel'
+ */
+async function forwardSessionApprovalToDO(
+  env: Env,
+  sessionId: string,
+  invocationId: string,
+  result: 'approved' | 'denied',
+  userId: string,
+): Promise<ApprovalResolveResult> {
+  const stub = env.SESSIONS.idFromName(sessionId);
+  const session = env.SESSIONS.get(stub);
+  const actionId = result === 'approved' ? 'allow_once' : 'cancel';
+  const response = await session.fetch(new Request('http://do/prompt-resolved', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ promptId: invocationId, actionId, resolvedBy: userId }),
+  }));
+  if (response.status === 403) {
+    throw new ValidationError('only the session owner can resolve this approval');
+  }
+  if (response.status === 404) {
+    // DO returns 404 when the prompt has already been resolved or expired.
+    return { kind: 'already_resolved', status: 'resolved' };
+  }
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`SessionAgentDO /prompt-resolved failed (${response.status}): ${text}`);
+  }
+  return { kind: 'resolved', status: result, sweptCount: 0 };
 }
 
 async function dispatchResume(
