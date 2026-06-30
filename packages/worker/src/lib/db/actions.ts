@@ -256,6 +256,13 @@ export async function upsertActionPolicy(
     .onConflictDoUpdate({
       target: actionPolicies.id,
       set: {
+        // Target identity fields are updatable: a user editing an
+        // existing rule via /api/action-policy-overrides PUT expects
+        // the new (service, actionId, riskLevel) to overwrite, not
+        // silently fall back to the row's previous values.
+        service: data.service ?? null,
+        actionId: data.actionId ?? null,
+        riskLevel: data.riskLevel ?? null,
         mode: data.mode,
         paramMatchers: paramMatchersJson,
         matcherSummary,
