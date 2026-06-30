@@ -55,6 +55,12 @@ interface WorkflowExecutionViewerProps {
   onSelectNode: (nodeId: string | null) => void;
   onRetryExecution?: (executionId: string) => void;
   isRetryingExecution?: boolean;
+  /** Embedded mode: caller owns the page chrome (header, retry button)
+   *  and is showing exactly one execution, so we hide the executions
+   *  sidebar AND the top-right execution summary card. The canvas
+   *  takes the full container width and switches to h-full so it can
+   *  live inside a sized div rather than a flex parent. */
+  embedded?: boolean;
 }
 
 interface ExecutionNodeCardData extends WorkflowFlowNodeData {
@@ -90,6 +96,7 @@ function WorkflowExecutionViewerInner({
   onSelectNode,
   onRetryExecution,
   isRetryingExecution = false,
+  embedded = false,
 }: WorkflowExecutionViewerProps) {
   const flow = React.useMemo(
     () => definitionToFlow(definition ?? createDefaultWorkflowDefinition()),
@@ -133,7 +140,13 @@ function WorkflowExecutionViewerInner({
   }, [selectedNodeId]);
 
   return (
-    <div className="grid min-h-0 flex-1 grid-cols-[280px_minmax(0,1fr)] overflow-hidden bg-neutral-50 dark:bg-neutral-950">
+    <div
+      className={cn(
+        'grid min-h-0 overflow-hidden bg-neutral-50 dark:bg-neutral-950',
+        embedded ? 'h-full grid-cols-[minmax(0,1fr)]' : 'flex-1 grid-cols-[280px_minmax(0,1fr)]',
+      )}
+    >
+      {!embedded && (
       <aside className="min-h-0 border-r border-neutral-200 bg-white dark:border-neutral-800 dark:bg-neutral-950">
         <div className="flex h-12 items-center justify-between border-b border-neutral-200 px-4 dark:border-neutral-800">
           <div>
@@ -181,6 +194,7 @@ function WorkflowExecutionViewerInner({
           )}
         </div>
       </aside>
+      )}
 
       <div
         className={cn(
@@ -222,7 +236,7 @@ function WorkflowExecutionViewerInner({
               Loading execution...
             </div>
           )}
-          {execution && executionPaneOpen ? (
+          {embedded ? null : execution && executionPaneOpen ? (
             <ExecutionSummaryPane
               execution={execution}
               onRetryExecution={onRetryExecution}

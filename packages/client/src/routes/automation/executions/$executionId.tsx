@@ -149,6 +149,7 @@ function ExecutionDetailPage() {
             onSelectNode={setSelectedNodeId}
             onRetryExecution={() => onRetry()}
             isRetryingExecution={retryExecution.isPending}
+            embedded
           />
         </section>
       ) : (
