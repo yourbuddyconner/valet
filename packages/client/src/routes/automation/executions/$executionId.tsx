@@ -317,7 +317,17 @@ function SummaryItem({ label, value }: { label: string; value: string }) {
 }
 
 function NodeTraceTable({ nodes }: { nodes: ExecutionNode[] }) {
-  if (nodes.length === 0) {
+  // Collapse per DAG node: each node can have many trace rows (one per
+  // status transition: running → waiting_approval → completed). The
+  // canvas view picks the latest using buildExecutionNodeStateMap;
+  // mirror that here so the table doesn't read "WAITING APPROVAL" for
+  // a node that since completed.
+  const latest = React.useMemo(() => {
+    const byNode = new Map<string, ExecutionNode>();
+    for (const n of nodes) byNode.set(n.nodeId, n);
+    return Array.from(byNode.values());
+  }, [nodes]);
+  if (latest.length === 0) {
     return (
       <div className="rounded-lg border border-neutral-200 bg-white p-6 text-sm text-neutral-500 dark:border-neutral-800 dark:bg-neutral-900 dark:text-neutral-400">
         No node trace rows recorded.
@@ -338,7 +348,7 @@ function NodeTraceTable({ nodes }: { nodes: ExecutionNode[] }) {
             </tr>
           </thead>
           <tbody className="divide-y divide-neutral-200 dark:divide-neutral-800">
-            {nodes.map((node) => (
+            {latest.map((node) => (
               <tr key={node.id}>
                 <td className="px-4 py-3">
                   <div className="font-mono text-xs text-neutral-900 dark:text-neutral-100">
