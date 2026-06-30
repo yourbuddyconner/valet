@@ -228,8 +228,15 @@ workflowsRouter.get('/:id/executions', async (c) => {
 
 // ─── Approve / deny a pending workflow approval ────────────────────────────
 
+// `scope` is `once` for plain approvals, `workflow_execution` when the user
+// wants a runtime grant for the rest of the execution. `nodeId` narrows a
+// `workflow_execution` grant to the specific foreach body (or other
+// repeating node), so "Approve remaining rows" doesn't bleed across other
+// approval nodes that share the same service+actionId.
 const approvalDecisionSchema = z.object({
   reason: z.string().optional(),
+  scope: z.enum(['once', 'workflow_execution']).optional(),
+  nodeId: z.string().optional(),
 });
 
 workflowsRouter.post(
@@ -255,7 +262,7 @@ async function runResolveApprovalRoute(
 ) {
   const { id: workflowIdOrSlug, executionId, approvalId } = c.req.param();
   const user = c.get('user');
-  const body = c.req.valid('json') as { reason?: string };
+  const body = c.req.valid('json') as { reason?: string; scope?: 'once' | 'workflow_execution'; nodeId?: string };
 
   // Resolve slug→id so the shared helper can verify ownership against
   // the canonical workflow id from the execution row.
@@ -271,6 +278,8 @@ async function runResolveApprovalRoute(
     expectedWorkflowId: workflowId,
     result,
     ...(body.reason !== undefined ? { reason: body.reason } : {}),
+    ...(body.scope !== undefined ? { scope: body.scope } : {}),
+    ...(body.nodeId !== undefined ? { nodeId: body.nodeId } : {}),
   });
 
   if (outcome.kind === 'expired') {

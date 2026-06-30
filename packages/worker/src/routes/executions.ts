@@ -317,24 +317,33 @@ executionsRouter.get('/:id/approvals', async (c) => {
   });
 });
 
-const approvalDecisionSchema = z.object({ reason: z.string().optional() });
+// `scope` is `once` for plain approvals, `workflow_execution` when the user
+// wants a runtime grant for the rest of the execution. `nodeId` narrows a
+// `workflow_execution` grant to the specific foreach body (or other
+// repeating node), so "Approve remaining rows" doesn't bleed across other
+// approval nodes that share the same service+actionId.
+const approvalDecisionSchema = z.object({
+  reason: z.string().optional(),
+  scope: z.enum(['once', 'workflow_execution']).optional(),
+  nodeId: z.string().optional(),
+});
 
 executionsRouter.post(
   '/:id/approvals/:approvalId/approve',
   zValidator('json', approvalDecisionSchema),
-  async (c) => runResolveApproval(c, 'approved', c.req.valid('json').reason),
+  async (c) => runResolveApproval(c, 'approved', c.req.valid('json')),
 );
 
 executionsRouter.post(
   '/:id/approvals/:approvalId/deny',
   zValidator('json', approvalDecisionSchema),
-  async (c) => runResolveApproval(c, 'denied', c.req.valid('json').reason),
+  async (c) => runResolveApproval(c, 'denied', c.req.valid('json')),
 );
 
 async function runResolveApproval(
   c: ExecutionsRouteContext,
   result: 'approved' | 'denied',
-  reason?: string,
+  body: { reason?: string; scope?: 'once' | 'workflow_execution'; nodeId?: string },
 ) {
   const { id: executionId, approvalId } = c.req.param();
   const user = c.get('user');
@@ -351,7 +360,9 @@ async function runResolveApproval(
     approvalId,
     executionId,
     result,
-    ...(reason !== undefined ? { reason } : {}),
+    ...(body.reason !== undefined ? { reason: body.reason } : {}),
+    ...(body.scope !== undefined ? { scope: body.scope } : {}),
+    ...(body.nodeId !== undefined ? { nodeId: body.nodeId } : {}),
   });
 
   if (outcome.kind === 'expired') {
