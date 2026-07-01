@@ -24,7 +24,8 @@ import {
 import { ToolPayload } from '@/components/payload/tool-payload';
 import { DeferredMarkdownContent } from '@/components/chat/markdown/deferred-markdown-content';
 import { useQueryClient } from '@tanstack/react-query';
-import { workflowKeys } from '@/api/workflows';
+import { workflowKeys, type GetDraftResponse } from '@/api/workflows';
+import type { WorkflowDefinition } from '@valet/shared';
 
 interface CopilotPanelProps {
   workflowId: string;
@@ -162,19 +163,41 @@ function ThreadStream({
     }
   }, [liveThreadId, threadId, onThreadDiscovered, qc, workflowId]);
 
-  // Whenever the model lands a tool result that mutated the workflow,
-  // invalidate the actual editor draft query so the canvas re-renders.
-  // Previously this used the wrong key and silently no-op'd.
-  const lastToolCount = useRef(0);
+  // When the model lands a tool result that mutated the workflow, the
+  // server returns the new definition inline. Push it straight into the
+  // React Query cache instead of invalidating — avoids a redundant
+  // ~100 ms GET /workflows/:id/draft round-trip. Fall back to invalidate
+  // if the tool doesn't include a definition (getWorkflow, getNodeSchema,
+  // listModels, etc. return other shapes).
+  const seenToolResults = useRef<Set<string>>(new Set());
   useEffect(() => {
-    const toolCount = messages.reduce(
-      (acc, m) => acc + m.parts.filter((p) => p.type === 'tool-result').length,
-      0,
-    );
-    if (toolCount > lastToolCount.current) {
+    const last = messages[messages.length - 1];
+    if (!last || last.role !== 'assistant') return;
+    let sawMutation = false;
+    let nextDefinition: WorkflowDefinition | null = null;
+    for (const part of last.parts) {
+      if (!isToolPart(part)) continue;
+      if (part.state !== 'output-available') continue;
+      if (seenToolResults.current.has(part.toolCallId)) continue;
+      seenToolResults.current.add(part.toolCallId);
+      const output = unwrapOutput(part.output);
+      const asRecord = isRecord(output) ? output : null;
+      if (!asRecord || asRecord.ok !== true) continue;
+      sawMutation = true;
+      const def = asRecord.definition;
+      if (isWorkflowDefinitionShape(def)) nextDefinition = def;
+    }
+    if (nextDefinition) {
+      qc.setQueryData<GetDraftResponse>(
+        workflowKeys.draft(workflowId),
+        (prev) => ({
+          draft: nextDefinition,
+          ui: nextDefinition.ui ?? prev?.ui ?? null,
+          publishedVersionId: prev?.publishedVersionId ?? null,
+        }),
+      );
+    } else if (sawMutation) {
       qc.invalidateQueries({ queryKey: workflowKeys.draft(workflowId) });
-      qc.invalidateQueries({ queryKey: workflowKeys.detail(workflowId) });
-      lastToolCount.current = toolCount;
     }
   }, [messages, qc, workflowId]);
 
@@ -331,6 +354,35 @@ function ThreadList({
       </button>
     </div>
   );
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// Cache-injection helpers
+// ────────────────────────────────────────────────────────────────────────
+
+/**
+ * SDK wraps tool outputs as `{ type: 'json' | 'text', value | text }`
+ * at some transport boundaries. Same unwrap the render layer does — we
+ * duplicate it here so the effect that pushes to React Query stays
+ * decoupled from render.
+ */
+function unwrapOutput(value: unknown): unknown {
+  if (isRecord(value)) {
+    if (value.type === 'json' && 'value' in value) return value.value;
+    if (value.type === 'text' && typeof value.text === 'string') return value.text;
+  }
+  return value;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function isWorkflowDefinitionShape(value: unknown): value is WorkflowDefinition {
+  return isRecord(value)
+    && value.version === 'dag/v1'
+    && Array.isArray(value.nodes)
+    && Array.isArray(value.edges);
 }
 
 function formatRelative(iso: string): string {

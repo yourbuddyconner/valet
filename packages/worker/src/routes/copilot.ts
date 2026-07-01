@@ -246,11 +246,20 @@ copilotRouter.post('/chat', zValidator('json', chatBodySchema), async (c) => {
       return { ok: false, error: 'candidate is not a valid dag/v1 workflow definition' };
     }
     await saveDraft(db, workflowId, candidate);
+    // Include the resulting definition so the client can drop it
+    // straight into its React Query cache via setQueryData, skipping
+    // an otherwise-redundant GET /workflows/:id/draft round-trip.
+    // The definition is also implicit in the model's incremental
+    // knowledge (system-prompt snapshot + this turn's patches), so
+    // returning it doesn't teach the model anything new — the cost is
+    // additional output tokens on a single tool result, which is
+    // dwarfed by the round-trip latency we save.
     return {
       ok: true,
       workflowId,
       nodeCount: candidate.nodes.length,
       edgeCount: candidate.edges.length,
+      definition: candidate,
     };
   }
 
