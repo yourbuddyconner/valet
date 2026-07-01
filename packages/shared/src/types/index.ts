@@ -1184,6 +1184,16 @@ export interface UsageStatsResponse {
     cost: number | null;
     callCount: number;
   }>;
+  /** Usage grouped by session origin: interactive (user sessions) vs automated
+   *  (workflow: scheduled triggers / webhooks / manual runs) vs orchestrator. */
+  byPurpose: Array<{
+    purpose: string;
+    inputTokens: number;
+    outputTokens: number;
+    cost: number | null;
+    callCount: number;
+    percentage: number;
+  }>;
   period: number;
 }
 

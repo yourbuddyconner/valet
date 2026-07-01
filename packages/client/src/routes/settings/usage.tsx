@@ -7,6 +7,7 @@ import { useUsageStats } from '@/api/usage';
 import { UsageHeroMetrics } from '@/components/usage/hero-metrics';
 import { CostChart } from '@/components/usage/cost-chart';
 import { ModelBreakdownTable } from '@/components/usage/model-breakdown-table';
+import { OriginBreakdownTable } from '@/components/usage/origin-breakdown-table';
 import { UserBreakdownTable } from '@/components/usage/user-breakdown-table';
 import { PerformanceTab } from '@/components/analytics/performance-tab';
 import { EventsTab } from '@/components/analytics/events-tab';
@@ -94,7 +95,9 @@ function BillingContent({ period }: { period: number }) {
         sandboxActiveSeconds={data.hero.sandboxActiveSeconds}
       />
       <CostChart data={data.costByDay} />
+      <OriginBreakdownTable data={data.byPurpose} />
       <div className="grid gap-6 [&>*]:min-w-0 lg:grid-cols-2">
+
         <ModelBreakdownTable data={data.byModel} />
         <UserBreakdownTable data={data.byUser} byUserModel={data.byUserModel} />
       </div>

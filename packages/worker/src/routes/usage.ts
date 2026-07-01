@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import type { Env, Variables } from '../env.js';
 import type { UsageStatsResponse } from '@valet/shared';
-import { getUsageHeroStats, getUsageByDay, getUsageByUser, getUsageByModel, getUsageByUserModel, getSandboxHeroStats, getSandboxByDay, getSandboxByUser } from '../lib/db/analytics.js';
+import { getUsageHeroStats, getUsageByDay, getUsageByUser, getUsageByModel, getUsageByUserModel, getUsageByPurposeModel, getSandboxHeroStats, getSandboxByDay, getSandboxByUser } from '../lib/db/analytics.js';
 import { getModelPricing } from '../services/model-catalog.js';
 import { computeSandboxCost, DEFAULT_CPU_CORES, DEFAULT_MEMORY_GIB } from '../services/sandbox-pricing.js';
 import { getDb } from '../lib/drizzle.js';
@@ -38,7 +38,7 @@ usageRouter.get('/stats', async (c) => {
   const appDb = getDb(db);
 
   // Fetch all data + pricing in parallel (including sandbox stats)
-  const [heroStats, byDayRaw, byUserRaw, byModelRaw, byUserModelRaw, pricingMap, sandboxHero, sandboxByDay, sandboxByUser] = await Promise.all([
+  const [heroStats, byDayRaw, byUserRaw, byModelRaw, byUserModelRaw, pricingMap, sandboxHero, sandboxByDay, sandboxByUser, byPurposeModelRaw] = await Promise.all([
     getUsageHeroStats(db, periodStart),
     getUsageByDay(db, periodStart),
     getUsageByUser(db, periodStart),
@@ -48,6 +48,7 @@ usageRouter.get('/stats', async (c) => {
     getSandboxHeroStats(db, periodStart),
     getSandboxByDay(db, periodStart),
     getSandboxByUser(db, periodStart),
+    getUsageByPurposeModel(db, periodStart),
   ]);
 
   // Compute hero LLM total cost
@@ -157,6 +158,30 @@ usageRouter.get('/stats', async (c) => {
     };
   });
 
+  // Roll usage up by session origin (sessions.purpose). Cost is per-model, so compute it on the
+  // origin×model rows first, then sum to the origin. Percentage is share of total tokens.
+  const purposeMap = new Map<string, { inputTokens: number; outputTokens: number; cost: number | null; callCount: number }>();
+  for (const row of byPurposeModelRaw) {
+    const cost = computeCost(row.model, row.inputTokens, row.outputTokens, pricingMap);
+    const e = purposeMap.get(row.purpose) ?? { inputTokens: 0, outputTokens: 0, cost: null, callCount: 0 };
+    e.inputTokens += row.inputTokens;
+    e.outputTokens += row.outputTokens;
+    e.callCount += row.callCount;
+    if (cost !== null) e.cost = (e.cost ?? 0) + cost;
+    purposeMap.set(row.purpose, e);
+  }
+  const purposeTotalTokens = Array.from(purposeMap.values()).reduce((s, d) => s + d.inputTokens + d.outputTokens, 0);
+  const byPurpose = Array.from(purposeMap.entries())
+    .map(([purpose, d]) => ({
+      purpose,
+      inputTokens: d.inputTokens,
+      outputTokens: d.outputTokens,
+      cost: d.cost,
+      callCount: d.callCount,
+      percentage: purposeTotalTokens > 0 ? Math.round(((d.inputTokens + d.outputTokens) / purposeTotalTokens) * 1000) / 10 : 0,
+    }))
+    .sort((a, b) => (b.inputTokens + b.outputTokens) - (a.inputTokens + a.outputTokens));
+
   const response: UsageStatsResponse = {
     hero: {
       totalCost: heroTotalCost,
@@ -171,6 +196,7 @@ usageRouter.get('/stats', async (c) => {
     byUser,
     byModel,
     byUserModel,
+    byPurpose,
     period: periodHours,
   };
 
