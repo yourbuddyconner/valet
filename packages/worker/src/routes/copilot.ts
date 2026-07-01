@@ -10,9 +10,10 @@ import { NotFoundError, ValidationError } from '@valet/shared';
 import { getWorkflowByIdOrSlug } from '../lib/db.js';
 import { getDraft, saveDraft } from '../services/workflow-versions.js';
 import { isWorkflowDefinition } from '../lib/workflow-dag/schema.js';
-import { validateDefinition } from '../lib/workflow-dag/validator.js';
+import { validateDefinition, validateAgainstEnvironment } from '../lib/workflow-dag/validator.js';
 import { applyOpsLenient, type WorkflowOp } from '../services/workflow-ops.js';
 import { getWorkflowSchemaReference } from '../services/workflow-schema-reference.js';
+import { resolveAvailableModels } from '../services/model-catalog.js';
 import {
   createCopilotThread,
   getCopilotThread,
@@ -91,7 +92,7 @@ copilotRouter.post('/chat', zValidator('json', chatBodySchema), async (c) => {
     if (!workflowIdInput) {
       throw new ValidationError('workflowId required to start a new copilot thread');
     }
-    thread = await createCopilotThread(db, {
+    thread = await createCopilotThread(db, c.env, {
       workflowId: workflowIdInput,
       userId: user.id,
       model: modelInput ?? DEFAULT_MODEL,
@@ -129,6 +130,13 @@ copilotRouter.post('/chat', zValidator('json', chatBodySchema), async (c) => {
     ...convertedUi,
   ];
 
+  // Resolve validation env once per request. Both saveDraft and
+  // applyWorkflowPatch use it to run the runtime env validator alongside
+  // the structural one — otherwise the copilot can happily ship
+  // workflows that fail at test-run with "resources not configured".
+  const validationEnv = { ...c.env, ...envVars } as Env;
+  const availableModels = await resolveAvailableModels(db, validationEnv);
+
   const tools = {
     getWorkflow: tool({
       description: 'Fetch the current draft definition of the workflow under edit. Use this only if you suspect the snapshot in your system prompt is stale — for instance, after the user mentions an external canvas edit.',
@@ -151,11 +159,7 @@ copilotRouter.post('/chat', zValidator('json', chatBodySchema), async (c) => {
         definition: z.record(z.unknown()).describe('Full dag/v1 workflow definition: { version, nodes, edges, policy?, ui? }'),
       }),
       execute: async ({ definition }: { definition: Record<string, unknown> }) => {
-        if (!isWorkflowDefinition(definition)) {
-          return { ok: false, error: 'definition is not a valid dag/v1 workflow definition' };
-        }
-        await saveDraft(db, workflowId, definition);
-        return { ok: true, workflowId };
+        return validateAndPersist(definition);
       },
     }),
     applyWorkflowPatch: tool({
@@ -177,7 +181,9 @@ copilotRouter.post('/chat', zValidator('json', chatBodySchema), async (c) => {
         '',
         'On failure, this returns { ok: false, error, issues } — `issues` is',
         'the structured validator output (code, path, message, nodeId/edgeId).',
-        'Use those to fix the patch and retry; do not call getWorkflow.',
+        'Both structural AND runtime-env validation run here — the model id on',
+        'llm nodes must be a currently-available model. Use those to fix the',
+        'patch and retry; do not call getWorkflow.',
         '',
         'Always prefer this over saveDraft when the workflow already exists.',
       ].join('\n'),
@@ -189,34 +195,16 @@ copilotRouter.post('/chat', zValidator('json', chatBodySchema), async (c) => {
         if (!draft.draft) {
           return { ok: false, error: 'no current draft to patch — call saveDraft first to seed one' };
         }
-        // Apply ops over Record-shaped working copy, then run the
-        // structural validator so the model sees *what* is wrong with
-        // each node, not just a boolean fail. We persist only if the
-        // result is genuinely valid.
         let next: unknown;
         try {
           next = applyOpsLenient(draft.draft, ops as unknown as WorkflowOp[]);
         } catch (err) {
           return { ok: false, error: err instanceof Error ? err.message : String(err) };
         }
-        const issues = validateDefinition(next);
-        if (issues.length > 0) {
-          return {
-            ok: false,
-            error: `patch produced ${issues.length} validation issue${issues.length === 1 ? '' : 's'}; fix and retry`,
-            issues,
-          };
-        }
-        if (!isWorkflowDefinition(next)) {
-          return { ok: false, error: 'patch result is not a valid dag/v1 workflow definition' };
-        }
-        await saveDraft(db, workflowId, next);
+        const persisted = await validateAndPersist(next);
         return {
-          ok: true,
-          workflowId,
+          ...persisted,
           appliedOps: ops.length,
-          nodeCount: next.nodes.length,
-          edgeCount: next.edges.length,
         };
       },
     }),
@@ -225,7 +213,46 @@ copilotRouter.post('/chat', zValidator('json', chatBodySchema), async (c) => {
       inputSchema: z.object({}),
       execute: async () => getWorkflowSchemaReference(),
     }),
+    listModels: tool({
+      description: 'List LLM model ids that are currently available in this environment. Use this whenever you set the `model` field on an `llm` node — the model id must come from this list, otherwise the workflow will fail runtime validation.',
+      inputSchema: z.object({}),
+      execute: async () => ({
+        models: availableModels.flatMap((p) =>
+          p.models.map((m) => ({ id: m.id, provider: p.provider, name: m.name })),
+        ),
+      }),
+    }),
   };
+
+  /**
+   * Shared validate-then-persist pipeline for both saveDraft and
+   * applyWorkflowPatch. Runs both the structural validator (shape,
+   * node ids, edges) and the runtime env validator (model ids exist,
+   * provider keys configured). Returns structured issues to the model
+   * on failure so it can fix them without a round-trip.
+   */
+  async function validateAndPersist(candidate: unknown) {
+    const structural = validateDefinition(candidate);
+    const envIssues = validateAgainstEnvironment(candidate, validationEnv, { availableModels });
+    const issues = [...structural, ...envIssues];
+    if (issues.length > 0) {
+      return {
+        ok: false,
+        error: `validation failed with ${issues.length} issue${issues.length === 1 ? '' : 's'}; fix and retry`,
+        issues,
+      };
+    }
+    if (!isWorkflowDefinition(candidate)) {
+      return { ok: false, error: 'candidate is not a valid dag/v1 workflow definition' };
+    }
+    await saveDraft(db, workflowId, candidate);
+    return {
+      ok: true,
+      workflowId,
+      nodeCount: candidate.nodes.length,
+      edgeCount: candidate.edges.length,
+    };
+  }
 
   const result = streamText({
     model: providerClient(model),

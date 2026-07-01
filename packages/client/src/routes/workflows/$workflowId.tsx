@@ -45,6 +45,7 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
 import { toastError, toastSuccess } from '@/hooks/use-toast';
+import { ApiError } from '@/api/client';
 
 export const Route = createFileRoute('/workflows/$workflowId')({
   component: WorkflowDetailPage,
@@ -220,8 +221,7 @@ function WorkflowDetailPage() {
             setSelectedExecutionNodeId(null);
             toastSuccess(`Test run started (${res.executionId})`);
           },
-          onError: (err) =>
-            toastError(err instanceof Error ? err.message : 'Failed to start test run'),
+          onError: (err) => toastError(formatTestRunError(err)),
         },
       );
     } catch (err) {
@@ -602,4 +602,34 @@ function TrashIcon() {
       <line x1="14" y1="11" x2="14" y2="17" />
     </svg>
   );
+}
+
+interface ValidationIssue {
+  code?: string;
+  message?: string;
+  path?: string;
+  nodeId?: string;
+  edgeId?: string;
+}
+
+/**
+ * Turn an ApiError from POST /workflows/:id/test-runs into a
+ * multi-line human-readable string. The worker returns the outer
+ * message ("workflow references resources not configured in this
+ * environment") plus a `details` array of validator errors — the
+ * details are what tell the user which node is broken and why.
+ */
+function formatTestRunError(err: unknown): string {
+  if (!(err instanceof ApiError)) {
+    return err instanceof Error ? err.message : 'Failed to start test run';
+  }
+  const details = Array.isArray(err.details) ? (err.details as ValidationIssue[]) : [];
+  if (details.length === 0) return err.message || 'Failed to start test run';
+  const lines = details.slice(0, 5).map((d) => {
+    const where = d.nodeId ? `node "${d.nodeId}"` : d.edgeId ? `edge "${d.edgeId}"` : d.path ?? '';
+    const code = d.code ? `[${d.code}] ` : '';
+    return `${code}${where ? `${where}: ` : ''}${d.message ?? ''}`.trim();
+  });
+  const more = details.length > 5 ? `\n… and ${details.length - 5} more` : '';
+  return `${err.message}\n${lines.join('\n')}${more}`;
 }

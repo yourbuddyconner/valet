@@ -8,9 +8,12 @@
 import { eq, and, desc, sql } from 'drizzle-orm';
 import type { AppDb } from '../lib/drizzle.js';
 import { copilotThreads, copilotMessages } from '../lib/schema/copilot.js';
+import type { Env } from '../env.js';
 import { getWorkflowByIdOrSlug } from '../lib/db.js';
 import { getDraft } from './workflow-versions.js';
 import { getWorkflowSchemaReference } from './workflow-schema-reference.js';
+import { resolveAvailableModels } from './model-catalog.js';
+import { assembleLlmProviderEnv } from '../lib/llm/provider-env.js';
 import { NotFoundError } from '@valet/shared';
 
 export interface CopilotThread {
@@ -78,6 +81,7 @@ export async function listCopilotMessages(
  */
 export async function createCopilotThread(
   db: AppDb,
+  env: Env,
   params: { workflowId: string; userId: string; model?: string | null },
 ): Promise<CopilotThread> {
   const workflow = await getWorkflowByIdOrSlug(db, params.userId, params.workflowId);
@@ -85,11 +89,19 @@ export async function createCopilotThread(
 
   const draft = await getDraft(db, workflow.id);
   const definition = draft.draft ?? JSON.parse(workflow.data as string);
+  // Snapshot the currently-available model ids into the system prompt
+  // so the copilot picks a real one on the first `llm` node it adds.
+  // Frozen at thread creation — if new models are added later, the
+  // model can call `listModels` mid-conversation to refresh.
+  const validationEnv = { ...env, ...(await assembleLlmProviderEnv(db, env)) } as Env;
+  const availableModels = await resolveAvailableModels(db, validationEnv);
+  const availableModelIds = availableModels.flatMap((p) => p.models.map((m) => m.id));
   const systemPrompt = renderSystemPrompt({
     workflowName: workflow.name,
     workflowId: workflow.id,
     description: workflow.description ?? null,
     definition,
+    availableModelIds,
   });
 
   const id = crypto.randomUUID();
@@ -195,9 +207,13 @@ function renderSystemPrompt(input: {
   workflowId: string;
   description: string | null;
   definition: unknown;
+  availableModelIds: string[];
 }): string {
   const defJson = JSON.stringify(input.definition, null, 2);
   const schemaJson = JSON.stringify(getWorkflowSchemaReference(), null, 2);
+  const modelList = input.availableModelIds.length > 0
+    ? input.availableModelIds.map((id) => `  • ${id}`).join('\n')
+    : '  (no models configured — the environment cannot execute llm nodes)';
   return [
     `You are the Valet workflow copilot. Your job is to help the user build, edit,`,
     `validate, and ship the workflow they are currently editing. You have direct`,
@@ -214,6 +230,13 @@ function renderSystemPrompt(input: {
     '```json',
     defJson,
     '```',
+    ``,
+    `### Available LLM model ids`,
+    ``,
+    `The \`model\` field on every \`llm\` node MUST come from this list —`,
+    `otherwise the workflow will fail runtime validation and refuse to execute.`,
+    ``,
+    modelList,
     ``,
     `### dag/v1 schema reference`,
     ``,
