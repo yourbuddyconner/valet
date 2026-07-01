@@ -28,7 +28,7 @@ function ExecutionsPage() {
 
   return (
     <div className="space-y-4">
-      <div className="flex gap-2">
+      <div className="flex flex-wrap gap-2">
         {STATUS_OPTIONS.map((option) => (
           <button
             key={option.value}
@@ -61,8 +61,8 @@ function ExecutionsPage() {
         </div>
       ) : (
         <>
-          <div className="overflow-hidden rounded-lg border border-neutral-200 bg-white dark:border-neutral-700 dark:bg-neutral-800">
-            <table className="w-full">
+          <div className="overflow-x-auto rounded-lg border border-neutral-200 bg-white dark:border-neutral-700 dark:bg-neutral-800">
+            <table className="w-full min-w-[640px]">
               <thead>
                 <tr className="border-b border-neutral-200 bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-800">
                   <th className="px-4 py-3 text-left text-xs font-medium uppercase text-neutral-500 dark:text-neutral-400">

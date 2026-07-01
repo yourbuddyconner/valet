@@ -194,6 +194,7 @@ export function ActionEnablementSection() {
                   {/* Expanded action list */}
                   {isExpanded && (
                     <div className="border-t border-neutral-100 bg-neutral-50 dark:border-neutral-700/50 dark:bg-neutral-800/50">
+                      <div className="overflow-x-auto">
                       <table className="w-full text-sm">
                         <thead>
                           <tr className="border-b border-neutral-200 dark:border-neutral-700">
@@ -239,6 +240,7 @@ export function ActionEnablementSection() {
                           })}
                         </tbody>
                       </table>
+                      </div>
                     </div>
                   )}
                 </div>

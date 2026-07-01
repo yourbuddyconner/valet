@@ -23,7 +23,7 @@ export function TopRepositories({ repos }: TopRepositoriesProps) {
             return (
               <div key={repo.workspace} className="px-5 py-3">
                 <div className="flex items-baseline justify-between gap-3 mb-2">
-                  <span className="truncate text-[13px] font-medium text-neutral-900 dark:text-neutral-100">
+                  <span className="min-w-0 truncate text-[13px] font-medium text-neutral-900 dark:text-neutral-100">
                     <span className="font-mono text-2xs text-neutral-300 mr-1.5 tabular-nums">{i + 1}</span>
                     {repo.workspace}
                   </span>

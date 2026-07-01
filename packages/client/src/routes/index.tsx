@@ -45,10 +45,10 @@ function DashboardPage() {
           <HeroMetrics hero={data.hero} userHero={data.userHero} delta={data.delta} />
           <ActivityChart data={data.activity} />
           <div className="grid gap-6 lg:grid-cols-5">
-            <div className="lg:col-span-3">
+            <div className="min-w-0 lg:col-span-3">
               <ActivityFeed sessions={data.recentSessions} />
             </div>
-            <div className="lg:col-span-2 space-y-6">
+            <div className="min-w-0 space-y-6 lg:col-span-2">
               <TopRepositories repos={data.topRepos} />
               <AdoptionCard />
             </div>
@@ -68,8 +68,8 @@ function OrchestratorBanner() {
   // No identity at all — show setup CTA
   if (!data?.identity) {
     return (
-      <div className="mb-6 flex items-center justify-between rounded-lg border border-dashed border-neutral-300 bg-neutral-50 p-4 dark:border-neutral-700 dark:bg-neutral-800/50">
-        <div>
+      <div className="mb-6 flex flex-col gap-3 rounded-lg border border-dashed border-neutral-300 bg-neutral-50 p-4 sm:flex-row sm:items-center sm:justify-between dark:border-neutral-700 dark:bg-neutral-800/50">
+        <div className="min-w-0">
           <p className="text-sm font-medium text-neutral-900 dark:text-neutral-100">
             Set up your personal orchestrator
           </p>
@@ -79,7 +79,7 @@ function OrchestratorBanner() {
         </div>
         <Link
           to="/orchestrator"
-          className="rounded-md bg-accent px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-accent/90"
+          className="shrink-0 rounded-md bg-accent px-3 py-1.5 text-center text-sm font-medium text-white transition-colors hover:bg-accent/90"
         >
           Get Started
         </Link>
@@ -90,12 +90,12 @@ function OrchestratorBanner() {
   // Identity exists but session is dead — auto-restart in progress
   if (data.needsRestart) {
     return (
-      <div className="mb-6 flex items-center justify-between rounded-lg border border-amber-300 bg-amber-50 p-4 dark:border-amber-700 dark:bg-amber-950/30">
-        <div className="flex items-center gap-3">
-          <div className="flex h-8 w-8 items-center justify-center rounded-full bg-amber-100 text-sm font-semibold text-amber-600 dark:bg-amber-900/50 dark:text-amber-400">
+      <div className="mb-6 flex flex-col gap-3 rounded-lg border border-amber-300 bg-amber-50 p-4 sm:flex-row sm:items-center sm:justify-between dark:border-amber-700 dark:bg-amber-950/30">
+        <div className="flex min-w-0 items-center gap-3">
+          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-amber-100 text-sm font-semibold text-amber-600 dark:bg-amber-900/50 dark:text-amber-400">
             {data.identity.name.charAt(0)}
           </div>
-          <div>
+          <div className="min-w-0">
             <p className="text-sm font-medium text-neutral-900 dark:text-neutral-100">
               {data.identity.name} is offline
             </p>
@@ -121,12 +121,12 @@ function OrchestratorBanner() {
   }
 
   return (
-    <div className="mb-6 flex items-center justify-between rounded-lg border border-neutral-200 bg-white p-4 dark:border-neutral-700 dark:bg-neutral-800">
-      <div className="flex items-center gap-3">
-        <div className="flex h-8 w-8 items-center justify-center rounded-full bg-accent/10 text-sm font-semibold text-accent">
+    <div className="mb-6 flex flex-col gap-3 rounded-lg border border-neutral-200 bg-white p-4 sm:flex-row sm:items-center sm:justify-between dark:border-neutral-700 dark:bg-neutral-800">
+      <div className="flex min-w-0 items-center gap-3">
+        <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-accent/10 text-sm font-semibold text-accent">
           {data.identity.name.charAt(0)}
         </div>
-        <div>
+        <div className="min-w-0">
           <p className="text-sm font-medium text-neutral-900 dark:text-neutral-100">
             {data.identity.name}
           </p>
@@ -147,7 +147,7 @@ function OrchestratorBanner() {
       <Link
         to="/sessions/$sessionId"
         params={{ sessionId: 'orchestrator' }}
-        className="rounded-md bg-neutral-900 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-neutral-800 dark:bg-neutral-100 dark:text-neutral-900 dark:hover:bg-neutral-200"
+        className="shrink-0 rounded-md bg-neutral-900 px-3 py-1.5 text-center text-sm font-medium text-white transition-colors hover:bg-neutral-800 dark:bg-neutral-100 dark:text-neutral-900 dark:hover:bg-neutral-200"
       >
         Talk to {data.identity.name}
       </Link>

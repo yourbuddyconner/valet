@@ -245,8 +245,8 @@ export function EditWorkflowStepDialog({
           </button>
         )}
       </DialogTrigger>
-      <DialogContent className="max-h-[92vh] overflow-hidden p-0 sm:max-w-3xl">
-        <form onSubmit={handleSubmit} className="flex max-h-[92vh] flex-col">
+      <DialogContent className="max-h-[92dvh] overflow-hidden p-0 sm:max-w-3xl">
+        <form onSubmit={handleSubmit} className="flex max-h-[92dvh] flex-col">
           <div className="border-b border-neutral-200 bg-gradient-to-r from-neutral-50 to-cyan-50/70 px-5 py-4 dark:border-neutral-700 dark:from-neutral-900 dark:to-neutral-900 sm:px-6">
             <DialogHeader className="space-y-2">
               <div className="flex flex-wrap items-center gap-2">

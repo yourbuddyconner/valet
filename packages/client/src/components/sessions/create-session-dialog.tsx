@@ -467,12 +467,12 @@ export function CreateSessionDialog({ trigger }: CreateSessionDialogProps) {
             <div className="space-y-4 py-4">
               {/* Repository section */}
               <div>
-                <div className="mb-2 flex items-center justify-between">
+                <div className="mb-2 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                   <label className="block text-sm font-medium text-neutral-700 dark:text-neutral-300">
                     Repository
                     <span className="ml-1 text-xs font-normal text-neutral-400">(optional)</span>
                   </label>
-                  <div className="flex rounded-md border border-neutral-200 dark:border-neutral-700">
+                  <div className="flex w-full rounded-md border border-neutral-200 dark:border-neutral-700 sm:w-auto">
                     {(['my-repos', 'url', 'from-pr', 'from-issue'] as const).map((mode, i, arr) => (
                       <button
                         key={mode}

@@ -162,7 +162,7 @@ export function SessionTable() {
               placeholder="Search sessions..."
             />
           </div>
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
             {STATUS_OPTIONS.map((option) => (
               <button
                 key={option.value}
@@ -178,7 +178,7 @@ export function SessionTable() {
             ))}
           </div>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           {OWNERSHIP_OPTIONS.map((option) => (
             <button
               key={option.value}
@@ -230,8 +230,8 @@ export function SessionTable() {
         </div>
       ) : (
         <>
-          <div className="overflow-hidden rounded-lg border border-neutral-200 dark:border-neutral-700">
-            <table className="w-full text-sm">
+          <div className="relative overflow-x-auto rounded-lg border border-neutral-200 dark:border-neutral-700">
+            <table className="w-full min-w-[640px] text-sm">
               <thead>
                 <tr className="border-b border-neutral-200 bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-800/50">
                   <th className="w-10 px-3 py-3">
@@ -446,8 +446,8 @@ function SessionRow({
 
 function SessionTableSkeleton() {
   return (
-    <div className="overflow-hidden rounded-lg border border-neutral-200 dark:border-neutral-700">
-      <table className="w-full text-sm">
+    <div className="relative overflow-x-auto rounded-lg border border-neutral-200 dark:border-neutral-700">
+      <table className="w-full min-w-[640px] text-sm">
         <thead>
           <tr className="border-b border-neutral-200 bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-800/50">
             <th className="w-10 px-3 py-3">

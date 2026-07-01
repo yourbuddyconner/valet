@@ -75,7 +75,7 @@ export function CreateAPIKeyDialog({ open, onOpenChange }: CreateAPIKeyDialogPro
                   <Input
                     value={createdKey.token}
                     readOnly
-                    className="font-mono text-sm"
+                    className="min-w-0 font-mono text-sm"
                   />
                   <Button
                     type="button"

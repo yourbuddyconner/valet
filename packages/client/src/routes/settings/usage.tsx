@@ -35,7 +35,7 @@ function UsagePage() {
   return (
     <PageContainer>
       <div className="flex flex-col gap-4">
-        <div className="flex items-center justify-between">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
           <PageHeader
             title="Analytics"
             description="Usage, performance, and event analytics across your organization"
@@ -94,7 +94,7 @@ function BillingContent({ period }: { period: number }) {
         sandboxActiveSeconds={data.hero.sandboxActiveSeconds}
       />
       <CostChart data={data.costByDay} />
-      <div className="grid gap-6 lg:grid-cols-2">
+      <div className="grid gap-6 [&>*]:min-w-0 lg:grid-cols-2">
         <ModelBreakdownTable data={data.byModel} />
         <UserBreakdownTable data={data.byUser} byUserModel={data.byUserModel} />
       </div>
