@@ -76,6 +76,22 @@ export function getWorkflowSchemaReference() {
         required: ['id', 'type'],
         optional: ['dataSchema'],
         description: 'Represents the invocation source and exposes trigger.data, trigger.metadata, trigger.type, and trigger.timestamp.',
+        dataSchema: {
+          shape: 'Record<fieldName, { type, required?, default?, description?, enum? }>',
+          fieldTypes: ['string', 'number', 'boolean', 'object', 'array'],
+          fieldOptions: {
+            type: 'One of the field types above. Required.',
+            required: 'boolean. Manual runs reject empty inputs when true.',
+            default: 'Any JSON value matching `type`. Pre-fills the manual test-run form AND is applied at runtime when the trigger payload omits the field. STRONGLY RECOMMENDED for every field: it makes the workflow testable in one click and lets webhook/schedule triggers omit rarely-changing values.',
+            description: 'Short human-facing help text shown in the manual run form.',
+            enum: 'Optional array of allowed values. Runtime rejects payloads whose value is not in the list.',
+          },
+          example: {
+            names: { type: 'array', required: true, default: ['Alice', 'Bob', 'Carol'], description: 'Recipients for this campaign.' },
+            budget: { type: 'number', default: 5000, description: 'Total spend cap in USD.' },
+            campaignTitle: { type: 'string', required: true, default: 'Q3 Campaign' },
+          },
+        },
       },
       {
         type: 'llm',
