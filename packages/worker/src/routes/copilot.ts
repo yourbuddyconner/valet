@@ -8,7 +8,7 @@ import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import type { Env, Variables } from '../env.js';
 import { NotFoundError, ValidationError } from '@valet/shared';
 import { getWorkflowByIdOrSlug } from '../lib/db.js';
-import { getDraft, saveDraft, getWorkflowUpdatedAt } from '../services/workflow-versions.js';
+import { getDraft, saveDraft } from '../services/workflow-versions.js';
 import { isWorkflowDefinition } from '../lib/workflow-dag/schema.js';
 import { validateDefinition, validateAgainstEnvironment } from '../lib/workflow-dag/validator.js';
 import { applyOpsLenient } from '../services/workflow-ops.js';
@@ -98,6 +98,16 @@ copilotRouter.post('/chat', zValidator('json', chatBodySchema), async (c) => {
   const workflowIdInput = body.workflowId ?? null;
   const modelInput = body.model ?? null;
 
+  // Resolve the model + provider FIRST — before any DB writes — so a
+  // missing API key or malformed model id can't leave orphaned rows
+  // behind. Previously `createCopilotThread` committed a new thread
+  // row before we checked provider health, so a mis-configured env
+  // would create an orphaned thread on every retry.
+  const modelId = modelInput ?? DEFAULT_MODEL;
+  const { provider, model } = parseModelId(modelId);
+  const envVars = await assembleLlmProviderEnv(db, c.env);
+  const providerClient = buildProviderClient(provider, envVars, c.env);
+
   let thread = threadIdInput ? await getCopilotThread(db, threadIdInput, user.id) : null;
   if (!thread) {
     if (!workflowIdInput) {
@@ -115,15 +125,6 @@ copilotRouter.post('/chat', zValidator('json', chatBodySchema), async (c) => {
   const workflow = await getWorkflowByIdOrSlug(db, user.id, thread.workflowId);
   if (!workflow) throw new NotFoundError('Workflow', thread.workflowId);
   const workflowId = workflow.id;
-
-  // Resolve provider + model BEFORE persisting the user message, so a
-  // malformed model id or missing API key doesn't leave orphaned user
-  // rows behind that the client will retry into duplicates on the next
-  // successful call.
-  const modelId = modelInput ?? thread.model ?? DEFAULT_MODEL;
-  const { provider, model } = parseModelId(modelId);
-  const envVars = await assembleLlmProviderEnv(db, c.env);
-  const providerClient = buildProviderClient(provider, envVars, c.env);
 
   // Persist the latest user message before kicking off the stream so a
   // disconnect mid-response doesn't lose it.
@@ -211,12 +212,13 @@ copilotRouter.post('/chat', zValidator('json', chatBodySchema), async (c) => {
         ops: z.array(z.record(z.unknown())).min(1).describe('Ordered list of operations. See description for shapes.'),
       }),
       execute: async ({ ops }: { ops: Record<string, unknown>[] }) => {
-        // Capture the row's updated_at BEFORE the read so we can pass
-        // it as the CAS baseline to saveDraft. Two concurrent copilot
-        // patches (or a copilot patch racing a canvas save) will now
-        // fail the second write with a `conflict` error instead of
-        // silently discarding the earlier one.
-        const expectedUpdatedAt = await getWorkflowUpdatedAt(db, workflowId);
+        // Read the draft AND its updated_at atomically — one D1 query
+        // so a canvas save between the two reads can't produce a stale
+        // baseline. saveDraft then CAS-checks against this same
+        // updated_at, so two concurrent copilot patches (or a copilot
+        // patch racing a canvas save) fail the second write with a
+        // `conflict` error instead of silently trampling the earlier
+        // one.
         const draft = await getDraft(db, workflowId);
         if (!draft.draft) {
           return { ok: false, error: 'no current draft to patch — call saveDraft first to seed one' };
@@ -227,7 +229,7 @@ copilotRouter.post('/chat', zValidator('json', chatBodySchema), async (c) => {
         } catch (err) {
           return { ok: false, error: err instanceof Error ? err.message : String(err) };
         }
-        const persisted = await validateAndPersist(next, expectedUpdatedAt ?? undefined);
+        const persisted = await validateAndPersist(next, draft.updatedAt);
         return {
           ...persisted,
           appliedOps: ops.length,

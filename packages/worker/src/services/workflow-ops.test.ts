@@ -208,17 +208,17 @@ describe('applyOps', () => {
   });
 
   it('addNode rejects a top-level id that collides with a foreach body id', () => {
+    // Construct the foreach node as a typed WorkflowNode so we don't
+    // need a double-cast — CLAUDE.md forbids `as unknown as` in tests.
+    const foreach: WorkflowNode = {
+      id: 'loop',
+      type: 'foreach',
+      items: '{{ trigger.data.items }}',
+      body: { id: 'step', type: 'set', values: {} },
+    };
     const def: WorkflowDefinition = {
       version: 'dag/v1',
-      nodes: [
-        createDefaultWorkflowNode('set', 'start'),
-        {
-          id: 'loop',
-          type: 'foreach',
-          items: '{{ trigger.data.items }}',
-          body: { id: 'step', type: 'set', values: {} },
-        } as unknown as WorkflowDefinition['nodes'][number],
-      ],
+      nodes: [createDefaultWorkflowNode('set', 'start'), foreach],
       edges: [],
     };
     expect(() =>

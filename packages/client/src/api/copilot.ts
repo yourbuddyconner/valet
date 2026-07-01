@@ -133,19 +133,27 @@ export function useCopilotChat(opts: UseCopilotChatOptions) {
   // useState captures initialMessages once at mount, so if this hook's
   // parent renders us before the messages query resolved (typical on a
   // cache miss — first visit to a thread), the persisted history would
-  // be silently dropped. Sync it in once when the messages transition
-  // from empty to a real list.
+  // be silently dropped. Sync it in when it arrives.
+  //
+  // A previous version had a race: if the user sent a message before
+  // the messages query resolved, `messages.length > 0` triggered a
+  // "bootstrap already applied" branch that never actually applied the
+  // history. Now we PREPEND the persisted history to the user's
+  // in-flight turn instead — no matter which arrives first.
   const bootstrappedRef = useRef(false);
   useEffect(() => {
     if (bootstrappedRef.current) return;
     if (!opts.initialMessages || opts.initialMessages.length === 0) return;
-    if (messages.length > 0) {
-      bootstrappedRef.current = true;
-      return;
-    }
     bootstrappedRef.current = true;
-    setMessages(opts.initialMessages);
-  }, [opts.initialMessages, messages.length]);
+    setMessages((current) => {
+      // Merge by id so an initial message that has since been extended
+      // (e.g., the persisted assistant turn now has more parts than
+      // the seed we already have) doesn't get duplicated.
+      const seen = new Set(current.map((m) => m.id));
+      const prepend = opts.initialMessages!.filter((m) => !seen.has(m.id));
+      return [...prepend, ...current];
+    });
+  }, [opts.initialMessages]);
 
   const send = useCallback(async (text: string) => {
     if (!text.trim() || status === 'streaming') return;
@@ -284,7 +292,7 @@ type StreamChunk =
   // overflow). If we don't consume these the tool card stays stuck in
   // input-streaming state and mid-stream failures produce no user
   // feedback.
-  | { kind: 'tool-input-error'; toolCallId: string; errorText: string }
+  | { kind: 'tool-input-error'; toolCallId: string; toolName: string; errorText: string }
   | { kind: 'stream-error'; errorText: string };
 
 async function consumeUiStream(
@@ -372,6 +380,10 @@ function decodeChunk(chunk: Record<string, unknown>): StreamChunk | null {
       return {
         kind: 'tool-input-error',
         toolCallId: (chunk.toolCallId ?? '') as string,
+        // The SDK's tool-input-error chunk carries the tool name (it's
+        // guaranteed by the type). Preserve it so the "input-error"
+        // fallback card renders "applyWorkflowPatch" instead of "tool".
+        toolName: (chunk.toolName ?? '') as string,
         errorText: (chunk.errorText ?? '') as string,
       };
     case 'error':
@@ -458,13 +470,20 @@ function applyStreamChunk(msg: UiMessage, chunk: StreamChunk): UiMessage {
       if (idx === -1) {
         parts.push(buildDynamicToolPart({
           toolCallId: chunk.toolCallId,
-          toolName: '',
+          toolName: chunk.toolName,
           state: 'output-error',
           errorText: chunk.errorText,
         }));
       } else {
         const existing = parts[idx] as ToolPart;
-        parts[idx] = { ...existing, state: 'output-error', errorText: chunk.errorText };
+        parts[idx] = {
+          ...existing,
+          // Only override toolName if we didn't already have one — the
+          // input-start / input-available events are the primary source.
+          toolName: existing.toolName || chunk.toolName,
+          state: 'output-error',
+          errorText: chunk.errorText,
+        };
       }
       break;
     }

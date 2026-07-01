@@ -217,20 +217,16 @@ export function useSaveWorkflowDraft() {
   return useMutation({
     mutationFn: ({ workflowId, ...data }: SaveDraftRequest & { workflowId: string }) =>
       api.put<{ ok: true }>(`/workflows/${workflowId}/draft`, data),
-    // Write the just-saved draft straight into the cache. Invalidating
-    // instead used to trigger a background GET that could race the
-    // copilot's own setQueryData: the refetch would return the
-    // pre-copilot server state and silently drop whatever the copilot
-    // had just injected into the cache.
-    onSuccess: (_, { workflowId, draft, ui }) => {
-      queryClient.setQueryData<GetDraftResponse>(
-        workflowKeys.draft(workflowId),
-        (prev) => ({
-          draft,
-          ui: ui ?? prev?.ui ?? null,
-          publishedVersionId: prev?.publishedVersionId ?? null,
-        }),
-      );
+    // Invalidate rather than setQueryData: the mutation only knows the
+    // draft it just PUT, but the copilot may have raced its own write
+    // into the same row between our mutate and onSuccess. A blind
+    // setQueryData with our snapshot would silently trample the
+    // copilot's changes in the client cache; a fetch picks up the
+    // authoritative server state (which either has the user's or the
+    // copilot's edit, depending on which won the server-side write
+    // race — mitigated by the CAS on the copilot side).
+    onSuccess: (_, { workflowId }) => {
+      queryClient.invalidateQueries({ queryKey: workflowKeys.draft(workflowId) });
     },
   });
 }

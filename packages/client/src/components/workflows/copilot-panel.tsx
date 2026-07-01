@@ -208,6 +208,11 @@ function ThreadStream({
   }, [messages, status]);
 
   const [input, setInput] = useState('');
+  // While messages are still loading for an existing thread, block
+  // submits — otherwise the prepend-on-bootstrap logic ends up
+  // interleaving the persisted history with a new turn the user just
+  // sent, which is jarring even when it's technically correct.
+  const submitDisabled = status === 'streaming' || (threadId !== null && messagesLoading);
   // Shared submit body — the form's onSubmit passes a FormEvent, the
   // textarea's Enter handler doesn't have one to preventDefault, so we
   // let each caller handle its own event and only run the pure send
@@ -215,7 +220,7 @@ function ThreadStream({
   // previous shape required.
   const submit = () => {
     const text = input.trim();
-    if (!text || status === 'streaming') return;
+    if (!text || submitDisabled) return;
     setInput('');
     void send(text);
   };
@@ -261,9 +266,15 @@ function ThreadStream({
               }
             }}
             rows={1}
-            placeholder={status === 'streaming' ? 'Cooking…' : 'Ask the copilot to build, edit, or fix this workflow'}
+            placeholder={
+              status === 'streaming'
+                ? 'Cooking…'
+                : submitDisabled
+                  ? 'Loading conversation…'
+                  : 'Ask the copilot to build, edit, or fix this workflow'
+            }
             className="min-h-[28px] flex-1 resize-none bg-transparent text-sm text-neutral-900 outline-none placeholder:text-neutral-400 dark:text-neutral-100"
-            disabled={status === 'streaming'}
+            disabled={submitDisabled}
           />
           {status === 'streaming' ? (
             <button

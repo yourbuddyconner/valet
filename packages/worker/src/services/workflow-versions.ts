@@ -45,11 +45,24 @@ export interface PublishedVersion {
   createdAt: string;
 }
 
-export async function getDraft(db: AppDb, workflowId: string): Promise<{ draft: WorkflowDefinition | null; ui: unknown; publishedVersionId: string | null }> {
+export async function getDraft(db: AppDb, workflowId: string): Promise<{
+  draft: WorkflowDefinition | null;
+  ui: unknown;
+  publishedVersionId: string | null;
+  /**
+   * The row's `updated_at` at read time. Callers that need optimistic-
+   * lock semantics for a subsequent `saveDraft` should pass this
+   * verbatim to `saveDraft(..., { expectedUpdatedAt })` — reading it
+   * from the same query eliminates the TOCTOU window a separate
+   * `getWorkflowUpdatedAt` call would open.
+   */
+  updatedAt: string;
+}> {
   const row = await db.select({
     draftDefinition: workflows.draftDefinition,
     ui: workflows.ui,
     publishedVersionId: workflows.publishedVersionId,
+    updatedAt: workflows.updatedAt,
   }).from(workflows).where(eq(workflows.id, workflowId)).get();
   if (!row) throw new WorkflowVersionError('not_found', `workflow ${workflowId} not found`);
 
@@ -57,6 +70,7 @@ export async function getDraft(db: AppDb, workflowId: string): Promise<{ draft: 
     draft: row.draftDefinition ? safeParseJson<WorkflowDefinition>(row.draftDefinition) : null,
     ui: row.ui ? safeParseJson<unknown>(row.ui) : null,
     publishedVersionId: row.publishedVersionId,
+    updatedAt: row.updatedAt,
   };
 }
 
@@ -97,19 +111,6 @@ export async function saveDraft(
   return { updatedAt: nextUpdatedAt };
 }
 
-/**
- * Return the current updated_at for a workflow row — used as the CAS
- * baseline for saveDraft. Cheap: single-column select on the primary
- * key.
- */
-export async function getWorkflowUpdatedAt(db: AppDb, workflowId: string): Promise<string | null> {
-  const row = await db
-    .select({ updatedAt: workflows.updatedAt })
-    .from(workflows)
-    .where(eq(workflows.id, workflowId))
-    .get();
-  return row?.updatedAt ?? null;
-}
 
 export async function publishDraft(
   db: AppDb,

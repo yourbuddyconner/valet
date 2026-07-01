@@ -277,8 +277,15 @@ function VisualWorkflowEditorInner({
   isTesting = false,
   className,
 }: VisualWorkflowEditorProps) {
-  const initialDefinition = definition ?? createDefaultWorkflowDefinition();
-  const initialFlow = React.useMemo(() => definitionToFlow(initialDefinition), [initialDefinition]);
+  // `createDefaultWorkflowDefinition()` returns a fresh object every
+  // call, so hoisting it above useMemo's dep list would cause
+  // definitionToFlow to re-run on every render whenever definition is
+  // null. Compute the fallback INSIDE the memo instead — the memo now
+  // depends only on the actual definition prop.
+  const initialFlow = React.useMemo(
+    () => definitionToFlow(definition ?? createDefaultWorkflowDefinition()),
+    [definition],
+  );
   const [nodes, setNodes] = React.useState<WorkflowFlowNode[]>(initialFlow.nodes);
   const [edges, setEdges] = React.useState<WorkflowFlowEdge[]>(initialFlow.edges);
   const [selectedNodeId, setSelectedNodeId] = React.useState<string | null>(null);
@@ -289,6 +296,11 @@ function VisualWorkflowEditorInner({
   const [nodePaletteQuery, setNodePaletteQuery] = React.useState('');
   const [rawJson, setRawJson] = React.useState('');
   const [rawJsonError, setRawJsonError] = React.useState<string | null>(null);
+  // Mirror rawOpen into a ref so effects can gate writes on it without
+  // depending on stale state or nesting setRawJson inside a functional
+  // updater (which React invokes twice under StrictMode and produces a
+  // spurious double-write).
+  const rawOpenRef = React.useRef(false);
   const [armedDeleteNodeId, setArmedDeleteNodeId] = React.useState<string | null>(null);
   const [reactFlowInstance, setReactFlowInstance] = React.useState<ReactFlowInstance | null>(null);
   const deleteResetTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -326,12 +338,9 @@ function VisualWorkflowEditorInner({
     // Only clobber the raw-JSON draft when the panel is closed — if
     // the user is mid-edit inside the JSON textarea, refreshing it
     // from underneath them would discard their input.
-    setRawOpen((currentlyOpen) => {
-      if (!currentlyOpen) {
-        setRawJson(JSON.stringify(flowToDefinition(next, definition ?? undefined), null, 2));
-      }
-      return currentlyOpen;
-    });
+    if (!rawOpenRef.current) {
+      setRawJson(JSON.stringify(flowToDefinition(next, definition ?? undefined), null, 2));
+    }
     baselineFlowRef.current = next;
   }, [definition]);
 
@@ -420,7 +429,14 @@ function VisualWorkflowEditorInner({
     [dataFlowWarningsByEdgeId, edges, selectedEdgeId],
   );
 
+  // Keep the rawOpenRef mirrored to the state on every render — cheap,
+  // and simpler than updating the ref in every setRawOpen call site.
+  rawOpenRef.current = rawOpen;
+
   const syncRawJson = React.useCallback(() => {
+    // Same guard as the definition-sync effect: don't stomp on the
+    // JSON textarea while the user has it open.
+    if (rawOpenRef.current) return;
     setRawJson(JSON.stringify(currentDefinition(), null, 2));
   }, [currentDefinition]);
 
