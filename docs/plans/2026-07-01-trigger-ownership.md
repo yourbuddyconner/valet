@@ -11,8 +11,10 @@
 ## Global Constraints
 
 - Existing user-owned triggers (`owner_workflow_id IS NULL`) must behave exactly as today after every task in this plan.
-- No new subscription source types beyond `manual | webhook | schedule` — event sources (Slack/GitHub/Gmail) are out of scope and a follow-up spec.
+- Subscription source types in v1: `manual | webhook | schedule | slack.message.channels`. GitHub/Gmail defer.
 - Webhook tokens must remain stable across republishes (never regenerate on UPDATE).
+- Slack `message.channels` events already reach the worker (app manifest is subscribed). Dispatch to workflows forks off the existing DM/orchestrator router; do not alter DM routing.
+- Channel names (`#incidents`) in Slack subscriptions are resolved to Slack IDs (`C012ABCD`) at publish time. If resolution fails, publish fails with an actionable error. The reconciler's pure planning function operates on already-resolved IDs.
 - No `any`, no `as unknown as` double-casts, no `@ts-ignore`. Follow the type-safety rules in `CLAUDE.md`.
 - Every phase ends with a committed, testable state. Don't batch commits across phases.
 - No Co-Authored-By trailers in commit messages.
@@ -102,10 +104,11 @@ git commit -m "triggers: add owner_workflow_id + owner_node_id columns
 
 ---
 
-### Task 2: Extend `WorkflowTriggerNode` with `subscription`
+### Task 2: Extend `WorkflowTriggerNode` with `subscription` AND `TriggerConfig` with `slack.message.channels`
 
 **Files:**
 - Modify: the shared trigger-node type — likely `packages/shared/src/types/workflow-dag/*.ts` (locate the file that defines `WorkflowTriggerNode`). If the trigger-node shape lives in the worker's workflow schema (`packages/worker/src/workflows/schema.ts`), modify there instead.
+- Modify: `packages/worker/src/lib/db/triggers.ts` — extend `TriggerConfig` union with the new Slack case. Extend the zod schemas in `packages/worker/src/routes/triggers.ts` and `packages/worker/src/integrations/workflows-actions.ts` similarly.
 - Test: co-located with the schema (either `packages/shared/src/types/workflow-dag/*.test.ts` or a new `*.test.ts` alongside the schema).
 
 **Interfaces:**
@@ -116,7 +119,9 @@ git commit -m "triggers: add owner_workflow_id + owner_node_id columns
 type TriggerNodeSubscription =
   | { type: 'manual' }
   | { type: 'webhook'; method?: 'GET' | 'POST' | 'PUT'; rateLimit?: number }
-  | { type: 'schedule'; cron: string; timezone?: string; triggerData?: Record<string, unknown> };
+  | { type: 'schedule'; cron: string; timezone?: string; triggerData?: Record<string, unknown> }
+  | { type: 'slack.message.channels'; channel: string; teamId?: string;
+      filters?: { ignoreBots?: boolean; mentionOnly?: boolean } };
 ```
 
 - [ ] **Step 2.1: Locate the current trigger-node type/schema.**
@@ -171,10 +176,30 @@ describe('triggerNodeSchema.subscription', () => {
     expect(result.success).toBe(false);
   });
 
+  it('accepts slack.message.channels subscription', () => {
+    const result = triggerNodeSchema.safeParse({
+      id: 't', type: 'trigger',
+      subscription: {
+        type: 'slack.message.channels',
+        channel: '#incidents',
+        filters: { ignoreBots: true },
+      },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it('rejects slack subscription without channel', () => {
+    const result = triggerNodeSchema.safeParse({
+      id: 't', type: 'trigger',
+      subscription: { type: 'slack.message.channels' },
+    });
+    expect(result.success).toBe(false);
+  });
+
   it('rejects unknown subscription type', () => {
     const result = triggerNodeSchema.safeParse({
       id: 't', type: 'trigger',
-      subscription: { type: 'slack.messages', channel: '#x' },
+      subscription: { type: 'gmail.messages' },
     });
     expect(result.success).toBe(false);
   });
@@ -204,6 +229,15 @@ const triggerSubscriptionSchema = z.discriminatedUnion('type', [
     timezone: z.string().optional(),
     triggerData: z.record(z.string(), z.unknown()).optional(),
   }),
+  z.object({
+    type: z.literal('slack.message.channels'),
+    channel: z.string().min(1),
+    teamId: z.string().optional(),
+    filters: z.object({
+      ignoreBots: z.boolean().optional(),
+      mentionOnly: z.boolean().optional(),
+    }).optional(),
+  }),
 ]);
 ```
 
@@ -219,14 +253,43 @@ Expected: all cases PASS.
 Run: `pnpm typecheck` from repo root.
 Expected: PASS. If a consumer destructures the trigger node shape and needs updating, fix it here.
 
-- [ ] **Step 2.7: Commit.**
+- [ ] **Step 2.7: Extend `TriggerConfig` in `packages/worker/src/lib/db/triggers.ts`.**
+
+Add a case to the union:
+
+```ts
+| {
+    type: 'slack.message.channels';
+    teamId: string;                 // Slack team_id (T…)
+    channelId: string;              // Slack channel_id (C…), post-resolution
+    channelName?: string;           // Original name for display, if resolved from `#foo`
+    filters?: { ignoreBots?: boolean; mentionOnly?: boolean };
+  }
+```
+
+Update `requiresWorkflow` if needed (this new type always targets a workflow).
+
+- [ ] **Step 2.8: Extend the two `triggerConfigSchema` z.discriminatedUnions** in `packages/worker/src/routes/triggers.ts` and `packages/worker/src/integrations/workflows-actions.ts` with matching Slack cases.
+
+- [ ] **Step 2.9: Typecheck again + fix any switch-exhaustiveness break in existing code.**
+
+Run: `pnpm typecheck` from repo root.
+Expected: PASS. If any `switch (config.type)` doesn't handle the new case, TypeScript exhaustiveness will flag it — add a passthrough or throw for now (proper handling is in later tasks).
+
+- [ ] **Step 2.10: Commit.**
 
 ```bash
-git add <schema files> <test files>
-git commit -m "workflow-dag: add optional subscription on trigger node
+git add <schema files> <test files> \
+        packages/worker/src/lib/db/triggers.ts \
+        packages/worker/src/routes/triggers.ts \
+        packages/worker/src/integrations/workflows-actions.ts
+git commit -m "workflow-dag + triggers: add slack.message.channels type
 
-Discriminated union of manual | webhook | schedule.
-Foundation for reconciler-materialized triggers."
+- WorkflowTriggerNode.subscription now includes a slack
+  event source alongside manual|webhook|schedule.
+- TriggerConfig union grows a matching slack case with
+  resolved teamId + channelId.
+- Zod schemas kept in sync across route + action surfaces."
 ```
 
 ---
@@ -238,13 +301,15 @@ Foundation for reconciler-materialized triggers."
 - Create: `packages/worker/src/services/trigger-reconciler.test.ts`
 
 **Interfaces:**
-- Consumes: `WorkflowDefinition` (shared type), `TriggerRow` shape from Drizzle schema.
+- Consumes: `WorkflowDefinition` (shared type), `TriggerRow` shape from Drizzle schema. Slack subscriptions inside `definition` MUST have `channel` already normalized to a Slack channel ID (`C…`) and `teamId` set — resolution is the caller's job (Task 4).
 - Produces:
 
 ```ts
+export type ReconcilerTriggerType = 'webhook' | 'schedule' | 'slack.message.channels';
+
 export type ReconcilerOp =
-  | { kind: 'create'; nodeId: string; type: 'webhook' | 'schedule'; config: TriggerConfig; name: string }
-  | { kind: 'update'; triggerId: string; type: 'webhook' | 'schedule'; config: TriggerConfig; name: string }
+  | { kind: 'create'; nodeId: string; type: ReconcilerTriggerType; config: TriggerConfig; name: string }
+  | { kind: 'update'; triggerId: string; type: ReconcilerTriggerType; config: TriggerConfig; name: string }
   | { kind: 'delete'; triggerId: string };
 
 export function planReconciliation(input: {
@@ -375,6 +440,50 @@ describe('planReconciliation', () => {
     expect(ops).toHaveLength(2);
     expect(ops.map((o) => o.kind).sort()).toEqual(['create', 'create']);
   });
+
+  it('creates a slack.message.channels trigger when declared', () => {
+    const def = baseDef([{
+      id: 'trigger', type: 'trigger',
+      subscription: {
+        type: 'slack.message.channels',
+        channel: 'C012INCID',  // already-resolved channel id
+        teamId: 'T012ORG',
+        filters: { ignoreBots: true },
+      },
+    }]);
+    const ops = planReconciliation({
+      workflowId: 'wf', workflowName: 'W', definition: def, existing: [],
+    });
+    expect(ops).toHaveLength(1);
+    expect(ops[0]).toMatchObject({
+      kind: 'create', type: 'slack.message.channels',
+    });
+    const cfg = (ops[0] as { config: TriggerConfig }).config;
+    expect(cfg).toMatchObject({
+      type: 'slack.message.channels',
+      teamId: 'T012ORG',
+      channelId: 'C012INCID',
+    });
+  });
+
+  it('updates a slack trigger when the channel id changes', () => {
+    const existing = [{
+      id: 't1', ownerNodeId: 'trigger', type: 'slack.message.channels',
+      config: JSON.stringify({
+        type: 'slack.message.channels',
+        teamId: 'T012ORG', channelId: 'C_OLD',
+      }),
+      name: 'W — trigger',
+    }];
+    const def = baseDef([{
+      id: 'trigger', type: 'trigger',
+      subscription: { type: 'slack.message.channels', channel: 'C_NEW', teamId: 'T012ORG' },
+    }]);
+    const ops = planReconciliation({
+      workflowId: 'wf', workflowName: 'W', definition: def, existing,
+    });
+    expect(ops).toEqual([expect.objectContaining({ kind: 'update', triggerId: 't1' })]);
+  });
 });
 ```
 
@@ -463,6 +572,24 @@ function extractDeclared(def: WorkflowDefinition, workflowName: string): Map<str
           timezone: s.timezone,
           target: 'workflow',
           triggerData: s.triggerData,
+        },
+        name: `${workflowName} — ${node.id}`,
+      });
+    } else if (sub.type === 'slack.message.channels') {
+      // At this point channel MUST be an already-resolved Slack channel
+      // id (starts with C…) and teamId MUST be set. Task 4's wire-up
+      // takes care of resolution; if it slipped through, that's a bug
+      // upstream and we skip this node (the publish path should have
+      // errored earlier).
+      const s = sub as { type: 'slack.message.channels'; channel: string; teamId?: string; filters?: { ignoreBots?: boolean; mentionOnly?: boolean } };
+      if (!s.teamId || !/^C[A-Z0-9]+$/.test(s.channel)) continue;
+      out.set(node.id, {
+        type: 'slack.message.channels',
+        config: {
+          type: 'slack.message.channels',
+          teamId: s.teamId,
+          channelId: s.channel,
+          filters: s.filters,
         },
         name: `${workflowName} — ${node.id}`,
       });
@@ -649,22 +776,76 @@ describe('publishWorkflow reconciles owned triggers', () => {
 Run: `cd packages/worker && pnpm test workflows.publish`
 Expected: fail (reconciler not wired into publishWorkflow yet).
 
-- [ ] **Step 4.5: Invoke the reconciler inside `publishWorkflow`.**
+- [ ] **Step 4.5a: Add a Slack channel resolver helper.**
+
+Create `packages/worker/src/services/slack-channel-resolver.ts`:
+
+```ts
+import type { AppDb } from '../lib/drizzle.js';
+import * as db from '../lib/db.js';
+import type { WorkflowDefinition } from '@valet/shared';
+
+interface Args {
+  db: AppDb;
+  encryptionKey: string;
+  userId: string;
+  definition: WorkflowDefinition;
+}
+
+/**
+ * Walks the workflow definition and, for every trigger node with a
+ * slack.message.channels subscription:
+ *   - resolves teamId to the user's connected Slack workspace (auto if
+ *     there's exactly one; otherwise the caller-provided teamId is
+ *     required and validated against the install list)
+ *   - resolves `#name` channels to the C-prefixed channel id via
+ *     conversations.list on the workspace's bot token
+ * Returns a NEW definition with subscriptions rewritten to their
+ * resolved forms. Throws with an actionable message on failure.
+ */
+export async function resolveSlackSubscriptions(args: Args): Promise<WorkflowDefinition> {
+  // 1. Enumerate all slack.message.channels subscriptions in the
+  //    definition. Nothing to do if there are none.
+  // 2. Fetch the user's Slack installs.
+  // 3. For each subscription: pick a teamId (declared or defaulted);
+  //    fetch channel list once per team (cache within call); resolve
+  //    #name → id or validate a C-id is present.
+  // 4. Return a definition with subscriptions rewritten in place.
+}
+```
+
+Fill in the body following the pattern of existing Slack API calls in `packages/worker/src/services/slack.ts`. Throw a `ValidationError` (from `@valet/shared`) with a clear message like:
+- `"Workflow declares a Slack trigger for #incidents but you have multiple connected workspaces — set the trigger node's subscription.teamId."`
+- `"Channel #incidents was not found in workspace T012ORG. Invite the bot to the channel or check the name."`
+
+Write tests at `packages/worker/src/services/slack-channel-resolver.test.ts` mocking the Slack API surface (see existing mocks in `packages/worker/src/services/slack.test.ts` if present).
+
+- [ ] **Step 4.5b: Invoke the reconciler inside `publishWorkflow`.**
 
 At the end of `publishWorkflow`, after the version write commits:
 
 ```ts
 import { planReconciliation } from './trigger-reconciler.js';
 import { createTrigger, updateTrigger, deleteTrigger, listOwnedTriggers } from '../lib/db/triggers.js';
+import { resolveSlackSubscriptions } from './slack-channel-resolver.js';
 import { generateWebhookToken } from '...'; // reuse existing helper
 
 // ... existing publish logic ...
+
+// Resolve Slack subscriptions first so the reconciler sees fully-
+// materialized channel/team ids. If a channel can't be resolved,
+// this throws and publish fails cleanly (nothing written to the
+// triggers table).
+const resolvedDefinition = await resolveSlackSubscriptions({
+  db, encryptionKey: env.ENCRYPTION_KEY,
+  userId: workflow.userId, definition: publishedDefinition,
+});
 
 const owned = await listOwnedTriggers(db, workflowId);
 const ops = planReconciliation({
   workflowId,
   workflowName: workflow.name,
-  definition: publishedDefinition,
+  definition: resolvedDefinition,
   existing: owned.map((r) => ({
     id: r.id, ownerNodeId: r.ownerNodeId, type: r.type,
     config: r.config, name: r.name,
@@ -831,6 +1012,204 @@ enabled toggle still passes through since it's runtime state."
 
 ---
 
+### Task 5B: Slack events dispatch to workflows
+
+**Files:**
+- Modify: `packages/worker/src/routes/slack-events.ts` — after the DM-orchestrator branch and before the shared-surface early return, look up matching workflow triggers and dispatch executions.
+- Modify: `packages/worker/src/lib/db/triggers.ts` — add `findSlackChannelTriggers(db, teamId, channelId)`.
+- Modify: `packages/worker/src/services/executions.ts` (or wherever workflow executions are enqueued — locate via `grep -rn "enqueueExecution\|dispatchWorkflow" packages/worker/src`). Reuse the existing execution-start entry point.
+- Test: `packages/worker/src/routes/slack-events.test.ts` — extend or create.
+
+**Interfaces:**
+- Consumes: incoming Slack channel-message events; owned Slack triggers created by the reconciler in Task 4.
+- Produces: for each incoming `message` event whose `channel_type !== 'im'` and matching `slack.message.channels` triggers exist, an execution is enqueued with the event mapped into `trigger.data`.
+
+- [ ] **Step 5B.1: Add the DB helper.**
+
+In `packages/worker/src/lib/db/triggers.ts`:
+
+```ts
+export async function findSlackChannelTriggers(
+  db: AppDb,
+  teamId: string,
+  channelId: string,
+): Promise<Array<{ id: string; workflowId: string | null; config: string; enabled: boolean | null; userId: string }>> {
+  // Slack-typed triggers store teamId + channelId inside config JSON.
+  // SQLite lacks JSONB indexing, so filter by type first (indexed) and
+  // narrow with json_extract in the WHERE clause.
+  const rows = await db
+    .select({
+      id: triggers.id,
+      workflowId: triggers.workflowId,
+      config: triggers.config,
+      enabled: triggers.enabled,
+      userId: triggers.userId,
+    })
+    .from(triggers)
+    .where(and(
+      eq(triggers.type, 'slack.message.channels'),
+      sql`json_extract(${triggers.config}, '$.teamId') = ${teamId}`,
+      sql`json_extract(${triggers.config}, '$.channelId') = ${channelId}`,
+    ));
+  return rows;
+}
+```
+
+Import `sql` from `drizzle-orm` if not already.
+
+- [ ] **Step 5B.2: Write the failing test.**
+
+Create `packages/worker/src/routes/slack-events.workflow-dispatch.test.ts`:
+
+```ts
+import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { setupTestApp } from '../test-utils/app'; // adjust to actual helper
+
+describe('slack-events → workflow dispatch', () => {
+  it('fires a workflow execution when a channel message matches an owned trigger', async () => {
+    const { app, db, enqueueSpy } = await setupTestApp();
+    await seedOwnedSlackTrigger(db, {
+      workflowId: 'wf1', teamId: 'T1', channelId: 'C1', userId: 'u1',
+    });
+
+    const resp = await app.request('/api/channels/slack/events', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...validSlackSignatureHeaders() },
+      body: JSON.stringify({
+        type: 'event_callback',
+        team_id: 'T1',
+        event: {
+          type: 'message',
+          channel: 'C1',
+          channel_type: 'channel',
+          user: 'U1',
+          text: 'production is down',
+          ts: '1712345678.000100',
+        },
+      }),
+    });
+
+    expect(resp.status).toBe(200);
+    expect(enqueueSpy).toHaveBeenCalledWith(expect.objectContaining({
+      workflowId: 'wf1',
+      triggerData: expect.objectContaining({
+        team: 'T1', channel: 'C1', user: 'U1', text: 'production is down',
+      }),
+    }));
+  });
+
+  it('skips bot messages when ignoreBots is set', async () => {
+    const { app, db, enqueueSpy } = await setupTestApp();
+    await seedOwnedSlackTrigger(db, {
+      workflowId: 'wf1', teamId: 'T1', channelId: 'C1', userId: 'u1',
+      filters: { ignoreBots: true },
+    });
+
+    await app.request('/api/channels/slack/events', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...validSlackSignatureHeaders() },
+      body: JSON.stringify({
+        type: 'event_callback',
+        team_id: 'T1',
+        event: {
+          type: 'message', channel: 'C1', channel_type: 'channel',
+          bot_id: 'B1', text: 'noisy', ts: '1712345678.000100',
+        },
+      }),
+    });
+
+    expect(enqueueSpy).not.toHaveBeenCalled();
+  });
+
+  it('does not dispatch when the channel does not match any trigger', async () => {
+    const { app, enqueueSpy } = await setupTestApp();
+    await app.request('/api/channels/slack/events', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...validSlackSignatureHeaders() },
+      body: JSON.stringify({
+        type: 'event_callback', team_id: 'T1',
+        event: { type: 'message', channel: 'C_UNRELATED', channel_type: 'channel', user: 'U1', text: 'x', ts: '1.0' },
+      }),
+    });
+    expect(enqueueSpy).not.toHaveBeenCalled();
+  });
+});
+```
+
+- [ ] **Step 5B.3: Run the tests — expect failure.**
+
+Run: `cd packages/worker && pnpm test slack-events.workflow-dispatch`
+Expected: FAIL (dispatch code not yet added).
+
+- [ ] **Step 5B.4: Fork the dispatch inside `slack-events.ts`.**
+
+Just before the existing "shared-surface skip" branch (search for `Ignoring shared-surface event`), insert:
+
+```ts
+// Workflow-trigger fork: does this channel have any owned Slack
+// triggers? If so, dispatch to their workflows before falling through
+// to the personal-orchestrator branch.
+if (!isDm && teamId && event?.channel && typeof event.channel === 'string') {
+  const channelId = event.channel;
+  const matches = await db.findSlackChannelTriggers(c.get('db'), teamId, channelId);
+  for (const trig of matches) {
+    if (!trig.enabled) continue;
+    if (!trig.workflowId) continue;
+    const config = JSON.parse(trig.config) as import('../lib/db/triggers').TriggerConfig;
+    if (config.type !== 'slack.message.channels') continue;
+    if (config.filters?.ignoreBots !== false && event.bot_id) continue;
+    if (config.filters?.mentionOnly && !mentionsBot(event.text, botInfo)) continue;
+
+    c.executionCtx.waitUntil(enqueueWorkflowExecution({
+      db: c.get('db'),
+      env: c.env,
+      workflowId: trig.workflowId,
+      userId: trig.userId,
+      triggerId: trig.id,
+      triggerData: {
+        team: teamId,
+        channel: channelId,
+        channelName: (event.channel_name as string | undefined),
+        user: slackUserId ?? undefined,
+        text: event.text as string | undefined,
+        ts: event.ts as string | undefined,
+        threadTs: event.thread_ts as string | undefined,
+        eventType: eventType,
+      },
+    }));
+  }
+}
+```
+
+`enqueueWorkflowExecution` is the existing entry point from Step 5B intro's grep — adapt the field names to match. `mentionsBot` is a small helper: `botInfo?.userId && text?.includes(\`<@${botInfo.userId}>\`)`.
+
+- [ ] **Step 5B.5: Run the tests — expect pass.**
+
+Run: `cd packages/worker && pnpm test slack-events.workflow-dispatch`
+Expected: PASS.
+
+- [ ] **Step 5B.6: Confirm DM routing is unchanged.**
+
+Run: `cd packages/worker && pnpm test slack-events`
+Expected: all cases PASS (dispatch fork runs before the DM branch but only for non-DM channels, so DM routing is untouched).
+
+- [ ] **Step 5B.7: Commit.**
+
+```bash
+git add packages/worker/src/routes/slack-events.ts \
+        packages/worker/src/lib/db/triggers.ts \
+        packages/worker/src/routes/slack-events.workflow-dispatch.test.ts
+git commit -m "slack-events: dispatch channel messages to matched workflows
+
+Adds a workflow-trigger fork before the existing DM
+orchestrator branch. For every owned slack.message.channels
+trigger whose teamId/channelId match the event, enqueue a
+workflow execution with the message mapped into trigger.data.
+ignoreBots + mentionOnly filters honored."
+```
+
+---
+
 ### Task 6: Copilot `getNodeSchema` surfaces `subscription`
 
 **Files:**
@@ -872,6 +1251,24 @@ subscription: {
         triggerData: { optional: true, description: 'Static payload passed on each fire.' },
       },
     },
+    'slack.message.channels': {
+      fields: {
+        channel: { required: true, type: 'string', description: 'Slack channel — either a #name (resolved at publish) or a raw C-prefixed id.' },
+        teamId: { optional: true, type: 'string', description: 'Slack team id. Auto-selected when the user has exactly one connected workspace; required when they have more than one.' },
+        filters: {
+          optional: true,
+          fields: {
+            ignoreBots: { optional: true, type: 'boolean', default: true, description: 'Skip messages authored by other bots.' },
+            mentionOnly: { optional: true, type: 'boolean', default: false, description: 'Only fire when the workflow owner\'s Slack bot user is @-mentioned.' },
+          },
+        },
+      },
+      dataShape: {
+        team: 'string', channel: 'string', channelName: 'string?', user: 'string',
+        text: 'string', ts: 'string', threadTs: 'string?', eventType: 'message | app_mention',
+      },
+      note: 'Requires the Valet Slack bot to be a member of the channel. Publish fails with an actionable error if the channel cannot be resolved.',
+    },
   },
 },
 ```
@@ -880,7 +1277,11 @@ subscription: {
 
 Append (or splice into the trigger-node section) something like:
 
-> When the user describes an event source ("every morning", "when a webhook fires", "on a schedule"), set the trigger node's `subscription` field. Do NOT set `subscription` for triggers users say will only be invoked via the test-run button. Slack/GitHub/Gmail event sources are NOT yet supported — for those requests, declare `{ type: "manual" }` and tell the user they'll need to wire an external caller until first-party event triggers ship.
+> When the user describes an event source, set the trigger node's `subscription` field.
+> - "every morning" / "on a schedule" → `{ type: "schedule", cron: "..." }`
+> - "when a webhook fires" / "when an external system POSTs" → `{ type: "webhook" }`. The URL is generated post-publish; tell the user to check the trigger node inspector.
+> - "when someone posts in #foo" / "when I get pinged in #foo" → `{ type: "slack.message.channels", channel: "#foo", filters: { mentionOnly: true } }` if they specifically said "when I'm mentioned"; otherwise omit `mentionOnly`. Also update the trigger node's `dataSchema` to match the Slack event shape (team, channel, user, text, ts).
+> Do NOT set `subscription` for triggers the user says will only be invoked via the test-run button. GitHub / Gmail event sources are NOT yet supported — for those requests, declare `{ type: "manual" }` and tell the user they'll need to wire an external caller until first-party event triggers ship for those integrations.
 
 - [ ] **Step 6.4: Typecheck.**
 
@@ -1042,12 +1443,14 @@ export function TriggerNodeSubscriptionForm({ value, onChange, publishedWebhookU
           if (next === 'manual') return onChange({ type: 'manual' });
           if (next === 'webhook') return onChange({ type: 'webhook' });
           if (next === 'schedule') return onChange({ type: 'schedule', cron: '0 9 * * *' });
+          if (next === 'slack.message.channels') return onChange({ type: 'slack.message.channels', channel: '#general' });
         }}
         className="w-full rounded border border-neutral-200 bg-white px-2 py-1 text-sm dark:border-neutral-700 dark:bg-neutral-900"
       >
         <option value="manual">Manual (test-run only)</option>
         <option value="webhook">Webhook</option>
         <option value="schedule">Schedule</option>
+        <option value="slack.message.channels">Slack channel message</option>
       </select>
 
       {value?.type === 'webhook' && (
@@ -1081,6 +1484,36 @@ export function TriggerNodeSubscriptionForm({ value, onChange, publishedWebhookU
             className="w-full rounded border border-neutral-200 bg-white px-2 py-1 font-mono text-sm dark:border-neutral-700 dark:bg-neutral-900"
             placeholder="0 9 * * *"
           />
+        </>
+      )}
+
+      {value?.type === 'slack.message.channels' && (
+        <>
+          <label className="block text-xs text-neutral-500">Channel</label>
+          <input
+            type="text"
+            value={value.channel}
+            onChange={(e) => onChange({ ...value, channel: e.target.value })}
+            className="w-full rounded border border-neutral-200 bg-white px-2 py-1 font-mono text-sm dark:border-neutral-700 dark:bg-neutral-900"
+            placeholder="#incidents"
+          />
+          <label className="flex items-center gap-2 text-xs">
+            <input
+              type="checkbox"
+              checked={value.filters?.mentionOnly ?? false}
+              onChange={(e) => onChange({ ...value, filters: { ...value.filters, mentionOnly: e.target.checked } })}
+            />
+            Only fire when the bot is @-mentioned
+          </label>
+          <label className="flex items-center gap-2 text-xs">
+            <input
+              type="checkbox"
+              checked={value.filters?.ignoreBots ?? true}
+              onChange={(e) => onChange({ ...value, filters: { ...value.filters, ignoreBots: e.target.checked } })}
+            />
+            Ignore messages from other bots
+          </label>
+          <p className="text-[10px] text-neutral-500">The Valet bot must be a member of the channel. If the workspace can&apos;t be auto-detected, add a <code>teamId</code> field via the raw JSON view.</p>
         </>
       )}
     </div>
@@ -1147,7 +1580,10 @@ git commit -m "docs: reference the trigger-ownership model in workflows spec"
 ## Self-Review Notes
 
 - Every task ends with a build/test + commit. Steps are small.
-- Types flow forward: `ReconcilerOp` (Task 3) → consumed in Task 4; `subscription` union (Task 2) → consumed in Tasks 3, 6, 8.
+- Types flow forward: `ReconcilerOp` (Task 3) → consumed in Task 4; `subscription` union (Task 2) → consumed in Tasks 3, 5B, 6, 8.
 - No placeholder code — every step includes the exact change.
-- Slack/GitHub/Gmail event triggers are explicitly out of scope; the plan calls that out in Task 6's prompt update so the copilot doesn't hallucinate unsupported subscription types.
+- GitHub/Gmail event triggers are explicitly out of scope; the plan calls that out in Task 6's prompt update so the copilot doesn't hallucinate unsupported subscription types.
+- Slack `message.channels` is in v1 scope. The Slack Events API is already subscribed at the app manifest level (`packages/plugin-slack/slack-app-manifest.json`) — no external Slack config change needed. The dispatch fork in Task 5B is what wires those events to workflow executions.
+- Channel-name resolution is separated from the pure reconciler (Task 4.5a) so `planReconciliation` stays testable in isolation.
 - Existing user-owned triggers behavior verified in Task 4 test.
+- Existing DM → orchestrator routing unchanged; verified in Task 5B.6.
