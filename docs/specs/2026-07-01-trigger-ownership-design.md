@@ -17,7 +17,7 @@ Version history is also incomplete: rolling back a workflow does not roll back i
 ## Non-goals
 
 - **Collapsing all triggers into workflows.** Triggers that target the orchestrator or standalone actions stay first-class in the triggers UI. This spec only changes how *workflow-targeted* triggers are managed.
-- **GitHub / Gmail / other integration event subscriptions.** Only Slack `message.channels` is in v1 scope — its Events API subscription is already active at the app level and events already reach the worker. GitHub and Gmail need per-integration dispatcher work and are follow-ups.
+- **Gmail / other integration event subscriptions.** In v1: Slack `message.channels` and GitHub App webhook events — both already reach the worker (Slack via app manifest, GitHub via the App's webhook URL) and just need dispatch forks. Gmail and other integrations need per-integration dispatcher work and are follow-ups.
 - **Automatic migration of existing user-owned triggers.** They stay user-owned. Users can adopt the workflow-declared model by deleting the old trigger and letting publish materialize a new one.
 
 ## Design: Ownership
@@ -41,6 +41,7 @@ subscription?:
   | { type: 'webhook'; method?: 'GET' | 'POST' | 'PUT'; rateLimit?: number }
   | { type: 'schedule'; cron: string; timezone?: string; triggerData?: Record<string, unknown> }
   | { type: 'slack.message.channels'; channel: string /* name with #, or C-prefixed ID */; teamId?: string; filters?: { ignoreBots?: boolean; mentionOnly?: boolean } }
+  | { type: 'github.event'; event: string /* e.g. 'pull_request', 'issues', 'push', 'issue_comment' */; action?: string; installationId?: number; repo?: string /* 'owner/name' */; filters?: { branch?: string; author?: string } }
 ```
 
 Absent or `{ type: 'manual' }` → no materialized trigger (manual test runs still work off `dataSchema`).
@@ -50,6 +51,8 @@ Absent or `{ type: 'manual' }` → no materialized trigger (manual test runs sti
 `schedule` → reconciler creates a schedule trigger with the given cron. `triggerData` is the payload passed on each fire.
 
 `slack.message.channels` → reconciler creates a Slack event trigger bound to a specific workspace and channel. If `teamId` is omitted and the owner has exactly one connected Slack workspace, that workspace is bound automatically. If they have multiple, publish fails with a "must select workspace" error and the editor surfaces a picker. `channel` accepts either a human name (`#incidents`) or a Slack channel ID (`C012ABCD`); the reconciler resolves names to IDs at publish time via the workspace's `conversations.list` and rejects unresolvable names. `filters.ignoreBots` (default `true`) skips messages authored by bot integrations. `filters.mentionOnly` (default `false`) fires only when the workflow's bot user is @-mentioned.
+
+`github.event` → reconciler creates a GitHub event trigger bound to a GitHub App installation. `event` is the webhook event name (`pull_request`, `issues`, `push`, `issue_comment`, `release`, `workflow_run`, etc.). Optional `action` restricts to a payload action (`opened`, `closed`, `labeled`, …). `installationId` is auto-selected when the owner has exactly one installation; otherwise required. `repo` (`owner/name`) restricts to a single repository; omitted means "any repo the installation has access to". `filters.branch` restricts push events to a ref. `filters.author` matches `sender.login`. The reconciler validates that the installation exists and, when `repo` is set, that the installation actually has access to it.
 
 ### Reconciler
 
@@ -121,9 +124,32 @@ The trigger's `trigger.data` shape (used by the workflow's `dataSchema`):
 
 Retries: Slack retries events on non-200 responses within 3 seconds. The existing route already returns 200 immediately for retries; the workflow dispatch is async (fire-and-forget with `waitUntil`).
 
+### GitHub event dispatch
+
+GitHub App webhook events already reach `/api/webhooks/github` — signature verified via Octokit, delivery id tracked, and three event types (`installation`, `pull_request`, `push`) are dispatched to session-state handlers. Everything else is logged as "unhandled event". A workflow-trigger fork adds a second consumer without touching the existing handlers:
+
+1. After the existing handled-events block, look up owned triggers where `type = 'github.event'`, `config.installationId = <payload.installation.id>`, `config.event = <event header>`. Filter by `config.action` if set, and by `config.repo` (match `payload.repository.full_name`) if set, then by `config.filters` (branch on `payload.ref`, author on `payload.sender.login`).
+2. For each match, enqueue a workflow execution with the payload mapped into `trigger.data`.
+3. The `pull_request` and `push` session-state handlers continue to run unchanged — trigger dispatch is additive, not exclusive.
+
+Trigger data shape:
+
+```
+{
+  event: string;                // 'pull_request'
+  action?: string;              // 'opened'
+  installationId: number;
+  repo?: { owner: string; name: string; fullName: string };
+  sender?: { login: string; id: number };
+  payload: Record<string, unknown>;  // full payload for template access
+}
+```
+
+GitHub retries webhook deliveries on non-2xx responses. Dispatch runs inside `waitUntil` so the route still ACKs quickly.
+
 ### Explicit boundaries with future work
 
-- **GitHub / Gmail event subscriptions**: require per-integration dispatcher work. Follow-ups; the ownership model here doesn't change.
+- **Gmail / other integration event subscriptions**: require per-integration dispatcher work. Follow-ups; the ownership model here doesn't change.
 - **Cross-workflow subscriptions** (one Slack channel → multiple workflows): both workflows declare the subscription independently; the dispatcher fires each match. No sharing at the plumbing layer — Slack still delivers each event once, and the dispatcher fans out.
 - **Copilot-generated webhook URLs**: NOT in this spec. Webhook URLs are runtime outputs, not inputs. If a user asks the copilot for "an endpoint that does X", the copilot declares `{ subscription: { type: 'webhook' } }`; the URL surfaces post-publish.
 - **Copilot-authored channel picks**: the copilot can put `channel: '#incidents'` into the trigger node subscription based on user description, but the reconciler is what actually validates the channel exists in the bound workspace at publish time. If the bot isn't in the channel, publish fails with an actionable error and the user invites the bot.

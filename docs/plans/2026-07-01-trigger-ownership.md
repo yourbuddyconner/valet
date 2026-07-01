@@ -11,10 +11,12 @@
 ## Global Constraints
 
 - Existing user-owned triggers (`owner_workflow_id IS NULL`) must behave exactly as today after every task in this plan.
-- Subscription source types in v1: `manual | webhook | schedule | slack.message.channels`. GitHub/Gmail defer.
+- Subscription source types in v1: `manual | webhook | schedule | slack.message.channels | github.event`. Gmail/other integrations defer.
 - Webhook tokens must remain stable across republishes (never regenerate on UPDATE).
 - Slack `message.channels` events already reach the worker (app manifest is subscribed). Dispatch to workflows forks off the existing DM/orchestrator router; do not alter DM routing.
+- GitHub App webhooks already reach `/api/webhooks/github` and are signature-verified. The existing `installation`/`pull_request`/`push` handlers continue to run unchanged — the workflow-trigger dispatch is additive.
 - Channel names (`#incidents`) in Slack subscriptions are resolved to Slack IDs (`C012ABCD`) at publish time. If resolution fails, publish fails with an actionable error. The reconciler's pure planning function operates on already-resolved IDs.
+- GitHub `installationId` in subscriptions is auto-resolved when the owner has exactly one installation; otherwise required. `repo` (`owner/name`) is validated against the installation's repo access at publish.
 - No `any`, no `as unknown as` double-casts, no `@ts-ignore`. Follow the type-safety rules in `CLAUDE.md`.
 - Every phase ends with a committed, testable state. Don't batch commits across phases.
 - No Co-Authored-By trailers in commit messages.
@@ -121,7 +123,10 @@ type TriggerNodeSubscription =
   | { type: 'webhook'; method?: 'GET' | 'POST' | 'PUT'; rateLimit?: number }
   | { type: 'schedule'; cron: string; timezone?: string; triggerData?: Record<string, unknown> }
   | { type: 'slack.message.channels'; channel: string; teamId?: string;
-      filters?: { ignoreBots?: boolean; mentionOnly?: boolean } };
+      filters?: { ignoreBots?: boolean; mentionOnly?: boolean } }
+  | { type: 'github.event'; event: string; action?: string;
+      installationId?: number; repo?: string;
+      filters?: { branch?: string; author?: string } };
 ```
 
 - [ ] **Step 2.1: Locate the current trigger-node type/schema.**
@@ -196,6 +201,27 @@ describe('triggerNodeSchema.subscription', () => {
     expect(result.success).toBe(false);
   });
 
+  it('accepts github.event subscription', () => {
+    const result = triggerNodeSchema.safeParse({
+      id: 't', type: 'trigger',
+      subscription: {
+        type: 'github.event',
+        event: 'pull_request',
+        action: 'opened',
+        repo: 'anthropics/valet',
+      },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it('rejects github.event subscription without event name', () => {
+    const result = triggerNodeSchema.safeParse({
+      id: 't', type: 'trigger',
+      subscription: { type: 'github.event' },
+    });
+    expect(result.success).toBe(false);
+  });
+
   it('rejects unknown subscription type', () => {
     const result = triggerNodeSchema.safeParse({
       id: 't', type: 'trigger',
@@ -238,6 +264,17 @@ const triggerSubscriptionSchema = z.discriminatedUnion('type', [
       mentionOnly: z.boolean().optional(),
     }).optional(),
   }),
+  z.object({
+    type: z.literal('github.event'),
+    event: z.string().min(1),
+    action: z.string().optional(),
+    installationId: z.number().int().positive().optional(),
+    repo: z.string().regex(/^[^/]+\/[^/]+$/).optional(),
+    filters: z.object({
+      branch: z.string().optional(),
+      author: z.string().optional(),
+    }).optional(),
+  }),
 ]);
 ```
 
@@ -255,7 +292,7 @@ Expected: PASS. If a consumer destructures the trigger node shape and needs upda
 
 - [ ] **Step 2.7: Extend `TriggerConfig` in `packages/worker/src/lib/db/triggers.ts`.**
 
-Add a case to the union:
+Add TWO cases to the union:
 
 ```ts
 | {
@@ -265,9 +302,17 @@ Add a case to the union:
     channelName?: string;           // Original name for display, if resolved from `#foo`
     filters?: { ignoreBots?: boolean; mentionOnly?: boolean };
   }
+| {
+    type: 'github.event';
+    installationId: number;
+    event: string;
+    action?: string;
+    repo?: string;                  // 'owner/name' if scoped; omit for any repo in the installation
+    filters?: { branch?: string; author?: string };
+  }
 ```
 
-Update `requiresWorkflow` if needed (this new type always targets a workflow).
+Update `requiresWorkflow` if needed (both new types always target a workflow).
 
 - [ ] **Step 2.8: Extend the two `triggerConfigSchema` z.discriminatedUnions** in `packages/worker/src/routes/triggers.ts` and `packages/worker/src/integrations/workflows-actions.ts` with matching Slack cases.
 
@@ -283,12 +328,12 @@ git add <schema files> <test files> \
         packages/worker/src/lib/db/triggers.ts \
         packages/worker/src/routes/triggers.ts \
         packages/worker/src/integrations/workflows-actions.ts
-git commit -m "workflow-dag + triggers: add slack.message.channels type
+git commit -m "workflow-dag + triggers: add slack + github event types
 
-- WorkflowTriggerNode.subscription now includes a slack
-  event source alongside manual|webhook|schedule.
-- TriggerConfig union grows a matching slack case with
-  resolved teamId + channelId.
+- WorkflowTriggerNode.subscription now includes slack
+  and github event sources alongside manual|webhook|schedule.
+- TriggerConfig union grows matching cases with resolved
+  identifiers (teamId+channelId, installationId+repo).
 - Zod schemas kept in sync across route + action surfaces."
 ```
 
@@ -305,7 +350,7 @@ git commit -m "workflow-dag + triggers: add slack.message.channels type
 - Produces:
 
 ```ts
-export type ReconcilerTriggerType = 'webhook' | 'schedule' | 'slack.message.channels';
+export type ReconcilerTriggerType = 'webhook' | 'schedule' | 'slack.message.channels' | 'github.event';
 
 export type ReconcilerOp =
   | { kind: 'create'; nodeId: string; type: ReconcilerTriggerType; config: TriggerConfig; name: string }
@@ -484,6 +529,47 @@ describe('planReconciliation', () => {
     });
     expect(ops).toEqual([expect.objectContaining({ kind: 'update', triggerId: 't1' })]);
   });
+
+  it('creates a github.event trigger when declared', () => {
+    const def = baseDef([{
+      id: 'trigger', type: 'trigger',
+      subscription: {
+        type: 'github.event',
+        event: 'pull_request', action: 'opened',
+        installationId: 42, repo: 'anthropics/valet',
+      },
+    }]);
+    const ops = planReconciliation({
+      workflowId: 'wf', workflowName: 'W', definition: def, existing: [],
+    });
+    expect(ops).toHaveLength(1);
+    expect(ops[0]).toMatchObject({
+      kind: 'create', type: 'github.event',
+    });
+    const cfg = (ops[0] as { config: TriggerConfig }).config;
+    expect(cfg).toMatchObject({
+      type: 'github.event', installationId: 42, event: 'pull_request',
+      action: 'opened', repo: 'anthropics/valet',
+    });
+  });
+
+  it('updates a github trigger when the action filter changes', () => {
+    const existing = [{
+      id: 't1', ownerNodeId: 'trigger', type: 'github.event',
+      config: JSON.stringify({
+        type: 'github.event', installationId: 42, event: 'pull_request', action: 'opened',
+      }),
+      name: 'W — trigger',
+    }];
+    const def = baseDef([{
+      id: 'trigger', type: 'trigger',
+      subscription: { type: 'github.event', event: 'pull_request', action: 'closed', installationId: 42 },
+    }]);
+    const ops = planReconciliation({
+      workflowId: 'wf', workflowName: 'W', definition: def, existing,
+    });
+    expect(ops).toEqual([expect.objectContaining({ kind: 'update', triggerId: 't1' })]);
+  });
 });
 ```
 
@@ -589,6 +675,27 @@ function extractDeclared(def: WorkflowDefinition, workflowName: string): Map<str
           type: 'slack.message.channels',
           teamId: s.teamId,
           channelId: s.channel,
+          filters: s.filters,
+        },
+        name: `${workflowName} — ${node.id}`,
+      });
+    } else if (sub.type === 'github.event') {
+      // installationId MUST be resolved. Task 4 handles resolution and
+      // repo access validation.
+      const s = sub as {
+        type: 'github.event'; event: string; action?: string;
+        installationId?: number; repo?: string;
+        filters?: { branch?: string; author?: string };
+      };
+      if (typeof s.installationId !== 'number') continue;
+      out.set(node.id, {
+        type: 'github.event',
+        config: {
+          type: 'github.event',
+          installationId: s.installationId,
+          event: s.event,
+          action: s.action,
+          repo: s.repo,
           filters: s.filters,
         },
         name: `${workflowName} — ${node.id}`,
@@ -776,7 +883,7 @@ describe('publishWorkflow reconciles owned triggers', () => {
 Run: `cd packages/worker && pnpm test workflows.publish`
 Expected: fail (reconciler not wired into publishWorkflow yet).
 
-- [ ] **Step 4.5a: Add a Slack channel resolver helper.**
+- [ ] **Step 4.5a: Add subscription resolvers for Slack + GitHub.**
 
 Create `packages/worker/src/services/slack-channel-resolver.ts`:
 
@@ -820,6 +927,46 @@ Fill in the body following the pattern of existing Slack API calls in `packages/
 
 Write tests at `packages/worker/src/services/slack-channel-resolver.test.ts` mocking the Slack API surface (see existing mocks in `packages/worker/src/services/slack.test.ts` if present).
 
+Also create `packages/worker/src/services/github-installation-resolver.ts`:
+
+```ts
+import type { AppDb } from '../lib/drizzle.js';
+import { listGithubInstallationsByUser } from '../lib/db/github-installations.js';
+import type { WorkflowDefinition } from '@valet/shared';
+import { ValidationError } from '@valet/shared';
+
+interface Args {
+  db: AppDb;
+  userId: string;
+  definition: WorkflowDefinition;
+}
+
+/**
+ * For every trigger node with a github.event subscription:
+ *   - resolves installationId (auto if the user has exactly one installation
+ *     and installationId is unset; otherwise the declared installationId is
+ *     validated against the user's install list)
+ *   - if `repo` is set, validates that the installation has access to that
+ *     `owner/name` (via a lightweight repo lookup or the local index of
+ *     installed repos; pick whichever is already available)
+ * Returns a definition with subscriptions rewritten to their resolved forms.
+ * Throws ValidationError with an actionable message on failure.
+ */
+export async function resolveGithubSubscriptions(args: Args): Promise<WorkflowDefinition> {
+  // 1. Enumerate github.event subscriptions in the definition.
+  // 2. Fetch the user's installations (single query).
+  // 3. For each: pick installationId (declared or auto-defaulted);
+  //    validate `repo` access if set.
+  // 4. Return a definition with subscriptions rewritten.
+}
+```
+
+Error messages should be actionable:
+- `"Workflow declares a GitHub trigger but you have multiple installations — set subscription.installationId to one of: 12345 (anthropics), 67890 (personal)."`
+- `"Installation 12345 does not have access to repo anthropics/valet. Install the app on that repo or update subscription.repo."`
+
+Tests: `packages/worker/src/services/github-installation-resolver.test.ts` — mock the installations DB helper and the repo-access check.
+
 - [ ] **Step 4.5b: Invoke the reconciler inside `publishWorkflow`.**
 
 At the end of `publishWorkflow`, after the version write commits:
@@ -828,17 +975,21 @@ At the end of `publishWorkflow`, after the version write commits:
 import { planReconciliation } from './trigger-reconciler.js';
 import { createTrigger, updateTrigger, deleteTrigger, listOwnedTriggers } from '../lib/db/triggers.js';
 import { resolveSlackSubscriptions } from './slack-channel-resolver.js';
+import { resolveGithubSubscriptions } from './github-installation-resolver.js';
 import { generateWebhookToken } from '...'; // reuse existing helper
 
 // ... existing publish logic ...
 
-// Resolve Slack subscriptions first so the reconciler sees fully-
-// materialized channel/team ids. If a channel can't be resolved,
-// this throws and publish fails cleanly (nothing written to the
-// triggers table).
-const resolvedDefinition = await resolveSlackSubscriptions({
+// Resolve integration-scoped subscriptions before planning. If any
+// resolution fails, publish fails cleanly (nothing written to the
+// triggers table). Order doesn't matter — each resolver only touches
+// its own subscription type.
+let resolvedDefinition = await resolveSlackSubscriptions({
   db, encryptionKey: env.ENCRYPTION_KEY,
   userId: workflow.userId, definition: publishedDefinition,
+});
+resolvedDefinition = await resolveGithubSubscriptions({
+  db, userId: workflow.userId, definition: resolvedDefinition,
 });
 
 const owned = await listOwnedTriggers(db, workflowId);
@@ -1210,6 +1361,226 @@ ignoreBots + mentionOnly filters honored."
 
 ---
 
+### Task 5C: GitHub webhook dispatch to workflows
+
+**Files:**
+- Modify: `packages/worker/src/routes/webhooks.ts` — after the existing installation/pull_request/push handlers (and before the "unhandled event" log), look up matching workflow triggers and dispatch.
+- Modify: `packages/worker/src/lib/db/triggers.ts` — add `findGithubEventTriggers(db, installationId, event)`.
+- Test: `packages/worker/src/routes/webhooks.workflow-dispatch.test.ts`.
+
+**Interfaces:**
+- Consumes: incoming GitHub webhooks; owned github.event triggers created by the reconciler in Task 4.
+- Produces: for each incoming webhook whose payload matches an owned trigger's installationId/event (and optional action/repo/branch/author filters), an execution is enqueued with the payload mapped into `trigger.data`. Existing pull_request/push session-state handlers continue to run unchanged.
+
+- [ ] **Step 5C.1: Add the DB helper.**
+
+In `packages/worker/src/lib/db/triggers.ts`:
+
+```ts
+export async function findGithubEventTriggers(
+  db: AppDb,
+  installationId: number,
+  event: string,
+): Promise<Array<{ id: string; workflowId: string | null; config: string; enabled: boolean | null; userId: string }>> {
+  return db
+    .select({
+      id: triggers.id,
+      workflowId: triggers.workflowId,
+      config: triggers.config,
+      enabled: triggers.enabled,
+      userId: triggers.userId,
+    })
+    .from(triggers)
+    .where(and(
+      eq(triggers.type, 'github.event'),
+      sql`json_extract(${triggers.config}, '$.installationId') = ${installationId}`,
+      sql`json_extract(${triggers.config}, '$.event') = ${event}`,
+    ));
+}
+```
+
+- [ ] **Step 5C.2: Write the failing test.**
+
+Create `packages/worker/src/routes/webhooks.workflow-dispatch.test.ts` covering:
+
+```ts
+describe('webhooks/github → workflow dispatch', () => {
+  it('fires a matching workflow when a pull_request opened event arrives', async () => {
+    const { app, db, enqueueSpy } = await setupTestApp();
+    await seedOwnedGithubTrigger(db, {
+      workflowId: 'wf1', installationId: 42, event: 'pull_request',
+      action: 'opened', repo: 'anthropics/valet', userId: 'u1',
+    });
+
+    const resp = await app.request('/api/webhooks/github', {
+      method: 'POST',
+      headers: {
+        'X-GitHub-Event': 'pull_request',
+        'X-GitHub-Delivery': 'd1',
+        'X-Hub-Signature-256': validGithubSignature(body),
+      },
+      body: JSON.stringify({
+        action: 'opened',
+        installation: { id: 42 },
+        repository: { full_name: 'anthropics/valet', owner: { login: 'anthropics' }, name: 'valet' },
+        sender: { login: 'octocat', id: 1 },
+        pull_request: { number: 7 },
+      }),
+    });
+
+    expect(resp.status).toBe(200);
+    expect(enqueueSpy).toHaveBeenCalledWith(expect.objectContaining({
+      workflowId: 'wf1',
+      triggerData: expect.objectContaining({
+        event: 'pull_request', action: 'opened',
+        repo: expect.objectContaining({ fullName: 'anthropics/valet' }),
+      }),
+    }));
+  });
+
+  it('skips triggers whose action filter does not match', async () => {
+    const { app, db, enqueueSpy } = await setupTestApp();
+    await seedOwnedGithubTrigger(db, {
+      workflowId: 'wf1', installationId: 42, event: 'pull_request', action: 'closed',
+    });
+    await app.request('/api/webhooks/github', {
+      method: 'POST',
+      headers: githubHeaders('pull_request'),
+      body: JSON.stringify({ action: 'opened', installation: { id: 42 }, repository: { full_name: 'anthropics/valet' } }),
+    });
+    expect(enqueueSpy).not.toHaveBeenCalled();
+  });
+
+  it('skips triggers scoped to a different repo', async () => {
+    const { app, db, enqueueSpy } = await setupTestApp();
+    await seedOwnedGithubTrigger(db, {
+      workflowId: 'wf1', installationId: 42, event: 'pull_request', repo: 'anthropics/other',
+    });
+    await app.request('/api/webhooks/github', {
+      method: 'POST',
+      headers: githubHeaders('pull_request'),
+      body: JSON.stringify({ action: 'opened', installation: { id: 42 }, repository: { full_name: 'anthropics/valet' } }),
+    });
+    expect(enqueueSpy).not.toHaveBeenCalled();
+  });
+
+  it('honors branch filter on push events', async () => {
+    const { app, db, enqueueSpy } = await setupTestApp();
+    await seedOwnedGithubTrigger(db, {
+      workflowId: 'wf1', installationId: 42, event: 'push',
+      filters: { branch: 'main' },
+    });
+    await app.request('/api/webhooks/github', {
+      method: 'POST',
+      headers: githubHeaders('push'),
+      body: JSON.stringify({
+        ref: 'refs/heads/feature-x',
+        installation: { id: 42 },
+        repository: { full_name: 'anthropics/valet' },
+      }),
+    });
+    expect(enqueueSpy).not.toHaveBeenCalled();
+  });
+
+  it('does not disturb existing pull_request session-state handler', async () => {
+    const { app, db, sessionHandlerSpy } = await setupTestApp();
+    await app.request('/api/webhooks/github', {
+      method: 'POST',
+      headers: githubHeaders('pull_request'),
+      body: JSON.stringify({ action: 'opened', installation: { id: 42 }, repository: { full_name: 'x/y' } }),
+    });
+    expect(sessionHandlerSpy).toHaveBeenCalled();
+  });
+});
+```
+
+- [ ] **Step 5C.3: Run the test — expect failure.**
+
+Run: `cd packages/worker && pnpm test webhooks.workflow-dispatch`
+Expected: FAIL (dispatch code not added).
+
+- [ ] **Step 5C.4: Add the dispatch fork in `webhooks.ts`.**
+
+Right before the existing "unhandled event" log:
+
+```ts
+// Workflow-trigger fork — additive; does not affect existing handlers above.
+try {
+  const installationId = (payload.installation as { id?: number } | undefined)?.id;
+  if (installationId) {
+    const matches = await db.findGithubEventTriggers(getDb(c.env.DB), installationId, event);
+    for (const trig of matches) {
+      if (!trig.enabled || !trig.workflowId) continue;
+      const config = JSON.parse(trig.config) as import('../lib/db/triggers').TriggerConfig;
+      if (config.type !== 'github.event') continue;
+
+      const action = (payload as { action?: string }).action;
+      if (config.action && config.action !== action) continue;
+
+      const repoFullName = (payload.repository as { full_name?: string } | undefined)?.full_name;
+      if (config.repo && config.repo !== repoFullName) continue;
+
+      const ref = (payload as { ref?: string }).ref;
+      if (config.filters?.branch && ref !== `refs/heads/${config.filters.branch}`) continue;
+
+      const senderLogin = (payload.sender as { login?: string } | undefined)?.login;
+      if (config.filters?.author && senderLogin !== config.filters.author) continue;
+
+      const repo = (payload.repository as { full_name?: string; owner?: { login?: string }; name?: string } | undefined);
+      c.executionCtx.waitUntil(enqueueWorkflowExecution({
+        db: getDb(c.env.DB),
+        env: c.env,
+        workflowId: trig.workflowId,
+        userId: trig.userId,
+        triggerId: trig.id,
+        triggerData: {
+          event,
+          action,
+          installationId,
+          repo: repo?.full_name ? {
+            owner: repo.owner?.login ?? '', name: repo.name ?? '',
+            fullName: repo.full_name,
+          } : undefined,
+          sender: payload.sender,
+          payload,
+        },
+      }));
+    }
+  }
+} catch (error) {
+  console.error('[github webhook] workflow dispatch error:', error);
+}
+```
+
+Match `enqueueWorkflowExecution` to the actual signature from `packages/worker/src/services/executions.ts`.
+
+- [ ] **Step 5C.5: Run the test — expect pass.**
+
+Run: `cd packages/worker && pnpm test webhooks.workflow-dispatch`
+Expected: PASS.
+
+- [ ] **Step 5C.6: Full webhook test suite regression check.**
+
+Run: `cd packages/worker && pnpm test webhooks`
+Expected: PASS — pull_request/push/installation handlers must remain intact.
+
+- [ ] **Step 5C.7: Commit.**
+
+```bash
+git add packages/worker/src/routes/webhooks.ts \
+        packages/worker/src/lib/db/triggers.ts \
+        packages/worker/src/routes/webhooks.workflow-dispatch.test.ts
+git commit -m "webhooks/github: dispatch matched events to workflows
+
+Adds an additive fork alongside the existing installation
+/pull_request/push handlers. Matches owned github.event
+triggers by installationId + event + optional action/repo
+/branch/author filters. Runs inside waitUntil so the ACK
+stays fast."
+```
+
+---
+
 ### Task 6: Copilot `getNodeSchema` surfaces `subscription`
 
 **Files:**
@@ -1269,6 +1640,32 @@ subscription: {
       },
       note: 'Requires the Valet Slack bot to be a member of the channel. Publish fails with an actionable error if the channel cannot be resolved.',
     },
+    'github.event': {
+      fields: {
+        event: {
+          required: true, type: 'string',
+          examples: ['pull_request', 'issues', 'issue_comment', 'push', 'release', 'workflow_run', 'check_run'],
+          description: 'GitHub webhook event name.',
+        },
+        action: { optional: true, type: 'string', description: 'Restrict to a payload action (opened, closed, labeled, created, edited, ...).' },
+        installationId: { optional: true, type: 'number', description: 'GitHub App installation id. Auto-selected when the user has exactly one installation; required when they have more than one.' },
+        repo: { optional: true, type: 'string', description: 'Restrict to a single repo, "owner/name". Omit to fire for every repo in the installation.' },
+        filters: {
+          optional: true,
+          fields: {
+            branch: { optional: true, type: 'string', description: 'For push events, restrict to a ref (branch name, without refs/heads/).' },
+            author: { optional: true, type: 'string', description: 'Match payload.sender.login exactly.' },
+          },
+        },
+      },
+      dataShape: {
+        event: 'string', action: 'string?', installationId: 'number',
+        repo: '{ owner: string; name: string; fullName: string }?',
+        sender: '{ login: string; id: number }?',
+        payload: 'the full webhook payload — use for anything not in the top-level fields',
+      },
+      note: 'Requires the Valet GitHub App to be installed on the target repo/org. Publish fails if the installation is ambiguous or the declared repo is not covered by the installation.',
+    },
   },
 },
 ```
@@ -1281,7 +1678,8 @@ Append (or splice into the trigger-node section) something like:
 > - "every morning" / "on a schedule" → `{ type: "schedule", cron: "..." }`
 > - "when a webhook fires" / "when an external system POSTs" → `{ type: "webhook" }`. The URL is generated post-publish; tell the user to check the trigger node inspector.
 > - "when someone posts in #foo" / "when I get pinged in #foo" → `{ type: "slack.message.channels", channel: "#foo", filters: { mentionOnly: true } }` if they specifically said "when I'm mentioned"; otherwise omit `mentionOnly`. Also update the trigger node's `dataSchema` to match the Slack event shape (team, channel, user, text, ts).
-> Do NOT set `subscription` for triggers the user says will only be invoked via the test-run button. GitHub / Gmail event sources are NOT yet supported — for those requests, declare `{ type: "manual" }` and tell the user they'll need to wire an external caller until first-party event triggers ship for those integrations.
+> - "when a PR is opened" / "on every commit to main" / "when someone comments on an issue" → `{ type: "github.event", event: "pull_request", action: "opened", repo: "owner/name" }` (adjust event/action to fit). For push filtering, use `filters.branch: "main"`. Set `repo` if the user names one; omit for org-wide. Update the trigger node's `dataSchema` to reflect what your workflow reads from the payload (usually a subset of the top-level fields).
+> Do NOT set `subscription` for triggers the user says will only be invoked via the test-run button. Gmail and other integration event sources are NOT yet supported — for those requests, declare `{ type: "manual" }` and tell the user they'll need to wire an external caller until first-party event triggers ship for those integrations.
 
 - [ ] **Step 6.4: Typecheck.**
 
@@ -1444,6 +1842,7 @@ export function TriggerNodeSubscriptionForm({ value, onChange, publishedWebhookU
           if (next === 'webhook') return onChange({ type: 'webhook' });
           if (next === 'schedule') return onChange({ type: 'schedule', cron: '0 9 * * *' });
           if (next === 'slack.message.channels') return onChange({ type: 'slack.message.channels', channel: '#general' });
+          if (next === 'github.event') return onChange({ type: 'github.event', event: 'pull_request' });
         }}
         className="w-full rounded border border-neutral-200 bg-white px-2 py-1 text-sm dark:border-neutral-700 dark:bg-neutral-900"
       >
@@ -1451,6 +1850,7 @@ export function TriggerNodeSubscriptionForm({ value, onChange, publishedWebhookU
         <option value="webhook">Webhook</option>
         <option value="schedule">Schedule</option>
         <option value="slack.message.channels">Slack channel message</option>
+        <option value="github.event">GitHub event</option>
       </select>
 
       {value?.type === 'webhook' && (
@@ -1514,6 +1914,54 @@ export function TriggerNodeSubscriptionForm({ value, onChange, publishedWebhookU
             Ignore messages from other bots
           </label>
           <p className="text-[10px] text-neutral-500">The Valet bot must be a member of the channel. If the workspace can&apos;t be auto-detected, add a <code>teamId</code> field via the raw JSON view.</p>
+        </>
+      )}
+
+      {value?.type === 'github.event' && (
+        <>
+          <label className="block text-xs text-neutral-500">Event</label>
+          <select
+            value={value.event}
+            onChange={(e) => onChange({ ...value, event: e.target.value })}
+            className="w-full rounded border border-neutral-200 bg-white px-2 py-1 text-sm dark:border-neutral-700 dark:bg-neutral-900"
+          >
+            <option value="pull_request">pull_request</option>
+            <option value="issues">issues</option>
+            <option value="issue_comment">issue_comment</option>
+            <option value="push">push</option>
+            <option value="release">release</option>
+            <option value="workflow_run">workflow_run</option>
+            <option value="check_run">check_run</option>
+          </select>
+          <label className="block text-xs text-neutral-500">Action (optional)</label>
+          <input
+            type="text"
+            value={value.action ?? ''}
+            onChange={(e) => onChange({ ...value, action: e.target.value || undefined })}
+            className="w-full rounded border border-neutral-200 bg-white px-2 py-1 font-mono text-sm dark:border-neutral-700 dark:bg-neutral-900"
+            placeholder="opened, closed, labeled…"
+          />
+          <label className="block text-xs text-neutral-500">Repo (optional, owner/name)</label>
+          <input
+            type="text"
+            value={value.repo ?? ''}
+            onChange={(e) => onChange({ ...value, repo: e.target.value || undefined })}
+            className="w-full rounded border border-neutral-200 bg-white px-2 py-1 font-mono text-sm dark:border-neutral-700 dark:bg-neutral-900"
+            placeholder="anthropics/valet"
+          />
+          {value.event === 'push' && (
+            <>
+              <label className="block text-xs text-neutral-500">Branch (optional)</label>
+              <input
+                type="text"
+                value={value.filters?.branch ?? ''}
+                onChange={(e) => onChange({ ...value, filters: { ...value.filters, branch: e.target.value || undefined } })}
+                className="w-full rounded border border-neutral-200 bg-white px-2 py-1 font-mono text-sm dark:border-neutral-700 dark:bg-neutral-900"
+                placeholder="main"
+              />
+            </>
+          )}
+          <p className="text-[10px] text-neutral-500">Requires the Valet GitHub App on the target repo/org. If you have multiple installations, add an <code>installationId</code> via the raw JSON view.</p>
         </>
       )}
     </div>
@@ -1580,10 +2028,12 @@ git commit -m "docs: reference the trigger-ownership model in workflows spec"
 ## Self-Review Notes
 
 - Every task ends with a build/test + commit. Steps are small.
-- Types flow forward: `ReconcilerOp` (Task 3) → consumed in Task 4; `subscription` union (Task 2) → consumed in Tasks 3, 5B, 6, 8.
+- Types flow forward: `ReconcilerOp` (Task 3) → consumed in Task 4; `subscription` union (Task 2) → consumed in Tasks 3, 5B, 5C, 6, 8.
 - No placeholder code — every step includes the exact change.
-- GitHub/Gmail event triggers are explicitly out of scope; the plan calls that out in Task 6's prompt update so the copilot doesn't hallucinate unsupported subscription types.
-- Slack `message.channels` is in v1 scope. The Slack Events API is already subscribed at the app manifest level (`packages/plugin-slack/slack-app-manifest.json`) — no external Slack config change needed. The dispatch fork in Task 5B is what wires those events to workflow executions.
-- Channel-name resolution is separated from the pure reconciler (Task 4.5a) so `planReconciliation` stays testable in isolation.
+- Gmail / other integration event triggers are explicitly out of scope; the plan calls that out in Task 6's prompt update so the copilot doesn't hallucinate unsupported subscription types.
+- Slack `message.channels` is in v1 scope. The Slack Events API is already subscribed at the app manifest level (`packages/plugin-slack/slack-app-manifest.json`) — no external Slack config change needed. The dispatch fork in Task 5B wires those events to workflow executions.
+- GitHub events are in v1 scope. The GitHub App webhook is already live at `/api/webhooks/github` with signature verification. The dispatch fork in Task 5C is additive to the existing installation/pull_request/push handlers — those keep running for session-state routing.
+- Integration-scoped resolution (Slack channel name→id, GitHub installation binding) is separated from the pure reconciler (Task 4.5a) so `planReconciliation` stays testable in isolation.
 - Existing user-owned triggers behavior verified in Task 4 test.
-- Existing DM → orchestrator routing unchanged; verified in Task 5B.6.
+- Existing Slack DM → orchestrator routing unchanged; verified in Task 5B.6.
+- Existing GitHub session-state handlers unchanged; verified in Task 5C.6.
