@@ -10,6 +10,13 @@ import type { QueueMode } from '@valet/shared';
 import { Button } from '@/components/ui/button';
 import { APIKeyList } from '@/components/settings/api-key-list';
 import { useTheme } from '@/hooks/use-theme';
+import { useFontScale } from '@/hooks/use-font-scale';
+import {
+  FONT_SCALE_DEFAULT,
+  FONT_SCALE_MAX,
+  FONT_SCALE_MIN,
+  FONT_SCALE_STEP,
+} from '@/lib/font-scale';
 import { ActionPolicyOverridesSection } from '@/components/settings/action-policy-overrides-section';
 import { RuntimeGrantsSection } from '@/components/settings/runtime-grants-section';
 import {
@@ -151,7 +158,7 @@ function GeneralTab() {
       </SettingsSection>
 
       <SettingsSection title="Appearance">
-        <div className="space-y-4">
+        <div className="space-y-6">
           <div>
             <label className="text-sm font-medium text-neutral-700 dark:text-neutral-300">
               Theme
@@ -162,6 +169,7 @@ function GeneralTab() {
               <ThemeButton label="System" active={theme === 'system'} onClick={() => setTheme('system')} />
             </div>
           </div>
+          <FontScaleControl />
         </div>
       </SettingsSection>
 
@@ -1376,6 +1384,62 @@ function ThemeButton({
     >
       {label}
     </button>
+  );
+}
+
+// Generate discrete options [0.8, 0.9, ..., 1.5] up-front so the values are
+// stable and a slider's reflow-on-drag jitter is avoided entirely — each pill
+// is a single committed step.
+const FONT_SCALE_OPTIONS = (() => {
+  const out: number[] = [];
+  for (let v = FONT_SCALE_MIN; v <= FONT_SCALE_MAX + 1e-9; v += FONT_SCALE_STEP) {
+    out.push(Math.round(v * 100) / 100);
+  }
+  return out;
+})();
+
+function FontScaleControl() {
+  const { fontScale, setFontScale } = useFontScale();
+
+  return (
+    <div>
+      <label className="text-sm font-medium text-neutral-700 dark:text-neutral-300">
+        Font size
+      </label>
+      <div className="mt-2 flex flex-wrap gap-1.5">
+        {FONT_SCALE_OPTIONS.map((value) => {
+          const active = Math.abs(value - fontScale) < 1e-6;
+          const isDefault = Math.abs(value - FONT_SCALE_DEFAULT) < 1e-6;
+          return (
+            <button
+              key={value}
+              type="button"
+              onClick={() => setFontScale(value)}
+              aria-pressed={active}
+              className={`rounded-md px-3 py-1.5 text-xs font-medium tabular-nums transition-colors ${
+                active
+                  ? 'bg-neutral-900 text-white dark:bg-neutral-100 dark:text-neutral-900'
+                  : 'bg-neutral-100 text-neutral-700 hover:bg-neutral-200 dark:bg-neutral-800 dark:text-neutral-300 dark:hover:bg-neutral-700'
+              }`}
+            >
+              {Math.round(value * 100)}%
+              {isDefault && (
+                <span
+                  className={`ml-1 text-[10px] font-normal ${
+                    active ? 'opacity-70' : 'text-neutral-400 dark:text-neutral-500'
+                  }`}
+                >
+                  default
+                </span>
+              )}
+            </button>
+          );
+        })}
+      </div>
+      <p className="mt-2 text-xs text-neutral-500 dark:text-neutral-400">
+        Scales text across the app. Saved on this device.
+      </p>
+    </div>
   );
 }
 

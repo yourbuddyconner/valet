@@ -6,7 +6,7 @@
 # and workflow execution.
 
 .PHONY: help install setup clean \
-        dev dev-worker dev-opencode dev-client dev-all \
+        dev dev-worker dev-opencode dev-client dev-all otel-local otel-e2e \
         db-setup db-migrate db-seed db-reset \
         docker-build docker-up docker-down docker-logs \
         test test-unit test-integration test-e2e \
@@ -111,6 +111,14 @@ dev-worker: ## Start the Cloudflare Worker in dev mode
 
 dev-opencode: docker-up ## Start OpenCode container
 	@echo "$(GREEN)OpenCode container started on $(OPENCODE_URL)$(NC)"
+
+otel-local: ## Start the local OpenTelemetry backend (Grafana+Tempo on :3000/:4318)
+	@echo "$(GREEN)Starting grafana/otel-lgtm — Grafana http://localhost:3000 (admin/admin), OTLP :4318$(NC)"
+	@echo "Set OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 in packages/worker/.dev.vars, then: make dev-worker"
+	docker compose -f docker-compose.otel.yml up
+
+otel-e2e: generate-registries ## Smoke-test Worker tracing locally (spans + secret redaction + no-op)
+	@bash scripts/otel-e2e.sh
 
 # ==========================================
 # Database Operations

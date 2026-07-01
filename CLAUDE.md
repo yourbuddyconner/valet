@@ -371,6 +371,10 @@ async () => cloudflare.request({
 - **Can't**: access Modal container logs historically (live-stream only via `modal container logs <id>`), query logs older than CF's retention period
 - **Tip**: `modal container list --json` shows all currently running sandbox containers with full IDs; cross-reference timestamps with CF logs to correlate DO events with sandbox lifecycle
 
+### OpenTelemetry tracing
+
+The Worker + Durable Objects emit OpenTelemetry traces (`@microlabs/otel-cf-workers`), and `lib/log.ts` provides structured, trace-aware logging. Tracing is a **no-op until `OTEL_EXPORTER_OTLP_ENDPOINT` is set**. Run the local backend with `make otel-local` (Grafana + Tempo on `:3000`/`:4318`) and point the worker at it. Full guide: [`docs/observability.md`](docs/observability.md).
+
 ## Code Conventions
 
 ### Worker (Hono)

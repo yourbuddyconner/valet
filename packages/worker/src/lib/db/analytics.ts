@@ -226,6 +226,7 @@ export interface UsageByUserModelRow {
   model: string;
   inputTokens: number;
   outputTokens: number;
+  callCount: number;
 }
 
 export async function getUsageByUserModel(
@@ -238,12 +239,14 @@ export async function getUsageByUserModel(
         ae.user_id,
         ae.model,
         SUM(${AE_BILLABLE_INPUT_EXPR}) as input_tokens,
-        SUM(${AE_BILLABLE_OUTPUT_EXPR}) as output_tokens
+        SUM(${AE_BILLABLE_OUTPUT_EXPR}) as output_tokens,
+        COUNT(*) as call_count
       FROM analytics_events ae
       WHERE ae.event_type = 'llm_call'
         AND ae.created_at >= ?
         AND ae.user_id IS NOT NULL
       GROUP BY ae.user_id, ae.model
+      ORDER BY (SUM(${AE_BILLABLE_INPUT_EXPR}) + SUM(${AE_BILLABLE_OUTPUT_EXPR})) DESC
     `)
     .bind(periodStart)
     .all();
@@ -253,6 +256,7 @@ export async function getUsageByUserModel(
     model: String(r.model),
     inputTokens: Number(r.input_tokens),
     outputTokens: Number(r.output_tokens),
+    callCount: Number(r.call_count),
   }));
 }
 

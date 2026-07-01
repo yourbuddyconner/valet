@@ -92,14 +92,24 @@ usageRouter.get('/stats', async (c) => {
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([date, data]) => ({ date, ...data }));
 
-  // Build per-user LLM cost from per-user per-model data
+  // Build per-user LLM cost from per-user per-model data, and surface the
+  // per-user per-model rows (with cost) so the UI can drill into who is using
+  // which models. Ordered by tokens desc (from the query).
   const userCostMap = new Map<string, number | null>();
-  for (const row of byUserModelRaw) {
+  const byUserModel = byUserModelRaw.map((row) => {
     const cost = computeCost(row.model, row.inputTokens, row.outputTokens, pricingMap);
     if (cost !== null) {
       userCostMap.set(row.userId, (userCostMap.get(row.userId) ?? 0) + cost);
     }
-  }
+    return {
+      userId: row.userId,
+      model: row.model,
+      inputTokens: row.inputTokens,
+      outputTokens: row.outputTokens,
+      cost,
+      callCount: row.callCount,
+    };
+  });
 
   // Build per-user sandbox cost lookup
   const userSandboxMap = new Map<string, { cost: number; activeSeconds: number }>();
@@ -160,6 +170,7 @@ usageRouter.get('/stats', async (c) => {
     costByDay,
     byUser,
     byModel,
+    byUserModel,
     period: periodHours,
   };
 

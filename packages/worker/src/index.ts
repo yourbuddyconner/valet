@@ -73,8 +73,28 @@ import { dispatchOrchestratorPrompt } from './services/orchestrator.js';
 import { syncPluginsOnce } from './services/plugin-sync.js';
 import { matchesCronField, getZonedDateParts, cronMatchesNow, findMissedCronTicks } from './lib/cron.js';
 import { resolveAuthRedirectOrigin } from './lib/auth-redirect-origin.js';
+import { instrument, OTLPExporter } from '@microlabs/otel-cf-workers';
+import type { ResolveConfigFn } from '@microlabs/otel-cf-workers';
+import { buildTraceConfig, RedactingSpanExporter, setSessionAttributes } from './lib/tracing.js';
+import { log } from './lib/log.js';
 
-// Durable Object exports
+const workerTraceConfig: ResolveConfigFn = (env: Env) => {
+  const config = buildTraceConfig(env, 'valet-worker');
+  if ('exporter' in config && config.exporter && 'url' in config.exporter) {
+    config.exporter = new RedactingSpanExporter(new OTLPExporter(config.exporter));
+  }
+  return config;
+};
+
+// Durable Object exports — intentionally NOT wrapped with the library's
+// instrumentDO(). That wrapper instruments ctx.storage by proxying every storage
+// property as a callable, which breaks the SQLite storage API these DOs depend on
+// (ctx.storage.sql.exec → "Illegal invocation"), and it does so even when tracing
+// is disabled. instrument() on the worker (below) still traces the worker→DO call
+// (a client span + W3C trace-context propagation via the DO binding), so DO calls
+// stay correlated; DO-internal spans are added manually via createDoTracer
+// (lib/do-tracing.ts), which bypasses the broken storage proxy and reuses the worker's
+// redacting exporter. See docs/observability.md.
 export { SessionAgentDO } from './durable-objects/session-agent.js';
 export { EventBusDO } from './durable-objects/event-bus.js';
 
@@ -134,7 +154,7 @@ app.use('*', async (c, next) => {
   if (!skip) {
     c.executionCtx.waitUntil(
       syncPluginsOnce(c.env.DB).catch((err) => {
-        console.error('[plugin-sync] Sync failed, continuing:', err);
+        log.error('plugin-sync failed, continuing', { error: String(err) });
       }),
     );
   }
@@ -174,6 +194,12 @@ app.route('/github', githubAppSetupCallbackRouter);
 
 // Protected API routes
 app.use('/api/*', authMiddleware);
+// Tag the request's trace span with the authenticated principal so traces and logs
+// are queryable by user. A SPAN attribute (not resource) — the isolate is multi-tenant.
+app.use('/api/*', async (c, next) => {
+  setSessionAttributes({ userId: c.get('user')?.id });
+  return next();
+});
 app.route('/api/auth', authRouter);
 app.route('/api/api-keys', apiKeysRouter);
 app.route('/api/sessions', sessionsRouter);
@@ -225,7 +251,7 @@ app.notFound((c) => {
 
 // Scheduled handler for cron triggers
 const scheduled: ExportedHandlerScheduledHandler<Env> = async (event, env, ctx) => {
-  console.log('Running scheduled handler:', event.cron);
+  log.info('scheduled handler running', { cron: event.cron });
 
   try {
     await dispatchScheduledWorkflows(event, env);
@@ -963,7 +989,10 @@ async function reconcileOrchestrators(env: Env): Promise<void> {
   }
 }
 
-export default {
-  fetch: app.fetch,
-  scheduled,
-};
+export default instrument(
+  {
+    fetch: app.fetch,
+    scheduled,
+  },
+  workerTraceConfig,
+);

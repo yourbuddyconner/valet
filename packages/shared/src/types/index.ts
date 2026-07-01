@@ -866,6 +866,39 @@ export interface MemoryFileSearchResult {
   relevance: number;
 }
 
+/** A single memory file inside a portable export bundle. */
+export interface MemoryExportFile {
+  path: string;
+  content: string;
+  pinned: boolean;
+  updatedAt: string;
+}
+
+/**
+ * Portable snapshot of a user's orchestrator memory. Produced by
+ * `GET /api/me/memory/export` and consumed by `POST /api/me/memory/import`,
+ * letting users move memory between environments (e.g. dev → prod).
+ */
+export interface MemoryExportBundle {
+  /** Bundle format version. Bump on breaking shape changes. */
+  version: 1;
+  exportedAt: string;
+  count: number;
+  files: MemoryExportFile[];
+}
+
+/** Outcome of importing a memory bundle. */
+export interface MemoryImportResult {
+  imported: number;
+  skipped: { path: string; reason: string }[];
+  /**
+   * Non-pinned files removed by the 200-file memory cap after the import.
+   * Normally 0 — only non-zero when an import pushes the account's non-pinned
+   * file count past the cap (e.g. merging into an already-large account).
+   */
+  pruned: number;
+}
+
 export interface OrchestratorInfo {
   sessionId: string;
   identity: OrchestratorIdentity | null;
@@ -1151,6 +1184,15 @@ export interface UsageStatsResponse {
     cost: number | null;
     callCount: number;
     percentage: number;
+  }>;
+  /** Per-user, per-model usage — lets the UI drill into who is using which models. */
+  byUserModel: Array<{
+    userId: string;
+    model: string;
+    inputTokens: number;
+    outputTokens: number;
+    cost: number | null;
+    callCount: number;
   }>;
   period: number;
 }

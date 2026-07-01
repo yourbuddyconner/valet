@@ -4,6 +4,7 @@ import { routeTree } from './routeTree.gen';
 import { Toaster } from '@/components/ui/toaster';
 import { ErrorBoundary } from '@/components/error-boundary';
 import { ThemeProvider } from '@/hooks/use-theme';
+import { FontScaleProvider } from '@/hooks/use-font-scale';
 
 // Defer syntax highlighting — load the module lazily, then preload
 // only the most common languages. Others load on demand.
@@ -46,8 +47,10 @@ export function App() {
     <ErrorBoundary>
       <QueryClientProvider client={queryClient}>
         <ThemeProvider>
-          <RouterProvider router={router} />
-          <Toaster />
+          <FontScaleProvider>
+            <RouterProvider router={router} />
+            <Toaster />
+          </FontScaleProvider>
         </ThemeProvider>
       </QueryClientProvider>
     </ErrorBoundary>

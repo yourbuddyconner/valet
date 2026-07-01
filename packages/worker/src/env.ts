@@ -50,6 +50,11 @@ export interface Env {
 
   // Email allowlist (comma-separated). If unset, all emails are allowed.
   ALLOWED_EMAILS?: string;
+
+  // OpenTelemetry tracing. A no-op (zero network) when OTEL_EXPORTER_OTLP_ENDPOINT
+  // is unset, so it is safe to ship dark.
+  OTEL_EXPORTER_OTLP_ENDPOINT?: string; // OTLP/HTTP base, e.g. http://localhost:4318
+  OTEL_EXPORTER_OTLP_HEADERS?: string; // "key=value,key2=value2" auth headers for the endpoint
 }
 
 /** Read a string-valued env var by dynamic key name. Returns undefined for missing or non-string values. */
