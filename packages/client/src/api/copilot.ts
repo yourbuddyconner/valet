@@ -135,12 +135,13 @@ export function useCopilotChat(opts: UseCopilotChatOptions) {
   // cache miss — first visit to a thread), the persisted history would
   // be silently dropped. Sync it in when it arrives.
   //
-  // A previous version had a race: if the user sent a message before
-  // the messages query resolved, `messages.length > 0` triggered a
-  // "bootstrap already applied" branch that never actually applied the
-  // history. Now we PREPEND the persisted history to the user's
-  // in-flight turn instead — no matter which arrives first.
-  const bootstrappedRef = useRef(false);
+  // Arm the bootstrap guard at mount when there's NO initialThreadId:
+  // a brand-new thread can't have server-side history to bootstrap, so
+  // if the client already sent a first turn before the server-assigned
+  // thread id came back (and its messages query fired), we must NOT
+  // prepend the server's echo of that same turn — it would duplicate
+  // every message in the conversation.
+  const bootstrappedRef = useRef(!opts.initialThreadId);
   useEffect(() => {
     if (bootstrappedRef.current) return;
     if (!opts.initialMessages || opts.initialMessages.length === 0) return;

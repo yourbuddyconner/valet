@@ -128,6 +128,11 @@ function WorkflowDetailPage() {
     await saveDraft.mutateAsync({
       workflowId,
       draft: editorDefinition,
+      // Optimistic-lock baseline: whatever the client last knew about
+      // the server's state. Server rejects with 409 if it's moved on
+      // (e.g. the copilot just saved). The mutation's onError handler
+      // invalidates so the editor picks up the copilot's changes.
+      expectedUpdatedAt: draftData?.updatedAt,
     });
   }
 
@@ -238,11 +243,25 @@ function WorkflowDetailPage() {
     resetPublishConfirmation();
     if (!editorDefinition) return;
     saveDraft.mutate(
-      { workflowId, draft: editorDefinition },
+      {
+        workflowId,
+        draft: editorDefinition,
+        expectedUpdatedAt: draftData?.updatedAt,
+      },
       {
         onSuccess: () => toastSuccess('Draft saved'),
-        onError: (err) =>
-          toastError(err instanceof Error ? err.message : 'Failed to save draft'),
+        onError: (err) => {
+          // 409 conflict = server has a newer draft than we knew about
+          // (probably a copilot edit). Give the user a nudge; the
+          // mutation's onError already invalidated so the editor will
+          // rebase on the fresh draft.
+          const isConflict = err instanceof ApiError && err.status === 409;
+          toastError(
+            isConflict
+              ? 'Draft was updated elsewhere — reloaded from server. Try again.'
+              : err instanceof Error ? err.message : 'Failed to save draft',
+          );
+        },
       },
     );
   }

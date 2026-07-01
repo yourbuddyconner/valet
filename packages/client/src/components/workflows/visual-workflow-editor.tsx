@@ -440,9 +440,16 @@ function VisualWorkflowEditorInner({
     setRawJson(JSON.stringify(currentDefinition(), null, 2));
   }, [currentDefinition]);
 
+  // Depend on `rawOpen` too — when it transitions from open→closed,
+  // rawOpenRef.current has already flipped to false during the render
+  // above, so the callback proceeds past the guard and refreshes the
+  // textarea with any definition changes that arrived WHILE the panel
+  // was open (e.g. copilot patches). Otherwise the JSON stays frozen
+  // at pre-open contents and re-applying it silently rolls back the
+  // copilot's changes.
   React.useEffect(() => {
     syncRawJson();
-  }, [syncRawJson]);
+  }, [syncRawJson, rawOpen]);
 
   React.useEffect(() => {
     onDefinitionChange?.(currentDefinition());

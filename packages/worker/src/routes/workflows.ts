@@ -322,6 +322,13 @@ workflowsRouter.post('/:id/executions/:executionId/cancel', async (c) => {
 const draftPutSchema = z.object({
   draft: z.record(z.unknown()),
   ui: z.unknown().optional(),
+  // Optimistic-lock baseline: the `updated_at` the client read from
+  // GET /:id/draft. When present, the server rejects the write with
+  // 409 if the row has moved on. This lets the copilot's server-side
+  // writes survive a user's "Save draft" click on a stale editor
+  // snapshot — without this the user's PUT is last-write-wins and
+  // silently erases whatever the copilot just committed.
+  expectedUpdatedAt: z.string().min(1).optional(),
 });
 
 const publishSchema = z.object({
@@ -379,11 +386,20 @@ workflowsRouter.put('/:id/draft', zValidator('json', draftPutSchema), async (c) 
     return c.json({ error: 'invalid_draft', ...groupWorkflowValidationResults(modelErrors) }, 400);
   }
   try {
-    await saveDraft(c.get('db'), id, body.draft, body.ui);
-    return c.json({ ok: true });
+    const { updatedAt } = await saveDraft(
+      c.get('db'),
+      id,
+      body.draft,
+      body.ui,
+      body.expectedUpdatedAt !== undefined ? { expectedUpdatedAt: body.expectedUpdatedAt } : undefined,
+    );
+    return c.json({ ok: true, updatedAt });
   } catch (err) {
     if (err instanceof WorkflowVersionError && err.code === 'not_found') {
       throw new NotFoundError('Workflow', idOrSlug);
+    }
+    if (err instanceof WorkflowVersionError && err.code === 'conflict') {
+      return c.json({ error: 'conflict', message: err.message }, 409);
     }
     throw err;
   }

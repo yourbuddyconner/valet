@@ -58,11 +58,18 @@ export interface GetDraftResponse {
   draft: WorkflowDefinition | null;
   ui: unknown;
   publishedVersionId: string | null;
+  updatedAt?: string;
 }
 
 export interface SaveDraftRequest {
   draft: WorkflowDefinition;
   ui?: unknown;
+  /**
+   * Optimistic-lock baseline — the `updatedAt` the client read via
+   * useWorkflowDraft. Server responds 409 if the row has moved on
+   * (typically because the copilot patched it since we loaded).
+   */
+  expectedUpdatedAt?: string;
 }
 
 export interface ValidateDraftResponse {
@@ -216,16 +223,16 @@ export function useSaveWorkflowDraft() {
 
   return useMutation({
     mutationFn: ({ workflowId, ...data }: SaveDraftRequest & { workflowId: string }) =>
-      api.put<{ ok: true }>(`/workflows/${workflowId}/draft`, data),
-    // Invalidate rather than setQueryData: the mutation only knows the
-    // draft it just PUT, but the copilot may have raced its own write
-    // into the same row between our mutate and onSuccess. A blind
-    // setQueryData with our snapshot would silently trample the
-    // copilot's changes in the client cache; a fetch picks up the
-    // authoritative server state (which either has the user's or the
-    // copilot's edit, depending on which won the server-side write
-    // race — mitigated by the CAS on the copilot side).
+      api.put<{ ok: true; updatedAt: string }>(`/workflows/${workflowId}/draft`, data),
+    // Refresh from server on success — the server just responded with
+    // the exact draft we saved (barring race), and other tabs / the
+    // copilot may have been active. Same treatment on 409 conflict:
+    // invalidate so the editor re-fetches whatever the server now has
+    // (which is the writer that beat us).
     onSuccess: (_, { workflowId }) => {
+      queryClient.invalidateQueries({ queryKey: workflowKeys.draft(workflowId) });
+    },
+    onError: (_, { workflowId }) => {
       queryClient.invalidateQueries({ queryKey: workflowKeys.draft(workflowId) });
     },
   });

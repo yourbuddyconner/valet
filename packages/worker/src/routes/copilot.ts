@@ -321,16 +321,29 @@ copilotRouter.post('/chat', zValidator('json', chatBodySchema), async (c) => {
   const threadId = thread.id;
   const streamResp = result.toUIMessageStreamResponse({
     onFinish: async ({ responseMessage }) => {
-      const parts = Array.isArray(responseMessage.parts) ? responseMessage.parts : [];
-      const textContent = parts
-        .filter((p): p is { type: 'text'; text: string } => p.type === 'text' && typeof (p as { text?: unknown }).text === 'string')
-        .map((p) => p.text)
-        .join('\n');
-      await appendCopilotMessage(db, threadId, {
-        role: 'assistant',
-        content: textContent,
-        parts,
-      });
+      // Wrap the persist in try/catch: a rejected promise here would
+      // be swallowed by `waitUntil`, leaving the thread with a user
+      // message and no reply on reload with no signal of the failure.
+      // At minimum log it so we can see the failure in the tail; a
+      // metric or Sentry hook could be added later.
+      try {
+        const parts = Array.isArray(responseMessage.parts) ? responseMessage.parts : [];
+        const textContent = parts
+          .filter((p): p is { type: 'text'; text: string } => p.type === 'text' && typeof (p as { text?: unknown }).text === 'string')
+          .map((p) => p.text)
+          .join('\n');
+        await appendCopilotMessage(db, threadId, {
+          role: 'assistant',
+          content: textContent,
+          parts,
+        });
+      } catch (err) {
+        console.error('copilot: failed to persist assistant turn', {
+          threadId,
+          workflowId,
+          error: err instanceof Error ? { message: err.message, name: err.name } : err,
+        });
+      }
     },
   });
   // Keep the isolate alive to drain the stream even if the client

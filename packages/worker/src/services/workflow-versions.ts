@@ -90,24 +90,38 @@ export async function saveDraft(
   // (e.g. two copilot tool calls, or a copilot patch racing a canvas
   // save) can't silently trample each other. When the guard is omitted
   // we do a plain UPDATE for the callers that need last-write-wins.
-  const existing = await db
-    .select({ id: workflows.id, updatedAt: workflows.updatedAt })
-    .from(workflows)
-    .where(eq(workflows.id, workflowId))
-    .get();
-  if (!existing) throw new WorkflowVersionError('not_found', `workflow ${workflowId} not found`);
-  if (opts?.expectedUpdatedAt !== undefined && existing.updatedAt !== opts.expectedUpdatedAt) {
-    throw new WorkflowVersionError(
-      'conflict',
-      `draft was modified concurrently — expected updated_at ${opts.expectedUpdatedAt} but found ${existing.updatedAt}`,
-    );
-  }
+  //
+  // The CAS is expressed as a single conditional UPDATE — checking then
+  // writing as two round-trips would leave a TOCTOU window where two
+  // concurrent writers both pass their read + check before either
+  // writes, and both writes then succeed with the second silently
+  // clobbering the first.
   const nextUpdatedAt = new Date().toISOString();
-  await db.update(workflows).set({
+  const whereClause = opts?.expectedUpdatedAt !== undefined
+    ? and(eq(workflows.id, workflowId), eq(workflows.updatedAt, opts.expectedUpdatedAt))
+    : eq(workflows.id, workflowId);
+  const result = await db.update(workflows).set({
     draftDefinition: JSON.stringify(draft),
     ui: ui !== undefined ? JSON.stringify(ui) : undefined,
     updatedAt: nextUpdatedAt,
-  }).where(eq(workflows.id, workflowId)).run();
+  }).where(whereClause).run();
+
+  // No rows updated: either the workflow doesn't exist, or (when a CAS
+  // baseline was given) the row's updated_at didn't match. Disambiguate
+  // with one cheap lookup so callers can distinguish not_found from
+  // conflict.
+  if (result.meta.changes === 0) {
+    const existing = await db
+      .select({ id: workflows.id, updatedAt: workflows.updatedAt })
+      .from(workflows)
+      .where(eq(workflows.id, workflowId))
+      .get();
+    if (!existing) throw new WorkflowVersionError('not_found', `workflow ${workflowId} not found`);
+    throw new WorkflowVersionError(
+      'conflict',
+      `draft was modified concurrently — expected updated_at ${opts?.expectedUpdatedAt} but found ${existing.updatedAt}`,
+    );
+  }
   return { updatedAt: nextUpdatedAt };
 }
 
