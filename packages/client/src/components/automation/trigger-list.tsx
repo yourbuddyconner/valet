@@ -27,8 +27,10 @@ import {
 import { ScheduledWorkflowInputs } from '@/components/workflows/scheduled-workflow-inputs';
 import {
   FriendlyScheduleFields,
+  OrchestratorModelSelector,
   OrchestratorPromptEditor,
 } from '@/components/automation/trigger-schedule-controls';
+import { useAvailableModels } from '@/api/sessions';
 import { getSchedulePresetForCron } from '@/components/automation/trigger-schedule-model';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -68,6 +70,9 @@ interface TriggerFormState {
   scheduleTimezone: string;
   scheduleTarget: ScheduleTarget;
   schedulePrompt: string;
+  // Optional per-thread model override, orchestrator-target only. Empty
+  // string means "use the session's default model."
+  scheduleModel: string;
   // PATCH replaces config wholesale, so schedule run parameters are
   // stashed here and emitted as config.triggerData on save.
   scheduleTriggerData?: Record<string, unknown>;
@@ -85,6 +90,7 @@ const DEFAULT_FORM: TriggerFormState = {
   scheduleTimezone: 'UTC',
   scheduleTarget: 'orchestrator',
   schedulePrompt: '',
+  scheduleModel: '',
 };
 
 /* ─── Helpers ─── */
@@ -109,6 +115,7 @@ function formFromTrigger(trigger: Trigger): TriggerFormState {
     scheduleTimezone: 'UTC',
     scheduleTarget: 'workflow' as ScheduleTarget,
     schedulePrompt: '',
+    scheduleModel: '',
   };
 
   if (trigger.type === 'webhook' && isWebhookConfig(trigger.config)) {
@@ -130,6 +137,7 @@ function formFromTrigger(trigger: Trigger): TriggerFormState {
       scheduleTimezone: trigger.config.timezone || 'UTC',
       scheduleTarget: trigger.config.target || 'workflow',
       schedulePrompt: trigger.config.prompt || '',
+      scheduleModel: trigger.config.model || '',
       scheduleTriggerData: trigger.config.triggerData,
     };
   }
@@ -157,6 +165,10 @@ function toConfig(form: TriggerFormState): TriggerConfig {
       timezone: form.scheduleTimezone.trim() || undefined,
       target: form.scheduleTarget,
       prompt: form.scheduleTarget === 'orchestrator' ? form.schedulePrompt.trim() : undefined,
+      // Model override only applies to orchestrator-target schedules; drop it otherwise.
+      model: form.scheduleTarget === 'orchestrator' && form.scheduleModel.trim()
+        ? form.scheduleModel.trim()
+        : undefined,
       // Static trigger payload for every scheduled workflow run.
       ...(form.scheduleTriggerData && Object.keys(form.scheduleTriggerData).length > 0
         ? { triggerData: form.scheduleTriggerData }
@@ -242,6 +254,7 @@ export function TriggerList() {
   const [editingTrigger, setEditingTrigger] = React.useState<Trigger | null>(null);
   const [form, setForm] = React.useState<TriggerFormState>(DEFAULT_FORM);
   const [formError, setFormError] = React.useState<string | null>(null);
+  const { data: availableModels } = useAvailableModels();
   const [scheduleInputFields, setScheduleInputFields] = React.useState<Record<string, ManualWorkflowInputField>>({});
   const [scheduleInputErrors, setScheduleInputErrors] = React.useState<Record<string, string>>({});
   const [manualTrigger, setManualTrigger] = React.useState<Trigger | null>(null);
@@ -830,11 +843,18 @@ export function TriggerList() {
                     />
                   )}
                   {getFormTarget(form) === 'orchestrator' && (
-                    <OrchestratorPromptEditor
-                      value={form.schedulePrompt}
-                      onChange={(value) => onField('schedulePrompt', value)}
-                      hasError={Boolean(formError)}
-                    />
+                    <>
+                      <OrchestratorPromptEditor
+                        value={form.schedulePrompt}
+                        onChange={(value) => onField('schedulePrompt', value)}
+                        hasError={Boolean(formError)}
+                      />
+                      <OrchestratorModelSelector
+                        value={form.scheduleModel}
+                        onChange={(value) => onField('scheduleModel', value)}
+                        availableModels={availableModels}
+                      />
+                    </>
                   )}
                 </div>
               )}

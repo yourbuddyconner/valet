@@ -253,6 +253,7 @@ const scheduleConfigSchema = z.object({
   timezone: z.string().optional(),
   target: z.enum(['workflow', 'orchestrator']).optional().default('workflow'),
   prompt: z.string().min(1).max(100000).optional(),
+  model: z.string().min(1).optional(),
   triggerData: z.record(z.unknown()).optional(),
 });
 

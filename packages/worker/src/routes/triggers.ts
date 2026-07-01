@@ -43,6 +43,8 @@ const scheduleConfigSchema = z.object({
   timezone: z.string().optional(),
   target: z.enum(['workflow', 'orchestrator']).optional().default('workflow'),
   prompt: z.string().min(1).max(100000).optional(),
+  // Optional model override for orchestrator-target triggers. Ignored for workflow-target.
+  model: z.string().min(1).optional(),
   // Static trigger payload used for each scheduled workflow run.
   triggerData: z.record(z.unknown()).optional(),
 });

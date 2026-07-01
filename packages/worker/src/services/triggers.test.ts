@@ -90,6 +90,31 @@ describe('runTrigger', () => {
         originTriggerType: 'schedule',
       },
     }));
+    // No model in config → dispatch call omits it (or passes undefined).
+    const call = dispatchOrchestratorPromptMock.mock.calls[0]![1] as { model?: string };
+    expect(call.model).toBeUndefined();
+  });
+
+  it('forwards a config.model override to dispatchOrchestratorPrompt', async () => {
+    const env = { DB: {} } as Parameters<typeof runTrigger>[0];
+    getTriggerForRunMock.mockResolvedValue({
+      wf_id: null,
+      workflow_name: null,
+      config: JSON.stringify({
+        type: 'schedule',
+        target: 'orchestrator',
+        prompt: 'Daily triage',
+        model: 'claude-sonnet-4-6',
+        timezone: 'UTC',
+        cron: '0 9 * * *',
+      }),
+    });
+
+    await runTrigger(env, 'trigger-1', 'user-1', { clientRequestId: 'manual-run' }, 'http://worker.test');
+
+    expect(dispatchOrchestratorPromptMock).toHaveBeenCalledWith(env, expect.objectContaining({
+      model: 'claude-sonnet-4-6',
+    }));
   });
 
   it('passes explicit trigger data for workflow triggers', async () => {

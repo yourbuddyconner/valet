@@ -394,6 +394,10 @@ export async function dispatchOrchestratorPrompt(
     /** Pre-computed scope key from the channel transport. Passed through to ensureChannelBinding
      *  so the binding's scope key matches the lookup path in the inbound event handler. */
     scopeKey?: string;
+    /** Per-turn model override. Threads created by scheduled triggers can pin a specific
+     *  model (e.g. "claude-sonnet-4-6") without changing the user's default. Absent = the
+     *  session's default model applies. */
+    model?: string;
   }
 ): Promise<OrchestratorPromptDispatchResult> {
   // When forcing a new thread, prepend a memory instruction so the agent knows
@@ -512,6 +516,7 @@ export async function dispatchOrchestratorPrompt(
       authorId: params.userId,
       replyTo: params.replyTo,
       queueMode: 'steer',
+      model: params.model,
     }),
   }));
 

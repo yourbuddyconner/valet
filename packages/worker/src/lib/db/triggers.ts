@@ -22,6 +22,10 @@ export type TriggerConfig =
       timezone?: string;
       target?: 'workflow' | 'orchestrator';
       prompt?: string;
+      // Optional per-thread model override for orchestrator-target triggers
+      // (e.g. "claude-sonnet-4-6"). Only meaningful when target=orchestrator;
+      // ignored for workflow-target schedules.
+      model?: string;
       // Static trigger payload for each scheduled workflow run. Validated
       // against the workflow trigger node's dataSchema before execution.
       triggerData?: Record<string, unknown>;

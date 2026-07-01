@@ -129,3 +129,67 @@ export function OrchestratorPromptEditor({
     </div>
   );
 }
+
+interface OrchestratorModelSelectorProps {
+  value: string;
+  onChange: (value: string) => void;
+  availableModels: Array<{ provider: string; models: Array<{ id: string; name: string }> }>;
+}
+
+/**
+ * Optional per-trigger model override for orchestrator schedules. Empty
+ * string means "inherit the session's default model." The value is a raw
+ * model id (e.g. "claude-sonnet-4-6") threaded through to the DO's
+ * /prompt endpoint on each fire.
+ */
+export function OrchestratorModelSelector({
+  value,
+  onChange,
+  availableModels,
+}: OrchestratorModelSelectorProps) {
+  // If the persisted value isn't in any provider group — either because
+  // it was removed from the org's available models, or because the models
+  // query hasn't resolved yet — render a synthetic option so the pinned
+  // value stays visible instead of the select silently blanking out.
+  const valueInList = value === '' || availableModels.some(
+    (group) => group.models.some((model) => model.id === value),
+  );
+
+  return (
+    <div>
+      <label className="mb-1.5 block text-sm font-medium text-neutral-700 dark:text-neutral-300">
+        Model
+      </label>
+      <select
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        className={cn(
+          'w-full rounded-md border border-neutral-200 bg-white px-3 py-2 text-sm text-neutral-900 shadow-sm focus:outline-none focus:ring-2 focus:ring-neutral-900',
+          'dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-100 dark:focus:ring-neutral-100',
+        )}
+      >
+        <option value="">Inherit user default</option>
+        {!valueInList && (
+          <option value={value}>Unknown model: {value}</option>
+        )}
+        {availableModels.map((group) => (
+          <optgroup key={group.provider} label={group.provider}>
+            {group.models.map((model) => (
+              <option key={model.id} value={model.id}>{model.name}</option>
+            ))}
+          </optgroup>
+        ))}
+      </select>
+      {!valueInList && (
+        <p className="mt-1.5 text-xs text-amber-700 dark:text-amber-400">
+          The pinned model is not in your currently available list. Pick a new model or clear this to inherit the default.
+        </p>
+      )}
+      {valueInList && (
+        <p className="mt-1.5 text-xs text-neutral-500 dark:text-neutral-400">
+          Optional. Each fire creates a new thread using this model instead of your default.
+        </p>
+      )}
+    </div>
+  );
+}

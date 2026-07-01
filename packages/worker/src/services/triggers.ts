@@ -180,6 +180,7 @@ export async function runTrigger(
       userId,
       content: `[Today is ${scheduledDate}]\n\n${prompt}`,
       forceNewThread: true,
+      model: config.type === 'schedule' ? config.model : undefined,
       threadOrigin: {
         originType: 'automation',
         originTriggerId: triggerId,

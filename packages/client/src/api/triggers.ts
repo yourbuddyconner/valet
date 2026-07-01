@@ -45,6 +45,8 @@ export interface ScheduleConfig {
   timezone?: string;
   target?: 'workflow' | 'orchestrator';
   prompt?: string;
+  // Optional per-thread model override for orchestrator-target triggers.
+  model?: string;
   // Static trigger payload used for each scheduled workflow run.
   triggerData?: Record<string, unknown>;
 }
