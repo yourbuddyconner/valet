@@ -335,7 +335,7 @@ function ExecutionSummaryPane({
   onClose: () => void;
 }) {
   return (
-    <div className="nodrag nopan nowheel absolute right-5 top-5 z-20 w-[min(360px,calc(100%-2.5rem))] overflow-hidden rounded-xl border border-neutral-200 bg-white shadow-2xl shadow-neutral-900/15 dark:border-neutral-800 dark:bg-neutral-950 dark:shadow-black/30">
+    <div className="nodrag nopan nowheel absolute bottom-5 right-5 top-5 z-20 flex w-[min(400px,calc(100%-2.5rem))] flex-col overflow-hidden rounded-xl border border-neutral-200 bg-white shadow-2xl shadow-neutral-900/15 dark:border-neutral-800 dark:bg-neutral-950 dark:shadow-black/30">
       <div className="flex shrink-0 items-center justify-between gap-3 border-b border-neutral-200 px-4 py-3 dark:border-neutral-800">
         <div className="min-w-0">
           <h2 className="truncate text-sm font-semibold text-neutral-950 dark:text-neutral-100">Execution</h2>
@@ -350,43 +350,48 @@ function ExecutionSummaryPane({
           <CloseIcon />
         </button>
       </div>
-      <div className="space-y-4 p-4">
-        <div className="flex items-center justify-between gap-3">
-          <ExecutionStatusPill status={execution.status} />
-          {onRetryExecution && (
-            <Button
-              type="button"
-              variant="secondary"
-              size="sm"
-              onClick={() => onRetryExecution(execution.id)}
-              disabled={isRetryingExecution}
-              className="border border-neutral-200 bg-white text-neutral-800 hover:bg-neutral-100 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100 dark:hover:bg-neutral-800"
-            >
-              <RetryIcon />
-              {isRetryingExecution ? 'Retrying...' : 'Retry'}
-            </Button>
+      {/* Bounded height + inner scroll — the approval panel can carry
+          multi-KB prose or JSON payloads, so without this the whole
+          drawer grew past the viewport and nothing scrolled. */}
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        <div className="space-y-4 p-4">
+          <div className="flex items-center justify-between gap-3">
+            <ExecutionStatusPill status={execution.status} />
+            {onRetryExecution && (
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                onClick={() => onRetryExecution(execution.id)}
+                disabled={isRetryingExecution}
+                className="border border-neutral-200 bg-white text-neutral-800 hover:bg-neutral-100 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100 dark:hover:bg-neutral-800"
+              >
+                <RetryIcon />
+                {isRetryingExecution ? 'Retrying...' : 'Retry'}
+              </Button>
+            )}
+          </div>
+          <div className="space-y-2 text-xs text-neutral-600 dark:text-neutral-400">
+            <KeyValue label="Started" value={formatExecutionTimestamp(execution.startedAt)} />
+            <KeyValue label="Trigger" value={execution.triggerName ?? execution.triggerType} />
+            <KeyValue label="Mode" value={execution.mode ?? 'production'} />
+          </div>
+          {/* Pending approvals surfaced inline so users don't have to click
+              into the gated node to find the approve/deny buttons. The
+              panel polls /pending-approvals on its own so it picks up
+              spawned-session approvals (cross-context propagation) — the
+              execution-detail endpoint only knows about workflow-direct
+              gates and would silently hide the propagated ones. */}
+          <ExecutionApprovalPanel executionId={execution.id} />
+          {execution.error && (
+            <div className="rounded-md border border-red-200 bg-red-50 p-3 dark:border-red-900/50 dark:bg-red-950/40">
+              <h3 className="text-xs font-medium text-red-700 dark:text-red-300">Error</h3>
+              <pre className="mt-2 whitespace-pre-wrap break-words text-xs text-red-700 dark:text-red-300">
+                {execution.error}
+              </pre>
+            </div>
           )}
         </div>
-        <div className="space-y-2 text-xs text-neutral-600 dark:text-neutral-400">
-          <KeyValue label="Started" value={formatExecutionTimestamp(execution.startedAt)} />
-          <KeyValue label="Trigger" value={execution.triggerName ?? execution.triggerType} />
-          <KeyValue label="Mode" value={execution.mode ?? 'production'} />
-        </div>
-        {/* Pending approvals surfaced inline so users don't have to click
-            into the gated node to find the approve/deny buttons. The
-            panel polls /pending-approvals on its own so it picks up
-            spawned-session approvals (cross-context propagation) — the
-            execution-detail endpoint only knows about workflow-direct
-            gates and would silently hide the propagated ones. */}
-        <ExecutionApprovalPanel executionId={execution.id} />
-        {execution.error && (
-          <div className="rounded-md border border-red-200 bg-red-50 p-3 dark:border-red-900/50 dark:bg-red-950/40">
-            <h3 className="text-xs font-medium text-red-700 dark:text-red-300">Error</h3>
-            <pre className="mt-2 whitespace-pre-wrap break-words text-xs text-red-700 dark:text-red-300">
-              {execution.error}
-            </pre>
-          </div>
-        )}
       </div>
     </div>
   );
