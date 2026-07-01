@@ -37,16 +37,44 @@ export interface CopilotMessage {
 }
 
 /**
- * Subset of the Vercel AI SDK UIMessage parts we care about. Field
- * names match the SDK's canonical shape (input/output — NOT args/result)
- * so persisted messages, streamed chunks, and rendered UI all share
- * one representation with no translation layer.
+ * Vercel AI SDK v6 UIMessage parts as they appear on the wire and in
+ * responseMessage.parts. Tool invocations are ONE part per call whose
+ * state advances (input-streaming → input-available → output-available).
+ * We accept the SDK's canonical types verbatim so the SSE stream, the
+ * persisted history, and the renderer all read the same shape.
+ *
+ * Tool parts come in two flavors:
+ *   • Static: `type: "tool-<name>"` — for tools known at build time
+ *   • Dynamic: `type: "dynamic-tool"` — for tools discovered at request
+ *     time (which is all of ours, since the copilot registers tools
+ *     dynamically per workflow)
  */
-export type UiMessagePart =
-  | { type: 'text'; text: string }
-  | { type: 'tool-call'; toolCallId: string; toolName: string; input: unknown }
-  | { type: 'tool-result'; toolCallId: string; toolName: string; output: unknown }
-  | { type: string; [key: string]: unknown };
+export type ToolPartState =
+  | 'input-streaming'
+  | 'input-available'
+  | 'output-available'
+  | 'output-error';
+
+export interface TextPart {
+  type: 'text';
+  text: string;
+}
+
+export interface ToolPart {
+  type: string; // 'tool-<name>' | 'dynamic-tool'
+  toolCallId: string;
+  toolName?: string; // required on dynamic-tool
+  state: ToolPartState;
+  input?: unknown;
+  output?: unknown;
+  errorText?: string;
+}
+
+export type UiMessagePart = TextPart | ToolPart | { type: string; [key: string]: unknown };
+
+export function isToolPart(part: UiMessagePart): part is ToolPart {
+  return typeof part.type === 'string' && (part.type === 'dynamic-tool' || part.type.startsWith('tool-'));
+}
 
 export function useCopilotThreads(workflowId: string | null | undefined) {
   return useQuery({
@@ -148,11 +176,11 @@ export function useCopilotChat(opts: UseCopilotChatOptions) {
       const newThreadId = resp.headers.get('X-Copilot-Thread-Id');
       if (newThreadId && newThreadId !== threadId) setThreadId(newThreadId);
 
-      await consumeUiStream(resp.body!, (partUpdate) => {
+      await consumeUiStream(resp.body!, (chunk) => {
         setMessages((prev) => {
           const last = prev[prev.length - 1];
           if (!last || last.role !== 'assistant') return prev;
-          const updated = applyPartUpdate(last, partUpdate);
+          const updated = applyStreamChunk(last, chunk);
           return [...prev.slice(0, -1), updated];
         });
       });
@@ -189,14 +217,22 @@ export function useCopilotChat(opts: UseCopilotChatOptions) {
 // SSE stream parsing for the Vercel AI SDK UI message stream
 // ────────────────────────────────────────────────────────────────────────
 
-type PartUpdate =
+/**
+ * Chunks emitted by the SDK's UI-message stream that we care about.
+ * See `UIMessageChunk` in ai@6 for the full list.
+ */
+type StreamChunk =
+  | { kind: 'text-start'; id: string }
   | { kind: 'text-delta'; id: string; delta: string }
-  | { kind: 'tool-call'; toolCallId: string; toolName: string; input: unknown }
-  | { kind: 'tool-result'; toolCallId: string; toolName: string; output: unknown };
+  | { kind: 'tool-input-start'; toolCallId: string; toolName: string; dynamic?: boolean }
+  | { kind: 'tool-input-delta'; toolCallId: string; delta: string }
+  | { kind: 'tool-input-available'; toolCallId: string; toolName: string; input: unknown; dynamic?: boolean }
+  | { kind: 'tool-output-available'; toolCallId: string; output: unknown }
+  | { kind: 'tool-output-error'; toolCallId: string; errorText: string };
 
 async function consumeUiStream(
   body: ReadableStream<Uint8Array>,
-  onUpdate: (u: PartUpdate) => void,
+  onChunk: (c: StreamChunk) => void,
 ): Promise<void> {
   const reader = body.getReader();
   const decoder = new TextDecoder();
@@ -205,19 +241,17 @@ async function consumeUiStream(
     const { value, done } = await reader.read();
     if (done) break;
     buf += decoder.decode(value, { stream: true });
-    // SSE events are separated by `\n\n`.
     let idx;
     while ((idx = buf.indexOf('\n\n')) !== -1) {
       const raw = buf.slice(0, idx);
       buf = buf.slice(idx + 2);
-      handleSseEvent(raw, onUpdate);
+      handleSseEvent(raw, onChunk);
     }
   }
-  if (buf.trim()) handleSseEvent(buf, onUpdate);
+  if (buf.trim()) handleSseEvent(buf, onChunk);
 }
 
-function handleSseEvent(raw: string, onUpdate: (u: PartUpdate) => void) {
-  // Each event is one or more `data: <json>` lines.
+function handleSseEvent(raw: string, onChunk: (c: StreamChunk) => void) {
   for (const line of raw.split('\n')) {
     if (!line.startsWith('data:')) continue;
     const payload = line.slice(5).trim();
@@ -228,63 +262,154 @@ function handleSseEvent(raw: string, onUpdate: (u: PartUpdate) => void) {
     } catch {
       continue;
     }
-    routeChunk(parsed, onUpdate);
+    const chunk = decodeChunk(parsed);
+    if (chunk) onChunk(chunk);
   }
 }
 
-function routeChunk(chunk: Record<string, unknown>, onUpdate: (u: PartUpdate) => void) {
+function decodeChunk(chunk: Record<string, unknown>): StreamChunk | null {
   const type = chunk.type as string | undefined;
-  // The Vercel AI SDK v6 UI stream encoding — keys vary by version, so
-  // we look for the most common shapes and ignore unknown chunks.
-  if (type === 'text-delta' || type === 'text') {
-    const delta = (chunk.delta ?? chunk.text ?? '') as string;
-    const id = (chunk.id ?? 'text-0') as string;
-    if (delta) onUpdate({ kind: 'text-delta', id, delta });
-  } else if (type === 'tool-call' || type === 'tool-input-available') {
-    onUpdate({
-      kind: 'tool-call',
-      toolCallId: (chunk.toolCallId ?? chunk.id ?? '') as string,
-      toolName: (chunk.toolName ?? '') as string,
-      input: chunk.input ?? {},
-    });
-  } else if (type === 'tool-result' || type === 'tool-output-available') {
-    onUpdate({
-      kind: 'tool-result',
-      toolCallId: (chunk.toolCallId ?? chunk.id ?? '') as string,
-      toolName: (chunk.toolName ?? '') as string,
-      output: chunk.output ?? null,
-    });
+  switch (type) {
+    case 'text-start':
+      return { kind: 'text-start', id: (chunk.id ?? 'text-0') as string };
+    case 'text-delta':
+      return {
+        kind: 'text-delta',
+        id: (chunk.id ?? 'text-0') as string,
+        delta: (chunk.delta ?? '') as string,
+      };
+    case 'tool-input-start':
+      return {
+        kind: 'tool-input-start',
+        toolCallId: (chunk.toolCallId ?? '') as string,
+        toolName: (chunk.toolName ?? '') as string,
+        dynamic: chunk.dynamic as boolean | undefined,
+      };
+    case 'tool-input-delta':
+      return {
+        kind: 'tool-input-delta',
+        toolCallId: (chunk.toolCallId ?? '') as string,
+        delta: (chunk.inputTextDelta ?? chunk.delta ?? '') as string,
+      };
+    case 'tool-input-available':
+      return {
+        kind: 'tool-input-available',
+        toolCallId: (chunk.toolCallId ?? '') as string,
+        toolName: (chunk.toolName ?? '') as string,
+        input: chunk.input,
+        dynamic: chunk.dynamic as boolean | undefined,
+      };
+    case 'tool-output-available':
+      return {
+        kind: 'tool-output-available',
+        toolCallId: (chunk.toolCallId ?? '') as string,
+        output: chunk.output,
+      };
+    case 'tool-output-error':
+      return {
+        kind: 'tool-output-error',
+        toolCallId: (chunk.toolCallId ?? '') as string,
+        errorText: (chunk.errorText ?? '') as string,
+      };
+    default:
+      return null;
   }
 }
 
-function applyPartUpdate(msg: UiMessage, update: PartUpdate): UiMessage {
+function applyStreamChunk(msg: UiMessage, chunk: StreamChunk): UiMessage {
   const parts = [...msg.parts];
-  switch (update.kind) {
-    case 'text-delta': {
+  switch (chunk.kind) {
+    case 'text-start': {
+      // Some providers emit text-start before any deltas; guarantee a
+      // text slot exists so subsequent deltas have something to grow.
       const last = parts[parts.length - 1];
-      if (last && last.type === 'text') {
-        parts[parts.length - 1] = { ...last, text: (last as { text: string }).text + update.delta };
-      } else {
-        parts.push({ type: 'text', text: update.delta });
+      if (!last || last.type !== 'text') {
+        parts.push({ type: 'text', text: '' });
       }
       break;
     }
-    case 'tool-call':
-      parts.push({
-        type: 'tool-call',
-        toolCallId: update.toolCallId,
-        toolName: update.toolName,
-        input: update.input,
-      });
+    case 'text-delta': {
+      const last = parts[parts.length - 1];
+      if (last && last.type === 'text') {
+        parts[parts.length - 1] = { ...last, text: (last as TextPart).text + chunk.delta };
+      } else {
+        parts.push({ type: 'text', text: chunk.delta });
+      }
       break;
-    case 'tool-result':
-      parts.push({
-        type: 'tool-result',
-        toolCallId: update.toolCallId,
-        toolName: update.toolName,
-        output: update.output,
-      });
+    }
+    case 'tool-input-start': {
+      // Append a new tool part in `input-streaming` state — the SDK
+      // will send tool-input-delta or tool-input-available next.
+      parts.push(buildDynamicToolPart({
+        toolCallId: chunk.toolCallId,
+        toolName: chunk.toolName,
+        state: 'input-streaming',
+        input: '',
+      }));
       break;
+    }
+    case 'tool-input-delta': {
+      const idx = findToolPart(parts, chunk.toolCallId);
+      if (idx === -1) break;
+      const existing = parts[idx] as ToolPart;
+      const currentInput = typeof existing.input === 'string' ? existing.input : '';
+      parts[idx] = { ...existing, input: currentInput + chunk.delta };
+      break;
+    }
+    case 'tool-input-available': {
+      const idx = findToolPart(parts, chunk.toolCallId);
+      const built = buildDynamicToolPart({
+        toolCallId: chunk.toolCallId,
+        toolName: chunk.toolName,
+        state: 'input-available',
+        input: chunk.input,
+      });
+      if (idx === -1) parts.push(built);
+      else parts[idx] = { ...parts[idx], ...built };
+      break;
+    }
+    case 'tool-output-available': {
+      const idx = findToolPart(parts, chunk.toolCallId);
+      if (idx === -1) break;
+      const existing = parts[idx] as ToolPart;
+      parts[idx] = { ...existing, state: 'output-available', output: chunk.output };
+      break;
+    }
+    case 'tool-output-error': {
+      const idx = findToolPart(parts, chunk.toolCallId);
+      if (idx === -1) break;
+      const existing = parts[idx] as ToolPart;
+      parts[idx] = { ...existing, state: 'output-error', errorText: chunk.errorText };
+      break;
+    }
   }
   return { ...msg, parts };
+}
+
+function findToolPart(parts: UiMessagePart[], toolCallId: string): number {
+  return parts.findIndex(
+    (p) => isToolPart(p) && p.toolCallId === toolCallId,
+  );
+}
+
+function buildDynamicToolPart(fields: {
+  toolCallId: string;
+  toolName: string;
+  state: ToolPartState;
+  input?: unknown;
+  output?: unknown;
+  errorText?: string;
+}): ToolPart {
+  // We always use the dynamic-tool shape because our tools are
+  // registered per-request; the model doesn't know static tool names
+  // at build time and neither does the renderer.
+  return {
+    type: 'dynamic-tool',
+    toolCallId: fields.toolCallId,
+    toolName: fields.toolName,
+    state: fields.state,
+    input: fields.input,
+    output: fields.output,
+    errorText: fields.errorText,
+  };
 }

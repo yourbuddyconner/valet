@@ -15,8 +15,11 @@ import {
   useCopilotChat,
   useCopilotMessages,
   useCopilotThreads,
+  isToolPart,
   type UiMessage,
+  type UiMessagePart,
   type CopilotMessage,
+  type ToolPart,
 } from '@/api/copilot';
 import { ToolPayload } from '@/components/payload/tool-payload';
 import { DeferredMarkdownContent } from '@/components/chat/markdown/deferred-markdown-content';
@@ -350,31 +353,19 @@ function formatRelative(iso: string): string {
 // ────────────────────────────────────────────────────────────────────────
 
 function toUiMessages(persisted: CopilotMessage[]): UiMessage[] {
-  // The chat UI only renders user + assistant rows. Tool calls and
-  // results are children of the assistant turn that triggered them.
-  // Persisted shape stores assistant text + parts together; we
-  // reconstruct UiMessages directly.
+  // Persisted assistant messages carry UIMessage-shape parts directly
+  // (unified tool parts with state/input/output). User messages are
+  // just their text. Legacy `tool` role rows are ignored — they only
+  // existed in the old ModelMessage-based persistence and are now
+  // superseded by the tool parts embedded in the assistant message.
   const out: UiMessage[] = [];
   for (const m of persisted) {
-    if (m.role === 'tool') {
-      // Tool results attach to the most recent assistant message.
-      const last = out[out.length - 1];
-      if (last && last.role === 'assistant' && m.parts) {
-        const parts = Array.isArray(m.parts) ? m.parts : [m.parts];
-        for (const p of parts) {
-          if (p && typeof p === 'object') {
-            last.parts.push(p as UiMessage['parts'][number]);
-          }
-        }
-      }
-      continue;
-    }
+    if (m.role === 'tool') continue;
     if (m.role === 'user') {
       out.push({ id: m.id, role: 'user', parts: [{ type: 'text', text: m.content }] });
       continue;
     }
-    // assistant
-    const parts = Array.isArray(m.parts) ? (m.parts as UiMessage['parts']) : [];
+    const parts = Array.isArray(m.parts) ? (m.parts as UiMessagePart[]) : [];
     if (parts.length === 0 && m.content) {
       parts.push({ type: 'text', text: m.content });
     }
@@ -431,7 +422,7 @@ function MessageBubble({ message }: { message: UiMessage }) {
   );
 }
 
-function renderPart(part: UiMessage['parts'][number], i: number): ReactNode {
+function renderPart(part: UiMessagePart, i: number): ReactNode {
   if (part.type === 'text') {
     const text = (part as { text: string }).text;
     if (!text) return null;
@@ -441,19 +432,32 @@ function renderPart(part: UiMessage['parts'][number], i: number): ReactNode {
       </div>
     );
   }
-  if (part.type === 'tool-call') {
-    const p = part as { toolName: string; input: unknown };
-    return <ToolCallCard key={i} kind="call" toolName={p.toolName} payload={p.input} />;
-  }
-  if (part.type === 'tool-result') {
-    const p = part as { toolName?: string; output: unknown };
-    return <ToolCallCard key={i} kind="result" toolName={p.toolName ?? 'result'} payload={p.output} />;
+  if (isToolPart(part)) {
+    return <ToolInvocationCard key={i} part={part} />;
   }
   return null;
 }
 
-function ToolCallCard({ kind, toolName, payload }: { kind: 'call' | 'result'; toolName: string; payload: unknown }) {
+/**
+ * A single UIMessage tool part progresses through states — we render
+ * a single card whose contents (and status pill) change with state,
+ * rather than emitting two separate call/result cards.
+ *
+ * Output can arrive as the raw value OR as a ToolResultOutput wrapper
+ * `{ type: 'json' | 'text', value }` depending on where in the SDK
+ * the value crossed a wire boundary. We unwrap once so the payload
+ * viewer always sees the actual data.
+ */
+function ToolInvocationCard({ part }: { part: ToolPart }) {
   const [open, setOpen] = useState(false);
+  const state = part.state;
+  const isFinal = state === 'output-available' || state === 'output-error';
+  const label = part.toolName || 'tool';
+
+  const [pillColor, pillText] = pillFor(state);
+
+  const unwrappedOutput = unwrapToolResultOutput(part.output);
+
   return (
     <div className="overflow-hidden rounded-md border border-neutral-200 bg-neutral-50/60 dark:border-neutral-800 dark:bg-neutral-950/40">
       <button
@@ -461,19 +465,76 @@ function ToolCallCard({ kind, toolName, payload }: { kind: 'call' | 'result'; to
         onClick={() => setOpen((v) => !v)}
         className="flex w-full items-center gap-2 px-2 py-1 text-left text-[11px] font-mono text-neutral-600 hover:bg-neutral-100 dark:text-neutral-300 dark:hover:bg-neutral-900"
       >
-        <span className={kind === 'call' ? 'text-violet-600 dark:text-violet-400' : 'text-emerald-600 dark:text-emerald-400'}>
-          {kind === 'call' ? '→' : '←'}
+        <span className="text-violet-600 dark:text-violet-400">↳</span>
+        <span className="font-semibold">{label}</span>
+        <span className={`ml-2 rounded px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wider ${pillColor}`}>
+          {pillText}
         </span>
-        <span className="font-semibold">{toolName}</span>
+        {!isFinal && (
+          <span className="ml-2 inline-flex h-1.5 w-1.5 rounded-full bg-violet-500 animate-pulse" aria-hidden />
+        )}
         <span className="ml-auto text-[10px] text-neutral-400">{open ? '−' : '+'}</span>
       </button>
       {open && (
-        <div className="border-t border-neutral-200 p-2 dark:border-neutral-800">
-          <ToolPayload value={payload} />
+        <div className="space-y-2 border-t border-neutral-200 p-2 dark:border-neutral-800">
+          {part.input !== undefined && (
+            <section>
+              <div className="mb-1 text-[9.5px] font-medium uppercase tracking-wider text-neutral-400 dark:text-neutral-500">
+                Input
+              </div>
+              <ToolPayload value={part.input} />
+            </section>
+          )}
+          {state === 'output-error' && part.errorText && (
+            <section>
+              <div className="mb-1 text-[9.5px] font-medium uppercase tracking-wider text-red-500">
+                Error
+              </div>
+              <div className="rounded-md border border-red-200 bg-red-50 px-2 py-1.5 text-xs text-red-700 dark:border-red-900/40 dark:bg-red-950/40 dark:text-red-300">
+                {part.errorText}
+              </div>
+            </section>
+          )}
+          {state === 'output-available' && (
+            <section>
+              <div className="mb-1 text-[9.5px] font-medium uppercase tracking-wider text-neutral-400 dark:text-neutral-500">
+                Result
+              </div>
+              <ToolPayload value={unwrappedOutput} />
+            </section>
+          )}
         </div>
       )}
     </div>
   );
+}
+
+function pillFor(state: ToolPart['state']): [string, string] {
+  switch (state) {
+    case 'input-streaming':
+      return ['bg-neutral-200 text-neutral-600 dark:bg-neutral-800 dark:text-neutral-300', 'building'];
+    case 'input-available':
+      return ['bg-violet-100 text-violet-700 dark:bg-violet-950 dark:text-violet-300', 'running'];
+    case 'output-available':
+      return ['bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300', 'done'];
+    case 'output-error':
+      return ['bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300', 'error'];
+    default:
+      return ['bg-neutral-200 text-neutral-600 dark:bg-neutral-800 dark:text-neutral-300', String(state)];
+  }
+}
+
+/**
+ * SDK ToolResultOutput wraps raw values as `{ type: 'json' | 'text', value }`
+ * at some boundaries. Unwrap once so callers see the raw value.
+ */
+function unwrapToolResultOutput(value: unknown): unknown {
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    const obj = value as { type?: unknown; value?: unknown; text?: unknown };
+    if (obj.type === 'json' && 'value' in obj) return obj.value;
+    if (obj.type === 'text' && typeof obj.text === 'string') return obj.text;
+  }
+  return value;
 }
 
 /**
@@ -488,20 +549,14 @@ function CookingIndicator({ messages }: { messages: UiMessage[] }) {
   const last = messages[messages.length - 1];
   let label = 'Thinking';
   if (last && last.role === 'assistant' && last.parts.length > 0) {
-    const calls = new Map<string, { name: string }>();
-    const resolved = new Set<string>();
-    for (const p of last.parts) {
-      if (p.type === 'tool-call') {
-        const tc = p as { toolCallId: string; toolName: string };
-        calls.set(tc.toolCallId, { name: tc.toolName });
-      } else if (p.type === 'tool-result') {
-        const tr = p as { toolCallId: string };
-        resolved.add(tr.toolCallId);
-      }
-    }
-    const pending = [...calls.entries()].find(([id]) => !resolved.has(id));
-    if (pending) {
-      label = `Calling ${pending[1].name}`;
+    // Find any tool part not yet at a terminal state — that's what
+    // the model is waiting on right now.
+    const pendingTool = [...last.parts].reverse().find((p) => {
+      if (!isToolPart(p)) return false;
+      return p.state === 'input-streaming' || p.state === 'input-available';
+    }) as ToolPart | undefined;
+    if (pendingTool) {
+      label = `Calling ${pendingTool.toolName || 'tool'}`;
     } else {
       const lastPart = last.parts[last.parts.length - 1];
       if (lastPart?.type === 'text') label = 'Writing';

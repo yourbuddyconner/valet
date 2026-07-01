@@ -262,35 +262,30 @@ copilotRouter.post('/chat', zValidator('json', chatBodySchema), async (c) => {
     // having to be reprompted on the client side. Capped to keep cost
     // bounded.
     stopWhen: stepCountIs(8),
-    onFinish: async ({ response }) => {
-      // Persist the assistant turn (and any tool calls/results) so the
-      // thread can be replayed on reload. Append-only: never mutates
-      // earlier messages so the cache prefix stays stable.
-      // Content is persisted in the SDK's canonical shape — the same
-      // shape the streaming wire uses — so the client renders live and
-      // reloaded messages through one code path.
-      for (const msg of response.messages) {
-        if (msg.role === 'assistant' || msg.role === 'tool') {
-          const parts = Array.isArray(msg.content) ? msg.content : [];
-          const textContent = typeof msg.content === 'string'
-            ? msg.content
-            : parts
-                .filter((p): p is { type: 'text'; text: string } => p.type === 'text' && typeof (p as { text?: unknown }).text === 'string')
-                .map((p) => p.text)
-                .join('\n');
-          await appendCopilotMessage(db, thread!.id, {
-            role: msg.role,
-            content: textContent,
-            parts: parts.length > 0 ? parts : msg.content,
-          });
-        }
-      }
-    },
   });
 
-  // toUIMessageStreamResponse pipes the UI-message stream the Vercel AI
-  // SDK client expects (useChat hook).
-  const streamResp = result.toUIMessageStreamResponse();
+  // Persist via the UI-message stream's onFinish. This gives us
+  // `responseMessage.parts` in the canonical UIMessage shape — one
+  // unified tool part per invocation (with state, input, output) —
+  // which is exactly what the client renders both live and on reload.
+  // Persisting ModelMessage content (previous approach) split tool
+  // calls across assistant+tool roles and dropped the tool-name from
+  // tool-result parts, so reloaded conversations lost half the picture.
+  const threadId = thread.id;
+  const streamResp = result.toUIMessageStreamResponse({
+    onFinish: async ({ responseMessage }) => {
+      const parts = Array.isArray(responseMessage.parts) ? responseMessage.parts : [];
+      const textContent = parts
+        .filter((p): p is { type: 'text'; text: string } => p.type === 'text' && typeof (p as { text?: unknown }).text === 'string')
+        .map((p) => p.text)
+        .join('\n');
+      await appendCopilotMessage(db, threadId, {
+        role: 'assistant',
+        content: textContent,
+        parts,
+      });
+    },
+  });
   // Tag the thread id on the response so the client can persist it.
   streamResp.headers.set('X-Copilot-Thread-Id', thread.id);
   return streamResp;
