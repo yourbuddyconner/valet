@@ -179,9 +179,10 @@ export const MermaidBlock = memo(function MermaidBlock({ children }: MermaidBloc
           </code>
         </pre>
       ) : svg ? (
+        // TODO: add on-screen +/- zoom buttons for touch
         <div
           ref={containerRef}
-          className="relative overflow-hidden bg-white dark:bg-neutral-900"
+          className="relative touch-none overflow-hidden bg-white dark:bg-neutral-900"
           style={{ cursor: dragging.current ? 'grabbing' : 'grab', minHeight: 120 }}
           onPointerDown={handlePointerDown}
           onPointerMove={handlePointerMove}

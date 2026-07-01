@@ -71,6 +71,15 @@ const components: Components = {
       </code>
     );
   },
+  // Wrap GFM tables so wide tables scroll horizontally within the message
+  // column instead of pushing the whole assistant turn past the viewport.
+  table({ children, ...rest }) {
+    return (
+      <div className="max-w-full overflow-x-auto">
+        <table {...rest}>{children}</table>
+      </div>
+    );
+  },
   img({ src, alt }) {
     return <MarkdownImage src={src} alt={alt} />;
   },

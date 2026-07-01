@@ -100,17 +100,21 @@ export async function saveDraft(
   const whereClause = opts?.expectedUpdatedAt !== undefined
     ? and(eq(workflows.id, workflowId), eq(workflows.updatedAt, opts.expectedUpdatedAt))
     : eq(workflows.id, workflowId);
-  const result = await db.update(workflows).set({
+  // Use RETURNING so we get a driver-portable row count: D1's .run() exposes
+  // meta.changes, better-sqlite3's exposes .changes at the top level, and
+  // Drizzle doesn't fully abstract that difference. .returning().all() gives
+  // us a length that works everywhere.
+  const updated = await db.update(workflows).set({
     draftDefinition: JSON.stringify(draft),
     ui: ui !== undefined ? JSON.stringify(ui) : undefined,
     updatedAt: nextUpdatedAt,
-  }).where(whereClause).run();
+  }).where(whereClause).returning({ id: workflows.id }).all();
 
   // No rows updated: either the workflow doesn't exist, or (when a CAS
   // baseline was given) the row's updated_at didn't match. Disambiguate
   // with one cheap lookup so callers can distinguish not_found from
   // conflict.
-  if (result.meta.changes === 0) {
+  if (updated.length === 0) {
     const existing = await db
       .select({ id: workflows.id, updatedAt: workflows.updatedAt })
       .from(workflows)

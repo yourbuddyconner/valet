@@ -436,7 +436,7 @@ function OrgReposSection() {
           Known repositories for your organization. You can assign a default persona to each repo.
         </p>
 
-        <form onSubmit={handleAdd} className="flex items-end gap-3">
+        <form onSubmit={handleAdd} className="flex flex-col gap-3 sm:flex-row sm:items-end">
           <div className="flex-1">
             <label htmlFor="repo-name" className="text-sm font-medium text-neutral-700 dark:text-neutral-300">
               Add repository
@@ -448,7 +448,7 @@ function OrgReposSection() {
               placeholder="owner/repo"
             />
           </div>
-          <Button type="submit" disabled={!fullName.includes('/') || createRepo.isPending}>
+          <Button type="submit" className="w-full sm:w-auto" disabled={!fullName.includes('/') || createRepo.isPending}>
             {createRepo.isPending ? 'Adding...' : 'Add'}
           </Button>
         </form>
@@ -466,7 +466,8 @@ function OrgReposSection() {
             ))}
           </div>
         ) : repos && repos.length > 0 ? (
-          <table className="w-full text-sm">
+          <div className="overflow-x-auto">
+          <table className="w-full min-w-[560px] text-sm">
             <thead>
               <tr className="border-b border-neutral-200 dark:border-neutral-700">
                 <th className="pb-2 text-left font-medium text-neutral-500 dark:text-neutral-400">Repository</th>
@@ -512,6 +513,7 @@ function OrgReposSection() {
               ))}
             </tbody>
           </table>
+          </div>
         ) : (
           <p className="text-sm text-neutral-500 dark:text-neutral-400">No repositories added yet.</p>
         )}
@@ -808,7 +810,7 @@ function OrchestratorsSection() {
                         className="inline-flex items-center gap-1.5 transition-colors hover:text-accent dark:hover:text-accent"
                         title="Click to copy"
                       >
-                        <span className="select-all">{orch.sandboxId}</span>
+                        <span className="inline-block max-w-[160px] truncate align-bottom select-all">{orch.sandboxId}</span>
                         <span className="text-[10px]">
                           {copiedSandboxId === orch.sandboxId ? '✓' : '⎘'}
                         </span>
@@ -1077,7 +1079,7 @@ function LLMKeyRow({ provider, label, isSet, models: existingModels, showAllMode
 
   return (
     <div className="space-y-2">
-      <div className="flex items-center gap-3">
+      <div className="flex flex-wrap items-center gap-3">
         <div className="w-24 text-sm font-medium text-neutral-700 dark:text-neutral-300">{label}</div>
         {editing ? (
           <>
@@ -1129,7 +1131,7 @@ function LLMKeyRow({ provider, label, isSet, models: existingModels, showAllMode
       )}
     </div>
     {showModelConfig && (
-      <div className="ml-[6.5rem] rounded-md border border-neutral-200 bg-neutral-50 p-3 dark:border-neutral-700 dark:bg-neutral-800/50">
+      <div className="ml-0 sm:ml-[6.5rem] rounded-md border border-neutral-200 bg-neutral-50 p-3 dark:border-neutral-700 dark:bg-neutral-800/50">
         <div className="mb-3 flex items-center gap-2">
           <label className="flex items-center gap-2 text-sm text-neutral-700 dark:text-neutral-300">
             <input
@@ -1393,7 +1395,7 @@ function ModelIdInput({
       {showDropdown && filtered.length > 0 && (
         <div
           ref={dropdownRef}
-          className="absolute z-20 mt-1 max-h-48 min-w-[360px] w-full overflow-auto rounded-md border border-neutral-200 bg-white shadow-lg dark:border-neutral-700 dark:bg-neutral-800"
+          className="absolute z-20 mt-1 max-h-48 w-full max-w-[calc(100vw-3rem)] overflow-auto rounded-md border border-neutral-200 bg-white shadow-lg dark:border-neutral-700 dark:bg-neutral-800"
         >
           {filtered.map((modelId, i) => (
             <button
@@ -1534,7 +1536,7 @@ function CustomProviderForm({
 
   return (
     <form onSubmit={handleSubmit} className="space-y-4 rounded-md border border-neutral-200 bg-neutral-50 p-4 dark:border-neutral-700 dark:bg-neutral-800/50">
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div>
           <label className="block text-sm font-medium text-neutral-700 dark:text-neutral-300">Provider ID</label>
           <input
@@ -1557,7 +1559,7 @@ function CustomProviderForm({
           />
         </div>
       </div>
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div>
           <label className="block text-sm font-medium text-neutral-700 dark:text-neutral-300">Base URL</label>
           <input
@@ -1633,7 +1635,7 @@ function CustomProviderForm({
                   -
                 </Button>
               </div>
-              <div className="mt-2 grid grid-cols-3 gap-2">
+              <div className="mt-2 grid grid-cols-1 sm:grid-cols-3 gap-2">
                 <div>
                   <label className="block text-xs text-neutral-500 dark:text-neutral-400 mb-1">Display name</label>
                   <input
@@ -1822,7 +1824,7 @@ function InvitesSection() {
           Create an invite link to share with anyone. They'll sign in with OAuth and join with the assigned role.
         </p>
 
-        <form onSubmit={handleCreate} className="flex items-end gap-3">
+        <form onSubmit={handleCreate} className="flex flex-col gap-3 sm:flex-row sm:items-end">
           <div>
             <label htmlFor="invite-role" className="text-sm font-medium text-neutral-700 dark:text-neutral-300">
               Role
@@ -1850,7 +1852,7 @@ function InvitesSection() {
               className={inputClass}
             />
           </div>
-          <Button type="submit" disabled={createInvite.isPending}>
+          <Button type="submit" className="w-full sm:w-auto" disabled={createInvite.isPending}>
             {createInvite.isPending ? 'Creating...' : 'Create Invite'}
           </Button>
         </form>
@@ -1885,7 +1887,8 @@ function InvitesSection() {
             ))}
           </div>
         ) : invites && invites.length > 0 ? (
-          <table className="w-full text-sm">
+          <div className="overflow-x-auto">
+          <table className="w-full min-w-[560px] text-sm">
             <thead>
               <tr className="border-b border-neutral-200 dark:border-neutral-700">
                 <th className="pb-2 text-left font-medium text-neutral-500 dark:text-neutral-400">Code</th>
@@ -1955,6 +1958,7 @@ function InvitesSection() {
               })}
             </tbody>
           </table>
+          </div>
         ) : (
           <p className="text-sm text-neutral-500 dark:text-neutral-400">No invites yet.</p>
         )}
@@ -1983,7 +1987,8 @@ function UsersSection({ currentUserId }: { currentUserId: string }) {
             ))}
           </div>
         ) : users && users.length > 0 ? (
-          <table className="w-full text-sm">
+          <div className="overflow-x-auto">
+          <table className="w-full min-w-[560px] text-sm">
             <thead>
               <tr className="border-b border-neutral-200 dark:border-neutral-700">
                 <th className="pb-2 text-left font-medium text-neutral-500 dark:text-neutral-400">User</th>
@@ -2060,6 +2065,7 @@ function UsersSection({ currentUserId }: { currentUserId: string }) {
               })}
             </tbody>
           </table>
+          </div>
         ) : (
           <p className="text-sm text-neutral-500 dark:text-neutral-400">No users found.</p>
         )}
@@ -2334,7 +2340,7 @@ function PluginsSection() {
                     <button
                       type="button"
                       onClick={() => hasExpandable ? setExpandedId(isExpanded ? null : plugin.id) : undefined}
-                      className={`flex flex-1 items-center gap-3 text-left ${hasExpandable ? 'cursor-pointer' : 'cursor-default'}`}
+                      className={`flex flex-1 flex-wrap items-center gap-x-3 gap-y-1.5 text-left sm:flex-nowrap ${hasExpandable ? 'cursor-pointer' : 'cursor-default'}`}
                       disabled={!hasExpandable}
                       aria-expanded={hasExpandable ? isExpanded : undefined}
                     >
@@ -2344,17 +2350,17 @@ function PluginsSection() {
                           {isCustomConnector ? plugin.description || plugin.name : plugin.name}
                         </span>
                         {isCustomConnector ? (
-                          <span className="text-xs text-neutral-400 dark:text-neutral-500 truncate max-w-xs">
+                          <span className="text-xs text-neutral-400 dark:text-neutral-500 truncate max-w-[140px] sm:max-w-xs">
                             {plugin.name}
                           </span>
                         ) : plugin.description ? (
-                          <span className="text-xs text-neutral-400 dark:text-neutral-500 truncate max-w-xs">
+                          <span className="text-xs text-neutral-400 dark:text-neutral-500 truncate max-w-[140px] sm:max-w-xs">
                             {plugin.description}
                           </span>
                         ) : null}
                       </div>
 
-                      <div className="flex items-center gap-2 ml-auto">
+                      <div className="flex flex-wrap items-center gap-1.5 ml-auto">
                         {/* Capability badges */}
                         <div className="flex flex-wrap gap-1">
                           {plugin.capabilities.map((cap) => (
@@ -2503,7 +2509,8 @@ function PluginExpandedDetail({
               Actions ({actions.length})
             </span>
           </div>
-          <table className="w-full text-sm">
+          <div className="overflow-x-auto">
+          <table className="w-full min-w-[640px] text-sm">
             <thead>
               <tr className="border-b border-neutral-200 dark:border-neutral-700">
                 <th className="w-10 px-4 py-1.5" />
@@ -2547,6 +2554,7 @@ function PluginExpandedDetail({
               })}
             </tbody>
           </table>
+          </div>
         </div>
       )}
 

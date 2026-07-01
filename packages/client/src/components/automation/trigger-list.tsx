@@ -528,11 +528,11 @@ export function TriggerList() {
 
       {/* Toolbar */}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div className="flex items-center gap-3">
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-3">
           <div className="w-full sm:w-64">
             <SearchInput value={search} onChange={setSearch} placeholder="Search triggers..." />
           </div>
-          <div className="flex gap-1">
+          <div className="flex flex-wrap gap-1">
             {TYPE_FILTERS.map((option) => (
               <button
                 key={option.value}
@@ -660,16 +660,16 @@ export function TriggerList() {
                     </td>
                     <td className="px-4 py-3">
                       <div className="flex items-center justify-end gap-1.5">
-                        <Button size="sm" variant="ghost" onClick={() => onRun(trigger)} disabled={busy}>
+                        <Button size="sm" variant="ghost" onClick={() => onRun(trigger)} disabled={busy} className="min-h-[44px] min-w-[44px] md:min-h-0 md:min-w-0">
                           <PlayIcon className="size-3.5" />
                         </Button>
-                        <Button size="sm" variant="ghost" onClick={() => onToggleEnabled(trigger)} disabled={busy}>
+                        <Button size="sm" variant="ghost" onClick={() => onToggleEnabled(trigger)} disabled={busy} className="min-h-[44px] min-w-[44px] md:min-h-0 md:min-w-0">
                           {trigger.enabled ? <PauseIcon className="size-3.5" /> : <PlayCircleIcon className="size-3.5" />}
                         </Button>
-                        <Button size="sm" variant="ghost" onClick={() => openEditDialog(trigger)} disabled={busy}>
+                        <Button size="sm" variant="ghost" onClick={() => openEditDialog(trigger)} disabled={busy} className="min-h-[44px] min-w-[44px] md:min-h-0 md:min-w-0">
                           <EditIcon className="size-3.5" />
                         </Button>
-                        <Button size="sm" variant="ghost" onClick={() => onDelete(trigger)} disabled={busy} className="text-red-500 hover:text-red-600">
+                        <Button size="sm" variant="ghost" onClick={() => onDelete(trigger)} disabled={busy} className="min-h-[44px] min-w-[44px] text-red-500 hover:text-red-600 md:min-h-0 md:min-w-0">
                           <TrashIcon className="size-3.5" />
                         </Button>
                       </div>

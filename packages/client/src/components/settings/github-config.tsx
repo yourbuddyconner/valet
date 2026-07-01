@@ -222,7 +222,7 @@ function AppSetupForm() {
           <div className="space-y-3 rounded-md border border-neutral-200 bg-neutral-50 p-3 dark:border-neutral-700 dark:bg-neutral-800/50">
             <div>
               <p className="mb-2 text-xs font-medium text-neutral-600 dark:text-neutral-400">Permissions</p>
-              <div className="grid grid-cols-2 gap-1.5">
+              <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">
                 {AVAILABLE_PERMISSIONS.map((perm) => {
                   const current = permissions[perm.key];
                   return (
@@ -255,7 +255,7 @@ function AppSetupForm() {
             </div>
             <div>
               <p className="mb-2 text-xs font-medium text-neutral-600 dark:text-neutral-400">Events</p>
-              <div className="grid grid-cols-3 gap-1.5">
+              <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-3">
                 {AVAILABLE_EVENTS.map((event) => (
                   <label key={event} className="flex items-center gap-1.5 text-xs text-neutral-700 dark:text-neutral-300">
                     <input

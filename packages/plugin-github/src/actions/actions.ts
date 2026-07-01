@@ -369,6 +369,43 @@ const githubReadRepoFileSchema = {
   },
 } satisfies Record<string, unknown>;
 
+const githubDependabotAlertSummarySchema = {
+  type: 'object',
+  properties: {
+    number: { type: 'number' },
+    state: { type: 'string' },
+    severity: { type: ['string', 'null'] },
+    summary: { type: ['string', 'null'] },
+    package: { type: ['string', 'null'] },
+    ecosystem: { type: ['string', 'null'] },
+    manifest_path: { type: ['string', 'null'] },
+    ghsa_id: { type: ['string', 'null'] },
+    cve_id: { type: ['string', 'null'] },
+    url: { type: 'string' },
+    created_at: { type: 'string' },
+    updated_at: { type: ['string', 'null'] },
+    dismissed_at: { type: ['string', 'null'] },
+    fixed_at: { type: ['string', 'null'] },
+    repository: { type: ['string', 'null'] },
+  },
+} satisfies Record<string, unknown>;
+
+const githubListDependabotAlertsSchema = {
+  type: 'object',
+  properties: {
+    count: { type: 'number' },
+    alerts: { type: 'array', items: githubDependabotAlertSummarySchema },
+  },
+} satisfies Record<string, unknown>;
+
+// The single-alert endpoint returns the full Octokit payload; declare it as
+// a permissive object so downstream schemas can be tightened later without
+// blocking the presence-of-output-schema test.
+const githubDependabotAlertDetailSchema = {
+  type: 'object',
+  additionalProperties: true,
+} satisfies Record<string, unknown>;
+
 // ─── Octokit + Attribution Helpers ──────────────────────────────────────────
 
 function getOctokit(ctx: ActionContext): Octokit {
@@ -885,6 +922,7 @@ const listDependabotAlerts: ActionDefinition = {
     direction: z.enum(['asc', 'desc']).optional().describe('Sort direction (default: desc)'),
     limit: z.number().int().min(1).max(100).optional().describe('Max results (default: 30)'),
   }),
+  outputSchema: githubListDependabotAlertsSchema,
 };
 
 const getDependabotAlert: ActionDefinition = {
@@ -897,6 +935,7 @@ const getDependabotAlert: ActionDefinition = {
     repo: z.string().describe('Repository name'),
     alert_number: z.number().int().describe('Dependabot alert number'),
   }),
+  outputSchema: githubDependabotAlertDetailSchema,
 };
 
 const allActions: ActionDefinition[] = [

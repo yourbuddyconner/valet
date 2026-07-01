@@ -70,7 +70,7 @@ function ParamValue({ value }: { value: unknown }) {
 
   if (typeof value === 'string') {
     if (looksLikeId(value)) {
-      return <code className="rounded bg-neutral-100 px-1 py-0.5 font-mono text-xs dark:bg-neutral-800">{value}</code>;
+      return <code className="break-all rounded bg-neutral-100 px-1 py-0.5 font-mono text-xs dark:bg-neutral-800">{value}</code>;
     }
     if (value.length > 200 && looksLikeMarkdown(value)) {
       return (
@@ -80,7 +80,7 @@ function ParamValue({ value }: { value: unknown }) {
       );
     }
     if (value.length > 200) {
-      return <span className="text-xs">{value.slice(0, 200)}&hellip;</span>;
+      return <span className="break-words text-xs">{value.slice(0, 200)}&hellip;</span>;
     }
     return <span className="text-xs">{value}</span>;
   }
@@ -443,7 +443,7 @@ export function InteractivePromptCard({
             ))}
           </div>
           {!isApproval && (
-            <form onSubmit={handleFreeformSubmit} className="flex gap-2">
+            <form onSubmit={handleFreeformSubmit} className="flex flex-col gap-2 sm:flex-row">
               <input
                 type="text"
                 value={freeformValue}
@@ -452,14 +452,14 @@ export function InteractivePromptCard({
                 placeholder="Or type your own answer..."
                 className="flex-1 rounded-md border border-neutral-300 bg-surface-0 px-2.5 py-1.5 text-[13px] text-neutral-900 focus:outline-none focus:ring-2 focus:ring-amber-400/40 dark:border-neutral-600 dark:bg-surface-1 dark:text-neutral-100"
               />
-              <Button type="submit" size="sm" variant="outline" disabled={isSubmitted || !freeformValue.trim()}>
+              <Button type="submit" size="sm" variant="outline" className="w-full sm:w-auto" disabled={isSubmitted || !freeformValue.trim()}>
                 Answer
               </Button>
             </form>
           )}
         </div>
       ) : (
-        <form onSubmit={handleFreeformSubmit} className="mt-3 flex gap-2">
+        <form onSubmit={handleFreeformSubmit} className="mt-3 flex flex-col gap-2 sm:flex-row">
           <input
             type="text"
             value={freeformValue}
@@ -468,7 +468,7 @@ export function InteractivePromptCard({
             className="flex-1 rounded-md border border-neutral-300 bg-surface-0 px-2.5 py-1.5 text-[13px] text-neutral-900 focus:outline-none focus:ring-2 focus:ring-amber-400/40 dark:border-neutral-600 dark:bg-surface-1 dark:text-neutral-100"
             autoFocus
           />
-          <Button type="submit" size="sm" disabled={!freeformValue.trim()}>
+          <Button type="submit" size="sm" className="w-full sm:w-auto" disabled={!freeformValue.trim()}>
             Answer
           </Button>
         </form>

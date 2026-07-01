@@ -361,8 +361,8 @@ function IdentityLinksSection() {
         {isLoading ? (
           <div className="text-sm text-neutral-400 dark:text-neutral-500">Loading...</div>
         ) : links && links.length > 0 ? (
-          <div className="overflow-hidden rounded-lg border border-neutral-200 dark:border-neutral-700">
-            <table className="w-full text-sm">
+          <div className="overflow-x-auto rounded-lg border border-neutral-200 dark:border-neutral-700">
+            <table className="w-full min-w-[520px] text-sm">
               <thead>
                 <tr className="border-b border-neutral-200 bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-800/50">
                   <th className="px-4 py-2.5 text-left font-medium text-neutral-500 dark:text-neutral-400">Provider</th>
@@ -975,8 +975,8 @@ function NotificationPreferencesSection() {
           Choose how you receive notifications by message type and event category.
         </p>
 
-        <div className="overflow-hidden rounded-lg border border-neutral-200 dark:border-neutral-700">
-          <table className="w-full text-sm">
+        <div className="overflow-x-auto rounded-lg border border-neutral-200 dark:border-neutral-700">
+          <table className="w-full min-w-[520px] text-sm">
             <thead>
               <tr className="border-b border-neutral-200 bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-800/50">
                 <th className="px-4 py-2.5 text-left font-medium text-neutral-500 dark:text-neutral-400">

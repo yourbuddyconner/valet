@@ -496,6 +496,8 @@ const sendMessage: ActionDefinition = {
     text: z.string().describe('Message body. Supports Slack mrkdwn formatting (bold: *text*, italic: _text_, code: `code`, links: <url|label>).'),
     thread_ts: z.string().optional().describe('Post as a threaded reply under an existing message. Use the ts value returned by a previous send_message call (e.g. "1780887543.189519").'),
     blocks: z.string().optional().describe('Block Kit JSON array as a string for rich formatting. When provided, text is used as the notification fallback only.'),
+    unfurl_links: z.boolean().optional().describe('Whether Slack shows link-preview "unfurls" for URLs in the message. Omit to keep Slack\'s default (previews on). Set false to suppress link previews — e.g. when posting a batch of Linear/GitHub/Jira links you do not want each to expand into a card.'),
+    unfurl_media: z.boolean().optional().describe('Whether Slack unfurls media (images, video, rich media) linked in the message. Omit to keep Slack\'s default (on). Set false alongside unfurl_links to fully suppress embeds.'),
   }),
   outputSchema: slackPostMessageOutputSchema,
 };
@@ -907,6 +909,9 @@ async function executeAction(
             return { success: false, error: 'blocks must be valid JSON' };
           }
         }
+
+        if (p.unfurl_links !== undefined) body.unfurl_links = p.unfurl_links;
+        if (p.unfurl_media !== undefined) body.unfurl_media = p.unfurl_media;
 
         if (ctx.callerIdentity?.name) body.username = ctx.callerIdentity.name;
         if (ctx.callerIdentity?.avatar) body.icon_url = ctx.callerIdentity.avatar;

@@ -468,3 +468,69 @@ describe('slackActions usergroups', () => {
     expect(mocks.slackFetch).not.toHaveBeenCalled();
   });
 });
+
+describe('slackActions send_message', () => {
+  beforeEach(() => {
+    mocks.slackGet.mockReset();
+    mocks.slackFetch.mockReset();
+  });
+
+  // guardPrivateChannel calls conversations.info via slackGet before posting;
+  // a public channel passes the guard so the chat.postMessage body can be asserted.
+  function mockPublicChannel(): void {
+    mocks.slackGet.mockResolvedValueOnce(slackResponse({ channel: { is_private: false } }));
+  }
+
+  it('does not set unfurl flags when the params are omitted', async () => {
+    mockPublicChannel();
+    mocks.slackFetch.mockResolvedValueOnce(slackResponse({ ts: '1780887543.189519', channel: 'C001' }));
+
+    const result = await slackActions.execute('slack.send_message', {
+      channel: 'C001',
+      text: 'hello',
+    }, actionContext());
+
+    expect(result).toEqual({
+      success: true,
+      data: { ok: true, ts: '1780887543.189519', channel: 'C001' },
+    });
+    const body = mocks.slackFetch.mock.calls[0][2] as Record<string, unknown>;
+    expect(body).toEqual({ channel: 'C001', text: 'hello' });
+    expect(body).not.toHaveProperty('unfurl_links');
+    expect(body).not.toHaveProperty('unfurl_media');
+  });
+
+  it('forwards unfurl_links=false to chat.postMessage to suppress link embeds', async () => {
+    mockPublicChannel();
+    mocks.slackFetch.mockResolvedValueOnce(slackResponse({ ts: '1780887543.189519', channel: 'C001' }));
+
+    await slackActions.execute('slack.send_message', {
+      channel: 'C001',
+      text: 'VALET-123 https://linear.app/acme/issue/VALET-123',
+      unfurl_links: false,
+      unfurl_media: false,
+    }, actionContext());
+
+    expect(mocks.slackFetch).toHaveBeenCalledWith('chat.postMessage', 'xoxb-token', {
+      channel: 'C001',
+      text: 'VALET-123 https://linear.app/acme/issue/VALET-123',
+      unfurl_links: false,
+      unfurl_media: false,
+    });
+  });
+
+  it('forwards unfurl_links=true when explicitly requested', async () => {
+    mockPublicChannel();
+    mocks.slackFetch.mockResolvedValueOnce(slackResponse({ ts: '1780887543.189519', channel: 'C001' }));
+
+    await slackActions.execute('slack.send_message', {
+      channel: 'C001',
+      text: 'check this out https://example.com',
+      unfurl_links: true,
+    }, actionContext());
+
+    const body = mocks.slackFetch.mock.calls[0][2] as Record<string, unknown>;
+    expect(body.unfurl_links).toBe(true);
+    expect(body).not.toHaveProperty('unfurl_media');
+  });
+});

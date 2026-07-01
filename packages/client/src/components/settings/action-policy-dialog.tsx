@@ -387,7 +387,7 @@ function RiskLevelCards({
   ] as const;
 
   return (
-    <div className="grid grid-cols-4 gap-2">
+    <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
       {levels.map((level) => {
         const colors = riskColors[level.id];
         const selected = value === level.id;

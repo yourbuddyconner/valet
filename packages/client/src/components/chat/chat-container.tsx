@@ -556,7 +556,7 @@ export function ChatContainer({ sessionId, routeSessionId, initialThreadId, init
         <ChatSkeleton />
       ) : (
         <div className="flex min-h-0 flex-1 flex-row">
-          {isOrchestrator && (
+          {isOrchestrator && !isMobile && (
             <Suspense fallback={<ThreadSidebarFallback />}>
               <ThreadSidebar
                 sessionId={sessionId}
