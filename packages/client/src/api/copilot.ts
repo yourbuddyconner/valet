@@ -8,8 +8,10 @@
  * message shape directly.
  */
 import { useQuery } from '@tanstack/react-query';
-import { useState, useCallback, useRef } from 'react';
+import { useState, useCallback, useRef, useEffect } from 'react';
 import { api } from './client';
+import { useAuthStore } from '@/stores/auth';
+import { router } from '@/app';
 
 export const copilotKeys = {
   all: ['copilot'] as const,
@@ -118,6 +120,32 @@ export function useCopilotChat(opts: UseCopilotChatOptions) {
   const [status, setStatus] = useState<'idle' | 'streaming' | 'error'>('idle');
   const [error, setError] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  // Abort any in-flight stream when the hook unmounts. Without this
+  // every thread switch / panel close / route change during an active
+  // stream leaks the network request and keeps calling setState on a
+  // dead instance.
+  useEffect(() => {
+    return () => {
+      abortRef.current?.abort();
+    };
+  }, []);
+
+  // useState captures initialMessages once at mount, so if this hook's
+  // parent renders us before the messages query resolved (typical on a
+  // cache miss — first visit to a thread), the persisted history would
+  // be silently dropped. Sync it in once when the messages transition
+  // from empty to a real list.
+  const bootstrappedRef = useRef(false);
+  useEffect(() => {
+    if (bootstrappedRef.current) return;
+    if (!opts.initialMessages || opts.initialMessages.length === 0) return;
+    if (messages.length > 0) {
+      bootstrappedRef.current = true;
+      return;
+    }
+    bootstrappedRef.current = true;
+    setMessages(opts.initialMessages);
+  }, [opts.initialMessages, messages.length]);
 
   const send = useCallback(async (text: string) => {
     if (!text.trim() || status === 'streaming') return;
@@ -156,6 +184,14 @@ export function useCopilotChat(opts: UseCopilotChatOptions) {
       });
 
       if (!resp.ok) {
+        // Auth expiry: replicate the apiClient behaviour — clear auth
+        // state and bounce to /login. Otherwise the user gets stuck on
+        // the editor with a "session expired" toast and no recovery.
+        if (resp.status === 401) {
+          useAuthStore.getState().clearAuth();
+          void router.navigate({ to: '/login' });
+          return;
+        }
         const body = await resp.text().catch(() => '');
         let friendly = body || `HTTP ${resp.status}`;
         try {
@@ -176,7 +212,16 @@ export function useCopilotChat(opts: UseCopilotChatOptions) {
       const newThreadId = resp.headers.get('X-Copilot-Thread-Id');
       if (newThreadId && newThreadId !== threadId) setThreadId(newThreadId);
 
+      let streamError: string | null = null;
       await consumeUiStream(resp.body!, (chunk) => {
+        // Stream-level errors (rate limit, refusal, context overflow)
+        // arrive as their own chunk. Surface them to the hook state
+        // instead of silently dropping — otherwise the assistant
+        // bubble just goes quiet.
+        if (chunk.kind === 'stream-error') {
+          streamError = chunk.errorText || 'stream ended with an error';
+          return;
+        }
         setMessages((prev) => {
           const last = prev[prev.length - 1];
           if (!last || last.role !== 'assistant') return prev;
@@ -184,7 +229,12 @@ export function useCopilotChat(opts: UseCopilotChatOptions) {
           return [...prev.slice(0, -1), updated];
         });
       });
-      setStatus('idle');
+      if (streamError) {
+        setStatus('error');
+        setError(streamError);
+      } else {
+        setStatus('idle');
+      }
     } catch (err) {
       if (ac.signal.aborted) {
         setStatus('idle');
@@ -228,7 +278,14 @@ type StreamChunk =
   | { kind: 'tool-input-delta'; toolCallId: string; delta: string }
   | { kind: 'tool-input-available'; toolCallId: string; toolName: string; input: unknown; dynamic?: boolean }
   | { kind: 'tool-output-available'; toolCallId: string; output: unknown }
-  | { kind: 'tool-output-error'; toolCallId: string; errorText: string };
+  | { kind: 'tool-output-error'; toolCallId: string; errorText: string }
+  // The SDK also emits `tool-input-error` (malformed / rejected input)
+  // and a stream-level `error` chunk (rate limit, refusal, context
+  // overflow). If we don't consume these the tool card stays stuck in
+  // input-streaming state and mid-stream failures produce no user
+  // feedback.
+  | { kind: 'tool-input-error'; toolCallId: string; errorText: string }
+  | { kind: 'stream-error'; errorText: string };
 
 async function consumeUiStream(
   body: ReadableStream<Uint8Array>,
@@ -311,6 +368,17 @@ function decodeChunk(chunk: Record<string, unknown>): StreamChunk | null {
         toolCallId: (chunk.toolCallId ?? '') as string,
         errorText: (chunk.errorText ?? '') as string,
       };
+    case 'tool-input-error':
+      return {
+        kind: 'tool-input-error',
+        toolCallId: (chunk.toolCallId ?? '') as string,
+        errorText: (chunk.errorText ?? '') as string,
+      };
+    case 'error':
+      return {
+        kind: 'stream-error',
+        errorText: (chunk.errorText ?? chunk.error ?? '') as string,
+      };
     default:
       return null;
   }
@@ -382,6 +450,28 @@ function applyStreamChunk(msg: UiMessage, chunk: StreamChunk): UiMessage {
       parts[idx] = { ...existing, state: 'output-error', errorText: chunk.errorText };
       break;
     }
+    case 'tool-input-error': {
+      // Malformed / rejected input — treat as a terminal error state
+      // so the tool card stops streaming its pulse and renders the
+      // reason. Reuses the same `output-error` render slot.
+      const idx = findToolPart(parts, chunk.toolCallId);
+      if (idx === -1) {
+        parts.push(buildDynamicToolPart({
+          toolCallId: chunk.toolCallId,
+          toolName: '',
+          state: 'output-error',
+          errorText: chunk.errorText,
+        }));
+      } else {
+        const existing = parts[idx] as ToolPart;
+        parts[idx] = { ...existing, state: 'output-error', errorText: chunk.errorText };
+      }
+      break;
+    }
+    case 'stream-error':
+      // Surface to hook state via the switch above the applyStreamChunk
+      // call; nothing to do at the part level.
+      break;
   }
   return { ...msg, parts };
 }

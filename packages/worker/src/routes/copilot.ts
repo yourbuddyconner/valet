@@ -8,10 +8,10 @@ import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import type { Env, Variables } from '../env.js';
 import { NotFoundError, ValidationError } from '@valet/shared';
 import { getWorkflowByIdOrSlug } from '../lib/db.js';
-import { getDraft, saveDraft } from '../services/workflow-versions.js';
+import { getDraft, saveDraft, getWorkflowUpdatedAt } from '../services/workflow-versions.js';
 import { isWorkflowDefinition } from '../lib/workflow-dag/schema.js';
 import { validateDefinition, validateAgainstEnvironment } from '../lib/workflow-dag/validator.js';
-import { applyOpsLenient, type WorkflowOp } from '../services/workflow-ops.js';
+import { applyOpsLenient } from '../services/workflow-ops.js';
 import { getWorkflowSchemaReference } from '../services/workflow-schema-reference.js';
 import { resolveAvailableModels } from '../services/model-catalog.js';
 import {
@@ -64,6 +64,18 @@ copilotRouter.delete('/threads/:threadId', async (c) => {
 // Chat streaming
 // ────────────────────────────────────────────────────────────────────────
 
+/**
+ * Minimal shape guard for AI SDK v6 UIMessage — matches the fields we
+ * actually read (`role`, `parts`, `id`) without pulling in the SDK's
+ * full generic type in a Zod-friendly way.
+ */
+const uiMessageSchema = z.object({
+  id: z.string().optional(),
+  role: z.enum(['user', 'assistant', 'system']),
+  parts: z.array(z.record(z.unknown())).optional(),
+  metadata: z.unknown().optional(),
+}).passthrough();
+
 const chatBodySchema = z.object({
   // All three accept null because the client sends them through
   // JSON.stringify which preserves `null` for unset fields, and a fresh
@@ -71,8 +83,7 @@ const chatBodySchema = z.object({
   workflowId: z.string().min(1).nullish(),
   threadId: z.string().min(1).nullish(),
   model: z.string().min(1).nullish(),
-  // Vercel AI SDK UI message shape. We pass through to convertToModelMessages.
-  messages: z.array(z.record(z.unknown())),
+  messages: z.array(uiMessageSchema),
 });
 
 copilotRouter.post('/chat', zValidator('json', chatBodySchema), async (c) => {
@@ -105,9 +116,23 @@ copilotRouter.post('/chat', zValidator('json', chatBodySchema), async (c) => {
   if (!workflow) throw new NotFoundError('Workflow', thread.workflowId);
   const workflowId = workflow.id;
 
+  // Resolve provider + model BEFORE persisting the user message, so a
+  // malformed model id or missing API key doesn't leave orphaned user
+  // rows behind that the client will retry into duplicates on the next
+  // successful call.
+  const modelId = modelInput ?? thread.model ?? DEFAULT_MODEL;
+  const { provider, model } = parseModelId(modelId);
+  const envVars = await assembleLlmProviderEnv(db, c.env);
+  const providerClient = buildProviderClient(provider, envVars, c.env);
+
   // Persist the latest user message before kicking off the stream so a
   // disconnect mid-response doesn't lose it.
-  const incomingUi = body.messages as unknown as UIMessage[];
+  const incomingUi: UIMessage[] = body.messages.map((m) => ({
+    id: typeof m.id === 'string' ? m.id : crypto.randomUUID(),
+    role: m.role,
+    parts: Array.isArray(m.parts) ? m.parts : [],
+    metadata: m.metadata,
+  }) as UIMessage);
   const lastUi = incomingUi[incomingUi.length - 1];
   if (lastUi && lastUi.role === 'user') {
     await appendCopilotMessage(db, thread.id, {
@@ -116,13 +141,6 @@ copilotRouter.post('/chat', zValidator('json', chatBodySchema), async (c) => {
       parts: lastUi.parts,
     });
   }
-
-  const modelId = modelInput ?? thread.model ?? DEFAULT_MODEL;
-  const { provider, model } = parseModelId(modelId);
-
-  // Provider client — DB-configured org BYOK keys win over env vars.
-  const envVars = await assembleLlmProviderEnv(db, c.env);
-  const providerClient = buildProviderClient(provider, envVars, c.env);
 
   const convertedUi = await convertToModelMessages(incomingUi);
   const modelMessages: ModelMessage[] = [
@@ -159,6 +177,8 @@ copilotRouter.post('/chat', zValidator('json', chatBodySchema), async (c) => {
         definition: z.record(z.unknown()).describe('Full dag/v1 workflow definition: { version, nodes, edges, policy?, ui? }'),
       }),
       execute: async ({ definition }: { definition: Record<string, unknown> }) => {
+        // saveDraft is a whole-rewrite tool — we intentionally skip the
+        // CAS baseline. The model is knowingly clobbering existing state.
         return validateAndPersist(definition);
       },
     }),
@@ -191,17 +211,23 @@ copilotRouter.post('/chat', zValidator('json', chatBodySchema), async (c) => {
         ops: z.array(z.record(z.unknown())).min(1).describe('Ordered list of operations. See description for shapes.'),
       }),
       execute: async ({ ops }: { ops: Record<string, unknown>[] }) => {
+        // Capture the row's updated_at BEFORE the read so we can pass
+        // it as the CAS baseline to saveDraft. Two concurrent copilot
+        // patches (or a copilot patch racing a canvas save) will now
+        // fail the second write with a `conflict` error instead of
+        // silently discarding the earlier one.
+        const expectedUpdatedAt = await getWorkflowUpdatedAt(db, workflowId);
         const draft = await getDraft(db, workflowId);
         if (!draft.draft) {
           return { ok: false, error: 'no current draft to patch — call saveDraft first to seed one' };
         }
         let next: unknown;
         try {
-          next = applyOpsLenient(draft.draft, ops as unknown as WorkflowOp[]);
+          next = applyOpsLenient(draft.draft, ops);
         } catch (err) {
           return { ok: false, error: err instanceof Error ? err.message : String(err) };
         }
-        const persisted = await validateAndPersist(next);
+        const persisted = await validateAndPersist(next, expectedUpdatedAt ?? undefined);
         return {
           ...persisted,
           appliedOps: ops.length,
@@ -226,12 +252,12 @@ copilotRouter.post('/chat', zValidator('json', chatBodySchema), async (c) => {
 
   /**
    * Shared validate-then-persist pipeline for both saveDraft and
-   * applyWorkflowPatch. Runs both the structural validator (shape,
-   * node ids, edges) and the runtime env validator (model ids exist,
-   * provider keys configured). Returns structured issues to the model
-   * on failure so it can fix them without a round-trip.
+   * applyWorkflowPatch. Runs the structural validator + runtime env
+   * validator, then writes via saveDraft. If `expectedUpdatedAt` is
+   * provided we require the row to still be at that timestamp — used
+   * by applyWorkflowPatch to reject concurrent writes.
    */
-  async function validateAndPersist(candidate: unknown) {
+  async function validateAndPersist(candidate: unknown, expectedUpdatedAt?: string) {
     const structural = validateDefinition(candidate);
     const envIssues = validateAgainstEnvironment(candidate, validationEnv, { availableModels });
     const issues = [...structural, ...envIssues];
@@ -245,7 +271,17 @@ copilotRouter.post('/chat', zValidator('json', chatBodySchema), async (c) => {
     if (!isWorkflowDefinition(candidate)) {
       return { ok: false, error: 'candidate is not a valid dag/v1 workflow definition' };
     }
-    await saveDraft(db, workflowId, candidate);
+    try {
+      await saveDraft(db, workflowId, candidate, undefined, expectedUpdatedAt !== undefined ? { expectedUpdatedAt } : undefined);
+    } catch (err) {
+      if (err instanceof Error && 'code' in err && (err as { code?: string }).code === 'conflict') {
+        return {
+          ok: false,
+          error: 'draft was modified concurrently — call getWorkflow to re-fetch, then re-apply your patch',
+        };
+      }
+      throw err;
+    }
     // Include the resulting definition so the client can drop it
     // straight into its React Query cache via setQueryData, skipping
     // an otherwise-redundant GET /workflows/:id/draft round-trip.
@@ -295,6 +331,12 @@ copilotRouter.post('/chat', zValidator('json', chatBodySchema), async (c) => {
       });
     },
   });
+  // Keep the isolate alive to drain the stream even if the client
+  // disconnects mid-response, so `onFinish` still runs and the
+  // assistant turn gets persisted. Without this, closing the tab
+  // during a long tool sequence leaves the thread with a user message
+  // and no response on reload.
+  c.executionCtx.waitUntil(Promise.resolve(result.consumeStream()));
   // Tag the thread id on the response so the client can persist it.
   streamResp.headers.set('X-Copilot-Thread-Id', thread.id);
   return streamResp;

@@ -208,12 +208,20 @@ function ThreadStream({
   }, [messages, status]);
 
   const [input, setInput] = useState('');
-  const onSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
+  // Shared submit body — the form's onSubmit passes a FormEvent, the
+  // textarea's Enter handler doesn't have one to preventDefault, so we
+  // let each caller handle its own event and only run the pure send
+  // logic here. Avoids the `as unknown as React.FormEvent` cast the
+  // previous shape required.
+  const submit = () => {
     const text = input.trim();
     if (!text || status === 'streaming') return;
     setInput('');
     void send(text);
+  };
+  const onSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    submit();
   };
 
   return (
@@ -249,7 +257,7 @@ function ThreadStream({
             onKeyDown={(e) => {
               if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
-                void onSubmit(e as unknown as React.FormEvent);
+                submit();
               }
             }}
             rows={1}

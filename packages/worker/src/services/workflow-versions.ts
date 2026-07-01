@@ -27,7 +27,8 @@ export class WorkflowVersionError extends Error {
       | 'not_found'
       | 'invalid_definition'
       | 'invalid_draft'
-      | 'publish_contention',
+      | 'publish_contention'
+      | 'conflict',
     message: string,
     public readonly errors?: WorkflowValidationError[],
   ) {
@@ -59,17 +60,55 @@ export async function getDraft(db: AppDb, workflowId: string): Promise<{ draft: 
   };
 }
 
-export async function saveDraft(db: AppDb, workflowId: string, draft: WorkflowDefinition, ui?: unknown): Promise<void> {
+export async function saveDraft(
+  db: AppDb,
+  workflowId: string,
+  draft: WorkflowDefinition,
+  ui?: unknown,
+  opts?: { expectedUpdatedAt?: string },
+): Promise<{ updatedAt: string }> {
   // Drafts can be incomplete; saveDraft does NOT enforce validateDefinition.
   // The publish path enforces validation; the editor's validate endpoint
   // surfaces issues before publish.
-  const exists = await db.select({ id: workflows.id }).from(workflows).where(eq(workflows.id, workflowId)).get();
-  if (!exists) throw new WorkflowVersionError('not_found', `workflow ${workflowId} not found`);
+  //
+  // When opts.expectedUpdatedAt is provided we require the row's current
+  // updated_at to match — an optimistic lock so two concurrent writers
+  // (e.g. two copilot tool calls, or a copilot patch racing a canvas
+  // save) can't silently trample each other. When the guard is omitted
+  // we do a plain UPDATE for the callers that need last-write-wins.
+  const existing = await db
+    .select({ id: workflows.id, updatedAt: workflows.updatedAt })
+    .from(workflows)
+    .where(eq(workflows.id, workflowId))
+    .get();
+  if (!existing) throw new WorkflowVersionError('not_found', `workflow ${workflowId} not found`);
+  if (opts?.expectedUpdatedAt !== undefined && existing.updatedAt !== opts.expectedUpdatedAt) {
+    throw new WorkflowVersionError(
+      'conflict',
+      `draft was modified concurrently — expected updated_at ${opts.expectedUpdatedAt} but found ${existing.updatedAt}`,
+    );
+  }
+  const nextUpdatedAt = new Date().toISOString();
   await db.update(workflows).set({
     draftDefinition: JSON.stringify(draft),
     ui: ui !== undefined ? JSON.stringify(ui) : undefined,
-    updatedAt: new Date().toISOString(),
+    updatedAt: nextUpdatedAt,
   }).where(eq(workflows.id, workflowId)).run();
+  return { updatedAt: nextUpdatedAt };
+}
+
+/**
+ * Return the current updated_at for a workflow row — used as the CAS
+ * baseline for saveDraft. Cheap: single-column select on the primary
+ * key.
+ */
+export async function getWorkflowUpdatedAt(db: AppDb, workflowId: string): Promise<string | null> {
+  const row = await db
+    .select({ updatedAt: workflows.updatedAt })
+    .from(workflows)
+    .where(eq(workflows.id, workflowId))
+    .get();
+  return row?.updatedAt ?? null;
 }
 
 export async function publishDraft(

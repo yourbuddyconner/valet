@@ -217,8 +217,20 @@ export function useSaveWorkflowDraft() {
   return useMutation({
     mutationFn: ({ workflowId, ...data }: SaveDraftRequest & { workflowId: string }) =>
       api.put<{ ok: true }>(`/workflows/${workflowId}/draft`, data),
-    onSuccess: (_, { workflowId }) => {
-      queryClient.invalidateQueries({ queryKey: workflowKeys.draft(workflowId) });
+    // Write the just-saved draft straight into the cache. Invalidating
+    // instead used to trigger a background GET that could race the
+    // copilot's own setQueryData: the refetch would return the
+    // pre-copilot server state and silently drop whatever the copilot
+    // had just injected into the cache.
+    onSuccess: (_, { workflowId, draft, ui }) => {
+      queryClient.setQueryData<GetDraftResponse>(
+        workflowKeys.draft(workflowId),
+        (prev) => ({
+          draft,
+          ui: ui ?? prev?.ui ?? null,
+          publishedVersionId: prev?.publishedVersionId ?? null,
+        }),
+      );
     },
   });
 }

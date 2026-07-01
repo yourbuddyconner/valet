@@ -108,7 +108,11 @@ app.use(
     // origin hit the per-trigger webhook URL — without it, preflight
     // strips the header and the route returns 401.
     allowHeaders: ['Content-Type', 'Authorization', 'X-Valet-Trigger-Token'],
-    exposeHeaders: ['X-Request-Id'],
+    // X-Copilot-Thread-Id is set by POST /api/copilot/chat on new-thread
+    // responses so the streaming client can capture the server-assigned
+    // id before the first onFinish; browsers only surface non-safelisted
+    // headers when they're listed here.
+    exposeHeaders: ['X-Request-Id', 'X-Copilot-Thread-Id'],
     credentials: true,
   })
 );

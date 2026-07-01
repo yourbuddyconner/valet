@@ -4,7 +4,7 @@ import {
   type WorkflowDefinition,
   type WorkflowNode,
 } from '@valet/shared';
-import { applyOps } from './workflow-ops.js';
+import { applyOps, applyOpsLenient } from './workflow-ops.js';
 
 /**
  * Build a fresh definition pre-populated with a `set` node so we don't
@@ -177,10 +177,88 @@ describe('applyOps', () => {
     // not get overwritten by auto-layout.
     const out = applyOps(def, [
       { op: 'addNode', node: { id: 'a', type: 'set', values: {} } },
-      { op: 'setMeta', patch: { ui: { nodes: { start: { position: { x: 0, y: 0 } }, a: { position: { x: 999, y: 999 } } } } } },
+      { op: 'setMeta', patch: { ui: { nodes: { a: { position: { x: 999, y: 999 } } } } } },
       { op: 'addEdge', edge: { from: 'start', to: 'a' } },
     ]);
     expect(out.ui?.nodes?.a?.position).toEqual({ x: 999, y: 999 });
+  });
+
+  it('setMeta deep-merges ui.nodes without wiping siblings', () => {
+    const def: WorkflowDefinition = {
+      version: 'dag/v1',
+      nodes: [
+        createDefaultWorkflowNode('set', 'start'),
+        createDefaultWorkflowNode('set', 'existing'),
+      ],
+      edges: [],
+      ui: {
+        nodes: {
+          start: { position: { x: 0, y: 0 } },
+          existing: { position: { x: 340, y: 0 } },
+        },
+      },
+    };
+    const out = applyOps(def, [
+      { op: 'setMeta', patch: { ui: { nodes: { start: { position: { x: 10, y: 20 } } } } } },
+    ]);
+    // `start` moved, `existing` untouched (would previously have been
+    // wiped by the wholesale ui assignment).
+    expect(out.ui?.nodes?.start?.position).toEqual({ x: 10, y: 20 });
+    expect(out.ui?.nodes?.existing?.position).toEqual({ x: 340, y: 0 });
+  });
+
+  it('addNode rejects a top-level id that collides with a foreach body id', () => {
+    const def: WorkflowDefinition = {
+      version: 'dag/v1',
+      nodes: [
+        createDefaultWorkflowNode('set', 'start'),
+        {
+          id: 'loop',
+          type: 'foreach',
+          items: '{{ trigger.data.items }}',
+          body: { id: 'step', type: 'set', values: {} },
+        } as unknown as WorkflowDefinition['nodes'][number],
+      ],
+      edges: [],
+    };
+    expect(() =>
+      applyOps(def, [{ op: 'addNode', node: { id: 'step', type: 'set', values: {} } }]),
+    ).toThrow(/foreach body/);
+  });
+
+  it('addEdge from a non-if node rejects fromOutput', () => {
+    const def: WorkflowDefinition = {
+      version: 'dag/v1',
+      nodes: [
+        createDefaultWorkflowNode('set', 'a'),
+        createDefaultWorkflowNode('set', 'b'),
+      ],
+      edges: [],
+    };
+    expect(() =>
+      applyOps(def, [{ op: 'addEdge', edge: { from: 'a', to: 'b', fromOutput: 'true' } }]),
+    ).toThrow(/fromOutput is only valid on edges leaving an "if" node/);
+  });
+
+  it('addEdge from an if node requires fromOutput', () => {
+    // The default if node has empty conditions[] so a full validation
+    // pass would fail — use applyOpsLenient to exercise the op-level
+    // rejection in isolation.
+    const def: WorkflowDefinition = {
+      version: 'dag/v1',
+      nodes: [
+        createDefaultWorkflowNode('if', 'gate'),
+        createDefaultWorkflowNode('set', 'b'),
+      ],
+      edges: [],
+    };
+    expect(() =>
+      applyOpsLenient(def, [{ op: 'addEdge', edge: { from: 'gate', to: 'b' } }]),
+    ).toThrow(/require fromOutput/);
+    const out = applyOpsLenient(def, [
+      { op: 'addEdge', edge: { from: 'gate', to: 'b', fromOutput: 'true' } },
+    ]) as { edges: unknown[] };
+    expect(out.edges).toHaveLength(1);
   });
 });
 

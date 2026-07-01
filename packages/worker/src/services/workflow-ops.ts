@@ -36,7 +36,7 @@ interface WorkingDef {
   [key: string]: unknown;
 }
 
-export function applyOps(def: WorkflowDefinition, ops: WorkflowOp[]): WorkflowDefinition {
+export function applyOps(def: WorkflowDefinition, ops: readonly WorkflowOp[]): WorkflowDefinition {
   const next = applyOpsLenient(def, ops);
   // Runtime narrow back to a real WorkflowDefinition. If the LLM
   // produced a shape that violates the schema we throw before
@@ -58,16 +58,24 @@ export function applyOps(def: WorkflowDefinition, ops: WorkflowOp[]): WorkflowDe
  * entry, so patches from the copilot don't stack every new node at the
  * origin. Positions are derived from neighbors (right-of-upstream,
  * left-of-downstream, or top-right-of-existing).
+ *
+ * Accepts `readonly unknown[]` at the boundary because the ops come
+ * from an LLM tool call and are only shape-validated inside `applyOp`.
+ * The typed `WorkflowOp[]` form (used by tests) is a subtype.
  */
-export function applyOpsLenient(def: WorkflowDefinition, ops: WorkflowOp[]): unknown {
+export function applyOpsLenient(def: WorkflowDefinition, ops: readonly unknown[]): unknown {
   const previousNodeIds = new Set(def.nodes.map((n) => n.id));
   let working = toWorking(def);
-  for (const [i, op] of ops.entries()) {
+  for (const [i, rawOp] of ops.entries()) {
+    if (!isPlainObject(rawOp)) {
+      throw new Error(`op #${i}: expected an object, got ${typeof rawOp}`);
+    }
     try {
-      working = applyOp(working, op);
+      working = applyOp(working, rawOp as WorkflowOp);
     } catch (err) {
+      const opName = (rawOp as { op?: unknown }).op;
       const msg = err instanceof Error ? err.message : String(err);
-      throw new Error(`op #${i} (${op.op}): ${msg}`);
+      throw new Error(`op #${i} (${String(opName ?? 'unknown')}): ${msg}`);
     }
   }
   return autoLayoutNewNodes(working, previousNodeIds);
@@ -257,10 +265,23 @@ function addNode(def: WorkingDef, node: Record<string, unknown>): WorkingDef {
   if (typeof node.type !== 'string' || node.type.length === 0) {
     throw new Error('node.type is required and must be a non-empty string');
   }
-  if (def.nodes.some((n) => n.id === id)) {
-    throw new Error(`node id "${id}" already exists`);
-  }
+  // Dag/v1 node ids share ONE namespace with foreach body ids — check
+  // both so we surface the collision here (with a hint about which
+  // scope) instead of downstream in the validator.
+  const collision = findExistingId(def, id);
+  if (collision) throw new Error(`node id "${id}" already exists${collision === 'body' ? ' as a foreach body id' : ''}`);
   return { ...def, nodes: [...def.nodes, node] };
+}
+
+function findExistingId(def: WorkingDef, id: string): 'top' | 'body' | null {
+  for (const n of def.nodes) {
+    if (n.id === id) return 'top';
+    if (n.type === 'foreach') {
+      const body = (n as Record<string, unknown>).body;
+      if (isPlainObject(body) && body.id === id) return 'body';
+    }
+  }
+  return null;
 }
 
 function updateNode(def: WorkingDef, id: string, patch: Record<string, unknown>): WorkingDef {
@@ -293,11 +314,27 @@ function addEdge(def: WorkingDef, edge: Record<string, unknown>): WorkingDef {
   if (typeof edge.from !== 'string' || typeof edge.to !== 'string') {
     throw new Error('edge.from and edge.to are required strings');
   }
-  if (!def.nodes.some((n) => n.id === edge.from)) {
+  const fromNode = def.nodes.find((n) => n.id === edge.from);
+  if (!fromNode) {
     throw new Error(`edge.from node "${edge.from}" does not exist`);
   }
   if (!def.nodes.some((n) => n.id === edge.to)) {
     throw new Error(`edge.to node "${edge.to}" does not exist`);
+  }
+  // fromOutput belongs only on edges leaving `if` nodes, and every
+  // outbound `if` edge must set it — the validator would catch this
+  // later, but we prefer to fail the op so the tool's atomic-rollback
+  // promise holds.
+  const fromOutput = edge.fromOutput;
+  const isIfSource = fromNode.type === 'if';
+  if (fromOutput !== undefined && fromOutput !== 'true' && fromOutput !== 'false') {
+    throw new Error(`edge.fromOutput must be "true" or "false" when set (got ${JSON.stringify(fromOutput)})`);
+  }
+  if (isIfSource && fromOutput === undefined) {
+    throw new Error(`edges from "if" node "${edge.from}" require fromOutput ("true" or "false")`);
+  }
+  if (!isIfSource && fromOutput !== undefined) {
+    throw new Error(`edge.fromOutput is only valid on edges leaving an "if" node; "${edge.from}" is type "${fromNode.type ?? 'unknown'}"`);
   }
   const exists = def.edges.some(
     (e) => e.from === edge.from && e.to === edge.to && e.fromOutput === edge.fromOutput,
@@ -326,14 +363,32 @@ function setMeta(def: WorkingDef, patch: Record<string, unknown>): WorkingDef {
   // Only the documented top-level fields are mergeable via setMeta.
   // Specifically NOT `nodes` or `edges` — use the structural ops for
   // those so the model doesn't accidentally clobber the graph.
+  //
+  // For object-valued fields (`ui`, `policy`) we DEEP-MERGE so the
+  // model can e.g. add one node's position via `{ui:{nodes:{new:...}}}`
+  // without wiping every other node's position. `version` is scalar
+  // and gets replaced wholesale.
   const allowed = new Set(['version', 'policy', 'ui']);
   const merged: WorkingDef = { ...def };
   for (const [k, v] of Object.entries(patch)) {
     if (!allowed.has(k)) {
       throw new Error(`setMeta cannot modify "${k}" — use addNode/addEdge/etc. for graph changes`);
     }
-    if (v === null) delete merged[k];
-    else merged[k] = v;
+    if (v === null) {
+      delete merged[k];
+      continue;
+    }
+    if (k === 'version') {
+      merged[k] = v;
+      continue;
+    }
+    // ui / policy — deep merge onto whatever's there.
+    const current = merged[k];
+    if (isPlainObject(current) && isPlainObject(v)) {
+      merged[k] = deepMerge(current, v);
+    } else {
+      merged[k] = v;
+    }
   }
   return merged;
 }

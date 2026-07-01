@@ -304,27 +304,35 @@ function VisualWorkflowEditorInner({
   const { getViewport } = useReactFlow();
   const { data: actionCatalog = [], isSuccess: actionCatalogLoaded } = useActionCatalog();
 
+  // Baseline snapshot = the definition prop value we last synced from.
+  // We diff (previous local, previous baseline, incoming) to decide
+  // whether an incoming change comes from the SERVER (baseline changed
+  // → take incoming) or from LOCAL user edits (baseline unchanged →
+  // preserve local). Without this, any prop change would wipe
+  // in-progress user edits back to whatever the server had.
+  const baselineFlowRef = React.useRef<ReturnType<typeof definitionToFlow>>(initialFlow);
+
   // Diff-sync the incoming definition into local ReactFlow state.
   // Previously this reset both arrays wholesale + cleared selection +
   // closed the raw-JSON panel on every prop change — which meant every
   // copilot tool call took the user's cursor/panel state down with it.
-  //
-  // Now we:
-  //  • Merge nodes and edges by id: preserve entries that survived
-  //    (ReactFlow keeps their internal handles + focus), add newcomers,
-  //    drop those the copilot removed.
-  //  • Only clear selection if the selected node was actually removed.
-  //  • Leave the raw JSON panel state alone — its own submit path
-  //    already re-reads current state when the user re-opens it.
   React.useEffect(() => {
     const next = definitionToFlow(definition ?? createDefaultWorkflowDefinition());
-    setNodes((prev) => mergeFlowNodes(prev, next.nodes));
-    setEdges((prev) => mergeFlowEdges(prev, next.edges));
+    const baseline = baselineFlowRef.current;
+    setNodes((prev) => mergeFlowNodes(prev, next.nodes, baseline.nodes));
+    setEdges((prev) => mergeFlowEdges(prev, next.edges, baseline.edges));
     setSelectedNodeId((prev) => (prev && next.nodes.some((n) => n.id === prev) ? prev : null));
     setSelectedEdgeId((prev) => (prev && next.edges.some((e) => e.id === prev) ? prev : null));
-    // Keep rawJson mirrored so if the user opens the raw panel they see
-    // the current definition — but don't force-close the panel.
-    setRawJson(JSON.stringify(flowToDefinition(next, definition ?? undefined), null, 2));
+    // Only clobber the raw-JSON draft when the panel is closed — if
+    // the user is mid-edit inside the JSON textarea, refreshing it
+    // from underneath them would discard their input.
+    setRawOpen((currentlyOpen) => {
+      if (!currentlyOpen) {
+        setRawJson(JSON.stringify(flowToDefinition(next, definition ?? undefined), null, 2));
+      }
+      return currentlyOpen;
+    });
+    baselineFlowRef.current = next;
   }, [definition]);
 
   React.useEffect(() => {
@@ -3482,18 +3490,31 @@ function entriesToRecord(entries: string[][]): Record<string, unknown> {
 }
 
 /**
- * Merge the incoming node list into the previous one by id. Preserves
- * ReactFlow-internal state (drag position, focus, transient measured
- * dimensions) for surviving nodes; adds newcomers; drops removed ones.
+ * Merge the incoming node list into the previous one by id, using the
+ * BASELINE (the last server state we synced from) as an arbiter of
+ * server-vs-local changes:
  *
- * Also preserves the previous position if the incoming node is at the
- * origin — the copilot sometimes emits a node without a position and
- * relies on server-side auto-layout, but if the user then repositions
- * it and the copilot patches something else on that node, we don't
- * want the position to jump back to auto-layout's guess.
+ *   • Server changed the node (baseline ≠ incoming) → take incoming.
+ *     The server is authoritative for that field.
+ *   • Server didn't change it (baseline === incoming) → keep previous.
+ *     Whatever the user has locally is the freshest source; the
+ *     alternative would silently discard their unsaved edits.
+ *
+ * The old two-arg merge collapsed "user has dirty local state" with
+ * "server just changed this node" — both showed prev ≠ incoming — and
+ * always took incoming. This lost every user edit that hadn't debounced
+ * to the server yet the moment the copilot patched anything unrelated.
+ *
+ * Newcomers (no baseline, no previous) are added. Nodes missing from
+ * the incoming list are dropped (that's how removal is signalled).
  */
-function mergeFlowNodes(prev: WorkflowFlowNode[], next: WorkflowFlowNode[]): WorkflowFlowNode[] {
+function mergeFlowNodes(
+  prev: WorkflowFlowNode[],
+  next: WorkflowFlowNode[],
+  baseline: WorkflowFlowNode[],
+): WorkflowFlowNode[] {
   const prevById = new Map(prev.map((n) => [n.id, n]));
+  const baselineById = new Map(baseline.map((n) => [n.id, n]));
   const nextById = new Map(next.map((n) => [n.id, n]));
   const merged: WorkflowFlowNode[] = [];
   for (const incoming of next) {
@@ -3502,39 +3523,66 @@ function mergeFlowNodes(prev: WorkflowFlowNode[], next: WorkflowFlowNode[]): Wor
       merged.push(incoming);
       continue;
     }
-    // Same-node update: keep the previous object identity where nothing
-    // meaningful changed, otherwise create a new object so React Flow
-    // re-renders the changed node without re-mounting all its siblings.
-    const dataSame = shallowEqualNodeData(previous.data, incoming.data);
-    const positionSame = previous.position.x === incoming.position.x && previous.position.y === incoming.position.y;
-    if (dataSame && positionSame) {
+    const base = baselineById.get(incoming.id);
+    const serverChangedData = !base || !shallowEqualNodeData(base.data, incoming.data);
+    const serverChangedPosition = !base || base.position.x !== incoming.position.x || base.position.y !== incoming.position.y;
+    const data = serverChangedData ? incoming.data : previous.data;
+    const position = serverChangedPosition ? incoming.position : previous.position;
+    // Same identity when nothing needs to change — lets React Flow skip
+    // re-rendering the node entirely.
+    if (data === previous.data && position === previous.position) {
       merged.push(previous);
     } else {
-      merged.push({ ...previous, data: incoming.data, position: incoming.position });
+      merged.push({ ...previous, data, position });
     }
   }
-  // Preserve ordering discipline: any node the caller no longer knows
-  // about is dropped (that's how removal is signaled).
   return merged.filter((n) => nextById.has(n.id));
 }
 
-function mergeFlowEdges(prev: WorkflowFlowEdge[], next: WorkflowFlowEdge[]): WorkflowFlowEdge[] {
+function mergeFlowEdges(
+  prev: WorkflowFlowEdge[],
+  next: WorkflowFlowEdge[],
+  baseline: WorkflowFlowEdge[],
+): WorkflowFlowEdge[] {
   const prevById = new Map(prev.map((e) => [e.id, e]));
+  const baselineById = new Map(baseline.map((e) => [e.id, e]));
   const nextById = new Map(next.map((e) => [e.id, e]));
   const merged: WorkflowFlowEdge[] = [];
   for (const incoming of next) {
     const previous = prevById.get(incoming.id);
-    if (previous
-      && previous.source === incoming.source
-      && previous.target === incoming.target
-      && previous.sourceHandle === incoming.sourceHandle
-      && previous.type === incoming.type) {
+    if (!previous) {
+      merged.push(incoming);
+      continue;
+    }
+    const base = baselineById.get(incoming.id);
+    // Server-vs-local check: if the baseline matches the incoming edge
+    // on every meaningful field, the server didn't change anything;
+    // keep whatever the user has locally.
+    if (base && edgeFieldsEqual(base, incoming)) {
+      merged.push(previous);
+    } else if (edgeFieldsEqual(previous, incoming)) {
+      // Server changed something, but the local version already
+      // reflects it — keep the previous object identity.
       merged.push(previous);
     } else {
       merged.push(incoming);
     }
   }
   return merged.filter((e) => nextById.has(e.id));
+}
+
+function edgeFieldsEqual(a: WorkflowFlowEdge, b: WorkflowFlowEdge): boolean {
+  if (a.source !== b.source) return false;
+  if (a.target !== b.target) return false;
+  if (a.sourceHandle !== b.sourceHandle) return false;
+  if (a.type !== b.type) return false;
+  // `when` lives on data — the edge id encodes source/target/fromOutput
+  // only, so a change to a conditional expression wouldn't otherwise be
+  // detected here.
+  const aWhen = (a.data as { when?: unknown } | undefined)?.when;
+  const bWhen = (b.data as { when?: unknown } | undefined)?.when;
+  if (aWhen !== bWhen) return false;
+  return true;
 }
 
 function shallowEqualNodeData(a: WorkflowFlowNodeData, b: WorkflowFlowNodeData): boolean {
