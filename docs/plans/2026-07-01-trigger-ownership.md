@@ -12,11 +12,20 @@
 
 - Existing user-owned triggers (`owner_workflow_id IS NULL`) must behave exactly as today after every task in this plan.
 - Subscription source types in v1: `manual | webhook | schedule | slack.message.channels | github.event`. Gmail/other integrations defer.
-- Webhook tokens must remain stable across republishes (never regenerate on UPDATE).
-- Slack `message.channels` events already reach the worker (app manifest is subscribed). Dispatch to workflows forks off the existing DM/orchestrator router; do not alter DM routing.
+- **Publish ordering: resolve → commit resolved definition → reconcile.** Resolvers run BEFORE the version write commits. If a resolver throws, no version is committed and no triggers change. The version stores fully-resolved identifiers (teamId, channelId, installationId) so rollback + re-reconcile is deterministic.
+- **Name ownership.** Reconciler generates `name` on CREATE only. UPDATE never touches `name`, `enabled`, `webhookToken`, or `lastFiredAt`. Users may rename an owned trigger row; the rename persists across republishes.
+- **Uniqueness.** `UNIQUE(owner_workflow_id, owner_node_id)` partial index (where `owner_workflow_id IS NOT NULL`) is the guard against concurrent-publish duplication. The losing INSERT fails and the losing publish returns an error.
+- **Identity for reconciler matching:** `stableId ?? owner_node_id`. Webhook subscriptions may set an optional `stableId` so trigger-node renames don't rotate the URL.
+- Webhook tokens must remain stable across republishes and across trigger-node renames when `stableId` is set. Without `stableId`, node rename = delete + create = new token (UI must warn).
+- Slack `message.channels` events already reach the worker (app manifest is subscribed). Dispatch to workflows forks off the existing DM/orchestrator router; DM routing untouched.
 - GitHub App webhooks already reach `/api/webhooks/github` and are signature-verified. The existing `installation`/`pull_request`/`push` handlers continue to run unchanged — the workflow-trigger dispatch is additive.
-- Channel names (`#incidents`) in Slack subscriptions are resolved to Slack IDs (`C012ABCD`) at publish time. If resolution fails, publish fails with an actionable error. The reconciler's pure planning function operates on already-resolved IDs.
-- GitHub `installationId` in subscriptions is auto-resolved when the owner has exactly one installation; otherwise required. `repo` (`owner/name`) is validated against the installation's repo access at publish.
+- Channel names (`#incidents`) in Slack subscriptions are resolved to Slack IDs (`C012ABCD`) at publish time. For **private channels** the resolver additionally verifies the publishing user's linked Slack identity is a member — this closes a per-user leak where any org member could subscribe to sensitive channels the bot happens to be in.
+- GitHub `installationId` in subscriptions is auto-resolved when the owner has exactly one installation; otherwise required. `repo` (`owner/name`) is validated against the installation's repo access at publish. The resolver verifies the installation belongs to the publishing user.
+- GitHub reentrance: `filters.ignoreSelf` defaults to `true` and drops events where `sender.type === 'Bot'` and `sender.login.endsWith('[bot]')`. Only opt out with explicit user consent.
+- Slack reentrance: `filters.ignoreBots` defaults to `true`.
+- Reconciler + dispatch CRUD run via **system-context helpers** (`createTriggerAsOwner`, `updateOwnedTrigger`, `deleteOwnedTrigger`) that bypass the user-scoped WHERE clauses of the user-facing CRUD. User-facing helpers stay ownership-scoped.
+- Dispatch stamps `lastFiredAt` on every enqueued execution. UI surfaces "not fired recently" for both owned and user-owned triggers.
+- Delivery idempotency: Slack `event_id` and GitHub `X-GitHub-Delivery` are recorded before enqueue so a `waitUntil` failure can be recovered by a cron sweep (Task 10).
 - No `any`, no `as unknown as` double-casts, no `@ts-ignore`. Follow the type-safety rules in `CLAUDE.md`.
 - Every phase ends with a committed, testable state. Don't batch commits across phases.
 - No Co-Authored-By trailers in commit messages.
@@ -43,65 +52,113 @@
 
 ---
 
-### Task 1: Schema migration for owner columns
+### Task 1: Schema migration for ownership + widened execution CHECK
 
 **Files:**
 - Create: `packages/worker/migrations/0024_trigger_ownership.sql`
 - Modify: `packages/worker/src/lib/schema/workflows.ts` (triggers table)
+- Modify: `packages/worker/src/lib/schema/workflows.ts` (workflow_executions if the CHECK is expressed in Drizzle; otherwise SQL-only)
 
 **Interfaces:**
 - Consumes: nothing.
-- Produces: `triggers` row gains two nullable text columns: `owner_workflow_id`, `owner_node_id`. Index `idx_triggers_owner_workflow` on `owner_workflow_id`.
+- Produces:
+  - `triggers` gains `owner_workflow_id`, `owner_node_id`, `health_status` (all nullable text).
+  - `idx_triggers_owner_workflow` on `owner_workflow_id`.
+  - `idx_triggers_owner_key` — **partial unique** on `(owner_workflow_id, owner_node_id) WHERE owner_workflow_id IS NOT NULL`.
+  - `workflow_executions.trigger_type` CHECK widened to include `slack.message.channels` and `github.event`.
 
-- [ ] **Step 1.1: Read the current migration numbering and Drizzle schema for `triggers`.**
+**Why the CHECK widening matters:** the current constraint (from migration `0020_workflows_dag_v1.sql`) restricts `trigger_type` to `manual|webhook|schedule`. If we don't widen it, every Slack/GitHub execution INSERT fails with a constraint violation. Dispatch runs inside `waitUntil` so the error is swallowed silently — dropped events with no diagnostic. **Do this in the same migration as the owner columns.**
+
+- [ ] **Step 1.1: Read the current migration numbering and both schema pieces.**
 
 Run: `ls packages/worker/migrations/ | tail -5` and open `packages/worker/src/lib/schema/workflows.ts` to confirm the current `triggers` shape. Confirm the last migration is `0023_workflow_copilot.sql` before naming the new one `0024`.
+
+Also read `packages/worker/migrations/0020_workflows_dag_v1.sql` and search for `workflow_executions.*CHECK` — you need the exact original CHECK expression to reproduce it (SQLite requires a table rebuild to alter a CHECK).
 
 - [ ] **Step 1.2: Write the SQL migration.**
 
 Create `packages/worker/migrations/0024_trigger_ownership.sql`:
 
 ```sql
--- Add ownership columns so triggers can be materialized from a workflow's
--- trigger-node subscription declaration. NULL = user-owned (behavior
--- unchanged from prior migrations).
+-- Ownership columns for workflow-declared triggers. NULL = user-owned
+-- (behavior unchanged from prior migrations).
 ALTER TABLE triggers ADD COLUMN owner_workflow_id TEXT
   REFERENCES workflows(id) ON DELETE CASCADE;
 ALTER TABLE triggers ADD COLUMN owner_node_id TEXT;
+-- Populated by the periodic sanity check + resolver failures.
+ALTER TABLE triggers ADD COLUMN health_status TEXT;
 
 CREATE INDEX idx_triggers_owner_workflow ON triggers(owner_workflow_id);
+
+-- Partial unique: user-owned rows (both NULL) unconstrained; workflow-
+-- owned rows are unique by (workflow, node). Prevents duplicate rows
+-- from concurrent-publish races.
+CREATE UNIQUE INDEX idx_triggers_owner_key
+  ON triggers(owner_workflow_id, owner_node_id)
+  WHERE owner_workflow_id IS NOT NULL;
+
+-- Widen workflow_executions.trigger_type CHECK so Slack + GitHub
+-- executions can insert. SQLite table rebuild pattern.
+CREATE TABLE workflow_executions_new (
+  -- COPY the existing column definitions verbatim from migration 0020
+  -- and update ONLY the trigger_type CHECK to include the new values.
+  -- (Fill this in exactly per 0020's shape.)
+  ...
+  trigger_type TEXT NOT NULL CHECK (
+    trigger_type IN ('manual', 'webhook', 'schedule',
+                     'slack.message.channels', 'github.event')
+  ),
+  ...
+);
+
+INSERT INTO workflow_executions_new SELECT * FROM workflow_executions;
+DROP TABLE workflow_executions;
+ALTER TABLE workflow_executions_new RENAME TO workflow_executions;
+
+-- Re-create every index that lived on workflow_executions in 0020
+-- (SQLite drops indexes with the table).
 ```
+
+Fill in the `...` blocks from `0020_workflows_dag_v1.sql` — exact columns, exact indexes. Skipping any index leaves execution queries slower on prod.
 
 - [ ] **Step 1.3: Update the Drizzle schema in `packages/worker/src/lib/schema/workflows.ts`.**
 
-Add the two columns and the index inside the existing `triggers` table declaration:
+Add to `triggers` table:
 
 ```ts
 ownerWorkflowId: text('owner_workflow_id').references(() => workflows.id, { onDelete: 'cascade' }),
 ownerNodeId: text('owner_node_id'),
+healthStatus: text('health_status'),
 ```
 
-Add to the indexes array:
+And indexes:
 
 ```ts
 index('idx_triggers_owner_workflow').on(table.ownerWorkflowId),
+uniqueIndex('idx_triggers_owner_key').on(table.ownerWorkflowId, table.ownerNodeId)
+  .where(sql`${table.ownerWorkflowId} IS NOT NULL`),
 ```
+
+If `workflow_executions.triggerType` has a Drizzle CHECK, update the enum values there too. Otherwise Drizzle stays in sync via the DB.
 
 - [ ] **Step 1.4: Typecheck the worker.**
 
 Run: `cd packages/worker && pnpm typecheck`
-Expected: PASS. If any consumer destructures `TriggerRow` and fails on the new columns, they'll surface here — leave them broken for the next task to address by widening the row type.
+Expected: PASS. Any consumer that destructures `TriggerRow` will surface breaks — leave them to be widened in the next task.
 
 - [ ] **Step 1.5: Commit.**
 
 ```bash
 git add packages/worker/migrations/0024_trigger_ownership.sql \
         packages/worker/src/lib/schema/workflows.ts
-git commit -m "triggers: add owner_workflow_id + owner_node_id columns
+git commit -m "triggers: ownership columns + widen execution CHECK
 
-- New nullable FK to workflows for reconciler ownership.
-- Index on owner_workflow_id for reconciler lookups.
-- Existing rows: NULL = user-owned, semantics unchanged."
+- owner_workflow_id / owner_node_id / health_status.
+- Partial unique(owner_workflow_id, owner_node_id) prevents
+  concurrent-publish duplication.
+- Widen workflow_executions.trigger_type CHECK to include
+  slack.message.channels + github.event so dispatch INSERTs
+  do not silently fail inside waitUntil."
 ```
 
 ---
@@ -120,14 +177,16 @@ git commit -m "triggers: add owner_workflow_id + owner_node_id columns
 ```ts
 type TriggerNodeSubscription =
   | { type: 'manual' }
-  | { type: 'webhook'; method?: 'GET' | 'POST' | 'PUT'; rateLimit?: number }
+  | { type: 'webhook'; method?: 'GET' | 'POST' | 'PUT'; rateLimit?: number; stableId?: string }
   | { type: 'schedule'; cron: string; timezone?: string; triggerData?: Record<string, unknown> }
   | { type: 'slack.message.channels'; channel: string; teamId?: string;
       filters?: { ignoreBots?: boolean; mentionOnly?: boolean } }
   | { type: 'github.event'; event: string; action?: string;
       installationId?: number; repo?: string;
-      filters?: { branch?: string; author?: string } };
+      filters?: { branch?: string; author?: string; ignoreSelf?: boolean } };
 ```
+
+`stableId` on webhook lets the user pin token stability across trigger-node renames — the reconciler keys identity by `stableId ?? nodeId`. `ignoreSelf` on github defaults to `true` in the resolver + dispatcher; it drops events where `sender.type === 'Bot'` and `sender.login.endsWith('[bot]')`, preventing reentrance loops.
 
 - [ ] **Step 2.1: Locate the current trigger-node type/schema.**
 
@@ -248,6 +307,7 @@ const triggerSubscriptionSchema = z.discriminatedUnion('type', [
     type: z.literal('webhook'),
     method: z.enum(['GET', 'POST', 'PUT']).optional(),
     rateLimit: z.number().int().positive().optional(),
+    stableId: z.string().min(1).optional(),
   }),
   z.object({
     type: z.literal('schedule'),
@@ -273,6 +333,7 @@ const triggerSubscriptionSchema = z.discriminatedUnion('type', [
     filters: z.object({
       branch: z.string().optional(),
       author: z.string().optional(),
+      ignoreSelf: z.boolean().optional(),
     }).optional(),
   }),
 ]);
@@ -353,19 +414,27 @@ git commit -m "workflow-dag + triggers: add slack + github event types
 export type ReconcilerTriggerType = 'webhook' | 'schedule' | 'slack.message.channels' | 'github.event';
 
 export type ReconcilerOp =
-  | { kind: 'create'; nodeId: string; type: ReconcilerTriggerType; config: TriggerConfig; name: string }
-  | { kind: 'update'; triggerId: string; type: ReconcilerTriggerType; config: TriggerConfig; name: string }
+  | { kind: 'create'; identityKey: string; nodeId: string;
+      type: ReconcilerTriggerType; config: TriggerConfig; name: string }
+  | { kind: 'update'; triggerId: string;
+      type: ReconcilerTriggerType; config: TriggerConfig }
   | { kind: 'delete'; triggerId: string };
 
 export function planReconciliation(input: {
   workflowId: string;
   workflowName: string;
-  definition: WorkflowDefinition;
+  definition: WorkflowDefinition;   // MUST be resolved (Task 4.5a).
   existing: Array<{ id: string; ownerNodeId: string | null; type: string; config: string; name: string }>;
 }): ReconcilerOp[];
 ```
 
-Pure — no DB access, no side effects. Returns the op list; callers apply it.
+Pure — no DB access, no side effects. Returns the op list; callers apply it. Throws if an integration-scoped subscription is unresolved (missing teamId/channelId for Slack, or installationId for GitHub). The resolver in Task 4 is what filters invalid input before planning.
+
+Identity model:
+- `identityKey = subscription.stableId ?? node.id` — webhook subs can pin `stableId` to keep the URL stable across node renames.
+- The reconciler persists `owner_node_id = identityKey` on CREATE.
+- `create` ops carry both `identityKey` (persisted) and `nodeId` (informational — used by callers building names, logs, etc.).
+- `update` ops never carry `name` — name is user-editable after CREATE.
 
 - [ ] **Step 3.1: Write the failing test.**
 
@@ -408,8 +477,90 @@ describe('planReconciliation', () => {
     });
     expect(ops).toHaveLength(1);
     expect(ops[0]).toMatchObject({
-      kind: 'create', nodeId: 'trigger', type: 'webhook',
+      kind: 'create', identityKey: 'trigger', nodeId: 'trigger', type: 'webhook',
     });
+  });
+
+  it('webhook stableId survives trigger-node rename', () => {
+    // Existing owned trigger keyed by stableId=primary.
+    const existing = [{
+      id: 't1', ownerNodeId: 'primary', type: 'webhook',
+      config: JSON.stringify({ type: 'webhook', path: '/w/primary' }),
+      name: 'W — trigger',
+    }];
+    // Definition renames the node from 'trigger' to 'entry' but keeps stableId.
+    const def = baseDef([{
+      id: 'entry', type: 'trigger',
+      subscription: { type: 'webhook', stableId: 'primary' },
+    }]);
+    const ops = planReconciliation({
+      workflowId: 'wf', workflowName: 'W', definition: def, existing,
+    });
+    // NO create + delete cycle; noop.
+    expect(ops).toEqual([]);
+  });
+
+  it('does not clobber user-renamed trigger row on update', () => {
+    // Existing owned trigger with a user-set name.
+    const existing = [{
+      id: 't1', ownerNodeId: 'trigger', type: 'schedule',
+      config: JSON.stringify({ type: 'schedule', cron: '0 9 * * *' }),
+      name: 'My custom name',
+    }];
+    // Definition changed the cron.
+    const def = baseDef([{
+      id: 'trigger', type: 'trigger',
+      subscription: { type: 'schedule', cron: '0 12 * * *' },
+    }]);
+    const ops = planReconciliation({
+      workflowId: 'wf', workflowName: 'W', definition: def, existing,
+    });
+    expect(ops).toHaveLength(1);
+    expect(ops[0]).toMatchObject({ kind: 'update', triggerId: 't1' });
+    // Critical: the update op MUST NOT contain a `name` field.
+    expect(ops[0]).not.toHaveProperty('name');
+  });
+
+  it('nested filters do not produce false UPDATE ops', () => {
+    // Same filters object with keys in different insertion order.
+    const cfg = { type: 'schedule' as const, cron: '0 9 * * *' };
+    const filtersA = { mentionOnly: false, ignoreBots: true };
+    const filtersB = { ignoreBots: true, mentionOnly: false };
+    const def = baseDef([{
+      id: 'trigger', type: 'trigger',
+      subscription: { type: 'slack.message.channels', channel: 'C1', teamId: 'T1', filters: filtersA },
+    }]);
+    const existing = [{
+      id: 't1', ownerNodeId: 'trigger', type: 'slack.message.channels',
+      config: JSON.stringify({
+        type: 'slack.message.channels', teamId: 'T1', channelId: 'C1', filters: filtersB,
+      }),
+      name: 'W — trigger',
+    }];
+    const ops = planReconciliation({
+      workflowId: 'wf', workflowName: 'W', definition: def, existing,
+    });
+    expect(ops).toEqual([]);
+  });
+
+  it('throws when a slack subscription is not resolved (missing teamId)', () => {
+    const def = baseDef([{
+      id: 'trigger', type: 'trigger',
+      subscription: { type: 'slack.message.channels', channel: '#incidents' },  // unresolved
+    }]);
+    expect(() => planReconciliation({
+      workflowId: 'wf', workflowName: 'W', definition: def, existing: [],
+    })).toThrow(/unresolved/);
+  });
+
+  it('throws when a github subscription is not resolved (missing installationId)', () => {
+    const def = baseDef([{
+      id: 'trigger', type: 'trigger',
+      subscription: { type: 'github.event', event: 'pull_request' },  // unresolved
+    }]);
+    expect(() => planReconciliation({
+      workflowId: 'wf', workflowName: 'W', definition: def, existing: [],
+    })).toThrow(/unresolved/);
   });
 
   it('creates a schedule trigger with the declared cron', () => {
@@ -586,9 +737,16 @@ Create `packages/worker/src/services/trigger-reconciler.ts`. Key logic:
 import type { WorkflowDefinition } from '@valet/shared';
 import type { TriggerConfig } from '../lib/db/triggers.js';
 
+// Reconciler op union. `create` carries the identityKey so the caller
+// can persist owner_node_id; `update` NEVER carries `name` — the
+// reconciler owns name only at CREATE time. This is a deliberate change
+// from the initial draft to match the spec: users may rename an owned
+// trigger row, and the rename persists across republishes.
 export type ReconcilerOp =
-  | { kind: 'create'; nodeId: string; type: 'webhook' | 'schedule'; config: TriggerConfig; name: string }
-  | { kind: 'update'; triggerId: string; type: 'webhook' | 'schedule'; config: TriggerConfig; name: string }
+  | { kind: 'create'; identityKey: string; nodeId: string;
+      type: ReconcilerTriggerType; config: TriggerConfig; name: string }
+  | { kind: 'update'; triggerId: string;
+      type: ReconcilerTriggerType; config: TriggerConfig }
   | { kind: 'delete'; triggerId: string };
 
 type ExistingRow = { id: string; ownerNodeId: string | null; type: string; config: string; name: string };
@@ -596,100 +754,112 @@ type ExistingRow = { id: string; ownerNodeId: string | null; type: string; confi
 interface Input {
   workflowId: string;
   workflowName: string;
-  definition: WorkflowDefinition;
+  definition: WorkflowDefinition;   // MUST be a resolved definition — see Task 4.5a.
   existing: ExistingRow[];
 }
 
 export function planReconciliation(input: Input): ReconcilerOp[] {
   const declared = extractDeclared(input.definition, input.workflowName);
-  const existingByNode = new Map(
+  const existingByKey = new Map(
     input.existing.filter((r) => r.ownerNodeId).map((r) => [r.ownerNodeId!, r] as const),
   );
 
   const ops: ReconcilerOp[] = [];
 
-  for (const [nodeId, next] of declared) {
-    const prev = existingByNode.get(nodeId);
+  for (const [identityKey, next] of declared) {
+    const prev = existingByKey.get(identityKey);
     if (!prev) {
-      ops.push({ kind: 'create', nodeId, type: next.type, config: next.config, name: next.name });
+      ops.push({ kind: 'create', identityKey, nodeId: next.nodeId,
+                 type: next.type, config: next.config, name: next.name });
       continue;
     }
-    existingByNode.delete(nodeId);
+    existingByKey.delete(identityKey);
     if (configsEqual(prev, next)) continue;
-    ops.push({ kind: 'update', triggerId: prev.id, type: next.type, config: next.config, name: next.name });
+    // NOTE: no `name` — reconciler doesn't clobber user-renamed rows.
+    ops.push({ kind: 'update', triggerId: prev.id, type: next.type, config: next.config });
   }
 
-  for (const stale of existingByNode.values()) {
+  for (const stale of existingByKey.values()) {
     ops.push({ kind: 'delete', triggerId: stale.id });
   }
 
   return ops;
 }
 
-function extractDeclared(def: WorkflowDefinition, workflowName: string): Map<string, {
-  type: 'webhook' | 'schedule';
+interface DeclaredEntry {
+  nodeId: string;
+  type: ReconcilerTriggerType;
   config: TriggerConfig;
   name: string;
-}> {
-  const out = new Map<string, { type: 'webhook' | 'schedule'; config: TriggerConfig; name: string }>();
+}
+
+function extractDeclared(def: WorkflowDefinition, workflowName: string): Map<string, DeclaredEntry> {
+  const out = new Map<string, DeclaredEntry>();
   for (const node of def.nodes) {
     if (node.type !== 'trigger') continue;
     const sub = (node as { subscription?: { type: string } }).subscription;
     if (!sub || sub.type === 'manual') continue;
+
+    // Identity: webhook subscriptions may pin a stableId across renames.
+    // Everything else uses the node id.
+    const identityKey =
+      sub.type === 'webhook' && typeof (sub as { stableId?: string }).stableId === 'string'
+        ? (sub as { stableId: string }).stableId
+        : node.id;
+    const name = `${workflowName} — ${node.id}`;
+
     if (sub.type === 'webhook') {
-      const s = sub as { type: 'webhook'; method?: string; rateLimit?: number };
-      out.set(node.id, {
-        type: 'webhook',
+      const s = sub as { type: 'webhook'; method?: string; rateLimit?: number; stableId?: string };
+      out.set(identityKey, {
+        nodeId: node.id, type: 'webhook',
         config: {
           type: 'webhook',
-          path: `/w/${node.id}`, // path is a stable per-node identifier; runtime resolves against ownerWorkflowId
+          path: `/w/${identityKey}`,   // stable across node renames when stableId is set
           method: s.method,
           rateLimit: s.rateLimit,
         },
-        name: `${workflowName} — ${node.id}`,
+        name,
       });
     } else if (sub.type === 'schedule') {
       const s = sub as { type: 'schedule'; cron: string; timezone?: string; triggerData?: Record<string, unknown> };
-      out.set(node.id, {
-        type: 'schedule',
+      out.set(identityKey, {
+        nodeId: node.id, type: 'schedule',
         config: {
-          type: 'schedule',
-          cron: s.cron,
-          timezone: s.timezone,
-          target: 'workflow',
-          triggerData: s.triggerData,
+          type: 'schedule', cron: s.cron, timezone: s.timezone,
+          target: 'workflow', triggerData: s.triggerData,
         },
-        name: `${workflowName} — ${node.id}`,
+        name,
       });
     } else if (sub.type === 'slack.message.channels') {
-      // At this point channel MUST be an already-resolved Slack channel
-      // id (starts with C…) and teamId MUST be set. Task 4's wire-up
-      // takes care of resolution; if it slipped through, that's a bug
-      // upstream and we skip this node (the publish path should have
-      // errored earlier).
+      // Definition MUST be resolved — Task 4's resolver rewrote channel
+      // to a C-prefixed id and set teamId. If either is missing here it
+      // is a programmer error upstream; throw so the bug surfaces
+      // instead of silently dropping the subscription.
       const s = sub as { type: 'slack.message.channels'; channel: string; teamId?: string; filters?: { ignoreBots?: boolean; mentionOnly?: boolean } };
-      if (!s.teamId || !/^C[A-Z0-9]+$/.test(s.channel)) continue;
-      out.set(node.id, {
-        type: 'slack.message.channels',
+      if (!s.teamId || !/^C[A-Z0-9]+$/.test(s.channel)) {
+        throw new Error(`planReconciliation: slack subscription for node ${node.id} is unresolved (channel=${s.channel}, teamId=${s.teamId ?? 'undefined'}). Caller must resolve before planning.`);
+      }
+      out.set(identityKey, {
+        nodeId: node.id, type: 'slack.message.channels',
         config: {
           type: 'slack.message.channels',
           teamId: s.teamId,
           channelId: s.channel,
           filters: s.filters,
         },
-        name: `${workflowName} — ${node.id}`,
+        name,
       });
     } else if (sub.type === 'github.event') {
-      // installationId MUST be resolved. Task 4 handles resolution and
-      // repo access validation.
       const s = sub as {
         type: 'github.event'; event: string; action?: string;
         installationId?: number; repo?: string;
-        filters?: { branch?: string; author?: string };
+        filters?: { branch?: string; author?: string; ignoreSelf?: boolean };
       };
-      if (typeof s.installationId !== 'number') continue;
-      out.set(node.id, {
-        type: 'github.event',
+      if (typeof s.installationId !== 'number') {
+        throw new Error(`planReconciliation: github subscription for node ${node.id} is unresolved (installationId missing). Caller must resolve before planning.`);
+      }
+      out.set(identityKey, {
+        nodeId: node.id, type: 'github.event',
         config: {
           type: 'github.event',
           installationId: s.installationId,
@@ -698,28 +868,41 @@ function extractDeclared(def: WorkflowDefinition, workflowName: string): Map<str
           repo: s.repo,
           filters: s.filters,
         },
-        name: `${workflowName} — ${node.id}`,
+        name,
       });
     }
   }
   return out;
 }
 
-function configsEqual(prev: ExistingRow, next: { type: string; config: TriggerConfig; name: string }): boolean {
+function configsEqual(prev: ExistingRow, next: DeclaredEntry): boolean {
   if (prev.type !== next.type) return false;
-  if (prev.name !== next.name) return false;
+  // Deliberately DOES NOT compare `name` — the reconciler owns name only
+  // at create time; user renames must survive republish.
   try {
-    const prevCfg = JSON.parse(prev.config) as Record<string, unknown>;
-    return canonicalize(prevCfg) === canonicalize(next.config as unknown as Record<string, unknown>);
+    const prevCfg = JSON.parse(prev.config);
+    return canonicalJson(prevCfg) === canonicalJson(next.config);
   } catch {
     return false;
   }
 }
 
-function canonicalize(obj: Record<string, unknown>): string {
-  const sorted: Record<string, unknown> = {};
-  for (const key of Object.keys(obj).sort()) sorted[key] = obj[key];
-  return JSON.stringify(sorted);
+// Recursive deep-sort: nested objects (like `filters`) also get their
+// keys sorted so filter reorderings don't emit false UPDATE ops. Arrays
+// are preserved as-is (order matters). Primitives are passed through.
+function canonicalJson(value: unknown): string {
+  return JSON.stringify(sortDeep(value));
+}
+
+function sortDeep(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(sortDeep);
+  if (value && typeof value === 'object') {
+    const record = value as Record<string, unknown>;
+    const sorted: Record<string, unknown> = {};
+    for (const key of Object.keys(record).sort()) sorted[key] = sortDeep(record[key]);
+    return sorted;
+  }
+  return value;
 }
 ```
 
@@ -747,58 +930,84 @@ access — callers apply the ops."
 
 ---
 
-### Task 4: Wire reconciler into publishWorkflow
+### Task 4: Wire resolve → commit resolved → reconcile into publishDraft
 
 **Files:**
-- Modify: `packages/worker/src/services/workflows.ts` (or wherever `publishWorkflow` lives — locate via `grep -rn "publishWorkflow" packages/worker/src`).
-- Modify: `packages/worker/src/lib/db/triggers.ts` — add helpers for owned-trigger CRUD if the existing `createTrigger`/`updateTrigger`/`deleteTrigger` don't accept owner columns.
-- Test: `packages/worker/src/services/workflows.publish.test.ts` (new or extend existing) — integration test against a D1 test harness.
+- Modify: `packages/worker/src/services/workflow-versions.ts` — this is where `publishDraft` lives (grep to verify; the summary/state earlier confirms this file). The reconciler + resolvers wire in HERE, not `workflows.ts`.
+- Modify: `packages/worker/src/lib/db/triggers.ts` — add **system-context** CRUD helpers `createTriggerAsOwner`, `updateOwnedTrigger`, `deleteOwnedTrigger`, `listOwnedTriggers`. These bypass the user-scoped WHERE clauses of the existing user-facing CRUD; the user-facing helpers stay ownership-scoped.
+- Test: `packages/worker/src/services/workflow-versions.publish.test.ts` (new or extend existing) — integration test against the D1 test harness.
 
 **Interfaces:**
-- Consumes: `planReconciliation` from Task 3.
-- Produces: `publishWorkflow` returns unchanged shape; side-effect is triggers table matches the published definition's declarations.
+- Consumes: `planReconciliation` from Task 3; `resolveSlackSubscriptions` and `resolveGithubSubscriptions` from Step 4.5a.
+- Produces: `publishDraft` runs **resolve → commit resolved definition → reconcile**. Return shape unchanged. Side effects: (a) the `workflow_versions` row stores the *resolved* definition (with concrete team/channel/installation ids), (b) triggers table matches the resolved definition's declarations.
 
-- [ ] **Step 4.1: Locate the publish path and existing trigger CRUD.**
+**Why this ordering matters (from adversarial review):** the previous ordering ran the reconciler *after* the version commit. If the reconciler or resolver threw, the version was permanent but no triggers existed. The user's UI showed "published" while nothing routed to it. The fix is to run resolvers BEFORE the version write commits; the version stores the resolved definition so rollback + re-reconcile is deterministic.
+
+- [ ] **Step 4.1: Locate the actual publish path and existing trigger CRUD.**
 
 Run:
 ```bash
-grep -rn "publishWorkflow\|createTrigger\|export.*Trigger" packages/worker/src/services packages/worker/src/lib/db 2>/dev/null | head -30
+grep -rn "publishDraft\|publishWorkflow\|createTrigger\|export.*Trigger" packages/worker/src/services packages/worker/src/lib/db 2>/dev/null | head -30
 ```
 
-Read the current `publishWorkflow` implementation and the trigger CRUD in `packages/worker/src/lib/db/triggers.ts`. Confirm the CRUD signatures.
+Read the current `publishDraft` implementation and the trigger CRUD in `packages/worker/src/lib/db/triggers.ts`. Confirm the existing signatures — specifically `deleteTrigger(db, triggerId, userId)` and `updateTrigger(db, triggerId, userId, setClauses, values)` require a `userId` and raw SQL, and CANNOT be called directly from the reconciler.
 
-- [ ] **Step 4.2: Extend trigger CRUD to accept owner columns.**
+- [ ] **Step 4.2: Add system-context CRUD helpers to `packages/worker/src/lib/db/triggers.ts`.**
 
-In `packages/worker/src/lib/db/triggers.ts`:
-
-- Add `ownerWorkflowId?: string; ownerNodeId?: string` to the `createTrigger` params.
-- Add `listOwnedTriggers(db, workflowId)` returning rows keyed by `ownerNodeId`.
-
-Show a diff-style change of the create signature (concrete):
+Add alongside the existing user-facing helpers:
 
 ```ts
-// createTrigger params
-export async function createTrigger(db: AppDb, params: {
+// System-context CRUD used by the publish reconciler. Bypasses the
+// user-scoped WHERE clauses of the user-facing helpers. Never expose
+// via HTTP handlers directly.
+export async function createTriggerAsOwner(db: AppDb, params: {
   id: string;
   userId: string;
-  workflowId: string | null;
+  workflowId: string;
+  ownerWorkflowId: string;
+  ownerNodeId: string;
   name: string;
   type: string;
   config: string;
-  variableMapping?: string | null;
   webhookToken?: string | null;
-  ownerWorkflowId?: string | null;
-  ownerNodeId?: string | null;
-}) { /* ... */ }
-```
+}): Promise<void> {
+  await db.insert(triggers).values({
+    id: params.id,
+    userId: params.userId,
+    workflowId: params.workflowId,
+    ownerWorkflowId: params.ownerWorkflowId,
+    ownerNodeId: params.ownerNodeId,
+    name: params.name,
+    type: params.type,
+    config: params.config,
+    enabled: true,
+    webhookToken: params.webhookToken ?? null,
+  }).run();
+}
 
-Add:
+export async function updateOwnedTrigger(db: AppDb, triggerId: string, patch: {
+  type: string;
+  config: string;
+}): Promise<void> {
+  // Deliberately does NOT touch: name, enabled, webhookToken, lastFiredAt.
+  await db.update(triggers).set({
+    type: patch.type,
+    config: patch.config,
+    updatedAt: sql`(datetime('now'))`,
+  }).where(eq(triggers.id, triggerId)).run();
+}
 
-```ts
+export async function deleteOwnedTrigger(db: AppDb, triggerId: string): Promise<void> {
+  await db.delete(triggers).where(eq(triggers.id, triggerId)).run();
+}
+
 export async function listOwnedTriggers(db: AppDb, workflowId: string) {
-  return db.select().from(triggers).where(eq(triggers.ownerWorkflowId, workflowId));
+  return db.select().from(triggers)
+    .where(eq(triggers.ownerWorkflowId, workflowId));
 }
 ```
+
+The user-facing `createTrigger`/`updateTrigger`/`deleteTrigger` stay ownership-scoped. If Task 5 (guards) hasn't landed yet, that's fine — they simply won't be called on owned rows.
 
 - [ ] **Step 4.3: Write the failing integration test.**
 
@@ -925,7 +1134,30 @@ Fill in the body following the pattern of existing Slack API calls in `packages/
 - `"Workflow declares a Slack trigger for #incidents but you have multiple connected workspaces — set the trigger node's subscription.teamId."`
 - `"Channel #incidents was not found in workspace T012ORG. Invite the bot to the channel or check the name."`
 
-Write tests at `packages/worker/src/services/slack-channel-resolver.test.ts` mocking the Slack API surface (see existing mocks in `packages/worker/src/services/slack.test.ts` if present).
+**Private-channel user-membership check (from adversarial review — closes a leak).** Slack installs today are org-scoped; without this check, any user in an org where the bot is invited to `#exec-comp` could publish a workflow that pipes `#exec-comp` messages through `trigger.data.text`. For private channels (Slack returns `is_private: true` on `conversations.info`), the resolver MUST additionally call `conversations.members` with the workflow owner's linked Slack identity and verify membership:
+
+```ts
+// Inside resolveSlackSubscriptions, after resolving name -> channelId:
+const info = await slack.conversations.info({ channel: channelId, token: install.botToken });
+if (info.channel.is_private) {
+  const slackUserId = await getUserSlackIdentity(db, userId, install.teamId);
+  if (!slackUserId) {
+    throw new ValidationError(`Cannot subscribe to private channel ${channelDisplay} — you must link your Slack account first.`);
+  }
+  const members = await slack.conversations.members({ channel: channelId, token: install.botToken });
+  if (!members.includes(slackUserId)) {
+    throw new ValidationError(`Cannot subscribe to private channel ${channelDisplay} — you are not a member.`);
+  }
+}
+```
+
+Write tests at `packages/worker/src/services/slack-channel-resolver.test.ts` mocking the Slack API surface (see existing mocks in `packages/worker/src/services/slack.test.ts` if present). Include a test for:
+- name resolution to id,
+- unresolvable channel throws,
+- multi-workspace requires teamId,
+- private channel with user membership: PASS,
+- private channel WITHOUT user membership: throws,
+- public channel: no membership check runs.
 
 Also create `packages/worker/src/services/github-installation-resolver.ts`:
 
@@ -964,72 +1196,106 @@ export async function resolveGithubSubscriptions(args: Args): Promise<WorkflowDe
 Error messages should be actionable:
 - `"Workflow declares a GitHub trigger but you have multiple installations — set subscription.installationId to one of: 12345 (anthropics), 67890 (personal)."`
 - `"Installation 12345 does not have access to repo anthropics/valet. Install the app on that repo or update subscription.repo."`
+- `"Installation 99999 is not linked to your account."` (When the declared installationId belongs to another user — critical for cross-user isolation. `listGithubInstallationsByUser` is already user-scoped; the resolver must reject any declared installationId not in that list.)
 
-Tests: `packages/worker/src/services/github-installation-resolver.test.ts` — mock the installations DB helper and the repo-access check.
+Tests: `packages/worker/src/services/github-installation-resolver.test.ts` — mock the installations DB helper and the repo-access check. Include:
+- auto-select when user has exactly one installation,
+- multi-installation without declared id: throws,
+- declared installationId belonging to another user: throws (critical),
+- declared repo not in installation's covered repos: throws,
+- happy path when installationId + repo both valid.
 
-- [ ] **Step 4.5b: Invoke the reconciler inside `publishWorkflow`.**
+- [ ] **Step 4.5b: Reorder `publishDraft` to resolve → commit resolved → reconcile.**
 
-At the end of `publishWorkflow`, after the version write commits:
+The critical inversion: resolvers run BEFORE the version write commits. If a resolver throws (bot not in channel, wrong installationId, cross-user installation), the version is never written and no triggers change. The version stores the *resolved* definition so rollback + re-reconcile is deterministic.
+
+Read the current `publishDraft` in `packages/worker/src/services/workflow-versions.ts` and identify:
+- where the draft is loaded (raw definition),
+- where the CAS on `expectedUpdatedAt` happens,
+- where the new `workflow_versions` row is inserted,
+- where `published_version_id` is updated.
+
+Then restructure:
 
 ```ts
 import { planReconciliation } from './trigger-reconciler.js';
-import { createTrigger, updateTrigger, deleteTrigger, listOwnedTriggers } from '../lib/db/triggers.js';
+import {
+  createTriggerAsOwner, updateOwnedTrigger, deleteOwnedTrigger, listOwnedTriggers,
+} from '../lib/db/triggers.js';
 import { resolveSlackSubscriptions } from './slack-channel-resolver.js';
 import { resolveGithubSubscriptions } from './github-installation-resolver.js';
-import { generateWebhookToken } from '...'; // reuse existing helper
+import { generateWebhookToken } from '...';
 
-// ... existing publish logic ...
+export async function publishDraft(...) {
+  // 1. Load draft definition.
+  const draft = await loadDraft(db, workflowId);
 
-// Resolve integration-scoped subscriptions before planning. If any
-// resolution fails, publish fails cleanly (nothing written to the
-// triggers table). Order doesn't matter — each resolver only touches
-// its own subscription type.
-let resolvedDefinition = await resolveSlackSubscriptions({
-  db, encryptionKey: env.ENCRYPTION_KEY,
-  userId: workflow.userId, definition: publishedDefinition,
-});
-resolvedDefinition = await resolveGithubSubscriptions({
-  db, userId: workflow.userId, definition: resolvedDefinition,
-});
+  // 2. Resolve integration-scoped subscriptions. If any resolver
+  //    throws, we exit before touching workflow_versions.
+  let resolvedDefinition = await resolveSlackSubscriptions({
+    db, encryptionKey: env.ENCRYPTION_KEY,
+    userId: workflow.userId, definition: draft.definition,
+  });
+  resolvedDefinition = await resolveGithubSubscriptions({
+    db, userId: workflow.userId, definition: resolvedDefinition,
+  });
 
-const owned = await listOwnedTriggers(db, workflowId);
-const ops = planReconciliation({
-  workflowId,
-  workflowName: workflow.name,
-  definition: resolvedDefinition,
-  existing: owned.map((r) => ({
-    id: r.id, ownerNodeId: r.ownerNodeId, type: r.type,
-    config: r.config, name: r.name,
-  })),
-});
+  // 3. Commit the RESOLVED definition as the new published version.
+  //    Existing CAS + version-number retry loop stays as-is; the only
+  //    change is the definition being written is `resolvedDefinition`,
+  //    not the raw draft.
+  const versionRow = await commitPublishedVersion(db, {
+    workflowId,
+    definition: resolvedDefinition,
+    expectedUpdatedAt: opts.expectedUpdatedAt,
+    // ... other existing args
+  });
 
-for (const op of ops) {
-  if (op.kind === 'create') {
-    await createTrigger(db, {
-      id: crypto.randomUUID(),
-      userId: workflow.userId,
-      workflowId,
-      name: op.name,
-      type: op.type,
-      config: JSON.stringify(op.config),
-      ownerWorkflowId: workflowId,
-      ownerNodeId: op.nodeId,
-      webhookToken: op.type === 'webhook' ? generateWebhookToken() : null,
-    });
-  } else if (op.kind === 'update') {
-    await updateTrigger(db, op.triggerId, {
-      name: op.name,
-      type: op.type,
-      config: JSON.stringify(op.config),
-      // Do NOT touch webhookToken — keep it stable across republishes.
-    });
-  } else {
-    await deleteTrigger(db, op.triggerId);
+  // 4. Reconcile the triggers table.
+  const owned = await listOwnedTriggers(db, workflowId);
+  const ops = planReconciliation({
+    workflowId,
+    workflowName: workflow.name,
+    definition: resolvedDefinition,
+    existing: owned.map((r) => ({
+      id: r.id, ownerNodeId: r.ownerNodeId, type: r.type,
+      config: r.config, name: r.name,
+    })),
+  });
+
+  for (const op of ops) {
+    if (op.kind === 'create') {
+      await createTriggerAsOwner(db, {
+        id: crypto.randomUUID(),
+        userId: workflow.userId,
+        workflowId,
+        ownerWorkflowId: workflowId,
+        ownerNodeId: op.identityKey,       // NOTE: identityKey, not nodeId — stableId compatibility
+        name: op.name,
+        type: op.type,
+        config: JSON.stringify(op.config),
+        webhookToken: op.type === 'webhook' ? generateWebhookToken() : null,
+      });
+    } else if (op.kind === 'update') {
+      // System-context update — no user scoping, and deliberately does
+      // not touch name/enabled/webhookToken/lastFiredAt.
+      await updateOwnedTrigger(db, op.triggerId, {
+        type: op.type,
+        config: JSON.stringify(op.config),
+      });
+    } else {
+      await deleteOwnedTrigger(db, op.triggerId);
+    }
   }
+
+  return versionRow;
 }
 ```
 
-Confirm `createTrigger` / `updateTrigger` / `deleteTrigger` signatures match the calls above; adjust if the actual API differs.
+Notes:
+- If step 4 partially fails (one CREATE errors because of the partial unique index — concurrent-publish race), the winning publisher has already committed a valid version + triggers, and the loser gets a well-defined error. Report as `409 conflict` back to the client.
+- If step 4 fully fails after step 3 committed, the workflow is published but triggers are inconsistent. Next publish self-heals. In practice this only happens on a DB outage between the two batches; log at ERROR level and surface a `503` so the client retries. This edge is documented in the spec — do NOT try to roll back the version write, which would race worse.
+- The identity persisted on CREATE is `op.identityKey`, which equals `subscription.stableId ?? node.id`. This is what makes webhook renames with `stableId` stable.
 
 - [ ] **Step 4.6: Run the test — expect pass.**
 
@@ -1311,24 +1577,46 @@ if (!isDm && teamId && event?.channel && typeof event.channel === 'string') {
     if (config.filters?.ignoreBots !== false && event.bot_id) continue;
     if (config.filters?.mentionOnly && !mentionsBot(event.text, botInfo)) continue;
 
-    c.executionCtx.waitUntil(enqueueWorkflowExecution({
-      db: c.get('db'),
-      env: c.env,
-      workflowId: trig.workflowId,
-      userId: trig.userId,
-      triggerId: trig.id,
-      triggerData: {
-        team: teamId,
-        channel: channelId,
-        channelName: (event.channel_name as string | undefined),
-        user: slackUserId ?? undefined,
-        text: event.text as string | undefined,
-        ts: event.ts as string | undefined,
-        threadTs: event.thread_ts as string | undefined,
-        eventType: eventType,
-      },
-    }));
+    c.executionCtx.waitUntil((async () => {
+      try {
+        await enqueueWorkflowExecution({
+          db: c.get('db'),
+          env: c.env,
+          workflowId: trig.workflowId,
+          userId: trig.userId,
+          triggerId: trig.id,
+          triggerData: {
+            team: teamId,
+            channel: channelId,
+            channelName: (event.channel_name as string | undefined),
+            user: slackUserId ?? undefined,
+            text: event.text as string | undefined,
+            ts: event.ts as string | undefined,
+            threadTs: event.thread_ts as string | undefined,
+            eventType: eventType,
+          },
+        });
+        // Stamp lastFiredAt so the UI can surface "recently fired" and
+        // detect silent trigger death (spec: Health signals).
+        await stampTriggerLastFired(c.get('db'), trig.id);
+      } catch (err) {
+        // waitUntil failures are otherwise invisible. Log at ERROR so
+        // Cloudflare observability picks it up.
+        console.error('[slack-events] workflow dispatch failed', err);
+      }
+    })());
   }
+}
+```
+
+Where `stampTriggerLastFired` is a new helper in `packages/worker/src/lib/db/triggers.ts`:
+
+```ts
+export async function stampTriggerLastFired(db: AppDb, triggerId: string): Promise<void> {
+  await db.update(triggers)
+    .set({ lastRunAt: sql`(datetime('now'))` })
+    .where(eq(triggers.id, triggerId))
+    .run();
 }
 ```
 
@@ -1523,33 +1811,91 @@ try {
       const ref = (payload as { ref?: string }).ref;
       if (config.filters?.branch && ref !== `refs/heads/${config.filters.branch}`) continue;
 
-      const senderLogin = (payload.sender as { login?: string } | undefined)?.login;
+      const sender = payload.sender as { login?: string; type?: string } | undefined;
+      const senderLogin = sender?.login;
+      const senderType = sender?.type;
       if (config.filters?.author && senderLogin !== config.filters.author) continue;
 
+      // Reentrance guard (default ON per spec). Drop events authored
+      // by any GitHub App bot — includes the Valet app's own commits/
+      // comments that would otherwise loop the workflow indefinitely.
+      const ignoreSelf = config.filters?.ignoreSelf !== false;
+      if (ignoreSelf && senderType === 'Bot' && senderLogin?.endsWith('[bot]')) continue;
+
       const repo = (payload.repository as { full_name?: string; owner?: { login?: string }; name?: string } | undefined);
-      c.executionCtx.waitUntil(enqueueWorkflowExecution({
-        db: getDb(c.env.DB),
-        env: c.env,
-        workflowId: trig.workflowId,
-        userId: trig.userId,
-        triggerId: trig.id,
-        triggerData: {
-          event,
-          action,
-          installationId,
-          repo: repo?.full_name ? {
-            owner: repo.owner?.login ?? '', name: repo.name ?? '',
-            fullName: repo.full_name,
-          } : undefined,
-          sender: payload.sender,
-          payload,
-        },
-      }));
+      c.executionCtx.waitUntil((async () => {
+        try {
+          await enqueueWorkflowExecution({
+            db: getDb(c.env.DB),
+            env: c.env,
+            workflowId: trig.workflowId!,
+            userId: trig.userId,
+            triggerId: trig.id,
+            triggerData: {
+              event,
+              action,
+              installationId,
+              repo: repo?.full_name ? {
+                owner: repo.owner?.login ?? '', name: repo.name ?? '',
+                fullName: repo.full_name,
+              } : undefined,
+              sender: payload.sender,
+              payload,
+            },
+          });
+          await stampTriggerLastFired(getDb(c.env.DB), trig.id);
+        } catch (err) {
+          console.error('[github webhook] workflow dispatch failed', err);
+        }
+      })());
     }
   }
 } catch (error) {
   console.error('[github webhook] workflow dispatch error:', error);
 }
+```
+
+Reentrance-loop test to add to Step 5C.2:
+
+```ts
+it('drops events authored by another bot when ignoreSelf is on (default)', async () => {
+  const { app, db, enqueueSpy } = await setupTestApp();
+  await seedOwnedGithubTrigger(db, {
+    workflowId: 'wf1', installationId: 42, event: 'issue_comment',
+    // no filters — ignoreSelf defaults true
+  });
+  await app.request('/api/webhooks/github', {
+    method: 'POST',
+    headers: githubHeaders('issue_comment'),
+    body: JSON.stringify({
+      action: 'created',
+      installation: { id: 42 },
+      repository: { full_name: 'anthropics/valet' },
+      sender: { login: 'valet-app[bot]', type: 'Bot' },
+      comment: { body: 'looks good' },
+    }),
+  });
+  expect(enqueueSpy).not.toHaveBeenCalled();
+});
+
+it('honors explicit ignoreSelf: false override', async () => {
+  const { app, db, enqueueSpy } = await setupTestApp();
+  await seedOwnedGithubTrigger(db, {
+    workflowId: 'wf1', installationId: 42, event: 'issue_comment',
+    filters: { ignoreSelf: false },
+  });
+  await app.request('/api/webhooks/github', {
+    method: 'POST',
+    headers: githubHeaders('issue_comment'),
+    body: JSON.stringify({
+      action: 'created',
+      installation: { id: 42 },
+      repository: { full_name: 'anthropics/valet' },
+      sender: { login: 'valet-app[bot]', type: 'Bot' },
+    }),
+  });
+  expect(enqueueSpy).toHaveBeenCalled();
+});
 ```
 
 Match `enqueueWorkflowExecution` to the actual signature from `packages/worker/src/services/executions.ts`.
@@ -1581,15 +1927,158 @@ stays fast."
 
 ---
 
-### Task 6: Copilot `getNodeSchema` surfaces `subscription`
+### Task 5D: Cascade owned-trigger cleanup on integration disconnect
 
 **Files:**
-- Modify: `packages/worker/src/routes/copilot.ts` (locate the `getNodeSchema` tool).
-- Modify: the copilot's system prompt (may live inline in `copilot.ts` or a template file — locate via `grep -n "getNodeSchema\|systemPrompt\|You are" packages/worker/src/routes/copilot.ts`).
+- Modify: `packages/worker/src/services/github-installations.ts` (or wherever `handleInstallationWebhook` lives — locate via `grep -rn "handleInstallationWebhook" packages/worker/src`).
+- Modify: whatever code handles Slack workspace disconnect (grep for `deleteOrgSlackInstall`, `disconnectSlack`, or similar in `packages/worker/src/`).
+- Test: extend the corresponding installation/disconnect test files.
 
 **Interfaces:**
-- Consumes: existing `getNodeSchema` tool return shape.
-- Produces: the trigger-node entry in `nodes[]` gains a `subscription` documentation block describing the union.
+- Consumes: existing installation lifecycle hooks.
+- Produces: when a GitHub installation is uninstalled (or a Slack workspace disconnected), all owned triggers scoped to it are DELETEd and the owning workflows are marked with a `health_status` reason. Prevents dispatch continuing to fire against an installation/workspace the user no longer controls.
+
+- [ ] **Step 5D.1: Locate the installation lifecycle handlers.**
+
+Run: `grep -n "handleInstallationWebhook\|updateGithubInstallationStatus\|installation.*delete" packages/worker/src/**/*.ts | head -15`
+
+Read the handler and confirm where the `deleted`/`suspend` branches live.
+
+- [ ] **Step 5D.2: Write the failing test.**
+
+Extend `packages/worker/src/services/github-installations.test.ts` (or create one if none exists):
+
+```ts
+it('deletes owned github.event triggers when the installation is uninstalled', async () => {
+  const db = await setupTestDb();
+  await seedInstallation(db, { installationId: 42, userId: 'u1' });
+  await seedOwnedGithubTrigger(db, {
+    triggerId: 't1', workflowId: 'wf1', userId: 'u1',
+    installationId: 42, event: 'pull_request',
+  });
+
+  await handleInstallationWebhook(db, {
+    action: 'deleted',
+    installation: { id: 42 },
+  });
+
+  const trig = await db.select().from(triggers).where(eq(triggers.id, 't1')).get();
+  expect(trig).toBeUndefined();
+});
+
+it('marks the owning workflow with health_status when triggers were cascaded', async () => {
+  const db = await setupTestDb();
+  await seedInstallation(db, { installationId: 42, userId: 'u1' });
+  await seedOwnedGithubTrigger(db, {
+    triggerId: 't1', workflowId: 'wf1', userId: 'u1',
+    installationId: 42, event: 'pull_request',
+  });
+
+  await handleInstallationWebhook(db, {
+    action: 'deleted',
+    installation: { id: 42 },
+  });
+
+  // A separate row on the workflow itself, or a health flag readable by
+  // the UI. Adjust to whatever surface Task 8's inspector reads.
+  const workflow = await db.select().from(workflows).where(eq(workflows.id, 'wf1')).get();
+  expect(workflow?.healthStatus).toBe('trigger_installation_uninstalled');
+});
+```
+
+- [ ] **Step 5D.3: Implement the cascade in `handleInstallationWebhook`.**
+
+For `deleted` action:
+
+```ts
+if (payload.action === 'deleted') {
+  const installationId = payload.installation.id;
+  // Delete owned github.event triggers scoped to this installation.
+  const deleted = await db.delete(triggers)
+    .where(and(
+      eq(triggers.type, 'github.event'),
+      sql`json_extract(${triggers.config}, '$.installationId') = ${installationId}`,
+      // Only owned rows — user-owned triggers targeting this installation
+      // are the user's responsibility to clean up.
+      isNotNull(triggers.ownerWorkflowId),
+    ))
+    .returning({ workflowId: triggers.ownerWorkflowId }).all();
+
+  // Mark the owning workflows so the editor UI can surface "trigger
+  // source disconnected" without polling.
+  const workflowIds = new Set(deleted.map((r) => r.workflowId).filter(Boolean));
+  for (const workflowId of workflowIds) {
+    await db.update(workflows).set({
+      healthStatus: 'trigger_installation_uninstalled',
+    }).where(eq(workflows.id, workflowId as string)).run();
+  }
+}
+```
+
+For `suspend` — same idea but set `enabled = false` on the triggers rather than deleting; on `unsuspend` re-enable. Include tests for suspend/unsuspend too.
+
+- [ ] **Step 5D.4: Slack workspace disconnect.**
+
+Find the Slack workspace disconnect handler (grep `deleteOrgSlackInstall`, `disconnectSlack`, or the `/api/channels/slack/disconnect` route). Add a parallel cascade:
+
+```ts
+// Before deleting the org install row:
+await db.delete(triggers)
+  .where(and(
+    eq(triggers.type, 'slack.message.channels'),
+    sql`json_extract(${triggers.config}, '$.teamId') = ${teamId}`,
+    isNotNull(triggers.ownerWorkflowId),
+  )).run();
+
+// Mark workflows: 'trigger_workspace_disconnected'
+```
+
+If no explicit disconnect route exists today, add a TODO in the code with a link to this plan step and skip this substep — the GitHub cascade covers the more urgent case.
+
+- [ ] **Step 5D.5: Run the tests — expect pass.**
+
+Run: `cd packages/worker && pnpm test github-installations && pnpm test slack.disconnect`
+Expected: PASS.
+
+- [ ] **Step 5D.6: Add `healthStatus` column to workflows if it doesn't exist.**
+
+If the `workflows` table doesn't already carry a `health_status`, this is where it goes — add a nullable text column in migration 0024 (extend the Task 1 migration if not merged yet, or add a follow-up 0025 if already merged). Update the Drizzle schema similarly.
+
+- [ ] **Step 5D.7: Commit.**
+
+```bash
+git add packages/worker/src/services/github-installations.ts \
+        packages/worker/src/routes/... \
+        packages/worker/src/services/github-installations.test.ts \
+        packages/worker/src/lib/schema/workflows.ts \
+        packages/worker/migrations/0024_trigger_ownership.sql  # if extended
+git commit -m "triggers: cascade on installation uninstall / workspace disconnect
+
+- handleInstallationWebhook 'deleted' now cleans up owned
+  github.event triggers scoped to the installation, and marks
+  the owning workflows with health_status.
+- 'suspend' disables the triggers (unsuspend re-enables).
+- Slack workspace disconnect gets a parallel cascade for
+  owned slack.message.channels triggers.
+- Prevents dispatch continuing against installations/workspaces
+  the user no longer controls."
+```
+
+---
+
+### Task 6: Copilot integration awareness — new tool + `getNodeSchema` + prompt
+
+**Files:**
+- Modify: `packages/worker/src/routes/copilot.ts` — extend the `getNodeSchema` tool, add a new `listConnectedIntegrations` tool, and update the system prompt.
+
+**Interfaces:**
+- Consumes: existing `getNodeSchema` tool return shape, `listGithubInstallationsByUser`, and the Slack install lookup.
+- Produces:
+  - `getNodeSchema` — trigger-node entry documents the `subscription` union with all types, resolved trigger.data shapes, and default filter values.
+  - New tool `listConnectedIntegrations` — returns the caller's connected Slack workspaces (teamId, name) and GitHub installations (id, account name, list of repo full names). Copilot MUST call this before writing a subscription that references specific identifiers.
+  - System prompt additions: enumerate integrations first; warn on trigger-node rename with webhook subscriptions; ignoreSelf default true for GitHub; note subscription changes explicitly in assistant responses.
+
+**Why this exists (from adversarial review):** without a tool to enumerate integrations, the copilot fabricates `installationId`/`teamId`/`repo` values from context clues. Publish then fails at the resolver, error propagates back through the chat, user tells copilot, copilot retries. That loop is expensive and unreliable. Enumerating up-front means the copilot writes correct identifiers on the first try.
 
 - [ ] **Step 6.1: Find the trigger-node schema documentation in the copilot's `getNodeSchema` tool.**
 
@@ -1670,15 +2159,57 @@ subscription: {
 },
 ```
 
-- [ ] **Step 6.3: Update the system prompt with a short note.**
+- [ ] **Step 6.2b: Add a `listConnectedIntegrations` tool.**
+
+In `packages/worker/src/routes/copilot.ts`, add alongside the existing tool definitions:
+
+```ts
+tools.listConnectedIntegrations = {
+  description: 'List the current user\'s connected Slack workspaces and GitHub installations. Call this BEFORE writing a subscription that names a specific teamId, installationId, or repo — the identifiers must match what the user actually has.',
+  parameters: z.object({}),
+  execute: async (): Promise<{
+    slack: Array<{ teamId: string; teamName: string | null }>;
+    github: Array<{ installationId: number; accountLogin: string; accountType: 'User' | 'Organization'; repos: string[] }>;
+  }> => {
+    const slack = await listUserSlackWorkspaces(db, userId);
+    const github = await listGithubInstallationsByUser(db, userId);
+    return {
+      slack: slack.map((w) => ({ teamId: w.teamId, teamName: w.teamName ?? null })),
+      github: await Promise.all(github.map(async (inst) => ({
+        installationId: inst.installationId,
+        accountLogin: inst.accountLogin,
+        accountType: inst.accountType,
+        repos: await listInstallationRepos(db, inst.installationId),  // helper — cached repo index or on-demand fetch
+      }))),
+    };
+  },
+};
+```
+
+`listUserSlackWorkspaces` and `listInstallationRepos` may need light wrappers around existing lookups. The GitHub repo list should come from the existing `github_installations`-scoped index if one exists (grep for it); if not, use the Octokit `apps.listReposAccessibleToInstallation` call, memoized per installation for the request lifetime.
+
+- [ ] **Step 6.3: Update the system prompt with the integration guidance.**
 
 Append (or splice into the trigger-node section) something like:
 
-> When the user describes an event source, set the trigger node's `subscription` field.
+> **Setting the trigger node's `subscription` field:**
+>
+> When the user describes an event source, set the trigger node's `subscription`.
 > - "every morning" / "on a schedule" → `{ type: "schedule", cron: "..." }`
 > - "when a webhook fires" / "when an external system POSTs" → `{ type: "webhook" }`. The URL is generated post-publish; tell the user to check the trigger node inspector.
 > - "when someone posts in #foo" / "when I get pinged in #foo" → `{ type: "slack.message.channels", channel: "#foo", filters: { mentionOnly: true } }` if they specifically said "when I'm mentioned"; otherwise omit `mentionOnly`. Also update the trigger node's `dataSchema` to match the Slack event shape (team, channel, user, text, ts).
 > - "when a PR is opened" / "on every commit to main" / "when someone comments on an issue" → `{ type: "github.event", event: "pull_request", action: "opened", repo: "owner/name" }` (adjust event/action to fit). For push filtering, use `filters.branch: "main"`. Set `repo` if the user names one; omit for org-wide. Update the trigger node's `dataSchema` to reflect what your workflow reads from the payload (usually a subset of the top-level fields).
+>
+> **Before writing an integration-scoped subscription, call `listConnectedIntegrations`** to get the user's actual `teamId`s (Slack), `installationId`s (GitHub), and covered repos. Never fabricate these identifiers — publish will reject them at the resolver with an actionable error, wasting a round-trip.
+>
+> **Multi-workspace / multi-installation defaults:** if the user has exactly one, omit the identifier and let the resolver auto-select. If they have more than one, ask which one they mean rather than guessing.
+>
+> **Trigger-node rename hazard:** renaming a trigger node with `subscription.type === 'webhook'` and no `stableId` rotates the webhook URL, breaking external callers. Warn the user before making this change, or set `subscription.stableId` on the webhook to pin the URL.
+>
+> **GitHub reentrance:** `filters.ignoreSelf` defaults to `true` and drops events authored by any GitHub App bot. This is what prevents workflows that comment on PRs from firing themselves. Do not override to `false` without explicit user consent — infinite loops are the failure mode.
+>
+> **When applyWorkflowPatch touches a `subscription` field, note it explicitly** in your response summary. "I updated node X's subscription from schedule to slack.message.channels" — do not bury the change inside a generic patch description. These are high-consequence edits (they change what triggers the workflow).
+>
 > Do NOT set `subscription` for triggers the user says will only be invoked via the test-run button. Gmail and other integration event sources are NOT yet supported — for those requests, declare `{ type: "manual" }` and tell the user they'll need to wire an external caller until first-party event triggers ship for those integrations.
 
 - [ ] **Step 6.4: Typecheck.**
@@ -1767,7 +2298,7 @@ In the detail route, above the form:
 const isOwned = !!trigger.ownerWorkflowId;
 ```
 
-Pass `disabled={isOwned}` to declarative inputs (type dropdown, config JSON editor, variable mapping). Keep the `enabled` toggle and `name` input free.
+Pass `disabled={isOwned}` to declarative inputs (**type dropdown, config JSON editor, variable mapping only**). The `enabled` toggle stays free (runtime state), and the `name` field stays free too — the reconciler doesn't touch names post-create, so user renames persist. Do not disable the name input.
 
 For the delete button:
 
@@ -1973,7 +2504,71 @@ export function TriggerNodeSubscriptionForm({ value, onChange, publishedWebhookU
 
 Locate the inspector (Step 8's file-list) and mount the form when the selected node is `type: 'trigger'`. Wire the `onChange` to the same handler used by the rest of the node inspector (the one that calls `applyOps` or `patchNode`).
 
-For `publishedWebhookUrl`: after publish, look up the owned trigger by `ownerNodeId === trigger.id`, read its webhook token + path, construct the URL from the worker origin.
+- [ ] **Step 8.2b: Query the materialized owned trigger and surface runtime state.**
+
+Above the subscription form, when the node id resolves to a materialized owned trigger (look up via `ownerNodeId === node.subscription.stableId ?? node.id`), display:
+
+```tsx
+{materialized && (
+  <div className="mb-3 space-y-2 rounded-md border border-neutral-200 p-3 text-xs">
+    <div className="flex items-center gap-2">
+      <span className={materialized.enabled ? 'text-emerald-600' : 'text-neutral-500'}>
+        {materialized.enabled ? '● Active' : '○ Disabled'}
+      </span>
+      {!materialized.enabled && (
+        <button onClick={() => enableTrigger(materialized.id)} className="text-violet-600 hover:underline">
+          Re-enable
+        </button>
+      )}
+    </div>
+    <div className="text-neutral-500">
+      Last fired: {materialized.lastRunAt ? formatRelative(materialized.lastRunAt) : 'never'}
+    </div>
+    {materialized.type === 'webhook' && (
+      <div>
+        <div className="text-neutral-500">URL:</div>
+        <code className="block break-all rounded bg-neutral-100 px-2 py-1">{buildWebhookUrl(materialized)}</code>
+      </div>
+    )}
+    {materialized.healthStatus && (
+      <div className="rounded bg-amber-50 px-2 py-1 text-amber-800">
+        ⚠ {formatHealthStatus(materialized.healthStatus)}
+      </div>
+    )}
+  </div>
+)}
+```
+
+`healthStatus` reasons include: `trigger_installation_uninstalled`, `trigger_workspace_disconnected`, `slack_bot_removed_from_channel`, etc. Format them into human-readable copy in `formatHealthStatus`.
+
+- [ ] **Step 8.2c: Warn when renaming a trigger node with a webhook subscription and no `stableId`.**
+
+The inspector's node-id input handler needs a pre-commit guard:
+
+```tsx
+const isWebhookWithoutStableId =
+  node.type === 'trigger'
+  && node.subscription?.type === 'webhook'
+  && !node.subscription.stableId;
+
+const handleIdChange = (nextId: string) => {
+  if (isWebhookWithoutStableId && nextId !== node.id) {
+    const confirmed = window.confirm(
+      'Renaming this trigger node will rotate the webhook URL. Any external system using the current URL will get 401 errors.\n\n' +
+      'To pin the URL across renames, set subscription.stableId first.\n\n' +
+      'Rename anyway?'
+    );
+    if (!confirmed) return;
+  }
+  onIdChange(nextId);
+};
+```
+
+`window.confirm` is fine for v1 — replace with a modal later. The important part is the guard exists.
+
+- [ ] **Step 8.2d: For `publishedWebhookUrl`:**
+
+After publish, look up the owned trigger by `ownerNodeId === subscription.stableId ?? node.id`, read its webhook token + path, construct the URL from the worker origin. This is the `materialized` object referenced in Step 8.2b.
 
 - [ ] **Step 8.3: Build the client.**
 
@@ -2025,15 +2620,192 @@ git commit -m "docs: reference the trigger-ownership model in workflows spec"
 
 ---
 
+### Task 10: Delivery-id dedup + per-trigger execution rate cap
+
+**Files:**
+- Modify: `packages/worker/migrations/0024_trigger_ownership.sql` (or a follow-up 0025) — add `channel_event_deliveries` table.
+- Modify: `packages/worker/src/lib/schema/workflows.ts` — Drizzle schema for the new table.
+- Modify: `packages/worker/src/routes/slack-events.ts` + `packages/worker/src/routes/webhooks.ts` — write the delivery id before enqueue; skip if already recorded.
+- Modify: `packages/worker/src/services/executions.ts` (or wherever executions enqueue) — check per-trigger execution rate before enqueue, similar to the existing `trigger_webhook_rate` mechanism.
+- Test: extend the dispatch tests to cover dedup + rate cap.
+
+**Interfaces:**
+- Consumes: existing `trigger_webhook_rate` pattern.
+- Produces:
+  - New table `channel_event_deliveries (delivery_id TEXT PRIMARY KEY, trigger_id TEXT, seen_at INTEGER)` — TTL sweep via cron.
+  - New DB helper `recordDelivery(db, deliveryId, triggerId) → boolean` (true if newly inserted, false if already present).
+  - Per-trigger execution rate cap enforced in the dispatch fork; on exceed, log at WARN and drop.
+
+**Why v1 hardening:** `waitUntil` swallows enqueue failures. Without a delivery-id record, a transient D1 error means the event is permanently lost. And without a per-trigger execution rate cap, a chatty channel or a busy monorepo could fan out unbounded workflow executions before a human notices.
+
+- [ ] **Step 10.1: Add the delivery-dedup table.**
+
+Migration:
+
+```sql
+CREATE TABLE channel_event_deliveries (
+  delivery_id TEXT NOT NULL,        -- X-GitHub-Delivery or Slack event_id
+  source TEXT NOT NULL,             -- 'slack' | 'github'
+  trigger_id TEXT NOT NULL REFERENCES triggers(id) ON DELETE CASCADE,
+  seen_at INTEGER NOT NULL,
+  PRIMARY KEY (delivery_id, source, trigger_id)
+);
+CREATE INDEX idx_channel_event_deliveries_seen_at ON channel_event_deliveries(seen_at);
+```
+
+TTL sweep runs via existing cron.
+
+- [ ] **Step 10.2: Add the DB helper.**
+
+```ts
+export async function recordDelivery(
+  db: AppDb, deliveryId: string, source: 'slack' | 'github', triggerId: string,
+): Promise<boolean> {
+  try {
+    await db.insert(channelEventDeliveries).values({
+      deliveryId, source, triggerId, seenAt: Math.floor(Date.now() / 1000),
+    }).run();
+    return true;
+  } catch {
+    return false;  // PK conflict → already recorded
+  }
+}
+```
+
+- [ ] **Step 10.3: Wire dedup into both dispatch forks.**
+
+In each dispatch fork (Task 5B, 5C), BEFORE the `enqueueWorkflowExecution` call:
+
+```ts
+const isNew = await recordDelivery(db, deliveryId, 'github', trig.id);
+if (!isNew) continue;  // already dispatched
+```
+
+For Slack, `deliveryId` = the event's `event_id`. For GitHub, `deliveryId` = the `X-GitHub-Delivery` header value.
+
+- [ ] **Step 10.4: Per-trigger execution rate cap.**
+
+Reuse the `trigger_webhook_rate` pattern — a sliding-minute counter keyed by `trigger_id`. Default cap: 60/minute for event-triggered workflows (same as webhook default). Override via the subscription's `rateLimit` field (already exists on the webhook subscription; add it as an optional field on `slack.message.channels` and `github.event` too).
+
+Before dispatch:
+
+```ts
+const allowed = await checkTriggerExecutionRate(db, trig.id, config.rateLimit ?? 60);
+if (!allowed) {
+  console.warn(`[dispatch] rate limit exceeded for trigger ${trig.id}; dropping event`);
+  continue;
+}
+```
+
+- [ ] **Step 10.5: Tests + commit.**
+
+Extend the dispatch tests with: duplicate delivery id is deduped; rate cap exhausted → drop; rate cap resets after the minute window.
+
+```bash
+git commit -m "triggers: delivery-id dedup + per-trigger execution rate cap
+
+- channel_event_deliveries table dedupes Slack event_id + GitHub
+  delivery id so waitUntil failures do not silently drop events.
+- Per-trigger execution rate cap (default 60/minute) prevents
+  chatty channels or busy monorepos from fanning out unbounded
+  executions."
+```
+
+---
+
+### Task 11: Periodic sanity check for trigger health
+
+**Files:**
+- Modify: `packages/worker/src/index.ts` or wherever the cron entrypoint lives (`grep -n "scheduled\|handleCron" packages/worker/src/index.ts`).
+- Create: `packages/worker/src/services/trigger-health-check.ts` + test.
+
+**Interfaces:**
+- Consumes: existing cron scheduler.
+- Produces: hourly job that walks owned triggers, verifies bot channel membership (Slack) and installation validity (GitHub), and stamps `triggers.health_status` on rows whose bindings are broken. UI reads this in the workflow-editor inspector (Task 8.2b).
+
+- [ ] **Step 11.1: Implement the health check.**
+
+```ts
+export async function runTriggerHealthCheck(db: AppDb, env: Env): Promise<void> {
+  const rows = await db.select().from(triggers)
+    .where(and(isNotNull(triggers.ownerWorkflowId), eq(triggers.enabled, true)))
+    .all();
+
+  for (const trig of rows) {
+    let health: string | null = null;
+    if (trig.type === 'slack.message.channels') {
+      const cfg = JSON.parse(trig.config) as { teamId: string; channelId: string };
+      const stillMember = await isBotMemberOfChannel(db, env, cfg.teamId, cfg.channelId);
+      if (!stillMember) health = 'slack_bot_removed_from_channel';
+    } else if (trig.type === 'github.event') {
+      const cfg = JSON.parse(trig.config) as { installationId: number };
+      const install = await getGithubInstallation(db, cfg.installationId);
+      if (!install || install.status !== 'active') health = 'github_installation_inactive';
+    }
+    if (health !== (trig.healthStatus ?? null)) {
+      await db.update(triggers).set({ healthStatus: health }).where(eq(triggers.id, trig.id)).run();
+    }
+  }
+}
+```
+
+- [ ] **Step 11.2: Schedule it hourly.**
+
+In the cron config (`wrangler.toml` `[triggers.crons]`), add `"0 * * * *"` and route to `runTriggerHealthCheck` in the `scheduled` handler.
+
+- [ ] **Step 11.3: Test + commit.**
+
+Mock the Slack/GitHub API calls and verify `health_status` transitions.
+
+```bash
+git commit -m "triggers: hourly sanity check for owned trigger health
+
+Detects bot removed from channel / installation revoked and
+stamps triggers.health_status so the workflow editor can
+surface broken bindings without waiting for a user report."
+```
+
+---
+
 ## Self-Review Notes
 
-- Every task ends with a build/test + commit. Steps are small.
-- Types flow forward: `ReconcilerOp` (Task 3) → consumed in Task 4; `subscription` union (Task 2) → consumed in Tasks 3, 5B, 5C, 6, 8.
+**Adversarial review findings integrated (v2, 2026-07-01):**
+
+- Publish now runs **resolve → commit resolved definition → reconcile** (Task 4). Resolvers throw BEFORE the version write, so a failed resolution never leaves the workflow published without triggers.
+- The workflow_executions.trigger_type CHECK constraint is widened in Task 1 to include `slack.message.channels` and `github.event`. Without this, every event execution INSERT would fail silently inside `waitUntil`.
+- Task 1 also adds a partial unique index on `(owner_workflow_id, owner_node_id)` that guards the concurrent-publish race — the losing INSERT fails and the losing publish returns a 409.
+- Name ownership is inverted from the initial draft: reconciler defaults on CREATE, never touches on UPDATE. User renames persist. `configsEqual` no longer compares name; the `update` op no longer carries name (Task 3).
+- `configsEqual` now uses a **recursive** deep-sort canonicalization so nested `filters` objects don't emit false UPDATE ops on republish (Task 3).
+- Reconciler + dispatch use **system-context CRUD helpers** (`createTriggerAsOwner`, `updateOwnedTrigger`, `deleteOwnedTrigger`) that bypass user scoping. User-facing CRUD stays scoped (Task 4.2 + Task 5's guards).
+- Reconciler THROWS when a subscription is unresolved instead of silently `continue`ing — the previous silent skip masked resolver failures (Task 3).
+- Webhook token stability across trigger-node renames: new optional `subscription.stableId` field; identity keyed by `stableId ?? nodeId` (Tasks 2, 3). Workflow editor warns before commit when a webhook subscription is being renamed without `stableId` (Task 8.2c).
+- GitHub reentrance loop closed: `filters.ignoreSelf` defaults `true` and drops `sender.type === 'Bot' && sender.login.endsWith('[bot]')` events (Task 5C). Slack already had `ignoreBots`.
+- Slack private-channel leak closed: resolver additionally checks the publishing user's linked Slack identity is a member of the channel (Task 4.5a). Public channels skip the check.
+- GitHub cross-user installation binding rejected at resolve: `listGithubInstallationsByUser` is user-scoped; the resolver rejects any declared installationId not in that list (Task 4.5a).
+- Slack DM → orchestrator routing untouched; verified in Task 5B.6.
+- Existing GitHub session-state handlers (installation / pull_request / push) untouched; verified in Task 5C.6.
+- Existing user-owned triggers untouched: verified in Task 4 test with a manual trigger seeded on the same workflowId.
+
+**New tasks:**
+- **Task 5D — cascade cleanup on integration disconnect.** GitHub uninstall + Slack workspace disconnect delete owned triggers and mark owning workflows with `health_status`, preventing dispatch continuing against resources the user no longer controls.
+- **Task 6 — `listConnectedIntegrations` tool.** Copilot can enumerate the user's Slack workspaces and GitHub installations before writing a subscription, avoiding fabrication + publish-time round-trips.
+- **Task 10 — delivery-id dedup + per-trigger execution rate cap.** Prevents silent event loss on waitUntil failure and unbounded fanout on chatty channels or busy monorepos.
+- **Task 11 — hourly sanity check for trigger health.** Detects bot-removed-from-channel and installation-revoked out-of-band and marks `triggers.health_status`. Workflow editor's trigger-node inspector reads this (Task 8.2b).
+
+**Copilot UX hardening (Task 6 prompt):**
+- Enumerate integrations before subscribing.
+- Warn users before renaming trigger nodes with webhook subscriptions and no `stableId`.
+- Note subscription changes explicitly in assistant responses (they're high-consequence).
+- `ignoreSelf` default `true` for GitHub; only override with explicit user consent.
+
+**Explicit deferrals (documented as follow-ups):**
+- Gmail and other integration event triggers.
+- Cross-workflow subscription deduping at the plumbing layer (currently each workflow declares independently; dispatcher fires each match).
+- Duplicate-fanout warnings on publish (workflow-owned trigger overlaps a pre-existing user-owned trigger for the same event).
+
+**Types flow forward:**
+- `subscription` union (Task 2) → consumed in Tasks 3, 5B, 5C, 6, 8.
+- `ReconcilerOp` (Task 3) → consumed in Task 4.
+- `stampTriggerLastFired` + `recordDelivery` + `checkTriggerExecutionRate` → consumed in Tasks 5B, 5C.
+- `health_status` column (Tasks 1, 5D) → consumed in Task 8.2b + Task 11.
 - No placeholder code — every step includes the exact change.
-- Gmail / other integration event triggers are explicitly out of scope; the plan calls that out in Task 6's prompt update so the copilot doesn't hallucinate unsupported subscription types.
-- Slack `message.channels` is in v1 scope. The Slack Events API is already subscribed at the app manifest level (`packages/plugin-slack/slack-app-manifest.json`) — no external Slack config change needed. The dispatch fork in Task 5B wires those events to workflow executions.
-- GitHub events are in v1 scope. The GitHub App webhook is already live at `/api/webhooks/github` with signature verification. The dispatch fork in Task 5C is additive to the existing installation/pull_request/push handlers — those keep running for session-state routing.
-- Integration-scoped resolution (Slack channel name→id, GitHub installation binding) is separated from the pure reconciler (Task 4.5a) so `planReconciliation` stays testable in isolation.
-- Existing user-owned triggers behavior verified in Task 4 test.
-- Existing Slack DM → orchestrator routing unchanged; verified in Task 5B.6.
-- Existing GitHub session-state handlers unchanged; verified in Task 5C.6.
