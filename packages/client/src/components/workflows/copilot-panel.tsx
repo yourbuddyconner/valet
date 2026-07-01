@@ -442,12 +442,12 @@ function renderPart(part: UiMessage['parts'][number], i: number): ReactNode {
     );
   }
   if (part.type === 'tool-call') {
-    const p = part as { toolName: string; args: unknown };
-    return <ToolCallCard key={i} kind="call" toolName={p.toolName} payload={p.args} />;
+    const p = part as { toolName: string; input: unknown };
+    return <ToolCallCard key={i} kind="call" toolName={p.toolName} payload={p.input} />;
   }
   if (part.type === 'tool-result') {
-    const p = part as { result: unknown };
-    return <ToolCallCard key={i} kind="result" toolName="result" payload={p.result} />;
+    const p = part as { toolName?: string; output: unknown };
+    return <ToolCallCard key={i} kind="result" toolName={p.toolName ?? 'result'} payload={p.output} />;
   }
   return null;
 }

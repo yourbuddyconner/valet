@@ -266,12 +266,22 @@ copilotRouter.post('/chat', zValidator('json', chatBodySchema), async (c) => {
       // Persist the assistant turn (and any tool calls/results) so the
       // thread can be replayed on reload. Append-only: never mutates
       // earlier messages so the cache prefix stays stable.
+      // Content is persisted in the SDK's canonical shape — the same
+      // shape the streaming wire uses — so the client renders live and
+      // reloaded messages through one code path.
       for (const msg of response.messages) {
         if (msg.role === 'assistant' || msg.role === 'tool') {
+          const parts = Array.isArray(msg.content) ? msg.content : [];
+          const textContent = typeof msg.content === 'string'
+            ? msg.content
+            : parts
+                .filter((p): p is { type: 'text'; text: string } => p.type === 'text' && typeof (p as { text?: unknown }).text === 'string')
+                .map((p) => p.text)
+                .join('\n');
           await appendCopilotMessage(db, thread!.id, {
             role: msg.role,
-            content: typeof msg.content === 'string' ? msg.content : '',
-            parts: msg.content,
+            content: textContent,
+            parts: parts.length > 0 ? parts : msg.content,
           });
         }
       }

@@ -37,14 +37,15 @@ export interface CopilotMessage {
 }
 
 /**
- * Subset of the Vercel AI SDK UIMessage parts we care about. The server
- * is the source of truth for the full shape; this is just what the
- * panel renders.
+ * Subset of the Vercel AI SDK UIMessage parts we care about. Field
+ * names match the SDK's canonical shape (input/output — NOT args/result)
+ * so persisted messages, streamed chunks, and rendered UI all share
+ * one representation with no translation layer.
  */
 export type UiMessagePart =
   | { type: 'text'; text: string }
-  | { type: 'tool-call'; toolCallId: string; toolName: string; args: unknown }
-  | { type: 'tool-result'; toolCallId: string; toolName: string; result: unknown }
+  | { type: 'tool-call'; toolCallId: string; toolName: string; input: unknown }
+  | { type: 'tool-result'; toolCallId: string; toolName: string; output: unknown }
   | { type: string; [key: string]: unknown };
 
 export function useCopilotThreads(workflowId: string | null | undefined) {
@@ -190,8 +191,8 @@ export function useCopilotChat(opts: UseCopilotChatOptions) {
 
 type PartUpdate =
   | { kind: 'text-delta'; id: string; delta: string }
-  | { kind: 'tool-call'; toolCallId: string; toolName: string; args: unknown }
-  | { kind: 'tool-result'; toolCallId: string; result: unknown };
+  | { kind: 'tool-call'; toolCallId: string; toolName: string; input: unknown }
+  | { kind: 'tool-result'; toolCallId: string; toolName: string; output: unknown };
 
 async function consumeUiStream(
   body: ReadableStream<Uint8Array>,
@@ -244,13 +245,14 @@ function routeChunk(chunk: Record<string, unknown>, onUpdate: (u: PartUpdate) =>
       kind: 'tool-call',
       toolCallId: (chunk.toolCallId ?? chunk.id ?? '') as string,
       toolName: (chunk.toolName ?? '') as string,
-      args: chunk.input ?? chunk.args ?? {},
+      input: chunk.input ?? {},
     });
   } else if (type === 'tool-result' || type === 'tool-output-available') {
     onUpdate({
       kind: 'tool-result',
       toolCallId: (chunk.toolCallId ?? chunk.id ?? '') as string,
-      result: chunk.output ?? chunk.result ?? null,
+      toolName: (chunk.toolName ?? '') as string,
+      output: chunk.output ?? null,
     });
   }
 }
@@ -272,15 +274,15 @@ function applyPartUpdate(msg: UiMessage, update: PartUpdate): UiMessage {
         type: 'tool-call',
         toolCallId: update.toolCallId,
         toolName: update.toolName,
-        args: update.args,
+        input: update.input,
       });
       break;
     case 'tool-result':
       parts.push({
         type: 'tool-result',
         toolCallId: update.toolCallId,
-        toolName: '',
-        result: update.result,
+        toolName: update.toolName,
+        output: update.output,
       });
       break;
   }
