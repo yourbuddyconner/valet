@@ -29,9 +29,21 @@ import type { WorkflowDefinition } from '@valet/shared';
 
 interface CopilotPanelProps {
   workflowId: string;
+  /**
+   * Optional first-turn prompt. When provided, the panel starts a new
+   * thread and immediately sends this message as if the user had typed
+   * it. Consumed once — the parent should clear it via
+   * `onInitialPromptConsumed` so a re-render doesn't re-send.
+   */
+  initialPrompt?: string | null;
+  onInitialPromptConsumed?: () => void;
 }
 
-export function CopilotPanel({ workflowId }: CopilotPanelProps) {
+export function CopilotPanel({
+  workflowId,
+  initialPrompt,
+  onInitialPromptConsumed,
+}: CopilotPanelProps) {
   const { data: threadsData, isLoading: threadsLoading } = useCopilotThreads(workflowId);
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
   const [threadMenuOpen, setThreadMenuOpen] = useState(false);
@@ -114,6 +126,8 @@ export function CopilotPanel({ workflowId }: CopilotPanelProps) {
         workflowId={workflowId}
         threadId={activeThreadId}
         onThreadDiscovered={handleThreadDiscovered}
+        initialPrompt={initialPrompt ?? null}
+        onInitialPromptConsumed={onInitialPromptConsumed}
       />
     </div>
   );
@@ -127,10 +141,14 @@ function ThreadStream({
   workflowId,
   threadId,
   onThreadDiscovered,
+  initialPrompt,
+  onInitialPromptConsumed,
 }: {
   workflowId: string;
   threadId: string | null;
   onThreadDiscovered: (id: string) => void;
+  initialPrompt?: string | null;
+  onInitialPromptConsumed?: () => void;
 }) {
   const qc = useQueryClient();
   // Load persisted messages for this thread (if any). When threadId is
@@ -228,6 +246,20 @@ function ThreadStream({
     e.preventDefault();
     submit();
   };
+
+  // Auto-fire the seeded first turn when the parent hands us one (from
+  // the automation landing's deep-link) and the panel is idle enough
+  // to send it. Runs once — `initialPromptSentRef` guards against a
+  // second fire and we tell the parent to clear its state.
+  const initialPromptSentRef = useRef(false);
+  useEffect(() => {
+    if (initialPromptSentRef.current) return;
+    if (!initialPrompt) return;
+    if (submitDisabled) return;
+    initialPromptSentRef.current = true;
+    void send(initialPrompt);
+    onInitialPromptConsumed?.();
+  }, [initialPrompt, submitDisabled, send, onInitialPromptConsumed]);
 
   return (
     <>

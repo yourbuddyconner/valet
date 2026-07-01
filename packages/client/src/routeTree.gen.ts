@@ -19,6 +19,7 @@ import { Route as WorkflowsIndexRouteImport } from './routes/workflows/index'
 import { Route as SettingsIndexRouteImport } from './routes/settings/index'
 import { Route as SessionsIndexRouteImport } from './routes/sessions/index'
 import { Route as IntegrationsIndexRouteImport } from './routes/integrations/index'
+import { Route as AutomationIndexRouteImport } from './routes/automation/index'
 import { Route as WorkflowsWorkflowIdRouteImport } from './routes/workflows/$workflowId'
 import { Route as SettingsUsageRouteImport } from './routes/settings/usage'
 import { Route as SettingsSkillsRouteImport } from './routes/settings/skills'
@@ -89,6 +90,11 @@ const IntegrationsIndexRoute = IntegrationsIndexRouteImport.update({
   id: '/integrations/',
   path: '/integrations/',
   getParentRoute: () => rootRouteImport,
+} as any)
+const AutomationIndexRoute = AutomationIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => AutomationRoute,
 } as any)
 const WorkflowsWorkflowIdRoute = WorkflowsWorkflowIdRouteImport.update({
   id: '/workflows/$workflowId',
@@ -213,6 +219,7 @@ export interface FileRoutesByFullPath {
   '/settings/skills': typeof SettingsSkillsRouteWithChildren
   '/settings/usage': typeof SettingsUsageRoute
   '/workflows/$workflowId': typeof WorkflowsWorkflowIdRoute
+  '/automation/': typeof AutomationIndexRoute
   '/integrations/': typeof IntegrationsIndexRoute
   '/sessions/': typeof SessionsIndexRoute
   '/settings/': typeof SettingsIndexRoute
@@ -231,7 +238,6 @@ export interface FileRoutesByFullPath {
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
-  '/automation': typeof AutomationRouteWithChildren
   '/inbox': typeof InboxRoute
   '/login': typeof LoginRoute
   '/onboarding': typeof OnboardingRoute
@@ -244,6 +250,7 @@ export interface FileRoutesByTo {
   '/settings/skills': typeof SettingsSkillsRouteWithChildren
   '/settings/usage': typeof SettingsUsageRoute
   '/workflows/$workflowId': typeof WorkflowsWorkflowIdRoute
+  '/automation': typeof AutomationIndexRoute
   '/integrations': typeof IntegrationsIndexRoute
   '/sessions': typeof SessionsIndexRoute
   '/settings': typeof SettingsIndexRoute
@@ -277,6 +284,7 @@ export interface FileRoutesById {
   '/settings/skills': typeof SettingsSkillsRouteWithChildren
   '/settings/usage': typeof SettingsUsageRoute
   '/workflows/$workflowId': typeof WorkflowsWorkflowIdRoute
+  '/automation/': typeof AutomationIndexRoute
   '/integrations/': typeof IntegrationsIndexRoute
   '/sessions/': typeof SessionsIndexRoute
   '/settings/': typeof SettingsIndexRoute
@@ -311,6 +319,7 @@ export interface FileRouteTypes {
     | '/settings/skills'
     | '/settings/usage'
     | '/workflows/$workflowId'
+    | '/automation/'
     | '/integrations/'
     | '/sessions/'
     | '/settings/'
@@ -329,7 +338,6 @@ export interface FileRouteTypes {
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
-    | '/automation'
     | '/inbox'
     | '/login'
     | '/onboarding'
@@ -342,6 +350,7 @@ export interface FileRouteTypes {
     | '/settings/skills'
     | '/settings/usage'
     | '/workflows/$workflowId'
+    | '/automation'
     | '/integrations'
     | '/sessions'
     | '/settings'
@@ -374,6 +383,7 @@ export interface FileRouteTypes {
     | '/settings/skills'
     | '/settings/usage'
     | '/workflows/$workflowId'
+    | '/automation/'
     | '/integrations/'
     | '/sessions/'
     | '/settings/'
@@ -485,6 +495,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/integrations/'
       preLoaderRoute: typeof IntegrationsIndexRouteImport
       parentRoute: typeof rootRouteImport
+    }
+    '/automation/': {
+      id: '/automation/'
+      path: '/'
+      fullPath: '/automation/'
+      preLoaderRoute: typeof AutomationIndexRouteImport
+      parentRoute: typeof AutomationRoute
     }
     '/workflows/$workflowId': {
       id: '/workflows/$workflowId'
@@ -630,6 +647,7 @@ declare module '@tanstack/react-router' {
 }
 
 interface AutomationRouteChildren {
+  AutomationIndexRoute: typeof AutomationIndexRoute
   AutomationExecutionsExecutionIdRoute: typeof AutomationExecutionsExecutionIdRoute
   AutomationWorkflowsWorkflowIdRoute: typeof AutomationWorkflowsWorkflowIdRoute
   AutomationExecutionsIndexRoute: typeof AutomationExecutionsIndexRoute
@@ -638,6 +656,7 @@ interface AutomationRouteChildren {
 }
 
 const AutomationRouteChildren: AutomationRouteChildren = {
+  AutomationIndexRoute: AutomationIndexRoute,
   AutomationExecutionsExecutionIdRoute: AutomationExecutionsExecutionIdRoute,
   AutomationWorkflowsWorkflowIdRoute: AutomationWorkflowsWorkflowIdRoute,
   AutomationExecutionsIndexRoute: AutomationExecutionsIndexRoute,

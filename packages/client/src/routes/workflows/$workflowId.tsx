@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { createFileRoute, Link, useNavigate } from '@tanstack/react-router';
 import { PageContainer } from '@/components/layout/page-container';
 import {
@@ -47,12 +47,22 @@ import {
 import { toastError, toastSuccess } from '@/hooks/use-toast';
 import { ApiError } from '@/api/client';
 
+interface WorkflowDetailSearch {
+  copilot?: 'open';
+  prompt?: string;
+}
+
 export const Route = createFileRoute('/workflows/$workflowId')({
   component: WorkflowDetailPage,
+  validateSearch: (search: Record<string, unknown>): WorkflowDetailSearch => ({
+    copilot: search.copilot === 'open' ? 'open' : undefined,
+    prompt: typeof search.prompt === 'string' ? search.prompt : undefined,
+  }),
 });
 
 function WorkflowDetailPage() {
   const { workflowId } = Route.useParams();
+  const { copilot: copilotSearch, prompt: seedPrompt } = Route.useSearch();
   const navigate = useNavigate();
   const { data, isLoading, error } = useWorkflow(workflowId);
   const { data: draftData, isLoading: draftLoading } = useWorkflowDraft(workflowId);
@@ -78,7 +88,29 @@ function WorkflowDetailPage() {
   const [versionsDialogOpen, setVersionsDialogOpen] = useState(false);
   const [publishConfirming, setPublishConfirming] = useState(false);
   const [publishSubmitting, setPublishSubmitting] = useState(false);
-  const [copilotOpen, setCopilotOpen] = useState(false);
+  // Deep-linked copilot state from the automation landing:
+  // `?copilot=open` auto-opens the panel; `?prompt=…` is consumed once
+  // by the panel and sent as the first message. Both params get cleared
+  // from the URL after seeding so a refresh doesn't re-send.
+  const [copilotOpen, setCopilotOpen] = useState(copilotSearch === 'open');
+  const [pendingCopilotSeed, setPendingCopilotSeed] = useState<string | null>(seedPrompt ?? null);
+  // Stable no-arg callback so the panel's auto-send effect doesn't
+  // re-run every parent render (its guard would still block a re-fire,
+  // but the wasted work is avoidable).
+  const clearPendingSeed = useCallback(() => setPendingCopilotSeed(null), []);
+  useEffect(() => {
+    if (seedPrompt || copilotSearch) {
+      // Strip the search params — we've captured them into local state.
+      void navigate({
+        to: '/workflows/$workflowId',
+        params: { workflowId },
+        search: {},
+        replace: true,
+      });
+    }
+    // Intentionally run once on mount.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const publishConfirmTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const selectedExecution = useExecution(selectedExecutionId ?? '');
 
@@ -579,7 +611,11 @@ function WorkflowDetailPage() {
               />
               {copilotOpen && (
                 <div className="hidden w-[380px] shrink-0 md:block">
-                  <CopilotPanel workflowId={workflow.id} />
+                  <CopilotPanel
+                    workflowId={workflow.id}
+                    initialPrompt={pendingCopilotSeed}
+                    onInitialPromptConsumed={clearPendingSeed}
+                  />
                 </div>
               )}
             </div>

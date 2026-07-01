@@ -1,4 +1,4 @@
-import { createFileRoute, Outlet, Link, useRouterState, redirect } from '@tanstack/react-router';
+import { createFileRoute, Outlet, Link, useRouterState } from '@tanstack/react-router';
 import { PageContainer, PageHeader } from '@/components/layout/page-container';
 import { cn } from '@/lib/cn';
 
@@ -10,17 +10,24 @@ const TABS = [
 
 export const Route = createFileRoute('/automation')({
   component: AutomationLayout,
-  beforeLoad: ({ location }) => {
-    // Redirect /automation to /automation/triggers (default tab)
-    if (location.pathname === '/automation' || location.pathname === '/automation/') {
-      throw redirect({ to: '/automation/triggers' });
-    }
-  },
 });
 
 function AutomationLayout() {
   const router = useRouterState();
   const currentPath = router.location.pathname;
+  const isLanding = currentPath === '/automation' || currentPath === '/automation/';
+
+  // On the landing (/automation) we want a full-bleed hero, no tab
+  // strip or page header — those live one level up in the sidebar and
+  // would compete with the hero. Sub-routes keep the tab strip so
+  // jumping between Triggers/Workflows/Runs stays one click.
+  if (isLanding) {
+    return (
+      <PageContainer>
+        <Outlet />
+      </PageContainer>
+    );
+  }
 
   return (
     <PageContainer>
