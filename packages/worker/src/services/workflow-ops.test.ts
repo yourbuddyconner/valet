@@ -103,6 +103,85 @@ describe('applyOps', () => {
       applyOps(blankDef(), [{ op: 'setMeta', patch: { nodes: [] } }]),
     ).toThrow(/cannot modify "nodes"/);
   });
+
+  it('auto-lays out new nodes downstream of positioned upstream', () => {
+    const def: WorkflowDefinition = {
+      version: 'dag/v1',
+      nodes: [createDefaultWorkflowNode('set', 'start')],
+      edges: [],
+      ui: { nodes: { start: { position: { x: 100, y: 0 } } } },
+    };
+    const out = applyOps(def, [
+      { op: 'addNode', node: { id: 'a', type: 'set', values: {} } },
+      { op: 'addEdge', edge: { from: 'start', to: 'a' } },
+    ]);
+    const posA = out.ui?.nodes?.a?.position;
+    expect(posA).toEqual({ x: 100 + 340, y: 0 });
+  });
+
+  it('spreads sibling downstream nodes vertically', () => {
+    const def: WorkflowDefinition = {
+      version: 'dag/v1',
+      nodes: [
+        createDefaultWorkflowNode('set', 'start'),
+        createDefaultWorkflowNode('set', 'existing'),
+      ],
+      edges: [{ from: 'start', to: 'existing' }],
+      ui: {
+        nodes: {
+          start: { position: { x: 0, y: 0 } },
+          existing: { position: { x: 340, y: 0 } },
+        },
+      },
+    };
+    const out = applyOps(def, [
+      { op: 'addNode', node: { id: 'sibling', type: 'set', values: {} } },
+      { op: 'addEdge', edge: { from: 'start', to: 'sibling' } },
+    ]);
+    const posSibling = out.ui?.nodes?.sibling?.position;
+    // Same column as existing, next row down.
+    expect(posSibling?.x).toBe(340);
+    expect(posSibling?.y).toBeGreaterThanOrEqual(180);
+  });
+
+  it('cascades layout: node placed via its already-placed sibling', () => {
+    const def: WorkflowDefinition = {
+      version: 'dag/v1',
+      nodes: [createDefaultWorkflowNode('set', 'start')],
+      edges: [],
+      ui: { nodes: { start: { position: { x: 0, y: 0 } } } },
+    };
+    // a → b → c chain, all new. Should place a, then b, then c across
+    // multiple fixed-point passes.
+    const out = applyOps(def, [
+      { op: 'addNode', node: { id: 'a', type: 'set', values: {} } },
+      { op: 'addNode', node: { id: 'b', type: 'set', values: {} } },
+      { op: 'addNode', node: { id: 'c', type: 'set', values: {} } },
+      { op: 'addEdge', edge: { from: 'start', to: 'a' } },
+      { op: 'addEdge', edge: { from: 'a', to: 'b' } },
+      { op: 'addEdge', edge: { from: 'b', to: 'c' } },
+    ]);
+    expect(out.ui?.nodes?.a?.position?.x).toBe(340);
+    expect(out.ui?.nodes?.b?.position?.x).toBe(680);
+    expect(out.ui?.nodes?.c?.position?.x).toBe(1020);
+  });
+
+  it('preserves existing positions on newly-added nodes when patch includes them', () => {
+    const def: WorkflowDefinition = {
+      version: 'dag/v1',
+      nodes: [createDefaultWorkflowNode('set', 'start')],
+      edges: [],
+      ui: { nodes: { start: { position: { x: 0, y: 0 } } } },
+    };
+    // Manually placing a new node's ui.nodes entry via setMeta should
+    // not get overwritten by auto-layout.
+    const out = applyOps(def, [
+      { op: 'addNode', node: { id: 'a', type: 'set', values: {} } },
+      { op: 'setMeta', patch: { ui: { nodes: { start: { position: { x: 0, y: 0 } }, a: { position: { x: 999, y: 999 } } } } } },
+      { op: 'addEdge', edge: { from: 'start', to: 'a' } },
+    ]);
+    expect(out.ui?.nodes?.a?.position).toEqual({ x: 999, y: 999 });
+  });
 });
 
 function pickNode(def: WorkflowDefinition, id: string): WorkflowNode {

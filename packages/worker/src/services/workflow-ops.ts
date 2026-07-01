@@ -53,8 +53,14 @@ export function applyOps(def: WorkflowDefinition, ops: WorkflowOp[]): WorkflowDe
  * validation strategy — e.g. the copilot runs `validateDefinition` to
  * surface specific issues to the model, rather than failing with a
  * single opaque boolean.
+ *
+ * Also auto-lays out any newly-added nodes that don't have a `ui.nodes`
+ * entry, so patches from the copilot don't stack every new node at the
+ * origin. Positions are derived from neighbors (right-of-upstream,
+ * left-of-downstream, or top-right-of-existing).
  */
 export function applyOpsLenient(def: WorkflowDefinition, ops: WorkflowOp[]): unknown {
+  const previousNodeIds = new Set(def.nodes.map((n) => n.id));
   let working = toWorking(def);
   for (const [i, op] of ops.entries()) {
     try {
@@ -64,7 +70,152 @@ export function applyOpsLenient(def: WorkflowDefinition, ops: WorkflowOp[]): unk
       throw new Error(`op #${i} (${op.op}): ${msg}`);
     }
   }
-  return working;
+  return autoLayoutNewNodes(working, previousNodeIds);
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// Auto-layout
+// ────────────────────────────────────────────────────────────────────────
+
+// Match the editor's spacing so copilot-placed nodes align on the
+// canvas grid with human-placed ones.
+const COLUMN_GAP = 340;
+const ROW_GAP = 180;
+
+interface Position { x: number; y: number }
+
+function autoLayoutNewNodes(def: WorkingDef, previousNodeIds: Set<string>): WorkingDef {
+  const uiNodes = extractUiNodes(def);
+  const positions = new Map<string, Position>();
+  for (const [id, entry] of Object.entries(uiNodes)) {
+    const pos = extractPosition(entry);
+    if (pos) positions.set(id, pos);
+  }
+
+  const unplacedNewIds: string[] = [];
+  for (const node of def.nodes) {
+    const id = node.id;
+    if (typeof id !== 'string') continue;
+    if (previousNodeIds.has(id)) continue;
+    if (positions.has(id)) continue;
+    unplacedNewIds.push(id);
+  }
+  if (unplacedNewIds.length === 0) return def;
+
+  // Fixed-point iteration: repeatedly try to place a new node from its
+  // already-positioned neighbors. Nodes whose neighbors are themselves
+  // new get placed once those neighbors settle in a later pass.
+  const remaining = new Set(unplacedNewIds);
+  let progress = true;
+  while (progress && remaining.size > 0) {
+    progress = false;
+    for (const id of [...remaining]) {
+      const placed = tryPlaceFromNeighbors(id, def.edges, positions);
+      if (placed) {
+        positions.set(id, placed);
+        remaining.delete(id);
+        progress = true;
+      }
+    }
+  }
+  // Fallback for any node whose neighbors are still unpositioned:
+  // stack them to the right of the existing bounding box, one row
+  // apart, in stable id order.
+  if (remaining.size > 0) {
+    const boundsRight = positions.size > 0
+      ? Math.max(...[...positions.values()].map((p) => p.x))
+      : 0;
+    const startY = 0;
+    const stackX = boundsRight + COLUMN_GAP;
+    let row = 0;
+    for (const id of [...remaining].sort()) {
+      positions.set(id, { x: stackX, y: startY + row * ROW_GAP });
+      row++;
+    }
+  }
+
+  return applyPositions(def, positions);
+}
+
+function tryPlaceFromNeighbors(
+  id: string,
+  edges: Array<Record<string, unknown>>,
+  positions: Map<string, Position>,
+): Position | null {
+  const upstreamIds = edges
+    .filter((e) => e.to === id && typeof e.from === 'string')
+    .map((e) => e.from as string);
+  const upPositions = upstreamIds
+    .map((upId) => positions.get(upId))
+    .filter((p): p is Position => p !== undefined);
+  if (upPositions.length > 0) {
+    const anchor = upPositions.reduce((max, p) => (p.x > max.x ? p : max), upPositions[0]);
+    return spreadFromSiblings({ x: anchor.x + COLUMN_GAP, y: averageY(upPositions) }, positions);
+  }
+  const downstreamIds = edges
+    .filter((e) => e.from === id && typeof e.to === 'string')
+    .map((e) => e.to as string);
+  const downPositions = downstreamIds
+    .map((downId) => positions.get(downId))
+    .filter((p): p is Position => p !== undefined);
+  if (downPositions.length > 0) {
+    const anchor = downPositions.reduce((min, p) => (p.x < min.x ? p : min), downPositions[0]);
+    return spreadFromSiblings({ x: anchor.x - COLUMN_GAP, y: averageY(downPositions) }, positions);
+  }
+  return null;
+}
+
+/**
+ * If any already-placed node sits within a row-gap of `candidate`,
+ * push down until we find a free slot. Prevents new siblings from
+ * stacking directly on top of existing ones.
+ */
+function spreadFromSiblings(candidate: Position, positions: Map<string, Position>): Position {
+  let y = candidate.y;
+  const collides = () => {
+    for (const p of positions.values()) {
+      if (Math.abs(p.x - candidate.x) < 1 && Math.abs(p.y - y) < ROW_GAP) return true;
+    }
+    return false;
+  };
+  let guard = 0;
+  while (collides() && guard < 64) {
+    y += ROW_GAP;
+    guard++;
+  }
+  return { x: candidate.x, y };
+}
+
+function averageY(positions: Position[]): number {
+  if (positions.length === 0) return 0;
+  return positions.reduce((sum, p) => sum + p.y, 0) / positions.length;
+}
+
+function extractUiNodes(def: WorkingDef): Record<string, unknown> {
+  const ui = def.ui;
+  if (!isPlainObject(ui)) return {};
+  const nodes = (ui as Record<string, unknown>).nodes;
+  return isPlainObject(nodes) ? nodes : {};
+}
+
+function extractPosition(entry: unknown): Position | null {
+  if (!isPlainObject(entry)) return null;
+  const pos = entry.position;
+  if (!isPlainObject(pos)) return null;
+  if (typeof pos.x === 'number' && typeof pos.y === 'number') {
+    return { x: pos.x, y: pos.y };
+  }
+  return null;
+}
+
+function applyPositions(def: WorkingDef, positions: Map<string, Position>): WorkingDef {
+  const ui = isPlainObject(def.ui) ? { ...def.ui } : { nodes: {} };
+  const uiNodes = isPlainObject(ui.nodes) ? { ...ui.nodes } : {};
+  for (const [id, position] of positions) {
+    const existing = isPlainObject(uiNodes[id]) ? uiNodes[id] : {};
+    uiNodes[id] = { ...existing, position };
+  }
+  return { ...def, ui: { ...ui, nodes: uiNodes } };
 }
 
 function toWorking(def: WorkflowDefinition): WorkingDef {
