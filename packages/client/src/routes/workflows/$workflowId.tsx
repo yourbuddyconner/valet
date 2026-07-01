@@ -478,6 +478,18 @@ function WorkflowDetailPage() {
         <div className="flex min-w-0 shrink-0 items-center justify-end gap-2">
           <Button
             variant="secondary"
+            onClick={() => setCopilotOpen((v) => !v)}
+            title={copilotOpen ? 'Close copilot' : 'Open copilot'}
+            className={`hidden border md:inline-flex ${
+              copilotOpen
+                ? 'border-violet-500 bg-violet-50 text-violet-800 hover:bg-violet-100 dark:border-violet-400 dark:bg-violet-950/50 dark:text-violet-200 dark:hover:bg-violet-950'
+                : 'border-violet-300 bg-white text-violet-700 hover:bg-violet-50 dark:border-violet-700 dark:bg-neutral-900 dark:text-violet-300 dark:hover:bg-neutral-800'
+            }`}
+          >
+            ✦ {copilotOpen ? 'Close' : 'Copilot'}
+          </Button>
+          <Button
+            variant="secondary"
             onClick={() => {
               resetPublishConfirmation();
               setVersionsDialogOpen(true);
@@ -570,14 +582,6 @@ function WorkflowDetailPage() {
                   <CopilotPanel workflowId={workflow.id} />
                 </div>
               )}
-              <button
-                type="button"
-                onClick={() => setCopilotOpen((v) => !v)}
-                className="absolute right-3 top-[6.25rem] z-20 hidden rounded-md border border-violet-300 bg-white px-2 py-1 text-[11px] font-medium text-violet-700 shadow-sm hover:bg-violet-50 dark:border-violet-700 dark:bg-neutral-900 dark:text-violet-300 dark:hover:bg-neutral-800 md:inline-flex"
-                title={copilotOpen ? 'Close copilot' : 'Open copilot'}
-              >
-                ✦ {copilotOpen ? 'Close' : 'Copilot'}
-              </button>
             </div>
           )
         ) : (
