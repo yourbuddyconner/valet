@@ -60,9 +60,19 @@ export function CopilotPanel({
     if (autoSelectedFor.current === workflowId) return;
     autoSelectedFor.current = workflowId;
     const mostRecent = threadsData?.threads[0]?.id ?? null;
-    setActiveThreadId(mostRecent);
-    setMountKey((k) => k + 1);
-  }, [workflowId, threadsLoading, threadsData]);
+    // Only bump the mountKey when we're actually switching TO a
+    // persisted thread — remounting when there's nothing to load just
+    // tears down whatever the fresh ThreadStream is doing (like an
+    // in-flight seeded first turn from the automation landing). No
+    // thread to pick? Leave the ThreadStream alone.
+    if (mostRecent !== null && mostRecent !== activeThreadId) {
+      setActiveThreadId(mostRecent);
+      setMountKey((k) => k + 1);
+    }
+    // activeThreadId is in deps so we can compare, but `autoSelectedFor`
+    // short-circuits every subsequent run, so this effect fires at most
+    // once per workflow regardless of dep changes.
+  }, [workflowId, threadsLoading, threadsData, activeThreadId]);
 
   const handleNewThread = () => {
     setActiveThreadId(null);
