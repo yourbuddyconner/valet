@@ -46,8 +46,7 @@ valet/
 ├── V1.md                    # Original architecture spec (may be outdated)
 ├── V2.md                    # Orchestration layer spec (orchestrators, channels, personas)
 ├── Makefile                 # Dev, test, deploy commands
-├── docker-compose.yml       # Local dev (OpenCode container)
-└── .beans/                  # Task tracking (beans)
+└── docker-compose.yml       # Local dev (OpenCode container)
 ```
 
 ## Tech Stack Quick Reference
@@ -480,10 +479,6 @@ This codebase has accumulated `any`, `unknown`, and type assertions (`as`) as sh
 5. **Fix what you touch.** When editing a file that has `any`, unnecessary assertions, or double-casts, clean them up as part of your change. You don't need to fix the whole codebase — just leave every file you touch better than you found it.
 
 6. **Extract pure functions to avoid testing private members.** If a test needs `(obj as any).privateMethod(...)`, extract the logic into an exported pure function. Test the pure function directly (no mocks, no casts), and have the private method call it. Don't create wrapper types or helpers to smuggle access to private members.
-
-### Git Conventions
-
-- Commit code upon completion of each bean.
 
 ## Common Patterns
 
