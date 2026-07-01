@@ -306,6 +306,62 @@ export async function getUsageByPurposeModel(
   }));
 }
 
+export interface UsageByWorkflowModelRow {
+  workflowId: string | null;
+  workflowName: string;
+  triggerType: string;
+  model: string;
+  inputTokens: number;
+  outputTokens: number;
+  callCount: number;
+}
+
+/**
+ * Usage for AUTOMATED (workflow) sessions attributed to the SPECIFIC workflow that produced it,
+ * and how it fired. Joins analytics_events → workflow_executions (by session) → workflows (name)
+ * and → triggers (type: schedule/webhook/manual; NULL trigger = a manual/on-demand run). Model is
+ * kept for per-model cost, rolled up per workflow in the route. INNER JOIN on workflow_executions
+ * scopes this to the automated subset — interactive/orchestrator rows simply don't appear.
+ * Backward-compatible: LEFT JOINs to workflows/triggers, so a workflow row deleted out from under
+ * an execution still surfaces as 'Unknown workflow' rather than dropping the usage.
+ */
+export async function getUsageByWorkflow(
+  db: D1Database,
+  periodStart: string,
+): Promise<UsageByWorkflowModelRow[]> {
+  const result = await db
+    .prepare(`
+      SELECT
+        we.workflow_id,
+        COALESCE(w.name, w.slug, 'Unknown workflow') as workflow_name,
+        COALESCE(t.type, 'manual') as trigger_type,
+        ae.model,
+        SUM(${AE_BILLABLE_INPUT_EXPR}) as input_tokens,
+        SUM(${AE_BILLABLE_OUTPUT_EXPR}) as output_tokens,
+        COUNT(*) as call_count
+      FROM analytics_events ae
+      JOIN workflow_executions we ON we.session_id = ae.session_id
+      LEFT JOIN workflows w ON w.id = we.workflow_id
+      LEFT JOIN triggers t ON t.id = we.trigger_id
+      WHERE ae.event_type = 'llm_call'
+        AND ae.created_at >= ?
+      GROUP BY we.workflow_id, w.name, w.slug, t.type, ae.model
+      ORDER BY (SUM(${AE_BILLABLE_INPUT_EXPR}) + SUM(${AE_BILLABLE_OUTPUT_EXPR})) DESC
+    `)
+    .bind(periodStart)
+    .all();
+
+  return (result.results ?? []).map((r: Record<string, unknown>) => ({
+    workflowId: r.workflow_id ? String(r.workflow_id) : null,
+    workflowName: String(r.workflow_name),
+    triggerType: String(r.trigger_type),
+    model: String(r.model),
+    inputTokens: Number(r.input_tokens),
+    outputTokens: Number(r.output_tokens),
+    callCount: Number(r.call_count),
+  }));
+}
+
 export interface UsageByModelRow {
   model: string;
   inputTokens: number;

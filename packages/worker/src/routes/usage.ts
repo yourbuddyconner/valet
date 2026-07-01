@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import type { Env, Variables } from '../env.js';
 import type { UsageStatsResponse } from '@valet/shared';
-import { getUsageHeroStats, getUsageByDay, getUsageByUser, getUsageByModel, getUsageByUserModel, getUsageByPurposeModel, getSandboxHeroStats, getSandboxByDay, getSandboxByUser } from '../lib/db/analytics.js';
+import { getUsageHeroStats, getUsageByDay, getUsageByUser, getUsageByModel, getUsageByUserModel, getUsageByPurposeModel, getUsageByWorkflow, getSandboxHeroStats, getSandboxByDay, getSandboxByUser } from '../lib/db/analytics.js';
 import { getModelPricing } from '../services/model-catalog.js';
 import { computeSandboxCost, DEFAULT_CPU_CORES, DEFAULT_MEMORY_GIB } from '../services/sandbox-pricing.js';
 import { getDb } from '../lib/drizzle.js';
@@ -38,7 +38,7 @@ usageRouter.get('/stats', async (c) => {
   const appDb = getDb(db);
 
   // Fetch all data + pricing in parallel (including sandbox stats)
-  const [heroStats, byDayRaw, byUserRaw, byModelRaw, byUserModelRaw, pricingMap, sandboxHero, sandboxByDay, sandboxByUser, byPurposeModelRaw] = await Promise.all([
+  const [heroStats, byDayRaw, byUserRaw, byModelRaw, byUserModelRaw, pricingMap, sandboxHero, sandboxByDay, sandboxByUser, byPurposeModelRaw, byWorkflowRaw] = await Promise.all([
     getUsageHeroStats(db, periodStart),
     getUsageByDay(db, periodStart),
     getUsageByUser(db, periodStart),
@@ -49,6 +49,7 @@ usageRouter.get('/stats', async (c) => {
     getSandboxByDay(db, periodStart),
     getSandboxByUser(db, periodStart),
     getUsageByPurposeModel(db, periodStart),
+    getUsageByWorkflow(db, periodStart),
   ]);
 
   // Compute hero LLM total cost
@@ -182,6 +183,23 @@ usageRouter.get('/stats', async (c) => {
     }))
     .sort((a, b) => (b.inputTokens + b.outputTokens) - (a.inputTokens + a.outputTokens));
 
+  // Per-automation drill-down: roll the workflow×model rows up per (workflow, trigger type),
+  // cost computed per-model first. Keyed by workflow id + trigger so a workflow fired by both a
+  // schedule and a manual run shows as separate, honest rows.
+  const workflowMap = new Map<string, { workflowId: string | null; workflowName: string; triggerType: string; inputTokens: number; outputTokens: number; cost: number | null; callCount: number }>();
+  for (const row of byWorkflowRaw) {
+    const key = `${row.workflowId ?? 'null'}::${row.triggerType}`;
+    const cost = computeCost(row.model, row.inputTokens, row.outputTokens, pricingMap);
+    const e = workflowMap.get(key) ?? { workflowId: row.workflowId, workflowName: row.workflowName, triggerType: row.triggerType, inputTokens: 0, outputTokens: 0, cost: null, callCount: 0 };
+    e.inputTokens += row.inputTokens;
+    e.outputTokens += row.outputTokens;
+    e.callCount += row.callCount;
+    if (cost !== null) e.cost = (e.cost ?? 0) + cost;
+    workflowMap.set(key, e);
+  }
+  const byWorkflow = Array.from(workflowMap.values())
+    .sort((a, b) => (b.inputTokens + b.outputTokens) - (a.inputTokens + a.outputTokens));
+
   const response: UsageStatsResponse = {
     hero: {
       totalCost: heroTotalCost,
@@ -197,6 +215,7 @@ usageRouter.get('/stats', async (c) => {
     byModel,
     byUserModel,
     byPurpose,
+    byWorkflow,
     period: periodHours,
   };
 

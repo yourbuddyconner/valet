@@ -95,9 +95,8 @@ function BillingContent({ period }: { period: number }) {
         sandboxActiveSeconds={data.hero.sandboxActiveSeconds}
       />
       <CostChart data={data.costByDay} />
-      <OriginBreakdownTable data={data.byPurpose} />
+      <OriginBreakdownTable data={data.byPurpose} byWorkflow={data.byWorkflow} />
       <div className="grid gap-6 [&>*]:min-w-0 lg:grid-cols-2">
-
         <ModelBreakdownTable data={data.byModel} />
         <UserBreakdownTable data={data.byUser} byUserModel={data.byUserModel} />
       </div>

@@ -1194,6 +1194,17 @@ export interface UsageStatsResponse {
     callCount: number;
     percentage: number;
   }>;
+  /** Per-automation drill-down for the "automated" (workflow) origin: which specific
+   *  workflow produced the usage and how it fired (schedule / webhook / manual). */
+  byWorkflow: Array<{
+    workflowId: string | null;
+    workflowName: string;
+    triggerType: string;
+    inputTokens: number;
+    outputTokens: number;
+    cost: number | null;
+    callCount: number;
+  }>;
   period: number;
 }
 
