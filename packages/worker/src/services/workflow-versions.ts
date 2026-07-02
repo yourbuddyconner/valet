@@ -17,7 +17,7 @@ import type { AppDb } from '../lib/drizzle.js';
 import { workflows } from '../lib/schema/workflows.js';
 import { workflowDefinitionVersions } from '../lib/schema/workflow-definition-versions.js';
 import type { AvailableModels, WorkflowDefinition, WorkflowValidationError } from '@valet/shared';
-import { validateDefinition, validateAgainstEnvironment, validateAgainstAvailableModels } from '../lib/workflow-dag/validator.js';
+import { validateDefinition, validateAgainstEnvironment, validateAgainstAvailableModels, isValidationWarning } from '../lib/workflow-dag/validator.js';
 import type { Env } from '../env.js';
 import { sha256Hex } from '../lib/hash.js';
 
@@ -154,7 +154,7 @@ export async function publishDraft(
 
   // validateDefinition is total (returns malformed_definition on bad
   // shapes); no try/catch wrapper needed.
-  const errors = validateDefinition(def).filter((e) => e.code !== 'llm_maxoutput_warning');
+  const errors = validateDefinition(def).filter((e) => !isValidationWarning(e));
   if (errors.length > 0) {
     throw new WorkflowVersionError('invalid_definition', 'draft failed validation', errors);
   }

@@ -369,11 +369,11 @@ workflowsRouter.put('/:id/draft', zValidator('json', draftPutSchema), async (c) 
   const { id } = await assertWorkflowAccess(c.get('db'), user, idOrSlug, 'editor');
   const { saveDraft, WorkflowVersionError } = await import('../services/workflow-versions.js');
   const { isWorkflowDefinition } = await import('../lib/workflow-dag/schema.js');
-  const { validateDefinition, validateAgainstAvailableModels, groupWorkflowValidationResults } = await import('../lib/workflow-dag/validator.js');
+  const { validateDefinition, validateAgainstAvailableModels, groupWorkflowValidationResults, isValidationWarning } = await import('../lib/workflow-dag/validator.js');
   if (!isWorkflowDefinition(body.draft)) {
     return c.json({ error: 'invalid_draft', errors: validateDefinition(body.draft) }, 400);
   }
-  const structuralErrors = validateDefinition(body.draft).filter((issue) => issue.code !== 'llm_maxoutput_warning');
+  const structuralErrors = validateDefinition(body.draft).filter((issue) => !isValidationWarning(issue));
   if (structuralErrors.length > 0) {
     return c.json({ error: 'invalid_draft', ...groupWorkflowValidationResults(structuralErrors) }, 400);
   }

@@ -27,7 +27,7 @@ import type {
   WorkflowTriggerPayload,
   WorkflowValidationError,
 } from '@valet/shared';
-import { validateDefinition, validateTriggerData, validateAgainstEnvironment } from '../lib/workflow-dag/validator.js';
+import { validateDefinition, validateTriggerData, validateAgainstEnvironment, isValidationWarning } from '../lib/workflow-dag/validator.js';
 import { assembleLlmProviderEnv } from '../lib/llm/provider-env.js';
 import { resolveAvailableModels } from './model-catalog.js';
 
@@ -173,8 +173,9 @@ export async function createExecution(env: Env, input: CreateExecutionInput): Pr
 
   // 2. Structural validation. The publish path validates clean drafts,
   // but test-run executes drafts directly and we want the same gate.
-  // Filter out non-blocking warnings (e.g. llm_maxoutput_warning).
-  const structuralErrors = validateDefinition(def).filter((e) => e.code !== 'llm_maxoutput_warning');
+  // Filter out non-blocking warnings via the shared predicate so every
+  // gate treats the same codes as advisory.
+  const structuralErrors = validateDefinition(def).filter((e) => !isValidationWarning(e));
   if (structuralErrors.length > 0) {
     throw new WorkflowExecutionStartError('invalid_definition', 'definition failed validation', structuralErrors);
   }

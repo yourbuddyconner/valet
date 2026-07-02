@@ -25,6 +25,7 @@ import type {
   LlmNode,
 } from '@valet/shared';
 import { parseTemplate, parseExpression, TemplateParseError } from './expression.js';
+import { lintTemplateReferences, TEMPLATE_UNKNOWN_VARIABLE_CODE } from './template-lint.js';
 import { allowedIfOperations, isIfOperationSupported, normalizeIfOperation } from './if-operations.js';
 import { parseDurationMs } from './duration.js';
 import { parseModelId, hasProviderKey } from '../llm/model-id.js';
@@ -303,6 +304,15 @@ export function validateDefinitionWithContext(
 
   validateForeachItemSources(def, errors, context);
 
+  // Template-reference lint. Emits `template_unknown_variable` warnings
+  // for `{{...}}` expressions that reference paths the definition can't
+  // prove exist — the same class of issue the client editor flags in red
+  // via deriveWorkflowOutputSources + validateTemplateTags. Emitting
+  // through the validator surfaces the signal to programmatic authors
+  // (MCP workflows.validate / workflows.save_draft), which previously
+  // saw no such warnings.
+  errors.push(...lintTemplateReferences(def, context));
+
   // ── Cycles ──────────────────────────────────────────────────────────────
   if (hasCycle(def.nodes, def.edges)) {
     errors.push({ scope: 'workflow', code: 'cycle', message: 'Workflow graph contains a cycle' });
@@ -353,8 +363,8 @@ export function groupWorkflowValidationResults(results: WorkflowValidationError[
   return { errors, warnings };
 }
 
-function isValidationWarning(result: WorkflowValidationError): boolean {
-  return result.code === 'llm_maxoutput_warning';
+export function isValidationWarning(result: WorkflowValidationError): boolean {
+  return result.code === 'llm_maxoutput_warning' || result.code === TEMPLATE_UNKNOWN_VARIABLE_CODE;
 }
 
 /**
