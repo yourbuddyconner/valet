@@ -1184,6 +1184,27 @@ export interface UsageStatsResponse {
     cost: number | null;
     callCount: number;
   }>;
+  /** Usage grouped by session origin: interactive (user sessions) vs automated
+   *  (workflow: scheduled triggers / webhooks / manual runs) vs orchestrator. */
+  byPurpose: Array<{
+    purpose: string;
+    inputTokens: number;
+    outputTokens: number;
+    cost: number | null;
+    callCount: number;
+    percentage: number;
+  }>;
+  /** Per-automation drill-down for the "automated" (workflow) origin: which specific
+   *  workflow produced the usage and how it fired (schedule / webhook / manual). */
+  byWorkflow: Array<{
+    workflowId: string | null;
+    workflowName: string;
+    triggerType: string;
+    inputTokens: number;
+    outputTokens: number;
+    cost: number | null;
+    callCount: number;
+  }>;
   period: number;
 }
 
