@@ -187,8 +187,8 @@ const WorkflowAddNextContext = React.createContext<WorkflowAddNextContextValue |
 
 // Vertical nudge applied when the computed position would collide with an
 // existing node (within this many flow-units in either axis).
-const NEW_NODE_COLLISION_NUDGE = 200;
-const NEW_NODE_COLLISION_THRESHOLD = 260;
+const NEW_NODE_COLLISION_NUDGE = 140;
+const NEW_NODE_COLLISION_THRESHOLD = 200;
 
 // Pick a sensible (x, y) for a newly-added node.
 // 1. Prefer placement adjacent to the user's anchor (selection at the moment
