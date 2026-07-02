@@ -1,23 +1,8 @@
-import type { WorkflowExecutionDispatchPayload } from '../../durable-objects/runner-link.js';
 import type { SessionLifecycleStatus } from '../../durable-objects/session-state.js';
 
 export type SandboxRuntimeState = 'starting' | 'running' | 'hibernating' | 'hibernated' | 'restoring' | 'stopped' | 'error';
 export type AgentRuntimeState = 'starting' | 'busy' | 'idle' | 'queued' | 'sleeping' | 'standby' | 'stopped' | 'error';
 export type JointRuntimeState = 'starting' | 'running_busy' | 'running_idle' | 'queued' | 'waking' | 'sleeping' | 'standby' | 'stopped' | 'error';
-
-export function parseQueuedWorkflowPayload(raw: unknown): WorkflowExecutionDispatchPayload | null {
-  if (typeof raw !== 'string' || !raw) return null;
-  try {
-    const parsed = JSON.parse(raw) as WorkflowExecutionDispatchPayload;
-    if (!parsed || typeof parsed !== 'object') return null;
-    if (parsed.kind !== 'run' && parsed.kind !== 'resume') return null;
-    if (typeof parsed.executionId !== 'string' || !parsed.executionId) return null;
-    if (!parsed.payload || typeof parsed.payload !== 'object' || Array.isArray(parsed.payload)) return null;
-    return parsed;
-  } catch {
-    return null;
-  }
-}
 
 export function deriveRuntimeStates(args: {
   lifecycleStatus: string;

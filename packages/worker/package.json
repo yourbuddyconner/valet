@@ -18,6 +18,9 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@ai-sdk/anthropic": "^3.0.84",
+    "@ai-sdk/google": "^3.0.82",
+    "@ai-sdk/openai": "^3.0.71",
     "@cf-wasm/resvg": "^0.3.3",
     "@cf-wasm/satori": "^0.3.3",
     "@hono/zod-validator": "^0.2.1",
@@ -46,6 +49,7 @@
     "@valet/plugin-typefully": "workspace:*",
     "@valet/sdk": "workspace:*",
     "@valet/shared": "workspace:*",
+    "ai": "^6.0.203",
     "drizzle-orm": "^0.45.2",
     "hono": "^4.12.23",
     "octokit": "^5.0.5",

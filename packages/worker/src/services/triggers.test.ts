@@ -2,18 +2,32 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const {
   dispatchOrchestratorPromptMock,
+  dispatchWorkflowExecutionMock,
+  checkWorkflowConcurrencyMock,
+  checkIdempotencyKeyMock,
   getDbMock,
   getTriggerForRunMock,
-  updateTriggerLastRunMock,
+  updateTriggerLastRunUncheckedMock,
 } = vi.hoisted(() => ({
   dispatchOrchestratorPromptMock: vi.fn(),
+  dispatchWorkflowExecutionMock: vi.fn(),
+  checkWorkflowConcurrencyMock: vi.fn(),
+  checkIdempotencyKeyMock: vi.fn(),
   getDbMock: vi.fn(),
   getTriggerForRunMock: vi.fn(),
-  updateTriggerLastRunMock: vi.fn(),
+  updateTriggerLastRunUncheckedMock: vi.fn(),
 }));
 
 vi.mock('./orchestrator.js', () => ({
   dispatchOrchestratorPrompt: dispatchOrchestratorPromptMock,
+}));
+
+vi.mock('./workflow-dispatch.js', () => ({
+  dispatchWorkflowExecution: dispatchWorkflowExecutionMock,
+}));
+
+vi.mock('./executions.js', () => ({
+  checkWorkflowConcurrency: checkWorkflowConcurrencyMock,
 }));
 
 vi.mock('../lib/drizzle.js', () => ({
@@ -24,8 +38,9 @@ vi.mock('../lib/db.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../lib/db.js')>();
   return {
     ...actual,
+    checkIdempotencyKey: checkIdempotencyKeyMock,
     getTriggerForRun: getTriggerForRunMock,
-    updateTriggerLastRun: updateTriggerLastRunMock,
+    updateTriggerLastRunUnchecked: updateTriggerLastRunUncheckedMock,
   };
 });
 
@@ -39,6 +54,16 @@ describe('runTrigger', () => {
       dispatched: true,
       sessionId: 'orchestrator:user-1',
     });
+    dispatchWorkflowExecutionMock.mockResolvedValue({
+      executionId: 'exec-1',
+      status: 'pending',
+    });
+    checkWorkflowConcurrencyMock.mockResolvedValue({
+      allowed: true,
+      activeUser: 0,
+      activeGlobal: 0,
+    });
+    checkIdempotencyKeyMock.mockResolvedValue(null);
     getTriggerForRunMock.mockResolvedValue({
       wf_id: null,
       workflow_name: null,
@@ -53,7 +78,7 @@ describe('runTrigger', () => {
   });
 
   it('marks manually invoked orchestrator-targeted triggers as automation origin', async () => {
-    const env = { DB: {} } as any;
+    const env = { DB: {} } as Parameters<typeof runTrigger>[0];
 
     await runTrigger(env, 'trigger-1', 'user-1', { clientRequestId: 'manual-run' }, 'http://worker.test');
 
@@ -64,6 +89,53 @@ describe('runTrigger', () => {
         originTriggerId: 'trigger-1',
         originTriggerType: 'schedule',
       },
+    }));
+    // No model in config → dispatch call omits it (or passes undefined).
+    const call = dispatchOrchestratorPromptMock.mock.calls[0]![1] as { model?: string };
+    expect(call.model).toBeUndefined();
+  });
+
+  it('forwards a config.model override to dispatchOrchestratorPrompt', async () => {
+    const env = { DB: {} } as Parameters<typeof runTrigger>[0];
+    getTriggerForRunMock.mockResolvedValue({
+      wf_id: null,
+      workflow_name: null,
+      config: JSON.stringify({
+        type: 'schedule',
+        target: 'orchestrator',
+        prompt: 'Daily triage',
+        model: 'claude-sonnet-4-6',
+        timezone: 'UTC',
+        cron: '0 9 * * *',
+      }),
+    });
+
+    await runTrigger(env, 'trigger-1', 'user-1', { clientRequestId: 'manual-run' }, 'http://worker.test');
+
+    expect(dispatchOrchestratorPromptMock).toHaveBeenCalledWith(env, expect.objectContaining({
+      model: 'claude-sonnet-4-6',
+    }));
+  });
+
+  it('passes explicit trigger data for workflow triggers', async () => {
+    const env = { DB: {} } as Parameters<typeof runTrigger>[0];
+    getTriggerForRunMock.mockResolvedValue({
+      wf_id: 'workflow-1',
+      workflow_name: 'Customer onboarding',
+      workflow_data: '{}',
+      config: JSON.stringify({ type: 'manual' }),
+      variable_mapping: null,
+    });
+
+    await runTrigger(env, 'trigger-1', 'user-1', {
+      clientRequestId: 'manual-run',
+      triggerData: { email: 'conner@example.com', raw: { plan: 'enterprise' } },
+    }, 'http://worker.test');
+
+    expect(dispatchWorkflowExecutionMock).toHaveBeenCalledWith(env, expect.objectContaining({
+      trigger: expect.objectContaining({
+        data: { email: 'conner@example.com', raw: { plan: 'enterprise' } },
+      }),
     }));
   });
 });

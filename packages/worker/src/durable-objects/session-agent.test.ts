@@ -5,7 +5,7 @@ import { sessions } from '../lib/schema/sessions.js';
 import { users } from '../lib/schema/users.js';
 import { userIdentityLinks } from '../lib/schema/channels.js';
 import { workflows, workflowExecutions } from '../lib/schema/workflows.js';
-import { createInvocation, getInvocation, getUserActionPolicyOverride, upsertActionPolicy } from '../lib/db/actions.js';
+import { createInvocation, getActionPolicy, getInvocation, getRuntimeGrant, upsertActionPolicy } from '../lib/db/actions.js';
 import type { InteractivePrompt } from '@valet/sdk';
 import * as sessionTools from '../services/session-tools.js';
 import * as channelsDb from '../lib/db/channels.js';
@@ -1753,50 +1753,6 @@ describe('SessionAgentDO', () => {
     expect((agent as any).promptQueue.isChannelBusy('thread:thread-c')).toBe(true);
   });
 
-  it('sendNextQueuedPrompt does not co-dispatch a regular prompt alongside a workflow_execute', async () => {
-    // Workflow_execute holds the runner exclusively (its stampDispatched marks
-    // runnerBusy without a channel). A regular prompt that lands behind it in
-    // the queue must wait for the workflow to finish, not race it.
-    const runnerSocket = { send: vi.fn() };
-    const { agent } = await createTestAgent({ sockets: [runnerSocket] });
-
-    (agent as any).promptQueue.enqueue({
-      id: 'workflow-1',
-      content: '',
-      status: 'queued',
-      queueType: 'workflow_execute',
-      workflowExecutionId: 'exec-1',
-      workflowPayload: JSON.stringify({ kind: 'run', executionId: 'exec-1', payload: {} }),
-    });
-    (agent as any).promptQueue.enqueue({
-      id: 'msg-thread-a',
-      content: 'cross-channel prompt',
-      status: 'queued',
-      channelType: 'thread',
-      channelId: 'thread-a',
-      channelKey: 'thread:thread-a',
-      threadId: 'thread-a',
-    });
-
-    const dispatched = await (agent as any).sendNextQueuedPrompt();
-    expect(dispatched).toBe(true);
-
-    const sentFrames = runnerSocket.send.mock.calls
-      .map((call: unknown[]) => JSON.parse(call[0] as string));
-    const wfFrames = sentFrames.filter((m) => m.type === 'workflow-execute');
-    const promptFrames = sentFrames.filter((m) => m.type === 'prompt');
-    expect(wfFrames).toHaveLength(1);
-    expect(promptFrames).toHaveLength(0);
-
-    // The prompt row stays queued for a later drain after the workflow completes.
-    expect((agent as any).promptQueue.length).toBe(1);
-    const remaining = (agent as any).ctx.storage.sql
-      .exec("SELECT id, status FROM prompt_queue WHERE status = 'queued'")
-      .toArray();
-    expect(remaining).toHaveLength(1);
-    expect(remaining[0]).toMatchObject({ id: 'msg-thread-a', status: 'queued' });
-  });
-
   it('sendNextQueuedPrompt filters subsequent child events against the wait subscription that was set at drain entry', async () => {
     // dispatchQueuedPromptEntry clears sessionState.waitSubscription on every
     // successful dispatch. The picker must use a snapshot taken at drain entry
@@ -2739,12 +2695,24 @@ describe('SessionAgentDO', () => {
       });
 
       if (opts?.failOverrideWrite) {
+        // Inject a write failure on both new-model targets: runtime_grants
+        // (for allow_session) and action_policies (for allow_always).
         testDb.sqlite.exec(`
-          CREATE TRIGGER fail_uapo_insert BEFORE INSERT ON user_action_policy_overrides
+          CREATE TRIGGER fail_rg_insert BEFORE INSERT ON runtime_grants
           BEGIN
             SELECT RAISE(ABORT, 'override write failed');
           END;
-          CREATE TRIGGER fail_uapo_update BEFORE UPDATE ON user_action_policy_overrides
+          CREATE TRIGGER fail_rg_update BEFORE UPDATE ON runtime_grants
+          BEGIN
+            SELECT RAISE(ABORT, 'override write failed');
+          END;
+          CREATE TRIGGER fail_ap_insert BEFORE INSERT ON action_policies
+          WHEN NEW.managed_by = 'user'
+          BEGIN
+            SELECT RAISE(ABORT, 'override write failed');
+          END;
+          CREATE TRIGGER fail_ap_update BEFORE UPDATE ON action_policies
+          WHEN NEW.managed_by = 'user'
           BEGIN
             SELECT RAISE(ABORT, 'override write failed');
           END;
@@ -2834,41 +2802,39 @@ describe('SessionAgentDO', () => {
       }));
     });
 
-    it('allow_session creates a session-scoped exact override and executes', async () => {
+    it('allow_session creates a session-scoped runtime grant and executes', async () => {
       const { agent, sql, appDb } = await setupApprovalPrompt('allow_session');
 
-      const override = await getUserActionPolicyOverride(appDb as any, 'inv-approval:session');
+      const grant = await getRuntimeGrant(appDb as any, 'approval:inv-approval:session');
       const invocation = await getInvocation(appDb as any, 'inv-approval');
 
-      expect(override).toMatchObject({
+      expect(grant).toMatchObject({
         userId: 'user-1',
         service: 'gmail',
         actionId: 'draft.create',
-        mode: 'allow',
-        lifetime: 'session',
         sessionId: 'orchestrator:user-1',
-        source: 'approval_prompt',
-        sourceInvocationId: 'inv-approval',
+        subjectType: 'tool_action',
       });
       expect(invocation).toMatchObject({ status: 'approved', resolvedBy: 'user-1' });
       expect((agent as any).executeActionAndSend).toHaveBeenCalledOnce();
       expect(sql.interactivePrompts.has('inv-approval')).toBe(false);
     });
 
-    it('allow_always creates a persistent exact override and executes', async () => {
+    it('allow_always creates a durable user action policy and executes', async () => {
       const { agent, appDb } = await setupApprovalPrompt('allow_always');
 
-      const override = await getUserActionPolicyOverride(appDb as any, 'inv-approval:persistent');
+      const policy = await getActionPolicy(appDb as any, 'approval:inv-approval:durable');
 
-      expect(override).toMatchObject({
-        userId: 'user-1',
+      expect(policy).toMatchObject({
         service: 'gmail',
         actionId: 'draft.create',
         mode: 'allow',
-        lifetime: 'persistent',
-        sessionId: null,
-        source: 'approval_prompt',
-        sourceInvocationId: 'inv-approval',
+        managedBy: 'user',
+        principalType: 'user',
+        principalId: 'user-1',
+        subjectType: 'tool_action',
+        origin: 'approval_prompt',
+        sourceApprovalId: 'inv-approval',
       });
       expect((agent as any).executeActionAndSend).toHaveBeenCalledOnce();
     });
@@ -2888,7 +2854,7 @@ describe('SessionAgentDO', () => {
       const invocation = await getInvocation(appDb as any, 'inv-approval');
 
       expect(invocation).toMatchObject({ status: 'approved', resolvedBy: 'user-1' });
-      expect(await getUserActionPolicyOverride(appDb as any, 'inv-approval:session')).toBeUndefined();
+      expect(await getRuntimeGrant(appDb as any, 'approval:inv-approval:session')).toBeUndefined();
       expect((agent as any).executeActionAndSend).toHaveBeenCalledOnce();
     });
 
@@ -2920,7 +2886,7 @@ describe('SessionAgentDO', () => {
       expect(sql.interactivePrompts.has('inv-approval')).toBe(false);
     });
 
-    it('does not persist an allow override when the invocation is no longer pending', async () => {
+    it('does not persist an allow grant when the invocation is no longer pending', async () => {
       const { agent, appDb } = await setupApprovalPrompt('allow_session', {
         invocationStatus: 'denied',
       });
@@ -2928,7 +2894,7 @@ describe('SessionAgentDO', () => {
       const invocation = await getInvocation(appDb as any, 'inv-approval');
 
       expect(invocation).toMatchObject({ status: 'denied' });
-      expect(await getUserActionPolicyOverride(appDb as any, 'inv-approval:session')).toBeUndefined();
+      expect(await getRuntimeGrant(appDb as any, 'approval:inv-approval:session')).toBeUndefined();
       expect((agent as any).executeActionAndSend).not.toHaveBeenCalled();
     });
 
@@ -3003,24 +2969,24 @@ describe('SessionAgentDO', () => {
       }));
     });
 
-    it('broadcasts terminal prompt state when override persistence fails after approval', async () => {
-      const { agent, sql, appDb, broadcasts } = await setupApprovalPrompt('allow_session', {
+    it('leaves the invocation pending and restores the prompt when grant persistence fails', async () => {
+      // Post-refactor semantic: resolveInvocationWithScope persists the
+      // grant BEFORE approving the invocation. If the grant write
+      // throws, the approval never happens — invocation stays pending,
+      // prompt is restored to pending, user gets a 500 and can retry.
+      // (The old flow approved first, then wrote the grant, requiring
+      // a markFailed compensating action on grant-write failure.)
+      const { agent, sql, appDb } = await setupApprovalPrompt('allow_session', {
         failOverrideWrite: true,
       });
 
       const invocation = await getInvocation(appDb as any, 'inv-approval');
-
       expect(invocation).toMatchObject({
-        status: 'failed',
-        resolvedBy: 'user-1',
+        status: 'pending',
+        resolvedBy: null,
       });
       expect((agent as any).executeActionAndSend).not.toHaveBeenCalled();
-      expect(sql.interactivePrompts.has('inv-approval')).toBe(false);
-      expect(broadcasts).toContainEqual(expect.objectContaining({
-        type: 'interactive_prompt_expired',
-        promptId: 'inv-approval',
-        promptType: 'approval',
-      }));
+      expect(sql.interactivePrompts.get('inv-approval')).toMatchObject({ status: 'pending' });
     });
 
     it('rejects approval resolution from a non-owner websocket user', async () => {
@@ -3494,65 +3460,6 @@ describe('SessionAgentDO', () => {
       const callOpts = sendInteractiveMock.mock.calls[0][0] as { targets: Array<{ channelType: string; channelId: string }>; prompt: InteractivePrompt };
       expect(callOpts.targets).toContainEqual({ channelType: 'slack', channelId: 'D0DM1234' });
       expect(callOpts.prompt.context?.provenanceLabel as string).toContain('scheduled task');
-    });
-
-    it('sends a DM with workflow name in provenance label when processing a workflow_execute prompt', async () => {
-      const { agent } = await createTestAgent();
-      (agent as any).sessionState.set('sessionId', 'orchestrator:user-1');
-      (agent as any).sessionState.set('userId', 'user-1');
-
-      // Set up appDb with user, session, Slack identity link, and workflow + execution rows
-      const testDb = createTestDb();
-      const appDb = testDb.db;
-      appDb.insert(users).values({ id: 'user-1', email: 'user-1@example.com' }).run();
-      appDb.insert(sessions).values({
-        id: 'orchestrator:user-1', userId: 'user-1', workspace: '/tmp', status: 'running',
-      }).run();
-      appDb.insert(userIdentityLinks).values({
-        id: 'link-slack', userId: 'user-1', provider: 'slack', externalId: 'U0SLACK99',
-      }).run();
-      // Insert a workflow and execution so getWorkflowNameByExecutionId returns 'Weekly Report'
-      appDb.insert(workflows).values({
-        id: 'wf-weekly', userId: 'user-1', name: 'Weekly Report', data: '{}', version: '1.0.0',
-      }).run();
-      appDb.insert(workflowExecutions).values({
-        id: 'exec-wf-99', userId: 'user-1', workflowId: 'wf-weekly',
-        status: 'running', triggerType: 'manual', startedAt: new Date().toISOString(),
-      }).run();
-      Object.defineProperty(agent, 'appDb', { value: appDb, configurable: true });
-
-      // Enqueue a workflow_execute processing row so getProcessingWorkflowContext returns workflow context
-      (agent as any).promptQueue.enqueue({
-        id: 'pq-wf-test',
-        content: '',
-        queueType: 'workflow_execute',
-        workflowExecutionId: 'exec-wf-99',
-        status: 'processing',
-      });
-
-      const resolveUserDmTargetMock = vi.fn().mockResolvedValue({ channelType: 'slack', channelId: 'D0DM1234' });
-      (agent as any).channelRouter.resolveUserDmTarget = resolveUserDmTargetMock;
-      const sendInteractiveMock = vi.fn().mockResolvedValue([]);
-      (agent as any).channelRouter.sendInteractivePrompt = sendInteractiveMock;
-
-      const prompt: InteractivePrompt = {
-        id: 'inv-wf-dm',
-        sessionId: 'orchestrator:user-1',
-        type: 'approval',
-        title: 'Approval',
-        body: 'Send report',
-        actions: [{ id: 'approve_once', label: 'Approve', style: 'primary' }],
-        context: { toolId: 'slack:send_message', riskLevel: 'medium', summary: 'Send report' },
-      };
-
-      // Restore the real sendChannelInteractivePrompts (it is mocked in createTestAgent)
-      delete (agent as any).sendChannelInteractivePrompts;
-
-      await (agent as any).sendChannelInteractivePrompts('inv-wf-dm', prompt);
-
-      expect(sendInteractiveMock).toHaveBeenCalledOnce();
-      const callOpts = sendInteractiveMock.mock.calls[0][0] as { prompt: InteractivePrompt };
-      expect(callOpts.prompt.context?.provenanceLabel as string).toContain('Weekly Report');
     });
 
     it('creates 2-part and 3-part Slack DM bindings and pre-registers thread mapping after DM fallback delivery', async () => {

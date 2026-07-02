@@ -1,0 +1,246 @@
+<h2>Per-step-type rendering</h2>
+<p class="subtitle">Each step type gets its own idiom for input/output. Generic JSON only as fallback. Below: how each card looks expanded.</p>
+
+<style>
+  .panel { display:grid; grid-template-columns: 1.6fr 1fr; gap:14px; min-height: 600px; }
+  .timeline { display:flex; flex-direction:column; gap:8px; padding:10px; background:#0b0d12; border:1px solid #222; border-radius:10px; max-height:720px; overflow-y:auto; }
+  .diagram-side { background:#06080c; border:1px solid #222; border-radius:10px; padding:14px; display:flex; flex-direction:column; align-items:center; gap:6px; }
+
+  /* Card */
+  .card { background:#0f1115; border:1px solid #1f2937; border-radius:8px; overflow:hidden; }
+  .card.indent-1 { margin-left:18px; }
+  .card.ok { border-left:3px solid #10b981; }
+  .card.fail { border-left:3px solid #ef4444; }
+  .card.run { border-left:3px solid #f59e0b; }
+  .card.skip { border-left:3px solid #4b5563; opacity:0.55; }
+
+  .card-head { padding:8px 10px; display:flex; align-items:center; gap:8px; cursor:pointer; }
+  .card-head:hover { background:#15171c; }
+  .chev { color:#6b7280; font-size:10px; }
+  .type { font-family: ui-monospace, monospace; font-size:9px; padding:2px 5px; background:#1f2937; color:#9ca3af; border-radius:3px; letter-spacing:0.06em; text-transform:uppercase; }
+  .name { font-family: ui-monospace, monospace; font-size:12px; color:#e5e7eb; font-weight:500; }
+  .dur { margin-left:auto; font-family:ui-monospace, monospace; font-size:10px; color:#6b7280; }
+  .status-dot { width:6px; height:6px; border-radius:50%; }
+  .status-dot.ok { background:#10b981; }
+  .status-dot.fail { background:#ef4444; }
+  .status-dot.run { background:#f59e0b; box-shadow:0 0 6px #f59e0b; }
+
+  .card-body { padding:10px 12px; border-top:1px solid #1f2937; display:flex; flex-direction:column; gap:10px; background:#0a0c10; }
+
+  .field { display:flex; flex-direction:column; gap:4px; }
+  .field-label { font-size:9px; text-transform:uppercase; letter-spacing:0.08em; color:#6b7280; font-family:ui-monospace, monospace; }
+  .field-val { font-family: ui-monospace, monospace; font-size:11px; color:#d1d5db; }
+
+  /* agent_prompt rendering */
+  .prompt-box { background:#0c1018; border:1px solid #1f2937; border-radius:5px; padding:8px 10px; font-size:11px; color:#cbd5e1; line-height:1.5; font-style:italic; border-left:2px solid #3b82f6; }
+  .response-box { background:#0d1320; border:1px solid #1e3a5f; border-radius:5px; padding:8px 10px; font-size:11px; color:#e2e8f0; line-height:1.5; }
+  .persona-pill { display:inline-flex; align-items:center; gap:4px; padding:2px 7px; background:#1e1b4b; border:1px solid #4338ca; border-radius:99px; font-size:9px; color:#c7d2fe; font-family: ui-monospace, monospace; }
+
+  /* Structured output table */
+  .kv { display:grid; grid-template-columns: max-content 1fr; gap:4px 12px; font-size:11px; font-family: ui-monospace, monospace; }
+  .kv-key { color:#94a3b8; }
+  .kv-val { color:#e2e8f0; }
+
+  /* Terminal block */
+  .terminal { background:#000; border-radius:5px; padding:8px 10px; font-family: ui-monospace, monospace; font-size:11px; color:#a7f3d0; white-space:pre; line-height:1.5; border:1px solid #14532d; }
+  .terminal.err { color:#fecaca; border-color:#7f1d1d; }
+  .exit-pill { font-family:ui-monospace, monospace; font-size:9px; padding:1px 5px; border-radius:3px; }
+  .exit-pill.ok { background:#064e3b; color:#a7f3d0; }
+  .exit-pill.fail { background:#7f1d1d; color:#fecaca; }
+
+  /* Notify */
+  .notify-card { display:flex; gap:10px; align-items:center; padding:8px 10px; background:#0c1018; border:1px solid #1f2937; border-radius:5px; }
+  .channel-icon { width:24px; height:24px; border-radius:6px; background:#1e293b; display:flex; align-items:center; justify-content:center; font-size:11px; }
+
+  /* Error */
+  .err-box { background:#1a0a0a; border:1px solid #7f1d1d; border-radius:5px; padding:8px 10px; font-family:ui-monospace, monospace; font-size:11px; color:#fecaca; }
+  .err-trace { font-size:10px; color:#fca5a5; margin-top:4px; opacity:.8; }
+
+  /* Loop iteration nav */
+  .iter-bar { display:flex; gap:4px; padding:4px 10px; background:#0c1018; border-bottom:1px solid #1f2937; }
+  .iter-tab { font-family:ui-monospace, monospace; font-size:10px; padding:3px 8px; border-radius:3px; background:#1f2937; color:#9ca3af; cursor:pointer; }
+  .iter-tab.active { background:#10b981; color:#000; }
+
+  /* Diagram side */
+  .node { background:#1f2937; color:#e5e7eb; font-family:ui-monospace, monospace; font-size:9px; padding:4px 10px; border-radius:3px; min-width:120px; text-align:center; }
+  .node.sel { background:#1e3a5f; border:1px solid #3b82f6; color:#fff; }
+  .node.ok { border-left:2px solid #10b981; }
+  .node.fail { border-left:2px solid #ef4444; }
+  .arrow { color:#4b5563; font-size:10px; }
+  .strip-label { font-size:9px; color:#6b7280; text-transform:uppercase; letter-spacing:0.08em; }
+
+  /* Retry */
+  .retry-btn { display:inline-flex; align-items:center; gap:5px; padding:4px 10px; background:#1f2937; color:#e5e7eb; border:1px solid #374151; border-radius:5px; font-size:10px; cursor:pointer; }
+  .retry-btn:hover { background:#374151; }
+</style>
+
+<div class="panel">
+  <!-- TIMELINE -->
+  <div class="timeline">
+    <!-- LOOP, expanded, showing 3 iterations as nested cards -->
+    <div class="card ok">
+      <div class="card-head">
+        <span class="chev">▾</span>
+        <span class="type">LOOP</span>
+        <span class="name">personaShoutouts</span>
+        <span style="color:#6b7280;font-size:10px;font-family:ui-monospace;">over <code style="color:#cbd5e1;">workflow.personas</code> · 3 of 3</span>
+        <span class="dur">1.2s</span>
+        <span class="status-dot ok"></span>
+      </div>
+      <div class="iter-bar">
+        <span class="iter-tab active">iter 1</span>
+        <span class="iter-tab">iter 2</span>
+        <span class="iter-tab">iter 3</span>
+        <span style="margin-left:auto;font-family:ui-monospace;font-size:10px;color:#6b7280;">all iterations ↓</span>
+      </div>
+    </div>
+
+    <!-- agent_prompt iteration -->
+    <div class="card ok indent-1">
+      <div class="card-head">
+        <span class="chev">▾</span>
+        <span class="type">AGENT</span>
+        <span class="name">personaResult</span>
+        <span class="persona-pill">◐ Captain Chaos</span>
+        <span class="dur">420ms · claude-opus-4.6 · 1.2k tok</span>
+        <span class="status-dot ok"></span>
+      </div>
+      <div class="card-body">
+        <div class="field">
+          <div class="field-label">prompt</div>
+          <div class="prompt-box">Tell me about your morning routine in one sentence, then say a quick hello to the team.</div>
+        </div>
+        <div class="field">
+          <div class="field-label">structured output · schema:capability+greeting</div>
+          <div class="kv">
+            <div class="kv-key">capability</div>
+            <div class="kv-val">"Orchestrating spring raids on properly cobblers — I go in clean, unsplash every bug-eyed eight..."</div>
+            <div class="kv-key">greeting</div>
+            <div class="kv-val">"Alright team, Captain Chaos reporting for duty — three espressos deep and ready to roll"</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- agent_prompt iteration 2 collapsed preview -->
+    <div class="card ok indent-1">
+      <div class="card-head">
+        <span class="chev">▸</span>
+        <span class="type">AGENT</span>
+        <span class="name">personaResult</span>
+        <span class="persona-pill">◑ Captain Chaos</span>
+        <span style="color:#6b7280;font-size:11px;font-family:ui-monospace;">"Orchestrating complex software engineering heists..."</span>
+        <span class="dur">380ms</span>
+        <span class="status-dot ok"></span>
+      </div>
+    </div>
+
+    <!-- agent_prompt iteration 3 collapsed preview -->
+    <div class="card ok indent-1">
+      <div class="card-head">
+        <span class="chev">▸</span>
+        <span class="type">AGENT</span>
+        <span class="name">personaResult</span>
+        <span class="persona-pill">◓ Captain Chaos</span>
+        <span style="color:#6b7280;font-size:11px;font-family:ui-monospace;">"Greetings team, ready to dive into the day..."</span>
+        <span class="dur">400ms</span>
+        <span class="status-dot ok"></span>
+      </div>
+    </div>
+
+    <!-- BASH expanded -->
+    <div class="card ok">
+      <div class="card-head">
+        <span class="chev">▾</span>
+        <span class="type">BASH</span>
+        <span class="name">envOutput</span>
+        <span style="color:#6b7280;font-size:11px;font-family:ui-monospace;">echo "Runner OS: $(uname -s)..."</span>
+        <span class="dur">120ms</span>
+        <span class="exit-pill ok">exit 0</span>
+        <span class="status-dot ok"></span>
+      </div>
+      <div class="card-body">
+        <div class="field">
+          <div class="field-label">command · cwd: /valet/packages/runner</div>
+          <div class="terminal">$ echo "Runner OS: $(uname -s), Shell: ${SHELL}"</div>
+        </div>
+        <div class="field">
+          <div class="field-label">stdout</div>
+          <div class="terminal">Runner OS: Linux, Shell: /bin/bash</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- BASH collapsed -->
+    <div class="card ok">
+      <div class="card-head">
+        <span class="chev">▸</span>
+        <span class="type">BASH</span>
+        <span class="name">timestampOutput</span>
+        <span style="color:#6b7280;font-size:11px;font-family:ui-monospace;">→ "Workflow ran at 21:43:11"</span>
+        <span class="dur">90ms</span>
+        <span class="exit-pill ok">exit 0</span>
+        <span class="status-dot ok"></span>
+      </div>
+    </div>
+
+    <!-- NOTIFY failed -->
+    <div class="card fail">
+      <div class="card-head">
+        <span class="chev">▾</span>
+        <span class="type">NOTIFY</span>
+        <span class="name">notify-both-responded</span>
+        <span class="dur">12ms</span>
+        <span class="status-dot fail"></span>
+      </div>
+      <div class="card-body">
+        <div class="notify-card">
+          <div class="channel-icon">#</div>
+          <div style="display:flex;flex-direction:column;gap:2px;">
+            <div style="font-size:11px;color:#e5e7eb;font-family:ui-monospace;">orchestrator@user/me</div>
+            <div style="font-size:10px;color:#6b7280;">delivery skipped — interpolation failed</div>
+          </div>
+        </div>
+        <div class="field">
+          <div class="field-label">error</div>
+          <div class="err-box">
+            loop_post_not_array: outputs.personaResult.capability
+            <div class="err-trace">The variable <code>outputs.personaResult.capability</code> referenced after a loop expects an array (one value per iteration). Got: <code>undefined</code>.</div>
+          </div>
+        </div>
+        <div style="display:flex;gap:8px;">
+          <button class="retry-btn">↻ Retry from here</button>
+          <button class="retry-btn">↗ Open in builder</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- DIAGRAM SIDE (compact, scroll-synced) -->
+  <div class="diagram-side">
+    <div class="strip-label">graph · scroll-synced</div>
+    <span class="node ok">trigger</span>
+    <span class="arrow">↓</span>
+    <span class="node ok">loop · 3 iters</span>
+    <span class="arrow">↓</span>
+    <span class="node ok">agent · personaResult</span>
+    <span class="arrow">↓</span>
+    <span class="node ok">bash · env</span>
+    <span class="arrow">↓</span>
+    <span class="node ok">bash · timestamp</span>
+    <span class="arrow">↓</span>
+    <span class="node fail sel">notify · failed</span>
+    <div style="margin-top:auto;font-size:10px;color:#6b7280;font-family:ui-monospace;">click node → jump in timeline ↔</div>
+  </div>
+</div>
+
+<div class="options">
+  <div class="option opt-block" data-choice="yes" onclick="toggleSelect(this)">
+    <div class="opt-title" style="font-weight:600;color:#f9fafb;">Yes — this idiom works, build on it</div>
+    <div class="opt-sub" style="font-size:11px;color:#9ca3af;">Per-step-type rendering, loops as collapsible iteration tabs, failures auto-expand, retry inline.</div>
+  </div>
+  <div class="option opt-block" data-choice="adjust" onclick="toggleSelect(this)">
+    <div class="opt-title" style="font-weight:600;color:#f9fafb;">Close, but I'd change something</div>
+    <div class="opt-sub" style="font-size:11px;color:#9ca3af;">Tell me what.</div>
+  </div>
+</div>

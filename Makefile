@@ -15,7 +15,7 @@
         lint typecheck \
         logs logs-worker logs-opencode logs-cloudflare logs-worker-prod \
         health health-worker health-opencode \
-        workflow-create workflow-list workflow-run workflow-delete \
+        workflow-create workflow-list workflow-delete \
         trigger-create trigger-list trigger-run \
         bootstrap bootstrap-d1 bootstrap-r2 bootstrap-pages bootstrap-secrets \
         release deploy deploy-worker deploy-modal deploy-migrate deploy-client generate-registries \
@@ -273,12 +273,15 @@ smoke-test-api: ## Run only direct API smoke tests (no agent dispatch, fast)
 smoke-test-agent: ## Run only agent-dispatched smoke tests (slower, needs running orchestrator)
 	@WORKER_URL=$(WORKER_URL) API_TOKEN=$(API_TOKEN) pnpm vitest run --config tests/smoke/vitest.config.ts agent-
 
+smoke-dag: ## Smoke-test the dag/v1 draft/publish/test-run API (needs `wrangler dev` + db-seed)
+	@WORKER_URL=$(WORKER_URL) API_TOKEN=$(API_TOKEN) bash scripts/smoke-dag.sh
+
 # ==========================================
 # Workflow E2E Tests
 # ==========================================
 
-test-workflow: ## Test workflow CRUD operations
-	@echo "$(GREEN)Testing workflow operations...$(NC)"
+test-workflow: ## Test workflow CRUD operations (create / list / delete)
+	@echo "$(GREEN)Testing workflow CRUD...$(NC)"
 	@echo ""
 	@echo "1. Creating test workflow..."
 	@make workflow-create-test
@@ -286,13 +289,14 @@ test-workflow: ## Test workflow CRUD operations
 	@echo "2. Listing workflows..."
 	@make workflow-list
 	@echo ""
-	@echo "3. Running workflow..."
-	@make workflow-run-test
+	@echo "$(YELLOW)Note: 'Run' is exercised via the worker's dag/v1 flow"
+	@echo "(POST /api/workflows/:id/test-run after publish). The CRUD"
+	@echo "smoke test stops here — see docs/specs/workflows.md.$(NC)"
 	@echo ""
-	@echo "4. Cleaning up..."
+	@echo "3. Cleaning up..."
 	@make workflow-delete-test
 	@echo ""
-	@echo "$(GREEN)✓ Workflow tests passed$(NC)"
+	@echo "$(GREEN)✓ Workflow CRUD tests passed$(NC)"
 
 test-triggers: ## Test trigger CRUD operations
 	@echo "$(GREEN)Testing trigger operations...$(NC)"
@@ -350,7 +354,7 @@ workflow-create: ## Create a workflow (interactive)
 		echo "$(YELLOW)Please specify WORKFLOW_FILE$(NC)"; \
 	fi
 
-workflow-create-test: ## Create a test workflow for E2E testing
+workflow-create-test: ## Create a test workflow for E2E testing (dag/v1)
 	@echo "Creating test workflow: $(WORKFLOW_TEST_ID)"
 	@curl -sf -X POST $(WORKER_URL)/api/workflows/sync \
 		-H "Content-Type: application/json" \
@@ -361,19 +365,14 @@ workflow-create-test: ## Create a test workflow for E2E testing
 			"description": "Automated E2E test workflow", \
 			"version": "1.0.0", \
 			"data": { \
-				"id": "$(WORKFLOW_TEST_ID)", \
-				"name": "$(WORKFLOW_TEST_NAME)", \
-				"description": "Automated E2E test workflow", \
-				"version": "1.0.0", \
-				"steps": [ \
-					{ \
-						"id": "step-1", \
-						"name": "Echo Test", \
-						"type": "tool", \
-						"tool": "bash", \
-						"arguments": { "command": "echo Hello from E2E test" }, \
-						"outputVariable": "echoResult" \
-					} \
+				"version": "dag/v1", \
+				"inputs": {}, \
+				"nodes": [ \
+					{ "id": "start", "type": "set", "values": { "msg": "Hello from E2E test" } }, \
+					{ "id": "end", "type": "stop", "output": { "msg": "{{nodes.start.data.msg}}" } } \
+				], \
+				"edges": [ \
+					{ "from": "start", "to": "end" } \
 				] \
 			} \
 		}' && echo " $(GREEN)✓$(NC)" || echo " $(RED)✗$(NC)"
@@ -390,31 +389,6 @@ workflow-get: ## Get a specific workflow (WORKFLOW_ID required)
 	fi
 	@curl -sf $(WORKER_URL)/api/workflows/$(WORKFLOW_ID) \
 		-H "Authorization: Bearer $(API_TOKEN)" | jq .
-
-workflow-run: ## Run a workflow (WORKFLOW_ID required)
-	@if [ -z "$(WORKFLOW_ID)" ]; then \
-		echo "$(RED)Usage: make workflow-run WORKFLOW_ID=<id> [VARIABLES='{}']$(NC)"; \
-		exit 1; \
-	fi
-	@curl -sf -X POST $(OPENCODE_URL)/session \
-		-H "Content-Type: application/json" \
-		-H "Authorization: Basic $$(echo -n ":$(OPENCODE_SERVER_PASSWORD)" | base64)" \
-		-d '{"path": "/workspace"}' | jq -r '.id' > /tmp/session_id.txt
-	@curl -sf -X POST $(OPENCODE_URL)/session/$$(cat /tmp/session_id.txt)/message \
-		-H "Content-Type: application/json" \
-		-H "Authorization: Basic $$(echo -n ":$(OPENCODE_SERVER_PASSWORD)" | base64)" \
-		-d '{"content": "Run workflow.run with id=$(WORKFLOW_ID) and variables=$(VARIABLES)"}'
-	@rm -f /tmp/session_id.txt
-
-workflow-run-test: ## Run the test workflow
-	@echo "Running test workflow: $(WORKFLOW_TEST_ID)"
-	@# In a real scenario, this would create a session and run the workflow
-	@# For now, we simulate via the API
-	@curl -sf -X POST "$(WORKER_URL)/api/triggers/manual/run" \
-		-H "Content-Type: application/json" \
-		-H "Authorization: Bearer $(API_TOKEN)" \
-		-d '{"workflowId": "$(WORKFLOW_TEST_ID)", "variables": {"test": true}}' \
-		&& echo " $(GREEN)✓$(NC)" || echo " $(YELLOW)Manual run endpoint not yet implemented$(NC)"
 
 workflow-delete: ## Delete a workflow (WORKFLOW_ID required)
 	@if [ -z "$(WORKFLOW_ID)" ]; then \

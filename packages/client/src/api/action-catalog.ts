@@ -8,6 +8,8 @@ export interface ActionCatalogEntry {
   name: string;
   description: string;
   riskLevel: string;
+  inputSchema?: Record<string, unknown>;
+  outputSchema?: Record<string, unknown>;
 }
 
 export const actionCatalogKeys = {

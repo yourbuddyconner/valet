@@ -70,7 +70,7 @@ Detailed per-subsystem specifications live in `docs/specs/`. These are the sourc
 | [`docs/specs/sessions.md`](docs/specs/sessions.md) | Session lifecycle, state machine, sandbox orchestration, prompt queue, message streaming, hibernation/restore, access control, multiplayer |
 | [`docs/specs/sandbox-runtime.md`](docs/specs/sandbox-runtime.md) | Sandbox boot sequence, service ports, auth gateway, Runner process, OpenCode lifecycle, Runner↔DO WebSocket protocol, Modal backend |
 | [`docs/specs/real-time.md`](docs/specs/real-time.md) | SessionAgentDO WebSocket handling, EventBusDO, event types, V2 streaming protocol, client reconnection, message deduplication |
-| [`docs/specs/workflows.md`](docs/specs/workflows.md) | Workflow definitions, trigger types (webhook/schedule/manual), execution lifecycle, WorkflowExecutorDO, step engine, approval gates, proposals, version history |
+| [`docs/specs/workflows.md`](docs/specs/workflows.md) | Workflow definitions, trigger types (webhook/schedule/manual), execution lifecycle, ValetWorkflowInterpreter (Cloudflare Workflow), approval gates via workflow_approvals + step.waitForEvent, version history |
 | [`docs/specs/auth-access.md`](docs/specs/auth-access.md) | OAuth flows (GitHub/Google), token auth, admin middleware, org model (settings/invites/LLM keys), session access control, JWT issuance |
 | [`docs/specs/orchestrator.md`](docs/specs/orchestrator.md) | Orchestrator identity, auto-restart, child session spawning, memory system (FTS), mailbox, channel routing, task board |
 | [`docs/specs/integrations.md`](docs/specs/integrations.md) | Integration framework, GitHub (OAuth/webhooks/API proxy), Telegram bot, Gmail, Google Calendar, channel bindings, custom LLM providers, credential storage |
@@ -90,7 +90,7 @@ When using superpowers skills (brainstorming → writing-plans → executing-pla
 These are decided and locked in. Do not revisit:
 
 1. **WebSocket only** between Runner and SessionAgent DO. No HTTP callbacks.
-2. **Single merged SessionAgent DO** for session orchestration. Three DOs total: `SessionAgentDO`, `EventBusDO`, `WorkflowExecutorDO`.
+2. **Single merged SessionAgent DO** for session orchestration. Two DOs total: `SessionAgentDO`, `EventBusDO`. Workflows execute on a Cloudflare Workflow entrypoint (`ValetWorkflowInterpreter`) — not a Durable Object.
 3. **Single Modal App** for the Python backend (structured for future split).
 4. **Repo-specific images** from day one. Base image fallback for unconfigured repos.
 5. **iframes** for VNC (websockify noVNC web UI) and Terminal (TTYD web UI). No embedded JS clients.
@@ -204,7 +204,7 @@ Three deploy workflows live in `.github/workflows/`:
 | `deploy-dev.yml` | Push to `main` | dev environment |
 | `deploy-prod.yml` | Push of a `v*` tag | prod environment |
 
-`deploy-dev.yml` and `deploy-prod.yml` call `make deploy` (the full `scripts/deploy.sh cmd_all` path: worker → migrations → modal → client). `deploy-preview.yml` calls `make deploy-client` with `PAGES_DEPLOY_BRANCH=pr-<number>` so the preview branch is published to the dev Pages project without deploying a per-PR Worker, D1, R2 bucket, or Modal backend. The client is built against the dev Worker URL; set `DEV_WORKER_URL` as a GitHub Actions variable in the `dev` environment when Cloudflare's deployment lookup cannot infer the correct workers.dev URL.
+`deploy-dev.yml` and `deploy-prod.yml` call `make deploy` (the full `scripts/deploy.sh cmd_all` path: worker → migrations → modal → client). `deploy-preview.yml` calls `make deploy-client` with `PAGES_DEPLOY_BRANCH=pr-<number>` so the preview branch is published to the dev Pages project without deploying a per-PR Worker, D1, R2 bucket, or Modal backend. All three workflows write `API_PUBLIC_URL` into `.env.deploy.<env>` from a GitHub Actions **secret** of the same name in each environment; the deploy script requires it (no auto-discovery fallback) and the client build uses it as `VITE_API_URL`.
 
 The Worker accepts preview OAuth redirects only for the configured frontend origin or for hosts under `FRONTEND_PREVIEW_ORIGIN_SUFFIX`, which defaults to `${PAGES_PROJECT_NAME}.pages.dev` during deploy config generation. Keep that suffix project-specific; do not set it to a broad value like `pages.dev`.
 
@@ -220,7 +220,7 @@ The Worker accepts preview OAuth redirects only for the configured frontend orig
 | `CLOUDFLARE_ACCOUNT_ID` | Secret | Your Cloudflare account ID (find it in the dashboard URL or `wrangler whoami`) |
 | `ALLOWED_EMAILS` | Secret | Comma-separated email allowlist; empty = no restriction |
 | `D1_DATABASE_ID` | Secret | Optional — auto-discovered from `wrangler d1 list` if omitted |
-| `DEV_WORKER_URL` | Variable | Optional for `deploy-preview.yml`; full dev Worker origin used for `VITE_API_URL` (for example `https://dev-valet-turnkey.<subdomain>.workers.dev`) |
+| `API_PUBLIC_URL` | Secret | **Required** in each environment. Full public Worker origin (e.g. `https://dev-valet-turnkey.<subdomain>.workers.dev` for dev). Written into `.env.deploy.<env>` and consumed by `deploy.sh` + the Worker runtime + the client build's `VITE_API_URL` |
 
 **Prod environment protection:** Add required reviewers to the `prod` GitHub Actions environment so every `v*` tag push triggers a manual approval gate before secrets are exposed.
 
@@ -383,7 +383,7 @@ The Worker + Durable Objects emit OpenTelemetry traces (`@microlabs/otel-cf-work
 - Each route file exports a Hono router: `export const fooRouter = new Hono<{ Bindings: Env; Variables: Variables }>()`
 - Route is mounted in `index.ts`: `app.route('/api/foo', fooRouter)`
 - Database uses **Drizzle ORM**: schema in `src/lib/schema/`, query helpers in `src/lib/db/`, Drizzle instance via `src/lib/drizzle.ts`. Barrel re-export at `src/lib/db.ts`.
-- Three Durable Objects in `src/durable-objects/`: `SessionAgentDO` (session-agent.ts), `EventBusDO` (event-bus.ts), `WorkflowExecutorDO` (workflow-executor.ts). All re-exported from `index.ts`.
+- Two Durable Objects in `src/durable-objects/`: `SessionAgentDO` (session-agent.ts), `EventBusDO` (event-bus.ts). Both re-exported from `index.ts`. Workflow runs are handled by `ValetWorkflowInterpreter` in `src/workflows/interpreter.ts` — a Cloudflare Workflow entrypoint exported alongside the DOs.
 - Services go in `packages/worker/src/services/<name>.ts`
 - Middleware: `auth.ts` (OAuth + API keys), `db.ts` (Drizzle setup), `admin.ts` (role-based access), `error-handler.ts` (global error handling). Auth sets `c.get('user')` with `{ id, email, role }`.
 - Plugin registries: `src/integrations/packages.ts` (actions), `src/channels/packages.ts` (channels), `src/plugins/content-registry.ts` (skills/personas/tools). All auto-generated by `make generate-registries` from `packages/plugin-*/`.
@@ -452,7 +452,6 @@ Auto-discovered by `make generate-registries` which scans `packages/plugin-*/` a
 - OpenCode interaction: `packages/runner/src/prompt.ts`
 - OpenCode lifecycle: `packages/runner/src/opencode-manager.ts`
 - Auth gateway: `packages/runner/src/gateway.ts` (Hono on port 9000)
-- Workflow engine: `packages/runner/src/workflow-engine.ts`, `workflow-compiler.ts`, `workflow-cli.ts`
 - Secrets: `packages/runner/src/secrets.ts`, `onepassword-provider.ts`
 
 ### Backend
@@ -479,6 +478,11 @@ This codebase has accumulated `any`, `unknown`, and type assertions (`as`) as sh
 5. **Fix what you touch.** When editing a file that has `any`, unnecessary assertions, or double-casts, clean them up as part of your change. You don't need to fix the whole codebase — just leave every file you touch better than you found it.
 
 6. **Extract pure functions to avoid testing private members.** If a test needs `(obj as any).privateMethod(...)`, extract the logic into an exported pure function. Test the pure function directly (no mocks, no casts), and have the private method call it. Don't create wrapper types or helpers to smuggle access to private members.
+
+### Git Conventions
+
+- Commit at logical checkpoints — each phase / sub-task / passing test surface — rather than batching everything into one mega-commit at the end.
+- Keep commit messages succinct. The subject line is one short sentence (≤72 chars); the body, when needed, is a few terse bullet points covering what changed and why. Skip exhaustive enumerations of files, line counts, or test totals — `git log` and the diff already show that. If you find yourself writing a multi-paragraph essay, trim.
 
 ## Common Patterns
 

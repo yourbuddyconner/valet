@@ -26,6 +26,7 @@ import {
   resolveTableIdentifier,
   listAllTables,
 } from './sheets-helpers.js';
+import { withGoogleWorkspaceOutputSchemas } from './workspace-output-schemas.js';
 
 // ─── Shared Schemas ───────────────────────────────────────────────────────
 
@@ -818,8 +819,13 @@ async function executeAction(
 
       case 'sheets.clear_range': {
         const p = clearRangeDef.params.parse(params);
-        const data = await clearRange(token, p.spreadsheetId, p.range);
-        return { success: true, data };
+        const res = await sheetsFetch(
+          `/${encodeURIComponent(p.spreadsheetId)}/values/${encodeURIComponent(p.range)}:clear`,
+          token,
+          { method: 'POST', body: JSON.stringify({}) },
+        );
+        if (!res.ok) return sheetsError(res);
+        return { success: true, data: await res.json() };
       }
 
       // ── Sheet Management ───────────────────────────────────────────────
@@ -1713,5 +1719,5 @@ async function executeAction(
 
 // ─── Export ────────────────────────────────────────────────────────────────
 
-export const sheetsActionDefs: ActionDefinition[] = allActions;
+export const sheetsActionDefs: ActionDefinition[] = withGoogleWorkspaceOutputSchemas(allActions);
 export { executeAction as executeSheetsAction };

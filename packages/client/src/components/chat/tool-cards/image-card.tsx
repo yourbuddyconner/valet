@@ -24,6 +24,7 @@ export function ImageCard({ tool }: { tool: ToolCallData }) {
       icon={<ImageIcon className="h-3.5 w-3.5" />}
       label={tool.toolName}
       status={tool.status}
+      tool={tool}
       summary={caption ? (
         <span className="text-neutral-500 dark:text-neutral-400">{caption}</span>
       ) : undefined}

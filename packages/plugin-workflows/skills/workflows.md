@@ -1,243 +1,327 @@
 ---
 name: workflows
-description: End-to-end Valet workflow operations. Use when creating, updating, deleting, running, scheduling, debugging, rolling back, or self-modifying workflows; when managing workflow executions and approvals; when configuring trigger behavior; when passing repository context into workflow runs; and when using agent_message workflow steps.
+description: Guidance for understanding Valet workflows, including the worker-backed workflow tools available through list_tools/call_tool.
 ---
 
 # Workflows
 
-## Use the workflow tools, not raw API calls
+Workflows are a `dag/v1` graph of nodes (`trigger`, `llm`, `tool`, `set`, `if`, `wait`, `approval`, `foreach`, `orchestrator`, `session`, `stop`) connected by edges. They run on the `ValetWorkflowInterpreter` Cloudflare Workflow entrypoint in the worker.
 
-Use these tools for lifecycle operations:
+## Where workflows are managed
 
-- `list_workflows`, `get_workflow`, `sync_workflow`, `update_workflow`, `delete_workflow`
-- `list_workflow_history`, `rollback_workflow`
-- `list_workflow_proposals`, `create_workflow_proposal`, `review_workflow_proposal`, `apply_workflow_proposal`
-- `run_workflow`, `list_workflow_executions`, `get_execution`, `get_execution_steps`, `debug_execution`, `approve_execution`, `cancel_execution`
-- `list_triggers`, `sync_trigger`, `run_trigger`, `delete_trigger`
+- **Web UI** — `/workflows` is the canonical surface: draft editor, validate, publish, version history, executions list, pending-approval resolution.
+- **Worker HTTP API** — `/api/workflows/*`, `/api/triggers/*`, `/api/executions/*` (auth required; called by the web UI and external clients).
+- **Agent remote tools** — `list_tools service=workflows` exposes worker-backed workflow actions through the runner gateway.
 
-## Think in 4 layers
+## Inside a session
 
-1. Workflow definition: versioned JSON with non-empty `steps`.
-2. Trigger configuration: dispatch rules for `manual`, `webhook`, or `schedule`.
-3. Execution record: immutable run state, status, step traces, and approval token lifecycle.
-4. Workflow session: dedicated sandbox session (`purpose: workflow`) started/woken by the workflow executor.
+Use the remote integration tool surface, not local scripts or OpenCode-native tools:
 
-## Choose the right lifecycle tool
+```text
+list_tools service=workflows
+call_tool workflows:workflows.list params={} summary="List workflows"
+```
 
-- Use `sync_workflow` for create or full-definition upsert.
-- Use `update_workflow` for partial metadata/definition patch (`name`, `description`, `slug`, `version`, `enabled`, `tags`, `data`).
-- Use `delete_workflow` to remove workflows (and linked triggers).
-- Use `list_workflow_history` before rollback or forensic comparison.
-- Use `rollback_workflow` with a `target_workflow_hash` from history.
+Available actions:
 
-## Use proposal flow for self-modifying workflows
+- `workflows.list` — list the current user's workflows.
+- `workflows.get` — fetch metadata plus published definition and draft by workflow ID or slug.
+- `workflows.create` — create a new workflow draft.
+- `workflows.save_draft` — save a structurally valid `dag/v1` draft. Drafts may still be semantically incomplete. Pass `validate: true` to return grouped validation after save.
+- `workflows.schema` — return valid node types, required fields, template syntax, old-name aliases, and foreach constraints.
+- `workflows.validate` — validate a saved draft or supplied definition. Returns blocking `errors` separately from non-blocking `warnings`.
+- `workflows.publish` — publish the current draft. This is high risk and may require approval.
+- `workflows.test_run` — start a draft execution with sample trigger data exposed as `{{trigger.data}}`. Returns an execution id/status.
+- `workflows.get_execution` — inspect an execution by id, including status, parsed trigger data, outputs, node traces, and approval history.
 
-Follow this sequence:
+Prefer the web UI for visual graph editing. Use tools for inspection, small edits, validation, publishing, and test runs when the user asks the agent to operate on workflows directly. Malformed drafts are not saved; the tool returns validation details instead.
 
-1. Use `get_workflow` and compute/use current workflow hash as `base_workflow_hash`.
-2. Use `create_workflow_proposal`.
-3. Use `review_workflow_proposal` (`approve=true/false`).
-4. Use `apply_workflow_proposal` after approval.
+## Authoring Reference
 
-Notes:
+A workflow definition has this top-level shape:
 
-- Proposal creation enforces base-hash matching.
-- Workflow must allow self-modification (`constraints.allowSelfModification === true`).
-- Use `list_workflow_proposals` to inspect status transitions (`pending`, `approved`, `rejected`, `applied`, `failed`).
-
-## Run and operate executions
-
-Run:
-
-- Use `run_workflow` with `workflow_id`.
-- Optionally pass `variables_json`.
-- Optionally pass repo context: `repo_url`, `repo_branch`, `repo_ref`, `source_repo_full_name`.
-
-Inspect:
-
-- Use `list_workflow_executions` for recent runs.
-- Use `get_execution` for authoritative status and current `resumeToken`.
-- Use `get_execution_steps` for ordered normalized step traces.
-- Use `debug_execution` first when a run stalls/fails.
-
-Approval/cancel:
-
-- Use `approve_execution` with the latest `resume_token` from `get_execution`.
-- Use `cancel_execution` for stuck/inconsistent runs.
-
-## Configure triggers and scheduling
-
-Triggers are identified by name. `sync_trigger` is idempotent — calling with the same name updates the existing trigger, preserving its creation time and history. No need to look up trigger IDs first.
-
-Use `sync_trigger` for create/update:
-
-- `type=manual`
-- `type=webhook` requires `webhook_path` (optional method/secret)
-- `type=schedule` requires `schedule_cron`
-
-Schedule specifics:
-
-- `schedule_cron` is a 5-field cron expression evaluated in `schedule_timezone` (default: UTC). Example: `0 8 * * *` with timezone `America/Denver` fires at 8:00 AM Mountain Time daily.
-- `schedule_target=workflow` (default): dispatches workflow execution.
-- `schedule_target=orchestrator`: dispatches `schedule_prompt` to orchestrator session.
-- `schedule_prompt` is required when `schedule_target=orchestrator`.
-
-Use `run_trigger` to test behavior immediately.
-
-Use `delete_trigger` to remove stale triggers (by ID or name).
-
-Variable mapping note:
-
-- Keep `variable_mapping_json` paths simple (`$.field`), since extraction is shallow.
-
-## Understand workflow execution context
-
-Workflow runs do not execute in the orchestrator sandbox.
-
-Execution context behavior:
-
-1. A workflow session is created as a dedicated session (`purpose: workflow`) and initially hibernated.
-2. `WorkflowExecutorDO` wakes/boots that workflow sandbox when enqueue/resume happens.
-3. The executor dispatches a workflow-run prompt into that workflow session.
-
-Repository context behavior:
-
-- Repo context is stored in `session_git_state` for the workflow session.
-- Executor injects `REPO_URL`, `REPO_BRANCH`, `REPO_REF` env vars into the sandbox.
-- Sandbox startup clones `REPO_URL` into `/workspace/<repo>`, checks out branch/ref when provided, and sets working directory to the clone.
-
-## Author workflow definitions with current runtime behavior
-
-Minimum requirement:
-
-- `workflow.steps` must be a non-empty array.
-- Each step must have `id` (string), `name` (string), and `type` (string).
-
-Valid step types: `bash`, `tool`, `approval`, `conditional`, `parallel`, `agent`, `agent_message`.
-
-### `bash` step (preferred for shell commands)
-
-Use `type: "bash"` for shell commands. This is a first-class step type.
-
-Required fields:
-- `command` (string): The shell command to execute.
-
-Optional fields:
-- `description` (string): Human-readable description of what this command does.
-- `cwd` (string): Working directory.
-- `timeoutMs` (number): Timeout in milliseconds (default 120000, max 600000).
-- `outputVariable` (string): Variable name to store command output.
-
-Example:
 ```json
 {
-  "id": "1",
-  "name": "Run tests",
-  "type": "bash",
-  "command": "npm test",
-  "description": "Run the test suite"
+  "version": "dag/v1",
+  "nodes": [],
+  "edges": []
 }
 ```
 
-**Do NOT use `type: "tool"` with `tool: "bash"` for shell commands.** Use `type: "bash"` instead.
+Node IDs may contain letters, numbers, `_`, and `-`. They must be unique across top-level nodes and foreach body nodes. Edges connect top-level nodes only.
 
-### `tool` step
+Prefer underscore IDs for agent-authored workflows because dot notation is simplest. If a node ID contains `-`, use bracket notation in expressions:
 
-For non-bash tools only. Requires `tool` (string) and optionally `arguments` (object).
+```text
+{{nodes["tool-1"].data.issues}}
+```
 
-### `approval` step
+### Templates and Data
 
-Pauses execution and waits for human approval.
+String fields and JSON values on most nodes support `{{ expression }}` templates.
 
-Optional fields:
-- `prompt` (string): Message shown to the approver.
+Common references:
 
-### `conditional` step
+- `{{trigger.data}}` — invocation payload (webhook body/query/headers or test-run sample data).
+- `{{trigger.metadata}}` — trigger metadata such as mode, initiator, or webhook context.
+- `{{trigger.type}}` / `{{trigger.timestamp}}` — trigger envelope fields.
+- `{{trigger.data.name}}` — declared trigger parameter values.
+- `{{nodes.node_id.data}}` — output data from a previous node.
+- `{{nodes.llm_id.data.response}}` — LLM text response.
+- `{{nodes.tool_id.data}}` — tool action result data.
+- Inside `foreach`, the defaults are `{{item}}` and `{{index}}` unless aliases are set.
 
-Evaluates a condition and runs `then` or `else` branch.
+Do not use `outputs.*`; the runtime context is `nodes.*`.
 
-Required fields:
-- `condition`: Boolean value, or object like `{ "variable": "varName", "equals": "value" }`.
+Legacy or incorrect node names are rejected. Common replacements:
 
-Optional fields:
-- `then` (array of steps): Steps to run when condition is true.
-- `else` (array of steps): Steps to run when condition is false.
+- `agent_prompt` or `prompt` → `llm`
+- `http` or `action` → `tool`
+- `loop` → `foreach`
+- `sleep` → `wait`
+- `start` → `trigger`
+- `bash` has no built-in dag/v1 equivalent; use `session`/`orchestrator` to run code in a sandbox or `tool` for integration actions.
 
-### `parallel` step
+### Edges
 
-Runs nested steps. Requires `steps` (array of steps).
+```json
+{ "from": "start", "to": "next" }
+```
 
-### `agent` step
+Edges from an `if` node must include `fromOutput`:
 
-Dispatches work to an AI agent.
+```json
+{ "from": "route", "fromOutput": "true", "to": "on_true" }
+{ "from": "route", "fromOutput": "false", "to": "on_false" }
+```
 
-Optional fields:
-- `goal` (string): What the agent should accomplish.
-- `context` (string): Additional context for the agent.
+`when` is an optional expression predicate for advanced edge gating.
 
-### `agent_message` step
+### Node Schemas
 
-Sends a message to the workflow session agent.
-
-Required: Provide message via `content` (preferred), or `message`, or `goal`.
-
-Optional fields:
-- `interrupt` (boolean).
-- `await_response` (or `awaitResponse`) boolean.
-- `await_timeout_ms` (or `awaitTimeoutMs`) number, minimum 1000.
-
-Behavior:
-- Non-await mode sends a message to the current workflow session agent.
-- Await mode runs a temporary OpenCode session and returns response text in step output.
-
-### Complete workflow example
+`trigger` represents the invocation source and exposes trigger payload data. It may declare `dataSchema`, using the `WorkflowInputDefinition` field shape, to describe and validate payload fields available at `{{trigger.data.*}}`. The UI uses this schema for manual test-run fields, scheduled workflow trigger parameters, and template suggestions.
 
 ```json
 {
-  "steps": [
-    {
-      "id": "1",
-      "name": "Install dependencies",
-      "type": "bash",
-      "command": "npm install",
-      "description": "Install project dependencies"
-    },
-    {
-      "id": "2",
-      "name": "Run linter",
-      "type": "bash",
-      "command": "npm run lint",
-      "description": "Check code quality"
-    },
-    {
-      "id": "3",
-      "name": "Run tests",
-      "type": "bash",
-      "command": "npm test",
-      "outputVariable": "test_results"
-    },
-    {
-      "id": "4",
-      "name": "Approve deployment",
-      "type": "approval",
-      "prompt": "Tests passed. Deploy to production?"
-    },
-    {
-      "id": "5",
-      "name": "Deploy",
-      "type": "bash",
-      "command": "npm run deploy"
-    }
+  "id": "trigger",
+  "type": "trigger",
+  "dataSchema": {
+    "email": { "type": "string", "required": true, "description": "Customer email" },
+    "plan": { "type": "string", "default": "free", "enum": ["free", "business", "enterprise"] }
+  }
+}
+```
+
+`set` writes structured values to `nodes.<id>.data`:
+
+```json
+{ "id": "prepare", "type": "set", "values": { "message": "hello {{trigger.data.name}}" } }
+```
+
+`llm` generates text or structured data. Without `outputSchema`, it returns plain text at `{{nodes.<id>.data.response}}`. With `outputSchema`, the model must return JSON matching that schema; malformed or schema-invalid JSON is repaired up to three times, and the validated object is returned as `nodes.<id>.data`:
+
+```json
+{
+  "id": "summarize",
+  "type": "llm",
+  "model": "anthropic:claude-sonnet-4-5",
+  "system": "Optional system prompt",
+  "prompt": "Summarize {{trigger.data.text}}",
+  "maxOutputTokens": 800
+}
+```
+
+Model IDs use `provider:model`, not `provider/model`. Supported providers are `anthropic`, `openai`, and `google`. The provider API key must be configured as an org LLM key in the admin UI/DB, or as a Worker env fallback secret; otherwise validation/test-run returns an environment error. The model must also exist in the configured model catalog used by the settings pages/model picker; stale model IDs are rejected with `llm_model_unavailable` and suggestions. `maxOutputTokens` is not required, but omitting it returns a warning.
+
+`tool` calls a remote integration action:
+
+```json
+{
+  "id": "list_issues",
+  "type": "tool",
+  "service": "github",
+  "action": "github.list_issues",
+  "params": { "owner": "tkhq", "repo": "valet" },
+  "summary": "List GitHub issues",
+  "onPolicyDeny": "fail",
+  "retries": 1
+}
+```
+
+`if` branches on conditions:
+
+```json
+{
+  "id": "route",
+  "type": "if",
+  "combinator": "and",
+  "conditions": [
+    { "left": "trigger.data.priority", "dataType": "string", "operation": "equals", "right": "high" }
   ]
 }
 ```
 
-## Reliable operating playbook
+Condition fields are `left`, `dataType`, `operation`, and optional `right`. Use `operation`, not `operator` or `op`.
 
-1. Use `list_workflows` before creating/updating to avoid duplicates. Triggers are idempotent by name — no need to list first.
-2. Use `get_workflow` before patching critical definitions.
-3. Use `run_workflow` or `run_trigger` for tests.
-4. Use `debug_execution` first for incidents.
-5. Use fresh `resume_token` from `get_execution` before `approve_execution`.
-6. Use `cancel_execution` when state is inconsistent, then rerun cleanly.
-7. Use `list_workflow_history` and `rollback_workflow` for safe recovery.
+Use the operation names returned by `workflows.schema`. Common string operations include `exists`, `doesNotExist`, `isEmpty`, `isNotEmpty`, `equals`, `notEquals`, `contains`, `doesNotContain`, `startsWith`, `endsWith`, and `matchesRegex`. Snake-case aliases such as `is_not_empty`, `not_equals`, and `matches_regex` are accepted, but camelCase is preferred.
+
+`foreach` iterates over an array expression and runs one body node per item:
+
+```json
+{
+  "id": "each_issue",
+  "type": "foreach",
+  "items": "{{nodes.list_issues.data.issues}}",
+  "itemAlias": "issue",
+  "indexAlias": "i",
+  "maxItems": 25,
+  "concurrency": 3,
+  "onItemError": "fail",
+  "body": {
+    "id": "shape_issue",
+    "type": "set",
+    "values": { "title": "{{issue.title}}", "number": "{{issue.number}}" }
+  }
+}
+```
+
+Foreach `body` may be `llm`, `tool`, `set`, `stop`, `orchestrator`, or `session`. Nested `if`, `wait`, `approval`, `trigger`, and `foreach` nodes are not supported inside a foreach body.
+
+Foreach `items` must be a single template that resolves to a typed array output. For session and orchestrator nodes, structured fields declared by `outputSchema` are nested under `data.output`, so an array field named `companies` is referenced as `{{nodes.scrape_yc.data.output.companies}}`, not `{{nodes.scrape_yc.data.companies}}`.
+
+`maxItems` is an optional truncation limit. If omitted, the foreach node processes up to 100 items by default. If the input array has more items than `maxItems`, the foreach node processes the first `maxItems` items and returns `inputCount` plus `truncatedCount` in its output envelope. It does not fail just because more items were available. Explicit `maxItems` may be set up to the default workflow policy ceiling of 5000 iterations.
+
+`approval` pauses until a human approves or denies:
+
+```json
+{ "id": "approve", "type": "approval", "prompt": "Approve deploy?", "summary": "Deploy approval", "timeout": "24h", "onDeny": "fail" }
+```
+
+`wait` sleeps for a duration:
+
+```json
+{ "id": "pause", "type": "wait", "mode": "duration", "duration": "10m" }
+```
+
+`orchestrator` prompts the user's orchestrator in a fresh automation thread. Default behavior is fire-and-forget:
+
+```json
+{ "id": "ask_orchestrator", "type": "orchestrator", "prompt": "Investigate {{trigger.data.issue}}" }
+```
+
+Fields:
+- `prompt` (string, required) — prompt sent to the orchestrator thread; supports templates.
+- `wait` (object, optional) — `{ "mode": "none" | "until_idle", "timeout"?: string }`.
+- `resultMode` (`"last_message"` | `"transcript"`, optional) — only applies with `wait.mode: "until_idle"`; defaults to `"last_message"`.
+- `outputSchema` (object, optional) — JSON Schema for the final assistant reply. Only applies when waiting. Validated structured data is stored at `{{nodes.<id>.data.output}}`; raw text remains at `{{nodes.<id>.data.response}}`.
+- `repairModel` (string, optional) — model used to repair malformed or schema-invalid JSON. Defaults to user/org model preferences.
+
+Use `wait.mode: "until_idle"` only when downstream nodes need the orchestrator result. This waits for the workflow-created thread's prompt queue to become idle, not for the long-lived orchestrator session to stop running. Waited orchestrator nodes output `response` and `lastMessage` by default, so downstream nodes can reference `{{nodes.ask_orchestrator.data.response}}` or `{{nodes.ask_orchestrator.data.lastMessage.content}}`:
+
+```json
+{ "id": "ask_orchestrator", "type": "orchestrator", "prompt": "Investigate {{trigger.data.issue}}", "wait": { "mode": "until_idle", "timeout": "30m" } }
+```
+
+Set `resultMode: "transcript"` to also output the full ordered thread transcript:
+
+```json
+{ "id": "ask_orchestrator", "type": "orchestrator", "prompt": "Investigate {{trigger.data.issue}}", "wait": { "mode": "until_idle", "timeout": "30m" }, "resultMode": "transcript" }
+```
+
+`session` either starts a new session or prompts an existing one:
+
+```json
+{ "id": "start_session", "type": "session", "mode": "start", "workspace": "/workspace", "prompt": "Run tests", "wait": { "mode": "until_idle", "timeout": "1h" } }
+```
+
+When a session node waits until idle, use `{{nodes.start_session.data.finalStatus}}` for workflow branching. It is `"completed"` when the session reached an idle/terminal success state. The raw observed session state is also available as `{{nodes.start_session.data.waitStatus}}` (`"idle"`, `"hibernated"`, `"terminated"`, or `"timed_out"`). The final assistant message text is available at `{{nodes.start_session.data.response}}`.
+
+Session nodes also support `outputSchema` and `repairModel`. With `outputSchema`, the final assistant message must be JSON matching that schema; malformed or schema-invalid JSON is repaired up to three times. The validated object is stored under `{{nodes.start_session.data.output}}` so lifecycle fields like `sessionId`, `threadId`, and `finalStatus` cannot be overwritten by agent output.
+
+```json
+{
+  "id": "scrape_yc",
+  "type": "session",
+  "mode": "start",
+  "workspace": "yc-scraper",
+  "prompt": "Return only JSON with companies and totalCount.",
+  "wait": { "mode": "until_idle", "timeout": "15m" },
+  "outputSchema": {
+    "type": "object",
+    "properties": {
+      "companies": { "type": "array", "items": { "type": "object" } },
+      "totalCount": { "type": "number" }
+    },
+    "required": ["companies", "totalCount"]
+  }
+}
+```
+
+```json
+{ "id": "prompt_session", "type": "session", "mode": "prompt", "sessionId": "{{nodes.start_session.data.sessionId}}", "prompt": "Continue", "wait": { "mode": "none" } }
+```
+
+`stop` ends a branch with optional output:
+
+```json
+{ "id": "done", "type": "stop", "outcome": "success", "output": { "ok": true }, "message": "Complete" }
+```
+
+## Known Valid Examples
+
+Minimal workflow:
+
+```json
+{
+  "version": "dag/v1",
+  "nodes": [
+    { "id": "trigger", "type": "trigger" },
+    { "id": "hello", "type": "set", "values": { "message": "hello {{trigger.data.name}}" } },
+    { "id": "done", "type": "stop", "outcome": "success", "output": "{{nodes.hello.data}}" }
+  ],
+  "edges": [
+    { "from": "trigger", "to": "hello" },
+    { "from": "hello", "to": "done" }
+  ]
+}
+```
+
+Branching workflow:
+
+```json
+{
+  "version": "dag/v1",
+  "nodes": [
+    { "id": "trigger", "type": "trigger" },
+    {
+      "id": "route",
+      "type": "if",
+      "conditions": [
+        { "left": "trigger.data.priority", "dataType": "string", "operation": "equals", "right": "high" }
+      ]
+    },
+    { "id": "high", "type": "stop", "outcome": "success", "message": "High priority" },
+    { "id": "normal", "type": "stop", "outcome": "success", "message": "Normal priority" }
+  ],
+  "edges": [
+    { "from": "trigger", "to": "route" },
+    { "from": "route", "fromOutput": "true", "to": "high" },
+    { "from": "route", "fromOutput": "false", "to": "normal" }
+  ]
+}
+```
+
+## Lifecycle (dag/v1)
+
+Workflows use a draft → publish lifecycle:
+
+1. Author or edit a `dag/v1` draft (web UI `/workflows/:id` editor → save).
+2. Validate the draft (editor's Validate button → `POST /api/workflows/:id/validate`).
+3. Publish to create an immutable `workflow_definition_versions` row. Triggers and executions reference the published definition.
+
+## Triggers + approvals
+
+- Webhook triggers authenticate with a server-issued `X-Valet-Trigger-Token` (shown once at create time in the web UI).
+- Approval nodes (and tool nodes with `require_approval` policy) park the execution on `step.waitForEvent`. Resolve in the web UI under the execution detail; the API path `POST /api/executions/:id/approvals/:approvalId/approve` (or `/deny`) is what the UI calls.
+
+See `docs/specs/workflows.md` for the full data model, state machine, validator rules, and runtime semantics.

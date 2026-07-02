@@ -67,6 +67,34 @@ function buildContext(authType: 'none' | 'oauth' | 'api_key' | 'bearer'): Custom
 }
 
 describe('IntegrationRegistry custom MCP fallback', () => {
+  it('requires every native static action to declare an output schema', async () => {
+    const registry = new IntegrationRegistry();
+    registry.init();
+
+    const nativeStaticServices = [
+      'github',
+      'gmail',
+      'google_calendar',
+      'google_workspace',
+      'slack',
+      'workflows',
+    ];
+    const missing: string[] = [];
+
+    for (const service of nativeStaticServices) {
+      const actionSource = registry.getActions(service);
+      expect(actionSource, `${service} action source should be registered`).toBeDefined();
+      const actions = await actionSource!.listActions();
+      for (const action of actions) {
+        if (!action.outputSchema) {
+          missing.push(action.id);
+        }
+      }
+    }
+
+    expect(missing).toEqual([]);
+  });
+
   it('resolves built-in services before custom connector context', () => {
     const registry = new IntegrationRegistry();
     registry.init();

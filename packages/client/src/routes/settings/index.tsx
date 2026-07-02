@@ -18,6 +18,7 @@ import {
   FONT_SCALE_STEP,
 } from '@/lib/font-scale';
 import { ActionPolicyOverridesSection } from '@/components/settings/action-policy-overrides-section';
+import { RuntimeGrantsSection } from '@/components/settings/runtime-grants-section';
 import {
   ModelSelector,
   ModelSelectorContent,
@@ -203,6 +204,7 @@ function AgentTab() {
 
       <ModelPreferencesSection />
       <ActionPolicyOverridesSection />
+      <RuntimeGrantsSection />
       <TimezoneSection />
       <IdleTimeoutSection />
       <SandboxResourcesSection />

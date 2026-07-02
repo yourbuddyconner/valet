@@ -11,7 +11,7 @@ describe('getToolCardMeta', () => {
         result: null,
       })
     ).toEqual({
-      label: 'Read',
+      label: 'read',
       summary: 'packages/client/src/app.tsx',
     });
 
@@ -23,7 +23,7 @@ describe('getToolCardMeta', () => {
         result: null,
       })
     ).toEqual({
-      label: 'Bash',
+      label: 'bash',
       summary: 'Run typecheck',
     });
   });
@@ -38,6 +38,48 @@ describe('getToolCardMeta', () => {
       })
     ).toEqual({
       label: 'unknown_tool',
+    });
+  });
+
+  it('surfaces arg + result count for unknown list-style tools', () => {
+    expect(
+      getToolCardMeta({
+        toolName: 'list_tools',
+        status: 'completed',
+        args: { query: 'trigger' },
+        result: JSON.stringify([{ id: 'a' }, { id: 'b' }, { id: 'c' }, { id: 'd' }]),
+      })
+    ).toEqual({
+      label: 'list_tools',
+      summary: 'trigger · 4 results',
+    });
+  });
+
+  it('surfaces service-scoped args even when query is absent', () => {
+    expect(
+      getToolCardMeta({
+        toolName: 'list_tools',
+        status: 'completed',
+        args: { service: 'workflows' },
+        result: JSON.stringify([{ id: 'a' }, { id: 'b' }]),
+      })
+    ).toEqual({
+      label: 'list_tools',
+      summary: 'workflows · 2 results',
+    });
+  });
+
+  it('combines call_tool dispatch target with result count', () => {
+    expect(
+      getToolCardMeta({
+        toolName: 'call_tool',
+        status: 'completed',
+        args: { tool_id: 'workflows:workflows.list' },
+        result: JSON.stringify({ workflows: [{ id: '1' }, { id: '2' }] }),
+      })
+    ).toEqual({
+      label: 'call_tool',
+      summary: 'workflows:workflows.list · 2 workflows',
     });
   });
 });

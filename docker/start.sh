@@ -3,6 +3,9 @@ set -e
 
 export DISPLAY=:99
 export HOME=/workspace
+export AGENT_BROWSER_HOME="${AGENT_BROWSER_HOME:-/tmp/valet-agent-browser}"
+export AGENT_BROWSER_PROFILE="${AGENT_BROWSER_PROFILE:-/workspace/.agent-browser-profile}"
+export TMPDIR="${TMPDIR:-/tmp}"
 
 # First-boot setup: copy default dotfiles and create persistent bin dir
 [ ! -f /workspace/.bashrc ] && cp /root/.bashrc /workspace/.bashrc
@@ -17,6 +20,7 @@ OPENCODE_RUNTIME_DIR="${OPENCODE_RUNTIME_DIR:-/tmp/valet-opencode}"
 VALET_PERSONA_DIR="${VALET_PERSONA_DIR:-${OPENCODE_RUNTIME_DIR}/persona}"
 export OPENCODE_RUNTIME_DIR
 export VALET_PERSONA_DIR
+mkdir -p "${AGENT_BROWSER_HOME}" "${AGENT_BROWSER_PROFILE}"
 
 echo "[start.sh] Starting Valet sandbox"
 echo "[start.sh] Session: ${SESSION_ID}"

@@ -1,4 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import type { WorkflowDefinition, WorkflowValidationError } from '@valet/shared';
 import { api } from './client';
 import { executionKeys } from './executions';
 
@@ -10,93 +11,23 @@ function createClientRequestId(): string {
   }
 }
 
-// Types
+// ─── Types ────────────────────────────────────────────────────────────────────
+
 export interface Workflow {
   id: string;
   slug: string | null;
   name: string;
   description: string | null;
   version: string;
-  data: WorkflowData;
+  data: Record<string, unknown>;
   enabled: boolean;
   tags: string[];
   createdAt: string;
   updatedAt: string;
-}
-
-export interface WorkflowData {
-  id: string;
-  name: string;
-  description?: string;
-  version?: string;
-  variables?: Record<string, VariableDefinition>;
-  steps: WorkflowStep[];
-  constraints?: WorkflowConstraints;
-}
-
-export interface VariableDefinition {
-  type: 'string' | 'number' | 'boolean' | 'array' | 'object';
-  description?: string;
-  required?: boolean;
-  default?: unknown;
-}
-
-export interface WorkflowStep {
-  id: string;
-  name: string;
-  type: 'agent' | 'agent_message' | 'tool' | 'bash' | 'conditional' | 'loop' | 'parallel' | 'subworkflow' | 'approval';
-  tool?: string;
-  command?: string;
-  description?: string;
-  arguments?: Record<string, unknown>;
-  goal?: string;
-  context?: string;
-  content?: string;
-  prompt?: string;
-  interrupt?: boolean;
-  await_response?: boolean;
-  await_timeout_ms?: number;
-  awaitResponse?: boolean;
-  awaitTimeoutMs?: number;
-  outputVariable?: string;
-  condition?: unknown;
-  then?: WorkflowStep[];
-  else?: WorkflowStep[];
-  steps?: WorkflowStep[];
-}
-
-export interface WorkflowConstraints {
-  maxDuration?: number;
-  maxSteps?: number;
-  maxToolCalls?: number;
-}
-
-export interface WorkflowMutationProposal {
-  id: string;
-  workflowId: string;
-  executionId: string | null;
-  proposedBySessionId: string | null;
-  baseWorkflowHash: string;
-  proposal: Record<string, unknown>;
-  diffText: string | null;
-  status: 'pending' | 'approved' | 'rejected' | 'applied' | 'failed';
-  reviewNotes: string | null;
-  expiresAt: string | null;
-  createdAt: string;
-  updatedAt: string;
-}
-
-export interface WorkflowVersionHistoryEntry {
-  id: string;
-  workflowId: string;
-  version: string | null;
-  workflowHash: string;
-  workflowData: Record<string, unknown>;
-  source: 'sync' | 'update' | 'proposal_apply' | 'rollback' | 'system';
-  sourceProposalId: string | null;
-  notes: string | null;
-  createdBy: string | null;
-  createdAt: string;
+  // Null when the workflow has no published version yet. The list/detail
+  // endpoints both return this so the UI can distinguish draft-only
+  // workflows (Draft badge) from published ones (Published badge).
+  publishedVersionId: string | null;
 }
 
 export interface ListWorkflowsResponse {
@@ -107,47 +38,10 @@ export interface GetWorkflowResponse {
   workflow: Workflow;
 }
 
-export interface ListWorkflowProposalsResponse {
-  proposals: WorkflowMutationProposal[];
-}
-
-export interface WorkflowHistoryResponse {
-  currentWorkflowHash: string;
-  history: WorkflowVersionHistoryEntry[];
-}
-
-export interface CreateWorkflowProposalRequest {
-  executionId?: string;
-  proposedBySessionId?: string;
-  baseWorkflowHash: string;
-  proposal: Record<string, unknown>;
-  diffText?: string;
-  expiresAt?: string;
-}
-
-export interface ReviewWorkflowProposalRequest {
-  approve: boolean;
-  notes?: string;
-}
-
-export interface ApplyWorkflowProposalRequest {
-  reviewNotes?: string;
-  version?: string;
-}
-
-export interface RollbackWorkflowRequest {
-  targetWorkflowHash: string;
-  version?: string;
-  notes?: string;
-}
-
-export interface SyncWorkflowRequest {
-  id: string;
-  slug?: string;
+export interface CreateWorkflowRequest {
   name: string;
-  description?: string;
-  version?: string;
-  data: WorkflowData;
+  description?: string | null;
+  slug?: string | null;
 }
 
 export interface UpdateWorkflowRequest {
@@ -157,10 +51,72 @@ export interface UpdateWorkflowRequest {
   version?: string;
   enabled?: boolean;
   tags?: string[];
-  data?: WorkflowData;
+  data?: Record<string, unknown>;
 }
 
-// Query keys
+export interface GetDraftResponse {
+  draft: WorkflowDefinition | null;
+  ui: unknown;
+  publishedVersionId: string | null;
+  updatedAt?: string;
+}
+
+export interface SaveDraftRequest {
+  draft: WorkflowDefinition;
+  ui?: unknown;
+  /**
+   * Optimistic-lock baseline — the `updatedAt` the client read via
+   * useWorkflowDraft. Server responds 409 if the row has moved on
+   * (typically because the copilot patched it since we loaded).
+   */
+  expectedUpdatedAt?: string;
+}
+
+export interface ValidateDraftResponse {
+  errors: WorkflowValidationError[];
+  warnings: WorkflowValidationError[];
+}
+
+export interface PublishDraftRequest {
+  publishNote?: string;
+}
+
+export interface PublishDraftResponse {
+  // The publish endpoint returns the freshly-created workflow_definition_versions
+  // row nested under `version`. Server source of truth: services/workflow-versions.ts
+  // `publishDraft` returns `{ version: PublishedVersion }`.
+  version: WorkflowPublishedVersion;
+}
+
+export interface TestRunRequest {
+  /** Sample trigger payload exposed to templates as {{trigger.data.X}}. */
+  triggerData?: Record<string, unknown>;
+}
+
+export interface TestRunResponse {
+  executionId: string;
+  status: 'pending';
+}
+
+export interface WorkflowPublishedVersion {
+  id: string;
+  version: number;
+  definitionHash: string;
+  publishNote?: string;
+  createdAt: string;
+}
+
+export interface ListVersionsResponse {
+  versions: WorkflowPublishedVersion[];
+}
+
+export interface RestoreVersionResponse {
+  draft: WorkflowDefinition;
+  ui: unknown;
+}
+
+// ─── Query keys ──────────────────────────────────────────────────────────────
+
 export const workflowKeys = {
   all: ['workflows'] as const,
   lists: () => [...workflowKeys.all, 'list'] as const,
@@ -168,11 +124,12 @@ export const workflowKeys = {
   details: () => [...workflowKeys.all, 'detail'] as const,
   detail: (id: string) => [...workflowKeys.details(), id] as const,
   executions: (id: string) => [...workflowKeys.detail(id), 'executions'] as const,
-  proposals: (id: string) => [...workflowKeys.detail(id), 'proposals'] as const,
-  history: (id: string) => [...workflowKeys.detail(id), 'history'] as const,
+  draft: (id: string) => [...workflowKeys.detail(id), 'draft'] as const,
+  versions: (id: string) => [...workflowKeys.detail(id), 'versions'] as const,
 };
 
-// Hooks
+// ─── Workflow CRUD ───────────────────────────────────────────────────────────
+
 export function useWorkflows() {
   return useQuery({
     queryKey: workflowKeys.list(),
@@ -188,14 +145,15 @@ export function useWorkflow(workflowId: string) {
   });
 }
 
-export function useSyncWorkflow() {
+export function useCreateWorkflow() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: (data: SyncWorkflowRequest) =>
-      api.post<{ success: boolean; id: string }>('/workflows/sync', data),
-    onSuccess: () => {
+    mutationFn: (data: CreateWorkflowRequest) =>
+      api.post<GetWorkflowResponse>('/workflows', data),
+    onSuccess: (response) => {
       queryClient.invalidateQueries({ queryKey: workflowKeys.lists() });
+      queryClient.setQueryData(workflowKeys.detail(response.workflow.id), response);
     },
   });
 }
@@ -236,7 +194,6 @@ export function useRunWorkflow() {
         workflowName: string;
         status: string;
         variables: Record<string, unknown>;
-        sessionId?: string;
         message: string;
       }>('/triggers/manual/run', {
         workflowId,
@@ -251,109 +208,101 @@ export function useRunWorkflow() {
   });
 }
 
-export function useWorkflowProposals(workflowId: string, status?: string) {
-  const queryParams = new URLSearchParams();
-  if (status) queryParams.set('status', status);
-  const query = queryParams.toString();
+// ─── Draft / publish / test-run / versions (dag/v1) ──────────────────────────
 
+export function useWorkflowDraft(workflowId: string) {
   return useQuery({
-    queryKey: [...workflowKeys.proposals(workflowId), status] as const,
-    queryFn: () =>
-      api.get<ListWorkflowProposalsResponse>(
-        `/workflows/${workflowId}/proposals${query ? `?${query}` : ''}`
-      ),
+    queryKey: workflowKeys.draft(workflowId),
+    queryFn: () => api.get<GetDraftResponse>(`/workflows/${workflowId}/draft`),
     enabled: !!workflowId,
   });
 }
 
-export function useWorkflowHistory(workflowId: string) {
-  return useQuery({
-    queryKey: workflowKeys.history(workflowId),
-    queryFn: () => api.get<WorkflowHistoryResponse>(`/workflows/${workflowId}/history`),
-    enabled: !!workflowId,
-  });
-}
-
-export function useCreateWorkflowProposal() {
+export function useSaveWorkflowDraft() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: ({ workflowId, ...data }: CreateWorkflowProposalRequest & { workflowId: string }) =>
-      api.post<{ proposal: WorkflowMutationProposal }>(`/workflows/${workflowId}/proposals`, data),
+    mutationFn: ({ workflowId, ...data }: SaveDraftRequest & { workflowId: string }) =>
+      api.put<{ ok: true; updatedAt: string }>(`/workflows/${workflowId}/draft`, data),
+    // Refresh from server on success — the server just responded with
+    // the exact draft we saved (barring race), and other tabs / the
+    // copilot may have been active. Same treatment on 409 conflict:
+    // invalidate so the editor re-fetches whatever the server now has
+    // (which is the writer that beat us).
     onSuccess: (_, { workflowId }) => {
-      queryClient.invalidateQueries({ queryKey: workflowKeys.proposals(workflowId) });
+      queryClient.invalidateQueries({ queryKey: workflowKeys.draft(workflowId) });
+    },
+    onError: (_, { workflowId }) => {
+      queryClient.invalidateQueries({ queryKey: workflowKeys.draft(workflowId) });
     },
   });
 }
 
-export function useReviewWorkflowProposal() {
-  const queryClient = useQueryClient();
-
+export function useValidateWorkflowDraft() {
   return useMutation({
-    mutationFn: ({
-      workflowId,
-      proposalId,
-      data,
-    }: {
-      workflowId: string;
-      proposalId: string;
-      data: ReviewWorkflowProposalRequest;
-    }) =>
-      api.post<{ success: boolean; status: string; reviewedAt: string }>(
-        `/workflows/${workflowId}/proposals/${proposalId}/review`,
-        data
-      ),
-    onSuccess: (_, { workflowId }) => {
-      queryClient.invalidateQueries({ queryKey: workflowKeys.proposals(workflowId) });
-    },
+    mutationFn: ({ workflowId }: { workflowId: string }) =>
+      api.post<ValidateDraftResponse>(`/workflows/${workflowId}/validate`),
   });
 }
 
-export function useApplyWorkflowProposal() {
+export function usePublishWorkflow() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: ({
-      workflowId,
-      proposalId,
-      data,
-    }: {
-      workflowId: string;
-      proposalId: string;
-      data?: ApplyWorkflowProposalRequest;
-    }) =>
-      api.post<{ success: boolean; proposalId: string; workflow: Workflow }>(
-        `/workflows/${workflowId}/proposals/${proposalId}/apply`,
-        data || {}
-      ),
-    onSuccess: (response) => {
-      const workflow = response.workflow;
-      queryClient.invalidateQueries({ queryKey: workflowKeys.proposals(workflow.id) });
-      queryClient.setQueryData<GetWorkflowResponse>(workflowKeys.detail(workflow.id), { workflow });
+    mutationFn: ({ workflowId, publishNote }: PublishDraftRequest & { workflowId: string }) =>
+      api.post<PublishDraftResponse>(`/workflows/${workflowId}/publish`, {
+        ...(publishNote ? { publishNote } : {}),
+      }),
+    onSuccess: (_, { workflowId }) => {
+      queryClient.invalidateQueries({ queryKey: workflowKeys.detail(workflowId) });
+      queryClient.invalidateQueries({ queryKey: workflowKeys.versions(workflowId) });
       queryClient.invalidateQueries({ queryKey: workflowKeys.lists() });
     },
   });
 }
 
-export function useRollbackWorkflowVersion() {
+export function useTestRunWorkflow() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: ({
-      workflowId,
-      data,
-    }: {
-      workflowId: string;
-      data: RollbackWorkflowRequest;
-    }) =>
-      api.post<{ success: boolean; workflow: Workflow }>(`/workflows/${workflowId}/rollback`, data),
-    onSuccess: (response) => {
-      const workflow = response.workflow;
-      queryClient.setQueryData<GetWorkflowResponse>(workflowKeys.detail(workflow.id), { workflow });
-      queryClient.invalidateQueries({ queryKey: workflowKeys.history(workflow.id) });
-      queryClient.invalidateQueries({ queryKey: workflowKeys.proposals(workflow.id) });
-      queryClient.invalidateQueries({ queryKey: workflowKeys.executions(workflow.id) });
-      queryClient.invalidateQueries({ queryKey: workflowKeys.lists() });
+    mutationFn: ({ workflowId, triggerData }: TestRunRequest & { workflowId: string }) =>
+      api.post<TestRunResponse>(`/workflows/${workflowId}/test-run`, {
+        ...(triggerData !== undefined ? { triggerData } : {}),
+      }),
+    onSuccess: (_, { workflowId }) => {
+      queryClient.invalidateQueries({ queryKey: workflowKeys.executions(workflowId) });
+      queryClient.invalidateQueries({ queryKey: executionKeys.byWorkflow(workflowId) });
+      queryClient.invalidateQueries({ queryKey: executionKeys.lists() });
+    },
+  });
+}
+
+export function useWorkflowVersions(workflowId: string) {
+  return useQuery({
+    queryKey: workflowKeys.versions(workflowId),
+    queryFn: () => api.get<ListVersionsResponse>(`/workflows/${workflowId}/versions`),
+    enabled: !!workflowId,
+  });
+}
+
+export function useRestoreWorkflowVersion() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ workflowId, versionId }: { workflowId: string; versionId: string }) =>
+      api.post<RestoreVersionResponse>(
+        `/workflows/${workflowId}/versions/${versionId}/restore`,
+      ),
+    onSuccess: (response, { workflowId }) => {
+      queryClient.setQueryData<GetDraftResponse>(
+        workflowKeys.draft(workflowId),
+        (current) =>
+          current
+            ? { ...current, draft: response.draft, ui: response.ui }
+            : current,
+      );
+      queryClient.invalidateQueries({ queryKey: workflowKeys.draft(workflowId) });
+      queryClient.invalidateQueries({ queryKey: workflowKeys.detail(workflowId) });
     },
   });
 }

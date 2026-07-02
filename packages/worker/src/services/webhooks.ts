@@ -1,8 +1,93 @@
 import type { Env } from '../env.js';
 import * as db from '../lib/db.js';
 import { getDb } from '../lib/drizzle.js';
-import { checkWorkflowConcurrency, enqueueWorkflowExecution } from './executions.js';
-import { sha256Hex, createWorkflowSession } from '../lib/workflow-runtime.js';
+import { checkWorkflowConcurrency } from './executions.js';
+import { dispatchWorkflowExecution } from './workflow-dispatch.js';
+import { sha256Hex } from '../lib/hash.js';
+import { constantTimeEqual } from '../lib/crypto.js';
+import { WEBHOOK_RATE_LIMIT_DEFAULT, bumpWebhookRateCount } from '../lib/db.js';
+
+// Row shape shared by the id-based lookup (getWebhookTriggerById, used
+// by /api/triggers/:id/webhook with token auth) and the path-based
+// lookup (lookupWebhookTrigger, used by /webhooks/:path with optional
+// config.secret). Both lookups now include webhook_token so the path
+// handler can refuse tokenized triggers — once a token is minted on a
+// row, /webhooks/:path is closed for it and the token URL is the only
+// supported entry.
+export interface TriggerWebhookRow {
+  id: string;
+  workflow_id: string;
+  workflow_name: string;
+  user_id: string;
+  version: string | null;
+  data: string;
+  config: string;
+  variable_mapping: string | null;
+  webhook_token?: string | null;
+}
+
+/**
+ * Per-trigger rate limit check. Returns the new count after this
+ * request and whether the request should be rejected. Schedule and
+ * manual triggers don't call this — it's webhook-only.
+ *
+ * The rate-limit window is a fixed 60-second bucket keyed by unix
+ * second truncated to a minute boundary. Slightly bursty across bucket
+ * boundaries but cheap to implement on D1 and fine for our scale.
+ */
+export async function checkWebhookRateLimit(
+  env: Env,
+  triggerId: string,
+  config: { rateLimit?: number },
+): Promise<{ allowed: boolean; count: number; limit: number; retryAfter: number }> {
+  const limit = typeof config.rateLimit === 'number' && config.rateLimit > 0
+    ? Math.floor(config.rateLimit)
+    : WEBHOOK_RATE_LIMIT_DEFAULT;
+  const nowSec = Math.floor(Date.now() / 1000);
+  const windowStart = nowSec - (nowSec % 60);
+  const count = await bumpWebhookRateCount(env.DB, triggerId, windowStart);
+  const retryAfter = 60 - (nowSec - windowStart);
+  return { allowed: count <= limit, count, limit, retryAfter };
+}
+
+/**
+ * Canonicalize a raw URL query string (no leading '?') for use as part
+ * of the webhook idempotency hash.
+ *
+ * The parsed query Record collapses duplicate keys and decodes percent
+ * escapes — both lose information needed to distinguish distinct
+ * deliveries. We canonicalize at the RAW pair level so:
+ *   - duplicate keys are preserved: ?tag=a&tag=b ≠ ?tag=b
+ *   - URL-encoded characters stay distinct from their decoded forms:
+ *     ?a=1%26b%3D2 ≠ ?a=1&b=2
+ *
+ * Sorting the raw pairs lexicographically also makes the result
+ * order-independent (?a=1&b=2 ≡ ?b=2&a=1).
+ *
+ * Exported for direct unit testing.
+ */
+export function canonicalizeRawQuery(rawQuery: string): string {
+  return rawQuery
+    .split('&')
+    .filter((pair) => pair.length > 0)
+    .sort()
+    .join('&');
+}
+
+/**
+ * Validate the X-Valet-Trigger-Token header against the trigger row.
+ * Returns true on a constant-time match. Triggers created before the
+ * webhook_token column may have null webhook_token — in that case this
+ * returns false and the caller decides whether to fall back to the
+ * path-based secret check (only the /webhooks/:path route does so).
+ */
+export function verifyTriggerToken(
+  row: { webhook_token?: string | null },
+  header: string | undefined,
+): boolean {
+  if (!row.webhook_token || !header) return false;
+  return constantTimeEqual(row.webhook_token, header);
+}
 
 // ─── Generic Webhook Handler ────────────────────────────────────────────────
 
@@ -12,7 +97,6 @@ export interface GenericWebhookResult {
   workflowId?: string;
   workflowName?: string;
   status?: string;
-  sessionId?: string;
   dispatched?: boolean;
   deduplicated?: boolean;
   queued?: boolean;
@@ -30,10 +114,12 @@ export async function handleGenericWebhook(
   rawBody: string,
   headers: { [key: string]: string | undefined },
   query: Record<string, string>,
-  workerOrigin: string,
+  rawQuery: string = '',
 ): Promise<{ result: GenericWebhookResult; statusCode: number } | null> {
-  const appDb = getDb(env.DB);
-  // Look up trigger by webhook path
+  // Path-based entry point used by /webhooks/:path. Looks up the trigger
+  // by config.path and defers to dispatchWebhookForTrigger after the
+  // secret + rate-limit checks. Triggers created via the token model
+  // are reached through /api/triggers/:id/webhook instead.
   const trigger = await db.lookupWebhookTrigger(env.DB, webhookPath);
 
   if (!trigger) {
@@ -43,7 +129,25 @@ export async function handleGenericWebhook(
     };
   }
 
-  const config = JSON.parse(trigger.config as string);
+  // Tokenized triggers refuse the path-based route entirely. The token
+  // URL (POST /api/triggers/:id/webhook with X-Valet-Trigger-Token) is
+  // the only supported entry once a token has been minted on the row.
+  // Without this gate, an operator who configured "token-protected
+  // webhook" with no legacy secret would still accept unauthenticated
+  // hits at /webhooks/<path> — an auth bypass. Returning 404 (rather
+  // than 401) refuses without revealing which trigger the path maps to.
+  if (trigger.webhook_token) {
+    return {
+      result: { received: true, message: 'Webhook not found' } as any,
+      statusCode: 404,
+    };
+  }
+
+  const config = JSON.parse(trigger.config as string) as {
+    method?: string;
+    secret?: string;
+    rateLimit?: number;
+  };
 
   // Verify HTTP method if specified
   if (config.method && config.method !== method) {
@@ -53,68 +157,132 @@ export async function handleGenericWebhook(
     };
   }
 
-  // Verify secret/signature if configured
+  // Secret check for the path-based webhook route. The forward-facing
+  // /api/triggers/:id/webhook route uses a server-issued token instead.
+  // Constant-time compare against config.secret — a header-presence
+  // check would be an auth bypass.
   if (config.secret) {
     const signature = headers['x-webhook-signature'] || headers['x-hub-signature-256'];
-    if (!signature) {
+    if (!signature || !constantTimeEqual(String(config.secret), signature)) {
       return {
-        result: { received: true, message: 'Missing webhook signature' } as any,
+        result: { received: true, message: 'Missing or invalid webhook signature' } as any,
         statusCode: 401,
       };
     }
   }
 
-  // Parse request body
-  let payload: Record<string, unknown> = {};
-  try {
-    if (rawBody) {
-      payload = JSON.parse(rawBody) as Record<string, unknown>;
+  // Per-trigger rate limit applies on the path-based route too.
+  const rate = await checkWebhookRateLimit(env, trigger.id, config);
+  if (!rate.allowed) {
+    return {
+      result: {
+        received: true,
+        queued: false,
+        error: 'rate_limited',
+        reason: 'rate_limited',
+        message: `Webhook rate limit exceeded (${rate.count}/${rate.limit} per 60s).`,
+      },
+      statusCode: 429,
+    };
+  }
+
+  return dispatchWebhookForTrigger(env, trigger, webhookPath, method, rawBody, headers, query, rawQuery);
+}
+
+/**
+ * Authenticated webhook entry point used by
+ * POST /api/triggers/:triggerId/webhook. The route handler is
+ * responsible for verifying the X-Valet-Trigger-Token + rate limit
+ * before calling here. webhookPath is whatever the trigger's
+ * config.path is, for backward-compat metadata only.
+ */
+export async function dispatchWebhookForTrigger(
+  env: Env,
+  trigger: TriggerWebhookRow,
+  webhookPath: string,
+  method: string,
+  rawBody: string,
+  headers: { [key: string]: string | undefined },
+  query: Record<string, string>,
+  // Raw URL search string (without the leading '?'). Required for the
+  // duplicate-safe, encoding-stable idempotency hash below — the parsed
+  // `query` Record collapses duplicate keys and decodes values, both of
+  // which lose information needed to distinguish distinct deliveries.
+  rawQuery: string = '',
+): Promise<{ result: GenericWebhookResult; statusCode: number }> {
+  const appDb = getDb(env.DB);
+
+  // Parse request body. Non-JSON bodies are surfaced as the raw string
+  // under `body` so workflows can still inspect them via
+  // {{trigger.data.body}} — JSON.parse failure is not an error here.
+  let parsedBody: unknown = null;
+  if (rawBody) {
+    try {
+      parsedBody = JSON.parse(rawBody);
+    } catch {
+      parsedBody = rawBody;
     }
-  } catch {
-    // Body might be empty or not JSON
   }
 
-  // Add query params to payload
-  if (Object.keys(query).length > 0) {
-    payload.query = query;
+  // Strip undefined values from headers so downstream template lookups
+  // see a clean Record<string, string>.
+  const cleanHeaders: Record<string, string> = {};
+  for (const [k, v] of Object.entries(headers)) {
+    if (typeof v === 'string') cleanHeaders[k] = v;
   }
 
-  // Extract variables using the trigger's variable mapping
+  // Spec §"Webhook trigger payload": trigger.data carries the
+  // normalized request (body / headers / query / method). Authors
+  // reference it as {{trigger.data.body}}, {{trigger.data.headers.X}},
+  // etc. The pre-fix shape dumped only variableMapping fields into
+  // trigger.data, which silently broke any workflow that didn't ship
+  // an exhaustive mapping — including {{trigger.data.body}} examples.
+  const normalizedPayload: Record<string, unknown> = {
+    body: parsedBody,
+    headers: cleanHeaders,
+    query,
+    method,
+  };
+
+  // variableMapping is a per-trigger user-friendly extraction layer.
+  // It traverses the parsed body (with `query` merged in under .query)
+  // and surfaces named values directly as trigger.data parameters.
   const variableMapping = trigger.variable_mapping
     ? JSON.parse(trigger.variable_mapping as string)
     : {};
 
-  const extractedVariables: Record<string, unknown> = {};
-  for (const [varName, pathExpr] of Object.entries(variableMapping)) {
-    const pathStr = pathExpr as string;
-    if (pathStr.startsWith('$.')) {
-      const parts = pathStr.slice(2).split('.');
-      let value: unknown = payload;
-      for (const part of parts) {
-        if (value && typeof value === 'object' && part in value) {
-          value = (value as Record<string, unknown>)[part];
-        } else {
-          value = undefined;
-          break;
-        }
-      }
-      if (value !== undefined) {
-        extractedVariables[varName] = value;
-      }
-    }
+  // Extraction scope: the parsed body merged with `query` under .query,
+  // so mappings like `$.user.email` or `$.query.token` resolve against
+  // a single dotted-path namespace.
+  const extractScope: Record<string, unknown> =
+    parsedBody && typeof parsedBody === 'object' && !Array.isArray(parsedBody)
+      ? { ...(parsedBody as Record<string, unknown>) }
+      : {};
+  if (Object.keys(query).length > 0) {
+    extractScope.query = query;
   }
 
-  const variables = {
-    ...extractedVariables,
-    _trigger: {
-      type: 'webhook',
-      triggerId: trigger.id,
-      path: webhookPath,
-      method,
-      timestamp: new Date().toISOString(),
-    },
-    _payload: payload,
-  };
+  const extractedTriggerData: Record<string, unknown> = {};
+  for (const [varName, pathExpr] of Object.entries(variableMapping)) {
+    const pathStr = pathExpr as string;
+    if (!pathStr.startsWith('$.')) continue;
+    const parts = pathStr.slice(2).split('.');
+    let value: unknown = extractScope;
+    for (const part of parts) {
+      if (value && typeof value === 'object' && part in value) {
+        value = (value as Record<string, unknown>)[part];
+      } else {
+        value = undefined;
+        break;
+      }
+    }
+    if (value !== undefined) {
+      extractedTriggerData[varName] = value;
+    }
+  }
+  const workflowTriggerData = Object.keys(extractedTriggerData).length > 0
+    ? extractedTriggerData
+    : normalizedPayload;
 
   const deliveryId = headers['x-github-delivery']
     || headers['x-request-id']
@@ -123,10 +291,23 @@ export async function handleGenericWebhook(
   const signature = headers['x-webhook-signature']
     || headers['x-hub-signature-256']
     || '';
-  const fallbackBodyHash = await sha256Hex(`${signature}:${rawBody}`);
-  const idempotencyKey = `webhook:${trigger.id}:${deliveryId || fallbackBodyHash}`;
+  // GET deliveries have no body and rarely have a signature, so a
+  // signature:body hash collapses every GET into one idempotency key.
+  // Mix in the method and a canonicalized query string so distinct GETs
+  // hash differently. See canonicalizeRawQuery for the duplicate/encoding
+  // properties this needs to preserve.
+  const canonicalQuery = canonicalizeRawQuery(rawQuery);
+  const fallbackBodyHash = await sha256Hex(`${method}:${signature}:${rawBody}:${canonicalQuery}`);
+  // Include user_id in the idempotency key so two tenants with the
+  // same delivery id can't collide on workflow_executions inserts.
+  const idempotencyKey = `webhook:${trigger.user_id}:${trigger.id}:${deliveryId || fallbackBodyHash}`;
+  const triggerMetadata = {
+    path: webhookPath,
+    method,
+    deliveryId,
+  };
 
-  const existing = await db.checkIdempotencyKey(env.DB, trigger.workflow_id, idempotencyKey);
+  const existing = await db.checkIdempotencyKey(env.DB, trigger.workflow_id, trigger.user_id, idempotencyKey);
 
   if (existing) {
     return {
@@ -137,7 +318,6 @@ export async function handleGenericWebhook(
         workflowId: trigger.workflow_id,
         workflowName: trigger.workflow_name,
         status: existing.status as string,
-        sessionId: existing.session_id as string,
         message: 'Webhook received. Existing workflow execution reused.',
       },
       statusCode: 200,
@@ -160,58 +340,50 @@ export async function handleGenericWebhook(
     };
   }
 
-  const executionId = crypto.randomUUID();
-  const now = new Date().toISOString();
-  const workflowHash = await sha256Hex(String(trigger.data ?? '{}'));
-  const sessionId = await createWorkflowSession(appDb, {
-    userId: trigger.user_id,
+  const result = await dispatchWorkflowExecution(env, {
     workflowId: trigger.workflow_id,
-    executionId,
-  });
-
-  await db.createExecution(env.DB, {
-    id: executionId,
-    workflowId: trigger.workflow_id,
-    userId: trigger.user_id,
-    triggerId: trigger.id,
-    triggerType: 'webhook',
-    triggerMetadata: JSON.stringify({ path: webhookPath, method }),
-    variables: JSON.stringify(variables),
-    now,
-    workflowVersion: trigger.version || null,
-    workflowHash,
-    workflowSnapshot: trigger.data,
+    user: { id: trigger.user_id },
+    trigger: {
+      type: 'webhook',
+      triggerId: trigger.id,
+      timestamp: new Date().toISOString(),
+      data: workflowTriggerData,
+      metadata: triggerMetadata,
+    },
     idempotencyKey,
-    sessionId,
-    initiatorType: 'webhook',
-    initiatorUserId: trigger.user_id,
   });
-
-  const dispatched = await enqueueWorkflowExecution(env, {
-    executionId,
-    workflowId: trigger.workflow_id,
-    userId: trigger.user_id,
-    sessionId,
-    triggerType: 'webhook',
-    workerOrigin,
-  });
-
-  await db.updateTriggerLastRun(appDb, trigger.id, now);
-
+  if (result.status === 'rejected') {
+    // Failures shouldn't bump last_run_at — only successful dispatch
+    // counts as a "run". Catch-up logic would otherwise misread the
+    // last-run cursor.
+    const statusCode = result.reason === 'rate_limited' ? 429 : 400;
+    return {
+      result: {
+        received: true,
+        queued: false,
+        error: result.reason ?? 'workflow start failed',
+        reason: result.reason,
+        activeUser: concurrency.activeUser,
+        activeGlobal: concurrency.activeGlobal,
+        message: result.reason === 'rate_limited'
+          ? 'Webhook received but rate limited.'
+          : 'Webhook received but workflow could not start.',
+      },
+      statusCode,
+    };
+  }
+  await db.updateTriggerLastRunUnchecked(appDb, trigger.id, new Date().toISOString());
   return {
     result: {
       received: true,
-      executionId,
+      executionId: result.executionId,
       workflowId: trigger.workflow_id,
       workflowName: trigger.workflow_name,
       status: 'pending',
-      sessionId,
-      dispatched,
-      message: dispatched
-        ? 'Webhook received. Workflow execution queued and dispatched.'
-        : 'Webhook received. Workflow execution queued but dispatch failed.',
+      dispatched: true,
+      message: 'Webhook received. Workflow execution queued.',
     },
-    statusCode: 202,
+    statusCode: 200,
   };
 }
 

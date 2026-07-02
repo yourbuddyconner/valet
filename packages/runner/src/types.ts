@@ -6,9 +6,6 @@
 export type {
   // Supporting types
   PromptAttachment,
-  WorkflowRunResultStep,
-  WorkflowRunResultEnvelope,
-  WorkflowExecutionDispatchPayload,
   ToolCallStatus,
   AgentStatus,
   DiffFile,

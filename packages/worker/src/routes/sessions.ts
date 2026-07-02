@@ -298,6 +298,26 @@ sessionsRouter.get('/:id', async (c) => {
 });
 
 /**
+ * GET /api/sessions/:id/pending-approvals
+ * Lists pending action approvals rooted at this session — both the session's
+ * own and every descendant in the parent_session_id tree. Lets a parent
+ * session view (and an orchestrator session view in particular) surface
+ * approval gates raised in spawned children without the user having to open
+ * each child individually.
+ *
+ * Per-row access enforcement happens at the resolve endpoints — surfacing
+ * here just requires viewer access to the rooted session.
+ */
+sessionsRouter.get('/:id/pending-approvals', async (c) => {
+  const user = c.get('user');
+  const { id } = c.req.param();
+  const resolvedId = await resolveRequestedSessionId(c.env.DB, user.id, id);
+  await db.assertSessionAccess(c.get('db'), resolvedId, user.id, 'viewer');
+  const approvals = await db.listDescendantPendingApprovalsForSession(c.get('db'), resolvedId);
+  return c.json({ approvals });
+});
+
+/**
  * GET /api/sessions/:id/git-state
  * Get the git state for a session
  */

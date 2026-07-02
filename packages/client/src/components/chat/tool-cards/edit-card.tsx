@@ -32,6 +32,7 @@ export function EditCard({ tool }: { tool: ToolCallData }) {
       icon={<FileEditIcon className="h-3.5 w-3.5" />}
       label="edit"
       status={tool.status}
+      tool={tool}
       defaultExpanded
       summary={
         <span className="flex items-center gap-1.5">

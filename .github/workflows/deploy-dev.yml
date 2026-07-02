@@ -52,12 +52,20 @@ jobs:
           ALLOWED_EMAILS: ${{ secrets.ALLOWED_EMAILS }}
           D1_DATABASE_ID: ${{ secrets.D1_DATABASE_ID }}
           MODAL_BACKEND_URL: ${{ secrets.MODAL_BACKEND_URL }}
+          API_PUBLIC_URL: ${{ secrets.API_PUBLIC_URL }}
         run: |
+          if [ -z "${API_PUBLIC_URL}" ]; then
+            echo "::error::API_PUBLIC_URL is not set on the dev environment."
+            echo "Set it as a GitHub Actions variable (Settings → Environments → dev → Variables)."
+            echo "Value should be the public dev Worker origin, e.g. https://dev-valet-turnkey.<account>.workers.dev"
+            exit 1
+          fi
           cat > .env.deploy.dev <<EOF
           PROJECT_NAME=${PROJECT_NAME}
           ALLOWED_EMAILS=${ALLOWED_EMAILS}
           D1_DATABASE_ID=${D1_DATABASE_ID}
           MODAL_BACKEND_URL=${MODAL_BACKEND_URL}
+          API_PUBLIC_URL=${API_PUBLIC_URL}
           EOF
 
       - name: Deploy

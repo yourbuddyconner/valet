@@ -18,7 +18,7 @@ describe('login form auth response helpers', () => {
       token: 'session-token',
       response: {
         user,
-        orgModelPreferences: ['anthropic/claude-sonnet-4'],
+        orgModelPreferences: ['anthropic/claude-sonnet-4-5'],
       },
       setAuth: (...args) => {
         calls.push(args);
@@ -26,7 +26,7 @@ describe('login form auth response helpers', () => {
     });
 
     expect(calls).toEqual([
-      ['session-token', user, ['anthropic/claude-sonnet-4']],
+      ['session-token', user, ['anthropic/claude-sonnet-4-5']],
     ]);
   });
 });

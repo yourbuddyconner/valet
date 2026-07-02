@@ -1155,7 +1155,7 @@ function LLMKeyRow({ provider, label, isSet, models: existingModels, showAllMode
                     updated[i] = { ...updated[i], id: e.target.value };
                     setModelIds(updated);
                   }}
-                  placeholder="e.g. claude-sonnet-4-20250514"
+                  placeholder="e.g. claude-sonnet-4-5"
                   className={inputClass + ' !mt-0 flex-1'}
                 />
                 <Button

@@ -16,7 +16,6 @@ import type {
   ReviewResultData,
   RunnerToDOMessage,
   ToolCallStatus,
-  WorkflowRunResultEnvelope,
 } from "./types.js";
 import { gitCredentials } from "./git-credentials.js";
 import { setupGitConfig, cloneRepo } from "./git-setup.js";
@@ -63,14 +62,6 @@ export class AgentClient {
   private reviewHandler: ((requestId: string) => void | Promise<void>) | null = null;
   private tunnelDeleteHandler: ((name: string, actor?: { id?: string; name?: string; email?: string }) => void | Promise<void>) | null = null;
   private openCodeCommandHandler: ((command: string, args: string | undefined, requestId: string) => void | Promise<void>) | null = null;
-  private workflowExecuteHandler: ((executionId: string, payload: {
-    kind: "run" | "resume";
-    executionId: string;
-    workflowHash?: string;
-    resumeToken?: string;
-    decision?: "approve" | "deny";
-    payload: Record<string, unknown>;
-  }, model?: string, modelPreferences?: string[]) => void | Promise<void>) | null = null;
   private newSessionHandler: ((channelType: string, channelId: string, requestId: string) => void | Promise<void>) | null = null;
   private initHandler: (() => void | Promise<void>) | null = null;
   private openCodeConfigHandler: ((config: { tools?: Record<string, boolean>; providerKeys?: Record<string, string>; instructions?: string[]; isOrchestrator?: boolean; customProviders?: Array<{ providerId: string; displayName: string; baseUrl: string; apiKey?: string; models: Array<{ id: string; name?: string; contextLimit?: number; outputLimit?: number }> }> }) => void | Promise<void>) | null = null;
@@ -264,23 +255,6 @@ export class AgentClient {
 
   // ─── Outbound (Runner → DO) ─────────────────────────────────────────
 
-  sendWorkflowChatMessage(
-    role: "user" | "assistant" | "system",
-    content: string,
-    parts?: Record<string, unknown>,
-    context?: { channelType?: string; channelId?: string; opencodeSessionId?: string },
-  ): void {
-    this.send({
-      type: "workflow-chat-message",
-      role,
-      content,
-      ...(parts ? { parts } : {}),
-      ...(context?.channelType ? { channelType: context.channelType } : {}),
-      ...(context?.channelId ? { channelId: context.channelId } : {}),
-      ...(context?.opencodeSessionId ? { opencodeSessionId: context.opencodeSessionId } : {}),
-    });
-  }
-
   sendQuestion(messageId: string | undefined, questionId: string, text: string, options?: string[]): void {
     this.send({ type: "question", messageId, questionId, text, options });
   }
@@ -315,10 +289,6 @@ export class AgentClient {
 
   sendTunnels(tunnels: Array<{ name: string; port: number; protocol?: string; path: string; url?: string }>): void {
     this.send({ type: "tunnels", tunnels });
-  }
-
-  sendWorkflowExecutionResult(executionId: string, envelope: WorkflowRunResultEnvelope): void {
-    this.send({ type: "workflow-execution-result", executionId, envelope });
   }
 
   sendAborted(messageId?: string, channelType?: string, channelId?: string): void {
@@ -571,174 +541,6 @@ export class AgentClient {
     });
   }
 
-  requestListWorkflows(): Promise<{ workflows: unknown[] }> {
-    const requestId = crypto.randomUUID();
-    return this.createPendingRequest(requestId, MESSAGE_OP_TIMEOUT_MS, () => {
-      this.send({ type: "workflow-list", requestId });
-    });
-  }
-
-  requestSyncWorkflow(params: {
-    id?: string;
-    slug?: string;
-    name: string;
-    description?: string;
-    version?: string;
-    data: Record<string, unknown>;
-  }): Promise<{ success: boolean; workflow?: unknown }> {
-    const requestId = crypto.randomUUID();
-    return this.createPendingRequest(requestId, MESSAGE_OP_TIMEOUT_MS, () => {
-      this.send({ type: "workflow-sync", requestId, ...params });
-    });
-  }
-
-  requestRunWorkflow(
-    workflowId: string,
-    variables?: Record<string, unknown>,
-    options?: { repoUrl?: string; branch?: string; ref?: string; sourceRepoFullName?: string },
-  ): Promise<{ execution: unknown }> {
-    const requestId = crypto.randomUUID();
-    return this.createPendingRequest(requestId, MESSAGE_OP_TIMEOUT_MS, () => {
-      this.send({
-        type: "workflow-run",
-        requestId,
-        workflowId,
-        variables,
-        repoUrl: options?.repoUrl,
-        branch: options?.branch,
-        ref: options?.ref,
-        sourceRepoFullName: options?.sourceRepoFullName,
-      });
-    });
-  }
-
-  requestListWorkflowExecutions(workflowId?: string, limit?: number): Promise<{ executions: unknown[] }> {
-    const requestId = crypto.randomUUID();
-    return this.createPendingRequest(requestId, MESSAGE_OP_TIMEOUT_MS, () => {
-      this.send({ type: "workflow-executions", requestId, workflowId, limit });
-    });
-  }
-
-  requestGetWorkflow(workflowId: string): Promise<{ workflow: unknown }> {
-    const requestId = crypto.randomUUID();
-    return this.createPendingRequest(requestId, MESSAGE_OP_TIMEOUT_MS, () => {
-      this.send({ type: "workflow-api", requestId, action: "get", payload: { workflowId } });
-    });
-  }
-
-  requestUpdateWorkflow(workflowId: string, payload: Record<string, unknown>): Promise<{ workflow: unknown }> {
-    const requestId = crypto.randomUUID();
-    return this.createPendingRequest(requestId, MESSAGE_OP_TIMEOUT_MS, () => {
-      this.send({ type: "workflow-api", requestId, action: "update", payload: { workflowId, ...payload } });
-    });
-  }
-
-  requestDeleteWorkflow(workflowId: string): Promise<{ success: boolean }> {
-    const requestId = crypto.randomUUID();
-    return this.createPendingRequest(requestId, MESSAGE_OP_TIMEOUT_MS, () => {
-      this.send({ type: "workflow-api", requestId, action: "delete", payload: { workflowId } });
-    });
-  }
-
-  requestListTriggers(filters?: { workflowId?: string; type?: string; enabled?: boolean }): Promise<{ triggers: unknown[] }> {
-    const requestId = crypto.randomUUID();
-    return this.createPendingRequest(requestId, MESSAGE_OP_TIMEOUT_MS, () => {
-      this.send({ type: "trigger-api", requestId, action: "list", payload: filters || {} });
-    });
-  }
-
-  requestSyncTrigger(params: {
-    triggerId?: string;
-    workflowId?: string | null;
-    name?: string;
-    enabled?: boolean;
-    config?: Record<string, unknown>;
-    variableMapping?: Record<string, string>;
-  }): Promise<{ trigger?: unknown; success?: boolean }> {
-    const requestId = crypto.randomUUID();
-    return this.createPendingRequest(requestId, MESSAGE_OP_TIMEOUT_MS, () => {
-      this.send({
-        type: "trigger-api",
-        requestId,
-        action: params.triggerId ? "update" : "sync",
-        payload: params as Record<string, unknown>,
-      });
-    });
-  }
-
-  requestRunTrigger(
-    triggerId: string,
-    params?: { variables?: Record<string, unknown>; repoUrl?: string; branch?: string; ref?: string; sourceRepoFullName?: string },
-  ): Promise<Record<string, unknown>> {
-    const requestId = crypto.randomUUID();
-    return this.createPendingRequest(requestId, MESSAGE_OP_TIMEOUT_MS, () => {
-      this.send({
-        type: "trigger-api",
-        requestId,
-        action: "run",
-        payload: {
-          triggerId,
-          variables: params?.variables,
-          repoUrl: params?.repoUrl,
-          branch: params?.branch,
-          ref: params?.ref,
-          sourceRepoFullName: params?.sourceRepoFullName,
-        },
-      });
-    });
-  }
-
-  requestDeleteTrigger(triggerId: string): Promise<{ success: boolean }> {
-    const requestId = crypto.randomUUID();
-    return this.createPendingRequest(requestId, MESSAGE_OP_TIMEOUT_MS, () => {
-      this.send({ type: "trigger-api", requestId, action: "delete", payload: { triggerId } });
-    });
-  }
-
-  requestGetExecution(executionId: string): Promise<{ execution: unknown }> {
-    const requestId = crypto.randomUUID();
-    return this.createPendingRequest(requestId, MESSAGE_OP_TIMEOUT_MS, () => {
-      this.send({ type: "execution-api", requestId, action: "get", payload: { executionId } });
-    });
-  }
-
-  requestGetExecutionSteps(executionId: string): Promise<{ steps: unknown[] }> {
-    const requestId = crypto.randomUUID();
-    return this.createPendingRequest(requestId, MESSAGE_OP_TIMEOUT_MS, () => {
-      this.send({ type: "execution-api", requestId, action: "steps", payload: { executionId } });
-    });
-  }
-
-  requestApproveExecution(
-    executionId: string,
-    params: { approve: boolean; resumeToken: string; reason?: string },
-  ): Promise<{ success: boolean; status?: string }> {
-    const requestId = crypto.randomUUID();
-    return this.createPendingRequest(requestId, MESSAGE_OP_TIMEOUT_MS, () => {
-      this.send({
-        type: "execution-api",
-        requestId,
-        action: "approve",
-        payload: { executionId, approve: params.approve, resumeToken: params.resumeToken, reason: params.reason },
-      });
-    });
-  }
-
-  requestCancelExecution(
-    executionId: string,
-    params?: { reason?: string },
-  ): Promise<{ success: boolean; status?: string }> {
-    const requestId = crypto.randomUUID();
-    return this.createPendingRequest(requestId, MESSAGE_OP_TIMEOUT_MS, () => {
-      this.send({
-        type: "execution-api",
-        requestId,
-        action: "cancel",
-        payload: { executionId, reason: params?.reason },
-      });
-    });
-  }
-
   // ─── Phase C: Mailbox + Task Board ────────────────────────────────
 
   requestMailboxSend(params: {
@@ -950,17 +752,6 @@ export class AgentClient {
 
   onTunnelDelete(handler: (name: string, actor?: { id?: string; name?: string; email?: string }) => void | Promise<void>): void {
     this.tunnelDeleteHandler = handler;
-  }
-
-  onWorkflowExecute(handler: (executionId: string, payload: {
-    kind: "run" | "resume";
-    executionId: string;
-    workflowHash?: string;
-    resumeToken?: string;
-    decision?: "approve" | "deny";
-    payload: Record<string, unknown>;
-  }, model?: string, modelPreferences?: string[]) => void | Promise<void>): void {
-    this.workflowExecuteHandler = handler;
   }
 
   onNewSession(handler: (channelType: string, channelId: string, requestId: string) => void | Promise<void>): void {
@@ -1252,46 +1043,6 @@ export class AgentClient {
             });
           }
           break;
-        case "workflow-list-result":
-          if (msg.error) {
-            this.rejectPendingRequest(msg.requestId, msg.error);
-          } else {
-            this.resolvePendingRequest(msg.requestId, { workflows: msg.workflows ?? [] });
-          }
-          break;
-        case "workflow-sync-result":
-          if (msg.error) {
-            this.rejectPendingRequest(msg.requestId, msg.error);
-          } else {
-            this.resolvePendingRequest(msg.requestId, {
-              success: msg.success ?? true,
-              workflow: msg.workflow,
-            });
-          }
-          break;
-        case "workflow-run-result":
-          if (msg.error) {
-            this.rejectPendingRequest(msg.requestId, msg.error);
-          } else {
-            this.resolvePendingRequest(msg.requestId, { execution: msg.execution ?? null });
-          }
-          break;
-        case "workflow-executions-result":
-          if (msg.error) {
-            this.rejectPendingRequest(msg.requestId, msg.error);
-          } else {
-            this.resolvePendingRequest(msg.requestId, { executions: msg.executions ?? [] });
-          }
-          break;
-        case "workflow-api-result":
-        case "trigger-api-result":
-        case "execution-api-result":
-          if (msg.error) {
-            this.rejectPendingRequest(msg.requestId, msg.error);
-          } else {
-            this.resolvePendingRequest(msg.requestId, msg.data ?? {});
-          }
-          break;
         case "skill-api-result":
         case "persona-api-result":
         case "identity-api-result":
@@ -1389,16 +1140,6 @@ export class AgentClient {
             name: msg.actorName,
             email: msg.actorEmail,
           });
-          break;
-        case "workflow-execute":
-          await this.workflowExecuteHandler?.(
-            msg.executionId,
-            msg.payload,
-            typeof msg.model === "string" ? msg.model : undefined,
-            Array.isArray(msg.modelPreferences)
-              ? msg.modelPreferences.filter((entry): entry is string => typeof entry === "string" && !!entry.trim())
-              : undefined,
-          );
           break;
         case "repo-config": {
           const { token, expiresAt, gitConfig, repoUrl, branch, ref } = msg;

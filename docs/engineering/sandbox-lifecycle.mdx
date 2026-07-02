@@ -56,7 +56,7 @@ Session-scoped trust should expire when the sandbox hibernates, refreshes, or te
 
 ## Image composition
 
-Production sandboxes are built with Modal's Python image API from `backend/images/base.py`. The image includes Debian, Python, Node.js, Bun, OpenCode, agent-browser, Playwright Chromium, code-server, noVNC, TTYD, whisper.cpp, Runner source, workflow CLI wrappers, start script, and OpenCode config/tools.
+Production sandboxes are built with Modal's Python image API from `backend/images/base.py`. The image includes Debian, Python, Node.js, Bun, OpenCode, agent-browser, Playwright Chromium, code-server, noVNC, TTYD, whisper.cpp, Runner source, start script, and OpenCode config/tools.
 
 The Dockerfile under `docker/` is a reference/local artifact. Production uses the Modal image definition.
 

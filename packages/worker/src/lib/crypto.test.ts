@@ -4,6 +4,7 @@ import {
   decryptString,
   encryptStringPBKDF2,
   decryptStringPBKDF2,
+  constantTimeEqual,
 } from './crypto.js';
 
 const TEST_SECRET = 'test-encryption-key-for-unit-tests';
@@ -73,6 +74,24 @@ describe('AES-GCM (PBKDF2 key derivation)', () => {
     const encrypted = await encryptStringPBKDF2(plaintext, TEST_SECRET);
     const decrypted = await decryptStringPBKDF2(encrypted, TEST_SECRET);
     expect(decrypted).toBe(plaintext);
+  });
+});
+
+describe('constantTimeEqual', () => {
+  it('matches identical strings', () => {
+    expect(constantTimeEqual('abc123', 'abc123')).toBe(true);
+  });
+  it('rejects different strings of same length', () => {
+    expect(constantTimeEqual('abc123', 'abc124')).toBe(false);
+  });
+  it('rejects different-length strings', () => {
+    expect(constantTimeEqual('abc', 'abcd')).toBe(false);
+  });
+  it('rejects empty vs non-empty', () => {
+    expect(constantTimeEqual('', 'a')).toBe(false);
+  });
+  it('matches two empty strings', () => {
+    expect(constantTimeEqual('', '')).toBe(true);
   });
 });
 

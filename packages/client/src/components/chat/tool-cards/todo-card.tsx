@@ -19,6 +19,7 @@ export function TodoWriteCard({ tool }: { tool: ToolCallData }) {
       icon={<ChecklistIcon className="h-3.5 w-3.5" />}
       label="todowrite"
       status={tool.status}
+      tool={tool}
       summary={
         <span className="text-neutral-500 dark:text-neutral-400">
           {count} {count === 1 ? 'task' : 'tasks'}
@@ -43,6 +44,7 @@ export function TodoReadCard({ tool }: { tool: ToolCallData }) {
       icon={<ListIcon className="h-3.5 w-3.5" />}
       label="todoread"
       status={tool.status}
+      tool={tool}
       summary={
         <span className="text-neutral-500 dark:text-neutral-400">
           {count} {count === 1 ? 'task' : 'tasks'}

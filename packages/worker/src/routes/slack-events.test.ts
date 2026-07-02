@@ -68,7 +68,7 @@ vi.mock('@valet/plugin-slack/actions', () => ({
   checkPrivateChannelAccess: checkPrivateChannelAccessMock,
 }));
 
-vi.mock('../lib/workflow-runtime.js', () => ({
+vi.mock('../services/orchestrator.js', () => ({
   dispatchOrchestratorPrompt: dispatchOrchestratorPromptMock,
 }));
 

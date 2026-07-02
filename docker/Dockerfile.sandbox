@@ -75,10 +75,6 @@ COPY --from=runner-build /build/runner/package.json ./
 COPY --from=runner-build /build/runner/src ./src
 COPY --from=runner-build /build/runner/tsconfig.json ./
 
-# Expose workflow CLI as a first-class sandbox command.
-RUN printf '#!/bin/bash\nexec bun run /runner/src/workflow-cli.ts "$@"\n' > /usr/local/bin/workflow \
-    && chmod +x /usr/local/bin/workflow
-
 # Startup script
 COPY docker/start.sh /start.sh
 RUN chmod +x /start.sh

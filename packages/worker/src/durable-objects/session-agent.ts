@@ -12,8 +12,9 @@ import { assembleCustomProviders, assembleBuiltInProviderModelConfigs, assembleR
 import { resolveAvailableModels } from '../services/model-catalog.js';
 import { integrationRegistry } from '../integrations/registry.js';
 import { updateIntegrationStatus } from '../lib/db/integrations.js';
-import { approveInvocation, denyInvocation, markFailed } from '../services/actions.js';
-import { resolveOrgPolicyMatch, updateInvocationStatus, upsertUserActionPolicyOverride, deleteSessionActionPolicyOverrides } from '../lib/db/actions.js';
+import { denyInvocation, markFailed } from '../services/actions.js';
+import { resolveAdminPolicyMatch, updateInvocationStatus, deleteRuntimeGrantsByScope } from '../lib/db/actions.js';
+import { resolveInvocationWithScope, type ApprovalScope } from '../services/scoped-approvals.js';
 import { getActivePluginArtifacts, getPluginSettings } from '../lib/db/plugins.js';
 import { getPersonaSkills, getOrgDefaultSkills, getPersonaToolWhitelist } from '../lib/db.js';
 import type { ChannelTarget, ChannelContext, InteractivePrompt, InteractiveAction, InteractivePromptRef, InteractiveResolution } from '@valet/sdk';
@@ -21,7 +22,7 @@ import { MessageStore } from './message-store.js';
 import { getChannelForMessage, dropEmission } from './channel-resolver.js';
 import { ChannelRouter } from './channel-router.js';
 import { PromptQueue, type QueueEntry } from './prompt-queue.js';
-import { RunnerLink, type RunnerToDOMessage, type DOToRunnerMessage, type PromptAttachment, type RunnerMessageHandlers, type WorkflowExecutionDispatchPayload, type DOMessageOf } from './runner-link.js';
+import { RunnerLink, type RunnerToDOMessage, type DOToRunnerMessage, type PromptAttachment, type RunnerMessageHandlers, type DOMessageOf } from './runner-link.js';
 import { SessionState, type SessionStartParams } from './session-state.js';
 import { SessionLifecycle, SandboxAlreadyExitedError, SandboxSnapshotFailedError } from './session-lifecycle.js';
 import { SessionHealthMonitor, DISCONNECT_GRACE_MS, SANDBOX_WAKE_TIMEOUT_MS, type HealthSnapshot } from './session-health-monitor.js';
@@ -35,17 +36,6 @@ import { spawnChild, sendSessionMessage, getSessionMessages, forwardMessages, te
 import { listTools as listToolsSvc, resolveActionPolicy, executeAction as executeActionSvc, type CredentialCache } from '../services/session-tools.js';
 import { loadCustomMcpConnectorContext } from '../services/custom-mcp-connectors.js';
 import {
-  workflowList as workflowListSvc,
-  workflowSync as workflowSyncSvc,
-  workflowRun as workflowRunSvc,
-  workflowExecutions as workflowExecutionsSvc,
-  handleWorkflowAction as handleWorkflowActionSvc,
-  handleTriggerAction as handleTriggerActionSvc,
-  handleExecutionAction as handleExecutionActionSvc,
-  processWorkflowExecutionResult as processWorkflowExecutionResultSvc,
-  buildWorkflowDispatch,
-} from '../services/session-workflows.js';
-import {
   sanitizePromptAttachments,
   attachmentPartsForDisplay,
   attachmentsForClientState,
@@ -53,7 +43,7 @@ import {
   parsePromptAttachmentBlobUrl,
   SUPPORTED_FILE_TYPES_DESCRIPTION,
 } from '../lib/utils/prompt-validation.js';
-import { parseQueuedWorkflowPayload, deriveRuntimeStates } from '../lib/utils/runtime.js';
+import { deriveRuntimeStates } from '../lib/utils/runtime.js';
 import { ensureChannelBinding } from '../lib/db/channels.js';
 import { getOrgSlackInstallAny } from '../lib/db/slack.js';
 import { registerChannelThread } from '../lib/db/channel-threads.js';
@@ -562,6 +552,8 @@ export class SessionAgentDO {
       }
       case '/status':
         return tracer.span('handleStatus', () => this.handleStatus());
+      case '/thread-status':
+        return tracer.span('handleThreadStatus', () => this.handleThreadStatus(url));
       case '/wake':
         return tracer.span('handleWake', () => this.handleWake());
       case '/hibernate':
@@ -683,16 +675,6 @@ export class SessionAgentDO {
         }
         await this.handleSystemMessage(body.content, body.parts, body.wake, body.threadId);
         return Response.json({ success: true });
-      }
-      case '/workflow-execute': {
-        if (request.method !== 'POST') {
-          return new Response(JSON.stringify({ error: 'Method not allowed' }), { status: 405 });
-        }
-        const body = await request.json() as {
-          executionId?: string;
-          payload?: WorkflowExecutionDispatchPayload;
-        };
-        return this.handleWorkflowExecuteDispatch(body.executionId, body.payload);
       }
       case '/tunnels': {
         if (request.method !== 'POST') {
@@ -2767,47 +2749,6 @@ export class SessionAgentDO {
         }
       },
 
-      'workflow-chat-message': (msg) => {
-        const ALLOWED_ROLES = new Set(['user', 'assistant', 'system']);
-        const rawRole = typeof msg.role === 'string' ? msg.role : 'user';
-        const role = (ALLOWED_ROLES.has(rawRole) ? rawRole : 'user') as 'user' | 'assistant' | 'system';
-        const content = (msg.content || '').trim();
-        if (!content) return;
-
-        const workflowMsgId = crypto.randomUUID();
-        const partsObj = msg.parts && typeof msg.parts === 'object' ? msg.parts as Record<string, unknown> : null;
-        const partsJson = partsObj ? JSON.stringify(partsObj) : null;
-        const workflowChannelType = typeof msg.channelType === 'string'
-          ? msg.channelType
-          : (partsObj && typeof partsObj.channelType === 'string' ? partsObj.channelType : null);
-        const workflowChannelId = typeof msg.channelId === 'string'
-          ? msg.channelId
-          : (partsObj && typeof partsObj.channelId === 'string' ? partsObj.channelId : null);
-        const workflowOcSessionId = typeof msg.opencodeSessionId === 'string'
-          ? msg.opencodeSessionId
-          : (partsObj && typeof partsObj.opencodeSessionId === 'string' ? partsObj.opencodeSessionId : null);
-        this.messageStore.writeMessage({
-          id: workflowMsgId,
-          role,
-          content,
-          parts: partsJson,
-          channelType: workflowChannelType,
-          channelId: workflowChannelId,
-          opencodeSessionId: workflowOcSessionId,
-        });
-        this.broadcastToClients({
-          type: 'message',
-          data: {
-            id: workflowMsgId,
-            role,
-            content,
-            ...(partsJson ? { parts: JSON.parse(partsJson) } : {}),
-            ...(workflowChannelType && workflowChannelId ? { channelType: workflowChannelType, channelId: workflowChannelId } : {}),
-            createdAt: Math.floor(Date.now() / 1000),
-          },
-        });
-      },
-
       'question': async (msg) => {
         // Resolve channel explicitly from the originating prompt — never fall back
         // to a mutable "active" cursor. If the prompt_queue row is missing or lacks
@@ -3897,108 +3838,6 @@ export class SessionAgentDO {
         }
       },
 
-      'workflow-list': async (msg) => {
-        try {
-          const result = await workflowListSvc(this.appDb, this.sessionState.userId);
-          if (result.error) {
-            this.runnerLink.send({ type: 'workflow-list-result', requestId: msg.requestId!, error: result.error } as any);
-          } else {
-            this.runnerLink.send({ type: 'workflow-list-result', requestId: msg.requestId!, workflows: result.data!.workflows } as any);
-          }
-        } catch (err) {
-          console.error('[SessionAgentDO] Failed to list workflows:', err);
-          this.runnerLink.send({ type: 'workflow-list-result', requestId: msg.requestId!, error: err instanceof Error ? err.message : String(err) } as any);
-        }
-      },
-
-      'workflow-sync': async (msg) => {
-        try {
-          const result = await workflowSyncSvc(this.appDb, this.env.DB, this.sessionState.userId, {
-            id: msg.id,
-            slug: msg.slug,
-            name: msg.name,
-            description: msg.description,
-            version: msg.version,
-            data: msg.data,
-          });
-          if (result.error) {
-            this.runnerLink.send({ type: 'workflow-sync-result', requestId: msg.requestId!, error: result.error } as any);
-          } else {
-            this.runnerLink.send({ type: 'workflow-sync-result', requestId: msg.requestId!, success: true, workflow: result.data!.workflow } as any);
-          }
-        } catch (err) {
-          console.error('[SessionAgentDO] Failed to sync workflow:', err);
-          this.runnerLink.send({ type: 'workflow-sync-result', requestId: msg.requestId!, error: err instanceof Error ? err.message : String(err) } as any);
-        }
-      },
-
-      'workflow-run': async (msg) => {
-        try {
-          const result = await workflowRunSvc(this.appDb, this.env.DB, this.env, this.sessionState.userId, msg.requestId!, {
-            workflowId: msg.workflowId!,
-            variables: msg.variables,
-            repoContext: {
-              repoUrl: msg.repoUrl,
-              branch: msg.branch,
-              ref: msg.ref,
-              sourceRepoFullName: msg.sourceRepoFullName,
-            },
-            spawnRequest: this.sessionState.spawnRequest,
-          });
-          if (result.error) {
-            this.runnerLink.send({ type: 'workflow-run-result', requestId: msg.requestId!, error: result.error } as any);
-          } else {
-            this.runnerLink.send({ type: 'workflow-run-result', requestId: msg.requestId!, execution: result.data!.execution } as any);
-          }
-        } catch (err) {
-          console.error('[SessionAgentDO] Failed to run workflow:', err);
-          this.runnerLink.send({ type: 'workflow-run-result', requestId: msg.requestId!, error: err instanceof Error ? err.message : String(err) } as any);
-        }
-      },
-
-      'workflow-executions': async (msg) => {
-        try {
-          const result = await workflowExecutionsSvc(this.appDb, this.env.DB, this.sessionState.userId, msg.workflowId, msg.limit);
-          if (result.error) {
-            this.runnerLink.send({ type: 'workflow-executions-result', requestId: msg.requestId!, error: result.error } as any);
-          } else {
-            this.runnerLink.send({ type: 'workflow-executions-result', requestId: msg.requestId!, executions: result.data!.executions } as any);
-          }
-        } catch (err) {
-          console.error('[SessionAgentDO] Failed to list workflow executions:', err);
-          this.runnerLink.send({ type: 'workflow-executions-result', requestId: msg.requestId!, error: err instanceof Error ? err.message : String(err) } as any);
-        }
-      },
-
-      'workflow-api': async (msg) => {
-        try {
-          const result = await handleWorkflowActionSvc(this.appDb, this.env.DB, this.sessionState.userId, msg.action || '', msg.payload);
-          if (result.error) {
-            this.runnerLink.send({ type: 'workflow-api-result', requestId: msg.requestId!, error: result.error } as any);
-          } else {
-            this.runnerLink.send({ type: 'workflow-api-result', requestId: msg.requestId!, data: result.data } as any);
-          }
-        } catch (err) {
-          console.error('[SessionAgentDO] Workflow API error:', err);
-          this.runnerLink.send({ type: 'workflow-api-result', requestId: msg.requestId!, error: err instanceof Error ? err.message : String(err) } as any);
-        }
-      },
-
-      'trigger-api': async (msg) => {
-        try {
-          const augmentedPayload = msg.payload ? { ...msg.payload, requestId: msg.requestId, _spawnRequest: this.sessionState.spawnRequest } : { requestId: msg.requestId, _spawnRequest: this.sessionState.spawnRequest };
-          const result = await handleTriggerActionSvc(this.appDb, this.env.DB, this.env, this.sessionState.userId, this.sessionState.sessionId, msg.action || '', augmentedPayload);
-          if (result.error) {
-            this.runnerLink.send({ type: 'trigger-api-result', requestId: msg.requestId!, error: result.error } as any);
-          } else {
-            this.runnerLink.send({ type: 'trigger-api-result', requestId: msg.requestId!, data: result.data } as any);
-          }
-        } catch (err) {
-          console.error('[SessionAgentDO] Trigger API error:', err);
-          this.runnerLink.send({ type: 'trigger-api-result', requestId: msg.requestId!, error: err instanceof Error ? err.message : String(err) } as any);
-        }
-      },
-
       'skill-api': async (msg) => {
         try {
           const orgId = await this.resolveOrgId() ?? 'default';
@@ -4070,32 +3909,6 @@ export class SessionAgentDO {
         } catch (err) {
           console.error('[SessionAgentDO] Identity API error:', err);
           this.runnerLink.send({ type: 'identity-api-result', requestId: msg.requestId!, error: err instanceof Error ? err.message : String(err), statusCode: 500 } as any);
-        }
-      },
-
-      'execution-api': async (msg) => {
-        try {
-          const result = await handleExecutionActionSvc(this.appDb, this.env.DB, this.env, this.sessionState.userId, msg.action || '', msg.payload);
-          if (result.error) {
-            this.runnerLink.send({ type: 'execution-api-result', requestId: msg.requestId!, error: result.error } as any);
-          } else {
-            this.runnerLink.send({ type: 'execution-api-result', requestId: msg.requestId!, data: result.data } as any);
-          }
-        } catch (err) {
-          console.error('[SessionAgentDO] Execution API error:', err);
-          this.runnerLink.send({ type: 'execution-api-result', requestId: msg.requestId!, error: err instanceof Error ? err.message : String(err) } as any);
-        }
-      },
-
-      'workflow-execution-result': async (msg) => {
-        const resultData = await processWorkflowExecutionResultSvc(
-          this.appDb,
-          this.env.DB,
-          msg,
-          this.sessionState.sessionId,
-        );
-        if (resultData?.shouldStopSession) {
-          this.ctx.waitUntil(this.handleStop(`workflow_execution_${resultData.nextStatus}`));
         }
       },
 
@@ -4788,7 +4601,7 @@ export class SessionAgentDO {
     // Expire session-scoped action policy overrides before stopping the runner
     // so no in-flight tool call can sneak through with a stale auto-allow.
     if (sessionId) {
-      await deleteSessionActionPolicyOverrides(this.appDb, sessionId);
+      await deleteRuntimeGrantsByScope(this.appDb, { sessionId });
     }
 
     // Tell runner to stop
@@ -4957,6 +4770,15 @@ export class SessionAgentDO {
       sandboxGeneration: this.sessionState.sandboxGeneration,
       sandboxWakeStartedAt: this.sessionState.sandboxWakeStartedAt || null,
     });
+  }
+
+  private handleThreadStatus(url: URL): Response {
+    const threadId = url.searchParams.get('threadId')?.trim();
+    if (!threadId) {
+      return Response.json({ error: 'Missing threadId' }, { status: 400 });
+    }
+
+    return Response.json(this.promptQueue.getThreadPromptStatus(threadId));
   }
 
   private notifyParentIfIdle() {
@@ -5145,95 +4967,6 @@ export class SessionAgentDO {
     }
   }
 
-  private async handleWorkflowExecuteDispatch(
-    executionIdRaw?: string,
-    payload?: WorkflowExecutionDispatchPayload,
-  ): Promise<Response> {
-    const dispatchResult = buildWorkflowDispatch(executionIdRaw, payload);
-    if (dispatchResult.error) {
-      return Response.json({ error: dispatchResult.error.error }, { status: dispatchResult.error.status });
-    }
-
-    const { executionId, payload: validPayload } = dispatchResult.ready!;
-
-    const status = this.sessionState.status;
-    const queueWorkflowDispatch = (reason: string) => {
-      const queueId = crypto.randomUUID();
-      this.promptQueue.enqueue({
-        id: queueId, content: '', queueType: 'workflow_execute',
-        workflowExecutionId: executionId, workflowPayload: JSON.stringify(validPayload),
-      });
-      this.emitAuditEvent(
-        'workflow.dispatch_queued',
-        `Workflow execution queued (${executionId.slice(0, 8)}): ${reason}`,
-        undefined,
-        { executionId, kind: validPayload.kind, reason },
-      );
-      return Response.json({ success: true, queued: true, reason }, { status: 202 });
-    };
-
-    if (status === 'hibernated') {
-      this.ctx.waitUntil(this.performWake());
-      return queueWorkflowDispatch('session_hibernated_waking');
-    }
-    if (status === 'restoring' || status === 'initializing' || status === 'hibernating') {
-      return queueWorkflowDispatch(`session_not_ready:${status}`);
-    }
-
-    if (!this.runnerLink.isConnected) {
-      return queueWorkflowDispatch('runner_not_connected');
-    }
-
-    if (!this.runnerLink.isReady) {
-      return queueWorkflowDispatch('runner_not_ready');
-    }
-
-    if (this.promptQueue.runnerBusy) {
-      return queueWorkflowDispatch('runner_busy');
-    }
-
-    this.lifecycle.touchActivity();
-    // Direct-dispatch workflows hold the runner exclusively without an
-    // associated prompt_queue row. stampDispatched() with no messageId sets
-    // runnerBusy=true; the workflow's lifecycle and watchdog visibility are
-    // tracked separately via _activeWorkflowExecutionId and the workflow
-    // execution row in D1 (workflow_executions). (A previous attempt to
-    // enqueue a tracking row here created several double-execution and
-    // abort/wipe hazards — reverted.)
-    this.promptQueue.stampDispatched();
-    this.rescheduleIdleAlarm();
-    this.sessionState.lastParentIdleNotice = undefined;
-    this.sessionState.parentIdleNotifyAt = 0;
-    this.sessionState.waitSubscription = null;
-    const dispatchOwnerId = this.sessionState.userId;
-    const dispatchOwnerDetails = dispatchOwnerId ? await this.getUserDetails(dispatchOwnerId) : undefined;
-    const dispatchModelPrefs = await this.resolveModelPreferences(dispatchOwnerDetails);
-
-    const directWfDispatched = this.runnerLink.send({
-      type: 'workflow-execute',
-      executionId,
-      payload: validPayload,
-      modelPreferences: dispatchModelPrefs,
-    });
-    if (!directWfDispatched) {
-      this.promptQueue.runnerBusy = false;
-      return queueWorkflowDispatch('runner_send_failed');
-    }
-
-    // Track execution ID so isUnattended checks during this turn know it's a
-    // workflow execution (no queue row exists on the direct-dispatch path).
-    this._activeWorkflowExecutionId = executionId;
-
-    this.emitAuditEvent(
-      'workflow.dispatch',
-      `Workflow execution dispatched (${executionId.slice(0, 8)})`,
-      undefined,
-      { executionId, kind: validPayload.kind },
-    );
-
-    return Response.json({ success: true });
-  }
-
   private async sendNextQueuedPrompt(): Promise<boolean> {
     if (!this.runnerLink.isConnected) {
       console.log(`[SessionAgentDO] sendNextQueuedPrompt: no runner sockets, skipping`);
@@ -5334,37 +5067,18 @@ export class SessionAgentDO {
         }
       }
 
-      // Drop malformed workflow entries
-      if (!shouldSkip && prompt.queueType === 'workflow_execute') {
-        const queuedExecutionId = (prompt.workflowExecutionId || '').trim();
-        const queuedPayload = parseQueuedWorkflowPayload(prompt.workflowPayload);
-        if (!queuedExecutionId || !queuedPayload) {
-          console.warn(`[SessionAgentDO] Dropping malformed queued workflow dispatch id=${prompt.id}`);
-          shouldSkip = true;
-        }
-      }
-
       if (shouldSkip) {
         this.promptQueue.dropEntry(prompt.id);
         prompt = this.promptQueue.dequeueNext(skippedBusyIds);
         continue;
       }
 
-      // Runner-exclusivity check, mirroring the live handlePrompt path:
-      //   - workflow_execute holds the runner exclusively (its stampDispatched
-      //     sets runnerBusy without a channel marker). Don't dispatch one if
-      //     anything is in flight, and don't dispatch anything else while one
-      //     is in flight.
-      //   - For regular prompts, refuse to dispatch when runnerBusy is set but
-      //     no channel is tracked — that signals an untracked turn (workflow
-      //     or recovery) owns the runner.
-      const isWorkflow = prompt.queueType === 'workflow_execute';
+      // Refuse to dispatch when runnerBusy is set but no channel is
+      // tracked — that signals an untracked turn (e.g. recovery) owns
+      // the runner.
       const anyChannelBusy = this.promptQueue.getBusyChannelKey() !== null;
-      const blockedByExclusivity = isWorkflow
-        ? (this.promptQueue.runnerBusy || anyChannelBusy)
-        : (this.promptQueue.runnerBusy && !anyChannelBusy);
-      if (blockedByExclusivity) {
-        console.log(`[SessionAgentDO] sendNextQueuedPrompt: skipping item ${prompt.id} — runner exclusively busy (isWorkflow=${isWorkflow} runnerBusy=${this.promptQueue.runnerBusy} anyChannelBusy=${anyChannelBusy})`);
+      if (this.promptQueue.runnerBusy && !anyChannelBusy) {
+        console.log(`[SessionAgentDO] sendNextQueuedPrompt: skipping item ${prompt.id} — runner exclusively busy (runnerBusy=${this.promptQueue.runnerBusy} anyChannelBusy=${anyChannelBusy})`);
         skippedBusyIds.add(prompt.id);
         this.promptQueue.revertProcessingToQueued(prompt.id);
         prompt = this.promptQueue.dequeueNext(skippedBusyIds);
@@ -5482,51 +5196,6 @@ export class SessionAgentDO {
         type: 'queue.state',
         data: { pending: null, threadId: prompt.threadId ?? null },
       });
-    }
-
-    if (prompt.queueType === 'workflow_execute') {
-      const queuedExecutionId = (prompt.workflowExecutionId || '').trim();
-      const queuedPayload = parseQueuedWorkflowPayload(prompt.workflowPayload)!;
-
-      // Workflow exclusivity: holds the runner globally; we stamp the row's
-      // dispatched_at via messageId but don't mark a per-channel busy flag.
-      this.promptQueue.stampDispatched(prompt.id);
-      this.promptQueue.clearAllChannelIdleQueuedSince();
-      // Mirror the direct-dispatch path so isUnattended() and friends see the
-      // active execution id regardless of which dispatch route the workflow took.
-      this._activeWorkflowExecutionId = queuedExecutionId;
-      this.sessionState.lastParentIdleNotice = undefined;
-      this.sessionState.parentIdleNotifyAt = 0;
-      this.sessionState.waitSubscription = null;
-      const queueOwnerId = this.sessionState.userId;
-      const queueOwnerDetails = queueOwnerId ? await this.getUserDetails(queueOwnerId) : undefined;
-      const queueModelPrefs = await this.resolveModelPreferences(queueOwnerDetails);
-      const wfDispatched = this.runnerLink.send({
-        type: 'workflow-execute',
-        executionId: queuedExecutionId,
-        payload: queuedPayload,
-        modelPreferences: queueModelPrefs,
-      });
-      if (!wfDispatched) {
-        this.promptQueue.revertProcessingToQueued(prompt.id);
-        this.promptQueue.runnerBusy = false;
-        // Workflow dispatch failed — re-arm idle timers for any channel that
-        // still has queued work so the watchdog kicks the queue eventually.
-        this.promptQueue.armIdleQueuedSinceForAllQueuedChannels(Date.now());
-        this.emitAuditEvent('workflow.dispatch_failed', `Workflow dispatch failed, reverted to queue: ${queuedExecutionId.slice(0, 8)}`);
-        return false;
-      }
-      this.broadcastToClients({
-        type: 'status',
-        data: { promptDequeued: true, remaining: this.promptQueue.length },
-      });
-      this.emitAuditEvent(
-        'workflow.dispatch',
-        `Workflow execution dispatched (${queuedExecutionId.slice(0, 8)})`,
-        undefined,
-        { executionId: queuedExecutionId, kind: queuedPayload.kind, queued: true },
-      );
-      return true;
     }
 
     // Look up git details from cache for the prompt author
@@ -5970,7 +5639,7 @@ export class SessionAgentDO {
     // replaced, so ephemeral "allow for this session" approvals should not
     // carry over to the fresh OpenCode instance.
     if (sessionId) {
-      await deleteSessionActionPolicyOverrides(this.appDb, sessionId);
+      await deleteRuntimeGrantsByScope(this.appDb, { sessionId });
     }
 
     // Explicit refresh — reset circuit breaker so the user can force a restart
@@ -6204,7 +5873,7 @@ export class SessionAgentDO {
       // Expire session-scoped action policy overrides before snapshot/stop
       // so no in-flight tool call can sneak through with a stale auto-allow.
       if (sessionId) {
-        await deleteSessionActionPolicyOverrides(this.appDb, sessionId);
+        await deleteRuntimeGrantsByScope(this.appDb, { sessionId });
       }
 
       // Snapshot via lifecycle (pure HTTP)
@@ -7192,6 +6861,91 @@ export class SessionAgentDO {
    * Execute an integration action via the service and send the result to the runner.
    * Shared between immediate execution and post-approval execution.
    */
+  /**
+   * Dispatch tools for invocations that the scoped-approval sweep just
+   * resolved alongside the originating prompt.
+   *
+   * Each sibling has its own `interactive_prompts` row in this DO with
+   * the same context shape as the originating prompt. We claim the row
+   * (CAS), run the tool, then clean up — mirroring the originating
+   * prompt's flow but condensed since the resolver already approved the
+   * invocation row.
+   *
+   * Best-effort: a sibling failure is logged and the invocation is
+   * marked failed, but the originating approval response has already
+   * been returned to the user. Runner-side MCP timeouts are the final
+   * safety net for any sibling whose tool genuinely never ran.
+   */
+  private async dispatchSweptApprovalSiblings(siblingIds: string[], userId: string): Promise<void> {
+    if (siblingIds.length === 0) return;
+    for (const siblingId of siblingIds) {
+      try {
+        await this.dispatchOneSweptSibling(siblingId, userId);
+      } catch (err) {
+        console.warn(`[session-agent] swept sibling dispatch failed for ${siblingId}: ${err instanceof Error ? err.message : String(err)}`);
+        await markFailed(this.appDb, siblingId, err instanceof Error ? err.message : String(err)).catch(() => {});
+      }
+    }
+  }
+
+  private async dispatchOneSweptSibling(siblingId: string, userId: string): Promise<void> {
+    const rows = this.ctx.storage.sql.exec(
+      'SELECT id, type, request_id, context, channel_refs FROM interactive_prompts WHERE id = ?',
+      siblingId,
+    ).toArray();
+    if (rows.length === 0) {
+      // Prompt entry already gone (sibling resolved separately, sibling
+      // belongs to a different DO, etc.). Nothing to dispatch here; the
+      // resolver-side state is already consistent.
+      return;
+    }
+    const row = rows[0] as Record<string, unknown>;
+    if (row.type !== 'approval') return;
+
+    const claimed = this.ctx.storage.sql.exec(
+      "UPDATE interactive_prompts SET status = 'resolving' WHERE id = ? AND status = 'pending' RETURNING id",
+      siblingId,
+    ).toArray();
+    if (claimed.length === 0) {
+      // Raced with another resolver; let that one own dispatch.
+      return;
+    }
+
+    const requestId = (row.request_id as string | null) ?? null;
+    const context = row.context ? JSON.parse(row.context as string) : {};
+    const channelRefsJson = (row.channel_refs as string) || null;
+    const toolId = String(context.toolId ?? '');
+    const service = String(context.service ?? '');
+    const actionId = String(context.actionId ?? '');
+    const params = (context.params as Record<string, unknown>) ?? {};
+    const ocSession = typeof context.opencodeSessionId === 'string' ? context.opencodeSessionId : undefined;
+
+    const orgId = await this.resolveOrgId() ?? 'default';
+    const customContext = await loadCustomMcpConnectorContext(this.env, this.appDb, orgId);
+    const actionSource = integrationRegistry.getActions(service, customContext);
+
+    if (requestId) {
+      await this.executeActionAndSend(requestId, toolId, service, actionId, params, userId, actionSource, siblingId, orgId, ocSession);
+    }
+
+    this.ctx.storage.sql.exec('DELETE FROM interactive_prompts WHERE id = ?', siblingId);
+
+    const resolved: InteractiveResolution = {
+      actionId: 'allow_once',
+      resolvedBy: userId,
+    };
+    this.broadcastToClients({
+      type: 'interactive_prompt_resolved',
+      promptId: siblingId,
+      promptType: 'approval',
+      resolution: resolved,
+      context,
+    });
+    if (channelRefsJson) {
+      this.ctx.waitUntil(this.updateChannelInteractivePrompts(channelRefsJson, resolved));
+    }
+  }
+
   private async executeActionAndSend(
     requestId: string,
     toolId: string,
@@ -7612,7 +7366,7 @@ export class SessionAgentDO {
 
       if (resolutionAction !== 'cancel') {
         try {
-          const orgPolicy = await resolveOrgPolicyMatch(this.appDb, String(service), String(actionId), String(context.riskLevel || 'medium'));
+          const orgPolicy = await resolveAdminPolicyMatch(this.appDb, String(service), String(actionId), String(context.riskLevel || 'medium'));
           if (orgPolicy?.mode === 'deny') {
             const error = `Action "${toolId}" is denied by organization policy and cannot be allowed.`;
             return failAndDeletePrompt(error, 403);
@@ -7623,46 +7377,49 @@ export class SessionAgentDO {
           return { ok: false, status: 500, error };
         }
 
-        let approval;
+        // Map the user's resolution choice to an approval scope. The
+        // helper persists the grant (when scope > 'once'), resolves the
+        // originating invocation, and sweeps any matching pending sibling
+        // invocations in the same session — fixing the parallel-pending-
+        // tools case where firing multiple tools at once and clicking
+        // "Allow session" used to only resolve the one the user clicked.
+        const scope: ApprovalScope = resolutionAction === 'allow_session'
+          ? 'session'
+          : resolutionAction === 'allow_always'
+            ? 'durable_policy'
+            : 'once';
+
+        let scopedResult;
         try {
-          approval = await approveInvocation(this.appDb, promptId, userId);
+          scopedResult = await resolveInvocationWithScope(this.appDb, {
+            invocationId: promptId,
+            decision: 'approved',
+            userId,
+            scope,
+          });
         } catch (err) {
           const error = err instanceof Error ? err.message : String(err);
           restorePrompt();
           return { ok: false, status: 500, error };
         }
-        if (!approval.ok) {
-          const error = 'This action approval is no longer pending.';
+
+        if (scopedResult.kind === 'not_found' || scopedResult.kind === 'already_resolved' || scopedResult.kind === 'expired') {
+          const error = scopedResult.kind === 'expired'
+            ? 'This action approval has expired.'
+            : 'This action approval is no longer pending.';
           deleteNoLongerPendingPrompt(error);
           return { ok: false, status: 409, error };
         }
 
-        if (resolutionAction === 'allow_session' || resolutionAction === 'allow_always') {
-          try {
-            const lifetime = resolutionAction === 'allow_session' ? 'session' : 'persistent';
-            await upsertUserActionPolicyOverride(this.appDb, {
-              id: `${promptId}:${lifetime}`,
-              userId,
-              service: String(service),
-              actionId: String(actionId),
-              mode: 'allow',
-              lifetime,
-              sessionId: lifetime === 'session' ? sessionId : null,
-              source: 'approval_prompt',
-              sourceInvocationId: promptId,
-            });
-          } catch (err) {
-            const error = `Failed to save approval override: ${err instanceof Error ? err.message : String(err)}`;
-            await markFailed(this.appDb, promptId, error).catch((markErr) => {
-              console.error('[session-agent] Failed to mark invocation failed after override save error:', markErr);
-            });
-            if (requestId) {
-              this.runnerLink.send({ type: 'call-tool-result', requestId, error } as any);
-            }
-            broadcastPromptExpired();
-            deletePrompt();
-            return { ok: false, status: 500, error };
-          }
+        // resolved — dispatch siblings (if any) before the original's
+        // dispatch below. Each sibling has its own interactive_prompts
+        // row in this DO; claim + run + clean each one independently.
+        // Best-effort: a sibling dispatch failure doesn't roll back the
+        // originating approval. The runner-side MCP timeout is the
+        // eventual safety net for any sibling whose tool never ran.
+        const sweptSiblings = scopedResult.resolved.filter((r) => r.id !== promptId);
+        if (sweptSiblings.length > 0) {
+          this.ctx.waitUntil(this.dispatchSweptApprovalSiblings(sweptSiblings.map((s) => s.id), userId));
         }
 
         const orgId = await this.resolveOrgId() ?? 'default';

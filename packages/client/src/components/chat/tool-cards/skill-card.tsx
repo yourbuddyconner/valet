@@ -15,6 +15,7 @@ export function SkillCard({ tool }: { tool: ToolCallData }) {
       icon={<SkillIcon className="h-3.5 w-3.5" />}
       label="skill"
       status={tool.status}
+      tool={tool}
       summary={
         name ? (
           <span className="font-semibold text-neutral-600 dark:text-neutral-300">{name}</span>

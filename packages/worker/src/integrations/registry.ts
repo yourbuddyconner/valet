@@ -12,6 +12,7 @@ import { installedIntegrations } from './packages.js';
 import { defaultCredentialResolver } from './resolvers/default.js';
 import { slackCredentialResolver } from './resolvers/slack.js';
 import { githubCredentialResolver } from './resolvers/github.js';
+import { workflowIntegrationPackage } from './workflows-actions.js';
 
 export type { CustomMcpConnectorContext } from '../services/custom-mcp-connectors.js';
 
@@ -43,6 +44,7 @@ export class IntegrationRegistry {
     for (const pkg of installedIntegrations) {
       this.packages.set(pkg.service, pkg);
     }
+    this.packages.set(workflowIntegrationPackage.service, workflowIntegrationPackage);
 
     // Register custom credential resolvers
     this.credentialResolvers.set('slack', slackCredentialResolver);

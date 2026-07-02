@@ -6,7 +6,7 @@ import { channelRegistry } from '../channels/registry.js';
 import * as db from '../lib/db.js';
 import { getDb } from '../lib/drizzle.js';
 import { getCredential } from '../services/credentials.js';
-import { dispatchOrchestratorPrompt } from '../lib/workflow-runtime.js';
+import { dispatchOrchestratorPrompt } from '../services/orchestrator.js';
 
 export const channelWebhooksRouter = new Hono<{ Bindings: Env; Variables: Variables }>();
 

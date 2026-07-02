@@ -27,6 +27,7 @@ import {
 } from '../services/custom-mcp-connectors.js';
 import { validateOutboundUrl } from '../services/outbound-url-policy.js';
 import { createSafeFetchOutbound } from '../services/safe-fetch-outbound.js';
+import { zodToJsonSchema } from '../lib/zod-json-schema.js';
 
 export const integrationsRouter = new Hono<{ Bindings: Env; Variables: Variables }>();
 
@@ -315,6 +316,8 @@ integrationsRouter.get('/actions', async (c) => {
     name: string;
     description: string;
     riskLevel: string;
+    inputSchema?: Record<string, unknown>;
+    outputSchema?: Record<string, unknown>;
   }> = [];
 
   // Track which service:actionId combos we've already added from static sources
@@ -328,6 +331,11 @@ integrationsRouter.get('/actions', async (c) => {
     for (const a of actions) {
       const key = `${pkg.service}:${a.id}`;
       seen.add(key);
+      // Fall back to converting the Zod `params` to JSON Schema when the
+      // action doesn't ship an explicit inputSchema. Lets the workflow tool
+      // node render typed parameters for every plugin action without each
+      // one hand-authoring a duplicate schema.
+      const inputSchema = a.inputSchema ?? zodToJsonSchema(a.params);
       catalog.push({
         service: pkg.service,
         serviceDisplayName: pkg.provider.displayName,
@@ -335,6 +343,8 @@ integrationsRouter.get('/actions', async (c) => {
         name: a.name,
         description: a.description,
         riskLevel: a.riskLevel,
+        ...(inputSchema && Object.keys(inputSchema).length > 0 ? { inputSchema } : {}),
+        ...(a.outputSchema ? { outputSchema: a.outputSchema } : {}),
       });
     }
   }
@@ -358,6 +368,8 @@ integrationsRouter.get('/actions', async (c) => {
         name: entry.name,
         description: entry.description,
         riskLevel: entry.riskLevel,
+        ...(entry.inputSchema ? { inputSchema: entry.inputSchema } : {}),
+        ...(entry.outputSchema ? { outputSchema: entry.outputSchema } : {}),
       });
     }
   } catch (err) {

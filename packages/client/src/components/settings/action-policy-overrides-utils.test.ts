@@ -13,6 +13,8 @@ function override(data: Partial<ActionPolicyOverride> & Pick<ActionPolicyOverrid
     actionId: null,
     riskLevel: null,
     mode: 'allow',
+    appliesIn: 'any',
+    paramMatchers: [],
     sessionId: null,
     expiresAt: null,
     source: 'settings',

@@ -5,6 +5,7 @@ import type { AppDb } from './drizzle.js';
 import { decryptString } from './crypto.js';
 import { getCredential } from '../services/credentials.js';
 import { repoProviderRegistry, stripProviderSuffix } from '../repos/registry.js';
+import { assembleLlmProviderEnv } from './llm/provider-env.js';
 
 /**
  * Generate a 256-bit hex token for runner authentication.
@@ -24,28 +25,7 @@ export async function assembleProviderEnv(
   database: AppDb,
   env: Env
 ): Promise<Record<string, string>> {
-  const envVars: Record<string, string> = {};
-
-  const providerEnvMap = [
-    { provider: 'anthropic', envKey: 'ANTHROPIC_API_KEY' },
-    { provider: 'openai', envKey: 'OPENAI_API_KEY' },
-    { provider: 'google', envKey: 'GOOGLE_API_KEY' },
-  ] as const;
-
-  for (const { provider, envKey } of providerEnvMap) {
-    try {
-      const orgKey = await db.getOrgApiKey(database, provider);
-      if (orgKey) {
-        envVars[envKey] = await decryptString(orgKey.encryptedKey, env.ENCRYPTION_KEY);
-        continue;
-      }
-    } catch {
-      // DB table may not exist yet — fall through to env var
-    }
-    if (env[envKey]) envVars[envKey] = env[envKey]!;
-  }
-
-  return envVars;
+  return assembleLlmProviderEnv(database, env);
 }
 
 /**

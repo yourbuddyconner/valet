@@ -319,6 +319,51 @@ describe('integrationsRouter custom MCP OAuth', () => {
     });
   });
 
+  it('includes authored output schemas in the action catalog', async () => {
+    const actionsRes = await app.fetch(new Request('http://localhost/actions?service=github'), env);
+
+    expect(actionsRes.status).toBe(200);
+    await expect(actionsRes.json()).resolves.toMatchObject({
+      actions: expect.arrayContaining([
+        expect.objectContaining({
+          service: 'github',
+          actionId: 'github.list_issues',
+          outputSchema: expect.objectContaining({
+            type: 'array',
+            items: expect.objectContaining({
+              type: 'object',
+              properties: expect.objectContaining({
+                number: expect.objectContaining({ type: 'number' }),
+                title: expect.objectContaining({ type: 'string' }),
+              }),
+            }),
+          }),
+        }),
+        expect.objectContaining({
+          service: 'github',
+          actionId: 'github.list_workflows',
+          outputSchema: expect.objectContaining({
+            type: 'object',
+            properties: expect.objectContaining({
+              workflows: expect.objectContaining({
+                type: 'array',
+                items: expect.objectContaining({
+                  type: 'object',
+                  properties: expect.objectContaining({
+                    id: expect.objectContaining({ type: 'number' }),
+                    name: expect.objectContaining({ type: 'string' }),
+                    path: expect.objectContaining({ type: 'string' }),
+                    state: expect.objectContaining({ type: 'string' }),
+                  }),
+                }),
+              }),
+            }),
+          }),
+        }),
+      ]),
+    });
+  });
+
   it('filters deleted custom connector integrations and stale cached actions', async () => {
     db.insert(integrations).values({
       id: 'integration-1',

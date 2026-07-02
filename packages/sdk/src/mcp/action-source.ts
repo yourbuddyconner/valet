@@ -133,6 +133,11 @@ export class McpActionSource implements ActionSource {
       riskLevel: this.deriveRiskLevel(tool),
       params: z.record(z.unknown()),
       inputSchema: tool.inputSchema,
+      // MCP outputSchema (added 2025-03-26) flows straight through. For
+      // older servers, declare the text output that execute() currently
+      // extracts from MCP content blocks so downstream workflow tooling
+      // never sees an action without an output contract.
+      outputSchema: tool.outputSchema ?? { type: 'string' },
     };
   }
 

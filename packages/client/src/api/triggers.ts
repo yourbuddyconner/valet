@@ -32,6 +32,11 @@ export interface WebhookConfig {
   method?: 'GET' | 'POST';
   secret?: string;
   headers?: Record<string, string>;
+  // Per-trigger requests-per-60s override; default 60. The trigger UI
+  // doesn't expose this directly yet, but we round-trip it on PATCH so
+  // an API-set value doesn't get silently wiped when a user edits the
+  // trigger from the form.
+  rateLimit?: number;
 }
 
 export interface ScheduleConfig {
@@ -40,6 +45,10 @@ export interface ScheduleConfig {
   timezone?: string;
   target?: 'workflow' | 'orchestrator';
   prompt?: string;
+  // Optional per-thread model override for orchestrator-target triggers.
+  model?: string;
+  // Static trigger payload used for each scheduled workflow run.
+  triggerData?: Record<string, unknown>;
 }
 
 export interface ManualConfig {
@@ -98,12 +107,19 @@ export function useTrigger(triggerId: string) {
   });
 }
 
+export interface CreateTriggerResponse extends Trigger {
+  // Server returns the webhook token EXACTLY ONCE at create time.
+  // Subsequent GET /api/triggers/:id calls never re-expose it. UIs must
+  // surface this from the mutation result or the token is lost.
+  webhookToken?: string;
+}
+
 export function useCreateTrigger() {
   const queryClient = useQueryClient();
 
   return useMutation({
     mutationFn: (data: CreateTriggerRequest) =>
-      api.post<Trigger>('/triggers', data),
+      api.post<CreateTriggerResponse>('/triggers', data),
     onSuccess: (_, variables) => {
       queryClient.invalidateQueries({ queryKey: triggerKeys.lists() });
       if (variables.workflowId) {
@@ -113,12 +129,22 @@ export function useCreateTrigger() {
   });
 }
 
+export interface UpdateTriggerResponse {
+  success: boolean;
+  updatedAt: string;
+  // Returned exactly once when PATCH transitions a trigger TO webhook
+  // (manual/schedule → webhook). Callers must capture it from this
+  // response; GET /api/triggers/:id never echoes it again.
+  webhookToken?: string;
+  webhookUrl?: string;
+}
+
 export function useUpdateTrigger() {
   const queryClient = useQueryClient();
 
   return useMutation({
     mutationFn: ({ triggerId, data }: { triggerId: string; data: UpdateTriggerRequest }) =>
-      api.patch<{ success: boolean; updatedAt: string }>(`/triggers/${triggerId}`, data),
+      api.patch<UpdateTriggerResponse>(`/triggers/${triggerId}`, data),
     onSuccess: (_, { triggerId }) => {
       queryClient.invalidateQueries({ queryKey: triggerKeys.detail(triggerId) });
       queryClient.invalidateQueries({ queryKey: triggerKeys.lists() });
@@ -168,18 +194,30 @@ export function useRunTrigger() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: ({ triggerId, variables }: { triggerId: string; variables?: Record<string, unknown> }) =>
+    mutationFn: ({
+      triggerId,
+      variables,
+      triggerData,
+    }: {
+      triggerId: string;
+      variables?: Record<string, unknown>;
+      triggerData?: Record<string, unknown>;
+    }) =>
       api.post<{
         executionId?: string;
         workflowId?: string | null;
         workflowName?: string | null;
         status: string;
         variables?: Record<string, unknown>;
+        // Orchestrator-target triggers also return `sessionId` (the
+        // orchestrator session's id, NOT a workflow execution column).
+        // Surface it on the trigger run mutation type so UI can deep-link.
         sessionId?: string;
         message: string;
         dispatched?: boolean;
       }>(`/triggers/${triggerId}/run`, {
-        variables,
+        ...(variables !== undefined ? { variables } : {}),
+        ...(triggerData !== undefined ? { triggerData } : {}),
         clientRequestId: createClientRequestId(),
       }),
     onSuccess: (data) => {

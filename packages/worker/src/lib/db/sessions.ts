@@ -29,7 +29,7 @@ import {
 import { users } from '../schema/users.js';
 import { agentPersonas } from '../schema/personas.js';
 import { generateShareToken, ROLE_HIERARCHY, ACTIVE_SESSION_STATUSES, DEFAULT_MAX_ACTIVE_SESSIONS } from './constants.js';
-import { deleteSessionActionPolicyOverrides } from './actions.js';
+import { deleteRuntimeGrantsByScope } from './actions.js';
 import { getOrgSettings } from './org.js';
 
 // ─── Exported Types ─────────────────────────────────────────────────────────
@@ -131,6 +131,12 @@ export async function createSession(
 ): Promise<AgentSession> {
   const purpose = data.purpose || (data.isOrchestrator ? 'orchestrator' : 'interactive');
 
+  // onConflictDoNothing: the workflow runtime's session.start executor
+  // pre-allocates the session id in an outer step.do and passes it
+  // here. If the wrapping step.do retries (D1 transient, etc.), this
+  // INSERT collides on the existing PK and silently no-ops — preserving
+  // the first sandbox + the workflow_spawned_sessions row instead of
+  // generating a fresh UUID and leaking the original sandbox.
   await db.insert(sessions).values({
     id: data.id,
     userId: data.userId,
@@ -144,7 +150,7 @@ export async function createSession(
     personaId: data.personaId || null,
     isOrchestrator: data.isOrchestrator ?? false,
     purpose,
-  });
+  }).onConflictDoNothing();
 
   return {
     id: data.id,
@@ -386,7 +392,7 @@ export async function updateSessionStatus(
     .where(eq(sessions.id, id));
 
   if (TERMINAL_SESSION_STATUSES.has(status) || status === 'hibernated') {
-    await deleteSessionActionPolicyOverrides(db, id);
+    await deleteRuntimeGrantsByScope(db, { sessionId: id });
   }
 }
 

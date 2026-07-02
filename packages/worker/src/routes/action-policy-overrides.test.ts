@@ -6,10 +6,9 @@ import { createTestDb } from '../test-utils/db.js';
 import { users } from '../lib/schema/users.js';
 import { actionPolicyOverridesRouter } from './action-policy-overrides.js';
 import {
-  getUserActionPolicyOverride,
-  listUserActionPolicyOverrides,
+  getActionPolicy,
+  listUserDurableActionPolicies,
   upsertActionPolicy,
-  upsertUserActionPolicyOverride,
 } from '../lib/db/actions.js';
 import { upsertMcpToolCache } from '../lib/db/mcp-tool-cache.js';
 
@@ -29,6 +28,31 @@ function buildApp(db: ReturnType<typeof createTestDb>['db']) {
   return app;
 }
 
+async function upsertUserDurableGrant(
+  db: ReturnType<typeof createTestDb>['db'],
+  data: {
+    id: string;
+    userId: string;
+    service?: string | null;
+    actionId?: string | null;
+    riskLevel?: string | null;
+    mode: 'allow' | 'require_approval' | 'deny';
+  },
+) {
+  await upsertActionPolicy(db as any, {
+    id: data.id,
+    service: data.service,
+    actionId: data.actionId,
+    riskLevel: data.riskLevel,
+    mode: data.mode,
+    managedBy: 'user',
+    principalType: 'user',
+    principalId: data.userId,
+    subjectType: 'tool_action',
+    createdBy: data.userId,
+  });
+}
+
 describe('actionPolicyOverridesRouter', () => {
   let db: ReturnType<typeof createTestDb>['db'];
   let app: ReturnType<typeof buildApp>;
@@ -42,20 +66,18 @@ describe('actionPolicyOverridesRouter', () => {
     app = buildApp(db);
   });
 
-  it('lists only current user overrides', async () => {
-    await upsertUserActionPolicyOverride(db as any, {
+  it('lists only the current user’s grants', async () => {
+    await upsertUserDurableGrant(db, {
       id: 'mine',
       userId: USER_ID,
       service: 'gmail',
       mode: 'allow',
-      source: 'settings',
     });
-    await upsertUserActionPolicyOverride(db as any, {
+    await upsertUserDurableGrant(db, {
       id: 'theirs',
       userId: OTHER_USER_ID,
       service: 'linear',
       mode: 'deny',
-      source: 'settings',
     });
 
     const res = await app.fetch(new Request('http://localhost/'), { DB: {} } as any);
@@ -66,7 +88,7 @@ describe('actionPolicyOverridesRouter', () => {
     ]);
   });
 
-  it('creates persistent action, service, and risk-level overrides', async () => {
+  it('creates action, service, and risk-level user allow grants', async () => {
     const actionRes = await app.fetch(new Request('http://localhost/action-override', {
       method: 'PUT',
       body: JSON.stringify({ service: 'gmail', actionId: 'draft.create', mode: 'allow' }),
@@ -74,12 +96,12 @@ describe('actionPolicyOverridesRouter', () => {
     }), { DB: {} } as any);
     const serviceRes = await app.fetch(new Request('http://localhost/service-override', {
       method: 'PUT',
-      body: JSON.stringify({ service: 'linear', mode: 'require_approval' }),
+      body: JSON.stringify({ service: 'linear', mode: 'allow' }),
       headers: { 'content-type': 'application/json' },
     }), { DB: {} } as any);
     const riskRes = await app.fetch(new Request('http://localhost/risk-override', {
       method: 'PUT',
-      body: JSON.stringify({ riskLevel: 'critical', mode: 'deny' }),
+      body: JSON.stringify({ riskLevel: 'critical', mode: 'allow' }),
       headers: { 'content-type': 'application/json' },
     }), { DB: {} } as any);
 
@@ -87,12 +109,30 @@ describe('actionPolicyOverridesRouter', () => {
     expect(serviceRes.status).toBe(200);
     expect(riskRes.status).toBe(200);
 
-    const rows = await listUserActionPolicyOverrides(db as any, USER_ID);
+    const rows = await listUserDurableActionPolicies(db as any, USER_ID);
     expect(rows).toEqual(expect.arrayContaining([
-      expect.objectContaining({ id: 'action-override', service: 'gmail', actionId: 'draft.create', mode: 'allow', lifetime: 'persistent' }),
-      expect.objectContaining({ id: 'service-override', service: 'linear', actionId: null, mode: 'require_approval', lifetime: 'persistent' }),
-      expect.objectContaining({ id: 'risk-override', riskLevel: 'critical', mode: 'deny', lifetime: 'persistent' }),
+      expect.objectContaining({ id: 'action-override', service: 'gmail', actionId: 'draft.create', mode: 'allow', managedBy: 'user' }),
+      expect.objectContaining({ id: 'service-override', service: 'linear', actionId: null, mode: 'allow', managedBy: 'user' }),
+      expect.objectContaining({ id: 'risk-override', riskLevel: 'critical', mode: 'allow', managedBy: 'user' }),
     ]));
+  });
+
+  it('rejects user policies with non-allow modes per spec safety rule', async () => {
+    const denyRes = await app.fetch(new Request('http://localhost/user-deny', {
+      method: 'PUT',
+      body: JSON.stringify({ service: 'linear', mode: 'deny' }),
+      headers: { 'content-type': 'application/json' },
+    }), { DB: {} } as any);
+    const requireRes = await app.fetch(new Request('http://localhost/user-require', {
+      method: 'PUT',
+      body: JSON.stringify({ service: 'gmail', mode: 'require_approval' }),
+      headers: { 'content-type': 'application/json' },
+    }), { DB: {} } as any);
+
+    expect(denyRes.status).toBe(400);
+    expect(requireRes.status).toBe(400);
+    expect(await getActionPolicy(db as any, 'user-deny')).toBeUndefined();
+    expect(await getActionPolicy(db as any, 'user-require')).toBeUndefined();
   });
 
   it('rejects invalid target combinations', async () => {
@@ -117,7 +157,7 @@ describe('actionPolicyOverridesRouter', () => {
     expect(noTarget.status).toBe(400);
   });
 
-  it('rejects exact-action allow when explicit org policy denies the action', async () => {
+  it('rejects exact-action allow when an admin policy denies the action', async () => {
     await upsertActionPolicy(db as any, {
       id: 'org-deny-gmail-draft',
       service: 'gmail',
@@ -133,10 +173,10 @@ describe('actionPolicyOverridesRouter', () => {
     }), { DB: {} } as any);
 
     expect(res.status).toBe(400);
-    expect(await getUserActionPolicyOverride(db as any, 'rejected')).toBeUndefined();
+    expect(await getActionPolicy(db as any, 'rejected')).toBeUndefined();
   });
 
-  it('allows service-scope allow even when organization policy denies the service', async () => {
+  it('allows service-scope allow even when admin policy denies the service', async () => {
     await upsertActionPolicy(db as any, {
       id: 'org-deny-gmail',
       service: 'gmail',
@@ -151,9 +191,10 @@ describe('actionPolicyOverridesRouter', () => {
     }), { DB: {} } as any);
 
     expect(res.status).toBe(200);
-    expect(await getUserActionPolicyOverride(db as any, 'rejected-service')).toMatchObject({
+    expect(await getActionPolicy(db as any, 'rejected-service')).toMatchObject({
       id: 'rejected-service',
-      userId: USER_ID,
+      principalId: USER_ID,
+      managedBy: 'user',
       service: 'gmail',
       actionId: null,
       riskLevel: null,
@@ -161,7 +202,7 @@ describe('actionPolicyOverridesRouter', () => {
     });
   });
 
-  it('allows risk-scope allow even when organization policy denies the risk level', async () => {
+  it('allows risk-scope allow even when admin policy denies the risk level', async () => {
     await upsertActionPolicy(db as any, {
       id: 'org-deny-critical',
       riskLevel: 'critical',
@@ -176,9 +217,10 @@ describe('actionPolicyOverridesRouter', () => {
     }), { DB: {} } as any);
 
     expect(res.status).toBe(200);
-    expect(await getUserActionPolicyOverride(db as any, 'rejected-risk')).toMatchObject({
+    expect(await getActionPolicy(db as any, 'rejected-risk')).toMatchObject({
       id: 'rejected-risk',
-      userId: USER_ID,
+      principalId: USER_ID,
+      managedBy: 'user',
       service: null,
       actionId: null,
       riskLevel: 'critical',
@@ -186,7 +228,7 @@ describe('actionPolicyOverridesRouter', () => {
     });
   });
 
-  it('rejects exact-action allow when organization policy denies the action risk level', async () => {
+  it('rejects exact-action allow when admin policy denies the action risk level', async () => {
     await upsertActionPolicy(db as any, {
       id: 'org-deny-high',
       riskLevel: 'high',
@@ -201,10 +243,10 @@ describe('actionPolicyOverridesRouter', () => {
     }), { DB: {} } as any);
 
     expect(res.status).toBe(400);
-    expect(await getUserActionPolicyOverride(db as any, 'rejected-high-action')).toBeUndefined();
+    expect(await getActionPolicy(db as any, 'rejected-high-action')).toBeUndefined();
   });
 
-  it('rejects exact-action allow when cached MCP metadata puts it under an organization risk deny', async () => {
+  it('rejects exact-action allow when cached MCP metadata puts it under an admin risk deny', async () => {
     await upsertActionPolicy(db as any, {
       id: 'org-deny-critical',
       riskLevel: 'critical',
@@ -226,7 +268,7 @@ describe('actionPolicyOverridesRouter', () => {
     }), { DB: {} } as any);
 
     expect(res.status).toBe(400);
-    expect(await getUserActionPolicyOverride(db as any, 'rejected-cached-action')).toBeUndefined();
+    expect(await getActionPolicy(db as any, 'rejected-cached-action')).toBeUndefined();
   });
 
   it('allows exact-action allow when only system default would deny', async () => {
@@ -237,23 +279,22 @@ describe('actionPolicyOverridesRouter', () => {
     }), { DB: {} } as any);
 
     expect(res.status).toBe(200);
-    expect(await getUserActionPolicyOverride(db as any, 'critical-allow')).toMatchObject({
+    expect(await getActionPolicy(db as any, 'critical-allow')).toMatchObject({
       id: 'critical-allow',
-      userId: USER_ID,
+      principalId: USER_ID,
+      managedBy: 'user',
       service: 'linear',
       actionId: 'issue.delete',
       mode: 'allow',
-      lifetime: 'persistent',
     });
   });
 
-  it('does not delete another user override', async () => {
-    await upsertUserActionPolicyOverride(db as any, {
+  it('does not delete another user’s grant', async () => {
+    await upsertUserDurableGrant(db, {
       id: 'theirs',
       userId: OTHER_USER_ID,
       service: 'gmail',
       mode: 'deny',
-      source: 'settings',
     });
 
     const res = await app.fetch(new Request('http://localhost/theirs', {
@@ -261,19 +302,18 @@ describe('actionPolicyOverridesRouter', () => {
     }), { DB: {} } as any);
 
     expect(res.status).toBe(404);
-    expect(await getUserActionPolicyOverride(db as any, 'theirs')).toMatchObject({
+    expect(await getActionPolicy(db as any, 'theirs')).toMatchObject({
       id: 'theirs',
-      userId: OTHER_USER_ID,
+      principalId: OTHER_USER_ID,
     });
   });
 
-  it('does not update another user override by id collision', async () => {
-    await upsertUserActionPolicyOverride(db as any, {
+  it('does not update another user’s grant via id collision', async () => {
+    await upsertUserDurableGrant(db, {
       id: 'theirs',
       userId: OTHER_USER_ID,
       service: 'gmail',
       mode: 'deny',
-      source: 'settings',
     });
 
     const res = await app.fetch(new Request('http://localhost/theirs', {
@@ -283,21 +323,20 @@ describe('actionPolicyOverridesRouter', () => {
     }), { DB: {} } as any);
 
     expect(res.status).toBe(404);
-    expect(await getUserActionPolicyOverride(db as any, 'theirs')).toMatchObject({
+    expect(await getActionPolicy(db as any, 'theirs')).toMatchObject({
       id: 'theirs',
-      userId: OTHER_USER_ID,
+      principalId: OTHER_USER_ID,
       service: 'gmail',
       mode: 'deny',
     });
   });
 
-  it('returns the existing override id when upserting a duplicate target', async () => {
-    await upsertUserActionPolicyOverride(db as any, {
+  it('returns the existing grant id when upserting a duplicate target', async () => {
+    await upsertUserDurableGrant(db, {
       id: 'existing-service-override',
       userId: USER_ID,
       service: 'gmail',
       mode: 'require_approval',
-      source: 'settings',
     });
 
     const res = await app.fetch(new Request('http://localhost/new-service-override-id', {
@@ -308,8 +347,8 @@ describe('actionPolicyOverridesRouter', () => {
 
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ ok: true, id: 'existing-service-override' });
-    expect(await getUserActionPolicyOverride(db as any, 'new-service-override-id')).toBeUndefined();
-    expect(await getUserActionPolicyOverride(db as any, 'existing-service-override')).toMatchObject({
+    expect(await getActionPolicy(db as any, 'new-service-override-id')).toBeUndefined();
+    expect(await getActionPolicy(db as any, 'existing-service-override')).toMatchObject({
       mode: 'allow',
     });
   });

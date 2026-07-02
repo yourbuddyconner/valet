@@ -20,6 +20,7 @@ import { ogRouter } from './routes/og.js';
 import { apiKeysRouter } from './routes/api-keys.js';
 import { workflowsRouter } from './routes/workflows.js';
 import { triggersRouter } from './routes/triggers.js';
+import { copilotRouter } from './routes/copilot.js';
 import { executionsRouter } from './routes/executions.js';
 import { eventsRouter } from './routes/events.js';
 import { reposRouter } from './routes/repos.js';
@@ -40,6 +41,7 @@ import { slackEventsRouter } from './routes/slack-events.js';
 import { channelWebhooksRouter } from './routes/channel-webhooks.js';
 import { actionPoliciesRouter } from './routes/action-policies.js';
 import { actionPolicyOverridesRouter } from './routes/action-policy-overrides.js';
+import { runtimeGrantsRouter } from './routes/runtime-grants.js';
 import { disabledActionsRouter } from './routes/disabled-actions.js';
 import { actionInvocationsRouter } from './routes/action-invocations.js';
 import { usageRouter } from './routes/usage.js';
@@ -53,16 +55,11 @@ import { githubMeRouter } from './routes/github-me.js';
 import { githubAuthRouter } from './routes/github-auth.js';
 import { adminMcpConnectorsRouter } from './routes/admin-mcp-connectors.js';
 import {
-  enqueueWorkflowApprovalNotificationIfMissing,
-  markWorkflowApprovalNotificationsRead,
   updateSessionGitState,
-  getTimedOutApprovals,
-  finalizeExecution,
-  getStaleWorkflowExecutions,
-  persistStepTrace,
   getActiveScheduleTriggers,
   insertScheduleTick,
-  updateTriggerLastRun,
+  releaseScheduleTick,
+  updateTriggerLastRunUnchecked,
   type TriggerConfig,
   getArchivableSessions,
   markSessionsArchived,
@@ -71,13 +68,8 @@ import {
 } from './lib/db.js';
 import { getCredential } from './services/credentials.js';
 import { getDb } from './lib/drizzle.js';
-import {
-  checkWorkflowConcurrency,
-  createWorkflowSession,
-  dispatchOrchestratorPrompt,
-  enqueueWorkflowExecution,
-  sha256Hex,
-} from './lib/workflow-runtime.js';
+import { checkWorkflowConcurrency } from './services/executions.js';
+import { dispatchOrchestratorPrompt } from './services/orchestrator.js';
 import { syncPluginsOnce } from './services/plugin-sync.js';
 import { matchesCronField, getZonedDateParts, cronMatchesNow, findMissedCronTicks } from './lib/cron.js';
 import { resolveAuthRedirectOrigin } from './lib/auth-redirect-origin.js';
@@ -105,7 +97,9 @@ const workerTraceConfig: ResolveConfigFn = (env: Env) => {
 // redacting exporter. See docs/observability.md.
 export { SessionAgentDO } from './durable-objects/session-agent.js';
 export { EventBusDO } from './durable-objects/event-bus.js';
-export { WorkflowExecutorDO } from './durable-objects/workflow-executor.js';
+
+// Cloudflare Workflow entrypoints
+export { ValetWorkflowInterpreter } from './workflows/interpreter.js';
 
 const app = new Hono<{ Bindings: Env; Variables: Variables }>();
 
@@ -130,8 +124,15 @@ app.use(
       return '';
     },
     allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-    allowHeaders: ['Content-Type', 'Authorization'],
-    exposeHeaders: ['X-Request-Id'],
+    // `X-Valet-Trigger-Token` lets browser callers from an allowed
+    // origin hit the per-trigger webhook URL — without it, preflight
+    // strips the header and the route returns 401.
+    allowHeaders: ['Content-Type', 'Authorization', 'X-Valet-Trigger-Token'],
+    // X-Copilot-Thread-Id is set by POST /api/copilot/chat on new-thread
+    // responses so the streaming client can capture the server-assigned
+    // id before the first onFinish; browsers only surface non-safelisted
+    // headers when they're listed here.
+    exposeHeaders: ['X-Request-Id', 'X-Copilot-Thread-Id'],
     credentials: true,
   })
 );
@@ -206,6 +207,7 @@ app.route('/api/integrations', integrationsRouter);
 app.route('/api/files', filesRouter);
 app.route('/api/workflows', workflowsRouter);
 app.route('/api/triggers', triggersRouter);
+app.route('/api/copilot', copilotRouter);
 app.route('/api/executions', executionsRouter);
 app.route('/api/events', eventsRouter);
 app.route('/api/repos', reposRouter);
@@ -225,6 +227,7 @@ app.route('/api/admin/github', adminGitHubRouter);
 app.route('/api/admin/mcp-connectors', adminMcpConnectorsRouter);
 app.route('/api/admin/action-policies', actionPoliciesRouter);
 app.route('/api/action-policy-overrides', actionPolicyOverridesRouter);
+app.route('/api/runtime-grants', runtimeGrantsRouter);
 app.route('/api/admin/disabled-actions', disabledActionsRouter);
 app.route('/api/admin/default-skills', orgDefaultSkillsRouter);
 app.route('/api/action-invocations', actionInvocationsRouter);
@@ -251,15 +254,42 @@ const scheduled: ExportedHandlerScheduledHandler<Env> = async (event, env, ctx) 
   log.info('scheduled handler running', { cron: event.cron });
 
   try {
-    await reconcileWorkflowExecutions(env);
-  } catch (error) {
-    console.error('Workflow execution reconcile error:', error);
-  }
-
-  try {
     await dispatchScheduledWorkflows(event, env);
   } catch (error) {
     console.error('Scheduled workflow dispatch error:', error);
+  }
+
+  // Sweep workflow executions stuck in `cancelling` longer than 5min
+  // (cleanup helper failed mid-step; rerun idempotently).
+  try {
+    const { sweepStuckCancellations } = await import('./workflows/cancel-cleanup.js');
+    const { swept } = await sweepStuckCancellations(env);
+    if (swept > 0) console.log(`[cancel-cleanup] swept ${swept} stuck cancelling rows`);
+  } catch (error) {
+    console.error('Workflow cancellation sweep error:', error);
+  }
+
+  // Retry workflow-owned session termination for executions that reached
+  // completed/failed/cancelled but whose immediate cleanup was incomplete.
+  try {
+    const { sweepTerminalSpawnedSessions } = await import('./workflows/spawned-session-cleanup.js');
+    const { executions, attempted, terminated, failed } = await sweepTerminalSpawnedSessions(env);
+    if (executions > 0) {
+      console.log(`[spawned-session-cleanup] swept ${executions} terminal executions; terminated ${terminated}/${attempted}; failed=${failed.length}`);
+    }
+  } catch (error) {
+    console.error('Workflow spawned-session cleanup sweep error:', error);
+  }
+
+  // Retry sendEvent for approvals that resolved in D1 but whose
+  // workflow_executions row is still parked in waiting_approval — the
+  // resolve API committed the row but sendEvent failed.
+  try {
+    const { sweepStuckApprovals } = await import('./workflows/cancel-cleanup.js');
+    const { retried } = await sweepStuckApprovals(env);
+    if (retried > 0) console.log(`[approval-resume-sweep] retried ${retried} stuck approvals`);
+  } catch (error) {
+    console.error('Approval resume sweep error:', error);
   }
 
   try {
@@ -274,6 +304,16 @@ const scheduled: ExportedHandlerScheduledHandler<Env> = async (event, env, ctx) 
       await archiveTerminatedSessions(env);
     } catch (error) {
       console.error('Session archive error:', error);
+    }
+
+    try {
+      const { sweepExpiredTraceRows, sweepExpiredSpawnedSessions } = await import('./workflows/trace-writer.js');
+      const { deleted } = await sweepExpiredTraceRows(env);
+      if (deleted > 0) console.log(`[trace-retention] deleted ${deleted} expired trace rows`);
+      const { deleted: spawnedDeleted } = await sweepExpiredSpawnedSessions(env);
+      if (spawnedDeleted > 0) console.log(`[trace-retention] deleted ${spawnedDeleted} expired spawned-session rows`);
+    } catch (error) {
+      console.error('Trace retention sweep error:', error);
     }
 
     try {
@@ -591,246 +631,36 @@ async function reconcileGitHubResources(env: Env): Promise<void> {
   );
 }
 
-function hasPromptDispatch(runtimeStateRaw: string | null): boolean {
-  if (!runtimeStateRaw) return false;
-  try {
-    const parsed = JSON.parse(runtimeStateRaw) as {
-      executor?: { promptDispatchedAt?: string };
-    };
-    return !!parsed?.executor?.promptDispatchedAt;
-  } catch {
-    return false;
-  }
-}
-
-interface WorkflowResultEnvelope {
-  executionId?: string;
-  status?: 'ok' | 'needs_approval' | 'cancelled' | 'failed';
-  output?: Record<string, unknown>;
-  steps?: Array<{
-    stepId: string;
-    status: string;
-    attempt?: number;
-    startedAt?: string;
-    completedAt?: string;
-    input?: unknown;
-    output?: unknown;
-    error?: string;
-  }>;
-  requiresApproval?: {
-    stepId?: string;
-    prompt?: string;
-    resumeToken?: string;
-    items?: unknown[];
-  } | null;
-  error?: string | null;
-}
-
-function extractJsonCandidates(text: string): string[] {
-  const candidates: string[] = [];
-  const trimmed = text.trim();
-  if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
-    candidates.push(trimmed);
-  }
-
-  const fenceRegex = /```(?:json)?\s*([\s\S]*?)```/gi;
-  let match: RegExpExecArray | null = fenceRegex.exec(text);
-  while (match) {
-    const block = match[1]?.trim();
-    if (block && block.startsWith('{') && block.endsWith('}')) {
-      candidates.push(block);
-    }
-    match = fenceRegex.exec(text);
-  }
-
-  const firstBrace = text.indexOf('{');
-  const lastBrace = text.lastIndexOf('}');
-  if (firstBrace >= 0 && lastBrace > firstBrace) {
-    const block = text.slice(firstBrace, lastBrace + 1).trim();
-    if (block.startsWith('{') && block.endsWith('}')) {
-      candidates.push(block);
-    }
-  }
-
-  return candidates;
-}
-
-function parseWorkflowResultEnvelope(text: string, executionId: string): WorkflowResultEnvelope | null {
-  for (const candidate of extractJsonCandidates(text)) {
-    try {
-      const parsed = JSON.parse(candidate) as WorkflowResultEnvelope;
-      if (!parsed || typeof parsed !== 'object') continue;
-      if (parsed.executionId && parsed.executionId !== executionId) continue;
-      if (!parsed.status) continue;
-      if (!['ok', 'needs_approval', 'cancelled', 'failed'].includes(parsed.status)) continue;
-      return parsed;
-    } catch {
-      continue;
-    }
-  }
-  return null;
-}
-
-async function fetchWorkflowResultEnvelope(
-  env: Env,
-  sessionId: string,
-  executionId: string,
-): Promise<WorkflowResultEnvelope | null> {
-  try {
-    const doId = env.SESSIONS.idFromName(sessionId);
-    const sessionDO = env.SESSIONS.get(doId);
-    const response = await sessionDO.fetch(new Request('http://do/messages?limit=200'));
-    if (!response.ok) return null;
-
-    const payload = await response.json<{
-      messages?: Array<{ role?: string; content?: string }>;
-    }>();
-
-    const messages = payload.messages || [];
-    for (let index = messages.length - 1; index >= 0; index -= 1) {
-      const msg = messages[index];
-      if (!msg?.content || (msg.role !== 'assistant' && msg.role !== 'system')) continue;
-      const envelope = parseWorkflowResultEnvelope(msg.content, executionId);
-      if (envelope) return envelope;
-    }
-    return null;
-  } catch (error) {
-    console.warn(`Failed to fetch workflow result envelope for session ${sessionId}`, error);
-    return null;
-  }
-}
-
-// persistStepTrace is now in lib/db/executions.ts
-
-async function expireWaitingApprovalExecutions(env: Env): Promise<number> {
-  const db = getDb(env.DB);
-  const now = new Date();
-  const cutoff = new Date(now.getTime() - (24 * 60 * 60 * 1000)).toISOString();
-  const nowIso = now.toISOString();
-
-  const rows = await getTimedOutApprovals(env.DB, cutoff);
-
-  let expired = 0;
-  for (const row of rows) {
-    await finalizeExecution(db, row.id, {
-      status: 'cancelled',
-      error: 'approval_timeout',
-      resumeToken: null,
-      completedAt: nowIso,
-    });
-    await markWorkflowApprovalNotificationsRead(db, row.user_id, row.id);
-    expired++;
-  }
-
-  return expired;
-}
-
-async function reconcileWorkflowExecutions(env: Env): Promise<void> {
-  const db = getDb(env.DB);
-  const now = new Date().toISOString();
-  const approvalsExpired = await expireWaitingApprovalExecutions(env);
-  const rows = await getStaleWorkflowExecutions(env.DB);
-
-  let completed = 0;
-  let waitingApproval = 0;
-  let cancelled = 0;
-  let failed = 0;
-
-  for (const row of rows) {
-    if (row.session_status === 'error') {
-      await finalizeExecution(db, row.id, { status: 'failed', error: 'workflow_session_error', completedAt: now });
-      await markWorkflowApprovalNotificationsRead(db, row.user_id, row.id);
-      failed++;
-      continue;
-    }
-
-    if (row.session_status === 'hibernated') {
-      await finalizeExecution(db, row.id, { status: 'failed', error: 'workflow_session_hibernated', completedAt: now });
-      await markWorkflowApprovalNotificationsRead(db, row.user_id, row.id);
-      failed++;
-      continue;
-    }
-
-    const promptDispatched = hasPromptDispatch(row.runtime_state);
-    if (!promptDispatched) {
-      await finalizeExecution(db, row.id, { status: 'failed', error: 'workflow_session_terminated_before_dispatch', completedAt: now });
-      await markWorkflowApprovalNotificationsRead(db, row.user_id, row.id);
-      failed++;
-      continue;
-    }
-
-    const envelope = row.session_id
-      ? await fetchWorkflowResultEnvelope(env, row.session_id, row.id)
-      : null;
-
-    if (!envelope) {
-      await finalizeExecution(db, row.id, { status: 'completed', completedAt: now });
-      await markWorkflowApprovalNotificationsRead(db, row.user_id, row.id);
-      completed++;
-      continue;
-    }
-
-    if (envelope.steps?.length) {
-      await persistStepTrace(env.DB, row.id, envelope.steps);
-    }
-
-    const outputsJson = envelope.output ? JSON.stringify(envelope.output) : null;
-    const stepsJson = envelope.steps ? JSON.stringify(envelope.steps) : null;
-
-    if (envelope.status === 'needs_approval') {
-      const resumeToken = envelope.requiresApproval?.resumeToken;
-      if (!resumeToken) {
-        await finalizeExecution(db, row.id, { status: 'failed', outputs: outputsJson, steps: stepsJson, error: 'approval_resume_token_missing', completedAt: now });
-        await markWorkflowApprovalNotificationsRead(db, row.user_id, row.id);
-        failed++;
-        continue;
-      }
-
-      await finalizeExecution(db, row.id, { status: 'waiting_approval', outputs: outputsJson, steps: stepsJson, resumeToken, completedAt: null });
-      await enqueueWorkflowApprovalNotificationIfMissing(env.DB, {
-        toUserId: row.user_id,
-        executionId: row.id,
-        fromSessionId: row.session_id || undefined,
-        contextSessionId: row.session_id || undefined,
-        workflowName: row.workflow_name,
-        approvalPrompt: envelope.requiresApproval?.prompt,
-      });
-      waitingApproval++;
-      continue;
-    }
-
-    if (envelope.status === 'cancelled') {
-      await finalizeExecution(db, row.id, { status: 'cancelled', outputs: outputsJson, steps: stepsJson, error: envelope.error || 'workflow_cancelled', completedAt: now });
-      await markWorkflowApprovalNotificationsRead(db, row.user_id, row.id);
-      cancelled++;
-      continue;
-    }
-
-    if (envelope.status === 'failed') {
-      await finalizeExecution(db, row.id, { status: 'failed', outputs: outputsJson, steps: stepsJson, error: envelope.error || 'workflow_failed', completedAt: now });
-      await markWorkflowApprovalNotificationsRead(db, row.user_id, row.id);
-      failed++;
-      continue;
-    }
-
-    await finalizeExecution(db, row.id, { status: 'completed', outputs: outputsJson, steps: stepsJson, completedAt: now });
-    await markWorkflowApprovalNotificationsRead(db, row.user_id, row.id);
-    completed++;
-  }
-
-  if (completed > 0 || waitingApproval > 0 || cancelled > 0 || failed > 0) {
-    console.log(
-      `Workflow reconcile finalized executions: completed=${completed} waiting_approval=${waitingApproval} cancelled=${cancelled} failed=${failed}`,
-    );
-  }
-  if (approvalsExpired > 0) {
-    console.log(`Workflow approval timeout sweep cancelled ${approvalsExpired} execution(s)`);
-  }
-}
-
 type ScheduleTriggerConfig = Extract<TriggerConfig, { type: 'schedule' }>;
 
 type TriggerRow = Awaited<ReturnType<typeof getActiveScheduleTriggers>>[number];
+
+/**
+ * Classifier shared by the workflow + orchestrator schedule dispatch
+ * paths. Transient reasons release the claimed tick so the catch-up
+ * pass can retry within the look-back window. Permanent reasons
+ * (definition/config errors that require an author edit) keep the tick
+ * burned — re-dispatching every minute for 4 hours would just spam logs
+ * and re-fail until the catch-up window slides past.
+ *
+ * When in doubt, treat as PERMANENT. A missed dispatch is recoverable
+ * by the next scheduled tick; a permanent rejection retried forever is
+ * not.
+ */
+function isTransientDispatchReason(reason: string | undefined): boolean {
+  if (!reason) return false;
+  // Workflow path (WorkflowExecutionStartError.code) — only the
+  // concurrency cap is transient. All other codes are author/config
+  // errors that won't resolve without an edit.
+  if (reason === 'rate_limited') return true;
+  // Orchestrator path — backoff and DO-side dispatch failures are
+  // transient (the DO may be cold/initializing); config errors
+  // (orchestrator_not_configured, empty_prompt) are permanent.
+  if (reason === 'backoff') return true;
+  if (reason === 'initialization_failed') return true;
+  if (reason.startsWith('orchestrator_dispatch_failed:')) return true;
+  return false;
+}
 
 async function dispatchScheduledWorkflows(event: ScheduledController, env: Env): Promise<void> {
   const db = getDb(env.DB);
@@ -872,61 +702,47 @@ async function dispatchScheduledWorkflows(event: ScheduledController, env: Env):
         return false;
       }
 
-      const executionId = crypto.randomUUID();
-      const workflowHash = await sha256Hex(String(row.workflow_data ?? '{}'));
-      const sessionId = await createWorkflowSession(db, {
-        userId: row.user_id,
-        workflowId: row.workflow_id,
-        executionId,
-      });
-
-      const variables = {
-        _trigger: {
-          type: 'schedule',
-          triggerId: row.trigger_id,
-          cron: config.cron,
-          timezone,
-          eventCron: event.cron,
-          tickBucket: bucket,
-          timestamp: dispatchTime.toISOString(),
-        },
-      };
-
-      const idempotencyKey = `schedule:${row.trigger_id}:${bucket}`;
-      await env.DB.prepare(`
-        INSERT INTO workflow_executions
-          (id, workflow_id, user_id, trigger_id, status, trigger_type, trigger_metadata, variables, started_at,
-           workflow_version, workflow_hash, workflow_snapshot, idempotency_key, session_id, initiator_type, initiator_user_id)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `).bind(
-        executionId,
-        row.workflow_id,
-        row.user_id,
-        row.trigger_id,
-        'pending',
-        'schedule',
-        JSON.stringify({ cron: config.cron, timezone, tickBucket: bucket }),
-        JSON.stringify(variables),
-        dispatchTime.toISOString(),
-        row.workflow_version || null,
-        workflowHash,
-        row.workflow_data,
-        idempotencyKey,
-        sessionId,
-        'schedule',
-        row.user_id
-      ).run();
-
-      await enqueueWorkflowExecution(env, {
-        executionId,
-        workflowId: row.workflow_id,
-        userId: row.user_id,
-        sessionId,
-        triggerType: 'schedule',
-      });
-
-      await updateTriggerLastRun(db, row.trigger_id, dispatchTime.toISOString());
-
+      const { dispatchWorkflowExecution } = await import('./services/workflow-dispatch.js');
+      let result: Awaited<ReturnType<typeof dispatchWorkflowExecution>>;
+      try {
+        // Static trigger data from schedule config is validated against the
+        // workflow trigger node's dataSchema before the run starts.
+        const scheduledTriggerData = config.triggerData ?? {};
+        result = await dispatchWorkflowExecution(env, {
+          workflowId: row.workflow_id,
+          user: { id: row.user_id },
+          trigger: {
+            type: 'schedule',
+            triggerId: row.trigger_id,
+            timestamp: dispatchTime.toISOString(),
+            data: scheduledTriggerData,
+            metadata: { cron: config.cron, timezone, tickBucket: bucket, eventCron: event.cron },
+          },
+          idempotencyKey: `schedule:${row.trigger_id}:${bucket}`,
+        });
+      } catch (err) {
+        // Dispatch threw — release the tick so the catch-up pass retries.
+        // Same rationale as the orchestrator branch below: a burned tick
+        // would silently skip this bucket forever.
+        await releaseScheduleTick(env.DB, row.trigger_id, bucket);
+        throw err;
+      }
+      if (result.status === 'rejected') {
+        console.warn(`${label}schedule dispatch rejected for trigger ${row.trigger_id}: ${result.reason}`);
+        // Transient rejections (concurrency cap brushed, transient DB
+        // hiccup) release the tick so catch-up can retry. Permanent
+        // rejections (invalid_inputs, invalid_env, invalid_definition,
+        // no_published_version, not_found, access_denied) keep the
+        // tick burned — re-dispatching every minute until the author
+        // fixes the workflow would spam logs and re-fail forever.
+        // last_run_at is intentionally NOT bumped either way: a false
+        // advance would mask a legitimate missed tick.
+        if (isTransientDispatchReason(result.reason)) {
+          await releaseScheduleTick(env.DB, row.trigger_id, bucket);
+        }
+        return false;
+      }
+      await updateTriggerLastRunUnchecked(db, row.trigger_id, dispatchTime.toISOString());
       return true;
     }
 
@@ -967,15 +783,13 @@ async function dispatchScheduledWorkflows(event: ScheduledController, env: Env):
     });
 
     if (!dispatch.dispatched) {
-      // Dispatch failed with a retriable reason (backoff, not configured, etc.) —
-      // release the tick so catch-up can retry on the next cron invocation.
-      // If this delete fails, the tick stays burned (safer than risking duplicate dispatch).
-      try {
-        await env.DB.prepare(
-          'DELETE FROM workflow_schedule_ticks WHERE trigger_id = ? AND tick_bucket = ?'
-        ).bind(row.trigger_id, bucket).run();
-      } catch {
-        // Best-effort release — if it fails, the tick is burned for this bucket
+      // Same transient/permanent split as the workflow branch above:
+      // release the tick on transient reasons (backoff, DO init) so
+      // catch-up can retry, but keep the burn on config errors
+      // (orchestrator_not_configured, empty_prompt) to avoid replay
+      // spam across the catch-up window.
+      if (isTransientDispatchReason(dispatch.reason)) {
+        await releaseScheduleTick(env.DB, row.trigger_id, bucket);
       }
       console.warn(
         `${label}Skipping scheduled orchestrator prompt for trigger ${row.trigger_id}: ${dispatch.reason || 'unknown_reason'}`,
@@ -983,7 +797,7 @@ async function dispatchScheduledWorkflows(event: ScheduledController, env: Env):
       return false;
     }
 
-    await updateTriggerLastRun(db, row.trigger_id, dispatchTime.toISOString());
+    await updateTriggerLastRunUnchecked(db, row.trigger_id, dispatchTime.toISOString());
     return true;
   }
 
