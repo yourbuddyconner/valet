@@ -318,12 +318,16 @@ export interface UsageByWorkflowModelRow {
 
 /**
  * Usage for AUTOMATED (workflow) sessions attributed to the SPECIFIC workflow that produced it,
- * and how it fired. Joins analytics_events → workflow_executions (by session) → workflows (name)
- * and → triggers (type: schedule/webhook/manual; NULL trigger = a manual/on-demand run). Model is
- * kept for per-model cost, rolled up per workflow in the route. INNER JOIN on workflow_executions
- * scopes this to the automated subset — interactive/orchestrator rows simply don't appear.
- * Backward-compatible: LEFT JOINs to workflows/triggers, so a workflow row deleted out from under
- * an execution still surfaces as 'Unknown workflow' rather than dropping the usage.
+ * and how it fired. Joins analytics_events → sessions (by session_id) → workflow_executions
+ * (by sessions.workflow_execution_id) → workflows (name) → triggers (type:
+ * schedule/webhook/manual; NULL trigger = manual/on-demand). Model is kept for per-model cost,
+ * rolled up per workflow in the route. INNER JOINs on sessions + workflow_executions scope this
+ * to the automated subset — interactive/orchestrator rows simply don't appear. LEFT JOINs to
+ * workflows/triggers keep usage for a deleted workflow/trigger visible as 'Unknown workflow'.
+ *
+ * sessions.workflow_execution_id is the durable attribution column; unlike
+ * workflow_spawned_sessions (which is pruned on successful terminal cleanup) it persists for
+ * the life of the session row.
  */
 export async function getUsageByWorkflowModel(
   db: D1Database,
@@ -340,7 +344,8 @@ export async function getUsageByWorkflowModel(
         SUM(${AE_BILLABLE_OUTPUT_EXPR}) as output_tokens,
         COUNT(*) as call_count
       FROM analytics_events ae
-      JOIN workflow_executions we ON we.session_id = ae.session_id
+      JOIN sessions s ON s.id = ae.session_id
+      JOIN workflow_executions we ON we.id = s.workflow_execution_id
       LEFT JOIN workflows w ON w.id = we.workflow_id
       LEFT JOIN triggers t ON t.id = we.trigger_id
       WHERE ae.event_type = 'llm_call'
