@@ -15,9 +15,9 @@ function definition(overrides: Partial<WorkflowDefinition> = {}): WorkflowDefini
   };
 }
 
-// Filter out the non-blocking llm_maxoutput_warning (it's an advisory).
+// Filter out the non-blocking warnings (advisories, not publish blockers).
 function blockingErrors(errs: ReturnType<typeof validateDefinition>) {
-  return errs.filter((e) => e.code !== 'llm_maxoutput_warning');
+  return errs.filter((e) => e.code !== 'llm_maxoutput_warning' && e.code !== 'template_unknown_variable');
 }
 
 describe('validateDefinition', () => {

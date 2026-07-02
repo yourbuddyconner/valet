@@ -40,6 +40,7 @@ import { createExecution, WorkflowExecutionStartError } from '../services/workfl
 import { assembleLlmProviderEnv } from '../lib/llm/provider-env.js';
 import {
   groupWorkflowValidationResults,
+  isValidationWarning,
   validateAgainstAvailableModels,
   validateAgainstEnvironment,
   validateDefinition,
@@ -1039,7 +1040,7 @@ async function saveDraftAction(
       validation: await validateWorkflowDefinitionInput(db, params.draft, env),
     };
   }
-  const structuralErrors = validateDefinition(params.draft).filter((issue) => issue.code !== 'llm_maxoutput_warning');
+  const structuralErrors = validateDefinition(params.draft).filter((issue) => !isValidationWarning(issue));
   if (structuralErrors.length > 0) {
     return {
       ok: false,

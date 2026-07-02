@@ -156,7 +156,10 @@ describe('workflowActions', () => {
     expect(result.success).toBe(true);
     expect(result.data).toMatchObject({
       errors: [],
-      warnings: [expect.objectContaining({ code: 'llm_maxoutput_warning' })],
+      warnings: expect.arrayContaining([
+        expect.objectContaining({ code: 'llm_maxoutput_warning' }),
+        expect.objectContaining({ code: 'template_unknown_variable' }),
+      ]),
     });
   });
 
