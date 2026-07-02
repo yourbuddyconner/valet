@@ -26,7 +26,9 @@ import { isActionDisabled } from '../../lib/db/disabled-actions.js';
 import { loadCustomMcpConnectorContext } from '../../services/custom-mcp-connectors.js';
 import { getDb } from '../../lib/drizzle.js';
 import { invokeWorkflowAction, markExecuted, markFailed } from '../../services/actions.js';
+import { buildActionCredentials } from '../../services/credentials.js';
 import { updateInvocationStatus } from '../../lib/db/actions.js';
+import { getUserIdentityLinks } from '../../lib/db/channels.js';
 import { waitForApprovalEvent } from '../approvals.js';
 import { setExecutionStatus } from '../execution-status.js';
 import { CancelledError, iterationSuffix, NO_RETRY } from '../types.js';
@@ -244,8 +246,20 @@ export async function executeTool(args: NodeExecutorArgs<ToolNode>): Promise<unk
         await updateInvocationStatus(db, invocationId, { status: 'failed', expectedStatus: invocation.outcome === 'allowed' ? 'pending' : 'approved' });
         throw new Error(`tool node "${node.id}": no credentials for ${node.service}: ${credResult.error.message}`);
       }
+      const built = buildActionCredentials(credResult);
+      // Service-specific extras. Mirrors session-tools' inject step so
+      // workflow-invoked Slack actions (dm_owner, guardPrivateChannel)
+      // that read ctx.credentials.owner_slack_user_id get the same
+      // value as when the orchestrator invokes them directly. Without
+      // this dm_owner fails "Owner has not linked their Slack identity"
+      // even for users who have.
+      if (node.service === 'slack') {
+        const identityLinks = await getUserIdentityLinks(db, runParams.userId);
+        const slackLink = identityLinks.find((l) => l.provider === 'slack');
+        if (slackLink) built.owner_slack_user_id = slackLink.externalId;
+      }
       return JSON.stringify({
-        credentials: buildCredentials(credResult),
+        credentials: built,
         attribution: credResult.credential.attribution,
       });
     });
@@ -297,7 +311,7 @@ export async function executeTool(args: NodeExecutorArgs<ToolNode>): Promise<unk
       }
       return JSON.stringify({
         ok: true,
-        credentials: buildCredentials(refreshed),
+        credentials: buildActionCredentials(refreshed),
         attribution: refreshed.credential.attribution,
       });
     });
@@ -364,28 +378,3 @@ function isAuthFailure(result: ActionResult): boolean {
     /\b(401|unauthorized|invalid.credentials|token.*expired|token.*revoked)\b/i.test(result.error);
 }
 
-interface CredentialOk {
-  ok: true;
-  credential: {
-    accessToken?: string;
-    refreshToken?: string;
-    customFields?: Record<string, string>;
-    attribution?: { name: string; email: string };
-  };
-}
-
-function buildCredentials(result: CredentialOk): Record<string, string> {
-  const out: Record<string, string> = {};
-  const cred = result.credential;
-  if (cred.accessToken) out.access_token = cred.accessToken;
-  if (cred.refreshToken) out.refresh_token = cred.refreshToken;
-  if (cred.customFields) Object.assign(out, cred.customFields);
-  return out;
-}
-
-function coerceString(v: unknown): string {
-  if (typeof v === 'string') return v;
-  if (v === null || v === undefined) return '';
-  if (typeof v === 'object') return JSON.stringify(v);
-  return String(v);
-}
