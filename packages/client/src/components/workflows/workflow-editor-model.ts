@@ -701,7 +701,7 @@ export function createEdgeId(from: string, to: string, fromOutput?: 'true' | 'fa
 }
 
 export const LAYOUT_COLUMN_GAP = 340;
-export const LAYOUT_ROW_GAP = 140;
+export const LAYOUT_ROW_GAP = 200;
 
 function layoutWorkflowNodes(definition: WorkflowDefinition): Map<string, { x: number; y: number }> {
   const nodeIds = new Set(definition.nodes.map((node) => node.id));
