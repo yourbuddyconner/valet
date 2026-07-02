@@ -43,6 +43,11 @@ vi.mock('../../lib/db/actions.js', () => ({
   updateInvocationStatus: (...args: unknown[]) => updateInvocationStatusMock(...args),
 }));
 
+const getUserIdentityLinksMock = vi.fn();
+vi.mock('../../lib/db/channels.js', () => ({
+  getUserIdentityLinks: (...args: unknown[]) => getUserIdentityLinksMock(...args),
+}));
+
 vi.mock('../approvals.js', () => ({
   waitForApprovalEvent: (...args: unknown[]) => waitForApprovalEventMock(...args),
 }));
@@ -100,6 +105,8 @@ beforeEach(() => {
   waitForApprovalEventMock.mockReset();
   markExecutedMock.mockReset();
   markFailedMock.mockReset();
+  getUserIdentityLinksMock.mockReset();
+  getUserIdentityLinksMock.mockResolvedValue([]);
   isActionDisabledMock.mockResolvedValue(false);
   loadCustomMcpConnectorContextMock.mockResolvedValue({ connectors: new Map() });
   listActionsMock.mockResolvedValue([{ id: 'slack.send_message', riskLevel: 'low' }, { id: 'slack.test', riskLevel: 'low' }, { id: 'gmail.send', riskLevel: 'medium' }, { id: 'sheets.clear_range', riskLevel: 'medium' }, { id: 'unknown.x', riskLevel: 'low' }, { id: 'unknown.y', riskLevel: 'low' }]);
@@ -203,6 +210,30 @@ describe('executeTool', () => {
       'slack.send_message',
       {},
       expect.objectContaining({ credentials: { access_token: 'tok-1', _credential_type: 'oauth2' } }),
+    );
+  });
+
+  it('injects owner_slack_user_id from identity links for slack service', async () => {
+    // slack.dm_owner and the private-channel guard both read
+    // ctx.credentials.owner_slack_user_id. The session-tools path injects
+    // it after resolving the bot token; the workflow path must too, else
+    // dm_owner from a workflow always fails "Owner has not linked their
+    // Slack identity" even when the user has.
+    getProviderMock.mockReturnValue({ authType: 'bot_token' });
+    resolveCredentialsMock.mockResolvedValue({
+      ok: true,
+      credential: { accessToken: 'xoxb-tok', credentialType: 'bot_token' },
+    });
+    getUserIdentityLinksMock.mockResolvedValue([{ provider: 'slack', externalId: 'U12345' }]);
+    executeMock.mockResolvedValue({ success: true, data: null });
+    const node: ToolNode = { id: 't', type: 'tool', service: 'slack', action: 'slack.send_message', params: {} };
+    await executeTool(args(node));
+    expect(executeMock).toHaveBeenCalledWith(
+      'slack.send_message',
+      {},
+      expect.objectContaining({
+        credentials: expect.objectContaining({ bot_token: 'xoxb-tok', owner_slack_user_id: 'U12345' }),
+      }),
     );
   });
 

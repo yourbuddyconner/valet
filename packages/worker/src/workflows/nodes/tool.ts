@@ -28,6 +28,7 @@ import { getDb } from '../../lib/drizzle.js';
 import { invokeWorkflowAction, markExecuted, markFailed } from '../../services/actions.js';
 import { buildActionCredentials } from '../../services/credentials.js';
 import { updateInvocationStatus } from '../../lib/db/actions.js';
+import { getUserIdentityLinks } from '../../lib/db/channels.js';
 import { waitForApprovalEvent } from '../approvals.js';
 import { setExecutionStatus } from '../execution-status.js';
 import { CancelledError, iterationSuffix, NO_RETRY } from '../types.js';
@@ -245,8 +246,20 @@ export async function executeTool(args: NodeExecutorArgs<ToolNode>): Promise<unk
         await updateInvocationStatus(db, invocationId, { status: 'failed', expectedStatus: invocation.outcome === 'allowed' ? 'pending' : 'approved' });
         throw new Error(`tool node "${node.id}": no credentials for ${node.service}: ${credResult.error.message}`);
       }
+      const built = buildActionCredentials(credResult);
+      // Service-specific extras. Mirrors session-tools' inject step so
+      // workflow-invoked Slack actions (dm_owner, guardPrivateChannel)
+      // that read ctx.credentials.owner_slack_user_id get the same
+      // value as when the orchestrator invokes them directly. Without
+      // this dm_owner fails "Owner has not linked their Slack identity"
+      // even for users who have.
+      if (node.service === 'slack') {
+        const identityLinks = await getUserIdentityLinks(db, runParams.userId);
+        const slackLink = identityLinks.find((l) => l.provider === 'slack');
+        if (slackLink) built.owner_slack_user_id = slackLink.externalId;
+      }
       return JSON.stringify({
-        credentials: buildActionCredentials(credResult),
+        credentials: built,
         attribution: credResult.credential.attribution,
       });
     });
