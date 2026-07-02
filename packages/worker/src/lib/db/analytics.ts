@@ -325,7 +325,7 @@ export interface UsageByWorkflowModelRow {
  * Backward-compatible: LEFT JOINs to workflows/triggers, so a workflow row deleted out from under
  * an execution still surfaces as 'Unknown workflow' rather than dropping the usage.
  */
-export async function getUsageByWorkflow(
+export async function getUsageByWorkflowModel(
   db: D1Database,
   periodStart: string,
 ): Promise<UsageByWorkflowModelRow[]> {
