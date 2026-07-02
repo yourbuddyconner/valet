@@ -33,6 +33,26 @@ export type CredentialResult =
   | { ok: true; credential: ResolvedCredential }
   | { ok: false; error: CredentialResolutionError };
 
+/**
+ * Build the `credentials` object that action handlers receive, given a
+ * successfully-resolved credential. Actions read the token under
+ * different keys depending on the credential type (`bot_token` for
+ * Slack-style bot tokens, `access_token` for OAuth / API key / etc.),
+ * so the mapping has to honour `credentialType` — every call site that
+ * bridges the resolver output to an action must go through this helper.
+ */
+export function buildActionCredentials(
+  credResult: CredentialResult & { ok: true },
+): Record<string, string> {
+  const cred = credResult.credential;
+  const credentials: Record<string, string> = cred.credentialType === 'bot_token'
+    ? { bot_token: cred.accessToken }
+    : { access_token: cred.accessToken };
+  if (cred.refreshToken) credentials.refresh_token = cred.refreshToken;
+  if (cred.credentialType) credentials._credential_type = cred.credentialType;
+  return credentials;
+}
+
 // ─── Internal Helpers ───────────────────────────────────────────────────────
 
 interface CredentialData {

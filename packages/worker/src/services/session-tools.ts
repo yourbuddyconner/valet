@@ -1,6 +1,6 @@
 import type { Env } from '../env.js';
 import type { AppDb } from '../lib/drizzle.js';
-import type { CredentialResult } from '../services/credentials.js';
+import { buildActionCredentials, type CredentialResult } from '../services/credentials.js';
 import { integrationRegistry } from '../integrations/registry.js';
 import { getUserIntegrations, getOrgIntegrations } from '../lib/db/integrations.js';
 import { invokeAction, markExecuted, markFailed } from '../services/actions.js';
@@ -498,7 +498,7 @@ export async function executeAction(
       return { success: false, error: `No credentials found for "${service}": ${credResult.error.message}. Connect it in Settings > Integrations.`, analyticsEvents: [], durationMs: 0 };
     }
 
-    credentials = buildCredentials(credResult);
+    credentials = buildActionCredentials(credResult);
     attribution = credResult.credential.attribution;
 
     // Inject service-specific extras
@@ -552,7 +552,7 @@ export async function executeAction(
         forceRefresh: true,
       });
       if (refreshed.ok) {
-        const refreshedCredentials = buildCredentials(refreshed);
+        const refreshedCredentials = buildActionCredentials(refreshed);
         attribution = refreshed.credential.attribution;
         if (service === 'slack' && credentials.owner_slack_user_id) {
           refreshedCredentials.owner_slack_user_id = credentials.owner_slack_user_id;
@@ -592,18 +592,6 @@ export async function executeAction(
     analyticsEvents: collectedEvents,
     durationMs,
   };
-}
-
-/** Build the credentials object from a successful CredentialResult. */
-function buildCredentials(credResult: CredentialResult & { ok: true }): Record<string, string> {
-  const token = credResult.credential.accessToken;
-  const credentials: Record<string, string> = credResult.credential.credentialType === 'bot_token'
-    ? { bot_token: token }
-    : { access_token: token };
-  if (credResult.credential.credentialType) {
-    credentials._credential_type = credResult.credential.credentialType;
-  }
-  return credentials;
 }
 
 function requiresUserCredential(provider?: { authType?: string; isCustomConnector?: boolean; credentialScope?: 'org' | 'user' }): boolean {

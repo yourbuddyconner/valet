@@ -26,6 +26,7 @@ import { isActionDisabled } from '../../lib/db/disabled-actions.js';
 import { loadCustomMcpConnectorContext } from '../../services/custom-mcp-connectors.js';
 import { getDb } from '../../lib/drizzle.js';
 import { invokeWorkflowAction, markExecuted, markFailed } from '../../services/actions.js';
+import { buildActionCredentials } from '../../services/credentials.js';
 import { updateInvocationStatus } from '../../lib/db/actions.js';
 import { waitForApprovalEvent } from '../approvals.js';
 import { setExecutionStatus } from '../execution-status.js';
@@ -245,7 +246,7 @@ export async function executeTool(args: NodeExecutorArgs<ToolNode>): Promise<unk
         throw new Error(`tool node "${node.id}": no credentials for ${node.service}: ${credResult.error.message}`);
       }
       return JSON.stringify({
-        credentials: buildCredentials(credResult),
+        credentials: buildActionCredentials(credResult),
         attribution: credResult.credential.attribution,
       });
     });
@@ -297,7 +298,7 @@ export async function executeTool(args: NodeExecutorArgs<ToolNode>): Promise<unk
       }
       return JSON.stringify({
         ok: true,
-        credentials: buildCredentials(refreshed),
+        credentials: buildActionCredentials(refreshed),
         attribution: refreshed.credential.attribution,
       });
     });
@@ -364,28 +365,3 @@ function isAuthFailure(result: ActionResult): boolean {
     /\b(401|unauthorized|invalid.credentials|token.*expired|token.*revoked)\b/i.test(result.error);
 }
 
-interface CredentialOk {
-  ok: true;
-  credential: {
-    accessToken?: string;
-    refreshToken?: string;
-    customFields?: Record<string, string>;
-    attribution?: { name: string; email: string };
-  };
-}
-
-function buildCredentials(result: CredentialOk): Record<string, string> {
-  const out: Record<string, string> = {};
-  const cred = result.credential;
-  if (cred.accessToken) out.access_token = cred.accessToken;
-  if (cred.refreshToken) out.refresh_token = cred.refreshToken;
-  if (cred.customFields) Object.assign(out, cred.customFields);
-  return out;
-}
-
-function coerceString(v: unknown): string {
-  if (typeof v === 'string') return v;
-  if (v === null || v === undefined) return '';
-  if (typeof v === 'object') return JSON.stringify(v);
-  return String(v);
-}

@@ -194,7 +194,7 @@ describe('executeTool', () => {
     getProviderMock.mockReturnValue({ authType: 'oauth2' });
     resolveCredentialsMock.mockResolvedValue({
       ok: true,
-      credential: { accessToken: 'tok-1', customFields: { workspace_id: 'W1' } },
+      credential: { accessToken: 'tok-1', credentialType: 'oauth2' },
     });
     executeMock.mockResolvedValue({ success: true, data: null });
     const node: ToolNode = { id: 't', type: 'tool', service: 'slack', action: 'slack.send_message', params: {} };
@@ -202,7 +202,27 @@ describe('executeTool', () => {
     expect(executeMock).toHaveBeenCalledWith(
       'slack.send_message',
       {},
-      expect.objectContaining({ credentials: { access_token: 'tok-1', workspace_id: 'W1' } }),
+      expect.objectContaining({ credentials: { access_token: 'tok-1', _credential_type: 'oauth2' } }),
+    );
+  });
+
+  it('maps bot_token credentials to credentials.bot_token (not access_token)', async () => {
+    // Slack-style providers (authType='bot_token') expect the action to
+    // receive `credentials.bot_token`. If the resolver-to-action bridge
+    // put the token under `access_token`, the action would fail with
+    // "Missing bot_token". Regression test for that exact bug.
+    getProviderMock.mockReturnValue({ authType: 'bot_token' });
+    resolveCredentialsMock.mockResolvedValue({
+      ok: true,
+      credential: { accessToken: 'xoxb-slack-token', credentialType: 'bot_token' },
+    });
+    executeMock.mockResolvedValue({ success: true, data: null });
+    const node: ToolNode = { id: 't', type: 'tool', service: 'slack', action: 'slack.send_message', params: {} };
+    await executeTool(args(node));
+    expect(executeMock).toHaveBeenCalledWith(
+      'slack.send_message',
+      {},
+      expect.objectContaining({ credentials: { bot_token: 'xoxb-slack-token', _credential_type: 'bot_token' } }),
     );
   });
 
