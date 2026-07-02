@@ -39,7 +39,7 @@ import type {
   ForeachNode,
   ToolNode,
 } from '@valet/shared';
-import { parseTemplate } from './expression.js';
+import { parseExpression, parseTemplate } from './expression.js';
 
 /**
  * Structural mirror of validator.ts's TemplateLintContext.
@@ -62,16 +62,27 @@ interface KnownOutputs {
    */
   opaqueNodes: Set<string>;
   /**
-   * True when the trigger has no dataSchema. In that case
-   * `trigger.data.*` refs are tolerated (the payload's shape is
-   * caller-driven) — matches how we already relax the foreach-over-
-   * trigger-array rule for schemaless triggers.
+   * Dotted-path prefixes past which we can't type-check further —
+   * schemas with `additionalProperties: true` or an `object` type
+   * without declared `properties`. Any ref starting with this prefix
+   * (plus `.`) should stay silent.
+   */
+  opaquePathPrefixes: Set<string>;
+  /**
+   * True when the trigger has no dataSchema. Still emits a warning per
+   * ref (matches the editor's strict UX) but with a targeted hint
+   * pointing at the fix: declare a dataSchema on the trigger node.
    */
   triggerDataOpaque: boolean;
+  /**
+   * All identifiers usable as foreach iteration roots — default
+   * `item` / `index` plus any per-foreach overrides via
+   * `itemAlias` / `indexAlias`. Referenced anywhere in the workflow;
+   * we don't currently scope by iteration body since the parser
+   * doesn't tell us which template lives inside which foreach.
+   */
+  foreachAliases: Set<string>;
 }
-
-/** Roots that are always allowed even if we can't enumerate their shape. */
-const ALWAYS_ALLOWED_ROOTS = new Set(['item', 'index']);
 
 export function lintTemplateReferences(
   def: WorkflowDefinition,
@@ -96,6 +107,8 @@ function buildKnownOutputs(
 ): KnownOutputs {
   const paths = new Set<string>();
   const opaqueNodes = new Set<string>();
+  const opaquePathPrefixes = new Set<string>();
+  const foreachAliases = new Set<string>(['item', 'index']);
   let triggerDataOpaque = false;
 
   // Static trigger shape — always available.
@@ -134,7 +147,7 @@ function buildKnownOutputs(
       case 'llm': {
         const schema = (node as LlmNode).outputSchema as Record<string, unknown> | undefined;
         if (schema) {
-          addSchemaPaths(paths, `nodes.${node.id}.data`, schema);
+          addSchemaPaths(paths, `nodes.${node.id}.data`, schema, opaquePathPrefixes);
         } else {
           paths.add(`nodes.${node.id}.data.response`);
         }
@@ -146,7 +159,7 @@ function buildKnownOutputs(
         if (orch.wait?.mode === 'until_idle') {
           paths.add(`nodes.${node.id}.data.output`);
           if (orch.outputSchema) {
-            addSchemaPaths(paths, `nodes.${node.id}.data.output`, orch.outputSchema as Record<string, unknown>);
+            addSchemaPaths(paths, `nodes.${node.id}.data.output`, orch.outputSchema as Record<string, unknown>, opaquePathPrefixes);
           }
           if (orch.resultMode === 'transcript') {
             paths.add(`nodes.${node.id}.data.transcript`);
@@ -162,7 +175,7 @@ function buildKnownOutputs(
         if (withWait.wait?.mode === 'until_idle') {
           paths.add(`nodes.${node.id}.data.output`);
           if (withWait.outputSchema) {
-            addSchemaPaths(paths, `nodes.${node.id}.data.output`, withWait.outputSchema as Record<string, unknown>);
+            addSchemaPaths(paths, `nodes.${node.id}.data.output`, withWait.outputSchema as Record<string, unknown>, opaquePathPrefixes);
           }
           if (withWait.resultMode === 'transcript') {
             paths.add(`nodes.${node.id}.data.transcript`);
@@ -170,15 +183,21 @@ function buildKnownOutputs(
         }
         break;
       }
-      case 'foreach':
+      case 'foreach': {
         paths.add(`nodes.${node.id}.data.items`);
         // Individual iteration results aren't stable dotted paths.
+        // Record any user-overridden loop-body aliases so refs like
+        // `{{row.name}}` under `itemAlias: 'row'` don't false-positive.
+        const foreachNode = node as ForeachNode;
+        if (foreachNode.itemAlias) foreachAliases.add(foreachNode.itemAlias);
+        if (foreachNode.indexAlias) foreachAliases.add(foreachNode.indexAlias);
         break;
+      }
       case 'tool': {
         const tool = node as ToolNode;
         const schema = context.toolOutputSchemas?.[`${tool.service}:${tool.action}`];
         if (schema) {
-          addSchemaPaths(paths, `nodes.${node.id}.data`, schema);
+          addSchemaPaths(paths, `nodes.${node.id}.data`, schema, opaquePathPrefixes);
         } else {
           // Server does not currently load the tool catalog for validate
           // calls; treat unknown tool outputs as opaque so we don't spam
@@ -190,19 +209,33 @@ function buildKnownOutputs(
     }
   }
 
-  return { paths, opaqueNodes, triggerDataOpaque };
+  return { paths, opaqueNodes, opaquePathPrefixes, triggerDataOpaque, foreachAliases };
 }
 
-function addSchemaPaths(out: Set<string>, basePath: string, schema: Record<string, unknown>): void {
+function addSchemaPaths(
+  out: Set<string>,
+  basePath: string,
+  schema: Record<string, unknown>,
+  opaqueBases: Set<string>,
+): void {
   const schemaType = getSchemaType(schema);
   out.add(basePath);
   if (schemaType !== 'object') return;
+  // An object schema that either allows extra properties or declares
+  // none is opaque: we can't tell if `basePath.anything` is valid, so
+  // record the base as opaque and don't warn on child refs.
   const properties = schema.properties;
-  if (!properties || typeof properties !== 'object' || Array.isArray(properties)) return;
-  for (const [key, child] of Object.entries(properties as Record<string, unknown>)) {
+  const propertiesTyped = properties && typeof properties === 'object' && !Array.isArray(properties)
+    ? (properties as Record<string, unknown>)
+    : undefined;
+  if (schema.additionalProperties === true || !propertiesTyped) {
+    opaqueBases.add(basePath);
+    return;
+  }
+  for (const [key, child] of Object.entries(propertiesTyped)) {
     const childPath = `${basePath}.${key}`;
     if (child && typeof child === 'object' && !Array.isArray(child)) {
-      addSchemaPaths(out, childPath, child as Record<string, unknown>);
+      addSchemaPaths(out, childPath, child as Record<string, unknown>, opaqueBases);
     } else {
       out.add(childPath);
     }
@@ -220,18 +253,41 @@ function lintNode(
   known: KnownOutputs,
   errors: WorkflowValidationError[],
 ): void {
+  const emit = (field: string, path: string): void => {
+    const hint = classifyPath(path, known);
+    if (hint !== null) {
+      errors.push({
+        scope: 'field',
+        nodeId: node.id,
+        path: field,
+        code: TEMPLATE_UNKNOWN_VARIABLE_CODE,
+        message: `Unknown template variable: ${path}${hint}`,
+      });
+    }
+  };
+
   for (const [field, source] of iterateTemplatedFields(node)) {
-    for (const path of extractPathReferences(source)) {
-      const hint = classifyPath(path, known);
-      if (hint !== null) {
-        errors.push({
-          scope: 'field',
-          nodeId: node.id,
-          path: field,
-          code: TEMPLATE_UNKNOWN_VARIABLE_CODE,
-          message: `Unknown template variable: ${path}${hint}`,
-        });
+    for (const path of extractPathReferences(source)) emit(field, path);
+  }
+
+  // `if` conditions use raw expression syntax (no `{{}}` braces). The
+  // existing validator's `tryParseExpression` checks that `left` parses
+  // but not whether the referenced path resolves to a known output —
+  // that's the gap this covers so authors don't ship conditions
+  // pointing at typoed or non-upstream refs.
+  if (node.type === 'if') {
+    for (const [idx, cond] of node.conditions.entries()) {
+      const source = typeof cond.left === 'string' ? cond.left : '';
+      if (!source) continue;
+      let ast;
+      try {
+        ast = parseExpression(source);
+      } catch {
+        continue; // Parse errors are surfaced by validator.ts's tryParseExpression.
       }
+      const paths: string[] = [];
+      collectPaths(ast, paths);
+      for (const path of paths) emit(`conditions[${idx}].left`, path);
     }
   }
 }
@@ -359,10 +415,11 @@ function collectPaths(ast: unknown, out: string[]): void {
  */
 function classifyPath(path: string, known: KnownOutputs): string | null {
   if (known.paths.has(path)) return null;
+  if (hasOpaquePrefix(path, known.opaquePathPrefixes)) return null;
 
   const root = path.split('.')[0];
   if (!root) return null;
-  if (ALWAYS_ALLOWED_ROOTS.has(root)) return null;
+  if (known.foreachAliases.has(root)) return null;
 
   if (root === 'trigger') {
     if (known.triggerDataOpaque && (path === 'trigger.data' || path.startsWith('trigger.data.'))) {
@@ -383,6 +440,13 @@ function classifyPath(path: string, known: KnownOutputs): string | null {
 
   // Unknown root (not trigger, nodes, item, index) — real bug.
   return ` — root "${root}" is not one of trigger / nodes / item / index`;
+}
+
+function hasOpaquePrefix(path: string, prefixes: Set<string>): boolean {
+  for (const prefix of prefixes) {
+    if (path === prefix || path.startsWith(`${prefix}.`)) return true;
+  }
+  return false;
 }
 
 function asRecord(value: unknown): Record<string, unknown> {

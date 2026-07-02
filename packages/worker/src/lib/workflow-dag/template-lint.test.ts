@@ -277,6 +277,112 @@ describe('lintTemplateReferences', () => {
     expect(errs).toEqual([]);
   });
 
+  it('honors foreach itemAlias / indexAlias overrides', () => {
+    // Regression: hardcoded ['item', 'index'] would warn on `row` /
+    // `i` when the foreach declares those as aliases.
+    const errs = lintTemplateReferences(def([
+      { id: 'trigger', type: 'trigger', dataSchema: { rows: { type: 'array' } } },
+      {
+        id: 'loop',
+        type: 'foreach',
+        items: '{{trigger.data.rows}}',
+        itemAlias: 'row',
+        indexAlias: 'i',
+        body: {
+          id: 'send',
+          type: 'tool',
+          service: 'slack',
+          action: 'slack.send_message',
+          params: { text: 'row {{i}}: {{row.name}}' },
+        },
+      },
+    ]));
+
+    expect(errs).toEqual([]);
+  });
+
+  it('tolerates references into schemas with additionalProperties: true', () => {
+    // Regression: an object schema with additionalProperties=true is
+    // by definition open-ended; we can't tell which children are valid.
+    // The old lint added a single leaf per declared property and warned
+    // on everything else.
+    const errs = lintTemplateReferences(def([
+      { id: 'trigger', type: 'trigger', dataSchema: { s: { type: 'string' } } },
+      {
+        id: 'gen',
+        type: 'llm',
+        model: 'anthropic:claude-sonnet-4-5',
+        prompt: '{{trigger.data.s}}',
+        outputSchema: {
+          type: 'object',
+          additionalProperties: true,
+          properties: { known: { type: 'string' } },
+        },
+      },
+      {
+        id: 'send',
+        type: 'tool',
+        service: 'slack',
+        action: 'slack.send_message',
+        params: { text: '{{nodes.gen.data.anythingGoes}}' },
+      },
+    ]));
+
+    expect(errs).toEqual([]);
+  });
+
+  it('tolerates references into object schemas with no declared properties', () => {
+    // Regression: `{ type: 'object' }` with no `properties` is opaque
+    // (author declared the return type but not its shape). Previously
+    // any child ref would warn.
+    const errs = lintTemplateReferences(def([
+      { id: 'trigger', type: 'trigger', dataSchema: { s: { type: 'string' } } },
+      {
+        id: 'gen',
+        type: 'llm',
+        model: 'anthropic:claude-sonnet-4-5',
+        prompt: '{{trigger.data.s}}',
+        outputSchema: { type: 'object' },
+      },
+      {
+        id: 'send',
+        type: 'tool',
+        service: 'slack',
+        action: 'slack.send_message',
+        params: { text: '{{nodes.gen.data.whatever}}' },
+      },
+    ]));
+
+    expect(errs).toEqual([]);
+  });
+
+  it('lints unknown path references inside if.conditions[].left expressions', () => {
+    // Regression: if.left uses expression syntax without braces.
+    // Previously iterateTemplatedFields skipped `if` nodes entirely,
+    // so the client editor would flag conditions[].left references
+    // but the server wouldn't. tryParseExpression only checks parse
+    // validity, not whether the referenced path is a known output.
+    const errs = lintTemplateReferences(def([
+      { id: 'trigger', type: 'trigger', dataSchema: { count: { type: 'number' } } },
+      {
+        id: 'check',
+        type: 'if',
+        conditions: [
+          { left: 'trigger.data.count', dataType: 'number', operation: 'greaterThan', right: 0 },
+          { left: 'trigger.data.missing', dataType: 'string', operation: 'exists' },
+        ],
+      },
+    ]));
+
+    expect(errs).toHaveLength(1);
+    expect(errs[0]).toMatchObject({
+      nodeId: 'check',
+      path: 'conditions[1].left',
+      code: TEMPLATE_UNKNOWN_VARIABLE_CODE,
+    });
+    expect(errs[0]!.message).toContain('trigger.data.missing');
+  });
+
   it('skips syntactically-invalid templates (those are parse errors)', () => {
     // parseTemplate throws on `{{ unterminated — the lint should stay
     // silent since the existing validator emits template_parse_error.
