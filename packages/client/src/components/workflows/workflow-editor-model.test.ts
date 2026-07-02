@@ -154,7 +154,7 @@ describe('workflow editor model', () => {
     expect(flow.nodes.find((node) => node.id === 'done')).toMatchObject({
       id: 'done',
       type: 'workflow',
-      position: { x: 1020, y: -140 },
+      position: { x: 1020, y: -200 },
       data: { nodeType: 'stop', label: 'Stop', handles: { source: false, target: true } },
     });
     expect(flow.edges).toEqual([
@@ -239,8 +239,8 @@ describe('workflow editor model', () => {
       trigger: { x: 0, y: 0 },
       normalize: { x: 340, y: 0 },
       branch: { x: 680, y: 0 },
-      true_tool: { x: 1020, y: -140 },
-      false_llm: { x: 1020, y: 140 },
+      true_tool: { x: 1020, y: -200 },
+      false_llm: { x: 1020, y: 200 },
       finish: { x: 1360, y: 0 },
     });
   });
