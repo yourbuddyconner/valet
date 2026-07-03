@@ -478,18 +478,46 @@ export async function getCredential(
   provider: string,
   options?: { forceRefresh?: boolean },
 ): Promise<CredentialResult> {
-  const result = await getCredentialInner(env, ownerType, ownerId, provider, options);
-  // Every failed resolution logs here — the one chokepoint all callers share — so a
+  const db = getDb(env.DB);
+  // Default to 'oauth2' for GitHub as a safety net — only oauth2 rows exist now.
+  const effectiveType = provider === 'github' ? 'oauth2' : undefined;
+  const row = await credentialDb.getCredentialRow(db, ownerType, ownerId, provider, effectiveType);
+  const result = await getCredentialInner(env, ownerType, ownerId, provider, row, options);
+
+  // Edge-triggered failure logging at the one chokepoint all callers share, so a
   // broken integration (expired/revoked token, failed refresh, undecryptable row)
-  // surfaces wherever it bites: tool calls, env assembly, webhooks, DOs. 'not_found'
-  // is just "never connected", not a breakage, so it stays quiet.
+  // surfaces wherever it bites: tool calls, env assembly, webhooks, DOs. Logs only
+  // on state TRANSITIONS — first failure, reason change, recovery — so a stuck
+  // credential retried by the refresh cron sweep warns once, not once per pass.
+  // 'not_found' is just "never connected" (and has no row to track), so it stays
+  // quiet, as before.
+  const priorFailure = row?.lastFailureReason ?? null;
   if (!result.ok && result.error.reason !== 'not_found') {
-    log.warn('integration auth/refresh failed', {
+    if (row && priorFailure !== result.error.reason) {
+      log.warn('integration auth/refresh failed', {
+        service: provider,
+        ownerType,
+        ownerId,
+        reason: result.error.reason,
+        detail: result.error.message,
+        ...(priorFailure ? { previousReason: priorFailure } : {}),
+      });
+      // Best-effort bookkeeping: a transient D1 write error must not turn a
+      // resolution result into a throw at ~20 call sites. Worst case the state
+      // doesn't persist and the next attempt re-warns (at-least-once).
+      await credentialDb.setCredentialFailureState(db, row.id, result.error.reason).catch((err) => {
+        log.warn('failed to persist credential failure state', { service: provider, error: String(err) });
+      });
+    }
+  } else if (result.ok && row && priorFailure) {
+    log.info('integration auth recovered', {
       service: provider,
       ownerType,
       ownerId,
-      reason: result.error.reason,
-      detail: result.error.message,
+      previousReason: priorFailure,
+    });
+    await credentialDb.setCredentialFailureState(db, row.id, null).catch((err) => {
+      log.warn('failed to persist credential failure state', { service: provider, error: String(err) });
     });
   }
   return result;
@@ -500,12 +528,9 @@ async function getCredentialInner(
   ownerType: string,
   ownerId: string,
   provider: string,
+  row: credentialDb.CredentialRow | null,
   options?: { forceRefresh?: boolean },
 ): Promise<CredentialResult> {
-  const db = getDb(env.DB);
-  // Default to 'oauth2' for GitHub as a safety net — only oauth2 rows exist now.
-  const effectiveType = provider === 'github' ? 'oauth2' : undefined;
-  const row = await credentialDb.getCredentialRow(db, ownerType, ownerId, provider, effectiveType);
   if (!row) {
     return {
       ok: false,

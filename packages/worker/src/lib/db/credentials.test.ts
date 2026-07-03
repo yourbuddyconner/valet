@@ -4,7 +4,7 @@ import { createTestDb } from '../../test-utils/db.js';
 import { credentials } from '../schema/credentials.js';
 import { users } from '../schema/users.js';
 import { sql } from 'drizzle-orm';
-import { resolveRepoCredential } from './credentials.js';
+import { resolveRepoCredential, getCredentialRow, setCredentialFailureState, upsertCredential } from './credentials.js';
 
 const TEST_OWNER_TYPE = 'user';
 const TEST_OWNER_ID = 'user-test-001';
@@ -289,5 +289,53 @@ describe('resolveRepoCredential', () => {
     expect(result).not.toBeNull();
     expect(result!.credentialType).toBe('oauth2');
     expect(result!.credential.id).toBe('cred-oauth');
+  });
+
+  it('round-trips failure state: set stamps reason + broke-at, clear nulls both', async () => {
+    db.insert(credentials).values({
+      id: 'cred-fs',
+      ownerType: TEST_OWNER_TYPE,
+      ownerId: TEST_OWNER_ID,
+      provider: 'linear',
+      credentialType: 'oauth2',
+      encryptedData: 'enc',
+    }).run();
+
+    await setCredentialFailureState(db as any, 'cred-fs', 'refresh_failed');
+    let row = await getCredentialRow(db as any, TEST_OWNER_TYPE, TEST_OWNER_ID, 'linear');
+    expect(row!.lastFailureReason).toBe('refresh_failed');
+    expect(row!.lastFailureAt).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/);
+
+    await setCredentialFailureState(db as any, 'cred-fs', null);
+    row = await getCredentialRow(db as any, TEST_OWNER_TYPE, TEST_OWNER_ID, 'linear');
+    expect(row!.lastFailureReason).toBeNull();
+    expect(row!.lastFailureAt).toBeNull();
+  });
+
+  it('upsert on an existing credential clears its failure state (reconnect un-marks broken)', async () => {
+    db.insert(credentials).values({
+      id: 'cred-rc',
+      ownerType: TEST_OWNER_TYPE,
+      ownerId: TEST_OWNER_ID,
+      provider: 'linear',
+      credentialType: 'oauth2',
+      encryptedData: 'enc-old',
+    }).run();
+    await setCredentialFailureState(db as any, 'cred-rc', 'expired');
+
+    await upsertCredential(db as any, {
+      id: 'cred-rc-new',
+      ownerType: TEST_OWNER_TYPE,
+      ownerId: TEST_OWNER_ID,
+      provider: 'linear',
+      credentialType: 'oauth2',
+      encryptedData: 'enc-new',
+    });
+
+    const row = await getCredentialRow(db as any, TEST_OWNER_TYPE, TEST_OWNER_ID, 'linear');
+    expect(row!.id).toBe('cred-rc'); // conflict update keeps the original row id
+    expect(row!.encryptedData).toBe('enc-new');
+    expect(row!.lastFailureReason).toBeNull();
+    expect(row!.lastFailureAt).toBeNull();
   });
 });
