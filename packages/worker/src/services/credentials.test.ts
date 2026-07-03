@@ -139,6 +139,55 @@ describe('getCredential', () => {
     }
   });
 
+  it('logs a structured warn on failed resolution (any caller benefits)', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      mockDb.getCredentialRow.mockResolvedValue({
+        id: 'cred-1',
+        ownerType: 'user',
+        ownerId: 'user-1',
+        provider: 'linear',
+        credentialType: 'oauth2',
+        encryptedData: 'bad-data',
+        metadata: null,
+        scopes: null,
+        expiresAt: null,
+        createdAt: '2025-01-01T00:00:00Z',
+        updatedAt: '2025-01-01T00:00:00Z',
+      });
+      mockDecrypt.mockRejectedValue(new Error('decrypt failed'));
+
+      await getCredential(fakeEnv, 'user', 'user-1', 'linear');
+
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+      const entry = JSON.parse(warnSpy.mock.calls[0][0] as string);
+      expect(entry).toMatchObject({
+        level: 'warn',
+        message: 'integration auth/refresh failed',
+        service: 'linear',
+        ownerType: 'user',
+        ownerId: 'user-1',
+        reason: 'decryption_failed',
+      });
+      expect(typeof entry.detail).toBe('string');
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it("does NOT log for not_found — that's 'never connected', not a breakage", async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      mockDb.getCredentialRow.mockResolvedValue(null);
+
+      await getCredential(fakeEnv, 'user', 'user-1', 'github');
+
+      expect(warnSpy).not.toHaveBeenCalled();
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
   it('returns decryption_failed when token field is missing', async () => {
     mockDb.getCredentialRow.mockResolvedValue({
       id: 'cred-1',

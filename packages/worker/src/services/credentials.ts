@@ -4,6 +4,7 @@ import { encryptStringPBKDF2, decryptStringPBKDF2 } from '../lib/crypto.js';
 import * as credentialDb from '../lib/db/credentials.js';
 import * as mcpOAuthDb from '../lib/db/mcp-oauth.js';
 import { getDb } from '../lib/drizzle.js';
+import { log } from '../lib/log.js';
 import { integrationRegistry } from '../integrations/registry.js';
 import { getCustomMcpOAuthConfig, getCustomMcpOAuthConnector } from './custom-mcp-connectors.js';
 import { createSafeFetchOutbound } from './safe-fetch-outbound.js';
@@ -471,6 +472,30 @@ async function attemptRefresh(
  * to ensure expired tokens are refreshed before use.
  */
 export async function getCredential(
+  env: Env,
+  ownerType: string,
+  ownerId: string,
+  provider: string,
+  options?: { forceRefresh?: boolean },
+): Promise<CredentialResult> {
+  const result = await getCredentialInner(env, ownerType, ownerId, provider, options);
+  // Every failed resolution logs here — the one chokepoint all callers share — so a
+  // broken integration (expired/revoked token, failed refresh, undecryptable row)
+  // surfaces wherever it bites: tool calls, env assembly, webhooks, DOs. 'not_found'
+  // is just "never connected", not a breakage, so it stays quiet.
+  if (!result.ok && result.error.reason !== 'not_found') {
+    log.warn('integration auth/refresh failed', {
+      service: provider,
+      ownerType,
+      ownerId,
+      reason: result.error.reason,
+      detail: result.error.message,
+    });
+  }
+  return result;
+}
+
+async function getCredentialInner(
   env: Env,
   ownerType: string,
   ownerId: string,

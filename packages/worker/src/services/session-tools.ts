@@ -9,7 +9,6 @@ import { listMcpToolCache, upsertMcpToolCache } from '../lib/db/mcp-tool-cache.j
 import { getAutoEnabledServices, getDisabledPluginServices } from '../lib/db/plugins.js';
 import { getUserIdentityLinks, getOrchestratorIdentity } from '../lib/db.js';
 import { loadCustomMcpConnectorContext } from './custom-mcp-connectors.js';
-import { log } from '../lib/log.js';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -229,18 +228,6 @@ export async function listTools(
 
       if (!credResult.ok) {
         const displayName = provider?.displayName || service;
-        // A genuinely-broken integration — token expired/revoked, refresh failed, or undecryptable —
-        // still failed here even after the force-refresh retry above, so its tools get skipped.
-        // Surface that on the trace-correlated logger so a silently-broken integration is caught,
-        // not just dropped. 'not_found' is only "not connected" (not a breakage), so it's excluded.
-        if (credResult.error.reason !== 'not_found') {
-          log.warn('integration auth/refresh failed', {
-            service,
-            userId,
-            reason: credResult.error.reason,
-            detail: credResult.error.message,
-          });
-        }
         warnings.push({
           service,
           displayName,
