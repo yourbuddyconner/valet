@@ -12,6 +12,8 @@ export interface CredentialRow {
   metadata: string | null;
   scopes: string | null;
   expiresAt: string | null;
+  lastFailureReason: string | null;
+  lastFailureAt: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -37,6 +39,26 @@ export async function getCredentialRow(
     .where(and(...conditions))
     .get();
   return (row as CredentialRow | undefined) ?? null;
+}
+
+/**
+ * Record a credential's failure-state transition. `reason` set = the credential
+ * just broke (stamps last_failure_at); `reason` null = it recovered. Called only
+ * on transitions — repeat failures never write, so retry loops (the refresh cron
+ * sweep) add no D1 write traffic.
+ */
+export async function setCredentialFailureState(
+  db: AppDb,
+  id: string,
+  reason: string | null,
+): Promise<void> {
+  await db
+    .update(credentials)
+    .set({
+      lastFailureReason: reason,
+      lastFailureAt: reason ? sql`datetime('now')` : null,
+    })
+    .where(eq(credentials.id, id));
 }
 
 export async function upsertCredential(
@@ -73,6 +95,11 @@ export async function upsertCredential(
         metadata: sql`COALESCE(excluded.metadata, ${credentials.metadata})`,
         scopes: sql`COALESCE(excluded.scopes, ${credentials.scopes})`,
         expiresAt: sql`excluded.expires_at`,
+        // A successful store (reconnect, refresh) means the credential works
+        // again — un-mark it so the broken-integrations view has no false
+        // positives for integrations that are never resolved again.
+        lastFailureReason: null,
+        lastFailureAt: null,
         updatedAt: sql`datetime('now')`,
       },
     });

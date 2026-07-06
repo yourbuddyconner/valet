@@ -4,6 +4,7 @@ import type { Env } from '../env.js';
 // Mock the DB layer
 vi.mock('../lib/db/credentials.js', () => ({
   getCredentialRow: vi.fn(),
+  setCredentialFailureState: vi.fn(),
   upsertCredential: vi.fn(),
   deleteCredential: vi.fn(),
   listCredentialsByOwner: vi.fn(),
@@ -50,6 +51,7 @@ import {
 
 const mockDb = credentialDb as unknown as {
   getCredentialRow: ReturnType<typeof vi.fn>;
+  setCredentialFailureState: ReturnType<typeof vi.fn>;
   upsertCredential: ReturnType<typeof vi.fn>;
   deleteCredential: ReturnType<typeof vi.fn>;
   listCredentialsByOwner: ReturnType<typeof vi.fn>;
@@ -69,6 +71,7 @@ const fakeEnv = {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockDb.setCredentialFailureState.mockResolvedValue(undefined);
   mockGetCustomMcpOAuthConfig.mockResolvedValue(null);
   mockGetCustomMcpOAuthConnector.mockResolvedValue(null);
   mockGetMcpOAuthClient.mockResolvedValue(null);
@@ -170,6 +173,8 @@ describe('getCredential', () => {
         reason: 'decryption_failed',
       });
       expect(typeof entry.detail).toBe('string');
+      // First failure is a state transition — persisted so repeats stay quiet.
+      expect(mockDb.setCredentialFailureState).toHaveBeenCalledWith(fakeDrizzleDb, 'cred-1', 'decryption_failed');
     } finally {
       warnSpy.mockRestore();
     }
@@ -183,8 +188,109 @@ describe('getCredential', () => {
       await getCredential(fakeEnv, 'user', 'user-1', 'github');
 
       expect(warnSpy).not.toHaveBeenCalled();
+      expect(mockDb.setCredentialFailureState).not.toHaveBeenCalled();
     } finally {
       warnSpy.mockRestore();
+    }
+  });
+
+  it('does NOT re-log a repeat failure with the same reason (edge-triggered)', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      mockDb.getCredentialRow.mockResolvedValue({
+        id: 'cred-1',
+        ownerType: 'user',
+        ownerId: 'user-1',
+        provider: 'linear',
+        credentialType: 'oauth2',
+        encryptedData: 'bad-data',
+        metadata: null,
+        scopes: null,
+        expiresAt: null,
+        lastFailureReason: 'decryption_failed',
+        lastFailureAt: '2025-01-01T00:00:00Z',
+        createdAt: '2025-01-01T00:00:00Z',
+        updatedAt: '2025-01-01T00:00:00Z',
+      });
+      mockDecrypt.mockRejectedValue(new Error('decrypt failed'));
+
+      const result = await getCredential(fakeEnv, 'user', 'user-1', 'linear');
+
+      expect(result.ok).toBe(false);
+      expect(warnSpy).not.toHaveBeenCalled();
+      expect(mockDb.setCredentialFailureState).not.toHaveBeenCalled();
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('logs again when the failure reason CHANGES, carrying previousReason', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      mockDb.getCredentialRow.mockResolvedValue({
+        id: 'cred-1',
+        ownerType: 'user',
+        ownerId: 'user-1',
+        provider: 'linear',
+        credentialType: 'oauth2',
+        encryptedData: 'bad-data',
+        metadata: null,
+        scopes: null,
+        expiresAt: null,
+        lastFailureReason: 'expired',
+        lastFailureAt: '2025-01-01T00:00:00Z',
+        createdAt: '2025-01-01T00:00:00Z',
+        updatedAt: '2025-01-01T00:00:00Z',
+      });
+      mockDecrypt.mockRejectedValue(new Error('decrypt failed'));
+
+      await getCredential(fakeEnv, 'user', 'user-1', 'linear');
+
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+      const entry = JSON.parse(warnSpy.mock.calls[0][0] as string);
+      expect(entry).toMatchObject({ reason: 'decryption_failed', previousReason: 'expired' });
+      expect(mockDb.setCredentialFailureState).toHaveBeenCalledWith(fakeDrizzleDb, 'cred-1', 'decryption_failed');
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('logs an info and clears the state when a broken credential recovers', async () => {
+    const infoSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      mockDb.getCredentialRow.mockResolvedValue({
+        id: 'cred-1',
+        ownerType: 'user',
+        ownerId: 'user-1',
+        provider: 'github',
+        credentialType: 'oauth2',
+        encryptedData: 'encrypted-blob',
+        metadata: null,
+        scopes: null,
+        expiresAt: null,
+        lastFailureReason: 'expired',
+        lastFailureAt: '2025-01-01T00:00:00Z',
+        createdAt: '2025-01-01T00:00:00Z',
+        updatedAt: '2025-01-01T00:00:00Z',
+      });
+      mockDecrypt.mockResolvedValue(JSON.stringify({ access_token: 'ghp_abc123' }));
+
+      const result = await getCredential(fakeEnv, 'user', 'user-1', 'github');
+
+      expect(result.ok).toBe(true);
+      const recovered = infoSpy.mock.calls
+        .map((c) => { try { return JSON.parse(c[0] as string); } catch { return null; } })
+        .find((e) => e?.message === 'integration auth recovered');
+      expect(recovered).toMatchObject({
+        level: 'info',
+        service: 'github',
+        ownerType: 'user',
+        ownerId: 'user-1',
+        previousReason: 'expired',
+      });
+      expect(mockDb.setCredentialFailureState).toHaveBeenCalledWith(fakeDrizzleDb, 'cred-1', null);
+    } finally {
+      infoSpy.mockRestore();
     }
   });
 
