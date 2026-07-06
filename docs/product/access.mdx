@@ -1,53 +1,63 @@
 ---
 title: Access and Sharing
-description: Decide who can use Valet, who can administer it, and who can see a task.
+description: Who can sign in to Valet, what admins control, and who can see or join a task.
 ---
 
-Valet needs clear access rules because it can see work details and use connected tools.
+This page is for admins deciding how to gate access, and for anyone wondering who can see their work. It covers sign-in controls, organization roles, and task-level access.
 
-The product questions are simple:
+Valet needs clear access rules because it sees real work and acts through connected tools. The model is deliberately simple: control who gets in, give a few people admin, and keep tasks private unless someone shares them.
 
-- Who can sign in?
-- Who can manage team settings?
-- Who can see or join a task?
-- Which connected tools can each person use?
+## Who can sign in
 
-## Signing in
+Users sign in with GitHub or Google. By default, with no restrictions configured, anyone who can reach your Valet instance can sign up — so set at least one gate. Admins can restrict sign-up with any combination of:
 
-Teams can limit who is allowed to join Valet. Common controls include approved domains, invites, and admin-managed access.
+- **Domain gating** — only emails on your domain (for example `acme.com`) can join.
+- **Email allowlist** — an explicit list of allowed addresses.
+- **Invites** — single-use invite codes, optionally locked to a specific email and role. Invites expire after seven days and bypass the other gates.
 
-## Admins and members
+Existing users always keep access regardless of gating changes. The first person to sign in to a new Valet instance automatically becomes an admin.
 
-Admins manage team-level setup:
+## Organization roles
 
-- Access rules.
-- Connected tools.
-- Approval defaults.
-- Shared workflows.
-- Shared personas and skills.
-- Channel settings.
+Every user is either an **admin** or a **member**.
 
-Members use Valet for their own tasks and any shared work they are allowed to see.
+Admins control organization-level setup:
 
-## Sharing a task
+- Sign-in rules (domain gating, allowlist, invites) and user management, including granting or revoking admin.
+- Organization LLM provider keys and custom model providers.
+- The default visibility for new tasks (private, visible to the org, or joinable by the org).
+- Organization settings like the display name.
 
-Share a task when someone else needs to review, collaborate, or take over.
+Members use Valet for their own work and any shared work they're allowed to see. Valet protects you from lockout: the last remaining admin can't be demoted or deleted.
 
-Use private tasks for:
+Finer-grained role-based access control — roles between "admin" and "member", per-resource permissions — is in active development. Today, plan around these two roles plus the team roles below.
 
-- Personal memory.
-- Sensitive customer information.
-- Account setup.
-- Work that only you should approve.
+## Who can see a task
 
-## Workspace access
+**Tasks are private by default.** Only the person who started a task can see it, unless one of the following applies:
 
-Some tasks include a workspace with files, drafts, or engineering tools. A person should only open a workspace when they are allowed to inspect the task.
+- **Participants.** The owner can share a task with specific people as a *viewer* (read-only), *collaborator* (can send messages and steer the work), or *owner* (full control, including sharing and deletion).
+- **Org visibility.** A task can be marked visible to the whole organization (anyone can read it) or joinable (anyone can participate). Admins set the org-wide default for new tasks; private is the safe default.
 
-## Admin checklist
+Two kinds of sessions never follow the sharing rules:
 
-- Decide who can join.
-- Choose who can be an admin.
-- Decide what work is private by default.
-- Decide when task sharing is allowed.
-- Review connected tools and approvals regularly.
+- **Your personal orchestrator.** The long-running conversation with your own Valet — including its memory and everything routed to it from Slack or Telegram DMs — is private to you. It can't be shared, and no one else, admins included, can open it.
+- **Workflow runs** are visible only to their owner.
+
+<Note>
+  Teams, which are rolling out, add a third path: tasks owned by a team are visible to every team member. Members can watch and prompt them; team admins get owner-level control (restart, delete, settings). Non-members can't see that a team's task exists. See [Teams](/product/teams).
+</Note>
+
+## Workspace access follows task access
+
+Some tasks include a live workspace — files, a VS Code editor, a terminal, a browser. Workspace access is not a separate permission: if you can view the task, you can inspect its workspace, and the same short-lived credentials that gate the task gate the workspace services. Sharing a task means sharing everything in it, so share deliberately when a workspace holds sensitive material.
+
+## What this page doesn't cover
+
+Access to *tools* — which connected services Valet may act on, and which actions pause for a human — is governed by [approvals](/product/approvals), not by task sharing. A collaborator on your task still answers to the same approval rules.
+
+## Next steps
+
+- [Admin setup](/product/admin-setup) — the practical day-one checklist for admins
+- [Teams](/product/teams) — shared orchestrators, team roles, and team-owned resources
+- [Approvals](/product/approvals) — controlling what Valet can do without asking

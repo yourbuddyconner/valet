@@ -1,0 +1,80 @@
+---
+title: Teams
+description: Give a group of people a shared Valet orchestrator, shared memory, and shared resources they all can see.
+---
+
+<Note>
+  Teams are rolling out. The core described here — team orchestrators, roles, team memory, and Slack channel bindings — is the first version, and some pieces (shared integrations, team workflows, richer roles) are still landing. If you don't see Teams in your sidebar yet, it hasn't reached your organization.
+</Note>
+
+A team is a named group of people inside your organization that owns resources together. Read this page if you're an admin or team lead deciding how to set one up: it covers what a team owns, who can manage it, how team memory works, and how a team shares a Slack channel with Valet.
+
+Without teams, everything in Valet belongs to one person — your orchestrator, your memory, your channel bindings. A team moves that ownership up a level, so the platform team's Slack channel, its long-running context, and the tasks it delegates to Valet belong to the team rather than to whoever happened to set them up.
+
+## The team orchestrator
+
+Every team gets its own orchestrator: a shared, always-on agent that any member can talk to, in the web UI on the team page or in a Slack channel bound to the team. It works like your personal orchestrator — it holds a conversation, keeps memory, and spawns child sessions for focused work — but it serves the whole team.
+
+Two behaviors make that workable with several people talking at once:
+
+- **Attribution.** The orchestrator knows who said what. Every prompt carries its author, so it can answer each person in their own context — and tell Bob "Alice asked me to look into the deploy failure" when he checks in.
+- **Queued turn-taking.** On your personal orchestrator, a new message can redirect what Valet is already doing. On a team orchestrator, prompts from different members queue instead: Bob's message waits its turn rather than interrupting the task Alice kicked off mid-flight. The team chat shows what's queued and from whom.
+
+Child sessions the team orchestrator spawns belong to the team too, so every member can open them, watch progress, and join in.
+
+## What a team owns
+
+A team owns its resources the way an individual user owns theirs:
+
+- **Tasks and sessions** — the team orchestrator's conversation and every child session it spawns. Visible to all members.
+- **Memory** — a team-scoped memory the orchestrator builds up over time (see below).
+- **Channel bindings** — Slack channels routed to the team's orchestrator.
+- **Integrations and credentials** — connections a member shares to the team, so team work can act on external services. When the sourcing member disconnects or leaves, the shared connection is marked broken and any other member can re-connect it.
+- **Workflows** — automations owned by the team, whose runs are visible to all members.
+
+## Roles
+
+Teams have two roles: **admin** and **member**.
+
+- **Team admins** manage membership, team settings, channel bindings, shared integrations, and the team orchestrator itself (identity, restart, deletion). They can also edit and delete team memory.
+- **Members** talk to the orchestrator, see all team-owned tasks and sessions, and read team memory.
+
+Anyone in your organization can create a team, and the creator becomes its first admin. Organization admins can manage any team, whether or not they're a member of it.
+
+Richer role-based access control — finer-grained permissions than admin/member — is in active development. For now, if someone needs to manage a team, make them a team admin.
+
+## Team memory
+
+The team orchestrator keeps memory at the team scope, the same way your personal orchestrator keeps memory about your work. Decisions, context, and running state the team accumulates live there, visible to every member in the team's memory browser.
+
+The boundaries are strict and worth knowing:
+
+- **Only the team orchestrator writes team memory.** Your personal orchestrator can't write into it.
+- **Your personal orchestrator can read your teams' memory.** When it searches memory, it sees your personal scope plus a read-only view of each team you belong to, with results labeled by source. Leave the team and that access ends immediately.
+- **Your personal memory is never shared with the team.** The team orchestrator cannot read any member's personal memory. Nothing private leaks upward.
+
+## Slack
+
+Bind a Slack channel to the team and `@valet` in that channel reaches the team's orchestrator — the channel itself is what routes the message, so nobody has to name or pick an orchestrator. One channel binds to one team.
+
+Only mapped team members are heard. Someone in the channel who isn't a team member, or whose Slack account isn't linked to their Valet account, is silently ignored — the bot never scolds a busy channel with authorization errors.
+
+Each binding has a trigger mode:
+
+- **Mention** (the default) — the orchestrator responds when it's @-mentioned, or when someone replies in a thread it's already active in.
+- **All messages** — the orchestrator reads every message from team members and may join in on its own. Useful for channels where you want Valet passively watching, but every message costs an evaluation, so reserve it for channels where that's worth it.
+
+Replies in a bound channel post under the team orchestrator's own name and avatar, so it's clear which agent is speaking.
+
+## Deleting a team
+
+Deleting a team is explicit and deliberate — a team admin (or org admin) confirms it, and everything the team owns is cleaned up rather than orphaned: sessions are stopped, channel bindings removed (the Slack channel goes quiet immediately), shared connections and team memory deleted, and the orchestrator's handle freed. You can export team memory as markdown before confirming.
+
+One thing blocks deletion: **team-owned workflows must be moved or deleted first.** Valet won't silently disable automation someone may rely on — it tells you what's in the way instead.
+
+## Related pages
+
+- [Access and sharing](/product/access) — who can sign in and see what across the org
+- [Admin setup](/product/admin-setup) — day-one checklist for org admins
+- [Memory](/product/memory) — how orchestrator memory works
+- [Channels](/product/channels) — Slack and Telegram setup

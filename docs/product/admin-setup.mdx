@@ -3,13 +3,13 @@ title: Admin Setup
 description: Prepare Valet for a team by setting access, tools, approvals, channels, skills, and workflows.
 ---
 
-Admins prepare Valet so a team can use it safely.
+This is the day-one checklist for org admins: the decisions to make and settings to configure before your team starts using Valet. For the full access model behind these settings, see [Access and sharing](/product/access).
 
 ## Setup checklist
 
 <Steps>
   <Step title="Choose who can join">
-    Decide which teammates can use Valet and who should be an admin.
+    Set a sign-in gate — domain gating, an email allowlist, or invites — and decide who should be an admin. The first person to sign in is an admin automatically. Details: [Access and sharing](/product/access).
   </Step>
   <Step title="Connect the first tools">
     Start with the systems needed for the team's first real use case, such as Slack, GitHub, Linear, Gmail, Google Workspace, or Notion.
@@ -23,6 +23,9 @@ Admins prepare Valet so a team can use it safely.
   <Step title="Create shared skills and workflows">
     Capture repeated work as skills and workflows so the team does not reinvent the same process.
   </Step>
+  <Step title="Set up teams (rolling out)">
+    If teams are available in your organization, create one for each group that should share an orchestrator, memory, and a Slack channel. See [Teams](/product/teams).
+  </Step>
 </Steps>
 
 ## Start narrow
@@ -31,6 +34,7 @@ For the first rollout:
 
 - Enable one or two tools.
 - Require approval for write actions.
+- Keep the default task visibility private; loosen it later if the org wants shared-by-default work.
 - Start in the web app.
 - Add Slack or Telegram once the team knows where updates should go.
 - Create one workflow only after the team has done the work manually.
@@ -45,9 +49,12 @@ After a few tasks, review:
 - Which repeated tasks should become workflows.
 - Which instructions should become shared skills.
 - Which channels need tighter rules.
+- Whether a group has outgrown personal orchestrators and should become a [team](/product/teams).
 
 ## Useful next pages
 
+- [Access and sharing](/product/access)
+- [Teams](/product/teams)
 - [Connect tools](/product/tools)
 - [Approvals](/product/approvals)
 - [Channels](/product/channels)
