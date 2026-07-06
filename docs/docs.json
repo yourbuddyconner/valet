@@ -83,38 +83,34 @@
             "pages": [
               "product/tasks",
               "product/workspaces",
-              "product/workflows",
+              "product/child-sessions",
+              "product/software-workflow",
               "product/memory",
               "product/skills-and-personas"
             ]
           },
           {
-            "group": "Setup and control",
+            "group": "Automations",
             "pages": [
-              "product/access",
-              "product/approvals",
-              "product/channels",
-              "product/tools",
-              "product/admin-setup"
-            ]
-          },
-          {
-            "group": "Integrations and channels",
-            "pages": [
-              "product/google-workspace",
-              "product/telegram-setup"
-            ]
-          },
-          {
-            "group": "Help and reference",
-            "pages": [
-              "product/troubleshooting",
-              "product/environments",
+              "product/workflows",
               "product/triggers",
-              "product/models",
-              "product/child-sessions",
-              "product/software-workflow",
+              "product/approvals"
+            ]
+          },
+          {
+            "group": "Your organization",
+            "pages": [
+              "product/admin-setup",
+              "product/teams",
+              "product/access",
               "product/billing"
+            ]
+          },
+          {
+            "group": "Channels",
+            "pages": [
+              "product/channels",
+              "product/telegram-setup"
             ]
           },
           {
@@ -142,9 +138,13 @@
             ]
           },
           {
-            "group": "Built-in tools",
+            "group": "Help and reference",
             "pages": [
-              "product/built-in-tools"
+              "product/tools",
+              "product/built-in-tools",
+              "product/troubleshooting",
+              "product/environments",
+              "product/models"
             ]
           }
         ]
@@ -211,5 +211,11 @@
   },
   "search": {
     "prompt": "Search Valet docs for product concepts, use cases, tasks, workspaces, workflows, skills, approvals, channels, integrations, engineering details, API reference, and MCP access."
-  }
+  },
+  "redirects": [
+    {
+      "source": "/product/google-workspace",
+      "destination": "/product/integrations/google-workspace"
+    }
+  ]
 }
