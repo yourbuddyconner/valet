@@ -19,9 +19,13 @@ Use a workflow when the process is known and should not drift: a weekly summary 
 
 Everything is under **Automation** in the sidebar, which has three tabs: **Triggers**, **Workflows**, and **Runs**. The Automation landing page is a copilot: describe the automation in plain language ("When someone posts in #alerts, summarize the thread and email me every morning") and click **Build workflow** — it drafts the workflow for you to iterate on. Or go to the **Workflows** tab and click **New workflow** to start from a blank canvas. Either way you land in the editor described below, and the same **Copilot** button stays available in the editor toolbar for follow-up edits.
 
+![The Automation page: a copilot prompt for describing a workflow in plain language, above cards for the Triggers, Workflows, and Runs tabs.](/images/product/automation-copilot.png)
+
 ## The visual editor
 
 Each workflow opens as a full-canvas editor, in the style of node-based automation tools. Nodes are compact cards connected by edges; an add-node control opens a searchable palette grouped by category, and selecting a node opens an inspector panel where you edit its parameters. Editor, executions, and tests are peer tabs on the same page.
+
+![The workflow editor canvas showing a published workflow as connected nodes — set-values, a session step, an if branch, an approval gate, and stop nodes — with the Copilot, Save draft, Test, and Publish controls in the toolbar.](/images/product/workflow-editor.png)
 
 Steps pass data to each other through template expressions like `{{trigger.data.email}}` or `{{nodes.summarize.data.response}}`. Typing `{{` in a parameter field opens a typeahead listing the outputs available from upstream steps, and the editor flags unknown or malformed references inline before you save. Selecting an edge opens a data-flow inspector that shows what the source step produces, what the target expects, and any mismatch between them.
 
