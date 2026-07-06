@@ -1,8 +1,9 @@
 import type { Env } from '../env.js';
 import type { AppDb } from '../lib/drizzle.js';
 import { getDb } from '../lib/drizzle.js';
-import { createDoTracer, type DoTracer } from '../lib/do-tracing.js';
+import { createDoTracer, parseTraceparent, type DoTracer } from '../lib/do-tracing.js';
 import { activeTraceparent } from '../lib/tracing.js';
+import type { Context } from '@opentelemetry/api';
 import { updateSessionStatus, updateSessionMetrics, addActiveSeconds, updateSessionGitState, upsertSessionFileChanged, updateSessionTitle, getSession, getSessionGitState, getChildSessions, listUserChannelBindings, getUserById, getUsersByIds, createMailboxMessage, getOrgSettings, isNotificationWebEnabled, batchInsertAnalyticsEvents, batchUpsertMessages, updateUserDiscoveredModels, setCatalogCache, updateThread, incrementThreadMessageCount, getThreadOriginChannel, getOrchestratorIdentity, getUserSlackIdentityLink, getWorkflowNameByExecutionId } from '../lib/db.js';
 import { getCredential, type CredentialResult } from '../services/credentials.js';
 import { memRead, memWrite, memPatch, memRm, memSearch } from '../services/session-memory.js';
@@ -340,6 +341,23 @@ export class SessionAgentDO {
   private sessionState!: SessionState;
   private lifecycle!: SessionLifecycle;
 
+  // DO-scoped OTel tracer: created once and reused across fetch / WS / alarm. Spans are batched
+  // in the DO (do-tracing.ts) and flushed externally — never one POST per span on the WS hotpath.
+  // traceFlushDeadline keeps an alarm pending so buffered spans drain within the interval even if
+  // the DO is evicted (the in-memory batch buffer is otherwise lost on hibernation).
+  private static readonly TRACE_FLUSH_INTERVAL_MS = 10_000;
+  // Per-token streaming frames + keepalive: high-frequency, low-value; not traced individually.
+  private static readonly WS_TRACE_SKIP = new Set<string>(['ping', 'pong', 'message.part.text-delta', 'message.part.tool-update']);
+  private doTracerPromise?: Promise<DoTracer>;
+  private traceFlushDeadline: number | null = null;
+  // Per-turn W3C traceparent of the originating Worker trace, captured at prompt dispatch so
+  // webSocketMessage can parent the runner's reply spans to it instead of disconnected roots.
+  // Keyed by a channel key (the DO runs cross-thread turns concurrently); turnChannelKeys maps a
+  // turnId → that key so runner messages carrying only a turnId (finalize/usage-report) resolve
+  // too. In-memory + best-effort: lost on hibernation (spans fall back to roots), and size-capped.
+  private turnTraceparents = new Map<string, string>();
+  private turnChannelKeys = new Map<string, string>();
+
   /** Tracks the workflow execution ID for direct-dispatch workflow turns
    *  (where no queue row exists). Set when handleWorkflowExecuteDispatch
    *  sends directly to the runner; cleared on turn completion. */
@@ -515,7 +533,7 @@ export class SessionAgentDO {
 
     // Wrap control-endpoint dispatch in a DO root span, parented to the worker→DO
     // traceparent, so DO-internal work nests under the worker trace. ctx.storage stays native.
-    const tracer = await createDoTracer(this.env, this.ctx, 'valet-session-agent-do');
+    const tracer = await this.getTracer();
     return tracer.traceFetch(request, `SessionAgentDO ${url.pathname}`, (span) => {
       span.setAttribute('do.path', url.pathname);
       // Correlate DO spans with the session/user, mirroring the worker's
@@ -1020,18 +1038,42 @@ export class SessionAgentDO {
 
     console.log(`[SessionAgentDO] WebSocket message: isRunner=${isRunner}, type=${parsed.type}, data=${data.slice(0, 200)}`);
 
-    if (isRunner) {
-      await this.runnerLink.handleMessage(
-        parsed as RunnerToDOMessage,
-        this.runnerHandlers,
-        () => {
-          this.lifecycle.touchActivity();
-          this.rescheduleIdleAlarm();
-        },
-      );
-    } else {
-      await this.handleClientMessage(ws, parsed as ClientMessage);
+    const dispatch = isRunner
+      ? () => this.runnerLink.handleMessage(
+          parsed as RunnerToDOMessage,
+          this.runnerHandlers,
+          () => {
+            this.lifecycle.touchActivity();
+            this.rescheduleIdleAlarm();
+          },
+        )
+      : () => this.handleClientMessage(ws, parsed as ClientMessage);
+
+    // Trace each non-noise inbound message as a ROOT span — the WS protocol carries no
+    // traceparent, so there is nothing to parent to; correlate by attributes instead. Skip
+    // keepalive + per-token streaming frames (high-frequency, low-value).
+    const msgType = typeof parsed.type === 'string' ? parsed.type : 'unknown';
+    if (SessionAgentDO.WS_TRACE_SKIP.has(msgType)) {
+      await dispatch();
+      return;
     }
+
+    const tracer = await this.getTracer();
+    const userId = isRunner ? this.sessionState.userId : this.getClientUserId(ws);
+    // Parent the runner's reply spans to the originating turn's trace (captured at dispatch, keyed
+    // by channel). Channel-bearing messages resolve directly; turnId-only ones (finalize/usage-
+    // report) resolve via the turnId→channel map populated on message.create. Client messages and
+    // unkeyable runner messages fall back to a root span (no inbound trace context exists).
+    const parent = isRunner ? this.resolveTurnParent(parsed as RunnerToDOMessage) : undefined;
+    await tracer.span(`ws.${isRunner ? 'runner' : 'client'}.${msgType}`, dispatch, {
+      'valet.session.id': this.sessionState.sessionId,
+      ...(userId ? { 'valet.user.id': userId } : {}),
+      'ws.side': isRunner ? 'runner' : 'client',
+      'ws.msg_type': msgType,
+      ...(parent ? { 'ws.trace_parented': true } : {}),
+    }, parent);
+    // Keep an alarm pending so this buffered span drains within the flush interval even on eviction.
+    this.armTraceFlush();
   }
 
   async webSocketClose(ws: WebSocket, code: number, reason: string, _wasClean: boolean) {
@@ -1128,6 +1170,9 @@ export class SessionAgentDO {
     } catch {
       // Socket already closed or invalid close code — ignore
     }
+
+    // Flush buffered spans before the DO can hibernate after this disconnect.
+    this.ctx.waitUntil(this.flushTraces());
   }
 
   async webSocketError(ws: WebSocket, error: unknown) {
@@ -1164,12 +1209,24 @@ export class SessionAgentDO {
   // ─── Alarm Handler ────────────────────────────────────────────────────
 
   async alarm() {
+    // Drain spans buffered on the WS/alarm hotpath — the alarm is the bounded-interval flush
+    // driver (JS timers freeze under hibernation). Runs even before the terminal early-return.
+    this.ctx.waitUntil(this.flushTraces());
+
     // ─── Early Exit: terminal states don't need alarms ──────────────
     const status = this.sessionState.status;
     if (['terminated', 'archived', 'error', 'hibernated'].includes(status)) {
       return; // don't re-arm
     }
 
+    // The alarm is a self-initiated tick with no inbound trace context → a root span. The branch
+    // actually taken (recovery / hibernate / health action) shows as the work inside.
+    const tracer = await this.getTracer();
+    await tracer.span('do.alarm', () => this.alarmTick(), { 'valet.session.id': this.sessionState.sessionId });
+  }
+
+  private async alarmTick(): Promise<void> {
+    const status = this.sessionState.status;
     const now = Date.now();
     const nowSecs = Math.floor(now / 1000);
 
@@ -2261,7 +2318,7 @@ export class SessionAgentDO {
       : content;
 
     const channelOcSessionId = this.getChannelOcSessionId(channelKey);
-    const dispatched = this.runnerLink.send({
+    const dispatched = this.sendPrompt({
       type: 'prompt',
       messageId,
       content: agentContent,
@@ -3060,6 +3117,7 @@ export class SessionAgentDO {
 
       'message.finalize': (msg) => {
         const turnId = msg.turnId!;
+        this.turnChannelKeys.delete(turnId); // turn done — drop the trace correlation (bounded-growth)
         if (!this.messageStore.getTurnSnapshot(turnId)) {
           if (!this.messageStore.recoverTurn(turnId)) {
             console.warn(`[SessionAgentDO] finalize for unknown turn ${turnId}`);
@@ -3210,7 +3268,7 @@ export class SessionAgentDO {
               if (initialModel) {
                 this.sessionState.initialModel = undefined;
               }
-              this.runnerLink.send({
+              this.sendPrompt({
                 type: 'prompt',
                 messageId,
                 content: initialPrompt,
@@ -4940,7 +4998,7 @@ export class SessionAgentDO {
             await this.ensureThreadOcSessionHydrated(threadId, sysChannelKey);
           }
           const sysOcSessionId = this.getChannelOcSessionId(sysChannelKey);
-          const sysDispatched = this.runnerLink.send({
+          const sysDispatched = this.sendPrompt({
             type: 'prompt',
             messageId,
             content,
@@ -5236,7 +5294,7 @@ export class SessionAgentDO {
       ? `${prompt.contextPrefix}\n\n${prompt.content}`
       : prompt.content;
 
-    const queueDispatched = this.runnerLink.send({
+    const queueDispatched = this.sendPrompt({
       type: 'prompt',
       messageId: prompt.id,
       content: queueAgentContent,
@@ -5847,6 +5905,8 @@ export class SessionAgentDO {
       console.log(`[SessionAgentDO] performHibernate skipped — status is ${currentStatus}`);
       return;
     }
+    // Drain buffered spans before the isolate is torn down.
+    this.ctx.waitUntil(this.flushTraces());
 
     console.log(`[SessionAgentDO] performHibernate starting for session ${sessionId}`);
 
@@ -6116,11 +6176,85 @@ export class SessionAgentDO {
       ? wakeStarted + SANDBOX_WAKE_TIMEOUT_MS
       : null;
 
-    return [promptExpiry, followupMs, watchdog, safetyNet, parentIdle, gracePeriod, idleQueueDeadline, readyDeadline, backoffDeadline, wakeDeadline];
+    return [promptExpiry, followupMs, watchdog, safetyNet, parentIdle, gracePeriod, idleQueueDeadline, readyDeadline, backoffDeadline, wakeDeadline, this.traceFlushDeadline];
   }
 
   private rescheduleIdleAlarm(): void {
     this.lifecycle.scheduleAlarm(this.collectAlarmDeadlines());
+  }
+
+  // ─── DO-scoped tracing (batched; see do-tracing.ts) ───────────────────
+  private getTracer(): Promise<DoTracer> {
+    return (this.doTracerPromise ??= createDoTracer(this.env, this.ctx, 'valet-session-agent-do'));
+  }
+
+  /** Drain buffered spans now (alarm / close / hibernate / fetch). Best-effort — never throws. */
+  private async flushTraces(): Promise<void> {
+    this.traceFlushDeadline = null;
+    try {
+      await (await this.getTracer()).forceFlush();
+    } catch {
+      // tracing is best-effort
+    }
+  }
+
+  /**
+   * Keep an alarm pending while spans are buffered so they flush within TRACE_FLUSH_INTERVAL_MS
+   * even if the DO hibernates (the in-memory buffer is lost on eviction). Idempotent + cheap:
+   * arms once per flush cycle, through the existing scheduleAlarm machinery (collectAlarmDeadlines
+   * includes traceFlushDeadline). Call after handling a WS message that produced spans.
+   */
+  private armTraceFlush(): void {
+    if (this.traceFlushDeadline !== null) return;
+    // armTraceFlush is only called right after a span was buffered, so there is always something
+    // to flush — no need to probe a pending count.
+    this.traceFlushDeadline = Date.now() + SessionAgentDO.TRACE_FLUSH_INTERVAL_MS;
+    this.lifecycle.scheduleAlarm(this.collectAlarmDeadlines());
+  }
+
+  /**
+   * Stable key for the per-turn traceparent map. Derived from the SAME raw channel fields that
+   * appear on both the outbound prompt and the runner's echoed reply messages, so store-time and
+   * lookup-time keys match by construction (independent of channelKeyFrom's normalization).
+   */
+  private turnKeyFor(channelType?: string, channelId?: string, threadId?: string): string {
+    return threadId ? `thread:${threadId}` : `${channelType ?? ''}:${channelId ?? ''}`;
+  }
+
+  /**
+   * Send a prompt to the runner, stamping it with the active turn's traceparent and recording that
+   * traceparent (keyed by channel) so webSocketMessage can parent the runner's reply spans to the
+   * originating Worker trace. No-op on the trace side when there's no active span (e.g. a queue- or
+   * alarm-driven dispatch outside a Worker request); the prompt is still sent.
+   */
+  private sendPrompt(msg: DOMessageOf<'prompt'>): boolean {
+    const tp = activeTraceparent();
+    if (tp) {
+      msg.traceparent = tp;
+      const key = this.turnKeyFor(msg.channelType, msg.channelId, msg.threadId);
+      this.turnTraceparents.set(key, tp);
+      if (this.turnTraceparents.size > 64) this.turnTraceparents.delete(this.turnTraceparents.keys().next().value!);
+    }
+    return this.runnerLink.send(msg);
+  }
+
+  /** Resolve the parent trace Context for an inbound runner message, or undefined to root it. */
+  private resolveTurnParent(msg: RunnerToDOMessage): Context | undefined {
+    const m = msg as { channelType?: string; channelId?: string; threadId?: string; turnId?: string };
+    let key: string | undefined;
+    if (m.channelType || m.channelId || m.threadId) {
+      key = this.turnKeyFor(m.channelType, m.channelId, m.threadId);
+      // message.create carries both turnId and channel — remember the mapping so later turnId-only
+      // messages (finalize / usage-report) resolve the same traceparent.
+      if (m.turnId) {
+        this.turnChannelKeys.set(m.turnId, key);
+        if (this.turnChannelKeys.size > 256) this.turnChannelKeys.delete(this.turnChannelKeys.keys().next().value!);
+      }
+    } else if (m.turnId) {
+      key = this.turnChannelKeys.get(m.turnId);
+    }
+    const tp = key ? this.turnTraceparents.get(key) : undefined;
+    return tp ? parseTraceparent(tp) : undefined;
   }
 
   // ─── Helpers ───────────────────────────────────────────────────────────

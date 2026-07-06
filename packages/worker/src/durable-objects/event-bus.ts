@@ -14,10 +14,26 @@ import { createDoTracer, type DoTracer } from '../lib/do-tracing.js';
 export class EventBusDO {
   private ctx: DurableObjectState;
   private env: Env;
+  // DO-scoped batched tracer (created once; see do-tracing.ts). EventBus has no alarm, so its
+  // buffered broadcast spans flush on the size threshold and on webSocketClose / webSocketError.
+  private doTracerPromise?: Promise<DoTracer>;
 
   constructor(ctx: DurableObjectState, env: Env) {
     this.ctx = ctx;
     this.env = env;
+  }
+
+  private getTracer(): Promise<DoTracer> {
+    return (this.doTracerPromise ??= createDoTracer(this.env, this.ctx, 'valet-event-bus-do'));
+  }
+
+  /** Drain buffered spans now (webSocketClose). Best-effort — never throws. */
+  private async flushTraces(): Promise<void> {
+    try {
+      await (await this.getTracer()).forceFlush();
+    } catch {
+      // tracing is best-effort
+    }
   }
 
   // ─── Entry Point ─────────────────────────────────────────────────────────
@@ -30,7 +46,9 @@ export class EventBusDO {
       return this.handleWebSocketUpgrade(url);
     }
 
-    const tracer = await createDoTracer(this.env, this.ctx, 'valet-event-bus-do');
+    const tracer = await this.getTracer();
+    // flushOnEnd=false: /publish is the hub's hot path — batch broadcast spans instead of one
+    // POST per publish (flushed on the size threshold and on webSocketClose).
     return tracer.traceFetch(request, `EventBusDO ${url.pathname}`, async (span) => {
       span.setAttribute('do.path', url.pathname);
 
@@ -45,7 +63,7 @@ export class EventBusDO {
       }
 
       return new Response('Not found', { status: 404 });
-    });
+    }, false);
   }
 
   // ─── WebSocket Upgrade ───────────────────────────────────────────────────
@@ -163,11 +181,15 @@ export class EventBusDO {
   }
 
   async webSocketClose(ws: WebSocket, code: number, reason: string): Promise<void> {
+    // Drain buffered broadcast spans before the DO can hibernate after this disconnect —
+    // EventBus has no alarm, so close/error are the only lifecycle flush drivers.
+    this.ctx.waitUntil(this.flushTraces());
     ws.close(code, reason);
   }
 
   async webSocketError(ws: WebSocket, error: unknown): Promise<void> {
     console.error('EventBus WebSocket error:', error);
+    this.ctx.waitUntil(this.flushTraces());
     ws.close(1011, 'Internal error');
   }
 }

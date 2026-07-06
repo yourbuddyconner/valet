@@ -68,6 +68,10 @@ export type DOToRunnerMessage =
       channelType?: string;
       channelId?: string;
       threadId?: string;
+      /** W3C traceparent of the originating turn's Worker/DO span, injected at dispatch so the
+       *  runner can emit child spans on the same trace and the DO can parent the runner's reply
+       *  spans to it (see SessionAgentDO.sendPrompt / resolveTurnParent). */
+      traceparent?: string;
       /** Original channel info before thread normalization (e.g., slack:D123:threadTs).
        *  Used by the Runner for the [via ...] attribution prefix so the agent knows
        *  which external channel to reply to even when channelType is 'thread'. */
