@@ -10,12 +10,14 @@ This is the day-one checklist for org admins: the decisions to make and settings
 <Steps>
   <Step title="Configure model keys">
     Nothing runs without a model. In **Settings → Organization → LLM API Keys**, add at least one provider key (Anthropic, OpenAI, or Google) — org-level keys are used for all sandboxes. Then set the failover order under **Default Model Preferences**: if a model hits a billing, rate-limit, or auth error, Valet fails over to the next one in the list.
+
+    ![The LLM API Keys panel in Settings → Organization: a row per provider (Anthropic, OpenAI, Google, Parallel) showing whether a key is set, with Configure models and Set/Update controls.](/images/product/llm-api-keys.png)
   </Step>
   <Step title="Choose who can join">
     In **Settings → Organization → Access Control**, restrict sign-ups to your email domain or an allowlist — **if nothing is enabled, sign-ups are open to anyone who can reach your Valet URL**. Create invite links (with Member or Admin role) under **Invites**, choose which login providers appear (Google, GitHub, email/password) under **Login Providers**, and manage roles under **Members**. The first person to sign in is an admin automatically. Details: [Access and sharing](/product/access).
   </Step>
   <Step title="Connect the first tools">
-    Start with the systems needed for the team's first real use case, such as Slack, GitHub, Linear, Gmail, Google Workspace, or Notion. Org-level apps (the Slack workspace app, the GitHub App) are configured in **Settings → Organization**; individual users then connect their own accounts from the **Integrations** page in the sidebar.
+    Start with the systems needed for the team's first real use case, such as Slack, GitHub, Linear, Gmail, Google Workspace, or Notion. Org-level apps (the Slack workspace app, the GitHub App) are installed once from the **Slack** and **GitHub** sections of **Settings → Organization**; individual users then connect their own accounts from the **Integrations** page in the sidebar.
   </Step>
   <Step title="Set approval rules">
     Decide which actions Valet can do on its own and which should ask first. System defaults are sensible (low risk runs, medium/high asks, critical is denied); add org-wide overrides in **Settings → Organization → Action Policies**, and audit everything after the fact in the **Action Log**. Details: [Approvals](/product/approvals).
