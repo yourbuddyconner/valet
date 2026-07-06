@@ -1,27 +1,109 @@
 ---
 title: Software Engineering
-description: Use Valet for repository work, PR review, issue triage, QA loops, and release follow-up.
+description: Playbook for engineering teams — PR review on every pull request, issue triage, scoped changes shipped end to end, CI health reports, and Sentry follow-up.
 ---
 
-Valet can work like an engineering teammate with a hosted workspace. It can inspect a repository, use connected tools, prepare changes, run checks, and keep a task alive in the background.
+This playbook is for engineering teams that want Valet to own recurring repository work — reviewing pull requests, triaging issues, shipping scoped changes, and watching CI — so engineers spend their time on the changes that need human judgment. After reading it you can pick a play, wire up the trigger and integrations it needs, and set the approval gates that keep it safe.
 
-Typical work includes:
+Valet works like an engineering teammate with a hosted workspace. It inspects repositories, prepares changes in an isolated [child session](/product/child-sessions), runs checks, and keeps a [task](/product/tasks) alive in the background until the work lands. It never commits directly to your base branch: it works on a separate branch, opens or updates a pull request, and lets your CI and branch protection rules apply as they would for any human PR. The [software engineering workflow](/product/software-workflow) page covers the branch and PR policy in detail.
 
-- Reviewing pull requests and leaving actionable feedback.
-- Triaging issues from GitHub, Linear, Slack, or a scheduled workflow.
-- Preparing code changes in an isolated workspace.
-- Running tests, collecting logs, and preparing a summary.
-- Splitting large investigations into smaller tasks.
-- Asking for approval before risky operations.
+Each play below names the trigger, the steps Valet runs, the integrations involved, and where an [approval](/product/approvals) pauses the work.
 
-## Product surfaces involved
+## Play: review every opened pull request
 
-- [Run tasks](/product/tasks) keeps each request, review, and result together.
-- [Workspaces](/product/workspaces) explains where the work happens.
-- [Memory](/product/memory) helps Valet reuse useful preferences and project notes.
-- [Approvals](/product/approvals) control sensitive tools.
-- [Connect tools](/product/tools) connects GitHub, Linear, Slack, and other systems.
+**Trigger:** a [GitHub webhook](/product/integrations/github#triggers) on `pull_request` events, wired to a [workflow](/product/workflows).
 
-<Tip>
-  Product pages explain what Valet does. Engineering pages explain how the runtime works.
-</Tip>
+When a PR opens, the workflow:
+
+1. Pulls the diff, existing review comments, and check status with `github.inspect_pull_request`.
+2. Reads the surrounding files in the repo (`github.read_repo_file`) to judge the change in context, not just the hunks.
+3. Writes a review: risks, missed edge cases, and questions — skipping style nits your linter already catches.
+4. Posts the review as a PR comment with `github.create_comment`.
+
+Posting a comment is a medium-risk action, so your org policy decides whether it publishes immediately or waits for someone to approve the draft first. Teams that want a quieter start route the review to a Slack channel instead of the PR and promote it to a comment once they trust the output.
+
+## Play: triage incoming issues
+
+**Trigger:** a GitHub webhook on `issues` events for immediate triage, or a daily schedule that sweeps everything new since the last run.
+
+For each new issue, Valet:
+
+1. Reads the issue and searches for duplicates and related history with `github.search_issues`.
+2. Checks the code the report touches (`github.search_code`, `github.read_repo_file`) to judge severity and point at a likely owner.
+3. Applies labels and assignees with `github.update_issue`, or files a linked ticket in [Linear](/product/integrations/linear) if that is where your team plans work.
+4. Posts a triage summary — what came in, what it did, what needs a human decision — to the task thread or a Slack channel.
+
+Reading is low risk and runs freely. Writes — labeling, assigning, creating Linear issues — are medium risk, so you can start with an approval gate on every write and relax it once the triage quality is proven.
+
+## Play: ship a scoped change end to end
+
+**Trigger:** manual — a task in the web UI, or a mention of Valet in a bound [Slack](/product/integrations/slack) channel: "add rate limiting to the invite endpoint, base off `main`."
+
+This is the core coding loop, and it runs in a child session so the repo checkout, terminal, and build never touch your conversation:
+
+1. Valet starts a child session, clones the repo, and checks out your base branch.
+2. It reads the relevant code, plans the change, and creates a working branch.
+3. It edits, commits, runs whatever checks it can inside the sandbox, and pushes the branch.
+4. It opens a pull request into the base branch — or pushes to an existing PR if you pointed it at one.
+5. Your CI runs on the PR. Valet watches the results, reports them in the task thread, and can attempt a fix on the same branch if CI fails.
+
+Approvals gate the sensitive steps: pushing to a remote, opening or updating the PR, and merging (high risk) can each require sign-off depending on your policy. The task is not done until the branch is pushed and the PR exists — if a push or PR step fails, Valet reports the blocker instead of claiming success.
+
+<Note>
+  Un-pushed work in a child session can be lost if the sandbox ends. Ask Valet to commit and push early — once a commit reaches your remote, it is safe. See [recovering from interrupted sessions](/product/software-workflow#recovering-from-interrupted-sessions).
+</Note>
+
+## Play: nightly CI health report
+
+**Trigger:** a [schedule](/product/triggers) — for example, every weekday at 7am before standup.
+
+The workflow:
+
+1. Lists recent runs across your key repos with `github.list_workflow_runs`, filtered to failures.
+2. Drills into each failure with `github.get_workflow_run` and `github.get_job_logs`, which returns only the failed steps with noise stripped.
+3. Groups failures by cause: a real regression, an infrastructure blip, or a flaky test that failed on an unrelated change.
+4. Re-runs suspected flakes with `github.rerun_workflow` (failed jobs only) and notes which ones pass on retry.
+5. Posts a short report to Slack: what is red, what is flaky, and which failures trace back to a specific PR.
+
+Reruns are medium risk; gate them with an approval at first, then allow them once you trust the flake classification. For repeat offenders, extend the workflow to file a Linear issue per flaky test so the debt is tracked instead of retried forever.
+
+## Play: Sentry follow-up after an incident
+
+**Trigger:** manual or scheduled — a morning sweep of new [Sentry](/product/integrations/sentry) issues, or "look into that spike from last night" in Slack.
+
+Valet:
+
+1. Reads the Sentry issue and its events — stack traces, frequency, affected releases — through the Sentry integration.
+2. Correlates the first occurrence with recent history: `github.list_commits` on the affected paths and recently merged PRs.
+3. Writes up the likely cause with the suspect commit or PR linked, and files a tracking issue in GitHub or Linear — a write gated by approval.
+4. If you confirm the diagnosis, it can start the fix as a scoped-change task using the play above, carrying the investigation context with it.
+
+The Sentry integration is read-oriented, so the investigation itself is safe to run unattended; only the issue-filing and fixing steps touch approval gates.
+
+## Where this work accumulates
+
+Two surfaces make these plays compound over time. [Memory](/product/memory) keeps repo conventions, review preferences, and past decisions available across tasks, so the tenth PR review reflects what you corrected in the first nine. And each workflow is versioned, so you can tighten instructions and approval placement as you learn what the runs actually look like.
+
+<Note>
+  Teams are rolling out: a team can own these workflows, integrations, and a shared team orchestrator that members reach in bound Slack channels. Team roles are admin and member today, with richer role-based access in progress.
+</Note>
+
+## Set this up
+
+<Steps>
+  <Step title="Connect GitHub">
+    Connect the [GitHub integration](/product/integrations/github), plus [Linear](/product/integrations/linear) or [Sentry](/product/integrations/sentry) if your plays use them. See [Connect tools](/product/tools).
+  </Step>
+  <Step title="Run one play as a task first">
+    Ask Valet to review one PR or triage one issue as a normal [task](/product/tasks). Check the output quality before automating anything.
+  </Step>
+  <Step title="Turn it into a workflow">
+    Create a [workflow](/product/workflows) with the right [trigger](/product/triggers) — a GitHub webhook for PR and issue events, a schedule for reports and sweeps.
+  </Step>
+  <Step title="Set approval gates">
+    Configure [approvals](/product/approvals) so writes — comments, labels, pushes, PRs, merges — pause for a human until the play has earned trust.
+  </Step>
+  <Step title="Tighten after a few runs">
+    Review the first runs, sharpen the instructions, and relax the gates that only ever get rubber-stamped.
+  </Step>
+</Steps>

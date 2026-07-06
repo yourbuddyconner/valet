@@ -1,35 +1,48 @@
 ---
 title: Use Cases
-description: Start from the kind of work Valet should own, then move into product docs or engineering reference when you need details.
+description: Pick the vertical closest to your team and follow its playbook — each play maps to a workflow you can copy, with the integrations and approvals it needs.
 ---
 
 import { UseCaseCard } from '/snippets/use-case-card.mdx';
 
-Valet is most useful when it has a clear job: the work to do, the tools it can use, and the approval rules it should follow.
+These pages are for teams deciding what work to hand Valet first. Pick the vertical closest to your team, and you leave with a set of plays you can put into production this week.
 
-Use these pages as starting points. Each use case can map to tasks, workflows, connected tools, saved instructions, and approvals.
+Each vertical is a playbook built from concrete **plays**. A play names a trigger (a webhook, a schedule, or someone asking), describes what Valet does step by step, lists the integrations involved, and calls out where an approval gate belongs. Every play maps to a [workflow](/product/workflows) you can copy: save it once, and it runs the same way every time instead of depending on how you phrase the request.
 
 <div className="valet-use-case-grid">
   <UseCaseCard
     title="Software engineering"
-    description="PR review, issue triage, repository work, QA, release prep, and follow-up tasks."
+    description="PR review on every push, issue triage from Linear and GitHub, QA loops, release prep, and follow-up fixes in real repositories."
     href="/use-cases/software-engineering"
   />
   <UseCaseCard
     title="Operations"
-    description="Scheduled checks, Slack requests, internal workflows, inbox triage, and handoffs."
+    description="Scheduled morning checks, Slack requests routed to workflows, inbox triage, internal reporting, and clean handoffs between tools."
     href="/use-cases/operations"
   />
   <UseCaseCard
     title="Customer workflows"
-    description="Research, support follow-up, account details, and connected-tool work."
+    description="Account research before calls, support follow-up with approval gates, and customer-facing work across email, CRM data, and docs."
     href="/use-cases/customer-workflows"
   />
 </div>
 
+## How a vertical becomes reality
+
+The path from a play on these pages to automation running in your org is the same every time:
+
+1. **Connect the tools** the play uses — GitHub, Slack, Gmail, Linear, and the rest live in [integrations](/product/integrations/overview).
+2. **Save the play as a workflow.** Build it in the visual editor, pick the trigger — webhook, schedule, or manual — and test a run. See [workflows](/product/workflows) and [triggers](/product/triggers).
+3. **Set approvals** where the play touches something sensitive: merging code, sending email, changing customer records. A workflow pauses at the gate until a human approves, from web, Slack, or Telegram. See [approvals](/product/approvals).
+4. **For organizations: set up a team.** A [team](/product/teams) owns the workflows, integrations, and memory for a vertical, and gives every member a shared team orchestrator to talk to in the web UI and bound Slack channels.
+
+<Note>
+Teams and team orchestrators are rolling out. Individual users can run every play with their personal orchestrator and workflows today.
+</Note>
+
 ## Where to go next
 
 - [What is Valet?](/product/what-is-valet) for the general product model.
-- [Run tasks](/product/tasks) for one focused request.
-- [Workflows](/product/workflows) for scheduled, manual, and event-based repeatable work.
+- [Run tasks](/product/tasks) for one focused request before you automate it.
+- [Workflows](/product/workflows) for the automation surface every play is built on.
 - [Approvals](/product/approvals) for control over sensitive actions.
