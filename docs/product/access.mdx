@@ -9,13 +9,13 @@ Valet needs clear access rules because it sees real work and acts through connec
 
 ## Who can sign in
 
-Users sign in with GitHub or Google. By default, with no restrictions configured, anyone who can reach your Valet instance can sign up — so set at least one gate. Admins can restrict sign-up with any combination of:
+Users sign in with Google, GitHub, or email/password — admins choose which providers appear on the login page under **Settings → Organization → Login Providers**. By default, with no restrictions configured, anyone who can reach your Valet URL can sign up — so set at least one gate. All the gates live in **Settings → Organization**, under **Access Control** and **Invites**:
 
 - **Domain gating** — only emails on your domain (for example `acme.com`) can join.
 - **Email allowlist** — an explicit list of allowed addresses.
 - **Invites** — single-use invite codes, optionally locked to a specific email and role. Invites expire after seven days and bypass the other gates.
 
-Existing users always keep access regardless of gating changes. The first person to sign in to a new Valet instance automatically becomes an admin.
+Existing users always keep access regardless of gating changes. The first person to sign in to a new Valet instance automatically becomes an admin; roles are managed under **Settings → Organization → Members**.
 
 ## Organization roles
 
@@ -42,7 +42,7 @@ Finer-grained role-based access control — roles between "admin" and "member", 
 Two kinds of sessions never follow the sharing rules:
 
 - **Your personal orchestrator.** The long-running conversation with your own Valet — including its memory and everything routed to it from Slack or Telegram DMs — is private to you. It can't be shared, and no one else, admins included, can open it.
-- **Workflow runs** are visible only to their owner.
+- **Workflow runs** are visible only to the workflow's owner. (Team-owned workflows are the exception — their runs are visible to every team member; see the note below.)
 
 <Note>
   Teams, which are rolling out, add a third path: tasks owned by a team are visible to every team member. Members can watch and prompt them; team admins get owner-level control (restart, delete, settings). Non-members can't see that a team's task exists. See [Teams](/product/teams).

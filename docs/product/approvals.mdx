@@ -29,6 +29,19 @@ When Valet asks, you may be able to:
 
 The options you see depend on your organization's settings.
 
+## Risk levels
+
+Every integration action carries a risk level, and the integration pages list them per action. When no custom policy applies, the defaults are:
+
+| Risk | Default behavior |
+| --- | --- |
+| `low` | Runs without asking (reads, searches, lists). |
+| `medium` | Requires approval (creating drafts, editing files, filing issues). |
+| `high` | Requires approval (sending, deleting, merging). |
+| `critical` | Denied outright. |
+
+Your personal allow rules and your organization's policies both hook into these levels — you can auto-allow a whole risk tier, and admins can gate or deny one.
+
 ## How long each choice lasts
 
 The three "allow" choices look similar, but they last for very different amounts of time. This matters when you are deciding whether to make Valet quieter or keep it strict.
@@ -36,7 +49,7 @@ The three "allow" choices look similar, but they last for very different amounts
 | Choice | Scope | Expires |
 | --- | --- | --- |
 | Allow | This single action only. | Immediately after the action runs. |
-| Allow for this task | The same action, for as long as the task is alive. | When the task's sandbox refreshes, hibernates, or ends. |
+| Allow for this task | The same action, for as long as the task is alive. | When the session ends or hibernates (sessions hibernate after a period of inactivity). |
 | Always allow | The same action, every time, until you remove it. | Only when you delete the rule from settings. |
 
 "Allow for this task" is good for the moment — for example, you are watching Valet draft three Linear tickets and don't want to approve each one, but you do want the rule to disappear when the task is done.
@@ -66,7 +79,7 @@ You have a workflow that runs the same way every week — for example, generatin
 2. For each prompt, choose **Always allow** if the action is safe and identical every run.
 3. After one or two clean runs, the workflow should run without prompting at all.
 
-Review the rules in settings every so often. If the workflow changes shape, the old rules may no longer match — that is good, because Valet will start asking again.
+Review the rules in **Settings → Agent → Auto-approval rules** every so often. If the workflow changes shape, the old rules may no longer match — that is good, because Valet will start asking again.
 
 ### Quiet a noisy session, but only for now
 
@@ -74,19 +87,22 @@ You're working through a long task and approving the same action over and over i
 
 Choose **Allow for this task** the next time Valet asks. The rule applies for the rest of that task and disappears when the task ends. The next task will start clean.
 
-## What admins decide
+## Where the controls live
 
-Admins can decide:
+Your personal approval rules live in **Settings → Agent**:
 
-- Which tools Valet can use.
-- Which actions always need approval.
-- Which actions should never run.
-- Whether users can create their own approval preferences.
-- Where approval prompts can appear.
+- **Auto-approval rules** — durable allow rules that skip the prompt for a specific action, an entire service, or a risk level. This is where "Always allow" choices end up; edit or delete them here.
+- **Active runtime grants** — the ephemeral approvals from "Allow for this task" and per-run approvals. They expire on their own, but you can revoke one early here.
+
+Admin controls live in **Settings → Organization**:
+
+- **Action Policies** — gate or deny specific actions, services, or risk levels for the whole organization.
+- **Plugins & Connectors** — turn whole integrations or individual actions on or off.
+- **Action Log** — an audit trail of every action invocation across the organization, with user attribution.
 
 **An organization rule always wins.** If your admin has decided a specific action must be denied or must always require approval, your personal "Always allow" will not override it. The strictest rule wins.
 
-This matters when you are tuning approvals: if a rule you set does not seem to take effect, an admin policy is likely overriding it. Check with your admin or look at the action in your settings.
+This matters when you are tuning approvals: if a rule you set does not seem to take effect, an admin policy is likely overriding it. Check with your admin, or compare your rule in **Settings → Agent → Auto-approval rules** against the org's Action Policies.
 
 ## How to tune approvals
 
@@ -97,7 +113,7 @@ Start stricter than you think you need. After teams use Valet for real work, rev
 - Which actions should always be blocked.
 - Which low-risk actions can run automatically.
 
-You can review and remove your own "Always allow" rules at any time in settings.
+You can review and remove your own "Always allow" rules at any time in **Settings → Agent → Auto-approval rules**.
 
 ## Good approval habits
 

@@ -1,38 +1,38 @@
 ---
 title: Quickstart
-description: Get to your first useful Valet task.
+description: Sign in, meet your orchestrator, and get to your first useful Valet task.
 ---
 
 Start with one real piece of work. Valet is easiest to understand when the task is clear, bounded, and easy to review.
 
 ## Before you start
 
-You need:
-
-- A Valet account.
-- The web app or a connected channel.
-- Any tools Valet should use for the task.
-- A clear idea of which actions should wait for approval.
+- **A Valet account.** Open your organization's Valet web app URL (your admin has it) and sign in with Google, GitHub, or email — whichever your admin has enabled. If sign-ups are invite-based, use the invite link your admin sent.
+- **At least one connected tool** for the task you have in mind (see step 2).
 
 ## Run your first task
 
 <Steps>
-  <Step title="Open Valet">
-    Start in the web app. It gives you the clearest view of the task, progress, approvals, and result.
+  <Step title="Sign in and look around">
+    The sidebar is the whole product: **Dashboard**, **Orchestrator** (with its Chat and Memory), **Automation**, **Sessions**, **Integrations**, **Skills**, **Personas**, and **Settings**. Your orchestrator is your personal AI coworker — it has a name and handle (you chose them during onboarding), and the Dashboard shows a **Talk to \[name\]** button whenever you want it.
+  </Step>
+  <Step title="Connect a tool">
+    Go to **Integrations** in the sidebar and click **Connect Integration**. For Google, GitHub, Linear, and most services this is an OAuth consent screen — sign in, approve, done. The card shows the connection status afterward.
   </Step>
   <Step title="Ask for a specific outcome">
-    Use a request like: "Summarize the open Linear issues assigned to me and suggest the top three to handle."
-  </Step>
-  <Step title="Add missing information">
-    If Valet needs a tool, document, project, account, or channel it cannot reach yet, connect it or ask an admin to enable it.
+    Open **Orchestrator → Chat** and make a bounded request: "Summarize the open Linear issues assigned to me and suggest the top three to handle." If Valet needs something it can't reach, it will say so — connect the missing tool or ask an admin to enable it.
   </Step>
   <Step title="Review before Valet acts">
-    If Valet wants to send, write, delete, merge, or change something important, review the approval prompt before continuing.
+    When Valet wants to send, write, delete, or change something important, an approval prompt appears in the chat (and in Slack or Telegram if connected). Read it, then approve once, allow for the session, or set a durable rule — see [approvals](/product/approvals).
   </Step>
   <Step title="Use the result">
-    Read the summary, inspect what changed, and send a follow-up if the task needs more work.
+    Read the summary, inspect what changed, and send a follow-up if the task needs more work. Long-running work shows up under **Sessions** in the sidebar, where you can reopen it any time.
   </Step>
 </Steps>
+
+<Note>
+  The docs say "task" for a unit of work; the app's sidebar labels the list of them **Sessions**. Same thing — a session is one task's conversation, activity, and workspace.
+</Note>
 
 ## Good first tasks
 
@@ -48,7 +48,7 @@ Good first tasks are easy to inspect:
 
 After a successful first task:
 
-- Turn repeated steps into a [workflow](/product/workflows).
+- Turn repeated steps into a [workflow](/product/workflows) — go to **Automation** and describe it; the copilot builds a first draft.
 - Capture useful instructions as a [skill](/product/skills-and-personas).
 - Connect more [tools](/product/tools) if Valet needed information it could not reach.
 - Adjust [approvals](/product/approvals) if the task prompted too often or too little.

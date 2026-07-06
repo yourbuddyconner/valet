@@ -20,7 +20,7 @@ Each morning, Valet:
 3. Pulls anything else your team tracks — open Linear issues, GitHub PRs waiting on review, yesterday's support queue.
 4. Posts one digest to a [Slack](/product/integrations/slack) channel or DM: today's meetings, items needing a reply, and anything that changed overnight.
 
-This play works well as a scheduled prompt to your orchestrator rather than a formal workflow — the work is judgment-based ("what matters this morning?"), and the [triggers page](/product/triggers) explains when to pick a scheduled prompt over a scheduled workflow. Because every step is read-only until the final Slack post, you can approve the posting action once with "Always allow" and the briefing runs unattended from then on.
+This play works well as a scheduled prompt to your orchestrator — your personal always-on Valet agent, the one you talk to in chat — rather than a formal workflow — the work is judgment-based ("what matters this morning?"), and the [triggers page](/product/triggers) explains when to pick a scheduled prompt over a scheduled workflow. Because every step is read-only until the final Slack post, you can approve the posting action once with "Always allow" and the briefing runs unattended from then on.
 
 To set it up, just ask:
 
@@ -35,12 +35,12 @@ the day, unread emails that need a reply, and open PRs assigned to me.
 
 Valet:
 
-1. Runs `gmail.triage_inbox` to fetch recent unread messages with categorization — newsletters, meeting references, messages containing questions or action requests.
+1. Triages the inbox: fetches recent unread messages and categorizes them — newsletters, meeting references, messages containing questions or action requests.
 2. Archives or labels the routine mail: newsletters get labeled and marked read, receipts get filed.
-3. For messages that need a response, drafts a threaded reply with `gmail.create_draft`. Drafts are safe — nothing leaves your account until someone sends it.
+3. For messages that need a response, drafts a threaded reply. Drafts are safe — nothing leaves your account until someone sends it.
 4. Posts a summary to Slack or the web app: what was filed, what was drafted, what needs your judgment.
 
-The approval shape matters here. Set **Always allow** on creating drafts (nothing external happens) and keep **sending** gated — `gmail.send_email` and `gmail.send_draft` are high-risk actions that prompt for approval every time. You review each draft in Gmail or from the approval prompt, then approve the send. The [approvals page](/product/approvals) walks through this exact recipe.
+The approval shape matters here. Set **Always allow** on creating drafts (nothing external happens) and keep **sending** gated — sending mail is a high-risk action that prompts for approval every time. You review each draft in Gmail or from the approval prompt, then approve the send. The [approvals page](/product/approvals) walks through this exact recipe.
 
 ## Play: the weekly report
 
@@ -74,7 +74,7 @@ Requests that change external systems still pause for approval, and approval pro
 
 Valet:
 
-1. Lists upcoming events with `calendar.list_events` and picks out the meetings with external attendees or agendas.
+1. Reads your calendar and picks out the meetings with external attendees or agendas.
 2. For each, gathers context: the last email thread with those attendees in Gmail, the relevant Notion page or project doc, and recent Slack discussion.
 3. Sends you a short prep note per meeting — who's attending, what was last discussed, open items, and a suggested agenda if there isn't one.
 

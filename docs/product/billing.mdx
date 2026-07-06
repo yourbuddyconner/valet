@@ -26,7 +26,7 @@ Valet calls model providers using API keys configured at the **org level**. When
 
 The org admin is responsible for setting up provider keys and keeping credits or billing active. Individual users do not need to bring their own keys for normal use.
 
-For details on which providers are approved, see the [admin setup](/product/admin-setup) page.
+Keys live in **Settings → Organization → LLM API Keys** (Anthropic, OpenAI, Google, and custom OpenAI-compatible providers), and the org-wide failover order is set under **Default Model Preferences** on the same page.
 
 ## "Credit balance is too low" or "quota exceeded"
 
@@ -52,7 +52,7 @@ There can be exceptions in custom setups — for example, if your org has chosen
 
 ## Sandbox and platform usage
 
-Model API calls are not the only cost. When Valet starts a [child session](/product/child-sessions) for code or long-running work, that workspace also uses compute time on Valet's platform. Like model usage, sandbox usage is tracked at the org level. Sessions that finish their work and report back free up that capacity for the next task.
+Model API calls are not the only cost. When Valet starts a [child session](/product/child-sessions) for code or long-running work, that workspace also uses compute time on Valet's platform. Like model usage, sandbox usage is tracked at the org level, and users can adjust the CPU and memory allocated to new sandboxes in **Settings → Agent → Sandbox Resources** (higher allocations cost more compute). Sessions that finish their work and report back free up that capacity for the next task.
 
 You do not need to manage sandboxes directly. If a session is taking too long or no longer needed, ending it in the task thread is enough.
 
@@ -73,4 +73,5 @@ If you are the admin for your org, the provider keys and limits you set determin
 - Use business-tier accounts at each provider so usage is not used for model training.
 - Keep at least one fallback provider configured so a single outage does not stop all tasks.
 - Watch for low-balance and rate-limit signals proactively. Valet surfaces these as task errors, but the underlying alerts come from the provider.
-- See [admin setup](/product/admin-setup) for how org-level keys are configured.
+- Configure keys in **Settings → Organization → LLM API Keys**; add self-hosted or OpenAI-compatible providers under **Custom LLM Providers** on the same page.
+- Track spend in **Settings → Usage & Cost** — token usage and cost broken down by user and model.
